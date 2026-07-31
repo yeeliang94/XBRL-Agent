@@ -25,23 +25,6 @@ const FILL_DOC = {
   strict: true,
 };
 
-/** A patch response in the Step-11A shape: the FULL report as the body, plus
- *  an artifact id the workbook is fetched with separately. `report` may be a
- *  JSON string (the old header payload) or an object. */
-function patchResponse(report: string | object) {
-  const parsed = typeof report === "string" ? JSON.parse(report) : report;
-  return new Response(
-    JSON.stringify({
-      ...parsed,
-      artifact_id: "a1",
-      download_url: "/api/runs/42/mtool-fill/artifact/a1",
-      artifact_expires_in_s: 900,
-      filename: "mtool_filled_run42.xlsx",
-    }),
-    { status: 200, headers: { "content-type": "application/json" } },
-  );
-}
-
 function mockFetch(handler: (url: string, init?: RequestInit) => Response | Promise<Response>) {
   vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => Promise.resolve(handler(url, init))));
 }
@@ -78,7 +61,10 @@ describe("MtoolFillModal", () => {
     });
     mockFetch((url) => {
       if (url.includes("/mtool-fill/patch")) {
-        return patchResponse(reportHeader);
+        return new Response(new Blob(["xlsxbytes"]), {
+          status: 200,
+          headers: { "X-mTool-Report": reportHeader },
+        });
       }
       if (url.includes("/mtool-fill")) return new Response(JSON.stringify(FILL_DOC), { status: 200 });
       return new Response("{}", { status: 200 });
@@ -94,7 +80,7 @@ describe("MtoolFillModal", () => {
       type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     });
     fireEvent.change(input, { target: { files: [file] } });
-    fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /fill & download/i }));
 
     await waitFor(() => expect(screen.getByText(/safe to validate/i)).toBeTruthy());
   });
@@ -126,13 +112,18 @@ describe("MtoolFillModal", () => {
           );
         }
         // Second attempt (with column_map) -> success.
-        return patchResponse(JSON.stringify({
+        return new Response(new Blob(["xlsx"]), {
+          status: 200,
+          headers: {
+            "X-mTool-Report": JSON.stringify({
               status: "ok",
               counts: { written: 7, unresolved: 0, skipped_formula: 0, mismatches: 0, errors: 0 },
               unresolved: [],
               skipped_formula: [],
               mismatches: [],
-            }));
+            }),
+          },
+        });
       }
       if (url.includes("/mtool-fill")) return new Response(JSON.stringify(FILL_DOC), { status: 200 });
       return new Response("{}", { status: 200 });
@@ -143,7 +134,7 @@ describe("MtoolFillModal", () => {
     await waitFor(() => expect(screen.getByText(/values will be written/i)).toBeTruthy());
     const input = screen.getByLabelText(/mtool template file/i);
     fireEvent.change(input, { target: { files: [new File(["x"], "t.xlsx")] } });
-    fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /fill & download/i }));
 
     // Editor appears seeded with the detected guess (label col D, values E/F).
     await waitFor(() => expect(screen.getByLabelText(/column layout editor/i)).toBeTruthy());
@@ -152,7 +143,7 @@ describe("MtoolFillModal", () => {
     expect((screen.getByLabelText(/current_year column/i) as HTMLInputElement).value).toBe("E");
 
     // Retry -> now includes column_map -> success.
-    fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /fill & download/i }));
     await waitFor(() => expect(screen.getByText(/safe to validate/i)).toBeTruthy());
     expect(patchCalls).toBe(2);
   });
@@ -181,7 +172,7 @@ describe("MtoolFillModal", () => {
     });
     mockFetch((url) => {
       if (url.includes("/mtool-fill/patch"))
-        return patchResponse(reportHeader);
+        return new Response(new Blob(["x"]), { status: 200, headers: { "X-mTool-Report": reportHeader } });
       if (url.includes("/mtool-notes-fill"))
         return new Response(JSON.stringify({ meta: { counts: { notes: 2 } }, footnotes: [] }), { status: 200 });
       if (url.includes("/mtool-fill")) return new Response(JSON.stringify(FILL_DOC), { status: 200 });
@@ -193,7 +184,7 @@ describe("MtoolFillModal", () => {
     fireEvent.change(screen.getByLabelText(/mtool template file/i), {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
-    fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /fill & download/i }));
     await waitFor(() => expect(screen.getByText(/Notes:/)).toBeTruthy());
     expect(screen.getByText(/2 filled/)).toBeTruthy();
   });
@@ -210,7 +201,7 @@ describe("MtoolFillModal", () => {
     });
     mockFetch((url) => {
       if (url.includes("/mtool-fill/patch"))
-        return patchResponse(reportHeader);
+        return new Response(new Blob(["x"]), { status: 200, headers: { "X-mTool-Report": reportHeader } });
       if (url.includes("/mtool-notes-fill"))
         return new Response(JSON.stringify({ meta: { counts: { notes: 3 } }, footnotes: [] }), { status: 200 });
       if (url.includes("/mtool-fill")) return new Response(JSON.stringify(FILL_DOC), { status: 200 });
@@ -222,7 +213,7 @@ describe("MtoolFillModal", () => {
     fireEvent.change(screen.getByLabelText(/mtool template file/i), {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
-    fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /fill & download/i }));
     // Banner reflects the notes failure, NOT a false "Clean".
     await waitFor(() => expect(screen.getByText(/review before validate/i)).toBeTruthy());
     expect(screen.queryByText(/safe to validate/i)).toBeNull();
@@ -377,13 +368,18 @@ describe("MtoolFillModal", () => {
       }
       if (url.includes("/mtool-fill/patch")) {
         patchBody = init?.body as FormData;
-        return patchResponse(JSON.stringify({
+        return new Response(new Blob(["x"]), {
+          status: 200,
+          headers: {
+            "X-mTool-Report": JSON.stringify({
               status: "ok",
               counts: { written: 7, unresolved: 0, skipped_formula: 0, mismatches: 0, errors: 0 },
               unresolved: [],
               skipped_formula: [],
               mismatches: [],
-            }));
+            }),
+          },
+        });
       }
       if (url.includes("/mtool-notes-fill"))
         return new Response(JSON.stringify({ meta: { counts: { notes: 2 } }, footnotes: [] }), { status: 200 });
@@ -410,7 +406,7 @@ describe("MtoolFillModal", () => {
     expect(screen.getByText(/1 placed/i)).toBeTruthy();
 
     // Fill sends the decision as notes_targets keyed by the note index.
-    fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /fill & download/i }));
     await waitFor(() => expect(patchBody).toBeTruthy());
     const sent = JSON.parse(patchBody!.get("notes_targets") as string);
     expect(sent).toEqual({ "1": { sheet: "Notes-CI", cell: "E12" } });
@@ -498,7 +494,7 @@ describe("MtoolFillModal", () => {
     fireEvent.change(screen.getByLabelText(/mtool template file/i), {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
-    fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /fill & download/i }));
     await waitFor(() => expect(screen.getByLabelText(/column layout editor/i)).toBeTruthy());
     // Guidance copy, and NOT the red "Fill failed" framing.
     expect(screen.getByText(/one more step/i)).toBeTruthy();
@@ -600,7 +596,7 @@ describe("MtoolFillModal", () => {
     await waitFor(() => expect(screen.getByText(/values will be written/i)).toBeTruthy());
     const input = screen.getByLabelText(/mtool template file/i);
     fireEvent.change(input, { target: { files: [new File(["x"], "t.xlsx")] } });
-    fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /fill & download/i }));
     await waitFor(() => expect(screen.getByText(/no fillable facts/i)).toBeTruthy());
   });
 
@@ -610,13 +606,18 @@ describe("MtoolFillModal", () => {
       if (url.includes("/mtool-fill/patch")) {
         const body = init?.body as FormData;
         sentStyling = body?.get?.("notes_styling") ?? null;
-        return patchResponse(JSON.stringify({
+        return new Response(new Blob(["x"]), {
+          status: 200,
+          headers: {
+            "X-mTool-Report": JSON.stringify({
               status: "ok",
               counts: { written: 7, unresolved: 0, skipped_formula: 0, mismatches: 0, errors: 0 },
               unresolved: [],
               skipped_formula: [],
               mismatches: [],
-            }));
+            }),
+          },
+        });
       }
       if (url.includes("/mtool-notes-fill"))
         return new Response(JSON.stringify({ meta: { counts: { notes: 2 } }, footnotes: [] }), { status: 200 });
@@ -637,7 +638,7 @@ describe("MtoolFillModal", () => {
     fireEvent.change(screen.getByLabelText(/mtool template file/i), {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
-    fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /fill & download/i }));
     await waitFor(() => expect(screen.getByText(/safe to validate/i)).toBeTruthy());
     expect(sentStyling).toBe("none");
   });
@@ -657,7 +658,7 @@ describe("MtoolFillModal", () => {
     });
     mockFetch((url) => {
       if (url.includes("/mtool-fill/patch"))
-        return patchResponse(reportHeader);
+        return new Response(new Blob(["x"]), { status: 200, headers: { "X-mTool-Report": reportHeader } });
       if (url.includes("/mtool-notes-fill"))
         return new Response(JSON.stringify({ meta: { counts: { notes: 2 } }, footnotes: [] }), { status: 200 });
       if (url.includes("/mtool-fill")) return new Response(JSON.stringify(FILL_DOC), { status: 200 });
@@ -669,7 +670,7 @@ describe("MtoolFillModal", () => {
     fireEvent.change(screen.getByLabelText(/mtool template file/i), {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
-    fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /fill & download/i }));
     await waitFor(() => expect(screen.getByText(/written without styling/i)).toBeTruthy());
     expect(screen.getByText(/plain-looking notes are expected/i)).toBeTruthy();
   });
@@ -700,7 +701,7 @@ describe("MtoolFillModal", () => {
     });
     mockFetch((url) => {
       if (url.includes("/mtool-fill/patch"))
-        return patchResponse(reportHeader);
+        return new Response(new Blob(["x"]), { status: 200, headers: { "X-mTool-Report": reportHeader } });
       if (url.includes("/mtool-notes-fill"))
         return new Response(JSON.stringify({ meta: { counts: { notes: 5 } }, footnotes: [] }), { status: 200 });
       if (url.includes("/mtool-fill")) return new Response(JSON.stringify(FILL_DOC), { status: 200 });
@@ -712,7 +713,7 @@ describe("MtoolFillModal", () => {
     fireEvent.change(screen.getByLabelText(/mtool template file/i), {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
-    fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /fill & download/i }));
     await waitFor(() =>
       expect(screen.getByText(/2 large note\(s\) used slimmer styling/i)).toBeTruthy()
     );
@@ -799,7 +800,7 @@ describe("RunDetailView mTool button", () => {
       if (url.includes("/mtool-fill")) return new Response(JSON.stringify(FILL_DOC), { status: 200 });
       return new Response(JSON.stringify({ concepts: [] }), { status: 200 });
     });
-    render(<RunDetailView detail={makeDetail()} mtoolFillEnabled onDelete={() => {}} onDownload={() => {}} />);
+    render(<RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />);
     fireEvent.click(screen.getByRole("button", { name: /fill mtool template/i }));
     const dialog = await screen.findByRole("dialog", { name: /fill mtool template/i });
     await waitFor(() => expect(within(dialog).getByText(/values will be written/i)).toBeTruthy());
@@ -808,183 +809,9 @@ describe("RunDetailView mTool button", () => {
   test("button is disabled on a running run", () => {
     mockFetch(() => new Response(JSON.stringify({ concepts: [] }), { status: 200 }));
     render(
-      <RunDetailView detail={makeDetail({ status: "running" })} mtoolFillEnabled onDelete={() => {}} onDownload={() => {}} />
+      <RunDetailView detail={makeDetail({ status: "running" })} onDelete={() => {}} onDownload={() => {}} />
     );
     const btn = screen.getByRole("button", { name: /fill mtool template/i }) as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
-  });
-});
-
-/**
- * Step 8A + 11A — the mTool fill is a filing action and the UI treats it as one:
- * hidden unless the deployment exposes it, blocked unless the run's data is
- * settled, and the workbook withheld until the report has been read.
- */
-describe("mTool exposure and filing gates", () => {
-  afterEach(() => {
-    cleanup();
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
-
-  const CLEAN_REPORT = {
-    status: "ok",
-    counts: { written: 7, unresolved: 0, skipped_formula: 0, mismatches: 0, errors: 0 },
-    unresolved: [],
-    skipped_formula: [],
-    mismatches: [],
-  };
-
-  test("the action is absent when the deployment does not expose it", () => {
-    mockFetch(() => new Response(JSON.stringify({ concepts: [] }), { status: 200 }));
-    render(<RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />);
-    expect(screen.queryByRole("button", { name: /fill mtool template/i })).toBeNull();
-  });
-
-  async function openWith(handler: (url: string, init?: RequestInit) => Response) {
-    mockFetch(handler);
-    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
-    await waitFor(() => expect(screen.getByText(/values will be written/i)).toBeTruthy());
-  }
-
-  function chooseTemplate() {
-    const input = screen.getByLabelText(/mtool template file/i);
-    fireEvent.change(input, { target: { files: [new File(["x"], "t.xlsx")] } });
-  }
-
-  test("a run that isn't ready to file explains why and holds the Fill button", async () => {
-    await openWith((url) => {
-      if (url.includes("/mtool-fill/preflight")) {
-        return new Response(
-          JSON.stringify({
-            ok: false,
-            blockers: [
-              {
-                code: "open_conflicts",
-                count: 2,
-                message: "2 figure(s) are still marked as conflicting — resolve them on the Review values tab first.",
-                examples: ["Trade receivables (SOFP-Sub-CuNonCu, CY)"],
-              },
-            ],
-            warnings: [],
-          }),
-          { status: 200 },
-        );
-      }
-      if (url.includes("/mtool-fill")) return new Response(JSON.stringify(FILL_DOC), { status: 200 });
-      return new Response("{}", { status: 200 });
-    });
-
-    expect(screen.getByText(/isn't ready to file yet/i)).toBeTruthy();
-    expect(screen.getByText(/still marked as conflicting/i)).toBeTruthy();
-    expect(screen.getByText(/Trade receivables/)).toBeTruthy();
-
-    chooseTemplate();
-    const fill = screen.getByRole("button", { name: /^fill$/i }) as HTMLButtonElement;
-    expect(fill.disabled).toBe(true);
-
-    // Writing down a reason releases it — and that reason goes on the record.
-    fireEvent.change(screen.getByLabelText(/reason for filing anyway/i), {
-      target: { value: "partner approved" },
-    });
-    expect((screen.getByRole("button", { name: /^fill$/i }) as HTMLButtonElement).disabled).toBe(false);
-  });
-
-  test("a clean fill shows the report first, then downloads on a second click", async () => {
-    const calls: string[] = [];
-    vi.stubGlobal("URL", { createObjectURL: () => "blob:x", revokeObjectURL: () => {} });
-    await openWith((url) => {
-      calls.push(url);
-      if (url.includes("/mtool-fill/patch")) return patchResponse(CLEAN_REPORT);
-      if (url.includes("/mtool-fill/artifact/")) return new Response(new Blob(["xlsx"]), { status: 200 });
-      if (url.includes("/mtool-fill")) return new Response(JSON.stringify(FILL_DOC), { status: 200 });
-      return new Response("{}", { status: 200 });
-    });
-
-    chooseTemplate();
-    fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
-    await waitFor(() => expect(screen.getByText(/safe to validate/i)).toBeTruthy());
-    // Nothing was downloaded by filling.
-    expect(calls.some((u) => u.includes("/artifact/"))).toBe(false);
-
-    fireEvent.click(screen.getByRole("button", { name: /download filled template/i }));
-    await waitFor(() => expect(calls.some((u) => u.includes("/artifact/"))).toBe(true));
-  });
-
-  test("a degraded fill withholds the download until it is acknowledged", async () => {
-    vi.stubGlobal("URL", { createObjectURL: () => "blob:x", revokeObjectURL: () => {} });
-    await openWith((url) => {
-      if (url.includes("/mtool-fill/patch")) {
-        return patchResponse({
-          status: "degraded",
-          numeric_status: "degraded",
-          counts: { written: 3, unresolved: 2, skipped_formula: 0, mismatches: 0, errors: 0 },
-          unresolved: [
-            { sheet: "SOFP-Sub-CuNonCu", label: "Freehold land", detail: "no matching row" },
-            { sheet: "SOFP-Sub-CuNonCu", label: "Buildings", detail: "no matching row" },
-          ],
-          skipped_formula: [],
-          mismatches: [],
-        });
-      }
-      if (url.includes("/mtool-fill/artifact/")) return new Response(new Blob(["x"]), { status: 200 });
-      if (url.includes("/mtool-fill")) return new Response(JSON.stringify(FILL_DOC), { status: 200 });
-      return new Response("{}", { status: 200 });
-    });
-
-    chooseTemplate();
-    fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
-    await waitFor(() => expect(screen.getByText(/degraded/i)).toBeTruthy());
-
-    const download = () =>
-      screen.getByRole("button", { name: /download filled template/i }) as HTMLButtonElement;
-    expect(download().disabled).toBe(true);
-
-    fireEvent.click(screen.getByLabelText(/i have read the problems above/i));
-    expect(download().disabled).toBe(false);
-  });
-
-  test("problem rows are listed individually, not just counted", async () => {
-    await openWith((url) => {
-      if (url.includes("/mtool-fill/patch")) {
-        return patchResponse({
-          status: "degraded",
-          numeric_status: "degraded",
-          counts: { written: 0, unresolved: 2, skipped_formula: 1, mismatches: 0, errors: 0 },
-          unresolved: [
-            { sheet: "SOFP-Sub-CuNonCu", label: "Freehold land", detail: "no matching row" },
-            { sheet: "SOFP-Sub-CuNonCu", label: "Buildings", detail: "no matching row" },
-          ],
-          skipped_formula: [{ sheet: "SOFP-CuNonCu", cell: "B12", label: "Total assets" }],
-          mismatches: [],
-        });
-      }
-      if (url.includes("/mtool-fill")) return new Response(JSON.stringify(FILL_DOC), { status: 200 });
-      return new Response("{}", { status: 200 });
-    });
-
-    chooseTemplate();
-    fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
-    await waitFor(() => expect(screen.getByText(/Freehold land/)).toBeTruthy());
-    expect(screen.getByText(/Buildings/)).toBeTruthy();
-    expect(screen.getByText(/Total assets/)).toBeTruthy();
-  });
-
-  test("a unit mismatch between template and run is called out", async () => {
-    await openWith((url) => {
-      if (url.includes("/mtool-fill/patch")) {
-        return patchResponse({
-          ...CLEAN_REPORT,
-          unit_scale_warnings: [
-            { sheet: "SOFP-CuNonCu", column: "E", template_declares: "thousands", run_denomination: "units" },
-          ],
-        });
-      }
-      if (url.includes("/mtool-fill")) return new Response(JSON.stringify(FILL_DOC), { status: 200 });
-      return new Response("{}", { status: 200 });
-    });
-    chooseTemplate();
-    fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
-    await waitFor(() => expect(screen.getByText(/factor of a thousand/i)).toBeTruthy());
   });
 });
