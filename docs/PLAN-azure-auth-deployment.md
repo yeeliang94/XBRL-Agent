@@ -8,6 +8,16 @@ those need the enterprise subscription, not code. Authored 2026-06-11;
 "Auth method" below). Email+password is the primary method, built first; SSO is
 layered on later.
 
+**Re-verified 2026-07-28** against the live codebase (schema now v35): the
+auth + deploy code is real and in places *ahead* of this plan — the admin role
+system and a Users management page in Settings (originally a Phase 4
+nice-to-have) already shipped (schema v20, `auth/deps.py`, `SettingsPage.tsx`).
+One claim below was found to be **false** (the `--proxy-headers` startup
+command was never wired into code — it is a manual Azure setting, see the
+punch list), several are stale, and the target is now **three environments**
+(testing / staging / production). See "Pre-deploy punch list (2026-07-28)"
+and the revised cost section.
+
 **Implemented + tested locally (🟩).**
 - **Phase 1 — auth layer:** schema v18 (`auth_users` + `auth_sessions`), the
   `auth/` package (passwords, sessions, lockout, middleware, routes, admin
@@ -15,10 +25,15 @@ layered on later.
   `/api/health`), and the frontend (LoginPage, boot gate, idle ping, header
   logout).
 - **Phase 3 — deploy code:** `XBRL_OUTPUT_DIR` override (durable state →
-  `/home/data`), SSE `: keepalive` comments + **mid-stream session expiry**
-  (now built — see below), `--proxy-headers` startup command, and
-  `scripts/deploy_azure.bat` (guarded build → test → stamp → zip → `az webapp
-  deploy`).
+  `/home/data`; also moves the SQLite DB, `server.py:85-89`), SSE
+  `: keepalive` comments + **mid-stream session expiry** (now built — see
+  below), and `scripts/deploy_azure.bat` (guarded build → test → stamp → zip
+  → `az webapp deploy`).
+  - **CORRECTION (2026-07-28):** the `--proxy-headers` startup command was
+    previously listed here as implemented. **It is not in code** — no
+    startup file exists; the repo only carries a runtime *warning* that
+    detects its absence (`server._maybe_log_proxy_header_diag`). It must be
+    set manually per environment in the Azure portal (punch-list item 1).
 
 Backend + frontend suites green. **One deliberate deviation remaining:**
 
@@ -44,6 +59,90 @@ the resource group + App Service in Southeast Asia, set the App Settings
 `WEBSITES_ENABLE_APP_SERVICE_STORAGE=true`, Always On, 1 instance), seed
 accounts with the CLI over SSH/Kudu, and run the smoke checklist.
 
+## Pre-deploy punch list (2026-07-28 verification)
+
+Findings from the claim-by-claim re-check against the live codebase. Items
+1–6 must be resolved before the first deployment; the "doc drift" items are
+corrections folded into the sections below.
+
+1. **Set the startup command manually in Azure — BLOCKER.** No startup file
+   ships in the repo, and the default entry point (`python server.py`) binds
+   `127.0.0.1:8002` — on App Service the site would simply not respond. In
+   each environment set (Configuration → General settings → Startup Command):
+
+   ```
+   uvicorn server:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips="*"
+   ```
+
+   `uvicorn server:app` is safe: the SPA mount and router wiring run at
+   module import (`server.py:6718` notes the alias is a no-op under it).
+   Without `--proxy-headers`, per-IP login lockout buckets every user onto
+   the App Service front-end IP; cookie hardening is unaffected (it keys on
+   `is_production()`, not the request scheme — good design, verified).
+
+2. **Word (.docx) upload will NOT work on Azure App Service Linux.** Since
+   this plan was written the app gained `.docx` ingest (gotcha #29), which on
+   Linux requires **LibreOffice** on the host — App Service's Python image
+   doesn't include it and offers no way to install it. Failure is graceful
+   (HTTP 422 with a "Save As → PDF" message), but decide before launch:
+   accept PDF-only in the cloud, or move to a custom-container deployment
+   (bigger piece of work, out of scope here).
+
+3. **`scripts/deploy_azure.bat` installs deps without the version pin.** It
+   runs `pip install -r requirements.txt` **without `-c constraints.txt`**,
+   so a deploy could resolve different library versions than the tested
+   venv (every other install path passes `-c`). One-line fix. While there:
+   add `-n auto` to the pytest step (~3,100 tests now — serial is ~4× slower),
+   parameterise `AZ_APP_NAME` per environment (currently one hard-coded
+   placeholder), and reconcile `version.txt` (what the script stamps) vs the
+   `VERSION` file (what `utils/app_version.py` prefers).
+
+4. **`BOOTSTRAP_ADMIN_*` must stay UNSET in every cloud environment.** This
+   post-plan convenience auto-creates an admin from env vars at startup and
+   runs **before** the "refuse to boot with zero accounts" guard
+   (`server.py:2278-2350`) — set in App Settings it would mint an admin whose
+   password sits in plain text in the portal. Seed accounts only via
+   `python -m auth.manage` over SSH/Kudu.
+
+5. **GitHub Actions CI does not exist.** The "tests-only Actions" safety net
+   described under Deployment (§3.5) was never created — there is no
+   `.github/` directory. Either add it (small; needs no Azure credentials)
+   or drop the claim and rely on running the deploy script's test gate.
+
+6. **`.env.example` is badly out of date** — it documents 18 of the ~52 env
+   vars the code reads and is **missing `XBRL_OUTPUT_DIR`**, the single most
+   important Azure setting. Refresh it before provisioning, since App
+   Settings will be copied from it.
+
+**Doc drift corrected in this revision (no action needed beyond alignment):**
+
+- **Idle timeout default is now 60 minutes, not 15** (`auth/config.py:27`,
+  changed by PLAN-design-qa-fixes R5: "don't log people out mid-review"),
+  and the session cookie now **survives a browser restart**
+  (`cookie_max_age_seconds()`). The Requirements table below still records
+  the original 15-min decision — the owner should confirm which posture is
+  wanted for confidential client data, then align `CLAUDE.md`,
+  `.claude/rules/auth.md`, and `.env.example` (which still shows `900`).
+- Two §1.5 test files were never created under their planned names; the
+  behaviour is covered elsewhere (noted inline in §1.5).
+- Schema is now **v35**; the auth steps (v18, v20 `is_admin`) replay intact
+  inside the walk-forward.
+- The **single-instance invariant got stronger**: four post-plan background
+  subsystems (notes reviewer, notes formatter, evals suite runner, and the
+  boot-time `reconcile_stale_runs(max_age_hours=0)` sweep that treats every
+  `running` row as orphaned) all assume exactly one process. A second
+  instance would actively abort the first instance's live runs. **Pin every
+  environment to 1 instance, 1 worker.**
+- `constraints.txt` still pins ~1.2 GB of libraries from the removed
+  docconvert feature (torch, docling, onnxruntime, easyocr, rapidocr) —
+  harmless (`-c` only constrains, never installs) but a confusing footgun;
+  regenerate the freeze when convenient.
+- New default-off env gates exist that production must consciously leave
+  off or turn on: `XBRL_MTOOL_FILL` (filing-artifact gate, gotcha #28),
+  `XBRL_REVIEWER_INVESTIGATION_BUNDLE`, `XBRL_REVIEWER_COMPACT_CONTEXT`.
+  Keep `XBRL_PAGE_CACHE_MAX` at its default 64 on B2 (raising it toward the
+  4096 cap costs ~800 MB of the 3.5 GB).
+
 ## Requirements (as agreed)
 
 | Decision | Choice |
@@ -51,7 +150,7 @@ accounts with the CLI over SSH/Kudu, and run the smoke checklist.
 | Hosting | Azure App Service (Linux) in the **company/enterprise Azure subscription**; deploys run manually from the enterprise Windows laptop |
 | Login methods | **Email + password** (primary, built first — works everywhere incl. local dev and Azure prod); **enterprise SSO (Microsoft Entra)** layered on **later**, tested on the Windows laptop. Google SSO deferred indefinitely. |
 | Users | Small known team; **per-user accounts** (one row each, admin-provisioned). The account table *is* the allowlist. |
-| Session | Auto-logout after **15 minutes of inactivity** (sliding window) |
+| Session | Auto-logout after **15 minutes of inactivity** (sliding window). *2026-07-28: the shipped default is now **60 min** and the cookie persists across browser restarts (design-QA R5) — owner to confirm the wanted posture and align docs (see punch list).* |
 | Data sensitivity | Real client financial statements (confidential) |
 | Region | Southeast Asia (Singapore) — closest Azure region to Malaysia |
 | Local development | Real email+password login on localhost (a seeded `dev@localhost` account); `AUTH_MODE=dev` auto-session kept only for CI/offline |
@@ -334,15 +433,23 @@ Shared:
   cookie-hardening** case: when `WEBSITE_SITE_NAME` is set, the session
   cookie carries `Secure` + `__Host-` + `Path=/` + no `Domain` **even when
   the observed request scheme reads `http`** (proxy-terminated TLS).
-- `tests/test_auth_sse_expiry.py` — an SSE stream opened while valid is
-  closed with a `session-expired` event once the session ages past
-  `AUTH_IDLE_TIMEOUT_S` mid-stream (the stream itself never bumped activity).
+- ~~`tests/test_auth_sse_expiry.py`~~ *(2026-07-28: never created under this
+  name — the coverage lives in `tests/test_sse_keepalive.py`, which asserts
+  the `session-expired` close, plus `tests/test_server_rerun_notes.py`
+  pinning that the rerun streams also route through the keepalive wrapper)*
+  — an SSE stream opened while valid is closed with a `session-expired`
+  event once the session ages past `AUTH_IDLE_TIMEOUT_S` mid-stream (the
+  stream itself never bumped activity).
 - `tests/test_auth_middleware.py` — every `/api/*` route 401s without a
   session (walk the route table programmatically so new endpoints can't
   ship unguarded); `/api/auth/*` + `/api/health` exempt, and `/api/health`
   actually exists (no phantom-route exemption).
-- `tests/test_auth_dev_mode.py` — dev bypass works locally, **fails fast
-  under `WEBSITE_SITE_NAME`**.
+- ~~`tests/test_auth_dev_mode.py`~~ *(2026-07-28: never created under this
+  name — the prod guard is pinned by
+  `tests/test_auth_prod_requires_users.py::test_prod_dev_mode_aborts`; the
+  local bypass is exercised by `tests/conftest.py` and
+  `tests/test_auth_me_reports_admin.py`)* — dev bypass works locally,
+  **fails fast under `WEBSITE_SITE_NAME`**.
 - `tests/test_db_schema_v18.py` — migration walk-forward (v17→v18 adds
   `auth_users` + `auth_sessions`; v17 is already taken by
   `run_agents.error_type`).
@@ -421,7 +528,10 @@ path takes for granted need confirming before any resources are created:
    login is the default) — and emphatically **not** `AUTH_MODE=dev` (the
    `WEBSITE_SITE_NAME` guard would abort the boot anyway). The Microsoft
    OIDC values (`MS_CLIENT_ID`/`MS_CLIENT_SECRET`) + `AUTH_ALLOWED_EMAILS`
-   are added **only** when the SSO phase lands.
+   are added **only** when the SSO phase lands. **Never set
+   `BOOTSTRAP_ADMIN_EMAIL`/`_PASSWORD`/`_NAME` in App Settings** (punch-list
+   item 4 — it auto-mints an admin with a portal-visible password and
+   bypasses the zero-accounts guard).
    - **Seed the accounts after first deploy:** run the provisioning CLI
      (§1.2) against the production DB to create each teammate's
      email+password — over SSH/Kudu console, e.g.
@@ -431,12 +541,16 @@ path takes for granted need confirming before any resources are created:
 3. **Platform settings:** Always On = on; scale out **fixed at 1
    instance**; HTTPS Only = on; min TLS 1.2; FTP disabled.
 4. **Code changes in this phase:** `XBRL_OUTPUT_DIR` env override for
-   `OUTPUT_DIR`/`AUDIT_DB_PATH`; SSE keepalive comments; startup command
+   `OUTPUT_DIR`/`AUDIT_DB_PATH` — **done** (`server.py:85-89`; one override
+   moves DB + uploads + workbooks together); SSE keepalive comments —
+   **done**. The startup command
    `uvicorn server:app --host 0.0.0.0 --port 8000 --proxy-headers
    --forwarded-allow-ips='*'` (single worker — see single-instance
    invariant; `--proxy-headers` so the request scheme is seen as https
-   behind Azure's TLS-terminating front end — §1.1 cookie hardening) wired
-   so `mount_spa` still runs.
+   behind Azure's TLS-terminating front end — §1.1 cookie hardening) is
+   **NOT shipped in code** — it is a manual per-environment Azure setting
+   (punch-list item 1). `mount_spa` runs at module import, so
+   `uvicorn server:app` serves the SPA correctly.
 5. **Deployment — manual, from the enterprise Windows laptop.** GitHub
    Actions **cannot** deploy here: that would require enterprise Azure
    credentials inside a personal GitHub repo (policy violation, and
@@ -463,9 +577,11 @@ path takes for granted need confirming before any resources are created:
      the browser, nothing installed on the laptop; (c) last resort:
      build the zip with the script's package step and drag-drop it onto
      the App Service's Kudu/"Deployment Center" page in the portal.
-   - **GitHub Actions remains, tests-only:** build + pytest + vitest on
-     every push (no Azure credentials anywhere). Green checks on GitHub
-     mean "safe to pull and deploy from Windows".
+   - **GitHub Actions, tests-only — NOT YET CREATED (2026-07-28):** the
+     intent stands (build + pytest + vitest on every push, no Azure
+     credentials anywhere, green checks = "safe to pull and deploy from
+     Windows"), but no `.github/` directory exists in the repo. Add the
+     workflow before relying on this safety net (punch-list item 5).
 6. **Smoke checklist:** seed an account via the CLI, then log in with
    email+password; wrong password rejected (generic 401); repeated wrong
    passwords lock the account (429); 15-min timeout fires; upload→extract→
@@ -529,6 +645,34 @@ Principles that make this work with zero per-machine code changes:
   as argon2id hashes in the DB, created by the provisioning CLI. The later MS
   client secret exists **only** in Azure App Settings.
 
+### Three Azure environments (decided 2026-07-28): testing / staging / production
+
+Each environment is its **own App Service (own plan)** — they are not
+instances of one app. Consequences:
+
+- **Per-environment everything:** its own `SESSION_SECRET`, its own seeded
+  `auth_users` accounts, its own `/home/data` (DB + artifacts), its own App
+  Settings, and its own manually-set startup command (punch-list item 1).
+  Nothing is shared; a staging login does not work on production.
+- **Every environment stays pinned to 1 instance / 1 worker** — the
+  single-instance invariant applies per environment, not just to prod.
+- **Deploy script parameterisation:** `scripts/deploy_azure.bat` currently
+  hard-codes one `AZ_APP_NAME` — extend it to take the target app name (or
+  an env argument mapping to three names) so the same guarded package step
+  serves all three (punch-list item 3).
+- **Promotion flow:** deploy to testing → smoke checklist (§3.6) → deploy
+  the same commit to staging → user-acceptance on real (non-client or
+  anonymised) documents → deploy the same commit to production. The
+  `version.txt` stamp answers "what's live?" per environment.
+- **Don't share an App Service plan between environments to save money** —
+  two apps on one plan share its RAM, and this app's extraction runs are
+  memory-hungry (concurrent face agents + notes fan-out + a 4-thread
+  cross-check pool on a 3.5 GB B2). Separate plans, sized per the cost
+  section below.
+- **LLM keys:** testing/staging can use the same provider keys as prod or
+  cheaper models via `TEST_MODEL` — LLM spend follows usage, not
+  environment count.
+
 > **Governance flag (raise-once, owner's call):** hosting in the
 > enterprise Azure subscription is the right home for client-confidential
 > data. The remaining wrinkle is that the *source code* lives in a
@@ -554,11 +698,46 @@ Principles that make this work with zero per-machine code changes:
   posture demands it; secret-rotation calendar (MS client secret + a
   periodic user-password review).
 
-## Cost ballpark
+## Cost estimate — 3 environments (verified 2026-07-28)
 
-App Service B2 ≈ US$25–35/month (Southeast Asia pricing). Application
-Insights/Storage add single-digit dollars. LLM API usage remains the
-dominant variable cost, unchanged by hosting.
+Rates pulled live from the Azure Retail Prices API for **Southeast Asia
+(Singapore), Linux App Service**, pay-as-you-go (730 h/month). The original
+"B2 ≈ US$25–35" ballpark holds: B2 is exactly US$26.28/month.
+
+| Tier | Specs | US$/month |
+|---|---|---|
+| B1 | 1 core, 1.75 GB RAM | 13.14 |
+| **B2** (recommended floor) | 2 cores, 3.5 GB RAM | 26.28 |
+| B3 | 4 cores, 7 GB RAM | 51.83 |
+
+**Sizing note (post-plan):** the app has grown since this plan was written
+(notes pipeline, reviewer passes, evals workspace). B2 is now the sensible
+**floor for any environment that runs real extractions**; B1 is only safe
+for a click-around-the-UI environment.
+
+Add-ons per month: Application Insights log ingestion US$2.99/GB after the
+free monthly allowance (a small app ≈ US$0–6 total), backup blob storage
+~US$0.02/GB (pennies), bandwidth negligible (first 100 GB egress free).
+
+**Scenarios, including the 10% service charge:**
+
+| Scenario | Testing | Staging | Production | Add-ons | Subtotal | **+10% service** | **≈ Annual** |
+|---|---|---|---|---|---|---|---|
+| **Recommended — all B2** | 26.28 | 26.28 | 26.28 | ~5 | ~84 | **~US$92/mo** | **~US$1,105** |
+| Lean — testing on B1 (UI-only) | 13.14 | 26.28 | 26.28 | ~4 | ~70 | **~US$77/mo** | **~US$925** |
+| Roomier production on B3 | 13.14 | 26.28 | 51.83 | ~5 | ~96 | **~US$106/mo** | **~US$1,270** |
+
+Caveats that matter more than the tier choice:
+
+1. **LLM API usage is the dominant cost and is NOT in this table.** It
+   scales with how many extraction runs happen, not with hosting or the
+   number of environments.
+2. **App Service plans bill 24/7 whether used or not.** "Stopping" the app
+   does not stop the charge — only deleting the plan (or scaling to Free)
+   does. If testing is occasional, delete/recreate its plan around test
+   cycles, or take the lean scenario.
+3. **These are retail pay-as-you-go rates** — an enterprise agreement
+   typically prices lower, so treat the table as a ceiling.
 
 ## Out of scope (explicitly)
 
