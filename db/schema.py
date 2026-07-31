@@ -163,18 +163,7 @@ from pathlib import Path
 # source hash (computed at resume time) and the reused/rerun statement lists.
 # Pure CREATE TABLE IF NOT EXISTS walk-forward (new table, no ALTER); inert
 # unless XBRL_STAGE_RESUME is used. Pinned by tests/test_db_schema_v34.py.
-# v35 adds `mtool_fill_receipts` — the durable record of every mTool fill
-# (docs/PLAN-mtool-fill-pipeline.md Step 19). A filled MBRS workbook is a
-# regulatory artifact; before this, producing one left no trace, and because a
-# completed run stays editable, two fills of "the same" run could differ with
-# nothing to show it. One row per fill records the source snapshot, the input
-# and output hashes, the uploaded template's fingerprint, the resolved column
-# map, the translation-manifest version, the preflight verdict + any override,
-# the operator, and the full report. Pure CREATE TABLE IF NOT EXISTS
-# walk-forward (new table, no ALTER); every column nullable or defaulted and no
-# CHECK on status (gotcha #11). Inert unless XBRL_MTOOL_FILL is on. Pinned by
-# tests/test_db_schema_v35.py.
-CURRENT_SCHEMA_VERSION = 35
+CURRENT_SCHEMA_VERSION = 34
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -1141,36 +1130,6 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         created_at       TEXT NOT NULL
     )
     """,
-    # -----------------------------------------------------------------
-    # v35: mtool_fill_receipts — durable record of every mTool fill
-    # (docs/PLAN-mtool-fill-pipeline.md Step 19). The patcher itself stays
-    # stateless and stdlib-only; the ROUTE writes this row. `snapshot_*`
-    # identifies the exact fact revision the workbook was built from, so two
-    # fills of the same still-editable run are distinguishable. No CHECK on
-    # `status` (gotcha #11) and every column nullable/defaulted.
-    # -----------------------------------------------------------------
-    """
-    CREATE TABLE IF NOT EXISTS mtool_fill_receipts (
-        id                    INTEGER PRIMARY KEY AUTOINCREMENT,
-        run_id                INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-        snapshot_fact_count   INTEGER,
-        snapshot_digest       TEXT,        -- hash over the facts read for this fill
-        snapshot_max_updated  TEXT,        -- newest fact updated_at in the snapshot
-        source_sha256         TEXT,        -- uploaded (empty) template
-        output_sha256         TEXT,        -- filled workbook handed back
-        template_fingerprint  TEXT,        -- structural id of the uploaded template
-        column_map_json       TEXT,        -- resolved physical layout used
-        translation_version   TEXT,        -- unit/sign manifest version
-        preflight_json        TEXT,        -- blockers + warnings at fill time
-        preflight_override    TEXT,        -- operator acknowledgement, NULL = none
-        degraded_ack          TEXT,        -- acknowledgement given at download
-        status                TEXT,        -- 'ok' | 'degraded' (no CHECK)
-        report_json           TEXT,        -- the full run report
-        operator              TEXT,
-        created_at            TEXT NOT NULL DEFAULT '',
-        downloaded_at         TEXT
-    )
-    """,
 )
 
 
@@ -1178,8 +1137,6 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
 # ix_runs_created_at supports the History list's default DESC sort.
 _CREATE_INDEXES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS ix_run_agents_run_id ON run_agents(run_id)",
-    "CREATE INDEX IF NOT EXISTS ix_mtool_fill_receipts_run_id "
-    "ON mtool_fill_receipts(run_id)",
     "CREATE INDEX IF NOT EXISTS ix_run_lineage_child ON run_lineage(child_run_id)",
     "CREATE INDEX IF NOT EXISTS ix_run_lineage_parent ON run_lineage(parent_run_id)",
     "CREATE INDEX IF NOT EXISTS ix_agent_events_run_agent_id ON agent_events(run_agent_id)",
@@ -2554,26 +2511,6 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
                         (34,),
-                    )
-                conn.commit()
-            except Exception:
-                conn.rollback()
-                raise
-
-        # v34 → v35: add mtool_fill_receipts (durable mTool fill record). Pure
-        # CREATE TABLE IF NOT EXISTS (already run above), so this block only
-        # advances the marker. Same BEGIN IMMEDIATE + re-check discipline.
-        if current_version is not None and current_version < 35:
-            try:
-                conn.execute("BEGIN IMMEDIATE")
-                row = conn.execute(
-                    "SELECT version FROM schema_version LIMIT 1"
-                ).fetchone()
-                latest = int(row[0]) if row else None
-                if latest is not None and latest < 35:
-                    conn.execute(
-                        "UPDATE schema_version SET version = ?",
-                        (35,),
                     )
                 conn.commit()
             except Exception:

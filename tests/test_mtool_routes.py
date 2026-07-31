@@ -71,32 +71,10 @@ def _seed_distinct_leaves(db, run_id, n=4):
     return len(leaves)
 
 
-def _download(tc, run_id: int, patch_resp, *, acknowledge: str | None = None):
-    """Fetch the workbook a patch produced (Step 11A's second step).
-
-    The patch response carries the report and an artifact id; the file itself
-    comes from a separate GET, so the operator can read the report before they
-    hold the file. A degraded fill needs an acknowledgement to release it.
-    """
-    body = patch_resp.json()
-    params = {}
-    if acknowledge is None and body.get("status") != "ok":
-        acknowledge = "understood, filling anyway"
-    if acknowledge:
-        params["acknowledge_degraded"] = acknowledge
-    resp = tc.get(body["download_url"], params=params)
-    assert resp.status_code == 200, resp.text
-    return resp.content
-
-
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     db = tmp_path / "xbrl.db"
     monkeypatch.setenv("XBRL_OUTPUT_DIR", str(tmp_path))
-    # The exposure gate (Step 8A) defaults OFF; these tests exercise the
-    # feature itself, so they turn it on explicitly. The gate's own behaviour
-    # is pinned in tests/test_mtool_exposure_gate.py.
-    monkeypatch.setenv("XBRL_MTOOL_FILL", "1")
     monkeypatch.setenv("GOOGLE_API_KEY", "test-key-12345")
     monkeypatch.setenv("LLM_PROXY_URL", "")
     import importlib
@@ -159,14 +137,14 @@ def test_patch_with_explicit_column_map(client, tmp_path):
         data={"column_map": json.dumps(cmap), "strict": "true"},
     )
     assert resp.status_code == 200, resp.text
-    report = resp.json()
+    report = json.loads(resp.headers["X-mTool-Report"])
     assert report["status"] == "ok"
     assert report["counts"]["written"] == n
     assert report["counts"]["unresolved"] == 0
 
     # The returned bytes are a valid workbook with the values.
     import openpyxl
-    wb = openpyxl.load_workbook(io.BytesIO(_download(tc, run_id, resp)))
+    wb = openpyxl.load_workbook(io.BytesIO(resp.content))
     assert sheet in wb.sheetnames
 
 
@@ -180,7 +158,7 @@ def test_patch_auto_detects_column_map(client):
         data={"strict": "true"},  # no column_map → auto-detect
     )
     assert resp.status_code == 200, resp.text
-    report = resp.json()
+    report = json.loads(resp.headers["X-mTool-Report"])
     assert report["counts"]["written"] >= 1
 
 
@@ -277,58 +255,29 @@ def test_patch_column_map_bad_json_is_422(client):
     assert resp.status_code == 422
 
 
-def test_report_is_returned_in_full_not_capped(client):
-    """Step 11A: the report moved out of an HTTP header and into the body, so
-    the 20-row / 6 KB cap — and the `truncated` flag that admitted to it — are
-    gone. Row detail is complete."""
+def test_report_header_is_present_and_bounded(client):
     tc, db, _ = client
     run_id = _make_run(db)
     _seed_distinct_leaves(db, run_id)
     resp = tc.post(f"/api/runs/{run_id}/mtool-fill/patch",
                    files=_upload_our_template(), data={"strict": "true"})
     assert resp.status_code == 200
-    assert "X-mTool-Report" not in resp.headers
-    body = resp.json()
-    assert "counts" in body
-    assert "truncated" not in body
-    for key in ("unresolved", "skipped_formula", "mismatches", "ambiguous",
-                "fuzzy_matched", "errors"):
-        assert isinstance(body[key], list)
+    header = resp.headers["X-mTool-Report"]
+    assert len(header.encode("utf-8")) <= 6000
+    parsed = json.loads(header)
+    assert "counts" in parsed and "truncated" in parsed
 
 
-def test_unresolved_rows_are_all_returned_past_the_old_cap(client):
-    """The header cap silently elided detail past 20 rows. Prove it doesn't."""
+def test_no_temp_dirs_leak_across_error_and_success(client, tmp_path):
     tc, db, _ = client
     run_id = _make_run(db)
     _seed_distinct_leaves(db, run_id)
-    doc = tc.get(f"/api/runs/{run_id}/mtool-fill").json()
-    sheet = doc["meta"]["sheets_covered"][0]
-    # Point the label column at an empty column: every write goes unresolved.
-    cmap = {sheet: {"label_column": "Z", "columns": {"current_year": "B"}}}
-    resp = tc.post(f"/api/runs/{run_id}/mtool-fill/patch",
-                   files=_upload_our_template(),
-                   data={"column_map": json.dumps(cmap), "strict": "true"})
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert len(body["unresolved"]) == body["counts"]["unresolved"]
-
-
-def test_error_paths_leave_no_temp_dir_behind(client, tmp_path):
-    """An error path must clean up immediately — it produced nothing to keep.
-
-    (A SUCCESS keeps its dir until the artifact is fetched or expires — see
-    test_successful_patch_keeps_exactly_one_artifact_dir.)
-    """
-    tc, db, _ = client
-    run_id = _make_run(db)
-    _seed_distinct_leaves(db, run_id)
+    # An error path (malformed column_map) then a success path.
     tc.post(f"/api/runs/{run_id}/mtool-fill/patch",
             files=_upload_our_template(),
             data={"column_map": json.dumps({"S": 1})})
     tc.post(f"/api/runs/{run_id}/mtool-fill/patch",
-            files={"template": ("junk.xlsx", b"not a zip",
-                                "application/vnd.openxmlformats-officedocument"
-                                ".spreadsheetml.sheet")})
+            files=_upload_our_template(), data={"strict": "true"})
     staging = tmp_path / "_mtool_tmp"
     leftovers = list(staging.glob("*")) if staging.exists() else []
     assert leftovers == [], f"temp dirs leaked: {leftovers}"
@@ -444,7 +393,7 @@ def test_patch_fill_notes_off_omits_notes_block(client):
                    files=_upload_our_template(),
                    data={"strict": "true", "fill_notes": "false"})
     assert resp.status_code == 200, resp.text
-    report = resp.json()
+    report = json.loads(resp.headers["X-mTool-Report"])
     assert "notes" not in report
 
 
@@ -459,7 +408,7 @@ def test_patch_fill_notes_on_reports_notes_block(client):
     resp = tc.post(f"/api/runs/{run_id}/mtool-fill/patch",
                    files=_upload_our_template(), data={"strict": "true"})
     assert resp.status_code == 200, resp.text
-    report = resp.json()
+    report = json.loads(resp.headers["X-mTool-Report"])
     assert report["counts"]["written"] == n          # numbers still filled
     assert "notes" in report                          # notes block present
     assert report["notes"]["status"] == "degraded"    # no +FootnoteTexts here
@@ -468,7 +417,7 @@ def test_patch_fill_notes_on_reports_notes_block(client):
     assert report["numeric_status"] == "ok"
     # The returned bytes are still a valid workbook.
     import openpyxl
-    openpyxl.load_workbook(io.BytesIO(_download(tc, run_id, resp)))
+    openpyxl.load_workbook(io.BytesIO(resp.content))
 
 
 def test_patch_notes_styling_none_fills_raw_and_reports_it(client, monkeypatch):
@@ -493,7 +442,7 @@ def test_patch_notes_styling_none_fills_raw_and_reports_it(client, monkeypatch):
                    data={"strict": "true", "notes_styling": "none"})
     assert resp.status_code == 200, resp.text
     assert seen.get("decorate") is False
-    report = resp.json()
+    report = json.loads(resp.headers["X-mTool-Report"])
     assert report["notes"]["styling_disabled"] is True
 
 
@@ -515,7 +464,7 @@ def test_patch_notes_styling_defaults_to_styled(client, monkeypatch):
                    files=_upload_our_template(), data={"strict": "true"})
     assert resp.status_code == 200, resp.text
     assert seen.get("decorate") is True
-    report = resp.json()
+    report = json.loads(resp.headers["X-mTool-Report"])
     assert report["notes"]["styling_disabled"] is False
     # The size-tier counters ride along (all zero for this tiny note).
     assert report["notes"]["counts"]["formatting_compacted"] == 0
@@ -543,7 +492,7 @@ def test_patch_reports_white_grid_dropped(client):
     resp = tc.post(f"/api/runs/{run_id}/mtool-fill/patch",
                    files=_upload_our_template(), data={"strict": "true"})
     assert resp.status_code == 200, resp.text
-    report = resp.json()
+    report = json.loads(resp.headers["X-mTool-Report"])
     assert report["notes"]["counts"]["white_grid_dropped"] == 1
 
 
@@ -565,7 +514,7 @@ def test_patch_reports_source_styling_dropped(client):
     resp = tc.post(f"/api/runs/{run_id}/mtool-fill/patch",
                    files=_upload_our_template(), data={"strict": "true"})
     assert resp.status_code == 200, resp.text
-    report = resp.json()
+    report = json.loads(resp.headers["X-mTool-Report"])
     assert report["notes"]["counts"]["source_styling_dropped"] == 1
 
 
@@ -598,13 +547,13 @@ def test_patch_notes_exception_preserves_numeric_fill(client, monkeypatch):
     resp = tc.post(f"/api/runs/{run_id}/mtool-fill/patch",
                    files=_upload_our_template(), data={"strict": "true"})
     assert resp.status_code == 200, resp.text
-    report = resp.json()
+    report = json.loads(resp.headers["X-mTool-Report"])
     assert report["counts"]["written"] == n       # numbers survived the raise
     assert report["notes"]["status"] == "degraded"
     assert report["status"] == "degraded"
     assert report["numeric_status"] == "ok"
     import openpyxl
-    openpyxl.load_workbook(io.BytesIO(_download(tc, run_id, resp)))  # still a valid workbook
+    openpyxl.load_workbook(io.BytesIO(resp.content))  # still a valid workbook
 
 
 def test_patch_invalid_notes_doc_reports_degraded(client, monkeypatch):
@@ -621,7 +570,7 @@ def test_patch_invalid_notes_doc_reports_degraded(client, monkeypatch):
     resp = tc.post(f"/api/runs/{run_id}/mtool-fill/patch",
                    files=_upload_our_template(), data={"strict": "true"})
     assert resp.status_code == 200, resp.text
-    report = resp.json()
+    report = json.loads(resp.headers["X-mTool-Report"])
     assert report["counts"]["written"] == n
     assert report["notes"]["status"] == "degraded"
     assert report["status"] == "degraded"
@@ -643,35 +592,17 @@ def test_patch_non_letter_column_map_is_422(client):
     assert resp.status_code == 422
 
 
-def test_successful_patch_keeps_exactly_one_artifact_dir(client, tmp_path):
-    """Step 11A moved the file behind a second request, so the workbook has to
-    outlive the patch response — but only by one bounded holding area."""
+def test_temp_dir_cleaned_after_patch(client, tmp_path):
     tc, db, _ = client
     run_id = _make_run(db)
     _seed_distinct_leaves(db, run_id)
     resp = tc.post(f"/api/runs/{run_id}/mtool-fill/patch",
                    files=_upload_our_template(), data={"strict": "true"})
     assert resp.status_code == 200
-    held = list((tmp_path / "_mtool_tmp").glob("*"))
-    assert len(held) == 1, held
-    assert (held[0] / "filled.xlsx").exists()
-
-
-def test_expired_artifact_is_swept_and_404s(client, tmp_path, monkeypatch):
-    tc, db, _ = client
-    run_id = _make_run(db)
-    _seed_distinct_leaves(db, run_id)
-    resp = tc.post(f"/api/runs/{run_id}/mtool-fill/patch",
-                   files=_upload_our_template(), data={"strict": "true"})
-    url = resp.json()["download_url"]
-
-    import api.mtool as m
-    monkeypatch.setattr(m, "_ARTIFACT_TTL_S", -1.0)  # everything is expired
-    gone = tc.get(url)
-    assert gone.status_code == 404
-    assert "no longer available" in gone.json()["detail"]
-    leftovers = list((tmp_path / "_mtool_tmp").glob("*"))
-    assert leftovers == [], f"expired artifact not swept: {leftovers}"
+    # BackgroundTask runs after the response is consumed by TestClient.
+    leftovers = list((tmp_path / "_mtool_tmp").glob("*")) \
+        if (tmp_path / "_mtool_tmp").exists() else []
+    assert leftovers == []
 
 
 # ------------------------------------------------ notes preview (diagnostic)
@@ -749,7 +680,7 @@ def test_patch_accepts_create_missing_notes_param(client):
                    files=_upload_our_template(),
                    data={"strict": "true", "create_missing_notes": "true"})
     assert resp.status_code == 200, resp.text
-    report = resp.json()
+    report = json.loads(resp.headers["X-mTool-Report"])
     assert report["counts"]["written"] == n
 
 

@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -176,47 +175,24 @@ def test_computed_and_abstract_are_excluded(company_db):
     assert all(w["value"] != 9999 for w in doc["writes"])
 
 
-def test_default_translation_is_identity(company_db):
+def test_scale_multiplies_values(company_db):
+    db, run_id = company_db
+    uuid, _, _ = _find_leaf(db)
+    _seed(db, run_id, uuid, value=1500)
+    doc = build_fill_doc(db, run_id, filing_standard="mfrs",
+                         filing_level="company", scale=1000)
+    assert doc["writes"][0]["value"] == 1_500_000
+    assert doc["meta"]["scale"] == 1000
+
+
+def test_default_scale_is_identity(company_db):
     db, run_id = company_db
     uuid, _, _ = _find_leaf(db)
     _seed(db, run_id, uuid, value=1234.5)
     doc = build_fill_doc(db, run_id, filing_standard="mfrs",
                          filing_level="company")
     assert doc["writes"][0]["value"] == 1234.5
-    assert doc["meta"]["translation_version"] == "identity-1"
-
-
-# ---------------------------------------------------------------- Step 2:
-# a fill doc must be self-describing (finding 8) — when it was built and under
-# which translation rules, plus the identity of the fact revision it came from.
-
-def test_meta_is_self_describing(company_db):
-    db, run_id = company_db
-    uuid, _, _ = _find_leaf(db)
-    _seed(db, run_id, uuid, value=10)
-    meta = build_fill_doc(db, run_id, filing_standard="mfrs",
-                          filing_level="company")["meta"]
-    # UTC ISO-8601, parseable — not a free-text stamp.
-    parsed = datetime.fromisoformat(meta["generated_at"])
-    assert parsed.tzinfo is not None
-    assert meta["translation_version"] == "identity-1"
-    assert meta["snapshot"]["fact_count"] == 1
-    assert len(meta["snapshot"]["digest"]) == 64
-
-
-def test_snapshot_digest_changes_when_a_fact_changes(company_db):
-    db, run_id = company_db
-    uuid, _, _ = _find_leaf(db)
-    _seed(db, run_id, uuid, value=10)
-    first = build_fill_doc(db, run_id, filing_standard="mfrs",
-                           filing_level="company")["meta"]["snapshot"]
-    _seed(db, run_id, uuid, value=11)
-    second = build_fill_doc(db, run_id, filing_standard="mfrs",
-                            filing_level="company")["meta"]["snapshot"]
-    # Same fact COUNT, different data — the digest is what tells two fills of
-    # the same still-editable run apart (Step 19).
-    assert first["fact_count"] == second["fact_count"] == 1
-    assert first["digest"] != second["digest"]
+    assert doc["meta"]["scale"] == 1.0
 
 
 def test_output_validates_after_column_map(company_db):

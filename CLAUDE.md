@@ -105,29 +105,56 @@ mode if the proxy fails to start.
 
 ### .env
 
-Variable names + defaults live in `.env.example` — copy it and fill in keys.
-Non-derivable notes:
+```env
+# At least one provider API key
+GEMINI_API_KEY=
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
 
-- `LLM_PROXY_URL` empty = direct mode. `LLM_PROXY_API_KEY` is the proxy auth
-  key (`start.sh` sets the local-dev master key). On Windows there is no
-  `LLM_PROXY_API_KEY` — `GOOGLE_API_KEY` doubles as the proxy auth key.
-- `SCOUT_MODEL` falls back to `TEST_MODEL` when blank.
-- Auth (gotcha #24): `AUTH_MODE` unset = real email+password login;
-  `AUTH_MODE=dev` auto-sessions as dev@localhost (tests/CI only; refuses to
-  boot on Azure). `SESSION_SECRET` is REQUIRED in prod (startup fails without
-  it).
-- Item-32 fact-based verification (gotcha #25): `XBRL_FACT_BASED_CHECKS` and
-  `XBRL_FACT_BASED_VERIFY` both DEFAULT ON; set `=0` to fall back to the xlsx
-  path.
-- The canonical concept model is MANDATORY (rewrite Phase 1.1) — the legacy
-  `XBRL_CANONICAL_MODE` opt-out was removed and the flag is no longer read
-  (gotcha #21).
+# Proxy (set by start.sh on Mac, manual on Windows)
+LLM_PROXY_URL=                 # empty = direct mode
+LLM_PROXY_API_KEY=             # proxy auth key; start.sh sets the local-dev master key here
+GOOGLE_API_KEY=                # real Google key; also the proxy auth key on Windows (no LLM_PROXY_API_KEY there)
+
+# Model defaults
+TEST_MODEL=openai.gpt-5.4
+SCOUT_MODEL=openai.gpt-5.4     # falls back to TEST_MODEL when blank
+
+# Auth (gotcha #24). AUTH_MODE unset = real email+password login; AUTH_MODE=dev
+# auto-sessions as dev@localhost (CI / offline only; refuses to boot on Azure).
+AUTH_MODE=                     # leave blank for prod login; set "dev" for tests/CI
+SESSION_SECRET=                # REQUIRED in prod (startup fails without it); dev falls back
+# AUTH_IDLE_TIMEOUT_S=900      # sliding idle logout (default 15 min)
+# AUTH_LOGIN_MAX_ATTEMPTS=5    # (email, IP) lockout threshold
+# AUTH_LOGIN_LOCKOUT_S=900     # lockout window seconds
+
+# Item-32 fact-based verification (gotcha #25) — both DEFAULT ON.
+# XBRL_FACT_BASED_CHECKS=1     # cross-checks read run_concept_facts; 0 = xlsx path
+# XBRL_FACT_BASED_VERIFY=1     # verifier reads facts; 0 = xlsx formula-eval path
+
+# Canonical concept model is now MANDATORY (rewrite Phase 1.1): the legacy
+# direct-xlsx pipeline and the XBRL_CANONICAL_MODE opt-out were removed.
+# The flag is no longer read (see gotcha #21).
+```
 
 ### PydanticAI Model Creation (v1.77+)
 
-Copy the working construction pattern from `_create_proxy_model()` in
-`server.py` (`OpenAIChatModel` / `GoogleModel` / `AnthropicModel`, each built
-with its `provider=` object).
+```python
+# Proxy path (OpenAI-compatible)
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
+model = OpenAIChatModel(name, provider=OpenAIProvider(base_url=url, api_key=key))
+
+# Direct Google
+from pydantic_ai.models.google import GoogleModel
+from pydantic_ai.providers.google import GoogleProvider
+model = GoogleModel(name, provider=GoogleProvider(api_key=key))
+
+# Direct Anthropic
+from pydantic_ai.models.anthropic import AnthropicModel
+from pydantic_ai.providers.anthropic import AnthropicProvider
+model = AnthropicModel(name, provider=AnthropicProvider(api_key=key))
+```
 
 **Do not** pass `base_url=` or `openai_client=` as direct kwargs to
 `OpenAIModel` — those were removed in pydantic-ai 1.x. Always use `provider=`.
@@ -352,7 +379,7 @@ artifact — pinned by `tests/test_stop_all_preserves_partial.py`.
 
 ### 11. DB schema — version-stepped auto-migration on startup
 
-`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **35**). `init_db`
+`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **33**). `init_db`
 reads the stored version and walks an old DB up **one version at a time**
 through per-version, idempotent `ALTER TABLE` blocks, so any older DB reaches
 the current schema automatically. `db/schema.py` is the authoritative
@@ -385,8 +412,7 @@ notes-formatter `notes_format_tasks` / `notes_format_snapshots` (#16) · v28
 `notes_coverage_rows` (#27) · v29 `notes_cells.style_source` (#16) · v30–v31
 Evals workspace repeats/taxonomy/gold-prose + suites (#30) · v32
 `eval_suite_run_docs` frozen-corpus snapshot (#30) · v33 gold fingerprint on
-`eval_scores` + benchmark archive flag (#30) · v34 `run_lineage` stage-level
-resume trail · v35 `mtool_fill_receipts` durable mTool fill record (#28).
+`eval_scores` + benchmark archive flag (#30).
 
 ### 12. Filing level — Company vs Group
 
@@ -561,19 +587,258 @@ Full walkthrough: [docs/MPERS.md](docs/MPERS.md).
 ### 16. Notes cells are HTML; Excel download regenerates from the DB
 
 Notes agents emit **HTML** (not plaintext) into cells on sheets 10–14 (MFRS) /
-11–15 (MPERS). The `notes_cells` DB table is the **source of truth**; the xlsx
-download is regenerated from it at stream time (the overlay is authoritative,
-including reviewer deletions via tombstones). Cap is 30,000 RENDERED chars. An
-agent re-run **CLOBBERS human edits** (confirm-gated). Word-sourced tables are
-copied verbatim — inline styles and all — and stamped `data-source-styled`
-so no renderer adds a grid the source never had; PROSE stays style-free,
-enforced in code.
+11–15 (MPERS). Flow:
 
-**Full invariants** (sanitiser whitelist, the two AI styling paths, table
-themes, clipboard/mTool dialect translation, editor rules):
-`.claude/rules/notes-pipeline.md` — auto-loads when working under `notes/`,
-`mtool/`, `web/src/lib/`, or the notes web components. Read it BEFORE changing
-anything in those areas.
+```
+agent HTML → sanitiser → notes_cells (DB, canonical) → overlay → xlsx stream
+                                     ↘ NotesReviewTab (TipTap editor)
+```
+
+**Verbatim table passthrough on Word uploads (2026-07-19) — the one exception
+to "content stays style-free."** When a run carries a `source.html` sidecar
+(gotcha #29), notes agents COPY the Word table's markup — inline `style=` and
+all — straight into `content` rather than translating it into `format_ops`.
+The sanitiser's table-tag whitelist already preserves those declarations
+(verified end-to-end on the FINCO 2021 statement: padding, text-align and
+per-side borders all survive), and `mtool/notes_decorate._merge_cell_style`
+gives persisted per-cell declarations precedence over theme defaults, so
+Word's own formatting reaches the review page, the clipboard and the mTool
+filing without a model re-describing it. **PROSE stays style-free, enforced in
+code** — `notes/writer.py::_strip_non_table_styles` removes inline `style=`
+from every non-table tag on the AGENT path (`_sanitize_payload`). That strip is
+load-bearing, not belt-and-braces: the sanitiser itself *does* permit
+`text-align`/`margin-*` on `p`/`h3`/`li`, `color` on `span` and
+`background-color` on `mark`, and `ingest/docx_html` deliberately writes
+paragraph styles into `source.html` — so without it, "copy the table verbatim
+but not the paragraph beside it" would rest on model judgement alone. The human
+TipTap editor reaches the DB through the PATCH endpoint and keeps its paragraph
+alignment. `_style_cell_html` tags such a
+cell `style_source='source'` (vs `ops` / `unstyled`) so the Notes-tab chip can
+tell "copied from the source" apart from "may want a formatter pass".
+
+**Copying declarations is NOT copying the look — `data-source-styled` (run-75
+fix, 2026-07-20).** A Word financial table defines its appearance largely by the
+borders it does NOT state (measured on FINCO 2021: 515 of 662 cells state no
+border at all; zero state a fill). Every renderer here paints a theme grid where
+a cell is silent, so a perfectly-copied table came out boxed in lines the source
+never had — verbatim in the DB, house-styled on screen. Absence can't be copied,
+so it is DECLARED: `notes/writer.py::_mark_source_styled_tables` stamps
+`data-source-styled="true"` on each table in verbatim content, and that marker
+means **"this table's borders are the whole truth; add none."** It must stay in
+lock-step across FOUR surfaces or preview ≠ paste ≠ filing:
+`notes/html_sanitize.py` (`_TABLE_STRUCTURE_ATTRS`, value-checked to `"true"` —
+without it a human edit strips the marker and the grid returns on first save),
+`web/src/lib/cellFormatting.ts::StyledTable` (TipTap drops unknown attrs on
+round-trip), `NotesReviewTab.css` (`border: 0`, so per-cell inline borders still
+win), `mtool/notes_decorate.py` + `web/src/lib/clipboard.ts` (border-family
+declarations dropped from the cell base). The house totals double-underline is
+suppressed on these tables too — the source carries its own. Verified in real
+Chrome (specificity vs `.is-totals-num` is not reproducible in jsdom). Pinned by
+`tests/test_notes_format_sidecar.py`, `tests/test_mtool_notes_decorate.py`, and
+the `clipboard` / `cellFormatting` web tests. Size is
+handled by the existing mTool ladder (full → compact → lite → flat →
+oversize), not by a new guard. Pinned by `tests/test_notes_source_prompt.py`,
+`tests/test_notes_format_sidecar.py`. Plan:
+docs/PLAN-notes-verbatim-and-scout-inventory.md.
+
+Key invariants:
+
+- **`notes_cells` (schema v3) is the source of truth.** The on-disk xlsx is a
+  flattened snapshot; the download endpoint overlays the DB rows onto a temp
+  workbook at stream time (`notes/persistence.overlay_notes_cells_into_workbook`).
+- **The overlay is AUTHORITATIVE for the prose region, not additive.** It writes
+  each surviving row's prose (col B) and evidence (`evidence_col_for(filing_level)`,
+  D=Company / F=Group), then BLANKS every coordinate the reviewer emptied
+  (recorded in `notes_cell_tombstones`, v25) — an additive-only overlay can't
+  express a deletion. `clear`/`move` add a tombstone, `author`/`edit` remove it,
+  `revert` reconciles. Callers MUST pass the run's `filing_level`. Rerun-safety:
+  a notes-agent rerun drops the sheet's tombstones, and the overlay never blanks
+  a coord that has live prose. Pinned by
+  `tests/test_notes_reviewer_overlay_deletions.py`.
+- **Cap is 30,000 RENDERED chars** (`notes.html_to_text.rendered_length`), not
+  raw HTML; sanitiser + writer enforce it, and the PATCH endpoint returns 413
+  over the limit.
+- **Agent re-run CLOBBERS edits:** the coordinator calls
+  `delete_notes_cells_for_run_sheet(run_id, sheet)` before writing a fresh batch.
+  A confirm dialog gates this, fed by
+  `GET /api/runs/{run_id}/notes_cells/edited_count`.
+- **The HTML tag whitelist in `prompts/_notes_base.md` must match the sanitiser's
+  `ALLOWED_TAGS`** (`notes/html_sanitize.py`) — a divergence silently strips
+  markup the prompt invited.
+- **Inline `style=` is a VALIDATED whitelist on TABLE tags only** (notes WYSIWYG,
+  docs/PRD-notes-wysiwyg-formatting.md); off the table `style=` is stripped
+  wholesale, so **prose in the DB stays style-free**. The gate is tag-aware
+  (`_STYLE_PROPS_BY_TAG`): fill / per-side `border-*` / `text-align` on table
+  tags, `color` on `<span>`, `background-color`+`color` on `<mark>`,
+  `text-align`/`margin-left` (indent) on `<p>/<h3>/<li>`, `width`/`min-width` on
+  `<table>`/`<col>`. Every value is shape-checked (rejects `url()`,
+  `expression()`, malformed borders). Table-tag *attributes* are also an explicit
+  allowlist (`_TABLE_STRUCTURE_ATTRS`: `colspan`/`rowspan`/`colwidth` + validated
+  `style=`). Two browser-only traps the sanitiser MUST tolerate (jsdom doesn't
+  reproduce them — verifiable only in real Chrome): (1) the browser CSSOM
+  COLLAPSES four uniform per-side borders into the `border:` shorthand / grouped
+  `border-width|style|color` longhands, so `_is_border_shorthand` /
+  `_is_border_group` accept them and `resolveCellBorders` (`cellFormatting.ts`)
+  expands them back; (2) a swatch may serialise as `rgb(255, 255, 255)` with
+  spaces, so border parsing must treat the whole `rgb(...)` as one token. Erasing
+  an edge uses an explicit `1px hidden #000000` triplet (`BORDER_HIDDEN`), NOT
+  `none` — under `border-collapse` a neighbour's grid line out-prioritises `none`.
+  "No fill" persists as `background-color: transparent`, not attribute-absence.
+  Pinned by `tests/test_notes_html_sanitize_css.py` (incl.
+  `test_browser_collapsed_border_shorthand_survives_on_td`) +
+  `test_server_notes_cells_api.py`.
+- **Editor v2** (docs/PRD-notes-editor-v2.md) is a full rich-text + table editor:
+  `ALLOWED_TAGS` gained human-only marks `u/s/sup/sub/mark/span` — a **superset**
+  of the agent set (agents still emit style-free HTML, so the rule is
+  "agent-emittable ⊆ sanitiser-permitted"). The colour palette is enforced at the
+  TOOLBAR (`notesPalette.ts`), not the sanitiser (which only validates safe colour
+  values). The sanitiser-warning UI panel was removed (still logged in
+  `sanitizer_warnings`). One two-tier `EditorToolbar` (Tier 2 = table controls,
+  keeps the `table-format-bar` testid). Per-cell alignment (`applyCellAlign`),
+  column width (TipTap `resizable`, serialised as `<colgroup>`), merge/split, and
+  indentation (`notesIndent.ts`) all round-trip through the sanitiser + the
+  `html_to_excel_text` overlay. Pinned by the `cellFormatting`/`notesIndent`/
+  `NotesReviewTab` web tests + `tests/test_notes_html_sanitize_css.py`.
+- **Two AI styling paths (the `content` channel stays style-free either way):**
+  - **Formatting sidecar (DEFAULT, write-time,
+    docs/PLAN-notes-format-sidecar.md):** notes extraction agents emit an optional
+    `format_ops` field per payload (same constrained op vocabulary as
+    `notes/format_patch.py` — a structured channel, NOT inline styles in
+    `content`). `notes/writer.py::_style_cell_html` applies it through one gate,
+    `format_patch.apply_cell_operations` (ops → sanitiser → `verify_format_only`).
+    Fallback: **agent ops → unstyled (plain).** The deterministic house-style
+    floor (`notes/format_defaults.py`, kill switch `XBRL_NOTES_HOUSE_STYLE`) was
+    **REMOVED 2026-07-07** — it *imposed* the accountant convention (notably a
+    double-underline on any "total"-text row) rather than mirroring the source
+    PDF, so it invented borders the statement didn't have. A cell without usable
+    agent ops renders plain and the operator restyles on demand via the
+    formatter agent; legacy DB rows may still carry `style_source='floor'`.
+    Formatting NEVER blocks a content write — invalid ops degrade to plain.
+    Multi-payload rows (`_combine_payloads`) re-offset each payload's table
+    indices; a non-table op in a combined cell drops all ops for that cell.
+    **Omission gets pushback (run-63 fix, 2026-07-07):** the `write_notes`
+    return message appends a nudge when table cells land `unstyled`
+    (`notes/agent.py::format_unstyled_table_nudge` — invite an observation,
+    never invent), the tool docstring + a rebalanced `_notes_base.md`
+    FORMATTING OBSERVATION block say a visible table's formatting is
+    EXPECTED, and the Sheet-12 sink replaces (not concatenates) an
+    identical-content re-send so the nudge's "re-send with format_ops" advice
+    is safe. **Styling provenance is surfaced:** `_style_cell_html` tags each
+    cell `ops`/`unstyled`, persisted to `notes_cells.style_source` (v29,
+    preserve-on-omit like `concept_uuid`), returned by `GET /notes_cells`, and
+    shown as a chip in the Notes tab (`StyleSourceChip` — only for `unstyled`/
+    legacy `floor`, the cells that may want a formatter pass). Pinned by
+    `tests/test_notes_format_sidecar.py`, `tests/test_db_schema_v29.py`.
+  - **Notes formatter agent (manual REPAIR pass, `POST /api/runs/{id}/notes-format`,
+    per prose sheet):** the only AI role that authors styling on demand; returns
+    JSON style patches applied to `notes_cells.html`, rejected unless rendered
+    text, numeric tokens, and table geometry survive `sanitize_notes_html`.
+    Production invariants: writes are compare-and-swap
+    (`cas_update_notes_cell_html`, `WHERE html = launch-snapshot` under
+    `BEGIN IMMEDIATE` — a row edited/deleted mid-pass is skipped, never
+    clobbered); safety is versioning (`notes_format_snapshots` v27 +
+    `/notes-format/revert`, content-guarded so it undoes styling not a newer
+    edit); it atomically interlocks with the reviewer pass
+    (`claim_*_task_guarded`); bounded by `XBRL_NOTES_FORMATTER_WALLCLOCK_S` (300)
+    + `XBRL_NOTES_FORMATTER_MAX_REQUESTS` (16, ≤45 per gotcha #18); `error_type`
+    taxonomy (`FORMATTER_ERROR_TYPES`) + token telemetry + a re-written trace;
+    `notes_formatter` ∈ `_AGENT_ROLES` with `XBRL_NOTES_FORMATTER_MIN_CONFIDENCE`
+    (0.70). Numeric sheets (13/14) are excluded (422). Pinned by
+    `tests/test_notes_format_patch.py`, `test_notes_formatter_routes.py`,
+    `test_db_schema_v26.py`/`_v27.py`.
+  Styling reaches the Review panel + clipboard paste ONLY — the xlsx download
+  stays a text overlay (native xlsx styling still deferred).
+- **Evidence column is read-only in the editor** (audit trail); the PATCH
+  endpoint ignores any `evidence` key.
+- **Heading-injection scope:** the writer auto-injects `<h3>` from the
+  `parent_note` + `sub_note` structured fields ONLY. In-prose `(a)/(b)/(i)/(ii)`
+  sub-section labels MUST be preserved verbatim by the agent as
+  `<p><strong>…</strong></p>` — don't let the writer-owned-heading rule
+  over-generalise and flatten them. Pinned by `tests/test_notes_prompt_phase1.py`.
+- **Clipboard decoration:** `web/src/lib/clipboard.ts::decorateHtmlForClipboard`
+  injects inline `style=` (border, padding, right-align for numeric cells matched
+  by `_NUMERIC_CELL_RE`) at copy time only — the DB stays style-free, because
+  external CSS doesn't travel with a paste into M-Tool / Word / Outlook. It's
+  option-driven (`ClipboardFormatOptions`); **the defaults (`DEFAULT_FORMAT_OPTIONS`)
+  reproduce the old hard-coded STYLING byte-for-byte** — same border/padding/
+  font/alignment declarations; keep that equivalence when editing. Two
+  deliberate additions ride on top of it and are NOT part of the historic
+  bytes: the run-76 TX-dialect pass (legacy `width` attrs on unsized numeric
+  tables, white borders on source-styled / border-none tables — block below)
+  and, on themed copies only, the theme's own knobs. Pinned by
+  `web/src/__tests__/clipboard.test.ts`.
+- **Notes-table style THEME (docs/PLAN-notes-table-theme.md):**
+  `ClipboardFormatOptions` was promoted to a full table theme that is the shared,
+  server-side firm default (`XBRL_NOTES_TABLE_STYLE` via `/api/settings`). ONE
+  resolved theme (`resolveTheme(runOverride, firmDefault)`) drives BOTH the editor
+  (as `--nt-*` CSS vars) and the clipboard, so preview == paste. A per-run override
+  lives on `runs.notes_table_style` (v22, editable post-run via the Notes-tab
+  picker) and is a full SNAPSHOT, not a partial diff. Per-cell manual styles win
+  over the theme; "Reset cell to theme" (`resetCellToTheme`) re-inherits it. A
+  totals row's double underline (`border-bottom: 3px double`) is saved document
+  formatting, and Copy reads the resolved theme at click time.
+  **The SHIPPED firm default is `notes/table_theme.py::HOUSE_NOTES_TABLE_STYLE`,
+  resolved ONLY through `firm_theme()`** (2026-07-20, chosen by the product
+  owner) — `server._notes_table_style` and
+  `formatting_agent._resolve_notes_table_theme` both delegate there. They used
+  to each parse the env var, and the formatter's copy still fell back to `{}`
+  after the house default landed, so the agent reasoned about a boxed grey grid
+  over a ruled display and would "correct" formatting that was already right.
+  A new consumer must resolve through `firm_theme()`, never re-read the env var.
+  The look: accountant *ruled*, not boxed — no cell grid
+  (`borderStyle: "none"`), one rule under the header row (`headerRule`, the knob
+  added for it), bold un-filled headers, historic Arial 10pt / 4×8px density,
+  and totals underlines left MANUAL (the auto-detect matched the word "total" in
+  row text and invented rules — the reason the house-style floor was removed,
+  2026-07-07). Two DISTINCT layers, do not conflate them: `NotesTableStyle()` /
+  `DEFAULT_FORMAT_OPTIONS` still mean "no theme configured at all" and keep the
+  historic boxed STYLING (a dozen pinning tests rely on that; the run-76
+  TX-dialect attrs below layer on top for every theme, so the full output is
+  no longer literally byte-identical); `_notes_table_style()` returns the HOUSE style when the setting is
+  unset. An explicit `{}` is the operator's escape hatch back to the historic
+  look, so rollback is a Settings change, not a code revert. `headerRule` moves
+  in lock-step across `mtool/notes_decorate.py`, `clipboard.ts`,
+  `themeToCssVars`, `NotesReviewTab.css` and `api/config_routes.py` — and a
+  source-styled table suppresses it (verbatim block above), since that table
+  carries the source's own rules.
+  **mTool/TX renders SILENCE differently from a browser (run-76, 2026-07-20):**
+  in the TX editor an UNDECLARED cell boundary shows the default grey grid, and
+  CSS widths are ignored — there is no "no line", only "visible line" or "line
+  painted white", and no CSS page fit, only the legacy `width` ATTRIBUTE. So the
+  two mTool-bound decorators (`mtool/notes_decorate.py` + `clipboard.ts`, twins
+  — keep in step) must (a) spell out every intended-invisible edge as explicit
+  white (`_fill_undeclared_borders_white`, the absent-edge twin of the proven
+  hidden→white translation) for source-styled tables and `borderStyle: "none"`
+  themes, and (b) fit unsized tables to the page via `width="100%"` +
+  first-row percentage attrs (`_fit_table_width`; label column keeps the rest,
+  amounts share a bounded slice; skipped on colspans / operator-sized tables —
+  capture "operator-sized" BEFORE the decorator injects its own `width: 100%`
+  CSS or the fit never fires; `<colgroup>`/`colwidth` column sizing counts as
+  operator-sized too; 9+ columns bail to the page fit alone since the two
+  percentage floors would sum past 100%; nested tables fit independently —
+  row/cell scans are scoped to their OWN table). A side whose SHARED edge the
+  neighbouring cell declares is NOT painted white (`_neighbor_declared_sides`;
+  a same-width white tie wins by position under border-collapse and would
+  erase a source underline / the header rule; spans disable the suppression).
+  The white grid costs ~27 chars/cell against Excel's 32,767-char cell cap and
+  lands on exactly the tables whose `compact` tier is inoperative, so the
+  exporter ladder (gotcha #28's `_resolve_note_html`) retries full/compact/
+  lite with `fill_white_grid=False` (the exact pre-run-76 payload) BEFORE
+  falling to `flat`, and reports the drop (`white_grid_dropped` per-entry +
+  meta count, surfaced in `MtoolFillModal`) — a note never lands on a worse
+  tier than the pre-run-76 ladder gave it. `strip_inline_styles` (the destyle
+  rescue rung) also drops the `data-source-styled` marker — with the styles
+  gone its "borders are the whole truth" premise is false and it would force
+  a pointless re-paint. The DB and the review page stay silent — this is
+  strictly an mTool-dialect translation at decorate time. Pinned by
+  `tests/test_settings_api.py`, `test_run_notes_table_style.py`,
+  `test_mtool_notes_exporter.py` (ladder + no-regression pin), and the
+  `clipboardFormat`/`clipboard`/`cellFormatting`/`NotesReviewTab` web tests.
+- **Numeric notes rows (sheets 13/14, `NumericCellRow`)** show grouped `1,595` at
+  rest, raw while focused (`formatGroupedInput` in `web/src/lib/numberFormat.ts`);
+  display-only, stored values stay raw.
+
+Full walkthrough: [docs/NOTES-PIPELINE.md](docs/NOTES-PIPELINE.md).
 
 ### 17. Abstract section-header rows are never writable; agents must not plug residuals
 
@@ -824,28 +1089,132 @@ never a bare in-place `wb.save(path)`.
 
 ### 23. Gold-standard eval — gold is facts, scoped by template SET
 
-Gold lives in `gold_concept_facts` — the SAME shape as `run_concept_facts` —
-and grading is an exact set join on `concept_uuid + period + entity_scope`,
-scoped by the benchmark's explicit `template_id` SET (never a standard/level
-prefix), LEAF/MATRIX_CELL only, `score = matched / gold_cells`. Prefer seeding
-gold **from a run** (`POST /api/benchmarks/from-run`) — the workbook-upload
-path silently drops formula cells with no cached value.
+The `eval/` subsystem (schema v16) scores a run's extraction against a
+benchmark's human-verified gold answers. Gold lives in `gold_concept_facts`,
+the SAME shape as `run_concept_facts` (keyed by `concept_uuid + period +
+entity_scope`); grading (`eval/grader.py::grade_run`) is a set join on that key,
+so the score is exact, not a brittle cell-diff (sidesteps gotcha #4).
 
-**Full invariants:** `.claude/rules/eval-benchmarks.md` — auto-loads when
-working under `eval/` or the eval/suites web pages.
+Load-bearing invariants:
+
+- **Scope by the benchmark's explicit `template_id` SET, never a
+  `{standard}-{level}-` prefix.** `template_id` encodes the variant
+  (`...-sofp-cunoncu-v1` vs `...-sofp-orderofliquidity-v1`); uuids differ per
+  variant (gotcha #21). `eval_benchmark_templates` holds the set;
+  `eval/ingest.py` + `grade_run` both filter `template_id IN (set)`.
+- **Grade LEAF / MATRIX_CELL only.** COMPUTED totals are Excel-formula-derived
+  and excluded so they can't inflate the score. Grading keys on
+  `concept_uuid`, so cross-sheet alias coords (one uuid, two render coords —
+  schema v11) are counted once.
+- **Score = `matched / gold_cells`** where `gold_cells = matched + missing +
+  mismatch`. `extra_cells` (run filled a gold-blank leaf) + `scale_mismatch`
+  (`run == gold·10^k`) are **flags, NOT in the denominator** (open question:
+  whether extras should move the headline). `not_disclosed` gold is excluded
+  from the denominator and a run value there is ignored; `explicit_zero` gold
+  grades as numeric 0.
+- **Ingestion reuses `cell_resolver.resolve_cell`** — no new mapping logic. A
+  workbook matching no benchmark template is rejected loudly (`ValueError`); so
+  is a workbook that matches sheets but yields **zero gold cells** (a useless
+  0/0 benchmark — `eval/store.create_benchmark_from_workbook` raises → 422).
+- **Two ways to author gold; prefer seeding from a run (2026-06-05).** Upload
+  ingest reads `openpyxl(data_only=True)`, which returns `None` for any
+  formula cell with **no cached value** — exactly the state of a freshly
+  machine-exported workbook (the SOCIE matrix + cross-sheet face rollups are
+  live formulas, computed only when Excel opens the file). So uploading an
+  un-recalculated export silently drops most sub-sheet/matrix leaves (the
+  2026-06-05 incident: gold seeded from `run_159_filled.xlsx` captured 64 of
+  102 facts, SOCIE collapsing 42→6). `ingest_workbook` now COUNTS those lost
+  gradeable cells (`IngestResult.skipped_formula_cells`) and surfaces a
+  `warning` in the create response. The lossless path is
+  `eval/store.create_benchmark_from_run` (`POST /api/benchmarks/from-run`):
+  it copies `run_concept_facts` (LEAF/MATRIX_CELL, scoped to the templates the
+  run wrote) straight into `gold_concept_facts`, bypassing the xlsx round-trip
+  entirely. Only seedable from a **complete** terminal run (`completed` /
+  `completed_with_errors`) — draft/running/failed/`aborted` (Stop-All partial
+  merge) are refused. It also re-rejects the **0/0 gold** the workbook path
+  guards (a run whose gradeable facts are all `not_disclosed`/blank copies rows
+  but grades 0/0 — the reject uses grader-equivalent denominator semantics, not
+  the raw copied-row count). Hand-correct values afterwards in the gold
+  editor. Pinned by `tests/test_eval_from_run.py`,
+  `test_eval_ingest.py::test_ingest_counts_uncached_formula_cells_as_warning`,
+  and `test_eval_routes.py::test_create_benchmark_from_run_endpoint`.
+- **Run-start validates the attached benchmark** (`_validate_and_build_run`):
+  it must exist and its `filing_standard`/`filing_level` must match the run, or
+  the run fails fast (config error, before extraction — not a soft skip). This
+  only catches standard/level + existence; it **cannot** verify the uploaded
+  PDF is the benchmark's document, because two same-`(standard, level)`
+  benchmarks share `template_id`s/uuids — picking the wrong *document's*
+  benchmark still grades against the wrong gold. That's inherent user
+  responsibility (like uploading the wrong PDF), not a validatable condition.
+  The extract-page picker filters to matching benchmarks and clears a stale
+  selection on a standard/level switch to make the mismatch hard to hit.
+- **Grading fires at run completion, after the reviewer + re-export/re-merge**
+  (`server._grade_run_against_benchmark`), gated on `runs.benchmark_id`, wrapped
+  in try/except (a grading failure never changes the run's terminal status —
+  gotcha #20). Emits an `eval_score` SSE event.
+- **Frontend reuses, never re-implements.** The gold editor is `ConceptsPage`
+  with a `source='benchmark'` prop (NOT a component extraction); the Eval tab,
+  Benchmarks page, extract-page toggle, and History score column are additive.
+- **COMPUTED totals are derived on-read for DISPLAY, never persisted as gold.**
+  Gold stores only leaves (ingest skips COMPUTED), so the gold editor's total
+  rows would render blank. `eval/store.gold_display_totals` re-derives them from
+  the gold leaves at query time (edge-sum + blank-child semantics mirroring the
+  run cascade, minus the conflict machinery) and `benchmark_concepts` merges
+  them into `value` + `scope_facts`. It writes nothing — grading stays
+  leaf-only and unaffected; a coordinate already carrying a gold value (e.g. an
+  ingested SOCIE MATRIX total) wins over the re-derivation. There is NO
+  gold-side equivalent of `concept_model/cascade.py` (which is `run_id`-only).
+  Pinned by `test_eval_ingest.py::test_benchmark_concepts_derives_computed_totals_from_gold_leaves`.
+
+Pinned by `tests/test_db_schema_v16.py`, `test_eval_grader.py`,
+`test_eval_ingest.py`, `test_eval_routes.py`, `test_eval_wiring.py`, and the
+`BenchmarksPage` / `EvalTab` / `ConceptsPage` / `HistoryList` / `PreRunPanel`
+frontend tests. Full plan: docs/PLAN-eval-benchmark.md.
 
 ### 24. Auth layer gates every `/api/*` route (schema v18)
 
-Every `/api/*` route is auth-gated (exempt: `/api/auth/*` prefix, exact
-`/api/health`). **`AUTH_MODE=dev` is required to run the test suite** —
-`tests/conftest.py` defaults it; running pytest with it unset 401s API-hitting
-tests. `SESSION_SECRET` is mandatory in prod (startup refuses to boot without
-it), and dev-mode refuses to boot on Azure. Sessions are server-side +
-revocable with a 15-min sliding idle timeout; `auth_users.is_admin` is the
-privilege boundary, enforced server-side per route.
+The `auth/` package (`config`, `middleware`, `sessions`, `lockout`,
+`passwords`, `routes`, `manage`) + `web/src/pages/LoginPage.tsx` add
+email+password login (PLAN-azure-auth-deployment Phase 1). The DB side is
+gotcha #11 (v18 `auth_users` / `auth_sessions`); the operational invariants:
 
-**Full invariants:** `.claude/rules/auth.md` — auto-loads when working under
-`auth/` or the login/settings pages.
+- **`AUTH_MODE=dev` is required to run the test suite.** The middleware guards
+  **every** `/api/*` route (exempt: prefix `/api/auth/*`, exact `/api/health`).
+  `tests/conftest.py` defaults the whole suite into `AUTH_MODE=dev` (auto-session
+  as `dev@localhost`, no login form) so pre-auth tests don't 401; auth-specific
+  tests opt OUT with `monkeypatch.delenv("AUTH_MODE")`. **Running pytest with
+  `AUTH_MODE` unset makes API-hitting tests 401.**
+- **Production fails fast on misconfig.** `SESSION_SECRET` is mandatory in prod
+  (startup refuses to boot without it; dev falls back to an insecure constant).
+  A startup guard also **refuses to boot in `AUTH_MODE=dev` under production**
+  (`WEBSITE_SITE_NAME` present) so dev-mode can never ship to Azure.
+- **Sessions are server-side + revocable** (`auth_sessions` row, not a stateless
+  JWT) with a **15-min sliding idle timeout** (`AUTH_IDLE_TIMEOUT_S`); the SPA
+  keeps it alive via `/api/auth/refresh`. Brute-force lockout is per `(email, IP)`
+  — 5 attempts → 15-min lock (`AUTH_LOGIN_MAX_ATTEMPTS` / `AUTH_LOGIN_LOCKOUT_S`).
+- **Accounts = the email allowlist.** Provision with
+  `python -m auth.manage add-user you@firm.com --name "Your Name"` (add `--admin`
+  to mint an admin). There is no self-signup. Azure provisioning is still TODO.
+- **Admin role + web user management (schema v20).** `auth_users.is_admin` is the
+  privilege boundary. The CLI gained `--admin` / `make-admin` / `revoke-admin`
+  (with a **last-admin guard** — refuses to demote/disable the only enabled
+  admin); admin #1 is minted there since the admin UI is admin-gated. Web side:
+  `/api/auth/me` reports `is_admin`; `/api/admin/users` (list/add/disable/enable/
+  reset-password/promote) each independently enforce `is_admin` server-side via
+  `_require_admin` (the hidden UI tab is NOT the boundary) and carry the same
+  409 last-admin guard; `/api/auth/change-password` is self-service (re-auths
+  with the current password). Frontend: the gear opens a consolidated **`/settings`
+  page** (`SettingsPage.tsx`, `AppView "settings"`) with three tabs — **General**
+  (the old model/proxy/run-defaults form, extracted into `GeneralSettingsForm`;
+  `SettingsModal` is now a thin wrapper around it), **Account** (change password),
+  **Users** (admin-only). Pinned by `tests/test_admin_routes.py`,
+  `test_change_password.py`, `test_auth_me_reports_admin.py`,
+  `test_db_schema_v20.py`, and `web` `SettingsPage`/`AccountTab`/`UsersTab` tests.
+
+Pinned by `tests/test_auth_middleware.py`, `test_auth_password.py`,
+`test_auth_sessions.py`, `test_auth_lockout.py`,
+`test_auth_prod_requires_users.py`, `test_manage_users.py`,
+`test_db_schema_v18.py`.
 
 ### 25. Fact-based verification (item 32) — both flags DEFAULT ON
 
@@ -877,62 +1246,263 @@ reads it.
 
 ### 27. Notes coverage checklist — post-reviewer visibility + status tipping
 
-A post-reviewer **coverage checklist** reconciles every top-level note in the
-scout inventory against where its content landed across all notes sheets —
-keyed on note numbers + provenance only, never content matching. An unresolved
-`missing` row / uninvestigated `suspected_gap` / unavailable inventory tips the
-run to `completed_with_errors`. Kill switch `XBRL_NOTES_COVERAGE` (default ON;
-suite default OFF).
+A holistic, human-visible **coverage checklist** reconciles every top-level
+note in the scout inventory against WHERE its content landed across ALL notes
+sheets (docs/PLAN-notes-coverage-and-routing.md). Two coupled hardenings: the
+checklist, and a **top-line routing rule** (notes stay whole; only
+explicitly-labelled material/significant accounting-policy sections carve out
+to the policies sheet — enforced by prompt tiers + `detect_topline_splits`).
 
-**Full invariants:** `.claude/rules/notes-pipeline.md` (shared with gotcha #16).
+Load-bearing invariants:
 
-### 28. mTool fill pipeline — offline zip surgery, one patcher, gated OFF
+- **Pure builder, gotcha-#14-safe.** `notes/coverage_checklist.py::
+  build_draft_checklist(inventory_rows, provenance_entries, …)` keys ONLY on
+  integer note numbers + sub-ref STRINGS from `source_note_refs` provenance —
+  never content matching. Content judgement (is sub-section (b) really in the
+  cell?) is the reviewer's job. Statuses: `placed` / `missing` / `skipped` /
+  `suspected_gap` (INTERNAL numbering holes only — before-first / after-last is
+  the documented blind spot). `skipped` is sourced from the Sheet-12 skip
+  receipts the coordinator persists to `{output_dir}/notes12_skips.json` at
+  fan-out time (loaded by both the reviewer context and the server finalizer via
+  `coverage_checklist.load_notes12_skips`) — an intentionally-skipped note is
+  `skipped`, never `missing`, so it doesn't tip the run. An empty inventory yields
+  `inventory_available=False` (loud, never empty-but-green). A note the reviewer
+  resolves (`not_applicable`/`confirmed_absent`) or that was skipped is also
+  dropped from the raw `coverage_gaps` detector family so `verify_findings`
+  doesn't re-flag it as still-open.
+- **The human sees the POST-reviewer checklist.** The draft is a reviewer
+  INPUT only. The notes reviewer auto-resolves every non-placed row via two
+  grounded tools (`resolve_coverage_notes` → `confirmed_absent`/`not_applicable`;
+  `verify_subnotes` → `verified`/`missing`) accumulated on `NotesReviewerDeps`;
+  the FINAL checklist merges those verdicts + reviewer-authored notes. **The
+  coverage + clear tools are list-only (`resolve_coverage_notes` /
+  `verify_subnotes` / `clear_note_cells`)** — each applies a list in ONE tool
+  call (a single item is a one-element list) under the same grounding +
+  once-per-pass snapshot latch, so the reviewer never burns one turn per row/ref
+  (which was timing the pass out against the 300s wallclock —
+  `notes_reviewer_wallclock_exceeded`). The 2026-07-07 change added the batch
+  forms; the singular `resolve_coverage_note` / `verify_subnote` /
+  `clear_note_cell` variants were removed 2026-07-07 (agent-tool consolidation)
+  since they had the identical activation scenario. Pinned by
+  `tests/test_notes_reviewer_coverage.py`. The pass
+  recomputes + persists on EVERY exit path (`_finalize_coverage` in
+  `server._run_notes_reviewer_pass`): success → `reviewed`; crash/construction
+  failure → `not_reviewed` draft; empty inventory → `inventory_unavailable` +
+  a structured warning event. Manual re-review re-persists for free (same pass).
+- **Coverage tips run status.** An unresolved `missing` row / uninvestigated
+  `suspected_gap` / unavailable inventory tips the run to
+  `completed_with_errors` (`_notes_coverage_tips_status`, folded into the
+  overall-status block per gotcha #10 — never a second writer). `not_verified`
+  sub-refs warn only. The reviewer skip gate uses `count_open_items` (detector
+  families + unresolved checklist rows) so a suspected-gap-only run still runs.
+- **Persistence + API.** Durable in `notes_coverage_rows` (schema v28) — one
+  top-level row per note + per-sub-ref child rows + a `note_num = -1` banner
+  sentinel (distinguishes `inventory_unavailable` from `pre_feature`).
+  `GET /api/runs/{id}/notes-coverage` nests children under parents + derives the
+  summary. `web/src/components/NotesCoveragePanel.tsx` is a Notes-tab SECTION
+  (not a `role="tab"` — gotcha #7), placement chips dispatch a
+  `notes-coverage-focus` window event.
+- **Kill switch:** `XBRL_NOTES_COVERAGE` (default ON; `/api/settings` +
+  `/api/config`; suite default OFF in `tests/conftest.py`, like spot-check).
+  Rollback is a config flip — the table stays as an inert artifact.
 
-`mtool/offline_fill.py` fills a run's figures into an SSM mTool template by
-pure zip/XML **text surgery** — a single stdlib-only file (no openpyxl, no
-repo imports; openpyxl load/save corrupts the mTool package). **One patcher:**
-the server endpoint imports the same `fill_workbook` the CLI runs — never
-reimplement patching in `api/`. Exporter emits LEAF only.
+Pinned by `tests/test_coverage_checklist.py`,
+`tests/test_notes_reviewer_coverage.py`,
+`tests/test_notes_coverage_run_status.py`, `tests/test_notes_coverage_api.py`,
+`tests/test_notes_detectors_splits.py`, `tests/test_db_schema_v28.py`, and the
+`NotesCoveragePanel` web tests.
 
-**The action is NOT exposed:** `XBRL_MTOOL_FILL` defaults **off** and every
-workbook-producing route 404s without it. A filled MBRS workbook is a filing
-artifact, so the default flips only after a machine-generated workbook passes
-Validate/Generate on Windows (plan Step 7). Values are unit-aware and the
-shipped translation is identity — scale/sign rules stay Windows-blocked.
-Filing readiness is `mtool/preflight.py`, not run status. Every fill writes a
-receipt (schema v35).
+### 28. mTool fill pipeline — offline zip surgery, one patcher, no DB schema
 
-**Full invariants** (exposure gate, preflight policy, unit classes, semantic
-column detection, patch/download split, receipts, the SOFP label-ambiguity
-ceiling, footnote `fn_` orphan pool): `.claude/rules/mtool-fill.md` —
-auto-loads when working under `mtool/`. Plan:
-`docs/PLAN-mtool-fill-pipeline.md`.
+The `mtool/` package fills a run's figures into an SSM **mTool** MBRS template so
+the operator can Validate/Generate the XBRL inside mTool without hand-copying
+(docs/PLAN.md, docs/MTOOL-ZIP-RECON-BRIEF.md). Proven end-to-end. The whole path
+is **Excel-free** (pure zip/XML surgery), so it runs server-side and in the cloud.
+
+Load-bearing invariants:
+
+- **`offline_fill.py` is a single stdlib-only file** (zipfile/re/ElementTree — no
+  openpyxl, no repo imports) because it also travels to the enterprise Windows box
+  as one script. Reading parses XML; **writing is targeted text edits** — openpyxl
+  load/save corrupts the mTool package and full reserialization breaks namespaces.
+  Prefixed sheet XML (`<x:sheetData>`) aborts loudly. Do NOT add a third-party dep
+  or repo import (a test asserts this).
+- **One patcher, no fork.** The server endpoint imports `offline_fill.fill_workbook`
+  — the SAME function the CLI runs. Never reimplement patching in `api/`.
+- **Exporter emits LEAF only** (`exporter.build_fill_doc`): ABSTRACT headers +
+  COMPUTED totals excluded (mTool derives totals). SOCIE/MATRIX_CELL is deferred
+  and **counted**, never silently dropped. Scoped to the run's `{standard}-{level}-`
+  family, deduped by `concept_uuid`, reads `run_concept_facts` only.
+- **Values emitted verbatim (scale=identity) by default.** The `scale` argument
+  and per-row sign flips are **Windows-blocked** until the recon confirms whether
+  mTool stores the unscaled or the thousands figure — a wrong scale silently
+  1000×-inflates every figure. `denomination` is surfaced in the doc meta.
+- **Semantic, not physical:** writes carry a `column_role` (CY/PY × company/group),
+  NOT a column letter. mTool's real layout (observed: labels col D, values E/F) is
+  resolved at fill time via `exporter.apply_column_map` (fails loudly on a missing
+  role) or `column_detect.detect_column_map` (positional + confidence; the endpoint
+  refuses low-confidence auto-detection and asks for an explicit map).
+- **Machine docs are `strict`** (`build_fill_doc` sets `strict:true`): a non-exact
+  label is a bug to surface, not a typo to forgive. Hand-authored operator runs
+  stay lenient; fuzzy hits are still reported.
+- **Created note slots REUSE the template's orphan `fn_` pool; the `+FootnoteTexts`
+  column-A key is the join key and MUST stay unique** (2026-07-05 Amgen empty-popup
+  incident). mTool joins visible cell → payload by that column-A string and reads
+  the FIRST match, so a minted key that duplicates a pre-provisioned orphan `fn_N`
+  row leaves the popup silently empty (and read-back misses it, because
+  `read_footnote_rows` keeps the LAST match — the opposite of mTool).
+  `_create_footnote_slot` drains `_build_orphan_pool` first and only appends past
+  exhaustion; `_detect_duplicate_fn_keys` (a raw row scan) flags any duplicate into
+  `report["errors"]`. Never `replace_shared_string` an EMPTY payload cell (it may
+  share a `""` `<si>`); append+patch instead. Pinned by the orphan-pool tests in
+  `tests/test_mtool_offline_fill.py`.
+- **No DB schema change** — endpoints are stateless over existing tables; uploaded
+  templates are request-scoped temp files under `OUTPUT_DIR/_mtool_tmp` (cleaned
+  via `BackgroundTask`). Run gate is `completed`/`completed_with_errors` (409
+  otherwise).
+- **UI is a button + modal (`MtoolFillModal`), not a tab** — avoids a third
+  `role="tab"` (gotcha #7).
+
+Pinned by `tests/test_mtool_offline_fill.py`, `test_mtool_exporter.py`,
+`test_mtool_routes.py`, `test_mtool_column_detect.py`, and the `MtoolFillModal`
+web tests. Full plan: `docs/PLAN.md`; operator guide: `mtool/README.md`.
 
 ### 29. Word (.docx) input — convert at the door; PDF stays the spine
 
-Uploads accept `.docx`: converted to a text PDF **at upload time**
-(`ingest/word_convert.py` — LibreOffice on Mac/cloud, Word COM on Windows) and
-stored as the run's `uploaded.pdf`, so the whole page-based pipeline runs
-unchanged. Conversion failure is a 422 with a plain-language Save-As-PDF
-fallback, never a crash. A best-effort `source.html` sidecar (mammoth) feeds
-the notes verbatim-table passthrough — gotcha #16 owns that rule.
+Uploads accept Microsoft Word (`.docx`) as well as PDF (docs/PLAN-word-input.md).
+A `.docx` is converted to a **text PDF at upload time** and stored as the run's
+`uploaded.pdf`, so the entire page-based pipeline (scout, page hints, evidence
+citations "PDF page N", the PdfSourcePane viewer) runs UNCHANGED — it just sees
+crisp real text instead of a scan. Excel input is deliberately out of scope
+(a spreadsheet has no pages; it belongs as a future companion channel, not a
+primary input).
 
-**Full invariants:** `.claude/rules/word-input.md` — auto-loads when working
-under `ingest/`.
+- **Both files are kept in the session dir:** `uploaded.docx` (original,
+  formatting source) + `uploaded.pdf` (canonical for extraction + viewer). The
+  `uploaded.pdf` naming contract is preserved — nothing downstream learns a new
+  path. PDF uploads are byte-for-byte unchanged (land straight as
+  `uploaded.pdf`, no sidecar).
+- **`ingest/word_convert.py` is the single converter seam** (`convert_docx_to_pdf`).
+  Platform-native + lightweight, NOT the removed docling/torch stack (gotcha
+  #26): **Word COM via `docx2pdf` on Windows** (Word is installed there),
+  **LibreOffice `soffice --convert-to pdf` on Mac/Linux/cloud**. Override with
+  `XBRL_DOCX_CONVERTER` (`soffice`|`docx2pdf`) / `XBRL_SOFFICE_PATH`.
+  `_run_conversion` is the monkeypatch point in tests (no real converter in CI).
+- **Conversion failure is a 422, never a crash.** The upload endpoint tears down
+  the whole session dir and returns `WordConversionError.user_message` verbatim
+  (plain-language, tells the operator to Save-As-PDF in Word and re-upload — the
+  always-available fallback, since the pipeline can't tell a hand-saved PDF from
+  a server-converted one). CLI (`run._stage_input_document`) lets it propagate.
+- **Notes source-formatting side-channel (Phase 2).** `ingest/docx_html.py`
+  extracts the Word body to `source.html` (via `mammoth`, small pure-Python) —
+  **best-effort, never blocks the upload**. `notes/source_snippets.py` slices it
+  per top-level note (navigation only, keyed on note-number headings like scout
+  hints — gotcha #13; NO deterministic label-matching enters the notes
+  pipeline). `create_notes_agent` registers the `read_source_note(note_num)`
+  tool + a prompt block ONLY when `source.html` exists for the run (derived from
+  the PDF's parent dir); PDF-only runs are byte-identical to before. The agent
+  **COPIES the source table's markup — inline `style=` included — straight into
+  `content`** (verbatim passthrough, 2026-07-19); it does NOT re-describe that
+  styling as `format_ops`, which was the original design and is what run 74
+  showed the model getting wrong. **PROSE still stays style-free**, enforced in
+  code by `notes/writer.py::_strip_non_table_styles` — the narrowing is TABLES
+  ONLY. Such tables are stamped `data-source-styled` so no renderer adds its own
+  grid. `format_ops` remains the channel for styling the agent *observes* rather
+  than copies (PDF runs, and any table with no source counterpart). See gotcha
+  #16, which owns the full rule — this bullet must not drift from it again.
+- **No DB schema change** — files live on disk (hybrid-storage, gotcha #6). The
+  inert `doc_conversions` table (gotcha #11) is NOT reused.
+
+Pinned by `tests/test_word_convert.py`, `test_docx_html.py`,
+`test_notes_source_snippets.py`, `test_notes_source_prompt.py`,
+`test_upload_docx.py`, `test_run_cli_docx.py`, and the `UploadPanel` web tests.
+Phase 0 converter spike + real-run validation (Steps 6/10) and Windows
+enablement (Step 11) are operator/hardware gates, still open. Plan:
+docs/PLAN-word-input.md.
 
 ### 30. Evals workspace — repeats/consistency, mTool gold, suites, trends
 
-The Evals workspace (suites, repeats, consistency, mTool gold, trends) launches
-completely normal extraction runs and only grades/aggregates — it **NEVER
-alters extraction behaviour**. Scoring formulas are fixed and decompose:
-accuracy = matched ÷ gold slots; consistency = unanimous agreement over the
-union of filled slots (≥2 finished repeats, else "unavailable"); suite
-aggregate = MEAN of per-document accuracy. History hides suite children by
-default.
+The Evals workspace (docs/PLAN-evals-workspace.md, PRD docs/PRD-evals-workspace.md)
+turns one-run-one-gold grading into a corpus-level quality system. Every eval
+child run is a **completely normal extraction run** through the existing
+pipeline; the workspace only launches, watches, grades, and aggregates — it
+NEVER alters extraction behaviour. Schema v30 (repeats/taxonomy/gold-prose) +
+v31 (suites). All additive/nullable (gotcha #11); on rollback the tables sit
+inert.
 
-**Full invariants** (batch runner, gap-filling Resume, frozen-corpus snapshots,
-gold fingerprints, frontend rules): `.claude/rules/eval-benchmarks.md`
-(shared with gotcha #23).
+Load-bearing invariants:
+
+- **Scoring formulas are fixed and decompose (PRD Scoring Design).**
+  `accuracy = matched ÷ gold slots` (unchanged headline; a value slot is
+  concept_uuid × period × entity_scope, LEAF/MATRIX_CELL only — COMPUTED
+  totals excluded so they can't inflate). The **failure taxonomy**
+  (`eval/grader.classify_failures`: scale / sign / period-swap / scope-swap /
+  misplaced / false-not-disclosed / unaddressed / plain-wrong) NEVER softens
+  the score — it powers drill-down + trends. Beyond-gold is a trended watchdog,
+  never a headline penalty. **Consistency = unanimous agreement over the union
+  of slots any repeat filled** (`eval/consistency.py`), needs ≥2 finished
+  repeats else "unavailable" (never a misleading 100%). **Suite aggregate =
+  MEAN of per-document accuracy** (`eval/scorecards.aggregate_suite`), pooled
+  figure secondary, worst document always surfaced, failed docs excluded +
+  "N of M". These live in pure modules with hand-built fixtures — change a
+  formula and its pinning test in the same commit.
+- **Repeats ride one SSE stream** (`server.run_repeat_group_stream`, Step D1):
+  N identically-configured runs back-to-back sharing ONE `session_id` (so
+  Stop-All / disconnect reaches the live repeat) but isolated output subdirs;
+  consistency is finalized on the generator's `finally` (abort mid-group →
+  `partial`). Do NOT reintroduce a separate cancel channel.
+- **Suite batch runner** (`api/suite_runner.py`, Step E3) is a background loop
+  (reviewer-pass thread pattern), concurrency **fixed at 3** (decision #2),
+  Resume re-launches only documents whose DISTINCT finished repeats are below
+  the requested count (identified by the deterministic
+  `suite-{suite_run}-doc-{doc}` session id; completion counts distinct repeats
+  via `COALESCE(repeat_index, id)`, never raw rows), and
+  `repo.reconcile_stale_suite_runs` retires crash-orphaned `running` suite runs
+  at startup (mirrors `reconcile_stale_review_tasks`). Child runs link via
+  `runs.suite_run_id`, threaded through `run_multi_agent_stream` /
+  `run_repeat_group_stream`. **Repeat Resume fills the GAPS** — the missing
+  repeat indices, computed from `repo.finished_repeat_indices` — never a blind
+  append from a count (which duplicated a later index and left an earlier one
+  unfilled when a middle repeat failed; consistency dedups per index via
+  `repo.deduped_repeat_run_ids`). The v32 snapshot freezes each document's
+  BYTES into a run-owned copy (`_copy_source_for_snapshot`, under
+  `output/_suite_snapshots/run_{N}`), so deleting a live suite document can't
+  strand an unfinished Resume. Snapshot copies are never auto-reclaimed —
+  deliberate (Resume may need them indefinitely), same accumulation model as
+  per-run output dirs; cleanup is future housekeeping, don't add it as a side
+  effect. An empty statement list is a
+  notes-only run (preserved, not expanded to all five); a both-empty selection
+  is rejected 422.
+- **History hides suite children by default** (Step E6): `GET /api/runs`
+  filters `suite_run_id IS NULL` unless `include_suite_children=true`
+  (decision #1). Repeat children are NOT hidden (they're normal History runs).
+- **mTool gold ingest is strict + variant-precise** (already shipped C1–C3):
+  `POST /api/benchmarks/from-mtool` requires a declared unit (no auto-guess —
+  a wrong unit silently 1000×'s every value) AND an explicit `template_ids`
+  set (gotcha #21 — uuids differ per variant). The C4 form's picker is fed by
+  `GET /api/eval/templates`. Off-template labels surface as unmatched, never
+  fuzzy-matched.
+- **Trends + compare recompute on demand from durable facts** (`eval/compare.py`,
+  F1/F2) — no heavyweight new storage. Compare unions differing document sets
+  (greyed + excluded from the aggregate delta), and warns when gold changed
+  between the two runs via a per-run gold FINGERPRINT (v33, `_gold_changed`);
+  the `updated_at` timestamp window is the legacy fallback for pre-v33 scores.
+  Pooled accuracy sums the EXACT repeat matched counts (`matched_for_pool`),
+  never per-doc rounded ints (rounding a 0.5 repeat mean to 0 corrupted it).
+  Suite "N of M" coverage is over the FROZEN corpus (`aggregate_suite(...,
+  corpus_size=)`), so a failed-to-stage document counts toward M and its state
+  + reason surface via the detail endpoint's `doc_states`.
+- **Frontend:** the "Evals" nav surface (`/evals` → `web/src/pages/SuitesPage.tsx`)
+  is admin-gated like Benchmarks (which it depends on for gold). Recharts is the
+  ONE chart dep (SVG, coexists with the inline-style rule, gotcha #7). The
+  ConsistencyPanel is a run-page SECTION, not a `role="tab"` (gotcha #7).
+
+Pinned by `tests/test_db_schema_v30.py`/`_v31.py`, `test_eval_taxonomy.py`,
+`test_eval_consistency.py`, `test_repeat_group_launch.py`,
+`test_eval_mtool_ingest.py`/`test_mtool_gold_routes.py`, `test_suite_routes.py`,
+`test_suite_runner.py`, `test_suite_scorecards.py`, `test_reviewer_lift.py`,
+`test_suite_compare.py`, and the `ConsistencyPanel`/`BenchmarksPage`/
+`SuitesPage`/`EvalTab` web tests.
 
 ## Testing
 

@@ -175,10 +175,6 @@ async def get_config():
         "notes_coverage": server._notes_coverage_enabled(),
         # Item 28 — per-entity advisory memory (prior-year prompt hints). Default on.
         "entity_memory": server._entity_memory_enabled(),
-        # mTool fill EXPOSURE gate (docs/PLAN-mtool-fill-pipeline.md Step 8A).
-        # Default OFF: producing a filled MBRS workbook is a filing action, so
-        # the action stays hidden until the Windows acceptance run passes.
-        "mtool_fill": server._mtool_fill_enabled(),
         # Firm-wide notes-table style theme (docs/PLAN-notes-table-theme.md).
         # Surfaced here so the Notes tab + clipboard read the firm default at
         # render time without a separate /api/settings round-trip.
