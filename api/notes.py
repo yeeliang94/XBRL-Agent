@@ -1083,6 +1083,34 @@ async def notes_integrity_events(run_id: int, limit: int = 200):
     return {"run_id": run_id, "events": [dict(r) for r in rows]}
 
 
+@router.get("/api/runs/{run_id}/export_preflight")
+async def export_preflight(run_id: int, include_size: bool = True):
+    """What a download or an mTool fill will lose — plan Phase 9, Step 9.1.
+
+    Both exits degrade quietly today: the size ladder reports what it dropped
+    only DURING the fill, by which point the operator is committed, and
+    neither exit says anything about a note whose source is half accounted
+    for. This says both, before either action.
+
+    Advisory: it never blocks. `blocking_count` means "a person should look",
+    not "the button is disabled" — partial output stays downloadable
+    (Step 7.3).
+    """
+    from db import repository as repo
+    from notes import export_preflight as preflight
+
+    conn = server._open_audit_conn()
+    try:
+        if repo.fetch_run(conn, run_id) is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        result = preflight.run_preflight(
+            conn, server.AUDIT_DB_PATH, run_id, include_size=include_size,
+        )
+    finally:
+        conn.close()
+    return result.as_dict()
+
+
 @router.get("/api/runs/{run_id}/notes_tables")
 async def notes_tables(run_id: int):
     """Every table across the run's prose notes sheets, for the review surface.
