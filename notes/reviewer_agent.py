@@ -125,7 +125,18 @@ class NotesReviewerDeps:
         inventory_note_nums: Optional[List[int]] = None,
         inventory_subnotes: Optional[dict] = None,
         sidecar_paths: Optional[List[str]] = None,
+        integrity_mode: Optional[str] = None,
     ):
+        # Plan Step 5.1. In `enforce` the reviewer relinks instead of authoring
+        # prose over a source-linked cell — otherwise the first reviewer pass
+        # silently breaks the lineage every completeness figure depends on
+        # (peer-review blocker 2). Resolved once here rather than re-read per
+        # tool call, so one pass cannot straddle a flag change.
+        from notes.source_models import IntegrityMode, integrity_mode as _resolve
+
+        self.integrity_mode = (
+            IntegrityMode(integrity_mode) if integrity_mode else _resolve()
+        )
         self.run_id = run_id
         self.db_path = db_path
         self.pdf_path = pdf_path
@@ -1090,6 +1101,111 @@ def create_notes_reviewer_agent(
         ]
         return _summarize_batch(outcomes, "authored {ok} cell(s)")
 
+    # -------------------- source-linked write tools (Step 5.1) --------------
+    #
+    # These replace body-authoring for source-linked cells in `enforce`. They
+    # change WHICH parts of the document a cell is made of, or record why a
+    # part was not used — never what the text says.
+
+    def _active_generation_id(ctx: RunContext[NotesReviewerDeps]):
+        from notes import source_repository as _srepo
+
+        with repo.db_session(ctx.deps.db_path) as conn:
+            gen = _srepo.active_generation(conn, ctx.deps.run_id)
+        return gen["id"] if gen else None
+
+    @agent.tool
+    def relink_note_cell(
+        ctx: RunContext[NotesReviewerDeps],
+        sheet: str, row: int, block_ids: List[str],
+        source_pages: Optional[List[int]] = None,
+        evidence: Optional[str] = None,
+    ) -> str:
+        """Rebuild a cell from a different set of source parts.
+
+        Use this instead of rewriting a cell's text when the cell was built
+        from the document. Name the block ids the cell should contain; the
+        text is rebuilt from the document, in document order. The rest of a
+        part-named table is pulled in automatically."""
+        from notes import source_write
+
+        gen_id = _active_generation_id(ctx)
+        if gen_id is None:
+            return (
+                "rejected: this run has no frozen source reading, so there "
+                "are no parts to link to. Use edit_note_cells instead."
+            )
+        with ctx.deps.io_lock:
+            _ensure_snapshot(ctx)
+            try:
+                with repo.db_session(ctx.deps.db_path) as conn:
+                    existing = _read_cell(
+                        ctx.deps.db_path, ctx.deps.run_id, sheet, row
+                    ) or {}
+                    outcome = source_write.write_cell_from_blocks(
+                        conn, run_id=ctx.deps.run_id, generation_id=gen_id,
+                        sheet=sheet, row=row, block_ids=block_ids,
+                        label=existing.get("label") or "",
+                        evidence=_ground_evidence(source_pages or [], evidence),
+                        source_pages=source_pages or [],
+                        actor="notes_reviewer",
+                    )
+            except source_write.SourceWriteError as exc:
+                return f"rejected: {exc}"
+            ctx.deps.writes_performed += 1
+            ctx.deps.correction_log.append({
+                "op": "relink", "sheet": sheet, "row": row,
+                "evidence": ", ".join(outcome.block_ids),
+            })
+        return outcome.as_message()
+
+    @agent.tool
+    def record_block_dispositions(
+        ctx: RunContext[NotesReviewerDeps],
+        block_ids: List[str], disposition: str,
+        reason_code: Optional[str] = None, note: Optional[str] = None,
+    ) -> str:
+        """Record what happened to source parts that are not in any cell — in
+        ONE call (a single part is a one-element list).
+
+        `disposition` is one of: excluded, routed, structured_consumed.
+        `excluded` needs a `reason_code` from the approved list. Saying a part
+        could not be read (UNREADABLE_NEEDS_REVIEW) records the problem; it
+        does not settle it, and the part stays unresolved."""
+        from notes import source_repository as _srepo
+        from notes.source_models import Disposition as _D, EXCLUSION_REASONS
+
+        gen_id = _active_generation_id(ctx)
+        if gen_id is None:
+            return "rejected: this run has no frozen source reading."
+        try:
+            target = _D(disposition)
+        except ValueError:
+            return (
+                f"rejected: {disposition!r} is not a disposition. Use one of: "
+                "excluded, routed, structured_consumed."
+            )
+        if target is _D.EXCLUDED and reason_code not in EXCLUSION_REASONS:
+            return (
+                f"rejected: excluding a part needs a reason from the approved "
+                f"list: {', '.join(sorted(EXCLUSION_REASONS))}."
+            )
+        done, failed = 0, []
+        with ctx.deps.io_lock:
+            with repo.db_session(ctx.deps.db_path) as conn:
+                for bid in block_ids:
+                    try:
+                        _srepo.record_disposition(
+                            conn, ctx.deps.run_id, gen_id, bid, target,
+                            reason_code=reason_code, actor="notes_reviewer",
+                            actor_detail="reviewer pass", note=note,
+                        )
+                        done += 1
+                    except ValueError as exc:
+                        failed.append(f"{bid}: {exc}")
+        summary = f"ok: recorded {done} part(s) as {disposition}"
+        return summary + ("\n" + "\n".join(failed) if failed else "")
+
     @agent.tool
     def move_note_cell(
         ctx: RunContext[NotesReviewerDeps],
@@ -1323,6 +1439,33 @@ def create_notes_reviewer_agent(
             return verdict.message
         return None
 
+    def _refuse_authoring_over_source(
+        ctx: RunContext[NotesReviewerDeps], action: str, sheet: str, row: int,
+    ) -> Optional[str]:
+        """In `enforce`, a source-linked prose cell is relinked, not rewritten.
+
+        Scoped to cells that ACTUALLY have lineage: a note the source model
+        never covered still needs the ordinary edit path, and refusing there
+        would leave the reviewer unable to fix anything on a mixed run. In
+        `off` and `shadow` this returns None and behaviour is unchanged.
+        """
+        from notes import lineage as _lineage
+        from notes.source_models import IntegrityMode
+
+        if ctx.deps.integrity_mode is not IntegrityMode.ENFORCE:
+            return None
+        with repo.db_session(ctx.deps.db_path) as conn:
+            state = _lineage.read_lineage(conn, ctx.deps.run_id, sheet, row)
+        if state is None or not state.source_rendered_sha256:
+            return None
+        return (
+            f"rejected: {sheet} row {row} was built from the source document, "
+            f"so replacing its text would break the link back to what it came "
+            f"from. Use relink_note_cell to change WHICH parts of the source "
+            f"this cell is made of, or record a disposition if the content "
+            f"genuinely does not belong here."
+        )
+
     def _do_write(
         ctx: RunContext[NotesReviewerDeps], *, action: str,
         sheet: str, row: int, html: str,
@@ -1334,6 +1477,9 @@ def create_notes_reviewer_agent(
                 ctx, action=action, sheet=sheet, row=row,
                 source_pages=source_pages, note_num=note_num,
             )
+            if rej is not None:
+                return rej
+            rej = _refuse_authoring_over_source(ctx, action, sheet, row)
             if rej is not None:
                 return rej
             # Peer-review HIGH: validate the agent's RAW supplied content first
@@ -1392,6 +1538,16 @@ def create_notes_reviewer_agent(
                     # Audit marker: this note was authored back into place by
                     # the reviewer (shown on the final coverage checklist).
                     ctx.deps.authored_note_nums.add(int(note_num))
+                # Plan Step 5.2: the reviewer is a writer like any other, so
+                # its write records its own divergence in the same session.
+                # Without this the pass that FIXES a note is the pass that
+                # breaks its lineage.
+                from notes import lineage as _lineage
+
+                _lineage.mark_human_edit(
+                    conn, ctx.deps.run_id, sheet, row, cleaned,
+                    actor="notes_reviewer",
+                )
             ctx.deps.writes_performed += 1
             ctx.deps.correction_log.append({
                 "op": action, "sheet": sheet, "row": row, "evidence": ev,
