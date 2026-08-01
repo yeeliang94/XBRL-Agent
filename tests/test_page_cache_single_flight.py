@@ -39,7 +39,7 @@ def test_concurrent_cold_miss_renders_exactly_once(monkeypatch):
     render, not five. Every awaiter receives the same bytes."""
     render_count = {"n": 0}
 
-    def fake_render_single(pdf_path: str, page_num: int, dpi: int = 200):
+    def fake_render_single(pdf_path: str, page_num: int, dpi: int = 200, **kw):
         render_count["n"] += 1
         # Hold the render briefly so all 5 tasks have a chance to
         # install their Futures before the first one completes —
@@ -72,7 +72,7 @@ def test_concurrent_cold_miss_for_different_pages_renders_each_once(monkeypatch)
     not a global mutex."""
     renders: list[int] = []
 
-    def fake_render_single(pdf_path, page_num, dpi=200):
+    def fake_render_single(pdf_path, page_num, dpi=200, **kw):
         import time
         renders.append(page_num)
         time.sleep(0.01)
@@ -99,7 +99,7 @@ def test_duplicate_page_in_one_request_renders_once(monkeypatch):
     must render p32 once, not twice."""
     renders: list[int] = []
 
-    def fake_render_single(pdf_path, page_num, dpi=200):
+    def fake_render_single(pdf_path, page_num, dpi=200, **kw):
         renders.append(page_num)
         return page_num, f"PNG:{page_num}".encode()
 
@@ -119,7 +119,7 @@ def test_render_failure_propagates_to_every_awaiter_and_clears_inflight(monkeypa
     must be cleared so a subsequent call can retry cleanly."""
     attempt = {"n": 0}
 
-    def failing_render(pdf_path, page_num, dpi=200):
+    def failing_render(pdf_path, page_num, dpi=200, **kw):
         attempt["n"] += 1
         # First (coalesced) attempt raises; a later caller gets a
         # clean slate and would render normally.
@@ -166,7 +166,7 @@ def test_solo_render_failure_does_not_leak_unretrieved_exception(monkeypatch, ca
     import gc
     import logging
 
-    def failing_render(pdf_path, page_num, dpi=200):
+    def failing_render(pdf_path, page_num, dpi=200, **kw):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(notes_agent, "_render_single_page", failing_render)
@@ -195,7 +195,7 @@ def test_second_call_after_successful_render_hits_byte_cache(monkeypatch):
     without going through the in-flight path."""
     renders: list[int] = []
 
-    def fake_render_single(pdf_path, page_num, dpi=200):
+    def fake_render_single(pdf_path, page_num, dpi=200, **kw):
         renders.append(page_num)
         return page_num, f"PNG:{page_num}".encode()
 

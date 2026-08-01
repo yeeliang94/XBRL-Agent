@@ -155,7 +155,7 @@ def test_render_pages_async_uses_cache(monkeypatch):
 
     calls: list[int] = []
 
-    def fake_render_single(pdf_path: str, page_num: int, dpi: int = 200):
+    def fake_render_single(pdf_path: str, page_num: int, dpi: int = 200, **kw):
         calls.append(page_num)
         # Distinct bytes per page keep the assertions meaningful.
         return page_num, f"PNG:{pdf_path}:{page_num}:{dpi}".encode()

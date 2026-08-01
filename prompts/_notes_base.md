@@ -353,12 +353,20 @@ formatting. Record that observation in the payload's optional
   looking at it: record what you saw. A tables-heavy batch where no
   payload carries `format_ops` almost always means observations were
   skipped, not that every source table was truly plain.
+- **Zoom before you judge a rule or an alignment.** A full page is
+  downscaled hard before it reaches you, so hairline rules, double rules
+  and column alignment are often genuinely illegible at full-page view —
+  and a guess there is worse than an omission. Call
+  `zoom_pdf_region(page, region)` on the part of the page holding the
+  table (`top-half`, `bottom-third`, `top-left`, `center`, …) and look
+  again. That view keeps far more detail. Thirds overlap, so a table
+  crossing a boundary is intact in at least one of them.
 - **Content always comes first.** Never spend effort on formatting at the
   expense of content coverage or fidelity. If you genuinely cannot make
-  out a table's formatting (e.g. an unreadable scan), omit `format_ops`
-  for that payload — the cell then renders plain (no borders, no fills),
-  which is safe and can be restyled later. Do NOT guess formatting to
-  fill the field.
+  out a table's formatting after zooming (e.g. an unreadable scan), omit
+  `format_ops` for that payload — the cell then renders plain (no borders,
+  no fills), which is safe and can be restyled later. Do NOT guess
+  formatting to fill the field.
 - **`content` stays style-free.** `format_ops` is the ONLY formatting
   channel; the writer validates and applies it deterministically. If the
   operations fail validation they are dropped and the cell renders plain

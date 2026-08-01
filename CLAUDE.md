@@ -41,6 +41,30 @@ session's general operating rules):
   technical, give it a one-line plain-English gloss rather than assuming it
   lands. This governs how you *communicate*; it does not lower the technical
   precision of the code or of the invariants below.
+- **Write in plain business English. No flowery language.** This is a
+  standing correction, given twice — do not wait to be asked again, and apply
+  it to chat replies, plans, PRDs, commit messages, and any HTML or document
+  you produce. Concretely:
+  - **State the thing directly.** "The check confirms placement, not
+    completeness." Not "the tick is honest about placement and silent about
+    completeness."
+  - **No metaphors, analogies, or imagery** for technical points — no
+    icebergs, no "wearing a green badge", no "blow up later", no "the eye
+    catches it". Name the actual mechanism instead.
+  - **No editorialising.** Drop "genuinely", "rare for a plan this size",
+    "worth its keep", "the whole point", "cheap work", "sharp". Say what is
+    true and move on; praise only where it changes a decision.
+  - **Short declarative sentences.** One idea per sentence. Prefer
+    "Recommendation: do not start Phase 1." over a paragraph building to it.
+  - **Structure over prose** for anything with more than three points: a
+    numbered list, a summary table, or repeated labelled fields
+    (Issue / Impact / Recommendation). The reader should be able to find the
+    answer without reading top to bottom.
+  - **Lead with the conclusion**, then the reasoning. Put the recommendation
+    and the classification (blocker / correction / decision) before the
+    explanation, not after it.
+  Plain does not mean vague or softened — keep the finding, the number, and
+  the file reference exact.
 
 ## Quick Start
 
@@ -75,8 +99,10 @@ PDF + scout (optional) → coordinator → N extraction agents (parallel) ─┐
                                                                        └→ cross_checks
 ```
 
-Full module map, subsystems, and data flow in
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Full module map, subsystems, and data flow: **not currently written** —
+`docs/ARCHITECTURE.md` is referenced throughout this file but does not exist in
+the tree. Read the package layout directly (`notes/`, `scout/`, `extraction/`,
+`concept_model/`, `api/`) until it is restored.
 
 ## LLM Provider Setup
 
@@ -100,8 +126,8 @@ master key `sk-local-dev-key`, logs in `litellm.log`. Falls back to direct
 mode if the proxy fails to start.
 
 **Windows:** all traffic goes through `https://genai-sharedservice-emea.pwc.com`
-(OpenAI-compatible). Direct Google API calls are blocked (403). See
-[docs/PORTING-WINDOWS.md](docs/PORTING-WINDOWS.md).
+(OpenAI-compatible). Direct Google API calls are blocked (403).
+(`docs/PORTING-WINDOWS.md` is referenced historically but is not in the tree.)
 
 ### .env
 
@@ -219,7 +245,8 @@ components, added-instead-of-subtracted reclassification adjustments,
 inverted SOCF-Direct payment signs; pinned by
 `tests/test_template_formulas.py`). SOCF-Indirect and SOCIE remain
 hand-curated. Historical incident (2026-04-07, +20-row SOFP offset bug)
-documented in `docs/Archive/TEMPLATE-FORMULA-FIX-GUIDE.md`.
+recorded in git history (the write-up `docs/Archive/TEMPLATE-FORMULA-FIX-GUIDE.md`
+is no longer in the tree).
 
 ### 4. `compare_results.py` vs current templates — row numbering differs
 
@@ -509,7 +536,7 @@ Key invariants:
   `scout.notes_discoverer_vision._vision_inventory` renders the notes section
   in 8-page batches and runs up to 5 vision batches in parallel.
 
-Full walkthrough: [docs/NOTES-PIPELINE.md](docs/NOTES-PIPELINE.md).
+Full walkthrough: [docs/Archive/NOTES-PIPELINE.md](docs/Archive/NOTES-PIPELINE.md).
 
 ### 15. MPERS — first-class filing standard
 
@@ -580,7 +607,8 @@ Key invariants:
   formulas by `tests/test_notes_prompt_phase1.py::test_live_templates_subtract_dividends_paid`
   (parametrised across all 6 templates including MPERS Group SOCIE,
   which was extended with per-block formulas in the same change).
-  See [ADR-002](docs/ADR-002-socie-dividend-sign.md).
+  (ADR-002 is cited historically; `docs/ADR-002-socie-dividend-sign.md` is not
+  in the tree — the pinning test above is the live contract.)
 
 Full walkthrough: [docs/MPERS.md](docs/MPERS.md).
 
@@ -838,7 +866,7 @@ Key invariants:
   rest, raw while focused (`formatGroupedInput` in `web/src/lib/numberFormat.ts`);
   display-only, stored values stay raw.
 
-Full walkthrough: [docs/NOTES-PIPELINE.md](docs/NOTES-PIPELINE.md).
+Full walkthrough: [docs/Archive/NOTES-PIPELINE.md](docs/Archive/NOTES-PIPELINE.md).
 
 ### 17. Abstract section-header rows are never writable; agents must not plug residuals
 
@@ -1560,18 +1588,23 @@ Some tests auto-skip when sample data is absent (e.g. `test_pdf_viewer.py`).
   audit trail.
 - **`docs/PLAN-*.md` are historical context**, not API contracts. Treat them
   as "why we did X" snapshots, not load-bearing specs.
-- **For broad questions**, start with [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md);
-  for cross-file impact, check [docs/SYNC-MATRIX.md](docs/SYNC-MATRIX.md).
+- **For broad questions**, read the package layout directly. `docs/ARCHITECTURE.md`
+  and `docs/SYNC-MATRIX.md` are referenced in several places below but **do not
+  exist in this repo** — do not spend a tool call looking for them. For
+  cross-file impact, grep the gotcha that governs the area; each names its
+  pinning tests.
 
 ## Deeper References
 
 | Doc | When to read |
 |---|---|
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Full module map + data flow |
-| [docs/NOTES-PIPELINE.md](docs/NOTES-PIPELINE.md) | Notes subsystem deep-dive |
+| [docs/Archive/NOTES-PIPELINE.md](docs/Archive/NOTES-PIPELINE.md) | Notes subsystem deep-dive |
 | [docs/MPERS.md](docs/MPERS.md) | MPERS filing-standard deep-dive |
-| [docs/SYNC-MATRIX.md](docs/SYNC-MATRIX.md) | Cross-file impact for a given change |
-| [docs/PORTING-WINDOWS.md](docs/PORTING-WINDOWS.md) | Mac → Windows porting checklist |
-| [docs/Archive/TEMPLATE-FORMULA-FIX-GUIDE.md](docs/Archive/TEMPLATE-FORMULA-FIX-GUIDE.md) | SOFP formula-offset incident audit trail |
+
+**Referenced below but missing from the tree** — do not go looking for these:
+`docs/ARCHITECTURE.md`, `docs/SYNC-MATRIX.md`, `docs/PORTING-WINDOWS.md`,
+`docs/ADR-002-socie-dividend-sign.md`,
+`docs/Archive/TEMPLATE-FORMULA-FIX-GUIDE.md`. The invariants they supported are
+still carried in the gotchas above; the documents themselves were not preserved.
 | `docs/workflows/*.md` | Per-statement fill-workflow notes |
 | `docs/xbrl-field-descriptions.md` | Field reference for the XBRL taxonomy |
