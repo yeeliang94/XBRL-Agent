@@ -163,7 +163,14 @@ from pathlib import Path
 # source hash (computed at resume time) and the reused/rerun statement lists.
 # Pure CREATE TABLE IF NOT EXISTS walk-forward (new table, no ALTER); inert
 # unless XBRL_STAGE_RESUME is used. Pinned by tests/test_db_schema_v34.py.
-CURRENT_SCHEMA_VERSION = 34
+# v35 adds the notes source-integrity model (PLAN-notes-source-integrity-build
+# Phase 3): `notes_source_generations` / `_notes` / `_blocks`,
+# `notes_block_usages`, the append-only `notes_disposition_events`, and
+# `notes_integrity_runs`, plus five nullable content-provenance columns on
+# `notes_cells`. Inert unless XBRL_NOTES_SOURCE_INTEGRITY is shadow/enforce;
+# on rollback the tables sit unused and old code ignores the columns. Pinned
+# by tests/test_db_schema_v35.py.
+CURRENT_SCHEMA_VERSION = 35
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -518,6 +525,17 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         updated_at    TEXT NOT NULL,
         concept_uuid  TEXT,                    -- P7: link to canonical concept store; NULL = legacy notes write
         style_source  TEXT,                    -- v29: 'ops'|'floor'|'unstyled'; NULL = legacy / reviewer-authored
+        -- v35 content provenance (PLAN-notes-source-integrity-build Phase 3).
+        -- Kept DISTINCT from style_source: where the TEXT came from and how the
+        -- FORMATTING was decided are different facts. Mirrored in
+        -- _V35_MIGRATION_COLUMNS for existing databases — a column added only
+        -- there would be missing on a fresh init, since the migration branch
+        -- does not run when there is no stored version.
+        source_generation_id   INTEGER,
+        source_rendered_sha256 TEXT,
+        current_html_sha256    TEXT,
+        content_origin         TEXT,           -- source_exact|source_normalized|vision_transcribed|structured_generated|human_modified|legacy
+        source_diverged_at     TEXT,
         UNIQUE(run_id, sheet, row)
     )
     """,
@@ -1130,6 +1148,137 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         created_at       TEXT NOT NULL
     )
     """,
+    # -----------------------------------------------------------------
+    # v35: notes source integrity (PLAN-notes-source-integrity-build
+    # Phase 3). Inert unless XBRL_NOTES_SOURCE_INTEGRITY is shadow/enforce.
+    #
+    # The model: a RUN gets one active GENERATION of the source; a
+    # generation holds ordered BLOCKS (paragraph, heading, table, ...)
+    # grouped into SOURCE NOTES; a USAGE records what happened to each
+    # block; an INTEGRITY RUN records the verdict. Blocks are frozen —
+    # nothing downstream edits them, so a completeness count is a fact
+    # about the document rather than a claim by an agent.
+    # -----------------------------------------------------------------
+    """
+    CREATE TABLE IF NOT EXISTS notes_source_generations (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id            INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        generation_no     INTEGER NOT NULL,
+        source_sha256     TEXT,
+        extractor_version TEXT NOT NULL DEFAULT '',
+        input_kind        TEXT NOT NULL DEFAULT '',  -- docx_html|pdf_text|pdf_vision|pdf_hybrid
+        -- No CHECK constraint on `status`, deliberately: a new lifecycle
+        -- value must not require a full-table migration (gotcha #11).
+        status            TEXT NOT NULL DEFAULT 'building',
+        pages_expected    INTEGER,
+        pages_processed   INTEGER,
+        started_at        TEXT NOT NULL DEFAULT '',
+        activated_at      TEXT,
+        failed_at         TEXT,
+        failure_code      TEXT,
+        UNIQUE(run_id, generation_no)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS notes_source_notes (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        generation_id       INTEGER NOT NULL
+                              REFERENCES notes_source_generations(id) ON DELETE CASCADE,
+        source_note_id      TEXT NOT NULL,
+        top_note_num        TEXT NOT NULL DEFAULT '',
+        title               TEXT NOT NULL DEFAULT '',
+        page_lo             INTEGER,
+        page_hi             INTEGER,
+        boundary_confidence REAL,
+        content_sha256      TEXT,
+        status              TEXT NOT NULL DEFAULT 'frozen',
+        UNIQUE(generation_id, source_note_id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS notes_source_blocks (
+        id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+        generation_id      INTEGER NOT NULL
+                             REFERENCES notes_source_generations(id) ON DELETE CASCADE,
+        block_id           TEXT NOT NULL,
+        source_note_id     TEXT,               -- NULL until ownership is assigned
+        page               INTEGER,
+        reading_order      INTEGER NOT NULL DEFAULT 0,
+        block_kind         TEXT NOT NULL DEFAULT '',   -- paragraph|heading|table|caption
+        locator_json       TEXT,               -- DOM index (docx) or bbox (pdf)
+        canonical_html     TEXT,
+        content_sha256     TEXT,
+        capture_confidence REAL,
+        owner_kind         TEXT NOT NULL DEFAULT 'unresolved',  -- note|furniture|metadata|unresolved
+        table_group_id     TEXT,               -- links segments of one split table
+        continues_block_id TEXT,
+        UNIQUE(generation_id, block_id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS notes_block_usages (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id        INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        generation_id INTEGER NOT NULL
+                        REFERENCES notes_source_generations(id) ON DELETE CASCADE,
+        block_id      TEXT NOT NULL,
+        sheet         TEXT,
+        row           INTEGER,
+        concept_uuid  TEXT,
+        target_kind   TEXT,
+        disposition   TEXT NOT NULL DEFAULT 'unresolved',
+        reason_code   TEXT,
+        route_type    TEXT,
+        created_by    TEXT NOT NULL DEFAULT 'system',   -- agent|reviewer|human|system
+        created_at    TEXT NOT NULL DEFAULT '',
+        updated_at    TEXT NOT NULL DEFAULT '',
+        UNIQUE(generation_id, block_id)
+    )
+    """,
+    # Append-only history of every disposition change. `notes_block_usages`
+    # is the CURRENT state and is mutable; a mutable `created_by` column is
+    # not an audit trail (peer-review finding 11), so each change also lands
+    # here and nothing ever updates or deletes a row.
+    """
+    CREATE TABLE IF NOT EXISTS notes_disposition_events (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id          INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        generation_id   INTEGER NOT NULL,
+        block_id        TEXT NOT NULL,
+        from_disposition TEXT,
+        to_disposition  TEXT NOT NULL,
+        reason_code     TEXT,
+        actor           TEXT NOT NULL DEFAULT 'system',
+        actor_detail    TEXT,
+        note            TEXT,
+        created_at      TEXT NOT NULL DEFAULT ''
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS notes_integrity_runs (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id            INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        generation_id     INTEGER NOT NULL,
+        attempt           INTEGER NOT NULL DEFAULT 1,
+        rule_version      TEXT NOT NULL DEFAULT '',
+        status            TEXT NOT NULL DEFAULT '',
+        mode              TEXT NOT NULL DEFAULT 'off',   -- off|shadow|enforce
+        blocks_total      INTEGER NOT NULL DEFAULT 0,
+        blocks_included   INTEGER NOT NULL DEFAULT 0,
+        blocks_routed     INTEGER NOT NULL DEFAULT 0,
+        blocks_excluded   INTEGER NOT NULL DEFAULT 0,
+        blocks_unresolved INTEGER NOT NULL DEFAULT 0,
+        tables_total      INTEGER NOT NULL DEFAULT 0,
+        tables_unresolved INTEGER NOT NULL DEFAULT 0,
+        pages_expected    INTEGER NOT NULL DEFAULT 0,
+        pages_processed   INTEGER NOT NULL DEFAULT 0,
+        boundary_disagreements INTEGER NOT NULL DEFAULT 0,
+        render_loss_chars INTEGER NOT NULL DEFAULT 0,
+        requires_review   INTEGER NOT NULL DEFAULT 0,
+        reasons_json      TEXT,
+        created_at        TEXT NOT NULL DEFAULT ''
+    )
+    """,
 )
 
 
@@ -1374,6 +1523,22 @@ _V32_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
 # Steps 7-9/14). All additive: legacy scores read a NULL fingerprint (the UI
 # shows "unknown gold version" rather than a false "unchanged"), legacy
 # benchmarks are unarchived with an unknown source and verified scale.
+# v34 → v35: content provenance on notes_cells (PLAN-notes-source-integrity-
+# build Phase 3). All nullable — a pre-feature cell simply has no lineage, and
+# `content_origin` NULL reads as "legacy / not tracked". Deliberately separate
+# from `style_source` (v29): how a cell got its FORMATTING and where its TEXT
+# came from are different facts, and conflating them was how a cell copied
+# verbatim from Word became indistinguishable from one an agent composed.
+_V35_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("notes_cells", "source_generation_id", "INTEGER"),
+    ("notes_cells", "source_rendered_sha256", "TEXT"),
+    ("notes_cells", "current_html_sha256", "TEXT"),
+    # source_exact | source_normalized | vision_transcribed |
+    # structured_generated | human_modified | legacy
+    ("notes_cells", "content_origin", "TEXT"),
+    ("notes_cells", "source_diverged_at", "TEXT"),
+)
+
 _V33_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("eval_scores", "gold_fingerprint", "TEXT"),
     ("eval_benchmarks", "is_archived", "INTEGER NOT NULL DEFAULT 0"),
@@ -2511,6 +2676,41 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
                         (34,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        # v34 → v35: notes source integrity tables + notes_cells provenance
+        # columns. The six tables are pure CREATE TABLE IF NOT EXISTS (already
+        # run above); the ALTERs are additive and nullable, so old code reading
+        # this DB is unaffected and a rollback leaves the columns inert.
+        if current_version is not None and current_version < 35:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 35:
+                    for table, col_name, col_ddl in _V35_MIGRATION_COLUMNS:
+                        existing_cols = {
+                            r[1] for r in conn.execute(
+                                f"PRAGMA table_info({table})"
+                            ).fetchall()
+                        }
+                        if col_name not in existing_cols:
+                            try:
+                                conn.execute(
+                                    f"ALTER TABLE {table} ADD COLUMN {col_name} {col_ddl}"
+                                )
+                            except sqlite3.OperationalError as exc:
+                                if "duplicate column" not in str(exc).lower():
+                                    raise
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (35,),
                     )
                 conn.commit()
             except Exception:
