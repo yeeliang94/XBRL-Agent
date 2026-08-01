@@ -227,6 +227,10 @@ export interface CrossCheckCompleteData {
  *  label the dead zones between agent activity (merge → cross-check →
  *  correct → re-check → notes-validate). */
 export type PipelineStage =
+  // Reading the uploaded Word file into a frozen source manifest, before any
+  // agent sees a template (PLAN-notes-source-integrity-build Phase 4). Only
+  // fires when the source-integrity mode is shadow or enforce.
+  | "reading_source"
   | "extracting"
   | "merging"
   | "cross_checking"
