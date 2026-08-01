@@ -20,6 +20,7 @@ import { TabPanelFade } from "./TabPanelFade";
 import { NotesReviewTab } from "./NotesReviewTab";
 import { NotesReviewerPanel } from "./NotesReviewerPanel";
 import { NotesCoveragePanel } from "./NotesCoveragePanel";
+import { NotesTablesPanel } from "./NotesTablesPanel";
 import { ConsistencyPanel } from "./ConsistencyPanel";
 import {
   buildToolTimeline,
@@ -946,6 +947,7 @@ export function RunDetailView({
       {activeTab === "notes" && (
         <section style={styles.section} role="tabpanel" data-testid="run-detail-notes-review">
           <NotesCoveragePanel runId={detail.id} />
+          <NotesTablesPanel runId={detail.id} />
           <NotesReviewerPanel runId={detail.id} />
           <NotesReviewTab runId={detail.id} onRegenerate={onRegenerateNotes} />
         </section>

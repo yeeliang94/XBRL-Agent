@@ -5,6 +5,7 @@ Endpoints:
   ``PATCH /api/runs/{run_id}/notes_cells/{sheet}/{row}``   — edit one cell's HTML
   ``GET   /api/runs/{run_id}/notes_cells/edited_count``    — post-run notes edits
   ``GET   /api/runs/{run_id}/facts/edited_count``          — post-run fact edits
+  ``GET   /api/runs/{run_id}/notes_tables``                — every table, for review
 
 Step 8 (docs/Archive/PLAN-NOTES-RICH-EDITOR.md): the post-run editor reads rich
 HTML payloads per cell via GET (grouped by sheet) and saves edits via PATCH. The
@@ -625,3 +626,77 @@ async def notes_coverage_endpoint(run_id: int):
         "rows": rows,
         "summary": summary,
     }
+
+
+@router.get("/api/runs/{run_id}/notes_tables")
+async def notes_tables(run_id: int):
+    """Every table across the run's prose notes sheets, for the review surface.
+
+    PLAN-notes-source-integrity-build Phase 2, Steps 2.1 / 2.4.
+
+    Two honesty constraints are baked into the response shape:
+
+    * ``style_state`` is derived PER TABLE from the markup, because
+      ``notes_cells.style_source`` is one verdict for the whole cell. A cell
+      holding a copied Word table beside a plain one would otherwise report a
+      single style for both.
+    * ``source_pages`` is returned under ``cell_evidence`` and labelled
+      ``"cell"`` — it is the evidence cited for the CELL, not proof of where
+      this particular table came from. Per-table provenance needs the source
+      blocks (plan Phase 4); claiming it now would be inventing lineage.
+
+    ``table_index`` is the same zero-based document-order index
+    ``format_ops`` targets, so "table 2" means the same table in the review
+    surface and in a restyle request.
+    """
+    from db.repository import decode_source_pages
+    from notes.table_index import index_tables
+
+    conn = server._open_audit_conn()
+    try:
+        from db import repository as repo
+
+        if repo.fetch_run(conn, run_id) is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+
+        rows = conn.execute(
+            "SELECT sheet, row, label, html, source_pages, style_source, updated_at "
+            "FROM notes_cells WHERE run_id = ? ORDER BY sheet, row",
+            (run_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    tables: list[dict] = []
+    for c in rows:
+        html = c["html"] or ""
+        if "<table" not in html.lower():
+            continue
+        pages = decode_source_pages(c["source_pages"])
+        for entry in index_tables(html):
+            item = entry.to_dict()
+            item.update({
+                "sheet": c["sheet"],
+                "row": c["row"],
+                "label": c["label"],
+                # Stable selection key: unique across the run and stable across
+                # reloads as long as the cell's table order is unchanged.
+                "table_id": f"{c['sheet']}:{c['row']}:{entry.table_index}",
+                "cell_style_source": c["style_source"],
+                "cell_evidence": {"kind": "cell", "source_pages": pages},
+                "updated_at": c["updated_at"],
+            })
+            tables.append(item)
+
+    # Step 1.5 lives here rather than in its own endpoint: the unstyled count
+    # is exactly what this walk already computes, and a second source of the
+    # same number is a second thing to keep in step.
+    summary = {
+        "tables": len(tables),
+        "plain": sum(1 for t in tables if t["style_state"] == "plain"),
+        "styled": sum(1 for t in tables if t["style_state"] == "styled"),
+        "source": sum(1 for t in tables if t["style_state"] == "source"),
+        "flagged": sum(1 for t in tables if t["flags"]),
+        "cells_with_tables": len({(t["sheet"], t["row"]) for t in tables}),
+    }
+    return {"run_id": run_id, "tables": tables, "summary": summary}
