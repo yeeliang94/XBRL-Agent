@@ -960,6 +960,11 @@ def _resolve_api_key() -> str:
 _PROVIDER_PREFIXES: tuple[str, ...] = (
     "bedrock.anthropic.",
     "vertex_ai.",
+    # Longest first. The enterprise proxy lists its OpenAI models as
+    # `openai.global.gpt-5.6`; stripping only `openai.` left `global.gpt-5.6`,
+    # which fails the `gpt-` check and fell through to Google — direct mode
+    # then built a GoogleModel for an OpenAI model (peer review, 2026-08-01).
+    "openai.global.",
     "openai.",
     "google-gla:",
     "google-vertex:",
@@ -4493,6 +4498,28 @@ async def run_multi_agent_stream(
         # `build_docx_manifest` raises rather than measuring a partial read,
         # and that exception lands here, leaving the run on today's path with
         # no source generation and no integrity verdict.
+        # Snapshot the thinking levels this run actually used. The env value is
+        # mutable, so without this a past run's cost and quality could not be
+        # attributed to the setting that produced them — the same reason the
+        # integrity MODE is persisted per run (peer review, 2026-08-01).
+        try:
+            _levels = _thinking_levels()
+            if _levels:
+                _lvl_conn = _open_audit_conn()
+                try:
+                    _lvl_conn.execute(
+                        "UPDATE runs SET run_config_json = json_set("
+                        "  COALESCE(run_config_json, '{}'), "
+                        "  '$.thinking_levels', json(?)) WHERE id = ?",
+                        (json.dumps(_levels), run_id),
+                    )
+                    _lvl_conn.commit()
+                finally:
+                    _lvl_conn.close()
+        except Exception:  # noqa: BLE001 — telemetry, never fatal
+            logger.warning("Could not record the run's thinking levels",
+                           exc_info=True)
+
         notes_integrity_mode = _notes_integrity_mode()
         notes_source_generation_id: Optional[int] = None
         notes_boundary_report = None

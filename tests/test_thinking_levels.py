@@ -9,13 +9,15 @@ the settings this builds are byte-identical to what they were before. A
 performance knob that changes behaviour when nobody has touched it is not a
 knob, it is a silent migration.
 
-Provider mapping is not uniform, and the proxy makes it less uniform still:
+We set pydantic-ai's UNIFIED `thinking` field and let it translate per
+provider — it is model-profile-aware in ways a hand-rolled table is not. The
+one exception is the proxy path, where an explicit `openai_reasoning_effort`
+is set so LiteLLM sees the body parameter it translates from.
 
-* direct OpenAI takes the word (`minimal|low|medium|high`);
-* direct Gemini and Claude take a token BUDGET;
-* through the proxy, everything arrives as an OpenAI-shaped client, and
-  LiteLLM translates `reasoning_effort` per provider — so the word is the
-  right thing to send even for a proxied Gemini.
+The first version rolled its own mapping and put a dict into `thinking`, whose
+declared type is `bool | minimal|low|medium|high|xhigh`. These tests asserted
+on the dict they had just built, so they agreed with the bug (peer review,
+2026-08-01). They now assert against pydantic-ai's own maps.
 """
 from __future__ import annotations
 
@@ -138,27 +140,32 @@ def test_a_proxied_gemini_still_gets_no_openai_cache_params():
     assert "openai_prompt_cache_retention" not in s
 
 
-def test_direct_gemini_takes_a_token_budget():
+def test_direct_gemini_carries_the_unified_level():
+    """These three tests used to assert the hand-rolled DICT this code built,
+    so they agreed with the bug rather than catching it. pydantic-ai's own
+    translation is the thing worth asserting against."""
     s = build_model_settings(
         _model("gemini-3.5-flash", "GoogleModel"), thinking_level="medium",
     )
-    assert s["google_thinking_config"]["thinking_budget"] > 0
+    assert s["thinking"] == "medium"
 
 
-def test_direct_anthropic_takes_a_token_budget():
+def test_direct_anthropic_carries_the_unified_level():
     s = build_model_settings(
         _model("claude-sonnet-4-6", "AnthropicModel"), thinking_level="high",
     )
-    assert s["thinking"]["type"] == "enabled"
-    assert s["thinking"]["budget_tokens"] > 0
+    assert s["thinking"] == "high"
+    assert s["anthropic_cache_instructions"] is True
 
 
-def test_minimal_turns_anthropic_thinking_off_rather_than_sending_zero():
-    """A zero budget is not a valid enabled-thinking request."""
+def test_minimal_is_a_level_not_a_disabled_dict():
+    """`{'type': 'disabled'}` is truthy, so on an adaptive Claude every level
+    enabled thinking and the choice was ignored."""
     s = build_model_settings(
         _model("claude-sonnet-4-6", "AnthropicModel"), thinking_level="minimal",
     )
-    assert s["thinking"] == {"type": "disabled"}
+    assert s["thinking"] == "minimal"
+    assert not isinstance(s["thinking"], dict)
 
 
 def test_an_unclassifiable_model_gets_no_level():
@@ -226,3 +233,123 @@ def test_a_resolver_failure_degrades_to_none(monkeypatch):
         lambda _r: (_ for _ in ()).throw(RuntimeError("boom")),
     )
     assert ea._thinking_level_for("SOFP") is None
+
+
+# --------------------------------------------------------------------------
+# Peer review, 2026-08-01 — the real provider translation
+#
+# The first version hand-rolled a per-provider mapping and put a DICT into
+# `thinking`, whose declared type is `bool | minimal|low|medium|high|xhigh`.
+# The tests then asserted on the dict they had just built, so they agreed with
+# the bug. These check against pydantic-ai's own translation instead.
+# --------------------------------------------------------------------------
+
+def test_the_thinking_value_is_a_type_pydantic_ai_accepts():
+    from pydantic_ai.models.anthropic import ANTHROPIC_THINKING_BUDGET_MAP
+
+    for level in THINKING_LEVELS:
+        s = build_model_settings(
+            _model("claude-haiku-4-5", "AnthropicModel"), thinking_level=level,
+        )
+        # The exact expression that raised "unhashable type: dict".
+        assert ANTHROPIC_THINKING_BUDGET_MAP[s["thinking"]] > 0
+
+
+def test_each_level_reaches_anthropic_as_a_different_budget():
+    """A non-empty dict was truthy, so every level enabled thinking and the
+    choice was ignored. Distinct budgets prove the level survives."""
+    from pydantic_ai.models.anthropic import ANTHROPIC_THINKING_BUDGET_MAP
+
+    budgets = {
+        lvl: ANTHROPIC_THINKING_BUDGET_MAP[
+            build_model_settings(
+                _model("claude-haiku-4-5", "AnthropicModel"),
+                thinking_level=lvl,
+            )["thinking"]
+        ]
+        for lvl in THINKING_LEVELS
+    }
+    assert len(set(budgets.values())) == len(THINKING_LEVELS), budgets
+    assert budgets["minimal"] < budgets["high"]
+
+
+def test_each_level_reaches_openai_as_a_reasoning_effort():
+    from pydantic_ai.models.openai import OPENAI_REASONING_EFFORT_MAP
+
+    for level in THINKING_LEVELS:
+        assert OPENAI_REASONING_EFFORT_MAP[level] == level
+
+
+def test_direct_gemini_uses_the_unified_field_not_a_fixed_budget():
+    """pydantic-ai picks thinking_level or thinking_budget from the model's
+    own profile. A fixed budget table here got that wrong on half the tiers."""
+    s = build_model_settings(
+        _model("gemini-3.6-flash", "GoogleModel"), thinking_level="medium",
+    )
+    assert s["thinking"] == "medium"
+    assert "google_thinking_config" not in s
+
+
+def test_every_level_we_offer_is_one_pydantic_ai_knows():
+    from pydantic_ai.models.openai import OPENAI_REASONING_EFFORT_MAP
+    from pydantic_ai.models.anthropic import ANTHROPIC_THINKING_BUDGET_MAP
+
+    for level in THINKING_LEVELS:
+        assert level in OPENAI_REASONING_EFFORT_MAP
+        assert level in ANTHROPIC_THINKING_BUDGET_MAP
+
+
+# --------------------------------------------------------------------------
+# catalogue ↔ routing parity
+# --------------------------------------------------------------------------
+
+def test_every_catalogued_model_routes_to_the_right_provider():
+    """`openai.global.gpt-5.6` lost only the `openai.` prefix, so the leftover
+    `global.gpt-5.6` failed the gpt- check and direct mode built a GoogleModel
+    for an OpenAI model."""
+    from model_settings import classify_provider
+
+    expected = {"openai": "openai", "google": "google", "anthropic": "anthropic"}
+    for m in server._load_available_models():
+        assert classify_provider(m["id"]) == expected[m["provider"]], m["id"]
+
+
+def test_the_prefix_stripper_handles_the_global_segment():
+    assert server._strip_provider_prefix("openai.global.gpt-5.6") == "gpt-5.6"
+    assert server._strip_provider_prefix("openai.gpt-5.4") == "gpt-5.4"
+
+
+def test_the_local_proxy_can_serve_every_catalogued_model():
+    """config/models.json is shared with the Mac. An entry the local proxy
+    does not declare is a model the dropdown offers and the proxy rejects."""
+    import yaml
+
+    cfg = yaml.safe_load(open("litellm_config.yaml", encoding="utf-8"))
+    served = {m["model_name"] for m in cfg["model_list"]}
+    catalogued = {m["id"] for m in server._load_available_models()}
+    assert not (catalogued - served), sorted(catalogued - served)
+
+
+def test_unconfirmed_pricing_is_flagged_rather_than_shown_as_exact():
+    from pricing import pricing_is_unconfirmed
+
+    assert pricing_is_unconfirmed("openai.global.gpt-5.6") is True
+    assert pricing_is_unconfirmed("openai.gpt-5.4") is False
+
+
+def test_a_failed_resolution_warns_once_instead_of_failing_silently(monkeypatch, caplog):
+    """Swallowing everything left the Settings control looking active while
+    doing nothing, with no diagnostic."""
+    import logging
+
+    import extraction.agent as ea
+
+    ea._THINKING_WARNED.clear()
+    monkeypatch.setattr(
+        server, "thinking_level_for",
+        lambda _r: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    with caplog.at_level(logging.WARNING, logger="server"):
+        assert ea._thinking_level_for("SOFP") is None
+        assert ea._thinking_level_for("SOFP") is None
+    assert sum("thinking level" in r.message for r in caplog.records) == 1

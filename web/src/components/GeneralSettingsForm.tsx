@@ -75,6 +75,15 @@ const THINKING_ROLES: { key: string; label: string; hint: string }[] = [
   { key: "reviewer", label: "Reviewer", hint: "traces figures back to the PDF" },
   { key: "notes_reviewer", label: "Notes reviewer", hint: "" },
   { key: "notes_formatter", label: "Notes formatter", hint: "styling only" },
+  // The five notes-EXTRACTION roles. The backend has always accepted these
+  // keys (notes/agent.py resolves by template value), but the first version
+  // of this form listed only _AGENT_ROLES, so the sheets that do most of the
+  // prose reading had no control at all.
+  { key: "corporate_info", label: "Notes: corporate information", hint: "" },
+  { key: "accounting_policies", label: "Notes: accounting policies", hint: "usually the longest note" },
+  { key: "list_of_notes", label: "Notes: the numbered notes", hint: "the bulk of the prose" },
+  { key: "issued_capital", label: "Notes: issued capital", hint: "" },
+  { key: "related_party", label: "Notes: related party", hint: "" },
 ];
 
 const styles = {
@@ -357,6 +366,14 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         spot_check: spotCheck,
         spot_check_mode: spotCheckMode,
         entity_memory: entityMemory,
+        // Send EVERY role, with "" for the ones set back to the provider
+        // default. The server clears only the keys it is given, so omitting a
+        // cleared role would leave its old level active — and omitting the
+        // field entirely (the first version of this) meant the control saved
+        // nothing at all while the form still said "Saved".
+        thinking_levels: Object.fromEntries(
+          THINKING_ROLES.map(({ key }) => [key, thinkingLevels[key] || ""]),
+        ),
         ...(apiKey ? { api_key: apiKey } : {}),
       });
       setDirty(false);
@@ -373,7 +390,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
     } finally {
       setSaving(false);
     }
-  }, [dirty, model, proxyUrl, apiKey, autoReview, spotCheck, spotCheckMode, entityMemory, saveSettings]);
+  }, [dirty, model, proxyUrl, apiKey, autoReview, spotCheck, spotCheckMode, entityMemory, thinkingLevels, saveSettings]);
 
   // --- Test connection ---
   const handleTestConnection = useCallback(async () => {
