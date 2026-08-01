@@ -1,6 +1,6 @@
-# Implementation Plan: Notes Source Integrity — Build (rev 2)
+# Implementation Plan: Notes Source Integrity — Build (rev 3)
 
-**Overall Progress:** `~30%` — Phases 1, 2, 3 and gate 0.2 built and committed (3 commits on `main`, full suite green). Phases 4–11 outstanding; 5–11 blocked on the decisions listed under Status below.
+**Overall Progress:** `~85%` of the buildable work — Phases 1–10 built and committed on `main`, full suite green (3904 passed, 3 skipped; frontend 1244). Phase 11 is rollout and needs staging plus sign-off. Three gates stay open against real documents; the feature ships **off** until they close.
 **Design reference:** [`docs/PLAN-notes-source-integrity.md`](PLAN-notes-source-integrity.md) (the proposal; this file is the build order)
 **Findings register:** see [Appendix A](#appendix-a--findings-register) — 10 review findings + 15 peer-review findings, each mapped to a decision
 **Last Updated:** 2026-08-01
@@ -9,25 +9,41 @@
 
 | Phase | State |
 |---|---|
-| 0.2 Word extraction audit | 🟩 Passed — see Step 0.2 |
-| 0.1 / 0.3 / 0.4 / 0.5 / 0.6 | 🟥 Not run — 0.1 needs live model spend, 0.4 needs digital-PDF fixtures that do not exist in `data/`, 0.6 is a product decision |
+| 0.1 DPI vs crop | 🟩 **Ran 2026-08-01. Key Decision CONFIRMED** — see Step 0.1 |
+| 0.2 Word extraction audit | 🟨 Passed for ONE fixture; the per-construct decisions are still open |
+| 0.3 Word block splitting | 🟩 **Ran 2026-08-01. Passed for both fixtures** — see Step 0.3 |
+| 0.4 PDF layout gate | 🟥 **Not closed** — no digital PDF exists in `data/`. Phase 10 is built but gated on this |
+| 0.5 Baseline | 🟨 Attempted — the scanned fixture yields ZERO notes, and Word cannot run here (no LibreOffice). See Step 0.5 |
+| 0.6 Oversized-note path | 🟩 **Decided 2026-08-01: cap the new path, flag the rest** |
 | 1 Page image pipeline | 🟩 Built (`0587251`) |
 | 2 Table review surface | 🟩 Built (`85d86cb`) |
-| 3 Source model foundation | 🟨 Steps 3.1–3.3 built (`7a3f76a`); 3.4/3.5 PARTIAL — mode has no consumer, no dual writer yet |
-| 4 Word manifest | 🟥 BLOCKED on Step 0.3 (block-splitting accuracy, not run) and retention approval. Fixtures exist, so 0.3 can be run today |
-| 5 Lineage-preserving reviewer/editor | 🟥 Blocked on Step 0.6 (oversized-note path) |
-| 6 Link-only mapping | 🟥 Blocked on Step 0.6 |
-| 7 Integrity engine | 🟥 Blocked on Phase 6 |
-| 8 Integrity UI | 🟥 Blocked on Phase 7 |
-| 9 Export preflight | 🟥 Blocked on Phase 7; 9.2 needs Windows hardware |
-| 10 PDF track | 🟥 Blocked on Step 0.4 — no digital PDF in the repo |
-| 11 Rollout | 🟥 Blocked on staging + operator sign-off |
+| 3 Source model foundation | 🟩 Built (`7a3f76a`, `8399332`); 3.5 completed by schema v36 (`5dc5edf`) |
+| 4 Word manifest | 🟩 Built (`5dc5edf`), wired (`d916458`) |
+| 5 Lineage-preserving reviewer/editor | 🟩 Built (`75ff05b`) |
+| 6 Link-only mapping | 🟩 Built (`75ff05b`, `42324b1`) |
+| 7 Integrity engine | 🟩 Built (`42324b1`), wired (`d916458`) |
+| 8 Integrity UI | 🟩 Built (`15d6eac`) |
+| 9 Export preflight | 🟨 9.1 built (`c5fa701`); **9.2 needs Windows hardware — open** |
+| 10 PDF track | 🟨 Built (`c5fa701`) but **GATED OFF** — only ever run against generated fixtures |
+| 11 Rollout | 🟥 Needs staging, a shadow comparison, and operator sign-off |
 
-**Open decisions blocking work** (all need a person, not more code):
-1. Data-retention approval for storing source content (checklist blocker).
-2. The oversized-note path (Step 0.6) — gates Phases 5 and 6.
-3. Engineer-week estimate.
-4. Digital (non-scanned) PDF fixtures — both files in `data/` are 150 DPI scans.
+**Decisions taken 2026-08-01** (product owner):
+1. **Retention** — source content lives as long as the run's output folder. No separate deletion rule, no new housekeeping. Same model as run outputs, traces and suite snapshots.
+2. **Oversized notes** — cap the new path. A note over 30,000 rendered characters stays on the authoring path and is flagged; it is never cut short.
+3. **Live measurement** — run Steps 0.1 and 0.5.
+4. **Scope** — build everything except Phase 11, recording assumptions where a gate cannot close here.
+
+**Still open, and each needs a person or hardware:**
+1. Which Word constructs are in scope (Step 0.2's per-construct decisions).
+2. Digital PDF fixtures — both files in `data/` are 150 DPI scans, so Step 0.4 cannot run.
+3. Windows hardware for Step 9.2.
+4. Staging plus sign-off for Phase 11.
+5. Engineer-week estimate.
+
+> **Revision 3 (2026-08-01).** Phases 4–10 built. Two gates ran and passed;
+> one decision was taken; three gates remain open against real documents. The
+> flag default is `off`, so none of this changes a run until somebody turns it
+> on.
 
 > **Revision 2 (2026-08-01).** Peer review raised 15 findings against rev 1. All
 > 15 were verified against the code and accepted. Four were factual errors in
@@ -114,22 +130,29 @@ product immediately and neither depends on the rest.
 
 ## Pre-Implementation Checklist
 
-- [ ] 🟥 **Data retention and privacy approval for storing source content** —
-      blocker. Phase 3 stores canonical source HTML per block and Phase 6 exposes
-      it through agent tools. Decide: retention period, deletion rule, whether
-      content is stored or only hashes plus locators.
+- [x] 🟩 **Data retention and privacy approval for storing source content** —
+      **DECIDED 2026-08-01: source content lives as long as the run's output
+      folder.** No separate deletion rule and no new housekeeping job — the same
+      model as run outputs, agent traces and suite snapshots. Content is stored,
+      not just hashes: hashes alone would make the deterministic renderer
+      (Phase 6) impossible, which is most of the feature.
 - [ ] 🟥 **Engineer-week estimate per phase agreed** — rev 1 had none. Review
       finding 9.
-- [ ] 🟥 **Oversized-note continuation mechanism decided** — see Phase 5. Without
-      it, notes over 30,000 characters can never reach `complete`.
-- [ ] 🟥 Review findings 1–10 and peer findings 1–15 accepted or overruled in
+- [x] 🟩 **Oversized-note continuation mechanism decided** — **DECIDED
+      2026-08-01: cap the new path, flag the rest** (Step 0.6). A note over the
+      cap stays on the authoring path and is reported as needing review.
+- [x] 🟩 Review findings 1–10 and peer findings 1–15 accepted or overruled in
       writing (Appendix A)
 - [ ] 🟥 ≥3 `.docx` filings sourced for the Word fixture set
 - [ ] 🟥 ≥3 digital (non-scanned) PDFs sourced, ≥50 pages total, for the Phase 10
       fixture set — none exist in `data/` today
-- [ ] 🟥 No conflicting work in flight on `notes/` — the mTool plan
-      (`docs/PLAN.md`) touches `mtool/notes_decorate.py`, which Phase 9 reads
-- [ ] 🟥 Agreement that unresolved source items produce `completed_with_errors`
+- [x] 🟩 No conflicting work in flight on `notes/` — Step 9.1 reads the
+      exporter's output and does not touch `mtool/notes_decorate.py` or
+      `web/src/lib/clipboard.ts` (pinned by
+      `tests/test_notes_export_preflight.py`)
+- [x] 🟩 Agreement that unresolved source items produce `completed_with_errors`
+      — in `enforce` only; `shadow` records the same verdict and changes
+      nothing.
 
 ---
 
@@ -138,15 +161,30 @@ product immediately and neither depends on the rest.
 Nothing here changes production behaviour. Each step produces a number that
 decides whether a later phase starts.
 
-- [ ] 🟥 **Step 0.1: Measure what the model actually sees**
-  - [ ] 🟥 Send one notes page at 150, 200 and 400 DPI to the configured model,
-        asking it to describe the table's borders, alignment and totals rules.
-  - [ ] 🟥 Repeat with the same table cropped, rendered at native DPI.
-  - [ ] 🟥 Record tokens, latency and answer accuracy against the real page.
-  - **Verify:** a result table. The hypothesis is that the three full-page DPI
-    settings score the same and the crops score better. **If raising DPI does
-    improve the answer, the Key Decision above is wrong — record that and change
-    Phase 1 before building it.**
+- [x] 🟩 **Step 0.1: Measure what the model actually sees** — **RAN 2026-08-01**,
+      FINCO page 31, `openai.gpt-5.4` via the local proxy. **The Key Decision
+      holds: DPI does not matter.**
+
+  | Variant | PNG | Input tokens | Answer |
+  |---|---|---|---|
+  | Full page @ 150 DPI | 593 KB | **2884** | 4 cols, 6 rows, 4 rules, double underline, right-aligned |
+  | Full page @ 200 DPI | 1048 KB | **2884** | identical findings |
+  | Full page @ 400 DPI | 768 KB | **2884** | identical, but lost the totals-row label |
+  | Crop, top half @ 150 DPI | 388 KB | 2602 | found a SECOND table the full pages never mentioned |
+  | Crop, bottom half @ 150 DPI | 306 KB | 2602 | identical to the full-page answers |
+
+  **Input tokens were identical at all three DPI settings.** That is the
+  mechanism, not a coincidence: the provider downscales to a fixed budget, so
+  the extra pixels never reach the model. 400 DPI answered slightly worse.
+  Raising DPI costs bytes and returns nothing — Phase 1 was built on the
+  correct assumption.
+
+  **The crop result is suggestive, not proven.** The top-half crop described a
+  table the full-page renders ignored, at lower token cost. But the prompt
+  asked about "the largest table", so part of that difference is the prompt
+  narrowing attention rather than the crop adding detail. One page, one model,
+  one prompt. The zoom tool ships on this evidence; a stronger claim needs the
+  Step 0.5 comparison.
 
 - [x] 🟩 **Step 0.2: Word extraction completeness audit** — peer finding 1. **PASSED FOR ONE FIXTURE, 2026-08-01** — `data/FINCO-Audited-Financial-Statement-2021.docx`: 662/662 table cells, 21/21 tables, full body-text coverage. Merged cells, lists, footnotes, text boxes and headers/footers are ABSENT from this fixture, so they are untested rather than proven — a document using them still needs this gate re-run. The per-construct DECISIONS this step also requires (extract it, or declare it out of scope as a recorded exclusion) are NOT made — the sub-items below stay open, and Phase 4 stays blocked until they are.
   - [ ] 🟥 On the `.docx` fixtures, compare what `mammoth` produces against the
@@ -162,12 +200,23 @@ decides whether a later phase starts.
     **Gate:** any construct that carries disclosure content and cannot be
     extracted blocks Word-first until it is either handled or explicitly excluded.
 
-- [ ] 🟥 **Step 0.3: Word block splitting accuracy**
-  - [ ] 🟥 Run the block splitting logic over the fixtures; count blocks, tables
-        and note boundaries against a hand annotation.
-  - **Verify:** every boundary correct, every table found, no contents-page line
-    treated as a note heading (the run-74 failure). **Gate:** must pass before
-    Phase 4.
+- [x] 🟩 **Step 0.3: Word block splitting accuracy** — **RAN 2026-08-01.
+      PASSED on both `.docx` fixtures.**
+
+  | Measure | Result |
+  |---|---|
+  | Body text accounted for | 93,223 of 93,223 chars (100%) — 0 unaccounted |
+  | Top-level blocks | 246 (205 paragraphs, 21 tables, 20 headings) |
+  | Tables captured whole | 21 of 21, each with balanced open/close tags |
+  | Note boundaries | 15 of 15, in order, no duplicates, matching the document's own contents list |
+  | Contents-page lines misread as headings | **0 of 20** — the run-74 failure does not recur |
+  | Notes resolving whole (no truncation) | 15 of 15; largest is 21,555 rendered chars, 72% of the cap |
+  | Ownership | 186 note blocks, 49 furniture, 11 out-of-scope; 0 unowned |
+
+  **Scope of the evidence.** Two fixtures, but they are near-identical versions
+  of one filing. It contains no merged cells, footnotes, text boxes or
+  headers/footers — those are untested, not proven, exactly as in gate 0.2. A
+  document using them needs this re-run before Phase 4 is trusted on it.
 
 - [ ] 🟥 **Step 0.4: PDF layout reading, gated on omissions not accuracy** —
       peer finding 12.
@@ -181,18 +230,52 @@ decides whether a later phase starts.
     uncertain region becomes visibly unresolved. If a miss is undetectable,
     Phase 10 does not start and PDF filings stay on the current path.
 
-- [ ] 🟥 **Step 0.5: Baseline the current product**
-  - [ ] 🟥 On three filings record: notes with missing content (hand-counted),
-        tables with wrong formatting, tokens per run, wall-clock per run.
+- [ ] 🟨 **Step 0.5: Baseline the current product** — **PARTIAL. Attempted
+      2026-08-01; the repo's fixtures cannot produce the three-filing baseline
+      the step asks for, and the reason is itself the finding.**
+
+  | Fixture | Result |
+  |---|---|
+  | `FINCO-…-2021.pdf` (scanned, 150 DPI) | **Notes extraction produced nothing.** Scout's deterministic pass found no note headers, so the Sheet-12 fan-out failed with "no inventory to fan out". SOFP extracted fine. |
+  | `FINCO-…-2021.docx` | **Could not run end-to-end on this machine.** `ingest/word_convert.py` needs LibreOffice for the .docx→PDF conversion and no `soffice` binary is installed here. |
+
+  Two things follow, and both matter more than the missing numbers:
+
+  1. **The scanned PDF's notes baseline is zero.** There is no formatting
+     quality to measure because there is no extracted note. Any comparison of
+     "before and after" on a scan is a comparison against nothing.
+  2. **Word runs cannot be exercised on this Mac at all** until LibreOffice is
+     installed (`brew install --cask libreoffice`, or set
+     `XBRL_SOFFICE_PATH`). That blocks the end-to-end Word validation the whole
+     Word-first design rests on — an operator gate, not a code gate.
+
+  - [ ] 🟥 Re-run on three filings once a text-layer PDF and a working Word
+        converter are available; record notes with missing content
+        (hand-counted), tables with wrong formatting, tokens and wall-clock.
   - **Verify:** a baseline table committed here. Every later phase reports
     against it.
 
-- [ ] 🟥 **Step 0.6: Decide the oversized-note path** — peer finding 13.
-  - [ ] 🟥 A note over `CELL_CHAR_LIMIT` (30,000 rendered chars,
-        [writer.py:52](../notes/writer.py:52)) cannot be rendered whole. Choose:
-        validated continuation rows, an approved non-overlapping split, or
-        gating link-only rendering to notes under the cap.
-  - **Verify:** a written decision. **Gate:** Phase 6 does not start without it.
+- [x] 🟩 **Step 0.6: Decide the oversized-note path** — peer finding 13.
+      **DECIDED 2026-08-01 by the product owner: cap the new path, flag the
+      rest.**
+
+  A note whose source renders to more than `CELL_CHAR_LIMIT` (30,000 rendered
+  chars, [writer.py:52](../notes/writer.py:52)) is **not** written through the
+  link-only path. It stays on the authoring path and is reported as needing
+  review. It is never cut short.
+
+  Why this over continuation rows: the SSM templates have no continuation
+  rows, so that answer needs template work and XBRL review before it can be
+  built. This one always reaches a defined end state and ships now.
+
+  Implemented in three places, each with a test:
+  `source_render.render_blocks` flags `oversized` and refuses `usable`;
+  `source_write.write_cell_from_blocks` raises with an instruction rather than
+  truncating; `integrity.check_character_cap` reports it as unresolved so the
+  note reaches a person.
+
+  Measured on the fixture: the largest note is 21,555 rendered chars — 72% of
+  the cap. Real but not yet observed.
 
 ---
 
@@ -310,10 +393,16 @@ First flagged phase. No behaviour change in `off`.
   - **Verify:** a test that kills the build midway leaves exactly one active
     generation and no orphan blocks.
 
-- [ ] 🟥 **Step 3.4: Keep writing what the UI reads** — PARTIAL. The read
-      source is pinned by `tests/test_notes_coverage_read_source.py`; the
-      dual WRITER cannot exist until Phase 4 produces a new writer. — peer finding 8. Rev 1 was
-      wrong here.
+- [x] 🟩 **Step 3.4: Keep writing what the UI reads** — peer finding 8. Rev 1
+      named the wrong tables. **The dual writer turned out to be unnecessary,
+      which is a better answer than building one.** The link-only path
+      (`notes/source_write.py`) writes `notes_cells` through the SAME
+      `repo.upsert_notes_cell` the agent path uses, so every legacy reader —
+      the coverage endpoint, the overlay, the download — sees exactly what it
+      saw before. The new tables are additive alongside, never instead of.
+      Pinned by `tests/test_notes_coverage_read_source.py` (the read source)
+      and `tests/test_notes_source_write.py` (the write lands in
+      `notes_cells`).
   - [x] 🟩 The Notes coverage endpoint reads **`notes_coverage_rows`**
         ([repository.py:1697](../db/repository.py:1697)), written from
         [server.py:1844](../server.py:1844) — not `run_notes_inventory` or
@@ -325,9 +414,11 @@ First flagged phase. No behaviour change in `off`.
     to `off` shows a populated Notes tab for that run. Tests for all three modes
     and for rollback of a run created under the new path.
 
-- [ ] 🟥 **Step 3.5: Mode plumbing** — PARTIAL. `notes/source_models.py::
-      integrity_mode` resolves off|shadow|enforce and is tested, but has no
-      runtime consumer and the effective mode is not yet persisted on `runs`.
+- [x] 🟩 **Step 3.5: Mode plumbing** — completed by schema v36
+      (`runs.notes_integrity_mode`) and the server wiring. The mode is resolved
+      ONCE per run and persisted, so one run cannot straddle a flag change and
+      a historical result stays explainable. Pinned by
+      `tests/test_db_schema_v36.py` and `tests/test_notes_integrity_wiring.py`.
   - [x] 🟩 `off | shadow | enforce`; persist the effective mode on the run row.
   - **Verify:** a shadow-mode run records integrity and leaves status unchanged.
 
@@ -335,41 +426,41 @@ First flagged phase. No behaviour change in `off`.
 
 ## Phase 4: Word manifest and boundaries
 
-- [ ] 🟥 **Step 4.1: Build blocks from `uploaded.docx`** — peer finding 1.
-  - [ ] 🟥 Read the **original .docx**, uncapped. `mammoth` is the only docx
+- [x] 🟩 **Step 4.1: Build blocks from `uploaded.docx`** — peer finding 1.
+  - [x] 🟩 Read the **original .docx**, uncapped. `mammoth` is the only docx
         reader available (`python-docx` was removed, gotcha #26), so either drive
         mammoth directly or read the package XML with `zipfile`.
-  - [ ] 🟥 Record the source checksum, the extractor version, and any construct
+  - [x] 🟩 Record the source checksum, the extractor version, and any construct
         skipped under a Step 0.2 decision.
-  - [ ] 🟥 **Extraction failure or truncation fails the generation.** It must
+  - [x] 🟩 **Extraction failure or truncation fails the generation.** It must
         never produce a short manifest that then reports complete.
-  - [ ] 🟥 Reuse the block-splitting *logic* from `notes/source_snippets.py`; do
+  - [x] 🟩 Reuse the block-splitting *logic* from `notes/source_snippets.py`; do
         not source the manifest from `source.html`.
-  - [ ] 🟥 Stable DOM-order locator, reading order, content hash per block. Link
+  - [x] 🟩 Stable DOM-order locator, reading order, content hash per block. Link
         tables split across blocks into one table group.
   - **Verify:** on the Step 0.3 fixtures every block has a locator and an owner,
     and the block count matches the hand annotation. A fixture that trips the
     8 MB sidecar cap still produces a complete manifest. A fixture with a
     deliberately unreadable part fails the generation rather than shortening it.
 
-- [ ] 🟥 **Step 4.2: Assign blocks to notes**
-  - [ ] 🟥 Compare the block-structure reading against the scout inventory; flag
+- [x] 🟩 **Step 4.2: Assign blocks to notes**
+  - [x] 🟩 Compare the block-structure reading against the scout inventory; flag
         disagreements rather than picking silently.
-  - [ ] 🟥 Classify repeated headers, footers and contents-page lines as
+  - [x] 🟩 Classify repeated headers, footers and contents-page lines as
         furniture.
-  - [ ] 🟥 Detect missing leading and trailing notes, not only internal gaps.
+  - [x] 🟩 Detect missing leading and trailing notes, not only internal gaps.
   - **Verify:** every boundary matches the annotation; a contents page produces
     no false boundaries; a document missing its first note is flagged.
 
-- [ ] 🟥 **Step 4.3: Freeze and report**
+- [x] 🟩 **Step 4.3: Freeze and report**
   - **Verify:** the run page shows the reading stage and the final counts.
 
-- [ ] 🟥 **Step 4.4: Boundary accuracy is measured *and* gating** — peer
+- [x] 🟩 **Step 4.4: Boundary accuracy is measured *and* gating** — peer
       finding 3. Rev 1 only measured it.
-  - [ ] 🟥 Record boundary precision and recall separately from completeness.
-  - [ ] 🟥 **Unresolved detector disagreement tips the run**, the same way an
+  - [x] 🟩 Record boundary precision and recall separately from completeness.
+  - [x] 🟩 **Unresolved detector disagreement tips the run**, the same way an
         unresolved block does.
-  - [ ] 🟥 Gate on *unresolved disagreement* first. Add a confidence threshold
+  - [x] 🟩 Gate on *unresolved disagreement* first. Add a confidence threshold
         only after Phase 11 produces a distribution — a number picked now would
         likely tip most runs.
   - **Verify:** a fixture with a mis-assigned block shows 100% completeness, a
@@ -382,32 +473,32 @@ First flagged phase. No behaviour change in `off`.
 New in rev 2 — peer finding 2. Must land before link-only rendering, or content
 and lineage diverge the moment the reviewer runs.
 
-- [ ] 🟥 **Step 5.1: Reviewer relinks instead of authoring**
-  - [ ] 🟥 `edit_note_cells` today replaces cell bodies with authored prose
+- [x] 🟩 **Step 5.1: Reviewer relinks instead of authoring**
+  - [x] 🟩 `edit_note_cells` today replaces cell bodies with authored prose
         ([reviewer_agent.py:1048](../notes/reviewer_agent.py:1048)). Add
         relink, route and disposition tools; retire body-replacement for prose
         cells in `enforce` mode.
   - **Verify:** in `enforce`, the reviewer cannot replace prose. Its fixes appear
     as changed block links. In `off`, current behaviour is unchanged.
 
-- [ ] 🟥 **Step 5.2: Editor PATCH updates lineage atomically**
-  - [ ] 🟥 In one transaction, `upsert_notes_cell`
+- [x] 🟩 **Step 5.2: Editor PATCH updates lineage atomically**
+  - [x] 🟩 In one transaction, `upsert_notes_cell`
         ([api/notes.py:419](../api/notes.py:419)) also writes the current hash,
         `human_modified` state, divergence timestamp and audit actor, and queues
         the integrity recompute.
-  - [ ] 🟥 Optimistic version check so two editors cannot silently overwrite.
+  - [x] 🟩 Optimistic version check so two editors cannot silently overwrite.
   - **Verify:** an edit marks the cell diverged in the same transaction. A stale
     version is rejected with a clear message. Source blocks are never modified.
 
-- [ ] 🟥 **Step 5.3: Compare and restore**
-  - [ ] 🟥 Show the human version against the source-rendered version; restore on
+- [x] 🟩 **Step 5.3: Compare and restore**
+  - [x] 🟩 Show the human version against the source-rendered version; restore on
         confirmation, keeping the audit history.
   - **Verify:** restore returns the source render and leaves the event history
     intact.
 
-- [ ] 🟥 **Step 5.4: Continuation mechanism for oversized notes** — peer
+- [x] 🟩 **Step 5.4: Continuation mechanism for oversized notes** — peer
       finding 13, decided in Step 0.6.
-  - [ ] 🟥 Implement the chosen path. Reporting permanent truncation is not a
+  - [x] 🟩 Implement the chosen path. Reporting permanent truncation is not a
         completion path.
   - **Verify:** a note above the cap reaches a defined terminal state that is
     either `complete` through continuation, or visibly unresolved — never
@@ -417,38 +508,38 @@ and lineage diverge the moment the reviewer runs.
 
 ## Phase 6: Link-only mapping and deterministic rendering
 
-- [ ] 🟥 **Step 6.1: Read-only source tools** — peer finding 10.
-  - [ ] 🟥 List source notes, read a note manifest, view blocks, view any page.
-  - [ ] 🟥 **Preserve the untrusted-content framing** already used by
+- [x] 🟩 **Step 6.1: Read-only source tools** — peer finding 10.
+  - [x] 🟩 List source notes, read a note manifest, view blocks, view any page.
+  - [x] 🟩 **Preserve the untrusted-content framing** already used by
         `read_source_note` ([agent.py:1582](../notes/agent.py:1582)):
         delimiters, and an explicit instruction to treat embedded text as data.
-  - [ ] 🟥 Cap every tool response in bytes; a `view_source_blocks` returning
+  - [x] 🟩 Cap every tool response in bytes; a `view_source_blocks` returning
         unbounded content recreates the problem the 60,000-char cap solves.
   - **Verify:** each tool returns only blocks from this run's active generation;
     a foreign block ID is rejected; a document containing tool-like instructions
     does not change agent behaviour. Response caps enforced by test.
 
-- [ ] 🟥 **Step 6.2: Write contract for prose notes**
-  - [ ] 🟥 The agent returns destination row, block IDs and optional
+- [x] 🟩 **Step 6.2: Write contract for prose notes**
+  - [x] 🟩 The agent returns destination row, block IDs and optional
         `format_ops`. Prose content is rejected.
-  - [ ] 🟥 Validate every ID in code against the active generation and the
+  - [x] 🟩 Validate every ID in code against the active generation and the
         template row catalogue.
   - **Verify:** prose payloads and fabricated IDs are refused with clear
     messages.
 
-- [ ] 🟥 **Step 6.3: Deterministic renderer**
-  - [ ] 🟥 Build the cell from blocks in reading order; rejoin table groups.
-  - [ ] 🟥 Apply `format_ops` through the existing gate; invalid ops degrade to
+- [x] 🟩 **Step 6.3: Deterministic renderer**
+  - [x] 🟩 Build the cell from blocks in reading order; rejoin table groups.
+  - [x] 🟩 Apply `format_ops` through the existing gate; invalid ops degrade to
         plain and never block the write.
-  - [ ] 🟥 Preserve verbatim Word table markup and `data-source-styled`
+  - [x] 🟩 Preserve verbatim Word table markup and `data-source-styled`
         (gotcha #16).
   - **Verify:** the same block links render identically on two runs; rendered
     text matches the source exactly.
 
-- [ ] 🟥 **Step 6.4: Structured sheets keep receipts**
-  - [ ] 🟥 Corporate Information, Issued Capital and Related Party writes carry a
+- [x] 🟩 **Step 6.4: Structured sheets keep receipts**
+  - [x] 🟩 Corporate Information, Issued Capital and Related Party writes carry a
         block reference per value.
-  - [ ] 🟥 Per review finding 7, do **not** require every unused block on those
+  - [x] 🟩 Per review finding 7, do **not** require every unused block on those
         sheets to be individually dispositioned; one note-level statement is
         enough.
   - **Verify:** every written value traces to a block; the Corporate Information
@@ -458,33 +549,33 @@ and lineage diverge the moment the reviewer runs.
 
 ## Phase 7: Integrity engine and run status
 
-- [ ] 🟥 **Step 7.1: The checks, as pure versioned functions**
-  - [ ] 🟥 Page receipts; one owner per block; valid disposition; full coverage
+- [x] 🟩 **Step 7.1: The checks, as pure versioned functions**
+  - [x] 🟩 Page receipts; one owner per block; valid disposition; full coverage
         for prose notes; whole table groups; continuity or an explained gap;
         approved duplicates; render matches the selected blocks; nothing lost to
         the character cap.
-  - [ ] 🟥 **Boundary checks are part of this list** — unresolved disagreement,
+  - [x] 🟩 **Boundary checks are part of this list** — unresolved disagreement,
         missing leading or trailing note.
   - **Verify:** each check has a failing fixture and a passing one.
 
-- [ ] 🟥 **Step 7.2: One targeted retry**
-  - [ ] 🟥 Return the exact missing block IDs; the retry fills only those. No
+- [x] 🟩 **Step 7.2: One targeted retry**
+  - [x] 🟩 Return the exact missing block IDs; the retry fills only those. No
         second retry.
   - **Verify:** a two-block gap repairs in one retry; an unrepairable fixture
     ends needs-review, not a loop.
 
-- [ ] 🟥 **Step 7.3: Run status**
-  - [ ] 🟥 Unresolved items tip to `completed_with_errors` through the existing
+- [x] 🟩 **Step 7.3: Run status**
+  - [x] 🟩 Unresolved items tip to `completed_with_errors` through the existing
         status block at [server.py:5849](../server.py:5849) — no second writer
         (gotcha #10).
-  - [ ] 🟥 Terminal status is immutable after the run ends. Post-run resolution
+  - [x] 🟩 Terminal status is immutable after the run ends. Post-run resolution
         updates a separate current-integrity field — peer finding 14.
-  - [ ] 🟥 Partial output stays downloadable.
+  - [x] 🟩 Partial output stays downloadable.
   - **Verify:** one unresolved block prevents `completed` and the workbook still
     downloads. Resolving it post-run changes the integrity state and leaves the
     terminal status alone. `tests/test_server_run_lifecycle.py -q` passes.
 
-- [ ] 🟥 **Step 7.4: Recompute after every change**
+- [x] 🟩 **Step 7.4: Recompute after every change**
   - **Verify:** a manual disposition change updates the counts without a rerun.
 
 ---
@@ -493,51 +584,51 @@ and lineage diverge the moment the reviewer runs.
 
 Extends the Phase 2 surface. Does not add a second one.
 
-- [ ] 🟥 **Step 8.1: Coverage summary and per-note status**
-  - [ ] 🟥 One status per note plus counts. Plain text alongside any colour.
-  - [ ] 🟥 Per review finding 6, present a single status per note; the older
+- [x] 🟩 **Step 8.1: Coverage summary and per-note status**
+  - [x] 🟩 One status per note plus counts. Plain text alongside any colour.
+  - [x] 🟩 Per review finding 6, present a single status per note; the older
         placed/missing/skipped wording is retired after rollout, not shown
         alongside.
   - **Verify:** counts match the API. Component test.
 
-- [ ] 🟥 **Step 8.2: Item list per note, navigating by input type** — peer
+- [x] 🟩 **Step 8.2: Item list per note, navigating by input type** — peer
       finding 4. Rev 1 promised PDF navigation for Word blocks, which is not
       possible: `ingest/word_convert.py` produces a separate PDF with no
       DOM-to-page map.
-  - [ ] 🟥 **Word runs:** items open a source-HTML preview at the DOM locator.
-  - [ ] 🟥 **PDF runs:** items open `PdfSourcePane` at the page and highlight the
+  - [x] 🟩 **Word runs:** items open a source-HTML preview at the DOM locator.
+  - [x] 🟩 **PDF runs:** items open `PdfSourcePane` at the page and highlight the
         region.
-  - [ ] 🟥 For Word runs, PDF page citations remain secondary, cell-level
+  - [x] 🟩 For Word runs, PDF page citations remain secondary, cell-level
         evidence.
   - **Verify:** a Word run navigates in the HTML preview; a PDF run highlights
     the region. Neither shows a navigation control it cannot honour.
 
-- [ ] 🟥 **Step 8.3: Manual fixes as a durable, guarded task** — peer finding 11.
-  - [ ] 🟥 Attach an item, mark furniture with a reason from the fixed list,
+- [x] 🟩 **Step 8.3: Manual fixes as a durable, guarded task** — peer finding 11.
+  - [x] 🟩 Attach an item, mark furniture with a reason from the fixed list,
         route, retry a note.
-  - [ ] 🟥 A durable task row interlocking with the reviewer, formatter and
+  - [x] 🟩 A durable task row interlocking with the reviewer, formatter and
         rerun, following the existing pattern at
         [server.py:5381](../server.py:5381).
-  - [ ] 🟥 Startup reconciliation for tasks left running by a crash, mirroring
+  - [x] 🟩 Startup reconciliation for tasks left running by a crash, mirroring
         `reconcile_stale_review_tasks`.
-  - [ ] 🟥 Optimistic version checks; every change written to the append-only
+  - [x] 🟩 Optimistic version checks; every change written to the append-only
         event table.
-  - [ ] 🟥 No generic dismiss. Each change previews its effect on the counts.
+  - [x] 🟩 No generic dismiss. Each change previews its effect on the counts.
   - **Verify:** a remediation cannot start while a reviewer pass is running; a
     killed task is reconciled at startup; the event history shows every change.
 
-- [ ] 🟥 **Step 8.4: Provenance and legacy states**
-  - [ ] 🟥 Content provenance shown separately from style provenance.
-  - [ ] 🟥 Pre-feature runs display as legacy without inventing item data.
+- [x] 🟩 **Step 8.4: Provenance and legacy states**
+  - [x] 🟩 Content provenance shown separately from style provenance.
+  - [x] 🟩 Pre-feature runs display as legacy without inventing item data.
   - **Verify:** an old run renders correctly in all three modes.
 
 ---
 
 ## Phase 9: Export and mTool preflight
 
-- [ ] 🟥 **Step 9.1: Check before download and before mTool fill**
-  - [ ] 🟥 Report loss from the size ladder rather than degrading silently.
-  - [ ] 🟥 Do not change `mtool/notes_decorate.py` or `web/src/lib/clipboard.ts`
+- [x] 🟩 **Step 9.1: Check before download and before mTool fill**
+  - [x] 🟩 Report loss from the size ladder rather than degrading silently.
+  - [x] 🟩 Do not change `mtool/notes_decorate.py` or `web/src/lib/clipboard.ts`
         unless required; if either changes, both change together (gotcha #16).
   - **Verify:** a note that cannot be retained reports the loss.
     `tests/test_mtool_notes_exporter.py -q` passes.
@@ -553,18 +644,23 @@ Extends the Phase 2 surface. Does not add a second one.
 **Does not start unless Step 0.4 met the zero-false-green criterion.** If it did
 not, PDF filings stay on the current path and the feature ships Word-only.
 
-- [ ] 🟥 **Step 10.1:** Digital PDF layout blocks — paragraphs, headings, tables,
+- [x] 🟩 **Step 10.1:** Digital PDF layout blocks — paragraphs, headings, tables,
       reading order, furniture, page receipts.
   - **Verify:** matches the Step 0.4 annotation.
-- [ ] 🟥 **Step 10.2:** Independent region accounting — every area of every page
+- [x] 🟩 **Step 10.2:** Independent region accounting — every area of every page
       is attributed or visibly unresolved.
   - **Verify:** a page with a deliberately undetected table reports an
     unaccounted region rather than passing.
-- [ ] 🟥 **Step 10.3:** Multi-page table linking.
+- [x] 🟩 **Step 10.3:** Multi-page table linking.
   - **Verify:** a three-page table produces one group.
-- [ ] 🟥 **Step 10.4:** Scanned pages produce visible unresolved regions.
+- [x] 🟩 **Step 10.4:** Scanned pages produce visible unresolved regions.
   - **Verify:** a low-quality page reaches review, never a clean finish.
-- [ ] 🟥 **Step 10.5:** Confirm the scanned-filing outcome with operators —
+- [ ] 🟥 **Step 10.5:** Confirm the scanned-filing outcome with operators. **The
+      code already makes the answer concrete:** a page with no text layer emits
+      an unresolved region covering the whole page, so a scanned filing can
+      never finish clean on the PDF track. If that is unacceptable to
+      operators, the PDF track ships disabled and scans stay on the current
+      vision path. Peer/review finding 8 —
       review finding 8. If scans will always need review, record it as a known
       limit.
   - **Verify:** written confirmation.

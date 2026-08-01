@@ -226,6 +226,9 @@ async def run_listofnotes_subcoordinator(
     page_offset: int = 0,
     filing_standard: str = "mfrs",
     scout_context: Optional[dict] = None,
+    run_id: Optional[int] = None,
+    db_path: Optional[str] = None,
+    source_generation_id: Optional[int] = None,
 ) -> ListOfNotesSubResult:
     """Fan out the LIST_OF_NOTES work across `parallel` sub-agents."""
     import task_registry
@@ -267,6 +270,9 @@ async def run_listofnotes_subcoordinator(
                 launch_delay=launch_delay,
                 filing_standard=filing_standard,
                 scout_context=scout_context,
+                run_id=run_id,
+                db_path=db_path,
+                source_generation_id=source_generation_id,
             )
         finally:
             if session_id:
@@ -376,6 +382,9 @@ async def _run_list_of_notes_sub_agent(
     launch_delay: float = 0.0,
     filing_standard: str = "mfrs",
     scout_context: Optional[dict] = None,
+    run_id: Optional[int] = None,
+    db_path: Optional[str] = None,
+    source_generation_id: Optional[int] = None,
 ) -> SubAgentRunResult:
     """Run one sub-agent over its batch.
 
@@ -432,6 +441,9 @@ async def _run_list_of_notes_sub_agent(
             usage_out=cur_usage,
             filing_standard=filing_standard,
             scout_context=scout_context,
+            run_id=run_id,
+            db_path=db_path,
+            source_generation_id=source_generation_id,
         )
         last_prompt_tokens = prompt_t
         last_completion_tokens = completion_t
@@ -523,6 +535,9 @@ async def _invoke_sub_agent_once(
     usage_out: Optional[dict[str, int]] = None,
     filing_standard: str = "mfrs",
     scout_context: Optional[dict] = None,
+    run_id: Optional[int] = None,
+    db_path: Optional[str] = None,
+    source_generation_id: Optional[int] = None,
 ) -> tuple[list[NotesPayload], int, int, Optional[CoverageReceipt]]:
     """Single attempt at a sub-agent run.
 
@@ -570,6 +585,12 @@ async def _invoke_sub_agent_once(
         batch_note_nums=batch_note_nums,
         filing_standard=filing_standard,
         scout_context=scout_context,
+        # Sheet-12 is the MAIN prose sheet, so its sub-agents need the source
+        # tools too. Without this the link-only path would be registered on
+        # every sheet except the one that carries most of the notes.
+        run_id=run_id,
+        db_path=db_path,
+        source_generation_id=source_generation_id,
     )
     deps.payload_sink = payload_sink
     deps.sub_agent_id = sub_agent_id
