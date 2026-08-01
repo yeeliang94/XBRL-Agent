@@ -27,6 +27,17 @@ from pydantic_ai import Agent, BinaryContent
 from pydantic_ai.models import Model
 from model_settings import build_model_settings
 
+def _thinking_level_for(role: str):
+    """Per-role thinking level, or None. Lazy import + swallow: `server`
+    imports this module, and a settings lookup must never fail a run."""
+    try:
+        import server
+
+        return server.thinking_level_for(role)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 from scout.infopack import MAX_PLAUSIBLE_NOTE_NUM
 from scout.notes_discoverer import NoteInventoryEntry, SubNoteInventoryEntry
 from tools.pdf_viewer import render_pages_to_png_bytes
@@ -307,7 +318,10 @@ def _build_vision_agent(model: Model) -> Agent[None, _VisionBatch]:
         system_prompt=_VISION_SYSTEM_PROMPT,
         # Phase 2: the static vision system prompt caches across the up-to-5
         # parallel scan batches that share it.
-        model_settings=build_model_settings(model, cache_key="xbrl-scout-vision"),
+        model_settings=build_model_settings(
+            model, cache_key="xbrl-scout-vision",
+            thinking_level=_thinking_level_for("scout"),
+        ),
         end_strategy="early",  # pin V1 semantics across the V2 flip (plan B.3.1)
     )
 

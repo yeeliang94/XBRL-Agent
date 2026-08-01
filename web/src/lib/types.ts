@@ -484,6 +484,10 @@ export interface ExtendedSettingsResponse extends SettingsResponse {
   spot_check_mode?: string;
   /** Whether per-entity advisory memory injects prior-year prompt hints (item 28). */
   entity_memory?: boolean;
+  /** Per-agent-role reasoning effort. An absent role uses the provider
+   *  default, which is what every agent did before this setting existed. */
+  thinking_levels?: Record<string, string>;
+  thinking_level_choices?: string[];
 }
 
 export type FilingLevel = "company" | "group";

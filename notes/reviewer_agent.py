@@ -35,6 +35,17 @@ from pydantic_ai.messages import BinaryContent
 from pydantic_ai.models import Model
 
 from model_settings import build_model_settings
+
+def _thinking_level_for(role: str):
+    """Per-role thinking level, or None. Lazy import + swallow: `server`
+    imports this module, and a settings lookup must never fail a run."""
+    try:
+        import server
+
+        return server.thinking_level_for(role)
+    except Exception:  # noqa: BLE001
+        return None
+
 from db import repository as repo
 from notes.html_sanitize import sanitize_notes_html
 from notes.html_to_text import rendered_length
@@ -955,7 +966,10 @@ def create_notes_reviewer_agent(
         model,
         deps_type=NotesReviewerDeps,
         system_prompt=system_prompt,
-        model_settings=build_model_settings(model, cache_key="xbrl-notes-reviewer"),
+        model_settings=build_model_settings(
+            model, cache_key="xbrl-notes-reviewer",
+            thinking_level=_thinking_level_for("notes_reviewer"),
+        ),
         end_strategy="early",  # pin V1 semantics across the V2 flip (plan B.3.1)
     )
 

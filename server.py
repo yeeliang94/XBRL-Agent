@@ -2702,6 +2702,34 @@ _AGENT_ROLES = ("scout", "reviewer", "notes_reviewer", "notes_formatter",
                 "SOFP", "SOPL", "SOCI", "SOCF", "SOCIE")
 
 
+def _thinking_levels() -> dict:
+    """Per-role thinking level from `XBRL_THINKING_LEVELS` (a JSON object).
+
+    Mirrors `XBRL_DEFAULT_MODELS`: same keys, same storage, same read-fresh
+    behaviour, so the two settings that decide how an agent runs live side by
+    side. A role with no entry sends NO reasoning effort, which is exactly
+    what every agent did before this existed.
+    """
+    raw = os.environ.get("XBRL_THINKING_LEVELS", "")
+    try:
+        parsed = json.loads(raw) if raw else {}
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    from model_settings import normalize_thinking_level
+
+    return {
+        k: lvl for k, v in parsed.items()
+        if (lvl := normalize_thinking_level(v))
+    }
+
+
+def thinking_level_for(role: str) -> Optional[str]:
+    """The level for one agent role, or None to send nothing."""
+    return _thinking_levels().get(role)
+
+
 def _auto_review_enabled() -> bool:
     """Whether the reviewer pass auto-runs after extraction (canonical mode).
 

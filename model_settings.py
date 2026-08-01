@@ -117,11 +117,48 @@ def _resolved_provider(model: Any) -> str:
     return classify_provider(getattr(model, "model_name", "") or "")
 
 
+# ---------------------------------------------------------------------------
+# Thinking level (reasoning effort)
+#
+# Never set before this: every model ran at whatever its provider defaults to.
+# The four levels below are OpenAI's vocabulary because that is what the proxy
+# speaks — LiteLLM accepts `reasoning_effort` as a UNIFIED parameter and
+# translates it into a thinking budget for Gemini and Claude, so one word
+# works across providers on the proxy path. In direct mode we set each
+# provider's own control instead.
+#
+# `None` means "send nothing", which is today's behaviour byte for byte. That
+# is the default, and it is what keeps this change inert until somebody picks
+# a level.
+# ---------------------------------------------------------------------------
+
+THINKING_LEVELS = ("minimal", "low", "medium", "high")
+
+# Gemini and Claude take a token budget rather than a word. These are the
+# direct-mode translations; the proxy does its own mapping from the same words.
+_GOOGLE_THINKING_BUDGET = {
+    "minimal": 0, "low": 1024, "medium": 8192, "high": 24576,
+}
+_ANTHROPIC_THINKING_BUDGET = {
+    "minimal": 0, "low": 1024, "medium": 8192, "high": 24576,
+}
+
+
+def normalize_thinking_level(value: Any) -> str | None:
+    """Accept a level or return None. Unknown values fail to None — a typo in
+    Settings must not start sending an effort the provider will reject."""
+    if not value:
+        return None
+    level = str(value).strip().lower()
+    return level if level in THINKING_LEVELS else None
+
+
 def build_model_settings(
     model: Any,
     *,
     cache_key: str | None = None,
     temperature: float | None = None,
+    thinking_level: str | None = None,
 ) -> ModelSettings:
     """Return cache-enabled, provider-correct ``ModelSettings`` for ``model``.
 
@@ -137,17 +174,25 @@ def build_model_settings(
     if temperature is None:
         temperature = _default_temperature(model)
     type_name = type(model).__name__
+    level = normalize_thinking_level(thinking_level)
 
     if type_name == "AnthropicModel":
         # Direct Anthropic. Cache the two stable blocks; the default 5m TTL
         # comfortably covers a single agent's multi-turn loop.
         from pydantic_ai.models.anthropic import AnthropicModelSettings
 
-        return AnthropicModelSettings(
-            temperature=temperature,
-            anthropic_cache_instructions=True,
-            anthropic_cache_tool_definitions=True,
-        )
+        kwargs: dict[str, Any] = {
+            "temperature": temperature,
+            "anthropic_cache_instructions": True,
+            "anthropic_cache_tool_definitions": True,
+        }
+        if level:
+            budget = _ANTHROPIC_THINKING_BUDGET[level]
+            kwargs["thinking"] = (
+                {"type": "enabled", "budget_tokens": budget} if budget
+                else {"type": "disabled"}
+            )
+        return AnthropicModelSettings(**kwargs)
 
     # OpenAIChatModel is the Python type for direct OpenAI AND every
     # proxy-routed model. Only attach OpenAI-only cache params when the
@@ -168,8 +213,34 @@ def build_model_settings(
             }
             if cache_key:
                 settings["openai_prompt_cache_key"] = cache_key
+            if level:
+                settings["openai_reasoning_effort"] = level
             return OpenAIChatModelSettings(**settings)
+
+        # Proxy-routed Gemini / Claude arrive here as OpenAIChatModel. They
+        # cannot take the OpenAI-only cache params (the existing guard above),
+        # but `reasoning_effort` IS a unified LiteLLM parameter — the proxy
+        # translates it into each provider's own thinking budget. So the level
+        # still reaches them, using the one field the wire format carries.
+        if level:
+            from pydantic_ai.models.openai import OpenAIChatModelSettings
+
+            return OpenAIChatModelSettings(
+                temperature=temperature, openai_reasoning_effort=level,
+            )
         return ModelSettings(temperature=temperature)
 
-    # GoogleModel / bare string / unknown — implicit caching only.
+    # Direct GoogleModel — its own thinking config rather than a word.
+    if type_name == "GoogleModel" and level:
+        from pydantic_ai.models.google import GoogleModelSettings
+
+        return GoogleModelSettings(
+            temperature=temperature,
+            google_thinking_config={
+                "thinking_budget": _GOOGLE_THINKING_BUDGET[level]
+            },
+        )
+
+    # Bare string / unknown — implicit caching only, and no level to attach to
+    # a model we cannot classify.
     return ModelSettings(temperature=temperature)

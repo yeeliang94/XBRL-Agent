@@ -313,3 +313,83 @@ def test_house_style_callers_cannot_mutate_the_shared_constant(monkeypatch):
     monkeypatch.delenv("XBRL_NOTES_TABLE_STYLE", raising=False)
     server._notes_table_style()["borderStyle"] = "double"
     assert server.HOUSE_NOTES_TABLE_STYLE["borderStyle"] == "none"
+
+
+
+# --------------------------------------------------------------------------
+# Per-role thinking level (reasoning effort)
+#
+# Never set before this: every agent ran at its provider default. The tests
+# below cover the two directions that matter — a level can be chosen, and a
+# role can be put BACK to the provider default. Without the second, the first
+# choice would be permanent.
+# --------------------------------------------------------------------------
+
+def _env(tmp_path, monkeypatch):
+    env_file = tmp_path / ".env"
+    env_file.write_text("", encoding="utf-8")
+    # config_routes reads server.ENV_FILE at call time, so patching the one
+    # attribute is enough.
+    monkeypatch.setattr(server, "ENV_FILE", env_file)
+    monkeypatch.delenv("XBRL_THINKING_LEVELS", raising=False)
+    return env_file
+
+
+def test_settings_exposes_thinking_levels_and_its_choices(tmp_path, monkeypatch):
+    _env(tmp_path, monkeypatch)
+    body = client.get("/api/settings").json()
+    assert body["thinking_levels"] == {}
+    assert body["thinking_level_choices"] == ["minimal", "low", "medium", "high"]
+
+
+def test_a_level_can_be_saved_and_read_back(tmp_path, monkeypatch):
+    env_file = _env(tmp_path, monkeypatch)
+    r = client.post("/api/settings", json={"thinking_levels": {"SOFP": "high"}})
+    assert r.status_code == 200
+    assert '"SOFP": "high"' in env_file.read_text(encoding="utf-8")
+
+
+def test_clearing_a_role_returns_it_to_the_provider_default(tmp_path, monkeypatch):
+    """Without this there is no way back to "send nothing" once a level is
+    set — a merge-only update would make the first choice permanent."""
+    env_file = _env(tmp_path, monkeypatch)
+    client.post("/api/settings", json={"thinking_levels": {"SOFP": "high"}})
+    client.post("/api/settings", json={"thinking_levels": {"SOFP": ""}})
+    assert "SOFP" not in env_file.read_text(encoding="utf-8")
+
+
+def test_other_roles_survive_an_update_to_one(tmp_path, monkeypatch):
+    env_file = _env(tmp_path, monkeypatch)
+    client.post("/api/settings", json={"thinking_levels": {"SOFP": "high"}})
+    client.post("/api/settings", json={"thinking_levels": {"scout": "low"}})
+    written = env_file.read_text(encoding="utf-8")
+    assert '"SOFP": "high"' in written and '"scout": "low"' in written
+
+
+def test_an_unknown_level_is_refused(tmp_path, monkeypatch):
+    _env(tmp_path, monkeypatch)
+    r = client.post("/api/settings", json={"thinking_levels": {"SOFP": "extreme"}})
+    assert r.status_code == 400
+    assert "minimal" in r.json()["detail"]
+
+
+def test_an_unknown_role_is_refused(tmp_path, monkeypatch):
+    _env(tmp_path, monkeypatch)
+    r = client.post("/api/settings", json={"thinking_levels": {"nope": "high"}})
+    assert r.status_code == 400
+    assert "Unknown thinking_levels key" in r.json()["detail"]
+
+
+def test_a_non_object_payload_is_refused(tmp_path, monkeypatch):
+    _env(tmp_path, monkeypatch)
+    r = client.post("/api/settings", json={"thinking_levels": ["high"]})
+    assert r.status_code == 400
+
+
+def test_the_new_proxy_models_are_offered(tmp_path, monkeypatch):
+    """The ids come from the enterprise proxy's own list. Note the `global.`
+    segment on the OpenAI ones — our older entries omit it."""
+    _env(tmp_path, monkeypatch)
+    ids = {m["id"] for m in server._load_available_models()}
+    assert "openai.global.gpt-5.6" in ids
+    assert "vertex_ai.gemini-3.6-flash" in ids

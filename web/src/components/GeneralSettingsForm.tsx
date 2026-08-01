@@ -20,8 +20,8 @@ import { ClipboardFormatControls } from "./ClipboardFormatControls";
 // ---------------------------------------------------------------------------
 
 interface Props {
-  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; spot_check?: boolean; spot_check_mode?: string; entity_memory?: boolean; notes_table_style?: Partial<ClipboardFormatOptions>; available_models?: ModelEntry[] }>;
-  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; auto_review: boolean; spot_check: boolean; spot_check_mode: "light" | "full"; entity_memory: boolean; notes_table_style: ClipboardFormatOptions }>) => Promise<{ status: string }>;
+  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; spot_check?: boolean; spot_check_mode?: string; entity_memory?: boolean; thinking_levels?: Record<string, string>; thinking_level_choices?: string[]; notes_table_style?: Partial<ClipboardFormatOptions>; available_models?: ModelEntry[] }>;
+  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; auto_review: boolean; spot_check: boolean; spot_check_mode: "light" | "full"; entity_memory: boolean; thinking_levels: Record<string, string>; notes_table_style: ClipboardFormatOptions }>) => Promise<{ status: string }>;
   testConnection: (body: Partial<{ proxy_url: string; api_key: string; model: string }>) => Promise<{ status: string; model?: string; latency_ms?: number; message?: string }>;
   // When provided, a Cancel button is shown (used by the modal wrapper). The
   // page host omits it — there's nothing to cancel out of.
@@ -62,6 +62,20 @@ interface ConnectionResult {
   status: "ok" | "error";
   message: string;
 }
+
+// The roles a thinking level can be set for, in the order they run. Labels
+// are the operator's words, not the internal role keys.
+const THINKING_ROLES: { key: string; label: string; hint: string }[] = [
+  { key: "scout", label: "Scout", hint: "finds the pages — rarely needs depth" },
+  { key: "SOFP", label: "Statement of financial position", hint: "" },
+  { key: "SOPL", label: "Income statement", hint: "" },
+  { key: "SOCI", label: "Comprehensive income", hint: "" },
+  { key: "SOCF", label: "Cash flows", hint: "" },
+  { key: "SOCIE", label: "Changes in equity", hint: "" },
+  { key: "reviewer", label: "Reviewer", hint: "traces figures back to the PDF" },
+  { key: "notes_reviewer", label: "Notes reviewer", hint: "" },
+  { key: "notes_formatter", label: "Notes formatter", hint: "styling only" },
+];
 
 const styles = {
   fieldGroup: {
@@ -164,6 +178,22 @@ const styles = {
     fontSize: 13,
     color: pwc.grey700,
   } as React.CSSProperties,
+  thinkingRow: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: pwc.space.sm,
+    padding: "5px 0",
+  } as React.CSSProperties,
+  thinkingRoleLabel: {
+    display: "flex",
+    flexDirection: "column",
+    fontSize: 14,
+    color: pwc.grey900,
+  } as React.CSSProperties,
+  thinkingHint: {
+    fontSize: 12, color: pwc.grey700,
+  } as React.CSSProperties,
   sectionHeading: {
     marginTop: pwc.space.xxl,
     marginBottom: pwc.space.lg,
@@ -238,6 +268,11 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
   const [spotCheck, setSpotCheck] = useState(true);
   const [spotCheckMode, setSpotCheckMode] = useState<"light" | "full">("light");
   // Per-entity advisory memory toggle (item 28). Default on.
+  // Per-role thinking level. An absent role sends nothing, which is what
+  // every agent did before this setting existed.
+  const [thinkingLevels, setThinkingLevels] =
+    useState<Record<string, string>>({});
+  const [levelChoices, setLevelChoices] = useState<string[]>([]);
   const [entityMemory, setEntityMemory] = useState(true);
 
   const [saving, setSaving] = useState(false);
@@ -281,6 +316,8 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         setAutoReview(s.auto_review !== false);
         setSpotCheck(s.spot_check !== false);
         setSpotCheckMode(s.spot_check_mode === "full" ? "full" : "light");
+        setThinkingLevels(s.thinking_levels || {});
+        setLevelChoices(s.thinking_level_choices || []);
         setEntityMemory(s.entity_memory !== false);
         if (Array.isArray(s.available_models)) setAvailableModels(s.available_models);
         setDirty(false);
@@ -605,6 +642,51 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
           hints to double-check against this year&apos;s PDF. Turn this off if
           two different companies share a name.
         </p>
+      </div>
+
+      {/* Thinking level, per agent role. Never set before this — every model
+          ran at its provider default. An empty selection sends nothing, which
+          keeps that behaviour, so the control is additive rather than a
+          silent migration. Per role rather than global because scout is
+          navigation and extraction is judgement; one level would overpay on
+          one or underpower the other. */}
+      <div style={styles.fieldGroup}>
+        <label style={styles.label}>Thinking level</label>
+        <p style={styles.helperText}>
+          How much reasoning each part of the run does before answering.
+          Leave a row on <strong>Provider default</strong> to keep today&apos;s
+          behaviour. Higher levels cost more and take longer — thinking is
+          billed at the output rate.
+        </p>
+        {THINKING_ROLES.map(({ key, label, hint }) => (
+          <div key={key} style={styles.thinkingRow}>
+            <span style={styles.thinkingRoleLabel}>
+              {label}
+              <span style={styles.thinkingHint}>{hint}</span>
+            </span>
+            <select
+              id={`thinking-${key}`}
+              aria-label={`Thinking level for ${label}`}
+              value={thinkingLevels[key] || ""}
+              disabled={readOnly}
+              onChange={(e) => {
+                const next = { ...thinkingLevels };
+                if (e.target.value) next[key] = e.target.value;
+                else delete next[key];
+                setThinkingLevels(next);
+                setDirty(true);
+              }}
+              style={{ ...ui.select, width: 190 }}
+            >
+              <option value="">Provider default</option>
+              {levelChoices.map((lvl) => (
+                <option key={lvl} value={lvl}>
+                  {lvl.charAt(0).toUpperCase() + lvl.slice(1)}
+                </option>
+              ))}
+            </select>
+          </div>
+        ))}
       </div>
 
       <SettingsSectionHeading

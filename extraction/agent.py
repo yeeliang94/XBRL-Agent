@@ -19,6 +19,22 @@ from pydantic_ai.models import Model
 from pydantic_ai.messages import BinaryContent
 from model_settings import build_model_settings
 
+
+def _thinking_level_for(role: str):
+    """Per-role thinking level, or None to send nothing.
+
+    Imported lazily because `server` imports this module, so a module-level
+    import would be circular. Any failure degrades to None — the behaviour
+    every agent had before this setting existed. A settings lookup must never
+    fail a run.
+    """
+    try:
+        import server
+
+        return server.thinking_level_for(role)
+    except Exception:  # noqa: BLE001
+        return None
+
 from statement_types import StatementType
 from token_tracker import TokenReport
 from tools.calculator import calculator_batch_json as _calculator_impl
@@ -696,7 +712,8 @@ def create_extraction_agent(
         # cache shard. Temperature is provider-aware inside build_model_settings
         # (Phase 9): Gemini + OpenAI-reasoning stay 1.0, others lowered.
         model_settings=build_model_settings(
-            model, cache_key=f"xbrl-face-{statement_type.value}"
+            model, cache_key=f"xbrl-face-{statement_type.value}",
+            thinking_level=_thinking_level_for(statement_type.value),
         ),
         # Token-cost reduction: strip re-billed payloads from the outbound
         # request each turn — stale page images, the repeated template summary,

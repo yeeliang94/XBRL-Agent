@@ -185,6 +185,7 @@ export async function updateSettings(
     spot_check: boolean;
     spot_check_mode: "light" | "full";
     entity_memory: boolean;
+    thinking_levels: Record<string, string>;
     // Firm-wide notes-table style theme (docs/PLAN-notes-table-theme.md).
     // The server validates + cleans it before persisting.
     notes_table_style: ClipboardFormatOptions;
