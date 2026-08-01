@@ -825,6 +825,264 @@ async def notes_coverage_endpoint(run_id: int):
     }
 
 
+# --------------------------------------------------------------------------
+# Source integrity — plan Phase 8
+# --------------------------------------------------------------------------
+
+_LEGACY_STATE = "legacy"
+
+
+@router.get("/api/runs/{run_id}/notes_integrity")
+async def notes_integrity(run_id: int):
+    """Coverage of the source document, per note, plus the open items.
+
+    Three states this endpoint must keep distinct, because collapsing any two
+    of them invents a fact:
+
+    * `legacy` — the run predates the feature. It has no items, and inventing
+      an empty checklist would read as "nothing was missed".
+    * `off` — the feature existed and was switched off for this run.
+    * a real verdict — with the rules and mode that produced it.
+    """
+    from db import repository as repo
+    from notes import integrity_runner
+    from notes import source_repository as srepo
+
+    conn = server._open_audit_conn()
+    try:
+        run = repo.fetch_run(conn, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+
+        mode = repo.notes_integrity_mode(conn, run_id)
+        gen = srepo.active_generation(conn, run_id)
+        if gen is None:
+            return {
+                "run_id": run_id,
+                "state": _LEGACY_STATE if mode is None else (mode or "off"),
+                "mode": mode,
+                "notes": [],
+                "summary": None,
+                "findings": [],
+                "input_kind": None,
+            }
+
+        gen_id = gen["id"]
+        counts = srepo.coverage_counts(conn, gen_id)
+        stored = integrity_runner.latest_result(conn, run_id) or {}
+        usages = {u["block_id"]: u for u in srepo.fetch_usages(conn, gen_id)}
+        blocks = srepo.fetch_blocks(conn, gen_id)
+        notes_rows = srepo.fetch_notes(conn, gen_id)
+        cells = {
+            (r["sheet"], r["row"]): r["label"]
+            for r in conn.execute(
+                "SELECT sheet, row, label FROM notes_cells WHERE run_id = ?",
+                (run_id,),
+            ).fetchall()
+        }
+    finally:
+        conn.close()
+
+    from notes.source_models import Disposition, is_resolved
+    from notes.source_snippets import _block_text
+
+    per_note: dict[str, list] = {}
+    for b in blocks:
+        if b["source_note_id"]:
+            per_note.setdefault(b["source_note_id"], []).append(b)
+
+    def _item(b) -> dict:
+        u = usages.get(b["block_id"])
+        disposition = (u["disposition"] if u else Disposition.UNRESOLVED.value)
+        reason = u["reason_code"] if u else None
+        try:
+            resolved = is_resolved(Disposition(disposition), reason)
+        except ValueError:
+            resolved = False
+        placed = None
+        if u and u["sheet"] is not None and u["row"] is not None:
+            placed = {
+                "sheet": u["sheet"], "row": u["row"],
+                "label": cells.get((u["sheet"], u["row"])),
+            }
+        return {
+            "block_id": b["block_id"],
+            "kind": b["block_kind"],
+            "preview": _block_text(b["canonical_html"] or "")[:160],
+            "disposition": disposition,
+            "reason_code": reason,
+            "resolved": resolved,
+            "placed_at": placed,
+            "locator": b["locator_json"],
+            "page": b["page"],
+            "table_group_id": b["table_group_id"],
+        }
+
+    notes_out = []
+    for n in notes_rows:
+        items = [_item(b) for b in per_note.get(n["source_note_id"], [])]
+        unresolved = sum(1 for i in items if not i["resolved"])
+        notes_out.append({
+            "source_note_id": n["source_note_id"],
+            "note_num": n["top_note_num"],
+            "title": n["title"],
+            # ONE status per note (review finding 6). The older
+            # placed/missing/skipped wording is not shown alongside it.
+            "status": "complete" if not unresolved else "needs_review",
+            "items_total": len(items),
+            "items_unresolved": unresolved,
+            "items": items,
+        })
+
+    return {
+        "run_id": run_id,
+        "state": "reviewed" if stored else (mode or "off"),
+        "mode": stored.get("mode") or mode,
+        "rule_version": stored.get("rule_version"),
+        "checked_at": stored.get("created_at"),
+        # Word runs navigate by DOM locator, PDF runs by page — peer finding 4.
+        # `ingest/word_convert.py` makes a separate PDF with no DOM-to-page map,
+        # so a Word item must never offer a PDF page control it cannot honour.
+        "input_kind": gen["input_kind"],
+        "notes": notes_out,
+        "summary": {
+            **counts,
+            "notes_total": len(notes_out),
+            "notes_needing_review": sum(
+                1 for n in notes_out if n["status"] == "needs_review"
+            ),
+            "requires_review": bool(stored.get("requires_review")),
+        },
+        "findings": stored.get("findings", []),
+    }
+
+
+class _DispositionBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    block_ids: list[str]
+    disposition: str
+    reason_code: Optional[str] = None
+    note: Optional[str] = None
+
+
+@router.post("/api/runs/{run_id}/notes_integrity/disposition")
+async def notes_integrity_disposition(run_id: int, body: _DispositionBody):
+    """Record what happened to one or more source items, as a person.
+
+    There is no generic dismiss (Step 8.3): a reason comes from the approved
+    list, and `UNREADABLE_NEEDS_REVIEW` deliberately does not settle an item.
+    The response carries the recomputed counts so the caller sees the effect
+    of the change rather than guessing at it (Step 7.4).
+    """
+    from db import repository as repo
+    from notes import integrity_runner
+    from notes import source_repository as srepo
+    from notes.source_models import (
+        EXCLUSION_REASONS, Disposition, IntegrityMode,
+    )
+
+    try:
+        disposition = Disposition(body.disposition)
+    except ValueError:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{body.disposition!r} is not one of: "
+                + ", ".join(d.value for d in Disposition)
+            ),
+        )
+    if disposition is Disposition.EXCLUDED and body.reason_code not in EXCLUSION_REASONS:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Leaving an item out needs a reason from the approved list: "
+                + ", ".join(sorted(EXCLUSION_REASONS))
+            ),
+        )
+    if not body.block_ids:
+        raise HTTPException(status_code=422, detail="No items were named.")
+
+    conn = server._open_audit_conn()
+    try:
+        gen = srepo.active_generation(conn, run_id)
+        if gen is None:
+            raise HTTPException(
+                status_code=409,
+                detail="This run has no frozen source reading.",
+            )
+        for bid in body.block_ids:
+            try:
+                srepo.record_disposition(
+                    conn, run_id, gen["id"], bid, disposition,
+                    reason_code=body.reason_code, actor="human",
+                    actor_detail="notes integrity panel", note=body.note,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc))
+        counts = srepo.coverage_counts(conn, gen["id"])
+        mode = IntegrityMode(repo.notes_integrity_mode(conn, run_id) or "off")
+        result = integrity_runner.run_and_store(
+            conn, run_id, gen["id"], mode=mode,
+            attempt=(integrity_runner.latest_result(conn, run_id) or {})
+            .get("attempt", 0) + 1,
+        )
+    finally:
+        conn.close()
+
+    return {
+        "run_id": run_id,
+        "updated": len(body.block_ids),
+        "summary": counts,
+        "requires_review": result.requires_review,
+    }
+
+
+@router.get("/api/runs/{run_id}/notes_integrity/source/{block_id}")
+async def notes_integrity_source_block(run_id: int, block_id: str):
+    """The full content of one source item, for the side-by-side preview."""
+    from notes import source_repository as srepo
+
+    conn = server._open_audit_conn()
+    try:
+        gen = srepo.active_generation(conn, run_id)
+        if gen is None:
+            raise HTTPException(status_code=404, detail="No source reading")
+        row = conn.execute(
+            "SELECT block_id, block_kind, canonical_html, locator_json, page "
+            "FROM notes_source_blocks WHERE generation_id = ? AND block_id = ?",
+            (gen["id"], block_id),
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail="No such source item")
+    return {
+        "block_id": row["block_id"],
+        "kind": row["block_kind"],
+        "html": row["canonical_html"] or "",
+        "locator": row["locator_json"],
+        "page": row["page"],
+    }
+
+
+@router.get("/api/runs/{run_id}/notes_integrity/events")
+async def notes_integrity_events(run_id: int, limit: int = 200):
+    """The append-only history of every decision made about a source item."""
+    conn = server._open_audit_conn()
+    try:
+        rows = conn.execute(
+            "SELECT block_id, from_disposition, to_disposition, reason_code, "
+            "actor, actor_detail, note, created_at "
+            "FROM notes_disposition_events WHERE run_id = ? "
+            "ORDER BY id DESC LIMIT ?",
+            (run_id, max(1, min(limit, 1000))),
+        ).fetchall()
+    finally:
+        conn.close()
+    return {"run_id": run_id, "events": [dict(r) for r in rows]}
+
+
 @router.get("/api/runs/{run_id}/notes_tables")
 async def notes_tables(run_id: int):
     """Every table across the run's prose notes sheets, for the review surface.
