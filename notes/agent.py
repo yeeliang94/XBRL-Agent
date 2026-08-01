@@ -41,7 +41,13 @@ from token_tracker import TokenReport
 from tools import page_cache
 from tools.calculator import calculator_batch_json as _calculator_impl
 from concept_model.definitions import lookup_as_json as _lookup_definitions_impl
-from tools.pdf_viewer import count_pdf_pages, render_pages_to_png_bytes
+from tools.pdf_viewer import (
+    RENDER_POLICY_CAP,
+    RENDER_POLICY_NATIVE,
+    count_pdf_pages,
+    render_page_png,
+    render_pages_to_png_bytes,
+)
 from tools.template_reader import TemplateField, read_template as _read_template_impl
 from extraction.history_processors import clamp_oversized_parts, strip_stale_images
 from limit_warner import limit_warning_processor
@@ -823,9 +829,21 @@ def _load_template_label_catalog(template_path: str, sheet_name: str) -> list[st
         wb.close()
 
 
-def _render_single_page(pdf_path: str, page_num: int, dpi: int = 200) -> tuple[int, bytes]:
-    images = render_pages_to_png_bytes(pdf_path, start=page_num, end=page_num, dpi=dpi)
-    return page_num, images[0]
+def _render_single_page(
+    pdf_path: str,
+    page_num: int,
+    dpi: int = 200,
+    *,
+    policy: str = RENDER_POLICY_CAP,
+    clip: Optional[tuple] = None,
+) -> tuple[int, bytes]:
+    """Render one page for the vision model. ``dpi`` is a CAP, not a target.
+
+    Under ``policy='native'`` a scanned page renders at its own resolution
+    instead of being interpolated up to the cap (plan Step 1.1).
+    """
+    png = render_page_png(pdf_path, page_num, cap=dpi, policy=policy, clip=clip)
+    return page_num, png
 
 
 def _ensure_label_index(deps: "NotesDeps") -> list:
@@ -1187,6 +1205,64 @@ def _submit_coverage_impl(deps: "NotesDeps", receipt_json: str) -> str:
 # changes, cache hits will go to zero until the new DPI warms up.
 _NOTES_RENDER_DPI = 200
 
+# The notes vision path opts in to native-resolution rendering (plan Step 1.1).
+# On the FINCO fixture the scan is 150 DPI, so the historic 200 DPI render was
+# interpolating: bigger PNG, no extra detail, and providers downscale a full
+# page to a fixed budget regardless. `_NOTES_RENDER_DPI` stays the CAP.
+# Scout, the notes reviewer and the formatter still use the shared renderer at
+# the flat cap — they have not been measured yet.
+_NOTES_RENDER_POLICY = RENDER_POLICY_NATIVE
+
+
+# --------------------------------------------------------------------------
+# Zoom regions (plan Step 1.3)
+#
+# A closed vocabulary rather than free coordinates: the model picks a name it
+# cannot get subtly wrong, and a wrong name comes back as a correctable error
+# instead of a silently mis-cropped strip.
+#
+# Cropping does NOT change pixel density. It helps because providers downscale
+# each image to a fixed budget, so a region covering less of the page keeps
+# more detail after that downscale. Thirds overlap by ~2% of page height so a
+# table straddling a boundary is whole in at least one of them.
+# --------------------------------------------------------------------------
+ZOOM_REGIONS: dict[str, tuple[float, float, float, float]] = {
+    "top-half":     (0.0,  0.0,  1.0, 0.52),
+    "bottom-half":  (0.0,  0.48, 1.0, 1.0),
+    "left-half":    (0.0,  0.0,  0.52, 1.0),
+    "right-half":   (0.48, 0.0,  1.0, 1.0),
+    "top-third":    (0.0,  0.0,  1.0, 0.36),
+    "middle-third": (0.0,  0.32, 1.0, 0.68),
+    "bottom-third": (0.0,  0.64, 1.0, 1.0),
+    "top-left":     (0.0,  0.0,  0.52, 0.52),
+    "top-right":    (0.48, 0.0,  1.0, 0.52),
+    "bottom-left":  (0.0,  0.48, 0.52, 1.0),
+    "bottom-right": (0.48, 0.48, 1.0, 1.0),
+    "center":       (0.15, 0.25, 0.85, 0.75),
+}
+
+# Accepted as "no crop" — the way back out to the whole page.
+_ZOOM_FULL_PAGE = {"full", "full-page", "whole", "page", "all"}
+
+
+def resolve_zoom_region(
+    region: str,
+) -> Optional[tuple[float, float, float, float]]:
+    """Map a region name to a page-fraction clip, or None for the full page.
+
+    Raises ValueError listing the valid names, so a model that guessed can
+    correct itself on the next turn.
+    """
+    key = str(region or "").strip().lower().replace("_", "-").replace(" ", "-")
+    if key in _ZOOM_FULL_PAGE:
+        return None
+    if key in ZOOM_REGIONS:
+        return ZOOM_REGIONS[key]
+    raise ValueError(
+        f"Unknown region {region!r}. Valid regions: "
+        f"{', '.join(sorted(ZOOM_REGIONS))}, or 'full' for the whole page."
+    )
+
 
 # In-flight render coalescing: 5 parallel sub-agents commonly race on
 # the same page; without this, every racer sees the cache miss, renders
@@ -1195,7 +1271,9 @@ _NOTES_RENDER_DPI = 200
 # the same Future. The try/finally + fut.exception() retrieval is the
 # load-bearing contract — a crashed render propagates uniformly to
 # every awaiter, then the key is cleared so retries work cleanly.
-_inflight: dict[tuple[str, int, int], "asyncio.Future[bytes]"] = {}
+_inflight: dict[
+    tuple[str, int, int, str, Optional[tuple]], "asyncio.Future[bytes]"
+] = {}
 
 
 def _reset_inflight_for_tests() -> None:
@@ -1205,7 +1283,12 @@ def _reset_inflight_for_tests() -> None:
 
 
 async def _render_one_page_single_flight(
-    pdf_path: str, page_num: int, dpi: int,
+    pdf_path: str,
+    page_num: int,
+    dpi: int,
+    *,
+    policy: str = RENDER_POLICY_CAP,
+    clip: Optional[tuple] = None,
 ) -> bytes:
     """Cache-aware render with in-flight coalescing.
 
@@ -1221,11 +1304,11 @@ async def _render_one_page_single_flight(
     Failures propagate via ``fut.set_exception`` so all awaiters raise
     identically. The in-flight entry is always removed in ``finally``.
     """
-    cached = page_cache.get(pdf_path, page_num, dpi)
+    cached = page_cache.get(pdf_path, page_num, dpi, policy=policy, clip=clip)
     if cached is not None:
         return cached
 
-    key = (pdf_path, page_num, dpi)
+    key = (pdf_path, page_num, dpi, policy, clip)
     inflight = _inflight.get(key)
     if inflight is not None:
         # Someone else is already rendering this page — ride along.
@@ -1237,8 +1320,10 @@ async def _render_one_page_single_flight(
     fut: "asyncio.Future[bytes]" = asyncio.get_running_loop().create_future()
     _inflight[key] = fut
     try:
-        _, png = await asyncio.to_thread(_render_single_page, pdf_path, page_num, dpi)
-        page_cache.put(pdf_path, page_num, dpi, png)
+        _, png = await asyncio.to_thread(
+            _render_single_page, pdf_path, page_num, dpi, policy=policy, clip=clip
+        )
+        page_cache.put(pdf_path, page_num, dpi, png, policy=policy, clip=clip)
         # Only set the result once the cache is populated, so any
         # awaiter that wakes up and subsequently calls back through
         # `_render_one_page_single_flight` gets a straight cache hit
@@ -1318,7 +1403,7 @@ async def _render_pages_async(pdf_path: str, pages: list[int]) -> dict[int, byte
     async def _one(pn: int) -> tuple[int, bytes]:
         async with sem:
             png = await _render_one_page_single_flight(
-                pdf_path, pn, _NOTES_RENDER_DPI,
+                pdf_path, pn, _NOTES_RENDER_DPI, policy=_NOTES_RENDER_POLICY,
             )
         return pn, png
 
@@ -1617,6 +1702,47 @@ def create_notes_agent(
             results.append(f"=== Page {pn} ===")
             results.append(BinaryContent(data=rendered[pn], media_type="image/png"))
         return results
+
+    @agent.tool
+    async def zoom_pdf_region(
+        ctx: RunContext[NotesDeps], page: int, region: str,
+    ) -> List[Union[str, BinaryContent]]:
+        """Re-render ONE region of a page so fine detail is legible.
+
+        Use this before recording a table's formatting. A whole page is
+        downscaled hard before the model sees it, which is why hairline rules
+        and alignment are hard to judge from a full-page view; a region keeps
+        far more of that detail.
+
+        `region` is one of: top-half, bottom-half, left-half, right-half,
+        top-third, middle-third, bottom-third, top-left, top-right,
+        bottom-left, bottom-right, center — or 'full' for the whole page.
+        Thirds overlap slightly, so a table crossing a boundary is intact in
+        at least one of them.
+        """
+        if ctx.deps.pdf_page_count == 0:
+            ctx.deps.pdf_page_count = await asyncio.to_thread(
+                count_pdf_pages, ctx.deps.pdf_path,
+            )
+        total = ctx.deps.pdf_page_count
+        if not isinstance(page, int) or page < 1 or page > total:
+            return [f"Invalid page {page!r}. Valid range is 1-{total}."]
+
+        try:
+            clip = resolve_zoom_region(region)
+        except ValueError as exc:
+            # Hand the valid vocabulary back so the next turn can correct.
+            return [str(exc)]
+
+        png = await _render_one_page_single_flight(
+            ctx.deps.pdf_path, page, _NOTES_RENDER_DPI,
+            policy=_NOTES_RENDER_POLICY, clip=clip,
+        )
+        label = "full page" if clip is None else region.strip().lower()
+        return [
+            f"=== Page {page} ({label}) ===",
+            BinaryContent(data=png, media_type="image/png"),
+        ]
 
     @agent.tool
     async def write_notes(ctx: RunContext[NotesDeps], payloads_json: str) -> str:

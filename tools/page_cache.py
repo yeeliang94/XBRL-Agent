@@ -10,9 +10,11 @@ without changing the public signature of `render_pages_to_png_bytes`
 (which is still the only piece of code talking to PyMuPDF directly).
 
 Design choices:
-- **Keyed on (pdf_path, page, dpi)**: two agents on the same PDF at the
-  same DPI will share renders; a different DPI is a different key so we
-  never hand back bytes scaled for the wrong consumer.
+- **Keyed on (pdf_path, page, dpi, policy, clip)**: two agents on the same
+  PDF at the same DPI will share renders; a different DPI is a different
+  key so we never hand back bytes scaled for the wrong consumer. ``policy``
+  and ``clip`` joined the key with the render-policy work
+  (PLAN-notes-source-integrity-build Step 1.1/1.2) — see `_PageCache`.
 - **Module-level singleton**: the cache survives across runs inside the
   same process, which is fine because distinct runs use distinct paths
   and the LRU bound caps memory.
@@ -33,9 +35,21 @@ import logging
 import os
 import threading
 from collections import OrderedDict
-from typing import Optional
+from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+# A normalised crop rectangle in page fractions: (x0, y0, x1, y1), each 0..1.
+_Clip = Tuple[float, float, float, float]
+# Full key shape — see `_PageCache` for why each component is present.
+_Key = Tuple[str, int, int, int, str, Optional[_Clip]]
+
+# Must equal ``tools.pdf_viewer.RENDER_POLICY_CAP``. Duplicated as a literal
+# rather than imported because this module is deliberately light — importing
+# pdf_viewer would pull PyMuPDF into every consumer of the cache. The two are
+# pinned in lock-step by
+# ``tests/test_render_policy.py::test_cache_default_policy_matches_renderer``.
+_DEFAULT_POLICY = "cap"
 
 # Cap is small by default; a full Sheet-12 run touches ~15-20 unique
 # pages, so 64 gives comfortable headroom even with multi-run overlap.
@@ -108,14 +122,22 @@ def _file_mtime_ns(pdf_path: str) -> int:
 class _PageCache:
     """Singleton LRU. Private — callers use the module-level helpers.
 
-    Key shape: ``(abspath, mtime_ns, page, dpi)``. The mtime component
-    means two runs against the same path but different file contents
+    Key shape: ``(abspath, mtime_ns, page, dpi, policy, clip)``. The mtime
+    component means two runs against the same path but different file contents
     correctly miss the cache instead of serving stale bytes.
+
+    ``policy`` and ``clip`` joined the key with the render-policy work
+    (PLAN-notes-source-integrity-build Step 1.1/1.2). ``clip`` is load-bearing:
+    without it the top and bottom halves of one page collide on a single entry
+    and the second crop silently serves the first one's bytes. ``policy`` is
+    defensive — two policies that resolve to the same DPI do produce identical
+    bytes today, but keeping it in the key means a future policy that changes
+    *how* a page is rasterised (not just at what DPI) cannot serve stale
+    renders. Both default so three-argument callers are unaffected.
     """
 
     def __init__(self, max_entries: int = _MAX_ENTRIES) -> None:
-        # Key now includes mtime_ns: (abspath, mtime_ns, page, dpi).
-        self._store: "OrderedDict[tuple[str, int, int, int], bytes]" = OrderedDict()
+        self._store: "OrderedDict[_Key, bytes]" = OrderedDict()
         self._lock = threading.Lock()
         self._max = max_entries
         # Counters are purely informational; reset() zeroes them for tests.
@@ -123,7 +145,13 @@ class _PageCache:
         self.misses = 0
 
     @staticmethod
-    def _build_key(pdf_path: str, page: int, dpi: int) -> tuple[str, int, int, int]:
+    def _build_key(
+        pdf_path: str,
+        page: int,
+        dpi: int,
+        policy: str = _DEFAULT_POLICY,
+        clip: Optional[_Clip] = None,
+    ) -> "_Key":
         # Peer-review I-3: ``realpath`` (not ``abspath``) so the key
         # collapses symlink-equivalent paths to a single entry. On macOS
         # ``/tmp`` is a symlink to ``/private/tmp``; a PDF written to
@@ -131,10 +159,20 @@ class _PageCache:
         # every page. ``realpath`` resolves the underlying inode path
         # once so both callers share the same cache slot.
         real = os.path.realpath(pdf_path)
-        return (real, _file_mtime_ns(real), page, dpi)
+        # Round the clip so float noise from two equivalent callers cannot
+        # split one region across two entries.
+        norm = None if clip is None else tuple(round(float(v), 6) for v in clip)
+        return (real, _file_mtime_ns(real), page, dpi, policy, norm)
 
-    def get(self, pdf_path: str, page: int, dpi: int) -> Optional[bytes]:
-        key = self._build_key(pdf_path, page, dpi)
+    def get(
+        self,
+        pdf_path: str,
+        page: int,
+        dpi: int,
+        policy: str = _DEFAULT_POLICY,
+        clip: Optional[_Clip] = None,
+    ) -> Optional[bytes]:
+        key = self._build_key(pdf_path, page, dpi, policy, clip)
         with self._lock:
             if key not in self._store:
                 self.misses += 1
@@ -144,8 +182,16 @@ class _PageCache:
             self.hits += 1
             return self._store[key]
 
-    def set(self, pdf_path: str, page: int, dpi: int, data: bytes) -> None:
-        key = self._build_key(pdf_path, page, dpi)
+    def set(
+        self,
+        pdf_path: str,
+        page: int,
+        dpi: int,
+        data: bytes,
+        policy: str = _DEFAULT_POLICY,
+        clip: Optional[_Clip] = None,
+    ) -> None:
+        key = self._build_key(pdf_path, page, dpi, policy, clip)
         with self._lock:
             if key in self._store:
                 # Refresh MRU position without duplicating data.
@@ -175,13 +221,28 @@ class _PageCache:
 _INSTANCE = _PageCache()
 
 
-def get(pdf_path: str, page: int, dpi: int) -> Optional[bytes]:
-    return _INSTANCE.get(pdf_path, page, dpi)
+def get(
+    pdf_path: str,
+    page: int,
+    dpi: int,
+    *,
+    policy: str = _DEFAULT_POLICY,
+    clip: Optional[_Clip] = None,
+) -> Optional[bytes]:
+    return _INSTANCE.get(pdf_path, page, dpi, policy, clip)
 
 
-def put(pdf_path: str, page: int, dpi: int, data: bytes) -> None:
+def put(
+    pdf_path: str,
+    page: int,
+    dpi: int,
+    data: bytes,
+    *,
+    policy: str = _DEFAULT_POLICY,
+    clip: Optional[_Clip] = None,
+) -> None:
     """Store rendered PNG bytes."""
-    _INSTANCE.set(pdf_path, page, dpi, data)
+    _INSTANCE.set(pdf_path, page, dpi, data, policy, clip)
 
 
 # Backwards-compat alias for the prior `set` name. Kept so external
