@@ -406,7 +406,7 @@ artifact — pinned by `tests/test_stop_all_preserves_partial.py`.
 
 ### 11. DB schema — version-stepped auto-migration on startup
 
-`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **35**). `init_db`
+`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **36**). `init_db`
 reads the stored version and walks an old DB up **one version at a time**
 through per-version, idempotent `ALTER TABLE` blocks, so any older DB reaches
 the current schema automatically. `db/schema.py` is the authoritative
@@ -443,9 +443,9 @@ Evals workspace repeats/taxonomy/gold-prose + suites (#30) · v32
 resume) · v35 notes source-integrity tables (`notes_source_generations` /
 `_notes` / `_blocks`, `notes_block_usages`, append-only
 `notes_disposition_events`, `notes_integrity_runs`) + five nullable
-content-provenance columns on `notes_cells` — inert unless
-`XBRL_NOTES_SOURCE_INTEGRITY` is `shadow`/`enforce`
-(docs/PLAN-notes-source-integrity-build.md).
+content-provenance columns on `notes_cells` · v36 `runs.notes_integrity_mode`
+— all inert unless `XBRL_NOTES_SOURCE_INTEGRITY` is `shadow`/`enforce`
+(#31, docs/PLAN-notes-source-integrity-build.md).
 
 ### 12. Filing level — Company vs Group
 
@@ -1537,6 +1537,100 @@ Pinned by `tests/test_db_schema_v30.py`/`_v31.py`, `test_eval_taxonomy.py`,
 `test_suite_runner.py`, `test_suite_scorecards.py`, `test_reviewer_lift.py`,
 `test_suite_compare.py`, and the `ConsistencyPanel`/`BenchmarksPage`/
 `SuitesPage`/`EvalTab` web tests.
+
+### 31. Notes source integrity — a COUNT, not a claim; ships OFF
+
+The `XBRL_NOTES_SOURCE_INTEGRITY` mode (`off` | `shadow` | `enforce`, **default
+off**) makes notes extraction prove that every part of the source document was
+handled, rather than only that each note landed somewhere. Word-first: the
+uploaded `.docx` is read into numbered, hashed **blocks** before any agent sees
+a template, agents return block ids instead of prose, and ordinary code builds
+the cell and counts what was used. Plan:
+docs/PLAN-notes-source-integrity-build.md. Schema is gotcha #11 (v35/v36).
+
+Every invariant below exists because breaking it produces a **false green** — a
+run that reports complete coverage of a document it only partly read. That is
+the one failure this feature has no defence against, so each is pinned.
+
+- **A short manifest is refused, never measured.**
+  `notes/source_manifest.py::build_docx_manifest` reads the ORIGINAL `.docx`
+  **uncapped** (`extract_docx_html` applies no cap; the 8 MB limit lives in
+  `write_source_html`, which serves the agent sidecar — two consumers, two
+  rules). Extraction failure, an empty body, or a truncation sentinel raises
+  `ManifestError`; the run-level handler then continues on the current path
+  with **no generation and no verdict**. Its splitter also MEASURES what it
+  skips (`unaccounted_chars`) — `source_snippets`' splitter is a navigation aid
+  and may ignore what falls between chunks, this one is a ledger. Gate 0.3 on
+  the FINCO fixture: 246 blocks, 93,223/93,223 chars, 21/21 tables, 15/15
+  boundaries, 0/20 contents-page lines misread.
+- **Furniture is settled at freeze, not left for a human.** Page headers,
+  page numbers, contents lines and pre-notes material are dispositioned with
+  their approved reason code at `freeze_manifest` time. Leaving them unresolved
+  buries the 186 blocks somebody must look at under 60 rows of page headers,
+  which is how a review queue stops being used.
+- **The reason list is closed, and one reason deliberately does NOT settle.**
+  `EXCLUSION_REASONS` is fixed; `UNREADABLE_NEEDS_REVIEW` records the problem
+  without resolving the block. `_SETTLING_REASONS` is DERIVED
+  (`EXCLUSION_REASONS - UNRESOLVED_REASONS`) so a new code cannot be forgotten
+  in a second place, and an unknown code fails CLOSED. There is **no generic
+  dismiss** anywhere in the UI or the tools.
+- **Lineage is recorded in the SAME transaction as the text.** `notes/lineage.py`
+  is called inside the caller's `BEGIN IMMEDIATE` — a recompute afterwards
+  leaves a window where a cell looks source-exact and is not. This applies to
+  the PATCH endpoint, the reviewer, and `source_write`. Editing a cell back to
+  the source text CLEARS the divergence; a permanent mark for an undone edit
+  makes the flag useless. The PATCH gained an optimistic version check (409):
+  last-write-wins was fine when an edit only lost text, not once it decides
+  whether a cell counts as accounted for.
+- **In `enforce` the reviewer relinks; it does not author over source.**
+  Scoped to cells that ACTUALLY carry lineage, so a mixed run's uncovered notes
+  keep the ordinary edit path. `off`/`shadow` are unchanged.
+- **One function owns "build a cell from source parts"**
+  (`notes/source_write.py`) — three callers need identical guarantees, and a
+  second implementation is how two of them disagree about whether a block was
+  used. Cell + lineage + one disposition per block land in ONE transaction
+  (joining an ambient one rather than nesting; SQLite has no nested
+  transactions). Naming half a split table pulls in the rest and says so.
+- **Oversized notes are capped, not truncated** (Step 0.6 decision). A render
+  over `CELL_CHAR_LIMIT` is refused with an instruction and left for the
+  authoring path; `check_character_cap` reports it so it reaches a person.
+- **Boundary disagreement BLOCKS, it is not merely measured.** A mis-assigned
+  block otherwise shows 100% completeness and a wrong answer. Absent scout data
+  reads as *unknown*, never as agreement.
+- **Status goes through the ONE existing block in `server.py`** (gotcha #10) —
+  `_run_notes_integrity_check` returns a verdict and never writes a status,
+  pinned by a test that reads its source. Only `enforce` tips; `shadow`
+  computes the IDENTICAL verdict and changes nothing, which is what makes the
+  staged rollout mean anything.
+- **A stored verdict carries its `rule_version` and its `mode`**, and attempts
+  append rather than replace. `legacy` (pre-feature), `off` (somebody decided)
+  and a real verdict are three different facts and the API keeps them apart —
+  an empty checklist would read as "nothing was missed".
+- **PDF track (Phase 10) is BUILT and GATED OFF.** Step 0.4's zero-false-green
+  criterion is unmet: no digital PDF exists in `data/`, so `notes/pdf_layout.py`
+  has only ever run against generated fixtures. Its area accounting measures
+  block boxes against word boxes from a SEPARATE `get_text("words")` call —
+  comparing against the same block dict the blocks came from can only detect
+  losses after segmentation, never the misses that happen. A page with no text
+  layer emits an unresolved region covering the page, so a scan can never
+  finish clean.
+- **Step 9.1's preflight changes no decorator.** It reads what
+  `mtool/notes_exporter` already produced and resolves its theme through
+  `firm_theme()` (gotcha #16's rule for a new consumer). Advisory only —
+  partial output stays downloadable.
+- **DPI does not matter; area might.** Measured 2026-08-01 on FINCO page 31:
+  input tokens were IDENTICAL at 150, 200 and 400 DPI (2884 each) because the
+  provider downscales to a fixed budget, and 400 DPI answered slightly worse.
+  Do not "improve" the render by raising DPI. The crop advantage is suggestive,
+  not proven.
+
+Pinned by `tests/test_notes_source_manifest.py`, `test_notes_source_render.py`,
+`test_notes_source_write.py`, `test_notes_lineage.py`,
+`test_notes_integrity_checks.py`, `test_notes_integrity_runner.py`,
+`test_notes_integrity_wiring.py`, `test_notes_integrity_api.py`,
+`test_notes_source_tools.py`, `test_notes_export_preflight.py`,
+`test_notes_pdf_layout.py`, `test_db_schema_v35.py`/`_v36.py`, and the
+`NotesIntegrityPanel` web tests.
 
 ## Testing
 

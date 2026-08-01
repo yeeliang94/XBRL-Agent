@@ -387,6 +387,9 @@ async def run_notes_extraction(
                 launch_delay=stagger,
                 filing_standard=config.filing_standard,
                 scout_context=scout_context,
+                run_id=config.run_id,
+                db_path=config.audit_db_path,
+                source_generation_id=config.source_generation_id,
             )
         else:
             runner = _run_single_notes_agent(
@@ -1028,6 +1031,9 @@ async def _run_list_of_notes_fanout(
     launch_delay: float = 0.0,
     filing_standard: str = "mfrs",
     scout_context: Optional[dict] = None,
+    run_id: Optional[int] = None,
+    db_path: Optional[str] = None,
+    source_generation_id: Optional[int] = None,
 ) -> NotesAgentResult:
     """Drive the Sheet-12 sub-agent fan-out and write the final workbook.
 
@@ -1121,6 +1127,9 @@ async def _run_list_of_notes_fanout(
             page_hints=page_hints,
             page_offset=page_offset,
             scout_context=scout_context,
+            run_id=run_id,
+            db_path=db_path,
+            source_generation_id=source_generation_id,
         )
 
         # Persist Sheet-12 skip receipts as a durable side-log so the notes
