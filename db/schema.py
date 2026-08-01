@@ -1265,6 +1265,12 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         mode              TEXT NOT NULL DEFAULT 'off',   -- off|shadow|enforce
         blocks_total      INTEGER NOT NULL DEFAULT 0,
         blocks_included   INTEGER NOT NULL DEFAULT 0,
+        -- One column per Disposition. `structured_consumed` is its own count,
+        -- not folded into `included`: a figure read into a field and a
+        -- paragraph rendered into a disclosure are different outcomes, and the
+        -- FIELD_SELECTIVE / PROSE_COMPLETE coverage modes judge them by
+        -- different rules.
+        blocks_structured_consumed INTEGER NOT NULL DEFAULT 0,
         blocks_routed     INTEGER NOT NULL DEFAULT 0,
         blocks_excluded   INTEGER NOT NULL DEFAULT 0,
         blocks_unresolved INTEGER NOT NULL DEFAULT 0,
@@ -1287,6 +1293,20 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
 _CREATE_INDEXES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS ix_run_agents_run_id ON run_agents(run_id)",
     "CREATE INDEX IF NOT EXISTS ix_run_lineage_child ON run_lineage(child_run_id)",
+    # v35: "one active generation per run" is the invariant every completeness
+    # count rests on — two active generations make the number meaningless and
+    # `active_generation(... LIMIT 1)` would return an arbitrary one. Enforcing
+    # it in application code alone leaves direct SQL, a future writer, or a
+    # partially-applied migration free to break it, so it is a PARTIAL UNIQUE
+    # INDEX in the database as well.
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_notes_source_generation_active "
+    "ON notes_source_generations(run_id) WHERE status = 'active'",
+    "CREATE INDEX IF NOT EXISTS ix_notes_source_blocks_generation "
+    "ON notes_source_blocks(generation_id)",
+    "CREATE INDEX IF NOT EXISTS ix_notes_block_usages_generation "
+    "ON notes_block_usages(generation_id)",
+    "CREATE INDEX IF NOT EXISTS ix_notes_disposition_events_block "
+    "ON notes_disposition_events(run_id, block_id)",
     "CREATE INDEX IF NOT EXISTS ix_run_lineage_parent ON run_lineage(parent_run_id)",
     "CREATE INDEX IF NOT EXISTS ix_agent_events_run_agent_id ON agent_events(run_agent_id)",
     "CREATE INDEX IF NOT EXISTS ix_extracted_fields_run_agent_id ON extracted_fields(run_agent_id)",

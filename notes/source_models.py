@@ -101,6 +101,11 @@ EXCLUSION_REASONS: frozenset[str] = frozenset({
 # footer is a decision; excluding it because it could not be read is not.
 UNRESOLVED_REASONS: frozenset[str] = frozenset({"UNREADABLE_NEEDS_REVIEW"})
 
+# The only reasons that SETTLE an excluded block. Derived rather than written
+# out so a new entry in EXCLUSION_REASONS cannot be forgotten here, and an
+# unknown code can never fall through as settled.
+_SETTLING_REASONS: frozenset[str] = EXCLUSION_REASONS - UNRESOLVED_REASONS
+
 _RESOLVING_DISPOSITIONS = frozenset({
     Disposition.INCLUDED,
     Disposition.STRUCTURED_CONSUMED,
@@ -148,11 +153,20 @@ def validate_disposition(
 
 
 def is_resolved(disposition: Disposition, reason_code: Optional[str]) -> bool:
-    """Whether this block is settled, for run-status purposes."""
+    """Whether this block is settled, for run-status purposes.
+
+    An exclusion settles a block only when its reason is one of the APPROVED
+    codes and is not itself an unresolved one. Checking merely "not in
+    UNRESOLVED_REASONS" would let an unrecognised code — a typo, a value from a
+    newer build, a hand-edited row — read as settled. The `reason_code` column
+    deliberately has no CHECK constraint (gotcha #11), so unknown values can
+    exist, and treating one as resolved is precisely the false-green this
+    feature exists to prevent. Unknown fails CLOSED.
+    """
     if disposition in _RESOLVING_DISPOSITIONS:
         return True
     if disposition is Disposition.EXCLUDED:
-        return reason_code is not None and reason_code not in UNRESOLVED_REASONS
+        return reason_code in _SETTLING_REASONS
     return False
 
 

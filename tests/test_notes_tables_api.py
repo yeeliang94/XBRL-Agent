@@ -158,3 +158,42 @@ def test_run_with_no_notes_returns_empty_not_error(tmp_path):
         f"/api/runs/{run_id}/notes_tables").json()
     assert body["tables"] == []
     assert body["summary"]["tables"] == 0
+
+
+def test_cell_and_table_counts_are_both_reported(client_and_run):
+    """Peer-review finding: Step 1.5 specifies a CELL count; `plain` is a
+    TABLE count. Both are useful and they differ — row 20 holds two tables in
+    one cell marked `unstyled`, so it contributes 2 tables and 1 cell."""
+    client, run_id = client_and_run
+    s = client.get(f"/api/runs/{run_id}/notes_tables").json()["summary"]
+    assert s["tables"] == 3
+    assert s["cells_with_tables"] == 2
+    # Rows 10 (style_source='source') and 20 ('unstyled'); only row 20 counts.
+    assert s["cells_unstyled"] == 1
+    assert s["plain"] == 1, "the table-level count is unchanged"
+
+
+def test_a_cell_with_several_plain_tables_counts_once_as_a_cell(tmp_path):
+    import server as server_module
+
+    server_module.OUTPUT_DIR = tmp_path
+    server_module.AUDIT_DB_PATH = tmp_path / "audit3.sqlite"
+    init_db(server_module.AUDIT_DB_PATH)
+    three_plain = "".join(
+        f"<table><tr><td>a{i}</td><td>{i}</td></tr>"
+        f"<tr><td>b{i}</td><td>{i}</td></tr></table>"
+        for i in range(3)
+    )
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        run_id = repo.create_run(
+            conn, "x.pdf", session_id="s3", output_dir=str(tmp_path / "s3"),
+        )
+        repo.upsert_notes_cell(
+            conn, run_id=run_id, sheet="Notes", row=5, label="Three tables",
+            html=three_plain, evidence=None, source_pages=[7],
+            style_source="unstyled",
+        )
+    s = TestClient(server_module.app).get(
+        f"/api/runs/{run_id}/notes_tables").json()["summary"]
+    assert s["plain"] == 3
+    assert s["cells_unstyled"] == 1

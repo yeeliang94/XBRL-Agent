@@ -72,11 +72,25 @@ def fetch_generation(conn: sqlite3.Connection, generation_id: int):
 
 
 def active_generation(conn: sqlite3.Connection, run_id: int):
-    return conn.execute(
-        "SELECT * FROM notes_source_generations "
-        "WHERE run_id = ? AND status = ? LIMIT 1",
+    """The run's one active generation, or None.
+
+    Fails LOUDLY on more than one rather than picking with `LIMIT 1`. A partial
+    unique index prevents this at the database level, but a database written
+    before that index existed could still carry two — and silently reading an
+    arbitrary one would make every downstream count untraceable.
+    """
+    rows = conn.execute(
+        "SELECT * FROM notes_source_generations WHERE run_id = ? AND status = ? "
+        "ORDER BY generation_no",
         (run_id, GenerationStatus.ACTIVE.value),
-    ).fetchone()
+    ).fetchall()
+    if len(rows) > 1:
+        raise ValueError(
+            f"run {run_id} has {len(rows)} active source generations "
+            f"(nos {[r['generation_no'] for r in rows]}); exactly one is "
+            "required before any coverage figure can be trusted"
+        )
+    return rows[0] if rows else None
 
 
 def activate_generation(
