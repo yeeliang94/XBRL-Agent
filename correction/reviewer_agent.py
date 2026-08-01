@@ -59,6 +59,16 @@ _SPOT_CHECK_PROMPT_PATH = (
 )
 
 
+def _thinking_level_for(role: str):
+    """Per-role thinking level, or None. Lazy import + swallow: `server`
+    imports this module, and a settings lookup must never fail a run."""
+    try:
+        import server
+
+        return server.thinking_level_for(role)
+    except Exception:  # noqa: BLE001
+        return None
+
 def _now() -> str:
     return (
         datetime.now(timezone.utc)
@@ -1737,6 +1747,7 @@ def create_reviewer_agent(
     (by-then terminal) DB rows. See :func:`run_verification_checks`.
     """
     from model_settings import build_model_settings
+
     from concept_model.facts_api import FactWrite
 
     deps = ReviewerDeps(
@@ -1794,7 +1805,10 @@ def create_reviewer_agent(
         model,
         deps_type=ReviewerDeps,
         system_prompt=system_prompt,
-        model_settings=build_model_settings(model, cache_key="xbrl-reviewer"),
+        model_settings=build_model_settings(
+            model, cache_key="xbrl-reviewer",
+            thinking_level=_thinking_level_for("reviewer"),
+        ),
         end_strategy="early",  # pin V1 semantics across the V2 flip (plan B.3.1)
         **_agent_kwargs,
     )

@@ -24,6 +24,10 @@ logger = logging.getLogger("server")
 
 router = APIRouter()
 
+# Mirrors model_settings.THINKING_LEVELS; imported rather than
+# re-listed so the API and the builder cannot drift.
+from model_settings import THINKING_LEVELS as _THINKING_LEVELS
+
 
 def _app_version() -> str:
     """The running build's version string. Prod build stamps are cached; on a
@@ -42,6 +46,9 @@ _ADMIN_ONLY_SETTINGS_KEYS = frozenset({
     "api_key",
     "proxy_url",
     "default_models",
+    # Firm-wide like default_models: it changes cost and behaviour for
+    # everyone, so it is not a per-user cosmetic setting.
+    "thinking_levels",
     "scout_enabled_default",
     "auto_review",
     "notes_auto_review",
@@ -175,6 +182,10 @@ async def get_config():
         "notes_coverage": server._notes_coverage_enabled(),
         # Item 28 — per-entity advisory memory (prior-year prompt hints). Default on.
         "entity_memory": server._entity_memory_enabled(),
+        # Per-role thinking level (reasoning effort). An absent role sends
+        # nothing, which is what every agent did before this setting existed.
+        "thinking_levels": server._thinking_levels(),
+        "thinking_level_choices": list(_THINKING_LEVELS),
         # Firm-wide notes-table style theme (docs/PLAN-notes-table-theme.md).
         # Surfaced here so the Notes tab + clipboard read the firm default at
         # render time without a separate /api/settings round-trip.
@@ -200,6 +211,11 @@ async def get_settings():
         "api_key_preview": masked,
         # Extended fields (Phase 8)
         "available_models": server._load_available_models(),
+        # Per-role thinking level. Lives here as well as on /api/config
+        # because the Settings form reads THIS endpoint; /api/config carries
+        # it for surfaces that only take the lightweight flag payload.
+        "thinking_levels": server._thinking_levels(),
+        "thinking_level_choices": list(_THINKING_LEVELS),
         **extended,
     }
 
@@ -281,6 +297,43 @@ async def update_settings(body: dict, request: Request):
         existing = server._load_extended_settings()["default_models"]
         existing.update(raw_models)
         set_key(str(ENV_FILE), "XBRL_DEFAULT_MODELS", json.dumps(existing))
+    if "thinking_levels" in body:
+        raw_levels = body["thinking_levels"]
+        if not isinstance(raw_levels, dict):
+            raise HTTPException(
+                status_code=400,
+                detail="thinking_levels must be an object keyed by agent role.",
+            )
+        from notes_types import NotesTemplateType as _NT
+        allowed = set(server._AGENT_ROLES) | {nt.value for nt in _NT}
+        cleaned: dict[str, str] = {}
+        for key, value in raw_levels.items():
+            if key not in allowed:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unknown thinking_levels key: {key!r}. "
+                           f"Allowed: {sorted(allowed)}.",
+                )
+            if value in (None, "", "default"):
+                continue     # clearing a role = send nothing for it
+            if value not in _THINKING_LEVELS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"thinking_levels[{key!r}] must be one of "
+                        f"{sorted(_THINKING_LEVELS)}, or empty to use the "
+                        "provider default."
+                    ),
+                )
+            cleaned[key] = value
+        load_dotenv(ENV_FILE, override=True)
+        existing = server._thinking_levels()
+        # A role sent as empty is REMOVED, not merged over — otherwise there
+        # would be no way to put a role back to the provider default.
+        for key in raw_levels:
+            existing.pop(key, None)
+        existing.update(cleaned)
+        set_key(str(ENV_FILE), "XBRL_THINKING_LEVELS", json.dumps(existing))
     if "scout_enabled_default" in body:
         set_key(str(ENV_FILE), "XBRL_SCOUT_ENABLED_DEFAULT",
                 "true" if body["scout_enabled_default"] else "false")

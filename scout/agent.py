@@ -26,6 +26,17 @@ import time
 import fitz
 from pydantic_ai import Agent, RunContext
 from model_settings import build_model_settings
+
+def _thinking_level_for(role: str):
+    """Per-role thinking level, or None. Lazy import + swallow: `server`
+    imports this module, and a settings lookup must never fail a run."""
+    try:
+        import server
+
+        return server.thinking_level_for(role)
+    except Exception:  # noqa: BLE001
+        return None
+
 from pydantic_ai.messages import (
     BinaryContent,
     FunctionToolCallEvent,
@@ -1124,7 +1135,10 @@ def create_scout_agent(
         system_prompt=system_prompt,
         # Phase 2: provider-correct prompt caching (scout's system prompt is
         # near-fully static, so it caches well across its own turns).
-        model_settings=build_model_settings(model, cache_key="xbrl-scout"),
+        model_settings=build_model_settings(
+            model, cache_key="xbrl-scout",
+            thinking_level=_thinking_level_for("scout"),
+        ),
         # Token-cost reduction: strip stale page-image blobs (from view_pages)
         # out of the outbound request each turn. Pure function over the message
         # list; see extraction/history_processors.py.

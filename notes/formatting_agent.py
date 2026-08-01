@@ -32,6 +32,17 @@ from notes.format_patch import (
 )
 from notes.table_theme import firm_theme
 from model_settings import build_model_settings
+
+def _thinking_level_for(role: str):
+    """Per-role thinking level, or None. Lazy import + swallow: `server`
+    imports this module, and a settings lookup must never fail a run."""
+    try:
+        import server
+
+        return server.thinking_level_for(role)
+    except Exception:  # noqa: BLE001
+        return None
+
 from tools.pdf_viewer import count_pdf_pages, render_pages_to_png_bytes
 
 logger = logging.getLogger(__name__)
@@ -146,7 +157,10 @@ def create_notes_formatter_agent(
         model,
         deps_type=NotesFormatterDeps,
         system_prompt=base_prompt,
-        model_settings=build_model_settings(model, cache_key="xbrl-notes-formatter"),
+        model_settings=build_model_settings(
+            model, cache_key="xbrl-notes-formatter",
+            thinking_level=_thinking_level_for("notes_formatter"),
+        ),
         end_strategy="early",  # pin V1 semantics across the V2 flip (plan B.3.1)
     )
 

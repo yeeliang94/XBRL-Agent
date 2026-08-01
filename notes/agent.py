@@ -19,6 +19,17 @@ from pydantic_ai.messages import BinaryContent
 from pydantic_ai.models import Model
 from model_settings import build_model_settings
 
+
+def _thinking_level_for(role: str):
+    """Per-role thinking level, or None. Lazy import + swallow: `server`
+    imports this module, and a settings lookup must never fail a run."""
+    try:
+        import server
+
+        return server.thinking_level_for(role)
+    except Exception:  # noqa: BLE001
+        return None
+
 from notes.coverage import CoverageReceipt
 from notes.html_sanitize import sanitize_notes_html
 from notes.html_to_text import html_to_excel_text
@@ -1766,7 +1777,8 @@ def create_notes_agent(
         deps_type=NotesDeps,
         system_prompt=system_prompt,
         model_settings=build_model_settings(
-            model, cache_key=f"xbrl-notes-{template_type.value}"
+            model, cache_key=f"xbrl-notes-{template_type.value}",
+            thinking_level=_thinking_level_for(template_type.value),
         ),
         # Token-cost reduction: strip stale page-image blobs (from
         # view_pdf_pages) out of the outbound request each turn. Transport

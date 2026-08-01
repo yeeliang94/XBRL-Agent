@@ -1,12 +1,72 @@
 [
   {
+    "id": "openai.global.gpt-5.6",
+    "display_name": "GPT-5.6",
+    "provider": "openai",
+    "supports_vision": true,
+    "notes": "Newest OpenAI flagship on the proxy. Pricing UNCONFIRMED \u2014 estimated from the 5.5 tier; correct it when you have the rate card.",
+    "input_price_per_mtok": 5.0,
+    "output_price_per_mtok": 30.0,
+    "notes_parallel": 5
+  },
+  {
+    "id": "openai.global.gpt-5.6-luna",
+    "display_name": "GPT-5.6 Luna",
+    "provider": "openai",
+    "supports_vision": true,
+    "notes": "GPT-5.6 variant. Purpose and pricing UNCONFIRMED.",
+    "input_price_per_mtok": 5.0,
+    "output_price_per_mtok": 30.0,
+    "notes_parallel": 5
+  },
+  {
+    "id": "openai.global.gpt-5.6-terra",
+    "display_name": "GPT-5.6 Terra",
+    "provider": "openai",
+    "supports_vision": true,
+    "notes": "GPT-5.6 variant. Purpose and pricing UNCONFIRMED.",
+    "input_price_per_mtok": 5.0,
+    "output_price_per_mtok": 30.0,
+    "notes_parallel": 5
+  },
+  {
+    "id": "openai.global.gpt-5.5-pro",
+    "display_name": "GPT-5.5 Pro",
+    "provider": "openai",
+    "supports_vision": true,
+    "notes": "Higher tier than 5.5. Pricing UNCONFIRMED \u2014 assumed above 5.5.",
+    "input_price_per_mtok": 15.0,
+    "output_price_per_mtok": 90.0,
+    "notes_parallel": 2
+  },
+  {
+    "id": "vertex_ai.gemini-3.6-flash",
+    "display_name": "Gemini 3.6 Flash",
+    "provider": "google",
+    "supports_vision": true,
+    "notes": "Newest Gemini flash tier on the proxy. Pricing UNCONFIRMED \u2014 estimated from the 3.5 flash tier.",
+    "input_price_per_mtok": 1.5,
+    "output_price_per_mtok": 9.0,
+    "notes_parallel": 2
+  },
+  {
+    "id": "vertex_ai.gemini-3.5-flash-lite",
+    "display_name": "Gemini 3.5 Flash Lite",
+    "provider": "google",
+    "supports_vision": true,
+    "notes": "Cheapest Gemini tier on the proxy. Replaces the 3.1-flash-lite-preview entry, which the proxy no longer lists. Pricing UNCONFIRMED.",
+    "input_price_per_mtok": 0.3,
+    "output_price_per_mtok": 1.8,
+    "notes_parallel": 2
+  },
+  {
     "id": "openai.gpt-5.5",
     "display_name": "GPT-5.5",
     "provider": "openai",
     "supports_vision": true,
     "notes": "Latest OpenAI flagship.",
-    "input_price_per_mtok": 5.00,
-    "output_price_per_mtok": 30.00,
+    "input_price_per_mtok": 5.0,
+    "output_price_per_mtok": 30.0,
     "notes_parallel": 5
   },
   {
@@ -15,8 +75,8 @@
     "provider": "openai",
     "supports_vision": true,
     "notes": "OpenAI flagship. Default for extraction, scout, and notes.",
-    "input_price_per_mtok": 2.50,
-    "output_price_per_mtok": 15.00,
+    "input_price_per_mtok": 2.5,
+    "output_price_per_mtok": 15.0,
     "notes_parallel": 5
   },
   {
@@ -26,7 +86,7 @@
     "supports_vision": true,
     "notes": "Smaller, faster GPT-5.4. Good cost/quality trade-off.",
     "input_price_per_mtok": 0.75,
-    "output_price_per_mtok": 4.50,
+    "output_price_per_mtok": 4.5,
     "notes_parallel": 2
   },
   {
@@ -36,7 +96,7 @@
     "supports_vision": true,
     "notes": "Smallest/cheapest GPT-5.4. Good for scout and simple statements.",
     "input_price_per_mtok": 0.25,
-    "output_price_per_mtok": 2.00,
+    "output_price_per_mtok": 2.0,
     "notes_parallel": 2
   },
   {
@@ -45,8 +105,8 @@
     "provider": "google",
     "supports_vision": true,
     "notes": "Latest Gemini flash tier. Fast, cost-effective.",
-    "input_price_per_mtok": 1.50,
-    "output_price_per_mtok": 9.00,
+    "input_price_per_mtok": 1.5,
+    "output_price_per_mtok": 9.0,
     "notes_parallel": 2
   },
   {
@@ -55,8 +115,8 @@
     "provider": "google",
     "supports_vision": true,
     "notes": "Fast, cost-effective. Previous default for extraction and scout.",
-    "input_price_per_mtok": 0.50,
-    "output_price_per_mtok": 3.00,
+    "input_price_per_mtok": 0.5,
+    "output_price_per_mtok": 3.0,
     "notes_parallel": 2
   },
   {
@@ -66,7 +126,7 @@
     "supports_vision": true,
     "notes": "Cheapest and fastest Gemini tier. Good for scout and simple statements.",
     "input_price_per_mtok": 0.25,
-    "output_price_per_mtok": 1.50,
+    "output_price_per_mtok": 1.5,
     "notes_parallel": 2
   },
   {
@@ -76,7 +136,7 @@
     "supports_vision": true,
     "notes": "Higher quality, slower. Good for complex statements.",
     "input_price_per_mtok": 1.25,
-    "output_price_per_mtok": 10.00,
+    "output_price_per_mtok": 10.0,
     "notes_parallel": 5
   },
   {
@@ -85,8 +145,8 @@
     "provider": "anthropic",
     "supports_vision": true,
     "notes": "Strong reasoning, good balance of speed and quality.",
-    "input_price_per_mtok": 3.00,
-    "output_price_per_mtok": 15.00,
+    "input_price_per_mtok": 3.0,
+    "output_price_per_mtok": 15.0,
     "notes_parallel": 5
   },
   {
@@ -95,8 +155,8 @@
     "provider": "anthropic",
     "supports_vision": true,
     "notes": "Latest, highest quality Anthropic model. Best for difficult extractions.",
-    "input_price_per_mtok": 5.00,
-    "output_price_per_mtok": 25.00,
+    "input_price_per_mtok": 5.0,
+    "output_price_per_mtok": 25.0,
     "notes_parallel": 5
   },
   {
@@ -105,8 +165,8 @@
     "provider": "anthropic",
     "supports_vision": true,
     "notes": "Highest quality Anthropic model. Best for difficult extractions.",
-    "input_price_per_mtok": 5.00,
-    "output_price_per_mtok": 25.00,
+    "input_price_per_mtok": 5.0,
+    "output_price_per_mtok": 25.0,
     "notes_parallel": 5
   },
   {
@@ -115,8 +175,8 @@
     "provider": "anthropic",
     "supports_vision": true,
     "notes": "Fastest Anthropic model. Good for simple statements.",
-    "input_price_per_mtok": 1.00,
-    "output_price_per_mtok": 5.00,
+    "input_price_per_mtok": 1.0,
+    "output_price_per_mtok": 5.0,
     "notes_parallel": 2
   }
 ]
