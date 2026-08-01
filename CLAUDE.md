@@ -406,7 +406,7 @@ artifact — pinned by `tests/test_stop_all_preserves_partial.py`.
 
 ### 11. DB schema — version-stepped auto-migration on startup
 
-`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **33**). `init_db`
+`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **35**). `init_db`
 reads the stored version and walks an old DB up **one version at a time**
 through per-version, idempotent `ALTER TABLE` blocks, so any older DB reaches
 the current schema automatically. `db/schema.py` is the authoritative
@@ -439,7 +439,13 @@ notes-formatter `notes_format_tasks` / `notes_format_snapshots` (#16) · v28
 `notes_coverage_rows` (#27) · v29 `notes_cells.style_source` (#16) · v30–v31
 Evals workspace repeats/taxonomy/gold-prose + suites (#30) · v32
 `eval_suite_run_docs` frozen-corpus snapshot (#30) · v33 gold fingerprint on
-`eval_scores` + benchmark archive flag (#30).
+`eval_scores` + benchmark archive flag (#30) · v34 `run_lineage` (stage-level
+resume) · v35 notes source-integrity tables (`notes_source_generations` /
+`_notes` / `_blocks`, `notes_block_usages`, append-only
+`notes_disposition_events`, `notes_integrity_runs`) + five nullable
+content-provenance columns on `notes_cells` — inert unless
+`XBRL_NOTES_SOURCE_INTEGRITY` is `shadow`/`enforce`
+(docs/PLAN-notes-source-integrity-build.md).
 
 ### 12. Filing level — Company vs Group
 

@@ -118,17 +118,72 @@ def test_content_origin_is_separate_from_style_source(tmp_path):
 # walk-forward from v34
 # --------------------------------------------------------------------------
 
-def test_v34_db_walks_forward(tmp_path):
-    db = tmp_path / "v34.db"
-    init_db(db)
+def _rewind_to_v34(db) -> None:
+    """Turn a fresh v35 database into a genuine v34 one.
+
+    Dropping the new TABLES is not enough: `notes_cells` keeps its five v35
+    columns from the fresh CREATE, so the `ALTER TABLE` half of the migration
+    is never exercised — the exact gap a peer review caught. SQLite has no
+    DROP COLUMN on older versions, so the table is rebuilt without them,
+    preserving its rows.
+    """
     conn = sqlite3.connect(str(db))
     try:
         for t in _NEW_TABLES:
-            conn.execute(f"DROP TABLE {t}")
+            conn.execute(f"DROP TABLE IF EXISTS {t}")
+        conn.execute("DROP INDEX IF EXISTS ux_notes_source_generation_active")
+        conn.execute("ALTER TABLE notes_cells RENAME TO notes_cells_v35")
+        conn.execute(
+            """
+            CREATE TABLE notes_cells (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id        INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+                sheet         TEXT NOT NULL,
+                row           INTEGER NOT NULL,
+                label         TEXT NOT NULL,
+                html          TEXT NOT NULL,
+                evidence      TEXT,
+                source_pages  TEXT,
+                updated_at    TEXT NOT NULL,
+                concept_uuid  TEXT,
+                style_source  TEXT,
+                UNIQUE(run_id, sheet, row)
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO notes_cells(id, run_id, sheet, row, label, html, "
+            "evidence, source_pages, updated_at, concept_uuid, style_source) "
+            "SELECT id, run_id, sheet, row, label, html, evidence, "
+            "source_pages, updated_at, concept_uuid, style_source "
+            "FROM notes_cells_v35"
+        )
+        conn.execute("DROP TABLE notes_cells_v35")
         conn.execute("UPDATE schema_version SET version = 34")
         conn.commit()
     finally:
         conn.close()
+
+
+def test_the_v34_fixture_really_lacks_the_new_columns(tmp_path):
+    """Guards the guard: if `_rewind_to_v34` stopped removing the columns, the
+    migration test below would pass without exercising the ALTER at all."""
+    db = tmp_path / "rewound.db"
+    init_db(db)
+    _rewind_to_v34(db)
+    conn = sqlite3.connect(str(db))
+    try:
+        assert _NEW_CELL_COLUMNS.isdisjoint(_columns(conn, "notes_cells"))
+        assert set(_NEW_TABLES).isdisjoint(_tables(conn))
+        assert _schema_version(conn) == 34
+    finally:
+        conn.close()
+
+
+def test_v34_db_walks_forward(tmp_path):
+    db = tmp_path / "v34.db"
+    init_db(db)
+    _rewind_to_v34(db)
 
     init_db(db)
     conn = sqlite3.connect(str(db))
@@ -136,6 +191,94 @@ def test_v34_db_walks_forward(tmp_path):
         assert set(_NEW_TABLES) <= _tables(conn)
         assert _NEW_CELL_COLUMNS <= _columns(conn, "notes_cells")
         assert _schema_version(conn) == CURRENT_SCHEMA_VERSION
+    finally:
+        conn.close()
+
+
+def test_v34_rows_survive_the_alter(tmp_path):
+    """The ALTER path runs against a table with data in it."""
+    db = tmp_path / "v34rows.db"
+    init_db(db)
+    conn = sqlite3.connect(str(db))
+    try:
+        run_id = _seed_run(conn)
+        conn.execute(
+            "INSERT INTO notes_cells(run_id, sheet, row, label, html, updated_at, "
+            "style_source) VALUES (?, 'Notes', 10, 'PPE', '<p>keep me</p>', '', 'ops')",
+            (run_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    _rewind_to_v34(db)
+    init_db(db)
+
+    conn = sqlite3.connect(str(db))
+    try:
+        row = conn.execute(
+            "SELECT html, style_source, content_origin FROM notes_cells"
+        ).fetchone()
+        assert row[0] == "<p>keep me</p>"
+        assert row[1] == "ops", "formatting provenance survives"
+        assert row[2] is None, "content provenance starts empty, not invented"
+    finally:
+        conn.close()
+
+
+def test_only_one_generation_can_be_active_per_run(tmp_path):
+    """Enforced by a partial unique index, not only by application code: the
+    completeness count is meaningless if two readings are both 'the' one."""
+    db = tmp_path / "active.db"
+    init_db(db)
+    conn = sqlite3.connect(str(db))
+    try:
+        run_id = _seed_run(conn)
+        conn.execute(
+            "INSERT INTO notes_source_generations(run_id, generation_no, status) "
+            "VALUES (?, 1, 'active')", (run_id,),
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO notes_source_generations(run_id, generation_no, status) "
+                "VALUES (?, 2, 'active')", (run_id,),
+            )
+    finally:
+        conn.close()
+
+
+def test_superseded_generations_are_not_constrained(tmp_path):
+    """The index is partial: many superseded generations must coexist."""
+    db = tmp_path / "superseded.db"
+    init_db(db)
+    conn = sqlite3.connect(str(db))
+    try:
+        run_id = _seed_run(conn)
+        for n in (1, 2, 3):
+            conn.execute(
+                "INSERT INTO notes_source_generations(run_id, generation_no, status) "
+                "VALUES (?, ?, 'superseded')", (run_id, n),
+            )
+        conn.commit()
+        assert conn.execute(
+            "SELECT COUNT(*) FROM notes_source_generations"
+        ).fetchone()[0] == 3
+    finally:
+        conn.close()
+
+
+def test_integrity_run_records_every_disposition(tmp_path):
+    """One column per Disposition. `structured_consumed` was missing, so a
+    figure read into a field had nowhere to be counted."""
+    from notes.source_models import Disposition
+
+    db = tmp_path / "integrity.db"
+    init_db(db)
+    conn = sqlite3.connect(str(db))
+    try:
+        cols = _columns(conn, "notes_integrity_runs")
+        for d in Disposition:
+            assert f"blocks_{d.value}" in cols, d.value
     finally:
         conn.close()
 

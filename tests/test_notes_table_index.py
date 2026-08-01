@@ -249,3 +249,76 @@ def test_padding_alone_is_not_styling():
     html = ('<table><tr><td style="padding: 4px 8px">a</td><td>1</td></tr>'
             "<tr><td>b</td><td>2</td></tr></table>")
     assert index_tables(html)[0].style_state == "plain"
+
+
+# --------------------------------------------------------------------------
+# Peer-review finding 4: per-side border resolution.
+#
+# gotcha #16 records that the browser COLLAPSES uniform per-side borders into
+# the grouped longhands, so these are the forms that actually arrive from a
+# human edit — not a hypothetical.
+# --------------------------------------------------------------------------
+
+def _one(css: str):
+    return index_tables(
+        f'<table><tr><td style="{css}">a</td><td>1</td></tr>'
+        "<tr><td>b</td><td>2</td></tr></table>"
+    )[0]
+
+
+def test_grouped_longhand_hidden_is_not_a_border():
+    """`border-width:1px` reads as a real border only if you stop at width."""
+    assert _one("border-width:1px; border-style:hidden; border-color:#000"
+                ).has_inline_borders is False
+
+
+def test_grouped_longhand_solid_is_a_border():
+    assert _one("border-width:1px; border-style:solid; border-color:#000"
+                ).has_inline_borders is True
+
+
+def test_one_visible_side_among_hidden_ones_counts():
+    """`hidden solid hidden hidden` has a real right edge — a whole-string
+    test for the word 'hidden' calls this blank, which is the opposite error."""
+    assert _one("border-style: hidden solid hidden hidden").has_inline_borders is True
+
+
+def test_all_four_sides_hidden_is_blank():
+    assert _one("border-style: hidden hidden hidden hidden"
+                ).has_inline_borders is False
+
+
+def test_width_without_style_paints_nothing():
+    """CSS's initial border-style is `none`, so a width alone draws no line."""
+    assert _one("border-width: 2px").has_inline_borders is False
+
+
+def test_zero_width_with_a_visible_style_paints_nothing():
+    assert _one("border-style: solid; border-width: 0").has_inline_borders is False
+
+
+def test_a_later_declaration_overrides_an_earlier_one():
+    assert _one("border-style: solid; border-style: hidden"
+                ).has_inline_borders is False
+    assert _one("border-style: hidden; border-style: solid"
+                ).has_inline_borders is True
+
+
+def test_per_side_shorthand_is_resolved():
+    assert _one("border-bottom: 1px solid #000000").has_inline_borders is True
+    assert _one("border-bottom: 1px hidden #000000").has_inline_borders is False
+
+
+def test_border_colour_alone_paints_nothing():
+    assert _one("border-color: rgb(0, 0, 0)").has_inline_borders is False
+
+
+def test_border_radius_and_collapse_are_not_lines():
+    assert _one("border-collapse: collapse; border-radius: 4px"
+                ).has_inline_borders is False
+
+
+def test_all_sides_shorthand_then_one_side_erased():
+    """The common real shape: a boxed cell with its bottom edge removed."""
+    e = _one("border: 1px solid #000000; border-bottom: 1px hidden #000000")
+    assert e.has_inline_borders is True, "three sides still paint"

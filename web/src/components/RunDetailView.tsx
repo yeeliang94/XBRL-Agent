@@ -410,6 +410,35 @@ export function RunDetailView({
   const [evidenceByCell, setEvidenceByCell] = useState<Map<string, string | null>>(
     new Map()
   );
+  // Cell focus for the Notes tab. NotesCoveragePanel and NotesTablesPanel both
+  // dispatch a `notes-coverage-focus` window event when the user clicks a
+  // placement or a table, and NotesReviewTab has always accepted a `focusCell`
+  // prop that opens the sheet and scrolls the row into view — but nothing
+  // joined the two, so every one of those clicks was a no-op. This listener is
+  // the missing hop; it fixes both panels at once. `key` bumps on every event
+  // so re-clicking the same cell re-scrolls.
+  const [notesFocusCell, setNotesFocusCell] = useState<
+    { sheet: string; row: number; key: number } | null
+  >(null);
+  useEffect(() => {
+    const onFocus = (e: Event) => {
+      const detailPayload = (e as CustomEvent).detail;
+      if (
+        !detailPayload ||
+        typeof detailPayload.sheet !== "string" ||
+        typeof detailPayload.row !== "number"
+      ) {
+        return;
+      }
+      setNotesFocusCell((prev) => ({
+        sheet: detailPayload.sheet,
+        row: detailPayload.row,
+        key: (prev?.key ?? 0) + 1,
+      }));
+    };
+    window.addEventListener("notes-coverage-focus", onFocus);
+    return () => window.removeEventListener("notes-coverage-focus", onFocus);
+  }, []);
   // Keyed on detail.id so switching runs (RunDetailView is NOT remounted per
   // run — no key in HistoryPage) refetches and clears stale state, instead of
   // resolving run B's targets against run A's concept map.
@@ -949,7 +978,11 @@ export function RunDetailView({
           <NotesCoveragePanel runId={detail.id} />
           <NotesTablesPanel runId={detail.id} />
           <NotesReviewerPanel runId={detail.id} />
-          <NotesReviewTab runId={detail.id} onRegenerate={onRegenerateNotes} />
+          <NotesReviewTab
+            runId={detail.id}
+            onRegenerate={onRegenerateNotes}
+            focusCell={notesFocusCell}
+          />
         </section>
       )}
 

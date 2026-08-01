@@ -688,9 +688,22 @@ async def notes_tables(run_id: int):
             })
             tables.append(item)
 
-    # Step 1.5 lives here rather than in its own endpoint: the unstyled count
-    # is exactly what this walk already computes, and a second source of the
-    # same number is a second thing to keep in step.
+    # Step 1.5 lives here rather than in its own endpoint: the counts are
+    # exactly what this walk already computes, and a second source of the same
+    # number is a second thing to keep in step.
+    #
+    # TWO different counts, deliberately, because they answer different
+    # questions and conflating them is how "3 unstyled" came to mean one cell:
+    #   * `plain` counts TABLES whose markup carries no visible formatting;
+    #   * `cells_unstyled` counts CELLS the writer marked `unstyled` (or the
+    #     legacy `floor`) — the same set the Notes-tab StyleSourceChip shows,
+    #     and the unit a formatter pass operates on.
+    # A cell holding three plain tables contributes 3 to the first and 1 to
+    # the second.
+    unstyled_cells = {
+        (t["sheet"], t["row"]) for t in tables
+        if t["cell_style_source"] in ("unstyled", "floor")
+    }
     summary = {
         "tables": len(tables),
         "plain": sum(1 for t in tables if t["style_state"] == "plain"),
@@ -698,5 +711,6 @@ async def notes_tables(run_id: int):
         "source": sum(1 for t in tables if t["style_state"] == "source"),
         "flagged": sum(1 for t in tables if t["flags"]),
         "cells_with_tables": len({(t["sheet"], t["row"]) for t in tables}),
+        "cells_unstyled": len(unstyled_cells),
     }
     return {"run_id": run_id, "tables": tables, "summary": summary}

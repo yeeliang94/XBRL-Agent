@@ -96,28 +96,109 @@ def _declarations(tag: Tag) -> list[tuple[str, str]]:
     return out
 
 
-def _has_visible_border(tag: Tag) -> bool:
-    """A border DECLARATION is not a visible border.
+_SIDES = ("top", "right", "bottom", "left")
+_BORDER_STYLE_KEYWORDS = frozenset({
+    "none", "hidden", "dotted", "dashed", "solid", "double",
+    "groove", "ridge", "inset", "outset",
+})
+_INVISIBLE_STYLES = frozenset({"none", "hidden"})
+_ZERO_WIDTH_RE = re.compile(r"^0(?:\.0+)?(?:px|pt|em|rem|%)?$")
+_WIDTH_TOKEN_RE = re.compile(r"^(?:thin|medium|thick|[\d.]+(?:px|pt|em|rem|%)?)$")
 
-    gotcha #16: erasing an edge persists as `1px hidden`, not `none`, because
-    under `border-collapse` a neighbour's grid line out-prioritises `none`. So
-    the markup meaning "deliberately no line here" contains the word "border".
-    Reading that as styling hides an explicitly-blank table from the
-    needs-a-look filter — the one place it belongs.
+
+def _expand_sides(values: list[str]) -> dict[str, str]:
+    """CSS 1–4 value expansion: all / (v,h) / (t,h,b) / (t,r,b,l)."""
+    if not values:
+        return {}
+    if len(values) == 1:
+        return {s: values[0] for s in _SIDES}
+    if len(values) == 2:
+        return {"top": values[0], "right": values[1],
+                "bottom": values[0], "left": values[1]}
+    if len(values) == 3:
+        return {"top": values[0], "right": values[1],
+                "bottom": values[2], "left": values[1]}
+    return dict(zip(_SIDES, values[:4]))
+
+
+def _shorthand_style_and_width(value: str) -> tuple[Optional[str], Optional[str]]:
+    """Pull the style and width out of a `border: …` shorthand.
+
+    Colour is ignored: a colour never makes a border visible on its own, and
+    skipping it also sidesteps `rgb(0, 0, 0)` tokenising badly.
     """
+    style = width = None
+    for token in value.split():
+        if style is None and token in _BORDER_STYLE_KEYWORDS:
+            style = token
+        elif width is None and _WIDTH_TOKEN_RE.match(token):
+            width = token
+    return style, width
+
+
+def _has_visible_border(tag: Tag) -> bool:
+    """True only if some SIDE resolves to a line that actually paints.
+
+    A border declaration is not a visible border, and the two failure
+    directions are both real in this codebase:
+
+    * gotcha #16 records that erasing an edge persists as `1px hidden`, not
+      `none` — so the markup meaning "deliberately no line here" contains both
+      the word "border" and a non-zero width. Reading that as styling hides an
+      explicitly-blank table from the needs-a-look filter.
+    * gotcha #16 also records that the browser COLLAPSES per-side borders into
+      grouped longhands (`border-width|style|color`). A grouped
+      `border-style: hidden solid hidden hidden` has one real edge, so a
+      whole-string test for the word "hidden" wrongly calls it blank.
+
+    So every declaration is resolved per side, in document order, and CSS's own
+    rule decides: a side paints only when its style is a visible keyword AND
+    its width is non-zero. Note that a declared width with no declared style
+    paints nothing — CSS's initial border-style is `none`.
+    """
+    style: dict[str, Optional[str]] = {s: None for s in _SIDES}
+    width: dict[str, Optional[str]] = {s: None for s in _SIDES}
+
     for prop, value in _declarations(tag):
-        if not prop.startswith("border"):
+        if not prop.startswith("border") or prop in {"border-collapse",
+                                                     "border-spacing",
+                                                     "border-radius"}:
             continue
-        # `border-collapse: collapse` is layout, not a line.
-        if prop == "border-collapse" or prop == "border-spacing":
-            continue
-        if "hidden" in value or "none" in value:
-            continue
-        if prop == "border-style" and value in {"hidden", "none"}:
-            continue
-        # A zero width draws nothing.
-        if re.match(r"^0(?:\.0+)?(?:px|pt|em|rem)?$", value):
-            continue
+        parts = prop.split("-")
+
+        if prop == "border":
+            st, w = _shorthand_style_and_width(value)
+            for s in _SIDES:
+                if st is not None:
+                    style[s] = st
+                if w is not None:
+                    width[s] = w
+        elif prop == "border-style":
+            style.update(_expand_sides(value.split()))
+        elif prop == "border-width":
+            width.update(_expand_sides(value.split()))
+        elif prop == "border-color":
+            continue  # colour alone never paints a line
+        elif len(parts) >= 2 and parts[1] in _SIDES:
+            side = parts[1]
+            if len(parts) == 2:                      # border-top: 1px solid #000
+                st, w = _shorthand_style_and_width(value)
+                if st is not None:
+                    style[side] = st
+                if w is not None:
+                    width[side] = w
+            elif parts[2] == "style":
+                style[side] = value
+            elif parts[2] == "width":
+                width[side] = value
+            # border-<side>-color: ignored, as above.
+
+    for s in _SIDES:
+        st, w = style[s], width[s]
+        if st is None or st in _INVISIBLE_STYLES:
+            continue                                  # nothing declared, or erased
+        if w is not None and _ZERO_WIDTH_RE.match(w):
+            continue                                  # zero-width paints nothing
         return True
     return False
 

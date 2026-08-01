@@ -143,3 +143,36 @@ def test_generation_lifecycle():
 def test_content_origin_separates_copied_from_composed():
     values = {c.value for c in ContentOrigin}
     assert {"source_exact", "human_modified", "legacy"} <= values
+
+
+# --------------------------------------------------------------------------
+# Peer-review finding 2: an unknown reason must not settle a block.
+# --------------------------------------------------------------------------
+
+def test_an_unknown_reason_does_not_resolve_an_exclusion():
+    """`reason_code` has no CHECK constraint (gotcha #11), so a typo, a value
+    from a newer build, or a hand-edited row can carry an unrecognised code.
+    Reading one as settled is the false-green this feature exists to prevent."""
+    assert is_resolved(Disposition.EXCLUDED, "FUTURE_UNKNOWN_REASON") is False
+    assert is_resolved(Disposition.EXCLUDED, "page_footer") is False  # wrong case
+    assert is_resolved(Disposition.EXCLUDED, "") is False
+
+
+def test_settling_reasons_are_derived_not_duplicated():
+    """A new approved reason must settle blocks without a second edit — the
+    kind of omission that silently makes runs look worse than they are."""
+    from notes.source_models import _SETTLING_REASONS
+    assert _SETTLING_REASONS == EXCLUSION_REASONS - UNRESOLVED_REASONS
+    for reason in _SETTLING_REASONS:
+        assert is_resolved(Disposition.EXCLUDED, reason) is True
+
+
+def test_an_approved_route_reason_is_valid_on_a_routed_block():
+    """Pushing back on one half of the peer recommendation: reason codes must
+    NOT be rejected on non-excluded dispositions. EXPLICIT_POLICY_ROUTE and
+    APPROVED_DUPLICATE_ROUTE exist precisely to annotate a ROUTED block — that
+    is the named-routing semantics invariant #7 requires."""
+    validate_disposition(Disposition.ROUTED, "EXPLICIT_POLICY_ROUTE")
+    validate_disposition(Disposition.INCLUDED, "APPROVED_DUPLICATE_ROUTE")
+    with pytest.raises(ValueError):
+        validate_disposition(Disposition.ROUTED, "NOT_A_REAL_REASON")

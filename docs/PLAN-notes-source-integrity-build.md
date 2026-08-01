@@ -13,8 +13,8 @@
 | 0.1 / 0.3 / 0.4 / 0.5 / 0.6 | 🟥 Not run — 0.1 needs live model spend, 0.4 needs digital-PDF fixtures that do not exist in `data/`, 0.6 is a product decision |
 | 1 Page image pipeline | 🟩 Built (`0587251`) |
 | 2 Table review surface | 🟩 Built (`85d86cb`) |
-| 3 Source model foundation | 🟩 Built (`7a3f76a`) — schema v35, inert |
-| 4 Word manifest | 🟥 Buildable next; fixtures exist |
+| 3 Source model foundation | 🟨 Steps 3.1–3.3 built (`7a3f76a`); 3.4/3.5 PARTIAL — mode has no consumer, no dual writer yet |
+| 4 Word manifest | 🟥 BLOCKED on Step 0.3 (block-splitting accuracy, not run) and retention approval. Fixtures exist, so 0.3 can be run today |
 | 5 Lineage-preserving reviewer/editor | 🟥 Blocked on Step 0.6 (oversized-note path) |
 | 6 Link-only mapping | 🟥 Blocked on Step 0.6 |
 | 7 Integrity engine | 🟥 Blocked on Phase 6 |
@@ -148,7 +148,7 @@ decides whether a later phase starts.
     improve the answer, the Key Decision above is wrong — record that and change
     Phase 1 before building it.**
 
-- [x] 🟩 **Step 0.2: Word extraction completeness audit** — peer finding 1. **PASSED 2026-08-01** on `data/FINCO-Audited-Financial-Statement-2021.docx`: 662/662 table cells, 21/21 tables, full body-text coverage. Merged cells, lists, footnotes, text boxes and headers/footers are ABSENT from this fixture, so they are untested rather than proven — a document using them still needs this gate re-run.
+- [x] 🟩 **Step 0.2: Word extraction completeness audit** — peer finding 1. **PASSED FOR ONE FIXTURE, 2026-08-01** — `data/FINCO-Audited-Financial-Statement-2021.docx`: 662/662 table cells, 21/21 tables, full body-text coverage. Merged cells, lists, footnotes, text boxes and headers/footers are ABSENT from this fixture, so they are untested rather than proven — a document using them still needs this gate re-run. The per-construct DECISIONS this step also requires (extract it, or declare it out of scope as a recorded exclusion) are NOT made — the sub-items below stay open, and Phase 4 stays blocked until they are.
   - [ ] 🟥 On the `.docx` fixtures, compare what `mammoth` produces against the
         document: body paragraphs, table cells, **merged cells**, lists,
         **footnotes**, **text boxes**, **headers and footers**, and content after
@@ -310,7 +310,9 @@ First flagged phase. No behaviour change in `off`.
   - **Verify:** a test that kills the build midway leaves exactly one active
     generation and no orphan blocks.
 
-- [x] 🟩 **Step 3.4: Keep writing what the UI reads** — peer finding 8. Rev 1 was
+- [ ] 🟥 **Step 3.4: Keep writing what the UI reads** — PARTIAL. The read
+      source is pinned by `tests/test_notes_coverage_read_source.py`; the
+      dual WRITER cannot exist until Phase 4 produces a new writer. — peer finding 8. Rev 1 was
       wrong here.
   - [x] 🟩 The Notes coverage endpoint reads **`notes_coverage_rows`**
         ([repository.py:1697](../db/repository.py:1697)), written from
@@ -323,7 +325,9 @@ First flagged phase. No behaviour change in `off`.
     to `off` shows a populated Notes tab for that run. Tests for all three modes
     and for rollback of a run created under the new path.
 
-- [x] 🟩 **Step 3.5: Mode plumbing** — peer finding 9.
+- [ ] 🟥 **Step 3.5: Mode plumbing** — PARTIAL. `notes/source_models.py::
+      integrity_mode` resolves off|shadow|enforce and is tested, but has no
+      runtime consumer and the effective mode is not yet persisted on `runs`.
   - [x] 🟩 `off | shadow | enforce`; persist the effective mode on the run row.
   - **Verify:** a shadow-mode run records integrity and leaves status unchanged.
 
