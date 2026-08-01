@@ -487,6 +487,39 @@ def update_run_config(
     return merged
 
 
+def set_notes_integrity_mode(
+    conn: sqlite3.Connection, run_id: int, mode: str
+) -> None:
+    """Record the source-integrity mode this run actually ran under (v36).
+
+    Validated here rather than by a CHECK constraint: the column deliberately
+    has none (gotcha #11), and a typo persisted at run time produces a
+    historical result nobody can explain later.
+    """
+    from notes.source_models import IntegrityMode
+
+    valid = {m.value for m in IntegrityMode}
+    if mode not in valid:
+        raise ValueError(
+            f"unknown notes integrity mode {mode!r}; expected one of "
+            f"{', '.join(sorted(valid))}"
+        )
+    conn.execute(
+        "UPDATE runs SET notes_integrity_mode = ? WHERE id = ?", (mode, run_id)
+    )
+    conn.commit()
+
+
+def notes_integrity_mode(
+    conn: sqlite3.Connection, run_id: int
+) -> Optional[str]:
+    """The recorded mode, or None for a run made before the feature existed."""
+    row = conn.execute(
+        "SELECT notes_integrity_mode FROM runs WHERE id = ?", (run_id,)
+    ).fetchone()
+    return row["notes_integrity_mode"] if row else None
+
+
 def mark_run_merged(
     conn: sqlite3.Connection, run_id: int, merged_workbook_path: str
 ) -> None:
