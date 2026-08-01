@@ -326,14 +326,26 @@ def coverage_counts(conn: sqlite3.Connection, generation_id: int) -> dict:
         if u is None:
             counts["unresolved"] += 1
             continue
-        disposition = Disposition(u["disposition"])
-        counts[disposition.value] = counts.get(disposition.value, 0) + 1
+        try:
+            disposition = Disposition(u["disposition"])
+        except ValueError:
+            # The column deliberately has no CHECK constraint (gotcha #11) so a
+            # new disposition can land without a full-table migration. The
+            # reader must not crash on one. Count it unresolved: an
+            # unrecognised decision is not a decision, and that is the safe
+            # direction — it shows up for review rather than passing silently.
+            counts["unresolved"] += 1
+            continue
+
+        if disposition is Disposition.UNRESOLVED:
+            counts["unresolved"] += 1
+            continue
+
+        counts[disposition.value] += 1
         if is_resolved(disposition, u["reason_code"]):
             counts["resolved"] += 1
         else:
-            # An unreadable exclusion is counted in `excluded` AND here: it is
-            # a decision that was attempted, not one that was reached.
-            if disposition is not Disposition.UNRESOLVED:
-                counts["unresolved"] += 1
-    # `unresolved` as a disposition was already counted in the loop above.
+            # An UNREADABLE_NEEDS_REVIEW exclusion is counted under `excluded`
+            # AND here: it is a decision that was attempted, not one reached.
+            counts["unresolved"] += 1
     return counts

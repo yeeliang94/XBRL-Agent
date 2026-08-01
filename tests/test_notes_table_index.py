@@ -190,3 +190,62 @@ def test_malformed_html_does_not_raise():
     crashes takes the whole Notes tab down with it."""
     for bad in ["<table><tr><td>unclosed", "<table>", "<<>>", "<table><td>x</td>"]:
         index_tables(bad)  # must not raise
+
+
+# --------------------------------------------------------------------------
+# Review finding: an explicitly-blank table is not a styled table.
+#
+# gotcha #16 records two deliberate conventions that a naive substring match
+# gets exactly backwards:
+#   * "no fill" persists as `background-color: transparent`, NOT as an absent
+#     attribute;
+#   * erasing an edge uses `1px hidden`, NOT `none`, because under
+#     border-collapse a neighbour's grid line out-prioritises `none`.
+# So the markup that means "this table is deliberately blank" contains the
+# words `background-color` and `border`. Reading those as "styled" hides the
+# table from the needs-a-look filter — the one place it should appear.
+# --------------------------------------------------------------------------
+
+def test_transparent_fill_is_not_a_fill():
+    html = ('<table><tr><td style="background-color: transparent">a</td>'
+            "<td>1</td></tr><tr><td>b</td><td>2</td></tr></table>")
+    e = index_tables(html)[0]
+    assert e.has_fills is False
+    assert e.style_state == "plain"
+
+
+def test_hidden_border_is_not_a_border():
+    html = ('<table><tr><td style="border-bottom: 1px hidden #000000">a</td>'
+            "<td>1</td></tr><tr><td>b</td><td>2</td></tr></table>")
+    e = index_tables(html)[0]
+    assert e.has_inline_borders is False
+    assert e.style_state == "plain"
+
+
+def test_none_border_is_not_a_border():
+    html = ('<table><tr><td style="border: none">a</td><td>1</td></tr>'
+            "<tr><td>b</td><td>2</td></tr></table>")
+    assert index_tables(html)[0].has_inline_borders is False
+
+
+def test_a_real_border_is_still_detected():
+    html = ('<table><tr><td style="border-bottom: 1px solid #000000">a</td>'
+            "<td>1</td></tr><tr><td>b</td><td>2</td></tr></table>")
+    e = index_tables(html)[0]
+    assert e.has_inline_borders is True
+    assert e.style_state == "styled"
+
+
+def test_a_real_fill_is_still_detected():
+    html = ('<table><tr><td style="background-color: #eeeeee">a</td>'
+            "<td>1</td></tr><tr><td>b</td><td>2</td></tr></table>")
+    e = index_tables(html)[0]
+    assert e.has_fills is True
+
+
+def test_padding_alone_is_not_styling():
+    """Padding is spacing, not a visible rule or fill — it must not promote a
+    plain table out of the needs-a-look filter."""
+    html = ('<table><tr><td style="padding: 4px 8px">a</td><td>1</td></tr>'
+            "<tr><td>b</td><td>2</td></tr></table>")
+    assert index_tables(html)[0].style_state == "plain"

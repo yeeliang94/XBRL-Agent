@@ -46,7 +46,6 @@ from tools.pdf_viewer import (
     RENDER_POLICY_NATIVE,
     count_pdf_pages,
     render_page_png,
-    render_pages_to_png_bytes,
 )
 from tools.template_reader import TemplateField, read_template as _read_template_impl
 from extraction.history_processors import clamp_oversized_parts, strip_stale_images
