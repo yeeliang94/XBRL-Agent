@@ -406,7 +406,7 @@ artifact — pinned by `tests/test_stop_all_preserves_partial.py`.
 
 ### 11. DB schema — version-stepped auto-migration on startup
 
-`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **36**). `init_db`
+`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **37**). `init_db`
 reads the stored version and walks an old DB up **one version at a time**
 through per-version, idempotent `ALTER TABLE` blocks, so any older DB reaches
 the current schema automatically. `db/schema.py` is the authoritative
@@ -444,7 +444,9 @@ resume) · v35 notes source-integrity tables (`notes_source_generations` /
 `_notes` / `_blocks`, `notes_block_usages`, append-only
 `notes_disposition_events`, `notes_integrity_runs`) + five nullable
 content-provenance columns on `notes_cells` · v36 `runs.notes_integrity_mode`
-— all inert unless `XBRL_NOTES_SOURCE_INTEGRITY` is `shadow`/`enforce`
+· v37 `notes_block_placements` + `notes_integrity_tasks` +
+`notes_cells.content_revision` / `source_render_version` — all inert unless
+`XBRL_NOTES_SOURCE_INTEGRITY` is `shadow`/`enforce`
 (#31, docs/PLAN-notes-source-integrity-build.md).
 
 ### 12. Filing level — Company vs Group
@@ -1552,6 +1554,44 @@ Every invariant below exists because breaking it produces a **false green** — 
 run that reports complete coverage of a document it only partly read. That is
 the one failure this feature has no defence against, so each is pinned.
 
+- **Disposition is not placement.** `notes_block_usages` records what was
+  DECIDED about a block; `notes_block_placements` (v37) records where it
+  currently LIVES, many-to-many, deactivated rather than deleted. They were
+  one table, and that produced two reproduced false greens: relinking a cell
+  from b1+b2 to b1 left b2 recorded as included AT that cell, and a clobbered
+  sheet verified clean over zero cells. An `included` block resolves ONLY when
+  it has an active placement pointing at a cell that still exists;
+  `routed`/`structured_consumed` need a destination. `UNIQUE(generation_id,
+  block_id)` on usages also made one block in two cells unrepresentable, so
+  the duplicate check was structurally dead — it now reads the ledger.
+- **A source write satisfies the ordinary coordinator contract.** It routes
+  its rendered payload through the same writer an authored write uses, so
+  `wrote_once` / `filled_path` / `cells_written` / the Sheet-12 sink are all
+  set. Writing only to the database tripped the no-write guard and left the
+  later `persist_notes_cells` free to clobber the row. That path now carries
+  provenance across the rewrite and retires the placements of coordinates it
+  drops.
+- **The shared writer validates its target.** Template family, prose sheet and
+  `LEAF`, inside `write_cell_from_blocks` — the one function all three callers
+  use. Validating in each caller is how `Ghost` row 999 wrote successfully and
+  verified clean. An extraction agent additionally may write only its OWN
+  sheet.
+- **One digest function for cell content.** `source_rendered_sha256` and
+  `current_html_sha256` are both `lineage.content_sha256`; the render shape
+  lives in `notes_cells.source_render_version`. Folding the version into the
+  hash meant a human edit could never equal a source render, so editing a cell
+  back to its exact source text never cleared the divergence mark.
+- **The version token is `content_revision`, and the client sends it.**
+  A monotonic counter, because `updated_at` is second-precision and two saves
+  inside one second shared it. The check was built server-side and never wired
+  to the editor, so the 409 could not fire in the product — the client now
+  sends it on every save including the keepalive, and refreshes it from each
+  response.
+- **Failure to assess is never proof of no loss.** A preflight whose size
+  check throws returns an explicit `unavailable` advisory and is NOT `clean`;
+  a PDF page whose independent word measurement fails is unresolved, not fully
+  covered; a detected table that cannot be extracted stops covering the words
+  beneath it.
 - **A short manifest is refused, never measured.**
   `notes/source_manifest.py::build_docx_manifest` reads the ORIGINAL `.docx`
   **uncapped** (`extract_docx_html` applies no cap; the 8 MB limit lives in
@@ -1624,7 +1664,13 @@ the one failure this feature has no defence against, so each is pinned.
   Do not "improve" the render by raising DPI. The crop advantage is suggestive,
   not proven.
 
-Pinned by `tests/test_notes_source_manifest.py`, `test_notes_source_render.py`,
+**Every one of the above was reproduced as a CLEAN verdict over missing
+content before it was fixed** (peer review, 2026-08-01). The reproductions are
+kept together in `tests/test_notes_integrity_false_greens.py` — read that file
+before changing anything in this area.
+
+Pinned by `tests/test_notes_integrity_false_greens.py`,
+`tests/test_notes_integrity_retry.py`, `tests/test_notes_source_manifest.py`, `test_notes_source_render.py`,
 `test_notes_source_write.py`, `test_notes_lineage.py`,
 `test_notes_integrity_checks.py`, `test_notes_integrity_runner.py`,
 `test_notes_integrity_wiring.py`, `test_notes_integrity_api.py`,

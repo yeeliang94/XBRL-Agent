@@ -66,10 +66,21 @@ def build_input(
     ]
     usages = {u["block_id"]: u for u in srepo.fetch_usages(conn, generation_id)}
 
+    # The PLACEMENT ledger (v37) — where blocks currently LIVE, as opposed to
+    # what was decided about them. Built from active rows only; a relinked-away
+    # or clobbered placement is deactivated, not deleted.
+    placements: dict[str, list[tuple[str, int]]] = {}
     cell_blocks: dict[tuple[str, int], list[str]] = {}
-    for u in usages.values():
-        if u["sheet"] is not None and u["row"] is not None:
-            cell_blocks.setdefault((u["sheet"], u["row"]), []).append(u["block_id"])
+    for pl in srepo.active_placements(conn, generation_id):
+        coord = (pl["sheet"], pl["row"])
+        placements.setdefault(pl["block_id"], []).append(coord)
+        cell_blocks.setdefault(coord, []).append(pl["block_id"])
+
+    live_cells = frozenset(
+        (r["sheet"], r["row"]) for r in conn.execute(
+            "SELECT sheet, row FROM notes_cells WHERE run_id = ?", (run_id,)
+        ).fetchall()
+    )
 
     cells = []
     for r in conn.execute(
@@ -96,6 +107,8 @@ def build_input(
         blocks=blocks, notes=notes, usages=usages, cells=cells,
         boundary_disagreements=list(boundary_disagreements),
         scout_available=scout_available,
+        placements=placements,
+        live_cells=live_cells,
         pages_expected=int(gen["pages_expected"] or 0) if gen else 0,
         pages_processed=int(gen["pages_processed"] or 0) if gen else 0,
         approved_duplicate_block_ids=approved_duplicate_block_ids,

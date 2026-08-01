@@ -2414,6 +2414,22 @@ async def _lifespan(app: FastAPI):
         logger.warning("notes re-review task reconciliation failed at startup",
                        exc_info=True)
 
+    # Retire integrity remediations orphaned by a restart (v37) — without
+    # this a crash mid-remediation locks the run's slot forever.
+    try:
+        from db import repository as repo
+        conn = _open_audit_conn()
+        try:
+            n = repo.reconcile_stale_notes_integrity_tasks(conn)
+            conn.commit()
+        finally:
+            conn.close()
+        if n:
+            logger.info("reconciled %d stale integrity remediation(s) at startup", n)
+    except Exception:
+        logger.warning("integrity remediation reconciliation failed at startup",
+                       exc_info=True)
+
     # Retire notes formatter tasks orphaned by a restart (v26).
     try:
         from db import repository as repo
@@ -2811,6 +2827,98 @@ def _run_notes_integrity_check(
                 for f in result.findings
             ],
             "missing_block_ids": integrity.missing_block_ids(result),
+        }
+    finally:
+        conn.close()
+
+
+def _retry_missing_source_blocks(
+    run_id: int, generation_id: Optional[int], mode, outcome: Optional[dict],
+    boundary_report=None,
+) -> Optional[dict]:
+    """Step 7.2 — ONE targeted retry over the exact blocks that are missing.
+
+    The retry is deterministic, not another agent turn: every unplaced block
+    already belongs to a note, and the source render is code. So it re-renders
+    each affected cell from the blocks its note owns and re-checks. If that
+    does not close the gap, the run goes to review — there is no second retry.
+
+    `missing_block_ids` used to be computed and returned and then never read
+    by anything (peer review, 2026-08-01), which made Step 7.2 an input with
+    no consumer.
+    """
+    from notes import integrity_runner, source_write
+    from notes import source_repository as srepo
+    from notes.source_models import IntegrityMode
+
+    missing = list((outcome or {}).get("missing_block_ids") or [])
+    if not missing or generation_id is None or mode is IntegrityMode.OFF:
+        return outcome
+
+    conn = _open_audit_conn()
+    try:
+        placements = {
+            p["block_id"]: (p["sheet"], p["row"])
+            for p in srepo.active_placements(conn, generation_id)
+        }
+        # Group the missing blocks by the cell their note already occupies.
+        by_cell: dict[tuple, list[str]] = {}
+        blocks = {b["block_id"]: b for b in srepo.fetch_blocks(conn, generation_id)}
+        for bid in missing:
+            note_id = (blocks.get(bid) or {})["source_note_id"] if bid in blocks else None
+            if not note_id:
+                continue
+            siblings = [
+                b["block_id"] for b in blocks.values()
+                if b["source_note_id"] == note_id
+            ]
+            coord = next(
+                (placements[s] for s in siblings if s in placements), None
+            )
+            if coord is None:
+                continue     # the note was never placed; a retry cannot guess
+            by_cell.setdefault(coord, [])
+            for s in siblings:
+                if s not in by_cell[coord]:
+                    by_cell[coord].append(s)
+
+        repaired = 0
+        for (sheet, row), block_ids in by_cell.items():
+            try:
+                source_write.write_cell_from_blocks(
+                    conn, run_id=run_id, generation_id=generation_id,
+                    sheet=sheet, row=row, block_ids=block_ids,
+                    actor="integrity_retry",
+                )
+                repaired += 1
+            except source_write.SourceWriteError as exc:
+                logger.info(
+                    "integrity retry could not repair %s row %s: %s",
+                    sheet, row, exc,
+                )
+        if not repaired:
+            return outcome
+
+        result = integrity_runner.run_and_store(
+            conn, run_id, generation_id, mode=mode, attempt=2,
+            boundary_disagreements=(
+                boundary_report.disagreements if boundary_report else ()
+            ),
+            scout_available=bool(
+                boundary_report and boundary_report.scout_available
+            ),
+        )
+        from notes import integrity
+
+        return {
+            "requires_review": result.requires_review,
+            "tips_status": integrity_runner.tips_run_status(result, mode),
+            "findings": [
+                {"check": f.check, "severity": f.severity, "message": f.message}
+                for f in result.findings
+            ],
+            "missing_block_ids": integrity.missing_block_ids(result),
+            "retry_repaired_cells": repaired,
         }
     finally:
         conn.close()
@@ -5995,6 +6103,14 @@ async def run_multi_agent_stream(
                 _run_notes_integrity_check,
                 run_id, notes_source_generation_id, notes_integrity_mode,
                 notes_boundary_report,
+            )
+            # Step 7.2 — one targeted retry over exactly the missing blocks,
+            # then re-check. No second retry: an unrepairable gap goes to
+            # review rather than round the loop again.
+            notes_integrity_outcome = await asyncio.to_thread(
+                _retry_missing_source_blocks,
+                run_id, notes_source_generation_id, notes_integrity_mode,
+                notes_integrity_outcome, notes_boundary_report,
             )
         except Exception:  # noqa: BLE001
             logger.warning(

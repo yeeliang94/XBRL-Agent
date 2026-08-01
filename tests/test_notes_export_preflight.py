@@ -164,7 +164,9 @@ def test_the_size_check_can_be_skipped(client_run):
     assert all(i["kind"] == "coverage" for i in body["items"])
 
 
-def test_a_size_check_failure_never_breaks_the_preflight(client_run, monkeypatch):
+def test_a_size_check_failure_is_reported_not_swallowed(client_run, monkeypatch):
+    """Failure to assess export loss is NOT proof that there is none. This
+    returned an empty list, so the whole preflight read `clean: true`."""
     client, run_id, db = client_run
     _seed_source(db, run_id)
     monkeypatch.setattr(
@@ -173,6 +175,22 @@ def test_a_size_check_failure_never_breaks_the_preflight(client_run, monkeypatch
     )
     body = client.get(f"/api/runs/{run_id}/export_preflight").json()
     assert body["coverage_checked"] is True
+    unavailable = [i for i in body["items"] if i["kind"] == "unavailable"]
+    assert len(unavailable) == 1
+    assert "not the same as nothing being dropped" in unavailable[0]["message"]
+
+
+def test_a_size_check_failure_on_an_otherwise_clean_run_is_not_clean(
+    client_run, monkeypatch,
+):
+    client, run_id, _db = client_run
+    monkeypatch.setattr(
+        "mtool.notes_exporter.build_notes_fill_doc",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    body = client.get(f"/api/runs/{run_id}/export_preflight").json()
+    assert body["clean"] is False
+    assert body["advisory_count"] == 1
 
 
 # --------------------------------------------------------------------------

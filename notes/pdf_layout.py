@@ -201,7 +201,9 @@ def build_pdf_manifest(pdf_path: str | Path) -> PdfLayoutResult:
                 continue
 
             table_rects: list[tuple] = []
+            unreadable_tables: list[tuple] = []
             page_blocks: list[SourceBlock] = []
+            measured = True
             try:
                 found = page.find_tables()
                 tables = list(getattr(found, "tables", found) or [])
@@ -218,6 +220,16 @@ def build_pdf_manifest(pdf_path: str | Path) -> PdfLayoutResult:
                     rows = table.extract()
                 except Exception:  # noqa: BLE001
                     rows = []
+                if not any(any(c for c in r) for r in rows):
+                    # The detector found a table but could not read it. An
+                    # empty table block would still cover the region, so the
+                    # words beneath it would count as accounted for and the
+                    # page would verify clean over content nobody extracted.
+                    # Drop the bbox from the covering set and record the
+                    # region as unresolved instead.
+                    table_rects.pop()
+                    unreadable_tables.append(bbox)
+                    continue
                 page_blocks.append(SourceBlock(
                     block_id=f"p{page_index:04d}t{t_index:02d}",
                     block_kind="table", reading_order=0,
@@ -246,6 +258,7 @@ def build_pdf_manifest(pdf_path: str | Path) -> PdfLayoutResult:
                 ]
             except Exception:  # noqa: BLE001
                 word_rects = []
+                measured = False
                 warnings.append(
                     f"page {page_index}: could not measure the page "
                     "independently, so its coverage is unverified"
@@ -302,29 +315,51 @@ def build_pdf_manifest(pdf_path: str | Path) -> PdfLayoutResult:
             missed = [w for w in word_rects if not _covered_by_a_block(w)]
             word_area = _union_area(word_rects)
             missed_area = _union_area(missed)
-            ratio = (
-                1.0 if word_area <= 0
-                else max(0.0, 1.0 - missed_area / word_area)
-            )
-            shortfall = missed_area
-            if ratio < _MIN_AREA_COVERAGE:
+            # A measurement that did not run is NOT full coverage. Zero word
+            # area used to divide out to ratio 1.0, so a page whose word
+            # extraction failed reported perfectly accounted (peer review,
+            # 2026-08-01). Failure to assess is never proof of no loss.
+            if not measured:
+                ratio, shortfall = 0.0, 0.0
+            else:
+                ratio = (
+                    1.0 if word_area <= 0
+                    else max(0.0, 1.0 - missed_area / word_area)
+                )
+                shortfall = missed_area
+
+            reason = None
+            if not measured:
+                reason = "measurement_failed"
+            elif unreadable_tables:
+                reason = "table_not_extractable"
+            elif ratio < _MIN_AREA_COVERAGE:
+                reason = "unaccounted_region"
+            if reason is not None:
                 blocks.append(SourceBlock(
                     block_id=f"p{page_index:04d}-unaccounted",
                     block_kind="unresolved_region", reading_order=order,
                     canonical_html="", page=page_index,
                     owner_kind=OwnerKind.UNRESOLVED,
                     locator={"kind": "pdf_bbox", "page": page_index,
-                             "reason": "unaccounted_region",
+                             "reason": reason,
                              "shortfall_ratio": round(1.0 - ratio, 4)},
                 ))
                 order += 1
-                warnings.append(
-                    f"page {page_index}: {(1 - ratio):.0%} of the marked area "
-                    "is not attributed to anything"
-                )
+                if reason == "table_not_extractable":
+                    warnings.append(
+                        f"page {page_index}: {len(unreadable_tables)} table(s) "
+                        "were detected but could not be read"
+                    )
+                elif reason == "unaccounted_region":
+                    warnings.append(
+                        f"page {page_index}: {(1 - ratio):.0%} of the marked "
+                        "area is not attributed to anything"
+                    )
 
             receipts.append(PageReceipt(
-                page=page_index, has_text_layer=True, chars=page_chars,
+                page=page_index, has_text_layer=True and measured,
+                chars=page_chars,
                 blocks=len([b for b in page_blocks if b.block_kind == "paragraph"]),
                 tables=len([b for b in page_blocks if b.block_kind == "table"]),
                 area_covered=ratio, unresolved_area=shortfall,

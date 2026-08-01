@@ -79,10 +79,14 @@ def _prose_sheet_rows(conn, run_id: int, template_id: str, sheet: str) -> list[d
             "updated_at": "",
             # v29: styling provenance — null on a blank/unfilled row.
             "style_source": None,
+            # v37: the optimistic version token. Null on a row with no cell
+            # yet — there is nothing to conflict with.
+            "content_revision": None,
         }
 
     for c in conn.execute(
-        "SELECT row, label, html, evidence, source_pages, updated_at, style_source "
+        "SELECT row, label, html, evidence, source_pages, updated_at, "
+        "style_source, content_revision "
         "FROM notes_cells WHERE run_id = ? AND sheet = ?",
         (run_id, sheet),
     ).fetchall():
@@ -99,6 +103,7 @@ def _prose_sheet_rows(conn, run_id: int, template_id: str, sheet: str) -> list[d
                 "source_pages": [],
                 "updated_at": "",
                 "style_source": None,
+                "content_revision": None,
             }
             by_row[c["row"]] = base
         base["html"] = c["html"]
@@ -106,6 +111,7 @@ def _prose_sheet_rows(conn, run_id: int, template_id: str, sheet: str) -> list[d
         base["source_pages"] = decode_source_pages(c["source_pages"])
         base["updated_at"] = c["updated_at"] or ""
         base["style_source"] = c["style_source"]
+        base["content_revision"] = c["content_revision"]
 
     return [by_row[r] for r in sorted(by_row)]
 
@@ -276,6 +282,9 @@ class _NotesCellPatch(BaseModel):
     # Optional so existing callers keep working; when sent, a concurrent
     # change returns 409 instead of silently overwriting. Plan Step 5.2.
     expected_updated_at: Optional[str] = None
+    # The real version token (schema v37) — a monotonic counter rather than a
+    # second-precision timestamp two writes could share.
+    expected_revision: Optional[int] = None
 
 
 @router.patch("/api/runs/{run_id}/notes_cells/{sheet}/{row}")
@@ -361,7 +370,8 @@ async def patch_notes_cell_endpoint(
             # as accounted for against its source.
             try:
                 lineage.check_version(
-                    conn, run_id, sheet, row, body.expected_updated_at
+                    conn, run_id, sheet, row, body.expected_updated_at,
+                    expected_revision=body.expected_revision,
                 )
             except lineage.StaleCellError as exc:
                 conn.rollback()
@@ -461,7 +471,8 @@ async def patch_notes_cell_endpoint(
 
         # Read back so the client sees the persisted updated_at.
         row_back = conn.execute(
-            "SELECT label, html, evidence, source_pages, updated_at "
+            "SELECT label, html, evidence, source_pages, updated_at, "
+            "content_revision "
             "FROM notes_cells WHERE run_id = ? AND sheet = ? AND row = ?",
             (run_id, sheet, row),
         ).fetchone()
@@ -477,6 +488,9 @@ async def patch_notes_cell_endpoint(
         "evidence": row_back["evidence"],
         "source_pages": decode_source_pages(row_back["source_pages"]),
         "updated_at": row_back["updated_at"] or "",
+        # The refreshed version token — the client must send it on the NEXT
+        # save or it would 409 against its own write.
+        "content_revision": row_back["content_revision"],
         # Peer-review #7: surface what the sanitiser removed so the
         # editor can tell the user "we dropped a <script> from your
         # paste" instead of silently swapping content. Empty list when
@@ -964,6 +978,15 @@ class _DispositionBody(BaseModel):
     disposition: str
     reason_code: Optional[str] = None
     note: Optional[str] = None
+    # Optimistic version per block: the disposition the caller believed was
+    # current. A remediation that silently overwrites a decision somebody else
+    # just made is the same defect the cell editor had (plan Step 8.3).
+    expected_dispositions: Optional[dict[str, str]] = None
+    # `attach` places blocks into a cell; `route` records a destination sheet.
+    # Without these the panel could only ever exclude, which is one third of
+    # the promised remediation set.
+    target_sheet: Optional[str] = None
+    target_row: Optional[int] = None
 
 
 @router.post("/api/runs/{run_id}/notes_integrity/disposition")
@@ -1004,6 +1027,7 @@ async def notes_integrity_disposition(run_id: int, body: _DispositionBody):
         raise HTTPException(status_code=422, detail="No items were named.")
 
     conn = server._open_audit_conn()
+    task_id = None
     try:
         gen = srepo.active_generation(conn, run_id)
         if gen is None:
@@ -1011,15 +1035,81 @@ async def notes_integrity_disposition(run_id: int, body: _DispositionBody):
                 status_code=409,
                 detail="This run has no frozen source reading.",
             )
-        for bid in body.block_ids:
-            try:
-                srepo.record_disposition(
-                    conn, run_id, gen["id"], bid, disposition,
-                    reason_code=body.reason_code, actor="human",
-                    actor_detail="notes integrity panel", note=body.note,
+        # Durable, interlocked slot (plan Step 8.3). A remediation writes
+        # dispositions and can rewrite a cell, so it must not run while the
+        # reviewer or the formatter holds the same run.
+        task_id = repo.claim_notes_integrity_task(
+            conn, run_id, action=body.disposition,
+        )
+        if task_id is None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Another pass is working on this run's notes. Wait for it "
+                    "to finish, then try again."
+                ),
+            )
+
+        # Version check per block, before any write.
+        if body.expected_dispositions:
+            current = {
+                u["block_id"]: u["disposition"]
+                for u in srepo.fetch_usages(conn, gen["id"])
+            }
+            for bid, expected in body.expected_dispositions.items():
+                if current.get(bid, "unresolved") != expected:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            f"Item {bid} changed since you opened this page. "
+                            "Reload and re-apply your decision."
+                        ),
+                    )
+
+        if disposition is Disposition.INCLUDED:
+            # `attach` — put the items into a cell. Goes through the one
+            # shared writer, so it validates its target and records lineage
+            # and placements exactly as an agent write does.
+            from notes import source_write
+
+            if not body.target_sheet or body.target_row is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Attaching an item needs a destination row.",
                 )
-            except ValueError as exc:
+            run = repo.fetch_run(conn, run_id)
+            cfg = (run.config or {}) if run else {}
+            prefix = (
+                f"{cfg.get('filing_standard', 'mfrs')}-"
+                f"{cfg.get('filing_level', 'company')}-"
+            )
+            existing = [
+                p["block_id"] for p in srepo.active_placements(conn, gen["id"])
+                if (p["sheet"], p["row"]) == (body.target_sheet, body.target_row)
+            ]
+            try:
+                source_write.write_cell_from_blocks(
+                    conn, run_id=run_id, generation_id=gen["id"],
+                    sheet=body.target_sheet, row=body.target_row,
+                    block_ids=existing + [
+                        b for b in body.block_ids if b not in existing
+                    ],
+                    actor="human", template_prefix=prefix,
+                )
+            except source_write.SourceWriteError as exc:
                 raise HTTPException(status_code=422, detail=str(exc))
+        else:
+            for bid in body.block_ids:
+                try:
+                    srepo.record_disposition(
+                        conn, run_id, gen["id"], bid, disposition,
+                        reason_code=body.reason_code, actor="human",
+                        actor_detail="notes integrity panel", note=body.note,
+                        sheet=body.target_sheet, row=body.target_row,
+                    )
+                except ValueError as exc:
+                    raise HTTPException(status_code=422, detail=str(exc))
+
         counts = srepo.coverage_counts(conn, gen["id"])
         mode = IntegrityMode(repo.notes_integrity_mode(conn, run_id) or "off")
         result = integrity_runner.run_and_store(
@@ -1028,6 +1118,12 @@ async def notes_integrity_disposition(run_id: int, body: _DispositionBody):
             .get("attempt", 0) + 1,
         )
     finally:
+        if task_id is not None:
+            try:
+                repo.finish_notes_integrity_task(conn, task_id)
+            except Exception:  # noqa: BLE001 — never double-fault (gotcha #10)
+                logger.warning("could not release the remediation slot",
+                               exc_info=True)
         conn.close()
 
     return {

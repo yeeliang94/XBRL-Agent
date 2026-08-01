@@ -170,7 +170,7 @@ from pathlib import Path
 # `notes_cells`. Inert unless XBRL_NOTES_SOURCE_INTEGRITY is shadow/enforce;
 # on rollback the tables sit unused and old code ignores the columns. Pinned
 # by tests/test_db_schema_v35.py.
-CURRENT_SCHEMA_VERSION = 36
+CURRENT_SCHEMA_VERSION = 37
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -542,6 +542,15 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         current_html_sha256    TEXT,
         content_origin         TEXT,           -- source_exact|source_normalized|vision_transcribed|structured_generated|human_modified|legacy
         source_diverged_at     TEXT,
+        -- v37: monotonic edit counter. The optimistic version check keyed on
+        -- `updated_at`, which has one-second precision, so two writes landing
+        -- in the same second shared a token and neither was refused.
+        content_revision       INTEGER NOT NULL DEFAULT 0,
+        -- v37: the render shape that produced `source_rendered_sha256`. It
+        -- used to be folded INTO that hash, which meant a human edit (a plain
+        -- digest) could never equal a source render — so editing a cell back
+        -- to exactly its source text never cleared the divergence mark.
+        source_render_version  TEXT,
         UNIQUE(run_id, sheet, row)
     )
     """,
@@ -1260,6 +1269,47 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         created_at      TEXT NOT NULL DEFAULT ''
     )
     """,
+    # v37 — the PLACEMENT ledger. `notes_block_usages` records what was
+    # DECIDED about a block; this records where it currently LIVES. They were
+    # one table, and that lost placement history: relinking a cell from b1+b2
+    # to b1 left b2 recorded as included AT that cell, and the verifier saw a
+    # clean run. UNIQUE(generation_id, block_id) also made one block in two
+    # cells unrepresentable, so the duplicate check was structurally dead.
+    #
+    # Many-to-many, with `active` rather than deletion so the history survives
+    # a relink. A block is genuinely placed only when it has an ACTIVE row
+    # pointing at a cell that still exists.
+    """
+    CREATE TABLE IF NOT EXISTS notes_block_placements (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id        INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        generation_id INTEGER NOT NULL,
+        block_id      TEXT NOT NULL,
+        sheet         TEXT NOT NULL,
+        row           INTEGER NOT NULL,
+        active        INTEGER NOT NULL DEFAULT 1,
+        render_sha256 TEXT,
+        created_at    TEXT NOT NULL DEFAULT '',
+        deactivated_at TEXT,
+        UNIQUE(generation_id, block_id, sheet, row)
+    )
+    """,
+    # v37 — the guarded remediation lifecycle for the integrity panel
+    # (plan Step 8.3). Mirrors notes_format_tasks / run_review_tasks: a
+    # durable row so a remediation cannot run while the reviewer or the
+    # formatter holds the run, and a crash leaves a row startup can retire.
+    """
+    CREATE TABLE IF NOT EXISTS notes_integrity_tasks (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id      INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        status      TEXT NOT NULL DEFAULT 'running',
+        actor       TEXT NOT NULL DEFAULT 'human',
+        action      TEXT NOT NULL DEFAULT '',
+        outcome     TEXT,
+        started_at  TEXT NOT NULL DEFAULT '',
+        ended_at    TEXT
+    )
+    """,
     """
     CREATE TABLE IF NOT EXISTS notes_integrity_runs (
         id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1311,6 +1361,10 @@ _CREATE_INDEXES: tuple[str, ...] = (
     "ON notes_source_blocks(generation_id)",
     "CREATE INDEX IF NOT EXISTS ix_notes_block_usages_generation "
     "ON notes_block_usages(generation_id)",
+    "CREATE INDEX IF NOT EXISTS ix_notes_block_placements_generation "
+    "ON notes_block_placements(generation_id, active)",
+    "CREATE INDEX IF NOT EXISTS ix_notes_block_placements_cell "
+    "ON notes_block_placements(generation_id, sheet, row)",
     "CREATE INDEX IF NOT EXISTS ix_notes_disposition_events_block "
     "ON notes_disposition_events(run_id, block_id)",
     "CREATE INDEX IF NOT EXISTS ix_run_lineage_parent ON run_lineage(parent_run_id)",
@@ -1571,6 +1625,14 @@ _V35_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
 # second is a decision anyone made.
 _V36_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("runs", "notes_integrity_mode", "TEXT"),
+)
+
+# v36 → v37: placement ledger + remediation tasks (both pure CREATE TABLE,
+# handled by the statement list above) plus two nullable/defaulted columns
+# on notes_cells. Peer review found both of the defects these close.
+_V37_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("notes_cells", "content_revision", "INTEGER NOT NULL DEFAULT 0"),
+    ("notes_cells", "source_render_version", "TEXT"),
 )
 
 _V33_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
@@ -2779,6 +2841,38 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
                         (36,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        # v36 → v37: placement ledger, remediation tasks, and the two
+        # notes_cells columns. Additive; on rollback the tables sit inert.
+        if current_version is not None and current_version < 37:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 37:
+                    for table, col_name, col_ddl in _V37_MIGRATION_COLUMNS:
+                        existing_cols = {
+                            r[1] for r in conn.execute(
+                                f"PRAGMA table_info({table})"
+                            ).fetchall()
+                        }
+                        if col_name not in existing_cols:
+                            try:
+                                conn.execute(
+                                    f"ALTER TABLE {table} ADD COLUMN {col_name} {col_ddl}"
+                                )
+                            except sqlite3.OperationalError as exc:
+                                if "duplicate column" not in str(exc).lower():
+                                    raise
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?", (37,),
                     )
                 conn.commit()
             except Exception:
