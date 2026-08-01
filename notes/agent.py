@@ -1562,22 +1562,75 @@ def _write_from_source_impl(
     try:
         prefix = f"{deps.filing_standard}-{deps.filing_level}-"
         with repo.db_session(deps.db_path) as conn:
-            node = repo.fetch_notes_node(
-                conn, sheet=sheet, row=row, template_prefix=prefix,
-            ) or {}
             outcome = source_write.write_cell_from_blocks(
                 conn, run_id=deps.run_id,
                 generation_id=deps.source_generation_id,
                 sheet=sheet, row=row, block_ids=block_ids,
-                label=node.get("label") or "",
                 evidence=evidence,
                 source_pages=source_pages,
                 format_ops=format_ops,
                 actor="notes_agent",
+                template_prefix=prefix,
+                # An extraction agent writes only its OWN sheet. It used to be
+                # able to name any sheet at all, and a `Ghost` row succeeded.
+                allowed_sheets=[deps.sheet_name],
             )
+            back = conn.execute(
+                "SELECT label, html FROM notes_cells "
+                "WHERE run_id = ? AND sheet = ? AND row = ?",
+                (deps.run_id, sheet, row),
+            ).fetchone()
+            label = (back["label"] if back else "") or ""
+            rendered_html = (back["html"] if back else "") or ""
     except source_write.SourceWriteError as exc:
         return f"rejected: {exc}"
-    return outcome.as_message()
+
+    payload = NotesPayload(
+        chosen_row_label=label,
+        content=rendered_html,
+        evidence=evidence or "",
+        source_pages=list(source_pages),
+    )
+    return outcome.as_message(), payload
+
+
+async def _emit_payload_through_writer(ctx, payloads: list) -> str:
+    """Put source-built payloads through the ordinary write path.
+
+    Sheet-12 sub-agents go to the sink; every other sheet writes the workbook.
+    Either way `wrote_once`, `filled_path` and `cells_written` end up in the
+    state the coordinator's no-write guard and its outcome expect.
+    """
+    deps = ctx.deps
+    if deps.payload_sink is not None:
+        return _sub_agent_sink_write(deps, payloads, parse_errors=[])
+
+    output_path = str(Path(deps.output_dir) / deps.filled_filename)
+    source_path = (
+        deps.filled_path
+        if deps.wrote_once and deps.filled_path and Path(deps.filled_path).exists()
+        else deps.template_path
+    )
+    result = await asyncio.to_thread(
+        write_notes_workbook,
+        template_path=source_path,
+        payloads=payloads,
+        output_path=output_path,
+        filing_level=deps.filing_level,
+        sheet_name=deps.sheet_name,
+    )
+    if result.success:
+        deps.filled_path = output_path
+        deps.wrote_once = True
+    if result.cells_written:
+        by_key = {(c["sheet"], c["row"]): c for c in deps.cells_written}
+        for cell in result.cells_written:
+            by_key[(cell["sheet"], cell["row"])] = cell
+        deps.cells_written = list(by_key.values())
+    if result.errors:
+        deps.write_skip_errors.extend(result.errors)
+        return "warning: " + "; ".join(result.errors)
+    return ""
 
 
 def create_notes_agent(
@@ -1901,10 +1954,23 @@ def create_notes_agent(
             prose — there is no content field, deliberately. If a part of the
             note does not belong in any row, record why with the disposition
             tool rather than leaving it unaccounted for."""
-            return await asyncio.to_thread(
+            built = await asyncio.to_thread(
                 _write_from_source_impl, ctx.deps, sheet, row, block_ids,
                 source_pages or [], evidence, format_ops,
             )
+            if isinstance(built, str):        # rejection message
+                return built
+            message, payload = built
+            # A source write must satisfy the SAME coordinator contract an
+            # ordinary write does. Writing only to the database left
+            # `wrote_once` / `filled_path` unset — so a source-only agent
+            # tripped the no-write guard and its sheet failed — and left the
+            # Sheet-12 sink with nothing to acknowledge (peer review,
+            # 2026-08-01). Routing the rendered payload through the normal
+            # path also produces the workbook artifact, so the later
+            # `persist_notes_cells` rewrite is a no-op rather than a clobber.
+            written = await _emit_payload_through_writer(ctx, [payload])
+            return f"{message}\n{written}" if written else message
 
     @agent.tool
     async def view_pdf_pages(

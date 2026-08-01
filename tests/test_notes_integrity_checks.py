@@ -34,12 +34,20 @@ def _settled(*block_ids) -> dict:
 
 def _clean() -> ig.IntegrityInput:
     """A run with nothing wrong. Every 'passes' test starts here so a check
-    that fires on a clean run is caught immediately."""
+    that fires on a clean run is caught immediately.
+
+    Both blocks are PLACED as well as dispositioned. Verifying the disposition
+    alone was the defect peer review found: a block could claim to be included
+    at a cell it had been relinked out of, or that had been deleted, and the
+    run verified clean over content nobody had.
+    """
     return ig.IntegrityInput(
         blocks=[_blk("b1", order=0), _blk("b2", order=1)],
         notes=[SourceNote(source_note_id="n1", top_note_num="1",
                           block_ids=["b1", "b2"])],
         usages=_settled("b1", "b2"),
+        placements={"b1": [("Notes", 10)], "b2": [("Notes", 10)]},
+        live_cells=frozenset({("Notes", 10)}),
         cells=[ig.CellRecord(sheet="Notes", row=10, block_ids=["b1", "b2"],
                              rendered_sha256="x", current_sha256="x",
                              content_origin="source_exact",
@@ -233,22 +241,36 @@ def test_character_cap_is_quiet_under_the_limit():
 
 
 def test_duplicate_use_of_one_block_fires_without_an_approval():
+    """Reads the PLACEMENT ledger. The old version read cell records whose
+    block lists came from `notes_block_usages`, which is UNIQUE per block —
+    so one block in two cells was unrepresentable and this check could never
+    fire in production. Its fixture hand-built a shape the real builder
+    cannot produce."""
     inp = _clean()
-    inp.cells = [
-        ig.CellRecord(sheet="Notes", row=10, block_ids=["b1"]),
-        ig.CellRecord(sheet="Policies", row=4, block_ids=["b1"]),
-    ]
+    inp.placements = {"b1": [("Notes", 10), ("Policies", 4)],
+                      "b2": [("Notes", 10)]}
+    inp.live_cells = frozenset({("Notes", 10), ("Policies", 4)})
     fs = ig.check_approved_duplicates(inp)
     assert len(fs) == 1 and fs[0].block_ids == ["b1"]
 
 
 def test_an_approved_duplicate_is_accepted():
     inp = _clean()
-    inp.cells = [
-        ig.CellRecord(sheet="Notes", row=10, block_ids=["b1"]),
-        ig.CellRecord(sheet="Policies", row=4, block_ids=["b1"]),
-    ]
+    inp.placements = {"b1": [("Notes", 10), ("Policies", 4)],
+                      "b2": [("Notes", 10)]}
+    inp.live_cells = frozenset({("Notes", 10), ("Policies", 4)})
     inp.approved_duplicate_block_ids = frozenset({"b1"})
+    assert ig.check_approved_duplicates(inp) == []
+
+
+def test_a_duplicate_pointing_at_a_deleted_cell_is_not_a_duplicate():
+    """One live placement and one stale one is a placement problem, not a
+    duplication — and reporting it as duplication would send the operator to
+    the wrong question."""
+    inp = _clean()
+    inp.placements = {"b1": [("Notes", 10), ("Policies", 4)],
+                      "b2": [("Notes", 10)]}
+    inp.live_cells = frozenset({("Notes", 10)})
     assert ig.check_approved_duplicates(inp) == []
 
 
@@ -332,3 +354,74 @@ def test_the_retry_list_does_not_repeat_a_block():
         ig.Finding("note_coverage", ig.UNRESOLVED, "", ["b2", "b4"]),
     ])
     assert ig.missing_block_ids(result) == ["b2", "b4"]
+
+
+# --------------------------------------------------------------------------
+# placement — the check peer review made necessary (2026-08-01)
+# --------------------------------------------------------------------------
+
+def test_a_block_relinked_out_of_its_cell_stops_counting_as_included():
+    """The reproduction: relink a cell from b1+b2 to b1. b2's disposition row
+    still says `included` at that cell. Before the placement ledger the run
+    verified clean."""
+    inp = _clean()
+    inp.placements = {"b1": [("Notes", 10)]}      # b2 dropped
+    fs = ig.check_dispositions(inp)
+    assert [f.check for f in fs] == ["placement"]
+    assert fs[0].block_ids == ["b2"] and fs[0].blocking
+
+
+def test_a_block_placed_in_a_deleted_cell_stops_counting_as_included():
+    """The other reproduction: the sheet was clobbered, so the cells are gone
+    while every disposition still says included."""
+    inp = _clean()
+    inp.live_cells = frozenset()
+    fs = ig.check_dispositions(inp)
+    assert {f.check for f in fs} == {"placement"}
+    assert {b for f in fs for b in f.block_ids} == {"b1", "b2"}
+
+
+def test_a_routed_block_with_no_destination_does_not_resolve_itself():
+    inp = _clean()
+    inp.usages = {
+        "b1": _usage(Disposition.INCLUDED),
+        "b2": {"disposition": Disposition.ROUTED.value, "reason_code": None,
+               "sheet": None, "row": None},
+    }
+    fs = ig.check_dispositions(inp)
+    assert [f.check for f in fs] == ["placement"]
+    assert "no destination" in fs[0].message
+
+
+def test_a_routed_block_with_a_destination_is_accepted():
+    inp = _clean()
+    inp.usages = {
+        "b1": _usage(Disposition.INCLUDED),
+        "b2": {"disposition": Disposition.ROUTED.value, "reason_code": None,
+               "sheet": "Policies", "row": 4},
+    }
+    assert ig.check_dispositions(inp) == []
+
+
+def test_structured_consumed_also_needs_a_destination():
+    inp = _clean()
+    inp.usages = {
+        "b1": _usage(Disposition.INCLUDED),
+        "b2": {"disposition": Disposition.STRUCTURED_CONSUMED.value,
+               "reason_code": None, "sheet": None, "row": None},
+    }
+    assert ig.check_dispositions(inp)
+
+
+def test_note_coverage_counts_an_unplaced_block_as_missing():
+    inp = _clean()
+    inp.placements = {"b1": [("Notes", 10)]}
+    fs = ig.check_prose_note_coverage(inp)
+    assert len(fs) == 1 and fs[0].block_ids == ["b2"]
+
+
+def test_a_placement_finding_is_repairable_by_a_retry():
+    result = ig.IntegrityResult(findings=[
+        ig.Finding("placement", ig.UNRESOLVED, "", ["b2"]),
+    ])
+    assert ig.missing_block_ids(result) == ["b2"]

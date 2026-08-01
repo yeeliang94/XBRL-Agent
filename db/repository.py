@@ -854,18 +854,24 @@ def upsert_notes_cell(
         # (e.g. the reviewer's edit/author path, which doesn't run the styling
         # sidecar) — same "don't silently downgrade" rule as concept_uuid.
         style = style_source if style_source is not None else existing[2]
+        # v37: bump the monotonic revision on every write. The optimistic
+        # version check keyed on `updated_at`, which has one-second precision,
+        # so two writes inside the same second shared a token and neither was
+        # refused (peer review, 2026-08-01).
         conn.execute(
             "UPDATE notes_cells SET label = ?, html = ?, evidence = ?, "
             "source_pages = ?, updated_at = ?, concept_uuid = ?, "
-            "style_source = ? WHERE id = ?",
+            "style_source = ?, content_revision = COALESCE(content_revision, 0) + 1 "
+            "WHERE id = ?",
             (label, html, evidence, pages_json, now, cuid, style, cell_id),
         )
         return cell_id
     cuid = concept_uuid or mint_notes_concept_uuid(sheet, row, label)
     cur = conn.execute(
         "INSERT INTO notes_cells(run_id, sheet, row, label, html, "
-        "evidence, source_pages, updated_at, concept_uuid, style_source) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "evidence, source_pages, updated_at, concept_uuid, style_source, "
+        "content_revision) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
         (run_id, sheet, row, label, html, evidence, pages_json, now, cuid,
          style_source),
     )
@@ -1343,6 +1349,75 @@ def reconcile_stale_notes_review_tasks(conn: sqlite3.Connection) -> int:
         "UPDATE notes_review_tasks SET status = 'done', outcome = ?, "
         "error = 'restarted', updated_at = ? WHERE status = 'running'",
         (outcome_json, now),
+    )
+    return int(cur.rowcount)
+
+
+def claim_notes_integrity_task(
+    conn: sqlite3.Connection, run_id: int, action: str, *, actor: str = "human",
+) -> Optional[int]:
+    """Claim the run's integrity-remediation slot, or return None.
+
+    Interlocks with the reviewer and the formatter (schema v37, plan Step 8.3).
+    A remediation writes dispositions and can rewrite cells; letting one run
+    while the notes reviewer holds the same run is how two writers disagree
+    about what a cell contains. The claim is a single `BEGIN IMMEDIATE`
+    transaction so two clicks cannot both win.
+    """
+    now = _now()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        busy = conn.execute(
+            "SELECT 1 FROM notes_integrity_tasks "
+            "WHERE run_id = ? AND status = 'running'",
+            (run_id,),
+        ).fetchone()
+        if busy is None:
+            busy = conn.execute(
+                "SELECT 1 FROM notes_review_tasks "
+                "WHERE run_id = ? AND status = 'running'",
+                (run_id,),
+            ).fetchone()
+        if busy is None:
+            busy = conn.execute(
+                "SELECT 1 FROM notes_format_tasks "
+                "WHERE run_id = ? AND status = 'running'",
+                (run_id,),
+            ).fetchone()
+        if busy is not None:
+            conn.rollback()
+            return None
+        cur = conn.execute(
+            "INSERT INTO notes_integrity_tasks("
+            "  run_id, status, actor, action, started_at"
+            ") VALUES (?, 'running', ?, ?, ?)",
+            (run_id, actor, action, now),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def finish_notes_integrity_task(
+    conn: sqlite3.Connection, task_id: int, *, outcome: Optional[str] = None,
+) -> None:
+    conn.execute(
+        "UPDATE notes_integrity_tasks SET status = 'done', outcome = ?, "
+        "ended_at = ? WHERE id = ?",
+        (outcome, _now(), task_id),
+    )
+    conn.commit()
+
+
+def reconcile_stale_notes_integrity_tasks(conn: sqlite3.Connection) -> int:
+    """Retire remediations orphaned by a process restart. Without this a crash
+    mid-remediation locks the run's slot forever."""
+    cur = conn.execute(
+        "UPDATE notes_integrity_tasks SET status = 'done', "
+        "outcome = 'restarted', ended_at = ? WHERE status = 'running'",
+        (_now(),),
     )
     return int(cur.rowcount)
 

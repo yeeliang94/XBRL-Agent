@@ -99,6 +99,45 @@ def expand_table_groups(
     return sorted(wanted, key=lambda bid: order.get(bid, 0))
 
 
+def resolve_target(
+    conn: sqlite3.Connection,
+    sheet: str,
+    row: int,
+    *,
+    template_prefix: str,
+    allowed_sheets: Optional[Sequence[str]] = None,
+) -> str:
+    """Validate a write target and return its template label.
+
+    The writer used to accept any `(sheet, row)` — a write to `Ghost` row 999
+    succeeded and got a clean verdict, because the agent fell back to an empty
+    label on lookup failure and the reviewer's relink bypassed its own target
+    guard. Validation belongs HERE, in the one function all three callers go
+    through, rather than in each of them (peer review, 2026-08-01).
+    """
+    from db import repository as repo
+
+    if allowed_sheets is not None and sheet not in allowed_sheets:
+        raise SourceWriteError(
+            f"{sheet} is not a sheet you may write. Yours: "
+            f"{', '.join(allowed_sheets)}."
+        )
+    node = repo.fetch_notes_node(
+        conn, sheet=sheet, row=row, template_prefix=template_prefix,
+    )
+    if node is None:
+        raise SourceWriteError(
+            f"{sheet} row {row} is not a row of this filing's notes "
+            "templates. Call read_template to see the rows you can write."
+        )
+    if (node.get("kind") or "").upper() != "LEAF":
+        raise SourceWriteError(
+            f"{sheet} row {row} is a section heading, not a writable row. "
+            "Write to the rows beneath it."
+        )
+    return node.get("label") or ""
+
+
 def write_cell_from_blocks(
     conn: sqlite3.Connection,
     *,
@@ -113,12 +152,25 @@ def write_cell_from_blocks(
     format_ops: Optional[list] = None,
     actor: str = "notes_agent",
     disposition: Disposition = Disposition.INCLUDED,
+    template_prefix: Optional[str] = None,
+    allowed_sheets: Optional[Sequence[str]] = None,
 ) -> WriteOutcome:
     """Build and store one cell from the named source blocks.
 
-    Raises :class:`SourceWriteError` for anything the agent can act on: an
-    unknown block id, an empty selection, or a note too long for one cell.
+    Raises :class:`SourceWriteError` for anything the caller can act on: an
+    unknown block id, an empty selection, a target that is not a writable row
+    of this filing's templates, or a note too long for one cell.
+
+    ``template_prefix`` enables target validation. It is optional only so the
+    pure-unit tests can exercise rendering without a template registry; every
+    live caller passes it.
     """
+    if template_prefix:
+        label = resolve_target(
+            conn, sheet, row,
+            template_prefix=template_prefix, allowed_sheets=allowed_sheets,
+        ) or label
+
     if not block_ids:
         raise SourceWriteError(
             "no source parts were named. A cell is built from the document, "
@@ -174,12 +226,20 @@ def write_cell_from_blocks(
             generation_id=generation_id,
             rendered_sha256=rendered.source_rendered_sha256,
             content_origin=rendered.content_origin.value,
+            render_version=source_render.RENDER_VERSION,
         )
         for bid in rendered.block_ids:
             srepo.record_disposition_in_txn(
                 conn, run_id, generation_id, bid, disposition,
                 actor=actor, sheet=sheet, row=row, target_kind="prose_cell",
             )
+        # The PLACEMENT ledger (v37) is what makes a relink honest: blocks
+        # dropped from this cell are deactivated here, so they stop counting
+        # as placed even though their disposition row still says `included`.
+        srepo.set_cell_placements(
+            conn, run_id, generation_id, sheet, row, rendered.block_ids,
+            render_sha256=rendered.source_rendered_sha256,
+        )
         if owns_txn:
             conn.commit()
     except Exception:

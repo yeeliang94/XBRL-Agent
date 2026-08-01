@@ -19,8 +19,8 @@ def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
 
 
-def test_current_version_is_36():
-    assert CURRENT_SCHEMA_VERSION == 36
+def test_v36_is_reachable_from_the_current_version():
+    assert CURRENT_SCHEMA_VERSION >= 36
 
 
 def test_fresh_database_has_the_column(tmp_path):
@@ -31,7 +31,7 @@ def test_fresh_database_has_the_column(tmp_path):
         assert "notes_integrity_mode" in _columns(conn, "runs")
         assert conn.execute(
             "SELECT version FROM schema_version"
-        ).fetchone()[0] == 36
+        ).fetchone()[0] == CURRENT_SCHEMA_VERSION
     finally:
         conn.close()
 
@@ -60,7 +60,7 @@ def test_a_real_v35_database_migrates_forward(tmp_path):
         assert "notes_integrity_mode" in _columns(conn, "runs")
         assert conn.execute(
             "SELECT version FROM schema_version"
-        ).fetchone()[0] == 36
+        ).fetchone()[0] == CURRENT_SCHEMA_VERSION
     finally:
         conn.close()
 

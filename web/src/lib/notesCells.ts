@@ -25,6 +25,9 @@ export interface NotesCell {
   evidence: string | null;
   source_pages: number[];
   updated_at: string;
+  /** Monotonic edit counter (schema v37). The optimistic version token for
+   *  PATCH — `updated_at` is second-precision and could collide. */
+  content_revision?: number;
   sanitizer_warnings?: string[];
   // How this cell got its table styling (schema v29): "ops" = agent observed
   // it at extraction, "floor" = deterministic house style, "unstyled" = plain,
@@ -201,13 +204,23 @@ export async function patchNotesCell(
   sheet: string,
   row: number,
   html: string,
+  expectedRevision?: number | null,
 ): Promise<NotesCell & { sheet: string }> {
+  // The version token is REQUIRED for a real conflict check. It was built
+  // server-side and never sent, so the 409 could not fire in the editor
+  // (peer review, 2026-08-01). `content_revision` is a monotonic counter —
+  // `updated_at` has one-second precision, so two saves inside the same
+  // second shared a token and neither was refused.
   return apiFetch<NotesCell & { sheet: string }>(
     `/api/runs/${runId}/notes_cells/${encodeURIComponent(sheet)}/${row}`,
     {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ html }),
+      body: JSON.stringify(
+        expectedRevision == null
+          ? { html }
+          : { html, expected_revision: expectedRevision },
+      ),
     },
   );
 }

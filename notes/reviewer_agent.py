@@ -1149,6 +1149,12 @@ def create_notes_reviewer_agent(
                         evidence=_ground_evidence(source_pages or [], evidence),
                         source_pages=source_pages or [],
                         actor="notes_reviewer",
+                        # The relink used to bypass the reviewer's own target
+                        # guard entirely, so it could write to a row that does
+                        # not exist (peer review, 2026-08-01). The reviewer may
+                        # target any prose sheet, so no `allowed_sheets`, but
+                        # the row must be a real writable one.
+                        template_prefix=ctx.deps.template_prefix,
                     )
             except source_write.SourceWriteError as exc:
                 return f"rejected: {exc}"

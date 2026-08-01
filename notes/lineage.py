@@ -45,9 +45,16 @@ def _now() -> str:
 
 
 def content_sha256(html: Optional[str]) -> str:
-    """Hash of a cell's current HTML. Distinct from
-    `source_render.render_sha256`, which version-stamps the RENDER shape — this
-    one is a plain content fingerprint of whatever is stored."""
+    """Hash of a cell's HTML. **The only digest function for cell content.**
+
+    It used to have a sibling that folded the render version into the hash,
+    used for `source_rendered_sha256`. Two digest functions over the same
+    bytes meant a human edit could never equal a source render, so editing a
+    cell back to exactly its source text never cleared the divergence mark
+    (peer review, 2026-08-01). The render version now lives in its own column
+    (`notes_cells.source_render_version`, v37) where a shape change is still
+    detectable without corrupting the comparison.
+    """
     return hashlib.sha256((html or "").encode("utf-8")).hexdigest()
 
 
@@ -91,17 +98,31 @@ def check_version(
     run_id: int,
     sheet: str,
     row: int,
-    expected_updated_at: Optional[str],
+    expected_updated_at: Optional[str] = None,
+    *,
+    expected_revision: Optional[int] = None,
 ) -> None:
     """Optimistic concurrency. A caller that sends no version opts out —
-    the agent write path has no reader to be stale against."""
-    if expected_updated_at is None:
+    the agent write path has no reader to be stale against.
+
+    ``expected_revision`` is the real token: `notes_cells.content_revision`
+    is a monotonic counter, whereas `updated_at` has one-second precision, so
+    two saves inside the same second shared a timestamp and neither was
+    refused (peer review, 2026-08-01). The timestamp form is retained for
+    callers that still send it.
+    """
+    if expected_updated_at is None and expected_revision is None:
         return
     r = conn.execute(
-        "SELECT updated_at FROM notes_cells "
+        "SELECT updated_at, content_revision FROM notes_cells "
         "WHERE run_id = ? AND sheet = ? AND row = ?",
         (run_id, sheet, row),
     ).fetchone()
+    if expected_revision is not None:
+        actual_rev = r["content_revision"] if r else None
+        if actual_rev != expected_revision:
+            raise StaleCellError(str(expected_revision), str(actual_rev))
+        return
     actual = r["updated_at"] if r else None
     if actual != expected_updated_at:
         raise StaleCellError(expected_updated_at, actual)
@@ -164,16 +185,23 @@ def mark_source_render(
     generation_id: int,
     rendered_sha256: str,
     content_origin: str = ContentOrigin.SOURCE_EXACT.value,
+    render_version: Optional[str] = None,
 ) -> None:
     """Stamp a cell as produced from source blocks. Clears any divergence:
-    this write IS the source render, so nothing has diverged from it yet."""
+    this write IS the source render, so nothing has diverged from it yet.
+
+    ``rendered_sha256`` must be a :func:`content_sha256` digest of the stored
+    HTML — the SAME function a human edit uses. The render shape goes in
+    ``render_version``, not into the hash.
+    """
     conn.execute(
         "UPDATE notes_cells SET source_generation_id = ?, "
         "source_rendered_sha256 = ?, current_html_sha256 = ?, "
-        "content_origin = ?, source_diverged_at = NULL "
+        "content_origin = ?, source_diverged_at = NULL, "
+        "source_render_version = ? "
         "WHERE run_id = ? AND sheet = ? AND row = ?",
         (generation_id, rendered_sha256, rendered_sha256, content_origin,
-         run_id, sheet, row),
+         render_version, run_id, sheet, row),
     )
 
 

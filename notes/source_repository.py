@@ -349,6 +349,87 @@ def fetch_usages(conn: sqlite3.Connection, generation_id: int) -> list:
     ).fetchall()
 
 
+# --------------------------------------------------------------------------
+# placements — where a block currently LIVES (v37)
+#
+# Separate from `notes_block_usages`, which records what was DECIDED about a
+# block. Merging the two lost placement history: relinking a cell from b1+b2
+# to b1 left b2 recorded as included AT that cell, and the run verified clean.
+# `UNIQUE(generation_id, block_id)` on usages also made one block in two cells
+# unrepresentable, so the duplicate check could never fire.
+# --------------------------------------------------------------------------
+
+def set_cell_placements(
+    conn: sqlite3.Connection,
+    run_id: int,
+    generation_id: int,
+    sheet: str,
+    row: int,
+    block_ids: Iterable[str],
+    *,
+    render_sha256: Optional[str] = None,
+) -> None:
+    """Make ``block_ids`` the ACTIVE placements for one cell.
+
+    Everything previously placed at that cell and not in the new list is
+    deactivated, not deleted — a relink must leave a trail, and the dropped
+    block must stop counting as placed. Runs in the caller's transaction.
+    """
+    now = _now()
+    wanted = list(dict.fromkeys(block_ids))
+    conn.execute(
+        "UPDATE notes_block_placements SET active = 0, deactivated_at = ? "
+        "WHERE generation_id = ? AND sheet = ? AND row = ? AND active = 1",
+        (now, generation_id, sheet, row),
+    )
+    for bid in wanted:
+        conn.execute(
+            "INSERT INTO notes_block_placements("
+            "  run_id, generation_id, block_id, sheet, row, active,"
+            "  render_sha256, created_at, deactivated_at"
+            ") VALUES (?,?,?,?,?,1,?,?,NULL) "
+            "ON CONFLICT(generation_id, block_id, sheet, row) DO UPDATE SET "
+            "  active = 1, render_sha256 = excluded.render_sha256,"
+            "  created_at = excluded.created_at, deactivated_at = NULL",
+            (run_id, generation_id, bid, sheet, row, render_sha256, now),
+        )
+
+
+def deactivate_placements_for_sheet(
+    conn: sqlite3.Connection, generation_id: int, sheet: str
+) -> int:
+    """Retire every active placement on a sheet.
+
+    Called when the sheet's cells are cleared (a notes rerun clobbers, gotcha
+    #16). Without this the blocks stay recorded as placed in cells that no
+    longer exist, which is precisely the clean-verdict-over-nothing failure.
+    """
+    cur = conn.execute(
+        "UPDATE notes_block_placements SET active = 0, deactivated_at = ? "
+        "WHERE generation_id = ? AND sheet = ? AND active = 1",
+        (_now(), generation_id, sheet),
+    )
+    return cur.rowcount or 0
+
+
+def active_placements(conn: sqlite3.Connection, generation_id: int) -> list:
+    return conn.execute(
+        "SELECT * FROM notes_block_placements "
+        "WHERE generation_id = ? AND active = 1 ORDER BY sheet, row, block_id",
+        (generation_id,),
+    ).fetchall()
+
+
+def placements_for_block(
+    conn: sqlite3.Connection, generation_id: int, block_id: str
+) -> list:
+    return conn.execute(
+        "SELECT * FROM notes_block_placements "
+        "WHERE generation_id = ? AND block_id = ? AND active = 1",
+        (generation_id, block_id),
+    ).fetchall()
+
+
 def coverage_counts(conn: sqlite3.Connection, generation_id: int) -> dict:
     """Counts over EVERY block in the generation.
 

@@ -78,6 +78,15 @@ class IntegrityInput:
     pages_expected: int = 0
     pages_processed: int = 0
     approved_duplicate_block_ids: frozenset = frozenset()
+    # block_id -> [(sheet, row), ...] from the ACTIVE placement ledger (v37).
+    # Distinct from `usages`, which records what was DECIDED about a block.
+    # Checking dispositions alone let a relinked-away block stay "included at
+    # a cell it is no longer in", and a clobbered sheet verify clean over
+    # cells that had been deleted.
+    placements: dict = field(default_factory=dict)
+    # Coordinates that currently hold a cell. A placement pointing outside
+    # this set is pointing at nothing.
+    live_cells: frozenset = frozenset()
 
 
 @dataclass
@@ -143,8 +152,23 @@ def check_block_ownership(inp: IntegrityInput) -> list[Finding]:
     return out
 
 
+def _live_placements(inp: IntegrityInput, block_id: str) -> list:
+    """Active placements of a block that point at a cell that still exists."""
+    return [
+        coord for coord in inp.placements.get(block_id, [])
+        if coord in inp.live_cells
+    ]
+
+
 def check_dispositions(inp: IntegrityInput) -> list[Finding]:
-    """Every block has a decision, and the decision is one we recognise."""
+    """Every block has a decision, the decision is one we recognise, **and the
+    decision is backed by live output**.
+
+    The last clause is the one peer review had to add. Verifying the claim and
+    not the result meant a block could be recorded `included` at a cell that
+    had since been relinked away or deleted outright, and the run finished
+    clean over content nobody had.
+    """
     out: list[Finding] = []
     for b in inp.blocks:
         disposition, reason = _disposition_of(inp.usages, b.block_id)
@@ -168,18 +192,46 @@ def check_dispositions(inp: IntegrityInput) -> list[Finding]:
                 "which describes a problem rather than settling it",
                 [b.block_id], b.source_note_id,
             ))
+        elif disposition is Disposition.INCLUDED and not _live_placements(inp, b.block_id):
+            out.append(Finding(
+                "placement", UNRESOLVED,
+                f"block {b.block_id} is recorded as used in a note, but it is "
+                "not in any cell that exists — it was moved out or the cell "
+                "was cleared",
+                [b.block_id], b.source_note_id,
+            ))
+        elif disposition in (Disposition.ROUTED, Disposition.STRUCTURED_CONSUMED):
+            u = inp.usages.get(b.block_id)
+            has_target = bool(
+                u is not None
+                and (u["sheet"] if hasattr(u, "keys") else getattr(u, "sheet", None))
+            )
+            if not has_target:
+                out.append(Finding(
+                    "placement", UNRESOLVED,
+                    f"block {b.block_id} is recorded as "
+                    f"{disposition.value.replace('_', ' ')} but names no "
+                    "destination, so there is nothing to check it against",
+                    [b.block_id], b.source_note_id,
+                ))
     return out
+
+
+def _block_settled(inp: IntegrityInput, bid: str) -> bool:
+    """Settled means decided AND, for an inclusion, actually placed."""
+    disposition, reason = _disposition_of(inp.usages, bid)
+    if disposition is None or not is_resolved(disposition, reason):
+        return False
+    if disposition is Disposition.INCLUDED:
+        return bool(_live_placements(inp, bid))
+    return True
 
 
 def check_prose_note_coverage(inp: IntegrityInput) -> list[Finding]:
     """A prose note is complete only when every one of its blocks is settled."""
     out: list[Finding] = []
     for n in inp.notes:
-        missing = [
-            bid for bid in n.block_ids
-            if not is_resolved(*_disposition_of(inp.usages, bid))
-            or _disposition_of(inp.usages, bid)[0] is None
-        ]
+        missing = [bid for bid in n.block_ids if not _block_settled(inp, bid)]
         if missing:
             out.append(Finding(
                 "note_coverage", UNRESOLVED,
@@ -298,11 +350,19 @@ def check_character_cap(inp: IntegrityInput) -> list[Finding]:
 
 
 def check_approved_duplicates(inp: IntegrityInput) -> list[Finding]:
-    """One block used in two places is a duplication unless it was approved."""
+    """One block used in two places is a duplication unless it was approved.
+
+    Reads the PLACEMENT ledger, not the cell records. It used to read cells
+    whose block lists were derived from `notes_block_usages`, which has
+    `UNIQUE(generation_id, block_id)` — so one block could only ever appear at
+    one coordinate and this check was structurally unable to fire. Its
+    "failing" fixture hand-built a shape the real builder cannot produce.
+    """
     seen: dict[str, list[str]] = {}
-    for c in inp.cells:
-        for bid in c.block_ids:
-            seen.setdefault(bid, []).append(f"{c.sheet}:{c.row}")
+    for bid, coords in inp.placements.items():
+        for sheet, row in coords:
+            if (sheet, row) in inp.live_cells:
+                seen.setdefault(bid, []).append(f"{sheet}:{row}")
     out: list[Finding] = []
     for bid, places in seen.items():
         if len(places) > 1 and bid not in inp.approved_duplicate_block_ids:
@@ -356,7 +416,7 @@ def missing_block_ids(result: IntegrityResult) -> list[str]:
     note because its page count is short would burn a turn on something it
     cannot change.
     """
-    repairable = {"disposition", "note_coverage", "table_group"}
+    repairable = {"disposition", "note_coverage", "table_group", "placement"}
     out: list[str] = []
     for f in result.findings:
         if f.blocking and f.check in repairable:

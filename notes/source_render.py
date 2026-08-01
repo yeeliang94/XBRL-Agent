@@ -196,14 +196,16 @@ def render_blocks(
 
 
 def render_sha256(html: str) -> str:
-    """Hash of a rendered cell, version-stamped.
+    """Plain content digest of a rendered cell.
 
-    The version is inside the hash on purpose: a render-shape change must read
-    as "different", not as a human edit that diverged from source.
+    **The render version is deliberately NOT in this hash.** It used to be,
+    which meant a source render and a human edit hashed the same bytes
+    differently, so editing a cell back to exactly its source text could never
+    clear the divergence mark (peer review, 2026-08-01). The version is stored
+    beside the hash instead (`notes_cells.source_render_version`, v37), where a
+    shape change is still visible without breaking the comparison.
     """
-    return hashlib.sha256(
-        f"{RENDER_VERSION}\n{html}".encode("utf-8")
-    ).hexdigest()
+    return hashlib.sha256(html.encode("utf-8")).hexdigest()
 
 
 def source_text_of(blocks: Sequence[SourceBlock]) -> str:

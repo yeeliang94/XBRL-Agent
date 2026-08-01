@@ -16,9 +16,12 @@ in lock-step when they do (gotcha #16).
 """
 from __future__ import annotations
 
+import logging
 import sqlite3
 from dataclasses import dataclass, field
 from typing import Optional
+
+logger = logging.getLogger("server")
 
 # The tier that means the note files with its formatting gone.
 _LOSSY_TIERS = {"flat"}
@@ -46,6 +49,7 @@ class Preflight:
 
     @property
     def clean(self) -> bool:
+        """Nothing to report AND nothing that failed to be assessed."""
         return not self.items
 
     def as_dict(self) -> dict:
@@ -132,8 +136,23 @@ def _size_items(db_path, run_id: int) -> list[PreflightItem]:
         doc = build_notes_fill_doc(
             db_path, run_id, style=NotesTableStyle.from_theme(firm_theme()),
         )
-    except Exception:  # noqa: BLE001 — preflight must never block the export
-        return []
+    except Exception as exc:  # noqa: BLE001 — never block the export
+        # Failure to assess is NOT proof of no loss. This used to return an
+        # empty list, which made the whole preflight report `clean: true`
+        # (peer review, 2026-08-01). Say what could not be checked.
+        logger.warning(
+            "export preflight: size assessment failed for run %s", run_id,
+            exc_info=True,
+        )
+        return [PreflightItem(
+            kind="unavailable", severity="advisory", sheet=None, row=None,
+            label="Size check",
+            message=(
+                "Could not work out what the mTool fill would drop for this "
+                f"run ({type(exc).__name__}). That is not the same as nothing "
+                "being dropped — check the fill report after filing."
+            ),
+        )]
 
     items = []
     for fn in doc.get("footnotes", []):

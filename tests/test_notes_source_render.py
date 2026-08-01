@@ -189,9 +189,14 @@ def test_the_cap_is_configurable_for_callers_that_need_a_tighter_one():
     assert out.oversized is True
 
 
-def test_the_render_hash_changes_with_the_render_version(monkeypatch):
-    """A render-shape change must read as 'the render moved', not as a human
-    edit that diverged from source."""
+def test_the_render_hash_is_a_plain_content_digest(monkeypatch):
+    """The render version used to be folded INTO this hash, so a source render
+    and a human edit hashed the same bytes differently — and editing a cell
+    back to exactly its source text could never clear the divergence mark
+    (peer review, 2026-08-01). The version is stored beside the hash instead."""
+    from notes.lineage import content_sha256
+
+    assert sr.render_sha256("<p>x</p>") == content_sha256("<p>x</p>")
     first = sr.render_sha256("<p>x</p>")
     monkeypatch.setattr(sr, "RENDER_VERSION", "src-render-99")
-    assert sr.render_sha256("<p>x</p>") != first
+    assert sr.render_sha256("<p>x</p>") == first

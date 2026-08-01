@@ -81,6 +81,30 @@ def persist_notes_cells(
     # us the right reader/writer behaviour, and the context manager's
     # commit is atomic at transaction end.
     with repo.db_session(db_path) as conn:
+        # Source lineage must survive the clobber (peer review, 2026-08-01).
+        # DELETE-then-INSERT drops the whole row, taking the v35 provenance
+        # columns with it — so a source-linked cell came back as an ordinary
+        # one while its block placements still pointed at it, and the run
+        # verified clean over content that no longer existed. Carry the
+        # provenance across for coordinates that are rewritten, and retire the
+        # placements of coordinates that are not.
+        _kept_coords = {
+            (str(c.get("sheet") or sheet_name), int(c["row"]))
+            for c in cells_list
+        }
+        _prior_lineage = {
+            (r["sheet"], r["row"]): r
+            for r in conn.execute(
+                "SELECT sheet, row, source_generation_id, "
+                "source_rendered_sha256, current_html_sha256, content_origin, "
+                "source_diverged_at, source_render_version, content_revision "
+                "FROM notes_cells WHERE run_id = ? AND sheet = ?",
+                (run_id, sheet_name),
+            ).fetchall()
+        }
+        _reconcile_placements(
+            conn, run_id=run_id, sheet=sheet_name, kept_coords=_kept_coords,
+        )
         repo.delete_notes_cells_for_run_sheet(
             conn, run_id=run_id, sheet=sheet_name,
         )
@@ -111,7 +135,76 @@ def persist_notes_cells(
                     str(style_source) if style_source is not None else None
                 ),
             )
+        _restore_lineage(conn, run_id, sheet_name, cells_list, _prior_lineage)
     return len(cells_list)
+
+
+def _reconcile_placements(
+    conn, *, run_id: int, sheet: str, kept_coords: set,
+) -> None:
+    """Retire the block placements of coordinates this rewrite drops.
+
+    A block placed at a cell that is about to disappear must stop counting as
+    placed. Leaving it active is the clean-verdict-over-nothing failure: the
+    cells were gone, the dispositions still said `included`, and integrity
+    reported no findings. Best-effort — a run without a source generation has
+    nothing to reconcile.
+    """
+    try:
+        from notes import source_repository as srepo
+
+        gen = srepo.active_generation(conn, run_id)
+        if gen is None:
+            return
+        for r in conn.execute(
+            "SELECT DISTINCT sheet, row FROM notes_block_placements "
+            "WHERE generation_id = ? AND sheet = ? AND active = 1",
+            (gen["id"], sheet),
+        ).fetchall():
+            if (r["sheet"], r["row"]) not in kept_coords:
+                srepo.set_cell_placements(
+                    conn, run_id, gen["id"], r["sheet"], r["row"], [],
+                )
+    except Exception:  # noqa: BLE001 — never fail a run on bookkeeping
+        logger.warning(
+            "could not reconcile source placements for %s", sheet, exc_info=True,
+        )
+
+
+def _restore_lineage(conn, run_id: int, sheet: str, cells_list, prior) -> None:
+    """Put back the provenance columns the DELETE removed.
+
+    Only for coordinates that were rewritten AND whose HTML is unchanged: if
+    the rerun produced different text, the cell is no longer that source
+    render and claiming otherwise would be worse than losing the link.
+    """
+    if not prior:
+        return
+    try:
+        from notes.lineage import content_sha256
+
+        for cell in cells_list:
+            coord = (str(cell.get("sheet") or sheet), int(cell["row"]))
+            before = prior.get(coord)
+            if before is None or not before["source_rendered_sha256"]:
+                continue
+            if content_sha256(str(cell["html"])) != before["source_rendered_sha256"]:
+                continue
+            conn.execute(
+                "UPDATE notes_cells SET source_generation_id = ?, "
+                "source_rendered_sha256 = ?, current_html_sha256 = ?, "
+                "content_origin = ?, source_diverged_at = ?, "
+                "source_render_version = ? "
+                "WHERE run_id = ? AND sheet = ? AND row = ?",
+                (before["source_generation_id"], before["source_rendered_sha256"],
+                 before["current_html_sha256"], before["content_origin"],
+                 before["source_diverged_at"], before["source_render_version"],
+                 run_id, coord[0], coord[1]),
+            )
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "could not restore source lineage for %s", sheet, exc_info=True,
+        )
 
 
 def persist_notes_review_inputs(

@@ -1117,6 +1117,11 @@ function CellRow({
   // the latest value without resubscribing every keystroke.
   const liveHtmlRef = useRef<string>(cell.html);
   const savedHtmlRef = useRef<string>(cell.html);
+  // The optimistic version token for this cell (schema v37). Seeded from the
+  // loaded cell and refreshed from every PATCH response, so a second save in
+  // the same session does not 409 against our own write. Null on a cell the
+  // projection surfaced but that has no row yet — nothing to conflict with.
+  const revisionRef = useRef<number | null>(cell.content_revision ?? null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Monotonic sequence counter for save requests. Each scheduled PATCH
   // captures its own `seq` at fire time; when the response returns,
@@ -1185,7 +1190,14 @@ function CellRow({
           // then guide users toward a shorter edit or a deliberate
           // Done-click (which goes through the normal debounced path
           // that isn't body-capped).
-          const body = JSON.stringify({ html: liveHtmlRef.current });
+          const body = JSON.stringify(
+            revisionRef.current == null
+              ? { html: liveHtmlRef.current }
+              : {
+                  html: liveHtmlRef.current,
+                  expected_revision: revisionRef.current,
+                },
+          );
           const KEEPALIVE_BUDGET = 60_000;
           if (body.length > KEEPALIVE_BUDGET) {
             console.warn(
@@ -1329,8 +1341,13 @@ function CellRow({
       latestSaveSeqRef.current = mySeq;
       try {
         const updated = await patchNotesCell(
-          runId, sheet, cell.row, attempted,
+          runId, sheet, cell.row, attempted, revisionRef.current,
         );
+        // Refresh the token on every save, or the NEXT save in this session
+        // would send a stale one and 409 against our own write.
+        if (typeof updated.content_revision === "number") {
+          revisionRef.current = updated.content_revision;
+        }
         if (!isMountedRef.current) return;
         if (mySeq !== latestSaveSeqRef.current) {
           // A newer save was scheduled after this one started — drop
