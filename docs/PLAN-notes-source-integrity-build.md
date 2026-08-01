@@ -1,9 +1,33 @@
 # Implementation Plan: Notes Source Integrity — Build (rev 2)
 
-**Overall Progress:** `0%`
+**Overall Progress:** `~30%` — Phases 1, 2, 3 and gate 0.2 built and committed (3 commits on `main`, full suite green). Phases 4–11 outstanding; 5–11 blocked on the decisions listed under Status below.
 **Design reference:** [`docs/PLAN-notes-source-integrity.md`](PLAN-notes-source-integrity.md) (the proposal; this file is the build order)
 **Findings register:** see [Appendix A](#appendix-a--findings-register) — 10 review findings + 15 peer-review findings, each mapped to a decision
 **Last Updated:** 2026-08-01
+
+## Status
+
+| Phase | State |
+|---|---|
+| 0.2 Word extraction audit | 🟩 Passed — see Step 0.2 |
+| 0.1 / 0.3 / 0.4 / 0.5 / 0.6 | 🟥 Not run — 0.1 needs live model spend, 0.4 needs digital-PDF fixtures that do not exist in `data/`, 0.6 is a product decision |
+| 1 Page image pipeline | 🟩 Built (`0587251`) |
+| 2 Table review surface | 🟩 Built (`85d86cb`) |
+| 3 Source model foundation | 🟩 Built (`7a3f76a`) — schema v35, inert |
+| 4 Word manifest | 🟥 Buildable next; fixtures exist |
+| 5 Lineage-preserving reviewer/editor | 🟥 Blocked on Step 0.6 (oversized-note path) |
+| 6 Link-only mapping | 🟥 Blocked on Step 0.6 |
+| 7 Integrity engine | 🟥 Blocked on Phase 6 |
+| 8 Integrity UI | 🟥 Blocked on Phase 7 |
+| 9 Export preflight | 🟥 Blocked on Phase 7; 9.2 needs Windows hardware |
+| 10 PDF track | 🟥 Blocked on Step 0.4 — no digital PDF in the repo |
+| 11 Rollout | 🟥 Blocked on staging + operator sign-off |
+
+**Open decisions blocking work** (all need a person, not more code):
+1. Data-retention approval for storing source content (checklist blocker).
+2. The oversized-note path (Step 0.6) — gates Phases 5 and 6.
+3. Engineer-week estimate.
+4. Digital (non-scanned) PDF fixtures — both files in `data/` are 150 DPI scans.
 
 > **Revision 2 (2026-08-01).** Peer review raised 15 findings against rev 1. All
 > 15 were verified against the code and accepted. Four were factual errors in
@@ -124,7 +148,7 @@ decides whether a later phase starts.
     improve the answer, the Key Decision above is wrong — record that and change
     Phase 1 before building it.**
 
-- [ ] 🟥 **Step 0.2: Word extraction completeness audit** — peer finding 1.
+- [x] 🟩 **Step 0.2: Word extraction completeness audit** — peer finding 1. **PASSED 2026-08-01** on `data/FINCO-Audited-Financial-Statement-2021.docx`: 662/662 table cells, 21/21 tables, full body-text coverage. Merged cells, lists, footnotes, text boxes and headers/footers are ABSENT from this fixture, so they are untested rather than proven — a document using them still needs this gate re-run.
   - [ ] 🟥 On the `.docx` fixtures, compare what `mammoth` produces against the
         document: body paragraphs, table cells, **merged cells**, lists,
         **footnotes**, **text boxes**, **headers and footers**, and content after
@@ -176,45 +200,45 @@ decides whether a later phase starts.
 
 Independent of the rest. Ships on its own.
 
-- [ ] 🟥 **Step 1.1: Native-resolution rendering, scoped to the notes vision path**
-  - [ ] 🟥 Detect a **dominant near-full-page raster** by area coverage. A page
+- [x] 🟩 **Step 1.1: Native-resolution rendering, scoped to the notes vision path**
+  - [x] 🟩 Detect a **dominant near-full-page raster** by area coverage. A page
         with no such image, or with several tiles, keeps the cap.
-  - [ ] 🟥 Render at `min(dominant_native_dpi, cap)`; cap defaults to 200.
-  - [ ] 🟥 Apply to the notes agent path only. Scout, reviewer and formatter keep
+  - [x] 🟩 Render at `min(dominant_native_dpi, cap)`; cap defaults to 200.
+  - [x] 🟩 Apply to the notes agent path only. Scout, reviewer and formatter keep
         current behaviour until this is proven.
-  - [ ] 🟥 Include the **render policy** in the page-cache and single-flight keys
+  - [x] 🟩 Include the **render policy** in the page-cache and single-flight keys
         alongside dpi, so two policies cannot collide on one entry.
   - **Verify:** FINCO pages render 1648 px wide, not 2200; PNG size drops ~40%.
     A synthetic vector-page-with-logo fixture still renders at the cap.
     `./venv/bin/python -m pytest tests/test_pdf_viewer.py
     tests/test_page_cache_single_flight.py -q` passes.
 
-- [ ] 🟥 **Step 1.2: Cropped-region render**
-  - [ ] 🟥 Render a given rectangle at native DPI, returning PNG bytes.
-  - [ ] 🟥 Include the **normalised crop rectangle** in the cache key.
+- [x] 🟩 **Step 1.2: Cropped-region render**
+  - [x] 🟩 Render a given rectangle at native DPI, returning PNG bytes.
+  - [x] 🟩 Include the **normalised crop rectangle** in the cache key.
   - **Verify (mechanics only):** the returned image covers the requested region
     at the requested density, and two different rectangles do not share a cache
     entry. **Do not unit-test the effectiveness claim** — that is Step 0.1's
     experiment, and Phase 0 must be able to disprove it.
 
-- [ ] 🟥 **Step 1.3: Zoom tool for the notes agent**
-  - [ ] 🟥 Read-only tool taking a page and a region; returns the crop.
-  - [ ] 🟥 Prompt update: zoom into a table before recording its formatting.
-  - [ ] 🟥 Page hints stay soft — any page accepted, no allowed-page filtering
+- [x] 🟩 **Step 1.3: Zoom tool for the notes agent**
+  - [x] 🟩 Read-only tool taking a page and a region; returns the crop.
+  - [x] 🟩 Prompt update: zoom into a table before recording its formatting.
+  - [x] 🟩 Page hints stay soft — any page accepted, no allowed-page filtering
         (gotcha #13).
   - **Verify:** a FINCO run shows the tool called before `format_ops` are
     emitted. Compare `format_ops` quality against the Step 0.5 baseline.
 
-- [ ] 🟥 **Step 1.4: Formatting survives every downstream surface**
-  - [ ] 🟥 One note with a table through: editor preview, clipboard, workbook
+- [x] 🟩 **Step 1.4: Formatting survives every downstream surface**
+  - [x] 🟩 One note with a table through: editor preview, clipboard, workbook
         download, mTool fill. Compare borders, alignment, header rule and totals
         underline against the source page at each step.
   - **Verify:** the four agree. `./venv/bin/python -m pytest
     tests/test_notes_format_sidecar.py tests/test_mtool_notes_decorate.py -q` and
     `cd web && npx vitest run clipboard cellFormatting` pass.
 
-- [ ] 🟥 **Step 1.5: Report unstyled tables**
-  - [ ] 🟥 Count cells landing `style_source='unstyled'` per run; expose on the
+- [x] 🟩 **Step 1.5: Report unstyled tables**
+  - [x] 🟩 Count cells landing `style_source='unstyled'` per run; expose on the
         run record.
   - **Verify:** the count matches a hand count on a test run.
 
@@ -224,39 +248,39 @@ Independent of the rest. Ships on its own.
 
 Independent of the rest. Ships on its own.
 
-- [ ] 🟥 **Step 2.1: Tables index endpoint** — peer finding 7.
-  - [ ] 🟥 Return a **stable identifier** per table: `(sheet, row, table_index)`,
+- [x] 🟩 **Step 2.1: Tables index endpoint** — peer finding 7.
+  - [x] 🟩 Return a **stable identifier** per table: `(sheet, row, table_index)`,
         plus nesting depth.
-  - [ ] 🟥 **Per-table** style facts derived from the cell HTML: does this table
+  - [x] 🟩 **Per-table** style facts derived from the cell HTML: does this table
         carry `data-source-styled`, does it carry inline borders, is it plain.
-  - [ ] 🟥 Row and column counts, character length.
-  - [ ] 🟥 Source pages labelled explicitly as **cell-level evidence**, not table
+  - [x] 🟩 Row and column counts, character length.
+  - [x] 🟩 Source pages labelled explicitly as **cell-level evidence**, not table
         provenance — `notes_cells.source_pages` and `style_source` are one per
         cell, not per table. True per-table provenance arrives with Phase 4.
   - **Verify:** a cell containing three tables returns three entries with
     distinct identifiers and independently derived style facts, and one shared
     page list marked cell-level.
 
-- [ ] 🟥 **Step 2.2: Tables list in the Notes tab**
-  - [ ] 🟥 A section inside the Notes tab, not a `role="tab"`.
-  - [ ] 🟥 One row per table: note, size, style state, page evidence.
-  - [ ] 🟥 Filter to "needs attention": plain, oversized, single-column, ragged.
-  - [ ] 🟥 Inline styles, tokens from `web/src/lib/theme.ts` (gotcha #7).
+- [x] 🟩 **Step 2.2: Tables list in the Notes tab**
+  - [x] 🟩 A section inside the Notes tab, not a `role="tab"`.
+  - [x] 🟩 One row per table: note, size, style state, page evidence.
+  - [x] 🟩 Filter to "needs attention": plain, oversized, single-column, ragged.
+  - [x] 🟩 Inline styles, tokens from `web/src/lib/theme.ts` (gotcha #7).
   - **Verify:** renders on a completed run; the plain filter matches Step 1.5.
 
-- [ ] 🟥 **Step 2.3: Side-by-side table and source**
-  - [ ] 🟥 Selecting a table shows it beside `PdfSourcePane` at the cited page.
-  - [ ] 🟥 Selecting focuses the cell; it does not replace the editor.
+- [x] 🟩 **Step 2.3: Side-by-side table and source**
+  - [x] 🟩 Selecting a table shows it beside `PdfSourcePane` at the cited page.
+  - [x] 🟩 Selecting focuses the cell; it does not replace the editor.
   - **Verify:** selection moves the PDF pane. Keyboard navigation works, focus
     is visible.
 
-- [ ] 🟥 **Step 2.4: Advisory sanity checks**
-  - [ ] 🟥 Ragged column counts, single-row tables, numeric columns with no
+- [x] 🟩 **Step 2.4: Advisory sanity checks**
+  - [x] 🟩 Ragged column counts, single-row tables, numeric columns with no
         numbers, tables over the cap. Display only. No blocking, no auto-fix.
   - **Verify:** each fires on a fixture and stays quiet on a clean run.
 
-- [ ] 🟥 **Step 2.5: States and responsive behaviour**
-  - [ ] 🟥 Loading, empty, error, run-in-progress, no-tables, narrow viewport,
+- [x] 🟩 **Step 2.5: States and responsive behaviour**
+  - [x] 🟩 Loading, empty, error, run-in-progress, no-tables, narrow viewport,
         screen-reader labels, visible focus, reduced motion.
   - **Verify:** `cd web && npx vitest run` passes; manual check at three widths.
 
@@ -266,41 +290,41 @@ Independent of the rest. Ships on its own.
 
 First flagged phase. No behaviour change in `off`.
 
-- [ ] 🟥 **Step 3.1: Schema**
-  - [ ] 🟥 Tables for source generations, source notes, source blocks, block
+- [x] 🟩 **Step 3.1: Schema**
+  - [x] 🟩 Tables for source generations, source notes, source blocks, block
         usages and integrity results. Allocate version numbers at implementation
         time — committed version is 34 and may move.
-  - [ ] 🟥 An **append-only disposition event table** — peer finding 11. A
+  - [x] 🟩 An **append-only disposition event table** — peer finding 11. A
         mutable `created_by` column is not an audit trail.
-  - [ ] 🟥 Nullable provenance columns on `notes_cells`.
-  - [ ] 🟥 Every new column nullable or defaulted (gotcha #11).
+  - [x] 🟩 Nullable provenance columns on `notes_cells`.
+  - [x] 🟩 Every new column nullable or defaulted (gotcha #11).
   - **Verify:** fresh database initialises; a copy of a v34 database migrates
     forward; old code reads it unchanged. New `tests/test_db_schema_vN.py`.
 
-- [ ] 🟥 **Step 3.2: Typed models and repository helpers**
+- [x] 🟩 **Step 3.2: Typed models and repository helpers**
   - **Verify:** unit tests; invalid reason codes and dispositions rejected.
 
-- [ ] 🟥 **Step 3.3: Atomic activation**
-  - [ ] 🟥 One transaction activates the new generation and supersedes the old. A
+- [x] 🟩 **Step 3.3: Atomic activation**
+  - [x] 🟩 One transaction activates the new generation and supersedes the old. A
         failed build leaves the previous one active.
   - **Verify:** a test that kills the build midway leaves exactly one active
     generation and no orphan blocks.
 
-- [ ] 🟥 **Step 3.4: Keep writing what the UI reads** — peer finding 8. Rev 1 was
+- [x] 🟩 **Step 3.4: Keep writing what the UI reads** — peer finding 8. Rev 1 was
       wrong here.
-  - [ ] 🟥 The Notes coverage endpoint reads **`notes_coverage_rows`**
+  - [x] 🟩 The Notes coverage endpoint reads **`notes_coverage_rows`**
         ([repository.py:1697](../db/repository.py:1697)), written from
         [server.py:1844](../server.py:1844) — not `run_notes_inventory` or
         `notes_cell_provenance`. The new path must keep populating
         `notes_coverage_rows`, plus the legacy provenance and inventory rows.
-  - [ ] 🟥 Write an explicit old/new coverage matrix: which writer owns which
+  - [x] 🟩 Write an explicit old/new coverage matrix: which writer owns which
         table in each mode.
   - **Verify:** a run in `enforce` produces both new and legacy rows. Switching
     to `off` shows a populated Notes tab for that run. Tests for all three modes
     and for rollback of a run created under the new path.
 
-- [ ] 🟥 **Step 3.5: Mode plumbing** — peer finding 9.
-  - [ ] 🟥 `off | shadow | enforce`; persist the effective mode on the run row.
+- [x] 🟩 **Step 3.5: Mode plumbing** — peer finding 9.
+  - [x] 🟩 `off | shadow | enforce`; persist the effective mode on the run row.
   - **Verify:** a shadow-mode run records integrity and leaves status unchanged.
 
 ---
