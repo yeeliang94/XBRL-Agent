@@ -278,3 +278,26 @@ def test_a_block_with_no_usage_counts_as_unresolved(db):
     counts = srepo.coverage_counts(db, gen)
     assert counts["total"] == 2
     assert counts["unresolved"] == 1
+
+
+def test_coverage_survives_a_disposition_value_it_does_not_know(db):
+    """The `disposition` column deliberately has no CHECK constraint (gotcha
+    #11) so a future value can land without a full-table migration. The reader
+    must therefore not crash on one — it counts it as unresolved, which is the
+    safe direction: an unrecognised decision is not a decision."""
+    run = _run_id(db)
+    gen = srepo.begin_generation(db, run, input_kind="docx_html")
+    srepo.write_blocks(db, gen, _blocks(2))
+    srepo.record_disposition(db, run, gen, "b0", Disposition.INCLUDED, actor="agent")
+    db.execute(
+        "INSERT INTO notes_block_usages(run_id, generation_id, block_id, disposition) "
+        "VALUES (?, ?, 'b1', 'invented_next_year')",
+        (run, gen),
+    )
+    db.commit()
+
+    counts = srepo.coverage_counts(db, gen)
+    assert counts["total"] == 2
+    assert counts["included"] == 1
+    assert counts["unresolved"] == 1
+    assert counts["resolved"] == 1

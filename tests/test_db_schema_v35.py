@@ -141,16 +141,24 @@ def test_v34_db_walks_forward(tmp_path):
 
 
 def test_migration_is_idempotent(tmp_path):
+    """Repeated init_db must not duplicate columns or advance past current."""
     db = tmp_path / "idem.db"
-    init_db(db)
-    init_db(db)
     init_db(db)
     conn = sqlite3.connect(str(db))
     try:
+        before = _columns(conn, "notes_cells")
+        before_tables = _tables(conn)
+    finally:
+        conn.close()
+
+    init_db(db)
+    init_db(db)
+
+    conn = sqlite3.connect(str(db))
+    try:
         assert _schema_version(conn) == CURRENT_SCHEMA_VERSION
-        assert len(_columns(conn, "notes_cells")) == len(
-            _columns(conn, "notes_cells")
-        )
+        assert _columns(conn, "notes_cells") == before
+        assert _tables(conn) == before_tables
     finally:
         conn.close()
 

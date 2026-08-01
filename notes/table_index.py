@@ -86,9 +86,54 @@ def _span(cell: Tag) -> int:
         return 1
 
 
-def _declares(cell: Tag, *needles: str) -> bool:
-    style = (cell.get("style") or "").lower()
-    return any(n in style for n in needles)
+def _declarations(tag: Tag) -> list[tuple[str, str]]:
+    """Split a `style=` attribute into (property, value) pairs, lowercased."""
+    out: list[tuple[str, str]] = []
+    for decl in (tag.get("style") or "").lower().split(";"):
+        prop, sep, value = decl.partition(":")
+        if sep:
+            out.append((prop.strip(), value.strip()))
+    return out
+
+
+def _has_visible_border(tag: Tag) -> bool:
+    """A border DECLARATION is not a visible border.
+
+    gotcha #16: erasing an edge persists as `1px hidden`, not `none`, because
+    under `border-collapse` a neighbour's grid line out-prioritises `none`. So
+    the markup meaning "deliberately no line here" contains the word "border".
+    Reading that as styling hides an explicitly-blank table from the
+    needs-a-look filter — the one place it belongs.
+    """
+    for prop, value in _declarations(tag):
+        if not prop.startswith("border"):
+            continue
+        # `border-collapse: collapse` is layout, not a line.
+        if prop == "border-collapse" or prop == "border-spacing":
+            continue
+        if "hidden" in value or "none" in value:
+            continue
+        if prop == "border-style" and value in {"hidden", "none"}:
+            continue
+        # A zero width draws nothing.
+        if re.match(r"^0(?:\.0+)?(?:px|pt|em|rem)?$", value):
+            continue
+        return True
+    return False
+
+
+def _has_visible_fill(tag: Tag) -> bool:
+    """`background-color: transparent` is how "no fill" persists (gotcha #16),
+    so its presence is the opposite of a fill."""
+    for prop, value in _declarations(tag):
+        if prop not in {"background", "background-color"}:
+            continue
+        if value in {"transparent", "none", "inherit", "initial", "unset"}:
+            continue
+        if value.startswith("rgba(") and re.search(r",\s*0(?:\.0+)?\s*\)$", value):
+            continue  # fully transparent rgba
+        return True
+    return False
 
 
 def index_tables(html: Optional[str]) -> list[TableEntry]:
@@ -107,11 +152,11 @@ def index_tables(html: Optional[str]) -> list[TableEntry]:
         # a stray value is not a verbatim-copy claim (gotcha #16).
         source_styled = (table.get("data-source-styled") or "").lower() == "true"
 
-        borders = _declares(table, "border") or any(
-            _declares(c, "border") for c in cell_tags
+        borders = _has_visible_border(table) or any(
+            _has_visible_border(c) for c in cell_tags
         )
-        fills = _declares(table, "background") or any(
-            _declares(c, "background") for c in cell_tags
+        fills = _has_visible_fill(table) or any(
+            _has_visible_fill(c) for c in cell_tags
         )
 
         if source_styled:
