@@ -119,6 +119,11 @@ class NotesRunConfig:
     # persistence) skips the persist step cleanly.
     run_id: Optional[int] = None
     audit_db_path: Optional[str] = None
+    # The run's frozen source reading (PLAN-notes-source-integrity-build
+    # Phase 6). Non-None registers the read-only source tools and the
+    # link-only write tool on every notes agent; None leaves each agent
+    # exactly as it was, which is what `off` mode and PDF runs get.
+    source_generation_id: Optional[int] = None
     # Item 28 — per-entity advisory memory. Set by the server when this run's
     # entity matched a prior completed run (an entity_memory.PriorYearAdvisory).
     # Rendered into each notes prompt as advisory-only prior-year hints; None
@@ -398,6 +403,9 @@ async def run_notes_extraction(
                 launch_delay=stagger,
                 filing_standard=config.filing_standard,
                 scout_context=scout_context,
+                run_id=config.run_id,
+                db_path=config.audit_db_path,
+                source_generation_id=config.source_generation_id,
             )
         task = asyncio.create_task(runner, name=agent_id)
         tasks[template_type] = task
@@ -577,6 +585,9 @@ async def _run_single_notes_agent(
     launch_delay: float = 0.0,
     filing_standard: str = "mfrs",
     scout_context: Optional[dict] = None,
+    run_id: Optional[int] = None,
+    db_path: Optional[str] = None,
+    source_generation_id: Optional[int] = None,
 ) -> NotesAgentResult:
     """Run one notes agent end-to-end with PLAN §4 E.1 retry budget.
 
@@ -635,6 +646,9 @@ async def _run_single_notes_agent(
             page_offset=page_offset,
             filing_standard=filing_standard,
             scout_context=scout_context,
+            run_id=run_id,
+            db_path=db_path,
+            source_generation_id=source_generation_id,
         )
         if retry_index > 0:
             logger.info("Notes agent %s recovered on attempt %d",
@@ -770,6 +784,9 @@ async def _invoke_single_notes_agent_once(
     page_offset: int = 0,
     filing_standard: str = "mfrs",
     scout_context: Optional[dict] = None,
+    run_id: Optional[int] = None,
+    db_path: Optional[str] = None,
+    source_generation_id: Optional[int] = None,
 ) -> _SingleAgentOutcome:
     """One invocation of a single-sheet notes agent.
 
@@ -790,6 +807,9 @@ async def _invoke_single_notes_agent_once(
         page_offset=page_offset,
         filing_standard=filing_standard,
         scout_context=scout_context,
+        run_id=run_id,
+        db_path=db_path,
+        source_generation_id=source_generation_id,
     )
 
     prompt = (

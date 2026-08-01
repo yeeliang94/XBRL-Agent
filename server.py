@@ -2737,6 +2737,93 @@ def _notes_coverage_enabled() -> bool:
     return os.environ.get("XBRL_NOTES_COVERAGE", "true").lower() == "true"
 
 
+# --------------------------------------------------------------------------
+# Notes source integrity — plan Phases 4 and 7
+# --------------------------------------------------------------------------
+
+def _notes_integrity_mode():
+    """The rollout mode for this process (off | shadow | enforce).
+
+    Read fresh so a Settings change takes effect without a restart, then
+    PERSISTED per run (schema v36) — a historical result has to stay
+    explainable after the flag moves on.
+    """
+    from notes.source_models import integrity_mode
+
+    return integrity_mode()
+
+
+def _build_source_manifest(run_id: int, docx_path, scout_note_nums=()):
+    """Read the uploaded Word file into a frozen manifest.
+
+    Returns ``(generation_id, boundary_report)``, or ``(None, None)`` when
+    there is nothing to read — a PDF upload, or no .docx on disk. Raises only
+    what the manifest builder raises: a source that cannot be read WHOLE stops
+    the reading rather than producing a short one.
+    """
+    from notes import source_manifest
+
+    if not docx_path or not Path(docx_path).is_file():
+        return None, None
+    manifest = source_manifest.build_docx_manifest(docx_path)
+    report = source_manifest.check_boundaries(
+        manifest, scout_note_nums=scout_note_nums
+    )
+    conn = _open_audit_conn()
+    try:
+        gen_id = source_manifest.freeze_manifest(conn, run_id, manifest)
+    finally:
+        conn.close()
+    return gen_id, report
+
+
+def _run_notes_integrity_check(
+    run_id: int, generation_id: Optional[int], mode, boundary_report=None,
+) -> Optional[dict]:
+    """Check the run against its frozen source reading and store the verdict.
+
+    Best-effort by design: an integrity failure must never change a run's
+    terminal status by crashing the pipeline (gotcha #20). It changes status
+    only through the ONE status block below, never by writing a status itself
+    (gotcha #10).
+    """
+    from notes import integrity, integrity_runner
+    from notes.source_models import IntegrityMode
+
+    if generation_id is None or mode is IntegrityMode.OFF:
+        return None
+    conn = _open_audit_conn()
+    try:
+        result = integrity_runner.run_and_store(
+            conn, run_id, generation_id, mode=mode,
+            boundary_disagreements=(
+                boundary_report.disagreements if boundary_report else ()
+            ),
+            scout_available=bool(
+                boundary_report and boundary_report.scout_available
+            ),
+        )
+        return {
+            "requires_review": result.requires_review,
+            "tips_status": integrity_runner.tips_run_status(result, mode),
+            "findings": [
+                {"check": f.check, "severity": f.severity, "message": f.message}
+                for f in result.findings
+            ],
+            "missing_block_ids": integrity.missing_block_ids(result),
+        }
+    finally:
+        conn.close()
+
+
+def _notes_integrity_tips_status(outcome: Optional[dict]) -> bool:
+    """Whether the integrity verdict tips the run to
+    ``completed_with_errors``. Only ever true in `enforce` — `shadow` records
+    the same verdict and leaves status alone, which is what makes the staged
+    rollout possible."""
+    return bool(outcome and outcome.get("tips_status"))
+
+
 def _spot_check_enabled() -> bool:
     """Whether a CLEAN run (all cross-checks passed, no open conflicts) still
     gets a grounded spot-check (issue 1, 2026-06-21).
@@ -4261,6 +4348,46 @@ async def run_multi_agent_stream(
                     "event_queue full; pipeline_stage=%s dropped", stage,
                 )
 
+        # Notes source integrity, plan Phases 3.5 / 4.3. Read the uploaded
+        # Word file into a frozen manifest BEFORE any agent sees a template,
+        # so the denominator is fixed before anything can influence it.
+        #
+        # Wrapped end to end: a reading failure must not take the run with it
+        # (gotcha #20). What it must NOT do is produce a SHORT manifest —
+        # `build_docx_manifest` raises rather than measuring a partial read,
+        # and that exception lands here, leaving the run on today's path with
+        # no source generation and no integrity verdict.
+        notes_integrity_mode = _notes_integrity_mode()
+        notes_source_generation_id: Optional[int] = None
+        notes_boundary_report = None
+        notes_integrity_outcome: Optional[dict] = None
+        try:
+            _mode_conn = _open_audit_conn()
+            try:
+                repo.set_notes_integrity_mode(
+                    _mode_conn, run_id, notes_integrity_mode.value
+                )
+            finally:
+                _mode_conn.close()
+            if notes_integrity_mode.computes:
+                _emit_stage("reading_source")
+                notes_source_generation_id, notes_boundary_report = (
+                    await asyncio.to_thread(
+                        _build_source_manifest,
+                        run_id,
+                        session_dir / "uploaded.docx",
+                        [e.note_num for e in getattr(infopack, "notes_inventory", [])
+                         or []],
+                    )
+                )
+        except Exception:  # noqa: BLE001 — reading is additive; never fatal
+            logger.warning(
+                "Source manifest could not be built; the run continues on the "
+                "current path with no integrity verdict",
+                exc_info=True, extra={"session_id": session_id},
+            )
+            notes_source_generation_id, notes_boundary_report = None, None
+
         # Stage 1: extracting — fired the moment we launch the
         # coordinator task and the first per-agent events are about to
         # start streaming.
@@ -4328,6 +4455,10 @@ async def run_multi_agent_stream(
             # if the row-creation above failed (run_id is None).
             run_id=run_id,
             audit_db_path=str(AUDIT_DB_PATH),
+            # The run's frozen source reading, when it has one. None on a PDF
+            # upload, in `off` mode, or when the reading failed — each of which
+            # leaves the notes agents exactly as they were.
+            source_generation_id=notes_source_generation_id,
             # Item 28 — same matched prior-year advisory the face coordinator
             # received (read off the resolved RunConfig).
             prior_year_advisory=getattr(config, "prior_year_advisory", None),
@@ -5855,8 +5986,33 @@ async def run_multi_agent_stream(
             validator_outcome.get("coverage")
             if isinstance(validator_outcome, dict) else None
         )
+        # Check the run against its frozen source reading, AFTER the notes
+        # reviewer — the reviewer's relinks and dispositions are part of what
+        # is being counted. Wrapped so a check failure never changes the run's
+        # terminal status by crashing (gotcha #20).
+        try:
+            notes_integrity_outcome = await asyncio.to_thread(
+                _run_notes_integrity_check,
+                run_id, notes_source_generation_id, notes_integrity_mode,
+                notes_boundary_report,
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "Notes integrity check failed; the run keeps its other "
+                "outcomes and reports no verdict",
+                exc_info=True, extra={"session_id": session_id},
+            )
+            notes_integrity_outcome = None
         notes_coverage_unresolved = (
             _notes_coverage_enabled() and _notes_coverage_tips_status(_coverage)
+        )
+        # Notes source integrity (PLAN-notes-source-integrity-build Phase 7,
+        # Step 7.3). Folded into THIS block rather than writing a status of its
+        # own — gotcha #10 allows exactly one status writer. Only `enforce`
+        # produces a true here; `shadow` records the identical verdict and
+        # leaves the status alone.
+        notes_integrity_unresolved = _notes_integrity_tips_status(
+            notes_integrity_outcome
         )
         if all_agents_ok and merge_result.success and correction_exhausted:
             overall_status = "correction_exhausted"
@@ -5868,7 +6024,8 @@ async def run_multi_agent_stream(
         elif (all_agents_ok and merge_result.success and not any_check_failed
               and not cross_check_crashed and open_conflicts == 0
               and not any_agent_flagged and not validator_failed
-              and not reviewer_failed and not notes_coverage_unresolved):
+              and not reviewer_failed and not notes_coverage_unresolved
+              and not notes_integrity_unresolved):
             # Peer-review fix (2026-04-27): a cross-check pass that
             # crashed produced an empty results list, so
             # ``any_check_failed`` is misleadingly False. Without the
@@ -5898,6 +6055,10 @@ async def run_multi_agent_stream(
             # Everything else is clean, but the notes coverage checklist has an
             # unresolved missing note / uninvestigated suspected gap, or the
             # notes inventory was unavailable → needs review (PRD Decision 3).
+            overall_status = "completed_with_errors"
+        elif all_agents_ok and merge_result.success and notes_integrity_unresolved:
+            # Everything else is clean, but part of the source document is not
+            # accounted for, or a note boundary is disputed → needs review.
             overall_status = "completed_with_errors"
         elif all_agents_ok and (any_check_failed or cross_check_crashed):
             overall_status = "completed_with_errors"
