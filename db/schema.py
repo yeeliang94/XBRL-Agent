@@ -170,7 +170,7 @@ from pathlib import Path
 # `notes_cells`. Inert unless XBRL_NOTES_SOURCE_INTEGRITY is shadow/enforce;
 # on rollback the tables sit unused and old code ignores the columns. Pinned
 # by tests/test_db_schema_v35.py.
-CURRENT_SCHEMA_VERSION = 35
+CURRENT_SCHEMA_VERSION = 36
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -237,7 +237,13 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         -- v31 evals-workspace Phase 2: links a suite child run back to its
         -- batch (eval_suite_runs, created later in this list). NULL on every
         -- non-suite run. History hides suite children by default (E6).
-        suite_run_id          INTEGER REFERENCES eval_suite_runs(id) ON DELETE SET NULL
+        suite_run_id          INTEGER REFERENCES eval_suite_runs(id) ON DELETE SET NULL,
+        -- v36: the notes source-integrity mode this run actually ran under
+        -- (off|shadow|enforce). Persisted rather than re-read from the
+        -- environment, so a historical result stays explainable after the
+        -- rollout flag moves on. NULL on every pre-feature run. Mirrored in
+        -- _V36_MIGRATION_COLUMNS for existing databases.
+        notes_integrity_mode  TEXT
     )
     """,
 
@@ -1559,6 +1565,14 @@ _V35_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("notes_cells", "source_diverged_at", "TEXT"),
 )
 
+# v35 → v36: the effective source-integrity mode on the run row (plan Step
+# 3.5). Nullable, so a pre-feature run reads NULL = "the feature did not exist"
+# rather than a fabricated "off" — the two are different facts, and only the
+# second is a decision anyone made.
+_V36_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("runs", "notes_integrity_mode", "TEXT"),
+)
+
 _V33_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("eval_scores", "gold_fingerprint", "TEXT"),
     ("eval_benchmarks", "is_archived", "INTEGER NOT NULL DEFAULT 0"),
@@ -2731,6 +2745,40 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
                         (35,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        # v35 → v36: runs.notes_integrity_mode. Additive and nullable; on
+        # rollback the column sits inert like every other retained artifact
+        # (gotcha #11).
+        if current_version is not None and current_version < 36:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 36:
+                    for table, col_name, col_ddl in _V36_MIGRATION_COLUMNS:
+                        existing_cols = {
+                            r[1] for r in conn.execute(
+                                f"PRAGMA table_info({table})"
+                            ).fetchall()
+                        }
+                        if col_name not in existing_cols:
+                            try:
+                                conn.execute(
+                                    f"ALTER TABLE {table} ADD COLUMN {col_name} {col_ddl}"
+                                )
+                            except sqlite3.OperationalError as exc:
+                                if "duplicate column" not in str(exc).lower():
+                                    raise
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (36,),
                     )
                 conn.commit()
             except Exception:
