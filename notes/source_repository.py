@@ -251,7 +251,51 @@ def record_disposition(
     The block must exist in this generation — an agent naming a block that is
     not in the manifest must not conjure a usage row, or the denominator and
     the numerator stop describing the same document.
+
+    Opens its own transaction. A caller that already holds one (writing a cell
+    and its dispositions together) must use :func:`record_disposition_in_txn`
+    instead — nesting `BEGIN IMMEDIATE` is an error in SQLite, and splitting
+    the write across two transactions would defeat the point of doing them
+    together.
     """
+    # Join an ambient transaction rather than nesting (SQLite has none) and
+    # leave the commit to whoever opened it.
+    owns_txn = not conn.in_transaction
+    try:
+        if owns_txn:
+            conn.execute("BEGIN IMMEDIATE")
+        record_disposition_in_txn(
+            conn, run_id, generation_id, block_id, disposition,
+            reason_code=reason_code, actor=actor, actor_detail=actor_detail,
+            note=note, sheet=sheet, row=row, concept_uuid=concept_uuid,
+            target_kind=target_kind, route_type=route_type,
+        )
+        if owns_txn:
+            conn.commit()
+    except Exception:
+        if owns_txn:
+            conn.rollback()
+        raise
+
+
+def record_disposition_in_txn(
+    conn: sqlite3.Connection,
+    run_id: int,
+    generation_id: int,
+    block_id: str,
+    disposition: Disposition,
+    *,
+    reason_code: Optional[str] = None,
+    actor: str = "system",
+    actor_detail: Optional[str] = None,
+    note: Optional[str] = None,
+    sheet: Optional[str] = None,
+    row: Optional[int] = None,
+    concept_uuid: Optional[str] = None,
+    target_kind: Optional[str] = None,
+    route_type: Optional[str] = None,
+) -> None:
+    """The body of :func:`record_disposition`, without transaction control."""
     validate_disposition(disposition, reason_code)
 
     exists = conn.execute(
@@ -271,37 +315,31 @@ def record_disposition(
     from_disposition = previous["disposition"] if previous else None
     now = _now()
 
-    try:
-        conn.execute("BEGIN IMMEDIATE")
-        conn.execute(
-            "INSERT INTO notes_block_usages("
-            "  run_id, generation_id, block_id, sheet, row, concept_uuid,"
-            "  target_kind, disposition, reason_code, route_type, created_by,"
-            "  created_at, updated_at"
-            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) "
-            "ON CONFLICT(generation_id, block_id) DO UPDATE SET "
-            "  sheet=excluded.sheet, row=excluded.row,"
-            "  concept_uuid=excluded.concept_uuid, target_kind=excluded.target_kind,"
-            "  disposition=excluded.disposition, reason_code=excluded.reason_code,"
-            "  route_type=excluded.route_type, created_by=excluded.created_by,"
-            "  updated_at=excluded.updated_at",
-            (run_id, generation_id, block_id, sheet, row, concept_uuid, target_kind,
-             disposition.value, reason_code, route_type, actor, now, now),
-        )
-        # Append-only: never updated, never deleted. `created_by` on the usage
-        # row is current state, not history (peer-review finding 11).
-        conn.execute(
-            "INSERT INTO notes_disposition_events("
-            "  run_id, generation_id, block_id, from_disposition, to_disposition,"
-            "  reason_code, actor, actor_detail, note, created_at"
-            ") VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (run_id, generation_id, block_id, from_disposition, disposition.value,
-             reason_code, actor, actor_detail, note, now),
-        )
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
+    conn.execute(
+        "INSERT INTO notes_block_usages("
+        "  run_id, generation_id, block_id, sheet, row, concept_uuid,"
+        "  target_kind, disposition, reason_code, route_type, created_by,"
+        "  created_at, updated_at"
+        ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(generation_id, block_id) DO UPDATE SET "
+        "  sheet=excluded.sheet, row=excluded.row,"
+        "  concept_uuid=excluded.concept_uuid, target_kind=excluded.target_kind,"
+        "  disposition=excluded.disposition, reason_code=excluded.reason_code,"
+        "  route_type=excluded.route_type, created_by=excluded.created_by,"
+        "  updated_at=excluded.updated_at",
+        (run_id, generation_id, block_id, sheet, row, concept_uuid, target_kind,
+         disposition.value, reason_code, route_type, actor, now, now),
+    )
+    # Append-only: never updated, never deleted. `created_by` on the usage
+    # row is current state, not history (peer-review finding 11).
+    conn.execute(
+        "INSERT INTO notes_disposition_events("
+        "  run_id, generation_id, block_id, from_disposition, to_disposition,"
+        "  reason_code, actor, actor_detail, note, created_at"
+        ") VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (run_id, generation_id, block_id, from_disposition, disposition.value,
+         reason_code, actor, actor_detail, note, now),
+    )
 
 
 def fetch_usages(conn: sqlite3.Connection, generation_id: int) -> list:

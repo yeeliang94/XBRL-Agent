@@ -14,6 +14,7 @@ goes through ``server._open_audit_conn`` so the same DB/WAL pragmas apply.
 """
 import logging
 import sqlite3
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict
@@ -271,6 +272,10 @@ class _NotesCellPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     html: str
+    # Optimistic version token — the `updated_at` the client last read.
+    # Optional so existing callers keep working; when sent, a concurrent
+    # change returns 409 instead of silently overwriting. Plan Step 5.2.
+    expected_updated_at: Optional[str] = None
 
 
 @router.patch("/api/runs/{run_id}/notes_cells/{sheet}/{row}")
@@ -300,6 +305,7 @@ async def patch_notes_cell_endpoint(
     #16) — not a bug.
     """
     from db import repository as repo
+    from notes import lineage
     from notes.html_sanitize import sanitize_notes_html
     from notes.html_to_text import rendered_length
     from notes.writer import CELL_CHAR_LIMIT
@@ -349,6 +355,18 @@ async def patch_notes_cell_endpoint(
         # gotcha #16.
         conn.execute("BEGIN IMMEDIATE")
         try:
+            # Plan Step 5.2 — optimistic version check. The last-write-wins
+            # note above was an acceptable trade when an edit only lost text;
+            # it is not once an edit also decides whether a cell still counts
+            # as accounted for against its source.
+            try:
+                lineage.check_version(
+                    conn, run_id, sheet, row, body.expected_updated_at
+                )
+            except lineage.StaleCellError as exc:
+                conn.rollback()
+                raise HTTPException(status_code=409, detail=str(exc))
+
             # An edit can target either a row already in notes_cells (update)
             # or a blank registry row the GET projection surfaced (insert).
             # The editor only ever offers cells that came from the projection,
@@ -428,6 +446,10 @@ async def patch_notes_cell_endpoint(
                 source_pages=upsert_pages,
                 concept_uuid=upsert_concept_uuid,
             )
+            # Same transaction as the content write, deliberately: a lineage
+            # update that ran afterwards would leave a window in which the
+            # cell looks source-exact and is not (plan Step 5.2).
+            lineage.mark_human_edit(conn, run_id, sheet, row, cleaned_html)
             conn.commit()
         except HTTPException:
             # Already rolled back above — re-raise so FastAPI returns
@@ -461,6 +483,181 @@ async def patch_notes_cell_endpoint(
         # the sanitiser was a no-op — always present so clients can
         # treat it as a stable field.
         "sanitizer_warnings": warnings,
+    }
+
+
+# --------------------------------------------------------------------------
+# Source lineage — plan Phase 5, Step 5.3
+# --------------------------------------------------------------------------
+
+def _render_from_recorded_blocks(conn, run_id: int, sheet: str, row: int):
+    """Re-render a cell from the source parts it was recorded as using.
+
+    Returns ``(rendered_cell, generation_id)`` or ``(None, None)`` when this
+    cell has no source lineage — an authored cell or a pre-feature run, which
+    is a legitimate state and not an error.
+    """
+    from notes import source_render
+    from notes import source_repository as srepo
+    from notes.source_models import SourceBlock
+
+    gen = srepo.active_generation(conn, run_id)
+    if gen is None:
+        return None, None
+    used = conn.execute(
+        "SELECT block_id FROM notes_block_usages "
+        "WHERE generation_id = ? AND sheet = ? AND row = ? "
+        "ORDER BY block_id",
+        (gen["id"], sheet, row),
+    ).fetchall()
+    if not used:
+        return None, None
+    rows = srepo.fetch_blocks(conn, gen["id"])
+    available = [
+        SourceBlock(
+            block_id=r["block_id"], block_kind=r["block_kind"],
+            reading_order=r["reading_order"], canonical_html=r["canonical_html"] or "",
+            table_group_id=r["table_group_id"],
+        )
+        for r in rows
+    ]
+    return (
+        source_render.render_blocks(
+            available, [u["block_id"] for u in used],
+            row_label=f"{sheet} row {row}",
+        ),
+        gen["id"],
+    )
+
+
+@router.get("/api/runs/{run_id}/notes_cells/{sheet}/{row}/source-compare")
+async def notes_cell_source_compare(run_id: int, sheet: str, row: int):
+    """The stored cell beside what its source parts produce.
+
+    A cell with no lineage returns `source_html: null` and `restorable:
+    false` — the honest answer, rather than an empty diff that reads as
+    "identical".
+    """
+    from notes import lineage
+
+    conn = server._open_audit_conn()
+    try:
+        cell = conn.execute(
+            "SELECT html, updated_at FROM notes_cells "
+            "WHERE run_id = ? AND sheet = ? AND row = ?",
+            (run_id, sheet, row),
+        ).fetchone()
+        if cell is None:
+            raise HTTPException(status_code=404, detail="No such cell")
+        state = lineage.read_lineage(conn, run_id, sheet, row) or lineage.LineageState()
+        rendered, _gen = _render_from_recorded_blocks(conn, run_id, sheet, row)
+    finally:
+        conn.close()
+
+    return {
+        "sheet": sheet,
+        "row": row,
+        "current_html": cell["html"] or "",
+        "updated_at": cell["updated_at"] or "",
+        "source_html": rendered.html if rendered else None,
+        "content_origin": state.content_origin,
+        "diverged": state.diverged,
+        "diverged_at": state.source_diverged_at,
+        "restorable": bool(rendered and rendered.usable),
+    }
+
+
+class _RestoreBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_updated_at: Optional[str] = None
+
+
+@router.post("/api/runs/{run_id}/notes_cells/{sheet}/{row}/restore-source")
+async def notes_cell_restore_source(
+    run_id: int, sheet: str, row: int, body: _RestoreBody | None = None,
+):
+    """Put back what the source parts produce, keeping the audit history.
+
+    The disposition events are append-only, so restoring does not erase the
+    record that a person edited the cell — it adds to it.
+    """
+    from db import repository as repo
+    from notes import lineage
+
+    body = body or _RestoreBody()
+    conn = server._open_audit_conn()
+    try:
+        existing = conn.execute(
+            "SELECT label, evidence, source_pages FROM notes_cells "
+            "WHERE run_id = ? AND sheet = ? AND row = ?",
+            (run_id, sheet, row),
+        ).fetchone()
+        if existing is None:
+            raise HTTPException(status_code=404, detail="No such cell")
+
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            try:
+                lineage.check_version(
+                    conn, run_id, sheet, row, body.expected_updated_at
+                )
+            except lineage.StaleCellError as exc:
+                conn.rollback()
+                raise HTTPException(status_code=409, detail=str(exc))
+
+            rendered, gen_id = _render_from_recorded_blocks(
+                conn, run_id, sheet, row
+            )
+            if rendered is None:
+                conn.rollback()
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "This cell was not built from the source document, so "
+                        "there is nothing to restore it to."
+                    ),
+                )
+            if not rendered.usable:
+                conn.rollback()
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "The source parts for this cell no longer fit in one "
+                        "cell, so restoring would cut the note short."
+                    ),
+                )
+            repo.upsert_notes_cell(
+                conn, run_id=run_id, sheet=sheet, row=row,
+                label=existing["label"], html=rendered.html,
+                evidence=existing["evidence"],
+                source_pages=repo.decode_source_pages(existing["source_pages"]),
+                style_source=rendered.style_source,
+            )
+            lineage.mark_source_render(
+                conn, run_id, sheet, row,
+                generation_id=gen_id,
+                rendered_sha256=rendered.source_rendered_sha256,
+            )
+            conn.commit()
+        except HTTPException:
+            raise
+        except Exception:
+            conn.rollback()
+            raise
+
+        back = conn.execute(
+            "SELECT html, updated_at FROM notes_cells "
+            "WHERE run_id = ? AND sheet = ? AND row = ?",
+            (run_id, sheet, row),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    return {
+        "sheet": sheet, "row": row,
+        "html": back["html"], "updated_at": back["updated_at"] or "",
+        "restored": True,
     }
 
 
