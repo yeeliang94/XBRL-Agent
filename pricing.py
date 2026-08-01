@@ -121,6 +121,22 @@ def _normalize(name: str) -> str:
     return name
 
 
+def pricing_is_unconfirmed(model: str) -> bool:
+    """Whether this model's rates are an ESTIMATE rather than a rate card.
+
+    A guessed price is still better than no cost figure, but presenting it in
+    the same shape as a confirmed one is what makes it misleading (peer
+    review, 2026-08-01). Surfaces that show cost use this to say so.
+    """
+    try:
+        for m in _read_models_json() or []:
+            if m.get("id") == model:
+                return bool(m.get("pricing_unconfirmed"))
+    except (OSError, TypeError):
+        pass
+    return False
+
+
 def get_model_pricing(model) -> Tuple[float, float]:
     """Return (input_price_per_mtok, output_price_per_mtok) for a model.
 

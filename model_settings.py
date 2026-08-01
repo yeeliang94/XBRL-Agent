@@ -121,27 +121,32 @@ def _resolved_provider(model: Any) -> str:
 # Thinking level (reasoning effort)
 #
 # Never set before this: every model ran at whatever its provider defaults to.
-# The four levels below are OpenAI's vocabulary because that is what the proxy
-# speaks — LiteLLM accepts `reasoning_effort` as a UNIFIED parameter and
-# translates it into a thinking budget for Gemini and Claude, so one word
-# works across providers on the proxy path. In direct mode we set each
-# provider's own control instead.
+#
+# We set pydantic-ai's UNIFIED `thinking` field and let it translate. It maps
+# the same four words into each provider's own form, and it is
+# model-profile-aware in ways a hand-rolled table is not — an adaptive Claude
+# gets `{'type': 'adaptive'}` rather than a budget, and a Gemini that supports
+# thinking LEVELS gets a level rather than a token count.
+#
+# The first version of this did roll its own per-provider mapping, and put a
+# dict into `thinking`, whose declared type is `bool | minimal|low|medium|
+# high|xhigh`. On a budget-based Claude that crashes in
+# ANTHROPIC_THINKING_BUDGET_MAP[thinking] with "unhashable type: dict"; on an
+# adaptive Claude it silently enables thinking and ignores the level, because
+# any non-empty dict is truthy (peer review, 2026-08-01).
+#
+# The proxy path is covered by the same field: pydantic-ai's OpenAI translator
+# turns the unified value into the `reasoning_effort` body parameter, which is
+# exactly what LiteLLM reads to set a thinking budget for a proxied Gemini or
+# Claude.
 #
 # `None` means "send nothing", which is today's behaviour byte for byte. That
-# is the default, and it is what keeps this change inert until somebody picks
-# a level.
+# is the default, and it keeps this inert until somebody picks a level.
 # ---------------------------------------------------------------------------
 
+# Deliberately a subset of pydantic-ai's vocabulary: `xhigh` is omitted because
+# it is not supported across all three providers we route to.
 THINKING_LEVELS = ("minimal", "low", "medium", "high")
-
-# Gemini and Claude take a token budget rather than a word. These are the
-# direct-mode translations; the proxy does its own mapping from the same words.
-_GOOGLE_THINKING_BUDGET = {
-    "minimal": 0, "low": 1024, "medium": 8192, "high": 24576,
-}
-_ANTHROPIC_THINKING_BUDGET = {
-    "minimal": 0, "low": 1024, "medium": 8192, "high": 24576,
-}
 
 
 def normalize_thinking_level(value: Any) -> str | None:
@@ -187,11 +192,7 @@ def build_model_settings(
             "anthropic_cache_tool_definitions": True,
         }
         if level:
-            budget = _ANTHROPIC_THINKING_BUDGET[level]
-            kwargs["thinking"] = (
-                {"type": "enabled", "budget_tokens": budget} if budget
-                else {"type": "disabled"}
-            )
+            kwargs["thinking"] = level
         return AnthropicModelSettings(**kwargs)
 
     # OpenAIChatModel is the Python type for direct OpenAI AND every
@@ -230,16 +231,11 @@ def build_model_settings(
             )
         return ModelSettings(temperature=temperature)
 
-    # Direct GoogleModel — its own thinking config rather than a word.
+    # Direct GoogleModel — the unified field again. pydantic-ai picks
+    # thinking_level or thinking_budget from the model's own profile, which a
+    # fixed budget table here would get wrong on half the Gemini tiers.
     if type_name == "GoogleModel" and level:
-        from pydantic_ai.models.google import GoogleModelSettings
-
-        return GoogleModelSettings(
-            temperature=temperature,
-            google_thinking_config={
-                "thinking_budget": _GOOGLE_THINKING_BUDGET[level]
-            },
-        )
+        return ModelSettings(temperature=temperature, thinking=level)
 
     # Bare string / unknown — implicit caching only, and no level to attach to
     # a model we cannot classify.
