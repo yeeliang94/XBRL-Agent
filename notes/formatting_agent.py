@@ -30,6 +30,7 @@ from notes.format_patch import (
     apply_sheet_patch,
     describe_effective_appearance,
 )
+from notes.format_schema import SheetFormatPatch, patch_to_dict
 from notes.table_theme import firm_theme
 from model_settings import build_model_settings
 
@@ -128,6 +129,37 @@ def _resolve_max_requests() -> int:
 
 MAX_FORMATTER_REQUESTS = _resolve_max_requests()
 
+
+def structured_output_enabled() -> bool:
+    """Whether the formatter declares its output shape to the provider.
+
+    On by default. `XBRL_NOTES_FORMATTER_STRUCTURED=0` returns the agent to
+    free-form text plus `_parse_json_patch` repair.
+
+    The switch exists because this could not be verified against a live model
+    before shipping: declaring a nested schema removes the parse-failure class,
+    but some models answer a complex schema less well than they answer prose.
+    If formatter quality drops, this is a config flip rather than a redeploy.
+    Read at call time so a test can toggle it.
+    """
+    return os.environ.get(
+        "XBRL_NOTES_FORMATTER_STRUCTURED", ""
+    ).strip().lower() not in ("0", "false", "no")
+
+
+def _output_json(output: Any) -> str:
+    """Normalise an agent result to the JSON text the screening path expects.
+
+    With `output_type` set, `result.output` is a validated `SheetFormatPatch`
+    and `str()` of it would be a Python repr. Everything downstream — the
+    screening gates, and the retry prompts that quote the model's own answer
+    back to it — works on JSON text, so convert once here rather than
+    branching in four places.
+    """
+    if isinstance(output, SheetFormatPatch):
+        return json.dumps(patch_to_dict(output), ensure_ascii=False)
+    return str(output)
+
 # Failure taxonomy persisted to notes_format_tasks.error_type (schema v27) —
 # branch on these codes, not on the human-facing error prose. No CHECK
 # constraint on the column (same rationale as runs.status).
@@ -168,6 +200,12 @@ def create_notes_formatter_agent(
         sheet=sheet, model=model,
     )
     base_prompt = _PROMPT_PATH.read_text(encoding="utf-8").strip()
+    agent_kwargs: dict[str, Any] = {}
+    if structured_output_enabled():
+        # Let the provider enforce the patch shape instead of asking for JSON
+        # in prose and repairing the answer afterwards. `format_patch` remains
+        # the authority — this only removes the parse-failure class.
+        agent_kwargs["output_type"] = SheetFormatPatch
     agent = Agent(
         model,
         deps_type=NotesFormatterDeps,
@@ -177,6 +215,7 @@ def create_notes_formatter_agent(
             thinking_level=_thinking_level_for("notes_formatter"),
         ),
         end_strategy="early",  # pin V1 semantics across the V2 flip (plan B.3.1)
+        **agent_kwargs,
     )
 
     @agent.tool
@@ -213,21 +252,63 @@ def create_notes_formatter_agent(
         return results
 
     @agent.tool
-    def read_note_cell(ctx: RunContext[NotesFormatterDeps], row: int) -> str:
-        """Read one current notes cell HTML payload."""
-        with repo.db_session(ctx.deps.db_path) as conn:
-            cells = [
-                c for c in repo.list_notes_cells_for_run(conn, ctx.deps.run_id)
-                if c.sheet == ctx.deps.sheet and c.row == row
-            ]
-        if not cells:
-            return f"{ctx.deps.sheet} row {row} is empty."
-        c = cells[0]
-        return json.dumps({
-            "sheet": c.sheet, "row": c.row, "label": c.label,
-            "html": c.html, "evidence": c.evidence,
-            "source_pages": c.source_pages,
-        }, ensure_ascii=False)
+    async def zoom_pdf_region(
+        ctx: RunContext[NotesFormatterDeps], page: int, region: str,
+    ) -> list[Union[str, BinaryContent]]:
+        """Re-render ONE region of a page so fine detail is legible.
+
+        Use this before deciding a border, a rule or a column alignment. A
+        whole page is downscaled hard before it reaches you, so hairline
+        rules, double rules and alignment are often illegible at full-page
+        view — and a guess there is worse than leaving the cell alone.
+
+        `region` is one of: top-half, bottom-half, left-half, right-half,
+        top-third, middle-third, bottom-third, top-left, top-right,
+        bottom-left, bottom-right, center — or 'full' for the whole page.
+        Thirds overlap slightly, so a table crossing a boundary is intact in
+        at least one of them.
+        """
+        # Same tool the notes extraction agent has. The formatter is the one
+        # role whose entire job is judging border extent and alignment, and
+        # it was the only one without it (peer review, 2026-08-01).
+        from notes.agent import (
+            _NOTES_RENDER_DPI,
+            _NOTES_RENDER_POLICY,
+            _render_one_page_single_flight,
+            resolve_zoom_region,
+        )
+
+        if ctx.deps.pdf_page_count == 0:
+            ctx.deps.pdf_page_count = count_pdf_pages(ctx.deps.pdf_path)
+        total = ctx.deps.pdf_page_count
+        if not isinstance(page, int) or page < 1 or page > total:
+            return [f"Invalid page {page!r}. Valid range is 1-{total}."]
+        try:
+            clip = resolve_zoom_region(region)
+        except ValueError as exc:
+            return [str(exc)]
+        png = await _render_one_page_single_flight(
+            ctx.deps.pdf_path, page, _NOTES_RENDER_DPI,
+            policy=_NOTES_RENDER_POLICY, clip=clip,
+        )
+        # A zoom is a real read of the page — the write guard checks
+        # viewed_pages, and a formatter that zoomed but never full-paged
+        # would otherwise be refused its own grounded edit.
+        ctx.deps.viewed_pages.add(page)
+        label = "full page" if clip is None else region.strip().lower()
+        return [
+            f"=== Page {page} ({label}) ===",
+            BinaryContent(data=png, media_type="image/png"),
+        ]
+
+    # `read_note_cell` was removed 2026-08-03 (peer review): it returned
+    # sheet/row/label/html/evidence/source_pages for ONE row, and the user
+    # prompt's CURRENT CELLS payload already carries exactly those fields for
+    # EVERY row, plus `table_geometry`, which the tool did not have. So a call
+    # could only ever return a strict subset of what the model had already
+    # read, at the cost of a turn — and its schema rode on every request.
+    # If a targeted re-read is ever needed, add it back returning MORE than
+    # the payload, not less.
 
     return agent, deps
 
@@ -403,7 +484,7 @@ async def _run_notes_formatter_impl(
         return result
 
     result = await _agent_run(prompt)
-    err, screened, stage = _screen_patch(str(result.output), sheet)
+    err, screened, stage = _screen_patch(_output_json(result.output), sheet)
     if err is not None and stage in ("parse", "confidence", "sheet"):
         # Mechanically rejected output (unparseable JSON / wrong sheet /
         # non-numeric confidence) — tell the model WHY and give it one retry,
@@ -417,10 +498,10 @@ async def _run_notes_formatter_impl(
             run_id, sheet, stage, err.get("error"),
         )
         retry_result = await _agent_run(
-            _build_output_rejected_prompt(sheet, str(result.output), err["error"]),
+            _build_output_rejected_prompt(sheet, _output_json(result.output), err["error"]),
         )
         retry_err, retry_screened, _retry_stage = _screen_patch(
-            str(retry_result.output), sheet, revised=True,
+            _output_json(retry_result.output), sheet, revised=True,
         )
         if retry_err is not None:
             return err  # keep the ORIGINAL rejection — it names the root cause
@@ -441,7 +522,7 @@ async def _run_notes_formatter_impl(
         )
         repair_result = await _agent_run(repair_prompt)
         err, screened, stage = _screen_patch(
-            str(repair_result.output), sheet, revised=True,
+            _output_json(repair_result.output), sheet, revised=True,
         )
         if stage == "parse":
             # The repair didn't even parse — report the ORIGINAL validation
@@ -480,7 +561,7 @@ async def _run_notes_formatter_impl(
         )
         review_result = await _agent_run(review_prompt)
         err, screened, stage = _screen_patch(
-            str(review_result.output), sheet, revised=True,
+            _output_json(review_result.output), sheet, revised=True,
         )
         if stage == "parse":
             pass  # self-check output unparseable — keep the validated patch

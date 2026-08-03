@@ -20,7 +20,7 @@ import { ClipboardFormatControls } from "./ClipboardFormatControls";
 // ---------------------------------------------------------------------------
 
 interface Props {
-  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; spot_check?: boolean; spot_check_mode?: string; entity_memory?: boolean; thinking_levels?: Record<string, string>; thinking_level_choices?: string[]; notes_table_style?: Partial<ClipboardFormatOptions>; available_models?: ModelEntry[] }>;
+  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; spot_check?: boolean; spot_check_mode?: string; entity_memory?: boolean; thinking_levels?: Record<string, string>; thinking_level_choices?: string[]; thinking_level_choices_by_model?: Record<string, string[]>; notes_table_style?: Partial<ClipboardFormatOptions>; available_models?: ModelEntry[] }>;
   saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; auto_review: boolean; spot_check: boolean; spot_check_mode: "light" | "full"; entity_memory: boolean; thinking_levels: Record<string, string>; notes_table_style: ClipboardFormatOptions }>) => Promise<{ status: string }>;
   testConnection: (body: Partial<{ proxy_url: string; api_key: string; model: string }>) => Promise<{ status: string; model?: string; latency_ms?: number; message?: string }>;
   // When provided, a Cancel button is shown (used by the modal wrapper). The
@@ -282,6 +282,11 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
   const [thinkingLevels, setThinkingLevels] =
     useState<Record<string, string>>({});
   const [levelChoices, setLevelChoices] = useState<string[]>([]);
+  // Per-model vocabulary. GPT-5.6 dropped `minimal`, so offering it there
+  // means the operator picks a level the run then substitutes — the picker
+  // must narrow to what the selected model accepts (peer review 2026-08-02).
+  const [levelChoicesByModel, setLevelChoicesByModel] =
+    useState<Record<string, string[]>>({});
   const [entityMemory, setEntityMemory] = useState(true);
 
   const [saving, setSaving] = useState(false);
@@ -327,6 +332,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         setSpotCheckMode(s.spot_check_mode === "full" ? "full" : "light");
         setThinkingLevels(s.thinking_levels || {});
         setLevelChoices(s.thinking_level_choices || []);
+        setLevelChoicesByModel(s.thinking_level_choices_by_model || {});
         setEntityMemory(s.entity_memory !== false);
         if (Array.isArray(s.available_models)) setAvailableModels(s.available_models);
         setDirty(false);
@@ -696,7 +702,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
               style={{ ...ui.select, width: 190 }}
             >
               <option value="">Provider default</option>
-              {levelChoices.map((lvl) => (
+              {(levelChoicesByModel[model] || levelChoices).map((lvl) => (
                 <option key={lvl} value={lvl}>
                   {lvl.charAt(0).toUpperCase() + lvl.slice(1)}
                 </option>

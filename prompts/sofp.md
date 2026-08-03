@@ -109,7 +109,6 @@ on substance. Never fabricate template rows.
   itself invokes MFRS 15 contract-liability treatment.
 - "Deposits" in receivable notes normally maps to the dedicated "Deposits"
   row rather than "Other current non-trade receivables".
-- Always include "section" for ambiguous labels (current vs non-current).
 
 === NO-RESIDUAL-PLUG RULE (sub-sheet) ===
 

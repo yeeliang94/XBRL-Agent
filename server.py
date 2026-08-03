@@ -1035,6 +1035,59 @@ def _is_local_proxy(proxy_url: str) -> bool:
     return "localhost" in proxy_url or "127.0.0.1" in proxy_url
 
 
+# Gemini 3+ enforces thought-signature echo-back on multi-turn tool calls; the
+# OpenAI chat wire format has nowhere to carry the field. Checked as substrings
+# against the lowercased (possibly prefixed) model id.
+_GEMINI_THOUGHT_SIGNATURE_MARKERS = ("gemini-3", "gemini3")
+
+from model_settings import use_responses_api  # noqa: E402
+
+
+def _warn_if_gemini_loses_thought_signatures(model_name: str, proxy_url: str) -> None:
+    """Refuse a configuration that is known to fail on the second tool turn.
+
+    Google requires the `thought_signature` returned with a prior functionCall
+    to be echoed back on the next request — including at minimal thinking
+    levels — and omitting it is a 400, not a soft degradation. The
+    OpenAI-compatible chat format cannot carry the field, so a Gemini 3 model
+    routed through an OpenAI-compatible proxy fails as soon as it makes a
+    second tool call. Every agent here is a multi-turn tool caller.
+
+    On the Mac local-dev proxy this never fires: `_create_proxy_model` already
+    bypasses the proxy and builds a native `GoogleModel`. It fires on the
+    enterprise proxy, where direct Google is firewall-blocked and there is no
+    native transport available — which is why this raises rather than warns.
+    Set `XBRL_ALLOW_GEMINI_PROXY=1` to proceed once the proxy is shown to
+    preserve the signatures.
+    """
+    name = (model_name or "").lower()
+    if not any(m in name for m in _GEMINI_THOUGHT_SIGNATURE_MARKERS):
+        return
+    if _detect_provider(model_name) != "google":
+        return
+    if _is_local_proxy(proxy_url):
+        return
+    if os.environ.get("XBRL_ALLOW_GEMINI_PROXY", "").strip().lower() in (
+        "1", "true", "yes",
+    ):
+        logger.warning(
+            "Gemini model %r is routed through an OpenAI-compatible proxy that "
+            "cannot carry thought_signature. Multi-turn tool calls are expected "
+            "to fail with a 400. Proceeding because XBRL_ALLOW_GEMINI_PROXY is "
+            "set.", model_name,
+        )
+        return
+    raise ValueError(
+        f"Model '{model_name}' cannot run through this OpenAI-compatible proxy. "
+        "Gemini 3 requires the thought_signature from each prior function call "
+        "to be sent back on the next request, and the OpenAI chat format has no "
+        "field for it — the run fails on the second tool call. Use an OpenAI or "
+        "Anthropic model here, or a native Google/Vertex transport. If this "
+        "proxy has been verified to preserve thought signatures, set "
+        "XBRL_ALLOW_GEMINI_PROXY=1."
+    )
+
+
 def _create_proxy_model(model_name: str, proxy_url: str, api_key: str):
     """Create a PydanticAI model with multi-provider support.
 
@@ -1081,6 +1134,8 @@ def _create_proxy_model(model_name: str, proxy_url: str, api_key: str):
                 "thought_signature error).", model_name,
             )
 
+        _warn_if_gemini_loses_thought_signatures(model_name, proxy_url)
+
         from pydantic_ai.models.openai import OpenAIChatModel
         from pydantic_ai.providers.openai import OpenAIProvider
 
@@ -1089,6 +1144,12 @@ def _create_proxy_model(model_name: str, proxy_url: str, api_key: str):
         # key (enterprise proxy, where GOOGLE_API_KEY is the real proxy key).
         proxy_auth = os.environ.get("LLM_PROXY_API_KEY", "") or api_key
         provider = OpenAIProvider(base_url=proxy_url, api_key=proxy_auth)
+        if _detect_provider(model_name) == "openai" and use_responses_api(
+            model_name, proxy_url
+        ):
+            from pydantic_ai.models.openai import OpenAIResponsesModel
+
+            return OpenAIResponsesModel(model_name, provider=provider)
         return OpenAIChatModel(model_name, provider=provider)
 
     # Direct API paths — route by provider.
@@ -1108,6 +1169,10 @@ def _create_proxy_model(model_name: str, proxy_url: str, api_key: str):
                 f"Model '{model_name}' requires OPENAI_API_KEY in .env but it is not set."
             )
         provider = OpenAIProvider(api_key=openai_key)
+        if use_responses_api(bare_name):
+            from pydantic_ai.models.openai import OpenAIResponsesModel
+
+            return OpenAIResponsesModel(bare_name, provider=provider)
         return OpenAIChatModel(bare_name, provider=provider)
 
     if detected == "anthropic":

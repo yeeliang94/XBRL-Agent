@@ -37,9 +37,13 @@ common path — but it is why the fix is two branches, not one.
 """
 from __future__ import annotations
 
+import logging
+import os
 from typing import Any
 
 from pydantic_ai.settings import ModelSettings
+
+logger = logging.getLogger(__name__)
 
 # Pinned temperature (Gemini-3-through-proxy requires 1.0; see module docstring
 # and CLAUDE.md "Temperature Constraint"). Also the safe default for OpenAI
@@ -146,7 +150,140 @@ def _resolved_provider(model: Any) -> str:
 
 # Deliberately a subset of pydantic-ai's vocabulary: `xhigh` is omitted because
 # it is not supported across all three providers we route to.
-THINKING_LEVELS = ("minimal", "low", "medium", "high")
+#
+# `none` was added 2026-08-01 (peer review). It is not a pydantic-ai thinking
+# level — it is the OpenAI reasoning-effort value that GPT-5.6 requires when
+# function tools go over Chat Completions, and it is the only way to express
+# "reasoning off" now that omitting the field means "provider default", which
+# on GPT-5.6 is `medium`. It is translated per provider in
+# `build_model_settings`; it never reaches Anthropic or Google as a literal.
+THINKING_LEVELS = ("none", "minimal", "low", "medium", "high")
+
+# GPT-5.6 dropped `minimal` from its reasoning-effort vocabulary and added
+# `none`/`xhigh`/`max`. Sending `minimal` to a 5.6-family model is a value the
+# model does not list, so fold it to the nearest thing that exists.
+_GPT_56_PLUS_MARKERS = ("gpt-5.6", "gpt-5-6")
+
+
+def _is_gpt_56_plus(model_name: str) -> bool:
+    name = (model_name or "").lower()
+    return any(m in name for m in _GPT_56_PLUS_MARKERS)
+
+
+def supported_thinking_levels(model_name: str) -> tuple[str, ...]:
+    """The levels THIS model actually accepts.
+
+    `minimal` is the only divergence today: GPT-5.6 lists `none`, `low`,
+    `medium`, `high`, `xhigh` and `max`, and dropped `minimal`. Every other
+    model we route to accepts the full set — `none` is universally
+    expressible (OpenAI takes it as a literal, Anthropic and Google as
+    `thinking=False`).
+
+    Exposed through `/api/settings` so the picker cannot offer a level the
+    selected model will not honour.
+    """
+    if _is_gpt_56_plus(model_name):
+        return tuple(lvl for lvl in THINKING_LEVELS if lvl != "minimal")
+    return THINKING_LEVELS
+
+
+# What to use when a configured level is not in the model's vocabulary. The
+# mapping preserves INTENT: `minimal` means "the least reasoning available",
+# which is `low` on a model without `minimal` — NOT `none`, which means no
+# reasoning at all. Folding it to `none` inverted the operator's choice and
+# silently disabled reasoning (peer review, 2026-08-02).
+_LEVEL_FALLBACK = {"minimal": "low"}
+
+
+def _openai_reasoning_effort(model_name: str, level: str) -> str:
+    """Translate an operator-chosen level into a value THIS model accepts.
+
+    A substitution is logged, never silent — the operator picked a level and
+    is entitled to know it was not the one used.
+    """
+    if level in supported_thinking_levels(model_name):
+        return level
+    substitute = _LEVEL_FALLBACK.get(level, "low")
+    logger.warning(
+        "Model %r does not support thinking level %r; using %r. Supported: %s.",
+        model_name, level, substitute,
+        ", ".join(supported_thinking_levels(model_name)),
+    )
+    return substitute
+
+
+def _unified_thinking(level: str) -> Any:
+    """Translate a level into pydantic-ai's unified `thinking` field.
+
+    `none` is an OpenAI reasoning-effort STRING, not a pydantic-ai level —
+    `ANTHROPIC_THINKING_BUDGET_MAP` has no such key, so passing it through
+    raises. pydantic-ai spells "reasoning off" as `False`, which both the
+    Anthropic and Google paths check for explicitly before any map lookup.
+    """
+    return False if level == "none" else level
+
+
+# Prompt-cache lifetime. The two request shapes accept DIFFERENT vocabularies
+# and are not interchangeable (peer review, 2026-08-02):
+#
+#   prompt_cache_retention   (legacy)  — "in_memory" | "24h"; GPT-5.5 and
+#                                        5.5-pro accept only "24h"
+#   prompt_cache_options.ttl (5.6+)    — "30m" is the ONLY supported value,
+#                                        and is also the default
+#
+# Sending "24h" as a `ttl` is a 400 on every request, so these must stay two
+# constants. The 5.6 window is shorter than the legacy one; 30m still spans
+# the agents within a single run, which is where the reuse actually is.
+CACHE_RETENTION = "24h"
+CACHE_OPTIONS_TTL = "30m"
+
+
+def _openai_cache_settings(model_name: str) -> dict[str, Any]:
+    """Prompt-cache parameters in the shape THIS model expects.
+
+    GPT-5.6 deprecates the flat `prompt_cache_retention` field in favour of a
+    `prompt_cache_options` object carrying a `ttl`. pydantic-ai 2.9.0 has no
+    typed field for the new shape, so it goes through `extra_body`.
+
+    OpenAI's own migration note says to "verify the live docs before rewriting
+    it", and the deprecated field still works, so the new shape is OPT-IN:
+    set `XBRL_OPENAI_CACHE_OPTIONS=1` once the request shape is confirmed
+    against a live 5.6 call. Default behaviour is byte-identical to before.
+    """
+    if _is_gpt_56_plus(model_name) and os.environ.get(
+        "XBRL_OPENAI_CACHE_OPTIONS", ""
+    ).strip() in ("1", "true", "yes"):
+        return {"extra_body": {"prompt_cache_options": {"ttl": CACHE_OPTIONS_TTL}}}
+    return {"openai_prompt_cache_retention": CACHE_RETENTION}
+
+
+def use_responses_api(model_name: str, proxy_url: str = "") -> bool:
+    """Should this OpenAI model be created as an `OpenAIResponsesModel`?
+
+    OpenAI's GPT-5.6 guidance is explicit: "Use the Responses API for
+    reasoning, tool-calling, and multi-turn workflows", and function tools on
+    Chat Completions are compatible only with effective reasoning `none`.
+    Every agent in this repo is a multi-turn tool caller, so on GPT-5.6 the
+    Chat Completions transport costs the model its reasoning.
+
+    Scope is deliberately narrow:
+
+    - Only the 5.6 family. `gpt-5.4` works on Chat Completions today and this
+      is not the change to disturb it with.
+    - Only the DIRECT OpenAI path by default. The enterprise LiteLLM proxy may
+      not expose `/v1/responses`, and defaulting it on there would break every
+      Windows run to fix a model nobody has run yet. Set
+      `XBRL_OPENAI_RESPONSES=1` to enable it on the proxy once confirmed, or
+      `=0` to force the old transport everywhere.
+    """
+    override = os.environ.get("XBRL_OPENAI_RESPONSES", "").strip().lower()
+    if override in ("0", "false", "no"):
+        return False
+    if override in ("1", "true", "yes"):
+        return True
+    if not _is_gpt_56_plus(model_name):
+        return False
+    return not proxy_url
 
 
 def normalize_thinking_level(value: Any) -> str | None:
@@ -192,7 +329,7 @@ def build_model_settings(
             "anthropic_cache_tool_definitions": True,
         }
         if level:
-            kwargs["thinking"] = level
+            kwargs["thinking"] = _unified_thinking(level)
         return AnthropicModelSettings(**kwargs)
 
     # OpenAIChatModel is the Python type for direct OpenAI AND every
@@ -206,16 +343,31 @@ def build_model_settings(
         if _resolved_provider(model) == "openai":
             from pydantic_ai.models.openai import OpenAIChatModelSettings
 
-            settings: dict[str, Any] = {
-                "temperature": temperature,
-                # Extend retention past the default few minutes so reuse
-                # survives across the agents in a run (and short gaps between).
-                "openai_prompt_cache_retention": "24h",
-            }
+            model_name = getattr(model, "model_name", "") or ""
+            settings: dict[str, Any] = {"temperature": temperature}
+            settings.update(_openai_cache_settings(model_name))
             if cache_key:
                 settings["openai_prompt_cache_key"] = cache_key
-            if level:
-                settings["openai_reasoning_effort"] = level
+
+            effort = _openai_reasoning_effort(model_name, level) if level else None
+            # GPT-5.6: "function tools in Chat Completions are compatible only
+            # with effective reasoning `none`" (OpenAI migration guide). Every
+            # agent here uses function tools, and OMITTING the field is not
+            # neutral — 5.6 then defaults to `medium`, which is the
+            # incompatible case. So on the Chat Completions transport the
+            # effort is pinned to `none` and the operator's choice is honoured
+            # only on the Responses transport (see `use_responses_api`).
+            if type_name != "OpenAIResponsesModel" and _is_gpt_56_plus(model_name):
+                if effort not in (None, "none"):
+                    logger.warning(
+                        "Model %r is on Chat Completions, where GPT-5.6 function "
+                        "tools require reasoning 'none'; ignoring the configured "
+                        "level %r. Enable the Responses API (XBRL_OPENAI_RESPONSES=1) "
+                        "to use reasoning with tools.", model_name, effort,
+                    )
+                effort = "none"
+            if effort:
+                settings["openai_reasoning_effort"] = effort
             return OpenAIChatModelSettings(**settings)
 
         # Proxy-routed Gemini / Claude arrive here as OpenAIChatModel. They
@@ -235,7 +387,7 @@ def build_model_settings(
     # thinking_level or thinking_budget from the model's own profile, which a
     # fixed budget table here would get wrong on half the Gemini tiers.
     if type_name == "GoogleModel" and level:
-        return ModelSettings(temperature=temperature, thinking=level)
+        return ModelSettings(temperature=temperature, thinking=_unified_thinking(level))
 
     # Bare string / unknown — implicit caching only, and no level to attach to
     # a model we cannot classify.

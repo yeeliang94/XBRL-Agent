@@ -212,3 +212,104 @@ def test_second_call_after_successful_render_hits_byte_cache(monkeypatch):
         f"expected single render on the first call and a cache hit on the "
         f"second; got renders={renders}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Cross-event-loop safety (peer review, 2026-08-02)
+# ---------------------------------------------------------------------------
+
+def test_two_event_loops_can_share_one_inflight_render(monkeypatch):
+    """The in-flight map is process-global; its awaiters are not all on one
+    loop.
+
+    `_inflight` used to hold `asyncio.Future`s, which belong to the loop that
+    created them. A second caller on a DIFFERENT loop that awaited one got
+    "got Future attached to a different loop" — the identical failure the
+    `_render_semaphores` dict is keyed by loop id to avoid.
+
+    That became reachable when the notes formatter gained `zoom_pdf_region`:
+    the formatter runs on its own thread under `asyncio.run`
+    (`api/notes_formatter.py`), so a formatter job racing a notes agent — or
+    two formatter jobs on different sheets — puts two loops on this one map.
+
+    Both callers must succeed AND still share a single render.
+    """
+    import threading
+    import time
+
+    render_count = {"n": 0}
+
+    def fake_render_single(pdf_path: str, page_num: int, dpi: int = 200, **kw):
+        render_count["n"] += 1
+        time.sleep(0.3)          # long enough that the loops genuinely overlap
+        return page_num, f"PNG:{page_num}".encode()
+
+    monkeypatch.setattr(notes_agent, "_render_single_page", fake_render_single)
+
+    results: dict[str, tuple] = {}
+
+    def run_on_own_loop(tag: str) -> None:
+        async def main():
+            return await notes_agent._render_one_page_single_flight(
+                "x.pdf", 32, notes_agent._NOTES_RENDER_DPI,
+                policy=notes_agent._NOTES_RENDER_POLICY,
+            )
+        try:
+            results[tag] = ("ok", asyncio.run(main()))
+        except Exception as exc:                        # noqa: BLE001
+            results[tag] = ("error", f"{type(exc).__name__}: {exc}")
+
+    first = threading.Thread(target=run_on_own_loop, args=("a",))
+    second = threading.Thread(target=run_on_own_loop, args=("b",))
+    first.start()
+    time.sleep(0.05)             # let 'a' claim the key before 'b' arrives
+    second.start()
+    first.join()
+    second.join()
+
+    assert results["a"] == ("ok", b"PNG:32"), results["a"]
+    assert results["b"] == ("ok", b"PNG:32"), results["b"]
+    # Coalescing must survive the fix — a loop-scoped map would have made
+    # this safe but rendered twice.
+    assert render_count["n"] == 1, render_count
+
+
+def test_render_failure_propagates_across_event_loops(monkeypatch):
+    """A crashed render must reach an awaiter on another loop as the same
+    exception, and must not leave the key wedged."""
+    import threading
+    import time
+
+    def boom(pdf_path: str, page_num: int, dpi: int = 200, **kw):
+        time.sleep(0.3)
+        raise RuntimeError("render exploded")
+
+    monkeypatch.setattr(notes_agent, "_render_single_page", boom)
+
+    results: dict[str, str] = {}
+
+    def run_on_own_loop(tag: str) -> None:
+        async def main():
+            return await notes_agent._render_one_page_single_flight(
+                "x.pdf", 32, notes_agent._NOTES_RENDER_DPI,
+                policy=notes_agent._NOTES_RENDER_POLICY,
+            )
+        try:
+            asyncio.run(main())
+            results[tag] = "no-error"
+        except RuntimeError as exc:
+            results[tag] = str(exc)
+        except Exception as exc:                        # noqa: BLE001
+            results[tag] = f"WRONG:{type(exc).__name__}: {exc}"
+
+    first = threading.Thread(target=run_on_own_loop, args=("a",))
+    second = threading.Thread(target=run_on_own_loop, args=("b",))
+    first.start()
+    time.sleep(0.05)
+    second.start()
+    first.join()
+    second.join()
+
+    assert results["a"] == "render exploded", results["a"]
+    assert results["b"] == "render exploded", results["b"]
+    assert notes_agent._inflight == {}

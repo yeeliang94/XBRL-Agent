@@ -7,6 +7,8 @@ and lands rows through `notes.writer.write_notes_workbook`.
 from __future__ import annotations
 
 import asyncio
+import threading
+from concurrent import futures
 import json
 import logging
 import re
@@ -1303,15 +1305,31 @@ def resolve_zoom_region(
 # the same Future. The try/finally + fut.exception() retrieval is the
 # load-bearing contract — a crashed render propagates uniformly to
 # every awaiter, then the key is cleared so retries work cleanly.
+#
+# The Future is a `concurrent.futures.Future`, NOT an `asyncio.Future`, and
+# the map is guarded by a lock. An asyncio Future belongs to the loop that
+# created it, so a second caller on a DIFFERENT loop that awaited it got
+# "got Future attached to a different loop" — the same failure the
+# `_render_semaphores` dict below is keyed by loop to avoid. That became
+# reachable when the notes formatter gained a zoom tool (2026-08-02 peer
+# review): the formatter runs on its own thread under `asyncio.run`
+# (`api/notes_formatter.py`), so a formatter job racing a notes agent — or
+# two formatter jobs on different sheets — meant two loops on one map.
+#
+# A thread-safe Future keeps the coalescing across loops rather than merely
+# making it safe: `asyncio.wrap_future` gives each awaiter a view bound to
+# its OWN loop, so one render still serves everybody.
+_inflight_lock = threading.Lock()
 _inflight: dict[
-    tuple[str, int, int, str, Optional[tuple]], "asyncio.Future[bytes]"
+    tuple[str, int, int, str, Optional[tuple]], "futures.Future[bytes]"
 ] = {}
 
 
 def _reset_inflight_for_tests() -> None:
     """Test-only helper: clear any leftover in-flight futures between
     tests so an earlier test's failure can't bleed into the next one."""
-    _inflight.clear()
+    with _inflight_lock:
+        _inflight.clear()
 
 
 async def _render_one_page_single_flight(
@@ -1341,16 +1359,22 @@ async def _render_one_page_single_flight(
         return cached
 
     key = (pdf_path, page_num, dpi, policy, clip)
-    inflight = _inflight.get(key)
-    if inflight is not None:
-        # Someone else is already rendering this page — ride along.
-        return await inflight
+    # Claim-or-join under the lock, so two threads can't both decide they
+    # are the renderer for the same key.
+    with _inflight_lock:
+        inflight = _inflight.get(key)
+        if inflight is None:
+            fut: "futures.Future[bytes]" = futures.Future()
+            _inflight[key] = fut
+        else:
+            fut = None  # type: ignore[assignment]
 
-    # Use get_running_loop (not get_event_loop) — the call sites are
-    # always inside a coroutine, and get_event_loop is deprecated in
-    # 3.10+ for the no-running-loop case (and warns on 3.9).
-    fut: "asyncio.Future[bytes]" = asyncio.get_running_loop().create_future()
-    _inflight[key] = fut
+    if fut is None:
+        # Someone else is already rendering this page — ride along.
+        # `wrap_future` binds a view of it to OUR loop, which is what makes
+        # this safe when the two callers are on different event loops.
+        return await asyncio.wrap_future(inflight)
+
     try:
         _, png = await asyncio.to_thread(
             _render_single_page, pdf_path, page_num, dpi, policy=policy, clip=clip
@@ -1363,21 +1387,18 @@ async def _render_one_page_single_flight(
         fut.set_result(png)
         return png
     except Exception as e:  # noqa: BLE001 — propagate to every awaiter
+        # Every awaiter that joined via `wrap_future` re-raises this; the
+        # renderer re-raises below. A `concurrent.futures.Future` does not
+        # emit asyncio's "Future exception was never retrieved" warning, so
+        # the defensive `.exception()` read the asyncio version needed is no
+        # longer required here.
         fut.set_exception(e)
-        # Peer-review MEDIUM: when there are no secondary waiters (the
-        # common case — batches rarely overlap at page granularity),
-        # the Future is GC'd with an unretrieved exception and asyncio
-        # logs "Future exception was never retrieved", which drowns
-        # real errors in the log. Reading `.exception()` here marks
-        # the exception as retrieved. Secondary waiters that went down
-        # the `await inflight` branch above consume the exception via
-        # their own `await`, so this doesn't hide anything from them.
-        fut.exception()
         raise
     finally:
         # Always remove so the next request can retry cleanly after a
         # transient render error.
-        _inflight.pop(key, None)
+        with _inflight_lock:
+            _inflight.pop(key, None)
 
 
 # Peer-review S-9: cap the number of simultaneous PDF renders so a
@@ -1978,9 +1999,10 @@ def create_notes_agent(
 
             You choose WHICH parts of the document belong in this row; the text
             is built from the document itself, in document order. Do not send
-            prose — there is no content field, deliberately. If a part of the
-            note does not belong in any row, record why with the disposition
-            tool rather than leaving it unaccounted for."""
+            prose — there is no content field, deliberately. Include every part
+            of the note that belongs in the template; a part you leave out is
+            recorded as unaccounted for and goes to the review queue, so leave
+            one out only when it genuinely belongs nowhere on your sheet."""
             built = await asyncio.to_thread(
                 _write_from_source_impl, ctx.deps, sheet, row, block_ids,
                 source_pages or [], evidence, format_ops,
@@ -2257,16 +2279,30 @@ def create_notes_agent(
         return msg
 
     @agent.tool
-    async def save_result(ctx: RunContext[NotesDeps], payloads_json: str) -> str:
-        """Persist the final payload list + token report to the output dir."""
+    async def save_result(
+        ctx: RunContext[NotesDeps], payloads_json: str = "",
+    ) -> str:
+        """Persist the final payload list + token report to the output dir.
+
+        Call it as `save_result()`. `payloads_json` is an optional secondary
+        artifact — every payload you passed to `write_notes` is already
+        persisted, so there is nothing to re-send.
+        """
         # Sub-agent mode: the sub-coordinator owns final persistence --
         # don't race on NOTES_{type}_result.json file writes.
         if ctx.deps.payload_sink is not None:
             return "Sub-agent mode -- sub-coordinator will persist."
-        try:
-            parsed = json.loads(payloads_json)
-        except json.JSONDecodeError as e:
-            return f"Invalid JSON: {e}"
+        # An omitted arg is the documented call shape, not an error: the
+        # prompts all describe a bare `save_result()`. Mirrors the extraction
+        # tool's empty-arg handling (Windows incident, run 35) — finalise with
+        # an empty list rather than burning a retry turn on a schema error.
+        if not payloads_json or not payloads_json.strip():
+            parsed: object = []
+        else:
+            try:
+                parsed = json.loads(payloads_json)
+            except json.JSONDecodeError as e:
+                return f"Invalid JSON: {e}"
         prefix = f"NOTES_{ctx.deps.template_type.value}"
         json_path = Path(ctx.deps.output_dir) / f"{prefix}_result.json"
         report = ctx.deps.token_report.format_table()
@@ -2298,8 +2334,11 @@ def create_notes_agent(
                 for notes you wrote to the template.
               - {"note_num": <int>, "action": "skipped",
                  "reason": "<one sentence>"}
-                for notes that don't fit any Sheet-12 row or belong on
-                a different sheet.
+                ONLY for a note that belongs on a DIFFERENT sheet
+                (Accounting Policies, Corporate Information, or Related
+                Party Transactions). A real disclosure note that simply
+                fits no specific Sheet-12 row is NEVER skipped — it goes
+                to the catch-all row. "No row fits" means catch-all.
 
             Every note in your batch must appear exactly once. The tool
             validates against the batch and your written payloads — if

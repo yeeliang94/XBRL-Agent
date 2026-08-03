@@ -232,7 +232,13 @@ comprehensive income), so a short or OCI-free comprehensive-income section is \
 still a found SOCI.
 - **SOCF**: "Indirect" if it starts from profit before tax with adjustments; \
 "Direct" if it shows gross cash receipts/payments.
-- **SOCIE**: always "Default".
+- **SOCIE**: "Default" for a full statement of changes in equity (columns or \
+blocks per equity component — issued capital, retained earnings, reserves). \
+On an MPERS filing an entity may instead present only the retained-earnings \
+movement, headed "Statement of Retained Earnings" or similar, with no \
+per-component breakdown — that is "SoRE". Call `check_variant_signals` to \
+confirm before deciding; it is standard-aware and will only score SoRE when \
+the filing warrants it. SoRE does not exist on MFRS.
 
 ## Strategy
 1. Call `find_toc` to get the TOC entries and candidate pages.
@@ -285,7 +291,12 @@ still a found SOCI.
 ## Important
 - Page numbers in the TOC may not match actual PDF pages — there is often an
   offset (e.g., TOC says "page 42" but actual PDF page is 48).
-- Only look at pages near the TOC-stated page (±10 pages).
+- Start within about ±10 pages of the TOC-stated page — that window covers \
+the usual TOC-to-PDF offset. It is a starting point, not a boundary: you may \
+view ANY page in the document. If the statement is not in that window, widen \
+the search rather than concluding it is absent (check the pages around the \
+other statements you have already found — the five face statements are \
+almost always printed consecutively).
 - If a statement cannot be found, omit it from the infopack — do NOT guess.
   BUT do not confuse "presented on the same page as another statement" with
   "not found". In particular, SOCI is almost always present and is usually
