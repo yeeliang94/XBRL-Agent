@@ -28,6 +28,22 @@ logger = logging.getLogger("server")
 router = APIRouter()
 
 
+def _pricing_is_unconfirmed(model: Optional[str]) -> bool:
+    """Whether this agent's cost figure came from a placeholder rate.
+
+    Never raises: a pricing-metadata lookup must not be able to fail a run's
+    detail payload (same rule the cost estimate itself follows).
+    """
+    if not model:
+        return False
+    try:
+        from pricing import pricing_is_unconfirmed
+
+        return pricing_is_unconfirmed(model)
+    except Exception:
+        return False
+
+
 @router.get("/api/runs")
 async def list_runs_endpoint(
     q: Optional[str] = None,
@@ -202,6 +218,14 @@ async def get_run_detail_endpoint(run_id: int):
                 "workbook_path": a.workbook_path,
                 "total_tokens": a.total_tokens,
                 "total_cost": a.total_cost,
+                # Whether `total_cost` was computed from a PLACEHOLDER rate
+                # rather than a published one. The registry has carried this
+                # flag since the 5.6 models were added, but nothing displayed
+                # it, so a guess read exactly like a rate card — the GPT-5.6
+                # Luna figure was wrong by 25x and looked authoritative
+                # (2026-08-03). Derived, not stored: correcting a rate in
+                # config/models.json must clear the marker on old runs too.
+                "pricing_unconfirmed": _pricing_is_unconfirmed(a.model),
                 # v17 (item 9): machine-readable failure class; None on
                 # success / legacy rows. Frontend renders it as a badge.
                 "error_type": getattr(a, "error_type", None),

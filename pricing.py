@@ -105,10 +105,15 @@ def _normalize(name: str) -> str:
     """
     # Order matters: `bedrock.anthropic.` must be tried before the
     # shorter `bedrock.` prefix, else the short form partially strips
-    # and we lose the `anthropic.` segment.
+    # and we lose the `anthropic.` segment. Same for `openai.global.`:
+    # stripping only `openai.` left `global.gpt-5.6-luna`, which matched
+    # no registry entry, so every DIRECT-mode 5.6 run costed at $0
+    # (2026-08-03). `server._PROVIDER_PREFIXES` had already gained the
+    # longer form; this list had not.
     for prefix in (
         "bedrock.anthropic.",
         "bedrock.",
+        "openai.global.",
         "openai.",
         "vertex_ai.",
         "google-gla:",
@@ -121,16 +126,28 @@ def _normalize(name: str) -> str:
     return name
 
 
-def pricing_is_unconfirmed(model: str) -> bool:
+def pricing_is_unconfirmed(model) -> bool:
     """Whether this model's rates are an ESTIMATE rather than a rate card.
 
     A guessed price is still better than no cost figure, but presenting it in
     the same shape as a confirmed one is what makes it misleading (peer
     review, 2026-08-01). Surfaces that show cost use this to say so.
+
+    Resolution matches ``get_model_pricing`` exactly — same accepted input
+    (a model object or a string), exact match then normalised match. An
+    id-only comparison returned False for every direct-mode run, because
+    direct mode hands over the bare name (2026-08-03).
     """
     try:
-        for m in _read_models_json() or []:
-            if m.get("id") == model:
+        entries = _read_models_json() or []
+        name = _resolve_model_name(model)
+        for m in entries:
+            if m.get("id") == name:
+                return bool(m.get("pricing_unconfirmed"))
+        norm = _normalize(name)
+        for m in entries:
+            model_id = m.get("id")
+            if isinstance(model_id, str) and _normalize(model_id) == norm:
                 return bool(m.get("pricing_unconfirmed"))
     except (OSError, TypeError):
         pass

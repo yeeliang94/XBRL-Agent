@@ -117,7 +117,18 @@ function AgentTelemetry({ runId, agent }: { runId: number; agent: RunAgentJson }
         {agent.variant && <span style={styles.agentVariant}>({agent.variant})</span>}
         <span style={styles.agentModel}>{displayModelId(agent.model)}</span>
         <span style={styles.agentRollup}>
-          {fmtInt(agent.total_tokens)} tokens · {fmtCost(agent.total_cost)}
+          {fmtInt(agent.total_tokens)} tokens ·{" "}
+          <span
+            style={agent.pricing_unconfirmed ? styles.costEstimated : undefined}
+            title={
+              agent.pricing_unconfirmed
+                ? "This model's rates are a placeholder, not a published rate card. The cost is indicative only."
+                : undefined
+            }
+          >
+            {fmtCost(agent.total_cost)}
+            {agent.pricing_unconfirmed ? " (est. rate)" : ""}
+          </span>
           {bd ? ` · ${bd.turn_count} turns · ${bd.tool_call_count} tool calls` : ""}
           {bd && (bd.cache_read_tokens || bd.cache_write_tokens)
             ? ` · cache ${fmtInt(bd.cache_read_tokens)} read / ${fmtInt(bd.cache_write_tokens)} write`
@@ -251,6 +262,12 @@ const styles = {
     fontFamily: pwc.fontMono,
     fontSize: 12,
     color: pwc.grey700,
+  } as React.CSSProperties,
+  // A cost derived from a placeholder rate. Dotted underline rather than a
+  // colour: this is "read the caveat", not an error.
+  costEstimated: {
+    borderBottom: `1px dotted ${pwc.grey700}`,
+    cursor: "help",
   } as React.CSSProperties,
   tableScroller: {
     overflowX: "auto" as const,

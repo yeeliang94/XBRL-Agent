@@ -391,6 +391,51 @@ def test_a_non_object_payload_is_refused(tmp_path, monkeypatch):
     assert r.status_code == 400
 
 
+def test_a_blank_value_under_an_unknown_key_is_still_refused(tmp_path, monkeypatch):
+    """The key check runs BEFORE the empty-value skip, and the Settings form
+    posts every role on every save. So one wrong key rejects the whole PATCH
+    — the model, proxy and API-key fields included.
+
+    That is what shipped: the form's five notes rows carried the CLI's
+    spelling (`corporate_info`) rather than the NotesTemplateType values, and
+    the General tab could not save anything at all (2026-08-03). Pinning the
+    blank case is the point — the broken rows were usually blank.
+    """
+    _env(tmp_path, monkeypatch)
+    r = client.post(
+        "/api/settings",
+        json={"thinking_levels": {"SOFP": "high", "corporate_info": ""}},
+    )
+    assert r.status_code == 400
+    assert "corporate_info" in r.json()["detail"]
+
+
+def test_every_notes_role_the_runtime_looks_up_is_an_accepted_key(
+    tmp_path, monkeypatch,
+):
+    """`notes/agent.py` resolves its level with `template_type.value`. If the
+    settings API accepted a different spelling, a saved level would simply
+    never be read — a silent no-op rather than an error."""
+    from notes_types import NotesTemplateType
+
+    env_file = _env(tmp_path, monkeypatch)
+    for nt in NotesTemplateType:
+        r = client.post(
+            "/api/settings", json={"thinking_levels": {nt.value: "low"}},
+        )
+        assert r.status_code == 200, (nt.value, r.json())
+
+    monkeypatch.setenv(
+        "XBRL_THINKING_LEVELS",
+        env_file.read_text(encoding="utf-8")
+        .split("XBRL_THINKING_LEVELS=", 1)[1]
+        .strip()
+        .strip("'\""),
+    )
+    for nt in NotesTemplateType:
+        assert server.thinking_level_for(nt.value) == "low", nt.value
+
+
 def test_the_new_proxy_models_are_offered(tmp_path, monkeypatch):
     """The ids come from the enterprise proxy's own list. Note the `global.`
     segment on the OpenAI ones — our older entries omit it."""
