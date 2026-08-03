@@ -85,14 +85,35 @@ describe("thinking level in Settings", () => {
     fireEvent.change(select, { target: { value: "medium" } });
     const levels = (await save()).thinking_levels as Record<string, string>;
     expect(Object.keys(levels)).toEqual(
-      expect.arrayContaining(["scout", "SOFP", "reviewer", "list_of_notes"]),
+      expect.arrayContaining(["scout", "SOFP", "reviewer", "LIST_OF_NOTES"]),
     );
   });
 
+  test("every submitted key is one the backend accepts", async () => {
+    // The form posts ALL roles on every save, and `/api/settings` validates
+    // the key name BEFORE it skips empty values — so one wrong key rejects
+    // the whole PATCH, blocking the model, proxy and API-key fields too.
+    // That is exactly what shipped: the five notes rows used the CLI's
+    // spelling (`corporate_info`) instead of the NotesTemplateType values,
+    // and the General tab could not save at all (2026-08-03).
+    //
+    // Mirrors `server._AGENT_ROLES | {nt.value for nt in NotesTemplateType}`.
+    const BACKEND_ALLOWED = new Set([
+      "scout", "reviewer", "notes_reviewer", "notes_formatter",
+      "SOFP", "SOPL", "SOCI", "SOCF", "SOCIE",
+      "CORP_INFO", "ACC_POLICIES", "LIST_OF_NOTES",
+      "ISSUED_CAPITAL", "RELATED_PARTY",
+    ]);
+    const select = await screen.findByLabelText(/Thinking level for Scout/i);
+    fireEvent.change(select, { target: { value: "medium" } });
+    const levels = (await save()).thinking_levels as Record<string, string>;
+    const rejected = Object.keys(levels).filter((k) => !BACKEND_ALLOWED.has(k));
+    expect(rejected).toEqual([]);
+  });
+
   test("the notes extraction sheets are offered too", async () => {
-    // The backend has always accepted these keys; the first version of the
-    // form listed only _AGENT_ROLES, so the sheets doing most of the prose
-    // reading had no control at all.
+    // The first version of the form listed only _AGENT_ROLES, so the sheets
+    // doing most of the prose reading had no control at all.
     expect(
       await screen.findByLabelText(/Thinking level for Notes: the numbered notes/i),
     ).toBeTruthy();

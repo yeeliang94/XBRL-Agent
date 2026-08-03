@@ -850,6 +850,30 @@ describe("RunDetailView", () => {
     ).toBeTruthy();
   });
 
+  test("a cost from a placeholder rate is labelled as an estimate", () => {
+    // The registry has carried `pricing_unconfirmed` since the GPT-5.6 models
+    // were added, and nothing displayed it — so a guessed rate rendered in the
+    // same shape as a published one. GPT-5.6 Luna was priced at the 5.5 tier
+    // and overstated cost 25x while looking authoritative (2026-08-03).
+    const detail = makeDetail({
+      agents: [makeAgent({ model: "gpt-5.6-luna", pricing_unconfirmed: true })],
+    });
+    render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
+    clickRunTab(/^activity$/i);
+    const panel = screen.getByTestId("run-detail-telemetry");
+    expect(within(panel).getByText(/\(est\. rate\)/i)).toBeTruthy();
+  });
+
+  test("a cost from a published rate carries no estimate label", () => {
+    const detail = makeDetail({
+      agents: [makeAgent({ model: "gpt-5.4", pricing_unconfirmed: false })],
+    });
+    render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
+    clickRunTab(/^activity$/i);
+    const panel = screen.getByTestId("run-detail-telemetry");
+    expect(within(panel).queryByText(/\(est\. rate\)/i)).toBeNull();
+  });
+
   test("Activity disclosure shows the run-level telemetry rollup", () => {
     const detail = makeDetail({
       telemetry_rollup: {

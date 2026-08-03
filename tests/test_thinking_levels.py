@@ -215,7 +215,7 @@ def test_every_agent_role_can_be_configured(monkeypatch):
 
 @pytest.mark.parametrize("module,role", [
     ("extraction.agent", "SOFP"),
-    ("notes.agent", "corporate_info"),
+    ("notes.agent", "CORP_INFO"),
     ("scout.agent", "scout"),
     ("correction.reviewer_agent", "reviewer"),
     ("notes.reviewer_agent", "notes_reviewer"),

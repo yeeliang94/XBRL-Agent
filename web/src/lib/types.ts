@@ -700,6 +700,10 @@ export interface RunAgentJson {
   workbook_path: string | null;
   total_tokens: number | null;
   total_cost: number | null;
+  /** True when `total_cost` was computed from a PLACEHOLDER rate rather than
+   *  a published one (config/models.json `pricing_unconfirmed`). Optional so
+   *  legacy payloads still type-check; absent reads as confirmed. */
+  pricing_unconfirmed?: boolean;
   // v17 (item 9): machine-readable failure class (turn_timeout,
   // iteration_capped, wallclock, token_budget_exceeded, projection_failed,
   // save_gate_refused, tool_exception, cancelled, no_write). Null on

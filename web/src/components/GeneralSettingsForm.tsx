@@ -75,15 +75,18 @@ const THINKING_ROLES: { key: string; label: string; hint: string }[] = [
   { key: "reviewer", label: "Reviewer", hint: "traces figures back to the PDF" },
   { key: "notes_reviewer", label: "Notes reviewer", hint: "" },
   { key: "notes_formatter", label: "Notes formatter", hint: "styling only" },
-  // The five notes-EXTRACTION roles. The backend has always accepted these
-  // keys (notes/agent.py resolves by template value), but the first version
-  // of this form listed only _AGENT_ROLES, so the sheets that do most of the
-  // prose reading had no control at all.
-  { key: "corporate_info", label: "Notes: corporate information", hint: "" },
-  { key: "accounting_policies", label: "Notes: accounting policies", hint: "usually the longest note" },
-  { key: "list_of_notes", label: "Notes: the numbered notes", hint: "the bulk of the prose" },
-  { key: "issued_capital", label: "Notes: issued capital", hint: "" },
-  { key: "related_party", label: "Notes: related party", hint: "" },
+  // The five notes-EXTRACTION roles. These keys MUST be the NotesTemplateType
+  // VALUES (notes_types.py) — `notes/agent.py` resolves its level with
+  // `template_type.value`, and `/api/settings` validates against the same set.
+  // They were first written in the CLI's spelling (`corporate_info`, from
+  // `run.py --notes`), which is a different vocabulary: the PATCH 400'd on the
+  // key name before it reached the empty-value skip, so EVERY save from this
+  // form failed, not just these five rows (2026-08-03).
+  { key: "CORP_INFO", label: "Notes: corporate information", hint: "" },
+  { key: "ACC_POLICIES", label: "Notes: accounting policies", hint: "usually the longest note" },
+  { key: "LIST_OF_NOTES", label: "Notes: the numbered notes", hint: "the bulk of the prose" },
+  { key: "ISSUED_CAPITAL", label: "Notes: issued capital", hint: "" },
+  { key: "RELATED_PARTY", label: "Notes: related party", hint: "" },
 ];
 
 const styles = {
