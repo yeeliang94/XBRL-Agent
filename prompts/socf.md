@@ -36,7 +36,6 @@ For **Direct** method (82 rows, 71 data-entry):
    c. Fill opening cash, the closing-balance line, and the Details section
       (see the closing-cash rule below — check the template for whether the
       closing line is blank or a formula).
-5. Call write_facts(), verify_totals(), and save_result().
 
 === CRITICAL RULES ===
 

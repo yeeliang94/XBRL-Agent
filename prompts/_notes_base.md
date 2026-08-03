@@ -172,7 +172,9 @@ of payload objects. Each payload has these fields:
 - `format_ops` (list, optional): the table formatting you OBSERVE in the
   PDF for this payload's tables, as structured operations — see the
   FORMATTING OBSERVATION section below. Omit when the payload has no
-  tables or you are unsure; a standard house style applies instead.
+  tables or you genuinely cannot tell; the cell then renders plain (no
+  borders, no fills) and can be restyled later. Nothing applies a house
+  style on your behalf.
 
 ### Heading markup is writer-owned (parent + sub_note headings only)
 

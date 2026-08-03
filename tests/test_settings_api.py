@@ -339,7 +339,12 @@ def test_settings_exposes_thinking_levels_and_its_choices(tmp_path, monkeypatch)
     _env(tmp_path, monkeypatch)
     body = client.get("/api/settings").json()
     assert body["thinking_levels"] == {}
-    assert body["thinking_level_choices"] == ["minimal", "low", "medium", "high"]
+    # `none` leads: GPT-5.6 function tools on Chat Completions require
+    # effective reasoning `none`, and omitting the field selects `medium`
+    # instead — so "off" has to be selectable (peer review, 2026-08-01).
+    assert body["thinking_level_choices"] == [
+        "none", "minimal", "low", "medium", "high",
+    ]
 
 
 def test_a_level_can_be_saved_and_read_back(tmp_path, monkeypatch):

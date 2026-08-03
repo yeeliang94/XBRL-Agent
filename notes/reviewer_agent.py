@@ -11,8 +11,8 @@ clobbered (see tests/test_notes_reviewer_clobber.py).
 Check families (deterministic detectors → packet → LLM judgement → fix):
   1. Comprehensiveness   — inventory notes with no content anywhere
   2. Sub-note coverage   — a note covered only partly (3.3 + (b), dropped (a))
-  3. Cross-sheet dup     — same note on Sheet 11 AND Sheet 12
-  4. Same-sheet collision— one Sheet-12 row holding >1 unrelated top-level note
+  3. Cross-sheet dup     — same note on Sheet {{CROSS_SHEET:accounting_policies}} AND Sheet {{CROSS_SHEET:list_of_notes}}
+  4. Same-sheet collision— one Sheet {{CROSS_SHEET:list_of_notes}} row holding >1 unrelated top-level note
   5. Title / format      — a prose cell missing its leading <h3> (ADVISORY)
 
 Safety is versioning, not write-gating: the pass snapshots the original prose
@@ -62,6 +62,7 @@ def _thinking_level_for(role: str):
         return None
 
 from db import repository as repo
+from notes.agent import _apply_cross_sheet_tokens
 from notes.html_sanitize import sanitize_notes_html
 from notes.html_to_text import rendered_length
 from notes.versioning import ensure_notes_snapshot
@@ -211,7 +212,7 @@ class NotesReviewerDeps:
         # Note numbers the reviewer AUTHORED back into place (audit marker on
         # the checklist row). Seeded by the author write path.
         self.authored_note_nums: set[int] = set()
-        # Sheet-12 skip receipts ([{"note_num","reason"}]) — an intentionally
+        # Sheet {{CROSS_SHEET:list_of_notes}} skip receipts ([{"note_num","reason"}]) — an intentionally
         # skipped note is `skipped`, not `missing`, so it neither shows in the
         # packet's MISSING block nor tips run status. Loaded by the factory.
         self.skip_receipts: list[dict] = []
@@ -545,25 +546,25 @@ def build_notes_reviewer_packet(context: dict) -> str:
 
     if dup:
         out.append(
-            "\n[CROSS-SHEET DUPLICATION] same note cited on Sheet 11 (policies) "
-            "AND Sheet 12. Two legitimate shapes exist — confirm on the PDF "
-            "before clearing anything: (1) a CARVE-OUT PARTITION: the Sheet-11 "
+            "\n[CROSS-SHEET DUPLICATION] same note cited on Sheet {{CROSS_SHEET:accounting_policies}} (policies) "
+            "AND Sheet {{CROSS_SHEET:list_of_notes}}. Two legitimate shapes exist — confirm on the PDF "
+            "before clearing anything: (1) a CARVE-OUT PARTITION: the Sheet {{CROSS_SHEET:accounting_policies}} "
             "cell holds ONLY an explicitly-labelled 'material/significant "
-            "accounting policy' sub-section of the note and the Sheet-12 cell "
+            "accounting policy' sub-section of the note and the Sheet {{CROSS_SHEET:list_of_notes}} cell "
             "holds the REST of the disclosure — different content, correct "
             "routing, leave both; (2) a genuine DUPLICATE: the same prose on "
-            "both sheets — material accounting policies belong on Sheet 11, "
-            "the numbered disclosure on Sheet 12; clear_note_cells the wrong "
+            "both sheets — material accounting policies belong on Sheet {{CROSS_SHEET:accounting_policies}}, "
+            "the numbered disclosure on Sheet {{CROSS_SHEET:list_of_notes}}; clear_note_cells the wrong "
             "copy."
         )
         for d in dup:
             out.append(
-                f"  • note {d['note_ref']!r}: Sheet 11 row "
-                f"{d['sheet_11'].get('row')} vs Sheet 12 row {d['sheet_12'].get('row')}"
+                f"  • note {d['note_ref']!r}: Sheet {{{{CROSS_SHEET:accounting_policies}}}} row "
+                f"{d['sheet_11'].get('row')} vs Sheet {{{{CROSS_SHEET:list_of_notes}}}} row {d['sheet_12'].get('row')}"
             )
     if collisions:
         out.append(
-            "\n[SAME-SHEET COLLISION] one Sheet-12 row holds prose from >1 "
+            "\n[SAME-SHEET COLLISION] one Sheet {{CROSS_SHEET:list_of_notes}} row holds prose from >1 "
             "unrelated top-level note. Decide which note owns the row; "
             "move_note_cell the other to its own EMPTY leaf row (read_template_"
             "labels to find one). If there is no correct alternative row, "
@@ -581,14 +582,14 @@ def build_notes_reviewer_packet(context: dict) -> str:
             "top-line note, WHOLE — a sub-section is only split out when the "
             "PDF presents materially different peer disclosures, and the only "
             "cross-sheet carve-out is an explicitly-labelled 'material/"
-            "significant accounting policy' sub-section (belongs on Sheet 11). "
+            "significant accounting policy' sub-section (belongs on Sheet {{CROSS_SHEET:accounting_policies}}). "
             "View the note's pages: if the fragments are genuinely separate "
             "peer disclosures, leave them; if content was split merely because "
             "a topic is MENTIONED (e.g. right-of-use prose pulled out of the "
             "PP&E note into a leases row), merge it back into the owning row "
             "(edit_note_cells the owner, clear_note_cells the fragment); if a "
             "fragment is an explicitly-labelled policy sub-section sitting on "
-            "a topical row, it belongs on Sheet 11 (move_note_cell). Unsure → "
+            "a topical row, it belongs on Sheet {{CROSS_SHEET:accounting_policies}} (move_note_cell). Unsure → "
             "raise_flag, never delete a valid disclosure."
         )
         for s in splits:
@@ -671,8 +672,8 @@ def build_notes_reviewer_packet(context: dict) -> str:
         )
         for c in overlap:
             out.append(
-                f"  • score {c['score']}: Sheet 11 row {c['sheet_11'].get('row')} "
-                f"vs Sheet 12 row {c['sheet_12'].get('row')}"
+                f"  • score {c['score']}: Sheet {{{{CROSS_SHEET:accounting_policies}}}} row {c['sheet_11'].get('row')} "
+                f"vs Sheet {{{{CROSS_SHEET:list_of_notes}}}} row {c['sheet_12'].get('row')}"
             )
     if titles:
         out.append(
@@ -713,7 +714,7 @@ def _build_context(
 
     ``coverage_gaps`` (the detector family that feeds ``finding_keys`` /
     ``verify_findings``) is filtered so a note the reviewer intentionally
-    SKIPPED (Sheet-12 receipt) or RESOLVED (``not_applicable``) no longer reads
+    SKIPPED (Sheet {{CROSS_SHEET:list_of_notes}} receipt) or RESOLVED (``not_applicable``) no longer reads
     as an open gap — otherwise ``verify_findings`` keeps reporting it open even
     though the workflow resolved it without authoring provenance (Codex review).
     """
@@ -955,7 +956,7 @@ def create_notes_reviewer_agent(
         if _backfill_sidecar_provenance(run_id, db_path, sidecar_paths):
             deps.db_provenance_present = True
 
-    # Sheet-12 skip receipts (durable side-log the coordinator wrote at fan-out
+    # Sheet {{CROSS_SHEET:list_of_notes}} skip receipts (durable side-log the coordinator wrote at fan-out
     # time) so an intentionally skipped note is `skipped`, not `missing`, in the
     # packet + checklist. Kept on deps so verify_findings' recompute agrees.
     from notes.coverage_checklist import load_notes12_skips
@@ -973,8 +974,17 @@ def create_notes_reviewer_agent(
     # Baseline for verify_findings regression detection (before any write).
     deps.original_finding_keys = finding_keys(context)
 
-    base_prompt = _PROMPT_PATH.read_text(encoding="utf-8").strip()
-    packet = build_notes_reviewer_packet(context)
+    # The reviewer prompt and its packet both used to hardcode the MFRS slot
+    # numbers (Sheets 10-14). MPERS puts the same notes at 11-15, so an MPERS
+    # reviewer was told to work on sheets that hold something else (peer
+    # review, 2026-08-01). Resolve the {{CROSS_SHEET:*}} tokens with the same
+    # helper the extraction prompts use, so there is one mapping, not two.
+    base_prompt = _apply_cross_sheet_tokens(
+        _PROMPT_PATH.read_text(encoding="utf-8").strip(), deps.filing_standard,
+    )
+    packet = _apply_cross_sheet_tokens(
+        build_notes_reviewer_packet(context), deps.filing_standard,
+    )
     system_prompt = f"{base_prompt}\n\n{packet}"
 
     agent = Agent(

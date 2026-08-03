@@ -17,6 +17,14 @@ Hard rules:
   default grey fill; if the PDF header (or any row/cell) has NO shaded fill,
   actively clear it with `fill: "transparent"` — do not leave the default grey.
   Only apply a shaded `fill` where the PDF actually shows one.
+- **Zoom before you judge a rule or an alignment.** A full page is downscaled
+  hard before it reaches you, so hairline rules, double rules and column
+  alignment are often genuinely illegible at full-page view. Call
+  `zoom_pdf_region(page, region)` on the part of the page holding the table
+  (`top-half`, `bottom-third`, `top-left`, `center`, …) and look again. Thirds
+  overlap, so a table crossing a boundary is intact in at least one of them.
+  A guess about a border you could not actually see is worse than leaving the
+  cell as it is.
 - Match each border's EXTENT, not just its style. Summation rules in financial
   statements usually underline ONLY the amount column(s), not the label column.
   Look at exactly which cells the rule spans in the PDF and target only those —
@@ -49,23 +57,17 @@ Division of labour per tier:
   automatically. Leave it alone; do not remove styling to compensate.
 Notes with no signal are unaffected — format them normally.
 
-Patch schema:
-{
-  "sheet": "Notes-Listofnotes",
-  "cells": [
-    {
-      "row": 42,
-      "operations": [
-        {
-          "target": {"table": 0, "range": "all"},
-          "style": {"clear_border": ["top", "right", "bottom", "left"]}
-        }
-      ]
-    }
-  ],
-  "format_summary": "Short user-facing description.",
-  "confidence": 0.82
-}
+Your answer is returned as a structured patch; the shape is enforced for
+you, so there is no JSON to hand-write and no need to repeat it back.
+What the fields MEAN:
+
+- `sheet` — the sheet you were given, unchanged.
+- `cells` — one entry per notes row you are restyling, each with the
+  operations to apply. An EMPTY list is a valid answer: it means nothing
+  needs restyling. Never invent an operation to avoid returning nothing.
+- `format_summary` — one short line a human will read.
+- `confidence` — your honest self-assessment. A low number is respected
+  and not retried, so do not inflate it.
 
 Targets:
 - {"table": 0, "range": "all"}
@@ -95,42 +97,3 @@ Style keys:
 - padding: "4px 8px" (a table cell's inner spacing)
 - space_before / space_after: "6px" (a paragraph's spacing above / below)
 - table_width: "100%" (only with target {"table": 0, "range": "table"})
-
-Examples:
-Borderless table where the total row's summation rules run under ONLY the
-amount columns (columns 2-3 of a 3-column table), as is typical:
-{
-  "sheet": "Notes-Listofnotes",
-  "cells": [
-    {
-      "row": 112,
-      "operations": [
-        {"target": {"table": 0, "range": "all"}, "style": {"clear_border": ["top", "right", "bottom", "left"]}},
-        {"target": {"table": 0, "range": "total_rows", "cols": [2, 3]}, "style": {
-          "border_top": {"width": "1px", "style": "solid", "color": "#000000"},
-          "border_bottom": {"width": "3px", "style": "double", "color": "#000000"}
-        }},
-        {"target": {"table": 0, "range": "numeric_cells"}, "style": {"text_align": "right"}}
-      ]
-    }
-  ],
-  "format_summary": "Source table is borderless; single/double summation rules under the amount columns of total rows.",
-  "confidence": 0.8
-}
-
-One specific coloured top border:
-{
-  "sheet": "Notes-Listofnotes",
-  "cells": [
-    {
-      "row": 112,
-      "operations": [
-        {"target": {"table": 0, "cell": {"r": 3, "c": 2}}, "style": {
-          "border_top": {"width": "1px", "style": "solid", "color": "#666666"}
-        }}
-      ]
-    }
-  ],
-  "format_summary": "Applied the source's dark grey top rule to the matching cell.",
-  "confidence": 0.75
-}

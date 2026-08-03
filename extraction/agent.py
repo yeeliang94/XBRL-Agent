@@ -954,11 +954,15 @@ def create_extraction_agent(
     @agent.tool
     def save_result(
         ctx: RunContext[ExtractionDeps],
-        fields_json: str,
+        fields_json: str = "",
         acknowledge_unresolved: bool = False,
         unresolved_reason: str = "",
     ) -> str:
         """Save extraction results (JSON + cost report) to the output directory.
+
+        Call it as `save_result()`. `fields_json` is an optional secondary
+        artifact — the values are already durable in the workbook and in
+        `run_concept_facts` by this point, so there is nothing to re-send.
 
         Phase 1.3: refuses to finalise unless the most recent verification
         passed AND no mandatory (`*`) rows are unfilled. If verify_totals

@@ -27,6 +27,21 @@ router = APIRouter()
 # Mirrors model_settings.THINKING_LEVELS; imported rather than
 # re-listed so the API and the builder cannot drift.
 from model_settings import THINKING_LEVELS as _THINKING_LEVELS
+from model_settings import supported_thinking_levels as _supported_levels
+
+
+def _levels_by_model() -> dict:
+    """`{model_id: [levels it accepts]}` for every catalogued model.
+
+    The global `thinking_level_choices` list stays as the superset (and the
+    fallback for a model the catalogue does not know); this narrows it per
+    model so the picker cannot offer `minimal` for a GPT-5.6 role.
+    """
+    return {
+        m["id"]: list(_supported_levels(m["id"]))
+        for m in server._load_available_models()
+        if isinstance(m, dict) and m.get("id")
+    }
 
 
 def _app_version() -> str:
@@ -186,6 +201,10 @@ async def get_config():
         # nothing, which is what every agent did before this setting existed.
         "thinking_levels": server._thinking_levels(),
         "thinking_level_choices": list(_THINKING_LEVELS),
+        # Per-model vocabulary: GPT-5.6 dropped `minimal`, so offering it
+        # for that model means the operator picks a level the run then
+        # substitutes (peer review, 2026-08-02). The picker filters on this.
+        "thinking_level_choices_by_model": _levels_by_model(),
         # Firm-wide notes-table style theme (docs/PLAN-notes-table-theme.md).
         # Surfaced here so the Notes tab + clipboard read the firm default at
         # render time without a separate /api/settings round-trip.
@@ -216,6 +235,10 @@ async def get_settings():
         # it for surfaces that only take the lightweight flag payload.
         "thinking_levels": server._thinking_levels(),
         "thinking_level_choices": list(_THINKING_LEVELS),
+        # Per-model vocabulary: GPT-5.6 dropped `minimal`, so offering it
+        # for that model means the operator picks a level the run then
+        # substitutes (peer review, 2026-08-02). The picker filters on this.
+        "thinking_level_choices_by_model": _levels_by_model(),
         **extended,
     }
 

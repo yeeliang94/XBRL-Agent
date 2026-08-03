@@ -24,7 +24,7 @@ const SETTINGS = {
   spot_check_mode: "light",
   entity_memory: true,
   thinking_levels: { SOFP: "high" },
-  thinking_level_choices: ["minimal", "low", "medium", "high"],
+  thinking_level_choices: ["none", "minimal", "low", "medium", "high"],
   available_models: [
     { id: "openai.gpt-5.4", display_name: "GPT-5.4", provider: "openai" },
   ],

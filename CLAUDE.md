@@ -230,6 +230,73 @@ on 1.107.1 and 2.x — both expose the same post-deprecation API surface.
   unchanged, now asserted directly by
   `tests/test_max_agent_iterations_below_pydantic_cap.py`.
 
+**Transport is per-model, not per-provider (2026-08-01 peer review).** Two
+vendor rules make "one OpenAI-compatible client for everything" wrong:
+
+- **GPT-5.6 + function tools + Chat Completions requires effective reasoning
+  `none`**, and OMITTING the reasoning field is not neutral — 5.6 then
+  defaults to `medium`, which is the incompatible case. Every agent here is a
+  multi-turn tool caller. `model_settings.use_responses_api()` therefore
+  builds an `OpenAIResponsesModel` for the 5.6 family on the DIRECT OpenAI
+  path, and on Chat Completions `build_model_settings` pins
+  `openai_reasoning_effort="none"` rather than letting the default through.
+  The proxy path stays on Chat Completions by default because the enterprise
+  proxy may not expose `/v1/responses` — flip with `XBRL_OPENAI_RESPONSES=1`
+  once confirmed. `gpt-5.4` is deliberately untouched.
+- **`none` is in `THINKING_LEVELS` but is NOT a pydantic-ai level.** It is the
+  OpenAI wire value for "reasoning off"; pydantic-ai spells that `False`, and
+  neither `ANTHROPIC_THINKING_BUDGET_MAP` nor the Google path has a key for
+  the string. `_unified_thinking()` does that translation — passing `none`
+  through raises at the same call site the old dict bug hit. 5.6 also dropped
+  `minimal`, which `_openai_reasoning_effort()` folds to `none`.
+- **Gemini 3 on a REMOTE OpenAI-compatible proxy is refused at construction**
+  (`server._warn_if_gemini_loses_thought_signatures`). Google requires the
+  `thought_signature` from each prior functionCall to be echoed back, even at
+  minimal thinking levels, and a missing one is a 400 — so the run dies on the
+  second tool call after paying for everything before it. The Mac local proxy
+  is unaffected (it already bypasses to a native `GoogleModel`). Override with
+  `XBRL_ALLOW_GEMINI_PROXY=1` only once the proxy is proven to preserve them.
+- **The two cache shapes take DIFFERENT values — they are not
+  interchangeable.** `prompt_cache_retention` (legacy) takes `in_memory` |
+  `24h`; `prompt_cache_options.ttl` (5.6+) accepts **`30m` and nothing else**.
+  Reusing one constant for both sends `ttl: "24h"`, which is a 400 on every
+  request. Hence `CACHE_RETENTION` and `CACHE_OPTIONS_TTL` are separate. The
+  new shape is **opt-in** via `XBRL_OPENAI_CACHE_OPTIONS=1` (through
+  `extra_body`, since pydantic-ai 2.9.0 has no typed field for it).
+- **An unsupported level is substituted loudly, and never inverted.**
+  `supported_thinking_levels(model)` is the per-model vocabulary and is
+  surfaced to the Settings picker as `thinking_level_choices_by_model`, so the
+  UI cannot offer `minimal` for a 5.6 role. If one is configured anyway,
+  `_LEVEL_FALLBACK` maps `minimal → low` — the least reasoning that still
+  exists — and logs it. Mapping it to `none` disabled reasoning entirely,
+  which is the opposite of what the operator asked for.
+
+Pinned by `tests/test_gpt56_transport.py`, `tests/test_thinking_levels.py`,
+`tests/test_provider_routing.py`.
+
+### 2a. Cross-loop safety: agents on background threads
+
+The reviewer, notes-reviewer, notes-formatter and suite-runner passes each run
+on their own thread under `asyncio.run` (`api/*.py`), so process-global async
+state is touched by MORE THAN ONE event loop. An `asyncio.Future` or
+`asyncio.Semaphore` belongs to the loop that created it; awaiting one from
+another loop raises `got Future attached to a different loop`.
+
+Two structures in `notes/agent.py` carry this, by different means:
+
+- `_render_semaphores` is keyed by `id(loop)` — one semaphore per loop.
+- `_inflight` (render coalescing) holds **`concurrent.futures.Future`**, not
+  `asyncio.Future`, under `_inflight_lock`, and awaiters join via
+  `asyncio.wrap_future`. That keeps ONE render shared across loops instead of
+  merely making it safe.
+
+This became reachable when the notes formatter gained `zoom_pdf_region`
+(2026-08-02): before that every `_inflight` caller was on the main server
+loop. Reproduced as a hard failure with two threads. Pinned by
+`tests/test_page_cache_single_flight.py::test_two_event_loops_can_share_one_inflight_render`.
+**Any new global holding an asyncio primitive must state which of these two
+shapes it uses.**
+
 ### 3. XBRL templates derived from SSM linkbase
 
 Templates in `XBRL-template-MFRS/` and `XBRL-template-MPERS/` are derived from
@@ -459,11 +526,38 @@ Each run has one `filing_level` (`"company"` or `"group"`, default
 - **Group templates:** 6 cols — A=label, B=Group CY, C=Group PY, D=Company CY,
   E=Company PY, F=source.
 - **Group SOCIE** uses 4 vertical row blocks (rows 3–25 Group CY, 27–49 Group
-  PY, 51–73 Company CY, 75–97 Company PY).
+  PY, 51–73 Company CY, 75–97 Company PY) — but the COLUMN count differs by
+  standard, and SoRE has no blocks at all. Measured shapes:
+
+  | Template | Cols | Rows | Group overlay applied |
+  |---|---|---|---|
+  | MFRS Group SOCIE | 24 | 97 | `_group_socie_overlay.md` (matrix) |
+  | MPERS Group SOCIE | 4 | 97 | none — `socie_mpers.md` describes the blocks |
+  | MPERS Group SoRE | 6 | 16 | `_group_overlay.md` (plain 6-col) |
+
+  **`_group_socie_overlay.md` must never be applied outside MFRS Default.**
+  It was applied to every Group SOCIE unconditionally, which contradicted
+  `socie_mpers.md` in one rendered prompt and pointed SoRE at rows 27–97 of a
+  16-row sheet (2026-08-01 peer review). The failure is SILENT:
+  `cell_resolver.resolve_cell` returns `None` for a coordinate with no
+  concept and the caller skips it, so the fact never reaches
+  `run_concept_facts` and — because the export re-renders from facts (gotcha
+  #21) — the statement lands empty while the agent reports success. Pinned by
+  `tests/test_group_socie_overlay_routing.py`, which reads the LIVE templates
+  and checks the fully rendered prompt for mutually exclusive layout claims
+  (phrase-by-phrase assertions do not catch this — `test_socie_prompt_mpers.py`
+  passed throughout).
 
 On Group filings, verifier + cross-checks run twice (Group cols, then Company
 cols) and report separately. Root-level template xlsx files no longer exist —
 all templates live in `Company/` or `Group/`.
+
+**The face persona is standard-neutral.** `_base.md` is loaded for every run,
+so it may not name a standard; `prompts/__init__._render_standard_block()`
+injects the run's actual framework instead. The persona used to declare the
+agent an MFRS specialist "for Malaysian public listed companies", which every
+MPERS (private-entity) run inherited. Pinned by
+`tests/test_prompt_standard_neutrality.py`.
 
 ### 13. Scout page hints are soft guidance only
 
@@ -545,6 +639,21 @@ Key invariants:
   in 8-page batches and runs up to 5 vision batches in parallel.
 
 Full walkthrough: [docs/Archive/NOTES-PIPELINE.md](docs/Archive/NOTES-PIPELINE.md).
+
+**Formatter output is a DECLARED schema, not repaired prose (2026-08-03).**
+`notes/format_schema.py` mirrors `notes/format_patch.py`'s closed vocabulary
+exactly — wider only moves the failure, narrower silently rejects patches that
+are valid today. `format_patch` stays the authority; the schema only removes
+the parse-failure class that `_parse_json_patch`'s fence-stripping and
+balanced-object hunt existed to absorb. `patch_to_dict` MUST keep
+`exclude_none=True`: `_apply_style` iterates the keys it is handed, so a
+serialised `"border_top": null` reaches `_border_value(None)` and raises.
+Kill switch `XBRL_NOTES_FORMATTER_STRUCTURED=0` — unverified against a live
+model, so a quality drop is a config flip, not a redeploy. The formatter's
+`read_note_cell` tool was removed with it: the CURRENT CELLS payload already
+carried those fields for every row, plus `table_geometry` the tool lacked.
+Pinned by `tests/test_notes_format_schema.py`,
+`tests/test_notes_formatter_zoom.py`.
 
 ### 15. MPERS — first-class filing standard
 
@@ -1746,6 +1855,7 @@ Some tests auto-skip when sample data is absent (e.g. `test_pdf_viewer.py`).
 |---|---|
 | [docs/Archive/NOTES-PIPELINE.md](docs/Archive/NOTES-PIPELINE.md) | Notes subsystem deep-dive |
 | [docs/MPERS.md](docs/MPERS.md) | MPERS filing-standard deep-dive |
+| [docs/agent-prompt-audit.html](docs/agent-prompt-audit.html) | Every agent's prompt, quoted verbatim. **Regenerate with `python scripts/refresh_prompt_audit.py` after editing a quoted prompt** — `tests/test_prompt_audit_matches_live.py` fails the build on drift, and also fails when a live agent role is missing from its matrix. |
 
 **Referenced below but missing from the tree** — do not go looking for these:
 `docs/ARCHITECTURE.md`, `docs/SYNC-MATRIX.md`, `docs/PORTING-WINDOWS.md`,

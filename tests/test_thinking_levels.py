@@ -32,6 +32,14 @@ from model_settings import (
     normalize_thinking_level,
 )
 
+# `none` is an OpenAI reasoning-effort STRING, not a pydantic-ai thinking
+# level — it means "reasoning off", which pydantic-ai spells `False` and
+# neither budget map has a key for. It was added for GPT-5.6, where function
+# tools on Chat Completions require effective reasoning `none` and omitting
+# the field yields `medium` (peer review, 2026-08-01). The levels that map to
+# an actual budget are the rest.
+BUDGET_LEVELS = tuple(lvl for lvl in THINKING_LEVELS if lvl != "none")
+
 
 class _FakeModel:
     """Stands in for what `_create_proxy_model` returns."""
@@ -247,12 +255,22 @@ def test_a_resolver_failure_degrades_to_none(monkeypatch):
 def test_the_thinking_value_is_a_type_pydantic_ai_accepts():
     from pydantic_ai.models.anthropic import ANTHROPIC_THINKING_BUDGET_MAP
 
-    for level in THINKING_LEVELS:
+    for level in BUDGET_LEVELS:
         s = build_model_settings(
             _model("claude-haiku-4-5", "AnthropicModel"), thinking_level=level,
         )
         # The exact expression that raised "unhashable type: dict".
         assert ANTHROPIC_THINKING_BUDGET_MAP[s["thinking"]] > 0
+
+
+def test_none_reaches_anthropic_as_thinking_off_not_as_a_string():
+    """`none` has no key in the budget map, so passing it through raises
+    KeyError at the same call site the dict bug hit. pydantic-ai checks
+    `thinking is False` before any map lookup."""
+    s = build_model_settings(
+        _model("claude-haiku-4-5", "AnthropicModel"), thinking_level="none",
+    )
+    assert s["thinking"] is False
 
 
 def test_each_level_reaches_anthropic_as_a_different_budget():
@@ -267,17 +285,19 @@ def test_each_level_reaches_anthropic_as_a_different_budget():
                 thinking_level=lvl,
             )["thinking"]
         ]
-        for lvl in THINKING_LEVELS
+        for lvl in BUDGET_LEVELS
     }
-    assert len(set(budgets.values())) == len(THINKING_LEVELS), budgets
+    assert len(set(budgets.values())) == len(BUDGET_LEVELS), budgets
     assert budgets["minimal"] < budgets["high"]
 
 
 def test_each_level_reaches_openai_as_a_reasoning_effort():
     from pydantic_ai.models.openai import OPENAI_REASONING_EFFORT_MAP
 
-    for level in THINKING_LEVELS:
+    for level in BUDGET_LEVELS:
         assert OPENAI_REASONING_EFFORT_MAP[level] == level
+    # `none` is already the OpenAI wire value, so it needs no mapping.
+    assert OPENAI_REASONING_EFFORT_MAP[False] == "none"
 
 
 def test_direct_gemini_uses_the_unified_field_not_a_fixed_budget():
@@ -294,9 +314,15 @@ def test_every_level_we_offer_is_one_pydantic_ai_knows():
     from pydantic_ai.models.openai import OPENAI_REASONING_EFFORT_MAP
     from pydantic_ai.models.anthropic import ANTHROPIC_THINKING_BUDGET_MAP
 
+    from model_settings import _unified_thinking
+
     for level in THINKING_LEVELS:
-        assert level in OPENAI_REASONING_EFFORT_MAP
-        assert level in ANTHROPIC_THINKING_BUDGET_MAP
+        # What we OFFER must reach each provider as something it accepts —
+        # after translation, which is now part of the path.
+        assert _unified_thinking(level) in ANTHROPIC_THINKING_BUDGET_MAP or (
+            _unified_thinking(level) is False
+        ), level
+        assert level in OPENAI_REASONING_EFFORT_MAP or level == "none", level
 
 
 # --------------------------------------------------------------------------

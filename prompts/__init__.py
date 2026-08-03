@@ -93,7 +93,7 @@ def render_prompt(
     # Assemble full prompt. Phase 2 — when scout populated context
     # fields, render them BEFORE navigation so the agent reads the
     # entity/period/unit framing first and then starts viewing pages.
-    parts = [base, statement_prompt]
+    parts = [base, _render_standard_block(std_key), statement_prompt]
     # Authoritative filer-declared denomination (always rendered on the face
     # path). The scout-observed scale line is suppressed in the context block
     # below so the agent gets one, unambiguous, authoritative scale statement
@@ -122,11 +122,29 @@ def render_prompt(
 
     # Group filing overlay — appended after navigation so the agent sees
     # column/block layout instructions after knowing which pages to visit.
+    #
+    # SOCIE is the one statement whose Group layout differs per standard AND
+    # per variant, so it does NOT get one overlay. The overlay used to be
+    # applied to every Group SOCIE unconditionally, which contradicted the
+    # statement body on MPERS and silently lost data (peer review, 2026-08-01):
+    # it instructs the agent to write columns B–X across four blocks at rows
+    # 3–97, and `resolve_cell` returns None for a coordinate the template has
+    # no concept at, so the caller SKIPS it — the fact never reaches
+    # `run_concept_facts` and the exported statement comes out empty.
+    #
+    # The live template shapes are the contract:
+    #   MFRS  Group SOCIE  — 24 cols × 97 rows, 4 blocks  → matrix overlay
+    #   MPERS Group SOCIE  —  4 cols × 97 rows, 4 blocks  → socie_mpers.md
+    #                         already describes the blocks natively; a second
+    #                         overlay could only contradict it
+    #   MPERS Group SoRE   —  6 cols × 16 rows, NO blocks → plain 6-col overlay
     if filing_level == "group":
-        if statement_type == StatementType.SOCIE:
-            parts.append(_load_prompt("_group_socie_overlay.md"))
-        else:
+        if statement_type != StatementType.SOCIE:
             parts.append(_load_prompt("_group_overlay.md"))
+        elif variant_key == "sore":
+            parts.append(_load_prompt("_group_overlay.md"))
+        elif std_key != "mpers":
+            parts.append(_load_prompt("_group_socie_overlay.md"))
 
     # Optionally embed template summary for caching
     if template_summary:
@@ -308,6 +326,40 @@ _SCALE_UNIT_LABELS = {
     "millions": "millions (RM mil)",
     "units": "units (no scaling — values are reported as-is)",
 }
+
+
+_STANDARD_BLOCKS = {
+    "mfrs": (
+        "=== FILING STANDARD: MFRS ===\n"
+        "This filing is prepared under MFRS (Malaysian Financial Reporting\n"
+        "Standards), the full framework applied by Malaysian public listed and\n"
+        "other non-private entities. Apply MFRS disclosure requirements,\n"
+        "terminology and line-item granularity. Do NOT apply MPERS conventions."
+    ),
+    "mpers": (
+        "=== FILING STANDARD: MPERS ===\n"
+        "This filing is prepared under MPERS (Malaysian Private Entities\n"
+        "Reporting Standard). MPERS is NOT MFRS: it is the framework for\n"
+        "PRIVATE entities, so this is not a public-listed-company filing.\n"
+        "Apply MPERS disclosure requirements and terminology. MPERS statements\n"
+        "use a narrower concept set and coarser line items than MFRS. Do NOT\n"
+        "import MFRS-only line items, MFRS labels, or MFRS row layouts — take\n"
+        "the vocabulary from the template you are given, not from MFRS habit."
+    ),
+}
+
+
+def _render_standard_block(filing_standard: str) -> str:
+    """State the run's reporting framework explicitly.
+
+    `_base.md` used to open by declaring the agent an MFRS specialist for
+    "Malaysian public listed companies", and it is loaded for EVERY run — so
+    an MPERS agent was given an MFRS persona and MFRS disclosure judgement
+    before it read a single MPERS instruction (peer review, 2026-08-01). The
+    persona is now standard-neutral and the actual standard is injected here,
+    so the two can never disagree.
+    """
+    return _STANDARD_BLOCKS.get(filing_standard.lower(), _STANDARD_BLOCKS["mfrs"])
 
 
 def _render_denomination_block(
@@ -569,5 +621,4 @@ def _build_self_navigation(statement_type: StatementType) -> str:
     lines.append("3. Be aware the TOC page number may differ from the actual PDF page index")
     lines.append("   (cover pages, prefaces shift numbering). Check nearby pages if needed.")
     lines.append("4. View the face page, then relevant note pages for breakdowns.")
-    lines.append("5. Do NOT bulk-scan the entire PDF. Only view pages you specifically need.")
     return "\n".join(lines)

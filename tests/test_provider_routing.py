@@ -100,10 +100,39 @@ def test_gemini_on_local_proxy_routes_direct_to_google(monkeypatch):
     assert getattr(model, "model_name", "") == "gemini-3-flash-preview"
 
 
-def test_gemini_on_enterprise_proxy_stays_on_proxy(monkeypatch):
-    """The remote enterprise proxy must NOT be bypassed — direct Google is
-    firewall-blocked (403) on Windows. Gemini there stays on OpenAIChatModel."""
+def test_gemini3_on_enterprise_proxy_is_refused(monkeypatch):
+    """Gemini 3 through an OpenAI-compatible proxy cannot complete a run here.
+
+    Google requires the `thought_signature` from each prior functionCall to be
+    echoed back on the next request — including at minimal thinking levels —
+    and omitting it is a 400. The OpenAI chat format has no field for it.
+    Every agent in this repo is a multi-turn tool caller, so the failure is
+    certain, not probabilistic: the run dies on the second tool call after
+    paying for everything before it.
+
+    This test previously asserted only that the model stayed on the proxy
+    (rather than bypassing to firewall-blocked direct Google). That routing
+    guarantee still holds and is pinned below, under the override — but the
+    configuration itself is now refused at construction rather than left to
+    fail mid-run (peer review, 2026-08-01).
+    """
     monkeypatch.setenv("GEMINI_API_KEY", "real-gemini-key")
+
+    with pytest.raises(ValueError, match="thought_signature"):
+        server._create_proxy_model(
+            "vertex_ai.gemini-3-flash-preview",
+            proxy_url="https://genai-sharedservice-emea.pwc.com/v1",
+            api_key="enterprise-key",
+        )
+
+
+def test_gemini_on_enterprise_proxy_stays_on_proxy_when_unblocked(monkeypatch):
+    """The original invariant: the remote enterprise proxy must NOT be
+    bypassed — direct Google is firewall-blocked (403) on Windows. Once an
+    operator has confirmed the proxy preserves thought signatures and set the
+    override, Gemini there must still stay on OpenAIChatModel."""
+    monkeypatch.setenv("GEMINI_API_KEY", "real-gemini-key")
+    monkeypatch.setenv("XBRL_ALLOW_GEMINI_PROXY", "1")
 
     model = server._create_proxy_model(
         "vertex_ai.gemini-3-flash-preview",
