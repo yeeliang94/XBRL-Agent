@@ -479,6 +479,106 @@ def test_subnote_of_the_same_note_does_not_warn(tmp_path: Path):
     assert "now holds notes" not in msg
 
 
+# --- block-path prompt activation (2026-08-06) ------------------------------
+# Phases 1-10 built the block tools but no prompt taught them: on the first
+# live `enforce` run every agent stayed on the copy-into-content channel and
+# write_note_from_source went unused. When a generation exists, the prompt's
+# source block must teach the block workflow INSTEAD of copy-verbatim, and
+# the nudges must steer to write_note_from_source.
+
+def test_prompt_teaches_block_workflow_when_generation_exists():
+    kwargs = dict(
+        template_type=NotesTemplateType.CORP_INFO,
+        filing_level="company",
+        inventory=[],
+        source_html_available=True,
+    )
+    with_blocks = render_notes_prompt(**kwargs, source_blocks_available=True)
+    assert "write_note_from_source" in with_blocks
+    assert "list_source_notes" in with_blocks
+    # The copy-verbatim workflow must NOT render alongside it — two channels
+    # teaching incompatible workflows is the run-79 defect shape.
+    assert "COPY THE SOURCE MARKUP VERBATIM" not in with_blocks
+    # PDF stays ground truth for figures on every path.
+    assert "PDF wins" in with_blocks
+
+
+def test_prompt_keeps_copy_verbatim_without_a_generation():
+    kwargs = dict(
+        template_type=NotesTemplateType.CORP_INFO,
+        filing_level="company",
+        inventory=[],
+        source_html_available=True,
+    )
+    sidecar_only = render_notes_prompt(**kwargs, source_blocks_available=False)
+    assert "COPY THE SOURCE MARKUP VERBATIM" in sidecar_only
+    assert "write_note_from_source" not in sidecar_only
+
+
+def test_sink_steers_covered_note_to_block_write(tmp_path: Path):
+    agent, deps = _make_word_sink_agent(tmp_path, with_source=True)
+    deps.source_block_notes = {1}
+    from notes.agent import _ensure_label_index
+    label = _ensure_label_index(deps)[0].original
+
+    msg = _send_payload(agent, deps, label, 1, _PLAIN_TABLE)
+    assert "write_note_from_source" in msg
+    # The copy-into-content nudges must not fire on a block-path run.
+    assert "read_source_note" not in msg
+    assert "without format_ops" not in msg
+
+
+def test_sink_never_nudges_an_uncovered_note_to_blocks(tmp_path: Path):
+    """A note the source has no parts for is CORRECTLY hand-written."""
+    agent, deps = _make_word_sink_agent(tmp_path, with_source=True)
+    deps.source_block_notes = {7}  # note 1 is not covered
+    from notes.agent import _ensure_label_index
+    label = _ensure_label_index(deps)[0].original
+
+    msg = _send_payload(agent, deps, label, 1, _PLAIN_TABLE)
+    assert "write_note_from_source" not in msg
+
+
+def test_sink_never_nudges_a_block_built_payload(tmp_path: Path):
+    """Block-built payloads re-enter the sink; before this fix the consulted
+    check ran against them and could tell a code-built cell to go call
+    read_source_note."""
+    from notes.agent import _sub_agent_sink_write, _ensure_label_index
+    from notes.payload import NotesPayload
+
+    agent, deps = _make_word_sink_agent(tmp_path, with_source=True)
+    deps.source_block_notes = {1}
+    label = _ensure_label_index(deps)[0].original
+    p = NotesPayload(
+        chosen_row_label=label, content=_SOURCE_TABLE,
+        evidence="Page 3, Note 1", note_num=1,
+        parent_note={"number": "1", "title": "T"},
+    )
+    p._from_source_blocks = True
+    msg = _sub_agent_sink_write(deps, [p], parse_errors=[])
+    assert "write_note_from_source" not in msg
+    assert "read_source_note" not in msg
+
+
+def test_block_write_count_counts_written_cells_only():
+    from notes.agent import block_write_nudge_count
+
+    deps = _deps_with_source()
+    deps.source_block_notes = {5}
+    payloads = [_payload("Row A", 5), _payload("Row B", 6)]
+    result = _FakeResult([
+        # note 5's cell landed — covered, counts.
+        {"label": "Row A", "html": "<table><tr><td>1</td></tr></table>",
+         "style_source": "unstyled"},
+        # note 6's cell landed but the source has no parts for it — silent.
+        {"label": "Row B", "html": "<table><tr><td>2</td></tr></table>",
+         "style_source": "unstyled"},
+    ])
+    assert block_write_nudge_count(deps, payloads, result) == 1
+    # All-rejected: no cells written, no nudge — the peer-review rule.
+    assert block_write_nudge_count(deps, payloads, _FakeResult([])) == 0
+
+
 def test_pdf_run_keeps_the_run63_format_ops_nudge(tmp_path: Path):
     """No Word source → format_ops IS the right remedy. PDF runs must be
     byte-identical to before the run-79 change."""
