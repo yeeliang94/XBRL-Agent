@@ -96,6 +96,78 @@ def test_the_source_tools_appear_with_a_frozen_reading(tmp_path, seeded):
     assert deps.source_generation_id == gen
 
 
+def _word_upload_dir(tmp_path):
+    """A session dir shaped like a Word upload: uploaded.pdf + source.html."""
+    d = tmp_path / "session"
+    d.mkdir()
+    (d / "uploaded.pdf").write_bytes(b"%PDF-1.4\n")
+    (d / "source.html").write_text(
+        "<h3>5. Receivables</h3><p>Stated at cost.</p>", encoding="utf-8",
+    )
+    return d
+
+
+def test_block_mode_hides_the_copy_workflow_tool(tmp_path, seeded):
+    """Peer review 2026-08-06: the prompt switched to block assembly but
+    read_source_note stayed registered, and its description teaches
+    copy-into-content — two incompatible workflows exposed at once. On a
+    block-path run the copy tool must be absent."""
+    from pydantic_ai.models.test import TestModel
+
+    db, run_id, gen = seeded
+    d = _word_upload_dir(tmp_path)
+    agent, deps = notes_agent.create_notes_agent(
+        template_type=NotesTemplateType.CORP_INFO,
+        pdf_path=str(d / "uploaded.pdf"),
+        inventory=[], filing_level="company", model=TestModel(),
+        output_dir=str(tmp_path),
+        run_id=run_id, db_path=db, source_generation_id=gen,
+    )
+    names = _tool_names(agent)
+    assert deps.source_block_notes == {5, 6}
+    assert "write_note_from_source" in names
+    assert "read_source_note" not in names
+
+
+def test_sidecar_only_run_keeps_the_copy_workflow_tool(tmp_path):
+    """No generation → the sidecar workflow is unchanged, copy tool and all."""
+    from pydantic_ai.models.test import TestModel
+
+    d = _word_upload_dir(tmp_path)
+    agent, deps = notes_agent.create_notes_agent(
+        template_type=NotesTemplateType.CORP_INFO,
+        pdf_path=str(d / "uploaded.pdf"),
+        inventory=[], filing_level="company", model=TestModel(),
+        output_dir=str(tmp_path),
+    )
+    names = _tool_names(agent)
+    assert deps.source_block_notes == set()
+    assert "read_source_note" in names
+    assert "write_note_from_source" not in names
+
+
+def test_numeric_templates_stay_off_the_block_workflow(tmp_path, seeded):
+    """Peer review 2026-08-06: sheets 13/14 need structured numeric_values and
+    write_note_from_source resolves prose nodes only — teaching it there
+    taught a write that always rejects. A numeric agent keeps the sidecar
+    workflow: no write tool, no block prompt, copy tool still present."""
+    from pydantic_ai.models.test import TestModel
+
+    db, run_id, gen = seeded
+    d = _word_upload_dir(tmp_path)
+    agent, deps = notes_agent.create_notes_agent(
+        template_type=NotesTemplateType.ISSUED_CAPITAL,
+        pdf_path=str(d / "uploaded.pdf"),
+        inventory=[], filing_level="company", model=TestModel(),
+        output_dir=str(tmp_path),
+        run_id=run_id, db_path=db, source_generation_id=gen,
+    )
+    names = _tool_names(agent)
+    assert deps.source_block_notes == set()
+    assert "write_note_from_source" not in names
+    assert "read_source_note" in names
+
+
 # --------------------------------------------------------------------------
 # what the tools return
 # --------------------------------------------------------------------------

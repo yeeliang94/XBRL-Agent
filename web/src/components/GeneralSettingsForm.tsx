@@ -100,8 +100,8 @@ const THINKING_ROLES: { key: string; label: string; hint: string }[] = [
 // `off` on the next save (peer review 2026-08-04).
 const SOURCE_INTEGRITY_LABELS: Record<string, string> = {
   off: "Off — agents write notes from their own reading (default)",
-  shadow: "Measure only — agents build from the source; result never changes the run",
-  enforce: "On — agents build from the source; unused content flags the run",
+  shadow: "Measure only — source-built notes; the verdict never affects run status",
+  enforce: "On — source-built notes; unused content flags the run",
 };
 
 // Used only when a backend predates `notes_source_integrity_choices`.
@@ -721,13 +721,15 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         <p style={styles.helperText}>
           Off leaves each agent to write every note in its own output, which is
           where formatting and fidelity are lost. Measure only and On both
-          instruct agents to assemble each note directly from the Word
-          document&apos;s own text; notes the document doesn&apos;t cover are
-          still written the ordinary way. Measure only records how completely
-          the document was used without ever changing the run&apos;s result or
-          status. On additionally marks the run as needing review when part of
-          the document went unused. Agents are instructed, not forced — the
-          run&apos;s source-coverage report shows what they actually did.
+          change how notes are extracted: agents are instructed to assemble
+          each note directly from the Word document&apos;s own text. The
+          difference is what the coverage verdict does — under Measure only it
+          is recorded but never affects the run&apos;s status; under On, unused
+          source content marks the run as needing review. Notes the document
+          doesn&apos;t cover, and the two figure sheets (Issued Capital,
+          Related Party), are still written the ordinary way in every mode.
+          Agents are instructed, not forced — the run&apos;s source-coverage
+          report shows what they actually did.
         </p>
         {sourceIntegrity === "enforce" && (
           <p style={{ ...styles.helperText, color: pwc.grey700, fontWeight: 500 }}>

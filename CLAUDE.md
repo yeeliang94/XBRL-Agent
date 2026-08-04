@@ -1720,15 +1720,46 @@ notes (`deps.source_block_notes`, loaded once at factory time),
 rendering both would teach two incompatible workflows for the same notes, the
 run-79 defect shape — and the write-time nudges route to
 `write_note_from_source` (`format_block_write_nudge`) instead of the
-copy-into-content pair. Block-built payloads re-enter the sink and are exempt
-via a `_from_source_blocks` marker (the consulted check used to fire AGAINST
-them). Agents are instructed, not forced: `write_notes` stays correct for
-notes the source has no parts for, and for a PDF-vs-source disagreement.
-Consequence for the modes: `shadow` now runs the SAME source-first workflow as
-`enforce` — the two differ only in whether the verdict tips run status and the
-reviewer relinks — so "changes nothing" means run status, not extraction
-behaviour. An empty/failed reading degrades to the sidecar workflow. Pinned by
-`tests/test_notes_source_prompt.py`.
+copy-into-content pair. Agents are instructed, not forced: `write_notes` stays
+correct for notes the source has no parts for, and for a PDF-vs-source
+disagreement. Consequence for the modes: `shadow` now runs the SAME
+source-first workflow as `enforce` — the two differ only in whether the
+verdict tips run status and the reviewer relinks — so "changes nothing" means
+run status, not extraction behaviour (the Settings copy says so). An
+empty/failed reading degrades to the sidecar workflow.
+
+Four peer-review findings (2026-08-06) harden the activation; each was
+reproduced before fixing:
+
+- **`write_note_from_source` payloads are `source_built=True`
+  (CRITICAL).** The impl used to build a plain `NotesPayload` with no
+  `parent_note` — the validator raised AFTER `write_cell_from_blocks` had
+  committed, crashing the very tool the prompt teaches and leaving a DB cell
+  with no workbook artifact. `source_built` waives the evidence + parent_note
+  authoring contracts (the rendered text is the document's own, already
+  persisted with lineage; a second injected `<h3>` would make the
+  `persist_notes_cells` rewrite a clobber instead of a no-op). The
+  `write_notes` JSON parser never passes the field, so an agent cannot set it
+  to dodge the evidence contract. The payload also carries `note_num`
+  (`_note_num_for_blocks` — None on a multi-note selection, never guessed) so
+  the run-79 same-note supersede replaces a hand-written draft with the
+  source-built version instead of concatenating.
+- **`read_source_note` is HIDDEN on block-path runs.** Its description
+  teaches copy-into-content — exposing it beside the block tools handed the
+  agent two incompatible workflows again. Sidecar-only runs keep it.
+- **Numeric templates (13/14, `entry.is_numeric`) are excluded from the
+  block workflow.** `write_note_from_source` resolves prose `notes_nodes`
+  only; teaching it to Issued Capital / Related Party taught a write that
+  always rejects. The factory leaves `source_block_notes` empty for them —
+  the ONE switch that gates the prompt, the nudges, the write-tool
+  registration and the copy-tool hiding together — until a source-block →
+  numeric-facts path exists.
+- **The Settings copy states that `shadow` changes extraction behaviour**,
+  not just measurement — only the verdict's effect on status differs from
+  `enforce`.
+
+Pinned by `tests/test_notes_source_prompt.py`,
+`tests/test_notes_source_tools.py`.
 
 Every invariant below exists because breaking it produces a **false green** — a
 run that reports complete coverage of a document it only partly read. That is

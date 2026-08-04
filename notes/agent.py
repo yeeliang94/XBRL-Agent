@@ -1110,7 +1110,7 @@ def block_write_nudge_count(deps: "NotesDeps", payloads, result) -> int:
         contributors = by_label.get(cell.get("label"))
         if not contributors:
             continue
-        if any(getattr(p, "_from_source_blocks", False) for p in contributors):
+        if any(getattr(p, "source_built", False) for p in contributors):
             continue  # code built this cell from blocks — nothing to steer
         if any(_covered_by_source(deps, p) for p in contributors):
             count += 1
@@ -1388,11 +1388,11 @@ def _sub_agent_sink_write(
         # content nudges below would steer the wrong way — and they used to
         # fire AGAINST block-built payloads (which arrive through this sink
         # with no read_source_note call on record). Payloads code built from
-        # blocks are exempt via the _from_source_blocks marker.
+        # blocks are exempt via the source_built payload field.
         msg += format_block_write_nudge(sum(
             1 for p in accepted
             if "<table" in p.content.lower()
-            and not getattr(p, "_from_source_blocks", False)
+            and not getattr(p, "source_built", False)
             and _covered_by_source(deps, p)
         ))
     elif deps.source_html_path:
@@ -1802,6 +1802,31 @@ def _cap(text: str, cap: int = SOURCE_TOOL_RESPONSE_CAP) -> str:
     )
 
 
+def _note_num_for_blocks(conn, generation_id, block_ids) -> Optional[int]:
+    """The single top-level note the named blocks belong to, or None.
+
+    None on a multi-note selection or any lookup failure — the payload then
+    supersedes by content equality only, never by a guessed note number.
+    """
+    try:
+        from notes import source_repository as srepo
+
+        wanted = set(block_ids)
+        note_ids = {
+            b["source_note_id"] for b in srepo.fetch_blocks(conn, generation_id)
+            if b["block_id"] in wanted and b["source_note_id"]
+        }
+        if len(note_ids) != 1:
+            return None
+        (note_id,) = note_ids
+        for r in srepo.fetch_notes(conn, generation_id):
+            if r["source_note_id"] == note_id:
+                return int(str(r["top_note_num"]).split(".")[0])
+    except Exception:  # noqa: BLE001 — advisory metadata; never block a write
+        pass
+    return None
+
+
 def _source_block_note_nums(
     db_path: Optional[str], generation_id: Optional[int],
 ) -> set[int]:
@@ -1949,20 +1974,27 @@ def _write_from_source_impl(
             ).fetchone()
             label = (back["label"] if back else "") or ""
             rendered_html = (back["html"] if back else "") or ""
+            note_num_val = _note_num_for_blocks(
+                conn, deps.source_generation_id, block_ids,
+            )
     except source_write.SourceWriteError as exc:
         return f"rejected: {exc}"
 
+    # `source_built=True` is load-bearing (peer-review CRITICAL, 2026-08-06):
+    # a plain NotesPayload raised "parent_note is required" here — AFTER the
+    # DB write above had committed — crashing the very tool the block prompt
+    # teaches and leaving the run with a cell but no workbook artifact. It
+    # also exempts this payload from every copy-workflow nudge, and carries
+    # `note_num` so the sink's same-note supersede replaces an earlier
+    # hand-written draft of this note instead of concatenating with it.
     payload = NotesPayload(
         chosen_row_label=label,
         content=rendered_html,
         evidence=evidence or "",
         source_pages=list(source_pages),
+        note_num=note_num_val,
+        source_built=True,
     )
-    # Provenance marker for the nudge layer: this payload's text was BUILT
-    # from source blocks by code, so no nudge may steer it anywhere — the
-    # sink used to run the consulted/copy checks against it and could tell a
-    # block-written cell to go call read_source_note (prompt activation fix).
-    payload._from_source_blocks = True  # type: ignore[attr-defined]
     return outcome.as_message(), payload
 
 
@@ -2113,9 +2145,18 @@ def create_notes_agent(
     )
     # Prompt activation (2026-08-06): when the run has a frozen source
     # reading, load which top-level notes it covers — ONCE, at factory time.
-    # Drives both the prompt branch below and the block-write nudge; empty on
-    # any failure so the run degrades to the sidecar workflow, never crashes.
-    if source_generation_id is not None and db_path:
+    # Drives the prompt branch, the block-write nudge, the
+    # write_note_from_source registration AND the read_source_note hiding;
+    # empty on any failure so the run degrades to the sidecar workflow.
+    # NUMERIC templates are excluded (peer review 2026-08-06): sheets 13/14
+    # need structured numeric_values via write_notes, and no source-block →
+    # numeric-facts path exists yet — teaching write_note_from_source there
+    # taught a workflow whose write always rejects. They keep the sidecar
+    # workflow until a numeric path is built.
+    if (
+        source_generation_id is not None and db_path
+        and not entry.is_numeric
+    ):
         deps.source_block_notes = _source_block_note_nums(
             db_path, source_generation_id,
         )
@@ -2232,7 +2273,10 @@ def create_notes_agent(
     # Word-source formatting channel (PLAN-word-input.md Phase 2). Registered
     # ONLY when a source.html sidecar exists for this run — PDF-only runs never
     # see this tool (graceful degradation, like empty scout hints, gotcha #13).
-    if source_html_available:
+    # HIDDEN on block-path runs (peer review 2026-08-06): its description
+    # teaches copy-into-content, the exact workflow the block prompt replaces —
+    # exposing both hands the agent two incompatible instructions again.
+    if source_html_available and not deps.source_block_notes:
         @agent.tool
         async def read_source_note(ctx: RunContext[NotesDeps], note_num: int) -> str:
             """Fetch the ORIGINAL Word-source HTML for note ``note_num``.
@@ -2320,6 +2364,15 @@ def create_notes_agent(
                 _view_source_blocks_impl, ctx.deps.db_path,
                 ctx.deps.source_generation_id, block_ids,
             )
+
+    # The WRITE tool is scoped tighter than the read-only three (peer review
+    # 2026-08-06): it resolves prose notes_nodes only, so a numeric-template
+    # agent (Issued Capital / Related Party — `entry.is_numeric`) offering it
+    # would be taught a write that always rejects. Keyed on
+    # `deps.source_block_notes`, which the factory populates ONLY for prose
+    # templates with a non-empty reading — the same switch as the prompt and
+    # the nudges, so the taught workflow and the registered tools agree.
+    if deps.source_block_notes:
 
         @agent.tool
         async def write_note_from_source(

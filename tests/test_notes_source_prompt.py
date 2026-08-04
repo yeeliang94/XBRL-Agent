@@ -552,12 +552,56 @@ def test_sink_never_nudges_a_block_built_payload(tmp_path: Path):
     p = NotesPayload(
         chosen_row_label=label, content=_SOURCE_TABLE,
         evidence="Page 3, Note 1", note_num=1,
-        parent_note={"number": "1", "title": "T"},
+        source_built=True,
     )
-    p._from_source_blocks = True
     msg = _sub_agent_sink_write(deps, [p], parse_errors=[])
     assert "write_note_from_source" not in msg
     assert "read_source_note" not in msg
+
+
+def test_source_built_payload_constructs_without_heading_or_evidence():
+    """Peer-review CRITICAL (2026-08-06): `_write_from_source_impl` built a
+    plain NotesPayload with no parent_note and possibly no evidence, so the
+    validator raised AFTER write_cell_from_blocks had committed — crashing
+    the very tool the block prompt teaches and leaving a DB cell with no
+    workbook artifact. A source-built payload waives both authoring
+    contracts: its text is the document's own, already persisted with
+    lineage, and injecting a second heading would turn the later
+    persist_notes_cells rewrite into a clobber."""
+    from notes.payload import NotesPayload
+
+    # The exact construction the impl performs — previously a ValueError.
+    p = NotesPayload(
+        chosen_row_label="Receivables", content="<p>Stated at cost.</p>",
+        evidence="", source_pages=[], note_num=5, source_built=True,
+    )
+    assert p.source_built and p.parent_note is None
+    # The ordinary contract is untouched: an authored payload still needs both.
+    import pytest as _pytest
+    with _pytest.raises(ValueError):
+        NotesPayload(chosen_row_label="X", content="<p>b</p>", evidence="")
+
+
+def test_source_built_resend_supersedes_the_hand_written_draft(tmp_path: Path):
+    """The block write carries note_num, so the sink's same-note supersede
+    replaces an earlier hand-written draft instead of concatenating — the
+    run-79 duplication rule must hold for the block path too."""
+    from notes.agent import _sub_agent_sink_write, _ensure_label_index
+    from notes.payload import NotesPayload
+
+    agent, deps = _make_word_sink_agent(tmp_path, with_source=True)
+    deps.source_block_notes = {1}
+    label = _ensure_label_index(deps)[0].original
+
+    _send_payload(agent, deps, label, 1, _PLAIN_TABLE)
+    assert len(deps.payload_sink) == 1
+    block_payload = NotesPayload(
+        chosen_row_label=label, content=_SOURCE_TABLE,
+        evidence="", note_num=1, source_built=True,
+    )
+    _sub_agent_sink_write(deps, [block_payload], parse_errors=[])
+    assert len(deps.payload_sink) == 1
+    assert deps.payload_sink[0].source_built
 
 
 def test_block_write_count_counts_written_cells_only():

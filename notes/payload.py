@@ -127,6 +127,16 @@ class NotesPayload:
     # WITHIN this payload's own content; the writer re-offsets them when it
     # concatenates payloads into one cell.
     format_ops: Optional[list] = None
+    # True ONLY for payloads CODE built from source blocks
+    # (`write_note_from_source` → `_write_from_source_impl`). The rendered
+    # content already carries the source's own heading and is committed to
+    # the DB with lineage before this object exists, so the evidence and
+    # parent_note contracts are waived — injecting a second <h3> would make
+    # the later `persist_notes_cells` rewrite a clobber instead of a no-op,
+    # and raising here crashed the tool AFTER the DB commit (peer-review
+    # CRITICAL, 2026-08-06). The write_notes JSON parser never passes this
+    # field, so an agent cannot set it to dodge the evidence contract.
+    source_built: bool = False
 
     def __post_init__(self) -> None:
         if not self.chosen_row_label or not self.chosen_row_label.strip():
@@ -134,8 +144,10 @@ class NotesPayload:
         # Mandatory evidence contract (PLAN Section 2 #11). An empty content
         # row may skip the check — it's a deliberate "I looked and there's
         # nothing here" signal. Numeric-only rows are considered non-empty.
+        # Source-built payloads are exempt from BOTH authoring contracts:
+        # their text is the document's own, already persisted with lineage.
         has_payload = bool(self.content.strip()) or bool(self.numeric_values)
-        if has_payload and not self.evidence.strip():
+        if has_payload and not self.source_built and not self.evidence.strip():
             raise ValueError(
                 "evidence is required for any payload with content or "
                 "numeric_values (PLAN Section 2 #11)"
@@ -143,7 +155,7 @@ class NotesPayload:
         # Heading-hierarchy validation. Mirrors the evidence gate: mandatory
         # on any non-empty payload, waived on deliberate-empty "I looked and
         # found nothing" payloads so the agent can still report coverage.
-        if has_payload and self.parent_note is None:
+        if has_payload and not self.source_built and self.parent_note is None:
             raise ValueError(
                 "parent_note is required for any payload with content or "
                 "numeric_values — the writer needs {number, title} to emit "
