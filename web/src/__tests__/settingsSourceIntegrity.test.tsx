@@ -129,9 +129,9 @@ describe("Word source handling — the vocabulary is the server's", () => {
       ]);
     });
     // No wording for it, so it shows its raw value rather than disappearing.
-    expect(
-      Array.from((await picker()).querySelectorAll("option")).at(-1)?.textContent,
-    ).toBe("audit");
+    // opts[length - 1], not .at(-1) — the build targets ES2020.
+    const opts = Array.from((await picker()).querySelectorAll("option"));
+    expect(opts[opts.length - 1]?.textContent).toBe("audit");
   });
 
   test("it is selected on load, not narrowed to off", async () => {
