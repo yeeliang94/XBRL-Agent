@@ -471,6 +471,18 @@ export interface VariantSelection {
   confidence: ConfidenceLevel | null;  // null when manually selected
 }
 
+/** Notes source-integrity rollout mode (gotcha #31). Shipped values are `off`,
+ *  `shadow` (computes the verdict, changes nothing) and `enforce` (the
+ *  deterministic block-id path goes live and an unresolved block can tip the
+ *  run status).
+ *
+ *  Deliberately a plain string, not a union of those three: the SERVER owns the
+ *  vocabulary and publishes it as `notes_source_integrity_choices`. A union
+ *  would push the client to narrow an unrecognised mode to `off` on load and
+ *  then write that back on the next save — silently downgrading a mode the
+ *  backend actually supports. */
+export type SourceIntegrityMode = string;
+
 export interface ExtendedSettingsResponse extends SettingsResponse {
   available_models: ModelEntry[];
   default_models: Record<string, string>;
@@ -484,6 +496,10 @@ export interface ExtendedSettingsResponse extends SettingsResponse {
   spot_check_mode?: string;
   /** Whether per-entity advisory memory injects prior-year prompt hints (item 28). */
   entity_memory?: boolean;
+  /** Notes source-integrity rollout mode (gotcha #31). Default 'off'. */
+  notes_source_integrity?: SourceIntegrityMode;
+  /** Server-supplied vocabulary, so a new mode needs no frontend edit. */
+  notes_source_integrity_choices?: string[];
   /** Per-agent-role reasoning effort. An absent role uses the provider
    *  default, which is what every agent did before this setting existed. */
   thinking_levels?: Record<string, string>;

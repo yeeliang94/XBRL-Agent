@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { userMessage } from "../lib/errors";
-import type { ModelEntry, SettingsResponse } from "../lib/types";
+import type {
+  ModelEntry,
+  SettingsResponse,
+  SourceIntegrityMode,
+} from "../lib/types";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import {
@@ -20,8 +24,8 @@ import { ClipboardFormatControls } from "./ClipboardFormatControls";
 // ---------------------------------------------------------------------------
 
 interface Props {
-  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; spot_check?: boolean; spot_check_mode?: string; entity_memory?: boolean; thinking_levels?: Record<string, string>; thinking_level_choices?: string[]; thinking_level_choices_by_model?: Record<string, string[]>; notes_table_style?: Partial<ClipboardFormatOptions>; available_models?: ModelEntry[] }>;
-  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; auto_review: boolean; spot_check: boolean; spot_check_mode: "light" | "full"; entity_memory: boolean; thinking_levels: Record<string, string>; notes_table_style: ClipboardFormatOptions }>) => Promise<{ status: string }>;
+  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; spot_check?: boolean; spot_check_mode?: string; entity_memory?: boolean; notes_source_integrity?: SourceIntegrityMode; notes_source_integrity_choices?: string[]; thinking_levels?: Record<string, string>; thinking_level_choices?: string[]; thinking_level_choices_by_model?: Record<string, string[]>; notes_table_style?: Partial<ClipboardFormatOptions>; available_models?: ModelEntry[] }>;
+  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; auto_review: boolean; spot_check: boolean; spot_check_mode: "light" | "full"; entity_memory: boolean; notes_source_integrity: SourceIntegrityMode; thinking_levels: Record<string, string>; notes_table_style: ClipboardFormatOptions }>) => Promise<{ status: string }>;
   testConnection: (body: Partial<{ proxy_url: string; api_key: string; model: string }>) => Promise<{ status: string; model?: string; latency_ms?: number; message?: string }>;
   // When provided, a Cancel button is shown (used by the modal wrapper). The
   // page host omits it — there's nothing to cancel out of.
@@ -88,6 +92,20 @@ const THINKING_ROLES: { key: string; label: string; hint: string }[] = [
   { key: "ISSUED_CAPITAL", label: "Notes: issued capital", hint: "" },
   { key: "RELATED_PARTY", label: "Notes: related party", hint: "" },
 ];
+
+// Plain-language labels for the Word-source modes. The SERVER owns the list of
+// modes (`notes_source_integrity_choices`); this map only supplies wording for
+// the ones we have words for, so an unrecognised mode still renders — as its
+// raw value — instead of vanishing from the picker and being written back as
+// `off` on the next save (peer review 2026-08-04).
+const SOURCE_INTEGRITY_LABELS: Record<string, string> = {
+  off: "Off — the agent copies the source itself (default)",
+  shadow: "Measure only — report coverage, change nothing",
+  enforce: "On — build cells from the source automatically",
+};
+
+// Used only when a backend predates `notes_source_integrity_choices`.
+const SOURCE_INTEGRITY_FALLBACK = ["off", "shadow", "enforce"];
 
 const styles = {
   fieldGroup: {
@@ -291,6 +309,16 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
   const [levelChoicesByModel, setLevelChoicesByModel] =
     useState<Record<string, string[]>>({});
   const [entityMemory, setEntityMemory] = useState(true);
+  // Notes source-integrity rollout mode (gotcha #31). Default off — `shadow`
+  // computes the verdict and changes nothing, `enforce` makes the block-id
+  // path live and lets an unresolved block tip the run status.
+  const [sourceIntegrity, setSourceIntegrity] =
+    useState<SourceIntegrityMode>("off");
+  // Server-published vocabulary. Never hardcoded into the picker: a mode this
+  // build doesn't know about must still be selectable and, above all, must
+  // survive a save untouched.
+  const [integrityChoices, setIntegrityChoices] =
+    useState<string[]>(SOURCE_INTEGRITY_FALLBACK);
 
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -337,6 +365,21 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         setLevelChoices(s.thinking_level_choices || []);
         setLevelChoicesByModel(s.thinking_level_choices_by_model || {});
         setEntityMemory(s.entity_memory !== false);
+        // The server's own list decides what is valid — this build's knowledge
+        // of the modes does not. Keep whatever mode it reports as long as it is
+        // in that list; only an absent or genuinely out-of-list value falls
+        // back to `off`, which is also the shipped default.
+        const choices =
+          Array.isArray(s.notes_source_integrity_choices) &&
+          s.notes_source_integrity_choices.length > 0
+            ? s.notes_source_integrity_choices
+            : SOURCE_INTEGRITY_FALLBACK;
+        setIntegrityChoices(choices);
+        setSourceIntegrity(
+          s.notes_source_integrity && choices.includes(s.notes_source_integrity)
+            ? s.notes_source_integrity
+            : "off",
+        );
         if (Array.isArray(s.available_models)) setAvailableModels(s.available_models);
         setDirty(false);
       })
@@ -375,6 +418,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         spot_check: spotCheck,
         spot_check_mode: spotCheckMode,
         entity_memory: entityMemory,
+        notes_source_integrity: sourceIntegrity,
         // Send EVERY role, with "" for the ones set back to the provider
         // default. The server clears only the keys it is given, so omitting a
         // cleared role would leave its old level active — and omitting the
@@ -399,7 +443,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
     } finally {
       setSaving(false);
     }
-  }, [dirty, model, proxyUrl, apiKey, autoReview, spotCheck, spotCheckMode, entityMemory, thinkingLevels, saveSettings]);
+  }, [dirty, model, proxyUrl, apiKey, autoReview, spotCheck, spotCheckMode, entityMemory, sourceIntegrity, thinkingLevels, saveSettings]);
 
   // --- Test connection ---
   const handleTestConnection = useCallback(async () => {
@@ -643,6 +687,55 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         <p style={styles.helperText}>
           Light samples the highest-value figures in a few turns. Full runs the
           same deep reviewer used for failed runs (slower, more thorough).
+        </p>
+      </div>
+
+      <SettingsSectionHeading
+        title="Word source handling"
+        description="Controls how notes content is built when a filing is uploaded as a Word document."
+      />
+      {/* Notes source-integrity rollout mode (gotcha #31). Three values, not a
+          checkbox: `shadow` exists precisely so the verdict can be computed and
+          compared before anything changes. */}
+      <div style={styles.fieldGroup}>
+        <label style={styles.label} htmlFor="notes-source-integrity">
+          Build notes from the Word source
+        </label>
+        <select
+          id="notes-source-integrity"
+          value={sourceIntegrity}
+          onChange={(e) => {
+            setSourceIntegrity(e.target.value as SourceIntegrityMode);
+            setDirty(true);
+          }}
+          disabled={readOnly}
+          style={{ ...ui.input, maxWidth: 420 }}
+          aria-label="Word source handling mode"
+        >
+          {integrityChoices.map((mode) => (
+            <option key={mode} value={mode}>
+              {SOURCE_INTEGRITY_LABELS[mode] ?? mode}
+            </option>
+          ))}
+        </select>
+        <p style={styles.helperText}>
+          Off leaves each agent to reproduce the Word tables in its own output,
+          which is where formatting is usually lost. Measure only reports how
+          much of the document would have been covered, without altering the
+          result — the safe way to try it on a real filing. On assembles the
+          cells from the source document directly, so tables keep their original
+          formatting exactly; it can also mark a run as needing attention when
+          part of the document was never used.
+        </p>
+        {sourceIntegrity === "enforce" && (
+          <p style={{ ...styles.helperText, color: pwc.grey700, fontWeight: 500 }}>
+            This changes how notes are produced and can affect a run&apos;s
+            status. It has not yet been validated on a live filing — run
+            &quot;Measure only&quot; on the same document first.
+          </p>
+        )}
+        <p style={styles.helperText}>
+          Word uploads only. PDF filings are unaffected by this setting.
         </p>
       </div>
 

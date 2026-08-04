@@ -157,6 +157,43 @@ def test_spot_check_mode_rejects_invalid_value(tmp_path, monkeypatch):
     assert resp.status_code == 400
 
 
+def test_notes_source_integrity_round_trips(tmp_path, monkeypatch):
+    """Gotcha #31's rollout mode is operator-settable from Settings rather than
+    .env-only. All three values are offered — the operator asked for the full
+    ladder, and `shadow` is useless without `enforce` to graduate to."""
+    from notes.source_models import IntegrityMode
+
+    env_file = tmp_path / ".env"
+    monkeypatch.setattr(server, "ENV_FILE", env_file)
+    monkeypatch.delenv("XBRL_NOTES_SOURCE_INTEGRITY", raising=False)
+
+    s = client.get("/api/settings").json()
+    assert s["notes_source_integrity"] == "off"  # shipped default
+    # The vocabulary is served, so a new mode needs no frontend edit.
+    assert s["notes_source_integrity_choices"] == ["off", "shadow", "enforce"]
+
+    from dotenv import load_dotenv
+    for mode in ("shadow", "enforce", "off"):
+        assert client.post(
+            "/api/settings", json={"notes_source_integrity": mode},
+        ).status_code == 200
+        load_dotenv(env_file, override=True)
+        assert client.get("/api/settings").json()["notes_source_integrity"] == mode
+        # The run path reads the same value the form just wrote.
+        assert server._notes_integrity_mode() is IntegrityMode(mode)
+
+
+def test_notes_source_integrity_rejects_invalid_value(tmp_path, monkeypatch):
+    """`integrity_mode()` fails CLOSED to `off` on an unrecognised value, so an
+    unvalidated write would look saved in the form and silently do nothing on
+    the next run. The 400 is what makes the setting honest."""
+    env_file = tmp_path / ".env"
+    monkeypatch.setattr(server, "ENV_FILE", env_file)
+    resp = client.post("/api/settings", json={"notes_source_integrity": "on"})
+    assert resp.status_code == 400
+    assert "off, shadow, enforce" in resp.json()["detail"]
+
+
 def test_reviewer_model_name_reads_default_models(tmp_path, monkeypatch):
     monkeypatch.delenv("XBRL_DEFAULT_MODELS", raising=False)
     assert server._reviewer_model_name() is None  # unset → inherit run model

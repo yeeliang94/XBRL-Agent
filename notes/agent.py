@@ -977,6 +977,82 @@ def format_unconsulted_source_nudge(count: int) -> str:
     )
 
 
+def word_run_nudge_counts(deps: "NotesDeps", payloads, result) -> tuple[int, int]:
+    """`(unconsulted, uncopied)` table-CELL counts for one Word-run write.
+
+    Counted over the cells the writer ACTUALLY wrote, never over submitted
+    payloads (peer review 2026-08-04). A payload whose label was rejected, or
+    whose row write failed, produces no cell — telling the agent that cell
+    "landed unstyled" sends it to restyle something that does not exist, and in
+    the all-rejected case the whole nudge fires over zero cells.
+
+    Cells are also the right UNIT: both messages say "N table cell(s)", and
+    `_combine_payloads` can fold several payloads into one cell, so counting
+    payloads overstates whenever a note is written in parts.
+
+    Payloads are attributed to their cell through the writer's fuzzy-match
+    table — a fuzzy-but-accepted label is the same row. A cell whose
+    contributors can't be identified is left out of both counts rather than
+    guessed into one.
+    """
+    fuzzy = {req: chosen for req, chosen, _ in (result.fuzzy_matches or [])}
+    by_label: dict[str, list] = {}
+    for p in payloads:
+        label = fuzzy.get(p.chosen_row_label, p.chosen_row_label)
+        by_label.setdefault(label, []).append(p)
+
+    unconsulted = uncopied = 0
+    for cell in (result.cells_written or []):
+        if "<table" not in (cell.get("html") or "").lower():
+            continue
+        contributors = by_label.get(cell.get("label"))
+        if not contributors:
+            continue
+        if not any(_payload_source_consulted(deps, p) for p in contributors):
+            unconsulted += 1
+        elif cell.get("style_source") == "unstyled":
+            # `unstyled` already means no usable format_ops were applied —
+            # a cell whose ops landed is tagged "ops", a verbatim copy
+            # "source". No need to re-test payload.format_ops here.
+            uncopied += 1
+    return unconsulted, uncopied
+
+
+def format_uncopied_source_nudge(count: int) -> str:
+    """Feedback for a table that landed unstyled although its Word source WAS read.
+
+    Run 79 (2026-08-04): every Sheet-12 sub-agent called `read_source_note` and
+    every call returned styled markup, yet 14 table cells persisted with no
+    styling at all — those tables were rebuilt from the PDF instead of copied.
+    The only feedback they drew was the run-63 nudge, which asks for
+    `format_ops`. On a Word run that CONTRADICTS the source block ("do NOT
+    translate it into `format_ops`") and points at the lower-fidelity remedy:
+    one agent attempted it, produced malformed JSON, was rejected, and dropped
+    the styling entirely on its retry.
+
+    Neither existing nudge covered this case. `format_unconsulted_source_nudge`
+    fires only when the source was never read, and every run-79 agent had read
+    it. So the gap is exactly "consulted the source, did not copy it".
+
+    Two-sided like its siblings: it names the copy as the remedy, and blesses
+    `format_ops` when the source genuinely holds no table for that note.
+    """
+    if count <= 0:
+        return ""
+    return (
+        f"\nNote: {count} table cell(s) landed unstyled even though you had "
+        f"already called read_source_note for those notes. The source markup "
+        f"you fetched carries the real Word borders and alignment on its "
+        f"cells; rebuilding the table from the PDF drops all of it. Re-send "
+        f"those rows via write_notes with the source table's markup copied "
+        f"into content verbatim, `style=` attributes included (an identical "
+        f"re-send replaces the earlier version). Do NOT describe the styling "
+        f"as format_ops — copying is higher fidelity than re-describing. If "
+        f"the source held no table for a note and you read it from the PDF "
+        f"instead, use format_ops there as usual."
+    )
+
+
 def format_unstyled_table_nudge(count: int) -> str:
     """Feedback line for table cells written without a formatting observation.
 
@@ -1103,19 +1179,26 @@ def _sub_agent_sink_write(
     # and push the agent to re-describe formatting it already copied (the
     # run-74 fidelity problem verbatim passthrough exists to fix). Judged on
     # SANITIZED html so the verdict matches what the writer will store.
-    msg += format_unstyled_table_nudge(sum(
-        1 for p in accepted
+    unstyled = [
+        p for p in accepted
         if not p.format_ops and "<table" in p.content.lower()
         and not _content_lands_source_styled(p.content)
-    ))
-    # Word uploads only: a table written without ever calling read_source_note
-    # is a missed verbatim copy, not a style choice (run 74).
+    ]
     if deps.source_html_path:
+        # Word upload: the remedy is ALWAYS to copy the source markup, never to
+        # re-describe it as format_ops — the source block says so explicitly, so
+        # the run-63 nudge would contradict it here (run 79). Which of the two
+        # source nudges applies turns on whether the note was read at all.
         msg += format_unconsulted_source_nudge(sum(
             1 for p in accepted
             if "<table" in p.content.lower()
             and not _payload_source_consulted(deps, p)
         ))
+        msg += format_uncopied_source_nudge(sum(
+            1 for p in unstyled if _payload_source_consulted(deps, p)
+        ))
+    else:
+        msg += format_unstyled_table_nudge(len(unstyled))
     return msg
 
 
@@ -2265,16 +2348,20 @@ def create_notes_agent(
         # row supersedes the cell). Appended AFTER the "Wrote N row(s)"
         # prefix — the history processors' write-boundary regex anchors on
         # that prefix (test_history_processors).
-        msg += format_unstyled_table_nudge(sum(
-            1 for c in (result.cells_written or [])
-            if c.get("style_source") == "unstyled"
-            and "<table" in (c.get("html") or "").lower()
-        ))
         if ctx.deps.source_html_path:
-            msg += format_unconsulted_source_nudge(sum(
-                1 for p in payloads
-                if "<table" in (p.content or "").lower()
-                and not _payload_source_consulted(ctx.deps, p)
+            # Word upload: copy the source, never re-describe it as format_ops
+            # (run 79 — same reasoning as the sink-path site above). Counted
+            # over WRITTEN cells, so a rejected label can't be nudged about.
+            unconsulted, uncopied = word_run_nudge_counts(
+                ctx.deps, payloads, result,
+            )
+            msg += format_unconsulted_source_nudge(unconsulted)
+            msg += format_uncopied_source_nudge(uncopied)
+        else:
+            msg += format_unstyled_table_nudge(sum(
+                1 for c in (result.cells_written or [])
+                if c.get("style_source") == "unstyled"
+                and "<table" in (c.get("html") or "").lower()
             ))
         return msg
 
