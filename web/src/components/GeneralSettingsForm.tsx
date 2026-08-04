@@ -99,9 +99,9 @@ const THINKING_ROLES: { key: string; label: string; hint: string }[] = [
 // raw value — instead of vanishing from the picker and being written back as
 // `off` on the next save (peer review 2026-08-04).
 const SOURCE_INTEGRITY_LABELS: Record<string, string> = {
-  off: "Off — the agent copies the source itself (default)",
-  shadow: "Measure only — report coverage, change nothing",
-  enforce: "On — build cells from the source automatically",
+  off: "Off — agents write notes from their own reading (default)",
+  shadow: "Measure only — agents build from the source; result never changes the run",
+  enforce: "On — agents build from the source; unused content flags the run",
 };
 
 // Used only when a backend predates `notes_source_integrity_choices`.
@@ -719,19 +719,21 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
           ))}
         </select>
         <p style={styles.helperText}>
-          Off leaves each agent to reproduce the Word tables in its own output,
-          which is where formatting is usually lost. Measure only reports how
-          much of the document would have been covered, without altering the
-          result — the safe way to try it on a real filing. On assembles the
-          cells from the source document directly, so tables keep their original
-          formatting exactly; it can also mark a run as needing attention when
-          part of the document was never used.
+          Off leaves each agent to write every note in its own output, which is
+          where formatting and fidelity are lost. Measure only and On both
+          instruct agents to assemble each note directly from the Word
+          document&apos;s own text; notes the document doesn&apos;t cover are
+          still written the ordinary way. Measure only records how completely
+          the document was used without ever changing the run&apos;s result or
+          status. On additionally marks the run as needing review when part of
+          the document went unused. Agents are instructed, not forced — the
+          run&apos;s source-coverage report shows what they actually did.
         </p>
         {sourceIntegrity === "enforce" && (
           <p style={{ ...styles.helperText, color: pwc.grey700, fontWeight: 500 }}>
-            This changes how notes are produced and can affect a run&apos;s
-            status. It has not yet been validated on a live filing — run
-            &quot;Measure only&quot; on the same document first.
+            This can affect a run&apos;s status. The source-built workflow has
+            not yet been validated on a live filing — run &quot;Measure
+            only&quot; on the same document first.
           </p>
         )}
         <p style={styles.helperText}>

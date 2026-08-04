@@ -1709,6 +1709,27 @@ save of any unrelated setting, silently downgrading the backend's real mode
 not a union. Pinned by `tests/test_settings_api.py` and
 `web/src/__tests__/settingsSourceIntegrity.test.tsx`.
 
+**Prompt activation (2026-08-06) — the tools are now TAUGHT.** Phases 1–10
+built the block tools, renderer and checks, but no prompt ever mentioned them:
+on the first live `enforce` run (IME 2024) every agent stayed on the
+copy-into-content channel, `write_note_from_source` was never invoked, and the
+integrity check then flagged the unused blocks — the mode was an accounting
+layer, not a workflow. Now, when a generation exists AND its reading found
+notes (`deps.source_block_notes`, loaded once at factory time),
+`_render_source_blocks_block` REPLACES the copy-verbatim sidecar block —
+rendering both would teach two incompatible workflows for the same notes, the
+run-79 defect shape — and the write-time nudges route to
+`write_note_from_source` (`format_block_write_nudge`) instead of the
+copy-into-content pair. Block-built payloads re-enter the sink and are exempt
+via a `_from_source_blocks` marker (the consulted check used to fire AGAINST
+them). Agents are instructed, not forced: `write_notes` stays correct for
+notes the source has no parts for, and for a PDF-vs-source disagreement.
+Consequence for the modes: `shadow` now runs the SAME source-first workflow as
+`enforce` — the two differ only in whether the verdict tips run status and the
+reviewer relinks — so "changes nothing" means run status, not extraction
+behaviour. An empty/failed reading degrades to the sidecar workflow. Pinned by
+`tests/test_notes_source_prompt.py`.
+
 Every invariant below exists because breaking it produces a **false green** — a
 run that reports complete coverage of a document it only partly read. That is
 the one failure this feature has no defence against, so each is pinned.
@@ -1799,8 +1820,10 @@ the one failure this feature has no defence against, so each is pinned.
 - **Status goes through the ONE existing block in `server.py`** (gotcha #10) —
   `_run_notes_integrity_check` returns a verdict and never writes a status,
   pinned by a test that reads its source. Only `enforce` tips; `shadow`
-  computes the IDENTICAL verdict and changes nothing, which is what makes the
-  staged rollout mean anything.
+  computes the IDENTICAL verdict and never touches run status. (Since prompt
+  activation, 2026-08-06, `shadow` shares `enforce`'s source-first extraction
+  workflow — the staged rollout comparison is now verdict-vs-status, not
+  workflow-vs-workflow; see the activation block above.)
 - **A stored verdict carries its `rule_version` and its `mode`**, and attempts
   append rather than replace. `legacy` (pre-feature), `off` (somebody decided)
   and a real verdict are three different facts and the API keeps them apart —
