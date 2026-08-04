@@ -868,7 +868,20 @@ Key invariants:
     FORMATTING OBSERVATION block say a visible table's formatting is
     EXPECTED, and the Sheet-12 sink replaces (not concatenates) an
     identical-content re-send so the nudge's "re-send with format_ops" advice
-    is safe. **On a WORD run that advice is WRONG, and the branch is not
+    is safe. **A SOURCE-STYLED re-send additionally replaces every earlier
+    payload for the same top-level note on that row (run-79 duplication fix,
+    2026-08-05):** the identical-content rule alone cannot catch a source
+    copy — it almost never renders the same text as the rebuilt table it
+    corrects (the rebuild compresses headers/year rows) — so following the
+    source nudges used to CONCATENATE both versions into one cell (Notes 6
+    and 9 each shipped twice). A source copy is whole-note by construction
+    (`read_source_note` returns the full note slice), so
+    `_top_level_note_key` matching ("9.1" → "9") makes the replace safe; a
+    DIFFERENT note sharing the row survives, and a mixed row draws an
+    advisory `_mixed_note_warnings` line in the tool reply (never a reject —
+    catch-all grouping is legitimate). Both nudges now say "send the note's
+    FULL content — prose and table" because the replace makes a table-only
+    re-send lossy. **On a WORD run that advice is WRONG, and the branch is not
     optional (run-79 fix, 2026-08-04):** the source block orders the agent to
     copy the table verbatim and NOT to translate it into `format_ops`, so the
     run-63 nudge contradicts it. Three cases, and each needs its own message —

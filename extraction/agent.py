@@ -1068,7 +1068,7 @@ def create_extraction_agent(
             'skipped' with a reason; never plug a row to satisfy coverage.
             """
             from extraction.coverage import (
-                FaceCoverageReceipt, face_coverage_warnings,
+                FaceCoverageReceipt, unaccounted_labels,
             )
             try:
                 receipt = FaceCoverageReceipt.from_json(receipt_json)
@@ -1081,14 +1081,20 @@ def create_extraction_agent(
             errors = receipt.validate(ctx.deps.face_line_refs)
             ctx.deps.face_coverage_receipt = receipt
             ctx.deps.face_coverage_submitted = True
-            warnings = face_coverage_warnings(ctx.deps.face_line_refs, receipt)
+            unaccounted = unaccounted_labels(ctx.deps.face_line_refs, receipt)
             parts = ["Coverage receipt recorded."]
             if errors:
                 parts.append("Issues: " + "; ".join(errors))
-            if warnings:
+            if unaccounted:
+                # Echo the BARE labels — the exact spellings the matcher
+                # accepts. The old reply echoed the display sentence with
+                # "(Note N)" appended, so the agent's corrected resubmission
+                # matched nothing either and the retry could never converge
+                # (2026-08-05 SOFP run: 15/15 warned on a filled statement).
                 parts.append(
-                    f"{len(warnings)} scout-observed line(s) still "
-                    f"unaccounted: " + "; ".join(w.split(" — ")[0] for w in warnings)
+                    f"{len(unaccounted)} line(s) still unaccounted. Resubmit "
+                    f"with ref set to the label text only — no note number: "
+                    + "; ".join(f"'{lbl}'" for lbl in unaccounted)
                 )
             return " ".join(parts)
 

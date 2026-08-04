@@ -932,6 +932,59 @@ def _payload_source_consulted(deps: "NotesDeps", payload) -> bool:
     return bool(refs & consulted)
 
 
+def _top_level_note_key(payload) -> Optional[str]:
+    """The payload's TOP-LEVEL note number as a string, or None.
+
+    `parent_note["number"]` first (mandatory on any content payload), falling
+    back to `note_num`. "9.1" resolves to "9": a source copy spans the whole
+    top-level note including its sub-notes, and grouping a note with its own
+    sub-notes in one row is legitimate — only a DIFFERENT top-level note in
+    the same cell is the run-79 misrouting case.
+    """
+    parent = getattr(payload, "parent_note", None) or {}
+    head = str(parent.get("number", "")).split(".")[0].strip()
+    if head:
+        return head
+    num = getattr(payload, "note_num", None)
+    return str(num) if num is not None else None
+
+
+def _mixed_note_warnings(deps: "NotesDeps", entries, accepted) -> list[str]:
+    """One line per row THIS call touched that now holds >1 top-level note.
+
+    Advisory, never a reject: grouping several small notes into one row can be
+    deliberate (a catch-all row is exactly that). The failure it surfaces is
+    run 79's Note 9 cell — an unrelated Note 22.1 appended by accident and
+    shipped inside another note's row, which nothing reported at write time.
+    """
+    by_row: dict[int, set[str]] = {}
+    row_label: dict[int, str] = {}
+    for e in deps.payload_sink:
+        resolved = _resolve_row(entries, e.chosen_row_label)
+        key = _top_level_note_key(e)
+        if resolved is None or key is None:
+            continue
+        by_row.setdefault(resolved[0], set()).add(key)
+        row_label.setdefault(resolved[0], e.chosen_row_label)
+    touched: set[int] = set()
+    for p in accepted:
+        resolved = _resolve_row(entries, p.chosen_row_label)
+        if resolved is not None:
+            touched.add(resolved[0])
+    out: list[str] = []
+    for row in sorted(touched):
+        keys = by_row.get(row) or set()
+        if len(keys) > 1:
+            ordered = sorted(
+                keys, key=lambda k: (0, int(k)) if k.isdigit() else (1, k),
+            )
+            out.append(
+                f"'{row_label.get(row, '?')}' now holds notes "
+                + " and ".join(ordered)
+            )
+    return out
+
+
 def _content_lands_source_styled(content: str) -> bool:
     """Mirror the writer's eventual verdict for the sink-path nudge.
 
@@ -971,9 +1024,10 @@ def format_unconsulted_source_nudge(count: int) -> str:
         f"original table markup — with its real borders and alignment — is "
         f"available and can be copied verbatim. Call read_source_note for "
         f"those notes and, if it returns a table, re-send those rows via "
-        f"write_notes with the source markup copied into content (an "
-        f"identical re-send replaces the earlier version). If it returns "
-        f"nothing for a note, no action is needed."
+        f"write_notes with the source markup copied into content. Send the "
+        f"note's FULL content — prose and table, not the table alone: a "
+        f"source-copied re-send REPLACES your earlier version of that note "
+        f"in the cell. If it returns nothing for a note, no action is needed."
     )
 
 
@@ -1045,8 +1099,10 @@ def format_uncopied_source_nudge(count: int) -> str:
         f"you fetched carries the real Word borders and alignment on its "
         f"cells; rebuilding the table from the PDF drops all of it. Re-send "
         f"those rows via write_notes with the source table's markup copied "
-        f"into content verbatim, `style=` attributes included (an identical "
-        f"re-send replaces the earlier version). Do NOT describe the styling "
+        f"into content verbatim, `style=` attributes included. Send the "
+        f"note's FULL content — its prose and its table, not the table "
+        f"alone: a source-copied re-send REPLACES your earlier version of "
+        f"that note in the cell. Do NOT describe the styling "
         f"as format_ops — copying is higher fidelity than re-describing. If "
         f"the source held no table for a note and you read it from the PDF "
         f"instead, use format_ops there as usual."
@@ -1134,22 +1190,34 @@ def _sub_agent_sink_write(
     # model reproducing content verbatim drifts on whitespace/attribute order,
     # and a raw-string compare would miss the resend and duplicate the note.
     # Genuinely different content on the same row keeps today's combine
-    # semantics.
+    # semantics — with ONE exception (run-79 duplication fix, 2026-08-05):
+    # a SOURCE-STYLED re-send is a whole-note copy (`read_source_note`
+    # returns the full note slice), so it subsumes every earlier payload for
+    # the same top-level note on that row — multi-part drafts and earlier
+    # source copies alike. The identical-content rule cannot catch it: a
+    # source copy almost never renders the same text as the rebuilt table it
+    # corrects (the rebuild compresses headers and year rows), which is how
+    # Note 6 and Note 9 each landed TWICE in one cell — rebuilt version plus
+    # full source version, concatenated.
     for p in accepted:
         resolved = _resolve_row(entries, p.chosen_row_label)
         p_row = resolved[0] if resolved else None
         if p_row is None:
             continue  # unreachable for accepted payloads; keep defensive
         p_key = _content_supersede_key(p.content)
+        p_note = _top_level_note_key(p)
+        p_is_source = _content_lands_source_styled(p.content)
         kept = []
         for e in deps.payload_sink:
             e_resolved = _resolve_row(entries, e.chosen_row_label)
-            if (
-                e_resolved is not None
-                and e_resolved[0] == p_row
-                and _content_supersede_key(e.content) == p_key
-            ):
+            same_row = e_resolved is not None and e_resolved[0] == p_row
+            if same_row and _content_supersede_key(e.content) == p_key:
                 continue  # equivalent resend — the new payload supersedes
+            if (
+                same_row and p_is_source and p_note is not None
+                and _top_level_note_key(e) == p_note
+            ):
+                continue  # whole-note source copy replaces the earlier draft
             kept.append(e)
         deps.payload_sink[:] = kept
     deps.payload_sink.extend(accepted)
@@ -1172,6 +1240,16 @@ def _sub_agent_sink_write(
         msg += "\n" + "\n".join(lines)
     if parse_errors:
         msg += "\nParse errors: " + "; ".join(parse_errors)
+    # Run-79 Note-9 case: an unrelated top-level note appended into an
+    # occupied row shipped without any write-time signal. Advisory only —
+    # grouping can be deliberate — but the agent must HEAR the row is mixed.
+    mixed = _mixed_note_warnings(deps, entries, accepted)
+    if mixed:
+        msg += (
+            "\nNote: " + "; ".join(mixed) + ". If any of that content landed "
+            "there by accident, re-send it under its correct row label; if "
+            "the grouping is deliberate, no action is needed."
+        )
     # Provenance-aware like the tool-path site (which checks
     # style_source == "unstyled"): a table copied VERBATIM from the Word
     # source carries its styling inline and needs no ops — nudging it to

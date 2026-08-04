@@ -101,6 +101,55 @@ def test_expected_ref_label_formats_note():
 
 
 # --------------------------------------------------------------------------
+# Decorated-ref matching (2026-08-05 SOFP run: 15/15 false warnings)
+# --------------------------------------------------------------------------
+# The agent never sees the bare label alone. The prompt renders each line as
+# "Label → Note 2"; the old failure feedback echoed "Label (Note 2)". The
+# agent submitted first one form, then the other; neither matched, so every
+# line warned on a fully-filled statement and the retry could not converge.
+
+@pytest.mark.parametrize("ref", [
+    "Trade receivables → Note 18",     # the prompt's rendering
+    "Trade receivables -> Note 18",    # ASCII-arrow variant
+    "Trade receivables (Note 18)",     # the old feedback's rendering
+    "*Trade Receivables (note 18)",    # decoration + the older loose forms
+])
+def test_decorated_refs_match_the_bare_label(ref):
+    receipt = FaceCoverageReceipt.from_json(
+        f'[{{"ref": "{ref}", "action": "written"}}]'
+    )
+    assert receipt.validate(_REFS) == []
+    warns = face_coverage_warnings(_REFS, receipt)
+    assert not any("Trade receivables" in w for w in warns)
+
+
+def test_note_reference_inside_a_label_is_not_stripped():
+    # Only a TRAILING decoration is stripped — a label that genuinely ends
+    # differently, or carries the words mid-label, must stay distinct.
+    from extraction.coverage import _normalize_ref
+
+    assert _normalize_ref("Amount due (note 9 companies)") == \
+        "amount due (note 9 companies)"
+    assert _normalize_ref("Trade receivables (Note 18)") == "trade receivables"
+
+
+def test_unaccounted_labels_returns_the_accepted_spellings():
+    # The tool's failure reply must hand back the BARE labels — the exact
+    # strings the matcher accepts — never the display sentence.
+    from extraction.coverage import unaccounted_labels
+
+    receipt = FaceCoverageReceipt(entries=[
+        FaceCoverageEntry("Trade receivables", "written"),
+    ])
+    labels = unaccounted_labels(_REFS, receipt)
+    assert labels == ["Other investments", "Cash and bank balances"]
+    assert not any("(Note" in lbl for lbl in labels)
+    assert unaccounted_labels(_REFS, None) == [
+        "Trade receivables", "Other investments", "Cash and bank balances",
+    ]
+
+
+# --------------------------------------------------------------------------
 # Conditional tool registration on the extraction agent
 # --------------------------------------------------------------------------
 
