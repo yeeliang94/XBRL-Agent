@@ -868,7 +868,29 @@ Key invariants:
     FORMATTING OBSERVATION block say a visible table's formatting is
     EXPECTED, and the Sheet-12 sink replaces (not concatenates) an
     identical-content re-send so the nudge's "re-send with format_ops" advice
-    is safe. **Styling provenance is surfaced:** `_style_cell_html` tags each
+    is safe. **On a WORD run that advice is WRONG, and the branch is not
+    optional (run-79 fix, 2026-08-04):** the source block orders the agent to
+    copy the table verbatim and NOT to translate it into `format_ops`, so the
+    run-63 nudge contradicts it. Three cases, and each needs its own message —
+    `format_unstyled_table_nudge` fires only when the run has NO `source.html`;
+    with one, an unread note gets `format_unconsulted_source_nudge` (run 74)
+    and a note that WAS read but whose table still landed plain gets
+    `format_uncopied_source_nudge`. Run 79 was the third case: every Sheet-12
+    sub-agent had called `read_source_note` and every call returned styled
+    markup, yet 14 table cells persisted with zero styling — and the only
+    feedback they drew pointed at the harder, lower-fidelity remedy (one agent
+    tried it, emitted malformed JSON, and dropped the styling on retry). Both
+    call sites (`_sub_agent_sink_write` and the `write_notes` tool) carry the
+    same three-way split. **Count WRITTEN CELLS, not submitted payloads**
+    (peer review, 2026-08-04): the sink path's `accepted` list is already
+    post-validation, but the tool path's `payloads` is not, so a rejected label
+    or a failed row write was reported as a cell that "landed unstyled" — and
+    an all-rejected write nudged over zero cells. `word_run_nudge_counts`
+    attributes payloads to `result.cells_written` through the writer's
+    fuzzy-match table (a fuzzy-but-accepted label is the same row) and counts
+    cells, which is also the unit both messages name and the only unit that
+    survives `_combine_payloads` folding a note into one cell.
+    **Styling provenance is surfaced:** `_style_cell_html` tags each
     cell `ops`/`unstyled`, persisted to `notes_cells.style_source` (v29,
     preserve-on-omit like `concept_uuid`), returned by `GET /notes_cells`, and
     shown as a chip in the Notes tab (`StyleSourceChip` — only for `unstyled`/
@@ -1658,6 +1680,21 @@ uploaded `.docx` is read into numbered, hashed **blocks** before any agent sees
 a template, agents return block ids instead of prose, and ordinary code builds
 the cell and counts what was used. Plan:
 docs/PLAN-notes-source-integrity-build.md. Schema is gotcha #11 (v35/v36).
+
+**Operator-settable from Settings since 2026-08-04** (`notes_source_integrity`
+on `/api/settings` + `/api/config`, "Word source handling" in the General tab).
+All three modes are offered — `shadow` only earns its keep as a step towards
+`enforce`. The POST validates against `IntegrityMode` and 400s an unknown value
+**because `integrity_mode()` fails CLOSED to `off`**: an unvalidated write would
+read as saved in the form and silently do nothing on the next run. The picker's
+vocabulary is served (`notes_source_integrity_choices`) and the picker BUILDS
+its options from it — a mode the frontend doesn't know must still render (as
+its raw value) and, above all, survive a save. Hardcoding the three modes made
+a future one display as `off` and then be written back as `off` on the next
+save of any unrelated setting, silently downgrading the backend's real mode
+(peer review, 2026-08-04). `SourceIntegrityMode` is therefore a plain string,
+not a union. Pinned by `tests/test_settings_api.py` and
+`web/src/__tests__/settingsSourceIntegrity.test.tsx`.
 
 Every invariant below exists because breaking it produces a **false green** — a
 run that reports complete coverage of a document it only partly read. That is

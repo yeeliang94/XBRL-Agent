@@ -147,3 +147,220 @@ def test_payload_consulted_helper_tracks_note_refs():
     # parent_note number alone is enough to resolve the note (it is
     # mandatory on any content payload), and note 5 was consulted.
     assert _payload_source_consulted(deps, p_none)
+
+
+# --- uncopied-source nudge (2026-08-04) ------------------------------------
+# Run 79: every Sheet-12 sub-agent CALLED read_source_note and every call
+# returned styled markup, yet 14 table cells persisted with no styling — the
+# tables were rebuilt from the PDF rather than copied. Neither existing nudge
+# covered that: the unconsulted one needs an unread source, and the run-63 one
+# asks for format_ops, which the source block explicitly forbids on a Word run.
+
+def test_uncopied_source_nudge_is_silent_at_zero():
+    from notes.agent import format_uncopied_source_nudge
+
+    assert format_uncopied_source_nudge(0) == ""
+    assert format_uncopied_source_nudge(-1) == ""
+
+
+def test_uncopied_source_nudge_names_copying_and_blesses_the_ops_fallback():
+    from notes.agent import format_uncopied_source_nudge
+
+    msg = format_uncopied_source_nudge(2)
+    assert "2 table cell(s)" in msg
+    assert "read_source_note" in msg
+    lowered = msg.lower()
+    # The remedy is the COPY, and the message must not send the agent back to
+    # describing the styling as ops — that contradiction is the defect.
+    assert "verbatim" in lowered
+    assert "do not describe the styling as format_ops" in lowered
+    # Still two-sided: ops remain correct for a note the source doesn't cover.
+    assert "no table" in lowered
+
+
+def _make_word_sink_agent(tmp_path: Path, *, with_source: bool):
+    """Sheet-12 sub-agent in sink mode, with or without a Word sidecar."""
+    (tmp_path / "uploaded.pdf").write_bytes(b"%PDF-1.4\n")
+    if with_source:
+        (tmp_path / "source.html").write_text(
+            "<h1>1. Corporate information</h1>"
+            '<table><tr><td style="text-align: right">1,595</td></tr></table>',
+            encoding="utf-8",
+        )
+    agent, deps = create_notes_agent(
+        template_type=NotesTemplateType.LIST_OF_NOTES,
+        pdf_path=str(tmp_path / "uploaded.pdf"),
+        inventory=[],
+        filing_level="company",
+        model="test",
+        output_dir=str(tmp_path),
+        batch_note_nums=[1],
+    )
+    deps.payload_sink = []
+    return agent, deps
+
+
+def _write_plain_table(agent, deps):
+    """Write one plain (unstyled) table for note 1 and return the tool reply."""
+    import asyncio
+    import json
+    from types import SimpleNamespace
+
+    from notes.agent import _ensure_label_index
+
+    label = _ensure_label_index(deps)[0].original
+    for attr in ("_function_toolset", "function_toolset", "toolset"):
+        ts = getattr(agent, attr, None)
+        if ts is not None and isinstance(getattr(ts, "tools", None), dict):
+            fn = ts.tools["write_notes"].function
+            break
+    else:  # pragma: no cover - toolset accessor drift
+        raise AssertionError("write_notes tool not found")
+    payloads_json = json.dumps({"payloads": [{
+        "chosen_row_label": label,
+        "content": "<table><tr><td>1,595</td></tr></table>",
+        "evidence": "Page 3, Note 1",
+        "source_pages": [3],
+        "note_num": 1,
+        "parent_note": {"number": "1", "title": "Corporate information"},
+    }]})
+    return asyncio.run(fn(SimpleNamespace(deps=deps), payloads_json))
+
+
+def test_word_run_consulted_table_gets_the_copy_nudge_not_format_ops(tmp_path: Path):
+    """The run-79 case: source read, table still plain. The agent must be told
+    to copy the markup it already fetched — NOT to re-describe it as ops."""
+    agent, deps = _make_word_sink_agent(tmp_path, with_source=True)
+    deps.consulted_source_notes = {1}
+
+    msg = _write_plain_table(agent, deps)
+    assert msg.startswith("Collected 1 payload")  # prefix contract (gotcha #7)
+    assert "already called read_source_note" in msg
+    # The contradiction is gone: no format_ops demand on a Word run.
+    assert "without format_ops" not in msg
+    # And the unconsulted nudge stays quiet — this agent DID read the source.
+    assert "written without calling read_source_note" not in msg
+
+
+def test_word_run_unconsulted_table_still_gets_the_consult_nudge(tmp_path: Path):
+    """Run 74's case is unchanged: never read the source → consult nudge only."""
+    agent, deps = _make_word_sink_agent(tmp_path, with_source=True)
+    deps.consulted_source_notes = set()
+
+    msg = _write_plain_table(agent, deps)
+    assert "written without calling read_source_note" in msg
+    assert "already called read_source_note" not in msg
+
+
+class _FakeResult:
+    """Minimal stand-in for the writer's NotesWriteResult."""
+
+    def __init__(self, cells_written, fuzzy_matches=()):
+        self.cells_written = list(cells_written)
+        self.fuzzy_matches = list(fuzzy_matches)
+
+
+def _deps_with_source(consulted=()):
+    from notes.agent import NotesDeps
+
+    deps = NotesDeps(
+        pdf_path="x", template_path="y", model=None, output_dir="z",
+        token_report=None, template_type=None, sheet_name="s",
+        filing_level="company", source_html_path="/tmp/source.html",
+    )
+    deps.consulted_source_notes = set(consulted)
+    return deps
+
+
+def _payload(label, note, content="<table><tr><td>1</td></tr></table>"):
+    from notes.payload import NotesPayload
+
+    return NotesPayload(
+        chosen_row_label=label, content=content, evidence="Page 1",
+        parent_note={"number": str(note), "title": "N"},
+    )
+
+
+def test_word_nudges_ignore_payloads_the_writer_rejected():
+    """Peer review 2026-08-04: the direct-write path counted SUBMITTED payloads,
+    so a rejected label or a failed row write was still reported as a cell that
+    "landed unstyled" — sending the agent to restyle a cell that was never
+    written. All-rejected is the sharp case: zero cells, and the nudge fired
+    anyway."""
+    from notes.agent import word_run_nudge_counts
+
+    deps = _deps_with_source(consulted={5})
+    payloads = [_payload("Row A", 5)]
+    # The writer refused it: no cells_written entry.
+    assert word_run_nudge_counts(deps, payloads, _FakeResult([])) == (0, 0)
+
+
+def test_word_nudges_count_only_the_cell_that_landed():
+    """Mixed success: one payload written, one rejected. Only the written one
+    may be nudged about."""
+    from notes.agent import word_run_nudge_counts
+
+    deps = _deps_with_source(consulted={5, 6})
+    payloads = [_payload("Row A", 5), _payload("Row B", 6)]
+    result = _FakeResult([
+        {"label": "Row A", "html": "<table><tr><td>1</td></tr></table>",
+         "style_source": "unstyled"},
+    ])
+    assert word_run_nudge_counts(deps, payloads, result) == (0, 1)
+
+
+def test_word_nudges_follow_a_fuzzy_matched_label_to_its_cell():
+    """A fuzzy-but-accepted label is the same row, so the payload must still be
+    attributed to the cell the writer created under the TEMPLATE label."""
+    from notes.agent import word_run_nudge_counts
+
+    deps = _deps_with_source(consulted=set())  # never read the source
+    payloads = [_payload("Row A (approx)", 5)]
+    result = _FakeResult(
+        [{"label": "Row A", "html": "<table><tr><td>1</td></tr></table>",
+          "style_source": "unstyled"}],
+        fuzzy_matches=[("Row A (approx)", "Row A", 0.91)],
+    )
+    # Unconsulted, so it belongs to the run-74 bucket, not the run-79 one.
+    assert word_run_nudge_counts(deps, payloads, result) == (1, 0)
+
+
+def test_word_nudges_count_a_combined_cell_once():
+    """`_combine_payloads` folds several payloads into ONE cell. Both messages
+    say "N table cell(s)", so a note written in parts must count once."""
+    from notes.agent import word_run_nudge_counts
+
+    deps = _deps_with_source(consulted={5})
+    payloads = [_payload("Row A", 5), _payload("Row A", 5)]
+    result = _FakeResult([
+        {"label": "Row A", "html": "<table><tr><td>1</td></tr></table>",
+         "style_source": "unstyled"},
+    ])
+    assert word_run_nudge_counts(deps, payloads, result) == (0, 1)
+
+
+def test_word_nudges_stay_silent_for_styled_and_prose_cells():
+    from notes.agent import word_run_nudge_counts
+
+    deps = _deps_with_source(consulted={5, 6})
+    payloads = [_payload("Row A", 5), _payload("Row B", 6, "<p>Prose.</p>")]
+    result = _FakeResult([
+        # Copied verbatim from the source — nothing to nudge.
+        {"label": "Row A", "html": "<table><tr><td>1</td></tr></table>",
+         "style_source": "source"},
+        # Prose carries no table.
+        {"label": "Row B", "html": "<p>Prose.</p>", "style_source": "unstyled"},
+    ])
+    assert word_run_nudge_counts(deps, payloads, result) == (0, 0)
+
+
+def test_pdf_run_keeps_the_run63_format_ops_nudge(tmp_path: Path):
+    """No Word source → format_ops IS the right remedy. PDF runs must be
+    byte-identical to before the run-79 change."""
+    agent, deps = _make_word_sink_agent(tmp_path, with_source=False)
+    assert deps.source_html_path is None
+
+    msg = _write_plain_table(agent, deps)
+    assert "without format_ops" in msg
+    assert "truly plain" in msg  # the no-invention escape hatch
+    assert "already called read_source_note" not in msg

@@ -28,6 +28,11 @@ router = APIRouter()
 # re-listed so the API and the builder cannot drift.
 from model_settings import THINKING_LEVELS as _THINKING_LEVELS
 from model_settings import supported_thinking_levels as _supported_levels
+from notes.source_models import IntegrityMode as _IntegrityMode
+
+# Derived from the enum, never re-typed: a new mode must not need a second
+# edit here to become selectable (same rule as _SETTLING_REASONS, gotcha #31).
+_INTEGRITY_MODES = tuple(m.value for m in _IntegrityMode)
 
 
 def _levels_by_model() -> dict:
@@ -70,6 +75,7 @@ _ADMIN_ONLY_SETTINGS_KEYS = frozenset({
     "spot_check",
     "spot_check_mode",
     "notes_coverage",
+    "notes_source_integrity",
     "entity_memory",
     "tolerance_rm",
 })
@@ -195,6 +201,11 @@ async def get_config():
         "spot_check_mode": server._spot_check_mode(),
         # Notes coverage checklist (docs/PLAN-notes-coverage-and-routing.md). Default on.
         "notes_coverage": server._notes_coverage_enabled(),
+        # Notes source integrity rollout mode (gotcha #31). Default off.
+        # `shadow` computes the verdict and changes nothing; `enforce` makes
+        # the block-id path live and lets an unresolved block tip run status.
+        "notes_source_integrity": server._notes_integrity_mode().value,
+        "notes_source_integrity_choices": list(_INTEGRITY_MODES),
         # Item 28 — per-entity advisory memory (prior-year prompt hints). Default on.
         "entity_memory": server._entity_memory_enabled(),
         # Per-role thinking level (reasoning effort). An absent role sends
@@ -239,6 +250,10 @@ async def get_settings():
         # for that model means the operator picks a level the run then
         # substitutes (peer review, 2026-08-02). The picker filters on this.
         "thinking_level_choices_by_model": _levels_by_model(),
+        # Vocabulary for the Word-source picker. Served (not typed out in the
+        # form) so a new IntegrityMode becomes selectable without a UI edit;
+        # the VALUE itself rides in `extended`.
+        "notes_source_integrity_choices": list(_INTEGRITY_MODES),
         **extended,
     }
 
@@ -382,6 +397,21 @@ async def update_settings(body: dict, request: Request):
     if "notes_coverage" in body:
         set_key(str(ENV_FILE), "XBRL_NOTES_COVERAGE",
                 "true" if body["notes_coverage"] else "false")
+    # Notes source integrity rollout mode (gotcha #31). Validated against the
+    # enum rather than a typed-out list: `integrity_mode()` fails CLOSED to
+    # `off` on an unrecognised value, so an unvalidated write here would look
+    # saved in the form and silently do nothing on the next run.
+    if "notes_source_integrity" in body:
+        mode = str(body["notes_source_integrity"]).strip().lower()
+        if mode not in _INTEGRITY_MODES:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "notes_source_integrity must be one of "
+                    f"{', '.join(_INTEGRITY_MODES)}."
+                ),
+            )
+        set_key(str(ENV_FILE), "XBRL_NOTES_SOURCE_INTEGRITY", mode)
     # Item 28 — per-entity advisory memory toggle (prior-year prompt hints).
     if "entity_memory" in body:
         set_key(str(ENV_FILE), "XBRL_ENTITY_MEMORY",

@@ -9,6 +9,7 @@ import type {
   RunsFilterParams,
   SSEEvent,
   AgentTraceJson,
+  SourceIntegrityMode,
 } from "./types";
 import type { ClipboardFormatOptions } from "./clipboardFormat";
 import { ApiError } from "./errors";
@@ -185,6 +186,8 @@ export async function updateSettings(
     spot_check: boolean;
     spot_check_mode: "light" | "full";
     entity_memory: boolean;
+    // Notes source-integrity rollout mode (gotcha #31).
+    notes_source_integrity: SourceIntegrityMode;
     thinking_levels: Record<string, string>;
     // Firm-wide notes-table style theme (docs/PLAN-notes-table-theme.md).
     // The server validates + cleans it before persisting.

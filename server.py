@@ -3190,6 +3190,9 @@ def _load_extended_settings() -> dict:
         "spot_check_mode": _spot_check_mode(),
         # Notes coverage checklist (docs/PLAN-notes-coverage-and-routing.md). Default on.
         "notes_coverage": _notes_coverage_enabled(),
+        # Notes source-integrity rollout mode (gotcha #31). Default off; the
+        # value is the enum's, so the form and the run path can't disagree.
+        "notes_source_integrity": _notes_integrity_mode().value,
         # Item 28 — per-entity advisory memory (prior-year prompt hints). Default on.
         "entity_memory": _entity_memory_enabled(),
         # Firm-wide notes-table style theme (docs/PLAN-notes-table-theme.md):
