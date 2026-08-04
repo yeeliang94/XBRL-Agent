@@ -354,6 +354,131 @@ def test_word_nudges_stay_silent_for_styled_and_prose_cells():
     assert word_run_nudge_counts(deps, payloads, result) == (0, 0)
 
 
+# --- source-copy replaces the draft (run-79 duplication, 2026-08-05) -------
+# Notes 6 and 9 each shipped TWICE in one cell: the agent wrote a rebuilt
+# table, the nudge invited a source-copied re-send, and the sink's
+# identical-content rule couldn't match the two versions (the rebuild
+# compresses headers), so the combine path concatenated them. A source copy
+# is a whole-note copy, so it must REPLACE earlier payloads for that note.
+
+_PLAIN_TABLE = "<p>Intro.</p><table><tr><td>Rebuilt</td><td>1,000</td></tr></table>"
+_SOURCE_TABLE = (
+    '<p>Intro.</p><table><tr>'
+    '<td style="border-bottom: 1px solid #000000">Property, plant and equipment</td>'
+    '<td style="text-align: right">1,000</td></tr></table>'
+)
+
+
+def _send_payload(agent, deps, label, note, content, parent_number=None):
+    """One write_notes call carrying a single payload for `note` at `label`."""
+    import asyncio
+    import json
+    from types import SimpleNamespace
+
+    for attr in ("_function_toolset", "function_toolset", "toolset"):
+        ts = getattr(agent, attr, None)
+        if ts is not None and isinstance(getattr(ts, "tools", None), dict):
+            fn = ts.tools["write_notes"].function
+            break
+    else:  # pragma: no cover - toolset accessor drift
+        raise AssertionError("write_notes tool not found")
+    payloads_json = json.dumps({"payloads": [{
+        "chosen_row_label": label,
+        "content": content,
+        "evidence": f"Page 3, Note {note}",
+        "source_pages": [3],
+        "note_num": note,
+        "parent_note": {
+            "number": parent_number or str(note), "title": "T",
+        },
+    }]})
+    return asyncio.run(fn(SimpleNamespace(deps=deps), payloads_json))
+
+
+def test_source_copy_resend_replaces_the_rebuilt_draft(tmp_path: Path):
+    agent, deps = _make_word_sink_agent(tmp_path, with_source=True)
+    deps.consulted_source_notes = {1}
+    from notes.agent import _ensure_label_index
+    label = _ensure_label_index(deps)[0].original
+
+    _send_payload(agent, deps, label, 1, _PLAIN_TABLE)
+    assert len(deps.payload_sink) == 1
+    _send_payload(agent, deps, label, 1, _SOURCE_TABLE)
+    # Replaced, not concatenated — ONE payload, the source-styled one.
+    assert len(deps.payload_sink) == 1
+    assert "style=" in deps.payload_sink[0].content
+
+
+def test_source_copy_subsumes_a_multipart_draft(tmp_path: Path):
+    """A note sent in parts (prose payload + table payload) is one note; the
+    whole-note source copy replaces BOTH parts, not just the matching one."""
+    agent, deps = _make_word_sink_agent(tmp_path, with_source=True)
+    from notes.agent import _ensure_label_index
+    label = _ensure_label_index(deps)[0].original
+
+    _send_payload(agent, deps, label, 1, "<p>Part one prose.</p>")
+    _send_payload(agent, deps, label, 1, _PLAIN_TABLE)
+    assert len(deps.payload_sink) == 2  # parts combine — today's semantics
+    _send_payload(agent, deps, label, 1, _SOURCE_TABLE)
+    assert len(deps.payload_sink) == 1
+    assert "style=" in deps.payload_sink[0].content
+
+
+def test_plain_resend_with_different_text_still_combines(tmp_path: Path):
+    """The replace rule is for SOURCE copies only. Two plain payloads with
+    genuinely different text keep the combine semantics — a note written in
+    parts must not lose part one."""
+    agent, deps = _make_word_sink_agent(tmp_path, with_source=True)
+    from notes.agent import _ensure_label_index
+    label = _ensure_label_index(deps)[0].original
+
+    _send_payload(agent, deps, label, 1, _PLAIN_TABLE)
+    _send_payload(agent, deps, label, 1, "<p>More prose for the note.</p>")
+    assert len(deps.payload_sink) == 2
+
+
+def test_source_copy_keeps_the_other_note_on_a_shared_row(tmp_path: Path):
+    """Replacement is scoped to the SAME top-level note. A different note
+    sharing the row (deliberate grouping) must survive the re-send."""
+    agent, deps = _make_word_sink_agent(tmp_path, with_source=True)
+    from notes.agent import _ensure_label_index
+    label = _ensure_label_index(deps)[0].original
+
+    _send_payload(agent, deps, label, 1, _PLAIN_TABLE)
+    _send_payload(agent, deps, label, 2, "<p>Note 2 disclosure.</p>")
+    _send_payload(agent, deps, label, 1, _SOURCE_TABLE)
+    notes = sorted(str(p.parent_note["number"]) for p in deps.payload_sink)
+    assert notes == ["1", "2"]
+
+
+def test_mixed_note_row_draws_an_advisory_warning(tmp_path: Path):
+    """Run 79's Note 9 cell shipped with unrelated Note 22.1 inside it and
+    nothing said so at write time. Mixing is a warning, never a reject."""
+    agent, deps = _make_word_sink_agent(tmp_path, with_source=True)
+    from notes.agent import _ensure_label_index
+    label = _ensure_label_index(deps)[0].original
+
+    msg1 = _send_payload(agent, deps, label, 9, _PLAIN_TABLE)
+    assert "now holds notes" not in msg1
+    msg2 = _send_payload(agent, deps, label, 22, "<p>Note 22.1 text.</p>",
+                         parent_number="22.1")
+    assert "now holds notes 9 and 22" in msg2
+    assert msg2.startswith("Collected 1 payload")  # prefix contract intact
+    assert len(deps.payload_sink) == 2  # advisory — nothing was rejected
+
+
+def test_subnote_of_the_same_note_does_not_warn(tmp_path: Path):
+    """Note 9 + sub-note 9.1 in one row is the normal grouped shape."""
+    agent, deps = _make_word_sink_agent(tmp_path, with_source=True)
+    from notes.agent import _ensure_label_index
+    label = _ensure_label_index(deps)[0].original
+
+    _send_payload(agent, deps, label, 9, _PLAIN_TABLE)
+    msg = _send_payload(agent, deps, label, 9, "<p>Sub-note detail.</p>",
+                        parent_number="9.1")
+    assert "now holds notes" not in msg
+
+
 def test_pdf_run_keeps_the_run63_format_ops_nudge(tmp_path: Path):
     """No Word source → format_ops IS the right remedy. PDF runs must be
     byte-identical to before the run-79 change."""

@@ -19,16 +19,31 @@ is a valid receipt entry, the agent is never forced to plug).
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
 _VALID_ACTIONS = frozenset({"written", "skipped"})
 
+# A trailing note decoration on a submitted ref. The agent never sees the bare
+# label alone: the prompt renders each line as "Label → Note 2" and the old
+# failure feedback echoed "Label (Note 2)" — so both decorated spellings came
+# back as refs on a live run (2026-08-05 SOFP), matched nothing, and all 15
+# lines warned on a fully-filled statement. Both sides normalise through this,
+# so any of the three spellings compare equal.
+_TRAILING_NOTE_REF_RE = re.compile(
+    r"\s*(?:\(\s*note\s+\d{1,3}[a-z]?\s*\)|(?:→|->)\s*note\s+\d{1,3}[a-z]?)\s*$",
+    re.IGNORECASE,
+)
+
 
 def _normalize_ref(s: str) -> str:
     """Lowercase + collapse whitespace so 'Trade receivables' and
-    '*Trade Receivables ' compare equal (the agent may quote the label loosely)."""
-    return " ".join((s or "").strip().lstrip("*").lower().split())
+    '*Trade Receivables ' compare equal (the agent may quote the label loosely),
+    then strip a trailing '(Note N)' / '→ Note N' decoration — the two forms
+    the agent is shown and will plausibly quote back."""
+    base = " ".join((s or "").strip().lstrip("*").lower().split())
+    return _TRAILING_NOTE_REF_RE.sub("", base).strip()
 
 
 def expected_ref_label(ref: dict) -> str:
@@ -100,6 +115,27 @@ class FaceCoverageReceipt:
     def accounted_refs(self) -> set[str]:
         """Normalised refs the agent accounted for (written OR skipped)."""
         return {_normalize_ref(e.ref) for e in self.entries}
+
+
+def unaccounted_labels(
+    expected_refs: list[dict],
+    receipt: "FaceCoverageReceipt | None",
+) -> list[str]:
+    """The BARE labels still unaccounted — the exact spellings the tool accepts.
+
+    This feeds the tool's failure reply. The old reply echoed the display
+    sentence ("scout saw 'Label (Note 2)' on the face page"), which taught the
+    agent a decorated spelling; its corrected resubmission then matched nothing
+    either, so the retry loop could never converge (2026-08-05 SOFP run: two
+    attempts, 15/15 still warned). Feedback must hand back the accepted input,
+    not the human-facing report.
+    """
+    accounted = receipt.accounted_refs() if receipt is not None else set()
+    return [
+        str(r.get("label", "")).strip()
+        for r in expected_refs
+        if _normalize_ref(r.get("label", "")) not in accounted
+    ]
 
 
 def face_coverage_warnings(
