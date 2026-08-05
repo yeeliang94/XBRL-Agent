@@ -187,15 +187,27 @@ def _build_warning(ctx) -> Optional[str]:
         return None
 
     severity = "CRITICAL" if critical else "URGENT"
-    guidance = (
-        "Finish NOW: complete any pending write, then call your terminal "
-        "save/summary tool this turn. Do not open new pages or start new "
-        "investigation."
-        if critical
-        else "Start wrapping up: prioritise completing the remaining writes "
-        "and reaching your terminal save/summary tool. Avoid opening new "
-        "lines of investigation."
+    # Role-specific wrap-up wording (run-83 review fix): the default names
+    # a "terminal save/summary tool", which the face/notes agents have but
+    # the reviewer does not — an agent factory may publish its own wording
+    # on deps (same advisory setattr channel as the loop counters).
+    custom = getattr(
+        deps,
+        "_limit_wrapup_critical" if critical else "_limit_wrapup_urgent",
+        None,
     )
+    if isinstance(custom, str) and custom.strip():
+        guidance = custom.strip()
+    else:
+        guidance = (
+            "Finish NOW: complete any pending write, then call your terminal "
+            "save/summary tool this turn. Do not open new pages or start new "
+            "investigation."
+            if critical
+            else "Start wrapping up: prioritise completing the remaining writes "
+            "and reaching your terminal save/summary tool. Avoid opening new "
+            "lines of investigation."
+        )
     return (
         f"{WARNING_MARKER} {severity}: run limits are approaching. "
         + " ".join(lines)

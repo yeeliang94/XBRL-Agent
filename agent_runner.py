@@ -329,11 +329,16 @@ async def run_agent_loop(
     except Exception:  # noqa: BLE001 — advisory plumbing only
         pass
 
-    def _inner(stream):
+    def _inner(stream, force_bound: bool = False):
         # Wrap the inner tool/model event stream in the per-step timeout only
         # when the caller opted in (face). Notes opts out so a legitimate long
         # tool call isn't cancelled mid-execution (see AgentLoopSpec).
-        if spec.bound_inner_streams:
+        # ``force_bound`` overrides the opt-out for a DEADLINE-GRACED tool
+        # node (run-83 Phase 2 Step 3): past the wall-clock cap there is no
+        # next node boundary left to catch a stall, so an unbounded graced
+        # stream would hang the pass forever — the grace must carry its own
+        # bound.
+        if spec.bound_inner_streams or force_bound:
             return iter_with_turn_timeout(stream, spec.turn_timeout)
         return stream
 
@@ -365,12 +370,18 @@ async def run_agent_loop(
         # boundary; run 83 lost three grounded mark_not_disclosed fixes
         # after 364s of paid investigation) and the END node (the run is
         # finished — raising would discard a completed result). A graced
-        # tool node still runs bounded by the per-turn timeout, and writes
-        # still pass their deterministic guards; the loop then raises here
+        # tool node runs with the per-step timeout FORCED on its inner
+        # stream (`_inner(..., force_bound=True)` below) even for callers
+        # that opted out of bounded inner streams — past the deadline
+        # there is no next node boundary to catch a stall. Writes still
+        # pass their deterministic guards; the loop then raises here
         # before the next model request.
-        if (
+        past_deadline = bool(
             wallclock_cap is not None
             and time.monotonic() - loop_start > wallclock_cap
+        )
+        if (
+            past_deadline
             and not Agent.is_call_tools_node(node)
             and not Agent.is_end_node(node)
         ):
@@ -400,7 +411,7 @@ async def run_agent_loop(
                     f"{spec.call_tools_cap}-turn tool budget."
                 )
             async with node.stream(agent_run.ctx) as tool_stream:
-                async for event in _inner(tool_stream):
+                async for event in _inner(tool_stream, force_bound=past_deadline):
                     if isinstance(event, FunctionToolCallEvent):
                         tool_name = event.part.tool_name
                         node_tool_names.append(tool_name)

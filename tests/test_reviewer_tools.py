@@ -789,33 +789,66 @@ def test_list_facts_is_family_scoped(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _fake_fact(i: int, value: float, sheet: str = "SOFP-CuNonCu") -> dict:
+def _fake_fact(
+    i: int, value: float, sheet: str = "SOFP-CuNonCu",
+    period: str = "CY", scope: str = "Company",
+) -> dict:
     return {
         "render_sheet": sheet, "render_row": i,
         "canonical_label": f"Row {i}", "kind": "LEAF",
-        "period": "CY", "entity_scope": "Company",
+        "period": period, "entity_scope": scope,
         "value": value, "value_status": "observed",
         "concept_uuid": f"uuid-{sheet}-{i}",
     }
 
 
-def test_fact_listing_caps_row_detail_with_continuation():
+def _row_facts(i: int, value: float, sheet: str = "SOFP-CuNonCu",
+               scopes: tuple = (("CY", "Company"), ("PY", "Company"))) -> list:
+    """All of one template row's fact records (CY/PY × scope), contiguous
+    the way list_run_facts orders them."""
+    return [
+        _fake_fact(i, value, sheet=sheet, period=p, scope=s)
+        for p, s in scopes
+    ]
+
+
+def test_fact_listing_caps_template_rows_not_records():
     """Run 83's opening whole-run listing flooded the reviewer's context.
-    Past the cap, row detail truncates and the footer teaches the
-    sheet-scoped follow-up call — it never silently swallows rows."""
-    facts = [_fake_fact(i, float(1000 + i)) for i in range(250)]
+    The cap unit is TEMPLATE ROWS — a shown row keeps ALL its period/scope
+    records (a record-count cap would split a row in half); rows past the
+    cap truncate with a footer that teaches the sheet-scoped follow-up."""
+    facts = [f for i in range(250) for f in _row_facts(i, float(1000 + i))]
     out = _format_fact_listing(facts, row_cap=200)
-    assert "'Row 199'" in out
-    assert "'Row 201'" not in out, "rows past the cap must not render"
-    assert "50 more row(s) not shown" in out
+    # Row 199 (the 200th row) renders with BOTH its CY and PY records.
+    assert out.count("'Row 199'") == 2
+    assert "'Row 200'" not in out, "rows past the cap must not render"
+    assert "50 more template row(s) not shown" in out
+    assert "every period/scope fact of a shown row is included" in out
     assert 'list_facts(sheet="<name>")' in out
-    assert "Facts per sheet" in out
+    assert "Rows per sheet" in out and "(250 rows)" in out
+
+
+def test_fact_listing_single_live_sheet_fits_even_on_group():
+    """The live SOCF-Indirect has 123 fact-bearing rows; a Group filing
+    carries up to four records per row (492 records). A sheet-scoped call
+    must render it IN FULL — the cap counts rows, never records."""
+    group_scopes = (("CY", "Group"), ("PY", "Group"),
+                    ("CY", "Company"), ("PY", "Company"))
+    facts = [
+        f for i in range(123)
+        for f in _row_facts(i, float(1000 + i), sheet="SOCF-Indirect",
+                            scopes=group_scopes)
+    ]
+    assert len(facts) == 492
+    out = _format_fact_listing(facts, row_cap=200)
+    assert "more template row(s) not shown" not in out
+    assert out.count("'Row 122'") == 4, "every scope record must render"
 
 
 def test_fact_listing_repeats_footer_covers_rows_past_the_cap():
     """The double-count signal is the reason the holistic listing exists —
     truncation may drop row DETAIL, never the whole-run repeats footer."""
-    facts = [_fake_fact(i, float(1000 + i)) for i in range(240)]
+    facts = [f for i in range(240) for f in _row_facts(i, float(1000 + i))]
     # The duplicate pair sits entirely PAST the cap.
     facts.append(_fake_fact(300, 991755.0, sheet="SOPL-Function"))
     facts.append(_fake_fact(301, 991755.0, sheet="SOPL-Function"))
@@ -825,9 +858,9 @@ def test_fact_listing_repeats_footer_covers_rows_past_the_cap():
 
 
 def test_fact_listing_under_cap_is_unchanged():
-    facts = [_fake_fact(i, float(1000 + i)) for i in range(5)]
+    facts = [f for i in range(5) for f in _row_facts(i, float(1000 + i))]
     out = _format_fact_listing(facts)
-    assert "more row(s) not shown" not in out
+    assert "more template row(s) not shown" not in out
     assert "'Row 4'" in out
 
 

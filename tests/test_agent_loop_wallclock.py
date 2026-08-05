@@ -73,7 +73,7 @@ class _AgentShim:
 
     @staticmethod
     def is_call_tools_node(node):
-        return isinstance(node, _ToolsNode)
+        return isinstance(node, (_ToolsNode, _StallingToolsNode))
 
     @staticmethod
     def is_end_node(node):
@@ -187,6 +187,70 @@ async def test_issued_tool_node_executes_past_the_cap(monkeypatch):
     assert tools_node.executed, (
         "the already-issued tool node must execute past the cap — "
         "discarding it is the run-83 failure mode"
+    )
+
+
+class _StallingToolsNode:
+    """A call-tools node whose event stream hangs forever (a stalled tool)."""
+
+    def stream(self, _ctx):
+        class _CM:
+            async def __aenter__(self):
+                class _Stall:
+                    def __aiter__(self):
+                        return self
+
+                    async def __anext__(self):
+                        await asyncio.Event().wait()  # never set — stalls
+
+                return _Stall()
+
+            async def __aexit__(self, *args):
+                return False
+
+        return _CM()
+
+
+@pytest.mark.asyncio
+async def test_graced_tool_node_is_bounded_with_unbound_inner_streams(monkeypatch):
+    """The LIVE reviewer and notes reviewer run bound_inner_streams=False
+    (server.py loop specs) — their inner tool streams are deliberately
+    untimed. Past the wall-clock deadline there is no next node boundary
+    left to catch a stall, so the grace rule must FORCE the per-step
+    timeout onto the graced node's stream, or a stalled tool hangs the
+    pass forever."""
+    monkeypatch.setattr(agent_runner, "Agent", _AgentShim)
+    stall_node = _StallingToolsNode()
+
+    class _StallRun(_ScriptedRun):
+        async def __anext__(self):
+            if not self._nodes:
+                raise StopAsyncIteration
+            item = self._nodes.pop(0)
+            if item is stall_node:
+                await asyncio.sleep(0.15)  # cross the 0.1s cap first
+            else:
+                await asyncio.sleep(0.01)
+            return item
+
+    run = _StallRun([_ModelNode(), stall_node])
+    spec = AgentLoopSpec(
+        agent_role="REVIEWER", model="test-model", turn_timeout=0.2,
+        phase_map={}, phase_message=lambda r, p: "",
+        max_iters=10_000, wallclock_timeout=0.1,
+        stream_model_nodes=False,
+        bound_inner_streams=False,  # the live reviewer configuration
+    )
+
+    async def emit(_t, _d):
+        pass
+
+    start = time.monotonic()
+    with pytest.raises(asyncio.TimeoutError):
+        await run_agent_loop(run, MagicMock(), spec, emit, [])
+    assert time.monotonic() - start < 5.0, (
+        "a stalled graced tool must hit the forced per-step timeout, "
+        "never hang the pass"
     )
 
 
