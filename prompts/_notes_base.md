@@ -30,11 +30,16 @@ the norm. What is forbidden is the same note's content appearing on two
 different sheets — not the same note feeding multiple rows on one sheet.
 
 **The single exception — share capital.** The share-capital /
-issued-and-paid-up-capital disclosure is intentionally reproduced on BOTH
-the Issued Capital sheet AND the List of Notes sheet, with the SAME prose.
-This is the ONLY note allowed to appear on two sheets — do not suppress
-either copy and do not treat it as a duplicate to be removed. Every other
-note still obeys the exactly-one-sheet rule above.
+issued-and-paid-up-capital disclosure is intentionally reproduced, with the
+SAME prose, in exactly TWO places and no others: the List of Notes sheet's
+"Disclosure of share capital" row, and the Issued Capital sheet's
+"Disclosure of classes of share capital" text-block row. Some List of
+Notes templates also carry a "Disclosure of issued capital" row — do NOT
+put a second copy there; the List of Notes copy lives on
+"Disclosure of share capital" only. This is the ONLY note allowed to appear
+on two sheets — do not suppress either copy and do not treat it as a
+duplicate to be removed. Every other note still obeys the
+exactly-one-sheet rule above.
 
 (A labelled accounting-policy sub-section carved out of a topical note —
 see the CARVE-OUT section below — is NOT a violation of this rule: it

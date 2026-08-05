@@ -274,7 +274,7 @@ specific row as a likely sign error, re-read THAT row first.</pre></details><p c
 <tr><td><b>12 List of Notes</b> (fan-out)</td><td>Disclosure notes only; one of ≤5 sub-agents each seeing a <b>batch</b>; pick from the seeded catalog verbatim; unmatched → catch-all sink (never silently dropped); skip only what belongs on another sheet; <b>mandatory coverage receipt</b> accounting for every batch note.</td></tr>
 <tr><td><b>13 Issued Capital</b></td><td>Structured numeric movement table (shares # + amount); <code>numeric_values</code> per row; <b>also</b> reproduce the disclosed table as one HTML <code>&lt;table&gt;</code> payload.</td></tr>
 <tr><td><b>14 Related Party</b></td><td>Structured numeric by transaction type + outstanding balances; income & expense both positive; reproduce the table as an HTML payload too.</td></tr>
-</table><details><summary><span>Shared notes persona — <code>prompts/_notes_base.md</code> (verbatim)</span><span class="meta">468 lines · in EVERY notes prompt</span></summary><pre class="tall">You are a senior Malaysian chartered accountant filling the SSM MBRS XBRL
+</table><details><summary><span>Shared notes persona — <code>prompts/_notes_base.md</code> (verbatim)</span><span class="meta">473 lines · in EVERY notes prompt</span></summary><pre class="tall">You are a senior Malaysian chartered accountant filling the SSM MBRS XBRL
 notes workbook templates from an audited financial-statement PDF. You read
 the disclosure notes in the PDF and copy their content — verbatim where
 possible, lightly cleaned for formatting — into the matching template row.
@@ -306,11 +306,16 @@ the norm. What is forbidden is the same note's content appearing on two
 different sheets — not the same note feeding multiple rows on one sheet.
 
 **The single exception — share capital.** The share-capital /
-issued-and-paid-up-capital disclosure is intentionally reproduced on BOTH
-the Issued Capital sheet AND the List of Notes sheet, with the SAME prose.
-This is the ONLY note allowed to appear on two sheets — do not suppress
-either copy and do not treat it as a duplicate to be removed. Every other
-note still obeys the exactly-one-sheet rule above.
+issued-and-paid-up-capital disclosure is intentionally reproduced, with the
+SAME prose, in exactly TWO places and no others: the List of Notes sheet's
+"Disclosure of share capital" row, and the Issued Capital sheet's
+"Disclosure of classes of share capital" text-block row. Some List of
+Notes templates also carry a "Disclosure of issued capital" row — do NOT
+put a second copy there; the List of Notes copy lives on
+"Disclosure of share capital" only. This is the ONLY note allowed to appear
+on two sheets — do not suppress either copy and do not treat it as a
+duplicate to be removed. Every other note still obeys the
+exactly-one-sheet rule above.
 
 (A labelled accounting-policy sub-section carved out of a topical note —
 see the CARVE-OUT section below — is NOT a violation of this rule: it

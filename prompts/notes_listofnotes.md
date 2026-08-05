@@ -3,8 +3,10 @@
 Sheet: `Notes-Listofnotes`. The full template has {{TEMPLATE_ROW_COUNT}}
 rows, each a canonical "Disclosure of …" label covering a single topic
 (e.g. "Disclosure of revenue", "Disclosure of property, plant and
-equipment", "Disclosure of related party transactions"). The exact row
-set depends on the active filing standard. **If a row-label catalog
+equipment", "Disclosure of capital management"). The related-party note
+is NOT matched on this sheet — it belongs on the Related Party
+Transactions sheet only; skip it per the coverage-receipt rules. The
+exact row set depends on the active filing standard. **If a row-label catalog
 block (titled `TEMPLATE ROW LABELS`) appears later in this prompt, use
 ONLY the labels in that block.** If no catalog block is present (the
 seed load failed at run start), **call `read_template` first** and use
