@@ -236,3 +236,77 @@ def test_durable_reexport_includes_numeric_note_edit(tmp_path):
         column=column_index_from_string(tgt["target_col"]),
     )
     assert cell.value == 55555.0
+
+
+# ---------------------------------------------------------------------------
+# Run-84: the download names an unfinished statement
+# ---------------------------------------------------------------------------
+#
+# A face agent that stops early still leaves facts in the DB and a scratch
+# workbook on disk, and the merge collects both — so the download carries a
+# partly-read statement. Filing is refused outright (mtool/preflight); the
+# download stays open because it is how an operator inspects a bad run, but the
+# filename has to say so. Run 84 handed over a `filled.xlsx` that looked final
+# with SOCF capped at 40 turns.
+
+
+def _add_agent(db_path, run_id, statement_type, status, variant="Indirect"):
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "INSERT INTO run_agents(run_id, statement_type, variant, model, "
+            "status, started_at) VALUES (?,?,?,?,?,?)",
+            (run_id, statement_type, variant, "test", status,
+             "2026-08-05T00:00:00Z"))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _download(server, run_id):
+    from fastapi.testclient import TestClient
+    return TestClient(server.app).get(f"/api/runs/{run_id}/download/filled")
+
+
+def test_download_is_marked_when_a_statement_did_not_finish(seeded_run):
+    server, db_path, run_id, _sheet, _row = seeded_run
+    _add_agent(db_path, run_id, "SOCF", "failed")
+
+    resp = _download(server, run_id)
+
+    assert resp.status_code == 200, "the download must stay available"
+    assert "INCOMPLETE" in resp.headers["content-disposition"], \
+        resp.headers["content-disposition"]
+    assert resp.headers["X-Incomplete-Statements"] == "SOCF"
+
+
+def test_clean_download_is_not_marked(seeded_run):
+    server, _db_path, run_id, _sheet, _row = seeded_run
+
+    resp = _download(server, run_id)
+
+    assert resp.status_code == 200
+    assert "INCOMPLETE" not in resp.headers["content-disposition"]
+    assert "X-Incomplete-Statements" not in resp.headers
+
+
+def test_skipped_statement_does_not_mark_the_download(seeded_run):
+    """`skipped` is a NotPrepared variant — no template to fill, nothing
+    half-read."""
+    server, db_path, run_id, _sheet, _row = seeded_run
+    _add_agent(db_path, run_id, "SOCI", "skipped", variant="NotPrepared")
+
+    resp = _download(server, run_id)
+
+    assert "INCOMPLETE" not in resp.headers["content-disposition"]
+
+
+def test_failed_notes_template_does_not_mark_the_download(seeded_run):
+    """Notes have their own coverage gate. A failed notes template must not be
+    reported as an unfinished FACE statement."""
+    server, db_path, run_id, _sheet, _row = seeded_run
+    _add_agent(db_path, run_id, "NOTES_LIST_OF_NOTES", "failed", variant=None)
+
+    resp = _download(server, run_id)
+
+    assert "INCOMPLETE" not in resp.headers["content-disposition"]

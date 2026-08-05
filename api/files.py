@@ -166,9 +166,11 @@ async def download_filled_endpoint(run_id: int):
     reflects the latest HTML → flattened-plaintext rendering.
     """
     from db import repository as repo
+    from statement_types import incomplete_face_statements
     conn = server._open_audit_conn()
     try:
         run = repo.fetch_run(conn, run_id)
+        agents = repo.fetch_run_agents(conn, run_id) if run is not None else []
     finally:
         conn.close()
     if run is None:
@@ -178,6 +180,16 @@ async def download_filled_endpoint(run_id: int):
             status_code=404,
             detail="This run has no merged workbook (likely failed before merge).",
         )
+    # Run-84 finding (2026-08-05): a statement that stopped early still reaches
+    # this download. Extraction projects facts live and the merge picks the
+    # agent's scratch workbook up off disk regardless of status, so the file
+    # carries a partly-read statement while looking like a finished extraction.
+    # The filing gate refuses such a run outright (mtool/preflight); the
+    # download stays OPEN — it is how an operator inspects a bad run — but must
+    # not be mistakable for a complete one. The marker rides the FILENAME so it
+    # shows in the download bar, the folder listing and Excel's title bar,
+    # rather than in a workbook property nobody opens.
+    incomplete = incomplete_face_statements(agents)
     wb_path = Path(run.merged_workbook_path)
     if not wb_path.exists():
         raise HTTPException(
@@ -277,11 +289,20 @@ async def download_filled_endpoint(run_id: int):
     if temp_paths:
         cleanup = BackgroundTask(_remove_overlay_tempfiles,
                                  [str(p) for p in temp_paths])
+    suffix = ""
+    headers: dict[str, str] = {}
+    if incomplete:
+        names = ",".join(sorted(a.statement_type for a in incomplete))
+        suffix = "_INCOMPLETE"
+        # Machine-readable twin of the filename, for the UI banner and for any
+        # caller that saves the stream under its own name.
+        headers["X-Incomplete-Statements"] = names
     return FileResponse(
         str(served_path),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        filename=f"run_{run_id}_filled.xlsx",
+        filename=f"run_{run_id}_filled{suffix}.xlsx",
         background=cleanup,
+        headers=headers or None,
     )
 
 

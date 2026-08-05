@@ -9,6 +9,7 @@ import { EvalTab } from "./EvalTab";
 import { runStatusDisplay, agentStatusDisplay } from "../lib/runStatus";
 import type { RunStatusDisplay } from "../lib/runStatus";
 import type { RunDetailJson, RunAgentJson, CrossCheckResult } from "../lib/types";
+import { STATEMENT_LABELS } from "../lib/types";
 import { AgentTelemetryPanel } from "./AgentTelemetryPanel";
 import { ValidatorTab } from "./ValidatorTab";
 import { ReviewTab } from "./ReviewTab";
@@ -501,6 +502,18 @@ export function RunDetailView({
     ].filter(Boolean);
     return `${crossCheckFailureLabel(c.name)}${values.length ? ` — ${values.join(", ")}` : ""}`;
   });
+  // Run-84 finding (2026-08-05): a single statement can stop early — the step
+  // cap, a timeout, a cancel — while the RUN still reports `completed`. Its
+  // partial figures reach the merged workbook anyway (extraction saves facts as
+  // it goes, and the merge collects every per-statement file on disk), so none
+  // of the run-level banners above fire and the download looks finished. Mirror
+  // of `statement_types.SETTLED_AGENT_STATUSES`; keep the two in step.
+  const settledAgentStatuses = ["succeeded", "completed_with_errors", "skipped"];
+  const incompleteStatements = (detail.agents ?? []).filter(
+    (a) =>
+      (Object.keys(STATEMENT_LABELS) as string[]).includes(a.statement_type) &&
+      !settledAgentStatuses.includes(a.status),
+  );
   // mTool fill needs a completed run (facts must be final) — same gate the
   // backend enforces (api/mtool.py _FILLABLE_STATUSES).
   const canFillMtool =
@@ -768,6 +781,38 @@ export function RunDetailView({
               View cross-checks
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Run-84: fires on its own condition, NOT on run status — the case it
+          exists for is a run that reports `completed` with one statement
+          unfinished, which every banner around it misses. */}
+      {incompleteStatements.length > 0 && (
+        <div style={styles.errorBanner} role="alert">
+          <div style={styles.errorBannerBody}>
+            <strong style={styles.errorBannerTitle}>
+              {incompleteStatements.length === 1
+                ? "One statement did not finish extracting."
+                : `${incompleteStatements.length} statements did not finish extracting.`}
+            </strong>
+            <span style={styles.errorBannerText}>
+              {incompleteStatements
+                .map((a) => STATEMENT_LABELS[a.statement_type as keyof typeof STATEMENT_LABELS] ?? a.statement_type)
+                .join(", ")}
+              . The figures each one got as far as writing are still in this run
+              and in the Excel download, which is named “INCOMPLETE” for that
+              reason. Re-run the statement before relying on it. This run cannot
+              be filed until it is resolved.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => selectTab("agents")}
+            className={uiClass.btnSecondary}
+            style={ui.buttonSecondary}
+          >
+            View activity
+          </button>
         </div>
       )}
 

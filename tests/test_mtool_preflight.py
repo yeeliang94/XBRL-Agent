@@ -497,3 +497,90 @@ def test_doc_snapshot_carries_conflicts_when_present(client):
     entry = doc["meta"]["conflicts"][0]
     assert {"canonical_label", "render_sheet", "period",
             "entity_scope", "kind"} <= set(entry)
+
+
+# ---------------------------------------------------------------------------
+# Incomplete face statements (run-84 finding, 2026-08-05)
+# ---------------------------------------------------------------------------
+#
+# A face agent that stops early — the iteration cap, a turn timeout, a cancel —
+# has usually already projected part of its figures into run_concept_facts, and
+# the merge picks its scratch workbook up off disk regardless of status. None of
+# the other blockers notice: those figures are not in conflict, they are merely
+# incomplete. Run 84 filed-ready in exactly that state, with SOCF capped at 40
+# turns and its partial cash-flow figures in the run.
+
+
+def _add_face_agent(db, run_id, statement_type, status, error_type=None,
+                    variant="CuNonCu"):
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(
+            "INSERT INTO run_agents(run_id, statement_type, variant, status, "
+            "error_type, started_at) VALUES (?,?,?,?,?,?)",
+            (run_id, statement_type, variant, status, error_type,
+             "2026-08-05T00:00:00Z"))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_capped_face_statement_blocks_the_fill(client):
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_leaves(db, run_id)
+    _add_face_agent(db, run_id, "SOFP", "succeeded")
+    _add_face_agent(db, run_id, "SOCF", "failed",
+                    error_type="iteration_capped", variant="Indirect")
+
+    resp = tc.post(f"/api/runs/{run_id}/mtool-fill/patch", files=_upload(),
+                   data={"strict": "true"})
+    assert resp.status_code == 409, resp.text
+    preflight = resp.json()["detail"]["preflight"]
+    codes = [b["code"] for b in preflight["blockers"]]
+    assert "incomplete_face_statements" in codes
+    blocker = preflight["blockers"][codes.index("incomplete_face_statements")]
+    assert blocker["count"] == 1
+    # Names the statement and says why, in words an operator can act on.
+    assert any("SOCF" in ex for ex in blocker["examples"]), blocker["examples"]
+    assert any("step budget" in ex for ex in blocker["examples"]), \
+        blocker["examples"]
+
+
+def test_cancelled_face_statement_blocks_the_fill(client):
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_leaves(db, run_id)
+    _add_face_agent(db, run_id, "SOCIE", "cancelled", error_type="cancelled")
+
+    body = tc.get(f"/api/runs/{run_id}/mtool-fill/preflight").json()
+    assert body["ok"] is False
+    assert "incomplete_face_statements" in [b["code"] for b in body["blockers"]]
+
+
+def test_skipped_face_statement_does_not_block(client):
+    """`skipped` is a NotPrepared variant with no template to fill — a
+    legitimate non-outcome, not an unfinished statement."""
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_leaves(db, run_id)
+    _add_face_agent(db, run_id, "SOCI", "skipped")
+    _add_face_agent(db, run_id, "SOFP", "completed_with_errors")
+
+    body = tc.get(f"/api/runs/{run_id}/mtool-fill/preflight").json()
+    assert body["ok"] is True, body["blockers"]
+
+
+def test_incomplete_notes_agent_does_not_block_the_face_fill(client):
+    """The blocker is scoped to the five face statements. Notes have their own
+    coverage gate; a failed notes template must not be reported as an
+    unfinished face statement."""
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_leaves(db, run_id)
+    _add_face_agent(db, run_id, "NOTES_LIST_OF_NOTES", "failed",
+                    error_type="iteration_capped")
+
+    body = tc.get(f"/api/runs/{run_id}/mtool-fill/preflight").json()
+    assert "incomplete_face_statements" not in [
+        b["code"] for b in body["blockers"]]

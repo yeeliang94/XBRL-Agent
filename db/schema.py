@@ -182,7 +182,18 @@ from pathlib import Path
 # the operator, and the full report. Pure CREATE TABLE IF NOT EXISTS
 # walk-forward (new table, no ALTER); every column nullable or defaulted and no
 # CHECK on status (gotcha #11). Pinned by tests/test_db_schema_v38.py.
-CURRENT_SCHEMA_VERSION = 38
+#
+# v39 adds the PROSE half of that snapshot (`snapshot_notes_*`). v38 recorded
+# only the `run_concept_facts` revision, but a filled workbook also carries the
+# prose notes, and those are read from `notes_cells` by a separate connection
+# later in the same request (`mtool.notes_exporter.build_notes_fill_doc`). A
+# notes edit landing between the two reads produced a workbook whose prose
+# belonged to a revision no receipt described — the exact condition this table
+# exists to make impossible. The digest is computed over the rows that actually
+# went into the fill, so it identifies the prose revision exactly. Nullable:
+# a numeric-only fill (`fill_notes=false`) legitimately has none, and a
+# pre-v39 receipt asserts nothing. Pinned by tests/test_db_schema_v39.py.
+CURRENT_SCHEMA_VERSION = 39
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -1369,6 +1380,12 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         snapshot_fact_count   INTEGER,
         snapshot_digest       TEXT,        -- hash over the facts read for this fill
         snapshot_max_updated  TEXT,        -- newest fact updated_at in the snapshot
+        -- v39: the PROSE revision. The notes are read separately from
+        -- notes_cells, so the numeric digest above cannot speak for them.
+        -- NULL = this fill wrote no notes (or predates v39).
+        snapshot_notes_count  INTEGER,
+        snapshot_notes_digest TEXT,        -- hash over the notes HTML filled
+        snapshot_notes_updated TEXT,       -- newest notes_cells updated_at
         source_sha256         TEXT,        -- uploaded (empty) template
         output_sha256         TEXT,        -- filled workbook handed back
         template_fingerprint  TEXT,        -- structural id of the uploaded template
@@ -1678,6 +1695,16 @@ _V36_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
 _V37_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("notes_cells", "content_revision", "INTEGER NOT NULL DEFAULT 0"),
     ("notes_cells", "source_render_version", "TEXT"),
+)
+
+# v38 → v39: the prose half of an mTool fill's data snapshot. See the
+# CURRENT_SCHEMA_VERSION note — v38 identified the numeric revision only, so a
+# notes edit between the two reads left the workbook's prose untraceable. All
+# nullable: a numeric-only fill has no notes revision to record.
+_V39_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("mtool_fill_receipts", "snapshot_notes_count", "INTEGER"),
+    ("mtool_fill_receipts", "snapshot_notes_digest", "TEXT"),
+    ("mtool_fill_receipts", "snapshot_notes_updated", "TEXT"),
 )
 
 _V33_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
@@ -2938,6 +2965,40 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
                         (38,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        # v38 → v39: the prose half of the mTool fill snapshot. Three nullable
+        # columns on mtool_fill_receipts; same BEGIN IMMEDIATE + re-check
+        # discipline as every step above.
+        if current_version is not None and current_version < 39:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 39:
+                    for table, col_name, col_ddl in _V39_MIGRATION_COLUMNS:
+                        existing_cols = {
+                            r[1] for r in conn.execute(
+                                f"PRAGMA table_info({table})"
+                            ).fetchall()
+                        }
+                        if col_name not in existing_cols:
+                            try:
+                                conn.execute(
+                                    f"ALTER TABLE {table} ADD COLUMN {col_name} {col_ddl}"
+                                )
+                            except sqlite3.OperationalError as exc:
+                                if "duplicate column" not in str(exc).lower():
+                                    raise
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (39,),
                     )
                 conn.commit()
             except Exception:

@@ -947,14 +947,62 @@ def _build_single_sheet_warnings(outcome: _SingleAgentOutcome) -> list[str]:
     return warnings
 
 
-def _write_notes12_skips(output_dir: str, sub_result: Any) -> None:
+def _unverified_skip_reason(sub: Any, note_num: int) -> Optional[str]:
+    """Why this sub-agent's skip of ``note_num`` cannot be taken at face value.
+
+    Returns None when the skip is a decision worth honouring, or a plain-English
+    reason when it is more likely a surrender (run-84). Two signals, both the
+    system's own record rather than the agent's account of itself:
+
+      - the note's own write was rejected, so nothing reached the sheet;
+      - the sub-agent had a write call fail before it named any note (a
+        `payloads_json` that never parsed), which taints every skip it declared
+        because we cannot tell which note the failure belonged to.
+
+    Shared by the skips side-log and the operator warnings so the two can never
+    disagree about which skips were honoured.
+    """
+    if note_num in (getattr(sub, "failed_write_notes", None) or ()):
+        return ("the write for this note was rejected, so the skip records a "
+                "failed attempt, not a decision")
+    unattributed = int(getattr(sub, "unattributed_write_failures", 0) or 0)
+    if unattributed:
+        return (f"this sub-agent had {unattributed} write call(s) that failed "
+                f"before naming a note, so its skips cannot be read as "
+                f"decisions")
+    return None
+
+
+def _write_notes12_skips(output_dir: str, sub_result: Any) -> list[dict[str, Any]]:
     """Write the run's Sheet-12 skip receipts to ``notes12_skips.json``.
 
     One ``{"note_num", "reason"}`` entry per note a succeeded sub-agent
     explicitly skipped (``action == "skipped"``). Overwrites wholesale so a
     notes re-run clears stale skips. Consumed by the coverage checklist so an
-    intentional skip lands `skipped`, not `missing` (Codex review P2)."""
+    intentional skip lands `skipped`, not `missing` (Codex review P2).
+
+    A skip is only honoured when the sub-agent's writes actually WORKED
+    (run-84 finding, 2026-08-05). A skip means "I looked, and this note belongs
+    somewhere else" — a claim about the document. A sub-agent whose writes were
+    failing is making a different claim, about itself, and the two used to be
+    indistinguishable: run 84's notes 19-21 were declared skipped after six
+    rejected `write_notes` calls, so the checklist recorded them `skipped`,
+    counted no uncovered notes, and the run reported success over three notes
+    that reached nothing.
+
+    The receipt cannot arbitrate this — the agent that failed is the one
+    writing it. So the system's own record wins: a note the sub-agent failed to
+    write, or ANY skip from a sub-agent that had a write failure it could not
+    pin to a note (a `payloads_json` that never parsed carries no note number),
+    is withheld from the skips file. Withheld notes then have no provenance and
+    no skip receipt, so the checklist marks them `missing` — unresolved, and it
+    tips the run — which is what they are.
+
+    Returns the withheld entries so the caller can surface them to the
+    operator; the file itself only carries the honoured skips.
+    """
     skips: list[dict[str, Any]] = []
+    withheld: list[dict[str, Any]] = []
     for sub in getattr(sub_result, "sub_agent_results", None) or []:
         if getattr(sub, "status", None) != "succeeded":
             continue
@@ -962,16 +1010,34 @@ def _write_notes12_skips(output_dir: str, sub_result: Any) -> None:
         if coverage is None:
             continue
         for entry in getattr(coverage, "entries", None) or []:
-            if getattr(entry, "action", None) == "skipped":
-                skips.append({
-                    "note_num": int(entry.note_num),
-                    "reason": str(getattr(entry, "reason", "") or ""),
-                })
+            if getattr(entry, "action", None) != "skipped":
+                continue
+            note_num = int(entry.note_num)
+            record = {
+                "note_num": note_num,
+                "reason": str(getattr(entry, "reason", "") or ""),
+            }
+            unverified = _unverified_skip_reason(sub, note_num)
+            if unverified is None:
+                skips.append(record)
+            else:
+                withheld.append({**record, "withheld_because": unverified})
     path = Path(output_dir) / "notes12_skips.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(skips, indent=2, ensure_ascii=False), encoding="utf-8",
     )
+    if withheld:
+        # Separate file: the skips file feeds the checklist and must carry only
+        # honoured skips, but an operator still needs to see what was withheld
+        # and why. Same shape and sanitisation rules as the other side-logs.
+        wpath = Path(output_dir) / "notes12_unverified_skips.json"
+        wpath.write_text(
+            json.dumps({"count": len(withheld), "entries": withheld},
+                       indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    return withheld
 
 
 def _write_single_sheet_failure_log(
@@ -1139,8 +1205,9 @@ async def _run_list_of_notes_fanout(
         # alone would flag it missing and wrongly tip the run to
         # completed_with_errors. Read from output_dir by BOTH the auto and the
         # manual reviewer passes. Best-effort — never fail the fan-out.
+        withheld_skips: list[dict[str, Any]] = []
         try:
-            _write_notes12_skips(output_dir, sub_result)
+            withheld_skips = _write_notes12_skips(output_dir, sub_result)
         except Exception:  # noqa: BLE001
             logger.debug("notes12 skips side-log write skipped", exc_info=True)
 
@@ -1195,6 +1262,16 @@ async def _run_list_of_notes_fanout(
                         return False
                     if not all(
                         e.action == "skipped" for e in r.coverage.entries
+                    ):
+                        return False
+                    # Run-84: the carve-out turns "wrote nothing" into a
+                    # success on the strength of the skip receipts alone. A
+                    # sub-agent whose writes were failing produces the same
+                    # receipt, and this branch would then ship a blank sheet as
+                    # a deliberate one. Every skip must be one we honour.
+                    if any(
+                        _unverified_skip_reason(r, int(e.note_num)) is not None
+                        for e in r.coverage.entries
                     ):
                         return False
                 return True
@@ -1464,8 +1541,21 @@ def _build_write_warnings(write_result: Any, sub_result: Any) -> List[str]:
                     )
             continue
         for entry in sub.coverage.entries:
-            if entry.action == "skipped":
+            if entry.action != "skipped":
+                continue
+            # Run-84: name a surrendered skip as such. The reported skip reason
+            # is still shown — it is the agent's account and an operator may
+            # want it — but the line must not read as a settled decision when
+            # the writes behind it failed.
+            unverified = _unverified_skip_reason(sub, int(entry.note_num))
+            if unverified is None:
                 warnings.append(
                     f"Note {entry.note_num} skipped: {entry.reason}"
+                )
+            else:
+                warnings.append(
+                    f"Note {entry.note_num} reported skipped "
+                    f"(\"{entry.reason}\") but NOT accepted as a skip — "
+                    f"{unverified}. It counts as unplaced."
                 )
     return warnings

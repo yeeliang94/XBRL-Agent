@@ -30,6 +30,7 @@ What this module owns:
 """
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -67,7 +68,7 @@ def build_notes_fill_doc(
     try:
         rows = conn.execute(
             """
-            SELECT sheet, row, label, html
+            SELECT sheet, row, label, html, updated_at
             FROM notes_cells
             WHERE run_id = ?
             ORDER BY sheet, row
@@ -78,6 +79,16 @@ def build_notes_fill_doc(
         conn.close()
 
     footnotes: list[dict[str, Any]] = []
+    # v39 prose-revision material, one entry per candidate footnote and
+    # positionally aligned with `footnotes`. NOT a digest: a candidate is only
+    # an OFFER, and `fill_footnotes` routinely resolves none of them (a
+    # template with no `fn_*` slots writes nothing and still returns a normal
+    # degraded report). Hashing the candidates produced a receipt attesting to
+    # prose that was never in the workbook — the same untraceability the
+    # snapshot exists to close, one level down (peer review, 2026-08-05).
+    # `build_notes_snapshot` turns this into a digest over the notes that
+    # actually landed, and the caller can only know that after the fill.
+    notes_revision: list[dict[str, Any]] = []
     skipped_empty = 0
     skipped_no_label = 0
     formatting_compacted = 0  # "compact" tier — same look, slimmer styling
@@ -134,6 +145,12 @@ def build_notes_fill_doc(
             white_grid_dropped += 1
             entry["white_grid_dropped"] = True
         footnotes.append(entry)
+        # Aligned by position with `footnotes`; `fill_footnotes` reports the
+        # same index on each written entry, which is how the two are joined.
+        notes_revision.append({
+            "identity": f"{r['sheet']}|{r['row']}|{label}|{r['html'] or ''}",
+            "updated_at": r["updated_at"] or "",
+        })
 
     meta = {
         "run_id": run_id,
@@ -141,6 +158,10 @@ def build_notes_fill_doc(
         # patch report, the modal) surface this so a deliberately-plain fill
         # can't be misread as a formatting bug.
         "styling_disabled": not decorate,
+        # v39 revision material for the fill receipt. Deliberately NOT a
+        # finished snapshot — see `notes_revision` above and
+        # `build_notes_snapshot` below.
+        "notes_revision": notes_revision,
         "counts": {
             "notes": len(footnotes),
             "skipped_empty": skipped_empty,
@@ -168,6 +189,42 @@ def build_notes_fill_doc(
         },
     }
     return {"meta": meta, "footnotes": footnotes, "strict": strict}
+
+
+def build_notes_snapshot(
+    notes_doc: dict[str, Any], written_indices,
+) -> dict[str, Any] | None:
+    """The prose revision that actually reached the workbook, or ``None``.
+
+    ``written_indices`` are the doc positions ``fill_footnotes`` reports on
+    ``footnotes_written`` — the notes it resolved to a slot and wrote. Only
+    those are hashed, because only those are in the file. A fill that wrote
+    nothing returns ``None``: "no prose was filed" and "this prose was filed"
+    are different facts, and a receipt must not blur them (peer review,
+    2026-08-05).
+
+    The digest is taken over each note's canonical DB form, so it identifies
+    the DATA revision and not the ``notes_styling`` chosen for this request —
+    the emitted file has its own ``output_sha256`` for that.
+    """
+    revision = (notes_doc.get("meta") or {}).get("notes_revision") or []
+    chosen = sorted({
+        i for i in written_indices
+        if isinstance(i, int) and 0 <= i < len(revision)
+    })
+    if not chosen:
+        return None
+    h = hashlib.sha256()
+    max_updated = ""
+    for i in chosen:
+        h.update((revision[i]["identity"] + "\n").encode("utf-8"))
+        if revision[i]["updated_at"] > max_updated:
+            max_updated = revision[i]["updated_at"]
+    return {
+        "notes_count": len(chosen),
+        "digest": h.hexdigest(),
+        "max_updated_at": max_updated or None,
+    }
 
 
 def _resolve_note_html(

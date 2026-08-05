@@ -490,6 +490,13 @@ def _inject_headings(payload: NotesPayload) -> NotesPayload:
         # <h3> headings add no <table>s, so the ops' table indices stay
         # valid across the prepend — safe to carry through unchanged.
         format_ops=payload.format_ops,
+        # Carried for the same reason `_combine_payloads` carries it: this is a
+        # rebuild, and a rebuild that drops the flag re-imposes the authoring
+        # contracts on content the document itself supplied. Reachable since a
+        # combined cell can now be both source-built and heading-bearing (a
+        # source-built payload merged with a deliberate-empty one that carries
+        # a heading has no evidence to satisfy the constructor).
+        source_built=payload.source_built,
     )
 
 
@@ -745,6 +752,21 @@ def _collect_unique_pages(payloads: list[NotesPayload]) -> list[int]:
     return out
 
 
+def _first_heading(
+    payloads: list[NotesPayload], attr: str,
+) -> Optional[dict]:
+    """First non-None ``parent_note`` / ``sub_note`` across the contributors.
+
+    Order is the caller's (sorted by earliest cited page), so the result is
+    stable across re-runs.
+    """
+    for p in payloads:
+        value = getattr(p, attr)
+        if value is not None:
+            return value
+    return None
+
+
 def _combine_payloads(payloads: list[NotesPayload]) -> NotesPayload:
     """Merge multiple payloads targeting the same row.
 
@@ -848,12 +870,25 @@ def _combine_payloads(payloads: list[NotesPayload]) -> NotesPayload:
         source_pages=all_pages,
         numeric_values=numeric_values,
         sub_agent_id=combined_sub_id,
-        # Merged payloads inherit the first payload's heading hierarchy.
-        # All payloads in a merge target the same row (same chosen_row_label),
-        # which means they're all covering the same note — parent_note and
-        # sub_note should match across them, so taking [0] is safe.
-        parent_note=payloads[0].parent_note,
-        sub_note=payloads[0].sub_note,
+        # Merged payloads inherit the heading hierarchy of the first
+        # contributor that HAS one. Payloads in a merge usually target the same
+        # note (same chosen_row_label), so [0] was enough — but a catch-all row
+        # legitimately groups DIFFERENT notes (run-79), and a source-built
+        # payload carries no parent_note at all. Blindly taking [0] then
+        # dropped the heading of a hand-authored contributor purely because the
+        # page sort put a source-built payload first.
+        parent_note=_first_heading(payloads, "parent_note"),
+        sub_note=_first_heading(payloads, "sub_note"),
+        # A cell is source-built when ANY contributor was code-built from
+        # source blocks — the same rule `_source_built_table_cells` applies at
+        # the nudge sites. Dropping the flag here re-armed the exact defect
+        # `source_built` exists to prevent: the rebuilt payload failed its own
+        # constructor with "parent_note is required" (and, for a payload whose
+        # evidence carried a ';', "evidence is required"), raising inside
+        # `write_notes_workbook` and taking down the notes agent AFTER the
+        # sub-agents had done their work. The single-payload fast path above is
+        # the only reason this wasn't hit on every source-built write.
+        source_built=any(p.source_built for p in payloads),
         # Sidecar ops re-indexed against the concatenated content (the
         # payload list here is already in the same sorted order the
         # `contents` join used, so chunk offsets line up).

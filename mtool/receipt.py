@@ -47,17 +47,19 @@ def snapshot_facts(
     filing_standard: str,
     filing_level: str,
 ) -> tuple[list[sqlite3.Row], dict[str, Any]]:
-    """Read a run's facts ONCE, inside a single consistent read.
-
-    The numeric figures and the prose notes used to be read at different
-    moments in the request; between them a reviewer could change a fact, so the
-    workbook wouldn't correspond to any single revision of the data. This reads
-    the fact set in one deferred transaction and returns it together with an
-    identity for that revision:
+    """Read a run's NUMERIC facts once, and return an identity for that revision.
 
     ``{"fact_count", "digest", "max_updated_at"}`` — the digest is a hash over
     the ordered ``(concept, period, scope, value, status)`` tuples, so any edit
     between two fills produces a different digest even when the counts match.
+
+    Scope is ``run_concept_facts`` and nothing else. The prose notes live in
+    ``notes_cells`` and are read by a separate connection later in the request
+    (``mtool.notes_exporter.build_notes_fill_doc``), so this digest cannot
+    speak for them — it once claimed to, and a notes edit between the two reads
+    produced a workbook whose prose no receipt described. The notes carry their
+    OWN revision identity (``meta.notes_snapshot``), and the receipt records
+    both (schema v39). Two digests, because there are two reads.
     """
     family_prefix = f"{filing_standard.lower()}-{filing_level.lower()}-"
     conn = sqlite3.connect(str(db_path))
@@ -101,6 +103,24 @@ def snapshot_facts(
     return rows, identity
 
 
+# Operator free text (the preflight override, the degraded-download
+# acknowledgement) is stored verbatim so the audit trail keeps the operator's
+# own words. Bound it anyway: it arrives from a form field / query string with
+# no length of its own, and an audit column is not a place to put an unbounded
+# body. 4 KB is far more than a reason sentence and far less than a problem.
+ACK_TEXT_LIMIT = 4096
+_TRUNCATION_SUFFIX = "… [truncated]"
+
+
+def clamp_ack_text(text: str | None) -> str | None:
+    """Bound an operator acknowledgement, marking it when it was cut."""
+    if text is None:
+        return None
+    if len(text) <= ACK_TEXT_LIMIT:
+        return text
+    return text[:ACK_TEXT_LIMIT - len(_TRUNCATION_SUFFIX)] + _TRUNCATION_SUFFIX
+
+
 def write_fill_receipt(
     db_path: str | Path,
     *,
@@ -115,8 +135,15 @@ def write_fill_receipt(
     preflight_override: str | None,
     operator: str | None,
     report: dict | None,
+    notes_snapshot: dict[str, Any] | None = None,
 ) -> int:
     """Insert one receipt and return its id.
+
+    ``snapshot`` identifies the numeric fact revision; ``notes_snapshot`` the
+    prose one (``meta.notes_snapshot`` from the notes fill doc). Both are
+    recorded because they come from two separate reads — see
+    :func:`snapshot_facts`. ``None`` for the notes half means this fill wrote
+    no prose, which is a different fact from "the prose was empty".
 
     RAISES on any write failure — the caller must treat a missing receipt as
     a failed fill and withhold the artifact (module docstring). Losing the
@@ -127,23 +154,28 @@ def write_fill_receipt(
         cur = conn.execute(
             "INSERT INTO mtool_fill_receipts("
             "run_id, snapshot_fact_count, snapshot_digest, "
-            "snapshot_max_updated, source_sha256, output_sha256, "
+            "snapshot_max_updated, snapshot_notes_count, "
+            "snapshot_notes_digest, snapshot_notes_updated, "
+            "source_sha256, output_sha256, "
             "template_fingerprint, column_map_json, translation_version, "
             "preflight_json, preflight_override, status, report_json, "
             "operator, created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 run_id,
                 (snapshot or {}).get("fact_count"),
                 (snapshot or {}).get("digest"),
                 (snapshot or {}).get("max_updated_at"),
+                (notes_snapshot or {}).get("notes_count"),
+                (notes_snapshot or {}).get("digest"),
+                (notes_snapshot or {}).get("max_updated_at"),
                 source_sha256,
                 output_sha256,
                 template_fingerprint,
                 json.dumps(column_map) if column_map is not None else None,
                 translation_version,
                 json.dumps(preflight) if preflight is not None else None,
-                preflight_override,
+                clamp_ack_text(preflight_override),
                 (report or {}).get("status"),
                 json.dumps(report) if report is not None else None,
                 operator,
@@ -171,7 +203,7 @@ def record_receipt_download(
                 conn.execute(
                     "UPDATE mtool_fill_receipts SET downloaded_at = ?, "
                     "degraded_ack = ? WHERE id = ?",
-                    (_now(), acknowledgement, receipt_id))
+                    (_now(), clamp_ack_text(acknowledgement), receipt_id))
             else:
                 conn.execute(
                     "UPDATE mtool_fill_receipts SET downloaded_at = ? "
@@ -189,8 +221,16 @@ def fetch_receipts(db_path: str | Path, run_id: int) -> list[dict[str, Any]]:
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     try:
+        # Columns named rather than `SELECT *`: a rename then fails here, at
+        # the query, instead of as a KeyError while building the response.
         rows = conn.execute(
-            "SELECT * FROM mtool_fill_receipts WHERE run_id = ? "
+            "SELECT id, run_id, created_at, downloaded_at, operator, status, "
+            "source_sha256, output_sha256, template_fingerprint, "
+            "translation_version, snapshot_fact_count, snapshot_digest, "
+            "snapshot_max_updated, snapshot_notes_count, "
+            "snapshot_notes_digest, snapshot_notes_updated, column_map_json, "
+            "preflight_json, preflight_override, degraded_ack, report_json "
+            "FROM mtool_fill_receipts WHERE run_id = ? "
             "ORDER BY id DESC", (run_id,)).fetchall()
     finally:
         conn.close()
@@ -218,6 +258,13 @@ def fetch_receipts(db_path: str | Path, run_id: int) -> list[dict[str, Any]]:
                 "digest": r["snapshot_digest"],
                 "max_updated_at": r["snapshot_max_updated"],
             },
+            # The prose revision (v39). `digest: None` = this fill wrote no
+            # notes, or the receipt predates the column.
+            "notes_snapshot": {
+                "notes_count": r["snapshot_notes_count"],
+                "digest": r["snapshot_notes_digest"],
+                "max_updated_at": r["snapshot_notes_updated"],
+            },
             "column_map": _decode(r["column_map_json"]),
             "preflight": _decode(r["preflight_json"]),
             "preflight_override": r["preflight_override"],
@@ -229,4 +276,4 @@ def fetch_receipts(db_path: str | Path, run_id: int) -> list[dict[str, Any]]:
 
 
 __all__ = ["snapshot_facts", "write_fill_receipt", "record_receipt_download",
-           "fetch_receipts"]
+           "fetch_receipts", "clamp_ack_text", "ACK_TEXT_LIMIT"]

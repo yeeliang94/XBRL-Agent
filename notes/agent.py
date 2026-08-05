@@ -833,6 +833,19 @@ class NotesDeps:
     write_skip_errors: list[str] = field(default_factory=list)
     # (requested_label, chosen_label, score) — only entries where score < 1.0
     write_fuzzy_matches: list[tuple[str, str, float]] = field(default_factory=list)
+    # Notes whose write ATTEMPTS failed, and failures we could not pin to a
+    # note (a payload that never parsed carries no note number).
+    #
+    # Run-84 finding (2026-08-05): a sub-agent whose writes kept being rejected
+    # gave up and declared the notes "skipped" in its coverage receipt. Nothing
+    # checked the reason, so an intentional skip ("this belongs on another
+    # sheet") and a surrender read identically — the notes landed nowhere, the
+    # checklist showed no uncovered notes, and the run reported success. The
+    # receipt cannot be the witness here: it is written by the agent that just
+    # failed. These two fields are the system's own record, and
+    # `_write_notes12_skips` believes them over the receipt.
+    failed_write_notes: set[int] = field(default_factory=set)
+    unattributed_write_failures: int = 0
     # Human-readable strings from the HTML sanitiser (Step 5 of the
     # notes rich-editor plan). Each entry describes something the
     # sanitiser stripped from a payload (script tags, event handlers,
@@ -1296,6 +1309,20 @@ def _sub_agent_sink_write(
     """
     entries = _ensure_label_index(deps)
     accepted, rejections = resolve_payload_labels(entries, payloads)
+    # Record what actually failed, before any of the advisory messaging below.
+    # A rejected payload never reaches the sheet; if the agent then reports the
+    # note as "skipped", `_write_notes12_skips` must not believe it (run-84).
+    # Identity, not equality — two payloads for one row can compare equal.
+    _accepted_ids = {id(p) for p in accepted}
+    for p in payloads:
+        if id(p) in _accepted_ids:
+            continue
+        if p.note_num is None:
+            deps.unattributed_write_failures += 1
+        else:
+            deps.failed_write_notes.add(int(p.note_num))
+    # A payload that failed to construct carries no note number at all.
+    deps.unattributed_write_failures += len(parse_errors)
     # Supersede-on-resend: the unstyled-table nudge below invites the agent to
     # re-send a row with the SAME content plus format_ops. In sink mode
     # multiple payloads for one row are normally CONCATENATED at the final
@@ -2492,13 +2519,20 @@ def create_notes_agent(
                 FORMATTING OBSERVATION contract in your system prompt) —
                 without it the table renders unstyled.
         """
+        # Both early returns below are write FAILURES, and neither reaches the
+        # sink — so they are recorded here or not at all. This is the exact
+        # shape that preceded run 84's surrendered skips: six consecutive
+        # "Invalid JSON: Extra data" replies, then a receipt declaring the
+        # notes skipped, which the system accepted at face value.
         try:
             parsed = json.loads(payloads_json)
         except json.JSONDecodeError as e:
+            ctx.deps.unattributed_write_failures += 1
             return f"Invalid JSON: {e}"
 
         items = parsed["payloads"] if isinstance(parsed, dict) and "payloads" in parsed else parsed
         if not isinstance(items, list):
+            ctx.deps.unattributed_write_failures += 1
             return 'Expected a list of payloads or {"payloads": [...]}'
 
         payloads: list[NotesPayload] = []

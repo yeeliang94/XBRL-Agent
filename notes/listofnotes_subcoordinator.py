@@ -149,6 +149,13 @@ class SubAgentRunResult:
     # 'succeeded'` as "agent completed work but didn't close the
     # handshake" — different from an outright failure.
     coverage: Optional[CoverageReceipt] = None
+    # The system's OWN record of writes that failed, independent of what the
+    # receipt claims (run-84). ``failed_write_notes`` are notes whose payloads
+    # were rejected; ``unattributed_write_failures`` counts failures that carry
+    # no note number — a `payloads_json` that never parsed is the common one, and
+    # it is exactly the failure that preceded run 84's surrendered skips.
+    failed_write_notes: set[int] = field(default_factory=set)
+    unattributed_write_failures: int = 0
 
 
 @dataclass
@@ -421,11 +428,18 @@ async def _run_list_of_notes_sub_agent(
     # isn't lost (the failure path reads it back, otherwise the aggregate cost
     # report under-reports every time a sub-agent spends tokens then raises).
     cur_usage: dict[str, int] = {"prompt": 0, "completion": 0}
+    # Same accumulator pattern for the attempt's write failures (run-84): the
+    # system's own record of writes that did not land, which outranks a coverage
+    # receipt claiming those notes were skipped. Reset per attempt — a retry
+    # starts a fresh agent, so the previous attempt's failures are not its.
+    cur_failures: dict[str, Any] = {"failed_notes": set(), "unattributed": 0}
 
     async def _attempt(retry_index: int) -> SubAgentRunResult:
         nonlocal retries_performed, last_prompt_tokens, last_completion_tokens, cur_usage
+        nonlocal cur_failures
         retries_performed = retry_index
         cur_usage = {"prompt": 0, "completion": 0}
+        cur_failures = {"failed_notes": set(), "unattributed": 0}
         payloads, prompt_t, completion_t, coverage = await _invoke_sub_agent_once(
             sub_agent_id=sub_agent_id,
             batch=batch,
@@ -439,6 +453,7 @@ async def _run_list_of_notes_sub_agent(
             page_hints=page_hints,
             page_offset=page_offset,
             usage_out=cur_usage,
+            failures_out=cur_failures,
             filing_standard=filing_standard,
             scout_context=scout_context,
             run_id=run_id,
@@ -478,6 +493,9 @@ async def _run_list_of_notes_sub_agent(
             prompt_tokens=last_prompt_tokens,
             completion_tokens=last_completion_tokens,
             coverage=coverage,
+            failed_write_notes=set(cur_failures.get("failed_notes") or ()),
+            unattributed_write_failures=int(
+                cur_failures.get("unattributed") or 0),
         )
 
     def _record_attempt(e: BaseException) -> None:
@@ -533,6 +551,7 @@ async def _invoke_sub_agent_once(
     page_hints: Optional[list[int]] = None,
     page_offset: int = 0,
     usage_out: Optional[dict[str, int]] = None,
+    failures_out: Optional[dict[str, Any]] = None,
     filing_standard: str = "mfrs",
     scout_context: Optional[dict] = None,
     run_id: Optional[int] = None,
@@ -843,6 +862,12 @@ async def _invoke_sub_agent_once(
     # the terminal call. We pass the attribute through regardless — the
     # aggregator decides how to treat None (uncovered) vs a populated
     # receipt (covered, possibly with skips).
+    # The system's own write-failure record (run-84), reported through an
+    # out-param rather than a wider return tuple — `usage_out` above set that
+    # pattern, and it keeps the arity stable for every caller and test double.
+    if failures_out is not None:
+        failures_out["failed_notes"] = set(deps.failed_write_notes)
+        failures_out["unattributed"] = deps.unattributed_write_failures
     return list(payload_sink), final_prompt, final_completion, deps.coverage_receipt
 
 
