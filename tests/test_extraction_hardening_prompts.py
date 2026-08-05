@@ -144,3 +144,69 @@ def test_listofnotes_keeps_profit_before_tax_together():
     flat = _flat("notes_listofnotes.md")
     assert "profit" in flat and "before tax" in flat
     assert "do not scatter its individual line items" in flat
+
+
+# --- Concern #7 (2026-08-05 user validation): note-splitting granularity ------
+# Users confirmed the placement logic: a note stays whole by default; a split
+# cuts only at first-level sub-section boundaries and must account for every
+# paragraph; no note is duplicated except share capital (two named rows); the
+# related-party note lives only on its own sheet. Each assertion below pins
+# one of those confirmed rules.
+
+def test_notes_base_split_granularity_floor():
+    flat = _flat("_notes_base.md")
+    # Whole-by-default is stated up front, not only in the hierarchy section.
+    assert "a note stays whole in one cell by default" in flat
+    # The split unit is whole first-level sub-sections, never lines.
+    assert "first-level sub-section boundaries" in flat
+    assert "never a fragment" in flat
+    assert "only the lines" not in flat
+    # Completeness: the pieces must sum to the whole note.
+    assert "every paragraph appears in exactly one payload" in flat
+
+
+def test_notes_base_grouping_is_default_not_optional():
+    flat = _flat("_notes_base.md")
+    assert "sub-notes belong with their parent by default" in flat
+    assert "sub-notes can be grouped" not in flat
+
+
+def test_notes_base_share_capital_names_both_target_rows():
+    flat = _flat("_notes_base.md")
+    assert "disclosure of share capital" in flat
+    assert "disclosure of classes of share capital" in flat
+    # The second List of Notes candidate row is named and excluded.
+    assert "disclosure of issued capital" in flat
+    assert "do not put a second copy there" in flat
+
+
+def test_listofnotes_states_keep_whole_vs_distribute_rule():
+    flat = _flat("notes_listofnotes.md")
+    assert "captures the note as a whole" in flat
+    assert "only when no single row captures the whole note" in flat
+    assert "never dropped" in flat
+
+
+def test_listofnotes_never_cites_a_related_party_row():
+    # No related-party row exists on the MFRS or MPERS List of Notes
+    # template; the note belongs on the Related Party Transactions sheet
+    # only. The old intro cited "Disclosure of related party transactions"
+    # as an example label, contradicting the skip rule below it.
+    flat = _flat("notes_listofnotes.md")
+    assert "disclosure of related party transactions" not in flat
+    assert "related party transactions sheet only" in flat
+
+
+def test_accounting_policies_multi_topic_paragraph_goes_to_one_row():
+    flat = _flat("notes_accounting_policies.md")
+    assert "single best-fitting row" in flat
+    assert "never cut it into sentences" in flat
+    assert "relevant sentence" not in flat
+
+
+def test_notes_reviewer_split_rule_matches_extraction_rule():
+    # The reviewer is the backstop for flagged splits; its acceptance rule
+    # must carry the same granularity floor as the extraction prompts.
+    flat = _flat("notes_reviewer.md")
+    assert "whole first-level sub-section boundaries" in flat
+    assert "entire note present across the rows" in flat
