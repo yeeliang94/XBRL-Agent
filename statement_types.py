@@ -31,6 +31,21 @@ FilingStandard = Literal["mfrs", "mpers"]
 # pass and excluding a facts-bearing statement from verification / export.
 FACTS_BEARING_AGENT_STATUSES = frozenset({"succeeded", "completed_with_errors"})
 
+# A face agent in one of these states did NOT stop early: it either finished
+# carrying facts, or had no template to fill (`skipped` = a NotPrepared variant,
+# a legitimate non-outcome). Every other terminal state — the iteration cap, a
+# turn timeout, the wall-clock or token bound, a cancel — leaves a PARTLY-read
+# statement behind: extraction projects facts live, so the figures the agent got
+# as far as writing are already in `run_concept_facts`, and the merge picks its
+# scratch workbook up off disk regardless of status.
+#
+# That combination is why an unfinished statement reached both the download and
+# the mTool fill looking complete (run 84, 2026-08-05). The two gates that now
+# refuse it — `mtool.preflight._incomplete_face_agents` and the download's
+# incomplete marker — must agree on what "did not finish" means, so the
+# definition lives here rather than in either of them.
+SETTLED_AGENT_STATUSES = FACTS_BEARING_AGENT_STATUSES | frozenset({"skipped"})
+
 
 class StatementType(str, Enum):
     """The 5 primary MBRS face statements."""
@@ -39,6 +54,22 @@ class StatementType(str, Enum):
     SOCI = "SOCI"   # Statement of Comprehensive Income
     SOCF = "SOCF"   # Statement of Cash Flows
     SOCIE = "SOCIE" # Statement of Changes in Equity
+
+
+def incomplete_face_statements(agents) -> list:
+    """Face statements among ``agents`` that stopped before finishing.
+
+    ``agents`` is any iterable of objects carrying ``statement_type`` and
+    ``status`` (``repository.RunAgent`` rows, or the coordinator's in-memory
+    results). Notes templates are out of scope — they have their own coverage
+    gate, and reporting one here would name it as a missing face statement.
+    """
+    faces = {s.value for s in StatementType}
+    return [
+        a for a in agents
+        if str(getattr(a, "statement_type", "")) in faces
+        and getattr(a, "status", None) not in SETTLED_AGENT_STATUSES
+    ]
 
 
 @dataclass(frozen=True)

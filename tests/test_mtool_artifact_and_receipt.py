@@ -297,9 +297,11 @@ def test_receipt_module_raises_on_write_failure(tmp_path):
 
 
 def test_snapshot_is_one_consistent_read(tmp_path):
-    """Numbers and notes used to be read at different moments in the request,
-    so a mid-request edit could produce a workbook matching no single revision.
-    The snapshot helper returns the rows AND the identity of that revision."""
+    """The helper returns the NUMERIC rows and the identity of that revision.
+
+    It speaks for `run_concept_facts` only — the prose has its own identity
+    (see the notes-snapshot tests below), because it comes from a separate
+    read of `notes_cells`."""
     from concept_model.importer import import_company_targets, import_template
     from concept_model.parser import parse_template
     from db.schema import init_db
@@ -322,3 +324,342 @@ def test_snapshot_is_one_consistent_read(tmp_path):
     # Re-reading unchanged data gives the same identity.
     assert snapshot_facts(db, run_id, filing_standard="mfrs",
                           filing_level="company")[1] == identity
+
+
+# ------------------------------------------------- the PROSE revision (v39)
+#
+# v38's receipt identified only the numeric fact revision. The prose is read
+# from `notes_cells` by its own connection, later in the same request, so a
+# notes edit landing between the two reads produced a workbook whose prose no
+# receipt described. Both revisions are now recorded.
+
+
+def _seed_notes(db, run_id, html="<p>Note one</p>", label="Corporate information"):
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(
+            "INSERT INTO notes_cells(run_id, sheet, row, label, html, "
+            "updated_at) VALUES (?,?,?,?,?,?)",
+            (run_id, "Notes-CI", 5, label, html, "2026-08-05T00:00:00Z"))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _written(indices):
+    """A fill report shaped like one where `indices` were actually written.
+
+    The SOFP fixture carries no `fn_*` slots, so a real fill through it always
+    resolves ZERO notes — which is exactly the case that must record no prose
+    revision. To exercise the WRITTEN path these tests stand in a report that
+    resolved the notes, rather than pretending the fixture did."""
+    def _fake(src, doc, out, **kwargs):
+        import shutil
+        if out:
+            shutil.copyfile(src, out)
+        return {
+            "status": "ok",
+            "footnotes_written": [
+                {"index": i, "key": f"fn_{i}",
+                 "label": doc["footnotes"][i]["label"]}
+                for i in indices],
+            "footnotes_created": [], "unresolved": [],
+            "footnote_mismatches": [], "errors": [],
+        }
+    return _fake
+
+
+def _receipt(db, run_id):
+    from mtool.receipt import fetch_receipts
+    return fetch_receipts(db, run_id)[0]
+
+
+def test_receipt_records_the_prose_revision_alongside_the_numeric_one(
+        client, monkeypatch):
+    import api.mtool as m
+
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed(db, run_id)
+    _seed_notes(db, run_id)
+
+    monkeypatch.setattr(m, "fill_footnotes", _written([0]))
+    assert _patch(tc, run_id).status_code == 200
+    rec = _receipt(db, run_id)
+    assert rec["snapshot"]["digest"], "numeric revision still recorded"
+    assert rec["notes_snapshot"]["digest"], "prose revision recorded too"
+    assert rec["notes_snapshot"]["notes_count"] == 1
+    assert rec["notes_snapshot"]["max_updated_at"] == "2026-08-05T00:00:00Z"
+
+
+def test_editing_a_note_moves_the_prose_digest_with_the_numbers_unchanged(
+        client, monkeypatch):
+    """The failure this closes: identical facts, edited prose, and — before
+    v39 — two receipts that were indistinguishable."""
+    import api.mtool as m
+
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed(db, run_id)
+    _seed_notes(db, run_id)
+    monkeypatch.setattr(m, "fill_footnotes", _written([0]))
+    assert _patch(tc, run_id).status_code == 200
+    first = _receipt(db, run_id)
+
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(
+            "UPDATE notes_cells SET html = ? WHERE run_id = ?",
+            ("<p>Note one, corrected</p>", run_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert _patch(tc, run_id).status_code == 200
+    second = _receipt(db, run_id)
+    assert second["snapshot"]["digest"] == first["snapshot"]["digest"]
+    assert second["notes_snapshot"]["digest"] != first["notes_snapshot"]["digest"]
+
+
+def test_a_numeric_only_fill_records_no_prose_revision(client):
+    """`None` means "this fill wrote no prose" — a different fact from "the
+    prose was empty", so it must not be a digest over nothing."""
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed(db, run_id)
+    _seed_notes(db, run_id)
+
+    assert _patch(tc, run_id, fill_notes="false").status_code == 200
+    assert _receipt(db, run_id)["notes_snapshot"]["digest"] is None
+
+
+def test_prose_digest_ignores_the_styling_knobs(client, monkeypatch):
+    """The digest identifies the DATA revision, not the rendering.
+
+    Styling is chosen per request (`notes_styling`) and the decorator rewrites
+    the HTML on the way out. If the digest tracked the rendered form, two fills
+    of identical prose would look like an edit — and a real edit made between
+    them would be indistinguishable from a styling change."""
+    import api.mtool as m
+
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed(db, run_id)
+    _seed_notes(db, run_id, html="<table><tr><td>1</td></tr></table>")
+
+    monkeypatch.setattr(m, "fill_footnotes", _written([0]))
+    assert _patch(tc, run_id, notes_styling="styled").status_code == 200
+    styled = _receipt(db, run_id)
+    assert _patch(tc, run_id, notes_styling="none").status_code == 200
+    plain = _receipt(db, run_id)
+    assert plain["notes_snapshot"]["digest"] == styled["notes_snapshot"]["digest"]
+    # And the two modes really did render the note differently, so the
+    # equality above is a property of the digest and not of the input.
+    from mtool.notes_exporter import build_notes_fill_doc
+    a = build_notes_fill_doc(db, run_id, decorate=True)["footnotes"][0]["html"]
+    b = build_notes_fill_doc(db, run_id, decorate=False)["footnotes"][0]["html"]
+    assert a != b
+
+
+# ------------------------------------------------- operator free text bounds
+
+
+def test_an_overlong_override_is_clamped_not_stored_whole(client):
+    from mtool.receipt import ACK_TEXT_LIMIT
+
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed(db, run_id)
+    # Force a blocking preflight so the override is required and recorded.
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(
+            "INSERT INTO reviewer_flags(run_id, category, reasoning, status, "
+            "created_at) VALUES (?,?,?,?,?)",
+            (run_id, "stuck", "unresolved", "open", "t"))
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert _patch(tc, run_id, acknowledge_preflight="y" * 50_000).status_code == 200
+    stored = _receipt(db, run_id)["preflight_override"]
+    assert len(stored) <= ACK_TEXT_LIMIT
+    assert stored.endswith("[truncated]")
+
+
+def test_a_normal_length_override_is_stored_verbatim(client):
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed(db, run_id)
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(
+            "INSERT INTO reviewer_flags(run_id, category, reasoning, status, "
+            "created_at) VALUES (?,?,?,?,?)",
+            (run_id, "stuck", "unresolved", "open", "t"))
+        conn.commit()
+    finally:
+        conn.close()
+
+    reason = "Partner reviewed the imbalance on 5 Aug and approved filing."
+    assert _patch(tc, run_id, acknowledge_preflight=reason).status_code == 200
+    assert _receipt(db, run_id)["preflight_override"] == reason
+
+
+# ------------------------------------------- gates that apply to BOTH paths
+
+
+def test_auto_detected_map_is_semantically_validated_too(client, monkeypatch):
+    """An operator-supplied map is checked for collisions and label overwrites;
+    the auto-detected one is the DEFAULT and was not. The detector cannot
+    currently produce such a map, which is exactly why the check has to be
+    here — otherwise the invariant rests on the detector's internals and a
+    future change to them breaks a filing rather than a request."""
+    import api.mtool as m
+
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed(db, run_id)
+
+    real = m.detect_column_map
+
+    def onto_the_labels(*args, **kwargs):
+        detected = real(*args, **kwargs)
+        for layout in detected.values():
+            # Confident, unattended-eligible, and wrong: the figures are
+            # addressed to the very column holding the labels they are matched
+            # by, so the fill would erase its own row headings.
+            layout["confidence"] = "high"
+            layout["requires_confirmation"] = False
+            layout["columns"] = {
+                r: layout["label_column"] for r in layout["columns"]}
+        return detected
+
+    monkeypatch.setattr(m, "detect_column_map", onto_the_labels)
+    resp = _patch(tc, run_id)
+    assert resp.status_code == 422, resp.text
+    assert "overwrite the row labels" in json.dumps(resp.json())
+
+
+def test_concurrent_registration_during_a_sweep_does_not_explode(client):
+    """`_ARTIFACTS` is touched from the event loop (patch) and from a worker
+    thread (download). An unsynchronised sweep iterating it while another
+    request registers raises RuntimeError and 500s a fill that had already
+    succeeded."""
+    import threading
+
+    import api.mtool as m
+
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed(db, run_id)
+
+    errors: list[BaseException] = []
+    stop = threading.Event()
+
+    def churn():
+        i = 0
+        while not stop.is_set():
+            try:
+                m._register_artifact(
+                    run_id, Path("/nonexistent"), Path("/nonexistent/f.xlsx"),
+                    status="ok", receipt_id=None)
+                m._sweep_artifacts()
+            except BaseException as exc:  # noqa: BLE001
+                errors.append(exc)
+                return
+            i += 1
+            if i > 400:
+                return
+
+    threads = [threading.Thread(target=churn) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    stop.set()
+    assert not errors, f"registry raced: {errors[0]!r}"
+
+
+def test_a_degraded_notes_fill_records_no_prose_revision(client, monkeypatch):
+    """When the notes fill fails, the operator gets the numeric-only workbook.
+    A receipt naming a prose revision that is not in that file would be the
+    same untraceability the snapshot exists to close."""
+    import api.mtool as m
+
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed(db, run_id)
+    _seed_notes(db, run_id)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("notes patcher fell over")
+
+    monkeypatch.setattr(m, "fill_footnotes", boom)
+    body = _patch(tc, run_id).json()
+    assert body["notes"]["status"] == "degraded"
+    assert _receipt(db, run_id)["notes_snapshot"]["digest"] is None
+
+
+def test_a_fill_that_wrote_no_notes_records_no_prose_revision(client):
+    """The reproduced bug: the SOFP template exposes no `fn_*` slots, so
+    fill_footnotes resolves nothing and returns a normal degraded report — yet
+    the receipt claimed a prose revision. Producing a notes workbook is not the
+    same as filling anything into it."""
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed(db, run_id)
+    _seed_notes(db, run_id)
+
+    body = _patch(tc, run_id).json()
+    assert body["notes"]["counts"]["written"] == 0, "fixture has no fn_ slots"
+    assert _receipt(db, run_id)["notes_snapshot"]["digest"] is None
+
+
+def test_a_partial_notes_fill_attests_only_to_what_landed(client, monkeypatch):
+    """Two notes offered, one written. The digest must cover the written one
+    alone — attesting to the unresolved note would be the same false claim as
+    the zero-write case, just harder to spot."""
+    import api.mtool as m
+    from mtool.notes_exporter import build_notes_fill_doc, build_notes_snapshot
+
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed(db, run_id)
+    _seed_notes(db, run_id, html="<p>First</p>", label="Corporate information")
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(
+            "INSERT INTO notes_cells(run_id, sheet, row, label, html, "
+            "updated_at) VALUES (?,?,?,?,?,?)",
+            (run_id, "Notes-CI", 9, "Significant accounting policies",
+             "<p>Second</p>", "2026-08-06T00:00:00Z"))
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(m, "fill_footnotes", _written([0]))
+    assert _patch(tc, run_id).status_code == 200
+    partial = _receipt(db, run_id)["notes_snapshot"]
+    assert partial["notes_count"] == 1
+    # It is note 0 that landed: the digest equals the one-note snapshot, and
+    # NOT the both-notes snapshot.
+    doc = build_notes_fill_doc(db, run_id)
+    assert partial["digest"] == build_notes_snapshot(doc, [0])["digest"]
+    assert partial["digest"] != build_notes_snapshot(doc, [0, 1])["digest"]
+    # …and the note that did not land is not implied by the timestamp either.
+    assert partial["max_updated_at"] == "2026-08-05T00:00:00Z"
+
+
+def test_build_notes_snapshot_ignores_indices_it_cannot_place(client):
+    """A written entry with a missing or out-of-range index must not silently
+    shift the digest onto some other note."""
+    from mtool.notes_exporter import build_notes_fill_doc, build_notes_snapshot
+
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_notes(db, run_id)
+    doc = build_notes_fill_doc(db, run_id)
+    assert build_notes_snapshot(doc, [None, 7, -1]) is None
+    assert build_notes_snapshot(doc, []) is None
+    assert build_notes_snapshot(doc, [0, 0])["notes_count"] == 1

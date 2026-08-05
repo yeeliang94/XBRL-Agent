@@ -97,6 +97,37 @@ def _integrity_state(
     return mode, verdict
 
 
+def _incomplete_face_agents(
+    conn: sqlite3.Connection, run_id: int,
+) -> list[sqlite3.Row]:
+    """Face statements that did not finish, yet may have left facts behind.
+
+    An agent that fails partway — the iteration cap, a turn timeout, a cancel —
+    has usually already projected some of its figures into ``run_concept_facts``
+    (extraction writes them live), and the merge picks its scratch workbook up
+    off disk regardless of status. So a half-extracted statement reaches both the
+    download and this fill without any of the other blockers noticing: its
+    figures aren't in conflict, they're merely incomplete.
+
+    Run status is deliberately NOT the gate here (see the module docstring) —
+    ``completed_with_errors`` is fillable. This asks the narrower question: did
+    a specific statement stop early? ``SETTLED_AGENT_STATUSES`` owns that
+    definition so this gate and the download's incomplete marker cannot drift.
+    """
+    from statement_types import SETTLED_AGENT_STATUSES, StatementType
+
+    faces = sorted(s.value for s in StatementType)
+    settled = sorted(SETTLED_AGENT_STATUSES)
+    return conn.execute(
+        f"SELECT statement_type, variant, status, error_type "
+        f"FROM run_agents WHERE run_id = ? "
+        f"  AND statement_type IN ({','.join('?' * len(faces))}) "
+        f"  AND status NOT IN ({','.join('?' * len(settled))}) "
+        f"ORDER BY statement_type",
+        (run_id, *faces, *settled),
+    ).fetchall()
+
+
 def _coverage_state(conn: sqlite3.Connection,
                     run_id: int) -> tuple[str | None, list[sqlite3.Row]]:
     """Return (banner, unresolved top-level coverage rows).
@@ -177,6 +208,7 @@ def evaluate_preflight(
             conflicts = _conflict_facts(conn, run_id, family_prefix)
         flags = _open_reviewer_flags(conn, run_id)
         notes_flags = _open_notes_flags(conn, run_id)
+        incomplete_faces = _incomplete_face_agents(conn, run_id)
         banner, coverage_unresolved = _coverage_state(conn, run_id)
         integrity_mode, integrity_verdict = _integrity_state(conn, run_id)
     finally:
@@ -219,6 +251,31 @@ def evaluate_preflight(
                 "changes in equity, which isn't filled yet). They won't reach "
                 "the workbook, but they're worth resolving."),
             "examples": [_describe(r) for r in other_conflicts[:_EXAMPLE_CAP]],
+        })
+
+    if incomplete_faces:
+        _reasons = {
+            "iteration_capped": "ran out of its step budget",
+            "turn_timeout": "stalled and timed out",
+            "wallclock": "ran out of time",
+            "token_budget": "ran out of its token budget",
+            "cancelled": "was stopped",
+            "projection_failed": "could not save its figures",
+        }
+        blockers.append({
+            "code": "incomplete_face_statements",
+            "count": len(incomplete_faces),
+            "message": (
+                f"{len(incomplete_faces)} statement(s) did not finish "
+                "extracting, but the figures they got as far as writing are "
+                "still in this run. Filing now would submit a partly-read "
+                "statement as if it were complete. Re-run the statement(s) "
+                "below, or remove them from the filing."),
+            "examples": [
+                f"{r['statement_type']}"
+                + (f" ({r['variant']})" if r["variant"] else "")
+                + f" — {_reasons.get(r['error_type'] or '', r['status'])}"
+                for r in incomplete_faces[:_EXAMPLE_CAP]],
         })
 
     if flags:

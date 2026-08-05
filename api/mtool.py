@@ -26,6 +26,7 @@ import json
 import logging
 import re
 import tempfile
+import threading
 import xml.etree.ElementTree as _ET
 from pathlib import Path
 
@@ -38,7 +39,7 @@ from mtool.column_detect import (
     needs_confirmation, overall_confidence, unit_scale_mismatches)
 from mtool.exporter import apply_column_map, build_fill_doc
 from mtool.notes_decorate import NotesTableStyle
-from mtool.notes_exporter import build_notes_fill_doc
+from mtool.notes_exporter import build_notes_fill_doc, build_notes_snapshot
 from mtool.offline_fill import (
     fill_footnotes, fill_workbook, validate_input, validate_notes_input)
 from mtool.preflight import evaluate_preflight, written_keys_from_doc
@@ -188,7 +189,11 @@ def _resolve_notes_decorate(notes_styling: str) -> bool:
 
 
 def _build_doc(run_id: int):
-    """(run, fill doc) for a fillable run, or an HTTPException.
+    """``(run, doc, standard, level, denomination)`` for a fillable run.
+
+    Returns the resolved config alongside the doc so callers never re-open the
+    audit DB to ask for what this function already read (every caller needs at
+    least the standard/level pair for the preflight).
 
     The translation manifest is not a parameter: the shipped default is
     identity and only a Windows acceptance run may change that (Step 7), so
@@ -204,7 +209,7 @@ def _build_doc(run_id: int):
         # Only reachable under a non-identity manifest — but if it ever fires,
         # it must read as a refusal to guess, not a crash.
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return run, doc
+    return run, doc, standard, level, denom
 
 
 @router.get("/api/runs/{run_id}/mtool-fill")
@@ -215,7 +220,7 @@ def get_mtool_fill_doc(run_id: int):
     the download is the seam the CLI or the patch endpoint resolves against a
     real template.
     """
-    _, doc = _build_doc(run_id)
+    doc = _build_doc(run_id)[1]
     return JSONResponse(doc)
 
 
@@ -227,8 +232,7 @@ def get_mtool_preflight(run_id: int):
     run one. See ``mtool/preflight.py`` for why run status alone isn't the
     gate.
     """
-    _, standard, level, _ = _load_fillable_run(run_id)
-    doc = _build_doc(run_id)[1]
+    _, doc, standard, level, _ = _build_doc(run_id)
     return JSONResponse(evaluate_preflight(
         server.AUDIT_DB_PATH, run_id,
         filing_standard=standard, filing_level=level,
@@ -273,7 +277,16 @@ _MAX_LIVE_ARTIFACTS = 32  # oldest evicted past this; bounds temp-dir growth
 
 # artifact_id -> {"run_id", "dir": Path, "path": Path, "filename",
 #                 "created": monotonic, "status", "receipt_id"}
+#
+# Touched from two kinds of caller: the async patch handler (event loop) and
+# the sync download handler (anyio worker thread). Without the lock, a sweep
+# iterating this dict while a concurrent request registers an artifact raises
+# `RuntimeError: dictionary changed size during iteration` and 500s a fill
+# that had already succeeded. The lock covers only the map — file removal
+# happens outside it (see `_sweep_artifacts`), so a slow rmtree can't stall
+# another request.
 _ARTIFACTS: dict[str, dict] = {}
+_ARTIFACTS_LOCK = threading.Lock()
 
 
 def _artifact_root() -> Path:
@@ -290,18 +303,24 @@ def _sweep_artifacts() -> None:
     import time
 
     now = time.monotonic()
-    for aid, rec in list(_ARTIFACTS.items()):
-        if now - rec["created"] > _ARTIFACT_TTL_S:
-            _cleanup(rec["dir"])
-            _ARTIFACTS.pop(aid, None)
-    while len(_ARTIFACTS) > _MAX_LIVE_ARTIFACTS:
-        oldest = min(_ARTIFACTS.items(), key=lambda kv: kv[1]["created"])[0]
-        _cleanup(_ARTIFACTS.pop(oldest)["dir"])
+    # Decide what to drop under the lock, delete outside it — holding a mutex
+    # across an rmtree would serialise every concurrent fill on disk I/O.
+    doomed: list[Path] = []
+    with _ARTIFACTS_LOCK:
+        for aid, rec in list(_ARTIFACTS.items()):
+            if now - rec["created"] > _ARTIFACT_TTL_S:
+                doomed.append(rec["dir"])
+                _ARTIFACTS.pop(aid, None)
+        while len(_ARTIFACTS) > _MAX_LIVE_ARTIFACTS:
+            oldest = min(_ARTIFACTS.items(), key=lambda kv: kv[1]["created"])[0]
+            doomed.append(_ARTIFACTS.pop(oldest)["dir"])
+        live = {str(rec["dir"]) for rec in _ARTIFACTS.values()}
+    for path in doomed:
+        _cleanup(path)
 
     root = _artifact_root()
     if not root.is_dir():
         return
-    live = {str(rec["dir"]) for rec in _ARTIFACTS.values()}
     wall = time.time()
     for child in root.iterdir():
         if not child.is_dir() or str(child) in live:
@@ -319,12 +338,13 @@ def _register_artifact(run_id: int, tmp: Path, path: Path, *, status: str,
     import uuid as _uuid
 
     artifact_id = _uuid.uuid4().hex
-    _ARTIFACTS[artifact_id] = {
-        "run_id": run_id, "dir": tmp, "path": path,
-        "filename": f"mtool_filled_run{run_id}.xlsx",
-        "created": time.monotonic(), "status": status,
-        "receipt_id": receipt_id,
-    }
+    with _ARTIFACTS_LOCK:
+        _ARTIFACTS[artifact_id] = {
+            "run_id": run_id, "dir": tmp, "path": path,
+            "filename": f"mtool_filled_run{run_id}.xlsx",
+            "created": time.monotonic(), "status": status,
+            "receipt_id": receipt_id,
+        }
     _sweep_artifacts()
     return artifact_id
 
@@ -364,7 +384,7 @@ async def patch_mtool_template(
     ``OUTPUT_DIR/_mtool_tmp`` staging area. On every failure path the dir is
     removed; on success it survives only until the artifact expires.
     """
-    run, doc = _build_doc(run_id)
+    run, doc, standard, level, denomination = _build_doc(run_id)
     if not doc["writes"]:
         raise HTTPException(
             status_code=422,
@@ -379,7 +399,6 @@ async def patch_mtool_template(
     # Conflicts come from the DOC's own fact snapshot, not a second DB read —
     # so the verdict, the writes and the receipt all describe one revision
     # even if a reviewer edits a fact mid-request (peer review, 2026-08-05).
-    _, standard, level, denomination = _load_fillable_run(run_id)
     preflight = evaluate_preflight(
         server.AUDIT_DB_PATH, run_id,
         filing_standard=standard, filing_level=level,
@@ -464,6 +483,14 @@ async def patch_mtool_template(
             cmap = {s: {"label_column": v["label_column"],
                         "columns": v["columns"]}
                     for s, v in detected.items()}
+            # The detector cannot currently propose a colliding or
+            # label-overwriting map (`_positional_layout` assigns strictly
+            # increasing columns, and the unattended path only runs on a known
+            # fingerprint). Check anyway: an operator-supplied map is validated
+            # and this one is the DEFAULT, so leaving the invariant resting on
+            # the detector's internals means a future detector change breaks a
+            # filing rather than a request.
+            _validate_cmap_semantics(cmap, doc)
 
         try:
             ready = apply_column_map(doc, cmap)
@@ -503,6 +530,13 @@ async def patch_mtool_template(
         # combined status surfaces it instead of silently reporting "skipped".
         final = out
         notes_report = None
+        # The prose revision that reaches the workbook (schema v39). The notes
+        # are read from `notes_cells` by their own connection, so the numeric
+        # `doc["meta"]["snapshot"]` cannot describe them — the receipt records
+        # both, or the workbook's prose is traceable to nothing. Stays None
+        # unless notes are actually WRITTEN: producing a notes workbook is not
+        # the same as filling anything into it.
+        notes_snapshot = None
         if fill_notes:
             try:
                 notes_doc = build_notes_fill_doc(
@@ -562,6 +596,18 @@ async def patch_mtool_template(
                         notes_report["styling_disabled"] = _nmeta.get(
                             "styling_disabled", False)
                         final = notes_out
+                        # Built from the notes fill_footnotes actually WROTE,
+                        # never from the candidate list. A template with no
+                        # `fn_*` slots resolves nothing and still returns a
+                        # normal degraded report with this branch taken — so
+                        # keying off `final = notes_out` attested to prose that
+                        # was not in the file (peer review, 2026-08-05). Zero
+                        # written => None.
+                        notes_snapshot = build_notes_snapshot(
+                            notes_doc,
+                            [w.get("index")
+                             for w in notes_report.get("footnotes_written", [])],
+                        )
             except HTTPException:
                 # A malformed notes_targets is a caller error (422), not a
                 # best-effort degrade — the operator just overrode the label
@@ -618,6 +664,7 @@ async def patch_mtool_template(
                 server.AUDIT_DB_PATH,
                 run_id=run_id,
                 snapshot=doc["meta"].get("snapshot", {}),
+                notes_snapshot=notes_snapshot,
                 source_sha256=_sha256_file(src),
                 output_sha256=_sha256_file(final),
                 template_fingerprint=fingerprint,
@@ -669,7 +716,8 @@ def download_mtool_artifact(run_id: int, artifact_id: str,
     downloads straight through.
     """
     _sweep_artifacts()
-    rec = _ARTIFACTS.get(artifact_id)
+    with _ARTIFACTS_LOCK:
+        rec = _ARTIFACTS.get(artifact_id)
     if rec is None or rec["run_id"] != run_id or not rec["path"].exists():
         raise HTTPException(
             status_code=404,
@@ -710,7 +758,7 @@ async def detect_mtool_columns(
     unattended — the patch endpoint enforces the same pair as a defensive
     fallback for callers that skip this step.
     """
-    run, doc = _build_doc(run_id)
+    run, doc = _build_doc(run_id)[:2]
 
     raw = await _read_capped(template, _MAX_TEMPLATE_BYTES)
     if not raw:

@@ -42,7 +42,11 @@ function makeAgent(overrides: Partial<RunAgentJson> = {}): RunAgentJson {
     statement_type: "SOFP",
     variant: "CuNonCu",
     model: "gemini-3-flash-preview",
-    status: "completed",
+    // A face agent never lands on "completed" — that is a pseudo-agent status
+    // (CORRECTION / NOTES_VALIDATOR). Face rows are succeeded / failed /
+    // cancelled / completed_with_errors / skipped, and the incomplete-statement
+    // banner keys on exactly that distinction.
+    status: "succeeded",
     started_at: "2026-04-10T09:30:00Z",
     ended_at: "2026-04-10T09:31:00Z",
     workbook_path: "/tmp/SOFP_filled.xlsx",
@@ -1081,6 +1085,9 @@ describe("RunDetailView", () => {
       <RunDetailView
         detail={makeDetail({
           status: "completed_with_errors",
+          // All-succeeded agents so the single alert under test is the
+          // cross-check banner, not the incomplete-statement one.
+          agents: [makeAgent()],
           cross_checks: [
             {
               name: "sofp_balance",
@@ -1125,7 +1132,13 @@ describe("RunDetailView", () => {
 
   test("clean completed run shows no warning banner and a primary Download", () => {
     render(
-      <RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />,
+      // Explicitly all-succeeded: the shared fixture carries a FAILED SOPL,
+      // which is a legitimate warning condition of its own.
+      <RunDetailView
+        detail={makeDetail({ agents: [makeAgent()] })}
+        onDelete={() => {}}
+        onDownload={() => {}}
+      />,
     );
     expect(screen.queryByRole("alert")).toBeNull();
     const download = screen.getByRole("button", { name: /download filled excel/i });
@@ -1244,5 +1257,71 @@ describe("RunDetailView", () => {
       .find((t) => t.getAttribute("aria-selected") === "true") as HTMLElement;
     expect(active.style.color).toBe("rgb(26, 26, 26)");
     expect(active.style.borderBottom).toContain("rgb(253, 81, 8)");
+  });
+});
+
+// --- Run-84: a statement that stopped early must not pass as complete ---
+describe("incomplete face statements", () => {
+  test("a capped statement warns even when the RUN reports completed", () => {
+    // The exact run-84 shape: run status `completed`, one face agent capped.
+    // Every other banner keys on run status, so this one has to key on its own
+    // condition or the page reads as a clean extraction.
+    render(
+      <RunDetailView
+        detail={makeDetail({
+          status: "completed",
+          agents: [
+            makeAgent(),
+            makeAgent({ id: 2, statement_type: "SOCF", variant: "Indirect",
+                        status: "failed" }),
+          ],
+        })}
+        onDelete={() => {}}
+        onDownload={() => {}}
+      />,
+    );
+    const banner = screen.getByRole("alert");
+    expect(banner.textContent).toMatch(/did not finish extracting/i);
+    expect(banner.textContent).toMatch(/Statement of Cash Flows/i);
+    expect(banner.textContent).toMatch(/cannot be filed/i);
+  });
+
+  test("a skipped statement is not reported as unfinished", () => {
+    // `skipped` = a NotPrepared variant with no template to fill. A legitimate
+    // non-outcome, not a half-read statement.
+    render(
+      <RunDetailView
+        detail={makeDetail({
+          status: "completed",
+          agents: [
+            makeAgent(),
+            makeAgent({ id: 2, statement_type: "SOCI", status: "skipped" }),
+          ],
+        })}
+        onDelete={() => {}}
+        onDownload={() => {}}
+      />,
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  test("a failed NOTES template does not report a missing face statement", () => {
+    render(
+      <RunDetailView
+        detail={makeDetail({
+          status: "completed",
+          agents: [
+            makeAgent(),
+            makeAgent({ id: 2, statement_type: "NOTES_LIST_OF_NOTES",
+                        status: "failed" }),
+          ],
+        })}
+        onDelete={() => {}}
+        onDownload={() => {}}
+      />,
+    );
+    const alerts = screen.queryAllByRole("alert");
+    expect(alerts.every((a) => !/did not finish extracting/i.test(a.textContent ?? "")))
+      .toBe(true);
   });
 });

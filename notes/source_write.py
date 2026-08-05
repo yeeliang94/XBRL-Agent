@@ -200,7 +200,8 @@ def write_cell_from_blocks(
             f"the parts named for {sheet} row {row} render to nothing."
         )
 
-    added = [bid for bid in rendered.block_ids if bid not in set(block_ids)]
+    asked_for = set(block_ids)
+    added = [bid for bid in rendered.block_ids if bid not in asked_for]
 
     # One transaction for the cell, its lineage and its dispositions. Split
     # across three, a crash between them leaves a cell that looks source-exact

@@ -484,7 +484,7 @@ artifact — pinned by `tests/test_stop_all_preserves_partial.py`.
 
 ### 11. DB schema — version-stepped auto-migration on startup
 
-`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **37**). `init_db`
+`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **39**). `init_db`
 reads the stored version and walks an old DB up **one version at a time**
 through per-version, idempotent `ALTER TABLE` blocks, so any older DB reaches
 the current schema automatically. `db/schema.py` is the authoritative
@@ -526,7 +526,9 @@ content-provenance columns on `notes_cells` · v36 `runs.notes_integrity_mode`
 `notes_cells.content_revision` / `source_render_version` — all inert unless
 `XBRL_NOTES_SOURCE_INTEGRITY` is `shadow`/`enforce`
 (#31, docs/PLAN-notes-source-integrity-build.md) · v38 `mtool_fill_receipts`
-(#28, mTool fill audit trail — one row per fill).
+(#28, mTool fill audit trail — one row per fill) · v39
+`mtool_fill_receipts.snapshot_notes_*` (#28, the PROSE revision — v38 recorded
+only the numeric one).
 
 ### 12. Filing level — Company vs Group
 
@@ -1153,6 +1155,27 @@ path — never yield directly from the generator outside that pattern
 (it breaks the disconnect-finalization contract; see the 2026-04-27
 fix in `_emit_stage`).
 
+**Two rules on the cross-check results list (peer review, 2026-08-05):**
+
+- **The initial pass COMMITS.** Its rows are written before the reviewer so a
+  Stop-All keeps the failing-check diagnosis, and that only works if the write
+  is committed: the cancel path rolls back. Leaving it pending also deadlocks
+  the reviewer — SQLite allows one writer, and the reviewer's very next act is
+  `ensure_snapshot` with `BEGIN IMMEDIATE` on its OWN connection, which blocks
+  for `busy_timeout` and raises `database is locked`, reported as
+  `snapshot_failed`. Pinned by
+  `tests/test_cross_checks_persist_before_reviewer.py`.
+- **Every advisory goes through `server._run_notes_advisories`, never a direct
+  call in a pipeline block.** The post-reviewer re-run REPLACES
+  `cross_check_results` wholesale and the final persistence writes whatever
+  that list holds, so an advisory computed in only one of the two blocks is
+  deleted the moment the reviewer makes a fix (how the run-84 SOCF
+  section-placement warning disappeared). The aggregator imports
+  `check_notes_consistency` OUTSIDE its `try` — the except is there for a
+  check that raises, and must not also absorb a missing symbol into an empty
+  list that reads as "nothing to warn about". Pinned by
+  `tests/test_socf_section_placement.py`.
+
 ### 20. Silent post-extraction failures are now structured SSE errors
 
 Two paths used to swallow errors silently (2026-04-27 fix):
@@ -1597,13 +1620,33 @@ Load-bearing invariants:
   `tests/test_mtool_offline_fill.py`.
 - **Every fill writes a receipt** (`mtool_fill_receipts`, schema **v38** —
   re-minted from the reverted build's v35 because source integrity took
-  v35–v37): fact-revision snapshot (count/digest/max-updated — facts are read
-  once from a consistent snapshot, so a workbook corresponds to ONE revision
-  of a still-editable run), both file hashes, template fingerprint, column
-  map, manifest version, preflight verdict + override, degraded-download
-  acknowledgement, operator, full report. The patcher itself stays stateless;
-  the ROUTE writes the row. Uploaded templates are request-scoped temp files
-  under `OUTPUT_DIR/_mtool_tmp`. Liveness gate is
+  v35–v37): both file hashes, template fingerprint, column map, manifest
+  version, preflight verdict + override, degraded-download acknowledgement,
+  operator, full report — plus **TWO revision snapshots, because there are
+  two reads**. The numeric one (`snapshot_*`, count/digest/max-updated) comes
+  from `receipt.snapshot_facts` over `run_concept_facts`. The prose one
+  (`snapshot_notes_*`, schema **v39**) comes from
+  `notes_exporter.build_notes_fill_doc`, which opens its OWN connection to
+  `notes_cells` later in the same request. v38 recorded only the numeric half
+  while its docstring claimed to cover both, so a notes edit landing between
+  the two reads produced a workbook whose prose no receipt described (peer
+  review, 2026-08-05). **A new consumer must not fold them into one digest** —
+  a numeric-only fill legitimately has `snapshot_notes_digest = NULL`, and
+  that is a different fact from "the prose was empty". **The prose digest
+  covers the notes `fill_footnotes` actually WROTE, never the candidate
+  list** (`notes_exporter.build_notes_snapshot`, fed from
+  `report["footnotes_written"]` indices): a candidate is only an OFFER, and a
+  template with no `fn_*` slots resolves none of them while still returning a
+  normal degraded report — so hashing the candidates attested to prose that
+  was never in the workbook (peer review, 2026-08-05; the first fix keyed off
+  `final = notes_out`, which that branch reaches even on a zero-write fill).
+  Zero written ⇒ no snapshot. The digest is taken over each note's canonical
+  DB form, so it tracks the DATA revision and not the `notes_styling` knob
+  (the emitted file has its own `output_sha256`).
+  Operator free text (`preflight_override`, `degraded_ack`)
+  is clamped to `receipt.ACK_TEXT_LIMIT` before storage. The patcher itself
+  stays stateless; the ROUTE writes the row. Uploaded templates are
+  request-scoped temp files under `OUTPUT_DIR/_mtool_tmp`. Liveness gate is
   `completed`/`completed_with_errors` (409 otherwise).
 - **UI is a button + modal (`MtoolFillModal`), not a tab** — avoids a third
   `role="tab"` (gotcha #7).
@@ -1612,7 +1655,7 @@ Pinned by `tests/test_mtool_offline_fill.py`, `test_mtool_exporter.py`,
 `test_mtool_routes.py`, `test_mtool_column_detect.py`, `test_mtool_units.py`,
 `test_mtool_value_conventions.py`, `test_mtool_preflight.py`,
 `test_mtool_artifact_and_receipt.py`, `test_mtool_failure_modes.py`,
-`test_mtool_coverage_dry_run.py`, `test_db_schema_v38.py`, and the
+`test_mtool_coverage_dry_run.py`, `test_db_schema_v38.py`/`_v39.py`, and the
 `MtoolFillModal` web tests. Full plan: `docs/PLAN.md` +
 `docs/PLAN-mtool-fill-pipeline.md`; operator guide: `mtool/README.md`.
 

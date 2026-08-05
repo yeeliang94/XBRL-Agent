@@ -751,6 +751,40 @@ def _recheck_from_facts(run_id: int) -> Optional[list[dict]]:
         return None
 
 
+def _persist_cross_check_results(conn, run_id: int, results) -> None:
+    """Write a run's cross-check rows, REPLACING any set already stored.
+
+    Called twice on the live path: once as soon as the initial pass resolves,
+    and again at the end of the pipeline with the post-reviewer state. Replace
+    rather than append — the second call supersedes the first, and every reader
+    (Review tab, re-review, preflight) expects one set of rows per run.
+
+    Does NOT commit. The caller's connection commits on every terminal path via
+    ``_safe_mark_finished``, so the early write survives a cancel without
+    introducing a second commit point in the run-lifecycle choreography
+    (gotcha #10).
+    """
+    from db import repository as repo
+    from cross_checks.framework import comparands_to_json
+
+    conn.execute("DELETE FROM cross_checks WHERE run_id = ?", (run_id,))
+    for check_result in results:
+        repo.save_cross_check(
+            conn, run_id,
+            check_name=check_result.name,
+            status=check_result.status,
+            expected=check_result.expected,
+            actual=check_result.actual,
+            diff=check_result.diff,
+            tolerance=check_result.tolerance,
+            message=check_result.message,
+            target_sheet=check_result.target_sheet,
+            target_row=check_result.target_row,
+            comparands_json=comparands_to_json(
+                getattr(check_result, "comparands", None)),
+        )
+
+
 def _refresh_persisted_cross_checks(run_id: int) -> bool:
     """Re-run cross-checks from current facts and REPLACE the stored rows.
 
@@ -3434,6 +3468,50 @@ def _run_notes_citation_consistency(merged_path: str, run_id: int) -> list:
     ]
 
 
+def _run_socf_section_placement(merged_path: str, infopack, run_id: int) -> list:
+    """Run-84: warn when a cash-flow line sits in a different section from the
+    one the source statement prints it under.
+
+    No arithmetic check can see this — moving a line between operating,
+    investing and financing leaves the net change in cash untouched, so
+    ``socf_articulation`` and the SOFP cash tie-out both still pass. Warning
+    only, by decision: MFRS permits some lines (dividends paid) in either
+    section, so the check is a comparison against the scout's reading of the
+    face page, and that reading's accuracy is unmeasured.
+
+    Advisory + never raises, like its notes siblings.
+    """
+    from cross_checks.framework import CrossCheckResult
+    try:
+        from cross_checks.socf_section_placement import (
+            check_socf_section_placement,
+        )
+        refs = []
+        statements = getattr(infopack, "statements", None) or {}
+        for key, ref in statements.items():
+            name = getattr(key, "value", key)
+            if str(name) == "SOCF":
+                refs = getattr(ref, "face_line_refs", None) or []
+                break
+        warns = check_socf_section_placement(merged_path, refs)
+    except Exception:  # noqa: BLE001 — advisory, never fail a run
+        logger.warning(
+            "SOCF section-placement check raised on run %s", run_id,
+            exc_info=True,
+        )
+        return []
+    return [
+        CrossCheckResult(
+            name=f"SOCF section: {w.label}",
+            status="warning",
+            message=w.message,
+            target_sheet="SOCF",
+            target_row=w.row,
+        )
+        for w in warns
+    ]
+
+
 async def _run_notes_advisory_bounded(fn, *args, run_id: int, label: str) -> list:
     """Dispatch an advisory notes check off the event loop, bounded.
 
@@ -3466,6 +3544,75 @@ async def _run_notes_advisory_bounded(fn, *args, run_id: int, label: str) -> lis
             label, run_id, exc_info=True,
         )
         return []
+
+
+async def _run_notes_advisories(
+    merged_path: str,
+    run_id: int,
+    *,
+    filing_level: str,
+    filing_standard: str,
+    infopack,
+) -> list:
+    """Every advisory warning derived from the merged workbook, in one place.
+
+    The initial pass and the post-reviewer re-run BOTH need this list, and the
+    post-reviewer pass REPLACES `cross_check_results` wholesale before the
+    final persistence writes it. So an advisory computed in only one of the two
+    blocks is silently deleted the moment the reviewer writes anything — which
+    is what happened to the run-84 SOCF section-placement check: it was added
+    to the initial block only, and any run where the reviewer made a fix filed
+    with the warning gone (peer review, 2026-08-05).
+
+    Keeping ONE aggregator is the fix and the guard: a new advisory added here
+    reaches both paths, and there is no second list to forget.
+
+    Advisory-only throughout — `_run_notes_advisory_bounded` never raises, and
+    `check_notes_consistency` is wrapped, so this cannot fail a run
+    (invariant #10). Callers must still skip it when the merge failed: with no
+    workbook there is nothing to compare.
+    """
+    # Imported OUTSIDE the try below on purpose. The except there exists to
+    # stop a check that RAISES from failing a run; it must not also absorb a
+    # missing symbol, because the result is an empty advisory list that reads
+    # exactly like "nothing to warn about" (this refactor did that once).
+    from cross_checks.framework import CrossCheckResult
+    from cross_checks.notes_consistency import check_notes_consistency
+
+    out: list = []
+    try:
+        consistency_warnings = check_notes_consistency(merged_path)
+    except Exception:
+        # The check has its own broad except; defence-in-depth is cheap here.
+        logger.warning(
+            "notes-consistency check raised unexpectedly on run %s",
+            run_id, exc_info=True,
+        )
+        consistency_warnings = []
+    for w in consistency_warnings:
+        out.append(CrossCheckResult(
+            name=(f"Notes consistency: {w.sheet_11_label} ↔ "
+                  f"{w.sheet_12_label}"),
+            status="warning",
+            message=w.message,
+        ))
+    # N4: generic citation-consistency pass — catches folio-vs-PDF drift for
+    # ANY note ref, not just the curated topic pairs.
+    out.extend(await _run_notes_advisory_bounded(
+        _run_notes_citation_consistency, merged_path, run_id,
+        run_id=run_id, label="notes-citation"))
+    # N1: notes↔face numeric tie-outs — a notes figure contradicting its face
+    # counterpart surfaces as a WARN.
+    out.extend(await _run_notes_advisory_bounded(
+        _run_notes_face_tieouts, merged_path, run_id,
+        filing_level, filing_standard,
+        run_id=run_id, label="notes-face-tieout"))
+    # Run-84: SOCF lines placed in a different section from the one the source
+    # prints them under.
+    out.extend(await _run_notes_advisory_bounded(
+        _run_socf_section_placement, merged_path, infopack, run_id,
+        run_id=run_id, label="socf-section-placement"))
+    return out
 
 
 def _emit_cross_check_summary(
@@ -5367,36 +5514,18 @@ async def run_multi_agent_stream(
         # ``"warning"`` so they ride the same persistence + SSE + UI path
         # as real cross-checks. Deliberately SKIPPED when the merge
         # failed — a missing workbook means there's nothing to compare.
+        # Advisory warnings ride `cross_check_results` with status "warning" so
+        # they share the persistence + SSE + UI path of a real cross-check.
+        # ONE aggregator, used by this pass and the post-reviewer re-run — see
+        # `_run_notes_advisories` for why a second copy is a data-loss bug.
+        # Skipped when the merge failed: no workbook, nothing to compare.
         if merge_result.success:
-            try:
-                consistency_warnings = check_notes_consistency(merged_path)
-            except Exception:
-                # The check has its own broad except but defence-in-depth
-                # is cheap here: never let an advisory check fail a run.
-                logger.warning(
-                    "notes-consistency check raised unexpectedly on run %s",
-                    run_id, exc_info=True,
-                )
-                consistency_warnings = []
-            from cross_checks.framework import CrossCheckResult
-            for w in consistency_warnings:
-                cross_check_results.append(CrossCheckResult(
-                    name=f"Notes consistency: {w.sheet_11_label} ↔ {w.sheet_12_label}",
-                    status="warning",
-                    message=w.message,
-                ))
-            # N4: generic citation-consistency pass — catches folio-vs-PDF
-            # drift for ANY note ref, not just the curated topic pairs.
-            # Dispatched off-loop (openpyxl full-workbook load blocks).
-            cross_check_results.extend(await _run_notes_advisory_bounded(
-                _run_notes_citation_consistency, merged_path, run_id,
-                run_id=run_id, label="notes-citation"))
-            # N1: notes↔face numeric tie-outs — a notes figure that contradicts
-            # its face counterpart surfaces as a WARN.
-            cross_check_results.extend(await _run_notes_advisory_bounded(
-                _run_notes_face_tieouts, merged_path, run_id,
-                run_config.filing_level, run_config.filing_standard,
-                run_id=run_id, label="notes-face-tieout"))
+            cross_check_results.extend(await _run_notes_advisories(
+                merged_path, run_id,
+                filing_level=run_config.filing_level,
+                filing_standard=run_config.filing_standard,
+                infopack=infopack,
+            ))
 
         # PLAN-stop-and-validation-visibility Phase 5: surface the
         # initial cross-check pass as per-check SSE events so the
@@ -5420,6 +5549,53 @@ async def run_multi_agent_stream(
                     yield evt
                 except (asyncio.CancelledError, GeneratorExit):
                     client_connected = False
+
+        # Persist the INITIAL pass now, before the reviewer runs.
+        #
+        # These rows used to be written once, in the persistence block at the
+        # very end of the pipeline — after the reviewer AND the notes reviewer.
+        # A Stop-All during either pass therefore threw away the failing-check
+        # diagnosis, which is exactly the state an operator stops a run to look
+        # at (reported against a Windows run, 2026-08-05: the reviewer started
+        # on six failed checks and `cross_checks` ended up empty).
+        #
+        # The write is COMMITTED here, immediately. Leaving it pending to ride
+        # `_safe_mark_finished`'s terminal commit looked tidier but deadlocks
+        # the reviewer: SQLite allows one writer, an uncommitted INSERT/DELETE
+        # holds the write lock for the whole reviewer stage, and the very next
+        # thing the reviewer does is `ensure_snapshot` on its OWN connection
+        # with `BEGIN IMMEDIATE`. That blocks for busy_timeout and raises
+        # `database is locked`, which the pass reports as `snapshot_failed` —
+        # so the change meant to preserve the diagnosis destroyed the pass that
+        # acts on it (reproduced, peer review 2026-08-05).
+        #
+        # Committing here is also what makes the rows durable through a
+        # Stop-All, which was the point: a pending write is discarded by the
+        # cancel path's rollback, so "persist before the reviewer" was only
+        # ever true once this commit existed. Same shape as `mark_run_merged`,
+        # which already commits mid-pipeline for the same durability reason
+        # (gotcha #10). The end-of-pipeline block re-persists the
+        # post-reviewer state over the top.
+        if db_conn is not None and run_id is not None:
+            try:
+                _persist_cross_check_results(
+                    db_conn, run_id, cross_check_results,
+                )
+                db_conn.commit()
+            except Exception:
+                logger.warning(
+                    "Failed to persist initial cross-check results for run %s",
+                    run_id, exc_info=True,
+                )
+                # Never leave the write lock held on the failure path either —
+                # the reviewer's snapshot would hit the same lock.
+                try:
+                    db_conn.rollback()
+                except Exception:
+                    logger.warning(
+                        "Rollback after failed cross-check persist also "
+                        "failed for run %s", run_id, exc_info=True,
+                    )
 
         # Peer-review C1: track pseudo-agent outcomes so the persistence
         # block below can finish_run_agent them. None means the helper was
@@ -5770,36 +5946,18 @@ async def run_multi_agent_stream(
                                 f"{type(_cc_exc2).__name__}: {_cc_exc2}"
                             ),
                         })
+                    # The re-run REPLACED cross_check_results, so every
+                    # advisory has to be recomputed onto the new list or the
+                    # final persistence deletes it. Same aggregator as the
+                    # initial pass — that is the whole point of it.
                     if merge_result.success:
-                        try:
-                            consistency_warnings = check_notes_consistency(merged_path)
-                        except Exception:
-                            consistency_warnings = []
-                        from cross_checks.framework import CrossCheckResult
-                        for w in consistency_warnings:
-                            cross_check_results.append(CrossCheckResult(
-                                name=(
-                                    f"Notes consistency: "
-                                    f"{w.sheet_11_label} ↔ {w.sheet_12_label}"
-                                ),
-                                status="warning",
-                                message=w.message,
+                        cross_check_results.extend(
+                            await _run_notes_advisories(
+                                merged_path, run_id,
+                                filing_level=run_config.filing_level,
+                                filing_standard=run_config.filing_standard,
+                                infopack=infopack,
                             ))
-                        # N4: generic citation-consistency pass
-                        # (off-loop, bounded — see helper).
-                        cross_check_results.extend(
-                            await _run_notes_advisory_bounded(
-                                _run_notes_citation_consistency,
-                                merged_path, run_id,
-                                run_id=run_id, label="notes-citation"))
-                        # N1: notes↔face numeric tie-outs.
-                        cross_check_results.extend(
-                            await _run_notes_advisory_bounded(
-                                _run_notes_face_tieouts,
-                                merged_path, run_id,
-                                run_config.filing_level,
-                                run_config.filing_standard,
-                                run_id=run_id, label="notes-face-tieout"))
 
                     # PLAN-stop-and-validation-visibility Phase 5:
                     # surface the post-correction re-run as a separate
@@ -6151,23 +6309,13 @@ async def run_multi_agent_stream(
                             exc_info=True,
                         )
 
-                # Persist cross-check results
-                from cross_checks.framework import comparands_to_json
-                for check_result in cross_check_results:
-                    repo.save_cross_check(
-                        db_conn, run_id,
-                        check_name=check_result.name,
-                        status=check_result.status,
-                        expected=check_result.expected,
-                        actual=check_result.actual,
-                        diff=check_result.diff,
-                        tolerance=check_result.tolerance,
-                        message=check_result.message,
-                        target_sheet=check_result.target_sheet,
-                        target_row=check_result.target_row,
-                        comparands_json=comparands_to_json(
-                            getattr(check_result, "comparands", None)),
-                    )
+                # Persist cross-check results — the post-reviewer state, which
+                # REPLACES the initial-pass rows written before the reviewer
+                # launched. Appending here would leave the run carrying both
+                # passes' rows.
+                _persist_cross_check_results(
+                    db_conn, run_id, cross_check_results,
+                )
                 db_conn.commit()
             except Exception as e:
                 logger.warning("Failed to persist run data to audit DB: %s", e)
