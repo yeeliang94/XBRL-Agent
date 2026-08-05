@@ -25,8 +25,10 @@ def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
 
 
-def test_current_version_is_37():
-    assert CURRENT_SCHEMA_VERSION == 37
+def test_current_version_is_at_least_37():
+    # v38 (mtool_fill_receipts) landed after this step; the walk-forward
+    # behaviour this file pins is unaffected by later versions.
+    assert CURRENT_SCHEMA_VERSION >= 37
 
 
 def test_a_fresh_database_has_everything(tmp_path):
@@ -83,7 +85,7 @@ def test_a_real_v36_database_migrates_forward(tmp_path):
         assert {"notes_block_placements", "notes_integrity_tasks"} <= names
         assert conn.execute(
             "SELECT version FROM schema_version"
-        ).fetchone()[0] == 37
+        ).fetchone()[0] == CURRENT_SCHEMA_VERSION
     finally:
         conn.close()
 

@@ -234,3 +234,95 @@ appears next, note the branching ("selecting X reveals Y").
 2. Task 4 experiments 4.1–4.3 (tolerance).
 3. Task 3.4 via filing #2 (Group representation).
 4. Everything else.
+
+---
+
+# Addendum A — Follow-up after the 2026-07-04 offline-patch spike
+
+**Added 2026-07-27** (docs/PLAN-mtool-fill-pipeline.md Step 1). The spike
+worked: a workbook we patched offline opened in mTool and passed Validate +
+Generate. These questions are about the **values inside** that filing, and the
+answers gate the unit/sign translation (plan Step 6) and the exposure of the
+patch/download action (Step 8A).
+
+Please answer against the filing that already worked, so the comparison is
+against a known-good file. Short answers are fine; verbatim paste beats
+paraphrase everywhere.
+
+## A.1 — Does the generated XBRL carry the full value or the on-sheet figure?
+
+The sheet showed `MYR'000` and a figure like `1,000`. In the **generated
+instance XML**, find that fact and paste the element verbatim, e.g.
+
+```xml
+<ifrs-full:PropertyPlantAndEquipment contextRef="..." unitRef="..."
+  decimals="...">1000</ifrs-full:PropertyPlantAndEquipment>
+```
+
+We need to know whether it says `1000` (mTool files the on-sheet figure and the
+scale lives in the unit/decimals) or `1000000` (mTool multiplies out). This is
+the single answer that decides whether our exporter ships the identity
+translation or a thousands one.
+
+Also paste the matching `<xbrli:unit>` element and the `decimals=` attribute.
+
+**Why we're asking rather than assuming:** we now read the sheet's own
+`#UNITSCALE#` marker row (it said `MYR'000` in the sample template), so we can
+see what the template DECLARES — but not what the generator DOES with it.
+
+## A.2 — Did the negative test value keep its sign?
+
+The spike wrote at least one negative figure. In the generated instance, does
+that fact appear as `-250` (sign preserved), `250` with a sign-flipping
+element, or something else? Paste the element.
+
+Also: did mTool's validation complain about the sign at any point?
+
+## A.3 — Were derived cells correct without `--force-recalc`?
+
+- Did the `*Total …` rows show the right numbers when you opened the patched
+  workbook, with the add-in loaded?
+- If you re-ran the fill **with** `--force-recalc`, did the add-in behave
+  normally, or did it complain / recalculate something it shouldn't?
+
+## A.4 — Two more `inspect` outputs
+
+Run the tool's `inspect` command and paste the output for:
+
+- an **MPERS** template (any level), and
+- a **Group** template (either standard).
+
+We need two things from each: the sheet-name list, and one sheet's column
+layout. Specifically, for a Group template, please paste the rows around the
+`#PRIM#` / `#STDTENDTDATE#` / `#ENDT#` / `#UNITSCALE#` markers — we want to see
+**how mTool distinguishes the Group columns from the Company ones**. Today our
+detector refuses to auto-map any Group layout precisely because we have never
+seen one, so this answer is what lets a Group filing proceed without the
+operator hand-entering four column letters.
+
+## A.5 — Column A on a real template
+
+In the sample we hold, column A of every data row carries the taxonomy concept,
+e.g. `full_ifrs-cor_2022-03-24.xsd#ifrs-full_PropertyPlantAndEquipment`.
+
+- Is that true on every template you have (MPERS, Group, notes sheets)?
+- Is it present on a template freshly exported from mTool, before any data is
+  entered?
+
+If yes, it is a unique per-row key, and it would let us stop addressing rows by
+their visible label — which currently cannot distinguish the repeated "Cost" /
+"Accumulated depreciation" rows on the SOFP sub-sheets.
+
+## Answer block
+
+> _(Windows operator: paste answers here, keeping the A.n numbering. Until this
+> block is filled in, plan Steps 6 and 7 stay blocked: the value translation
+> stays identity-only. There is no exposure flag any more — the 2026-08-05
+> replay dropped `XBRL_MTOOL_FILL`; the preflight and receipts are the
+> filing safeguards.)_
+
+- **A.1:**
+- **A.2:**
+- **A.3:**
+- **A.4:**
+- **A.5:**
