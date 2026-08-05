@@ -228,6 +228,78 @@ def test_registered_on_all_three_agent_factories():
         assert "limit_warning_processor" in src, mod.__name__
 
 
+def test_registered_on_the_reviewer_factory():
+    """Run-83 hardening (Phase 2 Step 4): the reviewer ALWAYS carries the
+    warner — its wall-clock branch is the soft deadline that run 83's
+    reviewer never got before losing its correction batch to the hard cap."""
+    import inspect
+
+    import correction.reviewer_agent as reviewer_mod
+
+    src = inspect.getsource(reviewer_mod.create_reviewer_agent)
+    assert "limit_warning_processor" in src
+
+
+# ---------------------------------------------------------------------------
+# Wall-clock branch (run-83 hardening Phase 2 Step 4)
+# ---------------------------------------------------------------------------
+
+
+def _wallclock_ctx(elapsed_fraction: float, cap_s: float = 300.0):
+    """Ctx whose deps carry the runner-published wall-clock envelope."""
+    import time as _time
+
+    deps = SimpleNamespace()
+    deps._wallclock_started = _time.monotonic() - elapsed_fraction * cap_s
+    deps._wallclock_cap = cap_s
+    return SimpleNamespace(
+        usage=SimpleNamespace(requests=0, total_tokens=0), deps=deps,
+    )
+
+
+def test_wallclock_silent_below_threshold():
+    out = limit_warning_processor(_wallclock_ctx(0.5), _history())
+    assert _warning_texts(out) == []
+
+
+def test_wallclock_urgent_at_threshold():
+    out = limit_warning_processor(_wallclock_ctx(0.75), _history())
+    warnings = _warning_texts(out)
+    assert len(warnings) == 1
+    assert "URGENT" in warnings[0]
+    assert "Wall-clock" in warnings[0]
+    assert "still executes" in warnings[0], (
+        "the warning must teach the grace rule: an issued tool call runs, "
+        "a further thinking turn does not")
+
+
+def test_wallclock_critical_in_final_stretch():
+    out = limit_warning_processor(_wallclock_ctx(0.95), _history())
+    warnings = _warning_texts(out)
+    assert len(warnings) == 1
+    assert "CRITICAL" in warnings[0]
+
+
+def test_wallclock_absent_attrs_is_off():
+    """Agents not driven by run_agent_loop (nothing published on deps)
+    must be byte-identical to before the wall-clock branch existed."""
+    msgs = _history()
+    out = limit_warning_processor(_ctx(steps=5), msgs)
+    assert _warning_texts(out) == []
+
+
+def test_runner_publishes_wallclock_envelope():
+    """Source pin: run_agent_loop publishes the wall-clock envelope onto
+    deps (the warner's only source for it)."""
+    import inspect
+
+    import agent_runner
+
+    src = inspect.getsource(agent_runner.run_agent_loop)
+    assert "deps._wallclock_started = loop_start" in src
+    assert "deps._wallclock_cap = wallclock_cap" in src
+
+
 # ---------------------------------------------------------------------------
 # Unit contract (2026-07-12 V2-review fix) — node units, warning before cap
 # ---------------------------------------------------------------------------

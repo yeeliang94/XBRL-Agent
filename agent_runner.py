@@ -253,7 +253,11 @@ class AgentLoopSpec:
     # Items 6/17: whole-run wall-clock cap (seconds). Checked at the top of
     # each loop iteration — bounds the 40-slow-but-compliant-turns scenario
     # the per-turn timeout can't catch. None (or <= 0) disables; raises
-    # WallclockExceeded on breach.
+    # WallclockExceeded on breach. Run-83 hardening (Phase 2 Step 3): the
+    # breach never fires on a CALL-TOOLS node (a tool call the model
+    # already issued still executes, bounded by turn_timeout, so a batched
+    # write landing at the deadline is not discarded) nor on the END node
+    # (a completed result is never discarded at the boundary).
     wallclock_timeout: float | None = None
     # Item 7: cumulative token ceiling for the whole run. 0 disables.
     # Checked at each turn boundary against pydantic-ai's cumulative usage;
@@ -314,6 +318,16 @@ async def run_agent_loop(
     # way so the per-turn rows show when a turn hit (or wrote) the cache.
     prev_prompt = prev_completion = prev_total = 0
     prev_cache_read = prev_cache_write = 0
+    # Run-83 hardening (Phase 2 Step 4): publish the wall-clock envelope
+    # onto deps so the in-band limit warner (limit_warner.py) can tell the
+    # agent to wrap up BEFORE the hard cap fires — closing the deferred
+    # docs/PLAN-pydantic-ai-v2.md Part D.3 Item 1. Same generic-setattr
+    # contract as the live loop counter published below: advisory only.
+    try:
+        deps._wallclock_started = loop_start
+        deps._wallclock_cap = wallclock_cap  # None = no cap = no warning
+    except Exception:  # noqa: BLE001 — advisory plumbing only
+        pass
 
     def _inner(stream):
         # Wrap the inner tool/model event stream in the per-step timeout only
@@ -343,10 +357,22 @@ async def run_agent_loop(
                 f"Hit iteration limit ({spec.max_iters}). "
                 f"Agent appears stuck in a loop."
             )
-        # Items 6/17: in-loop wall-clock check (same placement as the
-        # reviewer's hand-rolled guard in server._run_reviewer_pass).
-        if wallclock_cap is not None and (
-            time.monotonic() - loop_start > wallclock_cap
+        # Items 6/17: in-loop wall-clock check. Run-83 hardening (Phase 2
+        # Step 3, docs/PLAN-run83-hardening.md): the cap stops NEW MODEL
+        # THINKING, never work already decided. Two node kinds get grace:
+        # a CALL-TOOLS node (the model already issued those calls — raising
+        # here used to discard a fully formed correction batch at the
+        # boundary; run 83 lost three grounded mark_not_disclosed fixes
+        # after 364s of paid investigation) and the END node (the run is
+        # finished — raising would discard a completed result). A graced
+        # tool node still runs bounded by the per-turn timeout, and writes
+        # still pass their deterministic guards; the loop then raises here
+        # before the next model request.
+        if (
+            wallclock_cap is not None
+            and time.monotonic() - loop_start > wallclock_cap
+            and not Agent.is_call_tools_node(node)
+            and not Agent.is_end_node(node)
         ):
             raise WallclockExceeded(
                 f"{spec.agent_role}: exceeded the {wallclock_cap:.0f}s "

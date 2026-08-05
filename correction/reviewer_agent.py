@@ -508,13 +508,27 @@ def _repeated_values(facts: Sequence[dict[str, Any]]) -> dict[float, list[str]]:
     return {v: sorted(c) for v, c in seen.items() if len(c) > 1}
 
 
-def _format_fact_listing(facts: Sequence[dict[str, Any]]) -> str:
+# Run-83 hardening (Phase 5, docs/PLAN-run83-hardening.md): cap the row
+# detail one listing call can emit, so a single whole-run list_facts("")
+# cannot flood the reviewer's context (run 83's opening whole-run listing
+# was a major driver of the context growth that timed the pass out). 200
+# rows comfortably covers any single sheet (the largest, SOCF-Indirect,
+# has 109 data rows); a whole-run listing on a five-statement filing
+# truncates and points the model at sheet-scoped calls instead. The
+# repeated-values footer is ALWAYS computed over the FULL fact set —
+# truncation drops row detail, never the double-count signal.
+FACT_LISTING_ROW_CAP = 200
+
+
+def _format_fact_listing(
+    facts: Sequence[dict[str, Any]], row_cap: int = FACT_LISTING_ROW_CAP,
+) -> str:
     """Render :func:`list_run_facts` output as a compact scannable table."""
     if not facts:
         return "(no facts written for this run yet)"
     lines: list[str] = []
     current_sheet = None
-    for f in facts:
+    for f in facts[:row_cap]:
         if f["render_sheet"] != current_sheet:
             current_sheet = f["render_sheet"]
             lines.append(f"\n=== {current_sheet} ===")
@@ -522,6 +536,17 @@ def _format_fact_listing(facts: Sequence[dict[str, Any]]) -> str:
             f"  row {f['render_row']:>3} {f['canonical_label']!r} "
             f"[{f['kind']}] {f['period']}/{f['entity_scope']}: "
             f"{f['value']} ({f['value_status']}) uuid={f['concept_uuid']}"
+        )
+    if len(facts) > row_cap:
+        per_sheet: dict[str, int] = {}
+        for f in facts:
+            per_sheet[f["render_sheet"]] = per_sheet.get(f["render_sheet"], 0) + 1
+        summary = ", ".join(f"{s} ({n})" for s, n in per_sheet.items())
+        lines.append(
+            f"\n… {len(facts) - row_cap} more row(s) not shown "
+            f"(row cap {row_cap}). Facts per sheet: {summary}. "
+            f"Call list_facts(sheet=\"<name>\") for one sheet in full — "
+            f"the repeated-values footer below already covers the WHOLE run."
         )
     repeats = _repeated_values(facts)
     if repeats:
@@ -1800,22 +1825,30 @@ def create_reviewer_agent(
     _bundle_on = bundle_enabled()
     if _bundle_on:
         system_prompt += BUNDLE_PROMPT_ADDENDUM
-    # Plan agent-efficiency Phase 1A: optional reviewer-specific image-history
-    # compaction (default OFF — flag read at creation time). Off ⇒ NO
-    # capabilities kwarg at all, so the factory output is identical to today
-    # (pinned by tests/test_reviewer_compact_context.py). The processor is
+    # Run-83 hardening (Phase 2 Step 4): the reviewer ALWAYS carries the
+    # in-band limit warner. Its wall-clock branch is what tells the agent
+    # to stop investigating and batch its fixes before the 300s cap —
+    # run 83's reviewer diagnosed correctly, then lost its whole
+    # correction batch to a deadline it was never told about. The warner
+    # is inert unless run_agent_loop published a cap onto deps.
+    #
+    # Plan agent-efficiency Phase 1A: optional reviewer-specific
+    # image-history compaction (default OFF — flag read at creation
+    # time); the flag's ONLY effect is adding the stripper (pinned by
+    # tests/test_reviewer_compact_context.py). The processor is
     # reviewer-shaped, not extraction's write-event-keyed one — see
     # correction/history_processors.py for why.
-    _agent_kwargs: dict = {}
+    from pydantic_ai.capabilities import ProcessHistory
+    from limit_warner import limit_warning_processor
     from correction.history_processors import (
         reviewer_compact_context_enabled,
     )
+    _caps: list = []
     if reviewer_compact_context_enabled():
-        from pydantic_ai.capabilities import ProcessHistory
         from correction.history_processors import strip_stale_reviewer_images
-        _agent_kwargs["capabilities"] = [
-            ProcessHistory(strip_stale_reviewer_images),
-        ]
+        _caps.append(ProcessHistory(strip_stale_reviewer_images))
+    _caps.append(ProcessHistory(limit_warning_processor))
+    _agent_kwargs: dict = {"capabilities": _caps}
     agent = Agent(
         model,
         deps_type=ReviewerDeps,
@@ -1868,14 +1901,17 @@ def create_reviewer_agent(
 
     @agent.tool
     def list_facts(ctx: RunContext[ReviewerDeps], sheet: str = "") -> str:
-        """List EVERY fact filled across all statements (read-only, holistic).
+        """List the run's filled facts (read-only) — sheet-scoped by default.
 
-        Pass an empty ``sheet`` to see the whole run, or a sheet name (e.g.
-        'SOFP-Sub-OrdOfLiq') to narrow. Use this to audit the full picture
-        before fixing anything: a value disclosed once in the PDF but written
-        to several rows/sheets is a double-count, and a figure sitting on the
-        wrong statement is a misclassification. A '⚠ Repeated values' footer
-        highlights the likely double-counts for you to interrogate.
+        Your REVIEW PACKET's WHAT-WAS-FILLED summary already gives you the
+        whole-run picture and the repeated-values (double-count) list, so
+        do NOT open your pass with a whole-run listing. Reach for this tool
+        while working a specific failure, and prefer a NAMED sheet (e.g.
+        ``list_facts(sheet="SOFP-Sub-OrdOfLiq")``) for the row-level detail.
+        The empty-``sheet`` whole-run form exists for a cross-statement
+        hunt (a figure you suspect landed on the wrong statement); its row
+        detail is capped per call, though its '⚠ Repeated values' footer
+        always covers the whole run.
         """
         facts = list_run_facts(
             ctx.deps.db_path, ctx.deps.run_id,

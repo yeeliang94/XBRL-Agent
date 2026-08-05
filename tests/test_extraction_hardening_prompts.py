@@ -114,6 +114,46 @@ def test_socf_prefers_specific_row_generalised():
     assert "never invent a row" in flat
 
 
+# --- Run-83 hardening Phase 3 (docs/PLAN-run83-hardening.md Step 5) ---------
+# Three proven extraction errors on the IME 2024 run: pledged deposits
+# folded into cash equivalents (223 CY / 230 PY), a fair-value movement
+# classified by wording instead of source position (204), and a
+# many-lines-into-one-row aggregate off by 711 on the receivables row.
+
+
+def test_socf_pledged_deposits_both_years_rule():
+    flat = _flat("socf.md")
+    assert "pledged" in flat
+    # gotcha #13 pin: prompts never say "restricted"/"allowed" about pages,
+    # so the accounting term "restricted cash" stays out of prompt text too
+    # (test_prompts asserts the rendered prompt never contains "restricted").
+    assert "restricted" not in flat
+    assert "both years" in flat
+    assert "never the raw sofp balance" in flat
+
+
+def test_socf_section_by_position_rule():
+    flat = _flat("socf.md")
+    assert "where the line physically sits in the source statement" in flat
+    assert "changes in working capital" in flat
+    # The anchor the agent must locate before classifying.
+    assert "before or after" in flat
+
+
+def test_socf_aggregate_arithmetic_rule():
+    flat = _flat("socf.md")
+    assert "several source lines fold into one template row" in flat
+    assert "sum them with the calculator" in flat
+    assert "re-check the section subtotal" in flat
+
+
+def test_sofp_pledged_deposit_rule():
+    flat = _flat("sofp.md")
+    assert "pledged" in flat
+    assert "without being cash equivalents" in flat
+    assert "cross-check fails by exactly the pledged amount" in flat
+
+
 # --- Concern #5 (mandatory accounting-policy rows) --------------------------
 
 def test_accounting_policies_enforces_star_rows():

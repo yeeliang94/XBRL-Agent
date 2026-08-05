@@ -89,6 +89,14 @@ three components to those rows. Do NOT write RM1,200,000 only to the face
 statement or only to a generic "cash and bank balances" row when the
 component rows exist.
 
+**Pledged deposits inside the cash note:** deposits pledged as security
+may be cash at bank without being cash equivalents — the
+cash note usually says so and reconciles the balance the cash-flow
+statement uses. Keep the pledged amount where the note classifies it; do
+not silently fold it into "Cash and cash equivalents" just because it sits
+in the same note. A later SOCF-to-SOFP cash cross-check fails by exactly
+the pledged amount when this is folded in wrongly.
+
 === MAPPING GUIDANCE (apply judgement — not a rulebook) ===
 
 Map each line on the SUBSTANCE of what the note describes, not on surface

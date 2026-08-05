@@ -447,6 +447,17 @@ pointer to `filled.xlsx` even if later persistence crashes.
 `_safe_mark_finished` in `server.py` swallows audit-write exceptions so error
 handlers never double-fault. **Don't** "fix" this by removing the try/except.
 
+**Terminal runs leave no child row `running` (run-83 hardening, 2026-08-05):**
+face + notes agent rows are finalized from in-memory results right after the
+merge (`_persist_face_and_notes_agent_rows` — BEFORE cross-checks, reviewer
+and notes passes), and `_safe_mark_finished` additionally calls
+`repo.reconcile_unfinished_run_agents` so any row still `running` under a
+terminal run is closed as `cancelled`. The backstop never promotes a row to
+`succeeded` from the presence of a workbook or trace — real statuses come
+only from in-memory results. (Run 83: a Stop-All during the notes reviewer
+left all five extraction rows + CORRECTION at `running` forever under an
+`aborted` run.) Pinned by `tests/test_abort_reconciles_agent_rows.py`.
+
 **Persistent-draft addition (2026-04-26):** `POST /api/upload` now also
 inserts a draft `runs` row at upload time with `status='draft'` and an
 empty `started_at`. This makes the upload immediately shareable as
@@ -1083,11 +1094,24 @@ overhead. Operators can override via `XBRL_MAX_AGENT_ITERATIONS` but
 **must not raise it to ≥50** — pinned by
 `tests/test_max_agent_iterations_below_pydantic_cap.py`.
 
-The reviewer pass has its own dynamic 8-25 turn cap that's much
-tighter (RUN-REVIEW P0-1) and is independent of MAX_AGENT_ITERATIONS;
-it fires structured `correction_exhausted` outcomes via
-`server._run_reviewer_pass`. (The legacy `_run_correction_pass` was
-removed in rewrite Phase 1.1.)
+The reviewer pass has its own dynamic turn cap (12-36 since the
+holistic-audit Phase 3 raise; RUN-REVIEW P0-1) that's much tighter
+than and independent of MAX_AGENT_ITERATIONS; it fires structured
+`correction_exhausted` outcomes via `server._run_reviewer_pass`. (The
+legacy `_run_correction_pass` was removed in rewrite Phase 1.1.)
+
+**Wall-clock deadline behaviour (run-83 hardening, 2026-08-05):** the
+cap in `agent_runner.run_agent_loop` stops NEW MODEL THINKING only — a
+CALL-TOOLS node the model already issued executes past the deadline
+(bounded by the per-turn timeout; writes still pass their deterministic
+guards), and the END node is never discarded. Run 83's reviewer lost a
+fully-formed 3-fix correction batch to the old raise-before-any-node
+check. Companion soft deadline: `run_agent_loop` publishes
+`deps._wallclock_started` / `_wallclock_cap`, and `limit_warner.py`
+(now ALWAYS registered on the reviewer factory) injects a wrap-up
+warning past 70% / CRITICAL past 90% of the cap. Pinned by
+`tests/test_agent_loop_wallclock.py`, `tests/test_limit_warnings.py`,
+`tests/test_reviewer_compact_context.py`.
 
 **Wall-clock cap on correction (2026-04-27):**
 `CORRECTION_WALLCLOCK_TIMEOUT = 300.0` in `server.py` is
