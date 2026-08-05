@@ -1,15 +1,18 @@
-"""Phase 2 — facts → mTool fill instructions (docs/PLAN.md).
+"""Phase 2 — facts → mTool fill instructions
+(docs/PLAN-mtool-fill-pipeline.md).
 
 Turns a completed run's canonical facts (``run_concept_facts`` joined to
 ``concept_nodes``) into the fill-instruction document that
 ``mtool.offline_fill`` consumes. This is the app-side half of the bridge: it
-knows the extraction's variant, signs, and scale; the fill tool stays
+knows the extraction's variant, units, and signs; the fill tool stays
 variant-neutral and just writes cells.
 
 What this module owns (mirrors the plan's Key Decisions):
 
 * **Source = ``run_concept_facts`` only** — the reviewed canonical store,
-  never the scratch xlsx (gotcha #21).
+  never the scratch xlsx (gotcha #21). Read through
+  ``mtool.receipt.snapshot_facts``, so one fill corresponds to ONE revision of
+  the data even though a completed run stays editable.
 * **LEAF only** — ABSTRACT section headers and COMPUTED totals are excluded;
   mTool derives totals with its own template formulas (the fill tool's formula
   guard is the second line of defence). MATRIX_CELL (SOCIE) is deferred and
@@ -19,17 +22,50 @@ What this module owns (mirrors the plan's Key Decisions):
   letter. mTool's real column layout (observed: labels col D, values E/F —
   different from ours) is resolved against the actual template at fill time
   via :func:`apply_column_map`, not baked in here.
-* **Scale/sign translation is explicit and defaults to identity** — see
-  :func:`build_fill_doc`'s ``scale`` argument. We do NOT guess a scale factor;
-  emitting the DB value verbatim (scale=1) is the only safe default until the
-  Windows recon confirms whether mTool stores the full unscaled figure or the
-  thousands figure (docs/MTOOL-ZIP-RECON-BRIEF.md Task 3.6).
+* **Unit-aware translation** — see :mod:`mtool.translation`. The shipped
+  manifest is identity, so today's doc carries the DB value verbatim; a
+  non-identity manifest scales money and leaves share counts alone, and
+  refuses any row whose unit class it can't establish.
+
+WHAT OUR STORED VALUES MEAN (plan Step 5 — pinned by
+``tests/test_mtool_value_conventions.py``)
+
+Read this before writing any translation rule. These are conventions of the
+extraction prompts and the live template formulas, not of this module:
+
+* **Unit.** Facts are stored in the unit shown on the face of the source
+  statement — the run's ``denomination`` ("thousands", "units", …) describes
+  it and is surfaced in the doc's ``meta``. Nothing rescales at extraction
+  time, so a statement printed in RM'000 stores 1,595 for RM 1,595,000.
+* **Sign — SOPL / SOPL-Analysis.** Expenses and losses are stored as POSITIVE
+  magnitudes (finance costs, tax expense, impairment losses, depreciation):
+  the template's subtotal formula does the subtracting (``prompts/_base.md``).
+* **Sign — SOCF.** Signs follow cash-flow direction: receipts and inflows
+  positive, payments and outflows NEGATIVE, indirect-method add-backs
+  positive.
+* **Sign — SOCIE / SoRE.** ``Dividends paid`` is stored POSITIVE because every
+  SOCIE/SoRE template's "Total increase (decrease) in equity" formula
+  SUBTRACTS the row (ADR-002, gotcha #15). Rows the formula ADDS take negative
+  inputs when they represent a reduction.
+* **Sign — OCI / SOCI.** Losses are genuine negative movements, unlike SOPL
+  expense rows.
+
+The practical consequence: our stored sign is already the sign the SSM
+template's own formulas expect, so the identity manifest's ``sign=+1``
+everywhere is a claim about mTool matching SSM's formula conventions — which
+is precisely what the Windows acceptance run (Step 7) has to confirm before
+any sign rule is added here.
 """
 from __future__ import annotations
 
-import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from mtool.receipt import snapshot_facts
+from mtool.translation import IDENTITY, TranslationManifest, UnknownUnitClass
+from mtool.units import unit_class_for_label
+from notes.labels import normalize_label
 
 # Only these value_statuses carry a figure we should write. ``not_disclosed``
 # is an intentional blank (counted, not written); the rest either have no
@@ -69,15 +105,16 @@ def build_fill_doc(
     filing_standard: str,
     filing_level: str,
     denomination: str | None = None,
-    scale: float = 1.0,
+    manifest: TranslationManifest = IDENTITY,
     strict: bool = True,
 ) -> dict[str, Any]:
     """Build the semantic mTool fill document for a run.
 
-    ``scale`` multiplies every emitted value. **Default 1.0 = emit the DB
-    value verbatim.** Only pass a non-1 scale once the Windows recon has
-    confirmed the unit mTool expects vs. the unit the facts are stored in
-    (``denomination``); a wrong scale silently 1000×-inflates every figure.
+    ``manifest`` is the unit/sign translation applied on the way out; it
+    defaults to identity (emit the DB value verbatim). A non-identity manifest
+    raises :class:`mtool.translation.UnknownUnitClass` on the first row whose
+    unit class it cannot establish — a missing rule is never a silent
+    pass-through (finding 2).
 
     The returned doc is ``mtool.offline_fill``-shaped but with an unresolved
     ``sheets`` block (physical columns are ``None`` — the layout of the
@@ -86,34 +123,34 @@ def build_fill_doc(
     ``run_fill``. Structure::
 
         {
-          "meta": {run_id, filing_standard, filing_level, denomination,
-                   scale, sheets_covered, excluded, counts},
+          "meta": {run_id, generated_at, translation_version, snapshot,
+                   filing_standard, filing_level, denomination,
+                   sheets_covered, counts, unit_classes, columns_unresolved},
           "sheets": {sheet: {"label_column": None,
                              "columns": {role: None, ...}}},
           "writes": [{sheet, label, column_role, value}, ...],
           "strict": bool,
         }
     """
-    family_prefix = f"{filing_standard.lower()}-{filing_level.lower()}-"
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    try:
-        rows = conn.execute(
-            """
-            SELECT f.concept_uuid, f.period, f.entity_scope, f.value,
-                   f.value_status, n.canonical_label, n.kind, n.render_sheet,
-                   tpl.shape AS shape
-            FROM run_concept_facts f
-            JOIN concept_nodes n ON n.concept_uuid = f.concept_uuid
-            JOIN concept_templates tpl ON tpl.template_id = n.template_id
-            WHERE f.run_id = ?
-              AND n.template_id LIKE ?
-            ORDER BY n.render_sheet, n.render_row, f.entity_scope, f.period
-            """,
-            (run_id, family_prefix + "%"),
-        ).fetchall()
-    finally:
-        conn.close()
+    rows, snapshot = snapshot_facts(
+        db_path, run_id,
+        filing_standard=filing_standard, filing_level=filing_level)
+
+    # Every conflict in the SAME snapshot the writes come from, so the
+    # preflight verdict and the receipt describe one revision of the facts
+    # (peer review, 2026-08-05). Independent of the LEAF/scope filters below —
+    # the preflight decides which conflicts block and which merely warn.
+    snapshot_conflicts = [
+        {
+            "canonical_label": r["canonical_label"],
+            "render_sheet": r["render_sheet"],
+            "kind": r["kind"],
+            "period": r["period"],
+            "entity_scope": r["entity_scope"],
+        }
+        for r in rows
+        if r["value_status"] == "conflict"
+    ]
 
     writes: list[dict[str, Any]] = []
     sheets: dict[str, dict[str, Any]] = {}
@@ -124,8 +161,14 @@ def build_fill_doc(
     # Conflict-status facts still carry a value and ARE written (blanking a
     # cell the operator can't see is worse than an unresolved one they can),
     # but the count is surfaced so a conflicted figure never flows into a
-    # filing silently — the operator resolves it in the Values tab first.
+    # filing silently. The preflight (mtool/preflight.py) BLOCKS on these —
+    # this count is what the operator reads before overriding.
     conflict_writes = 0
+    # Per-unit-class tally + the rows whose unit the taxonomy doesn't know.
+    # Reported, not hidden: with an identity manifest these are harmless, and
+    # under any other manifest they are exactly what would have gone wrong.
+    unit_counts: dict[str, int] = {}
+    unknown_units: list[dict[str, str]] = []
     # De-dup: a concept surfacing on multiple physical coords (cross-sheet
     # alias) shares one uuid; keyed on (uuid, period, scope) so each fact is
     # emitted once.
@@ -155,11 +198,22 @@ def build_fill_doc(
             conflict_writes += 1
 
         sheet = r["render_sheet"]
+        label = r["canonical_label"]
+        unit_class = unit_class_for_label(label, filing_standard)
+        unit_counts[unit_class or "unknown"] = (
+            unit_counts.get(unit_class or "unknown", 0) + 1)
+        if unit_class is None:
+            unknown_units.append({"sheet": sheet, "label": label})
+        value = manifest.translate(
+            r["value"], unit_class=unit_class, label=label, sheet=sheet,
+            template_id=r["template_id"],
+            label_normalized=normalize_label(label))
+
         writes.append({
             "sheet": sheet,
-            "label": r["canonical_label"],
+            "label": label,
             "column_role": role,
-            "value": _scaled(r["value"], scale),
+            "value": _whole(value),
         })
         sheet_cfg = sheets.setdefault(sheet, {"label_column": None,
                                               "columns": {}})
@@ -167,10 +221,22 @@ def build_fill_doc(
 
     meta = {
         "run_id": run_id,
+        # A fill doc must be self-describing: WHEN it was built and under WHICH
+        # translation rules (finding 8). Without these, a doc found on disk
+        # can't be told apart from one built under different rules.
+        "generated_at": datetime.now(timezone.utc).isoformat(
+            timespec="seconds"),
+        "translation_version": manifest.version,
+        # Identity for the fact revision this doc was built from, so two fills
+        # of the same still-editable run are distinguishable (Step 19).
+        "snapshot": snapshot,
+        # Conflicts as of THAT snapshot — the preflight evaluates these rather
+        # than re-reading the DB, so its verdict cannot describe a different
+        # revision than the writes (peer review, 2026-08-05).
+        "conflicts": snapshot_conflicts,
         "filing_standard": filing_standard.lower(),
         "filing_level": filing_level.lower(),
         "denomination": denomination,
-        "scale": scale,
         "sheets_covered": sorted(sheets),
         "counts": {
             "writes": len(writes),
@@ -180,17 +246,22 @@ def build_fill_doc(
             "excluded_no_value": excluded_no_value,
             "excluded_out_of_scope": excluded_out_of_scope,
         },
+        "unit_classes": unit_counts,
+        "unit_class_unknown": unknown_units,
         "columns_unresolved": True,
     }
     return {"meta": meta, "sheets": sheets, "writes": writes, "strict": strict}
 
 
-def _scaled(value, scale: float):
-    """Apply the scale multiplier, keeping ints int where the result is whole."""
-    scaled = value * scale
-    if isinstance(scaled, float) and scaled.is_integer():
-        return int(scaled)
-    return scaled
+def _whole(value):
+    """Keep ints int where the translated result is a whole number.
+
+    mTool cells hold plain numbers; writing ``1595.0`` where the source said
+    ``1595`` is a gratuitous difference in the filed instance.
+    """
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value
 
 
 def apply_column_map(
@@ -234,3 +305,6 @@ def apply_column_map(
     meta["columns_unresolved"] = False
     out["meta"] = meta
     return out
+
+
+__all__ = ["build_fill_doc", "apply_column_map", "UnknownUnitClass"]

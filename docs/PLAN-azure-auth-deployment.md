@@ -138,8 +138,10 @@ corrections folded into the sections below.
   harmless (`-c` only constrains, never installs) but a confusing footgun;
   regenerate the freeze when convenient.
 - New default-off env gates exist that production must consciously leave
-  off or turn on: `XBRL_MTOOL_FILL` (filing-artifact gate, gotcha #28),
-  `XBRL_REVIEWER_INVESTIGATION_BUNDLE`, `XBRL_REVIEWER_COMPACT_CONTEXT`.
+  off or turn on: `XBRL_REVIEWER_INVESTIGATION_BUNDLE`,
+  `XBRL_REVIEWER_COMPACT_CONTEXT`. (The mTool fill has NO gate — the
+  2026-08-05 replay dropped v2's `XBRL_MTOOL_FILL` switch by product
+  decision; its safety is the preflight + receipts, gotcha #28.)
   Keep `XBRL_PAGE_CACHE_MAX` at its default 64 on B2 (raising it toward the
   4096 cap costs ~800 MB of the 3.5 GB).
 

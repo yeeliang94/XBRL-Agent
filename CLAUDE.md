@@ -514,7 +514,8 @@ content-provenance columns on `notes_cells` · v36 `runs.notes_integrity_mode`
 · v37 `notes_block_placements` + `notes_integrity_tasks` +
 `notes_cells.content_revision` / `source_render_version` — all inert unless
 `XBRL_NOTES_SOURCE_INTEGRITY` is `shadow`/`enforce`
-(#31, docs/PLAN-notes-source-integrity-build.md).
+(#31, docs/PLAN-notes-source-integrity-build.md) · v38 `mtool_fill_receipts`
+(#28, mTool fill audit trail — one row per fill).
 
 ### 12. Filing level — Company vs Group
 
@@ -1492,12 +1493,22 @@ Pinned by `tests/test_coverage_checklist.py`,
 `tests/test_notes_detectors_splits.py`, `tests/test_db_schema_v28.py`, and the
 `NotesCoveragePanel` web tests.
 
-### 28. mTool fill pipeline — offline zip surgery, one patcher, no DB schema
+### 28. mTool fill pipeline — offline zip surgery, one patcher, receipts on v38
 
 The `mtool/` package fills a run's figures into an SSM **mTool** MBRS template so
 the operator can Validate/Generate the XBRL inside mTool without hand-copying
-(docs/PLAN.md, docs/MTOOL-ZIP-RECON-BRIEF.md). Proven end-to-end. The whole path
-is **Excel-free** (pure zip/XML surgery), so it runs server-side and in the cloud.
+(docs/PLAN.md, docs/PLAN-mtool-fill-pipeline.md, docs/MTOOL-ZIP-RECON-BRIEF.md).
+Proven end-to-end. The whole path is **Excel-free** (pure zip/XML surgery), so it
+runs server-side and in the cloud.
+
+**History (2026-08-05 replay):** the v2 hardening (commit b04b178, 2026-07-28)
+was reverted wholesale by 7140f59 on 2026-08-01 and re-applied on 2026-08-05 —
+minus its `XBRL_MTOOL_FILL` exposure gate, dropped by product-owner decision.
+There is NO exposure gate: the filing safety is the preflight + the
+report-acknowledgment flow below, not hiding the feature.
+`tests/test_mtool_preflight.py::test_no_exposure_gate_exists` pins the gate's
+absence (routes live with no flag, no `mtool_fill` key in `/api/config`, no
+`server._mtool_fill_enabled`).
 
 Load-bearing invariants:
 
@@ -1513,15 +1524,39 @@ Load-bearing invariants:
   COMPUTED totals excluded (mTool derives totals). SOCIE/MATRIX_CELL is deferred
   and **counted**, never silently dropped. Scoped to the run's `{standard}-{level}-`
   family, deduped by `concept_uuid`, reads `run_concept_facts` only.
-- **Values emitted verbatim (scale=identity) by default.** The `scale` argument
-  and per-row sign flips are **Windows-blocked** until the recon confirms whether
-  mTool stores the unscaled or the thousands figure — a wrong scale silently
-  1000×-inflates every figure. `denomination` is surfaced in the doc meta.
-- **Semantic, not physical:** writes carry a `column_role` (CY/PY × company/group),
-  NOT a column letter. mTool's real layout (observed: labels col D, values E/F) is
-  resolved at fill time via `exporter.apply_column_map` (fails loudly on a missing
-  role) or `column_detect.detect_column_map` (positional + confidence; the endpoint
-  refuses low-confidence auto-detection and asks for an explicit map).
+- **Unit-aware translation; the global `scale` multiplier is GONE.** A single
+  multiplier had no unit dimension, so a thousands conversion would have
+  multiplied share COUNTS (MFRS sheet 13 puts "Number of shares issued" three
+  rows above "Amount of shares issued"). `scripts/generate_concept_units.py`
+  extracts each concept's declared XBRL item type from the SSM taxonomy into a
+  committed label-keyed index (`concept_model/concept_units_*.json`, 98% of
+  LEAF rows); `mtool/units.py` resolves it and `mtool/translation.py` applies
+  versioned manifests. The SHIPPED manifest is identity, and there is
+  deliberately no way to pick another one over the wire; any non-identity
+  manifest REFUSES an unclassified value rather than passing it through.
+  Non-identity conversion stays **Windows-blocked** on recon Addendum A.
+  `denomination` is surfaced in the doc meta.
+- **Semantic, not physical — columns by MEANING, not position:** writes carry a
+  `column_role` (CY/PY × company/group), NOT a column letter.
+  `column_detect` reads mTool's own marker rows — `#PRIM#` (label column),
+  `#ENDT#` (period end dates; current vs prior year comes from COMPARING
+  DATES), `#UNITSCALE#` (declared unit), `#DOM#` (columns are dimension
+  members). `needs_confirmation()` is the gate, not a confidence score: Group
+  layouts and unknown template fingerprints (`mtool/known_templates.json`)
+  always need a human. This caught a real one — the sample template's
+  Notes-Issuedcapital lays its columns out as SHARE CLASSES, so positional
+  mapping would have written the current year into "Ordinary shares".
+  `exporter.apply_column_map` still fails loudly on a missing role.
+- **Preflight is the filing-readiness gate — run status never was one**
+  (`mtool/preflight.py`). Blocks on conflicting figures that would REACH the
+  workbook, open reviewer flags, and unresolved notes coverage; overriding
+  needs a written reason that lands on the receipt. Conflicts on unfileable
+  rows warn instead of blocking; `completed_with_errors` alone does not block.
+- **Report before file.** `POST /patch` returns the COMPLETE report plus a
+  short-lived artifact id; the workbook is a separate GET that a degraded fill
+  won't release unacknowledged (enforced server-side — the acknowledgement is
+  stamped on the receipt). The old 20-row / 6 KB `X-mTool-Report` header is
+  gone.
 - **Machine docs are `strict`** (`build_fill_doc` sets `strict:true`): a non-exact
   label is a bug to surface, not a typo to forgive. Hand-authored operator runs
   stay lenient; fuzzy hits are still reported.
@@ -1536,16 +1571,26 @@ Load-bearing invariants:
   `report["errors"]`. Never `replace_shared_string` an EMPTY payload cell (it may
   share a `""` `<si>`); append+patch instead. Pinned by the orphan-pool tests in
   `tests/test_mtool_offline_fill.py`.
-- **No DB schema change** — endpoints are stateless over existing tables; uploaded
-  templates are request-scoped temp files under `OUTPUT_DIR/_mtool_tmp` (cleaned
-  via `BackgroundTask`). Run gate is `completed`/`completed_with_errors` (409
-  otherwise).
+- **Every fill writes a receipt** (`mtool_fill_receipts`, schema **v38** —
+  re-minted from the reverted build's v35 because source integrity took
+  v35–v37): fact-revision snapshot (count/digest/max-updated — facts are read
+  once from a consistent snapshot, so a workbook corresponds to ONE revision
+  of a still-editable run), both file hashes, template fingerprint, column
+  map, manifest version, preflight verdict + override, degraded-download
+  acknowledgement, operator, full report. The patcher itself stays stateless;
+  the ROUTE writes the row. Uploaded templates are request-scoped temp files
+  under `OUTPUT_DIR/_mtool_tmp`. Liveness gate is
+  `completed`/`completed_with_errors` (409 otherwise).
 - **UI is a button + modal (`MtoolFillModal`), not a tab** — avoids a third
   `role="tab"` (gotcha #7).
 
 Pinned by `tests/test_mtool_offline_fill.py`, `test_mtool_exporter.py`,
-`test_mtool_routes.py`, `test_mtool_column_detect.py`, and the `MtoolFillModal`
-web tests. Full plan: `docs/PLAN.md`; operator guide: `mtool/README.md`.
+`test_mtool_routes.py`, `test_mtool_column_detect.py`, `test_mtool_units.py`,
+`test_mtool_value_conventions.py`, `test_mtool_preflight.py`,
+`test_mtool_artifact_and_receipt.py`, `test_mtool_failure_modes.py`,
+`test_mtool_coverage_dry_run.py`, `test_db_schema_v38.py`, and the
+`MtoolFillModal` web tests. Full plan: `docs/PLAN.md` +
+`docs/PLAN-mtool-fill-pipeline.md`; operator guide: `mtool/README.md`.
 
 ### 29. Word (.docx) input — convert at the door; PDF stays the spine
 
