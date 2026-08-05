@@ -81,6 +81,32 @@ For **Direct** method (82 rows, 71 data-entry):
 - Net change = Operating + Investing + Financing.
 - Opening + Net change = Closing.
 
+- **Pledged deposits: read the cash note's reconciliation for
+  BOTH years before writing opening or closing cash.** Deposits pledged as
+  security are often cash at bank but NOT cash equivalents
+  for cash-flow purposes — the cash note usually reconciles the SOFP balance
+  down to the SOCF figure by deducting them, and the deduction can differ
+  between the current and prior year. Use the note's SOCF-side figure for
+  opening and closing cash, never the raw SOFP balance.
+
+- **Assign each line to the section the SOURCE statement prints it in, not
+  the section its wording suggests.** "Adjustments for" items and "Changes in
+  working capital" items can carry similar labels (e.g. a fair-value movement
+  on financial assets); what decides the template section is WHERE the line
+  physically sits in the source statement — before or after the "Operating
+  profit/surplus before changes in working capital" subtotal. Locate that
+  subtotal first, then classify each line by its position relative to it.
+
+- **When several source lines fold into one template row, sum them with the
+  calculator before writing, and re-check the section subtotal after.** The
+  template is often coarser than the source (e.g. one "trade and other
+  receivables" row absorbing receivables, deposits, prepayments and
+  pledged-deposit movements). List the source lines you are combining, sum
+  them with the calculator tool (signs included), write the exact total, and
+  then verify your section's lines sum to the section subtotal the source
+  prints. A hand-combined aggregate that is close-but-wrong is the main
+  cause of a cash-flow statement that will not articulate.
+
 - **Prefer the most specific template row; use the notes to disambiguate.**
   The SOCF face often prints a coarse line ("Interest paid", "Impairment
   loss", "Loss on disposal") while a footnote beneath the statement, or the

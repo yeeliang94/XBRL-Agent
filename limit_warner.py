@@ -16,16 +16,19 @@ strips any previously injected warning, so exactly ONE warning is live
 at any time (idempotent — the processed history is persisted back onto
 run state, gotcha #6, and must not accumulate stale nudges).
 
-Two limits are tracked, read from the same sources the hard raises use:
+Three limits are tracked, read from the same sources the hard raises use:
 
 - iterations: ``ctx.usage.requests`` vs ``agent_tracing.MAX_AGENT_ITERATIONS``
 - token budget: ``ctx.usage.total_tokens`` vs ``agent_runner.resolve_token_budget()``
   (0 = budget disabled = no token warning)
-
-The wall-clock cap is deliberately NOT warned about here: a history
-processor has no access to the runner's per-run deadline, and threading
-it through would couple this module to the loop internals. Deferred —
-see docs/PLAN-pydantic-ai-v2.md Part D.3 Item 1.
+- wall-clock: elapsed vs the per-run cap ``run_agent_loop`` publishes onto
+  deps (``_wallclock_started`` / ``_wallclock_cap``), the same advisory
+  generic-setattr channel as the live loop counter. Absent attributes =
+  no cap = no warning, so agents outside ``run_agent_loop`` are
+  unaffected. This closes the deferral in docs/PLAN-pydantic-ai-v2.md
+  Part D.3 Item 1 (run-83 hardening Phase 2 Step 4: the reviewer spent
+  364s investigating and lost its finished correction batch to the 300s
+  cap without ever being told time was short).
 
 Design constraints honoured:
 
@@ -44,6 +47,7 @@ Design constraints honoured:
 # as extraction/history_processors.py.
 import logging
 import os
+import time
 from dataclasses import replace
 from typing import List, Optional
 
@@ -66,6 +70,10 @@ WARN_FRACTION = 0.70
 # remaining steps leaves the model roughly two turns: finish writes, save.
 CRITICAL_REMAINING_ITERATIONS = 5
 CRITICAL_TOKEN_FRACTION = 0.95
+# Wall-clock escalates at 90%: on the reviewer's 300s cap that leaves ~30s
+# — one model turn to emit the batched fixes (which then execute even past
+# the cap, thanks to the agent_runner grace rule; run-83 Phase 2 Step 3).
+CRITICAL_WALLCLOCK_FRACTION = 0.90
 
 
 def _enabled() -> bool:
@@ -153,6 +161,26 @@ def _build_warning(ctx) -> Optional[str]:
             pct = int(round(100 * frac))
             lines.append(f"Token budget: {total:,}/{budget:,} used ({pct}%).")
             if frac >= CRITICAL_TOKEN_FRACTION:
+                critical = True
+
+    # --- Wall-clock (published by run_agent_loop; absent/None = off) ---
+    # Elapsed is computed HERE, at injection time, not at node boundaries —
+    # the freshest number the model can act on (run-83 Phase 2 Step 4).
+    started = getattr(deps, "_wallclock_started", None)
+    wcap = getattr(deps, "_wallclock_cap", None)
+    if started is not None and wcap:
+        elapsed = time.monotonic() - float(started)
+        wfrac = elapsed / float(wcap)
+        if wfrac >= WARN_FRACTION:
+            remaining_s = max(int(float(wcap) - elapsed), 0)
+            pct = int(round(100 * min(wfrac, 1.0)))
+            lines.append(
+                f"Wall-clock: {int(elapsed)}s of {int(wcap)}s used ({pct}%); "
+                f"~{remaining_s}s remaining. A tool call you issue before "
+                f"the deadline still executes; a further thinking turn "
+                f"after it will not."
+            )
+            if wfrac >= CRITICAL_WALLCLOCK_FRACTION:
                 critical = True
 
     if not lines:

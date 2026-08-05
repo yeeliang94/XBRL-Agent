@@ -3224,6 +3224,24 @@ def _safe_mark_finished(
     try:
         from db import repository as repo
         repo.mark_run_finished(db_conn, run_id, status)
+        # Run-83 hardening (Phase 1 Step 2): a terminal run must leave no
+        # child row 'running'. On the normal path every row is already
+        # terminal and this touches nothing; on an early-return cancel it
+        # closes the stragglers as 'cancelled'. Same swallow-everything
+        # contract as the rest of this helper (gotcha #10) — a reconcile
+        # failure must not block the terminal-status write below.
+        try:
+            closed = repo.reconcile_unfinished_run_agents(db_conn, run_id)
+            if closed:
+                logger.info(
+                    "Closed %d run_agents row(s) left 'running' under "
+                    "terminal run %s", closed, run_id,
+                )
+        except Exception:
+            logger.warning(
+                "Failed to reconcile unfinished agent rows for run %s",
+                run_id, exc_info=True,
+            )
         db_conn.commit()
         return True
     except Exception:
@@ -5061,6 +5079,180 @@ async def run_multi_agent_stream(
                     except (asyncio.CancelledError, GeneratorExit):
                         client_connected = False
 
+        # Run-83 hardening (docs/PLAN-run83-hardening.md Phase 1 Step 1):
+        # finalize the face + notes agent rows NOW, from the in-memory
+        # results. Extraction and merge are complete at this point, so a
+        # cancel during the reviewer / notes-reviewer stages below can no
+        # longer strand completed work at 'running' under an 'aborted' run
+        # (the run-83 incident). The reviewer's verify_fixes scope reads
+        # the in-memory succeeded set (run-58), not these rows, so flipping
+        # them early changes nothing for the reviewer.
+        def _persist_face_and_notes_agent_rows() -> None:
+            if db_conn is None or run_id is None:
+                return
+            try:
+                for agent_result in coordinator_result.agent_results:
+                    run_agent_id = run_agent_ids_by_stmt.get(agent_result.statement_type)
+                    if run_agent_id is None:
+                        # Pre-create didn't happen (DB was unhappy earlier);
+                        # fall back to creating the row now so extracted
+                        # fields still have somewhere to hang off.
+                        agent_model = config.models.get(agent_result.statement_type, config.model)
+                        run_agent_id = repo.create_run_agent(
+                            db_conn, run_id,
+                            statement_type=agent_result.statement_type.value,
+                            variant=agent_result.variant,
+                            model=_model_id(agent_model),
+                        )
+                    status = agent_result.status
+                    # Honest-completion flag (peer-review F1): a statement the
+                    # agent finalised via acknowledge_unresolved IS saved, but
+                    # carries a known imbalance / unfilled-mandatory that a
+                    # human must review. Persist the row as
+                    # completed_with_errors so History shows "needs review"
+                    # rather than a clean green — the data is still there.
+                    if status == "succeeded" and getattr(agent_result, "flag", None):
+                        status = "completed_with_errors"
+                    # Pass the coordinator-resolved variant so runs where
+                    # the user didn't specify one still record which
+                    # template was actually used. (Phase 6.5 pre-creates
+                    # run_agents with the user-supplied variant, which may
+                    # be None.)
+                    repo.finish_run_agent(
+                        db_conn, run_agent_id,
+                        status=status,
+                        workbook_path=agent_result.workbook_path,
+                        variant=agent_result.variant,
+                        # RUN-REVIEW P2-3: backfill token + cost telemetry
+                        # so run_agents stops shipping zeros (gotcha #6).
+                        total_tokens=agent_result.total_tokens,
+                        total_cost=agent_result.total_cost,
+                        # v8 per-turn telemetry rollups.
+                        prompt_tokens=getattr(agent_result, "prompt_tokens", 0),
+                        completion_tokens=getattr(agent_result, "completion_tokens", 0),
+                        turn_count=getattr(agent_result, "turn_count", 0),
+                        tool_call_count=getattr(agent_result, "tool_call_count", 0),
+                        # v15 cache telemetry rollups (§6 rec 1: measure first).
+                        cache_read_tokens=getattr(agent_result, "cache_read_tokens", 0),
+                        cache_write_tokens=getattr(agent_result, "cache_write_tokens", 0),
+                        # v17 (item 9): machine-readable failure class —
+                        # explicit from the coordinator, derived otherwise.
+                        error_type=_agent_row_error_type(
+                            agent_result.status,
+                            getattr(agent_result, "error_type", None),
+                            agent_result.error,
+                        ),
+                    )
+                    # v8: persist the per-turn metrics rows. Telemetry is
+                    # advisory — a write failure here must never fault the
+                    # run, so swallow and log (mirrors _safe_usage_backfill).
+                    try:
+                        repo.insert_agent_turns(
+                            db_conn, run_agent_id,
+                            getattr(agent_result, "turns", []) or [],
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Failed to persist per-turn telemetry for %s",
+                            agent_result.statement_type.value, exc_info=True,
+                        )
+
+                    # Persist extracted fields from per-statement result.json
+                    result_json_path = Path(output_dir) / f"{agent_result.statement_type.value}_result.json"
+                    if result_json_path.exists():
+                        try:
+                            result_data = json.loads(result_json_path.read_text(encoding="utf-8"))
+                            raw_fields = (
+                                result_data.get("fields", [])
+                                if isinstance(result_data, dict) else []
+                            )
+                            for field in raw_fields:
+                                # Defensive: a malformed result.json can carry a
+                                # non-dict entry in `fields` (observed on
+                                # SOCI/SOCIE), which would raise "'list' object
+                                # has no attribute 'get'" and abort the WHOLE
+                                # per-agent persist loop. Skip the bad entry
+                                # instead of losing every field for the agent.
+                                if not isinstance(field, dict):
+                                    logger.warning(
+                                        "Skipping non-dict field entry in %s result.json",
+                                        agent_result.statement_type.value,
+                                    )
+                                    continue
+                                repo.save_extracted_field(
+                                    db_conn, run_agent_id,
+                                    sheet=field.get("sheet", ""),
+                                    field_label=field.get("field_label", ""),
+                                    col=field.get("col", 2),
+                                    value=field.get("value"),
+                                    section=field.get("section"),
+                                    row_num=field.get("row"),
+                                    evidence=field.get("evidence"),
+                                )
+                        except Exception as e:
+                            logger.warning("Failed to persist fields for %s: %s",
+                                           agent_result.statement_type.value, e)
+
+                # Finalize notes agent rows so History can show their status,
+                # workbook path, and model for this run. Mirrors the face
+                # loop above. `notes_result` may be None if the coordinator
+                # itself crashed — the overall-status block below synthesizes
+                # a failed result in that case, so we handle None defensively.
+                notes_agent_results = (
+                    notes_result.agent_results if notes_result is not None else []
+                )
+                for notes_agent_result in notes_agent_results:
+                    run_agent_id = run_agent_ids_by_notes.get(notes_agent_result.template_type)
+                    if run_agent_id is None:
+                        # Pre-create didn't happen (DB was unhappy earlier).
+                        run_agent_id = repo.create_run_agent(
+                            db_conn, run_id,
+                            statement_type=f"NOTES_{notes_agent_result.template_type.value}",
+                            variant=None,
+                            model=_model_id(config.model),
+                        )
+                    repo.finish_run_agent(
+                        db_conn, run_agent_id,
+                        status=notes_agent_result.status,
+                        workbook_path=notes_agent_result.workbook_path,
+                        # RUN-REVIEW P2-3: notes agents also backfill.
+                        total_tokens=notes_agent_result.total_tokens,
+                        total_cost=notes_agent_result.total_cost,
+                        # v8 per-turn telemetry rollups (peer-review [2]).
+                        prompt_tokens=getattr(notes_agent_result, "prompt_tokens", 0),
+                        completion_tokens=getattr(notes_agent_result, "completion_tokens", 0),
+                        turn_count=getattr(notes_agent_result, "turn_count", 0),
+                        tool_call_count=getattr(notes_agent_result, "tool_call_count", 0),
+                        # v15 cache telemetry rollups (§6 rec 1: measure first).
+                        cache_read_tokens=getattr(notes_agent_result, "cache_read_tokens", 0),
+                        cache_write_tokens=getattr(notes_agent_result, "cache_write_tokens", 0),
+                        # v17 (item 9): machine-readable failure class —
+                        # explicit from the coordinator, derived otherwise.
+                        error_type=_agent_row_error_type(
+                            notes_agent_result.status,
+                            getattr(notes_agent_result, "error_type", None),
+                            notes_agent_result.error,
+                        ),
+                    )
+                    # v8: persist per-turn metrics rows for notes agents too.
+                    # Advisory — never fault the run on a telemetry write.
+                    try:
+                        repo.insert_agent_turns(
+                            db_conn, run_agent_id,
+                            getattr(notes_agent_result, "turns", []) or [],
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Failed to persist notes per-turn telemetry for %s",
+                            notes_agent_result.template_type.value, exc_info=True,
+                        )
+                db_conn.commit()
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "Failed to persist per-agent final state to audit DB: %s", e)
+
+        _persist_face_and_notes_agent_rows()
+
         # Run cross-checks (Phase 5 wiring). See `_build_default_cross_checks`
         # at module scope for the canonical registry the MPERS wiring tests
         # pin against.
@@ -5337,11 +5529,13 @@ async def run_multi_agent_stream(
                             "run's model instead", _rm, exc_info=True)
                         reviewer_model = model
                 # Scope the reviewer's verify_fixes off the SAME in-memory
-                # succeeded set the cross-check pass used. The extraction
-                # run_agents rows aren't flipped to 'succeeded' in the DB until
-                # the finish_run_agent loop further below — AFTER this pass — so
-                # a DB-status scope would resolve zero statements and the
-                # self-verifier would falsely report "all 0 PASS" (run 58).
+                # succeeded set the cross-check pass used (run 58: a DB-status
+                # scope once resolved zero statements and the self-verifier
+                # falsely reported "all 0 PASS"). Since run-83 hardening
+                # Phase 1 the extraction rows ARE terminal in the DB by this
+                # point, but the in-memory scope stays — it is the source of
+                # truth for what this run just extracted, independent of any
+                # DB write outcome.
                 reviewer_verify_scope = [
                     (getattr(ar.statement_type, "value", ar.statement_type),
                      ar.variant)
@@ -5868,172 +6062,14 @@ async def run_multi_agent_stream(
                     exc_info=True,
                 )
 
-        # Persist per-agent FINAL state + extracted fields + cross-checks.
-        # Phase 6.5 moved create_run_agent() UP FRONT so tool events could
-        # be persisted live as the stream came in; this block now only
-        # finalises each agent row (finish_run_agent) and writes the
-        # extracted-field table. The coarse `status:started` and `complete`
-        # log_event() calls that lived here have been removed — the live
-        # stream already persisted the real complete event with the live
-        # `{success: bool, error: str | None}` shape.
+        # Persist pseudo-agent rows + cross-check results. The face and
+        # notes agent rows were already finalized right after the merge
+        # (run-83 hardening Phase 1 — `_persist_face_and_notes_agent_rows`
+        # above), so this block only closes the reviewer / notes-reviewer
+        # pseudo-agents (whose outcomes exist only now) and writes the
+        # cross-check table.
         if db_conn is not None and run_id is not None:
             try:
-                for agent_result in coordinator_result.agent_results:
-                    run_agent_id = run_agent_ids_by_stmt.get(agent_result.statement_type)
-                    if run_agent_id is None:
-                        # Pre-create didn't happen (DB was unhappy earlier);
-                        # fall back to creating the row now so extracted
-                        # fields still have somewhere to hang off.
-                        agent_model = config.models.get(agent_result.statement_type, config.model)
-                        run_agent_id = repo.create_run_agent(
-                            db_conn, run_id,
-                            statement_type=agent_result.statement_type.value,
-                            variant=agent_result.variant,
-                            model=_model_id(agent_model),
-                        )
-                    status = agent_result.status
-                    # Honest-completion flag (peer-review F1): a statement the
-                    # agent finalised via acknowledge_unresolved IS saved, but
-                    # carries a known imbalance / unfilled-mandatory that a
-                    # human must review. Persist the row as
-                    # completed_with_errors so History shows "needs review"
-                    # rather than a clean green — the data is still there.
-                    if status == "succeeded" and getattr(agent_result, "flag", None):
-                        status = "completed_with_errors"
-                    # Pass the coordinator-resolved variant so runs where
-                    # the user didn't specify one still record which
-                    # template was actually used. (Phase 6.5 pre-creates
-                    # run_agents with the user-supplied variant, which may
-                    # be None.)
-                    repo.finish_run_agent(
-                        db_conn, run_agent_id,
-                        status=status,
-                        workbook_path=agent_result.workbook_path,
-                        variant=agent_result.variant,
-                        # RUN-REVIEW P2-3: backfill token + cost telemetry
-                        # so run_agents stops shipping zeros (gotcha #6).
-                        total_tokens=agent_result.total_tokens,
-                        total_cost=agent_result.total_cost,
-                        # v8 per-turn telemetry rollups.
-                        prompt_tokens=getattr(agent_result, "prompt_tokens", 0),
-                        completion_tokens=getattr(agent_result, "completion_tokens", 0),
-                        turn_count=getattr(agent_result, "turn_count", 0),
-                        tool_call_count=getattr(agent_result, "tool_call_count", 0),
-                        # v15 cache telemetry rollups (§6 rec 1: measure first).
-                        cache_read_tokens=getattr(agent_result, "cache_read_tokens", 0),
-                        cache_write_tokens=getattr(agent_result, "cache_write_tokens", 0),
-                        # v17 (item 9): machine-readable failure class —
-                        # explicit from the coordinator, derived otherwise.
-                        error_type=_agent_row_error_type(
-                            agent_result.status,
-                            getattr(agent_result, "error_type", None),
-                            agent_result.error,
-                        ),
-                    )
-                    # v8: persist the per-turn metrics rows. Telemetry is
-                    # advisory — a write failure here must never fault the
-                    # run, so swallow and log (mirrors _safe_usage_backfill).
-                    try:
-                        repo.insert_agent_turns(
-                            db_conn, run_agent_id,
-                            getattr(agent_result, "turns", []) or [],
-                        )
-                    except Exception:
-                        logger.warning(
-                            "Failed to persist per-turn telemetry for %s",
-                            agent_result.statement_type.value, exc_info=True,
-                        )
-
-                    # Persist extracted fields from per-statement result.json
-                    result_json_path = Path(output_dir) / f"{agent_result.statement_type.value}_result.json"
-                    if result_json_path.exists():
-                        try:
-                            result_data = json.loads(result_json_path.read_text(encoding="utf-8"))
-                            raw_fields = (
-                                result_data.get("fields", [])
-                                if isinstance(result_data, dict) else []
-                            )
-                            for field in raw_fields:
-                                # Defensive: a malformed result.json can carry a
-                                # non-dict entry in `fields` (observed on
-                                # SOCI/SOCIE), which would raise "'list' object
-                                # has no attribute 'get'" and abort the WHOLE
-                                # per-agent persist loop. Skip the bad entry
-                                # instead of losing every field for the agent.
-                                if not isinstance(field, dict):
-                                    logger.warning(
-                                        "Skipping non-dict field entry in %s result.json",
-                                        agent_result.statement_type.value,
-                                    )
-                                    continue
-                                repo.save_extracted_field(
-                                    db_conn, run_agent_id,
-                                    sheet=field.get("sheet", ""),
-                                    field_label=field.get("field_label", ""),
-                                    col=field.get("col", 2),
-                                    value=field.get("value"),
-                                    section=field.get("section"),
-                                    row_num=field.get("row"),
-                                    evidence=field.get("evidence"),
-                                )
-                        except Exception as e:
-                            logger.warning("Failed to persist fields for %s: %s",
-                                           agent_result.statement_type.value, e)
-
-                # Finalize notes agent rows so History can show their status,
-                # workbook path, and model for this run. Mirrors the face
-                # loop above. `notes_result` may be None if the coordinator
-                # itself crashed — the overall-status block below synthesizes
-                # a failed result in that case, so we handle None defensively.
-                notes_agent_results = (
-                    notes_result.agent_results if notes_result is not None else []
-                )
-                for notes_agent_result in notes_agent_results:
-                    run_agent_id = run_agent_ids_by_notes.get(notes_agent_result.template_type)
-                    if run_agent_id is None:
-                        # Pre-create didn't happen (DB was unhappy earlier).
-                        run_agent_id = repo.create_run_agent(
-                            db_conn, run_id,
-                            statement_type=f"NOTES_{notes_agent_result.template_type.value}",
-                            variant=None,
-                            model=_model_id(config.model),
-                        )
-                    repo.finish_run_agent(
-                        db_conn, run_agent_id,
-                        status=notes_agent_result.status,
-                        workbook_path=notes_agent_result.workbook_path,
-                        # RUN-REVIEW P2-3: notes agents also backfill.
-                        total_tokens=notes_agent_result.total_tokens,
-                        total_cost=notes_agent_result.total_cost,
-                        # v8 per-turn telemetry rollups (peer-review [2]).
-                        prompt_tokens=getattr(notes_agent_result, "prompt_tokens", 0),
-                        completion_tokens=getattr(notes_agent_result, "completion_tokens", 0),
-                        turn_count=getattr(notes_agent_result, "turn_count", 0),
-                        tool_call_count=getattr(notes_agent_result, "tool_call_count", 0),
-                        # v15 cache telemetry rollups (§6 rec 1: measure first).
-                        cache_read_tokens=getattr(notes_agent_result, "cache_read_tokens", 0),
-                        cache_write_tokens=getattr(notes_agent_result, "cache_write_tokens", 0),
-                        # v17 (item 9): machine-readable failure class —
-                        # explicit from the coordinator, derived otherwise.
-                        error_type=_agent_row_error_type(
-                            notes_agent_result.status,
-                            getattr(notes_agent_result, "error_type", None),
-                            notes_agent_result.error,
-                        ),
-                    )
-                    # v8: persist per-turn metrics rows for notes agents too.
-                    # Advisory — never fault the run on a telemetry write.
-                    try:
-                        repo.insert_agent_turns(
-                            db_conn, run_agent_id,
-                            getattr(notes_agent_result, "turns", []) or [],
-                        )
-                    except Exception:
-                        logger.warning(
-                            "Failed to persist notes per-turn telemetry for %s",
-                            notes_agent_result.template_type.value, exc_info=True,
-                        )
-
                 # Peer-review C1: finalise pseudo-agent rows so History
                 # doesn't show them stuck at the initial "running" status.
                 # `finish_run_agent` is safe to call even if events were

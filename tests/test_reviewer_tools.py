@@ -785,6 +785,68 @@ def test_list_facts_is_family_scoped(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Run-83 hardening Phase 5 — listing row cap with whole-run repeats footer
+# ---------------------------------------------------------------------------
+
+
+def _fake_fact(i: int, value: float, sheet: str = "SOFP-CuNonCu") -> dict:
+    return {
+        "render_sheet": sheet, "render_row": i,
+        "canonical_label": f"Row {i}", "kind": "LEAF",
+        "period": "CY", "entity_scope": "Company",
+        "value": value, "value_status": "observed",
+        "concept_uuid": f"uuid-{sheet}-{i}",
+    }
+
+
+def test_fact_listing_caps_row_detail_with_continuation():
+    """Run 83's opening whole-run listing flooded the reviewer's context.
+    Past the cap, row detail truncates and the footer teaches the
+    sheet-scoped follow-up call — it never silently swallows rows."""
+    facts = [_fake_fact(i, float(1000 + i)) for i in range(250)]
+    out = _format_fact_listing(facts, row_cap=200)
+    assert "'Row 199'" in out
+    assert "'Row 201'" not in out, "rows past the cap must not render"
+    assert "50 more row(s) not shown" in out
+    assert 'list_facts(sheet="<name>")' in out
+    assert "Facts per sheet" in out
+
+
+def test_fact_listing_repeats_footer_covers_rows_past_the_cap():
+    """The double-count signal is the reason the holistic listing exists —
+    truncation may drop row DETAIL, never the whole-run repeats footer."""
+    facts = [_fake_fact(i, float(1000 + i)) for i in range(240)]
+    # The duplicate pair sits entirely PAST the cap.
+    facts.append(_fake_fact(300, 991755.0, sheet="SOPL-Function"))
+    facts.append(_fake_fact(301, 991755.0, sheet="SOPL-Function"))
+    out = _format_fact_listing(facts, row_cap=200)
+    assert "Repeated values" in out
+    assert "991755" in out
+
+
+def test_fact_listing_under_cap_is_unchanged():
+    facts = [_fake_fact(i, float(1000 + i)) for i in range(5)]
+    out = _format_fact_listing(facts)
+    assert "more row(s) not shown" not in out
+    assert "'Row 4'" in out
+
+
+def test_reviewer_prompt_stages_packet_before_holistic_listing():
+    """Phase 5 decision (2026-08-05): the reviewer opens from its packet,
+    not a whole-run listing; list_facts stays available, sheet-first."""
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parent.parent / "prompts" /
+            "reviewer.md").read_text(encoding="utf-8")
+    flat = " ".join(text.lower().split())
+    assert "work the packet first" in flat
+    assert "do not open by re-listing the whole run" in flat
+    assert "prefer a named sheet" in flat
+    # The tool itself is still taught — staging, not removal.
+    assert "list_facts" in flat
+
+
+# ---------------------------------------------------------------------------
 # Phase 2 — the review packet renders a check's comparands (both sides)
 # ---------------------------------------------------------------------------
 

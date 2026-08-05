@@ -679,6 +679,31 @@ def finish_run_agent(
         )
 
 
+def reconcile_unfinished_run_agents(
+    conn: sqlite3.Connection, run_id: int
+) -> int:
+    """Close any run_agents row still 'running' once its run is terminal.
+
+    Run-83 hardening (docs/PLAN-run83-hardening.md Phase 1 Step 2): a
+    cancel during a post-extraction stage (reviewer, notes reviewer)
+    returns early and skips the normal finish_run_agent sites, which used
+    to leave rows stuck at 'running' forever under an 'aborted' run. This
+    is the BACKSTOP, not the primary status source — real statuses are
+    written from in-memory results as soon as they exist
+    (`_persist_face_and_notes_agent_rows` in server.py); this only closes
+    whatever is left, and it never invents 'succeeded' from the mere
+    presence of a workbook or trace (an artifact can outlive a later
+    failure). Returns the number of rows closed.
+    """
+    cur = conn.execute(
+        "UPDATE run_agents SET status = 'cancelled', "
+        "error_type = COALESCE(error_type, 'cancelled'), ended_at = ? "
+        "WHERE run_id = ? AND status = 'running'",
+        (_now(), run_id),
+    )
+    return int(cur.rowcount or 0)
+
+
 def insert_agent_turns(
     conn: sqlite3.Connection,
     run_agent_id: int,

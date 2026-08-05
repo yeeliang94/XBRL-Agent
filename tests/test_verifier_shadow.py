@@ -193,6 +193,65 @@ def test_mandatory_scan_treats_not_disclosed_as_resolved(sofp_run, monkeypatch):
         "a mandatory row with no fact at all must be flagged unfilled")
 
 
+def test_current_other_investments_never_satisfies_mandatory_noncurrent(sofp_run):
+    """Run-83 hardening Phase 4 (docs/PLAN-run83-hardening.md Step 6).
+
+    The MFRS SOFP face carries TWO 'Other investments' rows: mandatory
+    NON-CURRENT `*Other investments` (row 17) and non-mandatory CURRENT
+    `Other investments` (row 27) — same words, different sections,
+    different concepts. Run 83 wrote its FVTPL 2,457 to row 27 (correct)
+    and the failure investigation initially misread the verifier's row-17
+    mandatory-unfilled warning as an exporter defect. Pin the intended
+    semantics against the LIVE template so nobody "fixes" this into a bug:
+
+    1. a fact on the current row never satisfies the non-current row;
+    2. marking the non-current row not_disclosed resolves the warning
+       (what run 83's discarded reviewer batch was about to do).
+    """
+    from tools.verifier_facts import _collect_unfilled_mandatory_facts, _load_nodes
+    from concept_model.facts_api import read_run_facts
+
+    db, run_id, template_id, conn = sofp_run
+    nodes = _load_nodes(conn, template_id)
+    main = "SOFP-CuNonCu"
+    mandatory = [n for n in nodes if n["sheet"] == main
+                 and str(n["label"]).strip() == "*Other investments"]
+    current = [n for n in nodes if n["sheet"] == main
+               and str(n["label"]).strip() == "Other investments"]
+    assert len(mandatory) == 1 and len(current) == 1, (
+        "template must carry exactly one starred and one unstarred "
+        "'Other investments' face row")
+    assert mandatory[0]["row"] < current[0]["row"], (
+        "the starred row is the NON-CURRENT one (row 17 < row 27)")
+
+    # The run-83 shape: the FVTPL amount lands on the current row only.
+    conn.execute(
+        "INSERT INTO run_concept_facts(run_id, concept_uuid, period, "
+        "entity_scope, value, value_status, source, updated_at) "
+        "VALUES (?, ?, 'CY', 'Company', 2457, 'observed', 'pdf', 'Z')",
+        (run_id, current[0]["uuid"]),
+    )
+    conn.commit()
+    facts = read_run_facts(conn, run_id, [template_id])
+    unfilled = _collect_unfilled_mandatory_facts(nodes, facts, main, "company")
+    assert "*Other investments" in unfilled, (
+        "a current-row fact must NOT satisfy the mandatory non-current row")
+
+    # The intended resolution: mark the non-current row not_disclosed.
+    conn.execute(
+        "INSERT INTO run_concept_facts(run_id, concept_uuid, period, "
+        "entity_scope, value, value_status, source, updated_at) "
+        "VALUES (?, ?, 'CY', 'Company', NULL, 'not_disclosed', 'reviewer', 'Z')",
+        (run_id, mandatory[0]["uuid"]),
+    )
+    conn.commit()
+    facts = read_run_facts(conn, run_id, [template_id])
+    unfilled = _collect_unfilled_mandatory_facts(nodes, facts, main, "company")
+    conn.close()
+    assert "*Other investments" not in unfilled, (
+        "not_disclosed on the mandatory row must resolve the warning")
+
+
 # ---------------------------------------------------------------------------
 # Generic shadow runner for the cross-statement / matrix verifiers. Seeds every
 # data-entry fact, cascades, exports a real workbook, then runs verify_statement

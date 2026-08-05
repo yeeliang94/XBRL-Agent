@@ -118,12 +118,17 @@ def _process_history_caps(agent):
     return [c for c in caps if isinstance(c, ProcessHistory)]
 
 
-def test_flag_off_registers_no_history_processors(tmp_path, monkeypatch):
+def test_flag_off_registers_only_the_limit_warner(tmp_path, monkeypatch):
+    """Baseline changed by run-83 hardening (Phase 2 Step 4): the reviewer
+    ALWAYS carries the in-band limit warner (its wall-clock branch is the
+    soft deadline). Flag off ⇒ the warner and nothing else."""
     monkeypatch.delenv("XBRL_REVIEWER_COMPACT_CONTEXT", raising=False)
     agent = _build_agent(tmp_path)
-    assert _process_history_caps(agent) == [], (
-        "flag off must leave the factory output identical to today — "
-        "no history processors at all")
+    caps = _process_history_caps(agent)
+    assert len(caps) == 1, (
+        "flag off must register exactly one processor — the limit warner")
+    name = getattr(caps[0].processor, "__name__", repr(caps[0].processor))
+    assert "limit_warning_processor" in str(name)
 
 
 def test_flag_only_changes_capabilities_never_tools_or_prompt(
@@ -151,7 +156,12 @@ def test_flag_on_registers_reviewer_stripper(tmp_path, monkeypatch):
     monkeypatch.setenv("XBRL_REVIEWER_COMPACT_CONTEXT", "1")
     agent = _build_agent(tmp_path)
     caps = _process_history_caps(agent)
-    assert len(caps) == 1
-    name = getattr(caps[0].processor, "__name__", repr(caps[0].processor))
-    assert "strip_stale_reviewer_images" in str(name), (
+    # Run-83 hardening: the limit warner is always present; the flag adds
+    # the stripper BEFORE it (strip images first, then warn on what's left).
+    assert len(caps) == 2
+    names = [
+        str(getattr(c.processor, "__name__", repr(c.processor))) for c in caps
+    ]
+    assert "strip_stale_reviewer_images" in names[0], (
         "must be the reviewer-shaped stripper, never extraction's")
+    assert "limit_warning_processor" in names[1]
