@@ -511,10 +511,14 @@ def _repeated_values(facts: Sequence[dict[str, Any]]) -> dict[float, list[str]]:
 # Run-83 hardening (Phase 5, docs/PLAN-run83-hardening.md): cap the row
 # detail one listing call can emit, so a single whole-run list_facts("")
 # cannot flood the reviewer's context (run 83's opening whole-run listing
-# was a major driver of the context growth that timed the pass out). 200
-# rows comfortably covers any single sheet (the largest, SOCF-Indirect,
-# has 109 data rows); a whole-run listing on a five-statement filing
-# truncates and points the model at sheet-scoped calls instead. The
+# was a major driver of the context growth that timed the pass out). The
+# unit is TEMPLATE ROWS — distinct (sheet, render_row) groups — never raw
+# fact records: one row carries two Company facts (CY/PY) or up to four
+# Group facts, and a record-count cap would truncate a single live sheet
+# mid-row (SOCF-Indirect: 123 fact-bearing rows = 246-492 records). 200
+# rows covers any single sheet in full, every record included; a
+# whole-run listing on a five-statement filing truncates at a row
+# boundary and points the model at sheet-scoped calls. The
 # repeated-values footer is ALWAYS computed over the FULL fact set —
 # truncation drops row detail, never the double-count signal.
 FACT_LISTING_ROW_CAP = 200
@@ -528,7 +532,15 @@ def _format_fact_listing(
         return "(no facts written for this run yet)"
     lines: list[str] = []
     current_sheet = None
-    for f in facts[:row_cap]:
+    shown_rows: set = set()
+    truncated = False
+    for f in facts:
+        group = (f["render_sheet"], f["render_row"])
+        if group not in shown_rows:
+            if len(shown_rows) >= row_cap:
+                truncated = True
+                break
+            shown_rows.add(group)
         if f["render_sheet"] != current_sheet:
             current_sheet = f["render_sheet"]
             lines.append(f"\n=== {current_sheet} ===")
@@ -537,16 +549,23 @@ def _format_fact_listing(
             f"[{f['kind']}] {f['period']}/{f['entity_scope']}: "
             f"{f['value']} ({f['value_status']}) uuid={f['concept_uuid']}"
         )
-    if len(facts) > row_cap:
-        per_sheet: dict[str, int] = {}
+    if truncated:
+        all_rows_per_sheet: dict[str, set] = {}
         for f in facts:
-            per_sheet[f["render_sheet"]] = per_sheet.get(f["render_sheet"], 0) + 1
-        summary = ", ".join(f"{s} ({n})" for s, n in per_sheet.items())
+            all_rows_per_sheet.setdefault(
+                f["render_sheet"], set()).add(f["render_row"])
+        total_rows = sum(len(rows) for rows in all_rows_per_sheet.values())
+        summary = ", ".join(
+            f"{s} ({len(rows)} rows)"
+            for s, rows in all_rows_per_sheet.items()
+        )
         lines.append(
-            f"\n… {len(facts) - row_cap} more row(s) not shown "
-            f"(row cap {row_cap}). Facts per sheet: {summary}. "
-            f"Call list_facts(sheet=\"<name>\") for one sheet in full — "
-            f"the repeated-values footer below already covers the WHOLE run."
+            f"\n… {total_rows - row_cap} more template row(s) not shown "
+            f"(cap {row_cap} rows per call; every period/scope fact of a "
+            f"shown row is included). Rows per sheet: {summary}. "
+            f"Call list_facts(sheet=\"<name>\") for one sheet's full "
+            f"detail — the repeated-values footer below already covers "
+            f"the WHOLE run."
         )
     repeats = _repeated_values(facts)
     if repeats:
@@ -1802,6 +1821,25 @@ def create_reviewer_agent(
         # Inline pass hands us the succeeded-statement scope explicitly so
         # verify_fixes doesn't read an un-finalized 'running' DB (run-58 fix).
         verify_scope=list(verify_scope) if verify_scope is not None else None,
+    )
+    # Run-83 hardening (Phase 2 review fix): the shared limit warner's
+    # default guidance names a "terminal save/summary tool" — the face and
+    # notes agents have one, the reviewer does NOT (its pass ends with a
+    # final response after apply_fixes / verify_fixes / raise_flag). At the
+    # deadline that wording wastes a turn hunting for a tool that isn't
+    # there, so the reviewer publishes its own wrap-up wording for the
+    # warner to use (read via getattr — plain-dataclass setattr channel,
+    # same as the runner's loop counters).
+    deps._limit_wrapup_urgent = (
+        "Stop opening new lines of investigation. Batch every grounded fix "
+        "into ONE apply_fixes / mark_not_disclosed call, verify_fixes once, "
+        "and raise_flag what remains."
+    )
+    deps._limit_wrapup_critical = (
+        "Finish NOW: submit your batched fixes in ONE apply_fixes / "
+        "mark_not_disclosed call this turn — a tool call you issue before "
+        "the deadline still executes. Then raise_flag anything unresolved "
+        "and give your final summary; do not start new investigation."
     )
     system_prompt = render_reviewer_prompt(
         db_path=db_path, run_id=run_id, failed_checks=failed_checks,

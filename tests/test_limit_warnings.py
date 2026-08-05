@@ -301,6 +301,62 @@ def test_runner_publishes_wallclock_envelope():
 
 
 # ---------------------------------------------------------------------------
+# Role-specific wrap-up wording (run-83 review fix)
+# ---------------------------------------------------------------------------
+
+
+def test_custom_wrapup_wording_used_when_published():
+    """A factory may publish its own wrap-up wording on deps — the
+    reviewer has no terminal save tool, so the default's instruction
+    to call one would waste its final turn."""
+    ctx = _wallclock_ctx(0.75)
+    ctx.deps._limit_wrapup_urgent = "Batch fixes into ONE apply_fixes call."
+    ctx.deps._limit_wrapup_critical = "Submit fixes NOW then raise_flag."
+    out = limit_warning_processor(ctx, _history())
+    (warning,) = _warning_texts(out)
+    assert "Batch fixes into ONE apply_fixes call." in warning
+    assert "save/summary tool" not in warning
+
+    ctx = _wallclock_ctx(0.95)
+    ctx.deps._limit_wrapup_urgent = "Batch fixes into ONE apply_fixes call."
+    ctx.deps._limit_wrapup_critical = "Submit fixes NOW then raise_flag."
+    out = limit_warning_processor(ctx, _history())
+    (warning,) = _warning_texts(out)
+    assert "Submit fixes NOW then raise_flag." in warning
+
+
+def test_default_wrapup_wording_without_custom():
+    out = limit_warning_processor(_wallclock_ctx(0.75), _history())
+    (warning,) = _warning_texts(out)
+    assert "save/summary tool" in warning
+
+
+def test_reviewer_factory_publishes_tool_accurate_wrapup(tmp_path):
+    """The reviewer's wording must name the tools it actually has
+    (apply_fixes / mark_not_disclosed / verify_fixes / raise_flag), never
+    the nonexistent terminal save tool."""
+    import sqlite3
+
+    from correction.reviewer_agent import create_reviewer_agent
+    from db.schema import init_db
+
+    db = tmp_path / "xbrl.db"
+    init_db(db)
+    conn = sqlite3.connect(str(db))
+    run_id = int(conn.execute(
+        "INSERT INTO runs(created_at, pdf_filename, status) "
+        "VALUES ('2026-08-05T00:00:00Z','x.pdf','running')").lastrowid)
+    conn.commit()
+    conn.close()
+    _agent, deps = create_reviewer_agent(
+        model="test", db_path=db, run_id=run_id)
+    for wording in (deps._limit_wrapup_urgent, deps._limit_wrapup_critical):
+        assert "apply_fixes" in wording
+        assert "save/summary" not in wording
+    assert "raise_flag" in deps._limit_wrapup_critical
+
+
+# ---------------------------------------------------------------------------
 # Unit contract (2026-07-12 V2-review fix) — node units, warning before cap
 # ---------------------------------------------------------------------------
 
