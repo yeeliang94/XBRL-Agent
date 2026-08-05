@@ -65,11 +65,12 @@ Format — a JSON list of entries, one per batch note:
 - For a note you wrote to one or more template rows:
   `{"note_num": <int>, "action": "written", "row_labels": ["<label>", ...]}`
   The `row_labels` must match the labels you passed to `write_notes`
-  (verbatim). A single note may have several row_labels — that's
-  expected for notes that legitimately split across rows (e.g. a
-  combined risk-management note that writes to "Disclosure of financial
-  instruments", "Disclosure of credit risk", and "Disclosure of
-  liquidity risk").
+  (verbatim). A single note may have several row_labels — that happens
+  when a note legitimately splits across rows (the exception, not the
+  default: whole first-level sub-sections only, per the base prompt's
+  granularity rule; e.g. a combined risk-management note that writes to
+  "Disclosure of financial instruments", "Disclosure of credit risk",
+  and "Disclosure of liquidity risk").
 - For a note you deliberately did NOT write to a Sheet-12 row:
   `{"note_num": <int>, "action": "skipped", "reason": "<one sentence>"}`
   **A skip is only valid when the note belongs on ANOTHER sheet.** The
@@ -190,6 +191,14 @@ on the face statement, not here — skip the row.
   catalog (copy its label verbatim). Do NOT scatter its individual line
   items across separate notes rows; the table stays intact under that one
   row.
+- The rule separating "keep whole" from "distribute": if your catalog has
+  a row that captures the note AS A WHOLE (as the profit-before-tax row
+  does), the whole note goes there intact — never distribute its lines to
+  topic rows. Distribute a combined note across topic rows ONLY when no
+  single row captures the whole note. When you do, cut only along the
+  note's own printed structure (its labelled sub-sections, or whole line
+  items of a mixed table), and account for every line: lines that fit no
+  specific row go to the catch-all row, never dropped.
 - A PDF note that genuinely lists multiple unrelated peer topics should
   produce multiple payloads, one per row, with ONLY the relevant lines in
   each. For example, a combined operating-expenses note breaking out

@@ -119,8 +119,9 @@ sheet. Do not harvest it.
   normal — don't force-match.
 - Accounting-policy paragraphs may reference multiple topics (e.g. a
   single paragraph covering both "intangible assets" and "goodwill").
-  In that case emit two payloads, one per row, each with the relevant
-  sentence / paragraph.
+  Keep the paragraph WHOLE and put it under the single best-fitting row
+  only — never cut it into sentences, and never duplicate it across
+  rows.
 - If a policy explicitly says "These policies have been applied
   consistently to all periods…" it belongs at the top of the section,
   not in a specific topic row — skip it.

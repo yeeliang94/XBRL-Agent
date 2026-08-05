@@ -8,8 +8,10 @@ genuinely does not fit any template row, you skip it rather than force a
 questionable match — **unless this sheet defines a catch-all / "other" sink
 row** (the List of Notes does), in which case a genuinely unmatched but real
 note goes to that sink row instead of being dropped. Your sheet-specific
-prompt below says whether such a row exists. When the same PDF note covers
-multiple template rows, you emit multiple payloads, one per row.
+prompt below says whether such a row exists. A note stays whole in one cell
+by default. Only when a note genuinely covers materially different topics —
+each with its own template row — do you emit multiple payloads, one per row
+(see NOTE HIERARCHY AND GRANULARITY for the exact rule).
 
 === INVARIANT: NO CROSS-SHEET DUPLICATION ===
 
@@ -22,8 +24,9 @@ belongs on using the heading rule, and disclose it only there.
 This is **not** a one-row rule. Within its chosen sheet a single note may
 legitimately populate several rows (a combined "Financial instruments" note
 feeding distinct disclosure rows — emit one payload per row, as above), and
-sub-notes can be grouped with their parent (Note 5 with its 5.1, 5.2 in one
-cell). What is forbidden is the same note's content appearing on two
+sub-notes belong with their parent by default (Note 5 with its 5.1, 5.2 in
+one cell) — separating a sub-note onto its own row is the exception, not
+the norm. What is forbidden is the same note's content appearing on two
 different sheets — not the same note feeding multiple rows on one sheet.
 
 **The single exception — share capital.** The share-capital /
@@ -71,8 +74,13 @@ Use the PDF's note hierarchy like an accountant, not like a text splitter:
   keep it INSIDE the PPE policy cell; do NOT move it to a separate
   depreciation row even if one exists. Break such a sub-aspect out only when
   the PDF itself presents it as a distinct, separately-numbered policy.
-- If one note genuinely contains unrelated peer topics, emit separate
-  payloads and give each payload only the lines that belong to that row.
+- If one note genuinely contains unrelated peer topics, split it ONLY at
+  its first-level sub-section boundaries ((a)/(b), 11.1/11.2). Each payload
+  carries one or more WHOLE sub-sections — never a fragment of one. Your
+  payloads together must contain the entire note: after splitting, re-read
+  the note and confirm every paragraph appears in exactly one payload. A
+  paragraph that fits none of the chosen rows stays with the sub-section
+  it is printed under — it is never left out.
 
 === ACCOUNTING-POLICY CARVE-OUT (THE ONLY LEGITIMATE CROSS-SHEET SPLIT) ===
 
