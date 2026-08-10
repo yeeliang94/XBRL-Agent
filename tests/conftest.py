@@ -128,3 +128,26 @@ def _notes_coverage_off_by_default():
             os.environ.pop("XBRL_NOTES_COVERAGE", None)
         else:
             os.environ["XBRL_NOTES_COVERAGE"] = prior
+
+
+@pytest.fixture(autouse=True)
+def _pdf_sidecar_off_by_default():
+    """Force the scanned-PDF transcribed sidecar (PLAN-pdf-source-sidecar)
+    OFF for the suite.
+
+    The true default is already off, but a developer who flipped the Settings
+    toggle carries ``XBRL_PDF_SIDECAR='true'`` in .env (loaded at server
+    import), and the run generator would then attempt a transcription pass in
+    every mocked pipeline test. Sidecar tests opt IN with
+    ``monkeypatch.setenv("XBRL_PDF_SIDECAR", "true")``; the settings
+    round-trip test ``delenv``s this to verify the true default is OFF.
+    """
+    prior = os.environ.get("XBRL_PDF_SIDECAR")
+    os.environ["XBRL_PDF_SIDECAR"] = "false"
+    try:
+        yield
+    finally:
+        if prior is None:
+            os.environ.pop("XBRL_PDF_SIDECAR", None)
+        else:
+            os.environ["XBRL_PDF_SIDECAR"] = prior
