@@ -2885,6 +2885,93 @@ def _notes_coverage_enabled() -> bool:
     return os.environ.get("XBRL_NOTES_COVERAGE", "true").lower() == "true"
 
 
+def _pdf_sidecar_enabled() -> bool:
+    """Whether scanned-PDF runs get an LLM-transcribed source sidecar
+    (docs/PLAN-pdf-source-sidecar.md).
+
+    Default OFF — the feature ships dark until its live validation gate
+    passes. Read fresh each call so a Settings toggle takes effect without a
+    restart."""
+    return os.environ.get("XBRL_PDF_SIDECAR", "false").lower() == "true"
+
+
+def _pdf_sidecar_page_cap() -> int:
+    """Most pages one sidecar pass may transcribe (each is a paid vision
+    call). 80 clears every sample document's notes section several times
+    over; override with ``XBRL_PDF_SIDECAR_PAGE_CAP``."""
+    try:
+        return max(1, int(os.environ.get("XBRL_PDF_SIDECAR_PAGE_CAP", "80")))
+    except ValueError:
+        return 80
+
+
+async def _maybe_build_pdf_sidecar(
+    pdf_path: str,
+    notes_to_run,
+    infopack,
+    model,
+    model_name: str,
+) -> Optional[dict]:
+    """Build the transcribed sidecar for a scanned-PDF run (Phase 2 wiring).
+
+    Returns an SSE data dict describing what happened (built / skipped +
+    reason), or None when the pass simply doesn't apply (flag off, no notes,
+    text PDF, sidecar already present). Best-effort by contract: ANY exception
+    is caught and reported as a skip — the run proceeds sidecar-less exactly
+    as before the feature existed (same posture as ingest.docx_html).
+    """
+    try:
+        from ingest.pdf_sidecar import (
+            pdf_has_text_layer,
+            transcribe_pages,
+            write_pdf_sidecar,
+        )
+        from notes.source_snippets import has_source_html
+
+        if not _pdf_sidecar_enabled() or not notes_to_run:
+            return None
+        if has_source_html(pdf_path):
+            return None  # Word run — its extracted sidecar always wins
+        if pdf_has_text_layer(pdf_path):
+            return None  # digital PDF — out of scope (plan: scanned first)
+
+        inventory = getattr(infopack, "notes_inventory", None) or []
+        pages: set[int] = set()
+        for entry in inventory:
+            page_range = getattr(entry, "page_range", None)
+            if page_range and len(page_range) == 2:
+                pages.update(range(int(page_range[0]), int(page_range[1]) + 1))
+        if not pages:
+            # Never transcribe blind: without an inventory we don't know which
+            # pages are notes, and transcribing the whole document is spend
+            # without a consumer.
+            return {"status": "skipped", "reason": "no_notes_inventory"}
+        cap = _pdf_sidecar_page_cap()
+        if len(pages) > cap:
+            # Cost guard: each page is a paid vision call, so a degenerate
+            # inventory (a page_range spanning the whole document) must not
+            # fan out into hundreds of them. Skip loudly rather than
+            # truncate — a partial sidecar would silently miss notes.
+            return {"status": "skipped", "reason": "too_many_pages",
+                    "pages_requested": len(pages), "page_cap": cap}
+
+        result = await transcribe_pages(pdf_path, sorted(pages), model)
+        out = write_pdf_sidecar(pdf_path, result, model_name=model_name)
+        if out is None:
+            return {"status": "skipped", "reason": "no_pages_transcribed",
+                    "failed_pages": result.failed_pages}
+        return {
+            "status": "built",
+            "pages": len(result.pages_html),
+            "failed_pages": result.failed_pages,
+            "usage": result.usage,
+        }
+    except Exception as exc:  # noqa: BLE001 — best-effort by contract
+        logger.warning("pdf_sidecar pass failed; run proceeds without it",
+                       exc_info=True)
+        return {"status": "skipped", "reason": f"error: {exc}"}
+
+
 # --------------------------------------------------------------------------
 # Notes source integrity — plan Phases 4 and 7
 # --------------------------------------------------------------------------
@@ -3224,6 +3311,9 @@ def _load_extended_settings() -> dict:
         "spot_check_mode": _spot_check_mode(),
         # Notes coverage checklist (docs/PLAN-notes-coverage-and-routing.md). Default on.
         "notes_coverage": _notes_coverage_enabled(),
+        # Scanned-PDF transcribed source sidecar (docs/PLAN-pdf-source-sidecar.md).
+        # Default off — ships dark until the live validation gate passes.
+        "pdf_sidecar": _pdf_sidecar_enabled(),
         # Notes source-integrity rollout mode (gotcha #31). Default off; the
         # value is the enum's, so the form and the run path can't disagree.
         "notes_source_integrity": _notes_integrity_mode().value,
@@ -4500,6 +4590,16 @@ async def run_multi_agent_stream(
             # run_complete event below which also carries it now.
             "run_id": run_id,
         }}
+
+        # PLAN-pdf-source-sidecar Phase 2: scanned-PDF runs with notes get an
+        # LLM-transcribed source.html BEFORE agents launch, so notes agents
+        # find it via the ordinary has_source_html gate. Dark by default
+        # (XBRL_PDF_SIDECAR); helper is best-effort and never raises.
+        sidecar_event = await _maybe_build_pdf_sidecar(
+            config.pdf_path, notes_to_run, infopack, model, model_name,
+        )
+        if sidecar_event is not None:
+            yield {"event": "pdf_sidecar", "data": sidecar_event}
 
         # Phase 6.5: create run_agents rows UP FRONT so tool events can be
         # keyed to the right agent as they stream out of the coordinator.

@@ -7,6 +7,12 @@
       "runtimeArgs": ["run", "dev"],
       "cwd": "web",
       "port": 5173
+    },
+    {
+      "name": "server",
+      "runtimeExecutable": "./venv/bin/python",
+      "runtimeArgs": ["server.py"],
+      "port": 8002
     }
   ]
 }
