@@ -18,9 +18,13 @@ the meta file means the legacy Word origin. Source-integrity generations
 (gotcha #31) build from ``uploaded.docx`` only and are structurally
 unreachable from here.
 
-Failure contract mirrors ``ingest.docx_html.write_source_html``: best-effort,
-one retry per page, failed pages are skipped and recorded in the meta — the
-run proceeds either way.
+Failure contract (peer review 2026-08-11): best-effort like
+``ingest.docx_html.write_source_html`` — one retry per page, per-page and
+overall deadlines — but a PARTIAL transcription is never published. A failed
+middle page would silently join its neighbours into one apparently-complete
+note, and the prompt tells the agent the structure is trustworthy; so any
+failed page means NO sidecar, and the run proceeds exactly as before the
+feature existed.
 """
 from __future__ import annotations
 
@@ -53,6 +57,12 @@ TRANSCRIBE_CONCURRENCY = 4
 # is treated as having no usable text layer.
 _TEXT_LAYER_MIN_CHARS = 40
 _TEXT_LAYER_SAMPLE_PAGES = 10
+
+# Deadlines (peer review 2026-08-11): a hung provider call must not stall the
+# pre-agent stage indefinitely — the stage runs before the cancellable
+# coordinator task exists, so these bounds are what Stop-All falls back on.
+PAGE_TIMEOUT_S = 120.0
+OVERALL_TIMEOUT_S = 600.0
 
 TRANSCRIBE_PROMPT = (
     "Transcribe this scanned financial statement page to clean HTML, verbatim. "
@@ -119,29 +129,41 @@ async def _call_model(model: Any, page_no: int, png_bytes: bytes) -> tuple[str, 
     }
 
 
-async def transcribe_pages(
-    pdf_path: str | Path,
-    pages: list[int],
-    model: Any,
-    *,
-    concurrency: int = TRANSCRIBE_CONCURRENCY,
-    _caller: Optional[Callable[[int, bytes], Awaitable[tuple[str, dict]]]] = None,
-) -> TranscribeResult:
-    """Render + transcribe ``pages`` (1-based). One retry per page, then skip.
-
-    ``_caller`` is the test seam: ``async (page_no, png_bytes) -> (html, usage)``.
-    """
-    caller = _caller or (lambda p, b: _call_model(model, p, b))
-
+def _render_pages(pdf_path: str | Path, pages: list[int]) -> dict[int, bytes]:
+    """Render the requested pages to PNG bytes (synchronous; run off-thread —
+    rendering 20 pages measured ~5 s, which would starve the event loop and
+    the SSE keepalives with it)."""
     doc = fitz.open(str(pdf_path))
     try:
-        renders = {
+        return {
             p: doc[p - 1].get_pixmap(dpi=RENDER_DPI).tobytes("png")
             for p in pages
             if 1 <= p <= len(doc)
         }
     finally:
         doc.close()
+
+
+async def transcribe_pages(
+    pdf_path: str | Path,
+    pages: list[int],
+    model: Any,
+    *,
+    concurrency: int = TRANSCRIBE_CONCURRENCY,
+    page_timeout_s: float = PAGE_TIMEOUT_S,
+    overall_timeout_s: float = OVERALL_TIMEOUT_S,
+    _caller: Optional[Callable[[int, bytes], Awaitable[tuple[str, dict]]]] = None,
+) -> TranscribeResult:
+    """Render + transcribe ``pages`` (1-based). One retry per page, then skip.
+
+    Each attempt is bounded by ``page_timeout_s`` and the whole pass by
+    ``overall_timeout_s`` — pages still pending at the overall deadline are
+    cancelled and counted as failed. ``_caller`` is the test seam:
+    ``async (page_no, png_bytes) -> (html, usage)``.
+    """
+    caller = _caller or (lambda p, b: _call_model(model, p, b))
+
+    renders = await asyncio.to_thread(_render_pages, pdf_path, list(pages))
 
     sem = asyncio.Semaphore(concurrency)
     result = TranscribeResult(pages_html={})
@@ -151,20 +173,35 @@ async def transcribe_pages(
         async with sem:
             for attempt in (1, 2):  # max-1-retry, like every notes agent
                 try:
-                    html, usage = await caller(page_no, png)
+                    html, usage = await asyncio.wait_for(
+                        caller(page_no, png), timeout=page_timeout_s,
+                    )
                     result.pages_html[page_no] = html
                     for k, v in (usage or {}).items():
                         totals[k] = totals.get(k, 0) + v
                     return
+                except asyncio.CancelledError:
+                    raise  # overall deadline / caller cancellation — propagate
                 except Exception as exc:
                     logger.warning(
                         "pdf_sidecar: page %s attempt %s failed: %s",
                         page_no, attempt, exc,
                     )
-            result.failed_pages.append(page_no)
 
-    await asyncio.gather(*(one(p, png) for p, png in renders.items()))
-    result.failed_pages.sort()
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(*(one(p, png) for p, png in renders.items())),
+            timeout=overall_timeout_s,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "pdf_sidecar: overall deadline (%.0fs) hit — %s of %s pages done",
+            overall_timeout_s, len(result.pages_html), len(renders),
+        )
+
+    # Failed = requested but never transcribed, whatever the path there
+    # (exhausted retries, per-page timeout, overall-deadline cancellation).
+    result.failed_pages = sorted(set(renders) - set(result.pages_html))
     result.usage = totals
     return result
 
@@ -178,7 +215,15 @@ def write_pdf_sidecar(
     """Stitch transcribed pages into ``source.html`` + ``source_meta.json``.
 
     Refuses to touch an existing sidecar (a Word run's extraction always
-    wins), and writes nothing when no page transcribed.
+    wins), writes nothing when no page transcribed, and — the load-bearing
+    rule (peer review 2026-08-11) — REFUSES a partial transcription: a failed
+    middle page would silently join its neighbours into one
+    apparently-complete note, and the agent is told the structure is
+    trustworthy. All requested pages or no sidecar.
+
+    Write order is meta first, html second: ``has_source_html`` keys on the
+    html file, so a crash between the two leaves an inert meta file rather
+    than a transcription misclassified as a Word sidecar.
     """
     target = source_html_path_for(pdf_path)
     if target.exists():
@@ -187,22 +232,27 @@ def write_pdf_sidecar(
     if not result.pages_html:
         logger.warning("pdf_sidecar: no pages transcribed — writing nothing")
         return None
+    if result.failed_pages:
+        logger.warning(
+            "pdf_sidecar: pages %s failed — refusing to publish a partial "
+            "sidecar", result.failed_pages,
+        )
+        return None
+
+    meta = {
+        "origin": "llm_transcription",
+        "model": model_name,
+        "pages": sorted(result.pages_html),
+        "usage": result.usage,
+    }
+    meta_path = target.parent / SOURCE_META_NAME
+    meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
     parts = []
     for page_no in sorted(result.pages_html):
         parts.append(f"<!-- pdf-page: {page_no} -->")
         parts.append(normalize_transcription(result.pages_html[page_no]))
     target.write_text("\n".join(parts), encoding="utf-8")
-
-    meta = {
-        "origin": "llm_transcription",
-        "model": model_name,
-        "pages": sorted(result.pages_html),
-        "failed_pages": result.failed_pages,
-        "usage": result.usage,
-    }
-    meta_path = target.parent / SOURCE_META_NAME
-    meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return target
 
 

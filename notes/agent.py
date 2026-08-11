@@ -828,6 +828,12 @@ class NotesDeps:
     # read_source_note tool (PLAN-word-input.md Phase 2). Set by
     # create_notes_agent from the PDF's parent dir.
     source_html_path: Optional[str] = None
+    # Sidecar provenance (PLAN-pdf-source-sidecar Phase 3): "docx" (the
+    # document itself) or "llm_transcription" (a vision model's reading of a
+    # scanned PDF). Branches the trust framing in the prompt block, the
+    # read_source_note description and the source nudges — the agent must
+    # never be told a transcription is "the original Word source".
+    source_html_origin: str = "docx"
     # Source-integrity channel (PLAN-notes-source-integrity-build Phase 6).
     # Set only when the run has a frozen, active source generation; the
     # read-only source tools and `write_note_from_source` are registered off
@@ -1112,7 +1118,7 @@ def _content_lands_source_styled(content: str) -> bool:
     return _carries_table_styling(cleaned)
 
 
-def format_unconsulted_source_nudge(count: int) -> str:
+def format_unconsulted_source_nudge(count: int, origin: str = "docx") -> str:
     """Feedback line for table cells written without the Word source consulted.
 
     Run 74 (2026-07-19): the Accounting Policies agent never called
@@ -1128,6 +1134,21 @@ def format_unconsulted_source_nudge(count: int) -> str:
     """
     if count <= 0:
         return ""
+    if origin == "llm_transcription":
+        return (
+            f"\nNote: {count} table cell(s) were written without calling "
+            f"read_source_note first. This run carries an AI-transcribed "
+            f"source sidecar, so the transcribed table markup — with the "
+            f"borders and alignment read from the scan — is available and "
+            f"can be copied verbatim (verify the figures against the PDF). "
+            f"Call read_source_note for "
+            f"those notes and, if it returns a table, re-send those rows via "
+            f"write_notes with the source markup copied into content. Send "
+            f"the note's FULL content — prose and table, not the table "
+            f"alone: a source-copied re-send REPLACES your earlier version "
+            f"of that note in the cell. If it returns nothing for a note, no "
+            f"action is needed."
+        )
     return (
         f"\nNote: {count} table cell(s) were written without calling "
         f"read_source_note first. This filing was uploaded as Word, so the "
@@ -1242,7 +1263,7 @@ def format_block_write_nudge(count: int) -> str:
     )
 
 
-def format_uncopied_source_nudge(count: int) -> str:
+def format_uncopied_source_nudge(count: int, origin: str = "docx") -> str:
     """Feedback for a table that landed unstyled although its Word source WAS read.
 
     Run 79 (2026-08-04): every Sheet-12 sub-agent called `read_source_note` and
@@ -1263,6 +1284,23 @@ def format_uncopied_source_nudge(count: int) -> str:
     """
     if count <= 0:
         return ""
+    if origin == "llm_transcription":
+        return (
+            f"\nNote: {count} table cell(s) landed unstyled even though you "
+            f"had already called read_source_note for those notes. The "
+            f"transcribed markup you fetched carries the borders and "
+            f"alignment read from the scan; rebuilding the table from "
+            f"scratch drops all of it. Re-send "
+            f"those rows via write_notes with the source table's markup "
+            f"copied into content verbatim, `style=` attributes included "
+            f"(verify the figures against the PDF). Send the note's FULL "
+            f"content — its prose and its table, not the table alone: a "
+            f"source-copied re-send REPLACES your earlier version of that "
+            f"note in the cell. Do NOT describe the styling as format_ops — "
+            f"copying is higher fidelity than re-describing. If the source "
+            f"held no table for a note and you read it from the PDF instead, "
+            f"use format_ops there as usual."
+        )
     return (
         f"\nNote: {count} table cell(s) landed unstyled even though you had "
         f"already called read_source_note for those notes. The source markup "
@@ -1468,10 +1506,10 @@ def _sub_agent_sink_write(
             1 for p in accepted
             if "<table" in p.content.lower()
             and not _payload_source_consulted(deps, p)
-        ))
+        ), origin=deps.source_html_origin)
         msg += format_uncopied_source_nudge(sum(
             1 for p in unstyled if _payload_source_consulted(deps, p)
-        ))
+        ), origin=deps.source_html_origin)
     else:
         msg += format_unstyled_table_nudge(len(unstyled))
     return msg
@@ -2205,6 +2243,7 @@ def create_notes_agent(
         filing_standard=filing_standard,
         inventory=list(inventory),
         source_html_path=source_html_path,
+        source_html_origin=source_html_origin,
         run_id=run_id,
         db_path=db_path,
         source_generation_id=source_generation_id,
@@ -2351,7 +2390,6 @@ def create_notes_agent(
     # teaches copy-into-content, the exact workflow the block prompt replaces —
     # exposing both hands the agent two incompatible instructions again.
     if source_html_available and not deps.source_block_notes:
-        @agent.tool
         async def read_source_note(ctx: RunContext[NotesDeps], note_num: int) -> str:
             """Fetch the ORIGINAL Word-source HTML for note ``note_num``.
 
@@ -2398,6 +2436,26 @@ def create_notes_agent(
                 f"number against the PDF pages before writing.\n"
                 f"<<<SOURCE_NOTE {note_num}>>>\n{snippet}\n<<<END_SOURCE_NOTE>>>"
             )
+
+        # Provenance-aware description (peer review 2026-08-11): the docstring
+        # above is the tool's advertised contract, and on a transcription run
+        # "ORIGINAL Word-source HTML" contradicts the prompt block's
+        # model-read framing — the agent would hold two trust stories about
+        # the same file. Word runs keep the docstring byte-identical; the
+        # override below swaps it BEFORE registration on transcription runs.
+        if source_html_origin == "llm_transcription":
+            read_source_note.__doc__ = (
+                "Fetch the AI-TRANSCRIBED source HTML for note ``note_num`` "
+                "(this run is a scanned PDF; a vision model transcribed it).\n\n"
+                "COPY its table markup VERBATIM into your `content` — "
+                "including each cell's `style=` attribute. Do not rebuild the "
+                "table or re-describe its styling via `format_ops`. Returns a "
+                '"read the PDF instead" message when the note isn\'t found in '
+                "the source. The FIGURES in the transcription are model-read "
+                "— VERIFY every one against the PDF pages before writing; on "
+                "any disagreement the PDF wins."
+            )
+        agent.tool(read_source_note)
 
     # Source-integrity channel — plan Phase 6, Steps 6.1 / 6.2. Registered ONLY
     # when this run has a frozen source reading, so `off`-mode runs are
@@ -2747,8 +2805,12 @@ def create_notes_agent(
             unconsulted, uncopied = word_run_nudge_counts(
                 ctx.deps, payloads, result,
             )
-            msg += format_unconsulted_source_nudge(unconsulted)
-            msg += format_uncopied_source_nudge(uncopied)
+            msg += format_unconsulted_source_nudge(
+                unconsulted, origin=ctx.deps.source_html_origin,
+            )
+            msg += format_uncopied_source_nudge(
+                uncopied, origin=ctx.deps.source_html_origin,
+            )
         else:
             msg += format_unstyled_table_nudge(sum(
                 1 for c in (result.cells_written or [])

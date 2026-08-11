@@ -135,8 +135,45 @@ def test_transcriber_exception_is_a_skip_not_a_raise(tmp_path, monkeypatch):
         raise RuntimeError("provider down")
 
     out = _build(pdf, _infopack([(1, 2)]), monkeypatch, fake=boom)
-    assert out["status"] == "skipped" and "provider down" in out["reason"]
+    # Class name only — provider exception TEXT can carry endpoint/request
+    # detail that doesn't belong in a client-facing SSE payload.
+    assert out == {"status": "skipped", "reason": "error: RuntimeError"}
     assert not (tmp_path / "source.html").exists()
+
+
+def test_partial_transcription_is_a_structured_skip(tmp_path, monkeypatch):
+    """Any failed page refuses the sidecar (all-or-nothing publication) and
+    the skip event names the failed pages."""
+    monkeypatch.setenv("XBRL_PDF_SIDECAR", "true")
+    pdf = _make_pdf(tmp_path / "uploaded.pdf")
+
+    async def partial(pdf_path, pages, model, **kw):
+        from ingest.pdf_sidecar import TranscribeResult
+        ok = {p: f"<p>{p}</p>" for p in pages if p != 3}
+        return TranscribeResult(pages_html=ok, failed_pages=[3],
+                                usage={"in": 5, "out": 2})
+
+    out = _build(pdf, _infopack([(2, 4)]), monkeypatch, fake=partial)
+    assert out["status"] == "skipped"
+    assert out["reason"] == "transcription_incomplete"
+    assert out["failed_pages"] == [3]
+    assert not (tmp_path / "source.html").exists()
+
+
+def test_repeat_staging_copies_the_sidecar_bundle(tmp_path):
+    """Peer review 2026-08-11: source_meta.json must travel with source.html —
+    without it repeat 2's sidecar reads as Word-origin and repeat prompts
+    diverge, corrupting consistency scoring."""
+    (tmp_path / "uploaded.pdf").write_bytes(b"%PDF")
+    (tmp_path / "source.html").write_text("<p>t</p>", encoding="utf-8")
+    (tmp_path / "source_meta.json").write_text(
+        json.dumps({"origin": "llm_transcription"}), encoding="utf-8"
+    )
+    sub = server._seed_repeat_session_dir(tmp_path, 1)
+    assert (sub / "source.html").is_file()
+    assert (sub / "source_meta.json").is_file()
+    from ingest.pdf_sidecar import source_origin_for
+    assert source_origin_for(sub / "uploaded.pdf") == "llm_transcription"
 
 
 def test_settings_round_trip(tmp_path, monkeypatch):

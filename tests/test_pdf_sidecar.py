@@ -104,6 +104,37 @@ def test_transcribe_pages_retries_once_then_skips(tmp_path):
     assert calls[2] == 2  # one retry, then give up — max-1-retry contract
 
 
+def test_transcribe_pages_per_page_timeout_counts_as_failure(tmp_path):
+    pdf = _make_pdf(tmp_path / "scan.pdf", pages=2)
+
+    async def slow(page_no, png):
+        if page_no == 1:
+            await asyncio.sleep(5)
+        return f"<p>page {page_no}</p>", {}
+
+    result = asyncio.run(
+        transcribe_pages(pdf, [1, 2], model=object(), _caller=slow,
+                         page_timeout_s=0.05)
+    )
+    assert result.failed_pages == [1]
+    assert set(result.pages_html) == {2}
+
+
+def test_transcribe_pages_overall_deadline_fails_pending_pages(tmp_path):
+    pdf = _make_pdf(tmp_path / "scan.pdf", pages=3)
+
+    async def hang(page_no, png):
+        await asyncio.sleep(30)
+        return "<p>never</p>", {}
+
+    result = asyncio.run(
+        transcribe_pages(pdf, [1, 2, 3], model=object(), _caller=hang,
+                         page_timeout_s=60, overall_timeout_s=0.1)
+    )
+    assert result.pages_html == {}
+    assert result.failed_pages == [1, 2, 3]
+
+
 def test_transcribe_pages_transient_failure_recovers(tmp_path):
     pdf = _make_pdf(tmp_path / "scan.pdf", pages=2)
     call, calls = _fake_caller(fail_pages={1}, fail_times=1)
@@ -145,14 +176,29 @@ def test_write_refuses_to_overwrite_existing_sidecar(tmp_path):
 def test_write_records_provenance_meta(tmp_path):
     pdf = _make_pdf(tmp_path / "uploaded.pdf")
     write_pdf_sidecar(
-        pdf, _result({1: "<p>x</p>", 2: "<p>y</p>"}, failed=[5]), model_name="gpt-x"
+        pdf, _result({1: "<p>x</p>", 2: "<p>y</p>"}), model_name="gpt-x"
     )
     meta = json.loads((tmp_path / SOURCE_META_NAME).read_text())
     assert meta["origin"] == "llm_transcription"
     assert meta["model"] == "gpt-x"
     assert meta["pages"] == [1, 2]
-    assert meta["failed_pages"] == [5]
     assert meta["usage"] == {"in": 1, "out": 1}
+
+
+def test_write_refuses_a_partial_transcription(tmp_path):
+    """Peer review 2026-08-11 (CRITICAL): a failed MIDDLE page must not be
+    silently stitched over — pages 30 and 32 joined as one apparently-complete
+    note would feed the copy-verbatim channel a table missing its middle.
+    All requested pages or no sidecar."""
+    pdf = _make_pdf(tmp_path / "uploaded.pdf", pages=3)
+    out = write_pdf_sidecar(
+        pdf,
+        _result({30: "<p>note start</p>", 32: "<p>note end</p>"}, failed=[31]),
+        model_name="m",
+    )
+    assert out is None
+    assert not (tmp_path / "source.html").exists()
+    assert not (tmp_path / SOURCE_META_NAME).exists()
 
 
 def test_write_normalizes_page_html(tmp_path):
