@@ -225,6 +225,25 @@
   .page-preview .mark { position: absolute; background: var(--accent-soft);
                         border: 1px solid var(--accent); }
   .page-preview .hint { font-size: 11.5px; color: #666; }
+  /* Preview on the left, parameters on the right. The two columns have
+     independent heights, so a preview that redraws taller or shorter no
+     longer shoves the controls — and the page — around under the pointer.
+     The preview is sticky so it stays in view while the controls scroll. */
+  .split { display: grid; grid-template-columns: minmax(300px, 460px) minmax(0, 1fr); gap: 22px; align-items: start; }
+  /* Pinned while the controls beside it scroll. Capped at the viewport so a
+     tall preview column stays pinned too and scrolls within itself, instead
+     of silently unsticking the moment it outgrows the screen. */
+  .split-preview { position: sticky; top: 14px; max-height: calc(100vh - 28px); overflow-y: auto; }
+  @media (max-width: 960px) {
+    .split { grid-template-columns: 1fr; }
+    /* Stacked, the controls come first and the preview follows them. */
+    .split-preview { position: static; order: 2; }
+  }
+  /* The live sample: a real page, so it stays white in both themes and is
+     capped at a size where a whole page is visible without scrolling. */
+  #samplePreview .stage { max-width: 480px; }
+  #samplePreview .sample-caption { margin-top: 8px; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  #samplePreview .sample-caption b { color: var(--ink); }
   .err { color: var(--danger); font-size: 13px; margin-top: 10px; white-space: pre-wrap; }
 </style>
 </head>
@@ -246,118 +265,155 @@
   </section>
 
   <section class="panel">
-    <h2>2 · What to stamp</h2>
-    <div class="row" role="radiogroup" aria-label="What to stamp">
-      <label class="row" style="gap:7px">
-        <input type="radio" name="markKind" id="markImage" value="image" checked>
-        <span style="font-size:14px">A chop or signature image</span>
-      </label>
-      <label class="row" style="gap:7px">
-        <input type="radio" name="markKind" id="markCertificate" value="certificate">
-        <span style="font-size:14px">A certification block, signed by hand after printing</span>
-      </label>
-    </div>
+    <h2>2 · What to stamp, and where</h2>
 
-    <div id="imageFields" style="margin-top:14px">
-      <label class="drop" id="chopDrop" for="chopInput">
-        <strong>Chop image</strong>
-        <span>PNG with a see-through background works best.</span>
-        <div id="chopPreview"></div>
-        <input type="file" id="chopInput" class="visually-hidden" accept="image/png,image/jpeg">
-      </label>
-    </div>
+    <div class="split">
+      <div class="split-preview">
+        <h3 class="subhead" style="margin-top:0">Live sample on your document</h3>
+        <div id="samplePreview"></div>
+        <div id="certPreviewWrap" class="hidden">
+          <h3 class="subhead">Block close-up</h3>
+          <div class="cert-preview" id="certPreview" aria-hidden="true"></div>
+        </div>
+      </div>
 
-    <div id="certificateFields" class="hidden" style="margin-top:14px">
-      <label class="field"><span>Attestation</span>
-        <textarea id="certIntro" rows="2" style="width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:7px; background:var(--bg); color:var(--ink); font:inherit; font-size:14px; resize:vertical"></textarea>
-      </label>
-      <div class="fields" style="margin-top:12px">
-        <label class="field"><span>Role</span>
-          <input type="text" id="certRole" placeholder="Company Secretary">
+      <div>
+        <div class="row" role="radiogroup" aria-label="What to stamp">
+          <label class="row" style="gap:7px">
+            <input type="radio" name="markKind" id="markImage" value="image" checked>
+            <span style="font-size:14px">A chop or signature image</span>
+          </label>
+          <label class="row" style="gap:7px">
+            <input type="radio" name="markKind" id="markCertificate" value="certificate">
+            <span style="font-size:14px">A certification block, signed by hand after printing</span>
+          </label>
+        </div>
+
+        <div id="imageFields" style="margin-top:14px">
+          <label class="drop" id="chopDrop" for="chopInput">
+            <strong>Chop image</strong>
+            <span>PNG with a see-through background works best.</span>
+            <div id="chopPreview"></div>
+            <input type="file" id="chopInput" class="visually-hidden" accept="image/png,image/jpeg">
+          </label>
+        </div>
+
+        <div id="certificateFields" class="hidden" style="margin-top:14px">
+          <label class="field"><span>Attestation</span>
+            <textarea id="certIntro" rows="3" style="width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:7px; background:var(--bg); color:var(--ink); font:inherit; font-size:14px; resize:vertical"></textarea>
+            <small class="sub">Free text. Press Enter to start a new line — your line breaks are kept, blank lines included. Long lines still wrap on their own.</small>
+          </label>
+          <label class="field" style="margin-top:12px"><span>Details — printed under the signature line</span>
+            <textarea id="certDetails" rows="4" style="width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:7px; background:var(--bg); color:var(--ink); font:inherit; font-size:14px; resize:vertical" placeholder="Company Secretary Ang Su Yee (MAICSA 7068713)&#10;SSM PC No.: 202108000291&#10;Date: 22 June 2026"></textarea>
+            <small class="sub">Free text — name, membership number, date, anything. Each line you type is a line under the signature, exactly as written.</small>
+          </label>
+          <h3 class="subhead">Typography</h3>
+          <div class="fields">
+            <label class="field"><span>Font</span>
+              <select id="certFont">
+                <option value="helvetica" selected>Helvetica — clean, standard</option>
+                <option value="times">Times Roman — classic serif</option>
+                <option value="courier">Courier — typewriter</option>
+              </select>
+              <small class="sub">The three fonts every PDF reader has built in, so the file needs nothing embedded.</small>
+            </label>
+            <label class="field"><span>Weight</span>
+              <span class="row" style="gap:7px; padding-top:8px">
+                <input type="checkbox" id="certBold">
+                <span style="font-size:14px; color: var(--ink)">Bold</span>
+              </span>
+            </label>
+            <label class="field"><span>Line spacing — × line height</span>
+              <input type="number" id="certLineSpacing" min="1" max="2.2" step="0.05" value="1.34">
+              <small class="sub">1 = lines touching, 2 = double spaced.</small>
+            </label>
+          </div>
+
+          <label class="row" style="gap:7px; margin-top:14px">
+            <input type="checkbox" id="certPanel">
+            <span style="font-size:14px">Draw a background panel behind the text</span>
+          </label>
+          <div class="fields" style="margin-top:12px">
+            <label class="field"><span>Text colour</span>
+              <input type="color" id="certInk" value="#111111">
+            </label>
+            <label class="field"><span>Panel colour</span>
+              <input type="color" id="certPanelColour" value="#ffffff" disabled>
+            </label>
+          </div>
+          <p class="hint">The line is blank on purpose — print it and sign by hand. A panel puts a solid background behind the text so it stays readable on a busy page.</p>
+        </div>
+
+        <h3 class="subhead">Size and position</h3>
+        <div class="fields">
+          <label class="field"><span>Where should it go?</span>
+            <select id="anchor">
+              <option value="bottom-right" selected>Bottom right</option>
+              <option value="bottom-left">Bottom left</option>
+              <option value="top-right">Top right</option>
+              <option value="top-left">Top left</option>
+              <option value="center">Middle of the page</option>
+              <option value="custom">Custom — where you dragged it</option>
+            </select>
+            <small class="sub">Or just drag the sample to any spot — that becomes the custom
+              position. It still moves if the spot is busy on a page.</small>
+          </label>
+          <label class="field"><span>How wide — cm</span>
+            <input type="number" id="chopWidth" min="1.8" max="19.4" step="0.1" value="4.8">
+            <small class="sub" id="widthSub"></small>
+          </label>
+          <label class="field"><span>Gap from the paper edge — cm</span>
+            <input type="number" id="margin" min="0" max="2.6" step="0.1" value="0.9">
+            <small class="sub">Keeps it off the paper edge.</small>
+          </label>
+        </div>
+
+        <div class="fields" id="certificateShape" style="margin-top:14px">
+          <label class="field"><span>Text size — pt</span>
+            <input type="number" id="certTextSize" min="4" max="36" step="0.5" value="9">
+            <small class="sub" id="textSizeSub"></small>
+          </label>
+          <label class="field"><span>How tall — cm</span>
+            <input type="number" id="certHeight" min="1.4" max="26.5" step="0.1" value="3.6">
+            <small class="sub" id="heightSub"></small>
+          </label>
+        </div>
+
+        <h3 class="subhead">When the page is already full</h3>
+        <label class="row" style="gap:7px; margin-bottom:12px">
+          <input type="checkbox" id="stayPut">
+          <span style="font-size:14px">Keep it where I chose — allow only a small move</span>
         </label>
-        <label class="field"><span>Name</span>
-          <input type="text" id="certName" placeholder="Ang Su Yee">
-        </label>
-        <label class="field"><span>Membership no.</span>
-          <input type="text" id="certMembership" placeholder="MAICSA 7068713">
-        </label>
-        <label class="field"><span>SSM PC No.</span>
-          <input type="text" id="certPcNo" placeholder="202108000291">
-        </label>
-        <label class="field"><span>Date</span>
-          <input type="text" id="certDate" placeholder="22 June 2026">
-        </label>
+        <div class="fields">
+          <label class="field"><span>How far it may move — cm</span>
+            <input type="number" id="driftLimit" min="0" max="10" step="0.5" value="2">
+            <small class="sub">0 = never moves at all. If nothing within this distance is
+              clear, it stamps over what is there, see-through.</small>
+          </label>
+          <label class="field"><span>Treat a spot as clear up to — % covered</span>
+            <input type="number" id="cleanTolerance" min="0" max="25" step="0.1" value="0.2">
+            <small class="sub">On forms and tables, raise this so grid lines and faint print
+              don't push the stamp away. Anything under it is simply stamped over,
+              at full strength.</small>
+          </label>
+          <label class="field"><span>Let it shrink to — % of that size</span>
+            <input type="number" id="minScale" min="40" max="100" step="5" value="70">
+            <small class="sub">It shrinks before it gives up your spot. 100 = never
+              shrinks, unless it is too big for the page.</small>
+          </label>
+          <label class="field"><span>If it must sit on top of text, how solid — %</span>
+            <input type="number" id="overlapOpacity" min="30" max="100" step="5" value="85">
+            <small class="sub">Lower = more see-through.</small>
+          </label>
+        </div>
+
+        <p class="hint" id="placementHint"></p>
       </div>
-      <label class="row" style="gap:7px; margin-top:14px">
-        <input type="checkbox" id="certPanel">
-        <span style="font-size:14px">Draw a background panel behind the text</span>
-      </label>
-      <div class="fields" style="margin-top:12px">
-        <label class="field"><span>Text colour</span>
-          <input type="color" id="certInk" value="#111111">
-        </label>
-        <label class="field"><span>Panel colour</span>
-          <input type="color" id="certPanelColour" value="#ffffff" disabled>
-        </label>
-      </div>
-      <div class="cert-preview" id="certPreview" aria-hidden="true"></div>
-      <p class="hint">The line is blank on purpose — print it and sign by hand. A panel puts a solid background behind the text so it stays readable on a busy page.</p>
     </div>
   </section>
 
   <section class="panel">
-    <h2>3 · Size and position</h2>
-
-    <div class="fields">
-      <label class="field"><span>Which corner should it go in?</span>
-        <select id="anchor">
-          <option value="bottom-right" selected>Bottom right</option>
-          <option value="bottom-left">Bottom left</option>
-          <option value="top-right">Top right</option>
-          <option value="top-left">Top left</option>
-          <option value="center">Middle of the page</option>
-        </select>
-        <small class="sub">It moves if that corner is busy.</small>
-      </label>
-      <label class="field"><span id="widthLabel">How wide — <b id="widthOut">22%</b> of the page</span>
-        <input type="range" id="chopWidth" min="8" max="90" value="22">
-        <small class="sub" id="widthSub"></small>
-      </label>
-      <label class="field"><span>Gap from the paper edge — <b id="marginOut">4%</b> of the page</span>
-        <input type="range" id="margin" min="0" max="12" value="4">
-        <small class="sub">Keeps it off the paper edge.</small>
-      </label>
-    </div>
-
-    <div class="fields" id="certificateShape" style="margin-top:14px">
-      <label class="field"><span>Text size — <b id="textSizeOut">2.7%</b> of the block's width</span>
-        <input type="range" id="certTextSize" min="14" max="55" value="27">
-        <small class="sub" id="textSizeSub"></small>
-      </label>
-      <label class="field"><span>How tall — <b id="heightOut">13%</b> of a Letter page</span>
-        <input type="range" id="certHeight" min="5" max="95" value="13">
-        <small class="sub" id="heightSub"></small>
-      </label>
-    </div>
-
-    <h3 class="subhead">When the page is already full</h3>
-    <div class="fields">
-      <label class="field"><span>Let it shrink to <b id="scaleOut">70%</b> of that size</span>
-        <input type="range" id="minScale" min="40" max="100" value="70">
-        <small class="sub">It shrinks before it gives up your corner. 100% = never
-          shrinks, unless it is too big for the page.</small>
-      </label>
-      <label class="field"><span>If it must sit on top of text, how solid — <b id="opacityOut">85%</b></span>
-        <input type="range" id="overlapOpacity" min="30" max="100" value="85">
-        <small class="sub">Only when nothing is clear. Lower = more see-through.</small>
-      </label>
-    </div>
-
-    <p class="hint" id="placementHint"></p>
-  </section>
-
-  <section class="panel">
-    <h2>4 · AI review <span class="hint" style="font-weight:400">— optional</span></h2>
+    <h2>3 · AI review <span class="hint" style="font-weight:400">— optional</span></h2>
     <div class="row">
       <label class="row" style="gap:7px"><input type="checkbox" id="aiEnabled"> <span style="font-size:14px">Have a vision model check each page</span></label>
     </div>
@@ -396,7 +452,7 @@
   </section>
 
   <section class="panel hidden" id="reviewPanel">
-    <h2>5 · Review &amp; adjust</h2>
+    <h2>4 · Review &amp; adjust</h2>
     <div class="docbar" id="docbar"></div>
     <div class="note hidden" id="incompleteWarning" role="alert" style="margin:0 0 12px"></div>
     <div class="note hidden" id="signatureWarning" style="margin:0 0 12px"></div>
@@ -476,6 +532,18 @@ const DEFAULTS = {
   marginFrac: 0.03,
   cleanThreshold: 0.002,
   overlapOpacity: 0.8,
+  // How far (in cells, origin to origin) the search may wander from the
+  // anchor. null = anywhere on the page; 0 = never move. In between, the
+  // cascade is confined to a circle around the chosen spot — for structured
+  // forms where "the stamp goes about here" outranks "the stamp covers
+  // nothing", but a small nudge into an empty table cell is still welcome.
+  maxDrift: null,
+  // For the 'custom' anchor: where the user put the mark, as fractions of the
+  // page's free room (0 = flush left/top, 1 = flush right/bottom). Fractions
+  // of the *free room* rather than of the page, so the same setting lands the
+  // mark in the same visual spot on pages of any size without ever hanging it
+  // off an edge.
+  custom: null,
 };
 
 function buildIntegralImage(ink, width, height) {
@@ -505,11 +573,12 @@ function rectInk(integral, width, x, y, w, h) {
   );
 }
 
-function anchorOrigin(anchor, cw, ch, width, height, margin) {
+function anchorOrigin(anchor, cw, ch, width, height, margin, custom) {
   const right = width - margin - cw;
   const bottom = height - margin - ch;
   const centerX = Math.round((width - cw) / 2);
   const centerY = Math.round((height - ch) / 2);
+  const fraction = (value) => clamp(Number(value) || 0, 0, 1);
 
   let x;
   let y;
@@ -529,6 +598,10 @@ function anchorOrigin(anchor, cw, ch, width, height, margin) {
     case 'center':
       x = centerX;
       y = centerY;
+      break;
+    case 'custom':
+      x = Math.round(fraction(custom?.fx) * Math.max(0, width - cw));
+      y = Math.round(fraction(custom?.fy) * Math.max(0, height - ch));
       break;
     case 'bottom-right':
     default:
@@ -559,7 +632,12 @@ function planPlacement(options) {
     marginFrac,
     cleanThreshold,
     overlapOpacity,
+    maxDrift,
+    custom,
   } = { ...DEFAULTS, ...options };
+
+  // Compared against squared distances below.
+  const driftBudget = maxDrift === null || maxDrift === undefined ? null : maxDrift * maxDrift;
 
   const integral = buildIntegralImage(ink, width, height);
   const margin = Math.round(marginFrac * Math.min(width, height));
@@ -599,7 +677,7 @@ function planPlacement(options) {
 
   // Tier 1 & 2 — hold the anchor, shrinking before giving up on it.
   for (const { scale, w, h, exactW, exactH } of sized) {
-    const { x, y } = anchorOrigin(anchor, w, h, width, height, margin);
+    const { x, y } = anchorOrigin(anchor, w, h, width, height, margin, custom);
     if (isClean(x, y, w, h)) {
       return result({
         x, y, w: exactW, h: exactH, scale,
@@ -610,14 +688,16 @@ function planPlacement(options) {
     }
   }
 
-  // Tier 3 — clean space elsewhere, as close to the anchor as possible.
+  // Tier 3 — clean space elsewhere, as close to the anchor as possible, and
+  // never beyond the drift budget when one is set.
   for (const { scale, w, h, exactW, exactH } of sized) {
-    const target = anchorOrigin(anchor, w, h, width, height, margin);
+    const target = anchorOrigin(anchor, w, h, width, height, margin, custom);
     let best = null;
     for (let y = 0; y <= height - h; y++) {
       for (let x = 0; x <= width - w; x++) {
-        if (!isClean(x, y, w, h)) continue;
         const distance = (x - target.x) ** 2 + (y - target.y) ** 2;
+        if (driftBudget !== null && distance > driftBudget) continue;
+        if (!isClean(x, y, w, h)) continue;
         if (!best || distance < best.distance) best = { x, y, distance };
       }
     }
@@ -631,15 +711,19 @@ function planPlacement(options) {
     }
   }
 
-  // Tier 4 — the page is full. Cover the proportionally emptiest window,
-  // preferring a larger chop and then the anchor when scores tie.
+  // Tier 4 — nothing within reach is clean. Cover the proportionally
+  // emptiest window, preferring a larger chop and then the anchor when scores
+  // tie. The drift budget confines this hunt too; the anchor's own window is
+  // at distance zero, so a budget of any size always leaves at least one
+  // candidate.
   let best = null;
   for (const { scale, w, h, exactW, exactH } of sized) {
-    const target = anchorOrigin(anchor, w, h, width, height, margin);
+    const target = anchorOrigin(anchor, w, h, width, height, margin, custom);
     for (let y = 0; y <= height - h; y++) {
       for (let x = 0; x <= width - w; x++) {
-        const fraction = rectInk(integral, width, x, y, w, h) / (w * h);
         const distance = (x - target.x) ** 2 + (y - target.y) ** 2;
+        if (driftBudget !== null && distance > driftBudget) continue;
+        const fraction = rectInk(integral, width, x, y, w, h) / (w * h);
         if (
           !best ||
           fraction < best.fraction - 1e-9 ||
@@ -802,7 +886,7 @@ return { buildInkMap };
 })();
 
 // ---- geometry.js -------------------------------------------------
-const { cellRectToVisualRect, normaliseRotation, visualRectToDrawParams, visualPointToUserPoint, textRotation } = (function () {
+const { cellRectToVisualRect, normaliseRotation, visualRectToDrawParams, visualPointToUserPoint, textRotation, resizeDelta } = (function () {
 // Coordinate mapping between three spaces:
 //
 //   cell space    ink-map cells, origin top-left
@@ -877,7 +961,22 @@ function textRotation(rotation) {
   return normaliseRotation(rotation);
 }
 
-return { cellRectToVisualRect, normaliseRotation, visualRectToDrawParams, visualPointToUserPoint, textRotation };
+// The width change a corner-handle drag asks for, when the mark resizes from
+// its bottom-right corner keeping its aspect ratio.
+//
+// The two pointer axes are both meaningful — dragging straight down should
+// grow the mark just as dragging right does — but they cannot simply be added,
+// or a diagonal drag would grow the mark twice as fast as the pointer moves.
+// So each axis is expressed as the width change it implies (`dy` scaled by the
+// aspect ratio, since height times aspect is width) and the larger magnitude
+// wins. Near the diagonal the two agree, so the handoff between axes is
+// seamless; on a pure vertical drag the vertical term is the only one left.
+function resizeDelta(dx, dy, aspect) {
+  const fromVertical = dy * aspect;
+  return Math.abs(dx) >= Math.abs(fromVertical) ? dx : fromVertical;
+}
+
+return { cellRectToVisualRect, normaliseRotation, visualRectToDrawParams, visualPointToUserPoint, textRotation, resizeDelta };
 })();
 
 // ---- review.js ---------------------------------------------------
@@ -1337,7 +1436,7 @@ return { scanForSignatureTokens, hasSignatureField, detectSignature };
 })();
 
 // ---- certificate.js ----------------------------------------------
-const { FONT_FRACTION, LINE_SPACING, SIGNATURE_GAP, MIN_LEGIBLE_PT, RULE_FRACTION, PANEL_PAD_FRACTION, DEFAULT_STYLE, FONT_FRACTION_RANGE, SIGNATURE_GAP_RANGE, HEIGHT_PCT_RANGE, metricsFor, gapForHeight, metricsForRect, resolveMetrics, parseHexColour, padFractionFor, DEFAULT_INTRO, unsupportedCharacters, detailLines, overlongWords, layoutCertificate, certificateAspect, isLegible, pointSizeFor } = (function () {
+const { FONT_FRACTION, LINE_SPACING, SIGNATURE_GAP, MIN_LEGIBLE_PT, RULE_FRACTION, PANEL_PAD_FRACTION, FONT_FAMILIES, fontSpecFor, DEFAULT_STYLE, FONT_FRACTION_RANGE, SIGNATURE_GAP_RANGE, HEIGHT_PCT_RANGE, LINE_SPACING_RANGE, metricsFor, gapForHeight, metricsForRect, resolveMetrics, parseHexColour, padFractionFor, DEFAULT_INTRO, unsupportedCharacters, detailText, detailLines, overlongWords, layoutCertificate, certificateAspect, isLegible, pointSizeFor } = (function () {
 // The certification block: an attestation paragraph, a blank line to sign
 // across, and the signatory's details underneath.
 //
@@ -1371,6 +1470,26 @@ const RULE_FRACTION = 0.62;
 // with the block and the aspect ratio stays constant.
 const PANEL_PAD_FRACTION = 0.038;
 
+// The typefaces on offer. Only the standard PDF fonts qualify: they are the
+// ones every reader carries, so the export needs no font file and the tool
+// stays a single offline page. `standard`/`standardBold` are pdf-lib
+// StandardFonts keys; `css` is the closest the browser can draw for the
+// preview — metrics for wrapping always come from the embedded PDF font, so
+// the CSS stand-in decides how the preview *looks*, never where a line breaks.
+const FONT_FAMILIES = {
+  helvetica: { label: 'Helvetica', standard: 'Helvetica', standardBold: 'HelveticaBold', css: 'Helvetica, Arial, sans-serif' },
+  times: { label: 'Times Roman', standard: 'TimesRoman', standardBold: 'TimesRomanBold', css: '"Times New Roman", Times, serif' },
+  courier: { label: 'Courier', standard: 'Courier', standardBold: 'CourierBold', css: '"Courier New", Courier, monospace' },
+};
+
+// The font a style asks for, with every unknown value falling back to the
+// default — these settings round-trip through localStorage.
+function fontSpecFor(style) {
+  const family = FONT_FAMILIES[style?.fontFamily] ?? FONT_FAMILIES.helvetica;
+  const bold = !!style?.bold;
+  return { ...family, bold, standardName: bold ? family.standardBold : family.standard };
+}
+
 // How the block is drawn, as opposed to what it says.
 //
 // The block's shape is set by width, height and text size. Width and height
@@ -1388,6 +1507,9 @@ const DEFAULT_STYLE = {
   // A shade under an eighth of the page — the height the block used to work
   // out to at its old fixed proportions.
   heightPct: 13,
+  fontFamily: 'helvetica',
+  bold: false,
+  lineSpacing: LINE_SPACING,
 };
 
 // The range the sliders offer. The ceiling on the text is where the intro
@@ -1395,6 +1517,9 @@ const DEFAULT_STYLE = {
 const FONT_FRACTION_RANGE = { min: 0.014, max: 0.055 };
 const SIGNATURE_GAP_RANGE = { min: 0, max: 40 };
 const HEIGHT_PCT_RANGE = { min: 5, max: 95 };
+// From lines touching to double-spaced. The floor is 1: below that, ascenders
+// and descenders of neighbouring lines physically collide.
+const LINE_SPACING_RANGE = { min: 1, max: 2.2 };
 
 const clamp = (value, { min, max }, fallback) => {
   // Not just `Number(value)`: that turns null and '' into 0, which is inside
@@ -1413,6 +1538,7 @@ function metricsFor(style) {
     fontFraction: clamp(style?.fontFraction, FONT_FRACTION_RANGE, FONT_FRACTION),
     heightPct: clamp(style?.heightPct, HEIGHT_PCT_RANGE, DEFAULT_STYLE.heightPct),
     padFraction: padFractionFor(style),
+    lineSpacing: clamp(style?.lineSpacing, LINE_SPACING_RANGE, LINE_SPACING),
   };
 }
 
@@ -1428,10 +1554,11 @@ function metricsFor(style) {
 // block is scaled, so the aspect ratio the placement engine reserves stays
 // constant and the whole of it still scales as one piece.
 function gapForHeight(fields, {
-  width, measure, fontFraction = FONT_FRACTION, padFraction = 0, targetHeight,
+  width, measure, fontFraction = FONT_FRACTION, padFraction = 0,
+  lineSpacing = LINE_SPACING, targetHeight,
 }) {
   const closed = layoutCertificate(fields, {
-    width, measure, fontFraction, padFraction, signatureGap: 0,
+    width, measure, fontFraction, padFraction, lineSpacing, signatureGap: 0,
   });
   const wanted = (targetHeight - closed.height) / closed.lineHeight;
   // Floored, not clamped at both ends. A tall block with small text genuinely
@@ -1521,7 +1648,10 @@ function unsupportedCharacters(text) {
   const bad = new Set();
   for (const ch of String(text ?? '')) {
     const code = ch.codePointAt(0);
-    const ok = (code >= 0x20 && code <= 0x7e)
+    // Newlines are never drawn — the wrap turns them into line breaks before
+    // the font ever sees them — so they are structure, not glyphs to encode.
+    const ok = ch === '\n' || ch === '\r'
+      || (code >= 0x20 && code <= 0x7e)
       || (code >= 0xa0 && code <= 0xff)
       || WINANSI_EXTRA.includes(ch);
     if (!ok) bad.add(ch);
@@ -1529,8 +1659,18 @@ function unsupportedCharacters(text) {
   return [...bad];
 }
 
+// The text under the rule. `fields.details` is free text — the user types the
+// lines exactly as they want them to appear, newlines and all. The structured
+// fields below it are the pre-free-text shape, still understood so settings
+// saved by older versions lay out unchanged.
+function detailText(fields) {
+  return fields.details ?? detailLines(fields).join('\n');
+}
+
 // The detail lines under the rule, in the order they are read. A blank field
-// drops its line rather than leaving a dangling label.
+// drops its line rather than leaving a dangling label. Kept as the reader of
+// the legacy shape, and as the one place that knows how those fields were
+// worded — which is what lets an old saved setup migrate into free text.
 function detailLines({ role, name, membership, pcNo, date }) {
   const lines = [];
   const who = [role, name].filter(Boolean).join(' ').trim();
@@ -1565,23 +1705,34 @@ function overlongWords(text, measure, fontFraction = FONT_FRACTION) {
     .filter((word) => measure(word, MEASURE_REFERENCE_SIZE) > limit);
 }
 
+// A newline in the text is a line break the user asked for, so each hard line
+// wraps on its own and an empty one survives as a blank line. Trailing blank
+// lines are dropped — a textarea ends with a stray newline more often than
+// not, and it would silently grow the block.
 function wrap(text, size, maxWidth, measure) {
-  const words = String(text).split(/\s+/).filter(Boolean);
-  if (!words.length) return [];
   const lines = [];
-  let line = '';
-  for (const word of words) {
-    const candidate = line ? `${line} ${word}` : word;
-    // A single word longer than the block still gets its own line: breaking
-    // inside a registration number would be worse than overhanging.
-    if (line && measure(candidate, size) > maxWidth) {
-      lines.push(line);
-      line = word;
-    } else {
-      line = candidate;
+  for (const hard of String(text).split(/\r?\n/)) {
+    const words = hard.split(/\s+/).filter(Boolean);
+    if (!words.length) {
+      lines.push('');
+      continue;
     }
+    let line = '';
+    for (const word of words) {
+      const candidate = line ? `${line} ${word}` : word;
+      // A single word longer than the block still gets its own line: breaking
+      // inside a registration number would be worse than overhanging.
+      if (line && measure(candidate, size) > maxWidth) {
+        lines.push(line);
+        line = word;
+      } else {
+        line = candidate;
+      }
+    }
+    if (line) lines.push(line);
   }
-  if (line) lines.push(line);
+  while (lines.length && lines[0] === '') lines.shift();
+  while (lines.length && lines[lines.length - 1] === '') lines.pop();
   return lines;
 }
 
@@ -1605,6 +1756,7 @@ function wrap(text, size, maxWidth, measure) {
 function layoutCertificate(fields, {
   width, measure, padFraction = 0,
   fontFraction = FONT_FRACTION, signatureGap = SIGNATURE_GAP,
+  lineSpacing = LINE_SPACING,
 }) {
   const pad = width * padFraction;
   // The column the text actually gets. Sizing the font from this rather than
@@ -1612,15 +1764,16 @@ function layoutCertificate(fields, {
   // every padding, and leaves the unpadded case bit-for-bit as it was.
   const inner = Math.max(1, width - pad * 2);
   const fontSize = inner * fontFraction;
-  const lineHeight = fontSize * LINE_SPACING;
+  const lineHeight = fontSize * lineSpacing;
   const paragraphs = [];
 
   const intro = wrap(fields.intro ?? '', fontSize, inner, measure);
-  const details = detailLines(fields).flatMap((line) => wrap(line, fontSize, inner, measure));
+  const details = wrap(detailText(fields), fontSize, inner, measure);
 
   let y = pad + fontSize; // first baseline sits one font size below the top inset
   for (const text of intro) {
-    paragraphs.push({ text, x: pad, y });
+    // A blank line is only vertical space — there is nothing to draw on it.
+    if (text) paragraphs.push({ text, x: pad, y });
     y += lineHeight;
   }
 
@@ -1629,7 +1782,8 @@ function layoutCertificate(fields, {
   y = ruleY + lineHeight * 0.9;
 
   for (const text of details) {
-    paragraphs.push({ text, x: pad, y });
+    // A blank line is only vertical space here too.
+    if (text) paragraphs.push({ text, x: pad, y });
     y += lineHeight;
   }
 
@@ -1670,7 +1824,7 @@ function pointSizeFor(widthInPoints, metrics = {}) {
   return Math.max(1, widthInPoints * (1 - padFraction * 2)) * fontFraction;
 }
 
-return { FONT_FRACTION, LINE_SPACING, SIGNATURE_GAP, MIN_LEGIBLE_PT, RULE_FRACTION, PANEL_PAD_FRACTION, DEFAULT_STYLE, FONT_FRACTION_RANGE, SIGNATURE_GAP_RANGE, HEIGHT_PCT_RANGE, metricsFor, gapForHeight, metricsForRect, resolveMetrics, parseHexColour, padFractionFor, DEFAULT_INTRO, unsupportedCharacters, detailLines, overlongWords, layoutCertificate, certificateAspect, isLegible, pointSizeFor };
+return { FONT_FRACTION, LINE_SPACING, SIGNATURE_GAP, MIN_LEGIBLE_PT, RULE_FRACTION, PANEL_PAD_FRACTION, FONT_FAMILIES, fontSpecFor, DEFAULT_STYLE, FONT_FRACTION_RANGE, SIGNATURE_GAP_RANGE, HEIGHT_PCT_RANGE, LINE_SPACING_RANGE, metricsFor, gapForHeight, metricsForRect, resolveMetrics, parseHexColour, padFractionFor, DEFAULT_INTRO, unsupportedCharacters, detailText, detailLines, overlongWords, layoutCertificate, certificateAspect, isLegible, pointSizeFor };
 })();
 
 // ---- export.js ---------------------------------------------------
@@ -1865,8 +2019,13 @@ const SETTINGS_STORAGE = 'chomp.settings';
 // so both are migrated on load and both are removed by "Forget saved key".
 const LEGACY_KEY_STORAGE = 'chop-stamper.openai-key';
 const LEGACY_SETTINGS_STORAGE = 'chop-stamper.settings';
-// Matches the placement engine's tolerance for what counts as clear space.
+// The default for what counts as clear space; the run's own tolerance, once
+// one has started, lives in its settings snapshot and wins over this.
 const CLEAN_COVERAGE = 0.002;
+
+function cleanLimit() {
+  return state.settings?.cleanThreshold ?? CLEAN_COVERAGE;
+}
 // A stalled request must not park the whole run. Generous, because a large
 // page image on a slow link is legitimately slow.
 const AI_REQUEST_TIMEOUT_MS = 60_000;
@@ -1972,11 +2131,7 @@ function markKind() {
 function certificateFields() {
   return {
     intro: $('certIntro').value.trim(),
-    role: $('certRole').value.trim(),
-    name: $('certName').value.trim(),
-    membership: $('certMembership').value.trim(),
-    pcNo: $('certPcNo').value.trim(),
-    date: $('certDate').value.trim(),
+    details: $('certDetails').value.trim(),
   };
 }
 
@@ -1989,9 +2144,12 @@ function certificateStyle() {
     ink: $('certInk').value,
     panel: $('certPanel').checked,
     panelColour: $('certPanelColour').value,
-    // Sliders are integers; the layout wants fractions.
-    fontFraction: Number($('certTextSize').value) / 1000,
-    heightPct: Number($('certHeight').value),
+    // The inputs speak centimetres and points; the layout wants fractions.
+    fontFraction: inputFontFraction(),
+    heightPct: inputHeightPct(),
+    fontFamily: $('certFont').value,
+    bold: $('certBold').checked,
+    lineSpacing: Number($('certLineSpacing').value),
   };
 }
 
@@ -2003,15 +2161,12 @@ function certificateMetrics(fields, measure, style = certificateStyle()) {
   return resolveMetrics(fields, {
     measure,
     style,
-    width: REFERENCE_PAGE.width * (Number($('chopWidth').value) / 100),
+    width: REFERENCE_PAGE.width * (inputWidthPct() / 100),
     pageHeight: REFERENCE_PAGE.height,
   });
 }
 
-const CERTIFICATE_LABELS = {
-  intro: 'Attestation', role: 'Role', name: 'Name',
-  membership: 'Membership no.', pcNo: 'SSM PC No.', date: 'Date',
-};
+const CERTIFICATE_LABELS = { intro: 'Attestation', details: 'Details' };
 
 // The standard PDF fonts are the only ones available offline, and they encode
 // WinAnsi and nothing else. Better to say so under the field than to throw
@@ -2023,7 +2178,7 @@ function certificateProblem(fields) {
       return `${label} contains ${bad.map((c) => `“${c}”`).join(', ')}, which the built-in PDF fonts cannot write. Use the Latin alphabet, or stamp an image of the text instead.`;
     }
   }
-  if (!fields.intro && !fields.name) return 'Fill in at least the attestation or the name.';
+  if (!fields.intro && !fields.details) return 'Fill in at least the attestation or the details.';
   return '';
 }
 
@@ -2046,19 +2201,25 @@ function certificateWidthProblem(fields, measure, fontFraction) {
 
 // Text metrics come from the font that will actually be written, so the
 // preview and the export break lines in exactly the same places. Embedding is
-// one-off and cheap; the promise is memoised so a hundred pages share it.
-let certFontPromise = null;
+// one-off and cheap; the promise is memoised per typeface — Times and bold
+// Helvetica have different glyph widths, so each choice needs its own
+// measurer, but a hundred pages using one choice still share one embed.
+const certFontCache = new Map();
 
-function certificateFont() {
-  certFontPromise ??= (async () => {
-    const { PDFDocument, StandardFonts } = window.PDFLib;
-    const doc = await PDFDocument.create();
-    return doc.embedFont(StandardFonts.Helvetica);
-  })().catch((err) => {
-    certFontPromise = null;
-    throw err;
-  });
-  return certFontPromise;
+function certificateFont(style = certificateStyle()) {
+  const name = fontSpecFor(style).standardName;
+  if (!certFontCache.has(name)) {
+    certFontCache.set(name, (async () => {
+      const { PDFDocument, StandardFonts } = window.PDFLib;
+      const doc = await PDFDocument.create();
+      return doc.embedFont(StandardFonts[name]);
+    })().catch((err) => {
+      // A failed embed must not be cached as permanently broken.
+      certFontCache.delete(name);
+      throw err;
+    }));
+  }
+  return certFontCache.get(name);
 }
 
 function measurerFor(font) {
@@ -2073,7 +2234,7 @@ async function prepareMark() {
   }
   const fields = certificateFields();
   const style = certificateStyle();
-  const font = await certificateFont();
+  const font = await certificateFont(style);
   const measure = measurerFor(font);
   const metrics = certificateMetrics(fields, measure, style);
   return {
@@ -2093,14 +2254,25 @@ function markReady() {
 
 // --- settings --------------------------------------------------------------
 
+// Where a drag on the live sample put the mark, as fractions of the page's
+// free room (0 = flush left/top, 1 = flush right/bottom). Only read when the
+// position select says 'custom' — which is what a drag sets it to — and kept
+// as fractions so the same spot holds on pages of any size. Centre until the
+// first drag, so choosing "Custom" by hand does something sensible.
+let customPosition = { fx: 0.5, fy: 0.5 };
+
 function readSettings() {
   return {
     markKind: markKind(),
     anchor: $('anchor').value,
-    chopWidthPct: Number($('chopWidth').value),
+    chopWidthPct: inputWidthPct(),
+    custom: { ...customPosition },
     minScale: Number($('minScale').value) / 100,
-    marginFrac: Number($('margin').value) / 100,
+    marginFrac: inputMarginFrac(),
     overlapOpacity: Number($('overlapOpacity').value) / 100,
+    stayPut: $('stayPut').checked,
+    driftCm: Number($('driftLimit').value),
+    cleanThreshold: Number($('cleanTolerance').value) / 100,
     aiEnabled: $('aiEnabled').checked,
     apiKey: $('apiKey').value.trim(),
     model: $('model').value.trim() || 'gpt-4o-mini',
@@ -2149,6 +2321,29 @@ function setAiControlsDisabled(disabled) {
   $('aiFields').classList.toggle('locked', disabled);
 }
 
+// Everything that decides what the run stamps and where. Frozen for the same
+// reason the AI controls are: the run snapshotted them when it started, and
+// `discardReview` deliberately ignores edits made while the phase is
+// `running` — so a slider moved mid-run would change nothing, invalidate
+// nothing, and leave the setup screen quoting numbers the finished review was
+// never measured against.
+const MARK_SETTINGS_CONTROLS = [
+  'markImage', 'markCertificate',
+  'certIntro', 'certDetails',
+  'certInk', 'certPanel', 'certPanelColour', 'certFont', 'certBold',
+  'anchor', 'chopWidth', 'certTextSize', 'certHeight', 'certLineSpacing',
+  'minScale', 'margin', 'overlapOpacity', 'stayPut', 'driftLimit', 'cleanTolerance',
+];
+
+function setMarkControlsDisabled(disabled) {
+  for (const id of MARK_SETTINGS_CONTROLS) $(id).disabled = disabled;
+  // Two of these are normally slaved to other controls — the panel colour to
+  // the panel checkbox, the height slider to the mark kind. Coming back live
+  // they have to return to those states, and syncLabels is the code that
+  // knows them.
+  if (!disabled) syncLabels();
+}
+
 // Stops the AI pass for the run in flight. The rendered pages are kept: they
 // were produced locally and nothing about them was ever uploaded.
 function revokeAiConsent() {
@@ -2173,33 +2368,65 @@ function restoreSettings() {
   try {
     const saved = JSON.parse(localStorage.getItem(SETTINGS_STORAGE) || '{}');
     if (saved.anchor) $('anchor').value = saved.anchor;
-    if (saved.chopWidthPct) $('chopWidth').value = saved.chopWidthPct;
+    if (saved.custom) {
+      customPosition = {
+        fx: clamp(Number(saved.custom.fx) || 0, 0, 1),
+        fy: clamp(Number(saved.custom.fy) || 0, 0, 1),
+      };
+    }
+    // Storage keeps the engine's own units — fractions of a page — and the
+    // inputs speak centimetres, so the conversion happens here and only here.
+    if (saved.chopWidthPct) {
+      $('chopWidth').value = ptToCm(REFERENCE_PAGE.width * (saved.chopWidthPct / 100)).toFixed(1);
+    }
     if (saved.minScale) $('minScale').value = Math.round(saved.minScale * 100);
-    if (saved.marginFrac !== undefined) $('margin').value = Math.round(saved.marginFrac * 100);
+    if (saved.marginFrac !== undefined) {
+      $('margin').value = ptToCm(saved.marginFrac * Math.min(REFERENCE_PAGE.width, REFERENCE_PAGE.height)).toFixed(1);
+    }
     if (saved.overlapOpacity) $('overlapOpacity').value = Math.round(saved.overlapOpacity * 100);
+    if (saved.stayPut !== undefined) $('stayPut').checked = !!saved.stayPut;
+    if (saved.driftCm !== undefined) {
+      $('driftLimit').value = String(clamp(Number(saved.driftCm) || 0, 0, 10));
+    }
+    if (saved.cleanThreshold !== undefined) {
+      $('cleanTolerance').value = String(clamp(Number(saved.cleanThreshold) * 100 || 0, 0, 25));
+    }
     if (saved.model) $('model').value = saved.model;
     if (saved.markKind === 'certificate') $('markCertificate').checked = true;
     // Typed once, reused for every document afterwards — these are the details
     // of a person, not of a file.
     const cert = saved.certificate ?? {};
     $('certIntro').value = cert.intro ?? DEFAULT_INTRO;
-    $('certRole').value = cert.role ?? 'Company Secretary';
-    $('certName').value = cert.name ?? '';
-    $('certMembership').value = cert.membership ?? '';
-    $('certPcNo').value = cert.pcNo ?? '';
-    // Today, unless a date was explicitly kept. A certification carrying the
-    // day it was actually produced is the common case by a wide margin.
-    $('certDate').value = cert.date || todayLong();
+    // The details are free text now. Settings saved before that carried five
+    // structured fields; they are composed into text once, worded exactly as
+    // the old layout worded them, so nothing on paper changes. Date defaults
+    // to today either way — a certification carrying the day it was actually
+    // produced is the common case by a wide margin.
+    $('certDetails').value = cert.details ?? detailLines({
+      role: cert.role ?? 'Company Secretary',
+      name: cert.name ?? '',
+      membership: cert.membership ?? '',
+      pcNo: cert.pcNo ?? '',
+      date: cert.date || todayLong(),
+    }).join('\n');
 
     const style = saved.certificateStyle ?? {};
     $('certInk').value = style.ink ?? DEFAULT_STYLE.ink;
     $('certPanel').checked = style.panel ?? DEFAULT_STYLE.panel;
     $('certPanelColour').value = style.panelColour ?? DEFAULT_STYLE.panelColour;
+    // Through the same fallback the layout uses, so an unknown stored family
+    // comes back as the default rather than an empty select.
+    $('certFont').value = FONT_FAMILIES[style.fontFamily] ? style.fontFamily : DEFAULT_STYLE.fontFamily;
+    $('certBold').checked = !!(style.bold ?? DEFAULT_STYLE.bold);
     // Back through the same clamp the layout uses, so a hand-edited or
     // half-written stored value cannot put a slider outside its own track.
     const metrics = metricsFor({ ...DEFAULT_STYLE, ...style });
-    $('certTextSize').value = Math.round(metrics.fontFraction * 1000);
-    $('certHeight').value = Math.round(metrics.heightPct);
+    // Text size shows as the points it comes out to at the restored width —
+    // reading the width input back, so the two stay consistent.
+    const blockWidth = REFERENCE_PAGE.width * (inputWidthPct() / 100);
+    $('certTextSize').value = (metrics.fontFraction * blockWidth).toFixed(1);
+    $('certHeight').value = ptToCm(REFERENCE_PAGE.height * (metrics.heightPct / 100)).toFixed(1);
+    $('certLineSpacing').value = metrics.lineSpacing.toFixed(2);
     // Only ever restored if the user asked for it to be kept.
     const key = localStorage.getItem(KEY_STORAGE);
     if (key) {
@@ -2212,12 +2439,12 @@ function restoreSettings() {
 
 function syncLabels() {
   const certificate = markKind() === 'certificate';
-  $('scaleOut').textContent = `${$('minScale').value}%`;
-  $('marginOut').textContent = `${$('margin').value}%`;
-  $('opacityOut').textContent = `${$('overlapOpacity').value}%`;
   $('aiFields').classList.toggle('hidden', !$('aiEnabled').checked);
   $('imageFields').classList.toggle('hidden', certificate);
   $('certificateFields').classList.toggle('hidden', !certificate);
+  // The close-up lives in the shared preview column now, so it shows and
+  // hides with the block rather than with the fields beside it.
+  $('certPreviewWrap').classList.toggle('hidden', !certificate);
   // The block's own two dimensions. A chop's shape comes from its file, so
   // there is nothing here to offer for one.
   $('certificateShape').classList.toggle('hidden', !certificate);
@@ -2234,16 +2461,14 @@ function syncLabels() {
   // two differently proportioned pages. So height is a Letter figure, exact on
   // Letter and proportionally taller or shorter elsewhere. The review screen
   // reports what each page actually got, in points.
-  const widthPct = Number($('chopWidth').value);
+  const widthPct = inputWidthPct();
   const blockWidth = REFERENCE_PAGE.width * (widthPct / 100);
   const metrics = metricsFor(certificateStyle());
   $('certHeight').disabled = !certificate;
-  $('heightOut').textContent = `${metrics.heightPct}%`;
-  $('textSizeOut').textContent = `${(metrics.fontFraction * 100).toFixed(1)}%`;
   $('heightSub').textContent = certificate
-    ? `About ${((REFERENCE_PAGE.height * metrics.heightPct) / 100 / 72).toFixed(1)} in tall on a Letter page. `
-      + 'The block keeps its shape, so on a page of another proportion it comes out '
-      + 'a little taller or shorter — the review screen gives the real size per page.'
+    ? `${Math.round(metrics.heightPct)}% of the page height. Exact on Letter paper; the block keeps `
+      + 'its shape, so on a page of another proportion it comes out a little taller or shorter — '
+      + 'the review screen gives the real size per page.'
     : '';
   const textPt = pointSizeFor(blockWidth, metrics);
   // Only said when true. "About the size of normal text" beside 18.5 pt
@@ -2251,21 +2476,29 @@ function syncLabels() {
   const howBig = textPt < 8 ? 'smaller than normal text'
     : textPt <= 12 ? 'about the size of normal text'
       : 'bigger than normal text';
-  $('textSizeSub').textContent = certificate ? `${textPt.toFixed(0)} pt — ${howBig}.` : '';
-  $('widthSub').textContent = `About ${(blockWidth / 72).toFixed(1)} in wide on a Letter page.`;
+  // Prints-as differs from typed-as when the panel's padding or the layout's
+  // own limits take a slice, so the true figure is always stated.
+  $('textSizeSub').textContent = certificate ? `Prints at ${textPt.toFixed(1)} pt — ${howBig}.` : '';
+  $('widthSub').textContent = `${Math.round(widthPct)}% of the page width. Exact on Letter paper, `
+    + 'in proportion on other sizes.';
   // A colour for a panel that is not drawn is a control that does nothing.
   $('certPanelColour').disabled = !$('certPanel').checked;
   // Every one of these describes the thing being stamped, and half the time
   // that is not a chop. Written here rather than in the markup so there is one
   // place that decides what the mark is called.
+  // The drift distance is meaningless while free movement is on.
+  $('driftLimit').disabled = !$('stayPut').checked;
   const noun = markNounFor(markKind()).toLowerCase();
-  $('placementHint').textContent = `Every page is checked for space, so the ${noun} may sit `
-    + 'somewhere else on a busy one. You can move it yourself on the next screen.';
+  const driftCm = Number($('driftLimit').value);
+  $('placementHint').textContent = $('stayPut').checked
+    ? `The ${noun} stays within ${driftCm} cm of the spot you chose, on every page. `
+      + 'If nothing that close is clear, it stamps over the content, see-through. '
+      + 'You can still adjust pages on the next screen.'
+    : `Every page is checked for space, so the ${noun} may sit `
+      + 'somewhere else on a busy one. You can move it yourself on the next screen.';
   $('dragHint').textContent = `Drag the ${noun} to move it, or its corner to resize. `
     + 'Or tab to it and use the arrow keys — hold shift to resize.';
   $('aiMarkNoun').textContent = certificate ? 'the certification block' : 'your chop';
-
-  $('widthLabel').innerHTML = `How wide — <b id="widthOut">${widthPct}%</b> of the page`;
 }
 
 // --- file intake -----------------------------------------------------------
@@ -2342,6 +2575,7 @@ async function acceptPdfs(files) {
   $('pdfList').textContent = files.map((f) => f.name).join(', ');
   refreshRunButton();
   updatePdfSummary();
+  refreshSamplePreview();
 }
 
 // Counting pages means opening every file, so two changes in quick succession
@@ -2447,6 +2681,7 @@ async function acceptChop(files) {
     $('chopPreview').appendChild(warning);
   }
   refreshRunButton();
+  refreshSamplePreview();
 }
 
 function fileToDataUrl(file) {
@@ -2552,6 +2787,7 @@ async function run() {
   // the controls is what makes the snapshot taken above honest: without it the
   // checkbox can say "off" while the run it belongs to is still uploading.
   setAiControlsDisabled(true);
+  setMarkControlsDisabled(true);
   $('cancel').classList.remove('hidden');
   $('progress').classList.remove('hidden');
   $('reviewPanel').classList.add('hidden');
@@ -2596,6 +2832,7 @@ async function run() {
     state.abort = null;
     $('cancel').classList.add('hidden');
     setAiControlsDisabled(false);
+    setMarkControlsDisabled(false);
     refreshRunButton();
 
     // Whatever survived is worth showing, even if the run ended badly.
@@ -2738,9 +2975,16 @@ function applyAutoPlacement(record, settings) {
     chopWidth: (chopVisualWidth / record.visualWidth) * map.width,
     chopHeight: (chopVisualHeight / record.visualHeight) * map.height,
     anchor: settings.anchor,
+    custom: settings.custom,
     minScale: settings.minScale,
     marginFrac: settings.marginFrac,
     overlapOpacity: settings.overlapOpacity,
+    cleanThreshold: settings.cleanThreshold,
+    // The drift limit is physical (cm on the page), the engine works in
+    // ink-map cells; the map's cells are square, so one axis's scale converts.
+    maxDrift: settings.stayPut
+      ? cmToPt(settings.driftCm) * (map.width / record.visualWidth)
+      : null,
   };
 
   const toVisual = (cellRect) => ({
@@ -3098,7 +3342,10 @@ function paintCertificate(ctx, rect, sx, sy, {
   ctx.fillStyle = style.ink;
   ctx.strokeStyle = style.ink;
   ctx.textBaseline = 'alphabetic';
-  ctx.font = `${size}px Helvetica, Arial, sans-serif`;
+  // The browser's nearest stand-in for the chosen PDF font. Only looks: the
+  // line breaks came from the embedded font's own metrics above.
+  const font = fontSpecFor(style);
+  ctx.font = `${font.bold ? 'bold ' : ''}${size}px ${font.css}`;
   for (const line of layout.lines) {
     ctx.fillText(line.text, x0 + line.x * sx, y0 + line.y * sy);
   }
@@ -3157,7 +3404,7 @@ function selectPage(index) {
 function renderSummary(record) {
   const { inkFraction } = record.placement;
   const tier = record.placement.tier;
-  const covered = (inkFraction ?? 0) > CLEAN_COVERAGE
+  const covered = (inkFraction ?? 0) > cleanLimit()
     ? `${Math.round(inkFraction * 100)}% of that area has content`
     : 'clear space';
 
@@ -3244,7 +3491,7 @@ function markPlacementEdited(record, box) {
 function commitPlacementEdit(record, box) {
   const coverage = inkCoverage(record, record.placement);
   record.placement.inkFraction = coverage;
-  record.placement.opacity = coverage > CLEAN_COVERAGE ? state.settings.overlapOpacity : 1;
+  record.placement.opacity = coverage > cleanLimit() ? state.settings.overlapOpacity : 1;
   const face = box.querySelector('img, canvas');
   face.style.opacity = String(record.placement.opacity);
   // A block re-renders at its new size; an image just rescales.
@@ -3359,7 +3606,11 @@ function wireDragging(stage, box, handle, record) {
       const minWidth = record.visualWidth * 0.04;
       const widthLimit = Math.max(minWidth, record.visualWidth - start.x);
       const heightLimit = Math.max(minWidth, (record.visualHeight - start.y) * state.mark.aspect);
-      const width = clamp(start.width + dx, minWidth, Math.min(widthLimit, heightLimit));
+      const width = clamp(
+        start.width + resizeDelta(dx, dy, state.mark.aspect),
+        minWidth,
+        Math.min(widthLimit, heightLimit),
+      );
       record.placement.width = width;
       record.placement.height = width / state.mark.aspect;
     }
@@ -3525,7 +3776,9 @@ async function download() {
         ? (mark.chop.format === 'png'
           ? await pdfDoc.embedPng(mark.chop.bytes)
           : await pdfDoc.embedJpg(mark.chop.bytes))
-        : await pdfDoc.embedFont(StandardFonts.Helvetica);
+        // The same standard font the run was measured with — a different one
+        // here would re-break every line the review screen showed.
+        : await pdfDoc.embedFont(StandardFonts[fontSpecFor(mark.style).standardName]);
 
       for (const record of doc.pages) {
         if (!record.included) continue;
@@ -3577,6 +3830,41 @@ function saveFile(bytes, filename) {
 // so the line breaks it shows are the line breaks the export will make. Letter,
 // because that is what the SSM portal prints.
 const REFERENCE_PAGE = { width: 612, height: 792 };
+
+// The size inputs speak centimetres (and points, for text); the engine speaks
+// fractions of a page, because a mark has to scale with each page it lands on.
+// These are the two directions of that conversation, measured against the
+// reference page — so a typed size is exact on Letter paper and proportional
+// on anything else, which is what the labels under the inputs say.
+const CM_PER_PT = 2.54 / 72;
+const ptToCm = (pt) => pt * CM_PER_PT;
+const cmToPt = (cm) => cm / CM_PER_PT;
+
+// The current inputs, read in the engine's units. Every reader goes through
+// these so no call site does its own arithmetic.
+function inputWidthPct() {
+  return (cmToPt(Number($('chopWidth').value)) / REFERENCE_PAGE.width) * 100;
+}
+
+function inputMarginFrac() {
+  // The engine applies this fraction to each page's shorter edge, so it is
+  // expressed against the reference page's shorter edge here.
+  return cmToPt(Number($('margin').value)) / Math.min(REFERENCE_PAGE.width, REFERENCE_PAGE.height);
+}
+
+function inputHeightPct() {
+  return (cmToPt(Number($('certHeight').value)) / REFERENCE_PAGE.height) * 100;
+}
+
+// Text size is typed in points — nominal, like every word processor — and the
+// layout wants it as a fraction of the block's width. Derived from the width
+// input, so the typed size holds when the width changes; out-of-range values
+// are clamped by the layout's own metricsFor, and the label under the input
+// reports what the block actually gets.
+function inputFontFraction() {
+  const blockWidth = REFERENCE_PAGE.width * (inputWidthPct() / 100);
+  return Number($('certTextSize').value) / Math.max(1, blockWidth);
+}
 const PREVIEW_MAX_PX = 420; // how wide the block may be drawn on screen
 const PAGE_PREVIEW_PX = 150; // height of the whole-page thumbnail
 let certPreviewToken = 0;
@@ -3638,7 +3926,7 @@ async function refreshCertificatePreview() {
   // settings currently on screen. Laying the preview out at some convenient
   // width instead would break the lines in different places from the export,
   // which is the one thing this is here to show.
-  const asked = REFERENCE_PAGE.width * (Number($('chopWidth').value) / 100);
+  const asked = REFERENCE_PAGE.width * (inputWidthPct() / 100);
   // What the placement engine will actually do with that. A block bigger than
   // the space on the page is scaled down to fit before any of the shrink tiers
   // are considered, so the size asked for and the size drawn are not always the
@@ -3666,7 +3954,7 @@ async function refreshCertificatePreview() {
   // A height below the text's own minimum is the one request the block cannot
   // meet, so it is reported rather than silently rounded up to what it did.
   const floorPct = Math.ceil((metrics.minHeight / REFERENCE_PAGE.height) * 100);
-  caption.textContent = `${Math.round(layout.width)} × ${Math.round(layout.height)} pt · `
+  caption.textContent = `${ptToCm(layout.width).toFixed(1)} × ${ptToCm(layout.height).toFixed(1)} cm · `
     + `covers ${Math.round((layout.height / REFERENCE_PAGE.height) * 100)}% of the page height · `
     + `${layout.lines.length} line${layout.lines.length === 1 ? '' : 's'}`
     + (legible ? '' : ' · text too small to read')
@@ -3689,7 +3977,7 @@ async function refreshCertificatePreview() {
 // anything that decides where the mark actually goes, which is why this is
 // only ever used to draw and to caption.
 function pageFitScale(blockWidth, layout) {
-  const margin = (Number($('margin').value) / 100) * Math.min(REFERENCE_PAGE.width, REFERENCE_PAGE.height);
+  const margin = cmToPt(Number($('margin').value));
   const usableWidth = Math.max(1, REFERENCE_PAGE.width - 2 * margin);
   const usableHeight = Math.max(1, REFERENCE_PAGE.height - 2 * margin);
   return Math.min(1, usableWidth / blockWidth, usableHeight / layout.height);
@@ -3710,9 +3998,10 @@ function pagePreview(blockWidth, blockHeight) {
 
   // The same corners `anchorOrigin` works from, including the middle — which
   // is a position in its own right, not the absence of a corner.
-  const margin = (Number($('margin').value) / 100) * REFERENCE_PAGE.width;
+  const margin = cmToPt(Number($('margin').value));
   const anchor = $('anchor').value;
-  const along = (anchorEdge, page, block) => {
+  const along = (anchorEdge, page, block, customFraction) => {
+    if (anchor === 'custom') return customFraction * Math.max(0, page - block);
     if (anchor === 'center') return (page - block) / 2;
     return anchorEdge ? page - margin - block : margin;
   };
@@ -3721,8 +4010,8 @@ function pagePreview(blockWidth, blockHeight) {
   mark.className = 'mark';
   mark.style.width = `${blockWidth * scale}px`;
   mark.style.height = `${blockHeight * scale}px`;
-  mark.style.left = `${along(anchor.includes('right'), REFERENCE_PAGE.width, blockWidth) * scale}px`;
-  mark.style.top = `${along(!anchor.includes('top'), REFERENCE_PAGE.height, blockHeight) * scale}px`;
+  mark.style.left = `${along(anchor.includes('right'), REFERENCE_PAGE.width, blockWidth, customPosition.fx) * scale}px`;
+  mark.style.top = `${along(!anchor.includes('top'), REFERENCE_PAGE.height, blockHeight, customPosition.fy) * scale}px`;
   sheet.appendChild(mark);
 
   const note = document.createElement('div');
@@ -3732,6 +4021,315 @@ function pagePreview(blockWidth, blockHeight) {
 
   wrapper.append(sheet, note);
   return wrapper;
+}
+
+// --- live sample on the user's own document --------------------------------
+//
+// The blank-sheet preview above answers "how big is the block"; this one
+// answers "how does it sit on my actual document". It renders the first page
+// of the first PDF once and lays the mark on it exactly where the current
+// settings would put it on an empty page — same anchor arithmetic, same
+// margin, same fit clamp as the placement engine.
+//
+// It is also a control, not just a picture: dragging the mark chooses the
+// corner and the edge gap, dragging its handle drives the size sliders, and
+// the caption reports the true printed size as it moves. What it shows is the
+// *preferred* spot — on a busy page the engine may still move or shrink the
+// mark, which is what the run and the review screen are for.
+
+const SAMPLE_RENDER_EDGE = 700;
+const sample = { key: null, page: null };
+let sampleToken = 0;
+
+function sampleHint(box, text) {
+  const hint = document.createElement('p');
+  hint.className = 'hint';
+  hint.style.margin = '0';
+  hint.textContent = text;
+  box.replaceChildren(hint);
+}
+
+// The first page of the file, rendered once and kept. Keyed on the file's
+// identity so replacing the PDFs re-renders and everything else reuses.
+async function loadSamplePage(file) {
+  const key = `${file.name}|${file.size}|${file.lastModified}`;
+  if (sample.key === key) return sample.page;
+  const pdfjs = await loadPdfjs();
+  const task = pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) });
+  try {
+    const pdf = await task.promise;
+    const page = await pdf.getPage(1);
+    const base = page.getViewport({ scale: 1 });
+    const scale = SAMPLE_RENDER_EDGE / Math.max(base.width, base.height);
+    const viewport = page.getViewport({ scale });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(viewport.width);
+    canvas.height = Math.round(viewport.height);
+    await page.render({ canvas, viewport, background: '#ffffff' }).promise;
+    page.cleanup();
+    sample.key = key;
+    sample.page = { canvas, name: file.name, pageWidth: base.width, pageHeight: base.height };
+    return sample.page;
+  } catch (err) {
+    sample.key = null;
+    sample.page = null;
+    throw err;
+  } finally {
+    await task.destroy();
+  }
+}
+
+// Where the current settings would put the mark on an empty page of this
+// size: the same corner arithmetic and pre-cascade fit clamp as the engine,
+// in visual points.
+function sampleSettingsRect(pageW, pageH, aspect) {
+  const margin = inputMarginFrac() * Math.min(pageW, pageH);
+  let width = (inputWidthPct() / 100) * pageW;
+  let height = width / aspect;
+  const usableW = Math.max(1, pageW - 2 * margin);
+  const usableH = Math.max(1, pageH - 2 * margin);
+  const fit = Math.min(1, usableW / width, usableH / height);
+  width *= fit;
+  height *= fit;
+
+  const anchor = $('anchor').value;
+  let x;
+  let y;
+  if (anchor === 'custom') {
+    x = customPosition.fx * Math.max(0, pageW - width);
+    y = customPosition.fy * Math.max(0, pageH - height);
+  } else {
+    x = anchor === 'center' ? (pageW - width) / 2
+      : anchor.includes('right') ? pageW - margin - width : margin;
+    y = anchor === 'center' ? (pageH - height) / 2
+      : anchor.includes('top') ? margin : pageH - margin - height;
+  }
+  return {
+    x: clamp(x, 0, Math.max(0, pageW - width)),
+    y: clamp(y, 0, Math.max(0, pageH - height)),
+    width,
+    height,
+    fit,
+  };
+}
+
+async function refreshSamplePreview() {
+  const box = $('samplePreview');
+  const token = ++sampleToken;
+  const files = state.pendingPdfs;
+  if (!files?.length) {
+    sampleHint(box, 'Add a PDF above and a live sample appears here, drawn on your own first page.');
+    return;
+  }
+  if (!markReady()) {
+    sampleHint(box, markKind() === 'image'
+      ? 'Add a chop image above to see it on your document.'
+      : 'Fill in the certification block above to see it on your document.');
+    return;
+  }
+
+  // The mark's shape and, for a block, everything needed to draw it.
+  let aspect;
+  let cert = null;
+  if (markKind() === 'image') {
+    aspect = state.chop.aspect;
+  } else {
+    const fields = certificateFields();
+    const style = certificateStyle();
+    let font;
+    try {
+      font = await certificateFont(style);
+    } catch {
+      return; // the block preview above already reports a font that failed
+    }
+    if (token !== sampleToken) return;
+    const measure = measurerFor(font);
+    if (certificateWidthProblem(fields, measure, metricsFor(style).fontFraction)) {
+      sampleHint(box, 'The block cannot be laid out yet — see the message above.');
+      return;
+    }
+    const metrics = certificateMetrics(fields, measure, style);
+    aspect = certificateAspect(fields, measure, metrics);
+    cert = { fields, measure, metrics, style };
+  }
+
+  let page;
+  try {
+    page = await loadSamplePage(files[0]);
+  } catch {
+    sampleHint(box, 'Could not render the first page of that PDF for the sample. The run itself may still work.');
+    return;
+  }
+  if (token !== sampleToken) return;
+  buildSampleStage(box, page, aspect, cert);
+}
+
+// The size line under the sample, in the units that matter on paper.
+function describeSampleRect(caption, page, rect) {
+  const cm = (pt) => ptToCm(pt).toFixed(1);
+  const strong = document.createElement('b');
+  strong.textContent = `${cm(rect.width)} × ${cm(rect.height)} cm `
+    + `(${Math.round(rect.width)} × ${Math.round(rect.height)} pt)`;
+  caption.replaceChildren(
+    `Page 1 of ${page.name} — `,
+    strong,
+    ` · ${Math.round((rect.width / page.pageWidth) * 100)}% of the page width`
+    + (rect.fit < 1 ? ' · cut down to fit between the margins' : ''),
+  );
+}
+
+function buildSampleStage(box, page, aspect, cert) {
+  const rect = sampleSettingsRect(page.pageWidth, page.pageHeight, aspect);
+
+  const stage = document.createElement('div');
+  stage.className = 'stage';
+  stage.appendChild(page.canvas);
+
+  const markBox = document.createElement('div');
+  markBox.className = 'chop-box';
+  if (state.chop || cert) {
+    if (cert) {
+      const sx = page.canvas.width / page.pageWidth;
+      const sy = page.canvas.height / page.pageHeight;
+      const face = document.createElement('canvas');
+      face.width = Math.max(1, Math.round(rect.width * sx));
+      face.height = Math.max(1, Math.round(rect.height * sy));
+      paintCertificate(face.getContext('2d'), { ...rect, x: 0, y: 0 }, sx, sy, cert);
+      markBox.appendChild(face);
+    } else {
+      const img = document.createElement('img');
+      img.src = state.chop.dataUrl;
+      markBox.appendChild(img);
+    }
+  }
+  const handle = document.createElement('div');
+  handle.className = 'handle';
+  markBox.appendChild(handle);
+  stage.appendChild(markBox);
+
+  const caption = document.createElement('div');
+  caption.className = 'sample-caption';
+  describeSampleRect(caption, page, rect);
+
+  const hint = document.createElement('p');
+  hint.className = 'hint';
+  hint.textContent = 'Drag it to choose a corner, or drag the blue handle to resize — the sliders follow. '
+    + 'On a busy page the stamp still moves to the nearest clear space.';
+
+  box.replaceChildren(stage, caption, hint);
+  positionSampleBox(markBox, page, rect);
+  wireSampleDrag(stage, markBox, handle, page, rect, aspect, cert, caption);
+}
+
+function positionSampleBox(markBox, page, rect) {
+  markBox.style.left = `${(rect.x / page.pageWidth) * 100}%`;
+  markBox.style.top = `${(rect.y / page.pageHeight) * 100}%`;
+  markBox.style.width = `${(rect.width / page.pageWidth) * 100}%`;
+  markBox.style.height = `${(rect.height / page.pageHeight) * 100}%`;
+}
+
+// Drag ends are turned back into settings — the corner select, the edge-gap
+// slider, the size sliders — and the box then snaps to what those settings
+// actually mean, so the sample never shows a position the run cannot produce.
+function wireSampleDrag(stage, markBox, handle, page, rect, aspect, cert, caption) {
+  let mode = null;
+  let start = null;
+  const { pageWidth, pageHeight } = page;
+
+  const begin = (event, nextMode) => {
+    event.preventDefault();
+    event.stopPropagation();
+    // The sliders this drag writes to are frozen while a run holds them, and
+    // a drag that lands in disabled controls would be an edit that quietly
+    // changes nothing.
+    if (state.phase === 'running' || state.exporting) return;
+    mode = nextMode;
+    const bounds = stage.getBoundingClientRect();
+    start = {
+      pointerX: event.clientX,
+      pointerY: event.clientY,
+      x: rect.x,
+      y: rect.y,
+      width: rect.width,
+      height: rect.height,
+      scaleX: pageWidth / bounds.width,
+      scaleY: pageHeight / bounds.height,
+    };
+    markBox.classList.add('dragging');
+    markBox.setPointerCapture(event.pointerId);
+  };
+
+  markBox.addEventListener('pointerdown', (e) => begin(e, 'move'));
+  handle.addEventListener('pointerdown', (e) => begin(e, 'resize'));
+
+  markBox.addEventListener('pointermove', (event) => {
+    if (!mode) return;
+    const dx = (event.clientX - start.pointerX) * start.scaleX;
+    const dy = (event.clientY - start.pointerY) * start.scaleY;
+    if (mode === 'move') {
+      rect.x = clamp(start.x + dx, 0, pageWidth - start.width);
+      rect.y = clamp(start.y + dy, 0, pageHeight - start.height);
+    } else {
+      const minWidth = pageWidth * 0.04;
+      const widthLimit = Math.max(minWidth, pageWidth - start.x);
+      const heightLimit = Math.max(minWidth, (pageHeight - start.y) * aspect);
+      rect.width = clamp(start.width + resizeDelta(dx, dy, aspect), minWidth, Math.min(widthLimit, heightLimit));
+      rect.height = rect.width / aspect;
+    }
+    positionSampleBox(markBox, page, rect);
+    describeSampleRect(caption, page, rect);
+  });
+
+  const end = (event) => {
+    if (!mode) return;
+    const finished = mode;
+    mode = null;
+    markBox.classList.remove('dragging');
+    // Releasing a pointer that is already gone throws, and a throw here would
+    // swallow the edit the drag just made.
+    try { markBox.releasePointerCapture(event.pointerId); } catch { /* already released */ }
+    if (finished === 'move') applySamplePosition(rect, pageWidth, pageHeight);
+    else applySampleSize(rect, start, pageWidth, cert);
+  };
+  markBox.addEventListener('pointerup', end);
+  markBox.addEventListener('pointercancel', end);
+}
+
+// Dropped somewhere on the page → that exact spot, kept as fractions of the
+// page's free room so it holds on pages of any size. The position select
+// switches to Custom to say so; picking a corner from it again leaves the
+// custom spot remembered for next time.
+function applySamplePosition(rect, pageWidth, pageHeight) {
+  customPosition = {
+    fx: pageWidth - rect.width > 1 ? clamp(rect.x / (pageWidth - rect.width), 0, 1) : 0,
+    fy: pageHeight - rect.height > 1 ? clamp(rect.y / (pageHeight - rect.height), 0, 1) : 0,
+  };
+  $('anchor').value = 'custom';
+
+  discardReview('Position changed');
+  syncLabels();
+  refreshCertificatePreview();
+  refreshSamplePreview();
+}
+
+// Resized by hand → the width slider, and for a block the height slider too,
+// so the block's shape survives the round-trip through the settings.
+function applySampleSize(rect, start, pageWidth, cert) {
+  const widthBox = $('chopWidth');
+  const widthCm = ptToCm((rect.width / pageWidth) * REFERENCE_PAGE.width);
+  widthBox.value = clamp(widthCm, Number(widthBox.min), Number(widthBox.max)).toFixed(1);
+
+  if (cert) {
+    const grew = rect.width / start.width;
+    const heightBox = $('certHeight');
+    const heightCm = Number(heightBox.value) * grew;
+    heightBox.value = clamp(heightCm, Number(heightBox.min), Number(heightBox.max)).toFixed(1);
+  }
+
+  discardReview('Size changed');
+  syncLabels();
+  refreshCertificatePreview();
+  refreshSamplePreview();
 }
 
 // --- misc ------------------------------------------------------------------
@@ -3780,20 +4378,45 @@ function init() {
     chopWidth: 'Size changed',
     certTextSize: 'Text size changed',
     certHeight: 'Height changed',
+    certLineSpacing: 'Line spacing changed',
     minScale: 'Shrink limit changed',
     margin: 'Edge gap changed',
     overlapOpacity: 'Overlap setting changed',
+    cleanTolerance: 'Clear-space tolerance changed',
+    driftLimit: 'Move limit changed',
   };
+  // A number box accepts typing, and typing can leave it holding 500, -3 or
+  // nothing at all. Settled values are snapped back into the box's own range —
+  // on `change`, once the field is left, not per keystroke, so someone typing
+  // "12" is not corrected at the "1".
+  const sanitiseNumberInput = (el) => {
+    const min = Number(el.min);
+    const max = Number(el.max);
+    const value = Number(el.value);
+    const clamped = el.value !== '' && Number.isFinite(value)
+      ? Math.min(max, Math.max(min, value))
+      : Number(el.defaultValue);
+    el.value = String(clamped);
+  };
+
   Object.entries(PLACEMENT_CONTROLS).forEach(([id, reason]) => {
     $(id).addEventListener('input', () => {
       syncLabels();
       refreshCertificatePreview();
+      refreshSamplePreview();
     });
-    $(id).addEventListener('change', () => discardReview(reason));
+    $(id).addEventListener('change', () => {
+      sanitiseNumberInput($(id));
+      syncLabels();
+      refreshCertificatePreview();
+      refreshSamplePreview();
+      discardReview(reason);
+    });
   });
   $('anchor').addEventListener('change', () => {
     discardReview('Corner changed');
     refreshCertificatePreview();
+    refreshSamplePreview();
   });
 
   // Switching what gets stamped invalidates a finished review for the same
@@ -3802,33 +4425,44 @@ function init() {
   ['markImage', 'markCertificate'].forEach((id) =>
     $(id).addEventListener('change', () => {
       discardReview();
-      // A block needs far more room than a seal, so carry the slider to a
+      // A block needs far more room than a seal, so carry the width to a
       // sensible default the first time rather than leaving it at chop size.
-      if (markKind() === 'certificate' && Number($('chopWidth').value) < 40) $('chopWidth').value = 55;
-      if (markKind() === 'image' && Number($('chopWidth').value) > 45) $('chopWidth').value = 22;
+      // 11.9 cm and 4.8 cm are the old 55% and 22% of a Letter page.
+      if (markKind() === 'certificate' && Number($('chopWidth').value) < 8.6) $('chopWidth').value = '11.9';
+      if (markKind() === 'image' && Number($('chopWidth').value) > 9.7) $('chopWidth').value = '4.8';
       syncLabels();
       refreshRunButton();
       refreshCertificatePreview();
+      refreshSamplePreview();
     }));
 
   // The colours change nothing about where the block goes, but the panel does:
   // it insets the text, which changes the block's proportions, which is what
-  // every placement on a finished review was measured against. Simpler to
-  // treat all of them alike than to explain why one of them is different.
+  // every placement on a finished review was measured against. The font and
+  // weight change the glyph widths every line break was measured with, so they
+  // belong here too. Simpler to treat all of them alike than to explain why
+  // one of them is different.
   [
-    'certIntro', 'certRole', 'certName', 'certMembership', 'certPcNo', 'certDate',
-    'certInk', 'certPanelColour',
+    'certIntro', 'certDetails',
+    'certInk', 'certPanelColour', 'certFont', 'certBold',
   ].forEach((id) =>
     $(id).addEventListener('input', () => {
       discardReview();
       refreshRunButton();
       refreshCertificatePreview();
+      refreshSamplePreview();
     }));
 
   $('certPanel').addEventListener('change', () => {
     discardReview();
     syncLabels();
     refreshCertificatePreview();
+    refreshSamplePreview();
+  });
+  $('stayPut').addEventListener('change', () => {
+    discardReview('Placement mode changed');
+    syncLabels();
+    refreshSamplePreview();
   });
   $('aiEnabled').addEventListener('change', () => {
     // The control is disabled during a run, so this cannot normally fire then.
@@ -3893,6 +4527,7 @@ function init() {
 
   restoreSettings();
   refreshCertificatePreview();
+  refreshSamplePreview();
 }
 
 function setAllIncluded(included) {
