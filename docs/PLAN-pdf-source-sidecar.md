@@ -153,9 +153,42 @@ figures stay advisory and must be verified against the PDF.
   results stay in the memory note and this plan flips to "rejected, evidence
   attached".
 
+## Peer-Review Hardening (2026-08-11, post-Phase 4)
+
+Seven findings from an external review; five fixed, two deferred with reasons:
+
+- **FIXED (was CRITICAL): partial sidecar published.** A failed middle page
+  was silently omitted while its neighbours stitched into one
+  apparently-complete note — and the prompt calls the structure trustworthy.
+  Publication is now all-or-nothing (`write_pdf_sidecar` refuses when any
+  requested page failed; skip reason `transcription_incomplete`).
+- **FIXED (HIGH): unbounded, loop-blocking pre-agent stage.** Page rendering
+  (~5 s for 20 pages) ran on the event loop, starving SSE keepalives; model
+  calls had no deadline. Rendering now runs off-thread; per-page (120 s) and
+  overall (600 s) timeouts bound the stage. Residual: Stop-All still cannot
+  interrupt the stage mid-flight (it runs before the coordinator task
+  exists) — client disconnect cancels it, and the deadlines cap the stall.
+- **FIXED (HIGH): repeats dropped `source_meta.json`.** Repeat 2+ read the
+  copied sidecar as Word-origin, so repeat prompts diverged. The meta file
+  now travels in the repeat-staging bundle, and meta is written BEFORE html
+  so a crash between the two can't misclassify the sidecar.
+- **FIXED (MEDIUM): contradictory trust story.** `read_source_note`'s
+  description and the two source nudges said "ORIGINAL Word source" / "real
+  Word borders" on transcription runs. All three now branch on
+  `NotesDeps.source_html_origin`; Word-run output stays byte-identical.
+- **FIXED (MEDIUM): raw provider exception text in the SSE skip event.** Now
+  class name only; full detail stays in the server log.
+- **DEFERRED (MEDIUM): frontend drops the `pdf_sidecar` SSE event, and the
+  Settings form has no toggle.** Both are the UI half of a feature that
+  ships dark; an admin enables it via `.env` or `POST /api/settings` today.
+  Bundle both (event display + admin toggle + web tests) into the
+  default-flip milestone — building UI for a hidden feature invites drift.
+
 ## Out of Scope (explicitly)
 
 - Digital text-layer PDFs (revisit after Phase 4 evidence).
 - Feeding source-integrity generations/verdicts from transcriptions.
 - Docling/granite in any form.
 - Changing the Word (`.docx`) sidecar path in any way.
+- Frontend surfacing (event + Settings toggle) until the default-flip
+  milestone — see Peer-Review Hardening above.

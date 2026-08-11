@@ -2958,18 +2958,26 @@ async def _maybe_build_pdf_sidecar(
         result = await transcribe_pages(pdf_path, sorted(pages), model)
         out = write_pdf_sidecar(pdf_path, result, model_name=model_name)
         if out is None:
-            return {"status": "skipped", "reason": "no_pages_transcribed",
-                    "failed_pages": result.failed_pages}
+            # All-or-nothing publication: any failed page refuses the sidecar
+            # (a partial one reads as complete to the copy-verbatim agent).
+            reason = ("transcription_incomplete" if result.failed_pages
+                      else "no_pages_transcribed")
+            return {"status": "skipped", "reason": reason,
+                    "failed_pages": result.failed_pages,
+                    "usage": result.usage}
         return {
             "status": "built",
             "pages": len(result.pages_html),
-            "failed_pages": result.failed_pages,
             "usage": result.usage,
         }
     except Exception as exc:  # noqa: BLE001 — best-effort by contract
+        # Class name only: provider exceptions can carry endpoint/request
+        # detail that doesn't belong in a client-facing SSE payload (the
+        # connection-test pattern). Full detail stays in the server log.
         logger.warning("pdf_sidecar pass failed; run proceeds without it",
                        exc_info=True)
-        return {"status": "skipped", "reason": f"error: {exc}"}
+        return {"status": "skipped",
+                "reason": f"error: {type(exc).__name__}"}
 
 
 # --------------------------------------------------------------------------
@@ -6761,8 +6769,12 @@ def _seed_repeat_session_dir(base_dir: Path, index: int) -> Path:
     sub = base_dir / f"repeat_{index}"
     sub.mkdir(parents=True, exist_ok=True)
     import shutil
+    # source_meta.json travels WITH source.html (peer review 2026-08-11):
+    # without it a transcribed sidecar is misclassified as Word-origin on
+    # repeats 1..N-1, so repeat prompts diverge and consistency scoring
+    # compares two different workflows.
     for name in ("uploaded.pdf", "uploaded.docx", "source.html",
-                 "original_filename.txt"):
+                 "source_meta.json", "original_filename.txt"):
         src = base_dir / name
         if src.exists():
             try:
