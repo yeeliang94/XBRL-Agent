@@ -4607,6 +4607,11 @@ async def run_multi_agent_stream(
             config.pdf_path, notes_to_run, infopack, model, model_name,
         )
         if sidecar_event is not None:
+            # Persist alongside the emit so the History run page can show the
+            # same notice after a reload (the live event is otherwise gone —
+            # the transcript caveat matters most when reviewing the workbook).
+            from ingest.pdf_sidecar import write_sidecar_outcome
+            write_sidecar_outcome(output_dir, sidecar_event)
             yield {"event": "pdf_sidecar", "data": sidecar_event}
 
         # Phase 6.5: create run_agents rows UP FRONT so tool events can be

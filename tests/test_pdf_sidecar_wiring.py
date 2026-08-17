@@ -197,3 +197,84 @@ def test_settings_round_trip(tmp_path, monkeypatch):
     assert server._pdf_sidecar_enabled() is True
 
     assert "pdf_sidecar" in _ADMIN_ONLY_SETTINGS_KEYS
+
+
+# ---------------------------------------------------------------------------
+# Reload persistence (peer review 2026-08-18): the live SSE event is gone on a
+# page reload, but the "figures are model-read — verify" caveat matters most
+# when the workbook is reviewed later. The outcome is kept on disk under the
+# run's output dir (hybrid storage, gotcha #6 — no schema step) and read back
+# by GET /api/runs/{id}.
+# ---------------------------------------------------------------------------
+
+
+def test_outcome_round_trips_through_disk(tmp_path):
+    from ingest.pdf_sidecar import (
+        SIDECAR_OUTCOME_NAME, read_sidecar_outcome, write_sidecar_outcome,
+    )
+    payload = {"status": "skipped", "reason": "too_many_pages",
+               "pages_requested": 120, "page_cap": 80}
+    write_sidecar_outcome(tmp_path, payload)
+    assert (tmp_path / SIDECAR_OUTCOME_NAME).is_file()
+    assert read_sidecar_outcome(tmp_path) == payload
+    # Absent / unreadable / missing dir → None, never a raise.
+    assert read_sidecar_outcome(tmp_path / "nope") is None
+    assert read_sidecar_outcome(None) is None
+    (tmp_path / SIDECAR_OUTCOME_NAME).write_text("not json", encoding="utf-8")
+    assert read_sidecar_outcome(tmp_path) is None
+
+
+def test_write_failure_is_swallowed(tmp_path):
+    from ingest.pdf_sidecar import write_sidecar_outcome
+    # A FILE where the output dir should be: the write raises OSError inside,
+    # and the helper must not propagate it (the run never fails over a notice).
+    blocker = tmp_path / "blocker"
+    blocker.write_text("x", encoding="utf-8")
+    write_sidecar_outcome(blocker, {"status": "built", "pages": 1})
+
+
+def test_run_detail_returns_persisted_outcome(tmp_path, monkeypatch):
+    """GET /api/runs/{id} carries `pdf_sidecar` from the run's output dir, and
+    null when no outcome file exists (pre-feature run / pass did not apply)."""
+    import sqlite3
+    from db.schema import init_db
+    from ingest.pdf_sidecar import write_sidecar_outcome
+
+    db = tmp_path / "audit.db"
+    init_db(db)
+    out_dir = tmp_path / "run_out"
+    out_dir.mkdir()
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(
+            "INSERT INTO runs (id, status, created_at, pdf_filename, output_dir) "
+            "VALUES (1, 'completed', '2026-08-18T00:00:00', 'scan.pdf', ?)",
+            (str(out_dir),),
+        )
+        conn.execute(
+            "INSERT INTO runs (id, status, created_at, pdf_filename, output_dir) "
+            "VALUES (2, 'completed', '2026-08-18T00:00:00', 'text.pdf', ?)",
+            (str(tmp_path / "other"),),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    monkeypatch.setattr(server, "_open_audit_conn", lambda: sqlite3.connect(str(db)))
+
+    write_sidecar_outcome(out_dir, {"status": "built", "pages": 20,
+                                    "usage": {"in": 56760, "out": 13976}})
+    detail = client.get("/api/runs/1").json()
+    assert detail["pdf_sidecar"] == {"status": "built", "pages": 20,
+                                     "usage": {"in": 56760, "out": 13976}}
+    assert client.get("/api/runs/2").json()["pdf_sidecar"] is None
+
+
+def test_builder_outcome_is_persisted_by_the_stream(tmp_path, monkeypatch):
+    """The stream writes the outcome next to the emit: check the write helper
+    is what the server calls with the emitted payload (source-level pin, the
+    stream itself needs a full run to exercise)."""
+    import inspect
+    src = inspect.getsource(server)
+    emit = src.index('yield {"event": "pdf_sidecar", "data": sidecar_event}')
+    persist = src.index("write_sidecar_outcome(output_dir, sidecar_event)")
+    assert persist < emit

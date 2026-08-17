@@ -43,6 +43,11 @@ from notes.source_snippets import source_html_path_for
 logger = logging.getLogger(__name__)
 
 SOURCE_META_NAME = "source_meta.json"
+# The run-level outcome of the pass (the ``pdf_sidecar`` SSE payload), kept on
+# disk so the History run page can show the same notice after a reload. On
+# disk rather than the DB per the hybrid-storage rule (gotcha #6): a small
+# per-run artifact, no schema step. Absent = the pass did not apply.
+SIDECAR_OUTCOME_NAME = "pdf_sidecar_outcome.json"
 
 # Gotcha #31: provider vision inputs are downscaled to a fixed token budget —
 # measured identical tokens at 150/200/400 DPI, with 400 answering slightly
@@ -261,6 +266,32 @@ def read_source_meta(pdf_path: str | Path) -> Optional[dict]:
     meta_path = source_html_path_for(pdf_path).parent / SOURCE_META_NAME
     try:
         data = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def write_sidecar_outcome(output_dir: str | Path, outcome: dict) -> None:
+    """Persist the ``pdf_sidecar`` event payload under the run's output dir.
+
+    Best-effort: a write failure is logged, never raised — the live SSE event
+    has already told the operator, and the run must not fail over a notice.
+    """
+    try:
+        path = Path(output_dir) / SIDECAR_OUTCOME_NAME
+        path.write_text(json.dumps(outcome, indent=2), encoding="utf-8")
+    except (OSError, TypeError, ValueError):
+        logger.warning("pdf_sidecar: could not persist outcome under %s",
+                       output_dir, exc_info=True)
+
+
+def read_sidecar_outcome(output_dir: str | Path | None) -> Optional[dict]:
+    """The persisted ``pdf_sidecar`` payload, or None (no file / unreadable)."""
+    if not output_dir:
+        return None
+    path = Path(output_dir) / SIDECAR_OUTCOME_NAME
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     return data if isinstance(data, dict) else None

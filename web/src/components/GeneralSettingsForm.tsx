@@ -24,8 +24,8 @@ import { ClipboardFormatControls } from "./ClipboardFormatControls";
 // ---------------------------------------------------------------------------
 
 interface Props {
-  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; spot_check?: boolean; spot_check_mode?: string; entity_memory?: boolean; notes_source_integrity?: SourceIntegrityMode; notes_source_integrity_choices?: string[]; thinking_levels?: Record<string, string>; thinking_level_choices?: string[]; thinking_level_choices_by_model?: Record<string, string[]>; notes_table_style?: Partial<ClipboardFormatOptions>; available_models?: ModelEntry[] }>;
-  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; auto_review: boolean; spot_check: boolean; spot_check_mode: "light" | "full"; entity_memory: boolean; notes_source_integrity: SourceIntegrityMode; thinking_levels: Record<string, string>; notes_table_style: ClipboardFormatOptions }>) => Promise<{ status: string }>;
+  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; spot_check?: boolean; spot_check_mode?: string; entity_memory?: boolean; pdf_sidecar?: boolean; notes_source_integrity?: SourceIntegrityMode; notes_source_integrity_choices?: string[]; thinking_levels?: Record<string, string>; thinking_level_choices?: string[]; thinking_level_choices_by_model?: Record<string, string[]>; notes_table_style?: Partial<ClipboardFormatOptions>; available_models?: ModelEntry[] }>;
+  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; auto_review: boolean; spot_check: boolean; spot_check_mode: "light" | "full"; entity_memory: boolean; pdf_sidecar: boolean; notes_source_integrity: SourceIntegrityMode; thinking_levels: Record<string, string>; notes_table_style: ClipboardFormatOptions }>) => Promise<{ status: string }>;
   testConnection: (body: Partial<{ proxy_url: string; api_key: string; model: string }>) => Promise<{ status: string; model?: string; latency_ms?: number; message?: string }>;
   // When provided, a Cancel button is shown (used by the modal wrapper). The
   // page host omits it — there's nothing to cancel out of.
@@ -309,6 +309,10 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
   const [levelChoicesByModel, setLevelChoicesByModel] =
     useState<Record<string, string[]>>({});
   const [entityMemory, setEntityMemory] = useState(true);
+  // Scanned-PDF source transcript (docs/PLAN-pdf-source-sidecar.md). Default
+  // OFF: it adds one paid vision call per notes page, so an admin turns it
+  // on deliberately rather than every scanned upload paying for it.
+  const [pdfSidecar, setPdfSidecar] = useState(false);
   // Notes source-integrity rollout mode (gotcha #31). Default off — `shadow`
   // computes the verdict and changes nothing, `enforce` makes the block-id
   // path live and lets an unresolved block tip the run status.
@@ -365,6 +369,9 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         setLevelChoices(s.thinking_level_choices || []);
         setLevelChoicesByModel(s.thinking_level_choices_by_model || {});
         setEntityMemory(s.entity_memory !== false);
+        // Default to OFF when the field is absent (older backend) — the
+        // opposite of the other toggles, because this one costs money.
+        setPdfSidecar(s.pdf_sidecar === true);
         // The server's own list decides what is valid — this build's knowledge
         // of the modes does not. Keep whatever mode it reports as long as it is
         // in that list; only an absent or genuinely out-of-list value falls
@@ -418,6 +425,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         spot_check: spotCheck,
         spot_check_mode: spotCheckMode,
         entity_memory: entityMemory,
+        pdf_sidecar: pdfSidecar,
         notes_source_integrity: sourceIntegrity,
         // Send EVERY role, with "" for the ones set back to the provider
         // default. The server clears only the keys it is given, so omitting a
@@ -443,7 +451,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
     } finally {
       setSaving(false);
     }
-  }, [dirty, model, proxyUrl, apiKey, autoReview, spotCheck, spotCheckMode, entityMemory, sourceIntegrity, thinkingLevels, saveSettings]);
+  }, [dirty, model, proxyUrl, apiKey, autoReview, spotCheck, spotCheckMode, entityMemory, pdfSidecar, sourceIntegrity, thinkingLevels, saveSettings]);
 
   // --- Test connection ---
   const handleTestConnection = useCallback(async () => {
@@ -740,6 +748,42 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         )}
         <p style={styles.helperText}>
           Word uploads only. PDF filings are unaffected by this setting.
+        </p>
+      </div>
+
+      <SettingsSectionHeading
+        title="Scanned PDF handling"
+        description="Controls whether scanned (image-only) PDFs get a transcript for the notes agents to copy from."
+      />
+      {/* Scanned-PDF source transcript toggle (docs/PLAN-pdf-source-sidecar.md).
+          A checkbox, not a mode picker: the pass either runs or it doesn't.
+          Admin-only server-side (it changes cost for everyone). */}
+      <div style={styles.fieldGroup}>
+        <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            checked={pdfSidecar}
+            onChange={(e) => { setPdfSidecar(e.target.checked); setDirty(true); }}
+            disabled={readOnly}
+            aria-label="Transcribe scanned PDF notes pages before extraction"
+          />
+          <span style={styles.label}>Transcribe scanned PDF notes pages before extraction</span>
+        </label>
+        <p style={styles.helperText}>
+          When a filing is uploaded as a scanned PDF (no selectable text), the
+          notes pages are first read by the AI into a text transcript with the
+          tables and rules kept. Notes agents then copy tables and layout from
+          that transcript the way they do from a Word source, instead of
+          re-describing what they see. Figures in the transcript are treated
+          as unverified — agents are told to check every number against the
+          PDF. Adds one image-reading call per notes page (roughly a quarter
+          of a US dollar for a 20-page notes section). If the transcript
+          cannot be built the run continues as before, and the run page says
+          why.
+        </p>
+        <p style={styles.helperText}>
+          Scanned PDFs only. PDFs with selectable text and Word uploads are
+          unaffected by this setting.
         </p>
       </div>
 
