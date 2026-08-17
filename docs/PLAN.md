@@ -1,336 +1,390 @@
-# Implementation Plan: Extraction Harness Efficiency — Measure Right, Then Cut the Static Payload
+# Implementation Plan: Template Map — Give the Agent the Field List the Database Already Knows
 
 **Overall Progress:** `0%`
-**PRD Reference:** none — shaped in-session 2026-07-27 from a telemetry review of
-235 runs / 462 agent executions / 1,298 per-turn rows / 297 conversation traces
-in `output/xbrl_agent.db`. Companion doc:
-`docs/PLAN-agent-efficiency-and-recovery.md` (the reviewer-side portfolio — this
-plan is its extraction-side counterpart and deliberately does not overlap it).
-**Last Updated:** 2026-07-27
+**PRD Reference:** none — shaped in-session 2026-08-17 from a walkthrough of how
+extraction agents learn which fields to fill (`/explain`), followed by
+measurements on the live templates, the concept database and 303 historic
+conversation traces. Companion doc: `docs/PLAN-extraction-harness-efficiency.md`
+(the cost-side plan this file replaces in place — see the note below).
+**Last Updated:** 2026-08-17
 
-> Replaces the previous PLAN.md for **mTool Fill Pipeline — Facts → Filled MBRS
-> Template**, which was at **75% with Phases 1 / 3 / 5 still open** (all gated on
-> Windows recon evidence or a later variant pass). That work is **not cancelled**
-> — it was copied verbatim to `docs/PLAN-mtool-fill-pipeline.md` before this file
-> was replaced. Same replace-in-place convention this file has used before, but
-> the previous occupant was unfinished, so it was preserved rather than left to
-> git history alone.
+> Replaces the previous PLAN.md, **Extraction Harness Efficiency — Measure
+> Right, Then Cut the Static Payload** (2026-07-27, 0% done). That plan is
+> **not cancelled** — it was copied verbatim to
+> `docs/PLAN-extraction-harness-efficiency.md`. Its Phase 2 Step 4
+> ("row-oriented template summary") is **superseded by Phase 2 of this plan**,
+> which produces the row-level rendering from the concept database rather than
+> re-rendering the Excel dump; its Step 5 (move the template into the static
+> prefix) is sequenced here as Phase 5 because it depends on the map being
+> compact first. Everything else in that plan (pricing fix, economics report,
+> scout default, fan-out cap, SOCI/SOPL merge probe) stays open in its new home
+> and is untouched here.
 
 ## Summary
 
-Telemetry says the extraction pipeline's cost is not spent where we assumed.
-**90–97% of every extraction agent's billed text is a static prefix re-sent on
-every turn**, and its largest single item — the `read_template` summary, ~20,000
-tokens on SOFP — is fetched via an avoidable tool round trip and rendered one
-line per *cell* instead of one line per *row*. Separately, our reported dollar
-figures are roughly 3× too high because `pricing.py` bills cache reads at the
-full input rate. This plan fixes the measurement first, then cuts the static
-payload, then stops the five face agents from re-reading the same PDF pages.
+The extraction agent learns the fillable fields from a per-cell dump of the
+Excel template (`read_template`), and that dump is wrong in a way that costs
+turns: on the MFRS Company SOFP face sheet **37 of 63 rows are labelled
+`[DATA_ENTRY]` although their value cells are formulas** — the correct place to
+write is the sub-sheet. The concept database (`concept_nodes`,
+`concept_render_aliases`, `concept_edges`, `concept_definitions_*.json`)
+already holds the correct row-level classification, the "linked to sub-sheet
+row N" relationship, the summation structure, and the official SSM definitions.
+This plan renders the agent's template map from that database — one line per
+row, one status word, scoped per sheet, with definitions one call away — and
+adds a stable row key to `write_facts` so an ambiguous label can no longer
+misroute a write. The goal is fewer wasted turns and fewer wrong cells on
+cheaper models; cost reduction is a side effect, not the target.
+
+## Why now — the measurements
+
+| Signal | Value | Source |
+|---|---|---|
+| `read_template` payload, MFRS Company SOFP | 79,563 chars ≈ 20k tokens, 754 lines, one line per **cell** | `_summarize_template` on the live template |
+| Same figure, other MFRS Company face templates | OrderOfLiquidity 13.8k tok · SOPL 6.0–6.3k · SOCIE 10.2k · SOCF 2.5–4.3k · SOCI 1.7–2.0k | same |
+| Face-sheet rows shown `[DATA_ENTRY]` whose value cell is a formula (SOFP-CuNonCu) | **37 of 63** | `tools/template_reader.read_template` per-row scan |
+| Face-sheet rows that are truly writable (SOFP-CuNonCu) | 26 | same |
+| Refused writes across 303 historic traces — "formula cell" | **121** | `output/*/*_conversation_trace.json`, count of the guard message |
+| Refused writes — "no matching label" | 28 | same |
+| Refused writes — "abstract row" | 2 | same (the guard + `[ABSTRACT]` tag work — keep both) |
+| Face rows with an exact SSM definition available | MFRS 60% (783/1285) · MPERS 77% (715/927) | `concept_definitions_*.json` joined on normalised label |
+| Face agents whose first tool call is `read_template` | 89% (332/373) | companion plan, 2026-07-27 |
+| Eval scores ever computed | 0 (1 benchmark, 102 gold facts) | companion plan |
+
+The `formula_cell` refusal is the dominant wasted turn, and it is the direct
+consequence of the per-cell rendering: the tag next to the label says
+"writable", the prose in `prompts/sofp.md` says "many cells are formulas, fill
+the sub-sheet first", and a cheaper model follows the tag.
 
 ## Key Decisions
 
-- **Measurement before optimisation.** `pricing.py` prices every prompt token at
-  the full rate (its own docstring admits this), while SOFP runs at a 72% cache
-  hit. Reported $1.53 for SOFP is really ~$0.50–0.60. Every later step here is
-  gated on a number, so the numbers have to be right first.
-- **Attack extraction, not the reviewer.** The reviewer is ~15% of run cost and
-  `docs/PLAN-agent-efficiency-and-recovery.md` already covers it. SOFP alone is
-  ~45% — more than the other four face statements combined — and 97% of its text
-  is static. That is where the money is.
-- **This is not CodeMode.** The deleted spike failed because it tried to script
-  away vision and accounting judgement. Nothing here touches judgement: we are
-  moving a deterministic string from a tool return into a system prompt, and
-  making it shorter.
-- **Compress before relocating.** Two separate changes to the template payload,
-  landed separately, so if quality moves we know which one moved it.
-- **Every behaviour change ships behind an env kill-switch, default off during
-  rollout** — repo convention (`XBRL_FACT_BASED_CHECKS`, `XBRL_SPOT_CHECK`, …).
-- **The SOCI/SOPL merge is decision-gated, not pre-approved.** It is the only
-  step that changes agent topology, and it is sequenced last so it is judged
-  against the post-optimisation baseline rather than today's.
-- **Report both numbers.** Until Step 1 is live everywhere, every cost figure in
-  this doc carries the pre-cache estimate *and* the cache-adjusted figure.
-
-## Current Baseline (measured 2026-07-27 — the "before" picture)
-
-> **Corrected 2026-07-27 (second pass).** The first draft of this table was
-> contaminated two ways and both are now fixed:
-> (a) **CodeMode runs were included.** Runs **231, 233, 235** ran with the
-> since-deleted `XBRL_CODE_MODE` seam on (`run_code` calls in `agent_events`;
-> run 233's SOFP is the flag-on failure recorded in the spike's A/B). Those
-> runs cost ~$2.09 mean vs ~$1.42 without, and inflated the baseline ~8%. They
-> are now excluded from every figure below.
-> (b) **Static-prefix share was over-counted** by a recursive measurement that
-> double-counted nested parts. Re-measured flat: **73–90%, not 90–97%.**
-> The direction and ranking of levers are unchanged; the Phase 2 gate is
-> measured against these corrected numbers.
-
-| Signal | Value (CodeMode runs excluded) |
-|---|---|
-| SOFP reported cost / true cost | $1.42 mean, $1.60 median / ~$0.45–0.55 (72% cache hit) |
-| SOFP cumulative prompt tokens | 552,290 mean |
-| SOFP `read_template` payload | **79,563 chars** (~20k tokens), 755 lines, 2 sheets — byte-identical on every run, CodeMode or not (it is deterministic from the template file). Median across older traces on other variants: 55,095 |
-| Static share of billed text | SOCIE 90%, SOPL 75%, SOCI 75%, SOCF 74%, **SOFP 73%**, notes 75–86% |
-| Agents whose first tool is `read_template` | 332 / 373 (89%) |
-| Model requests : tool-call batches (SOFP) | 202 : 202 (exactly 1:1) |
-| Face-agent PDF page duplication | 1.56× median (max 3.74×); ~10 wasted fetches/run |
-| Highest-overlap pair | SOCI / SOPL — 42% of pages shared |
-| Runs with scout enabled (since June) | 8 / 81 |
-| Eval scores ever computed | **0** (1 benchmark, 102 gold facts loaded) |
-| Top cross-check failures | sopl_to_socie_profit 49, socie_to_sofp_equity 46, socf_to_sofp_cash 45, soci_to_socie_tci 40 — all cross-statement |
-| Concurrency control in `coordinator.py` | none (unbounded `create_task`); real 429s in `agent_events` |
+- **Correctness of the map is the target, not token count.** The companion plan
+  cuts the same payload for cost. This plan is judged on refused-write count and
+  written-fact accuracy on a cheap model. If the map is right, the payload gets
+  smaller as a consequence; if it is merely smaller, that is not enough.
+- **Render from the concept database, not from a re-styled Excel dump.** The DB
+  is where `LEAF / COMPUTED / ABSTRACT`, the alias-to-sub-sheet link, and the
+  summation edges already live. Re-deriving them from Excel a second time keeps
+  two parsers that can disagree. Formula *text* is the one thing the DB lacks
+  (recorded decision Q3 in `docs/PLAN-excel-free-verification.md`); the agent
+  does not need `='SOFP-Sub-CuNonCu'!B39` — it needs "linked → write on
+  Sub r39", which the alias table states directly.
+- **The Excel reader stays for the writer and for the fallback.** `tools/
+  template_reader.py` still feeds `fill_workbook`'s guards and section-header
+  detection (gotcha #17). This plan does not touch the write-side guards.
+- **Ships behind a flag, default off during rollout** — repo convention
+  (`XBRL_TEMPLATE_MAP`). Flag off = today's byte-identical summary. Flip is a
+  Settings change after the Phase 4 gate, not a code revert.
+- **Notes agents are out of scope.** They already seed compact col-A labels
+  into their system prompt (`notes/agent.py::_render_label_catalog`) and their
+  own `read_template` returns labels only. The defect being fixed lives on the
+  face-statement path.
+- **A stable row key is added, the label path is not removed.** `write_facts`
+  already accepts `row`; what it lacks is a cross-check that the row the agent
+  names carries the label the agent thinks it does. Adding that check makes the
+  row key safe on cheaper models; keeping the label path means no prompt is
+  forced to change on day one.
+- **Measurement gate before and after, on a cheap model.** Baseline and A/B run
+  on the same reference PDF with the same cheap model. The Evals workspace
+  exists for this; the accuracy instrument is currently unused (0 scores) and
+  is switched on in Phase 0.
 
 ## Pre-Implementation Checklist
 
-- [ ] 🟥 Confirm `docs/PLAN-mtool-fill-pipeline.md` is the accepted home for the
-      superseded mTool work, and that its open phases are still wanted
-- [ ] 🟥 Confirm no in-flight branch already edits `extraction/agent.py`
-      `_summarize_template` or the `coordinator.py` fan-out
-      (candidates to check: `feat/batched-write-tools`, `feat/compaction-economics`)
-- [ ] 🟥 Agree the Phase 2 and Phase 4 gate numbers **before** Phase 2 lands, so
-      they are frozen before the data that would tempt us to move them
-- [ ] 🟥 Pick one fixed reference PDF + run config as the standard A/B case, so
-      every "Verify" below compares like with like
+- [ ] 🟥 Confirm the companion plan's owner accepts that its Step 4 is
+      superseded here (this file says so; the other file should get a one-line
+      pointer back once agreed).
+- [ ] 🟥 No in-flight branch edits `extraction/agent.py::_summarize_template`,
+      `tools/fill_workbook.py::FactWrite`, or `extraction/history_processors.py`
+      (checked 2026-08-17: `feat/batched-write-tools` and
+      `feat/compaction-economics` are both fully merged; current branch
+      `feat/pdf-source-sidecar` does not touch these files).
+- [ ] 🟥 Pick the reference case: `data/FINCO-Audited-Financial-Statement-2021.pdf`,
+      MFRS Company, all five statements, scout on. Pick the cheap model for the
+      A/B from the configured list (candidates: `openai.gpt-5.4-mini`,
+      `vertex_ai.gemini-3.5-flash`, `bedrock.anthropic.claude-haiku-4-5`) and
+      write the choice into this file.
+- [ ] 🟥 Freeze the Phase 4 gate numbers (below) before the first flag-on run.
 
 ---
 
 ## Tasks
 
-### Phase 1: Make the Instruments Honest
+### Phase 0: Baseline — Count the Wasted Turns Before Changing Anything
 
-Nothing else in this plan can be judged until cost and accuracy are measured
-correctly. All three steps are additive and change no agent behaviour.
+Everything later is judged against these numbers. Read-only; no agent
+behaviour changes.
 
-- [ ] 🟥 **Step 1: Cache-aware cost accounting** — stop overstating spend ~3×.
-  - [ ] 🟥 Add a cache-read price per model to `config/models.json`
-        (`cached_input_price_per_mtok`), defaulting to the full input price when
-        absent so an unpriced model can never silently under-report.
-  - [ ] 🟥 Update `pricing.py`'s estimator to take cache-read tokens and bill
-        them at the cached rate. Reuse the provider denominator logic already
-        proven in `scripts/cache_report.py` — **OpenAI's `prompt_tokens` already
-        includes cached reads; Anthropic's does not.** Getting this backwards
-        double-counts or under-counts.
-  - [ ] 🟥 Keep the pre-cache estimate available alongside the adjusted figure;
-        do not silently change what historical `run_agents.total_cost` rows mean.
-  - [ ] 🟥 Test `tests/test_pricing_cache_adjusted.py`: OpenAI-shaped and
-        Anthropic-shaped inputs each produce the expected figure; a model with no
-        cached rate falls back to full price; zero cache reads reproduces today's
-        number exactly.
-  - **Verify:** `./venv/bin/python scripts/cache_report.py 235` reports a SOFP
-    cost materially below $1.53 (expect ~$0.50–0.60), and the same run with cache
-    reads forced to 0 reproduces the old figure to the cent.
+- [ ] 🟥 **Step 0.1: Refused-write census script** — turn the ad-hoc trace grep
+  into a repeatable instrument.
+  - [ ] 🟥 Dev-only `scripts/report_refused_writes.py [run_id | --all]`: for each
+        face agent, count `write_facts` tool returns containing each guard
+        message (`formula_cell`, `abstract_row`, `no_label`,
+        `redirect_other_sheet`, `labelless_row`), plus the number of
+        `read_template` calls, the number of model requests, and the model.
+        Reads `{output_dir}/{stmt}_conversation_trace.json` and `run_agents`;
+        writes nothing.
+  - [ ] 🟥 A `--compare A B` mode printing two runs side by side, so an A/B is
+        one command.
+  - [ ] 🟥 Group by model so the cheap-model figures are visible on their own.
+  - **Verify:** `--all` reproduces the 2026-08-17 hand count within rounding
+    (formula_cell 121 · no_label 28 · abstract_row 2 across 303 traces).
 
-- [ ] 🟥 **Step 2: One repeatable run-economics report** — the instrument every
-  later "Verify" depends on, so we stop hand-rolling SQL per question.
-  - [ ] 🟥 Dev-only `scripts/report_run_economics.py <run_id>`: per agent —
-        cache-adjusted cost, pre-cache cost, model requests
-        (`node_kind='model_request'`, never raw graph-node counts), tool-call
-        batches, prompt/completion/cache tokens, wall time, PDF pages viewed
-        (calls and unique pages), and the static-prefix share of billed text.
-  - [ ] 🟥 A `--compare A B` mode printing two runs side by side with deltas, so
-        an A/B is one command rather than a spreadsheet.
-  - [ ] 🟥 Read-only: no writes to the audit DB, no new tables, no schema change.
-  - **Verify:** run it against the frozen reference case; every number it prints
-    for run 235 reconciles with the raw `run_agents` / `run_agent_turns` rows.
-
-- [ ] 🟥 **Step 3: Turn the accuracy instrument on** — `eval_scores` is empty, so
-  "improve accuracy" currently has no target to move.
-  - [ ] 🟥 Score the existing benchmark (1 benchmark, 102 gold facts) against
-        every historical run matching its template set, via the existing
-        `eval/grader.py` path — no new grading logic.
-  - [ ] 🟥 Record the resulting accuracy figures in this doc as the frozen
-        accuracy baseline, alongside per-run cross-check pass/fail counts.
-  - [ ] 🟥 If the existing benchmark covers too few runs to be a usable gate, say
-        so explicitly here and seed one more from a known-good run
-        (`POST /api/benchmarks/from-run` — the workbook-upload path silently
-        drops formula cells, gotcha #23).
+- [ ] 🟥 **Step 0.2: Turn the accuracy instrument on** — the same step as the
+  companion plan's Step 3; do it once, here, since this plan needs it first.
+  - [ ] 🟥 Score the existing benchmark against every historical run matching
+        its template set via the existing `eval/grader.py` path — no new grading
+        logic.
+  - [ ] 🟥 If the benchmark covers too few cheap-model runs to be a usable gate,
+        seed one more from a known-good run (`POST /api/benchmarks/from-run`;
+        never the workbook-upload path — it drops uncached formula cells,
+        gotcha #23).
   - **Verify:** the Evals workspace shows a non-zero score for at least one run;
-    that number and its gold fingerprint are written into this doc.
+    the number and its gold fingerprint are recorded in this file.
 
-**Phase 1 gate:** cost figures are cache-adjusted, one command reproduces them,
-and at least one accuracy number exists. No agent behaviour has changed — a
-re-run of the reference case must show an identical tool sequence.
+- [ ] 🟥 **Step 0.3: Baseline runs on the reference case** — two runs with the
+  chosen cheap model, flag off. Record per face agent: refused writes by cause,
+  `read_template` calls, model requests, eval score, cross-check pass/fail.
+  - **Verify:** the table is written into this file under "Baseline (measured)".
+    Two runs, not one — the second tells us how noisy the cheap model is, which
+    sets how large a change has to be before we believe it.
 
----
-
-### Phase 2: Cut the Static Template Payload
-
-The single largest line item in extraction. Two independent changes, landed
-separately.
-
-- [ ] 🟥 **Step 4: Row-oriented template summary** — `_summarize_template` in
-  `extraction/agent.py` emits one line per *cell* (755 lines for SOFP, including
-  `B1`/`C1`/`D1` header cells and the same label repeated across value columns).
-  Emit one line per *row* with its label and which columns accept data.
-  - [ ] 🟥 Rewrite the renderer only. **No change to `TemplateField` parsing, to
-        `read_template`'s contract, or to which rows are writable.**
-  - [ ] 🟥 Preserve verbatim, in the same words: the
-        `[ABSTRACT (section header — do not write)]` marking, the `DATA_ENTRY`
-        marking, and formula visibility. Gotcha #17 — the abstract marking is a
-        load-bearing defence against the 2026-04-26 SOPL-Analysis incident.
-  - [ ] 🟥 Keep the existing process-global memoisation working
-        (`_TEMPLATE_SUMMARY_CACHE`, keyed by `template_id` + mtime).
-  - [ ] 🟥 Flag `XBRL_TEMPLATE_SUMMARY_COMPACT` (default off during rollout, read
-        at call time).
-  - [ ] 🟥 Extend `tests/test_template_reader.py`: existing
-        `test_abstract_rows_marked_in_sopl_analysis` and
-        `test_mpers_templates_carry_header_fills_like_mfrs` pass in **both** flag
-        states; a new test pins that every row present in the verbose rendering
-        is still present in the compact one, for MFRS and MPERS × Company and
-        Group.
-  - [ ] 🟥 `tests/test_fill_workbook_abstract_guard.py` green in both states.
-  - **Verify:** SOFP's `read_template` payload drops from 79,563 chars to under
-    35,000 with no row lost; the reference case produces the same written facts
-    as baseline; full suite green in both flag states.
-
-- [ ] 🟥 **Step 5: Move the template into the static prefix** — removes one model
-  round trip per agent and makes the payload cache-eligible from request #1
-  instead of #3.
-  - [ ] 🟥 Render the (now compact) summary into the agent's system prompt at
-        construction time. It is fully determined by the template file, and 89%
-        of agents fetch it unconditionally as their first act.
-  - [ ] 🟥 **Keep `read_template` registered as a tool.** On the new path it
-        returns a short pointer ("template structure is in your instructions
-        above") rather than being removed — an agent that calls it anyway must
-        not fail, and older prompts must not break.
-  - [ ] 🟥 Update `prompts/_base.md` and any statement prompt instructing the
-        agent to call `read_template` first; update the matching prompt pinning
-        tests in the same commit (repo convention).
-  - [ ] 🟥 Face extraction agents only in this step. Notes agents already seed
-        template labels into their system prompt (`create_notes_agent`) — leave
-        that path alone.
-  - [ ] 🟥 Flag `XBRL_TEMPLATE_IN_PROMPT` (default off during rollout).
-  - [ ] 🟥 Flag-off identity pin: with both Phase 2 flags off, the agent factory
-        snapshot (instructions, tools, capabilities, model settings) is
-        byte-identical to today.
-  - **Verify:** on the reference case,
-    `scripts/report_run_economics.py --compare` shows **one fewer model request
-    per face agent** and a cache hit beginning at request 2 rather than 3;
-    written facts and cross-check outcomes unchanged;
-    `tests/test_extraction_agent.py` and `tests/test_e2e.py` green in both flag
-    states.
-
-**Phase 2 gate (frozen before the first flag-on run):** written facts identical
-or better on the reference case; no new failing cross-check; no new abstract-row
-or residual-plug violation; cache-adjusted extraction cost down ≥20%; model
-requests down ≥1 per face agent. Miss any of these → flags stay off and we
-record why here.
+**Phase 0 gate:** one command reports refused writes for any run; at least one
+accuracy number exists; the cheap-model baseline table is in this file.
 
 ---
 
-### Phase 3: Stop the Blind Page Hunt
+### Phase 1: The Map Renderer — a Pure Function Over the Concept Database
 
-- [ ] 🟥 **Step 6: Scout on by default** — scout exists to tell agents which pages
-  to open, and 73 of the last 81 runs ran without it. Agents hunt instead: median
-  2 view calls, mean 3.4, max 36.
-  - [ ] 🟥 Flip the default to on for CLI and web run creation, with an explicit
-        off switch, surfaced in the run config as today.
-  - [ ] 🟥 **Do not** re-introduce page restriction. Hints stay advisory —
-        gotcha #13, pinned by `tests/test_page_hints.py` negative assertions.
-  - [ ] 🟥 Price scout honestly in the comparison: it is a real agent (~$0.21,
-        ~9 requests). The gate is total run cost, not view-call count.
-  - **Verify:** reference case with and without scout, compared with
-    `--compare`: unique pages viewed by face agents falls, **and cache-adjusted
-    total run cost including scout** falls. If total cost rises, scout stays
-    opt-in and we record that outcome here.
+No agent wiring yet. Build the renderer, pin it against every template, and
+prove it says the same thing about writability as the Excel reader.
 
-- [ ] 🟥 **Step 7: Bound the fan-out** — `coordinator.py` creates one task per
-  statement with no semaphore; a full run launches up to 15 concurrent agents,
-  and real 429 rate-limit errors are already in `agent_events`.
-  - [ ] 🟥 Add a configurable concurrency cap (`XBRL_MAX_CONCURRENT_AGENTS`,
-        default high enough to be a no-op for today's 5+5 shape) around agent
-        launch in `coordinator.py` and `notes/coordinator.py`.
-  - [ ] 🟥 **Preserve every existing lifecycle guarantee**: independent per-agent
-        cancellation, `task_registry` registration for the abort API, the
-        `CancelledError` grace-period path, and the sentinel push in `finally`
-        (gotcha #10). A queued-but-not-yet-started agent must still reach a
-        terminal status.
-  - [ ] 🟥 Extend `tests/test_coordinator.py`: a cap of 2 with 5 statements still
-        completes all 5; Stop-All while agents are queued leaves none `running`.
-  - **Verify:** a capped run of the reference case completes with identical
-    results; `tests/test_stop_all_preserves_partial.py` green.
+- [ ] 🟥 **Step 1.1: `concept_model/template_map.py::render_template_map`** —
+  input `(conn, template_id, sheet=None)`; output a string, one line per row.
+  - [ ] 🟥 Row status vocabulary, exactly four words: `WRITE` (`LEAF`, and
+        `MATRIX_CELL` on SOCIE), `TOTAL` (`COMPUTED`), `HEADER` (`ABSTRACT`),
+        `LINKED` (a face coordinate present in `concept_render_aliases` whose
+        primary node is on another sheet).
+  - [ ] 🟥 `LINKED` lines name the target: `LINKED → write on <sheet> r<row>`.
+        `TOTAL` lines name their children from `concept_edges` with sign:
+        `auto = r8 + r9 − r14 · do not write`. `WRITE` lines name the value
+        columns for the run's filing level (`B=CY C=PY` Company; `B/C Group,
+        D/E Company` on Group) — from `concept_targets`, not hard-coded.
+  - [ ] 🟥 A one-line sheet header with counts: `SOFP-CuNonCu (26 writable ·
+        37 linked · 12 headers · 24 totals)`. Mandatory rows keep their `*`
+        and the header explains it once: `* = mandatory row`.
+  - [ ] 🟥 Row-1 period date cells (`B1`/`C1`) get one explicit line, since
+        `prompts/_base.md` tells the agent to write them and the writer has a
+        row-1 carve-out.
+  - [ ] 🟥 Keep the `=== Sheet:` banner as the first line of each sheet block.
+        `extraction/history_processors._is_template_summary` and
+        `strip_duplicate_template` key on that marker
+        (`_TEMPLATE_SUMMARY_MARKER`); the compaction path must keep working
+        without knowing which renderer produced the text.
+  - [ ] 🟥 Template scoping by `template_id`, never a `{standard}-{level}-`
+        prefix (gotcha #21 — same `(sheet,row)` exists under every family with
+        different uuids).
+  - **Verify:** `tests/test_template_map.py` — for every one of the 58
+    Company/Group face templates across both standards: (a) the set of rows the
+    map calls `WRITE` equals the set of rows the Excel reader has a non-formula,
+    non-abstract label cell **and** a non-formula value cell in col B (the truth
+    `_summarize_template` was failing to say); (b) every row the Excel reader
+    marks abstract is `HEADER`; (c) every alias in `concept_render_aliases` is a
+    `LINKED` line naming the right target; (d) SOFP-CuNonCu renders under 5,000
+    chars for the face sheet alone and under 25,000 for both sheets.
 
----
+- [ ] 🟥 **Step 1.2: `describe_rows` — definitions keyed by the map's row ids**
+  — the "confirm what this field means" call, one turn, no fuzzy search.
+  - [ ] 🟥 `concept_model/template_map.py::describe_rows(conn, template_id,
+        sheet, rows: list[int])` → for each row: label, status, and the SSM
+        definition when the normalised label matches an entry in
+        `concept_definitions_{standard}.json` (60% MFRS / 77% MPERS today).
+        Rows without a definition say so explicitly ("no official definition on
+        file"), never silently omit — the agent must be able to tell "looked
+        and found nothing" from "didn't look".
+  - [ ] 🟥 Reuse `concept_model/definitions.load_definitions` and
+        `notes.labels.normalize_label`; no new index, no new dependency.
+  - **Verify:** `tests/test_template_map.py::test_describe_rows` — a known row
+    with a definition returns it; a known row without one returns the explicit
+    marker; an out-of-range row is reported, not raised.
 
-### Phase 4: Structural — Only If the Numbers Still Justify It
+- [ ] 🟥 **Step 1.3: Startup availability** — the map needs `concept_nodes` to
+  be populated, which the mandatory bootstrap guarantees (gotcha #21). Confirm
+  the renderer fails loudly, not blankly, if a `template_id` has no nodes.
+  - **Verify:** rendering an unknown `template_id` raises with the id in the
+    message; a test pins it.
 
-Entry gate: Phases 1–3 are live and their savings recorded in this doc. Both
-steps are judged against the **post-optimisation** baseline, not today's.
-
-- [ ] 🟥 **Step 8: Compaction-vs-cache probe** — measurement, then a decision. No
-  behaviour change in this step.
-  SOFP's cache-read tokens fall in *absolute* terms mid-run (37.5k → 31.1k, and
-  57.0k → 31.9k) while the prompt grows. That is what a changed prefix looks
-  like, and `extraction/history_processors.py` rewrites earlier messages by
-  design. If confirmed, we may be paying full price on a ~60k-token prefix to
-  trim a payload that was already heavily discounted.
-  - [ ] 🟥 Log cache-read deltas immediately before and after each history
-        processor fires, on the reference case.
-  - [ ] 🟥 Report the net effect: tokens saved by trimming vs. cache value
-        destroyed, in cache-adjusted dollars.
-  - [ ] 🟥 Record the decision here. Options: leave as-is, delay trimming until a
-        size threshold, or trim only the tail. **Do not weaken the run-126
-        stage-aware protections** (pre-write images stay whole) without the
-        scanned-PDF case passing — that regression caused extraction thrash.
-  - **Verify:** a findings section in this doc with the dollar figure and an
-    explicit "change / no change" decision.
-
-- [ ] 🟥 **Step 9: SOCI/SOPL agent merge** — the highest page overlap (42%) and
-  one of the four cross-statement checks that dominate our failures
-  (`soci_to_socie_tci`, 40). SOCI is the OCI continuation of SOPL, usually on the
-  same page, currently extracted by two agents that bill two copies of it and
-  then have to agree with each other.
-  - [ ] 🟥 **Decision gate first** — do not start until Phase 1–3 numbers are in
-        this doc and the owner approves. This is the only step that changes agent
-        topology, and it touches `statement_types.py`, the coordinator, prompts,
-        cross-checks, and coverage.
-  - [ ] 🟥 If approved: one agent producing both statements' facts, behind
-        `XBRL_MERGE_SOCI_SOPL` (default off).
-  - [ ] 🟥 Both statements keep their own `run_agents` row and telemetry so
-        History, the Agents tab, and per-statement resume stay meaningful.
-  - [ ] 🟥 Cross-checks unchanged in definition; `soci_to_socie_tci` and
-        `sopl_to_socie_profit` must still run and still be able to fail.
-  - [ ] 🟥 MFRS and MPERS × Company and Group all covered, including the
-        variant-specific SOCI templates.
-  - **Verify:** reference case + one Group + one MPERS case: same or better
-    accuracy score (Step 3 instrument), no new failing cross-check, unique pages
-    viewed down, cache-adjusted cost down. Any accuracy regression → flag off,
-    step abandoned, recorded here.
+**Phase 1 gate:** the map agrees with the Excel reader about writability on all
+58 templates, and is at most a quarter of the size of today's summary on SOFP.
 
 ---
 
-## Out of Scope (deliberately — recorded so it isn't lost)
+### Phase 2: Wire the Map into the Face Agent — Behind the Flag
 
-- **Reviewer economics** (context reduction, investigation bundle, tool search) —
-  owned by `docs/PLAN-agent-efficiency-and-recovery.md`. Not duplicated here.
-- **Reviewer not verifying its own work** — `apply_fix` was called 12 times
-  across 19 passes; `verify_fixes` once. Real finding, reviewer-side, belongs in
-  the companion plan.
-- **The reviewer's serial tail** (20–41% of wall clock) — architectural; needs
-  its own shaping session.
-- **Collapsing `verify_totals → save_result` into one round trip** — plausible,
-  but it crosses a judgement boundary and the CodeMode spike is the cautionary
-  tale. Not without its own experiment.
-- **Reopening extraction CodeMode in any form.**
-- **Notes agents' template seeding** — already in their system prompt; untouched.
-- **Any new abstraction, config surface, or Settings UI for these flags.**
+- [ ] 🟥 **Step 2.1: `read_template(sheet=None)` serves the map when the flag is
+  on** — `extraction/agent.py`.
+  - [ ] 🟥 New flag `XBRL_TEMPLATE_MAP` (default off during rollout, read at
+        call time so tests can toggle). Off = today's `_render_template_summary`
+        path, byte-identical (the existing
+        `tests/test_read_template_cache.py::test_cached_summary_is_byte_identical_for_every_template`
+        keeps pinning the off state).
+  - [ ] 🟥 On = `render_template_map(conn, deps.template_id, sheet)`; the tool
+        gains an optional `sheet` argument so the agent can pull one sheet at a
+        time. No `sheet` = all sheets (same call shape as today).
+  - [ ] 🟥 Memoise like today: process-global, keyed by
+        `(template_id, sheet, filing_level)`; the DB rows are deterministic per
+        template so this is safe. No mtime in the key — the DB, not the file,
+        is the source now; a template regeneration goes through the bootstrap.
+  - [ ] 🟥 Falls through to the legacy summary if `template_id`/`db_path` are
+        missing (some CLI paths) — graceful degradation, log once.
+  - **Verify:** `tests/test_read_template_cache.py` green in both flag states;
+    a new test asserts the flag-on return carries `_TEMPLATE_SUMMARY_MARKER`
+    so `strip_duplicate_template` still collapses repeats.
+
+- [ ] 🟥 **Step 2.2: Register `describe_rows` as a face-agent tool** — flag-on
+  only. Docstring says: "Confirm what a template row means before writing to
+  it. Pass ALL the rows you are unsure about in ONE call." Batched, like
+  `calculator` and `lookup_definitions`.
+  - [ ] 🟥 `lookup_definitions` stays registered (free-text search still has a
+        use when the agent has a PDF phrase, not a row).
+  - **Verify:** `tests/test_extraction_agent.py` — flag on: tool present; flag
+    off: agent factory snapshot (tools, instructions, capabilities) byte-identical
+    to today.
+
+- [ ] 🟥 **Step 2.3: Prompt wording for the map** — the prompts describe the
+  old shape ("the read_template() output lists every row label under each
+  section", `[FORMULA]`, `DATA_ENTRY`). Under the flag, `render_prompt` injects
+  a short block explaining the four status words and the two calls; the old
+  wording is untouched when the flag is off.
+  - [ ] 🟥 Face prompts only: `prompts/_base.md` and the statement files that
+        name `read_template` (`sofp.md`, `sofp_orderofliquidity.md`, `sopl.md`,
+        `soci.md`, `socf.md`, `socie.md`, `socie_mpers.md`, `socie_sore.md`).
+        Notes prompts untouched.
+  - [ ] 🟥 Regenerate `docs/agent-prompt-audit.html`
+        (`python scripts/refresh_prompt_audit.py`) — pinned by
+        `tests/test_prompt_audit_matches_live.py`.
+  - [ ] 🟥 Existing prompt pinning tests
+        (`tests/test_prompt_residual_plug_rule.py`,
+        `test_prompt_standard_neutrality.py`, `test_group_socie_overlay_routing.py`,
+        `test_extraction_hardening_prompts.py`) green in both flag states.
+  - **Verify:** the rendered flag-on SOFP prompt contains both the map block
+    and — still — the "fill the sub-sheet first" failure-mode text; the two no
+    longer contradict the tool output.
+
+**Phase 2 gate:** flag off is byte-identical everywhere; flag on, a mocked e2e
+run (`tests/test_e2e.py` with the flag forced on) completes with the same
+written facts as flag off.
+
+---
+
+### Phase 3: Stable Row Keys on `write_facts` — Close the Label-Ambiguity Class
+
+- [ ] 🟥 **Step 3.1: `row` + `field_label` together = cross-checked write** —
+  `tools/fill_workbook.py`. Today `row` alone skips label resolution and
+  `field_label` alone does fuzzy matching. When BOTH are given, resolve by
+  `row`, then require the col-A label at that row to match `field_label` after
+  the writer's own normalisation (leading `*`, taxonomy suffixes); refuse with a
+  message naming the actual label at that row when they disagree.
+  - [ ] 🟥 New guard kind `row_label_mismatch` in the `guard_rejections`
+        tally. All existing guards (formula cell, abstract row, labelless row,
+        leaf-over-header) still apply after resolution — no guard weakened.
+  - [ ] 🟥 `FactWrite` docstring and the `write_facts` docstring describe the
+        third mode: "Row-keyed (preferred when the map gives you the row):
+        `{"sheet","row","field_label","col","value","evidence"}`".
+  - **Verify:** `tests/test_fill_workbook_row_key.py` — matching row+label
+    writes; mismatched pair is refused and the message names the real label;
+    row alone and label alone behave exactly as today
+    (`tests/test_fill_workbook_abstract_guard.py`,
+    `test_fill_workbook_cross_sheet_hint.py` green).
+
+- [ ] 🟥 **Step 3.2: Prompt nudge under the flag** — the map block from Step
+  2.3 says: "When you have the row from the map, send both `row` and
+  `field_label`." Off-flag prompts unchanged.
+  - **Verify:** flag-on prompt contains the sentence; audit regenerated;
+    pinning tests green.
+
+- [ ] 🟥 **Step 3.3: Refusal messages point at the map, not at the dump** — the
+  five guard messages currently say "call read_template()"; under the flag they
+  say "call `read_template(sheet=…)` and use the row id shown as `rN`". Off-flag
+  wording byte-identical (`tests/test_verifier_feedback_wording.py` and the
+  guard tests pin it).
+  - **Verify:** guard tests green in both flag states.
+
+**Phase 3 gate:** the row-keyed mode exists, is cross-checked, and no existing
+guard test changed.
+
+---
+
+### Phase 4: Measure — Flag On vs Off, Same Cheap Model, Same PDF
+
+- [ ] 🟥 **Step 4.1: A/B on the reference case** — two flag-on runs with the
+  chosen cheap model, same config as Step 0.3.
+  - [ ] 🟥 `scripts/report_refused_writes.py --compare <baseline> <flag_on>`
+        and the eval score for each.
+  - [ ] 🟥 Record the table in this file under "Result (measured)".
+  - **Verify:** the table exists and every cell in it is a number from a run id
+    named in the file.
+
+- [ ] 🟥 **Step 4.2: Also run once on the default model** (`TEST_MODEL`) — the
+  change must not regress the strong model to help the weak one.
+  - **Verify:** written facts identical or better vs a same-model flag-off run;
+    no new failing cross-check.
+
+**Phase 4 gate (frozen before the first flag-on run):**
+1. `formula_cell` + `no_label` refusals per face agent down ≥50% on the cheap
+   model (baseline from Step 0.3).
+2. Eval accuracy on the cheap model equal or better; on the default model equal
+   or better.
+3. No new abstract-row or residual-plug violation on either model.
+4. No new failing cross-check on either model.
+Miss any → flag stays off, and this file records which one and why.
+
+---
+
+### Phase 5: Flip and Tidy — Only After the Gate
+
+- [ ] 🟥 **Step 5.1: Flip `XBRL_TEMPLATE_MAP` default on**; expose it in
+  `/api/settings` + `/api/config` like the other rollout flags; add it to the
+  CLAUDE.md `.env` block and to a new gotcha describing the map, the four
+  status words, and the row-key cross-check.
+  - **Verify:** `tests/test_settings_api.py` green; full suite green with the
+    default on.
+
+- [ ] 🟥 **Step 5.2: Hand the static-prefix move back to the companion plan** —
+  with the map compact and correct, `docs/PLAN-extraction-harness-efficiency.md`
+  Step 5 (render the template into the system prompt, keep `read_template`
+  as a pointer) becomes a small change. Update that file's Step 4 to point here
+  and leave Step 5 to that plan's owner.
+  - **Verify:** the companion file carries the pointer; nothing else in it
+    changed.
+
+- [ ] 🟥 **Step 5.3: Retire the legacy per-cell renderer** — a later,
+  separate decision, only once the flag has been on across a full week of real
+  runs. Not part of this plan's 100%.
+
+---
 
 ## Rollback Plan
 
-- **Any behaviour step, instantly:** unset its flag. Every step in Phases 2–4 is
-  default-off during rollout, so unsetting returns to today's behaviour with zero
-  code changes.
-- **Step 1 (pricing):** revert the commit. It changes reported figures only — no
-  schema change, no stored value rewritten. Historical `total_cost` rows keep
-  their original pre-cache meaning either way.
-- **Steps 2 and 3:** a dev-only script and read-only scoring — nothing to roll
-  back beyond deleting the script.
-- **Step 7 (semaphore):** set the cap high enough to be a no-op, which reproduces
-  today's unbounded behaviour exactly.
-- **State to check after any rollback:**
-  - flag-off agent factory snapshot tests green (Step 5's identity pin)
-  - `./venv/bin/python -m pytest tests/ -n auto` green
-  - a fresh run of the reference case shows the baseline tool sequence
-    (`read_template > view_pdf_pages > … > save_result`) and a normal Telemetry
-    tab
-  - no `run_agents` row left in `running` (gotcha #10)
+- **Any phase before 5:** the flag is off by default; nothing changes for a
+  live run. Revert is `git revert` of the phase's commits; no data to migrate —
+  this plan adds no table and no column.
+- **After the flip (5.1):** set `XBRL_TEMPLATE_MAP=0` in Settings. That restores
+  the byte-identical legacy summary and the legacy prompt wording without a
+  deploy. Row-keyed writes already in the DB are ordinary facts — nothing to
+  undo.
+- **What to check after a rollback:** `scripts/report_refused_writes.py` on the
+  next run shows the legacy `read_template` payload size (~79k chars on SOFP)
+  and no `row_label_mismatch` entries; `tests/test_read_template_cache.py`
+  green.
+
+## Out of Scope (named so nobody adds it by accident)
+
+- Notes agents' template view (already compact; different defect class).
+- Removing the Excel write path (`fill_workbook`) — a separate project;
+  the guards there are load-bearing (gotcha #17, #22).
+- Cost accounting, scout default, fan-out cap, SOCI/SOPL merge — all live in
+  `docs/PLAN-extraction-harness-efficiency.md`.
+- Adding formula text to `concept_nodes` — decided against (Q3,
+  `docs/PLAN-excel-free-verification.md`); the map does not need it.
+- Any deterministic label-matching in the notes pipeline (repo rule).
