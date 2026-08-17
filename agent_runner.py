@@ -535,7 +535,9 @@ async def run_agent_loop(
             # extraction/history_processors.py to see whether a compaction
             # pass cost more cache value than it reclaimed.
             if node_kind == "model_request":
-                logger.info(
+                from extraction.history_processors import probe_log_level
+                logger.log(
+                    probe_log_level(),
                     "turn_cache %s turn=%d prompt_delta=%d cache_read_delta=%d "
                     "cache_write_delta=%d cumulative_prompt=%d",
                     spec.agent_role, iteration, d_prompt,

@@ -32,7 +32,7 @@ either a live LLM run or an owner decision; neither can be produced offline.
 | 5 Template in prompt | built, default off | `XBRL_TEMPLATE_IN_PROMPT`; `read_template` returns `READ_TEMPLATE_IN_PROMPT_POINTER` when embedded; identity pin `tests/test_template_in_prompt.py` | live reference run (`--compare`: −1 request/agent, cache hit from request 2) |
 | 6 Scout on by default | done for CLI (`--no-scout`); web already defaulted on (`XBRL_SCOUT_ENABLED_DEFAULT=true`, PreRunPanel seed `true`) | `run.py::_run_cli_scout` (best-effort; failure never fails the run) | live with/without A/B on total cache-adjusted cost |
 | 7 Fan-out cap | done, default unbounded | `XBRL_MAX_CONCURRENT_AGENTS`; `agent_concurrency.py`; both coordinators; sub-agents ride their parent's slot | none |
-| 8 Compaction-vs-cache probe | logging in, decision open | `history_rewrite …` lines (`extraction/history_processors._log_rewrite`) + `turn_cache …` lines (`agent_runner`) | one reference run with the two log lines, then the dollar figure + decision here |
+| 8 Compaction-vs-cache probe | logging in, decision open | `history_rewrite …` + `turn_cache …` lines (DEBUG by default; `XBRL_CACHE_PROBE=1` lifts them to INFO for the reference run) | one reference run with `XBRL_CACHE_PROBE=1`, then the dollar figure + decision here |
 | 9 SOCI/SOPL merge | **not started** | — | owner approval (decision gate) |
 
 **Correction to Step 1's premise (found in review, 2026-08-18).** The plan
@@ -46,8 +46,10 @@ the reads. The estimator uses one rule (uncached = prompt − reads);
 `tests/test_pricing_cache_adjusted.py::test_pinned_library_sums_anthropic_cache_tokens_into_input_tokens`
 reads the library's mapping table so an upgrade that changes it fails
 loudly. The audit DB has no Anthropic run, so no stored figure was affected.
-Anthropic's 1.25× cache-WRITE surcharge is not applied (no write rate in the
-registry) — a small, stated under-count on the write slice only.
+Anthropic's 1.25× cache-WRITE surcharge is applied through
+`cache_write_price_per_mtok` (set on the Anthropic entries; absent → plain
+input rate). Reads and writes are clamped to the prompt count so contradictory
+telemetry cannot push `$adj` above `$pre`.
 
 **CLI scout has no `run_agents` row.** `run.py::_run_cli_scout` runs before
 the pipeline creates the `runs` row, so its tokens are not in
@@ -102,9 +104,14 @@ Excluding the seed run: median 85.4%, range 57.3–91.7%.
 | Run | $2.068 | $0.669 |
 
 Zero cache reads reproduce the stored figure to the cent
-(`tests/test_pricing_cache_adjusted.py`). Model requests for SOFP: 8
+(`tests/test_pricing_cache_adjusted.py`). Both reports read `$pre` from the
+STORED `run_agents.total_cost` (legacy rows have only that; retried agents'
+failed-attempt spend is in it) and derive `$adj` from it
+(`pricing.cache_adjustment_from_stored_cost`); a row with cost but no token
+telemetry prints `$adj = n/a`. Model requests for SOFP: 8
 (`node_kind='model_request'`), tool batches 8, static-prefix share of billed
-TEXT 99.1% (text-only measure — images excluded; see the script docstring).
+TEXT 92.8% (text-only — images excluded; prior responses and tool-call
+arguments are counted in the denominator; see the script docstring).
 
 ### Phase 2 gate — frozen wording (per the checklist), numbers to be filled by the live A/B
 

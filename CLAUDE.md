@@ -163,6 +163,7 @@ SESSION_SECRET=                # REQUIRED in prod (startup fails without it); de
 # XBRL_TEMPLATE_SUMMARY_COMPACT=0  # read_template: one line per ROW (SOFP 80k→35k chars)
 # XBRL_TEMPLATE_IN_PROMPT=0        # face agents: template in the system prompt; read_template returns a pointer
 # XBRL_MAX_CONCURRENT_AGENTS=0     # cap on top-level agents running at once; 0 = unbounded
+# XBRL_CACHE_PROBE=0               # lift the per-turn cache / history-rewrite probe lines to INFO
 # CLI: scout is ON by default (`--no-scout` to skip). Cost: run_agents.total_cost is
 # still the PRE-CACHE estimate; `scripts/report_run_economics.py` prints the
 # cache-adjusted figure beside it (pricing.estimate_cost_cache_adjusted).

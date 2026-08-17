@@ -30,22 +30,20 @@ import asyncio
 import contextlib
 import logging
 import os
-import weakref
 from typing import AsyncIterator, Optional
 
 logger = logging.getLogger(__name__)
 
 ENV_VAR = "XBRL_MAX_CONCURRENT_AGENTS"
 
-# id(loop) -> (weakref to the loop, cap, semaphore). Keyed by loop id so an
-# asyncio primitive is never awaited from a loop other than the one that
-# created it (gotcha #2a). The weakref guards the one hole in that shape: a
-# finished loop's id can be reused by a new loop (the reviewer / suite threads
-# create one per job), and a semaphore bound to the dead loop would then raise
-# "attached to a different loop" on first contended acquire — so an entry is
-# only reused when it is provably the SAME loop object. The cap is stored so
-# a changed env var (tests) rebuilds it.
-_semaphores: dict[int, tuple["weakref.ref[asyncio.AbstractEventLoop]", int, asyncio.Semaphore]] = {}
+# The semaphore lives ON the event loop object (a private attribute), not in
+# a module registry. An asyncio primitive must only be awaited from the loop
+# that created it (gotcha #2a); attaching it to that loop guarantees it and
+# — unlike an id(loop)-keyed dict — cannot leak: a contended Semaphore holds
+# a strong reference to its loop, so a registry entry keeps a finished loop
+# alive forever (peer review, 2026-08-18). The cap is stored alongside so a
+# changed env var (tests) rebuilds it.
+_LOOP_ATTR = "_xbrl_agent_slot"
 
 
 def max_concurrent_agents() -> int:
@@ -65,16 +63,11 @@ def max_concurrent_agents() -> int:
 
 def _semaphore_for_current_loop(cap: int) -> asyncio.Semaphore:
     loop = asyncio.get_running_loop()
-    key = id(loop)
-    entry = _semaphores.get(key)
-    if entry is None or entry[0]() is not loop or entry[1] != cap:
-        # Drop entries whose loop is gone so the dict does not grow with the
-        # number of loops ever created.
-        for k in [k for k, e in _semaphores.items() if e[0]() is None]:
-            del _semaphores[k]
-        entry = (weakref.ref(loop), cap, asyncio.Semaphore(cap))
-        _semaphores[key] = entry
-    return entry[2]
+    entry = getattr(loop, _LOOP_ATTR, None)
+    if entry is None or entry[0] != cap:
+        entry = (cap, asyncio.Semaphore(cap))
+        setattr(loop, _LOOP_ATTR, entry)
+    return entry[1]
 
 
 @contextlib.asynccontextmanager
