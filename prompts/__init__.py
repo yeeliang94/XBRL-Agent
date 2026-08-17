@@ -148,8 +148,17 @@ def render_prompt(
 
     # Optionally embed template summary for caching
     if template_summary:
+        # Rendered ONLY when a summary is embedded (Step 5 flag), so the prompt
+        # files above stay byte-identical for flag-off runs. The statement
+        # prompts' step-1 "Call read_template()" instructions are satisfied by
+        # this block; saying so here (rather than editing eight .md files
+        # under a default-off flag) keeps the flag-off identity pin honest.
         parts.append(
             f"\n=== TEMPLATE STRUCTURE (cached — do not call read_template again) ===\n"
+            f"The full template structure is embedded below. Wherever the "
+            f"instructions above say to call read_template(), read THIS block "
+            f"instead — do not call read_template; it would only return a "
+            f"pointer back here.\n"
             f"{template_summary}\n"
             f"=== END TEMPLATE STRUCTURE ==="
         )

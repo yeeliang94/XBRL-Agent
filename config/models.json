@@ -7,6 +7,7 @@
     "notes": "OpenAI flagship on the proxy. `gpt-5.6` is an alias for `gpt-5.6-sol`. OpenAI list price 2026-08-03; still flagged because the PwC proxy may bill at its own rate card.",
     "input_price_per_mtok": 5.0,
     "output_price_per_mtok": 30.0,
+    "cached_input_price_per_mtok": 0.5,
     "notes_parallel": 5,
     "pricing_unconfirmed": true
   },
@@ -18,6 +19,7 @@
     "notes": "Cheapest 5.6 tier \u2014 high-volume drafting/summarising. OpenAI list price 2026-08-03; still flagged because the PwC proxy may bill at its own rate card. Was estimated at the 5.5 rate (5/30), which overstated cost 25x.",
     "input_price_per_mtok": 0.2,
     "output_price_per_mtok": 1.2,
+    "cached_input_price_per_mtok": 0.02,
     "notes_parallel": 5,
     "pricing_unconfirmed": true
   },
@@ -29,6 +31,7 @@
     "notes": "Mid 5.6 tier \u2014 balanced. OpenAI list price 2026-08-03; still flagged because the PwC proxy may bill at its own rate card.",
     "input_price_per_mtok": 2.0,
     "output_price_per_mtok": 12.0,
+    "cached_input_price_per_mtok": 0.2,
     "notes_parallel": 5,
     "pricing_unconfirmed": true
   },
@@ -40,6 +43,7 @@
     "notes": "Deep-reasoning tier. OpenAI list price 2026-08-03; still flagged because the PwC proxy may bill at its own rate card. Was estimated at 15/90, which understated cost 2x.",
     "input_price_per_mtok": 30.0,
     "output_price_per_mtok": 180.0,
+    "cached_input_price_per_mtok": 3.0,
     "notes_parallel": 2,
     "pricing_unconfirmed": true
   },
@@ -71,6 +75,7 @@
     "notes": "Latest OpenAI flagship.",
     "input_price_per_mtok": 5.0,
     "output_price_per_mtok": 30.0,
+    "cached_input_price_per_mtok": 0.5,
     "notes_parallel": 5
   },
   {
@@ -81,6 +86,7 @@
     "notes": "OpenAI flagship. Default for extraction, scout, and notes.",
     "input_price_per_mtok": 2.5,
     "output_price_per_mtok": 15.0,
+    "cached_input_price_per_mtok": 0.25,
     "notes_parallel": 5
   },
   {
@@ -91,6 +97,7 @@
     "notes": "Smaller, faster GPT-5.4. Good cost/quality trade-off.",
     "input_price_per_mtok": 0.75,
     "output_price_per_mtok": 4.5,
+    "cached_input_price_per_mtok": 0.075,
     "notes_parallel": 2
   },
   {
@@ -101,6 +108,7 @@
     "notes": "Smallest/cheapest GPT-5.4. Good for scout and simple statements.",
     "input_price_per_mtok": 0.25,
     "output_price_per_mtok": 2.0,
+    "cached_input_price_per_mtok": 0.025,
     "notes_parallel": 2
   },
   {
@@ -151,6 +159,7 @@
     "notes": "Strong reasoning, good balance of speed and quality.",
     "input_price_per_mtok": 3.0,
     "output_price_per_mtok": 15.0,
+    "cached_input_price_per_mtok": 0.3,
     "notes_parallel": 5
   },
   {
@@ -161,6 +170,7 @@
     "notes": "Latest, highest quality Anthropic model. Best for difficult extractions.",
     "input_price_per_mtok": 5.0,
     "output_price_per_mtok": 25.0,
+    "cached_input_price_per_mtok": 0.5,
     "notes_parallel": 5
   },
   {
@@ -171,6 +181,7 @@
     "notes": "Highest quality Anthropic model. Best for difficult extractions.",
     "input_price_per_mtok": 5.0,
     "output_price_per_mtok": 25.0,
+    "cached_input_price_per_mtok": 0.5,
     "notes_parallel": 5
   },
   {
@@ -181,6 +192,7 @@
     "notes": "Fastest Anthropic model. Good for simple statements.",
     "input_price_per_mtok": 1.0,
     "output_price_per_mtok": 5.0,
+    "cached_input_price_per_mtok": 0.1,
     "notes_parallel": 2
   }
 ]

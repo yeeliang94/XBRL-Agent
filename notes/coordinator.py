@@ -282,6 +282,22 @@ async def _project_numeric_notes_facts(
 # Public entry point
 # ---------------------------------------------------------------------------
 
+async def _run_gated(label: str, runner):
+    """Await ``runner`` (a notes-agent coroutine) under one concurrency slot.
+    If the task is cancelled while queued, the never-started ``runner`` is
+    closed explicitly so no un-awaited coroutine warning is left behind."""
+    from agent_concurrency import agent_slot
+
+    started = False
+    try:
+        async with agent_slot(label):
+            started = True
+            return await runner
+    finally:
+        if not started:
+            runner.close()
+
+
 async def run_notes_extraction(
     config: NotesRunConfig,
     infopack: Optional[Infopack] = None,
@@ -410,7 +426,9 @@ async def run_notes_extraction(
                 db_path=config.audit_db_path,
                 source_generation_id=config.source_generation_id,
             )
-        task = asyncio.create_task(runner, name=agent_id)
+        # Step 7 (XBRL_MAX_CONCURRENT_AGENTS): slot taken inside the task, so
+        # registration / cancellation are unchanged (agent_concurrency.py).
+        task = asyncio.create_task(_run_gated(agent_id, runner), name=agent_id)
         tasks[template_type] = task
         if session_id:
             task_registry.register(session_id, agent_id, task)

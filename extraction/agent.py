@@ -10,6 +10,7 @@ hints from scout.
 import json
 import logging
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional, Union, List, Tuple, Set, Dict
@@ -119,6 +120,10 @@ class ExtractionDeps:
         self.filled_filename = f"{statement_type.value}_filled.xlsx"
         # Mutable state
         self.template_fields: list[TemplateField] = []
+        # Step 5 (XBRL_TEMPLATE_IN_PROMPT): True once the factory has embedded
+        # the template summary in the system prompt — read_template then
+        # returns a pointer instead of the payload.
+        self.template_in_prompt: bool = False
         self.pdf_page_count = 0
         self.turn_counter = 0
         self.filled_path: str = ""
@@ -506,8 +511,29 @@ def _format_verify_result(result) -> str:
     return "\n".join(lines)
 
 
-def _summarize_template(fields: list[TemplateField]) -> str:
-    """Convert template fields into human-readable structure summary."""
+def _template_summary_compact_enabled() -> bool:
+    """PLAN-extraction-harness-efficiency Step 4 flag. When on, the agent-visible
+    ``read_template`` summary is rendered one line per ROW instead of one line
+    per CELL (SOFP: ~80k → <35k chars). Default OFF during rollout; read at
+    call time so tests can toggle it."""
+    return os.environ.get("XBRL_TEMPLATE_SUMMARY_COMPACT", "0").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+def _summarize_template(fields: list[TemplateField], compact: Optional[bool] = None) -> str:
+    """Convert template fields into human-readable structure summary.
+
+    ``compact=None`` reads ``XBRL_TEMPLATE_SUMMARY_COMPACT``; ``False`` is the
+    legacy per-cell rendering (byte-identical to before the flag existed);
+    ``True`` is ``_summarize_template_compact``. Only the RENDERING differs —
+    ``TemplateField`` parsing, ``read_template``'s contract and which rows are
+    writable are the same on both paths.
+    """
+    if compact is None:
+        compact = _template_summary_compact_enabled()
+    if compact:
+        return _summarize_template_compact(fields)
     sheets: dict = {}
     for f in fields:
         if f.sheet not in sheets:
@@ -554,6 +580,135 @@ def _summarize_template(fields: list[TemplateField]) -> str:
     return "\n".join(lines)
 
 
+_ABSTRACT_STATUS = "ABSTRACT (section header — do not write)"
+
+
+def _col_letter(coordinate: str) -> str:
+    """``"B12"`` → ``"B"``."""
+    return re.match(r"[A-Z]+", coordinate).group(0)
+
+
+def _formula_pattern(formula: str, col_letter: str) -> str:
+    """``formula`` with its own column letter (as a cell reference) replaced by
+    a placeholder — so ``=1*B5+1*B6`` in B and ``=1*C5+1*C6`` in C compare
+    equal and the compact rendering can say "C same"."""
+    return re.sub(rf"(?<![A-Z]){re.escape(col_letter)}(?=\$?\d)", "{c}", formula)
+
+
+_UNIT_SUM_RE = re.compile(r"^=1\*([A-Z]+)(\d+)((?:\+1\*[A-Z]+\d+)+)$")
+
+
+def _compact_formula(formula: str) -> str:
+    """Formula text for the compact rendering. A plain unit-coefficient sum
+    over CONSECUTIVE rows in one column (``=1*B25+1*B26+…+1*B33``, the shape
+    the SSM calc linkbase generates for every ``*Total`` row) is folded to
+    ``=1*B25+…+1*B33 (9 rows, all +1)`` — the sign information the SOCF/SoRE
+    prompts read is kept, and nothing is cut mid-reference the way the 60-char
+    cap does. Any other formula is shown literally (60-char cap, as before)."""
+    m = _UNIT_SUM_RE.match(formula)
+    if m:
+        col, first = m.group(1), int(m.group(2))
+        rest = re.findall(r"\+1\*([A-Z]+)(\d+)", m.group(3))
+        rows = [first] + [int(r) for c, r in rest]
+        if all(c == col for c, _ in rest) and rows == list(range(first, first + len(rows))) \
+                and len(rows) >= 3:
+            return f"=1*{col}{first}+…+1*{col}{rows[-1]} ({len(rows)} rows, all +1)"
+    return formula[:60]
+
+
+def _summarize_template_compact(fields: list[TemplateField]) -> str:
+    """Row-oriented template summary (Step 4): one line per row.
+
+    Same header banner (``=== Sheet:`` — ``history_processors._is_template_summary``
+    keys on it), same three markings in the same words as the per-cell
+    rendering — ``ABSTRACT (section header — do not write)`` (gotcha #17),
+    ``DATA_ENTRY``, and the literal formula text — but the value columns of a
+    row are folded onto the label's line:
+
+        row 8: *Property, plant and equipment [FORMULA B: ='SOFP-Sub-CuNonCu'!B39 (C same)]
+        row 10: Biological assets [DATA_ENTRY]
+        row 1: (no label) B="01/01/YYYY - 31/12/YYYY", C="…", D="Source" [DATA_ENTRY]
+
+    A row is FORMULA when any of its value cells carries a formula (the label
+    cell being plain text is not what makes a row writable). Rows with no col-A
+    label but value-cell content (row 1's reporting-period cells) are kept —
+    the agent must fill them (prompts/_base.md).
+    """
+    sheets: dict[str, dict] = {}
+    for f in fields:
+        info = sheets.setdefault(
+            f.sheet, {"total": 0, "formula": 0, "data_entry": 0, "rows": {}},
+        )
+        info["total"] += 1
+        if f.has_formula:
+            info["formula"] += 1
+        else:
+            info["data_entry"] += 1
+        row = info["rows"].setdefault(f.row, {"label": None, "abstract": False, "cells": []})
+        if f.col == 1:
+            row["label"] = f.label[:80]
+            row["abstract"] = bool(f.is_abstract)
+        else:
+            row["cells"].append(f)
+
+    lines: list[str] = []
+    for sheet_name, info in sheets.items():
+        lines.append(f"\n=== Sheet: {sheet_name} ===")
+        lines.append(
+            f"Total cells: {info['total']} | Data entry: {info['data_entry']} | "
+            f"Formulas: {info['formula']} | Rows: {len(info['rows'])} (one line per row; "
+            f"a FORMULA row names only its formula columns — value columns it does "
+            f"not name are data entry)"
+        )
+        for row_num in sorted(info["rows"]):
+            row = info["rows"][row_num]
+            label = row["label"] if row["label"] is not None else "(no label)"
+            cells: list[TemplateField] = sorted(row["cells"], key=lambda c: c.col)
+            if row["abstract"]:
+                status = _ABSTRACT_STATUS
+            elif any(c.has_formula for c in cells):
+                # Group formula columns by pattern; show the first column's
+                # literal formula, name the others as "same pattern".
+                groups: dict[str, list[TemplateField]] = {}
+                for c in cells:
+                    if c.has_formula and c.formula:
+                        col_letter = _col_letter(c.coordinate)
+                        groups.setdefault(_formula_pattern(c.formula, col_letter), []).append(c)
+                parts = []
+                for members in groups.values():
+                    first = members[0]
+                    first_col = _col_letter(first.coordinate)
+                    text = f"{first_col}: {_compact_formula(first.formula)}"
+                    if len(members) > 1:
+                        others = ",".join(_col_letter(m.coordinate) for m in members[1:])
+                        text += f" ({others} same)"
+                    parts.append(text)
+                literal = [c for c in cells if not c.has_formula and c.value]
+                extra = ""
+                if literal:
+                    extra = " " + ", ".join(
+                        f'{_col_letter(c.coordinate)}="{c.value[:40]}"'
+                        for c in literal
+                    )
+                status = "FORMULA " + "; ".join(parts) + extra
+            else:
+                literal = [c for c in cells if c.value]
+                if literal and row["label"] is None:
+                    label = "(no label) " + ", ".join(
+                        f'{_col_letter(c.coordinate)}="{c.value[:40]}"'
+                        for c in literal
+                    )
+                elif literal:
+                    label += " " + ", ".join(
+                        f'{_col_letter(c.coordinate)}="{c.value[:40]}"'
+                        for c in literal
+                    )
+                status = "DATA_ENTRY"
+            lines.append(f"row {row_num}: {label} [{status}]")
+
+    return "\n".join(lines)
+
+
 # Item 32 (32c): process-global cache of the rendered read_template summary,
 # keyed by (template_id, mtime). The summary string is fully determined by the
 # template file, and template_id identifies that file 1:1 (it encodes
@@ -562,19 +717,21 @@ def _summarize_template(fields: list[TemplateField]) -> str:
 # The mtime in the key means an in-process template regeneration (the MPERS
 # generator, a dev hot-reload) self-invalidates the entry instead of serving a
 # stale summary; a normal process restart clears it outright.
-_TEMPLATE_SUMMARY_CACHE: dict[tuple[str, float], str] = {}
+_TEMPLATE_SUMMARY_CACHE: dict[tuple[str, float, bool], str] = {}
 
 
-def _template_summary_cache_key(deps: "ExtractionDeps") -> tuple[str, float]:
+def _template_summary_cache_key(deps: "ExtractionDeps") -> tuple[str, float, bool]:
     """Cache key for ``deps``'s rendered template summary: ``template_id`` plus
-    the template file's mtime so an on-disk regeneration self-invalidates.
-    An unreadable mtime falls back to ``-1.0`` — still keyed by template_id, just
-    without the self-invalidation guarantee."""
+    the template file's mtime so an on-disk regeneration self-invalidates, plus
+    the rendering mode (Step 4 compact flag) so a verbose string is never
+    served on a compact request or vice versa. An unreadable mtime falls back
+    to ``-1.0`` — still keyed by template_id, just without the
+    self-invalidation guarantee."""
     try:
         mtime = os.path.getmtime(deps.template_path)
     except OSError:
         mtime = -1.0
-    return (deps.template_id, mtime)
+    return (deps.template_id, mtime, _template_summary_compact_enabled())
 
 
 def _db_read_template_enabled() -> bool:
@@ -587,6 +744,22 @@ def _db_read_template_enabled() -> bool:
     return os.environ.get("XBRL_DB_READ_TEMPLATE", "1").strip().lower() in (
         "1", "true", "yes", "on",
     )
+
+
+def _template_in_prompt_enabled() -> bool:
+    """PLAN-extraction-harness-efficiency Step 5 flag. When on, face extraction
+    agents get the template summary embedded in their system prompt at
+    construction time and ``read_template`` returns a pointer instead of the
+    payload. Default OFF during rollout; read at call time (tests toggle it)."""
+    return os.environ.get("XBRL_TEMPLATE_IN_PROMPT", "0").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+READ_TEMPLATE_IN_PROMPT_POINTER = (
+    "The template structure is already in your instructions above — see the "
+    "TEMPLATE STRUCTURE block. Read it from there; it is not re-sent here."
+)
 
 
 def _render_template_summary(deps: "ExtractionDeps") -> str:
@@ -680,13 +853,33 @@ def create_extraction_agent(
         r for r in _face_refs if isinstance(r, dict) and r.get("label")
     ]
 
-    # The template summary is NOT embedded in the system prompt — the agent
-    # reads it on demand via the read_template tool, whose result is cached by
-    # the provider after the first call (OpenAI auto-caching measured at ~77%
-    # cross-turn hit rate, PLAN Phase 1 gate). Phase 3.1 confirmed the embed
-    # path (the old `cache_template` flag) earns nothing on top of that and
-    # removed it.
+    # By default the template summary is NOT embedded in the system prompt —
+    # the agent reads it on demand via the read_template tool, whose result is
+    # cached by the provider after the first call (OpenAI auto-caching measured
+    # at ~77% cross-turn hit rate, PLAN Phase 1 gate). Phase 3.1 confirmed the
+    # old `cache_template` embed earned nothing on top of that and removed it.
+    #
+    # PLAN-extraction-harness-efficiency Step 5 (`XBRL_TEMPLATE_IN_PROMPT`,
+    # default off): telemetry later showed 89% of face agents fetch the summary
+    # unconditionally as their FIRST act — one model round trip per agent, and
+    # the payload only becomes cache-eligible from request #3. With the flag
+    # on the summary (rendered through the same `_render_template_summary`
+    # path, so it honours the Step 4 compact flag and the process cache) is
+    # embedded here at construction time; `read_template` stays registered and
+    # returns a short pointer. Face agents only — notes agents seed their own
+    # label catalog.
     template_summary = None
+    if _template_in_prompt_enabled():
+        try:
+            template_summary = _render_template_summary(deps)
+            deps.template_in_prompt = True
+        except Exception:  # noqa: BLE001 — degrade to the tool path, never fail construction
+            logger.warning(
+                "XBRL_TEMPLATE_IN_PROMPT: could not render %s at construction; "
+                "read_template will serve it on demand instead", template_path,
+                exc_info=True,
+            )
+            template_summary = None
 
     system_prompt = render_prompt(
         statement_type=statement_type,
@@ -789,6 +982,11 @@ def create_extraction_agent(
     def read_template(ctx: RunContext[ExtractionDeps]) -> str:
         """Read the template structure. Returns the full template summary
         (cached after the first call so repeated calls are free)."""
+        if getattr(ctx.deps, "template_in_prompt", False):
+            # Step 5: the summary is already in the system prompt; don't
+            # re-send ~20k tokens. The tool stays registered so an agent (or
+            # an older prompt) that calls it anyway does not fail.
+            return READ_TEMPLATE_IN_PROMPT_POINTER
         return _render_template_summary(ctx.deps)
 
     @agent.tool

@@ -12,10 +12,14 @@ Usage (from repo root, after a run completes)::
     venv/bin/python scripts/cache_report.py 42         # a specific run id
     venv/bin/python scripts/cache_report.py --list     # list recent runs
 
-Provider note (peer-review F3): OpenAI's prompt_tokens (input) ALREADY
-INCLUDES cached reads, so its hit-rate is cache_read / prompt_tokens.
-Anthropic EXCLUDES them, so its hit-rate is cache_read / (prompt + read).
-The report picks the right denominator per agent from the model id.
+Provider note (corrected 2026-08-18, PLAN-extraction-harness-efficiency
+Step 1): on the pinned pydantic-ai V2 line EVERY provider's recorded
+prompt_tokens ALREADY INCLUDES cached reads — genai-prices' Anthropic
+extractor sums input + cache_creation + cache_read into input_tokens — so
+the hit-rate is cache_read / prompt_tokens for all of them. The old
+"Anthropic excludes them" denominator was never verified against a real row
+(the DB has no Anthropic run) and is wrong for the pinned library; see
+``pricing.prompt_tokens_include_cache_reads``.
 """
 from __future__ import annotations
 
@@ -33,6 +37,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 try:
     from model_settings import classify_provider as _classify
 except Exception:  # noqa: BLE001 — keep the DB-only diagnostic self-sufficient
+    _classify = None  # set below
+try:
+    # Step 1 (PLAN-extraction-harness-efficiency): both cost figures side by
+    # side — the stored PRE-CACHE estimate and the cache-adjusted one.
+    from pricing import estimate_cost, estimate_cost_cache_adjusted
+except Exception:  # noqa: BLE001
+    estimate_cost = estimate_cost_cache_adjusted = None
+if _classify is None:
     def _classify(model_name: str) -> str:
         m = (model_name or "").lower()
         if not m:
@@ -51,11 +63,9 @@ def _provider(model: str) -> str:
 
 
 def _hit_rate(provider: str, prompt: int, read: int) -> float:
-    """cache_read as a fraction of the cacheable prompt surface."""
-    if provider == "anthropic":
-        denom = prompt + read          # Anthropic input excludes cached reads
-    else:
-        denom = prompt                 # OpenAI input already includes them
+    """cache_read as a fraction of the recorded prompt tokens (which already
+    include the cached reads for every provider — see module docstring)."""
+    denom = prompt
     return (read / denom) if denom else 0.0
 
 
@@ -116,28 +126,38 @@ def report(conn: sqlite3.Connection, run_id: int | None) -> int:
 
     print(f"\n=== Cache report — run {run_id} ({meta[1]}) — {meta[0]} ===")
     print(f"{'agent':<10} {'provider':<9} {'prompt':>10} {'cache_rd':>10} "
-          f"{'cache_wr':>10} {'hit%':>6} {'turns':>6}  model")
-    print("-" * 92)
+          f"{'cache_wr':>10} {'hit%':>6} {'turns':>6} {'$pre':>7} {'$adj':>7}  model")
+    print("-" * 108)
 
     tot_prompt = tot_read = tot_write = 0
-    for st, model, prompt, _compl, read, write, turns, _status in agents:
+    tot_pre = tot_adj = 0.0
+    for st, model, prompt, compl, read, write, turns, _status in agents:
         prov = _provider(model)
-        prompt, read, write = prompt or 0, read or 0, write or 0
+        prompt, compl, read, write = prompt or 0, compl or 0, read or 0, write or 0
         tot_prompt += prompt
         tot_read += read
         tot_write += write
         hr = _hit_rate(prov, prompt, read) * 100
+        pre = adj = 0.0
+        if estimate_cost is not None:
+            pre = estimate_cost(prompt, compl, 0, model or "")
+            adj = estimate_cost_cache_adjusted(
+                prompt, compl, 0, model or "",
+                cache_read_tokens=read, cache_write_tokens=write,
+            )
+        tot_pre += pre
+        tot_adj += adj
         print(f"{st:<10} {prov:<9} {prompt:>10,} {read:>10,} {write:>10,} "
-              f"{hr:>5.1f}% {turns or 0:>6}  {model or ''}")
+              f"{hr:>5.1f}% {turns or 0:>6} {pre:>7.3f} {adj:>7.3f}  {model or ''}")
 
-    print("-" * 92)
+    print("-" * 108)
     # Run-level hit-rate: use the dominant provider's convention. Most runs
     # are single-provider; if mixed, this is a rough blend.
-    provs = {_provider(a[1]) for a in agents}
-    blend_denom = tot_prompt + (tot_read if provs == {"anthropic"} else 0)
-    blend = (tot_read / blend_denom * 100) if blend_denom else 0.0
+    blend = (tot_read / tot_prompt * 100) if tot_prompt else 0.0
     print(f"{'TOTAL':<10} {'':<9} {tot_prompt:>10,} {tot_read:>10,} "
-          f"{tot_write:>10,} {blend:>5.1f}%")
+          f"{tot_write:>10,} {blend:>5.1f}% {'':>6} {tot_pre:>7.3f} {tot_adj:>7.3f}")
+    print("   $pre = pre-cache estimate (what run_agents.total_cost stores); "
+          "$adj = cache reads billed at the cached rate.")
 
     print()
     if tot_read > 0:
