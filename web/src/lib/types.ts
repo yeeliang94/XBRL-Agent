@@ -62,7 +62,11 @@ export type SSEEventType =
   //  - scout_warnings: completeness probe findings (server, pre-flight).
   //  - scale_conflict: scale-unit reconciliation conflict (coordinator).
   | "scout_warnings"
-  | "scale_conflict";
+  | "scale_conflict"
+  // docs/PLAN-pdf-source-sidecar.md: outcome of the pre-agent LLM
+  // transcription pass on a scanned PDF (built / skipped + reason).
+  // Run-level, advisory — the run proceeds either way.
+  | "pdf_sidecar";
 
 // Every multi-agent event carries these routing fields inside `data` (the
 // backend stamps them in agent_runner.build_agent_event). We keep them in `data`
@@ -104,6 +108,8 @@ interface SSEEventDataMap {
   // Scout-quality warnings (run-level; no agent_id — see SSEEventType).
   scout_warnings: ScoutWarningsData & AgentRouting;
   scale_conflict: ScaleConflictData & AgentRouting;
+  // Scanned-PDF source transcript outcome (run-level; no agent_id).
+  pdf_sidecar: PdfSidecarData & AgentRouting;
 }
 
 export type SSEEvent = {
@@ -291,6 +297,22 @@ export interface ScaleConflictData {
   scout_scale_unit: string;
   resolved_scale_unit: string;
   message: string;
+}
+
+/** Payload of the ``pdf_sidecar`` SSE event (docs/PLAN-pdf-source-sidecar.md).
+ *  Emitted once, before the notes agents launch, on scanned-PDF runs where
+ *  the transcription setting is on. `status: "built"` carries the page count;
+ *  `status: "skipped"` carries a machine reason (e.g. `no_notes_inventory`,
+ *  `too_many_pages`, `transcription_incomplete`, `error: <ExceptionName>`).
+ *  Mirrors `server._maybe_build_pdf_sidecar`. */
+export interface PdfSidecarData {
+  status: "built" | "skipped";
+  reason?: string;
+  pages?: number;
+  pages_requested?: number;
+  page_cap?: number;
+  failed_pages?: number[];
+  usage?: { in?: number; out?: number };
 }
 
 export interface CompleteData {
@@ -496,6 +518,9 @@ export interface ExtendedSettingsResponse extends SettingsResponse {
   spot_check_mode?: string;
   /** Whether per-entity advisory memory injects prior-year prompt hints (item 28). */
   entity_memory?: boolean;
+  /** Scanned-PDF transcribed source sidecar (docs/PLAN-pdf-source-sidecar.md).
+   *  Default off; admin-only because it adds paid vision calls per run. */
+  pdf_sidecar?: boolean;
   /** Notes source-integrity rollout mode (gotcha #31). Default 'off'. */
   notes_source_integrity?: SourceIntegrityMode;
   /** Server-supplied vocabulary, so a new mode needs no frontend edit. */
@@ -797,6 +822,10 @@ export interface RunDetailJson {
   repeat_group_id?: number | null;
   repeat_index?: number | null;
   app_version?: string | null;
+  // docs/PLAN-pdf-source-sidecar.md: persisted outcome of the scanned-PDF
+  // transcription pass, so the run page shows the notice after a reload.
+  // Null/absent when the pass did not apply.
+  pdf_sidecar?: PdfSidecarData | null;
 }
 
 // Evals workspace (v30): a repeat group + its computed consistency result,

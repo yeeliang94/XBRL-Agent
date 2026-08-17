@@ -22,6 +22,7 @@ import { buildToolTimeline, filterEventsBySubAgent } from "../lib/buildToolTimel
 import { NOTES_12_AGENT_ID, isNotes12AgentId } from "../lib/notes";
 import { isNonAgentTab } from "../lib/agentTabKinds";
 import { TERMS } from "../lib/vocabulary";
+import { describePdfSidecar } from "../lib/pdfSidecar";
 
 // Re-export so existing callers / tests that imported NOTES_12_AGENT_ID
 // from ExtractPage keep working. The single source of truth lives in
@@ -218,6 +219,10 @@ export function ExtractPage({
     (id: string) => dispatch({ type: "SET_ACTIVE_TAB", payload: id }),
     [dispatch],
   );
+  // docs/PLAN-pdf-source-sidecar.md: scanned-PDF source transcript notice.
+  // Emitted once before the notes agents launch, only when the Settings
+  // toggle is on and the PDF is a scan. Advisory in both outcomes.
+  const sidecarNotice = state.pdfSidecar ? describePdfSidecar(state.pdfSidecar) : null;
   return (
     <>
       <PageHeader
@@ -370,6 +375,14 @@ export function ExtractPage({
               <li key={i} style={styles.partialMergeMessage}>{w}</li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {/* Same run-level palette as the scout banner; no agent tab (no agent_id). */}
+      {sidecarNotice && (
+        <div role="status" data-testid="pdf-sidecar-notice" style={styles.partialMergeBox}>
+          <h3 style={styles.partialMergeTitle}>{sidecarNotice.title}</h3>
+          <p style={styles.partialMergeMessage}>{sidecarNotice.message}</p>
         </div>
       )}
 

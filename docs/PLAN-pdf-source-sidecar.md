@@ -1,11 +1,12 @@
 # Implementation Plan: LLM-Transcribed Source Sidecar for Scanned PDFs
 
 **Overall Progress:** `100%` — all phases done; live validation passed
-2026-08-11. The flag stays DEFAULT OFF pending product-owner review.
+2026-08-11; the deferred UI half (Phase 5) shipped 2026-08-17. The flag stays
+DEFAULT OFF — flipping it is a product-owner decision (see Phase 5).
 **PRD Reference:** none — scoped by the 2026-08-10 research session (chunkless-RAG
 assessment → Docling experiments → gpt-5.6-luna transcription test). Memory:
 `chunkless_rag_assessment.md`.
-**Last Updated:** 2026-08-10
+**Last Updated:** 2026-08-17
 
 ## Summary
 
@@ -142,6 +143,51 @@ figures stay advisory and must be verified against the PDF.
   - **Open for product owner:** side-by-side quality comparison vs a flag-off
     run, and the decision on when (whether) the default flips.
 
+### Phase 5: Frontend Surfacing (the deferred UI half)
+
+- [x] 🟩 **Step 5: Settings toggle + run-page notice + web tests** —
+  2026-08-17. Closes the two DEFERRED items from the peer-review hardening
+  below. Backend needed no change (`/api/settings` + `/api/config` already
+  exposed `pdf_sidecar`, admin-only).
+  - [x] 🟩 **Settings → General → "Scanned PDF handling":** a checkbox
+        (`GeneralSettingsForm.tsx`) that loads `pdf_sidecar`, defaults OFF when
+        the backend omits it (the opposite of the other toggles — it costs
+        money), and is sent on every save. Read-only for non-admins. Helper
+        text states the cost (one image-reading call per notes page), the
+        figure-verification caveat, and the scanned-only scope.
+  - [x] 🟩 **Run page:** the `pdf_sidecar` SSE event is now typed
+        (`PdfSidecarData`), passed by the SSE filter (`sse.ts`), captured into
+        `AppState.pdfSidecar` (cleared on `RUN_STARTED`, no agent tab), and
+        rendered by `ExtractPage` as a run-level notice
+        (`data-testid="pdf-sidecar-notice"`). Wording lives in the pure
+        `web/src/lib/pdfSidecar.ts::describePdfSidecar` — one sentence per
+        server skip reason; an unknown reason is quoted, never swallowed.
+  - [x] 🟩 **Reload persistence + cost line (peer review 2026-08-18):** the
+        live event alone vanished on a page reload, and the "figures are
+        model-read — verify" caveat matters most when the workbook is reviewed
+        later. The stream now writes the payload to
+        `{output_dir}/pdf_sidecar_outcome.json`
+        (`ingest.pdf_sidecar.write_sidecar_outcome`, best-effort, on disk per
+        gotcha #6 — no schema step) and `GET /api/runs/{id}` returns it as
+        `pdf_sidecar` (null when the pass did not apply), rendered by
+        `RunDetailView`'s Overview tab through the same `describePdfSidecar`.
+        The `built` notice also states the tokens the pass consumed, since
+        cost is the toggle's whole justification.
+  - **Verified:** `web/src/__tests__/pdfSidecar.test.ts` (wording),
+    `RunDetailView.test.tsx` (persisted notice on Overview / absent),
+    `tests/test_pdf_sidecar_wiring.py` (disk round-trip, swallowed write
+    failure, detail endpoint, emit-after-persist source pin),
+    `settingsPdfSidecar.test.tsx` (default / reflect / submit on & off /
+    non-admin read-only), two reducer tests in `appReducer.test.ts`;
+    `tsc --noEmit` clean; full web suite 1,295 passed; backend
+    `test_settings_api.py` + `test_pdf_sidecar_wiring.py` 41 passed. Not
+    verified in a live browser: the running server on :8002 is in real-login
+    mode and the Vite proxy is pinned to that port.
+  - **Still open for the product owner (not code):** the side-by-side quality
+    comparison vs a flag-off run, and whether the default flips ON. Both are
+    now one Settings click away for an admin, so the decision no longer needs
+    a code change either way.
+
 ## Rollback Plan
 
 - Every phase ships dark behind `XBRL_PDF_SIDECAR` (default off) — rollback at
@@ -178,11 +224,9 @@ Seven findings from an external review; five fixed, two deferred with reasons:
   `NotesDeps.source_html_origin`; Word-run output stays byte-identical.
 - **FIXED (MEDIUM): raw provider exception text in the SSE skip event.** Now
   class name only; full detail stays in the server log.
-- **DEFERRED (MEDIUM): frontend drops the `pdf_sidecar` SSE event, and the
-  Settings form has no toggle.** Both are the UI half of a feature that
-  ships dark; an admin enables it via `.env` or `POST /api/settings` today.
-  Bundle both (event display + admin toggle + web tests) into the
-  default-flip milestone — building UI for a hidden feature invites drift.
+- **CLOSED 2026-08-17 (was DEFERRED, MEDIUM): frontend drops the
+  `pdf_sidecar` SSE event, and the Settings form has no toggle.** Shipped as
+  Phase 5 above (event display + admin toggle + web tests).
 
 ## Out of Scope (explicitly)
 
@@ -190,5 +234,4 @@ Seven findings from an external review; five fixed, two deferred with reasons:
 - Feeding source-integrity generations/verdicts from transcriptions.
 - Docling/granite in any form.
 - Changing the Word (`.docx`) sidecar path in any way.
-- Frontend surfacing (event + Settings toggle) until the default-flip
-  milestone — see Peer-Review Hardening above.
+- Flipping the default ON — a product-owner decision, now a Settings click.

@@ -186,6 +186,8 @@ export async function updateSettings(
     spot_check: boolean;
     spot_check_mode: "light" | "full";
     entity_memory: boolean;
+    // Scanned-PDF transcribed source sidecar (docs/PLAN-pdf-source-sidecar.md).
+    pdf_sidecar: boolean;
     // Notes source-integrity rollout mode (gotcha #31).
     notes_source_integrity: SourceIntegrityMode;
     thinking_levels: Record<string, string>;
