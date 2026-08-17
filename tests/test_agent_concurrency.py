@@ -11,9 +11,7 @@ import agent_concurrency as ac
 @pytest.fixture(autouse=True)
 def _reset(monkeypatch):
     monkeypatch.delenv(ac.ENV_VAR, raising=False)
-    ac._semaphores.clear()
     yield
-    ac._semaphores.clear()
 
 
 def test_cap_parsing(monkeypatch):
@@ -66,4 +64,47 @@ async def test_semaphore_is_per_event_loop(monkeypatch):
     a = await _use()
     b = await asyncio.to_thread(lambda: asyncio.run(_use()))
     assert a != b
-    assert len(ac._semaphores) == 2
+    assert getattr(asyncio.get_running_loop(), ac._LOOP_ATTR)[0] == 2
+
+
+@pytest.mark.asyncio
+async def test_no_module_registry_so_a_finished_contended_loop_is_not_retained(monkeypatch):
+    """Peer review 2026-08-18: a contended Semaphore strong-refs its loop, so
+    any module-level registry holding the semaphore keeps the loop alive.
+    The semaphore lives on the loop object instead — nothing module-level
+    references it."""
+    import gc
+    import weakref
+    monkeypatch.setenv(ac.ENV_VAR, "1")
+
+    def _contended_run():
+        async def _main():
+            release = asyncio.Event()
+
+            async def hold():
+                async with ac.agent_slot("h"):
+                    await release.wait()
+
+            async def wait():
+                async with ac.agent_slot("w"):
+                    return True
+
+            t1 = asyncio.create_task(hold())
+            await asyncio.sleep(0)
+            t2 = asyncio.create_task(wait())
+            await asyncio.sleep(0)   # t2 is now waiting on the semaphore
+            release.set()
+            await t1
+            assert await t2
+            return weakref.ref(asyncio.get_running_loop())
+
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(_main())
+        finally:
+            loop.close()
+
+    ref = await asyncio.to_thread(_contended_run)
+    gc.collect()
+    assert ref() is None, "finished loop retained after contended acquire"
+    assert not hasattr(ac, "_semaphores")

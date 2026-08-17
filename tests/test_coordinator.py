@@ -379,7 +379,6 @@ async def test_concurrency_cap_of_two_still_completes_all_five(tmp_path, monkeyp
     import agent_concurrency
 
     monkeypatch.setenv(agent_concurrency.ENV_VAR, "2")
-    agent_concurrency._semaphores.clear()
     running = 0
     peak = 0
 
@@ -432,7 +431,6 @@ async def test_stop_all_while_agents_are_queued_leaves_none_running(tmp_path, mo
     import agent_concurrency
 
     monkeypatch.setenv(agent_concurrency.ENV_VAR, "1")
-    agent_concurrency._semaphores.clear()
     first_started = asyncio.Event()
     release_first = asyncio.Event()
     started: list[str] = []

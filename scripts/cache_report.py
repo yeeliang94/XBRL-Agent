@@ -41,9 +41,9 @@ except Exception:  # noqa: BLE001 — keep the DB-only diagnostic self-sufficien
 try:
     # Step 1 (PLAN-extraction-harness-efficiency): both cost figures side by
     # side — the stored PRE-CACHE estimate and the cache-adjusted one.
-    from pricing import estimate_cost, estimate_cost_cache_adjusted
+    from pricing import cache_adjustment_from_stored_cost
 except Exception:  # noqa: BLE001
-    estimate_cost = estimate_cost_cache_adjusted = None
+    cache_adjustment_from_stored_cost = None
 if _classify is None:
     def _classify(model_name: str) -> str:
         m = (model_name or "").lower()
@@ -119,7 +119,7 @@ def report(conn: sqlite3.Connection, run_id: int | None) -> int:
 
     agents = conn.execute(
         "SELECT statement_type, model, prompt_tokens, completion_tokens, "
-        "       cache_read_tokens, cache_write_tokens, turn_count, status "
+        "       cache_read_tokens, cache_write_tokens, turn_count, status, total_cost "
         "FROM run_agents WHERE run_id = ? ORDER BY statement_type",
         (run_id,),
     ).fetchall()
@@ -131,19 +131,21 @@ def report(conn: sqlite3.Connection, run_id: int | None) -> int:
 
     tot_prompt = tot_read = tot_write = 0
     tot_pre = tot_adj = 0.0
-    for st, model, prompt, compl, read, write, turns, _status in agents:
+    for st, model, prompt, compl, read, write, turns, _status, cost in agents:
         prov = _provider(model)
         prompt, compl, read, write = prompt or 0, compl or 0, read or 0, write or 0
         tot_prompt += prompt
         tot_read += read
         tot_write += write
         hr = _hit_rate(prov, prompt, read) * 100
-        pre = adj = 0.0
-        if estimate_cost is not None:
-            pre = estimate_cost(prompt, compl, 0, model or "")
-            adj = estimate_cost_cache_adjusted(
-                prompt, compl, 0, model or "",
-                cache_read_tokens=read, cache_write_tokens=write,
+        # $pre is the STORED total_cost (legacy rows have only this; it also
+        # carries failed-retry spend). $adj derives from it.
+        pre = float(cost or 0.0)
+        adj = pre
+        if cache_adjustment_from_stored_cost is not None:
+            adj = cache_adjustment_from_stored_cost(
+                pre, model or "", cache_read_tokens=read, cache_write_tokens=write,
+                prompt_tokens=prompt,
             )
         tot_pre += pre
         tot_adj += adj
@@ -156,8 +158,8 @@ def report(conn: sqlite3.Connection, run_id: int | None) -> int:
     blend = (tot_read / tot_prompt * 100) if tot_prompt else 0.0
     print(f"{'TOTAL':<10} {'':<9} {tot_prompt:>10,} {tot_read:>10,} "
           f"{tot_write:>10,} {blend:>5.1f}% {'':>6} {tot_pre:>7.3f} {tot_adj:>7.3f}")
-    print("   $pre = pre-cache estimate (what run_agents.total_cost stores); "
-          "$adj = cache reads billed at the cached rate.")
+    print("   $pre = run_agents.total_cost as stored (pre-cache); "
+          "$adj = $pre with cache reads discounted to the cached rate.")
 
     print()
     if tot_read > 0:

@@ -152,6 +152,15 @@ current_agent_label: contextvars.ContextVar[str] = contextvars.ContextVar(
 )
 
 
+def probe_log_level() -> int:
+    """Step 8 probe lines are DEBUG unless ``XBRL_CACHE_PROBE=1`` lifts them to
+    INFO for the reference run — hundreds of INFO lines per extraction were
+    not acceptable as a permanent default (peer review, 2026-08-18)."""
+    return logging.INFO if os.environ.get("XBRL_CACHE_PROBE", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    ) else logging.DEBUG
+
+
 def _log_rewrite(processor: str, before: List[ModelMessage], after: List[ModelMessage]) -> None:
     """Step 8 probe (PLAN-extraction-harness-efficiency): one INFO line per
     processor pass that actually rewrote history — the earliest changed
@@ -178,7 +187,8 @@ def _log_rewrite(processor: str, before: List[ModelMessage], after: List[ModelMe
             return total
 
         reclaimed = _chars(before) - _chars(after)
-        _rewrite_logger.info(
+        _rewrite_logger.log(
+            probe_log_level(),
             "history_rewrite %s processor=%s first_changed_msg=%d/%d reclaimed_chars=%d",
             current_agent_label.get(), processor, first_changed, len(before), reclaimed,
         )

@@ -5,7 +5,11 @@ Read-only over the audit DB (``run_agents`` / ``run_agent_turns`` /
 ``agent_events``) and the on-disk conversation traces. Writes nothing; no new
 tables. Per agent it prints:
 
-- cache-adjusted cost and the stored PRE-CACHE cost (Step 1 — both numbers)
+- the stored PRE-CACHE cost (``run_agents.total_cost`` — read as stored, it
+  also carries failed-retry spend and is the only figure legacy rows have)
+  and the cache-adjusted figure derived from it (Step 1 — both numbers).
+  ``$adj`` is ``n/a`` when a row has a cost but no token telemetry at all
+  (legacy rows), because cache reads are unknown there.
 - model requests (``run_agent_turns.node_kind = 'model_request'``, never raw
   graph-node counts) and tool-call batches (``node_kind = 'call_tools'``)
 - prompt / completion / cache-read / cache-write tokens, wall time
@@ -13,7 +17,9 @@ tables. Per agent it prints:
   ``agent_events`` tool_call payloads)
 - static-prefix share of billed TEXT, measured FLAT from the trace file:
   (system prompt + the first read_template return) re-sent on every model
-  request, as a fraction of all request TEXT those requests carried. Page
+  request, as a fraction of ALL text those requests carried — request parts
+  plus the earlier model responses and tool-call arguments, which re-enter
+  the history on every later request. Page
   images are NOT text and are excluded (they are elided in traces), so this
   is a text-only share — on an image-heavy agent the true share of billed
   tokens is lower. Traces are end-state (gotcha #6): compaction placeholders
@@ -37,7 +43,7 @@ REPO = Path(__file__).resolve().parent.parent
 DB = REPO / "output" / "xbrl_agent.db"
 sys.path.insert(0, str(REPO))
 
-from pricing import estimate_cost, estimate_cost_cache_adjusted  # noqa: E402
+from pricing import cache_adjustment_from_stored_cost  # noqa: E402
 
 TEMPLATE_MARKER = "=== Sheet:"
 
@@ -48,7 +54,7 @@ class AgentEconomics:
     model: str
     status: str
     cost_pre: float = 0.0
-    cost_adj: float = 0.0
+    cost_adj: Optional[float] = None   # None = telemetry absent (legacy row)
     model_requests: int = 0
     tool_batches: int = 0
     has_turn_rows: bool = False
@@ -78,7 +84,8 @@ class RunEconomics:
 
     @property
     def cost_adj(self) -> float:
-        return sum(a.cost_adj for a in self.agents)
+        # Rows with no telemetry contribute their stored cost unadjusted.
+        return sum(a.cost_adj if a.cost_adj is not None else a.cost_pre for a in self.agents)
 
     @property
     def model_requests(self) -> int:
@@ -140,18 +147,28 @@ def _static_prefix_share(trace_path: Path) -> Optional[float]:
         parts = m.get("parts") or []
         if kind == "request":
             for p in parts:
-                n = _text_len(p.get("content"))
+                content = p.get("content")
+                n = _text_len(content)
                 running_request_chars += n
                 pk = p.get("part_kind")
                 if pk == "system-prompt":
                     system_chars += n
                 elif (pk == "tool-return" and template_chars == 0
-                      and isinstance(p.get("content"), str)
-                      and TEMPLATE_MARKER in p["content"]):
+                      and isinstance(content, str) and TEMPLATE_MARKER in content):
                     template_chars = n
         elif kind == "response":
+            # This response was billed against everything before it …
             billed += running_request_chars
             static += system_chars + template_chars
+            # … and then becomes history for every LATER request: its text
+            # and its tool-call arguments are re-sent from now on.
+            for p in parts:
+                running_request_chars += _text_len(p.get("content"))
+                args = p.get("args")
+                if isinstance(args, str):
+                    running_request_chars += len(args)
+                elif isinstance(args, (dict, list)):
+                    running_request_chars += len(json.dumps(args))
     if billed == 0:
         return None
     return static / billed
@@ -191,20 +208,26 @@ def load_run(conn: sqlite3.Connection, run_id: int) -> Optional[RunEconomics]:
     run = RunEconomics(run_id, status or "", pdf or "", bool(scout_enabled))
     agents = conn.execute(
         "SELECT id, statement_type, model, status, prompt_tokens, completion_tokens, "
-        "cache_read_tokens, cache_write_tokens, started_at, ended_at "
+        "cache_read_tokens, cache_write_tokens, started_at, ended_at, total_cost "
         "FROM run_agents WHERE run_id = ? ORDER BY id", (run_id,),
     ).fetchall()
-    for (aid, st, model, ast, prompt, compl, c_read, c_write, started, ended) in agents:
+    for (aid, st, model, ast, prompt, compl, c_read, c_write, started, ended, cost) in agents:
         a = AgentEconomics(statement=st or "", model=model or "", status=ast or "")
         a.prompt_tokens = int(prompt or 0)
         a.completion_tokens = int(compl or 0)
         a.cache_read = int(c_read or 0)
         a.cache_write = int(c_write or 0)
-        a.cost_pre = estimate_cost(a.prompt_tokens, a.completion_tokens, 0, a.model)
-        a.cost_adj = estimate_cost_cache_adjusted(
-            a.prompt_tokens, a.completion_tokens, 0, a.model,
-            cache_read_tokens=a.cache_read, cache_write_tokens=a.cache_write,
-        )
+        # $pre is the STORED figure (it includes failed-retry spend the token
+        # splits do not; legacy rows have only this). $adj is derived from it.
+        a.cost_pre = float(cost or 0.0)
+        has_telemetry = bool(a.prompt_tokens or a.completion_tokens or a.cache_read)
+        if has_telemetry or a.cost_pre == 0.0:
+            a.cost_adj = cache_adjustment_from_stored_cost(
+                a.cost_pre, a.model, cache_read_tokens=a.cache_read,
+                cache_write_tokens=a.cache_write, prompt_tokens=a.prompt_tokens,
+            )
+        else:
+            a.cost_adj = None  # cost known, cache reads unknown
         a.wall_s = _wall_seconds(started, ended)
         counts = dict(conn.execute(
             "SELECT node_kind, COUNT(*) FROM run_agent_turns WHERE run_agent_id = ? "
@@ -238,7 +261,8 @@ def print_run(run: RunEconomics) -> None:
     for a in run.agents:
         req = str(a.model_requests) if a.has_turn_rows else "-"
         tools = str(a.tool_batches) if a.has_turn_rows else "-"
-        print(f"{a.statement:<11} {a.status:<10} {a.cost_adj:>7.3f} {a.cost_pre:>7.3f} "
+        adj = f"{a.cost_adj:>7.3f}" if a.cost_adj is not None else f"{'n/a':>7}"
+        print(f"{a.statement:<11} {a.status:<10} {adj} {a.cost_pre:>7.3f} "
               f"{req:>4} {tools:>5} {a.prompt_tokens:>9,} "
               f"{a.completion_tokens:>7,} {a.cache_read:>9,} {a.cache_write:>8,} "
               f"{a.wall_s:>7.0f} {a.view_calls:>5} {a.unique_pages:>5} {a.page_fetches:>5} "
@@ -246,10 +270,12 @@ def print_run(run: RunEconomics) -> None:
     print("-" * len(hdr))
     print(f"{'TOTAL':<11} {'':<10} {run.cost_adj:>7.3f} {run.cost_pre:>7.3f} "
           f"{run.model_requests:>4}")
-    print("  $adj = cache-adjusted (Step 1); $pre = pre-cache estimate as stored in "
-          "run_agents.total_cost; req = model requests ('-' = no per-turn rows for this "
-          "role); stat_txt = static-prefix share of billed request TEXT (flat, from the "
-          "trace; images excluded).")
+    print("  $pre = run_agents.total_cost as stored (pre-cache; includes failed-retry "
+          "spend); $adj = $pre with cache reads discounted / writes surcharged (n/a = "
+          "cost stored but no token telemetry, so reads are unknown); req = model "
+          "requests ('-' = no per-turn rows for this role); stat_txt = static-prefix "
+          "share of billed TEXT incl. prior responses + tool args (flat, from the trace; "
+          "images excluded).")
 
 
 def print_compare(a: RunEconomics, b: RunEconomics) -> None:
@@ -262,8 +288,8 @@ def print_compare(a: RunEconomics, b: RunEconomics) -> None:
     by_b = {x.statement: x for x in b.agents}
     for st in sorted(set(by_a) | set(by_b), key=lambda s: (s not in _FACE, s)):
         xa, xb = by_a.get(st), by_b.get(st)
-        ca = xa.cost_adj if xa else 0.0
-        cb = xb.cost_adj if xb else 0.0
+        ca = (xa.cost_adj if xa.cost_adj is not None else xa.cost_pre) if xa else 0.0
+        cb = (xb.cost_adj if xb.cost_adj is not None else xb.cost_pre) if xb else 0.0
         ra = xa.model_requests if xa else 0
         rb = xb.model_requests if xb else 0
         print(f"{st:<11} {ca:>7.3f} {cb:>7.3f} {cb - ca:>+7.3f} {ra:>5} {rb:>5} {rb - ra:>+5} "

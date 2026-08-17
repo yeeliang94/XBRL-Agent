@@ -25,7 +25,13 @@ import json
 import pytest
 
 import pricing
-from pricing import estimate_cost, estimate_cost_cache_adjusted, get_cached_input_price
+from pricing import (
+    cache_adjustment_from_stored_cost,
+    estimate_cost,
+    estimate_cost_cache_adjusted,
+    get_cache_write_price,
+    get_cached_input_price,
+)
 
 
 def _reset() -> None:
@@ -42,7 +48,8 @@ def registry(tmp_path):
         {"id": "openai.gpt-x", "input_price_per_mtok": 2.5,
          "output_price_per_mtok": 15.0, "cached_input_price_per_mtok": 0.25},
         {"id": "bedrock.anthropic.claude-y", "input_price_per_mtok": 3.0,
-         "output_price_per_mtok": 15.0, "cached_input_price_per_mtok": 0.3},
+         "output_price_per_mtok": 15.0, "cached_input_price_per_mtok": 0.3,
+         "cache_write_price_per_mtok": 3.75},
         {"id": "vertex_ai.gemini-z", "input_price_per_mtok": 1.0,
          "output_price_per_mtok": 5.0},  # no cached rate → full price
     ]
@@ -68,19 +75,47 @@ def test_openai_shape_bills_uncached_portion_plus_cached_reads(registry):
     assert cost == pytest.approx(expected)
 
 
-def test_anthropic_shape_uses_the_same_inclusive_prompt_rule(registry):
+def test_anthropic_shape_uses_the_same_inclusive_prompt_rule_and_write_rate(registry):
     # prompt 650,000 INCLUDES the 500,000 cache reads and 50,000 writes
-    # (genai-prices sums them into input_tokens). Reads are discounted;
-    # writes stay at the input rate (no write rate in the registry).
+    # (genai-prices sums them into input_tokens). Reads discounted, writes at
+    # the 1.25x write rate, the remaining 100,000 at the input rate.
     cost = estimate_cost_cache_adjusted(
         prompt_tokens=650_000, completion_tokens=0, thinking_tokens=0,
         model="bedrock.anthropic.claude-y",
         cache_read_tokens=500_000, cache_write_tokens=50_000,
     )
-    expected = 150_000 / 1e6 * 3.0 + 500_000 / 1e6 * 0.3
+    expected = 100_000 / 1e6 * 3.0 + 500_000 / 1e6 * 0.3 + 50_000 / 1e6 * 3.75
     assert cost == pytest.approx(expected)
-    # Never above the pre-cache figure — a discount cannot add cost.
-    assert cost < estimate_cost(650_000, 0, 0, "bedrock.anthropic.claude-y")
+    assert get_cache_write_price("bedrock.anthropic.claude-y") == 3.75
+    # No write rate declared → plain input rate, never a surcharge invented.
+    assert get_cache_write_price("openai.gpt-x") == 2.5
+
+
+def test_reads_and_writes_are_clamped_to_the_prompt_count(registry):
+    # Reads > prompt is contradictory telemetry: clamp, so $adj ≤ $pre.
+    pre = estimate_cost(10, 0, 0, "openai.gpt-x")
+    adj = estimate_cost_cache_adjusted(10, 0, 0, "openai.gpt-x", cache_read_tokens=1_000)
+    assert adj == pytest.approx(10 / 1e6 * 0.25) and adj <= pre
+    # Writes clamp to what is left after reads.
+    adj2 = estimate_cost_cache_adjusted(
+        100, 0, 0, "bedrock.anthropic.claude-y", cache_read_tokens=80, cache_write_tokens=50,
+    )
+    assert adj2 == pytest.approx(80 / 1e6 * 0.3 + 20 / 1e6 * 3.75)
+
+
+def test_adjustment_from_stored_cost_keeps_retry_spend_and_legacy_rows(registry):
+    # A stored total_cost with NO token splits (legacy row): unchanged.
+    assert cache_adjustment_from_stored_cost(1.795, "openai.gpt-x") == pytest.approx(1.795)
+    # With reads: subtract the read discount from the STORED figure — a
+    # retried agent's failed-attempt spend (inside total_cost, outside the
+    # token splits) survives.
+    stored = 2.0  # includes $0.5 of failed-attempt spend
+    adj = cache_adjustment_from_stored_cost(stored, "openai.gpt-x", cache_read_tokens=400_000,
+                                            prompt_tokens=600_000)
+    assert adj == pytest.approx(2.0 - 400_000 / 1e6 * (2.5 - 0.25))
+    # Clamped when reads exceed a known prompt count; never below zero.
+    assert cache_adjustment_from_stored_cost(0.01, "openai.gpt-x", cache_read_tokens=10**9,
+                                             prompt_tokens=100) >= 0.0
 
 
 def test_pinned_library_sums_anthropic_cache_tokens_into_input_tokens():
@@ -117,16 +152,6 @@ def test_zero_cache_reads_reproduces_pre_cache_estimate_exactly(registry):
             prompt_tokens=123_456, completion_tokens=7_890, thinking_tokens=100,
             model=model, cache_read_tokens=0,
         ) == estimate_cost(123_456, 7_890, 100, model)
-
-
-def test_cache_reads_larger_than_prompt_never_go_negative(registry):
-    # Defensive: a telemetry glitch (reads > prompt on an OpenAI shape) must
-    # not produce a negative uncached slice.
-    cost = estimate_cost_cache_adjusted(
-        prompt_tokens=10, completion_tokens=0, thinking_tokens=0,
-        model="openai.gpt-x", cache_read_tokens=1_000,
-    )
-    assert cost == pytest.approx(1_000 / 1e6 * 0.25)
 
 
 def test_bare_model_name_resolves_cached_rate_via_prefix_strip(registry):
