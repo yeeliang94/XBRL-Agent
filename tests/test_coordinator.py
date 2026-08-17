@@ -350,3 +350,119 @@ async def test_iteration_limit_without_clean_verify_still_fails_with_tokens():
     assert result.status == "failed"
     assert "iteration limit" in (result.error or "").lower()
     assert result.total_tokens == 150
+
+
+# ---------------------------------------------------------------------------
+# Step 7 (PLAN-extraction-harness-efficiency): XBRL_MAX_CONCURRENT_AGENTS
+# bounds the fan-out without touching the lifecycle guarantees.
+# ---------------------------------------------------------------------------
+
+def _five_stmt_config(tmp_path):
+    return RunConfig(
+        pdf_path="/tmp/test.pdf",
+        output_dir=str(tmp_path),
+        model="test-model",
+        statements_to_run=set(StatementType),
+        variants={
+            StatementType.SOFP: "CuNonCu",
+            StatementType.SOPL: "Function",
+            StatementType.SOCI: "BeforeTax",
+            StatementType.SOCF: "Indirect",
+            StatementType.SOCIE: "Default",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_concurrency_cap_of_two_still_completes_all_five(tmp_path, monkeypatch):
+    from coordinator import run_extraction, AgentResult
+    import agent_concurrency
+
+    monkeypatch.setenv(agent_concurrency.ENV_VAR, "2")
+    agent_concurrency._semaphores.clear()
+    running = 0
+    peak = 0
+
+    async def fake_single(statement_type, variant, **kw):
+        nonlocal running, peak
+        running += 1
+        peak = max(peak, running)
+        await asyncio.sleep(0.02)
+        running -= 1
+        return AgentResult(statement_type=statement_type, variant=variant, status="succeeded")
+
+    with patch("coordinator._run_single_agent", side_effect=fake_single):
+        result = await run_extraction(_five_stmt_config(tmp_path), infopack=None)
+
+    assert len(result.agent_results) == 5
+    assert {r.status for r in result.agent_results} == {"succeeded"}
+    assert peak == 2, f"cap of 2 was not honoured (peak concurrency {peak})"
+
+
+@pytest.mark.asyncio
+async def test_unset_cap_is_unbounded_no_op(tmp_path, monkeypatch):
+    from coordinator import run_extraction, AgentResult
+    import agent_concurrency
+
+    monkeypatch.delenv(agent_concurrency.ENV_VAR, raising=False)
+    running = 0
+    peak = 0
+
+    async def fake_single(statement_type, variant, **kw):
+        nonlocal running, peak
+        running += 1
+        peak = max(peak, running)
+        await asyncio.sleep(0.02)
+        running -= 1
+        return AgentResult(statement_type=statement_type, variant=variant, status="succeeded")
+
+    with patch("coordinator._run_single_agent", side_effect=fake_single):
+        await run_extraction(_five_stmt_config(tmp_path), infopack=None)
+    assert peak == 5
+
+
+@pytest.mark.asyncio
+async def test_stop_all_while_agents_are_queued_leaves_none_running(tmp_path, monkeypatch):
+    """Cap 1, five statements: cancel the QUEUED agents through task_registry
+    (the abort API path) while the first is still running. Every queued task
+    must land as ``cancelled`` — never stuck ``running`` — and the running
+    one still completes."""
+    import task_registry
+    from coordinator import run_extraction, AgentResult
+    import agent_concurrency
+
+    monkeypatch.setenv(agent_concurrency.ENV_VAR, "1")
+    agent_concurrency._semaphores.clear()
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    started: list[str] = []
+
+    async def fake_single(statement_type, variant, **kw):
+        started.append(statement_type.value)
+        first_started.set()
+        await release_first.wait()
+        return AgentResult(statement_type=statement_type, variant=variant, status="succeeded")
+
+    session = "cap-test-session"
+
+    async def _stop_queued():
+        await first_started.wait()
+        # Cancel every registered agent except the one that is running.
+        for stmt in StatementType:
+            if stmt.value != started[0]:
+                assert task_registry.cancel_agent(session, stmt.value.lower())
+        release_first.set()
+
+    with patch("coordinator._run_single_agent", side_effect=fake_single):
+        stopper = asyncio.create_task(_stop_queued())
+        try:
+            result = await run_extraction(
+                _five_stmt_config(tmp_path), infopack=None, session_id=session,
+            )
+        finally:
+            await stopper
+            task_registry.remove_session(session)
+
+    statuses = sorted(r.status for r in result.agent_results)
+    assert statuses == ["cancelled"] * 4 + ["succeeded"], statuses
+    assert len(started) == 1, "a cancelled queued agent must never start"
