@@ -525,9 +525,14 @@ async def run_extraction(
                 },
             ))
 
-        # Create individual tasks so they can be cancelled independently
+        # Create individual tasks so they can be cancelled independently.
+        # Step 7 (XBRL_MAX_CONCURRENT_AGENTS): the task is created and
+        # registered up-front as before; the concurrency slot is taken INSIDE
+        # the task, so a queued agent is still cancellable / registered and
+        # reaches a terminal status (see agent_concurrency.py).
         task = asyncio.create_task(
-            _run_single_agent(
+            _run_gated_agent(
+                agent_id,
                 statement_type=stmt_type,
                 variant=variant,
                 pdf_path=config.pdf_path,
@@ -624,6 +629,17 @@ async def run_extraction(
     # Prepend skipped (NotPrepared) results so they survive the
     # CancelledError reset above and land in the CoordinatorResult.
     return CoordinatorResult(agent_results=skipped_results + results)
+
+
+async def _run_gated_agent(label: str, **kwargs) -> AgentResult:
+    """``_run_single_agent`` under one ``agent_concurrency.agent_slot`` (Step 7).
+    Unbounded by default; the ``_run_single_agent`` coroutine is only created
+    once the slot is held, so a queued-then-cancelled task never leaves an
+    un-awaited coroutine behind."""
+    from agent_concurrency import agent_slot
+
+    async with agent_slot(label):
+        return await _run_single_agent(**kwargs)
 
 
 async def _run_single_agent(

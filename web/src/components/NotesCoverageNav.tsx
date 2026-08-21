@@ -3,7 +3,8 @@ import { ApiError, userMessage } from "../lib/errors";
 import { coverageStatusLabel } from "../lib/vocabulary";
 import { pwc } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
-import { STATUS_SYMBOLS } from "../lib/runStatus";
+import { STATUS_SYMBOLS, type StatusSymbol } from "../lib/runStatus";
+import { StatusIcon } from "./StatusIcon";
 import { SkeletonText } from "./Skeleton";
 
 /**
@@ -87,7 +88,7 @@ export function coverageGapRows(rows: CoverageNavRow[]): CoverageNavRow[] {
   );
 }
 
-function statusSymbol(row: CoverageNavRow): string {
+function statusSymbol(row: CoverageNavRow): StatusSymbol {
   if (row.status === "placed") return STATUS_SYMBOLS.success;
   if (row.status === "skipped") return STATUS_SYMBOLS.inactive;
   if (RESOLVED_VERDICTS.has(row.reviewer_verdict || "")) return STATUS_SYMBOLS.inactive;
@@ -208,13 +209,10 @@ export function NotesCoverageNav({
                 data-testid={`coverage-nav-note-${row.note_num}`}
                 title={coverageStatusLabel(row.status)}
               >
-                <span
-                  aria-hidden="true"
-                  style={{ ...ui.statusSymbol, width: 14 }}
+                <StatusIcon
+                  symbol={statusSymbol(row)}
                   data-testid={`coverage-nav-dot-${row.status}`}
-                >
-                  {statusSymbol(row)}
-                </span>
+                />
                 <span style={styles.num}>{row.note_num}</span>
                 <span style={styles.itemTitle}>
                   {row.title || <span style={styles.dim}>(not in inventory)</span>}

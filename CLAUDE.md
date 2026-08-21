@@ -158,6 +158,16 @@ SESSION_SECRET=                # REQUIRED in prod (startup fails without it); de
 # XBRL_FACT_BASED_CHECKS=1     # cross-checks read run_concept_facts; 0 = xlsx path
 # XBRL_FACT_BASED_VERIFY=1     # verifier reads facts; 0 = xlsx formula-eval path
 
+# Extraction-harness efficiency flags (docs/PLAN-extraction-harness-efficiency.md)
+# — all DEFAULT OFF / no-op during rollout; unset = today's behaviour.
+# XBRL_TEMPLATE_SUMMARY_COMPACT=0  # read_template: one line per ROW (SOFP 80k→35k chars)
+# XBRL_TEMPLATE_IN_PROMPT=0        # face agents: template in the system prompt; read_template returns a pointer
+# XBRL_MAX_CONCURRENT_AGENTS=0     # cap on top-level agents running at once; 0 = unbounded
+# XBRL_CACHE_PROBE=0               # lift the per-turn cache / history-rewrite probe lines to INFO
+# CLI: scout is ON by default (`--no-scout` to skip). Cost: run_agents.total_cost is
+# still the PRE-CACHE estimate; `scripts/report_run_economics.py` prints the
+# cache-adjusted figure beside it (pricing.estimate_cost_cache_adjusted).
+
 # Canonical concept model is now MANDATORY (rewrite Phase 1.1): the legacy
 # direct-xlsx pipeline and the XBRL_CANONICAL_MODE opt-out were removed.
 # The flag is no longer read (see gotcha #21).

@@ -245,6 +245,31 @@ describe("RunDetailView", () => {
     expect(screen.queryByText(/^scout$/i)).toBeNull();
   });
 
+  // docs/PLAN-pdf-source-sidecar.md: the persisted transcript outcome shows
+  // on the Overview tab after a reload, so the "verify figures" caveat is
+  // still visible when the workbook is reviewed later.
+  test("renders the persisted scanned-PDF transcript notice on Overview", () => {
+    render(
+      <RunDetailView
+        detail={makeDetail({ pdf_sidecar: { status: "built", pages: 20, usage: { in: 56760, out: 13976 } } })}
+        onDelete={() => {}}
+        onDownload={() => {}}
+      />,
+    );
+    const notice = screen.getByTestId("pdf-sidecar-notice");
+    expect(notice.textContent).toMatch(/Source transcript built/);
+    expect(notice.textContent).toMatch(/20 scanned pages/);
+    expect(notice.textContent).toMatch(/verify every number/i);
+    expect(notice.textContent).toMatch(/56,760 in \/ 13,976 out tokens/);
+  });
+
+  test("no transcript notice when the pass did not apply", () => {
+    render(
+      <RunDetailView detail={makeDetail({ pdf_sidecar: null })} onDelete={() => {}} onDownload={() => {}} />,
+    );
+    expect(screen.queryByTestId("pdf-sidecar-notice")).toBeNull();
+  });
+
   test("renders per-agent status list with both agents", () => {
     render(
       <RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />,
@@ -1247,7 +1272,7 @@ describe("RunDetailView", () => {
     // Monochrome status: aria-hidden ✓ in grey700 next to the explicit label.
     const label = screen.getAllByText("Completed")[0];
     const symbol = label.parentElement!.querySelector('[aria-hidden="true"]');
-    expect(symbol?.textContent).toBe("\u2713");
+    expect(symbol?.getAttribute("data-status-icon")).toBe("success");
     expect((symbol as HTMLElement).style.color).toBe("rgb(94, 94, 94)");
 
     // Shared tab treatment: dark active text, orange only on the indicator.

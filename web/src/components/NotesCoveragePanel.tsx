@@ -3,7 +3,8 @@ import { ApiError, userMessage } from "../lib/errors";
 import { coverageStatusLabel, subNoteStateLabel } from "../lib/vocabulary";
 import { pwc } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
-import { STATUS_SYMBOLS } from "../lib/runStatus";
+import { STATUS_SYMBOLS, type StatusSymbol } from "../lib/runStatus";
+import { StatusIcon } from "./StatusIcon";
 import { SkeletonText } from "./Skeleton";
 
 /**
@@ -78,7 +79,7 @@ const KIND_TAG: Record<Placement["kind"], string> = {
   carve_out: "carve-out",
 };
 
-function statusSymbol(row: CoverageRow): string {
+function statusSymbol(row: CoverageRow): StatusSymbol {
   if (row.status === "placed") return STATUS_SYMBOLS.success;
   if (row.status === "skipped") return STATUS_SYMBOLS.inactive;
   // missing / suspected_gap: resolved by the reviewer reads as settled, else
@@ -247,7 +248,7 @@ export function NotesCoveragePanel({ runId }: Props) {
                         style={ui.status}
                         data-testid={`coverage-status-${row.status}`}
                       >
-                        <span aria-hidden="true" style={ui.statusSymbol}>{statusSymbol(row)}</span>
+                        <StatusIcon symbol={statusSymbol(row)} />
                         {STATUS_LABEL(row.status)}
                       </span>
                       {row.reason && <div style={styles.reason}>{row.reason}</div>}

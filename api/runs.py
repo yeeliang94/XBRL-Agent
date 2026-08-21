@@ -28,6 +28,15 @@ logger = logging.getLogger("server")
 router = APIRouter()
 
 
+def _read_pdf_sidecar_outcome(output_dir: Optional[str]) -> Optional[dict]:
+    """The persisted scanned-PDF transcript outcome, or None. Never raises."""
+    try:
+        from ingest.pdf_sidecar import read_sidecar_outcome
+        return read_sidecar_outcome(output_dir)
+    except Exception:  # noqa: BLE001 — a notice must not fail the detail payload
+        return None
+
+
 def _pricing_is_unconfirmed(model: Optional[str]) -> bool:
     """Whether this agent's cost figure came from a placeholder rate.
 
@@ -206,6 +215,11 @@ async def get_run_detail_endpoint(run_id: int):
         # None on a run with no override — the Notes tab then uses the firm
         # default from /api/config.
         "notes_table_style": getattr(run, "notes_table_style", None),
+        # docs/PLAN-pdf-source-sidecar.md: the persisted ``pdf_sidecar`` SSE
+        # payload (built / skipped + reason), read from the run's output dir so
+        # the run page shows the notice after a reload. None when the pass did
+        # not apply (setting off, text PDF, Word run, pre-feature run).
+        "pdf_sidecar": _read_pdf_sidecar_outcome(run.output_dir),
         "agents": [
             {
                 "id": a.id,

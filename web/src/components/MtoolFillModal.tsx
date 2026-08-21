@@ -2,7 +2,8 @@ import React, { useEffect, useRef, useState } from "react";
 import { userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
-import { STATUS_SYMBOLS } from "../lib/runStatus";
+import { STATUS_SYMBOLS, type StatusSymbol } from "../lib/runStatus";
+import { StatusIcon } from "./StatusIcon";
 import { denominationLabel } from "../lib/vocabulary";
 import { FileDropzone } from "./FileDropzone";
 
@@ -254,7 +255,7 @@ function PlanSection({
   hint,
   children,
 }: {
-  symbol: string;
+  symbol: StatusSymbol;
   title: string;
   count: number;
   defaultOpen?: boolean;
@@ -275,7 +276,7 @@ function PlanSection({
           color: pwc.grey900,
         }}
       >
-        <span aria-hidden="true" style={ui.statusSymbol}>{symbol}</span>
+        <StatusIcon symbol={symbol} />
         {title}
         <span style={{ color: pwc.grey500, fontWeight: pwc.weight.regular }}>({count})</span>
       </summary>
@@ -956,19 +957,15 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                 {/* One glanceable summary row — the three outcomes at a glance. */}
                 <div style={styles.planSummary}>
                   <span style={styles.planChip}>
-                    <span aria-hidden="true" style={ui.statusSymbol}>{STATUS_SYMBOLS.success}</span>
+                    <StatusIcon symbol={STATUS_SYMBOLS.success} />
                     {preview.will_fill_existing.length} ready to fill
                   </span>
                   <span style={styles.planChip}>
-                    <span aria-hidden="true" style={ui.statusSymbol}>
-                      {createMissingNotes ? STATUS_SYMBOLS.derived : STATUS_SYMBOLS.inactive}
-                    </span>
+                    <StatusIcon symbol={createMissingNotes ? STATUS_SYMBOLS.derived : STATUS_SYMBOLS.inactive} />
                     {preview.will_create.length} will be added
                   </span>
                   <span style={{ ...styles.planChip, color: preview.unresolved.length ? pwc.warningText : pwc.grey900 }}>
-                    <span aria-hidden="true" style={ui.statusSymbol}>
-                      {preview.unresolved.length ? STATUS_SYMBOLS.attention : STATUS_SYMBOLS.inactive}
-                    </span>
+                    <StatusIcon symbol={preview.unresolved.length ? STATUS_SYMBOLS.attention : STATUS_SYMBOLS.inactive} />
                     {preview.unresolved.length} need your decision
                   </span>
                 </div>

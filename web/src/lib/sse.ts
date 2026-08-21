@@ -44,6 +44,8 @@ const MULTI_EVENT_TYPES: SSEEventType[] = [
   // Scout-quality warnings (run-level, no agent_id) → warnings banner.
   "scout_warnings",
   "scale_conflict",
+  // Scanned-PDF source transcript outcome (run-level) → notice on the run page.
+  "pdf_sidecar",
 ];
 
 // Generic parse result. Stays loose on `data` because not every consumer

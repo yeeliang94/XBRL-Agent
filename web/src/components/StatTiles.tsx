@@ -1,6 +1,7 @@
 import { pwc, tokens } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { STATUS_SYMBOLS } from "../lib/runStatus";
+import { StatusIcon } from "./StatusIcon";
 import { AnimatedNumber } from "./AnimatedNumber";
 
 // ---------------------------------------------------------------------------
@@ -50,7 +51,7 @@ export function StatTiles({
       <div style={styles.tile}>
         <Count n={needsReview} />
         <span style={styles.label}>
-          <span aria-hidden="true" style={styles.symbol}>{STATUS_SYMBOLS.attention}</span>
+          <StatusIcon symbol={STATUS_SYMBOLS.attention} style={styles.symbol} />
           Needs review
         </span>
       </div>
@@ -58,7 +59,7 @@ export function StatTiles({
         <Count n={drafts} />
         <span style={styles.labelRow}>
           <span style={styles.label}>
-            <span aria-hidden="true" style={styles.symbol}>{STATUS_SYMBOLS.inactive}</span>
+            <StatusIcon symbol={STATUS_SYMBOLS.inactive} style={styles.symbol} />
             Not started
           </span>
           {canClearDrafts && (
@@ -119,6 +120,8 @@ const styles = {
     fontSize: 28,
     lineHeight: 1.1,
     color: pwc.grey900,
+    // Fixed-width digits so a counting value doesn't jitter and tiles line up.
+    fontVariantNumeric: "tabular-nums",
   } as React.CSSProperties,
   label: {
     fontFamily: pwc.fontBody,

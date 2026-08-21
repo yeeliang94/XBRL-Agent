@@ -216,3 +216,129 @@ def test_abstract_only_set_on_column_a_label_cells():
                 f"is_abstract should only be set on col-A label cells; "
                 f"got {f.coordinate} (col {f.col})"
             )
+
+
+# ---------------------------------------------------------------------------
+# Row-oriented (compact) template summary — PLAN-extraction-harness-efficiency
+# Step 4. `XBRL_TEMPLATE_SUMMARY_COMPACT` (default off) switches the agent-
+# visible rendering from one line per CELL to one line per ROW. The renderer
+# is the only thing that changes: TemplateField parsing, read_template's
+# contract and which rows are writable are untouched, and the three markings
+# the agent relies on — `ABSTRACT (section header — do not write)`,
+# `DATA_ENTRY`, and formula text — must survive verbatim.
+# ---------------------------------------------------------------------------
+
+import pytest
+
+from extraction.agent import (
+    _summarize_template,
+    _summarize_template_compact,
+    _template_summary_compact_enabled,
+)
+
+_ROOT = Path(__file__).resolve().parent.parent
+_ALL_TEMPLATES = sorted(
+    p
+    for standard in ("XBRL-template-MFRS", "XBRL-template-MPERS")
+    for level in ("Company", "Group")
+    for p in (_ROOT / standard / level).glob("*.xlsx")
+)
+
+
+def _rows_by_sheet(summary: str) -> dict[str, set[int]]:
+    """{sheet: {row numbers mentioned}} for either rendering — both spell a
+    row as ``(row N)`` (verbose) or ``row N:`` (compact)."""
+    import re
+    out: dict[str, set[int]] = {}
+    sheet = None
+    for line in summary.splitlines():
+        if line.startswith("=== Sheet: "):
+            sheet = line[len("=== Sheet: "):].rstrip(" =")
+            out.setdefault(sheet, set())
+            continue
+        if sheet is None:
+            continue
+        m = re.search(r"\(row\s+(\d+)\)", line) or re.match(r"\s*row\s+(\d+):", line)
+        if m:
+            out[sheet].add(int(m.group(1)))
+    return out
+
+
+def test_compact_flag_defaults_off(monkeypatch):
+    monkeypatch.delenv("XBRL_TEMPLATE_SUMMARY_COMPACT", raising=False)
+    assert _template_summary_compact_enabled() is False
+    monkeypatch.setenv("XBRL_TEMPLATE_SUMMARY_COMPACT", "1")
+    assert _template_summary_compact_enabled() is True
+
+
+def test_flag_off_rendering_is_byte_identical_to_legacy(monkeypatch):
+    monkeypatch.delenv("XBRL_TEMPLATE_SUMMARY_COMPACT", raising=False)
+    fields = read_template(TEMPLATE)
+    assert _summarize_template(fields) == _summarize_template(fields, compact=False)
+    monkeypatch.setenv("XBRL_TEMPLATE_SUMMARY_COMPACT", "1")
+    assert _summarize_template(fields) == _summarize_template_compact(fields)
+
+
+@pytest.mark.parametrize("path", _ALL_TEMPLATES, ids=lambda p: f"{p.parent.parent.name}/{p.parent.name}/{p.name}")
+def test_compact_keeps_every_row_of_the_verbose_rendering(path):
+    fields = read_template(str(path))
+    verbose = _rows_by_sheet(_summarize_template(fields, compact=False))
+    compact = _rows_by_sheet(_summarize_template_compact(fields))
+    assert set(compact) == set(verbose), "sheet set differs"
+    for sheet, rows in verbose.items():
+        assert compact[sheet] == rows, f"{sheet}: rows lost/added in compact rendering"
+
+
+def test_compact_preserves_abstract_data_entry_and_formula_markings():
+    fields = read_template(_SOPL_FUNCTION_TEMPLATE, sheet="SOPL-Analysis-Function")
+    out = _summarize_template_compact(fields)
+    lines = {int(l.split(":")[0].split()[1]): l for l in out.splitlines() if l.startswith("row ")}
+    # Row 27 'Interest income' is the abstract header (gotcha #17) — same words.
+    assert "Interest income" in lines[27]
+    assert "[ABSTRACT (section header — do not write)]" in lines[27]
+    # Row 28 is a leaf → DATA_ENTRY, no abstract marking.
+    assert "DATA_ENTRY" in lines[28] and "ABSTRACT" not in lines[28]
+    # Row 30 'Total interest income' carries a formula and it is visible.
+    assert "FORMULA" in lines[30] and "=" in lines[30]
+
+
+def test_compact_shows_formula_text_and_row1_date_cells():
+    fields = read_template(TEMPLATE, sheet="SOFP-CuNonCu")
+    out = _summarize_template_compact(fields)
+    # Face row 8 pulls from the sub-sheet; the cross-sheet formula must be readable.
+    row8 = next(l for l in out.splitlines() if l.startswith("row 8:"))
+    assert "='SOFP-Sub-CuNonCu'!B39" in row8
+    # Row 1 has no col-A label but carries the reporting-period cells the
+    # agent must fill (prompts/_base.md) — it must not be dropped.
+    row1 = next(l for l in out.splitlines() if l.startswith("row 1:"))
+    assert "01/01/YYYY - 31/12/YYYY" in row1 and "DATA_ENTRY" in row1
+
+
+def test_compact_sofp_payload_under_35k_and_keeps_compaction_marker():
+    fields = read_template(TEMPLATE)
+    out = _summarize_template_compact(fields)
+    verbose = _summarize_template(fields, compact=False)
+    assert len(verbose) > 70_000  # the measured 79,563-char baseline
+    assert len(out) < 35_000, len(out)
+    # history_processors._is_template_summary keys on this banner.
+    assert "=== Sheet:" in out
+
+
+def test_compact_cache_is_keyed_by_mode(monkeypatch):
+    """The process-global memo must not serve a verbose string on a compact
+    request (or vice versa) — the mode is part of the cache key."""
+    from types import SimpleNamespace
+    from extraction import agent as agent_mod
+    agent_mod._TEMPLATE_SUMMARY_CACHE.clear()
+    monkeypatch.setenv("XBRL_DB_READ_TEMPLATE", "1")
+    deps = SimpleNamespace(template_path=TEMPLATE, template_id="mfrs-company-sofp-cunoncu-v1",
+                           template_fields=[])
+    try:
+        monkeypatch.setenv("XBRL_TEMPLATE_SUMMARY_COMPACT", "0")
+        verbose = agent_mod._render_template_summary(deps)
+        monkeypatch.setenv("XBRL_TEMPLATE_SUMMARY_COMPACT", "1")
+        compact = agent_mod._render_template_summary(deps)
+        assert verbose != compact and len(compact) < len(verbose)
+        assert len(agent_mod._TEMPLATE_SUMMARY_CACHE) == 2
+    finally:
+        agent_mod._TEMPLATE_SUMMARY_CACHE.clear()
