@@ -1,6 +1,7 @@
 import { pwc } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
-import { STATUS_SYMBOLS } from "../lib/runStatus";
+import { STATUS_SYMBOLS, type StatusSymbol } from "../lib/runStatus";
+import { StatusIcon } from "./StatusIcon";
 import {
   crossCheckFailureLabel,
   crossCheckLabel,
@@ -31,7 +32,7 @@ export interface ValidatorTabProps {
 
 const STATUS_DISPLAY: Record<
   CrossCheckResult["status"],
-  { label: string; symbol: string }
+  { label: string; symbol: StatusSymbol }
 > = {
   passed: { label: "Passed", symbol: STATUS_SYMBOLS.success },
   failed: { label: "Failed", symbol: STATUS_SYMBOLS.failure },
@@ -143,7 +144,7 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
                         animation: `fade-in ${pwc.motion.duration.fast} ${pwc.motion.easing}`,
                       }}
                     >
-                      <span aria-hidden="true" style={ui.statusSymbol}>{display.symbol}</span>
+                      <StatusIcon symbol={display.symbol} />
                       {display.label}
                     </span>
                   </td>
@@ -153,7 +154,7 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
                       <span>{secondName}: <strong>{fmtCheckAmount(check.actual)}</strong></span>
                     </div>
                   </td>
-                  <td style={{ ...styles.td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                  <td style={{ ...styles.td, ...ui.numeric }}>
                     {fmtCheckAmount(check.diff)}
                   </td>
                   <td style={{ ...styles.td, fontSize: 13, color: pwc.grey700 }}>
@@ -188,9 +189,7 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
             {warningChecks.map((w) => (
               <li key={w.name} style={styles.warningItem}>
                 <span style={{ ...ui.status, marginRight: pwc.space.sm }}>
-                  <span aria-hidden="true" style={ui.statusSymbol}>
-                    {STATUS_DISPLAY.warning.symbol}
-                  </span>
+                  <StatusIcon symbol={STATUS_DISPLAY.warning.symbol} />
                   {STATUS_DISPLAY.warning.label}
                 </span>
                 <span style={styles.warningName}>{w.name}</span>

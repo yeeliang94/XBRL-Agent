@@ -64,6 +64,29 @@ describe("SuitesPage", () => {
     expect(est.textContent).toContain("2 extraction runs");
   });
 
+  test("the Reference answers cell carries explicit text beside the aria-hidden icon (a11y)", async () => {
+    mockRoutes((url, init) => {
+      if (url === "/api/suites") return { suites: [{ id: 1, name: "S", created_at: "", updated_at: "", doc_count: 2, run_count: 0 }] };
+      if (url === "/api/suites/1" && (init?.method ?? "GET") === "GET")
+        return { id: 1, name: "S", created_at: "", updated_at: "", docs: [
+          { id: 10, label: "d1", source_filename: "d1.pdf", filing_standard: "mfrs", filing_level: "company", benchmark_id: null, created_at: "" },
+          { id: 11, label: "d2", source_filename: "d2.pdf", filing_standard: "mfrs", filing_level: "company", benchmark_id: 4, created_at: "" },
+        ] };
+      if (url === "/api/suites/1/runs") return { suite_run_list: [] };
+      if (url === "/api/benchmarks") return { benchmarks: [] };
+      return {};
+    });
+    render(<SuitesPage />);
+    fireEvent.click(await screen.findByTestId("suite-card-1"));
+    const missing = await screen.findByTestId("suite-doc-gold-10");
+    const present = await screen.findByTestId("suite-doc-gold-11");
+    // The icon is decorative; the text is the accessible content.
+    expect(missing.querySelector('[aria-hidden="true"]')?.getAttribute("data-status-icon")).toBe("inactive");
+    expect(missing).toHaveTextContent("Not added");
+    expect(present.querySelector('[aria-hidden="true"]')?.getAttribute("data-status-icon")).toBe("success");
+    expect(present).toHaveTextContent("Available");
+  });
+
   test("a running suite run shows a Stop control that calls /stop", async () => {
     const calls: string[] = [];
     mockRoutes((url, init) => {
@@ -133,7 +156,7 @@ describe("SuitesPage", () => {
     // Raw enum "partial" is translated, and the symbol is neutral aria-hidden.
     expect(row.textContent).toContain("Partial — resume to finish");
     const symbol = row.querySelector('[aria-hidden="true"]');
-    expect(symbol?.textContent).toBe("!");
+    expect(symbol?.getAttribute("data-status-icon")).toBe("attention");
     expect((symbol as HTMLElement).style.color).toBe("rgb(94, 94, 94)");
   });
 });

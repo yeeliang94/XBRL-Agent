@@ -90,7 +90,7 @@ describe("RecentRunsList", () => {
     // Monochrome status: aria-hidden neutral symbol next to the label.
     const completed = screen.getByText("Completed");
     const symbol = completed.parentElement!.parentElement!.querySelector('[aria-hidden="true"]');
-    expect(symbol?.textContent).toBe("\u2713");
+    expect(symbol?.getAttribute("data-status-icon")).toBe("success");
     expect((symbol as HTMLElement).style.color).toBe("rgb(94, 94, 94)");
   });
 });

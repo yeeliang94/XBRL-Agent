@@ -561,6 +561,11 @@ export default function App() {
 
   return (
     <div style={styles.page}>
+      {/* Keyboard users can jump past the header + nav straight to the page
+          content. Visually hidden until focused (index.css .skip-link). */}
+      <a href="#main-content" className="skip-link">
+        Skip to main content
+      </a>
       {/* Header */}
       <header className="app-header" style={styles.header}>
         <div className="app-header-left" style={styles.headerLeft}>
@@ -629,6 +634,8 @@ export default function App() {
       </header>
 
       <main
+        id="main-content"
+        tabIndex={-1}
         className="app-main"
         style={
           // Two intentional widths (docs/PLAN-design-qa-fixes.md C3):

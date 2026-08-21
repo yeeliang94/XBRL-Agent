@@ -1,6 +1,7 @@
 import type { CSSProperties, ReactNode } from "react";
 import { ui } from "../lib/uiStyles";
 import { STATUS_SYMBOLS, type StatusSymbol } from "../lib/runStatus";
+import { StatusIcon } from "./StatusIcon";
 
 // The one monochrome status component (design-system Status). Routine status
 // is a neutral symbol plus explicit text — never a coloured dot, pill,
@@ -34,9 +35,7 @@ interface StatusLabelProps {
 export function StatusLabel({ state, label, description, symbol, style }: StatusLabelProps) {
   return (
     <span style={{ ...ui.status, ...style }}>
-      <span aria-hidden="true" style={ui.statusSymbol}>
-        {symbol ?? STATUS_SYMBOLS[state]}
-      </span>
+      <StatusIcon symbol={symbol ?? STATUS_SYMBOLS[state]} />
       <span>{label}</span>
       {description && <span style={{ ...ui.metadata, whiteSpace: "normal" }}>{description}</span>}
     </span>

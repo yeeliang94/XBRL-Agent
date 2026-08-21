@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState, useCallback } from "react";
 import { ApiError, userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
+import { STATUS_SYMBOLS } from "../lib/runStatus";
+import { StatusIcon } from "../components/StatusIcon";
 import { PageHeader } from "../components/PageHeader";
 import { templateGroupLabel, templatePickerLabel } from "../lib/sheetLabels";
 
@@ -320,7 +322,7 @@ function TemplateConceptRow({
             {/* Flag a customised label so it's easy to spot what's been
                 changed from the taxonomy default (E8). */}
                   <span style={styles.edited} data-testid={`ts-edited-${concept.concept_uuid}`}>
-                    <span aria-hidden="true" style={ui.statusSymbol}>✓</span>
+                    <StatusIcon symbol={STATUS_SYMBOLS.success} />
                     Edited
                   </span>
                 </span>

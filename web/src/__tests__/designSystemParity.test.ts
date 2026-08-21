@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import { pwc, tokens, component } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 import { STATUS_SYMBOLS } from "../lib/runStatus";
+import { STATUS_ICON_NAMES } from "../components/StatusIcon";
 
 // The HTML is the behavioural/visual specification; theme.ts and uiStyles.ts
 // are the production implementation. This contract catches the costly kind
@@ -135,15 +136,21 @@ describe("canonical page layout modes", () => {
 
 describe("monochrome status language", () => {
   test("the six canonical symbol families exist and are documented", () => {
+    // The family KEYS stay the text symbols (stable vocabulary for status
+    // maps and plain-text contexts)…
     expect(STATUS_SYMBOLS.inProgress).toBe("○");
     expect(STATUS_SYMBOLS.success).toBe("✓");
     expect(STATUS_SYMBOLS.attention).toBe("!");
     expect(STATUS_SYMBOLS.failure).toBe("×");
     expect(STATUS_SYMBOLS.inactive).toBe("–");
     expect(STATUS_SYMBOLS.derived).toBe("◇");
-    for (const symbol of Object.values(STATUS_SYMBOLS)) {
-      expect(designSystem).toContain(symbol);
+    // …and every family RENDERS as a named Phosphor icon that the spec's
+    // Status section documents by that name (one icon family, one weight).
+    expect(Object.keys(STATUS_ICON_NAMES).sort()).toEqual(Object.keys(STATUS_SYMBOLS).sort());
+    for (const name of Object.values(STATUS_ICON_NAMES)) {
+      expect(designSystem).toContain(`data-status-icon="${name}"`);
     }
+    expect(designSystem).toContain("@phosphor-icons/react");
   });
 
   test("the status primitive is neutral — no coloured dot, border, or fill", () => {

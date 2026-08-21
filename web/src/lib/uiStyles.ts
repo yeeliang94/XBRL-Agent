@@ -47,7 +47,9 @@ const buttonBase: CSSProperties = {
   gap: pwc.space.sm,
   whiteSpace: "nowrap",
   lineHeight: 1.2,
-  transition: "background .15s ease, border-color .15s ease",
+  // Reads the shared motion budget (theme.ts pwc.motion) so buttons ease the
+  // same way as every other transition in the app.
+  transition: `background ${pwc.motion.duration.fast} ${pwc.motion.easing}, border-color ${pwc.motion.duration.fast} ${pwc.motion.easing}`,
 };
 
 // Outline pill (design-system Badges): transparent fill, a thin status-coloured
@@ -116,10 +118,13 @@ export const ui = {
   // 22 Workspace title · 20 Section · 15–16 Subsection · 15 Body ·
   // 13–14 Data/support · 12–13 Metadata · 11–12 Micro-label. Small text uses
   // grey700 or darker; grey500 is decorative/disabled-adjacent only.
+  // Titles at 22-28px take a touch of negative tracking (design-system
+  // Typography): a grotesk at display size reads loose at 0 tracking.
   pageTitle: {
     fontFamily: pwc.fontHeading,
     fontSize: 28,
     lineHeight: 1.2,
+    letterSpacing: "-0.01em",
     fontWeight: pwc.weight.semibold,
     color: tokens.color.text.primary,
     margin: 0,
@@ -128,6 +133,7 @@ export const ui = {
     fontFamily: pwc.fontHeading,
     fontSize: 22,
     lineHeight: 1.2,
+    letterSpacing: "-0.01em",
     fontWeight: pwc.weight.semibold,
     color: tokens.color.text.primary,
     margin: 0,
@@ -375,13 +381,27 @@ export const ui = {
     color: tokens.color.text.body,
     whiteSpace: "nowrap",
   } as CSSProperties,
+  // Box for the status icon (components/StatusIcon.tsx draws a Phosphor icon
+  // inside it). inline-flex centres the SVG; width/colour are the contract the
+  // parity tests pin. fontSize/fontWeight remain for any legacy text glyph.
   statusSymbol: {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
     width: 14,
     flexShrink: 0,
     textAlign: "center",
     fontSize: 13,
     fontWeight: pwc.weight.semibold,
     color: tokens.color.text.secondary,
+  } as CSSProperties,
+
+  // Numeric cell / figure: right-aligned, fixed-width digits (design-system
+  // Financial data rule F2). Spread onto any element that shows a number in a
+  // column or tile so digits line up and a counting value doesn't jitter.
+  numeric: {
+    textAlign: "right",
+    fontVariantNumeric: "tabular-nums",
   } as CSSProperties,
 
   // --- Tabs ---------------------------------------------------------------
