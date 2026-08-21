@@ -23,6 +23,7 @@ import {
 } from "../lib/types";
 import { pwc, tokens } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
+import { CloseIcon } from "./icons";
 import { abortAgent, updateSettings, fetchBenchmarks } from "../lib/api";
 import { VariantSelector } from "./VariantSelector";
 import { ScoutToggle } from "./ScoutToggle";
@@ -411,7 +412,7 @@ function NotesInventoryEditor({
                     cursor: "pointer", color: pwc.grey700, fontSize: 12,
                   }}
                 >
-                  ×
+                  <CloseIcon />
                 </button>
               </li>
             ))}

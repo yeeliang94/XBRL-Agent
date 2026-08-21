@@ -75,6 +75,7 @@ _ADMIN_ONLY_SETTINGS_KEYS = frozenset({
     "spot_check",
     "spot_check_mode",
     "notes_coverage",
+    "pdf_sidecar",
     "notes_source_integrity",
     "entity_memory",
     "tolerance_rm",
@@ -201,6 +202,9 @@ async def get_config():
         "spot_check_mode": server._spot_check_mode(),
         # Notes coverage checklist (docs/PLAN-notes-coverage-and-routing.md). Default on.
         "notes_coverage": server._notes_coverage_enabled(),
+        # Scanned-PDF transcribed source sidecar (docs/PLAN-pdf-source-sidecar.md).
+        # Default off.
+        "pdf_sidecar": server._pdf_sidecar_enabled(),
         # Notes source integrity rollout mode (gotcha #31). Default off.
         # `shadow` computes the verdict and changes nothing; `enforce` makes
         # the block-id path live and lets an unresolved block tip run status.
@@ -397,6 +401,11 @@ async def update_settings(body: dict, request: Request):
     if "notes_coverage" in body:
         set_key(str(ENV_FILE), "XBRL_NOTES_COVERAGE",
                 "true" if body["notes_coverage"] else "false")
+    # Scanned-PDF transcribed source sidecar (docs/PLAN-pdf-source-sidecar.md).
+    # Default off; firm-wide + cost-changing, so admin-only (set below).
+    if "pdf_sidecar" in body:
+        set_key(str(ENV_FILE), "XBRL_PDF_SIDECAR",
+                "true" if body["pdf_sidecar"] else "false")
     # Notes source integrity rollout mode (gotcha #31). Validated against the
     # enum rather than a typed-out list: `integrity_mode()` fails CLOSED to
     # `off` on an unrecognised value, so an unvalidated write here would look

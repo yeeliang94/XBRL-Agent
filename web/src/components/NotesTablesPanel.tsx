@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError, userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { STATUS_SYMBOLS } from "../lib/runStatus";
+import { StatusIcon } from "./StatusIcon";
 import { PdfSourcePane } from "./PdfSourcePane";
 import { SkeletonText } from "./Skeleton";
 
@@ -217,7 +218,7 @@ export function NotesTablesPanel({ runId }: Props) {
                     <span style={styles.flags}>
                       {t.flags.map((f) => (
                         <span key={f} style={styles.flag}>
-                          {STATUS_SYMBOLS.attention} {FLAG_LABEL[f] ?? f}
+                          <StatusIcon symbol={STATUS_SYMBOLS.attention} /> {FLAG_LABEL[f] ?? f}
                         </span>
                       ))}
                     </span>

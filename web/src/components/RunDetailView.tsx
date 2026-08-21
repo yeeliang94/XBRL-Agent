@@ -7,6 +7,7 @@ import { ConceptsPage } from "../pages/ConceptsPage";
 import type { ConceptRow } from "../pages/ConceptsPage";
 import { EvalTab } from "./EvalTab";
 import { runStatusDisplay, agentStatusDisplay } from "../lib/runStatus";
+import { StatusIcon } from "./StatusIcon";
 import type { RunStatusDisplay } from "../lib/runStatus";
 import type { RunDetailJson, RunAgentJson, CrossCheckResult } from "../lib/types";
 import { STATEMENT_LABELS } from "../lib/types";
@@ -35,6 +36,7 @@ import { formatAccounting, formatCost } from "../lib/numberFormat";
 import { denominationLabel, pseudoAgentLabel, variantLabel, crossCheckFailureLabel } from "../lib/vocabulary";
 import { isNotes12StatementType } from "../lib/notes";
 import { statementCodeSubtitle, statementCodeOrder } from "../lib/sheetLabels";
+import { describePdfSidecar } from "../lib/pdfSidecar";
 
 // ---------------------------------------------------------------------------
 // RunDetailView — hydrated detail panel for a single past run.
@@ -76,7 +78,7 @@ export interface RunDetailViewProps {
 function statusBadge(display: RunStatusDisplay) {
   return (
     <span style={ui.status}>
-      <span aria-hidden="true" style={ui.statusSymbol}>{display.symbol}</span>
+      <StatusIcon symbol={display.symbol} />
       {display.label}
     </span>
   );
@@ -575,6 +577,7 @@ export function RunDetailView({
   // leaving a blank page below the tab bar (peer-review [6]).
   const activeTab: RunTabKey = availableTabs.some((t) => t.key === tab) ? tab : "overview";
   const rollup = detail.telemetry_rollup;
+  const sidecarNotice = detail.pdf_sidecar ? describePdfSidecar(detail.pdf_sidecar) : null;
 
   // Outcome summary for the Overview strip (E1). Cross-check status can carry
   // an advisory "warning" beyond the typed enum, so compare as strings.
@@ -974,6 +977,19 @@ export function RunDetailView({
           </div>
           <h4 style={styles.sectionHeading}>Run configuration</h4>
           <ConfigBlock config={detail.config} />
+          {/* docs/PLAN-pdf-source-sidecar.md: the persisted scanned-PDF
+              transcript outcome — the same notice the live page showed, so
+              the "figures are model-read, verify against the PDF" caveat is
+              still visible when someone reviews the workbook after a reload.
+              Absent when the pass did not apply. */}
+          {sidecarNotice && (
+            <div role="status" data-testid="pdf-sidecar-notice" style={styles.errorBanner}>
+              <div style={styles.errorBannerBody}>
+                <span style={styles.errorBannerTitle}>{sidecarNotice.title}</span>
+                <span style={styles.errorBannerText}>{sidecarNotice.message}</span>
+              </div>
+            </div>
+          )}
           {detail.repeat_group_id != null && (
             <ConsistencyPanel groupId={detail.repeat_group_id} />
           )}

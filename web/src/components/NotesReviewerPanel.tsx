@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { pwc } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 import { STATUS_SYMBOLS } from "../lib/runStatus";
+import { StatusIcon } from "./StatusIcon";
 import type { ModelEntry } from "../lib/types";
 import { ApiError, userMessage } from "../lib/errors";
 import { flagKindLabel, humanize } from "../lib/vocabulary";
@@ -271,7 +272,7 @@ export function NotesReviewerPanel({ runId }: Props) {
         </button>
         {data.has_reviewer_version ? (
           <span style={ui.status} data-testid="notes-reviewer-version-indicator">
-            <span aria-hidden="true" style={ui.statusSymbol}>{STATUS_SYMBOLS.derived}</span>
+            <StatusIcon symbol={STATUS_SYMBOLS.derived} />
             Reviewer version
           </span>
         ) : (

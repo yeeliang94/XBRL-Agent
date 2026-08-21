@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Tuple
+from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -325,3 +325,157 @@ def estimate_cost(
     input_cost = (prompt_tokens / 1_000_000) * input_price
     output_cost = ((completion_tokens + thinking_tokens) / 1_000_000) * output_price
     return input_cost + output_cost
+
+
+# --- Cache-adjusted pricing (PLAN-extraction-harness-efficiency, Step 1) ---
+#
+# ``estimate_cost`` above stays the PRE-CACHE estimate — it is what every
+# historical ``run_agents.total_cost`` row means, and the live path keeps
+# writing it. The functions below compute the cache-adjusted figure from the
+# same stored token counts (``cache_read_tokens`` / ``cache_write_tokens``,
+# schema v15) so both numbers stay available side by side.
+
+_cached_price_cache: dict[str, float] | None = None
+
+
+def _load_cached_prices() -> dict[str, tuple[Optional[float], Optional[float]]]:
+    """{model_id: (cached_input_price_per_mtok, cache_write_price_per_mtok)} —
+    each None when the entry does not declare it. Lazy + failure-tolerant like
+    ``_load_pricing``; callers fall back to the full input price."""
+    global _cached_price_cache
+    if _cached_price_cache is not None:
+        return _cached_price_cache
+    out: dict[str, tuple[Optional[float], Optional[float]]] = {}
+    for m in _read_models_json():
+        if not isinstance(m, dict) or not isinstance(m.get("id"), str):
+            continue
+
+        def _rate(key: str) -> Optional[float]:
+            v = m.get(key)
+            return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+        read_rate = _rate("cached_input_price_per_mtok")
+        write_rate = _rate("cache_write_price_per_mtok")
+        if read_rate is not None or write_rate is not None:
+            out[m["id"]] = (read_rate, write_rate)
+    _cached_price_cache = out
+    return out
+
+
+def _lookup_cache_rates(model) -> tuple[Optional[float], Optional[float]]:
+    cached = _load_cached_prices()
+    if not cached:
+        return (None, None)
+    name = _resolve_model_name(model)
+    if name in cached:
+        return cached[name]
+    norm = _normalize(name)
+    for model_id, rates in cached.items():
+        if _normalize(model_id) == norm:
+            return rates
+    return (None, None)
+
+
+def get_cached_input_price(model) -> float:
+    """Price per million CACHED prompt tokens for ``model``.
+
+    Falls back to the model's FULL input price when the registry entry has no
+    ``cached_input_price_per_mtok`` — an unpriced model can never silently
+    under-report. Resolution mirrors ``get_model_pricing`` (exact, then
+    prefix-normalised match).
+    """
+    input_price, _ = get_model_pricing(model)
+    read_rate, _ = _lookup_cache_rates(model)
+    return input_price if read_rate is None else read_rate
+
+
+def get_cache_write_price(model) -> float:
+    """Price per million prompt-cache WRITE tokens (Anthropic bills 1.25× the
+    input rate). Falls back to the plain input price when the entry has no
+    ``cache_write_price_per_mtok`` — never a discount, never a surcharge the
+    registry does not state."""
+    input_price, _ = get_model_pricing(model)
+    _, write_rate = _lookup_cache_rates(model)
+    return input_price if write_rate is None else write_rate
+
+
+def prompt_tokens_include_cache_reads() -> bool:
+    """Whether the ``prompt_tokens`` this app records already CONTAIN the
+    cache-read tokens. True for every provider on the pinned pydantic-ai V2
+    line: usage is built by ``genai_prices.RequestUsage.extract``, whose
+    Anthropic extractor sums ``input_tokens`` + ``cache_creation_input_tokens``
+    + ``cache_read_input_tokens`` into ``input_tokens`` (OpenAI/Google report
+    an inclusive prompt count natively). The older belief that Anthropic
+    EXCLUDES cache reads (``scripts/cache_report.py``'s original denominator)
+    was never verified against real rows — the audit DB has no Anthropic run —
+    and is false for the pinned library. Pinned against the library's own
+    mapping table by ``tests/test_pricing_cache_adjusted.py`` so an upgrade
+    that changes the convention fails loudly instead of silently
+    double-counting."""
+    return True
+
+
+def estimate_cost_cache_adjusted(
+    prompt_tokens: int,
+    completion_tokens: int,
+    thinking_tokens: int,
+    model,
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
+) -> float:
+    """Cache-adjusted USD estimate: cache READS billed at the model's cached
+    rate, cache WRITES at its write rate (``cache_write_price_per_mtok``, e.g.
+    Anthropic's 1.25× — plain input rate when the registry has none), the rest
+    as ``estimate_cost``.
+
+    ``prompt_tokens`` includes both the reads and the writes for every
+    provider we record (see ``prompt_tokens_include_cache_reads``), so
+    uncached = prompt − reads − writes. Contradictory telemetry is CLAMPED,
+    not trusted: reads + writes can never exceed the prompt count, so a
+    glitch that reports more cannot push the adjusted figure above the
+    pre-cache one (peer review, 2026-08-18).
+
+    With zero reads and writes this reproduces ``estimate_cost`` exactly.
+    """
+    input_price, output_price = get_model_pricing(model)
+    cached_price = get_cached_input_price(model)
+    write_price = get_cache_write_price(model)
+    prompt = max(int(prompt_tokens or 0), 0)
+    reads = min(max(int(cache_read_tokens or 0), 0), prompt)
+    writes = min(max(int(cache_write_tokens or 0), 0), prompt - reads)
+    if prompt_tokens_include_cache_reads():
+        uncached = prompt - reads - writes
+    else:  # pragma: no cover — no provider on the pinned library takes this branch
+        uncached = prompt
+    input_cost = (
+        (uncached / 1_000_000) * input_price
+        + (reads / 1_000_000) * cached_price
+        + (writes / 1_000_000) * write_price
+    )
+    output_cost = ((completion_tokens + thinking_tokens) / 1_000_000) * output_price
+    return input_cost + output_cost
+
+
+def cache_adjustment_from_stored_cost(
+    total_cost: float,
+    model,
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
+    prompt_tokens: int = 0,
+) -> float:
+    """Cache-adjusted figure derived FROM the stored pre-cache ``total_cost``
+    (what ``run_agents.total_cost`` holds — it also includes failed retry
+    attempts, which the token splits do not). Subtracts the read discount and
+    adds the write surcharge; with no reads/writes it returns ``total_cost``
+    unchanged. Reads/writes are clamped to ``prompt_tokens`` when that is
+    known (> 0), so a telemetry glitch cannot drive the figure below zero."""
+    input_price, _ = get_model_pricing(model)
+    reads = max(int(cache_read_tokens or 0), 0)
+    writes = max(int(cache_write_tokens or 0), 0)
+    prompt = max(int(prompt_tokens or 0), 0)
+    if prompt:
+        reads = min(reads, prompt)
+        writes = min(writes, prompt - reads)
+    discount = (reads / 1_000_000) * (input_price - get_cached_input_price(model))
+    surcharge = (writes / 1_000_000) * (get_cache_write_price(model) - input_price)
+    return max(float(total_cost or 0.0) - discount + surcharge, 0.0)

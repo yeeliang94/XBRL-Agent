@@ -85,6 +85,7 @@ def run_agent(
     filing_standard: str = "mfrs",
     denomination: str = "thousands",
     variants: Optional[Dict[str, str]] = None,
+    use_scout: bool = True,
 ) -> AgentResult:
     """Run a CLI extraction through the SAME canonical pipeline as the web server.
 
@@ -109,6 +110,12 @@ def run_agent(
         statements: set of StatementType to extract. Defaults to all 5.
         notes: optional set of NotesTemplateType to fill in parallel with the
             face-statement extraction.
+        use_scout: run the scout pass first (default ON since
+            PLAN-extraction-harness-efficiency Step 6 — 73 of 81 runs had run
+            without page hints) and hand its infopack to the pipeline as SOFT
+            page hints (gotcha #13). ``--no-scout`` on the CLI turns it off. A
+            scout failure is logged and the run proceeds without hints — the
+            same advisory contract the web UI has.
     """
     import uuid
 
@@ -148,6 +155,17 @@ def run_agent(
         server._CANONICAL_BOOTSTRAP_OK = False
         print(f"WARNING: canonical bootstrap failed: {exc}")
 
+    infopack_json: Optional[dict] = None
+    if use_scout:
+        infopack_json = _run_cli_scout(
+            pdf_path=str(session_dir / "uploaded.pdf"),
+            statements=statements,
+            model=model,
+            proxy_url=proxy_url,
+            api_key=api_key,
+            output_dir=str(session_dir),
+        )
+
     run_config = RunConfigRequest(
         statements=[s.value for s in statements],
         notes_to_run=sorted(n.value for n in notes),
@@ -158,6 +176,12 @@ def run_agent(
         # Without these the coordinator resolves the registry DEFAULT variant,
         # so a non-default benchmark would extract the wrong template shape.
         variants=dict(variants or {}),
+        # Scout infopack (soft hints) — the pipeline treats infopack presence
+        # as the truth. use_scout is the informational History flag and
+        # records what was REQUESTED (same meaning as the web checkbox), so a
+        # scout that failed still shows as a scout-on run.
+        infopack=infopack_json,
+        use_scout=use_scout,
     )
 
     merged_path = str(session_dir / "filled.xlsx")
@@ -205,6 +229,38 @@ def run_agent(
         errors=final["errors"],
         run_id=final["run_id"],
     )
+
+
+def _run_cli_scout(
+    pdf_path: str,
+    statements: Set[StatementType],
+    model: str,
+    proxy_url: str,
+    api_key: str,
+    output_dir: str,
+) -> Optional[dict]:
+    """Run the scout for a CLI run and return its infopack as JSON (a dict), or
+    None when the scout fails. Mirrors the web scout endpoint's model wiring
+    (``SCOUT_MODEL`` falls back to the run model; built through
+    ``server._create_proxy_model`` so proxy/direct routing is identical) but
+    is best-effort: the run proceeds without hints on any failure."""
+    import server
+    from scout.runner import run_scout
+
+    scout_model_name = os.environ.get("SCOUT_MODEL") or model
+    print(f"Scout: {scout_model_name}")
+    try:
+        scout_model = server._create_proxy_model(scout_model_name, proxy_url, api_key)
+        infopack = asyncio.run(run_scout(
+            pdf_path,
+            model=scout_model,
+            statements_to_find=set(statements),
+            output_dir=output_dir,
+        ))
+        return json.loads(infopack.to_json())
+    except Exception as exc:  # noqa: BLE001 — scout is advisory, never fatal
+        print(f"WARNING: scout failed ({exc}); continuing without page hints")
+        return None
 
 
 def run_resume(
@@ -483,6 +539,11 @@ def build_parser():
                              "source figures: thousands (default, RM '000), "
                              "units (RM), or millions (RM mil). Treated as "
                              "authoritative by the agents (no guessing).")
+    parser.add_argument("--no-scout", dest="use_scout", action="store_false",
+                        default=True,
+                        help="Skip the scout pass (on by default). Scout tells "
+                             "the agents which pages to open; hints are "
+                             "advisory only.")
     parser.add_argument("--resume-from", type=int, default=None,
                         metavar="RUN_ID",
                         help="Stage-level resume (Phase 4A): reuse the given "
@@ -525,6 +586,7 @@ if __name__ == "__main__":
     print(f"Model: {model}")
     print(f"Standard: {args.standard}   Level: {args.level}   Denomination: {args.denomination}")
     print(f"Statements: {', '.join(s.value for s in stmts)}")
+    print(f"Scout: {'on' if args.use_scout else 'off'}")
     if notes_set:
         print(f"Notes: {', '.join(sorted(n.value for n in notes_set))}")
 
@@ -536,6 +598,7 @@ if __name__ == "__main__":
         filing_level=args.level,
         filing_standard=args.standard,
         denomination=args.denomination,
+        use_scout=args.use_scout,
     )
     if args.output_dir:
         kwargs["output_dir"] = args.output_dir

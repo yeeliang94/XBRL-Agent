@@ -3,6 +3,7 @@ import { ApiError, userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { STATUS_SYMBOLS } from "../lib/runStatus";
+import { StatusIcon } from "../components/StatusIcon";
 import { ReconciliationQueue } from "../components/ReconciliationQueue";
 import { NotesReviewTab } from "../components/NotesReviewTab";
 import { NotesCoverageNav } from "../components/NotesCoverageNav";
@@ -2308,7 +2309,7 @@ function StatusBadge({
       : STATUS_SYMBOLS.derived;
   return (
     <span style={{ ...ui.status, fontSize: 12 }}>
-      <span aria-hidden="true" style={{ ...ui.statusSymbol, fontSize: 12 }}>{symbol}</span>
+      <StatusIcon symbol={symbol} size={12} />
       {label.replace(/_/g, " ")}
     </span>
   );

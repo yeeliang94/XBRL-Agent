@@ -108,7 +108,9 @@ export function AnimatedNumber({
 
   const shown = integer ? Math.round(display) : display;
   return (
-    <span style={style} data-testid={testId}>
+    // Tabular digits so the width stays fixed while the value rolls; a caller's
+    // own style still wins (spread last).
+    <span style={{ fontVariantNumeric: "tabular-nums", ...style }} data-testid={testId}>
       {fmt(shown)}
     </span>
   );

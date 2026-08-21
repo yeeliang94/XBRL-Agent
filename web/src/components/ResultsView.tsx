@@ -5,6 +5,7 @@ import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { formatElapsedMs } from "../lib/time";
 import { runStatusDisplay } from "../lib/runStatus";
+import { StatusIcon } from "./StatusIcon";
 
 interface Props {
   complete: CompleteData;
@@ -385,7 +386,7 @@ function SummaryTab({ complete, runStartTime }: { complete: CompleteData; runSta
               const display = runStatusDisplay(status);
               return (
                 <span style={ui.status}>
-                  <span aria-hidden="true" style={ui.statusSymbol}>{display.symbol}</span>
+                  <StatusIcon symbol={display.symbol} />
                   {display.label}
                 </span>
               );

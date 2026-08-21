@@ -34,6 +34,7 @@ Every changed part is rebuilt with `dataclasses.replace(...)` on copied lists.
 from __future__ import annotations
 
 import dataclasses
+import logging
 import os
 import re
 from typing import List
@@ -136,6 +137,63 @@ def _replace_part(
     new_parts[part_index] = new_part
     out[message_index] = dataclasses.replace(old_msg, parts=new_parts)
     return out
+
+
+_rewrite_logger = logging.getLogger(__name__)
+
+# Which agent the current processor pass belongs to — set by agent_runner at
+# the top of each agent loop (contextvars are inherited by the task the loop
+# runs in), read only for the Step 8 log line so five parallel agents' rewrite
+# lines can be paired with their own ``turn_cache`` lines.
+import contextvars
+
+current_agent_label: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "xbrl_history_agent_label", default="?",
+)
+
+
+def probe_log_level() -> int:
+    """Step 8 probe lines are DEBUG unless ``XBRL_CACHE_PROBE=1`` lifts them to
+    INFO for the reference run — hundreds of INFO lines per extraction were
+    not acceptable as a permanent default (peer review, 2026-08-18)."""
+    return logging.INFO if os.environ.get("XBRL_CACHE_PROBE", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    ) else logging.DEBUG
+
+
+def _log_rewrite(processor: str, before: List[ModelMessage], after: List[ModelMessage]) -> None:
+    """Step 8 probe (PLAN-extraction-harness-efficiency): one INFO line per
+    processor pass that actually rewrote history — the earliest changed
+    message index (every provider prompt cache is invalidated from there) and
+    the characters reclaimed. Paired with the per-turn ``prompt/cache_read``
+    delta line in ``agent_runner``, this is what the compaction-vs-cache
+    decision reads. Silent when nothing changed. Never raises."""
+    if after is before:
+        return
+    try:
+        first_changed = next(
+            (i for i, (a, b) in enumerate(zip(before, after)) if a is not b), len(before),
+        )
+
+        def _chars(msgs: List[ModelMessage]) -> int:
+            total = 0
+            for m in msgs:
+                for part in getattr(m, "parts", ()) or ():
+                    content = getattr(part, "content", None)
+                    if isinstance(content, str):
+                        total += len(content)
+                    elif isinstance(content, list):
+                        total += sum(len(c) for c in content if isinstance(c, str))
+            return total
+
+        reclaimed = _chars(before) - _chars(after)
+        _rewrite_logger.log(
+            probe_log_level(),
+            "history_rewrite %s processor=%s first_changed_msg=%d/%d reclaimed_chars=%d",
+            current_agent_label.get(), processor, first_changed, len(before), reclaimed,
+        )
+    except Exception:  # noqa: BLE001 — telemetry only
+        pass
 
 
 def _part_text(part: ToolReturnPart) -> str:
@@ -261,6 +319,7 @@ def strip_stale_images(messages: List[ModelMessage]) -> List[ModelMessage]:
         new_part = dataclasses.replace(part, content=new_content)
         out = _replace_part(out, mi, pi, new_part)
 
+    _log_rewrite("strip_stale_images", messages, out)
     return out
 
 
@@ -535,6 +594,7 @@ def compact_old_text_results(
     out = messages
     for mi, pi, part, summary in edits:
         out = _replace_part(out, mi, pi, dataclasses.replace(part, content=summary))
+    _log_rewrite("compact_old_text_results", messages, out)
     return out
 
 
@@ -581,6 +641,7 @@ def strip_duplicate_template(messages: List[ModelMessage]) -> List[ModelMessage]
         )
         out = _replace_part(out, mi, pi, new_part)
 
+    _log_rewrite("strip_duplicate_template", messages, out)
     return out
 
 
@@ -737,4 +798,6 @@ def clamp_oversized_parts(messages: List[ModelMessage]) -> List[ModelMessage]:
             changed_any = True
         else:
             out.append(msg)
+    if changed_any:
+        _log_rewrite("clamp_oversized_parts", messages, out)
     return out if changed_any else messages

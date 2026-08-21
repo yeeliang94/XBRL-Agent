@@ -4,6 +4,8 @@ import {
 } from "recharts";
 import { pwc, tokens } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
+import { STATUS_SYMBOLS } from "../lib/runStatus";
+import { StatusIcon } from "../components/StatusIcon";
 import { userMessage } from "../lib/errors";
 import { TERMS, humanize } from "../lib/vocabulary";
 import { PageHeader } from "../components/PageHeader";
@@ -351,7 +353,14 @@ function DocList({ suite, onRemoved }: { suite: SuiteJson; onRemoved: () => void
                   <option value="millions">Millions (RM mil)</option>
                 </select>
               </td>
-              <td style={styles.td}>{d.benchmark_id != null ? "✓" : "—"}</td>
+              <td style={styles.td}>
+                {/* Icon + explicit text: the icon is aria-hidden, so the text
+                    is what a screen reader gets (design-system Status). */}
+                <span style={ui.status} data-testid={`suite-doc-gold-${d.id}`}>
+                  <StatusIcon symbol={d.benchmark_id != null ? STATUS_SYMBOLS.success : STATUS_SYMBOLS.inactive} />
+                  {d.benchmark_id != null ? "Available" : "Not added"}
+                </span>
+              </td>
               <td style={styles.td}>
                 <button style={styles.linkBtn}
                   onClick={() => deleteSuiteDoc(suite.id, d.id).then(onRemoved)}>
