@@ -4,6 +4,7 @@ import { ToolCallCard } from "./ToolCallCard";
 import { pwc } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 import { STATUS_SYMBOLS, runStatusDisplay } from "../lib/runStatus";
+import { StatusIcon } from "./StatusIcon";
 
 // AgentTimeline is the single replacement for ChatFeed. It renders one row
 // per tool call via ToolCallCard, plus a terminal row for the final
@@ -152,9 +153,7 @@ function TerminalRow({ event }: { event: TerminalEvent }) {
               <span style={styles.terminalLabel}>Run finished</span>
             </div>
             <span style={{ ...ui.status, flexShrink: 0 }}>
-              <span aria-hidden="true" style={ui.statusSymbol}>
-                {hasWarnings ? STATUS_SYMBOLS.attention : STATUS_SYMBOLS.success}
-              </span>
+              <StatusIcon symbol={hasWarnings ? STATUS_SYMBOLS.attention : STATUS_SYMBOLS.success} />
               {hasWarnings ? `Completed · ${warnings!.length} warning${warnings!.length === 1 ? "" : "s"}` : "Completed"}
             </span>
           </div>
@@ -198,7 +197,7 @@ function TerminalRow({ event }: { event: TerminalEvent }) {
             <span style={styles.terminalLabel}>Run finished</span>
           </div>
           <span style={{ ...ui.status, flexShrink: 0 }}>
-            <span aria-hidden="true" style={ui.statusSymbol}>{display.symbol}</span>
+            <StatusIcon symbol={display.symbol} />
             {display.label}
           </span>
         </div>
@@ -233,7 +232,7 @@ function TerminalRow({ event }: { event: TerminalEvent }) {
           <span style={styles.terminalLabel}>{err ?? "Failed"}</span>
         </div>
         <span style={{ ...ui.status, flexShrink: 0 }}>
-          <span aria-hidden="true" style={ui.statusSymbol}>{STATUS_SYMBOLS.failure}</span>
+          <StatusIcon symbol={STATUS_SYMBOLS.failure} />
           Failed
         </span>
       </div>
@@ -254,7 +253,7 @@ function TerminalRow({ event }: { event: TerminalEvent }) {
         <span style={styles.terminalLabel}>{msg}</span>
       </div>
       <span style={{ ...ui.status, flexShrink: 0 }}>
-        <span aria-hidden="true" style={ui.statusSymbol}>{STATUS_SYMBOLS.failure}</span>
+        <StatusIcon symbol={STATUS_SYMBOLS.failure} />
         Failed
       </span>
     </div>

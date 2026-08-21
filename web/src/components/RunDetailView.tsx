@@ -7,6 +7,7 @@ import { ConceptsPage } from "../pages/ConceptsPage";
 import type { ConceptRow } from "../pages/ConceptsPage";
 import { EvalTab } from "./EvalTab";
 import { runStatusDisplay, agentStatusDisplay } from "../lib/runStatus";
+import { StatusIcon } from "./StatusIcon";
 import type { RunStatusDisplay } from "../lib/runStatus";
 import type { RunDetailJson, RunAgentJson, CrossCheckResult } from "../lib/types";
 import { STATEMENT_LABELS } from "../lib/types";
@@ -77,7 +78,7 @@ export interface RunDetailViewProps {
 function statusBadge(display: RunStatusDisplay) {
   return (
     <span style={ui.status}>
-      <span aria-hidden="true" style={ui.statusSymbol}>{display.symbol}</span>
+      <StatusIcon symbol={display.symbol} />
       {display.label}
     </span>
   );

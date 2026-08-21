@@ -9,6 +9,8 @@
 // Change a value and update its pinning test in the same commit.
 export const pwc = {
   // Primary
+  // @deprecated — pure #000000 is not used anywhere in the UI; the ink is
+  // grey900 (#1A1A1A). Kept only for token-name stability; do not consume.
   black: '#000000',
   white: '#FFFFFF',
   orange500: '#FD5108',   // Core orange (Pantone 1655C) — primary accent, active states, links
@@ -37,7 +39,10 @@ export const pwc = {
   warning:      '#EFA417',  // Warm gold — caution dot/border/left-rule
   error:        '#E5484D',  // Clean red — errors, failed states
   info:         '#3E84CC',  // Clean blue — informational states
-  thinking:     '#8B5CF6',  // Violet — agent thinking/reasoning blocks (functional, not brand)
+  // @deprecated — violet is the one off-palette hue and no component reads
+  // it (agent-reasoning surfaces use neutral/info). Kept for token-name
+  // stability only; do not consume.
+  thinking:     '#8B5CF6',
 
   // Status text — darker shade of each hue, AA-legible on neutral/light
   // surfaces. Carries status LABELS and inline coloured text (card deltas,

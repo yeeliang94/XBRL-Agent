@@ -1272,7 +1272,7 @@ describe("RunDetailView", () => {
     // Monochrome status: aria-hidden ✓ in grey700 next to the explicit label.
     const label = screen.getAllByText("Completed")[0];
     const symbol = label.parentElement!.querySelector('[aria-hidden="true"]');
-    expect(symbol?.textContent).toBe("\u2713");
+    expect(symbol?.getAttribute("data-status-icon")).toBe("success");
     expect((symbol as HTMLElement).style.color).toBe("rgb(94, 94, 94)");
 
     // Shared tab treatment: dark active text, orange only on the indicator.

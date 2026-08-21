@@ -7,6 +7,8 @@ import type {
 } from "../lib/types";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
+import { STATUS_SYMBOLS } from "../lib/runStatus";
+import { StatusIcon } from "./StatusIcon";
 import {
   parseThemeOptions,
   type ClipboardFormatOptions,
@@ -872,7 +874,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         <div style={styles.testResult}>
           {testResult.status === "ok" ? (
             <>
-              <span style={{ color: pwc.success, fontSize: 16 }}>✓</span>
+              <StatusIcon symbol={STATUS_SYMBOLS.success} size={16} style={{ color: pwc.success }} />
               <span style={{ color: pwc.success }}>{testResult.message}</span>
             </>
           ) : (

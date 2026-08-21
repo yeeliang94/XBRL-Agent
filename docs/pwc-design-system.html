@@ -257,7 +257,9 @@
   /* ---------- Monochrome status — symbol + explicit text ---------- */
   .status-preview { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:var(--s-sm) var(--s-xl); }
   .status-plain { display:inline-flex; align-items:center; gap:7px; color:var(--grey-800); font-size:13px; min-height:24px; }
-  .status-symbol { width:14px; color:var(--grey-700); font-size:13px; font-weight:var(--fw-semibold); text-align:center; }
+  .status-symbol { display:inline-flex; align-items:center; justify-content:center; width:14px; color:var(--grey-700); font-size:13px; font-weight:var(--fw-semibold); text-align:center; }
+  .status-symbol .ico { width:13px; height:13px; fill:currentColor; }
+  .btn:active:not(:disabled) { transform:translateY(1px); }
 
   /* ---------- Cards (mirror ui.card + .pwc-card hover) ---------- */
   .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px,1fr)); gap: var(--s-lg); }
@@ -342,6 +344,16 @@
 </style>
 </head>
 <body>
+<!-- Status icon sprite: the six monochrome status families, drawn with the bold-weight
+     paths from @phosphor-icons/react (the app renders the same icons via components/StatusIcon.tsx). -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="ico-in-progress" viewBox="0 0 256 256"><path d="M128,20A108,108,0,1,0,236,128,108.12,108.12,0,0,0,128,20Zm0,192a84,84,0,1,1,84-84A84.09,84.09,0,0,1,128,212Z"/></symbol>
+  <symbol id="ico-success" viewBox="0 0 256 256"><path d="M232.49,80.49l-128,128a12,12,0,0,1-17,0l-56-56a12,12,0,1,1,17-17L96,183,215.51,63.51a12,12,0,0,1,17,17Z"/></symbol>
+  <symbol id="ico-attention" viewBox="0 0 256 256"><path d="M148,200a20,20,0,1,1-20-20A20,20,0,0,1,148,200Zm-20-40a12,12,0,0,0,12-12V48a12,12,0,0,0-24,0V148A12,12,0,0,0,128,160Z"/></symbol>
+  <symbol id="ico-failure" viewBox="0 0 256 256"><path d="M208.49,191.51a12,12,0,0,1-17,17L128,145,64.49,208.49a12,12,0,0,1-17-17L111,128,47.51,64.49a12,12,0,0,1,17-17L128,111l63.51-63.52a12,12,0,0,1,17,17L145,128Z"/></symbol>
+  <symbol id="ico-inactive" viewBox="0 0 256 256"><path d="M228,128a12,12,0,0,1-12,12H40a12,12,0,0,1,0-24H216A12,12,0,0,1,228,128Z"/></symbol>
+  <symbol id="ico-derived" viewBox="0 0 256 256"><path d="M238.16,113.89,142.1,17.83a20,20,0,0,0-28.21,0l-96,96.06a20,20,0,0,0,0,28.22l96.05,96.06h0a20,20,0,0,0,28.21,0l96-96.06a20,20,0,0,0,0-28.22ZM128,218.33,37.68,128,128,37.67,218.32,128Z"/></symbol>
+</svg>
 <div class="shell">
 
   <!-- ================= SIDEBAR ================= -->
@@ -519,8 +531,9 @@
       <h3 class="sub-label">Core neutrals</h3>
       <div class="swatch-grid">
         <div class="swatch"><div class="chip" style="background:var(--white); border-bottom:1px solid var(--border)"></div><div class="meta"><div class="name">White (surface)</div><div class="tok">white</div><div class="hex">#FFFFFF</div></div></div>
-        <div class="swatch"><div class="chip" style="background:var(--black)"></div><div class="meta"><div class="name">Black</div><div class="tok">black</div><div class="hex">#000000</div></div></div>
+        <div class="swatch"><div class="chip" style="background:var(--grey-900)"></div><div class="meta"><div class="name">Ink (headings, focus ring)</div><div class="tok">grey900</div><div class="hex">#1A1A1A</div></div></div>
       </div>
+      <div class="note-box"><strong>No pure black.</strong> The interface's darkest value is <code class="inline">grey900</code>. The <code class="inline">pwc.black</code> token (#000000) is deprecated — kept for name stability, consumed by nothing, and must not be used for text, fills, or borders.</div>
 
       <h3 class="sub-label">Grey scale — <code class="inline">pwc.grey*</code> <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--grey-500)">(note: no grey25 / grey400 / grey600 in code)</span></h3>
       <div class="scale-strip">
@@ -549,11 +562,12 @@
         <div class="swatch"><div class="chip" style="background:var(--error)"></div><div class="meta"><div class="name">Error</div><div class="tok">error</div><div class="hex">#E5484D</div></div></div>
         <div class="swatch"><div class="chip" style="background:var(--warning)"></div><div class="meta"><div class="name">Warning</div><div class="tok">warning</div><div class="hex">#EFA417</div></div></div>
         <div class="swatch"><div class="chip" style="background:var(--info)"></div><div class="meta"><div class="name">Info</div><div class="tok">info</div><div class="hex">#3E84CC</div></div></div>
-        <div class="swatch"><div class="chip" style="background:var(--thinking)"></div><div class="meta"><div class="name">AI activity · technical details only</div><div class="tok">thinking</div><div class="hex">#8B5CF6</div></div></div>
       </div>
+      <div class="note-box"><strong>Four functional hues, and orange.</strong> Nothing else. The former <code class="inline">thinking</code> violet (#8B5CF6, "AI activity") is deprecated — no component reads it, and it was the one hue outside the palette. Agent-reasoning and technical surfaces use neutral text, or <code class="inline">info</code> where a state must be coloured.</div>
 
       <h3 class="sub-label">Functional colour — optional and exceptional</h3>
-      <div class="note-box"><strong>Routine status does not require colour.</strong> Prefer explicit text and neutral symbols. When functional colour materially improves urgency or differentiation, confine it to an alert icon, attention rule, chart mark, or rare highlighted row. Darker <code class="inline">*Text</code> roles carry any readable coloured label.</div>
+      <div class="note-box"><strong>Routine status does not require colour.</strong> Prefer explicit text and neutral icons. When functional colour materially improves urgency or differentiation, confine it to an alert icon, attention rule, chart mark, or rare highlighted row. Darker <code class="inline">*Text</code> roles carry any readable coloured label.</div>
+      <div class="note-box"><strong>Light theme only, by design.</strong> There is no dark theme and none is planned for this release. Because every component consumes semantic roles (<code class="inline">tokens.color.*</code> / <code class="inline">tokens.surface.*</code>), a future dark theme is a second set of values for those roles — not a per-component change. Do not add <code class="inline">prefers-color-scheme</code> handling to individual components.</div>
       <div class="note-box"><strong>Soft tints still exist, but are reserved for rare emphasis</strong> (e.g. highlighting one reconciliation row) and are intentionally desaturated — close to neutral, not vivid. They are never the default status or alert surface.</div>
     </section>
 
@@ -576,7 +590,7 @@
       <div class="section-head">
         <div class="rule"></div>
         <h2>Typography</h2>
-        <p>A compact Helvetica Neue scale optimized for a desktop financial workspace. Regular 400 and Semibold 600 carry product text; Medium 500 is reserved for controls. Smaller roles retain strong contrast and generous line height rather than becoming faint or compressed.</p>
+        <p>A compact grotesk scale optimized for a desktop financial workspace. The stack is <code class="inline">"Helvetica Neue", Helvetica, Arial, system-ui</code>: Mac renders Helvetica Neue, the production Windows estate renders <strong>Arial</strong> — an accepted decision (no licensed corporate face, no self-hosted font), so every size below must stay legible in Arial, whose semibold is lighter and whose letters run wider. Regular 400 and Semibold 600 carry product text; Medium 500 is reserved for controls. Smaller roles retain strong contrast and generous line height rather than becoming faint or compressed.</p>
       </div>
       <div class="panel">
         <div class="type-row"><span class="label">Title</span><span class="t-title">Run detail</span><span class="spec">28px / 600</span></div>
@@ -589,6 +603,7 @@
         <div class="type-row"><span class="label">Mono</span><span class="t-body" style="font-family:var(--font-mono);font-size:13px">SOFP-Sub-CuNonCu!B12 = 1,595</span><span class="spec">SF Mono</span></div>
       </div>
       <div class="note-box"><strong>Compact semantic scale:</strong> 28 Page title · 22 Workspace title · 18–20 Section · 15 Body/control · 13–14 Data/support · 11–12 Metadata/label. Use sentence case by default. Small text uses <code class="inline">grey700</code> or darker; uppercase 11px is reserved for brief eyebrows, never long instructions.</div>
+      <div class="note-box"><strong>Display details:</strong> titles at 22–28px carry <code class="inline">letter-spacing: -0.01em</code> (<code class="inline">ui.pageTitle</code> / <code class="inline">ui.pageTitleCompact</code>); body and data sizes stay at 0. Page-level <code class="inline">h1</code>/<code class="inline">h2</code> wrap with <code class="inline">text-wrap: balance</code> so a heading never leaves one word on its own line. Numbers in columns and tiles use <code class="inline">ui.numeric</code> (right-aligned, tabular figures) rather than hand-set <code class="inline">fontVariantNumeric</code>.</div>
     </section>
 
     <!-- SPACING -->
@@ -686,6 +701,7 @@
           <button class="btn btn-danger">Danger</button>
           <button class="btn btn-primary" disabled>Disabled</button>
         </div>
+        <div class="note-box"><strong>States:</strong> default · hover (darker fill / quiet surface via <code class="inline">uiClass.*</code>) · focus-visible (two-part ring) · pressed (<code class="inline">:active</code> settles the button 1px, instant, no transition — cards never move, buttons may) · disabled (45% opacity, <code class="inline">not-allowed</code> cursor) · busy (label swaps to the in-progress verb; never an unexplained spinner).</div>
         <h3 class="sub-label">Sizes — <code class="inline">ui.buttonSm / buttonLg</code></h3>
         <div class="demo-row">
           <button class="btn btn-primary btn-sm">Small</button>
@@ -742,19 +758,21 @@
       <div class="section-head">
         <div class="rule"></div>
         <h2>Status</h2>
-        <p>Routine status uses a neutral symbol plus explicit text. Shape improves scanning, text carries the meaning, and no status hue competes with financial data or the primary action.</p>
+        <p>Routine status uses a neutral icon plus explicit text. Shape improves scanning, text carries the meaning, and no status hue competes with financial data or the primary action. The six families are keyed in code by a text symbol (<code class="inline">STATUS_SYMBOLS</code>: ○ ✓ ! × – ◇) and drawn on screen by <code class="inline">StatusIcon</code> as one icon family at one stroke weight (<code class="inline">@phosphor-icons/react</code>, bold) — never as font glyphs, which Windows renders from a different fallback face at mismatched sizes.</p>
       </div>
       <div class="panel">
         <div class="status-preview">
-          <span class="status-plain"><span class="status-symbol" aria-hidden="true">○</span>Running</span>
-          <span class="status-plain"><span class="status-symbol" aria-hidden="true">✓</span>Completed</span>
-          <span class="status-plain"><span class="status-symbol" aria-hidden="true">!</span>Needs review</span>
-          <span class="status-plain"><span class="status-symbol" aria-hidden="true">×</span>Failed</span>
-          <span class="status-plain"><span class="status-symbol" aria-hidden="true">–</span>Not started</span>
-          <span class="status-plain"><span class="status-symbol" aria-hidden="true">◇</span>Calculated</span>
+          <span class="status-plain"><span class="status-symbol" data-status-icon="in-progress" aria-hidden="true"><svg class="ico"><use href="#ico-in-progress"/></svg></span>Running</span>
+          <span class="status-plain"><span class="status-symbol" data-status-icon="success" aria-hidden="true"><svg class="ico"><use href="#ico-success"/></svg></span>Completed</span>
+          <span class="status-plain"><span class="status-symbol" data-status-icon="attention" aria-hidden="true"><svg class="ico"><use href="#ico-attention"/></svg></span>Needs review</span>
+          <span class="status-plain"><span class="status-symbol" data-status-icon="failure" aria-hidden="true"><svg class="ico"><use href="#ico-failure"/></svg></span>Failed</span>
+          <span class="status-plain"><span class="status-symbol" data-status-icon="inactive" aria-hidden="true"><svg class="ico"><use href="#ico-inactive"/></svg></span>Not started</span>
+          <span class="status-plain"><span class="status-symbol" data-status-icon="derived" aria-hidden="true"><svg class="ico"><use href="#ico-derived"/></svg></span>Calculated</span>
         </div>
-        <pre><span class="c">// Symbols are neutral and aria-hidden; explicit text remains the accessible name.</span>
-&lt;span style={ui.status}&gt;&lt;span aria-hidden=<span class="s">"true"</span>&gt;✓&lt;/span&gt;Completed&lt;/span&gt;</pre>
+        <pre><span class="c">// Icons are neutral and aria-hidden; explicit text remains the accessible name.</span>
+&lt;span style={ui.status}&gt;&lt;StatusIcon symbol={STATUS_SYMBOLS.success} /&gt;Completed&lt;/span&gt;
+<span class="c">// or the one-stop primitive:</span>
+&lt;StatusLabel state=<span class="s">"success"</span> label=<span class="s">"Completed"</span> /&gt;</pre>
       </div>
       <div class="note-box"><strong>Status hierarchy:</strong> routine status stays monochrome · ordinary metadata remains plain text · actionable risk expands into an alert or attention row with recovery guidance · functional color is optional and confined to that exceptional treatment.</div>
     </section>
@@ -789,10 +807,10 @@
         <table>
           <thead><tr><th>Statement</th><th>Agent</th><th style="text-align:right">Turns</th><th>Status</th></tr></thead>
           <tbody>
-            <tr class="pwc-table-row"><td>SOFP</td><td>gpt-5.4</td><td style="text-align:right;font-variant-numeric:tabular-nums">14</td><td><span class="status-plain"><span class="status-symbol" aria-hidden="true">✓</span>Completed</span></td></tr>
-            <tr class="pwc-table-row"><td>SOPL</td><td>gpt-5.4</td><td style="text-align:right;font-variant-numeric:tabular-nums">22</td><td><span class="status-plain"><span class="status-symbol" aria-hidden="true">!</span>Needs review</span></td></tr>
-            <tr class="pwc-table-row"><td>SOCF</td><td>gpt-5.4</td><td style="text-align:right;font-variant-numeric:tabular-nums">18</td><td><span class="status-plain"><span class="status-symbol" aria-hidden="true">○</span>Running</span></td></tr>
-            <tr class="pwc-table-row"><td>SOCIE</td><td>gpt-5.4</td><td style="text-align:right">—</td><td><span class="status-plain"><span class="status-symbol" aria-hidden="true">×</span>Failed</span></td></tr>
+            <tr class="pwc-table-row"><td>SOFP</td><td>gpt-5.4</td><td style="text-align:right;font-variant-numeric:tabular-nums">14</td><td><span class="status-plain"><span class="status-symbol" data-status-icon="success" aria-hidden="true"><svg class="ico"><use href="#ico-success"/></svg></span>Completed</span></td></tr>
+            <tr class="pwc-table-row"><td>SOPL</td><td>gpt-5.4</td><td style="text-align:right;font-variant-numeric:tabular-nums">22</td><td><span class="status-plain"><span class="status-symbol" data-status-icon="attention" aria-hidden="true"><svg class="ico"><use href="#ico-attention"/></svg></span>Needs review</span></td></tr>
+            <tr class="pwc-table-row"><td>SOCF</td><td>gpt-5.4</td><td style="text-align:right;font-variant-numeric:tabular-nums">18</td><td><span class="status-plain"><span class="status-symbol" data-status-icon="in-progress" aria-hidden="true"><svg class="ico"><use href="#ico-in-progress"/></svg></span>Running</span></td></tr>
+            <tr class="pwc-table-row"><td>SOCIE</td><td>gpt-5.4</td><td style="text-align:right">—</td><td><span class="status-plain"><span class="status-symbol" data-status-icon="failure" aria-hidden="true"><svg class="ico"><use href="#ico-failure"/></svg></span>Failed</span></td></tr>
           </tbody>
         </table>
       </div>
@@ -812,15 +830,15 @@
         <table>
           <thead><tr><th>Line item</th><th style="text-align:right">FY 2024</th><th style="text-align:right">FY 2023</th><th>State</th><th>Evidence</th></tr></thead>
           <tbody>
-            <tr><td><strong>Total assets</strong></td><td style="text-align:right;font-variant-numeric:tabular-nums">1,002,593</td><td style="text-align:right;font-variant-numeric:tabular-nums">984,720</td><td><span class="status-plain"><span class="status-symbol" aria-hidden="true">◇</span>Calculated</span></td><td>Formula</td></tr>
-            <tr><td>Loss before tax</td><td style="text-align:right;font-variant-numeric:tabular-nums">(20,667)</td><td style="text-align:right;font-variant-numeric:tabular-nums">(21,319)</td><td><span class="status-plain"><span class="status-symbol" aria-hidden="true">✓</span>Extracted</span></td><td>Page 15</td></tr>
-            <tr><td>Other investment</td><td style="text-align:right;font-variant-numeric:tabular-nums">40,000</td><td style="text-align:right;font-variant-numeric:tabular-nums">—</td><td><span class="status-plain"><span class="status-symbol" aria-hidden="true">!</span>No source</span></td><td>Review</td></tr>
+            <tr><td><strong>Total assets</strong></td><td style="text-align:right;font-variant-numeric:tabular-nums">1,002,593</td><td style="text-align:right;font-variant-numeric:tabular-nums">984,720</td><td><span class="status-plain"><span class="status-symbol" data-status-icon="derived" aria-hidden="true"><svg class="ico"><use href="#ico-derived"/></svg></span>Calculated</span></td><td>Formula</td></tr>
+            <tr><td>Loss before tax</td><td style="text-align:right;font-variant-numeric:tabular-nums">(20,667)</td><td style="text-align:right;font-variant-numeric:tabular-nums">(21,319)</td><td><span class="status-plain"><span class="status-symbol" data-status-icon="success" aria-hidden="true"><svg class="ico"><use href="#ico-success"/></svg></span>Extracted</span></td><td>Page 15</td></tr>
+            <tr><td>Other investment</td><td style="text-align:right;font-variant-numeric:tabular-nums">40,000</td><td style="text-align:right;font-variant-numeric:tabular-nums">—</td><td><span class="status-plain"><span class="status-symbol" data-status-icon="attention" aria-hidden="true"><svg class="ico"><use href="#ico-attention"/></svg></span>No source</span></td><td>Review</td></tr>
           </tbody>
         </table>
       </div>
       <div class="rules" style="margin-top:var(--s-lg)">
         <div class="rule-item"><span class="num">F1</span><span class="txt">Name comparative periods explicitly; never show bare CY/PY when years are known.</span></div>
-        <div class="rule-item"><span class="num">F2</span><span class="txt">Right-align values with tabular numerals and accounting-parentheses display for negatives.</span></div>
+        <div class="rule-item"><span class="num">F2</span><span class="txt">Right-align values with tabular numerals (spread <code class="inline">ui.numeric</code>) and accounting-parentheses display for negatives.</span></div>
         <div class="rule-item"><span class="num">F3</span><span class="txt">Differentiate extracted, edited, calculated, zero, blank, not applicable, and unavailable states with explicit text and, where useful, a neutral symbol. Never depend on colour.</span></div>
         <div class="rule-item"><span class="num">F4</span><span class="txt">Keep totals, section rows, and mandatory fields structurally distinct from editable leaf rows.</span></div>
         <div class="rule-item"><span class="num">F5</span><span class="txt">Selecting a value should reveal its evidence without losing table position or active filters.</span></div>
@@ -890,6 +908,7 @@
         <div class="rule-item"><span class="num">J</span><span class="txt"><strong>Zoom and motion are tested.</strong> Core tasks remain usable at 200% zoom, and reduced motion reaches the same final state immediately.</span></div>
         <div class="rule-item"><span class="num">K</span><span class="txt"><strong>Reflow and high contrast.</strong> Monitoring and simple actions work at 320 CSS px; forced-colors and high-contrast modes preserve boundaries, focus, and state meaning.</span></div>
         <div class="rule-item"><span class="num">L</span><span class="txt"><strong>Dense grids have a keyboard model.</strong> Document navigation between cells, evidence, edit mode, validation, and frozen regions; do not rely on pointer hover.</span></div>
+        <div class="rule-item"><span class="num">M</span><span class="txt">Skip link. The app shell's first focusable element is a visually hidden "Skip to main content" link that appears on keyboard focus and moves focus to <code class="inline">main#main-content</code>, so keyboard users clear the header and navigation in one stop.</span></div>
       </div>
     </section>
 
@@ -998,6 +1017,7 @@
             <tr><td>Hover / focus / disabled / scrollbar rules</td><td><code class="inline">:hover</code> / <code class="inline">:focus</code> CSS</td><td><code>web/src/index.css</code> + <code>uiClass.*</code> hooks</td></tr>
             <tr><td>Top navigation shell</td><td>Tabs &amp; navigation section</td><td><code>web/src/components/TopNav.tsx</code></td></tr>
             <tr><td>Page header</td><td>page header chrome</td><td><code>web/src/components/PageHeader.tsx</code></td></tr>
+            <tr><td>Icons (status families, close / re-run / settings)</td><td>Status section</td><td><code>web/src/components/StatusIcon.tsx</code> + <code>web/src/components/icons.tsx</code> — one family, <code>@phosphor-icons/react</code> bold weight</td></tr>
             <tr><td>Notes-table theme (separate, run-configurable)</td><td>n/a (own subsystem)</td><td><code>web/src/components/NotesReviewTab.css</code> + clipboard/theme tokens (gotcha #16)</td></tr>
           </tbody>
         </table>
@@ -1006,7 +1026,7 @@
     </section>
 
     <footer>
-      <p>XBRL Agent Design System v3 · promoted to the production contract 12 July 2026. Core orange remains the signature identity accent; accessible semantic roles carry interactive text and fills. Routine status may be entirely monochrome; functional hues are optional and exceptional. Not an official PwC brand publication.</p>
+      <p>XBRL Agent Design System v3 · promoted to the production contract 12 July 2026 · revised 21 August 2026 (status icons replace font glyphs; pressed state, skip link, title tracking, <code class="inline">ui.numeric</code>; <code class="inline">black</code> and <code class="inline">thinking</code> tokens deprecated; Arial-on-Windows and light-only theme recorded as decisions). Core orange remains the signature identity accent; accessible semantic roles carry interactive text and fills. Routine status may be entirely monochrome; functional hues are optional and exceptional. Not an official PwC brand publication.</p>
     </footer>
 
   </main>

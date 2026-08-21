@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { pwc } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 import { STATUS_SYMBOLS } from "../lib/runStatus";
+import { StatusIcon } from "./StatusIcon";
 import type { CrossCheckResult } from "../lib/types";
 import type { CoverageNavRow } from "./NotesCoverageNav";
 
@@ -49,7 +50,7 @@ export function NeedsAttentionPanel({
   if (total === 0) {
     return (
       <div data-testid="needs-attention-clear" style={styles.clear}>
-        <span aria-hidden="true" style={ui.statusSymbol}>{STATUS_SYMBOLS.success}</span>
+        <StatusIcon symbol={STATUS_SYMBOLS.success} />
         All clear — nothing needs your attention.
       </div>
     );

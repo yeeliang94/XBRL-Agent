@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError, userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { STATUS_SYMBOLS } from "../lib/runStatus";
+import { StatusIcon } from "./StatusIcon";
 import { PdfSourcePane } from "./PdfSourcePane";
 import { SkeletonText } from "./Skeleton";
 
@@ -265,9 +266,9 @@ export function NotesIntegrityPanel({ runId }: Props) {
         <ul style={styles.findings} data-testid="notes-integrity-findings">
           {data.findings.slice(0, 6).map((f, i) => (
             <li key={`${f.check}-${i}`} style={styles.finding}>
-              {f.severity === "unresolved"
-                ? STATUS_SYMBOLS.attention
-                : STATUS_SYMBOLS.derived}{" "}
+              <StatusIcon
+                symbol={f.severity === "unresolved" ? STATUS_SYMBOLS.attention : STATUS_SYMBOLS.derived}
+              />{" "}
               {f.message}
             </li>
           ))}
@@ -294,9 +295,16 @@ export function NotesIntegrityPanel({ runId }: Props) {
                       Note {n.note_num} — {n.title}
                     </span>
                     <span style={styles.coord}>
-                      {n.status === "complete"
-                        ? `${STATUS_SYMBOLS.success} All accounted for`
-                        : `${STATUS_SYMBOLS.attention} ${n.items_unresolved} of ${n.items_total} not accounted for`}
+                      {n.status === "complete" ? (
+                        <>
+                          <StatusIcon symbol={STATUS_SYMBOLS.success} /> All accounted for
+                        </>
+                      ) : (
+                        <>
+                          <StatusIcon symbol={STATUS_SYMBOLS.attention} /> {n.items_unresolved} of{" "}
+                          {n.items_total} not accounted for
+                        </>
+                      )}
                     </span>
                   </span>
                 </button>

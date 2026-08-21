@@ -196,11 +196,11 @@ describe("HistoryList", () => {
     render(<HistoryList runs={makeRuns()} onRunSelected={() => {}} />);
     const completed = screen.getByText("Completed");
     const symbol = completed.parentElement!.querySelector('[aria-hidden="true"]');
-    expect(symbol?.textContent).toBe("\u2713");
+    expect(symbol?.getAttribute("data-status-icon")).toBe("success");
     // grey700 symbol — never a status hue.
     expect((symbol as HTMLElement).style.color).toBe("rgb(94, 94, 94)");
     const failed = screen.getByText("Failed");
-    expect(failed.parentElement!.querySelector('[aria-hidden="true"]')?.textContent).toBe("\u00d7");
+    expect(failed.parentElement!.querySelector('[aria-hidden="true"]')?.getAttribute("data-status-icon")).toBe("failure");
   });
 
   test("each row shows a visible action that activates once", () => {

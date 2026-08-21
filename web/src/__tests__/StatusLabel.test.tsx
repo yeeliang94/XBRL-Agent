@@ -10,13 +10,13 @@ describe("StatusLabel", () => {
     render(<StatusLabel state="success" label="Completed" />);
     const label = screen.getByText("Completed");
     expect(label).toBeInTheDocument();
-    const symbol = screen.getByText(STATUS_SYMBOLS.success);
+    const symbol = (document.querySelector('[data-status-icon="success"]') as HTMLElement);
     expect(symbol).toHaveAttribute("aria-hidden", "true");
   });
 
   test("the symbol is monochrome — no status hue, pill, or fill", () => {
     render(<StatusLabel state="failure" label="Failed" />);
-    const symbol = screen.getByText(STATUS_SYMBOLS.failure);
+    const symbol = (document.querySelector('[data-status-icon="failure"]') as HTMLElement);
     // grey700 → rgb(94, 94, 94); the wrapper carries no background/border.
     expect(symbol).toHaveStyle({ color: "rgb(94, 94, 94)" });
     const wrapper = symbol.parentElement!;
@@ -28,7 +28,7 @@ describe("StatusLabel", () => {
     const display = runStatusDisplay("completed_with_errors");
     render(<StatusLabel state="attention" symbol={display.symbol} label={display.label} />);
     expect(screen.getByText("Completed with errors")).toBeInTheDocument();
-    expect(screen.getByText("!")).toHaveAttribute("aria-hidden", "true");
+    expect(document.querySelector('[data-status-icon="attention"]')).toHaveAttribute("aria-hidden", "true");
   });
 
   test("renders an optional supporting description", () => {
