@@ -1,17 +1,8 @@
 """`save_result()` must validate as the prompts describe calling it.
 
-Peer review, 2026-08-01. Eight prompt files instruct the agent to "call
-`save_result()`" with no arguments, but both save tools declared a REQUIRED
-string — `fields_json` on the face path, `payloads_json` on the notes path.
-A model that follows the prompt literally gets a schema validation error and
-burns a turn re-sending an argument that changes nothing: by the time
-save_result runs, the face values are already in the workbook and in
-`run_concept_facts`, and every notes payload has already been persisted by
-`write_notes`.
-
-The face tool's BODY already tolerated an empty string (Windows incident, run
-35). The required-ness of the parameter is what produced the retry, so the
-body fix alone never reached the failure.
+The prompts describe a bare completion call because facts and notes are
+already persisted by their write tools. The completion tools therefore must
+not expose redundant JSON-in-a-string arguments, optional or required.
 """
 from __future__ import annotations
 
@@ -57,10 +48,8 @@ def test_face_save_result_takes_no_required_args(tmp_path):
         output_dir=str(tmp_path), model=TestModel(),
     )
     required = _schema_for(agent, "save_result").get("required", [])
-    assert "fields_json" not in required, (
-        "the prompts say `save_result()`; a required fields_json forces a "
-        "schema retry on every statement"
-    )
+    properties = _schema_for(agent, "save_result").get("properties", {})
+    assert "fields_json" not in properties
     assert required == [] or set(required) <= {"acknowledge_unresolved"}
 
 
@@ -75,24 +64,17 @@ def test_notes_save_result_takes_no_required_args(tmp_path):
         inventory=[], filing_level="company", model=TestModel(),
         output_dir=str(tmp_path),
     )
-    required = _schema_for(agent, "save_result").get("required", [])
-    assert "payloads_json" not in required
+    schema = _schema_for(agent, "save_result")
+    assert "payloads_json" not in schema.get("properties", {})
+    assert schema.get("required", []) == []
 
 
-def test_both_save_tools_treat_an_omitted_arg_as_valid_not_as_an_error():
-    """A default alone is not enough — the body must not then reject "".
-
-    The face tool already had this branch; the notes tool raised "Invalid
-    JSON" on an empty string, so defaulting the parameter without fixing the
-    body would have moved the failure rather than removed it.
-    """
+def test_both_save_tools_remove_redundant_stringified_json_arguments():
     import extraction.agent as face_agent
     import notes.agent as notes_agent
 
     notes_src = Path(notes_agent.__file__).read_text(encoding="utf-8")
     face_src = Path(face_agent.__file__).read_text(encoding="utf-8")
 
-    assert 'payloads_json: str = ""' in notes_src
-    assert "if not payloads_json or not payloads_json.strip():" in notes_src
-    assert 'fields_json: str = ""' in face_src
-    assert "if not fields_json or not fields_json.strip():" in face_src
+    assert "payloads_json" not in notes_src
+    assert "fields_json" not in face_src

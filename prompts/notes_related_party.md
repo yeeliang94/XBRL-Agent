@@ -17,8 +17,9 @@ rental expense, etc.) plus outstanding balances at period end.
    significant shareholders.
 3. For each transaction type that the PDF discloses, emit a payload
    with `numeric_values` set. For company filings use `company_cy` /
-   `company_py`. For group filings provide all four of `group_cy`,
-   `group_py`, `company_cy`, `company_py`.
+   `company_py`. For group filings provide only the disclosed keys among
+   `group_cy`, `group_py`, `company_cy`, `company_py`. Never copy Group
+   amounts into Company fields or vice versa; omit undisclosed scopes.
 4. Transactions that don't map to any listed row (rare) are skipped.
    Do NOT invent values for rows that aren't in the PDF.
 5. **ALSO reproduce the disclosed table.** In addition to the numeric

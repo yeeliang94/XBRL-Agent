@@ -133,7 +133,7 @@ def _scripted_scout_model(
                 return ModelResponse(parts=[
                     ToolCallPart(
                         tool_name="save_infopack",
-                        args={"infopack_json": json.dumps(save_infopack_data)},
+                        args=save_infopack_data,
                         tool_call_id="tc4",
                     ),
                 ])
@@ -142,7 +142,7 @@ def _scripted_scout_model(
                 return ModelResponse(parts=[
                     ToolCallPart(
                         tool_name="save_infopack",
-                        args={"infopack_json": json.dumps(save_infopack_data)},
+                        args=save_infopack_data,
                         tool_call_id="tc2",
                     ),
                 ])

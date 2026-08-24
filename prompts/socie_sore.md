@@ -13,24 +13,28 @@ a matrix; there are no per-component reserve columns.
 - C: Prior period value
 - (Group filings also fill D = Company CY, E = Company PY.)
 
-**Row layout (single period stacked twice via the B/C columns):**
-- Row 12: `Retained earnings at beginning of period`
-- Row 13: `Impact of changes in accounting policies` (if any; otherwise blank)
-- Row 14: `Retained earnings at beginning of period, restated` (FORMULA: row 12 + row 13)
-- Row 16: `Profit (loss)` for the period
-- Row 17: `*Total Profit (loss)` (FORMULA)
-- Row 19: `Dividends paid` (positive magnitude — the formula subtracts it)
-- Row 20: `*Total increase (decrease) in retained earnings` (FORMULA: row 17 + row 19)
-- Row 21: `Retained earnings at end of period` (FORMULA: row 14 + row 20)
+**Writable labels:**
+- `Retained earnings at beginning of period`
+- `Impact of changes in accounting policies` (if any; otherwise blank)
+- `Retained earnings at beginning of period, restated`
+- the writable LEAF occurrence of `Profit (loss)`
+- `Dividends paid` (positive magnitude — the formula subtracts it)
+- `Retained earnings at end of period`
+
+The live template also contains ABSTRACT headings and `*Total …` formula rows.
+They are not writable. Do not infer writability from a remembered row number.
 
 === STRATEGY ===
 
-1. Call `read_template()` to confirm the row numbers and labels above.
+1. Call `read_template()` to confirm the labels and DATA_ENTRY/formula status.
 2. View the Statement of Retained Earnings page in the PDF.
-3. Fill each data row using ROW + COL coordinates (B for CY, C for PY). Example:
-   `{"sheet": "SoRE", "row": 12, "col": 2, "value": 4_200_000, "evidence": "..."}`
-4. **Do NOT fill the `*Total…` formula rows** (17, 20, 21, 14) — they
-   auto-calculate from the inputs you supply.
+3. Fill writable rows by exact `field_label` (B for CY, C for PY). The duplicate
+   `Profit (loss)` label includes an ABSTRACT heading; label matching selects
+   the writable leaf. Use explicit coordinates only for the unlabelled
+   reporting-period cells shown by `read_template()`.
+4. **Do NOT fill any `*Total …` formula row.** The closing retained-earnings
+   row is a DATA_ENTRY row in the current template, so extract it from the
+   statement instead of assuming it is calculated.
 5. Call `write_facts()`, `verify_totals()` (status-only), then `save_result()`.
 
 === CRITICAL RULES ===
@@ -42,11 +46,11 @@ a matrix; there are no per-component reserve columns.
 - Do not apply the SOPL "expenses/losses are positive" convention here.
   SoRE is a retained-earnings movement statement: follow the formula sign so
   closing retained earnings reconciles to SOFP.
-- **Closing retained earnings (row 21) must match SOFP "Retained earnings".**
+- **Closing retained earnings must match SOFP "Retained earnings".**
   This is the SoRE cross-check — the one reconciliation that still runs after
   the SOCIE-consuming checks are gated out for SoRE filings.
 - **Leave cells blank where there is no activity.** Do not enter zeros —
-  especially on row 13 (accounting-policy impact) when no restatement applies.
+  especially for the accounting-policy impact when no restatement applies.
 - **No equity-component columns.** If the PDF shows a share-capital or
   reserves movement, that goes on a different statement (SOFP / SOCIE on
   standard MPERS) — not this sheet.

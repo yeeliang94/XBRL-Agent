@@ -464,9 +464,11 @@ function DataPreviewTab({
   const rows: { label: string; value: unknown }[] = [];
 
   if (Array.isArray(rawFields)) {
-    for (const f of rawFields as { statement?: string; field_label?: string; value?: unknown }[]) {
+    for (const f of rawFields as { statement?: string; field_label?: string; value?: unknown; entity_scope?: string; period?: string }[]) {
       const prefix = f.statement ? `${f.statement} — ` : "";
-      rows.push({ label: `${prefix}${f.field_label || ""}`, value: f.value });
+      const dimensions = [f.entity_scope, f.period].filter(Boolean).join(" ");
+      const suffix = dimensions ? ` (${dimensions})` : "";
+      rows.push({ label: `${prefix}${f.field_label || ""}${suffix}`, value: f.value });
     }
   } else {
     for (const [name, value] of Object.entries(rawFields as Record<string, unknown>)) {

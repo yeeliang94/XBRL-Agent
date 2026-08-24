@@ -18,9 +18,10 @@ shares and AMOUNT columns.
 3. The note contains a movement table. Extract the numeric values by line.
 4. Emit one `NotesPayload` per matched row with `numeric_values` set.
    For company filings provide `company_cy` and `company_py` (or
-   generic `cy` / `py`). For group filings provide all four of
-   `group_cy`, `group_py`, `company_cy`, `company_py` — group filings
-   typically disclose both consolidated and standalone figures.
+   generic `cy` / `py`). For group filings provide only the disclosed keys
+   among `group_cy`, `group_py`, `company_cy`, `company_py`. Never copy Group
+   amounts into Company fields or vice versa; omit an entity/period scope the
+   note does not disclose.
 5. **ALSO reproduce the disclosed table.** In addition to the numeric
    rows above, emit ONE prose `NotesPayload` whose `content` is the
    share-capital movement table reproduced verbatim as an HTML

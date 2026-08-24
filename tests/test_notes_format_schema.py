@@ -196,6 +196,24 @@ def test_agent_declares_the_output_type_when_enabled(monkeypatch, tmp_path):
         db_path=str(tmp_path / "x.db"), model=TestModel(),
     )
     assert agent.output_type is SheetFormatPatch
+    prompt = agent._system_prompts[0]
+    assert "OUTPUT MODE: STRUCTURED" in prompt
+    assert "Return JSON only" not in prompt
+
+
+def test_formatter_json_fallback_gets_only_json_mode_instruction(monkeypatch, tmp_path):
+    from pydantic_ai.models.test import TestModel
+
+    from notes.formatting_agent import create_notes_formatter_agent
+
+    monkeypatch.setenv("XBRL_NOTES_FORMATTER_STRUCTURED", "0")
+    agent, _deps = create_notes_formatter_agent(
+        run_id=1, sheet="Notes-Listofnotes", pdf_path="/tmp/no.pdf",
+        db_path=str(tmp_path / "x.db"), model=TestModel(),
+    )
+    prompt = agent._system_prompts[0]
+    assert "OUTPUT MODE: JSON FALLBACK" in prompt
+    assert "OUTPUT MODE: STRUCTURED" not in prompt
 
 
 def test_a_validated_patch_is_converted_to_json_for_the_screening_path():

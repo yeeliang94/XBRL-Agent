@@ -26,7 +26,7 @@ router = APIRouter()
 
 # Mirrors model_settings.THINKING_LEVELS; imported rather than
 # re-listed so the API and the builder cannot drift.
-from model_settings import THINKING_LEVELS as _THINKING_LEVELS
+from model_settings import ALL_THINKING_LEVELS as _ALL_THINKING_LEVELS
 from model_settings import supported_thinking_levels as _supported_levels
 from notes.source_models import IntegrityMode as _IntegrityMode
 
@@ -215,7 +215,7 @@ async def get_config():
         # Per-role thinking level (reasoning effort). An absent role sends
         # nothing, which is what every agent did before this setting existed.
         "thinking_levels": server._thinking_levels(),
-        "thinking_level_choices": list(_THINKING_LEVELS),
+        "thinking_level_choices": list(_ALL_THINKING_LEVELS),
         # Per-model vocabulary: GPT-5.6 dropped `minimal`, so offering it
         # for that model means the operator picks a level the run then
         # substitutes (peer review, 2026-08-02). The picker filters on this.
@@ -249,7 +249,7 @@ async def get_settings():
         # because the Settings form reads THIS endpoint; /api/config carries
         # it for surfaces that only take the lightweight flag payload.
         "thinking_levels": server._thinking_levels(),
-        "thinking_level_choices": list(_THINKING_LEVELS),
+        "thinking_level_choices": list(_ALL_THINKING_LEVELS),
         # Per-model vocabulary: GPT-5.6 dropped `minimal`, so offering it
         # for that model means the operator picks a level the run then
         # substitutes (peer review, 2026-08-02). The picker filters on this.
@@ -276,6 +276,41 @@ async def update_settings(body: dict, request: Request):
             denied = auth_routes._require_admin(conn, request)
         if denied is not None:
             return denied
+
+    # Validate model-dependent fields before writing ANY key. Previously the
+    # legacy model/proxy fields were written first, then an invalid thinking
+    # level raised 400, leaving a partially-applied settings request.
+    raw_levels: dict | None = None
+    cleaned_levels: dict[str, str] = {}
+    if "thinking_levels" in body:
+        candidate = body["thinking_levels"]
+        if not isinstance(candidate, dict):
+            raise HTTPException(
+                status_code=400,
+                detail="thinking_levels must be an object keyed by agent role.",
+            )
+        from notes_types import NotesTemplateType as _NT
+        allowed = set(server._AGENT_ROLES) | {nt.value for nt in _NT}
+        for key, value in candidate.items():
+            if key not in allowed:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unknown thinking_levels key: {key!r}. "
+                           f"Allowed: {sorted(allowed)}.",
+                )
+            if value in (None, "", "default"):
+                continue
+            if value not in _ALL_THINKING_LEVELS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"thinking_levels[{key!r}] must be one of "
+                        f"{sorted(_ALL_THINKING_LEVELS)}, or empty to use the "
+                        "provider default."
+                    ),
+                )
+            cleaned_levels[key] = value
+        raw_levels = candidate
 
     ENV_FILE = server.ENV_FILE
     if not ENV_FILE.exists():
@@ -339,42 +374,14 @@ async def update_settings(body: dict, request: Request):
         existing = server._load_extended_settings()["default_models"]
         existing.update(raw_models)
         set_key(str(ENV_FILE), "XBRL_DEFAULT_MODELS", json.dumps(existing))
-    if "thinking_levels" in body:
-        raw_levels = body["thinking_levels"]
-        if not isinstance(raw_levels, dict):
-            raise HTTPException(
-                status_code=400,
-                detail="thinking_levels must be an object keyed by agent role.",
-            )
-        from notes_types import NotesTemplateType as _NT
-        allowed = set(server._AGENT_ROLES) | {nt.value for nt in _NT}
-        cleaned: dict[str, str] = {}
-        for key, value in raw_levels.items():
-            if key not in allowed:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Unknown thinking_levels key: {key!r}. "
-                           f"Allowed: {sorted(allowed)}.",
-                )
-            if value in (None, "", "default"):
-                continue     # clearing a role = send nothing for it
-            if value not in _THINKING_LEVELS:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"thinking_levels[{key!r}] must be one of "
-                        f"{sorted(_THINKING_LEVELS)}, or empty to use the "
-                        "provider default."
-                    ),
-                )
-            cleaned[key] = value
+    if raw_levels is not None:
         load_dotenv(ENV_FILE, override=True)
         existing = server._thinking_levels()
         # A role sent as empty is REMOVED, not merged over — otherwise there
         # would be no way to put a role back to the provider default.
         for key in raw_levels:
             existing.pop(key, None)
-        existing.update(cleaned)
+        existing.update(cleaned_levels)
         set_key(str(ENV_FILE), "XBRL_THINKING_LEVELS", json.dumps(existing))
     if "scout_enabled_default" in body:
         set_key(str(ENV_FILE), "XBRL_SCOUT_ENABLED_DEFAULT",

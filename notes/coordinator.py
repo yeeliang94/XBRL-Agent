@@ -35,6 +35,7 @@ from notes.constants import NOTES_PHASE_MAP
 from notes.listofnotes_subcoordinator import run_listofnotes_subcoordinator
 from notes.writer import BORDERLINE_FUZZY_SCORE
 from notes_types import NotesTemplateType
+from model_settings import describe_model_runtime
 from pricing import estimate_cost
 from scout.infopack import Infopack
 from scout.notes_discoverer import NoteInventoryEntry
@@ -899,7 +900,8 @@ async def _invoke_single_notes_agent_once(
 
     result = agent_run.result
     save_agent_trace(
-        result, output_dir, f"NOTES_{template_type.value}", turns=_turn_records
+        result, output_dir, f"NOTES_{template_type.value}", turns=_turn_records,
+        runtime_metadata=describe_model_runtime(model, role=template_type.value),
     )
 
     # Phase 5.1 + peer-review #2: backfill the cost report totals from
@@ -974,7 +976,7 @@ def _unverified_skip_reason(sub: Any, note_num: int) -> Optional[str]:
 
       - the note's own write was rejected, so nothing reached the sheet;
       - the sub-agent had a write call fail before it named any note (a
-        `payloads_json` that never parsed), which taints every skip it declared
+        malformed payload input with no attributable note), which taints every skip it declared
         because we cannot tell which note the failure belonged to.
 
     Shared by the skips side-log and the operator warnings so the two can never
@@ -996,8 +998,8 @@ def _write_notes12_skips(output_dir: str, sub_result: Any) -> list[dict[str, Any
 
     One ``{"note_num", "reason"}`` entry per note a succeeded sub-agent
     explicitly skipped (``action == "skipped"``). Overwrites wholesale so a
-    notes re-run clears stale skips. Consumed by the coverage checklist so an
-    intentional skip lands `skipped`, not `missing` (Codex review P2).
+    notes re-run clears stale skips. The coverage checklist preserves this
+    claim and reason, but only destination-sheet provenance clears the note.
 
     A skip is only honoured when the sub-agent's writes actually WORKED
     (run-84 finding, 2026-08-05). A skip means "I looked, and this note belongs
@@ -1011,10 +1013,11 @@ def _write_notes12_skips(output_dir: str, sub_result: Any) -> list[dict[str, Any
     The receipt cannot arbitrate this — the agent that failed is the one
     writing it. So the system's own record wins: a note the sub-agent failed to
     write, or ANY skip from a sub-agent that had a write failure it could not
-    pin to a note (a `payloads_json` that never parsed carries no note number),
+    pin to a note (malformed payload input may carry no note number),
     is withheld from the skips file. Withheld notes then have no provenance and
-    no skip receipt, so the checklist marks them `missing` — unresolved, and it
-    tips the run — which is what they are.
+    no skip receipt. The checklist marks any unplaced note ``missing`` whether
+    its receipt was withheld or retained; a retained receipt explains the
+    attempted routing while provenance proves whether the hand-off completed.
 
     Returns the withheld entries so the caller can surface them to the
     operator; the file itself only carries the honoured skips.
@@ -1216,13 +1219,12 @@ async def _run_list_of_notes_fanout(
             source_generation_id=source_generation_id,
         )
 
-        # Persist Sheet-12 skip receipts as a durable side-log so the notes
-        # coverage checklist (server._compute_notes_coverage_checklist) marks
-        # an INTENTIONALLY skipped note `skipped` (reason attached) instead of
-        # `missing` — a skipped note has no provenance, so inventory×provenance
-        # alone would flag it missing and wrongly tip the run to
-        # completed_with_errors. Read from output_dir by BOTH the auto and the
-        # manual reviewer passes. Best-effort — never fail the fan-out.
+        # Persist Sheet-12 skip receipts as a durable side-log. The notes
+        # coverage checklist uses them to explain the routing claim, but only
+        # destination-sheet provenance clears the note. An unplaced claim stays
+        # missing and tips the run instead of becoming a false green. Read by
+        # both automatic and manual reviewer passes. Best-effort — never fail
+        # the fan-out.
         withheld_skips: list[dict[str, Any]] = []
         try:
             withheld_skips = _write_notes12_skips(output_dir, sub_result)

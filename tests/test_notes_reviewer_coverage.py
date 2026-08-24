@@ -162,6 +162,31 @@ def test_confirmed_absent_resolves_suspected_gap(db_path):
     assert cl.has_unresolved() is False
 
 
+def test_grounded_author_resolves_real_suspected_gap(db_path):
+    run_id = _seed_run(db_path)
+    _seed_node(db_path, 50, "LEAF", "Disclosure of X")
+    _seed_inv(db_path, run_id, 12)
+    _seed_inv(db_path, run_id, 14)
+    _seed_prov(db_path, run_id, 30, ["12"])
+    _seed_prov(db_path, run_id, 32, ["14"])
+    model = _scripted([
+        [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
+        [ToolCallPart(tool_name="author_note_cells", args={"authored": [{
+            "sheet": _S12, "row": 50, "html": "<p>grounded note 13</p>",
+            "note_num": 13, "source_pages": [19],
+            "evidence": "page 19: Note 13 disclosure",
+        }]})],
+    ])
+    agent, deps, _ = _agent(db_path, run_id, model)
+    agent.run_sync("go", deps=deps)
+    assert deps.suspected_gap_note_nums == {13}
+    assert deps.fix_rejections.get("note_not_in_inventory") is None
+    row = _row(ra.recompute_notes_findings(deps)["coverage_checklist"], 13)
+    assert row.status == STATUS_PLACED
+    assert row.reviewer_added is True
+    assert row.is_unresolved() is False
+
+
 def test_author_flips_missing_to_placed_reviewer_added(db_path):
     run_id = _seed_run(db_path)
     _seed_node(db_path, 50, "LEAF", "Disclosure of X")
@@ -262,6 +287,51 @@ def test_author_then_clear_drops_reviewer_added_marker(db_path):
     row = _row(cl, 4)
     assert row.status == STATUS_MISSING
     assert row.reviewer_added is False
+
+
+def test_clear_refuses_same_sheet_note_consolidation(db_path):
+    """The reviewer may not clear one Sheet-12 disclosure row merely because
+    the same note is also cited in another Sheet-12 row. Deterministic code
+    cannot decide which template concept is more precise, so it preserves both
+    and directs the model to raise a human-review flag."""
+    run_id = _seed_run(db_path)
+    _seed_inv(db_path, run_id, 9, "Financial instruments")
+    _seed_prov(db_path, run_id, 48, ["9"])
+    _seed_prov(db_path, run_id, 49, ["9"])
+    model = _scripted([
+        [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
+        [ToolCallPart(tool_name="clear_note_cells", args={
+            "sheet": _S12, "rows": [48], "source_pages": [19],
+            "evidence": "fold into broader risk row"})],
+    ])
+    agent, deps, _ = _agent(db_path, run_id, model)
+    result = agent.run_sync("go", deps=deps)
+    with repo.db_session(db_path) as conn:
+        rows = {c.row for c in repo.list_notes_cells_for_run(conn, run_id)}
+    assert {48, 49} <= rows
+    assert deps.writes_performed == 0
+    assert deps.fix_rejections.get("same_sheet_reroute") == 1
+    returns = _tool_return_texts(result, "clear_note_cells")
+    assert returns and "raise_flag" in returns[0]
+
+
+def test_clear_refuses_last_provenance_placement(db_path):
+    run_id = _seed_run(db_path)
+    _seed_inv(db_path, run_id, 9, "Financial instruments")
+    _seed_prov(db_path, run_id, 48, ["9"])
+    model = _scripted([
+        [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
+        [ToolCallPart(tool_name="clear_note_cells", args={
+            "sheet": _S12, "rows": [48], "source_pages": [19],
+            "evidence": "remove disclosure"})],
+    ])
+    agent, deps, _ = _agent(db_path, run_id, model)
+    agent.run_sync("go", deps=deps)
+    with repo.db_session(db_path) as conn:
+        rows = {c.row for c in repo.list_notes_cells_for_run(conn, run_id)}
+    assert 48 in rows
+    assert deps.writes_performed == 0
+    assert deps.fix_rejections.get("last_note_placement") == 1
 
 
 def test_verify_subnote_requires_grounding(db_path):
@@ -377,6 +447,17 @@ def test_clear_note_cells_batch_clears_all_rows(db_path):
     run_id = _seed_run(db_path)
     _seed_prov(db_path, run_id, 48, ["8"])
     _seed_prov(db_path, run_id, 49, ["9"])
+    # Each Sheet-12 row has a surviving cross-sheet placement, so clearing the
+    # duplicate is safe and the batch mechanics remain covered.
+    with repo.db_session(db_path) as conn:
+        repo.upsert_notes_provenance(
+            conn, run_id=run_id, sheet="Notes-SummaryofAccPol", row=58,
+            row_label="Policy 8", source_note_refs=["8"],
+        )
+        repo.upsert_notes_provenance(
+            conn, run_id=run_id, sheet="Notes-SummaryofAccPol", row=59,
+            row_label="Policy 9", source_note_refs=["9"],
+        )
     model = _scripted([
         [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
         [ToolCallPart(tool_name="clear_note_cells", args={

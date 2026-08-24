@@ -20,8 +20,9 @@ Inputs mirror the durable stores:
 - ``provenance_entries`` — the detector ``entries`` shape
   (``notes.detectors.load_provenance_entries``):
   ``{"sheet", "row", "row_label", "source_note_refs", ...}``.
-- ``skip_receipts`` — Sheet-12 coverage-receipt skips:
-  ``{"note_num", "reason"}``.
+- ``skip_receipts`` — Sheet-12 coverage-receipt skip claims:
+  ``{"note_num", "reason"}``. A claim does not clear coverage by itself;
+  destination-sheet provenance must exist.
 
 The builder is deliberately a pure function so it can be recomputed at any
 point (draft before the reviewer pass, final after) from the same durable
@@ -201,9 +202,9 @@ class Checklist:
 def load_notes12_skips(output_dir: Optional[str]) -> list[dict]:
     """Read the Sheet-12 skip-receipt side-log (``notes12_skips.json``) the notes
     coordinator wrote at fan-out time: ``[{"note_num", "reason"}]``. Best-effort
-    — a missing/unreadable file means "no skips" (an unplaced inventory note then
-    defaults to ``missing``). Shared by the server's coverage finalizer and the
-    reviewer's context so both agree on which notes were intentionally skipped."""
+    — a missing/unreadable file means "no skips". Receipts preserve the agent's
+    routing claim and reason, but do not clear coverage without destination
+    provenance. Shared by the server finalizer and reviewer context."""
     if not output_dir:
         return []
     try:
@@ -310,7 +311,19 @@ def build_draft_checklist(
         if placements:
             status, reason = STATUS_PLACED, ""
         elif note_num in skip_by_note:
-            status, reason = STATUS_SKIPPED, skip_by_note[note_num]
+            # A skip receipt is authored by the same sub-agent that chose not
+            # to write the note. It proves the decision was reported, not that
+            # the claimed destination agent actually placed the note. Only the
+            # shared provenance ledger can prove that hand-off. Without a
+            # placement the note stays unresolved instead of becoming a false
+            # green (run-84 / Note-9 related-party regression).
+            claimed_reason = skip_by_note[note_num]
+            status = STATUS_MISSING
+            reason = (
+                "Sheet-12 reported this note as skipped"
+                + (f": {claimed_reason}." if claimed_reason else ".")
+                + " No destination placement was recorded on any notes sheet."
+            )
         else:
             status, reason = STATUS_MISSING, ""
 
@@ -344,14 +357,18 @@ def build_draft_checklist(
 
     for gap in _suspected_gaps(present_nums):
         before, after = gap - 1, gap + 1
+        coords = placements_by_note.get(gap, {})
+        placements = _classify_placements(coords, policies_sheet)
         gap_row = CoverageRow(
             note_num=gap,
             title="",
-            status=STATUS_SUSPECTED_GAP,
-            reason=(
+            status=STATUS_PLACED if placements else STATUS_SUSPECTED_GAP,
+            placements=placements,
+            reason="" if placements else (
                 f"Inventory numbering jumps {before} → {after}; the scout "
                 f"may have missed note {gap}."
             ),
+            reviewer_added=gap in reviewer_added_notes,
         )
         _apply_note_verdict(gap_row, note_verdicts.get(gap))
         rows.append(gap_row)

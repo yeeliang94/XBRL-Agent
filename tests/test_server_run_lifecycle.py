@@ -656,7 +656,12 @@ def test_run_config_json_round_trips_request_body(session_env):
                     workbook_path=str(out / session_id / "SOPL_filled.xlsx")),
     ]
 
+    runtime_snapshot = {
+        "SOFP": {"transport": "responses", "effective_reasoning_effort": "high"},
+    }
     with patch("server._create_proxy_model", return_value="fake-model"), \
+         patch("server._thinking_levels", return_value={"SOFP": "high"}), \
+         patch("server._model_runtime_snapshot", return_value=runtime_snapshot), \
          patch("coordinator.run_extraction", side_effect=_happy_coordinator(agent_results)), \
          patch("workbook_merger.merge", return_value=MergeResult(success=True, output_path=str(out / session_id / "filled.xlsx"), sheets_copied=2)), \
          patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]):
@@ -678,6 +683,8 @@ def test_run_config_json_round_trips_request_body(session_env):
     assert stored["variants"] == {"SOFP": "CuNonCu", "SOPL": "Function"}
     assert stored["models"] == {"SOFP": "gpt-5.4"}
     assert stored["use_scout"] is True
+    assert stored["thinking_levels"] == {"SOFP": "high"}
+    assert stored["model_runtime"] == runtime_snapshot
     # scout_enabled flag on the row mirrors the request.
     assert row["scout_enabled"] == 1
 

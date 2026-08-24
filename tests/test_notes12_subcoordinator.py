@@ -735,6 +735,73 @@ class TestTaskRegistryCleanup:
         assert session_id not in task_registry._tasks
 
     @pytest.mark.asyncio
+    async def test_fanout_deadline_cancels_stalled_worker_and_records_failure(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        """One hung Sheet-12 worker cannot hold the parent indefinitely."""
+        import asyncio as _asyncio
+        import task_registry
+        from notes.listofnotes_subcoordinator import (
+            SubAgentRunResult,
+            run_listofnotes_subcoordinator,
+        )
+
+        session_id = "test-session-fanout-deadline"
+        task_registry.remove_session(session_id)
+        monkeypatch.setattr(
+            "notes.listofnotes_subcoordinator.NOTES12_FANOUT_TIMEOUT_SECS",
+            0.05,
+        )
+        pdf_path = tmp_path / "dummy.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n")
+        event_queue: _asyncio.Queue = _asyncio.Queue()
+
+        async def fake_sub(sub_agent_id, batch, **_):
+            if sub_agent_id.endswith("sub0"):
+                await _asyncio.sleep(10)
+            return SubAgentRunResult(
+                sub_agent_id=sub_agent_id,
+                batch=batch,
+                payloads=[_make_payload("Disclosure of revenue")],
+                status="succeeded",
+            )
+
+        with patch(
+            "notes.listofnotes_subcoordinator._run_list_of_notes_sub_agent",
+            side_effect=fake_sub,
+        ):
+            result = await _asyncio.wait_for(
+                run_listofnotes_subcoordinator(
+                    pdf_path=str(pdf_path),
+                    inventory=_make_inventory(2),
+                    filing_level="company",
+                    model="test",
+                    output_dir=str(tmp_path),
+                    parallel=2,
+                    session_id=session_id,
+                    event_queue=event_queue,
+                ),
+                timeout=1,
+            )
+
+        stalled = next(
+            item for item in result.sub_agent_results
+            if item.sub_agent_id.endswith("sub0")
+        )
+        assert stalled.status == "failed"
+        assert "deadline" in (stalled.error or "").lower()
+        assert result.failures_path is not None
+        assert session_id not in task_registry._tasks
+        events = []
+        while not event_queue.empty():
+            events.append(event_queue.get_nowait())
+        assert any(
+            event["data"].get("sub_agent_id", "").endswith("sub0")
+            and "deadline" in event["data"].get("message", "").lower()
+            for event in events
+        )
+
+    @pytest.mark.asyncio
     async def test_task_registry_cleared_on_cancellation(self, tmp_path: Path):
         """PR A.5: cancellation mid-run must still unregister sub-agent refs
         (the finally block covers success, failure, AND CancelledError)."""
@@ -750,6 +817,7 @@ class TestTaskRegistryCleanup:
         pdf_path = tmp_path / "dummy.pdf"
         pdf_path.write_bytes(b"%PDF-1.4\n")
         inv = _make_inventory(5)
+        event_queue: _asyncio.Queue = _asyncio.Queue()
 
         async def fake_sub(sub_agent_id, batch, **_):
             # Long-running sub-agent so we have time to cancel.
@@ -766,6 +834,7 @@ class TestTaskRegistryCleanup:
                     output_dir=str(tmp_path),
                     parallel=5,
                     session_id=session_id,
+                    event_queue=event_queue,
                 )
             )
             # Give the sub-coordinator time to register sub-agent tasks.
@@ -782,6 +851,15 @@ class TestTaskRegistryCleanup:
         # After cancellation propagates, the finally in _run_sub_with_cleanup
         # must have unregistered every sub-agent ref.
         assert session_id not in task_registry._tasks
+        terminal_events = []
+        while not event_queue.empty():
+            terminal_events.append(event_queue.get_nowait())
+        assert terminal_events
+        assert all(event["event"] == "complete" for event in terminal_events)
+        assert all(
+            event["data"].get("status") == "cancelled"
+            for event in terminal_events
+        )
 
 
 # ---------------------------------------------------------------------------

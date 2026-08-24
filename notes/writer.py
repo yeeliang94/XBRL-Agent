@@ -241,7 +241,7 @@ def write_notes_workbook(
                     "html": html_for_db,
                     "evidence": combined.evidence or None,
                     "source_pages": aggregated_pages,
-                    # How this cell got its styling: "ops" (agent observation)
+                    # How this cell got its styling: "ops" (legacy sidecar)
                     # or "unstyled" (plain; legacy rows may also say "floor").
                     # Persisted to notes_cells.style_source so the operator can
                     # see which cells need a manual formatter pass (schema v29).

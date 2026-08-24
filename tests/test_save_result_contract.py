@@ -262,20 +262,11 @@ async def test_coordinator_succeeds_when_workbook_written_and_save_called():
 
 
 # ---------------------------------------------------------------------------
-# Side 5: a malformed `fields_json` must not crash the run (Windows run-35)
+# Side 5: completion does not ask the model to resend persisted facts
 # ---------------------------------------------------------------------------
 #
-# Incident: the model called save_result with an empty `fields_json`. The
-# unguarded `json.loads(fields_json)` raised
-# `JSONDecodeError: Expecting value: line 1 column 1 (char 0)`, which escaped
-# the tool and pydantic-ai re-raised it — tearing down a fully extracted +
-# verified statement as a hard failure.
-#
-# Contract: the facts are already persisted (workbook + canonical DB) by save
-# time, so `fields_json` is a secondary artifact. An empty/whitespace arg is
-# tolerated as `{}` and FINALISES (no wasted retry turn); a genuinely
-# malformed arg still refuses with an actionable retry rather than silently
-# dropping content the model intended.
+# Facts are already persisted in the workbook and canonical DB. The completion
+# tool therefore exposes no redundant JSON serialization path.
 
 def _extract_save_result_fn(agent):
     for ts in getattr(agent, "toolsets", []) or []:
@@ -312,50 +303,12 @@ def _gate_open_ctx(tmp_path):
     return agent, deps, ctx
 
 
-@pytest.mark.parametrize("empty_json", ["", "   ", "\n\t"])
-def test_save_result_finalises_on_empty_fields_json(tmp_path, empty_json):
-    """An empty/whitespace `fields_json` must NOT crash the run (the run-35
-    JSONDecodeError) and must NOT waste a retry turn — the facts are already
-    persisted, so it finalises with `{}`."""
+def test_save_result_finalises_without_resending_facts(tmp_path):
     agent, deps, ctx = _gate_open_ctx(tmp_path)
     fn = _extract_save_result_fn(agent)
 
-    deps.save_attempts += 1
-    msg = fn(ctx, empty_json)  # must NOT raise
+    msg = fn(ctx)
 
     assert "Results saved to" in msg
     assert deps.result_saved is True
-    assert (tmp_path / "SOFP_result.json").exists()
-
-
-@pytest.mark.parametrize("bad_json", ["not json{", "{unquoted: 1}", "[1, 2"])
-def test_save_result_refuses_malformed_fields_json_without_crashing(tmp_path, bad_json):
-    """Genuinely malformed JSON returns an actionable refusal string (so the
-    agent retries) instead of letting a JSONDecodeError escape and crash the
-    run — and without silently dropping the content the model intended."""
-    agent, deps, ctx = _gate_open_ctx(tmp_path)
-    fn = _extract_save_result_fn(agent)
-
-    deps.save_attempts += 1
-    msg = fn(ctx, bad_json)  # must NOT raise
-
-    assert isinstance(msg, str)
-    assert "save_result refused" in msg
-    assert "fields_json" in msg
-    # The statement is NOT finalised on a parse failure, and the error is
-    # recorded for the coordinator to attribute.
-    assert deps.result_saved is False
-    assert deps.last_save_error is not None
-
-
-def test_save_result_still_saves_on_valid_fields_json(tmp_path):
-    """Mirror: a valid JSON object still saves and flips result_saved."""
-    agent, deps, ctx = _gate_open_ctx(tmp_path)
-    fn = _extract_save_result_fn(agent)
-
-    deps.save_attempts += 1
-    msg = fn(ctx, json.dumps({"fields": [{"label": "Cash", "value": 1}]}))
-
-    assert "Results saved to" in msg
-    assert deps.result_saved is True
-    assert (tmp_path / "SOFP_result.json").exists()
+    assert json.loads((tmp_path / "SOFP_result.json").read_text()) == {}

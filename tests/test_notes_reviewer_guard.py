@@ -56,6 +56,15 @@ def test_author_for_unknown_note_refused():
     assert kind == "note_not_in_inventory"
 
 
+def test_author_for_packet_listed_suspected_gap_accepts():
+    kind, msg = classify_notes_fix_guard(
+        action="author", source_pages=[19], viewed_pages=_VIEWED,
+        target_node={"kind": "LEAF"}, target_occupied=False,
+        note_in_inventory=False, note_is_suspected_gap=True,
+    )
+    assert kind is None and msg is None
+
+
 def test_grounded_leaf_author_accepts():
     kind, msg = classify_notes_fix_guard(
         action="author", source_pages=[19], viewed_pages=_VIEWED,

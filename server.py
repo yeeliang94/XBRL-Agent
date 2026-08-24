@@ -1829,17 +1829,23 @@ async def _run_reviewer_pass(
                 from agent_tracing import (
                     save_agent_trace, save_messages_trace,
                 )
+                from model_settings import describe_model_runtime
+                _runtime = describe_model_runtime(model, role="reviewer")
                 # Prefix = agent_id ("CORRECTION") so the file matches the
                 # reviewer's run_agents.statement_type and is served by the
                 # EXISTING /api/runs/{id}/agents/{stmt}/trace route — no new
                 # endpoint needed (that route whitelists by run_agents row).
                 _res = getattr(agent_run, "result", None)
                 if _res is not None:
-                    save_agent_trace(_res, _review_out_dir, agent_id)
+                    save_agent_trace(
+                        _res, _review_out_dir, agent_id,
+                        runtime_metadata=_runtime,
+                    )
                 elif agent_run is not None:
                     save_messages_trace(
                         agent_run.ctx.state.message_history,
                         _review_out_dir, agent_id,
+                        runtime_metadata=_runtime,
                     )
             except Exception:  # noqa: BLE001
                 logger.warning(
@@ -1928,7 +1934,8 @@ def _compute_notes_coverage_checklist(
     DB inputs (inventory × provenance), merging any reviewer verdicts. Mirrors
     the reviewer's ``_build_context`` but standalone so the construction-failure
     path (no deps) can still persist a draft. ``skip_receipts`` marks
-    intentionally-skipped Sheet-12 notes `skipped` instead of `missing`."""
+    Sheet-12 skip claims into the checklist. A claim clears coverage only when
+    the destination placement is present in provenance."""
     from db import repository as repo
     from notes.detectors import load_provenance_entries
     from notes.coverage_checklist import build_draft_checklist
@@ -2215,6 +2222,7 @@ async def _run_notes_reviewer_pass(
                 logger.warning("Failed to refresh merged workbook after notes review",
                                exc_info=True)
 
+    agent_run = None
     try:
         async with agent.iter(prompt, deps=deps) as agent_run:
             await run_agent_loop(agent_run, deps, loop_spec, _loop_emit, _turn_records)
@@ -2271,6 +2279,26 @@ async def _run_notes_reviewer_pass(
         await _finalize_coverage(reviewed=False)
         await _emit("error", {"type": "notes_reviewer_exception", "message": str(e)})
         await _emit("complete", {"success": False, "error": str(e)})
+    finally:
+        if output_dir and agent_run is not None:
+            try:
+                from agent_tracing import save_agent_trace, save_messages_trace
+                from model_settings import describe_model_runtime
+
+                runtime = describe_model_runtime(model, role="notes_reviewer")
+                finished = getattr(agent_run, "result", None)
+                if finished is not None:
+                    save_agent_trace(
+                        finished, output_dir, agent_id, turns=_turn_records,
+                        runtime_metadata=runtime,
+                    )
+                else:
+                    save_messages_trace(
+                        agent_run.ctx.state.message_history, output_dir, agent_id,
+                        turns=_turn_records, runtime_metadata=runtime,
+                    )
+            except Exception:  # noqa: BLE001 — tracing is advisory
+                logger.warning("Failed to save notes-reviewer trace", exc_info=True)
 
     _stamp_elapsed()
     return outcome
@@ -2832,6 +2860,37 @@ def _thinking_levels() -> dict:
 def thinking_level_for(role: str) -> Optional[str]:
     """The level for one agent role, or None to send nothing."""
     return _thinking_levels().get(role)
+
+
+def _model_runtime_snapshot(
+    default_model: Any,
+    statement_types: Set[Any],
+    statement_models: Dict[Any, Any],
+    notes_types: Set[Any],
+    notes_models: Dict[Any, Any],
+) -> dict[str, dict]:
+    """Record the effective model transport/settings planned for this run.
+
+    Traces carry the same metadata at agent completion. Keeping a snapshot on
+    the run row makes failed and benchmarked runs attributable even when an
+    agent fails before it can write a trace.
+    """
+    from model_settings import describe_model_runtime
+
+    snapshot: dict[str, dict] = {
+        "default": describe_model_runtime(default_model),
+    }
+    for statement_type in sorted(statement_types, key=lambda item: item.value):
+        role = statement_type.value
+        snapshot[role] = describe_model_runtime(
+            statement_models.get(statement_type, default_model), role=role,
+        )
+    for notes_type in sorted(notes_types, key=lambda item: item.value):
+        role = notes_type.value
+        snapshot[f"notes:{role}"] = describe_model_runtime(
+            notes_models.get(notes_type, default_model), role=role,
+        )
+    return snapshot
 
 
 def _auto_review_enabled() -> bool:
@@ -4844,26 +4903,29 @@ async def run_multi_agent_stream(
         # `build_docx_manifest` raises rather than measuring a partial read,
         # and that exception lands here, leaving the run on today's path with
         # no source generation and no integrity verdict.
-        # Snapshot the thinking levels this run actually used. The env value is
-        # mutable, so without this a past run's cost and quality could not be
-        # attributed to the setting that produced them — the same reason the
-        # integrity MODE is persisted per run (peer review, 2026-08-01).
+        # Snapshot both the configured levels and the effective transport/model
+        # settings. Environment settings are mutable, and GPT-5.6 reasoning is
+        # transport-sensitive, so the configured value alone is insufficient
+        # to attribute a past run's quality or cost.
         try:
             _levels = _thinking_levels()
-            if _levels:
-                _lvl_conn = _open_audit_conn()
-                try:
-                    _lvl_conn.execute(
-                        "UPDATE runs SET run_config_json = json_set("
-                        "  COALESCE(run_config_json, '{}'), "
-                        "  '$.thinking_levels', json(?)) WHERE id = ?",
-                        (json.dumps(_levels), run_id),
-                    )
-                    _lvl_conn.commit()
-                finally:
-                    _lvl_conn.close()
+            _runtime = _model_runtime_snapshot(
+                model, statements_to_run, models, notes_to_run, notes_models,
+            )
+            _lvl_conn = _open_audit_conn()
+            try:
+                _lvl_conn.execute(
+                    "UPDATE runs SET run_config_json = json_set("
+                    "  COALESCE(run_config_json, '{}'), "
+                    "  '$.thinking_levels', json(?), "
+                    "  '$.model_runtime', json(?)) WHERE id = ?",
+                    (json.dumps(_levels), json.dumps(_runtime), run_id),
+                )
+                _lvl_conn.commit()
+            finally:
+                _lvl_conn.close()
         except Exception:  # noqa: BLE001 — telemetry, never fatal
-            logger.warning("Could not record the run's thinking levels",
+            logger.warning("Could not record the run's model runtime settings",
                            exc_info=True)
 
         notes_integrity_mode = _notes_integrity_mode()
@@ -5163,43 +5225,50 @@ async def run_multi_agent_stream(
                     ) for nt in sorted(notes_to_run, key=lambda n: n.value)
                 ])
 
-        # Generate merged result.json from per-statement files so the
-        # preview tab can fetch a single file in both single- and multi-agent modes.
-        # Uses a list (not dict) to preserve duplicate labels (e.g. "Lease liabilities"
-        # appearing in both current and non-current sections of SOFP).
-        merged_fields: list[dict] = []
+        # Data Preview is a projection of the canonical fact store. The old
+        # per-statement JSON files are completion markers and intentionally no
+        # longer carry field payloads, so merging them produced an empty tab.
+        # Always replace result.json — including with [] — so a reused output
+        # directory cannot leak a prior run's figures.
+        from concept_model.parser import _derive_template_id
+        from concept_model.preview import build_preview_fields, write_preview_result
+        from statement_types import (
+            FACTS_BEARING_AGENT_STATUSES,
+            template_path as _statement_template_path,
+        )
+
+        statements_by_template_id: dict[str, str] = {}
         for agent_result in coordinator_result.agent_results:
-            stmt_result_path = Path(output_dir) / f"{agent_result.statement_type.value}_result.json"
-            if stmt_result_path.exists():
-                try:
-                    stmt_data = json.loads(stmt_result_path.read_text(encoding="utf-8"))
-                    stmt_key = agent_result.statement_type.value
-                    raw_fields = (
-                        stmt_data.get("fields", [])
-                        if isinstance(stmt_data, dict) else []
-                    )
-                    for field in raw_fields:
-                        # Same defence as the audit-persist loop below: a
-                        # non-dict entry in `fields` (observed on SOCI/SOCIE)
-                        # would raise "'list' object has no attribute 'get'"
-                        # and the except drops the WHOLE statement from the
-                        # preview result.json. Skip the bad entry instead.
-                        if not isinstance(field, dict):
-                            continue
-                        merged_fields.append({
-                            "statement": stmt_key,
-                            "field_label": field.get("field_label", ""),
-                            "value": field.get("value"),
-                            "section": field.get("section"),
-                        })
-                except Exception:
-                    logger.warning("Failed to merge result for %s", agent_result.statement_type.value, exc_info=True)
-        if merged_fields:
-            merged_result_path = Path(output_dir) / "result.json"
-            merged_result_path.write_text(
-                json.dumps({"fields": merged_fields}, indent=2, ensure_ascii=False),
-                encoding="utf-8",
+            if agent_result.status not in FACTS_BEARING_AGENT_STATUSES:
+                continue
+            try:
+                master = _statement_template_path(
+                    agent_result.statement_type,
+                    agent_result.variant,
+                    level=config.filing_level,
+                    standard=config.filing_standard,
+                )
+            except (KeyError, TypeError, ValueError):
+                logger.warning(
+                    "Could not resolve preview template for %s/%s",
+                    agent_result.statement_type.value,
+                    agent_result.variant,
+                    exc_info=True,
+                )
+                continue
+            statements_by_template_id[_derive_template_id(master)] = (
+                agent_result.statement_type.value
             )
+        try:
+            canonical_preview_fields = build_preview_fields(
+                AUDIT_DB_PATH, run_id, statements_by_template_id,
+            )
+        except Exception:
+            logger.exception("Could not build canonical Data Preview for run %s", run_id)
+            canonical_preview_fields = []
+        write_preview_result(
+            Path(output_dir) / "result.json", canonical_preview_fields,
+        )
 
         # Build workbook paths from ALL *_filled.xlsx in the session directory.
         # This ensures reruns merge with previously successful workbooks.
@@ -5417,41 +5486,30 @@ async def run_multi_agent_stream(
                             agent_result.statement_type.value, exc_info=True,
                         )
 
-                    # Persist extracted fields from per-statement result.json
-                    result_json_path = Path(output_dir) / f"{agent_result.statement_type.value}_result.json"
-                    if result_json_path.exists():
-                        try:
-                            result_data = json.loads(result_json_path.read_text(encoding="utf-8"))
-                            raw_fields = (
-                                result_data.get("fields", [])
-                                if isinstance(result_data, dict) else []
+                    # Keep the inert historical extracted_fields table useful
+                    # for older History consumers, but source it from the same
+                    # canonical projection as Data Preview.
+                    try:
+                        for field in canonical_preview_fields:
+                            if field.get("statement") != agent_result.statement_type.value:
+                                continue
+                            repo.save_extracted_field(
+                                db_conn, run_agent_id,
+                                sheet=field.get("sheet", ""),
+                                field_label=field.get("field_label", ""),
+                                col=field.get("col_index", 2),
+                                value=field.get("value"),
+                                section=(
+                                    f"{field.get('entity_scope')} {field.get('period')}"
+                                ),
+                                row_num=field.get("row"),
+                                evidence=field.get("evidence"),
                             )
-                            for field in raw_fields:
-                                # Defensive: a malformed result.json can carry a
-                                # non-dict entry in `fields` (observed on
-                                # SOCI/SOCIE), which would raise "'list' object
-                                # has no attribute 'get'" and abort the WHOLE
-                                # per-agent persist loop. Skip the bad entry
-                                # instead of losing every field for the agent.
-                                if not isinstance(field, dict):
-                                    logger.warning(
-                                        "Skipping non-dict field entry in %s result.json",
-                                        agent_result.statement_type.value,
-                                    )
-                                    continue
-                                repo.save_extracted_field(
-                                    db_conn, run_agent_id,
-                                    sheet=field.get("sheet", ""),
-                                    field_label=field.get("field_label", ""),
-                                    col=field.get("col", 2),
-                                    value=field.get("value"),
-                                    section=field.get("section"),
-                                    row_num=field.get("row"),
-                                    evidence=field.get("evidence"),
-                                )
-                        except Exception as e:
-                            logger.warning("Failed to persist fields for %s: %s",
-                                           agent_result.statement_type.value, e)
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to persist canonical fields for %s: %s",
+                            agent_result.statement_type.value, e,
+                        )
 
                 # Finalize notes agent rows so History can show their status,
                 # workbook path, and model for this run. Mirrors the face
@@ -6432,6 +6490,45 @@ async def run_multi_agent_stream(
                 db_conn.commit()
             except Exception as e:
                 logger.warning("Failed to persist run data to audit DB: %s", e)
+
+        # The reviewer may have corrected canonical facts after the first
+        # projection above. Refresh both Data Preview and the historical
+        # extracted_fields mirror from the post-review state so the completed
+        # run never shows pre-correction values.
+        try:
+            canonical_preview_fields = build_preview_fields(
+                AUDIT_DB_PATH, run_id, statements_by_template_id,
+            )
+            write_preview_result(
+                Path(output_dir) / "result.json", canonical_preview_fields,
+            )
+            if db_conn is not None:
+                for statement_type, run_agent_id in run_agent_ids_by_stmt.items():
+                    db_conn.execute(
+                        "DELETE FROM extracted_fields WHERE run_agent_id = ?",
+                        (run_agent_id,),
+                    )
+                    for field in canonical_preview_fields:
+                        if field.get("statement") != statement_type.value:
+                            continue
+                        repo.save_extracted_field(
+                            db_conn,
+                            run_agent_id,
+                            sheet=field.get("sheet", ""),
+                            field_label=field.get("field_label", ""),
+                            col=field.get("col_index", 2),
+                            value=field.get("value"),
+                            section=(
+                                f"{field.get('entity_scope')} {field.get('period')}"
+                            ),
+                            row_num=field.get("row"),
+                            evidence=field.get("evidence"),
+                        )
+                db_conn.commit()
+        except Exception:
+            logger.exception(
+                "Could not refresh post-review Data Preview for run %s", run_id,
+            )
 
         # Compute the final run-level status — include merge outcome AND
         # cross-check results — and stamp it on the runs row.

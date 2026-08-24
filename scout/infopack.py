@@ -9,7 +9,9 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Annotated, Any, Literal, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from statement_types import StatementType
 from scout.notes_discoverer import NoteInventoryEntry
@@ -70,6 +72,37 @@ def _registered_variant_names(st: StatementType) -> set[str]:
 # for a note that doesn't exist. Save-time filtering tightens further to
 # max(inventory note_num) + 5 when the deterministic inventory exists.
 MAX_PLAUSIBLE_NOTE_NUM = 150
+
+PositivePage = Annotated[int, Field(ge=1)]
+
+
+class ScoutInfopackInput(BaseModel):
+    """Structured final argument for the scout's ``save_infopack`` tool.
+
+    Keeping this as a real tool schema means the model supplies one object;
+    it never has to encode that object as JSON text inside another tool call.
+    The existing dataclass remains the trusted internal/persistence boundary.
+    """
+
+    # This is the recovery boundary, not the durable domain model. Keep the
+    # outer shape useful to the model, but let the save implementation retain
+    # valid siblings when one nested item is malformed or has an extra key.
+    model_config = ConfigDict(extra="ignore")
+
+    toc_page: PositivePage = 1
+    page_offset: int = 0
+    entity_name: Optional[str] = None
+    reporting_period_cy: Optional[str] = None
+    reporting_period_py: Optional[str] = None
+    currency: str = "RM"
+    scale_unit: str = "unknown"
+    consolidation_level: str = "unknown"
+    # None means the scout omitted the advisory guess. The save layer then
+    # preserves the deterministic detector's value instead of serialising an
+    # input-model default of "unknown" over it.
+    detected_standard: Optional[str] = None
+    statements: dict[str, Any] = Field(default_factory=dict)
+    notes_inventory: list[Any] = Field(default_factory=list)
 
 
 @dataclass

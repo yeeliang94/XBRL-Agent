@@ -134,6 +134,7 @@ def _write_trace(
     output_dir: str,
     prefix: str,
     turns: list[dict] | None,
+    runtime_metadata: dict[str, Any] | None,
 ) -> None:
     """Serialize a message list (+ optional per-turn metrics) to the trace
     file. Text content is preserved verbatim (capped per cell); true binary
@@ -173,6 +174,8 @@ def _write_trace(
         ),
         "messages": dicts,
     }
+    if runtime_metadata is not None:
+        payload["runtime"] = runtime_metadata
     if turns is not None:
         # Strip the coordinator-internal `_n_tool_calls` helper key so the
         # trace carries only the user-meaningful per-turn metrics.
@@ -199,6 +202,7 @@ def save_agent_trace(
     output_dir: str,
     prefix: str,
     turns: list[dict] | None = None,
+    runtime_metadata: dict[str, Any] | None = None,
 ) -> None:
     """Dump a finished agent's `all_messages()` to
     `{output_dir}/{prefix}_conversation_trace.json`.
@@ -209,7 +213,9 @@ def save_agent_trace(
     trace-save failures never mask the underlying run result.
     """
     try:
-        _write_trace(result.all_messages(), output_dir, prefix, turns)
+        _write_trace(
+            result.all_messages(), output_dir, prefix, turns, runtime_metadata
+        )
     except Exception as e:
         logger.warning("Failed to save trace for %s: %s", prefix, e)
 
@@ -219,6 +225,7 @@ def save_messages_trace(
     output_dir: str,
     prefix: str,
     turns: list[dict] | None = None,
+    runtime_metadata: dict[str, Any] | None = None,
 ) -> None:
     """Dump a PARTIAL run's accumulated message history to the trace file.
 
@@ -229,6 +236,6 @@ def save_messages_trace(
     (peer-review [1]). Best-effort, same as `save_agent_trace`.
     """
     try:
-        _write_trace(messages, output_dir, prefix, turns)
+        _write_trace(messages, output_dir, prefix, turns, runtime_metadata)
     except Exception as e:
         logger.warning("Failed to save partial trace for %s: %s", prefix, e)

@@ -40,10 +40,35 @@ from __future__ import annotations
 import logging
 import os
 from typing import Any
+from urllib.parse import urlsplit
 
 from pydantic_ai.settings import ModelSettings
 
 logger = logging.getLogger(__name__)
+_ROLE_LEVEL_WARNED: set[str] = set()
+
+
+def configured_role_thinking_level(
+    role: str, *, default: str | None = None
+) -> str | None:
+    """Return the operator's role setting, with a bounded-stage default.
+
+    Helper agents use this instead of silently falling back to the provider's
+    default. The lazy import avoids a module cycle because ``server`` imports
+    this settings module during startup.
+    """
+    try:
+        import server
+
+        return server.thinking_level_for(role) or default
+    except Exception:  # noqa: BLE001 — settings lookup must not fail a run
+        if role not in _ROLE_LEVEL_WARNED:
+            _ROLE_LEVEL_WARNED.add(role)
+            logger.warning(
+                "Could not resolve thinking level for helper role %r; using "
+                "default %r.", role, default, exc_info=True,
+            )
+        return default
 
 # Pinned temperature (Gemini-3-through-proxy requires 1.0; see module docstring
 # and CLAUDE.md "Temperature Constraint"). Also the safe default for OpenAI
@@ -148,8 +173,9 @@ def _resolved_provider(model: Any) -> str:
 # is the default, and it keeps this inert until somebody picks a level.
 # ---------------------------------------------------------------------------
 
-# Deliberately a subset of pydantic-ai's vocabulary: `xhigh` is omitted because
-# it is not supported across all three providers we route to.
+# Portable levels exposed for models that do not advertise a wider vocabulary.
+# GPT-5.6 has its own model-specific tuple below so `xhigh` and `max` remain
+# available without leaking unsupported values to other providers.
 #
 # `none` was added 2026-08-01 (peer review). It is not a pydantic-ai thinking
 # level — it is the OpenAI reasoning-effort value that GPT-5.6 requires when
@@ -158,6 +184,13 @@ def _resolved_provider(model: Any) -> str:
 # on GPT-5.6 is `medium`. It is translated per provider in
 # `build_model_settings`; it never reaches Anthropic or Google as a literal.
 THINKING_LEVELS = ("none", "minimal", "low", "medium", "high")
+GPT_56_THINKING_LEVELS = ("none", "low", "medium", "high", "xhigh", "max")
+ALL_THINKING_LEVELS = tuple(dict.fromkeys(
+    (*THINKING_LEVELS, *GPT_56_THINKING_LEVELS)
+))
+_ALL_THINKING_LEVELS = frozenset(
+    ALL_THINKING_LEVELS
+)
 
 # GPT-5.6 dropped `minimal` from its reasoning-effort vocabulary and added
 # `none`/`xhigh`/`max`. Sending `minimal` to a 5.6-family model is a value the
@@ -173,9 +206,8 @@ def _is_gpt_56_plus(model_name: str) -> bool:
 def supported_thinking_levels(model_name: str) -> tuple[str, ...]:
     """The levels THIS model actually accepts.
 
-    `minimal` is the only divergence today: GPT-5.6 lists `none`, `low`,
-    `medium`, `high`, `xhigh` and `max`, and dropped `minimal`. Every other
-    model we route to accepts the full set — `none` is universally
+    GPT-5.6 lists `none`, `low`, `medium`, `high`, `xhigh` and `max`, and
+    dropped `minimal`. Other models use the portable set — `none` is universally
     expressible (OpenAI takes it as a literal, Anthropic and Google as
     `thinking=False`).
 
@@ -183,7 +215,7 @@ def supported_thinking_levels(model_name: str) -> tuple[str, ...]:
     selected model will not honour.
     """
     if _is_gpt_56_plus(model_name):
-        return tuple(lvl for lvl in THINKING_LEVELS if lvl != "minimal")
+        return GPT_56_THINKING_LEVELS
     return THINKING_LEVELS
 
 
@@ -192,7 +224,7 @@ def supported_thinking_levels(model_name: str) -> tuple[str, ...]:
 # which is `low` on a model without `minimal` — NOT `none`, which means no
 # reasoning at all. Folding it to `none` inverted the operator's choice and
 # silently disabled reasoning (peer review, 2026-08-02).
-_LEVEL_FALLBACK = {"minimal": "low"}
+_LEVEL_FALLBACK = {"minimal": "low", "xhigh": "high", "max": "high"}
 
 
 def _openai_reasoning_effort(model_name: str, level: str) -> str:
@@ -292,7 +324,7 @@ def normalize_thinking_level(value: Any) -> str | None:
     if not value:
         return None
     level = str(value).strip().lower()
-    return level if level in THINKING_LEVELS else None
+    return level if level in _ALL_THINKING_LEVELS else None
 
 
 def build_model_settings(
@@ -317,6 +349,9 @@ def build_model_settings(
         temperature = _default_temperature(model)
     type_name = type(model).__name__
     level = normalize_thinking_level(thinking_level)
+    model_name = getattr(model, "model_name", "") or ""
+    if level and level not in supported_thinking_levels(model_name):
+        level = _openai_reasoning_effort(model_name, level)
 
     if type_name == "AnthropicModel":
         # Direct Anthropic. Cache the two stable blocks; the default 5m TTL
@@ -343,12 +378,6 @@ def build_model_settings(
         if _resolved_provider(model) == "openai":
             from pydantic_ai.models.openai import OpenAIChatModelSettings
 
-            model_name = getattr(model, "model_name", "") or ""
-            settings: dict[str, Any] = {"temperature": temperature}
-            settings.update(_openai_cache_settings(model_name))
-            if cache_key:
-                settings["openai_prompt_cache_key"] = cache_key
-
             effort = _openai_reasoning_effort(model_name, level) if level else None
             # GPT-5.6: "function tools in Chat Completions are compatible only
             # with effective reasoning `none`" (OpenAI migration guide). Every
@@ -366,6 +395,15 @@ def build_model_settings(
                         "to use reasoning with tools.", model_name, effort,
                     )
                 effort = "none"
+            settings: dict[str, Any] = {}
+            # OpenAI reasoning requests do not accept sampling parameters.
+            # PydanticAI used to warn and silently discard this value; omit it
+            # so traces and wire settings describe what the provider uses.
+            if effort in (None, "none"):
+                settings["temperature"] = temperature
+            settings.update(_openai_cache_settings(model_name))
+            if cache_key:
+                settings["openai_prompt_cache_key"] = cache_key
             if effort:
                 settings["openai_reasoning_effort"] = effort
             return OpenAIChatModelSettings(**settings)
@@ -392,3 +430,86 @@ def build_model_settings(
     # Bare string / unknown — implicit caching only, and no level to attach to
     # a model we cannot classify.
     return ModelSettings(temperature=temperature)
+
+
+def describe_model_runtime(
+    model: Any, *, role: str | None = None,
+) -> dict[str, Any]:
+    """Describe runtime settings without exposing secrets or breaking a run.
+
+    This feeds best-effort traces. Provider objects are third-party values and
+    even their string conversion can raise, so the entire descriptor is under
+    the no-throw boundary rather than only ``build_model_settings``.
+    """
+    try:
+        model_name = getattr(model, "model_name", None) or str(model)
+        transport_class = type(model).__name__
+        transport = {
+            "OpenAIResponsesModel": "responses",
+            "OpenAIChatModel": "chat_completions",
+            "OpenAIModel": "chat_completions",
+            "AnthropicModel": "anthropic_native",
+            "GoogleModel": "google_native",
+        }.get(transport_class, "automatic_or_unknown")
+        configured = (
+            configured_role_thinking_level(role) if role is not None else None
+        )
+        settings = build_model_settings(model, thinking_level=configured)
+        if "openai_reasoning_effort" in settings:
+            effective: Any = settings["openai_reasoning_effort"]
+        elif "thinking" in settings:
+            effective = "none" if settings["thinking"] is False else settings["thinking"]
+        else:
+            effective = "provider_default"
+        cache = {
+            key: settings[key]
+            for key in (
+                "openai_prompt_cache_retention",
+                "openai_prompt_cache_key",
+                "extra_body",
+                "anthropic_cache_instructions",
+                "anthropic_cache_tool_definitions",
+            )
+            if key in settings
+        }
+        endpoint = ""
+        provider = (
+            getattr(model, "provider", None)
+            or getattr(model, "_provider", None)
+        )
+        raw_url = str(getattr(provider, "base_url", "") or "")
+        if raw_url:
+            parsed = urlsplit(raw_url)
+            endpoint = f"{parsed.scheme}://{parsed.hostname or ''}"
+            if parsed.port:
+                endpoint += f":{parsed.port}"
+            endpoint += parsed.path.rstrip("/")
+
+        return {
+            "model": model_name,
+            "provider": _resolved_provider(model),
+            "transport": transport,
+            "transport_class": transport_class,
+            "endpoint": endpoint or "provider_default",
+            "role": role,
+            "configured_reasoning_effort": configured,
+            "effective_reasoning_effort": effective,
+            "cache_settings": cache,
+        }
+    except Exception:  # noqa: BLE001 — trace metadata must never break a run
+        logger.warning("Could not describe model runtime for trace", exc_info=True)
+        try:
+            model_name = str(getattr(model, "model_name", "unknown"))
+        except Exception:  # noqa: BLE001 — even __str__ may be hostile
+            model_name = "unknown"
+        return {
+            "model": model_name,
+            "provider": "unknown",
+            "transport": "automatic_or_unknown",
+            "transport_class": type(model).__name__,
+            "endpoint": "unknown",
+            "role": role,
+            "configured_reasoning_effort": None,
+            "effective_reasoning_effort": "unknown",
+            "cache_settings": {},
+        }

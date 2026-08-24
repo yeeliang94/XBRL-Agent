@@ -32,6 +32,7 @@ import pytest
 from model_settings import (
     THINKING_LEVELS,
     build_model_settings,
+    describe_model_runtime,
     normalize_thinking_level,
     use_responses_api,
 )
@@ -96,6 +97,8 @@ def test_supported_levels_are_model_aware():
     from model_settings import supported_thinking_levels
 
     assert "minimal" not in supported_thinking_levels("openai.global.gpt-5.6")
+    assert "xhigh" in supported_thinking_levels("openai.global.gpt-5.6")
+    assert "max" in supported_thinking_levels("openai.global.gpt-5.6")
     assert "minimal" in supported_thinking_levels("openai.gpt-5.4")
     assert "minimal" in supported_thinking_levels("vertex_ai.gemini-3.6-flash")
     # `none` is expressible everywhere — literal on OpenAI, `thinking=False`
@@ -115,7 +118,26 @@ def test_the_picker_is_narrowed_per_model():
     for model_id, levels in by_model.items():
         if "gpt-5.6" in model_id:
             assert "minimal" not in levels, model_id
+            assert "xhigh" in levels, model_id
+            assert "max" in levels, model_id
         assert "none" in levels, model_id
+
+
+def test_runtime_description_is_best_effort_for_hostile_provider_metadata():
+    """Trace metadata can never suppress the trace or fail an agent run."""
+    from model_settings import describe_model_runtime
+
+    class HostileUrl:
+        def __str__(self):
+            raise RuntimeError("unprintable URL")
+
+    model = _FakeChat("gpt-5.6")
+    model.provider = type("Provider", (), {"base_url": HostileUrl()})()
+
+    description = describe_model_runtime(model, role="SOFP")
+
+    assert description["model"] == "gpt-5.6"
+    assert description["endpoint"] in {"provider_default", "unknown"}
 
 
 def test_minimal_survives_on_older_openai_models():
@@ -148,6 +170,56 @@ def test_gpt56_on_responses_keeps_the_operator_choice(level):
     pin must NOT apply there — otherwise the migration buys nothing."""
     s = build_model_settings(_FakeResponses("gpt-5.6"), thinking_level=level)
     assert s.get("openai_reasoning_effort") == level
+    assert "temperature" not in s
+
+
+def test_chat_reasoning_none_keeps_supported_temperature():
+    s = build_model_settings(_FakeChat("gpt-5.6"), thinking_level="medium")
+    assert s["openai_reasoning_effort"] == "none"
+    assert s["temperature"] == 1.0
+
+
+@pytest.mark.parametrize("level", ["xhigh", "max"])
+def test_gpt56_responses_exposes_extended_effort_levels(level):
+    assert normalize_thinking_level(level) == level
+    settings = build_model_settings(
+        _FakeResponses("gpt-5.6-luna"), thinking_level=level
+    )
+    assert settings.get("openai_reasoning_effort") == level
+
+
+def test_runtime_description_distinguishes_responses_from_chat(monkeypatch):
+    import json
+
+    monkeypatch.setenv("XBRL_THINKING_LEVELS", json.dumps({"SOFP": "medium"}))
+    responses = describe_model_runtime(_FakeResponses("gpt-5.6-luna"), role="SOFP")
+    chat = describe_model_runtime(_FakeChat("gpt-5.6-luna"), role="SOFP")
+
+    assert responses["transport"] == "responses"
+    assert responses["effective_reasoning_effort"] == "medium"
+    assert chat["transport"] == "chat_completions"
+    assert chat["configured_reasoning_effort"] == "medium"
+    assert chat["effective_reasoning_effort"] == "none"
+
+
+def test_run_runtime_snapshot_records_each_planned_role(monkeypatch):
+    import json
+    import server
+    from notes_types import NotesTemplateType
+    from statement_types import StatementType
+
+    monkeypatch.setenv("XBRL_THINKING_LEVELS", json.dumps({"SOFP": "high"}))
+    default = _FakeResponses("gpt-5.6-luna")
+    snapshot = server._model_runtime_snapshot(
+        default,
+        {StatementType.SOFP},
+        {},
+        {NotesTemplateType.CORP_INFO},
+        {},
+    )
+    assert set(snapshot) == {"default", "SOFP", "notes:CORP_INFO"}
+    assert snapshot["SOFP"]["transport"] == "responses"
+    assert snapshot["SOFP"]["effective_reasoning_effort"] == "high"
 
 
 def test_older_models_are_untouched_on_chat_completions():

@@ -26,7 +26,7 @@ import { ClipboardFormatControls } from "./ClipboardFormatControls";
 // ---------------------------------------------------------------------------
 
 interface Props {
-  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; spot_check?: boolean; spot_check_mode?: string; entity_memory?: boolean; pdf_sidecar?: boolean; notes_source_integrity?: SourceIntegrityMode; notes_source_integrity_choices?: string[]; thinking_levels?: Record<string, string>; thinking_level_choices?: string[]; thinking_level_choices_by_model?: Record<string, string[]>; notes_table_style?: Partial<ClipboardFormatOptions>; available_models?: ModelEntry[] }>;
+  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; spot_check?: boolean; spot_check_mode?: string; entity_memory?: boolean; pdf_sidecar?: boolean; notes_source_integrity?: SourceIntegrityMode; notes_source_integrity_choices?: string[]; default_models?: Record<string, string>; thinking_levels?: Record<string, string>; thinking_level_choices?: string[]; thinking_level_choices_by_model?: Record<string, string[]>; notes_table_style?: Partial<ClipboardFormatOptions>; available_models?: ModelEntry[] }>;
   saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; auto_review: boolean; spot_check: boolean; spot_check_mode: "light" | "full"; entity_memory: boolean; pdf_sidecar: boolean; notes_source_integrity: SourceIntegrityMode; thinking_levels: Record<string, string>; notes_table_style: ClipboardFormatOptions }>) => Promise<{ status: string }>;
   testConnection: (body: Partial<{ proxy_url: string; api_key: string; model: string }>) => Promise<{ status: string; model?: string; latency_ms?: number; message?: string }>;
   // When provided, a Cancel button is shown (used by the modal wrapper). The
@@ -304,6 +304,8 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
   // every agent did before this setting existed.
   const [thinkingLevels, setThinkingLevels] =
     useState<Record<string, string>>({});
+  const [defaultModels, setDefaultModels] =
+    useState<Record<string, string>>({});
   const [levelChoices, setLevelChoices] = useState<string[]>([]);
   // Per-model vocabulary. GPT-5.6 dropped `minimal`, so offering it there
   // means the operator picks a level the run then substitutes — the picker
@@ -368,6 +370,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         setSpotCheck(s.spot_check !== false);
         setSpotCheckMode(s.spot_check_mode === "full" ? "full" : "light");
         setThinkingLevels(s.thinking_levels || {});
+        setDefaultModels(s.default_models || {});
         setLevelChoices(s.thinking_level_choices || []);
         setLevelChoicesByModel(s.thinking_level_choices_by_model || {});
         setEntityMemory(s.entity_memory !== false);
@@ -827,8 +830,14 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
           behaviour. Higher levels cost more and take longer — thinking is
           billed at the output rate.
         </p>
-        {THINKING_ROLES.map(({ key, label, hint }) => (
-          <div key={key} style={styles.thinkingRow}>
+        {THINKING_ROLES.map(({ key, label, hint }) => {
+          const roleModel = defaultModels[key] || model;
+          const choices = levelChoicesByModel[roleModel] || levelChoices;
+          const selected = thinkingLevels[key] || "";
+          const renderedChoices = selected && !choices.includes(selected)
+            ? [selected, ...choices]
+            : choices;
+          return <div key={key} style={styles.thinkingRow}>
             <span style={styles.thinkingRoleLabel}>
               {label}
               <span style={styles.thinkingHint}>{hint}</span>
@@ -836,7 +845,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
             <select
               id={`thinking-${key}`}
               aria-label={`Thinking level for ${label}`}
-              value={thinkingLevels[key] || ""}
+              value={selected}
               disabled={readOnly}
               onChange={(e) => {
                 const next = { ...thinkingLevels };
@@ -848,14 +857,14 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
               style={{ ...ui.select, width: 190 }}
             >
               <option value="">Provider default</option>
-              {(levelChoicesByModel[model] || levelChoices).map((lvl) => (
+              {renderedChoices.map((lvl) => (
                 <option key={lvl} value={lvl}>
                   {lvl.charAt(0).toUpperCase() + lvl.slice(1)}
                 </option>
               ))}
             </select>
           </div>
-        ))}
+        })}
       </div>
 
       <SettingsSectionHeading

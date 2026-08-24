@@ -232,7 +232,7 @@ class CoverageReceipt:
 
     @classmethod
     def from_json(cls, raw: str) -> "CoverageReceipt":
-        """Parse a JSON-encoded receipt from the model output.
+        """Parse a JSON-encoded receipt from a persisted/legacy representation.
 
         The expected shape is a top-level list of entry objects —
         keeping the root a list rather than an envelope dict avoids
@@ -265,3 +265,43 @@ class CoverageReceipt:
     def to_dict(self) -> dict[str, Any]:
         """JSON-serialisable snapshot for side-log persistence."""
         return {"entries": [e.to_dict() for e in self.entries]}
+
+
+def parse_coverage_entries(raw: Any) -> tuple[CoverageReceipt, list[str]]:
+    """Parse model-authored coverage without framework-level rejection."""
+    if not isinstance(raw, list):
+        return CoverageReceipt(), [
+            f"entries must be a list of objects (got {type(raw).__name__})"
+        ]
+    entries: list[CoverageEntry] = []
+    errors: list[str] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            errors.append(f"entry {index} is not an object")
+            continue
+        try:
+            note_num = item["note_num"]
+            action = item["action"]
+            if isinstance(note_num, bool) or not isinstance(note_num, int):
+                raise ValueError("note_num must be an integer")
+            if note_num <= 0:
+                raise ValueError("note_num must be greater than zero")
+            if not isinstance(action, str):
+                raise ValueError("action must be a string")
+            row_labels = item.get("row_labels", [])
+            if not isinstance(row_labels, list) or not all(
+                isinstance(label, str) for label in row_labels
+            ):
+                raise ValueError("row_labels must be a list of strings")
+            reason = item.get("reason", "")
+            if not isinstance(reason, str):
+                raise ValueError("reason must be a string")
+            entries.append(CoverageEntry(
+                note_num=note_num,
+                action=action,
+                row_labels=list(row_labels),
+                reason=reason,
+            ))
+        except (KeyError, TypeError, ValueError) as exc:
+            errors.append(f"entry {index}: {exc}")
+    return CoverageReceipt(entries=entries), errors

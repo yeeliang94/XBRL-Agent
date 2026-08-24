@@ -21,7 +21,9 @@ import pytest
 
 from notes.agent import render_notes_prompt
 from notes_types import NotesTemplateType
+from prompts import render_prompt
 from scout.notes_discoverer import NoteInventoryEntry
+from statement_types import StatementType
 
 
 _PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompts"
@@ -186,14 +188,24 @@ def test_sopl_prompt_is_coarse_not_template_first():
     )
 
 
-def test_base_prompt_requires_following_linked_notes_before_lumping():
-    """Shared face-statement prompt must force the accountant workflow:
+def test_detail_prompt_requires_following_linked_notes_before_lumping():
+    """Detailed face-statement prompt must force the accountant workflow:
     face line -> linked note -> template-specific component rows."""
-    body = (_PROMPT_DIR / "_base.md").read_text(encoding="utf-8")
+    body = (_PROMPT_DIR / "_detail_extraction.md").read_text(encoding="utf-8")
     flat = _flatten(body)
     assert "accountant extraction procedure" in flat
     assert "before writing any face-statement line that has a note reference" in flat
     assert "only write a lump-sum face value" in flat
+
+
+def test_sopl_render_excludes_conflicting_detail_procedure():
+    prompt = render_prompt(StatementType.SOPL, "Function")
+    assert "accountant extraction procedure" not in _flatten(prompt)
+
+
+def test_sofp_render_includes_detail_procedure():
+    prompt = render_prompt(StatementType.SOFP, "CuNonCu")
+    assert "accountant extraction procedure" in _flatten(prompt)
 
 
 def test_sofp_prompt_has_linked_note_split_example():

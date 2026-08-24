@@ -112,7 +112,7 @@ def _make_scout_model(infopack_data: dict):
             return ModelResponse(parts=[
                 ToolCallPart(
                     tool_name="save_infopack",
-                    args={"infopack_json": json.dumps(infopack_data)},
+                    args=infopack_data,
                     tool_call_id="tc2",
                 ),
             ])

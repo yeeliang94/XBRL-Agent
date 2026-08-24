@@ -13,6 +13,7 @@ from extraction.coverage import (
     FaceCoverageEntry,
     face_coverage_warnings,
     expected_ref_label,
+    parse_face_coverage_entries,
 )
 
 
@@ -28,12 +29,23 @@ _REFS = [
 # --------------------------------------------------------------------------
 
 def test_receipt_parses_written_and_skipped():
-    receipt = FaceCoverageReceipt.from_json(
-        '[{"ref": "Trade receivables", "action": "written"},'
-        ' {"ref": "Other investments", "action": "skipped",'
-        '  "reason": "not on the face statement"}]'
-    )
+    receipt, errors = parse_face_coverage_entries([
+        {"ref": "Trade receivables", "action": "written"},
+        {"ref": "Other investments", "action": "skipped",
+         "reason": "not on the face statement"},
+    ])
+    assert errors == []
     assert {e.ref for e in receipt.entries} == {"Trade receivables", "Other investments"}
+
+
+def test_malformed_receipt_entry_is_reported_without_rejecting_valid_sibling():
+    receipt, errors = parse_face_coverage_entries([
+        {"ref": "Trade receivables", "action": "written"},
+        {"ref": "Other investments", "action": "skipped"},
+    ])
+    assert [entry.ref for entry in receipt.entries] == ["Trade receivables"]
+    assert len(errors) == 1
+    assert "reason" in errors[0].lower()
 
 
 def test_skipped_entry_requires_reason():
@@ -47,18 +59,20 @@ def test_unknown_action_rejected():
 
 
 def test_validate_flags_unknown_ref():
-    receipt = FaceCoverageReceipt.from_json(
-        '[{"ref": "Goodwill on the moon", "action": "written"}]'
-    )
+    receipt, errors = parse_face_coverage_entries([
+        {"ref": "Goodwill on the moon", "action": "written"},
+    ])
+    assert errors == []
     errors = receipt.validate(_REFS)
     assert len(errors) == 1 and "not one of the scout-observed" in errors[0]
 
 
 def test_validate_label_match_is_normalised():
     # '*Trade Receivables ' must match the scout's 'Trade receivables'.
-    receipt = FaceCoverageReceipt.from_json(
-        '[{"ref": "*Trade Receivables ", "action": "written"}]'
-    )
+    receipt, errors = parse_face_coverage_entries([
+        {"ref": "*Trade Receivables ", "action": "written"},
+    ])
+    assert errors == []
     assert receipt.validate(_REFS) == []
 
 
@@ -115,9 +129,10 @@ def test_expected_ref_label_formats_note():
     "*Trade Receivables (note 18)",    # decoration + the older loose forms
 ])
 def test_decorated_refs_match_the_bare_label(ref):
-    receipt = FaceCoverageReceipt.from_json(
-        f'[{{"ref": "{ref}", "action": "written"}}]'
-    )
+    receipt, errors = parse_face_coverage_entries([
+        {"ref": ref, "action": "written"},
+    ])
+    assert errors == []
     assert receipt.validate(_REFS) == []
     warns = face_coverage_warnings(_REFS, receipt)
     assert not any("Trade receivables" in w for w in warns)
@@ -177,6 +192,11 @@ def test_tool_registered_only_when_refs_present():
     agent, deps = _make_agent({"face_line_refs": _REFS})
     assert "submit_face_coverage" in _tool_names(agent)
     assert deps.face_line_refs == _REFS
+    schema = agent._function_toolset.tools[
+        "submit_face_coverage"
+    ].function_schema.json_schema
+    assert "propertyNames" not in str(schema)
+    assert "receipt_json" not in str(schema)
 
 
 def test_tool_absent_without_refs():
