@@ -144,13 +144,15 @@ describe("monochrome status language", () => {
     expect(STATUS_SYMBOLS.failure).toBe("×");
     expect(STATUS_SYMBOLS.inactive).toBe("–");
     expect(STATUS_SYMBOLS.derived).toBe("◇");
-    // …and every family RENDERS as a named Phosphor icon that the spec's
-    // Status section documents by that name (one icon family, one weight).
+    // …and every family RENDERS as a named SVG icon that the spec's Status
+    // section documents by that name (one icon family, one weight).
     expect(Object.keys(STATUS_ICON_NAMES).sort()).toEqual(Object.keys(STATUS_SYMBOLS).sort());
     for (const name of Object.values(STATUS_ICON_NAMES)) {
       expect(designSystem).toContain(`data-status-icon="${name}"`);
     }
-    expect(designSystem).toContain("@phosphor-icons/react");
+    // The icon paths are vendored in the app, not pulled from an npm package —
+    // the registry is unreachable from the enterprise Windows box.
+    expect(designSystem).toContain("iconGlyphs.tsx");
   });
 
   test("the status primitive is neutral — no coloured dot, border, or fill", () => {

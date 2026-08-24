@@ -344,8 +344,9 @@
 </style>
 </head>
 <body>
-<!-- Status icon sprite: the six monochrome status families, drawn with the bold-weight
-     paths from @phosphor-icons/react (the app renders the same icons via components/StatusIcon.tsx). -->
+<!-- Status icon sprite: the six monochrome status families, drawn with the same
+     bold-weight paths the app vendors in web/src/components/iconGlyphs.tsx
+     (Phosphor Icons 2.1.10, MIT) and renders via components/StatusIcon.tsx. -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <symbol id="ico-in-progress" viewBox="0 0 256 256"><path d="M128,20A108,108,0,1,0,236,128,108.12,108.12,0,0,0,128,20Zm0,192a84,84,0,1,1,84-84A84.09,84.09,0,0,1,128,212Z"/></symbol>
   <symbol id="ico-success" viewBox="0 0 256 256"><path d="M232.49,80.49l-128,128a12,12,0,0,1-17,0l-56-56a12,12,0,1,1,17-17L96,183,215.51,63.51a12,12,0,0,1,17,17Z"/></symbol>
@@ -758,7 +759,7 @@
       <div class="section-head">
         <div class="rule"></div>
         <h2>Status</h2>
-        <p>Routine status uses a neutral icon plus explicit text. Shape improves scanning, text carries the meaning, and no status hue competes with financial data or the primary action. The six families are keyed in code by a text symbol (<code class="inline">STATUS_SYMBOLS</code>: ○ ✓ ! × – ◇) and drawn on screen by <code class="inline">StatusIcon</code> as one icon family at one stroke weight (<code class="inline">@phosphor-icons/react</code>, bold) — never as font glyphs, which Windows renders from a different fallback face at mismatched sizes.</p>
+        <p>Routine status uses a neutral icon plus explicit text. Shape improves scanning, text carries the meaning, and no status hue competes with financial data or the primary action. The six families are keyed in code by a text symbol (<code class="inline">STATUS_SYMBOLS</code>: ○ ✓ ! × – ◇) and drawn on screen by <code class="inline">StatusIcon</code> as one icon family at one stroke weight (bold-weight SVG paths vendored in <code class="inline">web/src/components/iconGlyphs.tsx</code>) — never as font glyphs, which Windows renders from a different fallback face at mismatched sizes.</p>
       </div>
       <div class="panel">
         <div class="status-preview">
@@ -1017,7 +1018,7 @@
             <tr><td>Hover / focus / disabled / scrollbar rules</td><td><code class="inline">:hover</code> / <code class="inline">:focus</code> CSS</td><td><code>web/src/index.css</code> + <code>uiClass.*</code> hooks</td></tr>
             <tr><td>Top navigation shell</td><td>Tabs &amp; navigation section</td><td><code>web/src/components/TopNav.tsx</code></td></tr>
             <tr><td>Page header</td><td>page header chrome</td><td><code>web/src/components/PageHeader.tsx</code></td></tr>
-            <tr><td>Icons (status families, close / re-run / settings)</td><td>Status section</td><td><code>web/src/components/StatusIcon.tsx</code> + <code>web/src/components/icons.tsx</code> — one family, <code>@phosphor-icons/react</code> bold weight</td></tr>
+            <tr><td>Icons (status families, close / re-run / settings)</td><td>Status section</td><td><code>web/src/components/StatusIcon.tsx</code> + <code>web/src/components/icons.tsx</code> — one family, bold weight, paths vendored in <code>web/src/components/iconGlyphs.tsx</code></td></tr>
             <tr><td>Notes-table theme (separate, run-configurable)</td><td>n/a (own subsystem)</td><td><code>web/src/components/NotesReviewTab.css</code> + clipboard/theme tokens (gotcha #16)</td></tr>
           </tbody>
         </table>
