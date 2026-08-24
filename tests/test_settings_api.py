@@ -1,4 +1,6 @@
 """Cycle 4: Settings API — GET/POST /api/settings."""
+import pytest
+
 import server
 from fastapi.testclient import TestClient
 from server import app
@@ -380,7 +382,7 @@ def test_settings_exposes_thinking_levels_and_its_choices(tmp_path, monkeypatch)
     # effective reasoning `none`, and omitting the field selects `medium`
     # instead — so "off" has to be selectable (peer review, 2026-08-01).
     assert body["thinking_level_choices"] == [
-        "none", "minimal", "low", "medium", "high",
+        "none", "minimal", "low", "medium", "high", "xhigh", "max",
     ]
 
 
@@ -389,6 +391,38 @@ def test_a_level_can_be_saved_and_read_back(tmp_path, monkeypatch):
     r = client.post("/api/settings", json={"thinking_levels": {"SOFP": "high"}})
     assert r.status_code == 200
     assert '"SOFP": "high"' in env_file.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("level", ["xhigh", "max"])
+def test_gpt56_levels_can_be_saved(tmp_path, monkeypatch, level):
+    """The API accepts every level it advertises for a GPT-5.6 role."""
+    env_file = _env(tmp_path, monkeypatch)
+    r = client.post(
+        "/api/settings", json={"thinking_levels": {"SOFP": level}},
+    )
+    assert r.status_code == 200, r.json()
+    assert f'"SOFP": "{level}"' in env_file.read_text(encoding="utf-8")
+
+
+def test_invalid_thinking_level_does_not_partially_save_model(
+    tmp_path, monkeypatch,
+):
+    """Validate the whole request before mutating the shared env file."""
+    env_file = _env(tmp_path, monkeypatch)
+    env_file.write_text("TEST_MODEL=openai.gpt-5.4\n", encoding="utf-8")
+
+    r = client.post(
+        "/api/settings",
+        json={
+            "model": "openai.gpt-5.6",
+            "thinking_levels": {"SOFP": "extreme"},
+        },
+    )
+
+    assert r.status_code == 400
+    written = env_file.read_text(encoding="utf-8")
+    assert "TEST_MODEL=openai.gpt-5.4" in written
+    assert "openai.gpt-5.6" not in written
 
 
 def test_clearing_a_role_returns_it_to_the_provider_default(tmp_path, monkeypatch):

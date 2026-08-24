@@ -78,11 +78,11 @@ def _seed_inv(db_path, run_id, note_num, subs=None):
                                     subnote_refs=subs, page_lo=30, page_hi=31)
 
 
-def _seed_placed(db_path, run_id, row, refs):
+def _seed_placed(db_path, run_id, row, refs, sheet=_S12):
     with repo.db_session(db_path) as conn:
-        repo.upsert_notes_cell(conn, run_id=run_id, sheet=_S12, row=row,
+        repo.upsert_notes_cell(conn, run_id=run_id, sheet=sheet, row=row,
                                label=f"Row {row}", html="<p>x</p>")
-        repo.upsert_notes_provenance(conn, run_id=run_id, sheet=_S12, row=row,
+        repo.upsert_notes_provenance(conn, run_id=run_id, sheet=sheet, row=row,
                                      row_label=f"Row {row}", source_note_refs=refs)
 
 
@@ -172,9 +172,9 @@ def test_empty_inventory_is_loud_and_tips(db_path, tmp_path):
                for e in events)
 
 
-def test_skip_receipt_note_is_skipped_not_missing(db_path, tmp_path):
-    """A Sheet-12-skipped inventory note (notes12_skips.json side-log) lands
-    `skipped`, not `missing`, so it never tips the run (Codex review P2)."""
+def test_unproven_skip_receipt_is_missing_and_tips(db_path, tmp_path):
+    """A Sheet-12 skip receipt is only a claim. Without destination-sheet
+    provenance the note remains missing and must tip the run."""
     import json
     with repo.db_session(db_path) as conn:
         run_id = repo.create_run(conn, "x.pdf", session_id="s",
@@ -188,12 +188,37 @@ def test_skip_receipt_note_is_skipped_not_missing(db_path, tmp_path):
     outcome = _run_pass(db_path, run_id, tmp_path,
                         _scripted([[TextPart("done")]]), q)
     cov = outcome["coverage"]
+    assert cov["unresolved"] == 1
+    from server import _notes_coverage_tips_status
+    assert _notes_coverage_tips_status(cov) is True
+    row = [r for r in _coverage_rows(db_path, run_id) if r["note_num"] == 4]
+    assert row and row[0]["status"] == "missing"
+    assert "belongs on Sheet 10" in row[0]["reason"]
+    assert "no destination placement" in row[0]["reason"].lower()
+
+
+def test_skip_receipt_with_destination_placement_does_not_tip(db_path, tmp_path):
+    import json
+    with repo.db_session(db_path) as conn:
+        run_id = repo.create_run(conn, "x.pdf", session_id="s",
+                                 output_dir=str(tmp_path))
+    _seed_inv(db_path, run_id, 9)
+    _seed_placed(
+        db_path, run_id, 12, ["9"], sheet="Notes-RelatedPartytran",
+    )
+    (tmp_path / "notes12_skips.json").write_text(
+        json.dumps([{"note_num": 9, "reason": "belongs on Related Party"}]),
+        encoding="utf-8",
+    )
+    q: asyncio.Queue = asyncio.Queue()
+    outcome = _run_pass(db_path, run_id, tmp_path,
+                        _scripted([[TextPart("done")]]), q)
+    cov = outcome["coverage"]
     assert cov["unresolved"] == 0
     from server import _notes_coverage_tips_status
     assert _notes_coverage_tips_status(cov) is False
-    row = [r for r in _coverage_rows(db_path, run_id) if r["note_num"] == 4]
-    assert row and row[0]["status"] == "skipped"
-    assert row[0]["reason"] == "belongs on Sheet 10"
+    row = [r for r in _coverage_rows(db_path, run_id) if r["note_num"] == 9]
+    assert row and row[0]["status"] == "placed"
 
 
 def test_coverage_gate_off_persists_nothing(db_path, tmp_path, monkeypatch):

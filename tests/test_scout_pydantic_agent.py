@@ -552,6 +552,50 @@ class TestViewPagesTool:
 class TestSaveInfopackTool:
     """Step 10: save_infopack persists the agent's result."""
 
+    def test_model_sees_a_typed_object_not_json_in_a_string(
+        self, synthetic_pdf: Path
+    ):
+        from scout.agent import create_scout_agent
+
+        agent, _ = create_scout_agent(pdf_path=synthetic_pdf, model="test")
+        tool = agent._function_toolset.tools["save_infopack"]
+        schema = tool.function_schema.json_schema
+
+        assert "infopack_json" not in schema.get("properties", {})
+        assert schema["properties"]["statements"]["type"] == "object"
+        assert schema["properties"]["notes_inventory"]["type"] == "array"
+        assert "propertyNames" not in str(schema)
+
+    def test_model_boundary_preserves_valid_inventory_siblings_and_standard(
+        self, synthetic_pdf: Path,
+    ):
+        """One malformed inventory item must not reject the whole tool call."""
+        from scout.agent import create_scout_agent, _save_infopack_impl
+        from scout.infopack import ScoutInfopackInput
+
+        _, deps = create_scout_agent(pdf_path=synthetic_pdf, model="test")
+        deps.detected_standard = "mpers"
+        boundary = ScoutInfopackInput.model_validate({
+            "statements": {},
+            "notes_inventory": [
+                {
+                    "note_num": 1,
+                    "title": "Corporate information",
+                    "page_range": [10, 11],
+                    "unexpected_but_harmless": True,
+                },
+                "malformed sibling",
+            ],
+        })
+
+        result = _save_infopack_impl(
+            deps, boundary.model_dump_json(exclude_none=True),
+        )
+
+        assert "success" in result.lower()
+        assert [item.note_num for item in deps.infopack.notes_inventory] == [1]
+        assert deps.infopack.detected_standard == "mpers"
+
     def test_valid_infopack_stored(self, synthetic_pdf: Path):
         from scout.agent import create_scout_agent, _save_infopack_impl
 
@@ -690,7 +734,7 @@ class TestRunScoutAgent:
                 return ModelResponse(parts=[
                     ToolCallPart(
                         tool_name="save_infopack",
-                        args={"infopack_json": json.dumps(infopack_data)},
+                        args=infopack_data,
                         tool_call_id="tc2",
                     ),
                 ])
@@ -745,7 +789,7 @@ class TestRunScoutAgent:
                 return ModelResponse(parts=[
                     ToolCallPart(
                         tool_name="save_infopack",
-                        args={"infopack_json": json.dumps(infopack_data)},
+                        args=infopack_data,
                         tool_call_id="tc2",
                     ),
                 ])

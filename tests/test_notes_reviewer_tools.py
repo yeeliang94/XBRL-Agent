@@ -94,7 +94,48 @@ def _cells(db_path: Path, run_id: int) -> dict[int, str]:
         return {c.row: c.html for c in repo.list_notes_cells_for_run(conn, run_id)}
 
 
+def _tool_names(agent) -> set[str]:
+    names: set[str] = set()
+    for toolset in getattr(agent, "toolsets", []) or []:
+        names.update(getattr(toolset, "tools", {}) or {})
+    return names
+
+
 # --------------------------------------------------------------------------
+
+
+def test_source_reviewer_tools_are_hidden_without_frozen_source(db_path: Path) -> None:
+    run_id = _seed_run(db_path)
+    agent, _deps, _ = _agent(db_path, run_id, _scripted([]))
+    names = _tool_names(agent)
+    assert "relink_note_cell" not in names
+    assert "record_block_dispositions" not in names
+    assert "FROZEN SOURCE MODE" not in agent._system_prompts[0]
+
+
+def test_source_reviewer_tools_and_instructions_appear_together(db_path: Path) -> None:
+    from notes import source_repository as srepo
+    from notes.source_models import OwnerKind, SourceBlock
+
+    run_id = _seed_run(db_path)
+    with repo.db_session(db_path) as conn:
+        generation_id = srepo.begin_generation(
+            conn, run_id, input_kind="docx_html"
+        )
+        srepo.write_blocks(conn, generation_id, [SourceBlock(
+            block_id="b1", block_kind="paragraph", reading_order=0,
+            canonical_html="<p>Source disclosure.</p>",
+            owner_kind=OwnerKind.NOTE,
+        )])
+        srepo.activate_generation(conn, generation_id)
+
+    agent, deps, _ = _agent(db_path, run_id, _scripted([]))
+    names = _tool_names(agent)
+    assert {"relink_note_cell", "record_block_dispositions"} <= names
+    assert deps.source_generation_id == generation_id
+    prompt = agent._system_prompts[0]
+    assert "FROZEN SOURCE MODE" in prompt
+    assert "relink_note_cell" in prompt
 
 
 def test_author_into_empty_leaf_creates_cell(db_path: Path) -> None:

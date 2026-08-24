@@ -92,6 +92,20 @@ def test_save_agent_trace_includes_turns(tmp_path: Path) -> None:
     assert "_n_tool_calls" not in trace["turns"][0]
 
 
+def test_trace_records_runtime_transport_and_effective_reasoning(tmp_path: Path) -> None:
+    result = _Result([_Msg({"role": "user", "content": "hi"})])
+    runtime = {
+        "model": "gpt-5.6-luna",
+        "transport": "responses",
+        "configured_reasoning_effort": "medium",
+        "effective_reasoning_effort": "medium",
+    }
+    save_agent_trace(
+        result, str(tmp_path), "SOFP", runtime_metadata=runtime
+    )
+    assert _read_trace(tmp_path, "SOFP")["runtime"] == runtime
+
+
 def test_save_messages_trace_writes_partial_run(tmp_path: Path) -> None:
     """Peer-review [1]: a failed/timeout agent has no final result, but its
     accumulated message history must still produce a debuggable trace."""

@@ -32,7 +32,7 @@ from notes.format_patch import (
 )
 from notes.format_schema import SheetFormatPatch, patch_to_dict
 from notes.table_theme import firm_theme
-from model_settings import build_model_settings
+from model_settings import build_model_settings, describe_model_runtime
 
 _THINKING_WARNED: set[str] = set()
 
@@ -64,6 +64,18 @@ from tools.pdf_viewer import count_pdf_pages, render_pages_to_png_bytes
 logger = logging.getLogger(__name__)
 
 _PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "notes_formatter.md"
+
+_STRUCTURED_OUTPUT_INSTRUCTION = """\
+=== OUTPUT MODE: STRUCTURED ===
+Return one SheetFormatPatch through the enforced structured-output schema.
+Do not write JSON text, Markdown, commentary, or a second copy of the patch.
+"""
+
+_JSON_FALLBACK_INSTRUCTION = """\
+=== OUTPUT MODE: JSON FALLBACK ===
+Return exactly one JSON object matching the SheetFormatPatch fields described
+above. Do not wrap it in Markdown and do not add commentary before or after it.
+"""
 
 
 def _resolve_min_confidence() -> float:
@@ -201,11 +213,15 @@ def create_notes_formatter_agent(
     )
     base_prompt = _PROMPT_PATH.read_text(encoding="utf-8").strip()
     agent_kwargs: dict[str, Any] = {}
-    if structured_output_enabled():
+    use_structured_output = structured_output_enabled()
+    if use_structured_output:
         # Let the provider enforce the patch shape instead of asking for JSON
         # in prose and repairing the answer afterwards. `format_patch` remains
         # the authority — this only removes the parse-failure class.
         agent_kwargs["output_type"] = SheetFormatPatch
+        base_prompt += "\n\n" + _STRUCTURED_OUTPUT_INSTRUCTION.strip()
+    else:
+        base_prompt += "\n\n" + _JSON_FALLBACK_INSTRUCTION.strip()
     agent = Agent(
         model,
         deps_type=NotesFormatterDeps,
@@ -480,6 +496,9 @@ async def _run_notes_formatter_impl(
         if output_dir and trace_messages:
             save_messages_trace(
                 trace_messages, output_dir, f"notes_format_{sheet}",
+                runtime_metadata=describe_model_runtime(
+                    model, role="notes_formatter"
+                ),
             )
         return result
 

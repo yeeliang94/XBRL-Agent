@@ -50,11 +50,15 @@ def test_value_cell_rule_reaches_rendered_prompt():
 # --- #5: aggregate ALL disclosed components into a broader row, reconcile ----
 
 def test_base_requires_summing_all_components():
-    flat = _flat("_base.md")
+    # Detailed note decomposition is compiled into every face prompt except
+    # SOPL, whose deliberate face-first workflow would conflict with it.
+    flat = _flat("_detail_extraction.md")
     assert "sum every disclosed component" in flat
     # The failure mode it guards: mapping only the nearest-named one.
     assert "not just the one whose name looks closest" in flat
     assert "reconcile to the note" in flat
+    rendered = render_prompt(StatementType.SOFP, "CuNonCu").lower()
+    assert "sum every disclosed component" in rendered
 
 
 # --- #6: grounded aggregation is NOT a plug (base integrity rule) ------------

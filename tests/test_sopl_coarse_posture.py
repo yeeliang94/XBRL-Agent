@@ -42,21 +42,14 @@ def test_sopl_prompt_instructs_coarse_no_decomposition():
     )
 
 
-def test_sopl_prompt_overrides_base_extraction_procedure():
-    """The shared `_base.md` ACCOUNTANT EXTRACTION PROCEDURE mandates
-    following note references and filling component rows before lumping — the
-    opposite of SOPL's coarse policy. Both prompts reach the agent in one
-    system prompt, so sopl.md must EXPLICITLY mark itself the exception, or the
-    base procedure silently countermands the coarse posture (code-review
-    finding, 2026-06-09). Pin the explicit override so a reword can't drop it."""
-    # Collapse whitespace so a line-wrapped "ACCOUNTANT EXTRACTION\nPROCEDURE"
-    # still matches the phrase.
+def test_sopl_prompt_is_self_contained_without_override_language():
+    """The renderer excludes the detailed procedure for SOPL, so this prompt
+    should state its workflow directly instead of asking the model to resolve
+    a shared-rule exception."""
     lower = re.sub(r"\s+", " ", _text().lower())
-    assert "accountant extraction procedure" in lower and "exception" in lower, (
-        "sopl.md must explicitly state it is the exception to the base "
-        "ACCOUNTANT EXTRACTION PROCEDURE — otherwise the system prompt's "
-        "note-following rule countermands the coarse posture"
-    )
+    assert "dedicated face-first workflow" in lower
+    assert "accountant extraction procedure" not in lower
+    assert "explicit exception" not in lower
 
 
 def test_sopl_prompt_routes_rollup_lines_to_catchall_leaf():

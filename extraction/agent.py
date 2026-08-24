@@ -13,7 +13,7 @@ import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Optional, Union, List, Tuple, Set, Dict
+from typing import Any, Optional, Union, List, Tuple, Set, Dict
 
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.models import Model
@@ -1152,15 +1152,14 @@ def create_extraction_agent(
     @agent.tool
     def save_result(
         ctx: RunContext[ExtractionDeps],
-        fields_json: str = "",
         acknowledge_unresolved: bool = False,
         unresolved_reason: str = "",
     ) -> str:
         """Save extraction results (JSON + cost report) to the output directory.
 
-        Call it as `save_result()`. `fields_json` is an optional secondary
-        artifact — the values are already durable in the workbook and in
-        `run_concept_facts` by this point, so there is nothing to re-send.
+        Call it as `save_result()`. Values are already durable in the workbook
+        and in `run_concept_facts`; the completion tool does not ask the model
+        to re-encode them.
 
         Phase 1.3: refuses to finalise unless the most recent verification
         passed AND no mandatory (`*`) rows are unfilled. If verify_totals
@@ -1182,30 +1181,7 @@ def create_extraction_agent(
         if gate_error is not None:
             ctx.deps.last_save_error = gate_error
             return gate_error
-        # An empty/malformed `fields_json` must NOT crash the whole run. The
-        # facts are already on disk (workbook) and in the canonical DB by this
-        # point, so the JSON arg is a secondary artifact (`{stmt}_result.json`).
-        #   - empty / whitespace-only → the model omitted a redundant arg;
-        #     finalise with `{}` rather than burning a retry turn (Windows
-        #     incident, run 35: "Expecting value: line 1 column 1 (char 0)").
-        #   - genuinely malformed → the model tried to pass content but botched
-        #     it; refuse with an actionable retry instead of silently dropping
-        #     the values it intended (like every other tool, never a raw
-        #     JSONDecodeError escaping and tearing down the agent).
-        if not fields_json or not fields_json.strip():
-            fields = {}
-        else:
-            try:
-                fields = json.loads(fields_json)
-            except (json.JSONDecodeError, TypeError) as exc:
-                parse_error = (
-                    "save_result refused: `fields_json` was not valid JSON "
-                    f"({exc}). Pass the extracted values as a JSON object "
-                    'string, e.g. {"fields": [...]} (or omit it entirely — the '
-                    "workbook is already written). Then call save_result again."
-                )
-                ctx.deps.last_save_error = parse_error
-                return parse_error
+        fields: dict = {}
         # Stamp the audited-gap metadata onto the persisted result so the
         # download / review surface can show WHY it was finalised flagged.
         if ctx.deps.completed_with_flag and isinstance(fields, dict):
@@ -1252,31 +1228,25 @@ def create_extraction_agent(
     # the Sheet-12 submit_batch_coverage). With no refs, the tool is absent and
     # the agent behaves exactly as before.
     if deps.face_line_refs:
+        from extraction.coverage import (
+            parse_face_coverage_entries, unaccounted_labels,
+        )
+
         @agent.tool
-        def submit_face_coverage(ctx: RunContext[ExtractionDeps], receipt_json: str) -> str:
+        def submit_face_coverage(
+            ctx: RunContext[ExtractionDeps],
+            entries: Any = None,
+        ) -> str:
             """Account for every scout-observed face line (written | skipped).
 
-            Pass a JSON list, one object per scout-flagged line:
-            ``[{"ref": "Trade receivables", "action": "written"},
-               {"ref": "Other investments", "action": "skipped",
-                "reason": "not disclosed on the face statement"}]``.
+            Pass one typed entry per scout-flagged line.
             ``ref`` is the line label the scout reported. This is an AUDIT
             receipt — it never changes your saved values and never forces a
             write. If a line genuinely isn't on the face statement, mark it
             'skipped' with a reason; never plug a row to satisfy coverage.
             """
-            from extraction.coverage import (
-                FaceCoverageReceipt, unaccounted_labels,
-            )
-            try:
-                receipt = FaceCoverageReceipt.from_json(receipt_json)
-            except (ValueError, json.JSONDecodeError) as exc:
-                return (
-                    f"submit_face_coverage refused: receipt was not valid "
-                    f"({exc}). Pass a JSON list of {{ref, action[, reason]}} "
-                    f"objects."
-                )
-            errors = receipt.validate(ctx.deps.face_line_refs)
+            receipt, parse_errors = parse_face_coverage_entries(entries)
+            errors = parse_errors + receipt.validate(ctx.deps.face_line_refs)
             ctx.deps.face_coverage_receipt = receipt
             ctx.deps.face_coverage_submitted = True
             unaccounted = unaccounted_labels(ctx.deps.face_line_refs, receipt)

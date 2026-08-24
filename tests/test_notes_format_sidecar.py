@@ -333,75 +333,13 @@ class TestCombineFormatOps:
 
 
 # ---------------------------------------------------------------------------
-# Prompt contract — Phase 4: the FORMATTING OBSERVATION section
+# Agent boundary — extraction is content-only; legacy ops remain readable
 # ---------------------------------------------------------------------------
 
 from notes.agent import render_notes_prompt  # noqa: E402
 from notes_types import NotesTemplateType as _NTT  # noqa: E402
 
-
-class TestPromptContract:
-    @pytest.mark.parametrize("standard", ["mfrs", "mpers"])
-    def test_rendered_prompts_carry_format_ops_section(self, standard: str):
-        prompt = render_notes_prompt(
-            template_type=_NTT.LIST_OF_NOTES,
-            filing_level="company",
-            inventory=[],
-            filing_standard=standard,
-        )
-        assert "FORMATTING OBSERVATION" in prompt
-        assert "format_ops" in prompt
-        # The extent rule — the single most common formatting mistake —
-        # must survive any base-prompt edit.
-        assert "EXTENT" in prompt
-
-    def test_prompt_expects_observation_for_visible_tables(self):
-        # 2026-07-07 rebalance: with the floor removed, the prompt must
-        # carry the counterweight ("recording a visible table's formatting
-        # is EXPECTED") or cautious models omit format_ops on every payload
-        # and whole runs land 100% unstyled (the run-63 Windows incident).
-        base = (
-            Path(__file__).resolve().parents[1]
-            / "prompts" / "_notes_base.md"
-        ).read_text(encoding="utf-8")
-        flat = " ".join(base.split())  # collapse line-wraps before matching
-        assert "EXPECTED, not extra credit" in flat
-        # The old blanket escape hatch must stay narrowed to genuine
-        # unreadability, not free-floating "when unsure".
-        assert "cannot make out" in flat
-
-    def test_style_free_content_rule_still_present(self):
-        # Gotcha #16's invariant: content HTML stays style-free; the
-        # sidecar is a separate channel, never a licence for inline styles.
-        base = (
-            Path(__file__).resolve().parents[1]
-            / "prompts" / "_notes_base.md"
-        ).read_text(encoding="utf-8")
-        assert "style-free" in base
-        assert "never" in base.lower()
-        # And format_ops is documented as the only formatting channel.
-        assert "ONLY formatting" in base or "only formatting" in base
-
-    def test_format_ops_documented_in_output_contract(self):
-        base = (
-            Path(__file__).resolve().parents[1]
-            / "prompts" / "_notes_base.md"
-        ).read_text(encoding="utf-8")
-        # Field bullet in the OUTPUT CONTRACT list…
-        assert "`format_ops` (list, optional)" in base
-        # …zero-based-within-payload indexing rule (the combine re-offset
-        # depends on agents following it)…
-        assert "zero-based within THIS payload" in base
-        # …and content-first priority.
-        assert "Content always comes first" in base
-
-
-# ---------------------------------------------------------------------------
-# Tool plumbing — write_notes threads raw format_ops into the payload
-# ---------------------------------------------------------------------------
-
 import asyncio  # noqa: E402
-import json  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
 
 
@@ -436,97 +374,53 @@ def _make_sink_agent(tmp_path: Path):
     return agent, deps
 
 
-def test_write_notes_tool_threads_format_ops_into_payload(tmp_path: Path):
-    """The agent-tool boundary: a payloads_json carrying format_ops must
-    reach the constructed NotesPayload (sink mode captures the payload
-    object before any workbook write)."""
+def _tool_schema(agent, name: str) -> dict:
+    for ts in agent.toolsets:
+        tool = getattr(ts, "tools", {}).get(name)
+        if tool is not None:
+            return tool.function_schema.json_schema
+    raise AssertionError(f"tool {name!r} not found")
+
+
+@pytest.mark.parametrize("standard", ["mfrs", "mpers"])
+def test_extraction_prompt_has_no_formatting_authorship(standard: str):
+    prompt = render_notes_prompt(
+        template_type=_NTT.LIST_OF_NOTES,
+        filing_level="company",
+        inventory=[],
+        filing_standard=standard,
+    )
+    assert "format_ops" not in prompt
+    assert "dedicated notes formatter" in prompt
+
+
+def test_write_notes_schema_reaches_recovery_boundary_and_excludes_formatting(
+    tmp_path: Path,
+):
+    agent, _deps = _make_sink_agent(tmp_path)
+    schema = _tool_schema(agent, "write_notes")
+    assert "propertyNames" not in str(schema)
+    assert "payloads_json" not in str(schema)
+    assert "format_ops" not in str(schema)
+
+
+def test_plain_pdf_table_write_succeeds_without_formatting_retry(tmp_path: Path):
     from notes.agent import _ensure_label_index
 
     agent, deps = _make_sink_agent(tmp_path)
-    # Pick a real, exactly-resolvable row label from the live template so
-    # the sink's label pre-validation accepts the payload.
     label = _ensure_label_index(deps)[0].original
-
-    ops = [{"target": {"table": 0, "range": "all"}, "style": {"bold": True}}]
-    payloads_json = json.dumps({"payloads": [{
+    items = [{
         "chosen_row_label": label,
         "content": "<p>Body.</p><table><tr><td>1,000</td></tr></table>",
         "evidence": "Page 3, Note 1",
         "source_pages": [3],
         "parent_note": {"number": "1", "title": "Test"},
-        "format_ops": ops,
-    }]})
-
+    }]
     write_notes = _get_tool_function(agent, "write_notes")
-    msg = asyncio.run(write_notes(SimpleNamespace(deps=deps), payloads_json))
-    assert "Collected 1 payload" in msg, msg
-    assert deps.payload_sink[0].format_ops == ops
-
-
-class TestUnstyledTableNudge:
-    """The write-time feedback loop (2026-07-07, run-63 fix): a write whose
-    table content arrives with no format_ops gets a gentle nudge appended
-    to the tool return, so the agent can rewrite the rows with its
-    observation while the pages are still in front of it. The nudge never
-    changes the message PREFIX ("Collected N payload(s)" / "Wrote N
-    row(s)") — the history processors' write-boundary regexes anchor on
-    it (test_history_processors)."""
-
-    def test_sink_write_nudges_on_unstyled_table(self, tmp_path: Path):
-        from notes.agent import _ensure_label_index
-
-        agent, deps = _make_sink_agent(tmp_path)
-        label = _ensure_label_index(deps)[0].original
-        payloads_json = json.dumps({"payloads": [{
-            "chosen_row_label": label,
-            "content": "<p>Body.</p><table><tr><td>1,000</td></tr></table>",
-            "evidence": "Page 3, Note 1",
-            "source_pages": [3],
-            "parent_note": {"number": "1", "title": "Test"},
-        }]})
-        write_notes = _get_tool_function(agent, "write_notes")
-        msg = asyncio.run(write_notes(SimpleNamespace(deps=deps), payloads_json))
-        assert msg.startswith("Collected 1 payload")
-        assert "without format_ops" in msg
-        assert "truly plain" in msg  # the no-invention escape hatch
-
-    def test_sink_write_no_nudge_for_prose_or_styled(self, tmp_path: Path):
-        from notes.agent import _ensure_label_index
-
-        agent, deps = _make_sink_agent(tmp_path)
-        labels = [e.original for e in _ensure_label_index(deps)[:2]]
-        ops = [{"target": {"table": 0, "range": "all"}, "style": {"bold": True}}]
-        payloads_json = json.dumps({"payloads": [
-            {   # prose only — no table, no nudge
-                "chosen_row_label": labels[0],
-                "content": "<p>Prose only.</p>",
-                "evidence": "Page 3, Note 1",
-                "source_pages": [3],
-                "parent_note": {"number": "1", "title": "Test"},
-            },
-            {   # table WITH ops — observed, no nudge
-                "chosen_row_label": labels[1],
-                "content": "<table><tr><td>1,000</td></tr></table>",
-                "evidence": "Page 4, Note 2",
-                "source_pages": [4],
-                "parent_note": {"number": "2", "title": "Test"},
-                "format_ops": ops,
-            },
-        ]})
-        write_notes = _get_tool_function(agent, "write_notes")
-        msg = asyncio.run(write_notes(SimpleNamespace(deps=deps), payloads_json))
-        assert "without format_ops" not in msg
-
-    def test_workbook_write_nudges_on_unstyled_table(self, tmp_path: Path):
-        # Same nudge on the direct (non-fanout) write path, driven by the
-        # writer's per-cell style_source verdicts.
-        from notes.agent import format_unstyled_table_nudge
-
-        nudge = format_unstyled_table_nudge(2)
-        assert "2 table cell(s)" in nudge
-        assert "without format_ops" in nudge
-        assert "truly plain" in nudge
-        assert format_unstyled_table_nudge(0) == ""
+    msg = asyncio.run(write_notes(SimpleNamespace(deps=deps), items))
+    assert msg.startswith("Collected 1 payload")
+    assert "format_ops" not in msg
+    assert deps.payload_sink[0].format_ops is None
 
 
 # ---------------------------------------------------------------------------
@@ -587,26 +481,18 @@ def test_styled_html_lands_in_notes_cells_and_flattens_clean(tmp_path: Path):
 
 
 class TestSinkResendSupersede:
-    """The nudge invites "re-send the SAME content plus format_ops". In sink
-    mode a plain re-send used to CONCATENATE at the final write
-    (_combine_payloads), duplicating the content — so an identical re-send
-    must replace the earlier sink entry. Comparison is by RESOLVED template
-    row, not raw label (peer-review fix): acceptance is fuzzy, so the first
-    send may ride a fuzzy-but-accepted label and the retry the exact one."""
+    """Equivalent content resends replace rather than duplicate a note."""
 
     TABLE = "<p>Body.</p><table><tr><td>1,000</td><td>2,000</td></tr></table>"
 
-    def _payload_json(self, label: str, ops=None) -> str:
-        entry = {
+    def _payload_items(self, label: str, content: str | None = None) -> list[dict]:
+        return [{
             "chosen_row_label": label,
-            "content": self.TABLE,
+            "content": content or self.TABLE,
             "evidence": "Page 3, Note 1",
             "source_pages": [3],
             "parent_note": {"number": "1", "title": "Test"},
-        }
-        if ops is not None:
-            entry["format_ops"] = ops
-        return json.dumps({"payloads": [entry]})
+        }]
 
     def test_fuzzy_then_exact_resend_supersedes(self, tmp_path: Path):
         from notes.agent import _ensure_label_index
@@ -626,20 +512,15 @@ class TestSinkResendSupersede:
 
         write_notes = _get_tool_function(agent, "write_notes")
         msg1 = asyncio.run(
-            write_notes(SimpleNamespace(deps=deps), self._payload_json(fuzzy))
+            write_notes(SimpleNamespace(deps=deps), self._payload_items(fuzzy))
         )
         assert "Collected 1 payload" in msg1
-        assert "without format_ops" in msg1  # the nudge that triggers a resend
-
-        ops = [{"target": {"table": 0, "range": "numeric_cells"},
-                "style": {"text_align": "right"}}]
         msg2 = asyncio.run(
-            write_notes(SimpleNamespace(deps=deps), self._payload_json(exact, ops))
+            write_notes(SimpleNamespace(deps=deps), self._payload_items(exact))
         )
         assert "Collected 1 payload" in msg2
         # Same row + identical content → superseded, never duplicated.
         assert len(deps.payload_sink) == 1
-        assert deps.payload_sink[0].format_ops == ops
         assert deps.payload_sink[0].chosen_row_label == exact
 
     def test_whitespace_drifted_resend_still_supersedes(self, tmp_path: Path):
@@ -654,29 +535,19 @@ class TestSinkResendSupersede:
         label = _ensure_label_index(deps)[0].original
         write_notes = _get_tool_function(agent, "write_notes")
 
-        first = json.dumps({"payloads": [{
-            "chosen_row_label": label,
-            "content": "<p>Body.</p><table><tr><td>1,000</td></tr></table>",
-            "evidence": "Page 3, Note 1",
-            "source_pages": [3],
-            "parent_note": {"number": "1", "title": "Test"},
-        }]})
+        first = self._payload_items(
+            label, "<p>Body.</p><table><tr><td>1,000</td></tr></table>",
+        )
         # Same rendered content, but reindented / attribute-reordered / extra
         # whitespace — what a model resend realistically looks like.
-        drifted = json.dumps({"payloads": [{
-            "chosen_row_label": label,
-            "content": "<p>Body.</p>\n<table >\n  <tr><td>1,000</td></tr>\n</table>",
-            "evidence": "Page 3, Note 1",
-            "source_pages": [3],
-            "parent_note": {"number": "1", "title": "Test"},
-            "format_ops": [{"target": {"table": 0, "range": "numeric_cells"},
-                            "style": {"text_align": "right"}}],
-        }]})
+        drifted = self._payload_items(
+            label,
+            "<p>Body.</p>\n<table >\n  <tr><td>1,000</td></tr>\n</table>",
+        )
         asyncio.run(write_notes(SimpleNamespace(deps=deps), first))
         asyncio.run(write_notes(SimpleNamespace(deps=deps), drifted))
         # Superseded, not duplicated — the drifted resend replaced the first.
         assert len(deps.payload_sink) == 1
-        assert deps.payload_sink[0].format_ops  # the resend's ops won
 
     def test_different_content_same_row_still_combines(self, tmp_path: Path):
         from notes.agent import _ensure_label_index
@@ -685,20 +556,8 @@ class TestSinkResendSupersede:
         label = _ensure_label_index(deps)[0].original
         write_notes = _get_tool_function(agent, "write_notes")
 
-        first = json.dumps({"payloads": [{
-            "chosen_row_label": label,
-            "content": "<p>Part one.</p>",
-            "evidence": "Page 3, Note 1",
-            "source_pages": [3],
-            "parent_note": {"number": "1", "title": "Test"},
-        }]})
-        second = json.dumps({"payloads": [{
-            "chosen_row_label": label,
-            "content": "<p>Part two.</p>",
-            "evidence": "Page 4, Note 1",
-            "source_pages": [4],
-            "parent_note": {"number": "1", "title": "Test"},
-        }]})
+        first = self._payload_items(label, "<p>Part one.</p>")
+        second = self._payload_items(label, "<p>Part two.</p>")
         asyncio.run(write_notes(SimpleNamespace(deps=deps), first))
         asyncio.run(write_notes(SimpleNamespace(deps=deps), second))
         # Distinct content on one row keeps the combine semantics.
@@ -761,14 +620,8 @@ def test_format_ops_still_win_over_source_detection():
     assert source == "ops"
 
 
-def test_sink_write_does_not_nudge_a_verbatim_copied_table(tmp_path: Path):
-    """Code review 2026-07-20 (HIGH): the Sheet-12 sink path counted "table
-    without format_ops" by payload alone, so an agent that copied a Word table
-    VERBATIM (styling inline, no ops — exactly what the source block asks for)
-    was told "your table cells will render unstyled — re-send with format_ops".
-    Two channels steering opposite ways on the branch's headline feature; an
-    obedient re-send would downgrade source-copied styling to model-described
-    ops. A PLAIN table on the same write must still get the nudge."""
+def test_sink_write_never_requests_extraction_authored_formatting(tmp_path: Path):
+    """Source-copied and plain tables both complete without a style retry."""
     from notes.agent import _ensure_label_index
 
     agent, deps = _make_sink_agent(tmp_path)
@@ -777,53 +630,44 @@ def test_sink_write_does_not_nudge_a_verbatim_copied_table(tmp_path: Path):
 
     styled = ('<table><tr><td style="padding: 1px 5px; text-align: right">'
               "1,595</td></tr></table>")
-    msg = asyncio.run(write_notes(SimpleNamespace(deps=deps), json.dumps({
-        "payloads": [{
+    msg = asyncio.run(write_notes(SimpleNamespace(deps=deps), [{
             "chosen_row_label": labels[0], "content": styled,
             "evidence": "Page 3, Note 1",
             "parent_note": {"number": "1", "title": "Test"},
-        }],
-    })))
+        }]))
     assert "Collected 1 payload" in msg
-    assert "without format_ops" not in msg
+    assert "format_ops" not in msg
 
     plain = "<table><tr><td>1,595</td></tr></table>"
-    msg2 = asyncio.run(write_notes(SimpleNamespace(deps=deps), json.dumps({
-        "payloads": [{
+    msg2 = asyncio.run(write_notes(SimpleNamespace(deps=deps), [{
             "chosen_row_label": labels[1], "content": plain,
             "evidence": "Page 4, Note 2",
             "parent_note": {"number": "2", "title": "Other"},
-        }],
-    })))
-    assert "without format_ops" in msg2  # plain tables keep the run-63 nudge
+        }]))
+    assert "format_ops" not in msg2
 
 
 @pytest.mark.parametrize("styled_td", [
     '<td style="">1,595</td>',                    # empty attribute
     '<td style="position: fixed">1,595</td>',     # property the sanitiser rejects
 ])
-def test_sink_nudge_judges_sanitized_html_not_raw(tmp_path: Path, styled_td: str):
-    """Code review 2026-07-20 (round 2): the sink check ran on RAW html, so an
-    empty or invalid style= suppressed the nudge — while the writer later
-    strips exactly those styles and stores the cell UNSTYLED. The verdict must
-    match what the writer will store: these cells land plain, so they get the
-    nudge."""
+def test_sink_accepts_invalid_source_style_as_content_only(
+    tmp_path: Path, styled_td: str,
+):
     from notes.agent import _ensure_label_index
 
     agent, deps = _make_sink_agent(tmp_path)
     label = _ensure_label_index(deps)[0].original
     write_notes = _get_tool_function(agent, "write_notes")
 
-    msg = asyncio.run(write_notes(SimpleNamespace(deps=deps), json.dumps({
-        "payloads": [{
+    msg = asyncio.run(write_notes(SimpleNamespace(deps=deps), [{
             "chosen_row_label": label,
             "content": f"<table><tr>{styled_td}</tr></table>",
             "evidence": "Page 3, Note 1",
             "parent_note": {"number": "1", "title": "Test"},
-        }],
-    })))
+        }]))
     assert "Collected 1 payload" in msg
-    assert "without format_ops" in msg
+    assert "format_ops" not in msg
 
 
 class TestProseStaysStyleFree:

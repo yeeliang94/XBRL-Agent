@@ -18,12 +18,12 @@ is a valid receipt entry, the agent is never forced to plug).
 """
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass, field
 from typing import Any
 
 _VALID_ACTIONS = frozenset({"written", "skipped"})
+
 
 # A trailing note decoration on a submitted ref. The agent never sees the bare
 # label alone: the prompt renders each line as "Label → Note 2" and the old
@@ -75,28 +75,6 @@ class FaceCoverageEntry:
 class FaceCoverageReceipt:
     entries: list[FaceCoverageEntry] = field(default_factory=list)
 
-    @classmethod
-    def from_json(cls, raw: str) -> "FaceCoverageReceipt":
-        data = json.loads(raw)
-        if not isinstance(data, list):
-            raise ValueError(
-                "Face coverage receipt must be a JSON list of entry objects "
-                f"(got {type(data).__name__})"
-            )
-        entries: list[FaceCoverageEntry] = []
-        for i, item in enumerate(data):
-            if not isinstance(item, dict):
-                raise ValueError(f"Entry {i} is not an object")
-            try:
-                entries.append(FaceCoverageEntry(
-                    ref=str(item["ref"]),
-                    action=str(item["action"]),
-                    reason=str(item.get("reason", "")),
-                ))
-            except KeyError as e:
-                raise ValueError(f"Entry {i} missing required key: {e}")
-        return cls(entries=entries)
-
     def validate(self, expected_refs: list[dict]) -> list[str]:
         """Structural errors only (empty = clean). An entry whose ref matches
         no scout-observed line is flagged so a typo'd receipt is visible; a
@@ -115,6 +93,43 @@ class FaceCoverageReceipt:
     def accounted_refs(self) -> set[str]:
         """Normalised refs the agent accounted for (written OR skipped)."""
         return {_normalize_ref(e.ref) for e in self.entries}
+
+
+def parse_face_coverage_entries(
+    raw: Any,
+) -> tuple[FaceCoverageReceipt, list[str]]:
+    """Parse model-authored receipt entries without rejecting valid siblings.
+
+    Coverage is advisory. A malformed entry must be visible in the tool result,
+    but it must not trigger framework-level argument retries or prevent the
+    remaining receipt from being recorded.
+    """
+    if not isinstance(raw, list):
+        return FaceCoverageReceipt(), [
+            f"entries must be a list of objects (got {type(raw).__name__})"
+        ]
+    entries: list[FaceCoverageEntry] = []
+    errors: list[str] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            errors.append(f"entry {index} is not an object")
+            continue
+        try:
+            ref = item["ref"]
+            action = item["action"]
+            if not isinstance(ref, str) or not ref.strip():
+                raise ValueError("ref must be a non-empty string")
+            if not isinstance(action, str):
+                raise ValueError("action must be a string")
+            reason = item.get("reason", "")
+            if not isinstance(reason, str):
+                raise ValueError("reason must be a string")
+            entries.append(FaceCoverageEntry(
+                ref=ref, action=action, reason=reason,
+            ))
+        except (KeyError, TypeError, ValueError) as exc:
+            errors.append(f"entry {index}: {exc}")
+    return FaceCoverageReceipt(entries=entries), errors
 
 
 def unaccounted_labels(

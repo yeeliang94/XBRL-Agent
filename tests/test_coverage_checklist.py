@@ -50,19 +50,40 @@ def _row(checklist: Checklist, note_num: int):
     return next(r for r in checklist.rows if r.note_num == note_num)
 
 
-def test_placed_missing_and_skipped_statuses():
+def test_placed_missing_and_unproven_skip_statuses():
     cl = build_draft_checklist(
         inventory_rows=[_inv(1, "Corporate information"),
                         _inv(2, "Investment properties"),
                         _inv(3, "Contingent liabilities")],
         provenance_entries=[_entry(S10, 6, ["1"])],
-        skip_receipts=[{"note_num": 3, "reason": "no matching template row"}],
+        skip_receipts=[{"note_num": 3, "reason": "belongs on another sheet"}],
     )
     assert _row(cl, 1).status == STATUS_PLACED
     assert _row(cl, 2).status == STATUS_MISSING
-    skipped = _row(cl, 3)
-    assert skipped.status == STATUS_SKIPPED
-    assert skipped.reason == "no matching template row"
+    unproven = _row(cl, 3)
+    assert unproven.status == STATUS_MISSING
+    assert "belongs on another sheet" in unproven.reason
+    assert "no destination placement" in unproven.reason.lower()
+
+
+def test_skip_with_destination_provenance_counts_as_placed():
+    """A Sheet-12 skip is safe only when the claimed hand-off is visible in
+    the shared provenance ledger. The placement, not the agent's receipt,
+    clears coverage."""
+    related_party_sheet = "Notes-RelatedPartytran"
+    cl = build_draft_checklist(
+        inventory_rows=[_inv(9, "Amount due from related companies")],
+        provenance_entries=[_entry(related_party_sheet, 12, ["9"])],
+        skip_receipts=[{
+            "note_num": 9,
+            "reason": "Related Party Transactions — belongs on that sheet",
+        }],
+    )
+    row = _row(cl, 9)
+    assert row.status == STATUS_PLACED
+    assert [(p.sheet, p.row) for p in row.placements] == [
+        (related_party_sheet, 12),
+    ]
 
 
 def test_placement_on_any_sheet_counts_as_placed():
@@ -87,6 +108,19 @@ def test_internal_numbering_hole_becomes_suspected_gap():
     assert "12 → 14" in gap.reason
     # Rows sort numerically so the gap sits between its neighbours.
     assert [r.note_num for r in cl.rows] == [12, 13, 14]
+
+
+def test_reviewer_authored_numbering_hole_becomes_placed():
+    cl = build_draft_checklist(
+        inventory_rows=[_inv(12), _inv(14)],
+        provenance_entries=[_entry(S12, 50, ["13"], "Disclosure of X")],
+        reviewer_added_notes={13},
+    )
+    gap = _row(cl, 13)
+    assert gap.status == STATUS_PLACED
+    assert gap.reviewer_added is True
+    assert [(p.sheet, p.row) for p in gap.placements] == [(S12, 50)]
+    assert gap.is_unresolved() is False
 
 
 def test_no_gap_flagged_outside_observed_range():
@@ -182,8 +216,8 @@ def test_duplicate_coords_deduped_and_counts_summarise():
     assert len(_row(cl, 5).placements) == 1
     counts = cl.counts()
     assert counts[STATUS_PLACED] == 1
-    assert counts[STATUS_SKIPPED] == 1
-    assert counts[STATUS_MISSING] == 1
+    assert counts[STATUS_SKIPPED] == 0
+    assert counts[STATUS_MISSING] == 2
     assert counts[STATUS_SUSPECTED_GAP] == 1  # note 7 hole
 
 

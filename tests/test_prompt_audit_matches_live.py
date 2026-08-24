@@ -127,3 +127,19 @@ def test_the_role_map_covers_every_live_role():
 
     unmapped = [r for r in server._AGENT_ROLES if r not in _ROLE_TO_MATRIX_LABEL]
     assert not unmapped, f"new agent role(s) not mapped here: {unmapped}"
+
+
+@pytest.mark.parametrize("source", [
+    "scout/vision.py",
+    "scout/notes_discoverer_vision.py",
+    "scout/calibrator.py",
+    "ingest/pdf_sidecar.py",
+])
+def test_helper_model_prompts_are_in_the_audit_inventory(source):
+    assert source in _AUDIT, f"helper prompt source missing from audit: {source}"
+
+
+def test_audit_does_not_claim_copied_runtime_prompts_are_exact():
+    assert 'id="runtime-prompts"' in _AUDIT
+    assert "byte-exact example" not in _AUDIT
+    assert "Exact output of <code>render_notes_prompt" not in _AUDIT

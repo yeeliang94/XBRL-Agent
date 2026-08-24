@@ -38,6 +38,14 @@ def test_anthropic_caches_instructions_and_tools():
     assert "openai_prompt_cache_key" not in s
 
 
+def test_extended_gpt_effort_is_folded_before_anthropic_settings(caplog):
+    """A stale setting after switching away from GPT-5.6 must not send an
+    unsupported provider value."""
+    s = build_model_settings(AnthropicModel(), thinking_level="max")
+    assert s["thinking"] == "high"
+    assert any("using 'high'" in record.getMessage() for record in caplog.records)
+
+
 def test_openai_sets_cache_key_and_retention():
     # Default fixture model is gpt-5.4 — an OpenAI reasoning model, which
     # rejects a non-default temperature, so it stays pinned at 1.0 (Phase 9).

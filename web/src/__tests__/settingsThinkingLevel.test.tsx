@@ -24,7 +24,15 @@ const SETTINGS = {
   spot_check_mode: "light",
   entity_memory: true,
   thinking_levels: { SOFP: "high" },
+  default_models: {
+    scout: "anthropic.claude-sonnet-4-5",
+    SOFP: "openai.gpt-5.6",
+  },
   thinking_level_choices: ["none", "minimal", "low", "medium", "high"],
+  thinking_level_choices_by_model: {
+    "openai.gpt-5.6": ["none", "low", "medium", "high", "xhigh", "max"],
+    "anthropic.claude-sonnet-4-5": ["none", "minimal", "low", "medium", "high"],
+  },
   available_models: [
     { id: "openai.gpt-5.4", display_name: "GPT-5.4", provider: "openai" },
   ],
@@ -128,5 +136,18 @@ describe("thinking level in Settings", () => {
     )) as HTMLSelectElement;
     expect(select.options[0].value).toBe("");
     expect(select.options[0].text).toMatch(/provider default/i);
+  });
+
+  test("each role uses its own model's thinking vocabulary", async () => {
+    const scout = (await screen.findByLabelText(
+      /Thinking level for Scout/i,
+    )) as HTMLSelectElement;
+    const sofp = screen.getByLabelText(
+      /Thinking level for Statement of financial position/i,
+    ) as HTMLSelectElement;
+
+    expect(Array.from(scout.options, (option) => option.value)).not.toContain("max");
+    expect(Array.from(sofp.options, (option) => option.value)).toContain("max");
+    expect(Array.from(sofp.options, (option) => option.value)).not.toContain("minimal");
   });
 });

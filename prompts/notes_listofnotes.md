@@ -58,11 +58,11 @@ the whole PDF.
 
 === COVERAGE RECEIPT (MANDATORY TERMINAL CALL) ===
 
-Before finishing, you must submit a JSON receipt that accounts for
-EVERY note in your batch. This is how the system detects silent skips:
-forgetting a note is impossible if you've submitted a receipt for it.
+Before finishing, call `submit_batch_coverage(entries=[...])` with one typed
+entry object for EVERY note in your batch. Pass the list directly; do not
+JSON-encode it. This is how the system detects silent skips.
 
-Format — a JSON list of entries, one per batch note:
+Entry shapes:
 
 - For a note you wrote to one or more template rows:
   `{"note_num": <int>, "action": "written", "row_labels": ["<label>", ...]}`
@@ -172,12 +172,12 @@ supporting schedule, or both. Do NOT write a bare single number (e.g.
 only a balance with no breakdown or explanation, that balance belongs
 on the face statement, not here — skip the row.
 
-=== MATCHING HEURISTICS ===
+=== MATCHING RULES ===
 
 - Prefer a specific label over the generic catch-all whenever plausible.
-- Label matching is fuzzy — "Property, plant and equipment" in your
-  payload will resolve to "*Disclosure of property, plant and
-  equipment*" in the template. Don't fret about exact punctuation.
+- Copy the complete target label verbatim from the seeded catalog or
+  `read_template`. Backend fuzzy matching exists only as recovery for minor
+  case/punctuation drift; never shorten or paraphrase a catalog label.
 - Hierarchy beats visual granularity. A PDF note that uses "(a)", "(b)",
   bullets, or table captions is not automatically multiple MBRS rows.
   For example, Note 18 "Finance costs" with sub-sections "(a) interest

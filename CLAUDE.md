@@ -653,6 +653,12 @@ Key invariants:
 - **Retry budget:** every notes agent and Sheet-12 sub-agent retried at most
   once. Exhaustion writes `notes_<TEMPLATE>_failures.json` /
   `notes12_failures.json` / `notes12_unmatched.json` side-logs.
+- **Sheet-12 stall bounds:** every outer/model/tool stream step has a 180-second
+  no-progress timeout (`XBRL_NOTES12_TURN_TIMEOUT_S`), which enters the normal
+  retry lane. The parent fan-out has a 420-second hard deadline
+  (`XBRL_NOTES12_FANOUT_TIMEOUT_S`); remaining workers are cancelled, emit a
+  terminal audit event, and land as explicit failed batches so one worker can
+  never hold the pipeline indefinitely.
 - **Cell cap:** 30,000 chars (`notes.writer.CELL_CHAR_LIMIT`). Longer content
   truncated with `[truncated -- see PDF pages N, M]` footer.
 - **Column rules:** prose rows write col B only; numeric rows (13, 14) fill
@@ -868,71 +874,31 @@ Key invariants:
   indentation (`notesIndent.ts`) all round-trip through the sanitiser + the
   `html_to_excel_text` overlay. Pinned by the `cellFormatting`/`notesIndent`/
   `NotesReviewTab` web tests + `tests/test_notes_html_sanitize_css.py`.
-- **Two AI styling paths (the `content` channel stays style-free either way):**
-  - **Formatting sidecar (DEFAULT, write-time,
-    docs/PLAN-notes-format-sidecar.md):** notes extraction agents emit an optional
-    `format_ops` field per payload (same constrained op vocabulary as
-    `notes/format_patch.py` — a structured channel, NOT inline styles in
-    `content`). `notes/writer.py::_style_cell_html` applies it through one gate,
-    `format_patch.apply_cell_operations` (ops → sanitiser → `verify_format_only`).
-    Fallback: **agent ops → unstyled (plain).** The deterministic house-style
-    floor (`notes/format_defaults.py`, kill switch `XBRL_NOTES_HOUSE_STYLE`) was
-    **REMOVED 2026-07-07** — it *imposed* the accountant convention (notably a
-    double-underline on any "total"-text row) rather than mirroring the source
-    PDF, so it invented borders the statement didn't have. A cell without usable
-    agent ops renders plain and the operator restyles on demand via the
-    formatter agent; legacy DB rows may still carry `style_source='floor'`.
-    Formatting NEVER blocks a content write — invalid ops degrade to plain.
-    Multi-payload rows (`_combine_payloads`) re-offset each payload's table
-    indices; a non-table op in a combined cell drops all ops for that cell.
-    **Omission gets pushback (run-63 fix, 2026-07-07):** the `write_notes`
-    return message appends a nudge when table cells land `unstyled`
-    (`notes/agent.py::format_unstyled_table_nudge` — invite an observation,
-    never invent), the tool docstring + a rebalanced `_notes_base.md`
-    FORMATTING OBSERVATION block say a visible table's formatting is
-    EXPECTED, and the Sheet-12 sink replaces (not concatenates) an
-    identical-content re-send so the nudge's "re-send with format_ops" advice
-    is safe. **A SOURCE-STYLED re-send additionally replaces every earlier
-    payload for the same top-level note on that row (run-79 duplication fix,
-    2026-08-05):** the identical-content rule alone cannot catch a source
-    copy — it almost never renders the same text as the rebuilt table it
-    corrects (the rebuild compresses headers/year rows) — so following the
-    source nudges used to CONCATENATE both versions into one cell (Notes 6
-    and 9 each shipped twice). A source copy is whole-note by construction
-    (`read_source_note` returns the full note slice), so
-    `_top_level_note_key` matching ("9.1" → "9") makes the replace safe; a
-    DIFFERENT note sharing the row survives, and a mixed row draws an
-    advisory `_mixed_note_warnings` line in the tool reply (never a reject —
-    catch-all grouping is legitimate). Both nudges now say "send the note's
-    FULL content — prose and table" because the replace makes a table-only
-    re-send lossy. **On a WORD run that advice is WRONG, and the branch is not
-    optional (run-79 fix, 2026-08-04):** the source block orders the agent to
-    copy the table verbatim and NOT to translate it into `format_ops`, so the
-    run-63 nudge contradicts it. Three cases, and each needs its own message —
-    `format_unstyled_table_nudge` fires only when the run has NO `source.html`;
-    with one, an unread note gets `format_unconsulted_source_nudge` (run 74)
-    and a note that WAS read but whose table still landed plain gets
-    `format_uncopied_source_nudge`. Run 79 was the third case: every Sheet-12
-    sub-agent had called `read_source_note` and every call returned styled
-    markup, yet 14 table cells persisted with zero styling — and the only
-    feedback they drew pointed at the harder, lower-fidelity remedy (one agent
-    tried it, emitted malformed JSON, and dropped the styling on retry). Both
-    call sites (`_sub_agent_sink_write` and the `write_notes` tool) carry the
-    same three-way split. **Count WRITTEN CELLS, not submitted payloads**
-    (peer review, 2026-08-04): the sink path's `accepted` list is already
-    post-validation, but the tool path's `payloads` is not, so a rejected label
-    or a failed row write was reported as a cell that "landed unstyled" — and
-    an all-rejected write nudged over zero cells. `word_run_nudge_counts`
-    attributes payloads to `result.cells_written` through the writer's
-    fuzzy-match table (a fuzzy-but-accepted label is the same row) and counts
-    cells, which is also the unit both messages name and the only unit that
-    survives `_combine_payloads` folding a note into one cell.
-    **Styling provenance is surfaced:** `_style_cell_html` tags each
-    cell `ops`/`unstyled`, persisted to `notes_cells.style_source` (v29,
-    preserve-on-omit like `concept_uuid`), returned by `GET /notes_cells`, and
-    shown as a chip in the Notes tab (`StyleSourceChip` — only for `unstyled`/
-    legacy `floor`, the cells that may want a formatter pass). Pinned by
-    `tests/test_notes_format_sidecar.py`, `tests/test_db_schema_v29.py`.
+- **One AI styling role plus deterministic source passthrough:** notes extraction
+  agents author content and table geometry only. Their typed tools do **not**
+  expose `format_ops`, and prompts do not ask them to infer styling while they
+  extract figures. PDF-origin tables land plain and may be styled later by the
+  dedicated formatter. Word/source tables are the narrow exception above: code
+  preserves the source's own table markup verbatim; that is passthrough, not
+  model-authored styling. The writer retains the legacy internal
+  `NotesPayload.format_ops` field for old stored payloads and compatibility
+  tests, but it is absent from every live model tool schema. Invalid legacy ops
+  degrade to plain and never block content. The deterministic house-style floor
+  remains removed because it invented borders not present in the source.
+  - **Source-copy replacement:** a source-styled resend replaces earlier drafts
+    for the same top-level note and row. `read_source_note` returns the whole
+    note slice, so `_top_level_note_key` matching ("9.1" → "9") makes this safe;
+    a different note sharing the row survives and draws an advisory mixed-row
+    message. With `source.html`, an unread source note gets
+    `format_unconsulted_source_nudge`; a source note that was read but rebuilt
+    without its table markup gets `format_uncopied_source_nudge`. Both paths
+    direct the agent to copy source markup, never synthesize styling. Counts are
+    based on cells actually written after label resolution, so rejected writes
+    cannot produce a false formatting warning. Styling provenance remains
+    persisted as `source` / legacy `ops` / `unstyled`; only `unstyled` and old
+    `floor` cells are surfaced as formatter candidates. Pinned by
+    `tests/test_notes_source_prompt.py`, `tests/test_notes_format_sidecar.py`,
+    and `tests/test_db_schema_v29.py`.
   - **Notes formatter agent (manual REPAIR pass, `POST /api/runs/{id}/notes-format`,
     per prose sheet):** the only AI role that authors styling on demand; returns
     JSON style patches applied to `notes_cells.html`, rejected unless rendered
@@ -1499,15 +1465,17 @@ Load-bearing invariants:
   never content matching. Content judgement (is sub-section (b) really in the
   cell?) is the reviewer's job. Statuses: `placed` / `missing` / `skipped` /
   `suspected_gap` (INTERNAL numbering holes only — before-first / after-last is
-  the documented blind spot). `skipped` is sourced from the Sheet-12 skip
-  receipts the coordinator persists to `{output_dir}/notes12_skips.json` at
-  fan-out time (loaded by both the reviewer context and the server finalizer via
-  `coverage_checklist.load_notes12_skips`) — an intentionally-skipped note is
-  `skipped`, never `missing`, so it doesn't tip the run. An empty inventory yields
-  `inventory_available=False` (loud, never empty-but-green). A note the reviewer
-  resolves (`not_applicable`/`confirmed_absent`) or that was skipped is also
-  dropped from the raw `coverage_gaps` detector family so `verify_findings`
-  doesn't re-flag it as still-open.
+  the documented blind spot). `skipped` remains in the persisted/API vocabulary
+  for older runs. Current Sheet-12 skip receipts are routing CLAIMS stored in
+  `{output_dir}/notes12_skips.json`, loaded by both the reviewer context and the
+  server finalizer via `coverage_checklist.load_notes12_skips`. A claim clears
+  coverage only when `source_note_refs` provenance shows the note placed on a
+  notes sheet. With destination provenance the row is `placed`; without it the
+  row is unresolved `missing`, retaining the claimed reason. This prevents a
+  same-agent receipt from proving its own cross-sheet hand-off. An empty
+  inventory yields `inventory_available=False` (loud, never empty-but-green).
+  Only a grounded reviewer resolution (`not_applicable`/`confirmed_absent`) is
+  removed from the raw `coverage_gaps` detector family; a bare skip claim is not.
 - **The human sees the POST-reviewer checklist.** The draft is a reviewer
   INPUT only. The notes reviewer auto-resolves every non-placed row via two
   grounded tools (`resolve_coverage_notes` → `confirmed_absent`/`not_applicable`;
@@ -1540,6 +1508,15 @@ Load-bearing invariants:
   summary. `web/src/components/NotesCoveragePanel.tsx` is a Notes-tab SECTION
   (not a `role="tab"` — gotcha #7), placement chips dispatch a
   `notes-coverage-focus` window event.
+- **Reviewer clears preserve routing precision.** `clear_note_cells` refuses to
+  remove the last provenance placement of a note. It also refuses to clear one
+  List-of-Notes row while that note remains in a different row on the same
+  sheet. Deterministic code cannot decide which MBRS disclosure label is more
+  precise without violating the all-LLM-judgement rule, so the reviewer keeps
+  both rows and raises `needs_human`. Cross-sheet duplicate clears remain
+  available when another placement survives; a reviewer-authored cell may be
+  cleared as an explicit same-pass undo. Pinned by
+  `tests/test_notes_reviewer_coverage.py`.
 - **Kill switch:** `XBRL_NOTES_COVERAGE` (default ON; `/api/settings` +
   `/api/config`; suite default OFF in `tests/conftest.py`, like spot-check).
   Rollback is a config flip — the table stays as an inert artifact.
@@ -1705,13 +1682,12 @@ primary input).
   the PDF's parent dir); PDF-only runs are byte-identical to before. The agent
   **COPIES the source table's markup — inline `style=` included — straight into
   `content`** (verbatim passthrough, 2026-07-19); it does NOT re-describe that
-  styling as `format_ops`, which was the original design and is what run 74
-  showed the model getting wrong. **PROSE still stays style-free**, enforced in
+  styling as a second model-authored representation. **PROSE still stays style-free**, enforced in
   code by `notes/writer.py::_strip_non_table_styles` — the narrowing is TABLES
   ONLY. Such tables are stamped `data-source-styled` so no renderer adds its own
-  grid. `format_ops` remains the channel for styling the agent *observes* rather
-  than copies (PDF runs, and any table with no source counterpart). See gotcha
-  #16, which owns the full rule — this bullet must not drift from it again.
+  grid. PDF tables with no source counterpart land plain; only the dedicated
+  formatter agent may author styling later. See gotcha #16, which owns the full
+  rule — this bullet must not drift from it again.
 - **No DB schema change** — files live on disk (hybrid-storage, gotcha #6). The
   inert `doc_conversions` table (gotcha #11) is NOT reused.
 

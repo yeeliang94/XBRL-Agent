@@ -3,7 +3,7 @@
 Contract:
 - The tool is only registered when `NotesDeps.batch_note_nums` is set
   (Sheet-12 sub-agent mode). Sheets 10/11/13/14 don't expose it.
-- Parses the receipt JSON from the agent, validates it against
+- Parses structured receipt entries from the agent, validates them against
   (batch_note_nums, payload_sink row labels), and either stashes the
   receipt on `deps.coverage_receipt` or returns an error string for
   the agent to retry against.
@@ -13,15 +13,26 @@ same pattern as `_sub_agent_sink_write` in Slice 0b.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
-from notes.agent import NotesDeps, _submit_coverage_impl
+from notes.agent import NotesDeps, _submit_coverage_entries_impl
 from notes.coverage import CoverageReceipt
 from notes.payload import NotesPayload
 from notes_types import NotesTemplateType
 from token_tracker import TokenReport
+
+
+def _submit(deps: NotesDeps, raw):
+    """Tests may keep readable JSON fixtures; production receives objects."""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            pass
+    return _submit_coverage_entries_impl(deps, raw)
 
 
 def _deps_in_sub_agent_mode(
@@ -80,7 +91,7 @@ def test_valid_receipt_stashes_on_deps_and_returns_accepted(tmp_path: Path):
        "row_labels": ["Disclosure of share capital"]}
     ]
     """
-    result = _submit_coverage_impl(deps, raw)
+    result = _submit(deps, raw)
     assert "accepted" in result.lower()
     assert isinstance(deps.coverage_receipt, CoverageReceipt)
     assert len(deps.coverage_receipt.entries) == 3
@@ -103,7 +114,7 @@ def test_valid_receipt_with_skip_is_accepted(tmp_path: Path):
        "row_labels": ["Disclosure of financial instruments"]}
     ]
     """
-    result = _submit_coverage_impl(deps, raw)
+    result = _submit(deps, raw)
     assert "accepted" in result.lower()
     assert deps.coverage_receipt is not None
     skipped = [e for e in deps.coverage_receipt.entries if e.action == "skipped"]
@@ -128,7 +139,7 @@ def test_missing_batch_note_rejected(tmp_path: Path):
        "row_labels": ["Disclosure of share capital"]}
     ]
     """
-    result = _submit_coverage_impl(deps, raw)
+    result = _submit(deps, raw)
     assert "missing" in result.lower() or "uncovered" in result.lower()
     # Explicit note numbers in the error so the agent knows exactly what
     # to add on its retry.
@@ -153,7 +164,7 @@ def test_extra_note_rejected(tmp_path: Path):
        "reason": "thought it was in my batch"}
     ]
     """
-    result = _submit_coverage_impl(deps, raw)
+    result = _submit(deps, raw)
     assert "99" in result
     assert deps.coverage_receipt is None
 
@@ -173,7 +184,7 @@ def test_written_entry_with_unknown_row_label_rejected(tmp_path: Path):
        "row_labels": ["Disclosure of something I never wrote"]}
     ]
     """
-    result = _submit_coverage_impl(deps, raw)
+    result = _submit(deps, raw)
     lower = result.lower()
     assert "something i never wrote" in lower
     assert deps.coverage_receipt is None
@@ -185,8 +196,8 @@ def test_malformed_json_rejected(tmp_path: Path):
         batch_note_nums=[4],
         sink_labels=["Disclosure of share capital"],
     )
-    result = _submit_coverage_impl(deps, "not a json list")
-    assert "json" in result.lower() or "parse" in result.lower()
+    result = _submit(deps, "not a json list")
+    assert "list" in result.lower()
     assert deps.coverage_receipt is None
 
 
@@ -198,7 +209,7 @@ def test_envelope_dict_rejected_must_be_list(tmp_path: Path):
         batch_note_nums=[4],
         sink_labels=["Disclosure of share capital"],
     )
-    result = _submit_coverage_impl(deps, '{"entries": []}')
+    result = _submit(deps, '{"entries": []}')
     assert "list" in result.lower()
     assert deps.coverage_receipt is None
 
@@ -223,7 +234,7 @@ def test_submit_coverage_requires_batch_note_nums(tmp_path: Path):
         filing_level="company",
     )
     # No batch_note_nums set — this deps is not in sub-agent mode.
-    result = _submit_coverage_impl(deps, "[]")
+    result = _submit(deps, "[]")
     assert (
         "not available" in result.lower()
         or "not in sub-agent mode" in result.lower()

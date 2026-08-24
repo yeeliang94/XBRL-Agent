@@ -52,7 +52,8 @@ assets", "Retained earnings", "Lease liabilities", "Contract liabilities").
 6. Call verify_totals() to check the balance sheet balances.
 7. If totals don't balance, identify which section is wrong, re-examine notes, and
    call write_facts() again with corrections.
-8. Call save_result() when totals balance.
+8. Call save_result() when totals balance, or use the shared prompt's explicit
+   acknowledged-unresolved path after a genuine re-examination if they cannot.
 
 === FAILURE MODE TO AVOID ===
 

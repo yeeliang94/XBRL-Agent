@@ -18,7 +18,9 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Annotated, Literal, Optional, Union
+
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +32,90 @@ logger = logging.getLogger(__name__)
 _NUMERIC_KEYS = frozenset({
     "group_cy", "group_py", "company_cy", "company_py", "cy", "py",
 })
+
+
+class NoteHeadingInput(BaseModel):
+    """Heading fields exposed in the model-facing ``write_notes`` schema."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    number: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1),
+        Field(description="Note number exactly as printed, including punctuation."),
+    ]
+    title: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1),
+        Field(description="Note title exactly as printed in the source."),
+    ]
+
+
+class NotesPayloadInput(BaseModel):
+    """Typed model-facing contract for one content extraction write."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    chosen_row_label: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1),
+        Field(description="Exact col-A label from the live template catalog."),
+    ]
+    content: str = Field(
+        default="",
+        description="Faithful note-body HTML; omit writer-owned h3 headings.",
+    )
+    evidence: str = Field(
+        default="",
+        description="Short citation using 1-indexed PDF page numbers viewed.",
+    )
+    source_pages: list[Annotated[int, Field(gt=0)]] = Field(
+        default_factory=list,
+        description="Every 1-indexed PDF page supporting this payload.",
+    )
+    numeric_values: Optional[dict[
+        Literal[
+            "group_cy", "group_py", "company_cy", "company_py", "cy", "py",
+        ],
+        Union[int, float],
+    ]] = Field(
+        default=None,
+        description="Numeric-sheet values only; include only disclosed entity keys.",
+    )
+    note_num: Optional[Annotated[int, Field(gt=0)]] = Field(
+        default=None,
+        description="Assigned top-level inventory note number in Sheet-12 batches.",
+    )
+    source_note_refs: list[str] = Field(
+        default_factory=list,
+        description="Visible source note references covered by this payload.",
+    )
+    parent_note: Optional[NoteHeadingInput] = Field(
+        default=None,
+        description="Required for non-empty writes; writer injects this heading.",
+    )
+    sub_note: Optional[NoteHeadingInput] = Field(
+        default=None,
+        description="Specific sub-note heading when this payload covers one.",
+    )
+
+    def to_payload(self, *, sub_agent_id: Optional[str]) -> "NotesPayload":
+        """Validate the internal invariants and inject harness-owned fields."""
+        return NotesPayload(
+            chosen_row_label=self.chosen_row_label,
+            content=self.content or "",
+            evidence=self.evidence or "",
+            source_pages=list(self.source_pages),
+            numeric_values=self.numeric_values,
+            sub_agent_id=sub_agent_id,
+            note_num=self.note_num,
+            source_note_refs=[str(ref) for ref in self.source_note_refs],
+            parent_note=(
+                self.parent_note.model_dump() if self.parent_note else None
+            ),
+            sub_note=self.sub_note.model_dump() if self.sub_note else None,
+            format_ops=None,
+        )
 
 
 def _validate_heading(field_name: str, heading: Optional[dict]) -> None:
@@ -118,14 +204,11 @@ class NotesPayload:
     # writer (not the model) is what makes headings impossible to drift.
     parent_note: Optional[dict] = None
     sub_note: Optional[dict] = None
-    # Formatting sidecar (docs/PLAN-notes-format-sidecar.md): the table
-    # formatting the agent OBSERVED in the PDF for THIS payload's tables,
-    # as the constrained op vocabulary of notes/format_patch.py — never
-    # inline styles (content stays style-free, gotcha #16). Optional: a
-    # missing/empty value means "no observation" and the writer falls back
-    # to the deterministic house-style floor. Table indices are zero-based
-    # WITHIN this payload's own content; the writer re-offsets them when it
-    # concatenates payloads into one cell.
+    # Legacy formatting sidecar retained for stored payload compatibility.
+    # Live model-facing tools do not expose this field; extraction agents
+    # author content only and the dedicated formatter owns AI styling. A
+    # missing/invalid value renders plain. Table indices are zero-based within
+    # the payload and the writer re-offsets them when combining cells.
     format_ops: Optional[list] = None
     # True ONLY for payloads CODE built from source blocks
     # (`write_note_from_source` → `_write_from_source_impl`). The rendered
@@ -178,7 +261,7 @@ class NotesPayload:
         if self.format_ops is not None:
             # Lenient shape check only (list of op objects) — the full
             # target/style validation happens in apply_cell_operations at
-            # write time, where a failure degrades to the house style
+            # write time, where a failure degrades to plain content
             # rather than rejecting the payload. A structurally-wrong value
             # is still a parse error (same path as other malformed fields).
             if not isinstance(self.format_ops, list) or not all(

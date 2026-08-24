@@ -399,7 +399,7 @@
           </div>
           <div class="tech">
             <span class="label">Technically</span>
-            <p>Notes fill MBRS templates 10–14 (MFRS) / 11–15 (MPERS). Discovery is PDF-first (scout inventory), then pure LLM judgement — no deterministic matching or synonym dictionary. Sheet 12 (the list of notes) fans out into model-aware sub-agents. Cells are sanitized HTML stored in <code>notes_cells</code> (the DB is source of truth; the xlsx download re-overlays from it at stream time). Styling travels through a constrained <code>format_ops</code> sidecar so the content channel stays style-free. A post-run coverage checklist reconciles every top-level note against where its content landed and can tip the run to <code>completed_with_errors</code> if a note is missing.</p>
+            <p>Notes fill MBRS templates 10–14 (MFRS) / 11–15 (MPERS). Discovery is PDF-first (scout inventory), then pure LLM judgement — no deterministic matching or synonym dictionary. Sheet 12 (the list of notes) fans out into model-aware sub-agents. Cells are sanitized HTML stored in <code>notes_cells</code> (the DB is source of truth; the xlsx download re-overlays from it at stream time). Extraction agents author content and table structure only; source-document table markup is preserved when available, while the dedicated formatter agent handles optional styling repairs. A post-run coverage checklist reconciles every top-level note against where its content landed and can tip the run to <code>completed_with_errors</code> if a note is missing.</p>
           </div>
         </div>
       </div>

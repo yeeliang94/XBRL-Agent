@@ -67,7 +67,7 @@ def test_skip_of_a_note_whose_write_was_rejected_is_withheld():
 
 
 def test_unattributed_failure_taints_every_skip_from_that_sub_agent():
-    """A `payloads_json` that never parsed carries no note number, so we cannot
+    """Malformed payload input can carry no note number, so we cannot
     tell which note the failure belonged to. Run 84's exact shape."""
     sub = _sub([_entry(19), _entry(20), _entry(21)], unattributed=6)
     for n in (19, 20, 21):
@@ -248,13 +248,13 @@ def test_accepted_payloads_record_no_failure(tmp_path: Path):
     assert deps.unattributed_write_failures == 0
 
 
-def test_malformed_payloads_json_is_recorded_by_the_tool(tmp_path: Path):
-    """Run 84's actual failure: `write_notes` returns "Invalid JSON: Extra
-    data" and never reaches the sink, so the tool has to record it or nothing
-    does."""
-    import asyncio
-    from types import SimpleNamespace
-    from notes.agent import create_notes_agent
+def test_write_notes_boundary_records_malformed_model_payload(tmp_path: Path):
+    """Run 84's malformed call reaches the sink's failure accounting."""
+    from notes.agent import (
+        _build_notes_payloads,
+        _sub_agent_sink_write,
+        create_notes_agent,
+    )
 
     deps = _sub_agent_deps(tmp_path)
     agent, real_deps = create_notes_agent(
@@ -268,13 +268,19 @@ def test_malformed_payloads_json_is_recorded_by_the_tool(tmp_path: Path):
     real_deps.payload_sink = []
     real_deps.sub_agent_id = "notes:LIST_OF_NOTES:sub0"
 
-    write_tool = agent._function_toolset.tools["write_notes"].function
-    ctx = SimpleNamespace(deps=real_deps)
+    tool = agent._function_toolset.tools["write_notes"]
+    schema = tool.function_schema.json_schema
+    assert "propertyNames" not in str(schema)
+    assert "payloads_json" not in str(schema)
 
-    # Two concatenated objects — precisely "Extra data".
-    asyncio.run(write_tool(ctx, '{"payloads": []}{"payloads": []}'))
+    built, errors = _build_notes_payloads(
+        [{"chosen_row_label": "Disclosure of cash", "numeric_values": {
+            "invented_scope": 1,
+        }}],
+        sub_agent_id=real_deps.sub_agent_id,
+    )
+    _sub_agent_sink_write(real_deps, built, parse_errors=errors)
+
+    assert built == []
+    assert len(errors) == 1
     assert real_deps.unattributed_write_failures == 1
-
-    # A parsed but non-list body is the other early return.
-    asyncio.run(write_tool(ctx, '{"nope": 1}'))
-    assert real_deps.unattributed_write_failures == 2

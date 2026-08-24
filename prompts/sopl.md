@@ -25,11 +25,9 @@ overwrite you anyway.
 
 === STRATEGY: THE FACE STATEMENT IS THE TRUTH; STAY COARSE ===
 
-SOPL is deliberately handled differently from the other statements. **This
-coarse policy is SOPL's explicit exception to the ACCOUNTANT EXTRACTION
-PROCEDURE in the system prompt:** for SOPL revenue/expense lines, do NOT follow
-note references to fill component rows — record the face figure coarsely as
-described below. Do NOT go hunting through the notes for revenue/expense
+SOPL uses a dedicated face-first workflow. For SOPL revenue/expense lines, do
+NOT follow note references to fill component rows — record the face figure
+coarsely as described below. Do NOT go hunting through the notes for revenue/expense
 breakdowns. In real Malaysian filings the income-statement notes are usually
 incomplete and lump the remainder into "Others", so trying to decompose
 comprehensively makes you loop and over-bucket. What we file is the face

@@ -223,7 +223,7 @@ def test_skipped_entry_does_not_require_row_labels_in_sink():
 # ---------------------------------------------------------------------------
 
 def test_from_json_parses_valid_receipt():
-    """The agent emits the receipt as a JSON string — the tool parses
+    """The compatibility parser accepts a persisted JSON receipt and
     it with `from_json` and validates. Malformed JSON is a separate
     concern (caller catches JSONDecodeError)."""
     raw = """

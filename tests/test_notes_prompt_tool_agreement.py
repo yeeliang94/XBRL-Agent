@@ -24,6 +24,12 @@ is the wrong way round when the body carries the contract.
 4. `notes_reviewer.md` and its generated packet hardcoded the MFRS slot
    numbers. MPERS puts the same notes one slot higher (gotcha #15), so an
    MPERS reviewer was directed at the wrong sheets.
+
+5. The notes reviewer prompt told the model to merge one Sheet-12 placement
+   into another and clear the source, while the deterministic guard now
+   preserves same-sheet routing precision. The prompt and packet must direct
+   that semantic decision to a human instead of teaching a tool call that is
+   refused.
 """
 from __future__ import annotations
 
@@ -56,7 +62,7 @@ def _tool_descriptions(agent) -> dict[str, str]:
 
 
 # --------------------------------------------------------------------------
-# 1. Formatting fallback
+# 1. Formatting ownership
 # --------------------------------------------------------------------------
 
 def test_notes_base_does_not_promise_a_house_style():
@@ -64,11 +70,9 @@ def test_notes_base_does_not_promise_a_house_style():
     assert "standard house style" not in _NOTES_BASE
 
 
-def test_notes_base_states_the_real_fallback_once():
-    """Omitting format_ops renders plain. That is stated, and nothing in the
-    file contradicts it."""
-    assert "renders plain" in _NOTES_BASE
-    assert "nothing adds borders, rules or fills on your behalf" in _NOTES_BASE
+def test_notes_base_assigns_styling_to_the_formatter():
+    assert "format_ops" not in _NOTES_BASE
+    assert "dedicated notes formatter" in _NOTES_BASE
 
 
 # --------------------------------------------------------------------------
@@ -152,3 +156,29 @@ def test_reviewer_packet_resolves_per_standard(standard, policies, listofnotes):
     assert "CROSS_SHEET" not in rendered
     assert f"Sheet {policies} row 7" in rendered
     assert f"Sheet {listofnotes} row 9" in rendered
+
+
+# --------------------------------------------------------------------------
+# 5. Same-sheet clear safety
+# --------------------------------------------------------------------------
+
+def test_reviewer_prompt_routes_same_sheet_consolidation_to_human():
+    assert "refuses same-Sheet-{{CROSS_SHEET:list_of_notes}} consolidation" in _REVIEWER
+    assert "raise_flag(kind='needs_human'" in _REVIEWER
+    assert "then `clear_note_cells` the fragment" not in _REVIEWER
+
+
+def test_reviewer_packet_matches_same_sheet_clear_guard():
+    packet = build_notes_reviewer_packet({
+        "topline_splits": [{
+            "note_num": 9,
+            "sheet": "Notes-Listofnotes",
+            "rows": [
+                {"row": 48, "row_label": "Dedicated"},
+                {"row": 49, "row_label": "Broad"},
+            ],
+            "source_note_refs": ["9"],
+        }],
+    })
+    assert "clear guard refuses same-sheet consolidation" in packet
+    assert "raise a needs_human flag" in packet

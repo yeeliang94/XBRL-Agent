@@ -35,9 +35,74 @@ BLOCK = re.compile(
     re.S,
 )
 
+ASSEMBLED_EXAMPLES = re.compile(
+    r'<section id="ex-face">.*?</section><section id="ex-notes">.*?</section>',
+    re.S,
+)
+
+ASSEMBLED_REPLACEMENT = (
+    '<section id="runtime-prompts"><h2>Runtime-assembled prompts</h2>'
+    '<p>Runtime prompts are intentionally not copied into this document. They '
+    'contain live template catalogs and source-specific data, so a pasted '
+    'snapshot becomes stale as soon as either input changes. Inspect the '
+    'agent trace for the exact prompt used by a run; traces also record model, '
+    'provider, transport, configured reasoning effort, and effective reasoning '
+    'effort. The mechanically synchronized <code>(verbatim)</code> blocks above '
+    'remain the static instruction source of truth.</p></section>'
+)
+
+COPY_REPLACEMENTS = (
+    (
+        '<a href="#ex-face">★ Full example: Face</a>\n'
+        '<a href="#ex-notes">★ Full example: Notes</a>\n',
+        '<a href="#runtime-prompts">Runtime prompts</a>\n',
+    ),
+    (
+        'Separate vision prompts exist for TOC extraction and scanned-PDF '
+        'notes discovery.',
+        'Separate helper prompts handle TOC vision, scanned-note discovery, '
+        'page calibration, and scanned-PDF source transcription; all are '
+        'listed in the matrix above.',
+    ),
+    (
+        'A bird\'s-eye view of the system prompt each agent receives, with the '
+        'agent-specific instructions, tools, and settings inputs. Blocks '
+        'labelled <b>verbatim</b> are mechanically synchronized with the live '
+        '<code>prompts/</code> files. The two assembled examples are illustrative '
+        'snapshots and are not the source of truth; runtime prompts also '
+        'include source-specific data and live template catalogs.',
+        'A bird\'s-eye view of every agent prompt in the pipeline, including '
+        'helper vision/transcription roles. Blocks labelled <b>verbatim</b> '
+        'are mechanically synchronized with the live <code>prompts/</code> '
+        'files. Runtime prompts include source-specific data and live template '
+        'catalogs, so the exact assembled prompt belongs in the run trace, not '
+        'in a copied documentation snapshot.',
+    ),
+    (
+        'Generated from the live repository on the current branch. Static '
+        '<code>.md</code> bodies are read verbatim; the two ★ examples are '
+        'produced by calling the real prompt-assembly functions, so they match '
+        'what an agent actually receives. Re-run the generator after editing '
+        'any <code>prompts/*.md</code> or the assembly code to refresh.',
+        'Generated from the live repository on the current branch. Static '
+        '<code>.md</code> bodies marked verbatim are synchronized by '
+        '<code>scripts/refresh_prompt_audit.py</code> and pinned by tests. '
+        'Runtime-assembled prompts are retained in per-run traces.',
+    ),
+)
+
 
 def refresh(text: str) -> tuple[str, list[str]]:
     changed: list[str] = []
+
+    for old, new in COPY_REPLACEMENTS:
+        if old in text:
+            text = text.replace(old, new)
+            changed.append("audit copy")
+
+    text, example_count = ASSEMBLED_EXAMPLES.subn(ASSEMBLED_REPLACEMENT, text)
+    if example_count:
+        changed.append("runtime example policy")
 
     def replace(m: re.Match) -> str:
         name = m.group("name")
