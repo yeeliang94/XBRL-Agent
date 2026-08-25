@@ -5,12 +5,13 @@ extracted from the document itself (ingest.docx_html); scanned PDFs have no
 such body to extract, so this module produces one by TRANSCRIBING each page
 image with a vision model. Chosen over Docling (measured 2026-08-10): no new
 dependencies, no model downloads through the enterprise proxy, no 3.6 GB RAM
-peak — and the transcription carries the visible rules/underlines as inline
-border styles, which Docling's output cannot.
+peak. The transcription carries content and table geometry only. PDF styling
+is removed before publication so scanned and text PDFs use the same dedicated
+formatter path.
 
 Trust contract (the load-bearing part): a transcription is a *reading* of the
-document, not the document. Its STRUCTURE and STYLING feed the verbatim-copy
-channel exactly like a Word sidecar; its FIGURES are advisory and the notes
+document, not the document. Its STRUCTURE feeds the source-copy channel; its
+FIGURES are advisory and the notes
 prompt tells the agent to verify each one against the PDF (notes/agent.py
 renders a transcription-specific source block). ``source_meta.json`` records
 the provenance so downstream code can tell the two sidecars apart — absence of
@@ -37,6 +38,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
 import fitz  # PyMuPDF
+from bs4 import BeautifulSoup, Tag
 
 from model_settings import build_model_settings, configured_role_thinking_level
 from notes.source_snippets import source_html_path_for
@@ -76,9 +78,11 @@ TRANSCRIBE_PROMPT = (
     "Rules: every table becomes a <table> with the exact rows, columns, headers "
     "and figures shown, including bracketed negatives and '-' dashes exactly as "
     "printed. Headings become <h3>. Prose becomes <p>. Do not summarise, do not "
-    "omit anything, do not add anything. Reproduce visible formatting: bold text "
-    "as <strong>, and note which rows carry single or double underlines using "
-    "style attributes (border-bottom: 1px solid / 3px double). "
+    "omit anything, do not add anything. Preserve content and table geometry "
+    "only. Do not emit style, class, width, border, fill, colour, font, "
+    "alignment, <strong>, <em>, <u>, <span>, or other presentation markup; a "
+    "separate formatter reads the PDF image and applies the supported mTool "
+    "style profile later. "
     "Output ONLY the HTML."
 )
 
@@ -87,6 +91,14 @@ _FENCE_RE = re.compile(r"^```[a-zA-Z]*\n?|\n?```$")
 # on the first gpt-5.6-luna test) plus the usual non-breaking variants. The
 # sanitiser downstream doesn't strip these, so normalise at the source.
 _ODD_WHITESPACE_RE = re.compile("[\u00a0\u2000-\u200b\u3000]")
+
+_PRESENTATION_TAGS = frozenset({
+    "b", "strong", "i", "em", "u", "s", "strike", "mark", "span", "font",
+})
+_GEOMETRY_ATTRS_BY_TAG = {
+    "td": frozenset({"rowspan", "colspan"}),
+    "th": frozenset({"rowspan", "colspan"}),
+}
 
 
 @dataclass
@@ -97,9 +109,24 @@ class TranscribeResult:
 
 
 def normalize_transcription(html: str) -> str:
-    """Strip model wrapping (code fences) and exotic whitespace."""
+    """Return structure-only transcript HTML.
+
+    Table rows/cells plus rowspan/colspan survive. Presentation attributes and
+    purely-presentational inline tags are removed deterministically.
+    """
     out = _FENCE_RE.sub("", html.strip()).strip()
-    return _ODD_WHITESPACE_RE.sub(" ", out)
+    out = _ODD_WHITESPACE_RE.sub(" ", out)
+    soup = BeautifulSoup(out, "html.parser")
+    for node in soup.find_all(True):
+        if not isinstance(node, Tag):
+            continue
+        allowed_attrs = _GEOMETRY_ATTRS_BY_TAG.get(node.name, frozenset())
+        for attr in list(node.attrs):
+            if attr not in allowed_attrs:
+                del node.attrs[attr]
+    for node in list(soup.find_all(_PRESENTATION_TAGS)):
+        node.unwrap()
+    return str(soup)
 
 
 def pdf_has_text_layer(pdf_path: str | Path) -> bool:
@@ -255,6 +282,7 @@ def write_pdf_sidecar(
 
     meta = {
         "origin": "llm_transcription",
+        "formatting": "stripped_for_pdf_formatter",
         "model": model_name,
         "pages": sorted(result.pages_html),
         "usage": result.usage,

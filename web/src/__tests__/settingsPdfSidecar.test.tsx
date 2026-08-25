@@ -49,6 +49,8 @@ afterEach(() => cleanup());
 
 const toggle = () =>
   screen.findByLabelText(/Transcribe scanned PDF notes pages before extraction/i);
+const formatToggle = () =>
+  screen.findByLabelText(/Automatically format PDF notes for mTool/i);
 
 async function save() {
   fireEvent.click(await screen.findByRole("button", { name: /save/i }));
@@ -89,5 +91,28 @@ describe("Scanned PDF transcript toggle in Settings", () => {
   test("is read-only for non-admins", async () => {
     renderForm({}, false);
     expect(((await toggle()) as HTMLInputElement).disabled).toBe(true);
+  });
+});
+
+describe("PDF notes automatic formatter toggle in Settings", () => {
+  test("defaults to OFF and submits an enabled value", async () => {
+    renderForm();
+    const input = (await formatToggle()) as HTMLInputElement;
+    expect(input.checked).toBe(false);
+    fireEvent.click(input);
+    expect(await save()).toMatchObject({ pdf_notes_auto_format: true });
+  });
+
+  test("explains shared scanned/text scope, safety, and paid passes", async () => {
+    renderForm({ pdf_notes_auto_format: true });
+    expect(((await formatToggle()) as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByText(/Scanned and selectable-text PDFs/i)).toBeTruthy();
+    expect(screen.getByText(/table rows and columns are locked/i)).toBeTruthy();
+    expect(screen.getByText(/one paid formatting pass per filled prose sheet/i)).toBeTruthy();
+  });
+
+  test("is read-only for non-admins", async () => {
+    renderForm({}, false);
+    expect(((await formatToggle()) as HTMLInputElement).disabled).toBe(true);
   });
 });

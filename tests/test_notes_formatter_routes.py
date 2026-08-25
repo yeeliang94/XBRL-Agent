@@ -36,7 +36,10 @@ def formatter_client(tmp_path: Path, monkeypatch):
         # The launch endpoint only formats finished runs (lifecycle interlock).
         repo.mark_run_finished(conn, run_id, "completed")
 
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    # The application uses GOOGLE_API_KEY for its enterprise proxy. Setting
+    # OPENAI_API_KEY made this fixture depend on a developer .env in serial
+    # runs and fail in clean xdist workers before reaching the route behavior.
+    monkeypatch.setenv("GOOGLE_API_KEY", "sk-test")
     monkeypatch.setattr(server_module, "_create_proxy_model", lambda *a, **k: "fake-model")
     return TestClient(server_module.app), run_id, server_module
 

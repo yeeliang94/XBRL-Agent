@@ -17,8 +17,8 @@ import { GeneralSettingsForm } from "./GeneralSettingsForm";
 interface Props {
   isOpen: boolean;
   onClose: () => void;
-  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; entity_memory?: boolean }>;
-  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; auto_review: boolean; entity_memory: boolean }>) => Promise<{ status: string }>;
+  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; entity_memory?: boolean; pdf_notes_auto_format?: boolean }>;
+  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; auto_review: boolean; entity_memory: boolean; pdf_notes_auto_format: boolean }>) => Promise<{ status: string }>;
   testConnection: (body: Partial<{ proxy_url: string; api_key: string; model: string }>) => Promise<{ status: string; model?: string; latency_ms?: number; message?: string }>;
 }
 

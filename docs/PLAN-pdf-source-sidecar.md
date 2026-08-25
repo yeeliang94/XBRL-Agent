@@ -8,14 +8,20 @@ assessment → Docling experiments → gpt-5.6-luna transcription test). Memory:
 `chunkless_rag_assessment.md`.
 **Last Updated:** 2026-08-17
 
+**Current-behavior correction (2026-08-25):** the live validation below proved
+that transcription is useful for content and geometry. Its copied styling is no
+longer the product path. `normalize_transcription` now strips presentation
+before publication, and the dedicated PDF formatter owns styling for both
+scanned and text PDFs. See `docs/HANDOFF-pdf-mtool-formatting.md`. Historical
+run-263 results remain below as evidence, not as the current styling contract.
+
 ## Summary
 
-Scanned-PDF runs get the same `source.html` sidecar that Word uploads already
-enjoy, produced by an LLM vision transcription pass instead of mammoth. Notes
-agents can then reuse the existing source-copy machinery (`read_source_note`,
-verbatim table markup, `data-source-styled`) on scans. The sidecar is a
-*reading* of the document, not the document: structure and styling are trusted,
-figures stay advisory and must be verified against the PDF.
+Scanned-PDF runs get a `source.html` sidecar produced by an LLM vision
+transcription pass. Notes agents reuse the source-read machinery for content
+and table geometry. Presentation is stripped and later authored by the
+dedicated PDF formatter. The sidecar is a *reading* of the document, not the
+document; figures stay advisory and must be verified against the PDF.
 
 ## Key Decisions
 
@@ -26,7 +32,7 @@ figures stay advisory and must be verified against the PDF.
   hardest sample page with every figure correct AND the rules/double-underlines
   as inline border styles — ~17 s and 1–2 ¢ per page through the existing LLM
   plumbing. No new dependencies anywhere.
-- **Trust split.** Transcribed structure + styling feed the verbatim-copy
+- **Trust split.** Transcribed content + geometry feed the structure-copy
   channel; transcribed NUMBERS are scout-grade (prompt says "model-transcribed
   — VERIFY figures against the PDF"). This differs from Word runs, so the
   source prompt block must branch on sidecar provenance.

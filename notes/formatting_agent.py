@@ -185,6 +185,7 @@ FORMATTER_ERROR_TYPES = (
     "model_error",          # unexpected exception in the pass
     "restarted",            # server restarted while the pass was running
     "reverted",             # user reverted the pass's formatting
+    "cancelled",            # Stop All during the automatic PDF pass
 )
 
 
@@ -408,6 +409,7 @@ async def run_notes_formatter(
     sheet: str,
     model: Union[str, Model],
     output_dir: str = "",
+    style_sources: Optional[set[str]] = None,
 ) -> dict[str, Any]:
     """Run the formatter pass and attach cross-pass token telemetry.
 
@@ -420,6 +422,7 @@ async def run_notes_formatter(
     outcome = await _run_notes_formatter_impl(
         run_id=run_id, db_path=db_path, pdf_path=pdf_path, sheet=sheet,
         model=model, output_dir=output_dir, usage=usage,
+        style_sources=style_sources,
     )
     outcome.update(_usage_fields(usage))
     return outcome
@@ -434,6 +437,7 @@ async def _run_notes_formatter_impl(
     model: Union[str, Model],
     output_dir: str,
     usage: RunUsage,
+    style_sources: Optional[set[str]] = None,
 ) -> dict[str, Any]:
     if not pdf_path or not Path(pdf_path).exists():
         return {
@@ -445,6 +449,7 @@ async def _run_notes_formatter_impl(
         cells = [
             c for c in repo.list_notes_cells_for_run(conn, run_id)
             if c.sheet == sheet and (c.html or "").strip()
+            and (style_sources is None or c.style_source in style_sources)
         ]
     if not cells:
         return {

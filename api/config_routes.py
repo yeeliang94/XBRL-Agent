@@ -72,6 +72,7 @@ _ADMIN_ONLY_SETTINGS_KEYS = frozenset({
     "scout_enabled_default",
     "auto_review",
     "notes_auto_review",
+    "pdf_notes_auto_format",
     "spot_check",
     "spot_check_mode",
     "notes_coverage",
@@ -205,6 +206,9 @@ async def get_config():
         # Scanned-PDF transcribed source sidecar (docs/PLAN-pdf-source-sidecar.md).
         # Default off.
         "pdf_sidecar": server._pdf_sidecar_enabled(),
+        # PDF-only post-review formatter. Default off because it adds one
+        # paid visual formatting pass per prose sheet.
+        "pdf_notes_auto_format": server._pdf_notes_auto_format_enabled(),
         # Notes source integrity rollout mode (gotcha #31). Default off.
         # `shadow` computes the verdict and changes nothing; `enforce` makes
         # the block-id path live and lets an unresolved block tip run status.
@@ -392,6 +396,9 @@ async def update_settings(body: dict, request: Request):
     if "notes_auto_review" in body:
         set_key(str(ENV_FILE), "XBRL_NOTES_AUTO_REVIEW",
                 "true" if body["notes_auto_review"] else "false")
+    if "pdf_notes_auto_format" in body:
+        set_key(str(ENV_FILE), "XBRL_PDF_NOTES_AUTO_FORMAT",
+                "true" if body["pdf_notes_auto_format"] else "false")
     # Clean-run spot-check (issue 1): enable toggle + depth (light/full).
     if "spot_check" in body:
         set_key(str(ENV_FILE), "XBRL_SPOT_CHECK",

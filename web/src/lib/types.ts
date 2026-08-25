@@ -249,6 +249,7 @@ export type PipelineStage =
   // prose-notes findings after the merge. Replaced the old `validating_notes`
   // label; kept here too so older in-flight streams still render.
   | "reviewing_notes"
+  | "formatting_notes"
   | "validating_notes"
   | "done";
 
@@ -521,6 +522,9 @@ export interface ExtendedSettingsResponse extends SettingsResponse {
   /** Scanned-PDF transcribed source sidecar (docs/PLAN-pdf-source-sidecar.md).
    *  Default off; admin-only because it adds paid vision calls per run. */
   pdf_sidecar?: boolean;
+  /** Automatically standardise PDF prose notes after review. PDF-only and
+   *  default off because it adds a paid formatter pass per prose sheet. */
+  pdf_notes_auto_format?: boolean;
   /** Notes source-integrity rollout mode (gotcha #31). Default 'off'. */
   notes_source_integrity?: SourceIntegrityMode;
   /** Server-supplied vocabulary, so a new mode needs no frontend edit. */

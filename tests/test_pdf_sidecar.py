@@ -45,9 +45,32 @@ def test_normalize_strips_code_fences_and_exotic_whitespace():
     assert out == "<h3>5. Receivables</h3>"
 
 
-def test_normalize_plain_html_unchanged():
-    raw = "<p>Total <strong>391,675</strong></p>"
-    assert normalize_transcription(raw) == raw
+def test_normalize_strips_presentation_but_preserves_table_geometry():
+    from notes.writer import _style_cell_html
+
+    raw = (
+        '<h3 style="color: red">5 Receivables</h3>'
+        '<table style="border-collapse: collapse" width="100%">'
+        '<tr><th style="background-color: #ddd"><strong>Category</strong></th>'
+        '<th>RM</th></tr>'
+        '<tr><td rowspan="2" style="border-bottom: 3px double #000">Trade</td>'
+        '<td style="text-align: right"><em>391,675</em></td></tr>'
+        '<tr><td><span style="color: blue">10,000</span></td></tr>'
+        '</table>'
+    )
+
+    out = normalize_transcription(raw)
+
+    assert 'style=' not in out
+    assert 'width=' not in out
+    assert '<strong>' not in out
+    assert '<em>' not in out
+    assert '<span' not in out
+    assert 'rowspan="2"' in out
+    assert "Category" in out
+    assert "391,675" in out
+    _styled, style_source = _style_cell_html(out, None, "Receivables", [])
+    assert style_source == "unstyled"
 
 
 # ---------------------------------------------------------------- text layer

@@ -44,8 +44,12 @@ def test_default_origin_is_the_word_block_unchanged():
 
 def test_transcription_block_carries_the_trust_split():
     llm = _render_source_html_block(True, "llm_transcription")
-    # Structure/styling: verbatim copy, no format_ops translation.
-    assert "COPY THE TRANSCRIBED MARKUP VERBATIM" in llm
+    # Structure is copied, but PDF presentation is deliberately left for the
+    # dedicated formatter so scanned and text PDFs use one styling path.
+    assert "COPY THE TRANSCRIBED TABLE STRUCTURE" in llm
+    assert "contains no presentational styling" in llm
+    assert "dedicated formatter" in llm
+    assert "style=` attributes included" not in llm
     # Figures: model-read, verify against the PDF, PDF wins.
     assert "VERIFY EVERY FIGURE" in llm
     assert "the PDF wins" in llm
@@ -128,8 +132,13 @@ def test_nudges_branch_on_origin_and_keep_word_bytes(tmp_path: Path):
         assert word_default == word_explicit  # Word runs byte-identical
         assert "Word" in word_default
         assert "Word" not in llm
-        assert "AI-transcribed" in llm or "transcribed" in llm
-        assert "verify the figures against the PDF" in llm
+        if fn is format_uncopied_source_nudge:
+            # Structure-only PDF transcripts are supposed to land unstyled;
+            # only the dedicated formatter authors their presentation.
+            assert llm == ""
+        else:
+            assert "AI-transcribed" in llm or "transcribed" in llm
+            assert "verify the figures against the PDF" in llm
         assert fn(0, origin="llm_transcription") == ""
 
 

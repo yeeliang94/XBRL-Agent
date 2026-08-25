@@ -296,6 +296,7 @@ export function ExtractPage({
           {state.pipelineStage === "reviewing" && "AI review: tracing flagged figures back to the PDF…"}
           {state.pipelineStage === "re_checking" && "Re-running the cross-checks after the AI review…"}
           {state.pipelineStage === "reviewing_notes" && "AI review: checking the notes against the PDF…"}
+          {state.pipelineStage === "formatting_notes" && "AI formatting: standardising the notes for mTool…"}
           {state.pipelineStage === "validating_notes" && "Checking the notes templates…"}
           <span style={styles.pipelineStageHint}>
             This can take a few minutes — you can leave this page open.

@@ -1240,6 +1240,7 @@ def _create_proxy_model(model_name: str, proxy_url: str, api_key: str):
 # tests can't drift.
 CORRECTION_AGENT_ID = "CORRECTION"
 NOTES_VALIDATOR_AGENT_ID = "NOTES_VALIDATOR"
+NOTES_FORMATTER_AGENT_ID = "NOTES_FORMATTER"
 
 # Per-turn timeout for the correction agent. Mirrors the notes coordinator's
 # NOTES_TURN_TIMEOUT — 180s is comfortably above healthy p99 for a single
@@ -2915,6 +2916,34 @@ def _notes_auto_review_enabled() -> bool:
     return os.environ.get("XBRL_NOTES_AUTO_REVIEW", "true").lower() == "true"
 
 
+def _pdf_notes_auto_format_enabled() -> bool:
+    """Whether PDF prose notes are standardised automatically after review.
+
+    Default OFF because each selected prose sheet adds a paid formatter pass.
+    Word uploads are excluded at the orchestration call site.
+    """
+    return os.environ.get(
+        "XBRL_PDF_NOTES_AUTO_FORMAT", "false"
+    ).lower() == "true"
+
+
+def _should_auto_format_pdf_notes(
+    session_dir: Path, *, merge_succeeded: bool, has_notes_result: bool,
+) -> bool:
+    """Pure gate for the PDF-only automatic formatter.
+
+    Word uploads also carry ``uploaded.pdf`` after conversion, so the absence
+    of ``uploaded.docx`` is the source-type boundary.
+    """
+    return bool(
+        merge_succeeded
+        and has_notes_result
+        and _pdf_notes_auto_format_enabled()
+        and (session_dir / "uploaded.pdf").exists()
+        and not (session_dir / "uploaded.docx").exists()
+    )
+
+
 def _notes_coverage_tips_status(coverage: Optional[dict]) -> bool:
     """Whether a run's notes coverage summary tips it to
     ``completed_with_errors`` (PRD Decision 3, docs/PLAN-notes-coverage-and-
@@ -3373,6 +3402,9 @@ def _load_extended_settings() -> dict:
         "auto_review": _auto_review_enabled(),
         # Notes reviewer auto-trigger (docs/PLAN.md — Notes Reviewer). Default on.
         "notes_auto_review": _notes_auto_review_enabled(),
+        # PDF-only, style-safe notes formatter. Default off because it adds
+        # paid visual review calls per prose sheet.
+        "pdf_notes_auto_format": _pdf_notes_auto_format_enabled(),
         # Issue 1 (2026-06-21): clean-run spot-check toggle + depth. Default on/light.
         "spot_check": _spot_check_enabled(),
         "spot_check_mode": _spot_check_mode(),
@@ -4400,7 +4432,7 @@ async def run_multi_agent_stream(
     phases — **Validate** → **Extract** → **Cascade** → **Merge/Render** →
     **Check** → **Review** → **Persist/Finalize**. Phase boundaries are marked
     by ``_emit_stage(...)`` events (extracting | merging | cross_checking |
-    reviewing | re_checking | reviewing_notes | done). The first phase is a
+    reviewing | re_checking | reviewing_notes | formatting_notes | done). The first phase is a
     standalone unit (:func:`_validate_and_build_run`) returning one structured
     result; the remaining phases stay inline in this generator because each is
     interleaved with the GeneratorExit-tolerant ``event_queue`` drain (gotcha
@@ -6361,6 +6393,87 @@ async def run_multi_agent_stream(
                         logger.warning(
                             "Failed to release notes-review task for run %s",
                             run_id, exc_info=True)
+
+        # PDF notes use one styling author. Extraction stores content/table
+        # geometry, then this optional pass reads the PDF and applies the
+        # standardised mTool-safe profile. Word uploads keep their verbatim
+        # source-styling path and never enter this block.
+        if _should_auto_format_pdf_notes(
+            session_dir,
+            merge_succeeded=merge_result.success,
+            has_notes_result=notes_result is not None,
+        ):
+            from notes_types import NOTES_REGISTRY as _FORMAT_NOTES_REG
+
+            _format_sheets = sorted({
+                _FORMAT_NOTES_REG[r.template_type].sheet_name
+                for r in notes_result.agent_results
+                if r.workbook_path
+                and not _FORMAT_NOTES_REG[r.template_type].is_numeric
+            })
+            if _format_sheets:
+                _emit_stage("formatting_notes")
+                _format_model_name = _notes_formatter_model_name() or model_name
+
+                async def _auto_format_pdf_notes():
+                    from notes.auto_format import run_pdf_auto_format
+
+                    return await run_pdf_auto_format(
+                        run_id=run_id,
+                        db_path=str(AUDIT_DB_PATH),
+                        pdf_path=str(session_dir / "uploaded.pdf"),
+                        sheets=_format_sheets,
+                        model_name=_format_model_name,
+                        model_factory=lambda: _create_proxy_model(
+                            _format_model_name, proxy_url, api_key,
+                        ),
+                        output_dir=output_dir,
+                        timeout_s=NOTES_FORMATTER_WALLCLOCK_TIMEOUT,
+                    )
+
+                _format_task = asyncio.create_task(_auto_format_pdf_notes())
+                import task_registry
+                task_registry.register(
+                    session_id, NOTES_FORMATTER_AGENT_ID, _format_task,
+                )
+                try:
+                    async for event in _drain_while_running(_format_task):
+                        persist_event(event)
+                        if client_connected:
+                            try:
+                                yield event
+                            except (asyncio.CancelledError, GeneratorExit):
+                                client_connected = False
+                    _format_outcome = await _format_task
+                    logger.info(
+                        "automatic PDF notes formatting completed run=%s "
+                        "formatted=%s failed=%s",
+                        run_id, _format_outcome.get("formatted"),
+                        _format_outcome.get("failed"),
+                    )
+                except asyncio.CancelledError:
+                    logger.info(
+                        "Automatic PDF notes formatting cancelled by user",
+                        extra={"session_id": session_id},
+                    )
+                    if _safe_mark_finished(db_conn, run_id, "aborted"):
+                        terminal_status = "aborted"
+                    if client_connected:
+                        yield {"event": "error", "data": {
+                            "message": "Run cancelled during notes formatting",
+                            "bucket": ERROR_BUCKET_FATAL,
+                        }}
+                    return
+                except Exception:  # noqa: BLE001 — formatting is advisory
+                    logger.exception(
+                        "Automatic PDF notes formatting failed for run %s; "
+                        "continuing with the extracted notes",
+                        run_id,
+                    )
+                finally:
+                    task_registry.unregister(
+                        session_id, NOTES_FORMATTER_AGENT_ID,
+                    )
 
         # RUN-REVIEW peer-review #1 (HIGH): recalc happens HERE — after
         # correction (if any) has had its chance to edit the merged
