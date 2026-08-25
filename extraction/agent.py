@@ -889,8 +889,8 @@ def create_extraction_agent(
         filing_level=filing_level,
         filing_standard=filing_standard,
         denomination=denomination,
-        # RUN-REVIEW P2-2: pass the live template path so SOCF/SoRE
-        # prompts get a per-row sign-from-formula block injected.
+        # Pass the live template path so every face statement receives its
+        # audited template-ready sign guidance.
         template_path=template_path,
         # Phase 2 — entity / period / unit context from scout. None /
         # empty dict means no scout enrichment and the renderer omits
@@ -1079,6 +1079,26 @@ def create_extraction_agent(
             filing_level=ctx.deps.filing_level,
         )
         if result.success:
+            # Sign checks are advisory and never mutate a fact. They compare
+            # formula-determinable rows against the live template after label
+            # resolution, so the agent gets one correction opportunity before
+            # the template-ready value is projected to canonical storage and
+            # later passed unchanged to mTool.
+            try:
+                from prompts._sign_conventions import sign_warnings_for_resolved_writes
+
+                result.warnings.extend(
+                    sign_warnings_for_resolved_writes(
+                        ctx.deps.template_path,
+                        result.resolved_writes,
+                    )
+                )
+            except Exception:  # noqa: BLE001 — never fail a valid workbook write
+                logger.warning(
+                    "Could not run sign checks for %s",
+                    ctx.deps.template_path,
+                    exc_info=True,
+                )
             ctx.deps.filled_path = output_path
             # Phase 1.3: any write invalidates the previous verification.
             # Forces the agent to call verify_totals again before save.

@@ -92,13 +92,13 @@ So <code>socie_sore.md</code> (variant) beats <code>socie_mpers.md</code> (stand
 </table>
 <p class="small">Cross-checks, the cascade, merge, and export are deterministic code — not agents — so they carry no prompt.</p></section><section id="face"><h2><span class="tag t-face">FACE</span>Face extraction agents</h2><p>One agent per selected statement. All share <code>_base.md</code> (persona + general rules + integrity/no-plug rule + accountant procedure + sign troubleshooting + what <code>verify_totals</code> does/doesn't check), then get a statement-specific body.</p><h3>Tools</h3><div class="tools"><span>read_template</span><span>view_pdf_pages</span><span>search_pdf_text</span><span>calculator</span><span>lookup_definitions</span><span class="w">write_facts</span><span class="w">verify_totals</span><span class="w">save_result</span><span>submit_face_coverage*</span></div><p class="small">* registered only when scout supplied face-line refs (coverage receipt handshake). <span class="w" style="padding:0 6px;border:1px solid #7a3;border-radius:5px">green</span> = write/finalise tools.</p><h3>What is agent-specific (the body files)</h3><table>
 <tr><th>Statement</th><th>Distinctive instruction the body encodes</th></tr>
-<tr><td><b>SOFP</b> (CuNonCu)</td><td>Two sheets; <b>fill the sub-sheet FIRST</b> (face cells are cross-sheet formulas that overwrite lump sums); split vs roll-up worked examples; per-period dedicated-row rule (CY≠PY) that <code>verify_totals</code> can't catch; long AFS-note→SSM-row mapping table.</td></tr>
+<tr><td><b>SOFP</b> (CuNonCu)</td><td>Two sheets; <b>fill the sub-sheet FIRST</b> (face cells are cross-sheet formulas that overwrite lump sums); split vs roll-up worked examples; per-period dedicated-row rule (CY≠PY) that <code>verify_totals</code> can't catch; live sign guidance distinguishes positive treasury-share inputs from negative accumulated losses.</td></tr>
 <tr><td><b>SOFP</b> (OrderOfLiquidity)</td><td>Main sheet is <b>standalone</b> (no cross-sheet formulas) — safe to write face values directly; no current/non-current split; simpler sections.</td></tr>
-<tr><td><b>SOPL</b></td><td><b>Deliberately face-first</b> — record source-disclosed face figures without decomposing them into the Analysis sub-sheet; formula face lines route through the section's generic "Other…" leaf; coarse source aggregation remains distinct from a fabricated balancing plug. MPERS adds a code-injected revenue-bucket note.</td></tr>
-<tr><td><b>SOCI</b></td><td>Profit row must match SOPL exactly; OCI losses are <b>NEGATIVE</b> (opposite of SOPL); BeforeTax vs NetOfTax row handling; many entities have zero OCI.</td></tr>
-<tr><td><b>SOCF</b></td><td>Sign conventions by cash-flow direction (not SOPL rules); closing-cash rule (blank line vs formula vs Details total); prefer specific row via notes; <b>per-row sign block appended from live formulas</b>.</td></tr>
+<tr><td><b>SOPL</b></td><td><b>Deliberately face-first</b> — record source-disclosed face figures without decomposing them into the Analysis sub-sheet; formula face lines route through the section's generic "Other…" leaf; coarse source aggregation remains distinct from a fabricated balancing plug. Live guidance distinguishes ordinary positive expense/income magnitudes from directional inventory, impairment, and tax rows. MPERS adds a code-injected revenue-bucket note.</td></tr>
+<tr><td><b>SOCI</b></td><td>Profit row must match SOPL exactly; OCI losses are <b>NEGATIVE</b> (opposite of SOPL); BeforeTax vs NetOfTax row handling; live guidance covers gain/loss, reclassification, and OCI-tax direction; many entities have zero OCI.</td></tr>
+<tr><td><b>SOCF</b></td><td>Formula-ready signs are computed per row as <code>V = C / k</code>, not by a statement-wide outflow rule; dual-use rows preserve every parent-formula role; closing-cash rule (blank line vs formula vs Details total); prefer specific row via notes; <b>per-row sign block appended from live formulas</b>.</td></tr>
 <tr><td><b>SOCIE</b> (matrix)</td><td>Matrix layout — write row×col intersections, not labels; dividends entered as <b>POSITIVE</b> (formula subtracts); columns fixed, rows read from template; CY+PY blocks. MPERS uses a flat <code>field_label</code> layout (<code>socie_mpers.md</code>); SoRE is a simplified retained-earnings schedule (<code>socie_sore.md</code>).</td></tr>
-</table><details><summary><span>Shared persona — <code>prompts/_base.md</code> (verbatim)</span><span class="meta">148 lines · in EVERY face prompt</span></summary><pre class="tall">You are a senior Malaysian chartered accountant specialising in XBRL financial reporting. You are extracting data from audited financial statements to fill the SSM MBRS XBRL template for filing with the Companies Commission of Malaysia (SSM). This filing's reporting framework and entity type are stated in the FILING STANDARD block below — read it before you apply any standard-specific judgement.
+</table><details><summary><span>Shared persona — <code>prompts/_base.md</code> (verbatim)</span><span class="meta">153 lines · in EVERY face prompt</span></summary><pre class="tall">You are a senior Malaysian chartered accountant specialising in XBRL financial reporting. You are extracting data from audited financial statements to fill the SSM MBRS XBRL template for filing with the Companies Commission of Malaysia (SSM). This filing's reporting framework and entity type are stated in the FILING STANDARD block below — read it before you apply any standard-specific judgement.
 
 You are meticulous, precise, and follow Malaysian accounting best practices. When there is ambiguity in how a PDF line item maps to a template field, apply professional judgement consistent with the declared standard's disclosure requirements and SSM MBRS filing conventions.
 
@@ -219,8 +219,11 @@ right, re-check signs before changing labels:
   loss allowance, finance costs, tax expense, employee benefits expense, and
   depreciation/amortisation expense should not be pre-negated merely because
   the PDF wording says "loss" or "expense".
-- For SOCF, signs follow cash-flow direction: receipts/inflows positive,
-  payments/outflows negative, and indirect-method add-backs positive.
+- For SOCF, first decide the intended cash contribution `C`: receipts/inflows
+  and indirect-method add-backs are positive; payments/outflows and deductions
+  are negative. Then apply the live row's formula coefficient `k` and enter
+  `V = C / k`. The stored value is template-ready; do not apply another sign
+  conversion for mTool.
 - For SOCIE / SoRE, signs follow the equity-movement formulas, not the word
   "paid" alone. In the current templates, `Dividends paid` is subtracted by
   the subtotal formula, so enter dividends as a POSITIVE magnitude. Treasury
@@ -228,9 +231,11 @@ right, re-check signs before changing labels:
   inputs when the formula adds that row.
 - For OCI/SOCI, losses are generally true negative OCI movements, unlike SOPL
   expense rows.
-- When in doubt, inspect the nearest subtotal formula in `read_template()`.
-  If the formula subtracts a row, enter that row as a positive magnitude; if
-  the formula adds the row to produce a decrease, enter the row as negative.
+- When in doubt, inspect the nearest relevant subtotal formula in
+  `read_template()`. If the formula subtracts a row whose intended contribution
+  is negative, enter a positive magnitude; if it adds that negative
+  contribution, enter a negative value. For a positive contribution the signs
+  are the mirror image. Never infer the input sign from the coefficient alone.
 
 === WHAT verify_totals() CHECKS — AND WHAT IT DOES NOT ===
 

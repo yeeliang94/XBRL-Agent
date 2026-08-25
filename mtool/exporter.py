@@ -40,9 +40,14 @@ extraction prompts and the live template formulas, not of this module:
 * **Sign — SOPL / SOPL-Analysis.** Expenses and losses are stored as POSITIVE
   magnitudes (finance costs, tax expense, impairment losses, depreciation):
   the template's subtotal formula does the subtracting (``prompts/_base.md``).
-* **Sign — SOCF.** Signs follow cash-flow direction: receipts and inflows
-  positive, payments and outflows NEGATIVE, indirect-method add-backs
-  positive.
+* **Sign — SOCF.** Facts are stored in the final sign expected by that live
+  SSM row. This is deliberately per-row, not a blanket cash-direction rule:
+  a +1 formula coefficient keeps the cash contribution's sign, while a -1
+  coefficient requires the opposite template input. For example, an operating
+  payment that the total ADDS is negative, while a PPE purchase that the total
+  SUBTRACTS is a positive magnitude. The dual-use MFRS indirect short-term
+  lease row is negative so one formula adds the expense back and another
+  records the cash outflow.
 * **Sign — SOCIE / SoRE.** ``Dividends paid`` is stored POSITIVE because every
   SOCIE/SoRE template's "Total increase (decrease) in equity" formula
   SUBTRACTS the row (ADR-002, gotcha #15). Rows the formula ADDS take negative
@@ -52,9 +57,10 @@ extraction prompts and the live template formulas, not of this module:
 
 The practical consequence: our stored sign is already the sign the SSM
 template's own formulas expect, so the identity manifest's ``sign=+1``
-everywhere is a claim about mTool matching SSM's formula conventions — which
-is precisely what the Windows acceptance run (Step 7) has to confirm before
-any sign rule is added here.
+everywhere is a claim about mTool matching SSM's per-row formula conventions.
+Never add a statement-wide SOCF sign flip here. Any evidence-backed mTool
+difference must be a narrow concept override and must be confirmed by the
+Windows acceptance run before it is enabled.
 """
 from __future__ import annotations
 

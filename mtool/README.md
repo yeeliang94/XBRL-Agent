@@ -73,9 +73,12 @@ python -m mtool.offline_fill fill \
 
 - A write targets a row by **`label` + `column_role`** (resolved at runtime)
   OR by an explicit **`cell`** (the escape hatch when a label misresolves).
-- `value` is a **final, signed, unscaled JSON number** — the tool never
-  transforms values (no `"(200)"` strings, no scaling). Sign/scale live in
-  the exporter, not here.
+- `value` is a **final, template-ready, signed, unscaled JSON number** — the
+  tool never transforms values (no `"(200)"` strings, no scaling). SOCF signs
+  are per row: an outflow may be negative when its formula adds it or a
+  positive magnitude when its formula subtracts it. The identity exporter
+  passes either value through unchanged; never apply a second sign conversion
+  in the patcher.
 - `column_role` ∈ `current_year` / `prior_year` (Company) plus
   `group_*` / `company_*` (Group). The physical `columns` map is per your
   actual template — get it from `inspect`.

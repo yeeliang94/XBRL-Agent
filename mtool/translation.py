@@ -13,7 +13,9 @@ rules that produced it.
 Two rules govern the design:
 
 * **Identity is the shipped default.** ``IDENTITY`` applies no scale and no
-  sign flip. That is not timidity — the Windows recon has not yet confirmed
+  sign flip. Extraction already stores the final per-row SSM-template sign;
+  a statement-wide sign rule (especially for mixed-convention SOCF rows)
+  would double-convert correct facts. The Windows recon has not yet confirmed
   whether mTool stores the full unscaled figure or the on-sheet thousands one
   (docs/MTOOL-ZIP-RECON-BRIEF.md Task 3.6), and a wrong answer silently
   1000×-inflates an entire filing. Emitting exactly what we hold is the only

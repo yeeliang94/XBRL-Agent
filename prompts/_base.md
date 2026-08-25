@@ -119,8 +119,11 @@ right, re-check signs before changing labels:
   loss allowance, finance costs, tax expense, employee benefits expense, and
   depreciation/amortisation expense should not be pre-negated merely because
   the PDF wording says "loss" or "expense".
-- For SOCF, signs follow cash-flow direction: receipts/inflows positive,
-  payments/outflows negative, and indirect-method add-backs positive.
+- For SOCF, first decide the intended cash contribution `C`: receipts/inflows
+  and indirect-method add-backs are positive; payments/outflows and deductions
+  are negative. Then apply the live row's formula coefficient `k` and enter
+  `V = C / k`. The stored value is template-ready; do not apply another sign
+  conversion for mTool.
 - For SOCIE / SoRE, signs follow the equity-movement formulas, not the word
   "paid" alone. In the current templates, `Dividends paid` is subtracted by
   the subtotal formula, so enter dividends as a POSITIVE magnitude. Treasury
@@ -128,9 +131,11 @@ right, re-check signs before changing labels:
   inputs when the formula adds that row.
 - For OCI/SOCI, losses are generally true negative OCI movements, unlike SOPL
   expense rows.
-- When in doubt, inspect the nearest subtotal formula in `read_template()`.
-  If the formula subtracts a row, enter that row as a positive magnitude; if
-  the formula adds the row to produce a decrease, enter the row as negative.
+- When in doubt, inspect the nearest relevant subtotal formula in
+  `read_template()`. If the formula subtracts a row whose intended contribution
+  is negative, enter a positive magnitude; if it adds that negative
+  contribution, enter a negative value. For a positive contribution the signs
+  are the mirror image. Never infer the input sign from the coefficient alone.
 
 === WHAT verify_totals() CHECKS — AND WHAT IT DOES NOT ===
 
