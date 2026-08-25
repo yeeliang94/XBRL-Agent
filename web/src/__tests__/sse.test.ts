@@ -1,5 +1,37 @@
-import { describe, test, expect } from "vitest";
-import { parseSSEStream, type RawSSEEvent } from "../lib/sse";
+import { describe, test, expect, vi, afterEach } from "vitest";
+import {
+  canResumeRunAfterSSEFailure,
+  createMultiAgentSSEByRunId,
+  parseSSEStream,
+  type RawSSEEvent,
+} from "../lib/sse";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+test("only transport loss with a durable run id resumes in History", () => {
+  expect(canResumeRunAfterSSEFailure("transport", 42)).toBe(true);
+  expect(canResumeRunAfterSSEFailure("request", 42)).toBe(false);
+  expect(canResumeRunAfterSSEFailure("session", 42)).toBe(false);
+  expect(canResumeRunAfterSSEFailure("transport", null)).toBe(false);
+});
+
+test("a rejected start response is classified as a request error", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(
+    JSON.stringify({ detail: "Run configuration is invalid." }),
+    { status: 422, headers: { "Content-Type": "application/json" } },
+  )));
+  const onError = vi.fn();
+
+  createMultiAgentSSEByRunId(42, vi.fn(), vi.fn(), onError);
+  await vi.waitFor(() => {
+    expect(onError).toHaveBeenCalledWith(
+      "Run configuration is invalid.",
+      "request",
+    );
+  });
+});
 
 // Build a ReadableStream that yields the given UTF-8 chunks in order. Each
 // chunk is delivered as a separate `read()` call, letting us test partial-line

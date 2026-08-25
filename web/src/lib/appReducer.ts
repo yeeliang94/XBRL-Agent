@@ -848,6 +848,17 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       }
 
       switch (event.event) {
+        case "status": {
+          // Legacy upload flows do not know the durable run id until the
+          // coordinator starts. Retain it so a later transport disconnect can
+          // resume monitoring through /history/{id} without restarting work.
+          const runId = event.data.run_id;
+          if (typeof runId === "number" && Number.isInteger(runId)) {
+            updates.currentRunId = runId;
+          }
+          break;
+        }
+
         case "token_update":
           // Aggregate across agents when the event carries an agent_id;
           // otherwise treat it as a legacy single-agent token payload.

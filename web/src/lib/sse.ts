@@ -1,6 +1,16 @@
 import { type SSEEvent, type SSEEventType, type RunConfigPayload } from "./types";
 import { ApiError } from "./errors";
 
+export type SSEFailureKind = "request" | "transport" | "session";
+type SSEErrorHandler = (error: string, kind: SSEFailureKind) => void;
+
+export function canResumeRunAfterSSEFailure(
+  kind: SSEFailureKind,
+  runId: number | null,
+): runId is number {
+  return kind === "transport" && runId != null;
+}
+
 /** Read a non-OK response's JSON body (if any) and return the friendly
  *  ApiError message — shared by the three SSE openers below. */
 async function sseErrorMessage(response: Response): Promise<string> {
@@ -160,7 +170,7 @@ export function createMultiAgentSSE(
   config: RunConfigPayload,
   onEvent: (event: SSEEvent) => void,
   onDone: () => void,
-  onError: (error: string) => void,
+  onError: SSEErrorHandler,
   /** Override the endpoint path — used by rerun to POST to /api/rerun/ */
   endpointPath?: string,
 ): AbortController {
@@ -177,13 +187,16 @@ export function createMultiAgentSSE(
       });
 
       if (!response.ok) {
-        onError(await sseErrorMessage(response));
+        onError(await sseErrorMessage(response), "request");
         return;
       }
 
       const reader = response.body?.getReader();
       if (!reader) {
-        onError("We couldn't open the connection to follow the run. Please try again.");
+        onError(
+          "We couldn't open the connection to follow the run. Please try again.",
+          "transport",
+        );
         return;
       }
 
@@ -191,7 +204,7 @@ export function createMultiAgentSSE(
         if (evt.event === "session-expired") {
           // The auth session idled out mid-stream — drop to the login page.
           window.dispatchEvent(new CustomEvent("auth:unauthorized"));
-          onError("Your session expired. Please sign in again.");
+          onError("Your session expired. Please sign in again.", "session");
           return;
         }
         if (!MULTI_EVENT_TYPES.includes(evt.event as SSEEventType)) continue;
@@ -208,7 +221,10 @@ export function createMultiAgentSSE(
         // in the console for support — a parse error or a callback exception
         // is NOT a network problem and would otherwise be misreported here.
         console.error("Multi-agent SSE stream failed:", err);
-        onError("The connection to the run was lost. Please check your network and try again.");
+        onError(
+          "The connection to the run was lost. Please check your network and try again.",
+          "transport",
+        );
       }
     }
   })();
@@ -229,7 +245,7 @@ export function createMultiAgentSSEByRunId(
   runId: number,
   onEvent: (event: SSEEvent) => void,
   onDone: () => void,
-  onError: (error: string) => void,
+  onError: SSEErrorHandler,
 ): AbortController {
   const controller = new AbortController();
 
@@ -243,13 +259,16 @@ export function createMultiAgentSSEByRunId(
       });
 
       if (!response.ok) {
-        onError(await sseErrorMessage(response));
+        onError(await sseErrorMessage(response), "request");
         return;
       }
 
       const reader = response.body?.getReader();
       if (!reader) {
-        onError("We couldn't open the connection to follow the run. Please try again.");
+        onError(
+          "We couldn't open the connection to follow the run. Please try again.",
+          "transport",
+        );
         return;
       }
 
@@ -257,7 +276,7 @@ export function createMultiAgentSSEByRunId(
         if (evt.event === "session-expired") {
           // The auth session idled out mid-stream — drop to the login page.
           window.dispatchEvent(new CustomEvent("auth:unauthorized"));
-          onError("Your session expired. Please sign in again.");
+          onError("Your session expired. Please sign in again.", "session");
           return;
         }
         if (!MULTI_EVENT_TYPES.includes(evt.event as SSEEventType)) continue;
@@ -273,7 +292,10 @@ export function createMultiAgentSSEByRunId(
         // Same as createMultiAgentSSE: friendly message to the operator, real
         // error to the console so support can see a non-network failure.
         console.error("Multi-agent SSE stream (by run id) failed:", err);
-        onError("The connection to the run was lost. Please check your network and try again.");
+        onError(
+          "The connection to the run was lost. Please check your network and try again.",
+          "transport",
+        );
       }
     }
   })();

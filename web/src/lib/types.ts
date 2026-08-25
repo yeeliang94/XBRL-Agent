@@ -123,6 +123,8 @@ export type SSEEvent = {
 export interface StatusData {
   phase: EventPhase;
   message: string;
+  /** Durable audit id emitted by the coordinator's starting event. */
+  run_id?: number;
 }
 
 export interface ThinkingDeltaData {

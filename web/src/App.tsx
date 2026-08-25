@@ -8,7 +8,13 @@ import { uploadPdf, abortAll, abortAgent } from "./lib/api";
 import { getAuthMe, logout as apiLogout, refreshAuth } from "./lib/api";
 import type { AuthMe } from "./lib/api";
 import { LoginPage } from "./pages/LoginPage";
-import { createMultiAgentSSE, createMultiAgentSSEByRunId, patchRunConfig } from "./lib/sse";
+import {
+  createMultiAgentSSE,
+  createMultiAgentSSEByRunId,
+  canResumeRunAfterSSEFailure,
+  patchRunConfig,
+  type SSEFailureKind,
+} from "./lib/sse";
 import { SettingsPage } from "./pages/SettingsPage";
 import { TopNav } from "./components/TopNav";
 import { SuccessToast } from "./components/SuccessToast";
@@ -363,10 +369,34 @@ export default function App() {
     return result;
   }, []);
 
+  const handleStreamTransportError = useCallback((error: string, kind: SSEFailureKind) => {
+    const runId = stateRef.current.currentRunId;
+    if (canResumeRunAfterSSEFailure(kind, runId)) {
+      // The backend deliberately continues and persists a run after its SSE
+      // client disconnects. Move to the durable detail view, whose running-run
+      // polling resumes monitoring without issuing a second extraction.
+      dispatch({ type: "SET_VIEW", payload: "history" });
+      dispatch({ type: "SET_SELECTED_RUN_ID", payload: runId });
+      dispatch({ type: "SET_CURRENT_RUN_ID", payload: null });
+      return;
+    }
+    // HTTP start rejections are authoritative application errors, not lost
+    // connections. Keep them visible even when the draft already has an id;
+    // redirecting would hide the rejection behind a History detail fetch.
+    dispatch({
+      type: "EVENT",
+      payload: {
+        event: "error",
+        data: { message: error, traceback: "" },
+        timestamp: Date.now() / 1000,
+      },
+    });
+  }, []);
+
   // Shared plumbing for handleMultiRun + handleRerunAgent. Both flows dispatch
-  // every incoming event to the reducer and translate transport-level errors
-  // into a synthetic `error` event so the reducer has a single code path for
-  // run failures. Returns the AbortController for the caller to stash.
+  // every incoming event to the reducer. Transport loss reattaches to the
+  // durable run when possible; only pre-start failures become fatal UI errors.
+  // Returns the AbortController for the caller to stash.
   const startSSERun = useCallback(
     (sessionId: string, config: RunConfigPayload, endpointPath?: string) => {
       return createMultiAgentSSE(
@@ -374,19 +404,11 @@ export default function App() {
         config,
         (event) => dispatch({ type: "EVENT", payload: event }),
         () => {},
-        (error) =>
-          dispatch({
-            type: "EVENT",
-            payload: {
-              event: "error",
-              data: { message: error, traceback: "" },
-              timestamp: Date.now() / 1000,
-            },
-          }),
+        handleStreamTransportError,
         endpointPath,
       );
     },
-    [],
+    [handleStreamTransportError],
   );
 
   // Multi-agent run: receives a RunConfigPayload from PreRunPanel.
@@ -455,20 +477,17 @@ export default function App() {
         state.currentRunId,
         (event) => dispatch({ type: "EVENT", payload: event }),
         () => {},
-        (error) =>
-          dispatch({
-            type: "EVENT",
-            payload: {
-              event: "error",
-              data: { message: error, traceback: "" },
-              timestamp: Date.now() / 1000,
-            },
-          }),
+        handleStreamTransportError,
       );
     } else {
       sseControllerRef.current = startSSERun(state.sessionId, config);
     }
-  }, [state.sessionId, state.currentRunId, startSSERun]);
+  }, [
+    state.sessionId,
+    state.currentRunId,
+    startSSERun,
+    handleStreamTransportError,
+  ]);
 
   // Abort all running agents
   const handleAbortAll = useCallback(async () => {
