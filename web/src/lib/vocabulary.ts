@@ -204,6 +204,8 @@ const NOTES_FORMAT_ERROR_LABELS: Record<string, string> = {
     "The AI service returned an error while formatting. Nothing was saved — try again in a moment.",
   precondition_failed:
     "This section couldn't be formatted right now (it may be numeric-only or mid-edit). Nothing was changed.",
+  reviewer_running:
+    "Automatic formatting was skipped because notes review was still running. Nothing was changed.",
   reverted: "Formatting was reverted to the previous version.",
 };
 

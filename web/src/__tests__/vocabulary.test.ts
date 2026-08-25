@@ -104,6 +104,12 @@ describe("denominationLabel", () => {
 });
 
 describe("notesFormatErrorMessage", () => {
+  test("explains an automatic pass skipped behind the notes reviewer", () => {
+    expect(notesFormatErrorMessage("reviewer_running", "internal detail")).toMatch(
+      /skipped.*notes review.*running/i,
+    );
+  });
+
   test("maps a taxonomy code to plain language and hides the raw dict", () => {
     const msg = notesFormatErrorMessage(
       "validation_failed",

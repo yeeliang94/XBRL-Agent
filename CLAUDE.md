@@ -925,7 +925,10 @@ Key invariants:
     `XBRL_PDF_NOTES_AUTO_FORMAT=true`, the run formats unstyled/floor prose
     cells after the notes reviewer, in parallel by sheet, through the same
     content/number/geometry verifier, CAS writes, snapshots, task rows, limits,
-    and mTool-safe closed vocabulary as the manual pass. The setting is
+    and mTool-safe closed vocabulary as the manual pass. Every sheet uses the
+    shared guarded claim, so a manual reviewer that starts first makes the
+    automatic formatter record a skipped outcome; once any formatter sheet is
+    claimed, the reviewer cannot start over it. The setting is
     admin-only and defaults OFF because it adds a paid pass per filled prose
     sheet. Stop All cancels the group. `uploaded.docx` is an explicit exclusion:
     Word's source-styled behavior above is unchanged. Pinned by

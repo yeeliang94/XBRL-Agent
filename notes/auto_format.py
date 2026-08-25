@@ -77,24 +77,51 @@ async def run_pdf_auto_format(
     """
     selected = candidate_sheets(db_path, run_id, sheets)
     if not selected:
-        return {"sheets": {}, "formatted": 0, "failed": 0}
+        return {"sheets": {}, "formatted": 0, "failed": 0, "skipped": 0}
 
     async def one(sheet: str) -> tuple[str, dict[str, Any]]:
-        with repo.db_session(db_path) as conn:
-            repo.upsert_notes_format_task(
-                conn, run_id, sheet, "running", model=model_name,
-            )
         try:
-            coro = formatter(
-                run_id=run_id, db_path=db_path, pdf_path=pdf_path,
-                sheet=sheet, model=model_factory(), output_dir=output_dir,
-                style_sources=PDF_FORMAT_CANDIDATE_SOURCES,
-            )
-            result = (
-                await asyncio.wait_for(coro, timeout=timeout_s)
-                if timeout_s and timeout_s != float("inf")
-                else await coro
-            )
+            with repo.db_session(db_path) as conn:
+                claim = repo.claim_notes_format_task_guarded(
+                    conn, run_id, sheet, model=model_name,
+                )
+            if claim == "reviewer_running":
+                result = {
+                    "ok": False,
+                    "skipped": True,
+                    "error_type": "reviewer_running",
+                    "error": "A notes reviewer pass is already running.",
+                    "summary": (
+                        "Automatic formatting was skipped because notes review "
+                        "was still running."
+                    ),
+                }
+                logger.info(
+                    "automatic PDF formatter skipped behind notes reviewer "
+                    "run=%s sheet=%s",
+                    run_id, sheet,
+                )
+            elif claim == "format_running":
+                # Never replace another pass's durable running row with this
+                # launch's terminal outcome. The existing owner will finish it.
+                return sheet, {
+                    "ok": False,
+                    "skipped": True,
+                    "error_type": "format_running",
+                    "error": "A notes formatter pass is already running.",
+                    "summary": "Automatic formatting was already in progress.",
+                }
+            else:
+                coro = formatter(
+                    run_id=run_id, db_path=db_path, pdf_path=pdf_path,
+                    sheet=sheet, model=model_factory(), output_dir=output_dir,
+                    style_sources=PDF_FORMAT_CANDIDATE_SOURCES,
+                )
+                result = (
+                    await asyncio.wait_for(coro, timeout=timeout_s)
+                    if timeout_s and timeout_s != float("inf")
+                    else await coro
+                )
         except asyncio.CancelledError:
             result = {
                 "ok": False, "error_type": "cancelled",
@@ -139,5 +166,11 @@ async def run_pdf_auto_format(
     return {
         "sheets": outcomes,
         "formatted": sum(1 for result in outcomes.values() if result.get("ok")),
-        "failed": sum(1 for result in outcomes.values() if not result.get("ok")),
+        "failed": sum(
+            1 for result in outcomes.values()
+            if not result.get("ok") and not result.get("skipped")
+        ),
+        "skipped": sum(
+            1 for result in outcomes.values() if result.get("skipped")
+        ),
     }

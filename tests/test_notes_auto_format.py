@@ -93,3 +93,105 @@ async def test_cancel_propagates_even_when_task_persistence_fails(
             model_factory=object, output_dir=str(tmp_path), timeout_s=30,
             formatter=cancelled_formatter,
         )
+
+
+@pytest.mark.asyncio
+async def test_auto_format_skips_when_notes_reviewer_claimed_first(auto_format_db):
+    db_path, run_id, tmp_path = auto_format_db
+    calls = []
+
+    async def fake_formatter(**kwargs):
+        calls.append(kwargs)
+        return {"ok": True, "changed_rows": 1}
+
+    with repo.db_session(db_path) as conn:
+        assert repo.claim_notes_review_task_guarded(
+            conn, run_id, model="review-model",
+        ) == "claimed"
+
+    result = await run_pdf_auto_format(
+        run_id=run_id, db_path=db_path,
+        pdf_path=str(tmp_path / "uploaded.pdf"),
+        sheets=["Notes-CI"], model_name="format-model",
+        model_factory=object, output_dir=str(tmp_path), timeout_s=30,
+        formatter=fake_formatter,
+    )
+
+    assert calls == []
+    assert result["formatted"] == 0
+    assert result["failed"] == 0
+    assert result["skipped"] == 1
+    assert result["sheets"]["Notes-CI"]["error_type"] == "reviewer_running"
+    with repo.db_session(db_path) as conn:
+        task = repo.fetch_notes_format_task(conn, run_id, "Notes-CI")
+        review = repo.fetch_notes_review_task(conn, run_id)
+    assert task["status"] == "done"
+    assert task["result"]["skipped"] is True
+    assert review["status"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_auto_format_claim_blocks_reviewer_until_sheet_finishes(
+    auto_format_db,
+):
+    db_path, run_id, tmp_path = auto_format_db
+    formatter_started = asyncio.Event()
+    release_formatter = asyncio.Event()
+
+    async def waiting_formatter(**_kwargs):
+        formatter_started.set()
+        await release_formatter.wait()
+        return {"ok": True, "changed_rows": 0}
+
+    task = asyncio.create_task(run_pdf_auto_format(
+        run_id=run_id, db_path=db_path,
+        pdf_path=str(tmp_path / "uploaded.pdf"),
+        sheets=["Notes-CI"], model_name="format-model",
+        model_factory=object, output_dir=str(tmp_path), timeout_s=30,
+        formatter=waiting_formatter,
+    ))
+    await formatter_started.wait()
+
+    with repo.db_session(db_path) as conn:
+        outcome = repo.claim_notes_review_task_guarded(
+            conn, run_id, model="review-model",
+        )
+    assert outcome == "formatter_running"
+
+    release_formatter.set()
+    result = await task
+    assert result["formatted"] == 1
+    assert result["skipped"] == 0
+
+
+@pytest.mark.asyncio
+async def test_auto_format_does_not_clobber_an_existing_formatter_claim(
+    auto_format_db,
+):
+    db_path, run_id, tmp_path = auto_format_db
+    calls = []
+
+    async def fake_formatter(**kwargs):
+        calls.append(kwargs)
+        return {"ok": True, "changed_rows": 1}
+
+    with repo.db_session(db_path) as conn:
+        assert repo.claim_notes_format_task_guarded(
+            conn, run_id, "Notes-CI", model="first-model",
+        ) == "claimed"
+
+    result = await run_pdf_auto_format(
+        run_id=run_id, db_path=db_path,
+        pdf_path=str(tmp_path / "uploaded.pdf"),
+        sheets=["Notes-CI"], model_name="second-model",
+        model_factory=object, output_dir=str(tmp_path), timeout_s=30,
+        formatter=fake_formatter,
+    )
+
+    assert calls == []
+    assert result["skipped"] == 1
+    assert result["sheets"]["Notes-CI"]["error_type"] == "format_running"
+    with repo.db_session(db_path) as conn:
+        task = repo.fetch_notes_format_task(conn, run_id, "Notes-CI")
+    assert task["status"] == "running"
+    assert task["model"] == "first-model"
