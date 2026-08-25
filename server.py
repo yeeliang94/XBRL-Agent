@@ -1254,10 +1254,10 @@ NOTES_VALIDATOR_TURN_TIMEOUT: float = 180.0
 
 # PLAN-stop-and-validation-visibility Phase 3: wall-clock cap on the
 # whole correction / notes-validator pass. Defence-in-depth on top of
-# the dynamic turn cap (RUN-REVIEW P0-1, max 25 turns) and per-turn
+# the dynamic tool-turn cap (RUN-REVIEW P0-1, max 40 turns) and per-turn
 # timeout (180s above): the slow-LLM scenario where every turn takes
 # 100s but the agent never stalls would still loop for ~40 minutes
-# (25 × 100s) before any cap fires. 5 minutes is a comfortable bound
+# (40 × 100s) before any cap fires. 5 minutes is a comfortable bound
 # for "this is the legitimate work" while still being far short of
 # what the user perceives as "stuck".
 #
@@ -1301,6 +1301,8 @@ def _error_type_for_outcome(error: Optional[str]) -> Optional[str]:
     exact = {
         "cancelled": "cancelled",
         "reviewer_exhausted": "iteration_capped",
+        "notes_reviewer_exhausted": "iteration_capped",
+        "notes_reviewer_interrupted": "tool_exception",
         "reviewer_wallclock_exceeded": "wallclock",
         "validator_wallclock_exceeded": "wallclock",
     }
@@ -1312,6 +1314,53 @@ def _error_type_for_outcome(error: Optional[str]) -> Optional[str]:
     if "per-turn timeout" in lowered or "stalled past" in lowered:
         return "turn_timeout"
     return "tool_exception"
+
+
+def _finish_reviewer_agent_row(
+    conn,
+    run_agent_id: int,
+    outcome: Optional[dict],
+    *,
+    status: Optional[str] = None,
+) -> None:
+    """Persist one reviewer pseudo-agent's terminal state and paid usage.
+
+    Shared by automatic and manual notes review so cancellation and ordinary
+    completion cannot drift into different telemetry contracts. Caller owns
+    the transaction and commits after any adjacent run-state writes.
+    """
+    from db import repository as repo
+
+    result = outcome or {}
+    final_status = status
+    if final_status is None:
+        if outcome is None:
+            final_status = "pending"
+        elif result.get("error"):
+            final_status = "failed"
+        else:
+            final_status = "completed"
+    repo.finish_run_agent(
+        conn,
+        run_agent_id,
+        status=final_status,
+        workbook_path=None,
+        total_tokens=int(result.get("total_tokens", 0) or 0),
+        total_cost=float(result.get("total_cost", 0.0) or 0.0),
+        prompt_tokens=int(result.get("prompt_tokens", 0) or 0),
+        completion_tokens=int(result.get("completion_tokens", 0) or 0),
+        turn_count=int(result.get("turns_used", 0) or 0),
+        tool_call_count=int(result.get("tool_call_count", 0) or 0),
+        cache_read_tokens=int(result.get("cache_read_tokens", 0) or 0),
+        cache_write_tokens=int(result.get("cache_write_tokens", 0) or 0),
+        error_type=_agent_row_error_type(
+            final_status,
+            None,
+            result.get("error"),
+        ),
+    )
+    repo.insert_agent_turns(
+        conn, run_agent_id, result.get("turn_records") or [])
 
 
 CORRECTION_WALLCLOCK_TIMEOUT: float = _resolve_wallclock(
@@ -2017,7 +2066,12 @@ async def _run_notes_reviewer_pass(
     import shutil as _shutil
     import time as _wc_time
     import server as _server_self
-    from agent_runner import AgentLoopSpec, WallclockExceeded, run_agent_loop
+    from agent_runner import (
+        AgentLoopSpec,
+        CallToolsCapExceeded,
+        WallclockExceeded,
+        run_agent_loop,
+    )
     from notes.reviewer_agent import create_notes_reviewer_agent
     from notes.versioning import ensure_notes_snapshot
     from correction.reviewer_agent import compute_reviewer_turn_cap
@@ -2025,6 +2079,11 @@ async def _run_notes_reviewer_pass(
     outcome: dict = {
         "invoked": False, "writes_performed": 0, "flags_raised": 0,
         "error": None, "context": {}, "elapsed_seconds": 0.0,
+        "total_tokens": 0, "total_cost": 0.0,
+        "prompt_tokens": 0, "completion_tokens": 0,
+        "cache_read_tokens": 0, "cache_write_tokens": 0,
+        "turns_used": 0, "tool_call_count": 0, "turn_records": [],
+        "max_turns": 0, "exhausted": False,
     }
     _pass_start = _wc_time.monotonic()
 
@@ -2142,6 +2201,7 @@ async def _run_notes_reviewer_pass(
 
     outcome["invoked"] = True
     max_turns = compute_reviewer_turn_cap(filing_level=filing_level, n_items=n_items)
+    outcome["max_turns"] = max_turns
     await _emit("status", {
         "phase": "started",
         "message": f"AI review of the notes started: checking {n_items} item(s) against the PDF.",
@@ -2172,6 +2232,8 @@ async def _run_notes_reviewer_pass(
             else NOTES_VALIDATOR_TURN_TIMEOUT
         ),
         phase_map={}, phase_message=lambda role, phase: "",
+        max_iters=max_turns * 2 + 10,
+        call_tools_cap=max_turns,
         wallclock_timeout=_wallclock_cap,
         stream_model_nodes=False,
         bound_inner_streams=False,
@@ -2246,17 +2308,66 @@ async def _run_notes_reviewer_pass(
             "writes_performed": deps.writes_performed,
             "flags_raised": len(deps.flags),
         })
-    except _asyncio.CancelledError:
-        await _emit("complete", {"success": False, "error": "Cancelled by user"})
-        outcome["error"] = "cancelled"
+    except _asyncio.CancelledError as exc:
         # Interrupted — append any raised flags, never delete prior open/answered.
         _persist_flags_and_refresh(replace_flags=False)
         # Persist whatever coverage the (partial) pass reached under a
         # not_reviewed banner so a Stop-All'd notes run still shows a checklist
         # instead of falling back to pre_feature. Best-effort (swallows), so it
-        # cannot suppress the re-raise that finalizes the run as aborted.
+        # cannot suppress cancellation handling by the outer coordinator.
         await _finalize_coverage(reviewed=False)
-        raise
+        import task_registry as _task_registry
+        if _task_registry.is_user_abort(exc):
+            await _emit("complete", {
+                "success": False, "error": "Cancelled by user"})
+            outcome["error"] = "cancelled"
+            # Return the outcome after ``finally`` captures usage. The outer
+            # coordinator recognizes this marker and still aborts the run, but
+            # now it can persist the spend incurred before cancellation.
+        else:
+            # A provider or nested request may surface a bare CancelledError at
+            # its own timeout boundary. That is a recoverable reviewer
+            # interruption, not evidence that the operator pressed Stop.
+            outcome["error"] = "notes_reviewer_interrupted"
+            outcome["writes_performed"] = deps.writes_performed
+            msg = (
+                "Notes reviewer was interrupted by the model provider. "
+                "Partial notes edits were preserved; the run will continue."
+            )
+            logger.warning(msg)
+            await _emit("error", {
+                "type": "notes_reviewer_interrupted", "message": msg})
+            await _emit("complete", {
+                "success": False,
+                "error": "notes_reviewer_interrupted",
+                "writes_performed": deps.writes_performed,
+            })
+    except CallToolsCapExceeded:
+        turns_used = sum(
+            1 for t in _turn_records if t.get("node_kind") == "call_tools")
+        msg = (
+            f"Notes reviewer exhausted its turn budget ({max_turns}) after "
+            f"{deps.writes_performed} write(s)."
+        )
+        logger.warning(msg)
+        outcome.update({
+            "error": "notes_reviewer_exhausted",
+            "exhausted": True,
+            "turns_used": turns_used,
+            "writes_performed": deps.writes_performed,
+            "flags_raised": len(deps.flags),
+        })
+        _persist_flags_and_refresh(replace_flags=False)
+        await _finalize_coverage(reviewed=True)
+        await _emit("error", {
+            "type": "notes_reviewer_exhausted", "message": msg})
+        await _emit("complete", {
+            "success": False,
+            "error": "notes_reviewer_exhausted",
+            "writes_performed": deps.writes_performed,
+            "turns_used": turns_used,
+            "max_turns": max_turns,
+        })
     except (WallclockExceeded, _asyncio.TimeoutError):
         msg = (f"Notes reviewer exceeded wall-clock cap of {_wallclock_cap}s "
                f"after {deps.writes_performed} write(s).")
@@ -2300,6 +2411,38 @@ async def _run_notes_reviewer_pass(
                     )
             except Exception:  # noqa: BLE001 — tracing is advisory
                 logger.warning("Failed to save notes-reviewer trace", exc_info=True)
+
+        # The notes reviewer is a paid agent and must participate in the same
+        # run-level telemetry rollup as extraction and statement correction.
+        outcome["turns_used"] = sum(
+            1 for t in _turn_records if t.get("node_kind") == "call_tools")
+        outcome["tool_call_count"] = sum(
+            int(t.get("_n_tool_calls") or 0) for t in _turn_records)
+        outcome["turn_records"] = _turn_records
+        outcome["cache_read_tokens"] = sum(
+            int(t.get("cache_read_tokens") or 0) for t in _turn_records)
+        outcome["cache_write_tokens"] = sum(
+            int(t.get("cache_write_tokens") or 0) for t in _turn_records)
+        try:
+            from pricing import estimate_cost as _estimate_cost
+            usage = agent_run.usage
+            outcome["total_tokens"] = int(usage.total_tokens or 0)
+            outcome["prompt_tokens"] = _in_tokens(usage)
+            outcome["completion_tokens"] = _out_tokens(usage)
+            # Usage objects expose aggregate cache figures even when a mocked
+            # or interrupted run produced no per-turn rows.
+            outcome["cache_read_tokens"] = max(
+                outcome["cache_read_tokens"],
+                int(getattr(usage, "cache_read_tokens", 0) or 0),
+            )
+            outcome["cache_write_tokens"] = max(
+                outcome["cache_write_tokens"],
+                int(getattr(usage, "cache_write_tokens", 0) or 0),
+            )
+            outcome["total_cost"] = _estimate_cost(
+                _in_tokens(usage), _out_tokens(usage), 0, model)
+        except Exception:  # noqa: BLE001 — telemetry is advisory
+            logger.debug("notes reviewer token capture skipped")
 
     _stamp_elapsed()
     return outcome
@@ -6335,6 +6478,7 @@ async def run_multi_agent_stream(
                 import task_registry
                 task_registry.register(
                     session_id, NOTES_VALIDATOR_AGENT_ID, validator_task)
+                validator_cancelled_without_outcome = False
                 try:
                     async for event in _drain_while_running(validator_task):
                         persist_event(event)
@@ -6345,32 +6489,13 @@ async def run_multi_agent_stream(
                                 client_connected = False
                     validator_outcome = await validator_task
                 except asyncio.CancelledError:
-                    # User hit Stop All during the notes validator. The merged
-                    # workbook is already durable; finalize as 'aborted' and
-                    # stop (mirrors the reviewer-cancel path above).
+                    # Defensive fallback for cancellation outside the review
+                    # pass. A tagged cancellation handled inside the pass
+                    # returns a telemetry-bearing outcome instead.
                     logger.info(
                         "Notes validator cancelled by user",
                         extra={"session_id": session_id})
-                    # Finalize the NOTES_VALIDATOR pseudo-agent row too (same
-                    # reason as the reviewer handler above — early return skips
-                    # the normal finish_run_agent block).
-                    if validator_run_agent_id is not None and db_conn is not None:
-                        try:
-                            repo.finish_run_agent(
-                                db_conn, validator_run_agent_id,
-                                status="cancelled", error_type="cancelled")
-                            db_conn.commit()
-                        except Exception:  # noqa: BLE001
-                            logger.warning(
-                                "Failed to finalize NOTES_VALIDATOR row on cancel",
-                                exc_info=True)
-                    if _safe_mark_finished(db_conn, run_id, "aborted"):
-                        terminal_status = "aborted"
-                    if client_connected:
-                        yield {"event": "error", "data": {
-                            "message": "Run cancelled during notes validation",
-                            "bucket": ERROR_BUCKET_FATAL}}
-                    return
+                    validator_cancelled_without_outcome = True
                 finally:
                     task_registry.unregister(
                         session_id, NOTES_VALIDATOR_AGENT_ID)
@@ -6393,6 +6518,37 @@ async def run_multi_agent_stream(
                         logger.warning(
                             "Failed to release notes-review task for run %s",
                             run_id, exc_info=True)
+
+                if (
+                    validator_cancelled_without_outcome
+                    or (
+                        isinstance(validator_outcome, dict)
+                        and validator_outcome.get("error") == "cancelled"
+                    )
+                ):
+                    # User hit Stop All during notes validation. The merged
+                    # workbook is already durable. Persist any captured spend,
+                    # then make the parent run terminal before returning.
+                    if validator_run_agent_id is not None and db_conn is not None:
+                        try:
+                            _finish_reviewer_agent_row(
+                                db_conn,
+                                validator_run_agent_id,
+                                validator_outcome,
+                                status="cancelled",
+                            )
+                            db_conn.commit()
+                        except Exception:  # noqa: BLE001
+                            logger.warning(
+                                "Failed to finalize NOTES_VALIDATOR row on cancel",
+                                exc_info=True)
+                    if _safe_mark_finished(db_conn, run_id, "aborted"):
+                        terminal_status = "aborted"
+                    if client_connected:
+                        yield {"event": "error", "data": {
+                            "message": "Run cancelled during notes validation",
+                            "bucket": ERROR_BUCKET_FATAL}}
+                    return
 
         # PDF notes use one styling author. Extraction stores content/table
         # geometry, then this optional pass reads the PDF and applies the
@@ -6560,9 +6716,8 @@ async def run_multi_agent_stream(
                         # node_kind breakdown to measure. Same advisory
                         # contract as the extraction/notes sites: inside this
                         # try so a telemetry write can never fault the run.
-                        # The notes reviewer / notes formatter passes share
-                        # the same gap (rollups only) — deliberately left for
-                        # the plan's Phase 5, instrument before measuring.
+                        # NOTES_VALIDATOR now follows this same persistence
+                        # contract below. The formatter remains non-agent work.
                         repo.insert_agent_turns(
                             db_conn, correction_run_agent_id,
                             _co.get("turn_records") or [],
@@ -6574,19 +6729,10 @@ async def run_multi_agent_stream(
                         )
                 if validator_run_agent_id is not None:
                     try:
-                        if validator_outcome is None:
-                            status = "pending"
-                        elif validator_outcome.get("error"):
-                            status = "failed"
-                        else:
-                            status = "completed"
-                        repo.finish_run_agent(
-                            db_conn, validator_run_agent_id,
-                            status=status,
-                            workbook_path=None,
-                            # v17 (item 9): classify the validator outcome.
-                            error_type=_error_type_for_outcome(
-                                (validator_outcome or {}).get("error")),
+                        _finish_reviewer_agent_row(
+                            db_conn,
+                            validator_run_agent_id,
+                            validator_outcome,
                         )
                     except Exception:
                         logger.warning(

@@ -1553,17 +1553,16 @@ def _format_review_packet(
 def compute_reviewer_turn_cap(*, filing_level: str, n_items: int) -> int:
     """Dynamic turn cap, staying safely below pydantic-ai's silent 50 (gotcha #18).
 
-    Formula: 12 base + 4 if Group + 2 per item to investigate, clamped
-    [12, 36]. Raised from the old [10, 30] for the holistic-audit reviewer
-    (Phase 3): it now reads the whole filing (`list_facts`) and traces BOTH
-    sides of cross-statement mismatches before writing, so it needs more
-    read headroom. The 36 ceiling stays below `MAX_AGENT_ITERATIONS` (40),
-    which stays below pydantic-ai's silent 50 — pinned by
+    Formula: 16 base + 4 if Group + 2 per item to investigate, clamped
+    [16, 40]. The reviewer needs enough headroom to investigate, commit, and
+    verify its final correction rather than reaching the right answer on its
+    last available turn. The 40 ceiling is the project request cap and stays
+    below pydantic-ai's default 50 — pinned by
     test_turn_cap_below_pydantic_50.
     """
     is_group = (filing_level or "").lower() == "group"
-    raw = 12 + (4 if is_group else 0) + 2 * int(n_items)
-    return max(12, min(36, raw))
+    raw = 16 + (4 if is_group else 0) + 2 * int(n_items)
+    return max(16, min(40, raw))
 
 
 def compute_spot_check_turn_cap(*, filing_level: str, mode: str) -> int:

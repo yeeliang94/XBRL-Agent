@@ -93,11 +93,20 @@ def test_reconcile_stale_notes_review_tasks(tmp_path):
     with repo.db_session(db) as conn:
         run_id = repo.create_run(conn, "x.pdf", session_id="s", output_dir="/tmp/s")
         repo.upsert_notes_review_task(conn, run_id, "running", model="m")
+        agent_id = repo.create_run_agent(
+            conn, run_id, statement_type="NOTES_VALIDATOR", model="m")
     with repo.db_session(db) as conn:
         n = repo.reconcile_stale_notes_review_tasks(conn)
         assert n == 1
         t = repo.fetch_notes_review_task(conn, run_id)
         assert t["status"] == "done" and t["outcome"]["ok"] is False
+        agent = conn.execute(
+            "SELECT status, ended_at, error_type FROM run_agents WHERE id = ?",
+            (agent_id,),
+        ).fetchone()
+        assert agent["status"] == "failed"
+        assert agent["ended_at"] is not None
+        assert agent["error_type"] == "tool_exception"
 
 
 def test_reinit_is_idempotent(tmp_path):

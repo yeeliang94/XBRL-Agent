@@ -58,6 +58,19 @@ def _ctx(steps: int = 0, total_tokens: int = 0, cap: int = None, requests: int =
     )
 
 
+def _reviewer_ctx(*, tool_turns: int, tool_cap: int, loop_steps: int, loop_cap: int):
+    """Reviewer runs publish both graph-node and user-facing tool-turn caps."""
+    return SimpleNamespace(
+        usage=SimpleNamespace(requests=0, total_tokens=0),
+        deps=SimpleNamespace(
+            _loop_iteration=loop_steps,
+            _loop_max_iters=loop_cap,
+            _call_tools_seen=tool_turns,
+            _call_tools_cap=tool_cap,
+        ),
+    )
+
+
 def _history():
     """A tiny plausible history ending in a pending ModelRequest."""
     return [
@@ -102,6 +115,17 @@ def test_urgent_at_threshold():
     assert f"{used}/{cap}" in warnings[0]
     # The warning rides on the LAST request, appended after existing parts.
     assert out[-1].parts[-1].content.startswith(WARNING_MARKER)
+
+
+def test_reviewer_warning_uses_the_prompt_turn_budget_not_graph_steps():
+    """The warning and reviewer prompt must describe the same unit."""
+    out = limit_warning_processor(
+        _reviewer_ctx(tool_turns=11, tool_cap=14, loop_steps=30, loop_cap=38),
+        _history(),
+    )
+    warning = _warning_texts(out)[0]
+    assert "11/14 tool turns" in warning
+    assert "30/38" not in warning
 
 
 def test_critical_in_final_stretch():

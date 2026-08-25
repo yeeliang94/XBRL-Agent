@@ -291,12 +291,12 @@ def test_ungrounded_fix_in_run_is_rejected_not_applied(seeded):
 
 
 @pytest.mark.parametrize("is_group, n_items, expected", [
-    (False, 0, 12),    # base, clamped at min (Phase 3: 10→12)
-    (False, 1, 14),    # 12 + 2
-    (False, 5, 22),    # 12 + 10
-    (True, 5, 26),     # 12 + 4 + 10
-    (False, 20, 36),   # clamped at max (Phase 3: 30→36)
-    (True, 20, 36),    # clamped at max
+    (False, 0, 16),    # higher base gives the reviewer write/verify headroom
+    (False, 1, 18),    # 16 + 2
+    (False, 5, 26),    # 16 + 10
+    (True, 5, 30),     # 16 + 4 + 10
+    (False, 20, 40),   # clamped at the project cap
+    (True, 20, 40),    # clamped at the project cap
 ])
 def test_turn_cap_formula(is_group, n_items, expected):
     from correction.reviewer_agent import compute_reviewer_turn_cap
@@ -312,14 +312,14 @@ def test_turn_cap_below_pydantic_50(seeded):
     from correction.reviewer_agent import compute_reviewer_turn_cap
     assert MAX_AGENT_ITERATIONS < 50
     worst = compute_reviewer_turn_cap(filing_level="group", n_items=999)
-    assert worst < MAX_AGENT_ITERATIONS
+    assert worst <= MAX_AGENT_ITERATIONS
 
 
 @pytest.mark.parametrize("level, mode, expected", [
     ("company", "light", 6),
     ("group", "light", 8),
-    ("company", "full", 12),   # reuses reviewer base cap (n_items=0)
-    ("group", "full", 16),     # base 12 + group 4
+    ("company", "full", 16),   # reuses reviewer base cap (n_items=0)
+    ("group", "full", 20),     # base 16 + group 4
 ])
 def test_spot_check_turn_cap(level, mode, expected):
     """Issue 1: the clean-run spot-check cap. Light is a tight sanity pass;

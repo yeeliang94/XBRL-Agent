@@ -1092,11 +1092,12 @@ overhead. Operators can override via `XBRL_MAX_AGENT_ITERATIONS` but
 **must not raise it to ≥50** — pinned by
 `tests/test_max_agent_iterations_below_pydantic_cap.py`.
 
-The reviewer pass has its own dynamic turn cap (12-36 since the
-holistic-audit Phase 3 raise; RUN-REVIEW P0-1) that's much tighter
-than and independent of MAX_AGENT_ITERATIONS; it fires structured
-`correction_exhausted` outcomes via `server._run_reviewer_pass`. (The
-legacy `_run_correction_pass` was removed in rewrite Phase 1.1.)
+The reviewer pass has its own dynamic tool-turn cap (16-40 since the
+2026-08-25 reviewer completion hardening; RUN-REVIEW P0-1). It is enforced
+through `AgentLoopSpec.call_tools_cap`, stays below PydanticAI's 50-request
+default, and fires structured `correction_exhausted` outcomes via
+`server._run_reviewer_pass`. The notes reviewer uses the same enforced cap.
+(The legacy `_run_correction_pass` was removed in rewrite Phase 1.1.)
 
 **Wall-clock deadline behaviour (run-83 hardening, 2026-08-05):** the
 cap in `agent_runner.run_agent_loop` stops NEW MODEL THINKING only — a
@@ -1110,6 +1111,10 @@ check. Companion soft deadline: `run_agent_loop` publishes
 warning past 70% / CRITICAL past 90% of the cap. Pinned by
 `tests/test_agent_loop_wallclock.py`, `tests/test_limit_warnings.py`,
 `tests/test_reviewer_compact_context.py`.
+
+For reviewer runs, the warning reports the same tool-turn unit shown in the
+prompt. Graph-node counters remain the fallback for other agent roles. Do not
+show the reviewer a graph-step budget that disagrees with its prompt.
 
 **Wall-clock cap on correction (2026-04-27):**
 `CORRECTION_WALLCLOCK_TIMEOUT = 300.0` in `server.py` is

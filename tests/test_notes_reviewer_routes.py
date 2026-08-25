@@ -125,6 +125,45 @@ def test_async_re_review_fixes_and_flags(client, monkeypatch):
     assert a.status_code == 200 and a.json()["status"] == "answered"
 
 
+def test_manual_re_review_cost_contributes_to_run_total(client, monkeypatch):
+    tc, db, run_id, srv = client
+
+    async def _paid_pass(**kwargs):
+        return {
+            "invoked": True,
+            "writes_performed": 0,
+            "flags_raised": 0,
+            "error": None,
+            "total_tokens": 150,
+            "total_cost": 1.25,
+            "prompt_tokens": 100,
+            "completion_tokens": 50,
+            "cache_read_tokens": 20,
+            "cache_write_tokens": 5,
+            "turns_used": 2,
+            "tool_call_count": 3,
+            "turn_records": [],
+        }
+
+    monkeypatch.setattr(srv, "_create_proxy_model", lambda *a, **k: object())
+    monkeypatch.setattr(srv, "_run_notes_reviewer_pass", _paid_pass)
+    r = tc.post(f"/api/runs/{run_id}/notes-review/re-review", json={})
+    assert r.status_code == 200
+    assert _await(tc, run_id)["ok"] is True
+
+    detail = tc.get(f"/api/runs/{run_id}")
+    assert detail.status_code == 200
+    body = detail.json()
+    reviewer = [
+        a for a in body["agents"]
+        if a["statement_type"] == srv.NOTES_VALIDATOR_AGENT_ID
+    ]
+    assert len(reviewer) == 1
+    assert reviewer[0]["total_cost"] == pytest.approx(1.25)
+    assert reviewer[0]["token_breakdown"]["turn_count"] == 2
+    assert body["telemetry_rollup"]["total_cost"] == pytest.approx(1.25)
+
+
 def test_revert_restores_original_prose(client, monkeypatch):
     tc, db, run_id, srv = client
     monkeypatch.setattr(srv, "_create_proxy_model",

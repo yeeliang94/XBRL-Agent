@@ -188,6 +188,29 @@ async def re_review_notes(run_id: int, body: Optional[dict] = None):
         )
 
     def _thread_main() -> None:
+        run_agent_id = None
+        # Manual re-review is paid agent work too. Give each pass its own audit
+        # row so repeated reviews contribute honestly to the run total instead
+        # of disappearing into notes_review_tasks.outcome_json.
+        try:
+            ac = server._open_audit_conn()
+            try:
+                run_agent_id = repo.create_run_agent(
+                    ac,
+                    run_id,
+                    statement_type=server.NOTES_VALIDATOR_AGENT_ID,
+                    variant=None,
+                    model=model_name,
+                )
+                ac.commit()
+            finally:
+                ac.close()
+        except Exception:  # noqa: BLE001 — telemetry must not block review
+            logger.warning(
+                "failed to create manual notes-review agent row for run %s",
+                run_id,
+                exc_info=True,
+            )
         try:
             outcome = asyncio.run(_runner_async())
             result = {"ok": not outcome.get("error"), "model": model_name, **outcome}
@@ -195,19 +218,44 @@ async def re_review_notes(run_id: int, body: Optional[dict] = None):
             logger.exception("background notes re-review failed for run %s", run_id)
             result = {"ok": False, "model": model_name,
                       "error": f"{type(e).__name__}: {e}"}
-        # Terminal write is best-effort (startup reconciles a lost row).
+        if run_agent_id is not None:
+            try:
+                ac = server._open_audit_conn()
+                try:
+                    server._finish_reviewer_agent_row(
+                        ac, run_agent_id, result)
+                    ac.commit()
+                finally:
+                    ac.close()
+            except Exception:  # noqa: BLE001 — telemetry remains advisory
+                logger.warning(
+                    "failed to finalize manual notes-review agent row for run %s",
+                    run_id,
+                    exc_info=True,
+                )
+        # Publish terminal task status only after telemetry finalization. The
+        # status endpoint's `done` response is therefore a reliable barrier for
+        # History's run-cost refresh. Best-effort; startup reconciles a lost row.
         try:
             tc = server._open_audit_conn()
             try:
-                repo.upsert_notes_review_task(tc, run_id, "done",
-                                              model=model_name, outcome=result,
-                                              error=result.get("error"))
+                repo.upsert_notes_review_task(
+                    tc,
+                    run_id,
+                    "done",
+                    model=model_name,
+                    outcome=result,
+                    error=result.get("error"),
+                )
                 tc.commit()
             finally:
                 tc.close()
         except Exception:  # noqa: BLE001
-            logger.warning("failed to persist notes re-review outcome for run %s",
-                           run_id, exc_info=True)
+            logger.warning(
+                "failed to persist notes re-review outcome for run %s",
+                run_id,
+                exc_info=True,
+            )
 
     threading.Thread(
         target=_thread_main, name=f"notes-re-review-{run_id}", daemon=True,

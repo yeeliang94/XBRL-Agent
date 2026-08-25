@@ -10,6 +10,17 @@ from typing import Optional
 # session_id -> {agent_id -> Task}
 _tasks: dict[str, dict[str, asyncio.Task]] = {}
 
+# Cancellation reason carried by asyncio.CancelledError for an explicit Stop
+# request. Provider/transport cancellations are deliberately left untagged so
+# reviewer passes can classify them as recoverable interruptions instead of
+# falsely attributing them to the operator.
+USER_ABORT_REASON = "user_abort"
+
+
+def is_user_abort(exc: BaseException) -> bool:
+    """Return True only for cancellations initiated by the Stop endpoints."""
+    return bool(exc.args and exc.args[0] == USER_ABORT_REASON)
+
 
 def register(session_id: str, agent_id: str, task: asyncio.Task) -> None:
     """Track a running agent task so it can be cancelled later."""
@@ -24,7 +35,7 @@ def cancel_agent(session_id: str, agent_id: str) -> bool:
     task = session.get(agent_id)
     if task is None or task.done():
         return False
-    task.cancel()
+    task.cancel(USER_ABORT_REASON)
     return True
 
 
@@ -43,7 +54,7 @@ def cancel_all(session_id: str) -> int:
     count = 0
     for task in session.values():
         if not task.done():
-            task.cancel()
+            task.cancel(USER_ABORT_REASON)
             count += 1
     return count
 

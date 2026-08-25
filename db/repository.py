@@ -1363,13 +1363,23 @@ def fetch_notes_review_task(
 
 def reconcile_stale_notes_review_tasks(conn: sqlite3.Connection) -> int:
     """Retire notes re-reviews orphaned by a process restart (mirrors
-    :func:`reconcile_stale_review_tasks`). Returns rows reconciled."""
+    :func:`reconcile_stale_review_tasks`). Also close the paid reviewer audit
+    row created by a manual re-review before retiring its durable task. Returns
+    the number of task rows reconciled."""
     now = _now()
     outcome_json = json.dumps({
         "ok": False, "invoked": False,
         "error": "Server restarted while the notes re-review was running. "
                  "Relaunch it to retry.",
     })
+    conn.execute(
+        "UPDATE run_agents SET status = 'failed', ended_at = ?, "
+        "error_type = COALESCE(error_type, 'tool_exception') "
+        "WHERE status = 'running' AND statement_type = 'NOTES_VALIDATOR' "
+        "AND run_id IN (SELECT run_id FROM notes_review_tasks "
+        "WHERE status = 'running')",
+        (now,),
+    )
     cur = conn.execute(
         "UPDATE notes_review_tasks SET status = 'done', outcome = ?, "
         "error = 'restarted', updated_at = ? WHERE status = 'running'",
