@@ -186,6 +186,7 @@ FORMATTER_ERROR_TYPES = (
     "restarted",            # server restarted while the pass was running
     "reverted",             # user reverted the pass's formatting
     "cancelled",            # Stop All during the automatic PDF pass
+    "reviewer_running",     # auto pass skipped behind the notes reviewer
 )
 
 
