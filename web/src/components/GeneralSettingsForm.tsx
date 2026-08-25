@@ -26,8 +26,8 @@ import { ClipboardFormatControls } from "./ClipboardFormatControls";
 // ---------------------------------------------------------------------------
 
 interface Props {
-  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; spot_check?: boolean; spot_check_mode?: string; entity_memory?: boolean; pdf_sidecar?: boolean; notes_source_integrity?: SourceIntegrityMode; notes_source_integrity_choices?: string[]; default_models?: Record<string, string>; thinking_levels?: Record<string, string>; thinking_level_choices?: string[]; thinking_level_choices_by_model?: Record<string, string[]>; notes_table_style?: Partial<ClipboardFormatOptions>; available_models?: ModelEntry[] }>;
-  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; auto_review: boolean; spot_check: boolean; spot_check_mode: "light" | "full"; entity_memory: boolean; pdf_sidecar: boolean; notes_source_integrity: SourceIntegrityMode; thinking_levels: Record<string, string>; notes_table_style: ClipboardFormatOptions }>) => Promise<{ status: string }>;
+  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; spot_check?: boolean; spot_check_mode?: string; entity_memory?: boolean; pdf_sidecar?: boolean; pdf_notes_auto_format?: boolean; notes_source_integrity?: SourceIntegrityMode; notes_source_integrity_choices?: string[]; default_models?: Record<string, string>; thinking_levels?: Record<string, string>; thinking_level_choices?: string[]; thinking_level_choices_by_model?: Record<string, string[]>; notes_table_style?: Partial<ClipboardFormatOptions>; available_models?: ModelEntry[] }>;
+  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; auto_review: boolean; spot_check: boolean; spot_check_mode: "light" | "full"; entity_memory: boolean; pdf_sidecar: boolean; pdf_notes_auto_format: boolean; notes_source_integrity: SourceIntegrityMode; thinking_levels: Record<string, string>; notes_table_style: ClipboardFormatOptions }>) => Promise<{ status: string }>;
   testConnection: (body: Partial<{ proxy_url: string; api_key: string; model: string }>) => Promise<{ status: string; model?: string; latency_ms?: number; message?: string }>;
   // When provided, a Cancel button is shown (used by the modal wrapper). The
   // page host omits it — there's nothing to cancel out of.
@@ -317,6 +317,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
   // OFF: it adds one paid vision call per notes page, so an admin turns it
   // on deliberately rather than every scanned upload paying for it.
   const [pdfSidecar, setPdfSidecar] = useState(false);
+  const [pdfNotesAutoFormat, setPdfNotesAutoFormat] = useState(false);
   // Notes source-integrity rollout mode (gotcha #31). Default off — `shadow`
   // computes the verdict and changes nothing, `enforce` makes the block-id
   // path live and lets an unresolved block tip the run status.
@@ -377,6 +378,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         // Default to OFF when the field is absent (older backend) — the
         // opposite of the other toggles, because this one costs money.
         setPdfSidecar(s.pdf_sidecar === true);
+        setPdfNotesAutoFormat(s.pdf_notes_auto_format === true);
         // The server's own list decides what is valid — this build's knowledge
         // of the modes does not. Keep whatever mode it reports as long as it is
         // in that list; only an absent or genuinely out-of-list value falls
@@ -431,6 +433,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         spot_check_mode: spotCheckMode,
         entity_memory: entityMemory,
         pdf_sidecar: pdfSidecar,
+        pdf_notes_auto_format: pdfNotesAutoFormat,
         notes_source_integrity: sourceIntegrity,
         // Send EVERY role, with "" for the ones set back to the provider
         // default. The server clears only the keys it is given, so omitting a
@@ -789,6 +792,29 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         <p style={styles.helperText}>
           Scanned PDFs only. PDFs with selectable text and Word uploads are
           unaffected by this setting.
+        </p>
+      </div>
+      <div style={styles.fieldGroup}>
+        <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            checked={pdfNotesAutoFormat}
+            onChange={(e) => { setPdfNotesAutoFormat(e.target.checked); setDirty(true); }}
+            disabled={readOnly}
+            aria-label="Automatically format PDF notes for mTool"
+          />
+          <span style={styles.label}>Automatically format PDF notes for mTool</span>
+        </label>
+        <p style={styles.helperText}>
+          After extraction and notes review, the AI formatter compares each
+          prose table with its PDF pages and applies the standard mTool-safe
+          profile: source-aware borders and totals rules, restrained fills,
+          and consistent numeric alignment. Scanned and selectable-text PDFs
+          use the same path. Word uploads are not changed.
+        </p>
+        <p style={styles.helperText}>
+          Adds one paid formatting pass per filled prose sheet. Content, figures,
+          table rows and columns are locked by the format-only verifier.
         </p>
       </div>
 

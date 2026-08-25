@@ -22,6 +22,16 @@ def test_prompt_instructs_currency_caption_alignment():
     assert "text_align" in prompt
 
 
+def test_prompt_pins_the_standardized_mtool_profile():
+    from pathlib import Path
+    prompt = (Path(__file__).resolve().parents[1]
+              / "prompts" / "notes_formatter.md").read_text(encoding="utf-8")
+    assert "STANDARDISED MTOOL PROFILE" in prompt
+    assert "Do not copy decorative brand colours" in prompt
+    assert "no borders" in prompt
+    assert "header_fill" in prompt
+
+
 def test_formatter_request_budget_stays_below_pydantic_cap(monkeypatch):
     """The per-click request budget must stay under pydantic-ai's silent 50
     (gotcha #18), including operator overrides which are clamped."""
@@ -484,7 +494,9 @@ def formatter_db(tmp_path):
     return db_path, str(pdf_path), run_id
 
 
-async def _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake_agent):
+async def _run_formatter_with_fake_agent(
+    monkeypatch, formatter_db, fake_agent, *, style_sources=None,
+):
     from pathlib import Path
 
     import notes.formatting_agent as fa
@@ -498,6 +510,7 @@ async def _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake_agent):
         run_id=run_id, db_path=str(db_path), pdf_path=pdf_path,
         sheet=_SHEET, model="fake-model",
         output_dir=str(Path(pdf_path).parent),
+        style_sources=style_sources,
     )
 
 
@@ -518,6 +531,29 @@ async def test_formatter_writes_unedited_rows(monkeypatch, formatter_db):
     # The pass snapshotted the pre-format HTML before its first write
     # (schema v27) so "Revert formatting" can restore it.
     assert snapshot == {112: _TABLE_HTML}
+
+
+@pytest.mark.asyncio
+async def test_pdf_auto_format_scope_refuses_source_styled_cells(
+    monkeypatch, formatter_db,
+):
+    from db import repository as repo
+
+    db_path, _pdf, run_id = formatter_db
+    with repo.db_session(db_path) as conn:
+        repo.upsert_notes_cell(
+            conn, run_id=run_id, sheet=_SHEET, row=112,
+            label="Disclosure of other notes", html=_TABLE_HTML,
+            evidence="Page 3", source_pages=[3], style_source="source",
+        )
+    fake = _FakeAgent([_GOOD_PATCH])
+    result = await _run_formatter_with_fake_agent(
+        monkeypatch, formatter_db, fake,
+        style_sources={"unstyled", "floor"},
+    )
+    assert result["ok"] is False
+    assert result["error_type"] == "precondition_failed"
+    assert fake.calls == 0
 
 
 @pytest.mark.asyncio

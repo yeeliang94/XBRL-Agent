@@ -900,7 +900,7 @@ Key invariants:
     `tests/test_notes_source_prompt.py`, `tests/test_notes_format_sidecar.py`,
     and `tests/test_db_schema_v29.py`.
   - **Notes formatter agent (manual REPAIR pass, `POST /api/runs/{id}/notes-format`,
-    per prose sheet):** the only AI role that authors styling on demand; returns
+    per prose sheet):** the only AI role that authors styling; returns
     JSON style patches applied to `notes_cells.html`, rejected unless rendered
     text, numeric tokens, and table geometry survive `sanitize_notes_html`.
     Production invariants: writes are compare-and-swap
@@ -916,6 +916,23 @@ Key invariants:
     (0.70). Numeric sheets (13/14) are excluded (422). Pinned by
     `tests/test_notes_format_patch.py`, `test_notes_formatter_routes.py`,
     `test_db_schema_v26.py`/`_v27.py`.
+  - **PDF structure-first formatting (2026-08-25).** Text PDFs already land
+    style-free. Scanned-PDF `source.html` transcripts now preserve content and
+    table geometry only: `ingest/pdf_sidecar.normalize_transcription` removes
+    presentation attributes and unwraps presentation-only inline tags before
+    publication. This stops the transcript model from becoming a second
+    styling author and keeps scanned/text PDFs on one formatter path. When
+    `XBRL_PDF_NOTES_AUTO_FORMAT=true`, the run formats unstyled/floor prose
+    cells after the notes reviewer, in parallel by sheet, through the same
+    content/number/geometry verifier, CAS writes, snapshots, task rows, limits,
+    and mTool-safe closed vocabulary as the manual pass. The setting is
+    admin-only and defaults OFF because it adds a paid pass per filled prose
+    sheet. Stop All cancels the group. `uploaded.docx` is an explicit exclusion:
+    Word's source-styled behavior above is unchanged. Pinned by
+    `tests/test_pdf_sidecar.py`, `test_pdf_sidecar_prompts.py`,
+    `test_notes_auto_format.py`, `test_pdf_notes_auto_format_wiring.py`,
+    `test_notes_format_patch.py`, `test_settings_api.py`, and the Settings /
+    reducer web tests.
   Styling reaches the Review panel + clipboard paste ONLY — the xlsx download
   stays a text overlay (native xlsx styling still deferred).
 - **Evidence column is read-only in the editor** (audit trail); the PATCH

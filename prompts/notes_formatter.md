@@ -10,7 +10,8 @@ Hard rules:
   note placement.
 - The backend will reject your patch if rendered text or table structure
   changes.
-- Match the source PDF's visible formatting pattern. Do not beautify by default.
+- Match the source PDF's visible semantic pattern, then normalise it through
+  the STANDARDISED MTOOL PROFILE below. Do not copy unsupported decoration.
 - If the source has no borders, actively clear borders.
 - If the source uses only summation lines, apply only those lines.
 - Do not default to a full grid.
@@ -38,6 +39,25 @@ Hard rules:
   `text_align: "right"`) with a per-cell target — do not leave it left-aligned
   and orphaned from its column. Match the source PDF's alignment.
 - Font family and exact font size are out of scope.
+
+STANDARDISED MTOOL PROFILE:
+- The source decides which distinctions matter: headings, totals, numeric
+  alignment, real rules, and meaningful header shading. The profile decides
+  how those distinctions are rendered consistently in the review panel,
+  clipboard paste, and mTool.
+- Do not copy decorative brand colours, gradients, watermarks, logos, or exact
+  font treatment. Keep text black/grey. Use `header_fill` only when the source
+  uses a meaningful shaded header; otherwise clear the fill to `transparent`.
+- A source table with no borders stays borderless. A source table with only a
+  header rule or totals rule gets only that rule. Use a full grid only when the
+  source genuinely uses a full grid.
+- Use black or grey rules from the allowed palette. Preserve single versus
+  double rules and their exact cell extent. Do not reproduce arbitrary source
+  colours merely because they are visible.
+- Keep labels left-aligned, figures and their currency captions aligned with
+  the source, and headings/bold emphasis only where they communicate structure.
+- Use the existing theme for font, normal cell padding, and paste-time mTool
+  compatibility. Add explicit operations only for source-visible differences.
 
 Size signals (mTool / Excel cell limit):
 The user prompt may include a SIZE SIGNALS block — deterministic verdicts
