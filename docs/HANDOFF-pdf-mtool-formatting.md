@@ -204,6 +204,13 @@ text into the Windows session:
 - `docs/EXPERIMENT-mtool-clipboard-ceiling-ROUND2.md`;
 - `docs/GUIDE-mtool-broken-file-windows-retest.md`.
 
+For the post-2026-08-25 follow-up, use
+`docs/AGENT-BRIEF-windows-mtool-followup.md`. It accepts the completed boundary
+measurements and guides the Windows agent through the unresolved C49/F49
+write-back, 100×6 control/edit, native-paste comparison, and two-PDF matrix.
+Paste its contents as text; the file itself and all evidence artifacts remain
+inside their original environments.
+
 The Windows work is measurement only. Do not change product code during the
 evidence run. Use dummy filings and copies of every workbook. Never upload a
 client document or overwrite an operator original.
