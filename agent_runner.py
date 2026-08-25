@@ -134,7 +134,7 @@ class TokenBudgetExceeded(RuntimeError):
 
 class CallToolsCapExceeded(RuntimeError):
     """Agent exceeded its CALL-TOOLS turn cap
-    (``AgentLoopSpec.call_tools_cap``) — the reviewer's dynamic 8-25 turn
+    (``AgentLoopSpec.call_tools_cap``) — the reviewer's dynamic 16-40 turn
     budget counts tool-calling turns, not raw node iterations (item 17
     migration). Raised before the over-cap node is processed, so the last
     recorded turn count equals the cap exactly.
@@ -333,6 +333,8 @@ async def run_agent_loop(
     try:
         deps._wallclock_started = loop_start
         deps._wallclock_cap = wallclock_cap  # None = no cap = no warning
+        deps._call_tools_seen = 0
+        deps._call_tools_cap = spec.call_tools_cap
     except Exception:  # noqa: BLE001 — advisory plumbing only
         pass
 
@@ -359,6 +361,8 @@ async def run_agent_loop(
         try:
             deps._loop_iteration = iteration
             deps._loop_max_iters = spec.max_iters
+            deps._call_tools_seen = call_tools_seen
+            deps._call_tools_cap = spec.call_tools_cap
         except Exception:  # noqa: BLE001 — advisory plumbing only
             pass
         if spec.set_turn_counter:

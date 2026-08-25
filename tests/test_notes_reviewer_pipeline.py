@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
@@ -230,6 +231,198 @@ class _FakeReviewerDeps:
         self.coverage_note_verdicts: dict = {}
         self.coverage_subnote_verdicts: dict = {}
         self.authored_note_nums: set = set()
+
+
+class _ImmediateAgentRun:
+    """Minimal completed/cancelled run with deterministic usage telemetry."""
+
+    def __init__(self, cancellation: BaseException | None = None) -> None:
+        self._cancellation = cancellation
+        self._done = False
+        self.result = None
+        self.usage = SimpleNamespace(
+            total_tokens=150,
+            input_tokens=100,
+            output_tokens=50,
+            cache_read_tokens=25,
+            cache_write_tokens=5,
+        )
+        self.ctx = SimpleNamespace(
+            state=SimpleNamespace(message_history=[]),
+        )
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self._done:
+            self._done = True
+            if self._cancellation is not None:
+                raise self._cancellation
+        raise StopAsyncIteration
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+
+class _ImmediateAgent:
+    def __init__(self, run: _ImmediateAgentRun) -> None:
+        self.run = run
+
+    def iter(self, *a, **k):
+        return self.run
+
+
+def _seed_reviewer_target(db_path: Path, tmp_path: Path) -> int:
+    with repo.db_session(db_path) as conn:
+        run_id = repo.create_run(
+            conn, "x.pdf", session_id="s", output_dir=str(tmp_path))
+        repo.upsert_notes_cell(
+            conn, run_id=run_id, sheet=_S12, row=49,
+            label="Disclosure of fair value information", html="<p>fv</p>",
+        )
+    return run_id
+
+
+def test_reviewer_pass_captures_usage_for_total_run_cost(
+    db_path: Path, tmp_path, monkeypatch,
+):
+    import server
+    import notes.reviewer_agent as ra_mod
+
+    run_id = _seed_reviewer_target(db_path, tmp_path)
+    context = {"duplicates": [{"note_ref": "1", "sheet_11": {}, "sheet_12": {}}]}
+    agent_run = _ImmediateAgentRun()
+    monkeypatch.setattr(
+        ra_mod, "create_notes_reviewer_agent",
+        lambda *a, **k: (_ImmediateAgent(agent_run), _FakeReviewerDeps(), context),
+    )
+
+    outcome = asyncio.run(server._run_notes_reviewer_pass(
+        run_id=run_id, db_path=str(db_path), pdf_path=str(tmp_path / "x.pdf"),
+        filing_level="company", filing_standard="mfrs",
+        model="openai.gpt-5.4", output_dir=str(tmp_path),
+        merged_workbook_path=None, event_queue=asyncio.Queue(), sidecar_paths=[],
+    ))
+
+    assert outcome["total_tokens"] == 150
+    assert outcome["prompt_tokens"] == 100
+    assert outcome["completion_tokens"] == 50
+    assert outcome["total_cost"] > 0
+    assert outcome["cache_read_tokens"] == 25
+    assert outcome["cache_write_tokens"] == 5
+    assert "turn_records" in outcome
+
+
+def test_untagged_notes_reviewer_cancellation_is_recoverable(
+    db_path: Path, tmp_path, monkeypatch,
+):
+    import server
+    import notes.reviewer_agent as ra_mod
+
+    run_id = _seed_reviewer_target(db_path, tmp_path)
+    context = {"duplicates": [{"note_ref": "1", "sheet_11": {}, "sheet_12": {}}]}
+    agent_run = _ImmediateAgentRun(asyncio.CancelledError())
+    monkeypatch.setattr(
+        ra_mod, "create_notes_reviewer_agent",
+        lambda *a, **k: (_ImmediateAgent(agent_run), _FakeReviewerDeps(), context),
+    )
+    q: asyncio.Queue = asyncio.Queue()
+
+    outcome = asyncio.run(server._run_notes_reviewer_pass(
+        run_id=run_id, db_path=str(db_path), pdf_path=str(tmp_path / "x.pdf"),
+        filing_level="company", filing_standard="mfrs",
+        model="openai.gpt-5.4", output_dir=str(tmp_path),
+        merged_workbook_path=None, event_queue=q, sidecar_paths=[],
+    ))
+
+    assert outcome["error"] == "notes_reviewer_interrupted"
+    errors = [e for e in _drain(q) if e["event"] == "error"]
+    assert errors and errors[-1]["data"]["type"] == "notes_reviewer_interrupted"
+    assert "user" not in errors[-1]["data"]["message"].lower()
+
+
+def test_explicit_user_abort_returns_telemetry_for_run_finalization(
+    db_path: Path, tmp_path, monkeypatch,
+):
+    import server
+    import task_registry
+    import notes.reviewer_agent as ra_mod
+
+    run_id = _seed_reviewer_target(db_path, tmp_path)
+    context = {"duplicates": [{"note_ref": "1", "sheet_11": {}, "sheet_12": {}}]}
+    agent_run = _ImmediateAgentRun(
+        asyncio.CancelledError(task_registry.USER_ABORT_REASON))
+    monkeypatch.setattr(
+        ra_mod, "create_notes_reviewer_agent",
+        lambda *a, **k: (_ImmediateAgent(agent_run), _FakeReviewerDeps(), context),
+    )
+
+    outcome = asyncio.run(server._run_notes_reviewer_pass(
+        run_id=run_id, db_path=str(db_path), pdf_path=str(tmp_path / "x.pdf"),
+        filing_level="company", filing_standard="mfrs",
+        model="openai.gpt-5.4", output_dir=str(tmp_path),
+        merged_workbook_path=None, event_queue=asyncio.Queue(), sidecar_paths=[],
+    ))
+
+    assert outcome["error"] == "cancelled"
+    assert outcome["total_tokens"] == 150
+    assert outcome["prompt_tokens"] == 100
+    assert outcome["completion_tokens"] == 50
+    assert outcome["total_cost"] > 0
+
+
+def test_notes_reviewer_row_finalizer_persists_cost_and_turns(db_path: Path):
+    """The NOTES_VALIDATOR pseudo-agent must contribute to run rollups."""
+    import server
+
+    with repo.db_session(db_path) as conn:
+        run_id = repo.create_run(conn, "x.pdf", session_id="s", output_dir="/tmp/s")
+        agent_id = repo.create_run_agent(
+            conn, run_id, statement_type="NOTES_VALIDATOR", model="m")
+        server._finish_reviewer_agent_row(conn, agent_id, {
+            "error": "cancelled",
+            "total_tokens": 150,
+            "total_cost": 0.012,
+            "prompt_tokens": 100,
+            "completion_tokens": 50,
+            "turns_used": 1,
+            "tool_call_count": 2,
+            "cache_read_tokens": 25,
+            "cache_write_tokens": 5,
+            "turn_records": [{
+                "turn_index": 1,
+                "node_kind": "call_tools",
+                "tool_names": "view_pdf_pages",
+                "prompt_tokens": 100,
+                "completion_tokens": 50,
+                "total_tokens": 150,
+                "cumulative_tokens": 150,
+                "cost_estimate": 0.012,
+                "duration_ms": 20,
+                "cache_read_tokens": 25,
+                "cache_write_tokens": 5,
+            }],
+        }, status="cancelled")
+
+    with repo.db_session(db_path) as conn:
+        agent = conn.execute(
+            "SELECT status, total_tokens, total_cost, prompt_tokens, "
+            "completion_tokens, turn_count, tool_call_count, cache_read_tokens, "
+            "cache_write_tokens, error_type FROM run_agents WHERE id = ?",
+            (agent_id,),
+        ).fetchone()
+        turn_count = conn.execute(
+            "SELECT COUNT(*) FROM run_agent_turns WHERE run_agent_id = ?",
+            (agent_id,),
+        ).fetchone()[0]
+
+    assert tuple(agent) == (
+        "cancelled", 150, 0.012, 100, 50, 1, 2, 25, 5, "cancelled")
+    assert turn_count == 1
 
 
 def test_reviewer_pass_times_out_on_stalled_turn(

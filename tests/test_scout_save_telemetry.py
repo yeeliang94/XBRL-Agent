@@ -89,6 +89,20 @@ class TestCoercionTelemetry:
         assert "Coerced" not in msg
         assert deps.infopack.scale_unit == "thousands"
 
+    def test_detected_standard_is_normalized_case_insensitively(self, tmp_path, caplog):
+        deps = _deps(tmp_path)
+        with caplog.at_level(logging.WARNING, logger="scout.agent"):
+            msg = _save_infopack_impl(deps, json.dumps({
+                "toc_page": 1,
+                "page_offset": 0,
+                "detected_standard": " MFRS ",
+            }))
+        assert deps.infopack.detected_standard == "mfrs"
+        assert "Coerced" not in msg
+        assert not any(
+            "invalid detected_standard" in r.getMessage() for r in caplog.records
+        )
+
 
 # ---------------------------------------------------------------------------
 # Item 4 — note_num sanity bounds

@@ -1029,8 +1029,13 @@ def _save_infopack_impl(deps: ScoutDeps, infopack_json: str) -> str:
     raw_standard = data.get("detected_standard")
     if raw_standard in (None, "", "unknown"):
         raw_standard = deps.detected_standard or "unknown"
-    if raw_standard in _VALID_DETECTED_STANDARD:
-        detected_standard = raw_standard
+    normalized_standard = (
+        raw_standard.strip().lower()
+        if isinstance(raw_standard, str)
+        else raw_standard
+    )
+    if normalized_standard in _VALID_DETECTED_STANDARD:
+        detected_standard = normalized_standard
     else:
         logger.warning(
             "scout emitted invalid detected_standard=%r — coerced to "

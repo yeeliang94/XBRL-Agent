@@ -125,7 +125,7 @@ def _build_warning(ctx) -> Optional[str]:
     lines: List[str] = []
     critical = False
 
-    # --- Iterations (always tracked; the cap always exists) ---
+    # --- Iterations / reviewer tool turns (always tracked) ---
     # UNIT CONTRACT (2026-07-12 V2-review fix): the hard cap in
     # agent_runner counts graph NODES (model-request and call-tools nodes
     # alternate), NOT model requests. Compare like with like: prefer the
@@ -133,8 +133,10 @@ def _build_warning(ctx) -> Optional[str]:
     # fall back to a documented nodes≈2×requests approximation for agents
     # not driven by run_agent_loop (e.g. scout's own loop).
     deps = getattr(ctx, "deps", None)
-    used = getattr(deps, "_loop_iteration", None)
-    cap = getattr(deps, "_loop_max_iters", None)
+    tool_used = getattr(deps, "_call_tools_seen", None)
+    tool_cap = getattr(deps, "_call_tools_cap", None)
+    used = tool_used if tool_cap is not None else getattr(deps, "_loop_iteration", None)
+    cap = tool_cap if tool_cap is not None else getattr(deps, "_loop_max_iters", None)
     if used is None:
         req = int(getattr(usage, "requests", 0) or 0)
         used = max(2 * req - 1, 0)
@@ -145,10 +147,16 @@ def _build_warning(ctx) -> Optional[str]:
     if cap > 0 and used / cap >= WARN_FRACTION:
         remaining = max(cap - used, 0)
         pct = int(round(100 * used / cap))
-        lines.append(
-            f"Turns: {used}/{cap} loop steps used ({pct}%); "
-            f"{remaining} remaining (a model turn + its tools is ~2 steps)."
-        )
+        if tool_cap is not None:
+            lines.append(
+                f"Turns: {used}/{cap} tool turns used ({pct}%); "
+                f"{remaining} remaining."
+            )
+        else:
+            lines.append(
+                f"Turns: {used}/{cap} loop steps used ({pct}%); "
+                f"{remaining} remaining (a model turn + its tools is ~2 steps)."
+            )
         if remaining <= CRITICAL_REMAINING_ITERATIONS:
             critical = True
 
