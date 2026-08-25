@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { userMessage } from "../lib/errors";
+import { ApiError, userMessage } from "../lib/errors";
 import { pwc, tokens } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { PageHeader } from "../components/PageHeader";
@@ -27,6 +27,14 @@ import { TERMS } from "../lib/vocabulary";
 // Page size for History list — matches backend default of 50. Kept as a
 // module constant so the test and the production code use the same number.
 const PAGE_SIZE = 50;
+const RUN_DETAIL_POLL_MS = 2_000;
+const RUN_DETAIL_MAX_RETRIES = 5;
+const RUN_DETAIL_MAX_RETRY_MS = 30_000;
+
+function isRetryableDetailError(error: unknown): boolean {
+  if (!(error instanceof ApiError) || error.status == null) return true;
+  return error.status === 408 || error.status === 429 || error.status >= 500;
+}
 
 export interface HistoryPageProps {
   /** Which run's full-page detail is open, or null for the list view.
@@ -176,7 +184,9 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
     }
   }, [runs.length, filters]);
 
-  // Fetch detail whenever `selectedId` changes.
+  // Fetch detail whenever `selectedId` changes. Running runs self-schedule one
+  // follow-up at a time so a dropped live stream can resume from durable state
+  // without overlapping requests or launching duplicate work.
   useEffect(() => {
     if (selectedId == null) {
       setDetail(null);
@@ -184,24 +194,48 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
       return;
     }
     let cancelled = false;
+    let pollTimer: ReturnType<typeof setTimeout> | null = null;
+    let consecutiveFailures = 0;
     setIsDetailLoading(true);
     setDetailError(null);
-    fetchRunDetail(selectedId)
-      .then((d) => {
+
+    const schedulePoll = (delayMs = RUN_DETAIL_POLL_MS) => {
+      if (pollTimer !== null) clearTimeout(pollTimer);
+      pollTimer = setTimeout(() => {
+        pollTimer = null;
+        void loadDetail(false);
+      }, delayMs);
+    };
+
+    const loadDetail = async (initial: boolean) => {
+      try {
+        const next = await fetchRunDetail(selectedId);
         if (cancelled) return;
-        setDetail(d);
-      })
-      .catch((err: unknown) => {
+        consecutiveFailures = 0;
+        setDetail(next);
+        setDetailError(null);
+        if (next.status === "running") schedulePoll();
+      } catch (err: unknown) {
         if (cancelled) return;
-        const msg = userMessage(err);
-        setDetailError(msg);
-        setDetail(null);
-      })
-      .finally(() => {
-        if (!cancelled) setIsDetailLoading(false);
-      });
+        setDetailError(userMessage(err));
+        if (initial) setDetail(null);
+        if (isRetryableDetailError(err) && consecutiveFailures < RUN_DETAIL_MAX_RETRIES) {
+          consecutiveFailures += 1;
+          const retryDelay = Math.min(
+            RUN_DETAIL_POLL_MS * 2 ** (consecutiveFailures - 1),
+            RUN_DETAIL_MAX_RETRY_MS,
+          );
+          schedulePoll(retryDelay);
+        }
+      } finally {
+        if (!cancelled && initial) setIsDetailLoading(false);
+      }
+    };
+
+    void loadDetail(true);
     return () => {
       cancelled = true;
+      if (pollTimer !== null) clearTimeout(pollTimer);
     };
   }, [selectedId]);
 

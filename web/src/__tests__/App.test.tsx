@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeEach, vi, afterEach } from "vitest";
 import { render, fireEvent, cleanup, act, screen, waitFor } from "@testing-library/react";
 import type { SSEEvent, RunConfigPayload } from "../lib/types";
+import type { SSEFailureKind } from "../lib/sse";
 
 // ---------------------------------------------------------------------------
 // App-level integration tests — guarantee the live extract view renders
@@ -13,6 +14,7 @@ import type { SSEEvent, RunConfigPayload } from "../lib/types";
 // ---------------------------------------------------------------------------
 
 let captureOnEvent: ((event: SSEEvent) => void) | null = null;
+let captureOnTransportError: ((error: string, kind: SSEFailureKind) => void) | null = null;
 
 function selectRequiredFormats() {
   const values = ["CuNonCu", "Function", "BeforeTax", "Indirect", "Default"];
@@ -54,16 +56,39 @@ vi.mock("../lib/api", async () => {
       tolerance_rm: 1,
     })),
     uploadPdf: vi.fn(async () => ({ session_id: "sess_1", filename: "FINCO.pdf" })),
+    fetchRuns: vi.fn(async () => ({
+      runs: [], total: 0, limit: 50, offset: 0,
+    })),
+    fetchRunDetail: vi.fn(async (id: number) => ({
+      id,
+      created_at: "2026-08-25T00:00:00Z",
+      pdf_filename: "FINCO.pdf",
+      status: "running",
+      session_id: "sess_1",
+      output_dir: "/tmp/out",
+      merged_workbook_path: null,
+      scout_enabled: false,
+      started_at: "2026-08-25T00:00:00Z",
+      ended_at: null,
+      config: {},
+      agents: [],
+      cross_checks: [],
+    })),
   };
 });
 
 vi.mock("../lib/sse", () => ({
+  canResumeRunAfterSSEFailure: (kind: SSEFailureKind, runId: number | null) =>
+    kind === "transport" && runId != null,
   createMultiAgentSSE: (
     _sessionId: string,
     _config: RunConfigPayload,
     onEvent: (event: SSEEvent) => void,
+    _onDone: () => void,
+    onError: (error: string, kind: SSEFailureKind) => void,
   ) => {
     captureOnEvent = onEvent;
+    captureOnTransportError = onError;
     return new AbortController();
   },
 }));
@@ -72,6 +97,7 @@ describe("App — AgentTimeline integration", () => {
   beforeEach(() => {
     window.history.replaceState({}, "", "/");
     captureOnEvent = null;
+    captureOnTransportError = null;
     cleanup();
   });
   afterEach(() => {
@@ -147,6 +173,43 @@ describe("App — AgentTimeline integration", () => {
     expect(screen.getAllByText("Reading template").length).toBeGreaterThan(0);
     // Legacy ChatFeed header must be gone — we stripped the whole component.
     expect(screen.queryByText(/Chat Feed/i)).toBeNull();
+  });
+
+  test("lost live stream resumes monitoring from the durable run detail", async () => {
+    const { default: App } = await import("../App");
+    render(<App />);
+
+    const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(fileInput, {
+        target: { files: [new File(["x"], "FINCO.pdf", { type: "application/pdf" })] },
+      });
+    });
+    const runButton = await waitFor(() =>
+      screen.getByRole("button", { name: /start extraction/i }),
+    );
+    selectRequiredFormats();
+    await act(async () => fireEvent.click(runButton));
+
+    await act(async () => {
+      captureOnEvent!({
+        event: "status",
+        data: {
+          phase: "starting",
+          message: "Starting",
+          run_id: 321,
+        },
+        timestamp: Date.now() / 1000,
+      });
+    });
+    await act(async () => {
+      captureOnTransportError!("The connection to the run was lost.", "transport");
+    });
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/history/321");
+    });
+    expect(screen.queryByText("The connection to the run was lost.")).toBeNull();
   });
 
   // ---------------------------------------------------------------------------

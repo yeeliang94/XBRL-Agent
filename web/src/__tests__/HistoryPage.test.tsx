@@ -15,6 +15,7 @@ vi.mock("../lib/api", async () => {
 
 import { HistoryPage } from "../pages/HistoryPage";
 import * as api from "../lib/api";
+import { ApiError } from "../lib/errors";
 import type { RunSummaryJson } from "../lib/types";
 
 const fetchRuns = vi.mocked(api.fetchRuns);
@@ -35,6 +36,7 @@ const baseRun = {
 describe("HistoryPage", () => {
   beforeEach(() => {
     fetchRuns.mockReset();
+    vi.mocked(api.fetchRunDetail).mockReset();
   });
 
   afterEach(() => {
@@ -536,6 +538,129 @@ describe("HistoryPage", () => {
         screen.getByRole("button", { name: /back to runs/i }),
       ).toBeInTheDocument();
     });
+  });
+
+  test("polls a running detail until it reaches a terminal status", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      fetchRuns.mockResolvedValue({ runs: [], total: 0, limit: 50, offset: 0 });
+      const running = {
+        id: 77,
+        created_at: "2026-04-10T00:00:00Z",
+        pdf_filename: "LIVE.pdf",
+        status: "running",
+        session_id: "sess-77",
+        output_dir: "/tmp/out/sess-77",
+        merged_workbook_path: null,
+        scout_enabled: false,
+        started_at: "2026-04-10T00:00:00Z",
+        ended_at: null,
+        config: { statements: ["SOFP"] },
+        agents: [],
+        cross_checks: [],
+      };
+      vi.mocked(api.fetchRunDetail)
+        .mockResolvedValueOnce(running)
+        .mockResolvedValueOnce({
+          ...running,
+          status: "completed",
+          ended_at: "2026-04-10T00:01:00Z",
+        });
+
+      render(<HistoryPage selectedId={77} onSelectRun={() => {}} />);
+      await waitFor(() => {
+        expect(api.fetchRunDetail).toHaveBeenCalledTimes(1);
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+      await waitFor(() => {
+        expect(api.fetchRunDetail).toHaveBeenCalledTimes(2);
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4_000);
+      });
+      expect(api.fetchRunDetail).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("retries an initial transient detail failure", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      fetchRuns.mockResolvedValue({ runs: [], total: 0, limit: 50, offset: 0 });
+      vi.mocked(api.fetchRunDetail)
+        .mockRejectedValueOnce(new Error("temporary network failure"))
+        .mockResolvedValueOnce({
+          id: 77,
+          created_at: "2026-04-10T00:00:00Z",
+          pdf_filename: "RECOVERED.pdf",
+          status: "completed",
+          session_id: "sess-77",
+          output_dir: "/tmp/out/sess-77",
+          merged_workbook_path: "/tmp/out/sess-77/filled.xlsx",
+          scout_enabled: false,
+          started_at: "2026-04-10T00:00:00Z",
+          ended_at: "2026-04-10T00:01:00Z",
+          config: { statements: ["SOFP"] },
+          agents: [],
+          cross_checks: [],
+        });
+
+      render(<HistoryPage selectedId={77} onSelectRun={() => {}} />);
+      await waitFor(() => expect(api.fetchRunDetail).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+      await waitFor(() => expect(api.fetchRunDetail).toHaveBeenCalledTimes(2));
+      expect(screen.getByText("RECOVERED.pdf")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("stops polling after a terminal detail error", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      fetchRuns.mockResolvedValue({ runs: [], total: 0, limit: 50, offset: 0 });
+      vi.mocked(api.fetchRunDetail).mockRejectedValue(
+        new ApiError("Run not found", { status: 404 }),
+      );
+
+      render(<HistoryPage selectedId={404} onSelectRun={() => {}} />);
+      await waitFor(() => expect(api.fetchRunDetail).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      expect(api.fetchRunDetail).toHaveBeenCalledTimes(1);
+      expect(screen.getByText(/run not found/i)).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("bounds repeated transient detail retries", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      fetchRuns.mockResolvedValue({ runs: [], total: 0, limit: 50, offset: 0 });
+      vi.mocked(api.fetchRunDetail).mockRejectedValue(new Error("network down"));
+
+      render(<HistoryPage selectedId={77} onSelectRun={() => {}} />);
+      await waitFor(() => expect(api.fetchRunDetail).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(120_000);
+      });
+      expect(api.fetchRunDetail).toHaveBeenCalledTimes(6);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(120_000);
+      });
+      expect(api.fetchRunDetail).toHaveBeenCalledTimes(6);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("does not render the list while a run detail is open", async () => {
