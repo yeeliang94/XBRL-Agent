@@ -15,13 +15,19 @@ formula references the cell. This test pins:
 """
 from __future__ import annotations
 
+import os
+import shutil
 from pathlib import Path
 
 import pytest
 
+import prompts._sign_conventions as sign_conventions
+
 from prompts import render_prompt
 from prompts._sign_conventions import (
+    face_sign_convention_block,
     _parse_total_formula,
+    sign_warnings_for_resolved_writes,
     socf_sign_convention_block,
 )
 from statement_types import StatementType
@@ -91,6 +97,87 @@ def test_added_outflow_rows_get_negative_entry_guidance() -> None:
     assert "obey the per-row ADDED/SUBTRACTED label" in block
 
 
+def test_dual_use_short_term_lease_row_reports_both_formula_roles() -> None:
+    """MFRS indirect row 24 is one fact with two deliberate formula uses.
+
+    The reconciliation subtotal subtracts the payment to add the expense back;
+    the operating subtotal adds the same negative payment as the actual cash
+    outflow.  Keeping only the first occurrence tells the agent to enter a
+    positive magnitude and reverses both intermediate subtotals.
+    """
+    path = REPO / "XBRL-template-MFRS" / "Company" / "07-SOCF-Indirect.xlsx"
+    block = socf_sign_convention_block(path)
+    assert block is not None
+    row_line = next(line for line in block.splitlines() if line.startswith("- Row 24 "))
+    assert "DUAL-USE" in row_line
+    assert "SUBTRACTED" in row_line
+    assert "ADDED" in row_line
+    assert "Enter NEGATIVE" in row_line
+
+
+@pytest.mark.parametrize(
+    "template,sheet,row,value,warning_fragment",
+    [
+        (
+            "XBRL-template-MFRS/Company/07-SOCF-Indirect.xlsx",
+            "SOCF-Indirect",
+            24,
+            100,
+            "dual-use row",
+        ),
+        (
+            "XBRL-template-MFRS/Company/08-SOCF-Direct.xlsx",
+            "SOCF-Direct",
+            42,
+            -100,
+            "subtotal subtracts this cash outflow",
+        ),
+        (
+            "XBRL-template-MFRS/Company/01-SOFP-CuNonCu.xlsx",
+            "SOFP-CuNonCu",
+            42,
+            -100,
+            "total-equity formula subtracts",
+        ),
+        (
+            "XBRL-template-MFRS/Company/09-SOCIE.xlsx",
+            "SOCIE",
+            17,
+            -100,
+            "subtracts dividends",
+        ),
+    ],
+)
+def test_formula_ready_sign_warnings_are_advisory_and_specific(
+    template: str,
+    sheet: str,
+    row: int,
+    value: int,
+    warning_fragment: str,
+) -> None:
+    warnings = sign_warnings_for_resolved_writes(
+        REPO / template,
+        [{"sheet": sheet, "row": row, "col": 2, "value": value}],
+    )
+    assert len(warnings) == 1
+    assert warning_fragment in warnings[0]
+    assert "written unchanged" in warnings[0]
+    assert "mTool will also export it unchanged" in warnings[0]
+
+
+def test_formula_ready_sign_check_accepts_correct_mixed_socf_values() -> None:
+    path = REPO / "XBRL-template-MFRS" / "Company" / "07-SOCF-Indirect.xlsx"
+    warnings = sign_warnings_for_resolved_writes(
+        path,
+        [
+            {"sheet": "SOCF-Indirect", "row": 24, "col": 2, "value": -100},
+            {"sheet": "SOCF-Indirect", "row": 97, "col": 2, "value": 100},
+            {"sheet": "SOCF-Indirect", "row": 109, "col": 2, "value": -100},
+        ],
+    )
+    assert warnings == []
+
+
 def test_subtracted_branch_has_math_first_rule_and_worked_examples() -> None:
     """run-50 / Amway SOCF defect: the SUBTRACTED branch previously gave only
     a name-heuristic ('enter a positive magnitude matching the plain name')
@@ -145,11 +232,8 @@ def test_render_prompt_injects_sign_block_for_socf(tmp_path: Path) -> None:
     assert "(Gain) loss on disposal of property, plant and equipment" in rendered
 
 
-def test_render_prompt_no_sign_block_for_non_socf() -> None:
-    """SOFP, SOPL, SOCI prompts don't get the sign block — only SOCF
-    and SOCIE/SoRE do, because the per-row sign convention is
-    specific to those two statements' subtraction-heavy *Total
-    formulas."""
+def test_render_prompt_injects_live_sign_block_for_sofp() -> None:
+    """SOFP treasury shares sound negative but are subtracted by equity."""
     sofp_path = REPO / "XBRL-template-MFRS" / "Company" / "01-SOFP-CuNonCu.xlsx"
     rendered = render_prompt(
         statement_type=StatementType.SOFP,
@@ -158,7 +242,45 @@ def test_render_prompt_no_sign_block_for_non_socf() -> None:
         filing_standard="mfrs",
         template_path=str(sofp_path),
     )
-    assert "SOCF SIGN CONVENTIONS" not in rendered
+    assert "FACE INPUT SIGN CONVENTIONS" in rendered
+    assert "Treasury shares" in rendered
+    assert "Enter a POSITIVE magnitude" in rendered
+
+
+@pytest.mark.parametrize(
+    "statement,variant,template,required",
+    [
+        (
+            StatementType.SOPL,
+            "Nature",
+            "04-SOPL-Nature.xlsx",
+            ("inventories of finished goods", "increase", "NEGATIVE"),
+        ),
+        (
+            StatementType.SOCI,
+            "BeforeTax",
+            "05-SOCI-BeforeTax.xlsx",
+            ("Reclassification adjustments", "POSITIVE magnitude", "tax benefit"),
+        ),
+        (
+            StatementType.SOCIE,
+            "Default",
+            "09-SOCIE.xlsx",
+            ("Dividends paid", "POSITIVE magnitude", "Treasury shares transactions"),
+        ),
+    ],
+)
+def test_non_socf_face_blocks_cover_directional_rows(
+    statement: StatementType,
+    variant: str,
+    template: str,
+    required: tuple[str, ...],
+) -> None:
+    path = REPO / "XBRL-template-MFRS" / "Company" / template
+    block = face_sign_convention_block(path, statement)
+    assert block is not None
+    for phrase in required:
+        assert phrase in block
 
 
 def test_render_prompt_omits_block_when_template_path_missing() -> None:
@@ -214,3 +336,115 @@ def test_socf_sign_block_fires_on_mfrs_direct_method() -> None:
         "Purchase of property, plant and equipment" in line and "SUBTRACTED" in line
         for line in block.splitlines()
     )
+
+
+def test_disposed_cash_proceeds_label_obeys_linkbase_not_keyword() -> None:
+    """This label looks like a receipt, but SSM assigns it weight -1.
+
+    It represents cash disposed with a discontinued operation. The agent must
+    enter the positive disclosed amount and let the live investing subtotal
+    subtract it, rather than applying the ordinary ``Proceeds`` heuristic.
+    """
+    path = REPO / "XBRL-template-MFRS" / "Company" / "08-SOCF-Direct.xlsx"
+    block = socf_sign_convention_block(path)
+    assert block is not None
+    row_line = next(
+        line
+        for line in block.splitlines()
+        if "net cash and cash equivalents disposed" in line
+    )
+    assert "SUBTRACTED" in row_line
+    assert "POSITIVE magnitude" in row_line
+    assert "disposed-cash concept" in row_line
+
+    warnings = sign_warnings_for_resolved_writes(
+        path,
+        [{"sheet": "SOCF-Direct", "row": 33, "col": 2, "value": -100}],
+    )
+    assert len(warnings) == 1
+    assert "SSM linkbase subtracts" in warnings[0]
+
+
+def test_indirect_disposed_cash_alias_uses_same_positive_input_as_direct() -> None:
+    """Direct and Indirect expose one taxonomy concept under two labels."""
+    path = REPO / "XBRL-template-MFRS" / "Company" / "07-SOCF-Indirect.xlsx"
+    block = socf_sign_convention_block(path)
+    assert block is not None
+    row_line = next(
+        line
+        for line in block.splitlines()
+        if line.startswith("- Row 88 `Disposal of discontinued operation")
+    )
+    assert "SUBTRACTED" in row_line
+    assert "POSITIVE magnitude" in row_line
+    assert "SSM linkbase subtracts" in row_line
+
+
+def test_mpers_impairment_reversal_guidance_follows_other_income_chain() -> None:
+    path = REPO / "XBRL-template-MPERS" / "Company" / "04-SOPL-Nature.xlsx"
+    block = face_sign_convention_block(path, StatementType.SOPL)
+    assert block is not None
+    row_line = next(
+        line
+        for line in block.splitlines()
+        if "(Reversal of)/Impairment loss on inventories" in line
+    )
+    assert "reversal = POSITIVE" in row_line
+    assert "impairment loss = NEGATIVE" in row_line
+
+
+def test_repeated_sign_checks_reuse_closed_workbook_metadata(monkeypatch) -> None:
+    """Repeated write_facts calls must not reopen the unchanged template."""
+    path = REPO / "XBRL-template-MFRS" / "Company" / "07-SOCF-Indirect.xlsx"
+    original_load_workbook = sign_conventions.load_workbook
+    calls = 0
+    sign_conventions._clear_template_sign_metadata_cache()
+
+    def counting_load_workbook(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original_load_workbook(*args, **kwargs)
+
+    monkeypatch.setattr(sign_conventions, "load_workbook", counting_load_workbook)
+    writes = [{"sheet": "SOCF-Indirect", "row": 109, "col": 2, "value": -100}]
+    sign_warnings_for_resolved_writes(path, writes)
+    sign_warnings_for_resolved_writes(path, writes)
+    assert calls == 1
+
+
+def test_sign_metadata_cache_invalidates_when_template_changes(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source = REPO / "XBRL-template-MFRS" / "Company" / "07-SOCF-Indirect.xlsx"
+    path = tmp_path / source.name
+    shutil.copy2(source, path)
+    original_load_workbook = sign_conventions.load_workbook
+    calls = 0
+    sign_conventions._clear_template_sign_metadata_cache()
+
+    def counting_load_workbook(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original_load_workbook(*args, **kwargs)
+
+    monkeypatch.setattr(sign_conventions, "load_workbook", counting_load_workbook)
+    writes = [{"sheet": "SOCF-Indirect", "row": 109, "col": 2, "value": -100}]
+    sign_warnings_for_resolved_writes(path, writes)
+    sign_warnings_for_resolved_writes(path, writes)
+    assert calls == 1
+
+    stat = path.stat()
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
+    sign_warnings_for_resolved_writes(path, writes)
+    assert calls == 2
+
+
+def test_face_helper_gives_sore_equity_guidance_not_cash_flow_examples() -> None:
+    path = REPO / "XBRL-template-MPERS" / "Company" / "10-SoRE.xlsx"
+    block = face_sign_convention_block(path, StatementType.SOCIE)
+    assert block is not None
+    assert "FACE INPUT SIGN CONVENTIONS" in block
+    assert "Dividends paid" in block
+    assert "mTool exports" in block
+    assert "cash OUTFLOW" not in block

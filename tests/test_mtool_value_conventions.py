@@ -5,8 +5,8 @@ any scale or sign rule is written, these tests pin the two claims the mTool
 exporter's docstring makes about ``run_concept_facts``:
 
 1. **Sign** — the stored sign is already the sign the SSM template's own
-   formulas expect (positive expenses in SOPL, cash-direction signs in SOCF,
-   positive dividends in SOCIE because the subtotal subtracts the row).
+   formulas expect (positive expenses in SOPL, per-row formula-ready signs in
+   SOCF, positive dividends in SOCIE because the subtotal subtracts the row).
 2. **Nothing rescales at extraction time** — a statement printed in RM'000
    stores the RM'000 figure, and the run's ``denomination`` is what says so.
 
@@ -77,12 +77,46 @@ def test_socie_subtotal_subtracts_dividends_so_positive_storage_is_right(
         wb.close()
 
 
-def test_socf_outflow_rows_are_stored_negative_and_emitted_unchanged(tmp_path):
-    """SOCF signs follow cash direction, and the exporter must not 'helpfully'
-    normalise them: a payment stored as -250 reaches mTool as -250."""
+@pytest.mark.parametrize(
+    "label_fragment,stored_value,formula_coefficient",
+    [
+        # This row is SUBTRACTED by the investing total, so the template-ready
+        # fact is a positive magnitude even though it is a cash outflow.
+        ("purchase of property, plant and equipment", 250.0, -1),
+        # This row is ADDED by the financing total, so it carries the negative
+        # cash-direction sign directly.
+        ("cash payments for the principal portion", -250.0, 1),
+    ],
+)
+def test_socf_mixed_formula_ready_signs_are_emitted_unchanged(
+    tmp_path,
+    label_fragment: str,
+    stored_value: float,
+    formula_coefficient: int,
+):
+    """mTool receives the final SSM-template sign without another sign flip."""
     db = tmp_path / "xbrl.db"
     init_db(db)
     tree = parse_template(str(SOCF_INDIRECT))
+    matching_nodes = [
+        node
+        for node in tree.concepts
+        if node.kind == "LEAF" and label_fragment in node.canonical_label.lower()
+    ]
+    assert len(matching_nodes) == 1
+    target_row = int(matching_nodes[0].render_key["row"])
+    parent_edges = [
+        edge
+        for node in tree.concepts
+        for edge in node.edges
+        if int(edge["ref"].get("row", -1)) == target_row
+    ]
+    assert any(
+        int(edge["coefficient"]) == formula_coefficient for edge in parent_edges
+    ), (
+        f"{label_fragment!r} no longer has coefficient {formula_coefficient}; "
+        "the pinned stored sign must be reviewed"
+    )
     jp = tmp_path / "tree.json"
     jp.write_text(json.dumps(tree.to_json(), sort_keys=True), encoding="utf-8")
     tid = import_template(db, jp)
@@ -97,15 +131,24 @@ def test_socf_outflow_rows_are_stored_negative_and_emitted_unchanged(tmp_path):
              "2026-07-27T00:00:00Z")).lastrowid
         leaf = conn.execute(
             "SELECT concept_uuid, canonical_label FROM concept_nodes "
-            "WHERE kind='LEAF' AND lower(canonical_label) LIKE '%purchase%' "
-            "LIMIT 1").fetchone()
-        assert leaf is not None, "no SOCF purchase/outflow LEAF to test with"
+            "WHERE kind='LEAF' AND lower(canonical_label) LIKE ? LIMIT 1",
+            (f"%{label_fragment}%",),
+        ).fetchone()
+        assert leaf is not None, f"no SOCF row matching {label_fragment!r}"
         conn.execute(
             "INSERT INTO run_concept_facts(run_id, concept_uuid, period, "
             "entity_scope, value, value_status, updated_at) "
             "VALUES (?,?,?,?,?,?,?)",
-            (run_id, leaf[0], "CY", "Company", -250.0, "observed",
-             "2026-07-27T00:00:00Z"))
+            (
+                run_id,
+                leaf[0],
+                "CY",
+                "Company",
+                stored_value,
+                "observed",
+                "2026-07-27T00:00:00Z",
+            ),
+        )
         conn.commit()
     finally:
         conn.close()
@@ -114,7 +157,7 @@ def test_socf_outflow_rows_are_stored_negative_and_emitted_unchanged(tmp_path):
                          filing_level="company")
     assert doc["writes"] == [{
         "sheet": doc["writes"][0]["sheet"], "label": leaf[1],
-        "column_role": "current_year", "value": -250}]
+        "column_role": "current_year", "value": int(stored_value)}]
 
 
 def test_identity_manifest_flips_no_signs():

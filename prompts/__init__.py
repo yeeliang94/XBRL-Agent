@@ -4,6 +4,7 @@ Each statement type has a .md file in this directory containing its system promp
 render_prompt() loads the appropriate file and interpolates runtime values.
 """
 
+import logging
 import re
 from pathlib import Path
 from typing import Optional
@@ -11,6 +12,7 @@ from typing import Optional
 from statement_types import StatementType
 
 _PROMPT_DIR = Path(__file__).resolve().parent
+logger = logging.getLogger(__name__)
 
 
 def render_prompt(
@@ -170,26 +172,23 @@ def render_prompt(
             f"=== END TEMPLATE STRUCTURE ==="
         )
 
-    # RUN-REVIEW P2-2: SOCF / SoRE per-row sign-from-formula injection.
-    # Mirrors the ADR-002 pattern for SOCIE dividends. The block lists
-    # each leaf row that feeds a `*Total …` formula along with its
-    # sign coefficient, so the agent can match the cell's directional
-    # name to the formula's intent (e.g. (Gain) loss on disposal of
-    # PPE — added with +1 → enter loss as POSITIVE magnitude).
-    #
-    # The gate includes SOCIE only to reach the SoRE variant: the helper
-    # filters on a "socf"/"sore" sheet name, so the matrix SOCIE sheet
-    # (named "SOCIE") no-ops and falls back to socie.md's prose (ADR-002).
-    # The block's title + wording are statement-neutral (Step 6.0) so the
-    # SoRE statement no longer receives a SOCF-branded block.
-    if template_path and statement_type in (StatementType.SOCF, StatementType.SOCIE):
+    # Live-template sign contract. SOCF receives a formula occurrence
+    # inventory; SOFP/SOPL/SOCI/SOCIE/SoRE receive concise guidance for their
+    # audited ambiguous concepts. Values written under this contract are
+    # already template-ready and mTool exports them unchanged.
+    if template_path:
         try:
-            from prompts._sign_conventions import socf_sign_convention_block
-            block = socf_sign_convention_block(template_path)
+            from prompts._sign_conventions import face_sign_convention_block
+            block = face_sign_convention_block(template_path, statement_type)
             if block:
                 parts.append(block)
-        except Exception:  # noqa: BLE001 — sign block is advisory
-            pass
+        except Exception:  # noqa: BLE001 — static prompt remains the fallback
+            logger.warning(
+                "Could not build live sign guidance for %s from %s",
+                statement_type.value,
+                template_path,
+                exc_info=True,
+            )
 
     return "\n\n".join(parts)
 

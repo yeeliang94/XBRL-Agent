@@ -46,13 +46,22 @@ For **Direct** method (82 rows, 71 data-entry):
   generic rules below are the fallback for rows the block does not list.
 
 - **Sign conventions are critical for SOCF:**
-  - Indirect method: non-cash add-backs are POSITIVE (depreciation, impairment losses).
-    Working capital: decrease in receivables = positive, increase in payables = positive.
-  - Direct method: cash receipts = POSITIVE, cash payments = NEGATIVE.
-  - Investing/financing: inflows = positive, outflows = NEGATIVE.
+  - First decide the line's intended cash contribution `C`: inflow/add-back =
+    positive; outflow/deduction = negative.
+  - Then use the live per-row coefficient `k` and enter `V = C / k`. A row
+    ADDED with +1 keeps the cash-direction sign. A row SUBTRACTED with -1
+    takes the opposite input sign.
+  - Indirect working-capital labels are standard-specific. A decrease in
+    receivables or increase in payables has a positive cash contribution, but
+    its TEMPLATE INPUT may be positive or negative depending on the live
+    coefficient. Do not use the label direction as the stored sign.
+  - Direct-method operating payments are normally ADDED and therefore
+    negative. Many investing/financing payment rows are SUBTRACTED and
+    therefore take positive magnitudes. Obey the live per-row block.
   - Do not import SOPL sign rules into SOCF. A "loss" adjustment may be a
     positive add-back, while a "payment" or "purchase" is normally negative
-    because it is a cash outflow.
+    as a cash contribution but may require a positive TEMPLATE INPUT when its
+    subtotal subtracts it.
 
 - **Closing cash ("Cash and cash equivalents at end of period") — check the
   template before writing; behaviour differs by template:**
@@ -123,8 +132,15 @@ For **Direct** method (82 rows, 71 data-entry):
 - Lease payments under MFRS 16: principal → Financing activities, interest → Operating
   or Financing (entity's choice). Check the entity's classification policy.
 
-- "Purchase of property, plant and equipment" is a NEGATIVE value (cash outflow).
-- "Proceeds from disposal" is a POSITIVE value (cash inflow).
+- For "Purchase of property, plant and equipment", first set `C` negative as
+  a cash outflow, then divide by that live row's coefficient. For an ordinary
+  "Proceeds from disposal" receipt, set `C` positive and apply the same rule.
+  The specialized discontinued-operation proceeds row (labelled either
+  "Proceeds from disposal of net cash and cash equivalents disposed off" or
+  "Disposal of discontinued operation, proceeds from disposal, net of cash
+  and cash equivalents disposed of") is one SSM taxonomy exception: its
+  linkbase subtracts the amount, so follow its authoritative per-row instruction.
+  Do not hardcode template-input signs across standards or variants.
 
 - Some entities combine operating + investing, or have no financing activities — this
   is normal. Leave unused sections blank.
