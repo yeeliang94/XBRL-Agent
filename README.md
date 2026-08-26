@@ -101,7 +101,8 @@ See `.env.example` for all options. Key settings:
 - `GOOGLE_API_KEY` — also used as proxy auth key on Windows
 - `TEST_MODEL` — default extraction model (e.g.
   `google-gla:gemini-3-flash-preview`)
-- `SCOUT_MODEL` — default scout model
+- `SCOUT_MODEL` — legacy scout-model fallback; a role override saved under
+  Settings takes precedence
 
 ## Documentation
 

@@ -14,7 +14,6 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-from dotenv import load_dotenv
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from pydantic_ai.exceptions import UsageLimitExceeded
@@ -74,7 +73,7 @@ async def launch_notes_formatter(run_id: int, body: _NotesFormatLaunch):
     finally:
         conn.close()
 
-    load_dotenv(server.ENV_FILE, override=True)
+    server._reload_runtime_settings()
     api_key = server._resolve_api_key()
     proxy_url = os.environ.get("LLM_PROXY_URL", "")
     if not api_key:

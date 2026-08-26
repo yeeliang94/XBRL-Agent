@@ -24,8 +24,14 @@ describe("parseEvidencePages", () => {
     expect(parseEvidencePages("Note 2.7, no page given")).toEqual([]);
   });
 
-  it("dedupes and sorts ascending", () => {
-    expect(parseEvidencePages("Page 4; Page 3; Page 4")).toEqual([3, 4]);
+  it("dedupes while preserving the source's citation order", () => {
+    expect(parseEvidencePages("Page 4; Page 3; Page 4")).toEqual([4, 3]);
+  });
+
+  it("keeps the primary note page ahead of a later face-statement cross-reference", () => {
+    expect(
+      parseEvidencePages("Note 5 page 29; face SOFP page 12"),
+    ).toEqual([29, 12]);
   });
 
   it("collapses an implausibly wide range to its start page", () => {

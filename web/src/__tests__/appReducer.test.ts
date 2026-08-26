@@ -764,6 +764,30 @@ describe("appReducer", () => {
     expect(state.isComplete).toBe(false);
   });
 
+  test("document scan uses a plain label and reaches a terminal tab state", () => {
+    let state = runningState();
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "status",
+        data: { phase: "scouting", message: "Reading document", agent_id: "scout", agent_role: "SCOUT" },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+    expect(state.agents.scout.label).toBe("Document scan");
+    expect(state.agents.scout.status).toBe("running");
+
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "complete",
+        data: { success: true, agent_id: "scout", agent_role: "SCOUT", error: null },
+        timestamp: 2,
+      } as SSEEvent,
+    });
+    expect(state.agents.scout.status).toBe("complete");
+  });
+
   test("Honest-completion flag on a complete event is captured (peer-review F1)", () => {
     let state = runningState();
     state = appReducer(state, {

@@ -16,7 +16,6 @@ import json
 import logging
 import os
 
-from dotenv import load_dotenv
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
@@ -61,7 +60,7 @@ async def run_multi_extraction(session_id: str, body: RunConfigRequest, request:
     server.active_runs.add(session_id)
 
     try:
-        load_dotenv(server.ENV_FILE, override=True)
+        server._reload_runtime_settings()
         api_key = server._resolve_api_key()
         proxy_url = os.environ.get("LLM_PROXY_URL", "")
         model_name = os.environ.get("TEST_MODEL", "openai.gpt-5.4")
@@ -233,7 +232,7 @@ async def start_run_endpoint(run_id: int, request: Request):
         )
 
     try:
-        load_dotenv(server.ENV_FILE, override=True)
+        server._reload_runtime_settings()
         api_key = server._resolve_api_key()
         proxy_url = os.environ.get("LLM_PROXY_URL", "")
         model_name = os.environ.get("TEST_MODEL", "openai.gpt-5.4")
@@ -493,6 +492,8 @@ async def rerun_notes(run_id: int, request: Request):
             models={},
             infopack=config.get("infopack"),
             use_scout=False,  # no new scout pass — reuse stored infopack
+            scanned_pdf=bool(config.get("scanned_pdf", False)),
+            notes_inventory_overrides=config.get("notes_inventory_overrides"),
             filing_level=config.get("filing_level", "company"),
             filing_standard=config.get("filing_standard", "mfrs"),
             notes_to_run=list(notes_to_run),
@@ -508,7 +509,7 @@ async def rerun_notes(run_id: int, request: Request):
             ),
         )
 
-    load_dotenv(server.ENV_FILE, override=True)
+    server._reload_runtime_settings()
     api_key = server._resolve_api_key()
     proxy_url = os.environ.get("LLM_PROXY_URL", "")
     model_name = os.environ.get("TEST_MODEL", "openai.gpt-5.4")
@@ -583,7 +584,7 @@ async def rerun_agent(session_id: str, body: RunConfigRequest, request: Request)
     if not pdf_path.exists():
         raise HTTPException(status_code=404, detail="PDF not found for this session.")
 
-    load_dotenv(server.ENV_FILE, override=True)
+    server._reload_runtime_settings()
     api_key = server._resolve_api_key()
     proxy_url = os.environ.get("LLM_PROXY_URL", "")
     model_name = os.environ.get("TEST_MODEL", "openai.gpt-5.4")

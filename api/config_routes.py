@@ -10,13 +10,16 @@ import logging
 import os
 import time
 
-from dotenv import load_dotenv, set_key
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 import re
 
 import server
+from runtime_settings import (
+    read_settings as read_runtime_settings,
+    update_settings as persist_runtime_settings,
+)
 from auth import routes as auth_routes
 from db.repository import db_session
 
@@ -69,7 +72,6 @@ _ADMIN_ONLY_SETTINGS_KEYS = frozenset({
     # Firm-wide like default_models: it changes cost and behaviour for
     # everyone, so it is not a per-user cosmetic setting.
     "thinking_levels",
-    "scout_enabled_default",
     "auto_review",
     "notes_auto_review",
     "pdf_notes_auto_format",
@@ -80,12 +82,32 @@ _ADMIN_ONLY_SETTINGS_KEYS = frozenset({
     "notes_source_integrity",
     "entity_memory",
     "tolerance_rm",
+    "reset_keys",
 })
+
+_SETTING_ENV_KEYS = {
+    "model": "TEST_MODEL",
+    "api_key": "GOOGLE_API_KEY",
+    "proxy_url": "LLM_PROXY_URL",
+    "default_models": "XBRL_DEFAULT_MODELS",
+    "thinking_levels": "XBRL_THINKING_LEVELS",
+    "auto_review": "XBRL_AUTO_REVIEW",
+    "notes_auto_review": "XBRL_NOTES_AUTO_REVIEW",
+    "pdf_notes_auto_format": "XBRL_PDF_NOTES_AUTO_FORMAT",
+    "spot_check": "XBRL_SPOT_CHECK",
+    "spot_check_mode": "XBRL_SPOT_CHECK_MODE",
+    "notes_coverage": "XBRL_NOTES_COVERAGE",
+    "pdf_sidecar": "XBRL_PDF_SIDECAR",
+    "notes_source_integrity": "XBRL_NOTES_SOURCE_INTEGRITY",
+    "entity_memory": "XBRL_ENTITY_MEMORY",
+    "tolerance_rm": "XBRL_TOLERANCE_RM",
+    "notes_table_style": "XBRL_NOTES_TABLE_STYLE",
+}
 
 # Notes-table style theme validation (docs/PLAN-notes-table-theme.md). Mirrors
 # the frontend `parseThemeOptions` (clipboardFormat.ts) + the sanitiser colour
 # rule, so a value that survived the form is accepted and a tampered payload
-# fails loudly (400) rather than landing broken CSS in .env.
+# fails loudly (400) rather than landing broken CSS in local settings.
 _HEX_COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
 _BORDER_STYLES = {"none", "single", "double"}
 _LIST_MARKERS = {"disc", "dash", "decimal"}
@@ -236,11 +258,12 @@ async def get_config():
 
 @router.get("/api/settings")
 async def get_settings():
-    load_dotenv(server.ENV_FILE, override=True)
+    server._reload_runtime_settings()
     api_key = server._resolve_api_key()
     masked = api_key[:4] + "..." + api_key[-2:] if len(api_key) > 8 else ""
 
     extended = server._load_extended_settings()
+    locally_saved = read_runtime_settings(server.SETTINGS_FILE)
     return {
         # Backward-compatible fields
         "model": os.environ.get("TEST_MODEL", "openai.gpt-5.4"),
@@ -249,6 +272,10 @@ async def get_settings():
         "api_key_preview": masked,
         # Extended fields (Phase 8)
         "available_models": server._load_available_models(),
+        "local_override_keys": sorted(
+            public_key for public_key, env_key in _SETTING_ENV_KEYS.items()
+            if env_key in locally_saved
+        ),
         # Per-role thinking level. Lives here as well as on /api/config
         # because the Settings form reads THIS endpoint; /api/config carries
         # it for surfaces that only take the lightweight flag payload.
@@ -268,7 +295,7 @@ async def get_settings():
 
 @router.post("/api/settings")
 async def update_settings(body: dict, request: Request):
-    """Update .env file with new settings.
+    """Update the local operator settings file.
 
     AI-plumbing + firm-wide run-default keys are admin-only (the settings form
     hides them from non-admins, but the server enforces it). A non-admin write
@@ -316,24 +343,34 @@ async def update_settings(body: dict, request: Request):
             cleaned_levels[key] = value
         raw_levels = candidate
 
-    ENV_FILE = server.ENV_FILE
-    if not ENV_FILE.exists():
-        # encoding pinned per the Windows UTF-8 invariant (gotcha #1).
-        ENV_FILE.write_text("", encoding="utf-8")
+    updates: dict[str, str | None] = {}
+
+    if "reset_keys" in body:
+        reset_keys = body["reset_keys"]
+        if not isinstance(reset_keys, list) or any(
+            not isinstance(key, str) or key not in _SETTING_ENV_KEYS
+            for key in reset_keys
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=f"reset_keys must contain only {sorted(_SETTING_ENV_KEYS)}.",
+            )
+        for key in reset_keys:
+            updates[_SETTING_ENV_KEYS[key]] = None
 
     # Legacy fields
     if "model" in body:
-        set_key(str(ENV_FILE), "TEST_MODEL", body["model"])
+        updates["TEST_MODEL"] = str(body["model"])
     if "api_key" in body and body["api_key"]:
-        set_key(str(ENV_FILE), "GOOGLE_API_KEY", body["api_key"])
-    if "proxy_url" in body and body["proxy_url"]:
-        set_key(str(ENV_FILE), "LLM_PROXY_URL", body["proxy_url"])
+        updates["GOOGLE_API_KEY"] = str(body["api_key"])
+    if "proxy_url" in body:
+        updates["LLM_PROXY_URL"] = str(body["proxy_url"])
 
     # Extended fields (Phase 8)
     if "default_models" in body:
         # Validate the submitted dict BEFORE merging anything. The peer
         # review flagged that an unvalidated payload could land arbitrary
-        # data in .env (e.g. {"x": {"nested": [...]}} would be json-dumped
+        # data in local settings (e.g. {"x": {"nested": [...]}} would be json-dumped
         # verbatim). Constrain keys to the known agent roles + notes
         # templates, and values to short strings matching an id in
         # config/models.json. Reject everything else with 400 so a
@@ -354,10 +391,15 @@ async def update_settings(body: dict, request: Request):
                     status_code=400,
                     detail=f"Unknown default_models key: {key!r}. Allowed: {sorted(allowed_keys)}.",
                 )
-            if not isinstance(value, str) or not value:
+            if value in (None, "", "default"):
+                continue
+            if not isinstance(value, str):
                 raise HTTPException(
                     status_code=400,
-                    detail=f"default_models[{key!r}] must be a non-empty string model id.",
+                    detail=(
+                        f"default_models[{key!r}] must be a model id, or empty "
+                        "to follow the global model."
+                    ),
                 )
             if len(value) > 128:
                 raise HTTPException(
@@ -374,35 +416,36 @@ async def update_settings(body: dict, request: Request):
                 )
 
         # Merge incoming (now-validated) overrides with existing defaults
-        load_dotenv(ENV_FILE, override=True)
-        existing = server._load_extended_settings()["default_models"]
-        existing.update(raw_models)
-        set_key(str(ENV_FILE), "XBRL_DEFAULT_MODELS", json.dumps(existing))
+        server._reload_runtime_settings()
+        existing = server._configured_default_models()
+        for key, value in raw_models.items():
+            if value in (None, "", "default"):
+                existing.pop(key, None)
+            else:
+                existing[key] = value
+        updates["XBRL_DEFAULT_MODELS"] = json.dumps(existing)
     if raw_levels is not None:
-        load_dotenv(ENV_FILE, override=True)
+        server._reload_runtime_settings()
         existing = server._thinking_levels()
         # A role sent as empty is REMOVED, not merged over — otherwise there
         # would be no way to put a role back to the provider default.
         for key in raw_levels:
             existing.pop(key, None)
         existing.update(cleaned_levels)
-        set_key(str(ENV_FILE), "XBRL_THINKING_LEVELS", json.dumps(existing))
-    if "scout_enabled_default" in body:
-        set_key(str(ENV_FILE), "XBRL_SCOUT_ENABLED_DEFAULT",
-                "true" if body["scout_enabled_default"] else "false")
+        updates["XBRL_THINKING_LEVELS"] = json.dumps(existing)
     if "auto_review" in body:
-        set_key(str(ENV_FILE), "XBRL_AUTO_REVIEW",
-                "true" if body["auto_review"] else "false")
+        updates["XBRL_AUTO_REVIEW"] = "true" if body["auto_review"] else "false"
     if "notes_auto_review" in body:
-        set_key(str(ENV_FILE), "XBRL_NOTES_AUTO_REVIEW",
-                "true" if body["notes_auto_review"] else "false")
+        updates["XBRL_NOTES_AUTO_REVIEW"] = (
+            "true" if body["notes_auto_review"] else "false"
+        )
     if "pdf_notes_auto_format" in body:
-        set_key(str(ENV_FILE), "XBRL_PDF_NOTES_AUTO_FORMAT",
-                "true" if body["pdf_notes_auto_format"] else "false")
+        updates["XBRL_PDF_NOTES_AUTO_FORMAT"] = (
+            "true" if body["pdf_notes_auto_format"] else "false"
+        )
     # Clean-run spot-check (issue 1): enable toggle + depth (light/full).
     if "spot_check" in body:
-        set_key(str(ENV_FILE), "XBRL_SPOT_CHECK",
-                "true" if body["spot_check"] else "false")
+        updates["XBRL_SPOT_CHECK"] = "true" if body["spot_check"] else "false"
     if "spot_check_mode" in body:
         mode = str(body["spot_check_mode"]).strip().lower()
         if mode not in ("light", "full"):
@@ -410,16 +453,16 @@ async def update_settings(body: dict, request: Request):
                 status_code=400,
                 detail="spot_check_mode must be 'light' or 'full'.",
             )
-        set_key(str(ENV_FILE), "XBRL_SPOT_CHECK_MODE", mode)
+        updates["XBRL_SPOT_CHECK_MODE"] = mode
     # Notes coverage checklist (docs/PLAN-notes-coverage-and-routing.md). Default on.
     if "notes_coverage" in body:
-        set_key(str(ENV_FILE), "XBRL_NOTES_COVERAGE",
-                "true" if body["notes_coverage"] else "false")
+        updates["XBRL_NOTES_COVERAGE"] = (
+            "true" if body["notes_coverage"] else "false"
+        )
     # Scanned-PDF transcribed source sidecar (docs/PLAN-pdf-source-sidecar.md).
     # Default off; firm-wide + cost-changing, so admin-only (set below).
     if "pdf_sidecar" in body:
-        set_key(str(ENV_FILE), "XBRL_PDF_SIDECAR",
-                "true" if body["pdf_sidecar"] else "false")
+        updates["XBRL_PDF_SIDECAR"] = "true" if body["pdf_sidecar"] else "false"
     # Notes source integrity rollout mode (gotcha #31). Validated against the
     # enum rather than a typed-out list: `integrity_mode()` fails CLOSED to
     # `off` on an unrecognised value, so an unvalidated write here would look
@@ -434,28 +477,40 @@ async def update_settings(body: dict, request: Request):
                     f"{', '.join(_INTEGRITY_MODES)}."
                 ),
             )
-        set_key(str(ENV_FILE), "XBRL_NOTES_SOURCE_INTEGRITY", mode)
+        updates["XBRL_NOTES_SOURCE_INTEGRITY"] = mode
     # Item 28 — per-entity advisory memory toggle (prior-year prompt hints).
     if "entity_memory" in body:
-        set_key(str(ENV_FILE), "XBRL_ENTITY_MEMORY",
-                "true" if body["entity_memory"] else "false")
+        updates["XBRL_ENTITY_MEMORY"] = (
+            "true" if body["entity_memory"] else "false"
+        )
     if "tolerance_rm" in body:
-        set_key(str(ENV_FILE), "XBRL_TOLERANCE_RM", str(body["tolerance_rm"]))
+        try:
+            tolerance = float(body["tolerance_rm"])
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400, detail="tolerance_rm must be a non-negative number."
+            )
+        if not 0 <= tolerance < float("inf"):
+            raise HTTPException(
+                status_code=400, detail="tolerance_rm must be a non-negative number."
+            )
+        updates["XBRL_TOLERANCE_RM"] = str(tolerance)
 
     # Firm-wide notes-table style theme (docs/PLAN-notes-table-theme.md). Stored
     # as a JSON object, like XBRL_DEFAULT_MODELS. Validated/cleaned first so a
-    # tampered payload can't land broken CSS in .env.
+    # tampered payload can't land broken CSS in local settings.
     if "notes_table_style" in body:
         cleaned = _validate_notes_table_style(body["notes_table_style"])
-        set_key(str(ENV_FILE), "XBRL_NOTES_TABLE_STYLE", json.dumps(cleaned))
+        updates["XBRL_NOTES_TABLE_STYLE"] = json.dumps(cleaned)
 
-    load_dotenv(ENV_FILE, override=True)
+    persist_runtime_settings(server.SETTINGS_FILE, updates)
+    server._reload_runtime_settings()
     return {"status": "ok"}
 
 
 @router.post("/api/test-connection")
 async def test_connection(body: dict, request: Request):
-    """Test LLM connectivity with provided or .env settings.
+    """Test LLM connectivity with provided or resolved runtime settings.
 
     Admin-only: this exercises the shared AI plumbing with a supplied model /
     proxy / key, so it's gated the same way as writing those settings (the
@@ -466,7 +521,7 @@ async def test_connection(body: dict, request: Request):
     if denied is not None:
         return denied
 
-    load_dotenv(server.ENV_FILE, override=True)
+    server._reload_runtime_settings()
 
     model_name = body.get("model") or os.environ.get("TEST_MODEL", "openai.gpt-5.4")
     api_key = body.get("api_key") or os.environ.get("GOOGLE_API_KEY", "")

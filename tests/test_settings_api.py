@@ -10,7 +10,7 @@ client = TestClient(app)
 
 
 def test_get_settings_default(tmp_path, monkeypatch):
-    """Returns defaults when no .env exists."""
+    """Returns defaults when neither local settings nor .env exists."""
     env_file = tmp_path / ".env"
     monkeypatch.setattr(server, "ENV_FILE", env_file)
     # Clear env so defaults apply
@@ -32,7 +32,7 @@ def test_default_model_is_gpt_5_4_for_every_agent_role(tmp_path, monkeypatch):
     (scout + 5 statement types) resolves to openai.gpt-5.4.
 
     Pins the decision that GPT-5.4 is the global default across platforms
-    (Mac direct + Windows proxy). If someone reverts the .env / server.py
+    (Mac direct + Windows proxy). If someone reverts the settings/server
     default back to a Gemini id, this test catches it before a run goes
     out with the wrong model.
     """
@@ -51,20 +51,22 @@ def test_default_model_is_gpt_5_4_for_every_agent_role(tmp_path, monkeypatch):
         )
 
 
-def test_post_settings_writes_env(tmp_path, monkeypatch):
+def test_post_settings_writes_local_file(tmp_path, monkeypatch):
     env_file = tmp_path / ".env"
+    settings_file = tmp_path / "settings.json"
     monkeypatch.setattr(server, "ENV_FILE", env_file)
+    monkeypatch.setattr(server, "SETTINGS_FILE", settings_file)
     resp = client.post("/api/settings", json={
         "model": "vertex_ai.gemini-3-flash-preview",
         "api_key": "test-key-123",
         "proxy_url": "https://genai-sharedservice-emea.pwc.com",
     })
     assert resp.status_code == 200
-    assert env_file.exists()
-    content = env_file.read_text()
-    assert "TEST_MODEL" in content
-    assert "GOOGLE_API_KEY" in content
-    assert "LLM_PROXY_URL" in content
+    saved = __import__("json").loads(settings_file.read_text())
+    assert saved["TEST_MODEL"] == "vertex_ai.gemini-3-flash-preview"
+    assert saved["GOOGLE_API_KEY"] == "test-key-123"
+    assert saved["LLM_PROXY_URL"] == "https://genai-sharedservice-emea.pwc.com"
+    assert not env_file.exists()
 
 
 def test_get_settings_shows_masked_key(tmp_path, monkeypatch):
@@ -93,12 +95,10 @@ def test_auto_review_toggle_round_trips(tmp_path, monkeypatch):
     assert client.get("/api/settings").json()["auto_review"] is True
     assert client.get("/api/config").json()["auto_review"] is True
 
-    # Turn it off → persisted + re-read fresh from the env file.
+    # Turn it off → persisted + re-read from local settings.
     resp = client.post("/api/settings", json={"auto_review": False})
     assert resp.status_code == 200
-    assert "XBRL_AUTO_REVIEW" in env_file.read_text()
-    from dotenv import load_dotenv
-    load_dotenv(env_file, override=True)
+    assert "XBRL_AUTO_REVIEW" in server.SETTINGS_FILE.read_text()
     assert client.get("/api/settings").json()["auto_review"] is False
     assert server._auto_review_enabled() is False
 
@@ -113,9 +113,7 @@ def test_pdf_notes_auto_format_toggle_round_trips(tmp_path, monkeypatch):
 
     resp = client.post("/api/settings", json={"pdf_notes_auto_format": True})
     assert resp.status_code == 200
-    assert "XBRL_PDF_NOTES_AUTO_FORMAT" in env_file.read_text()
-    from dotenv import load_dotenv
-    load_dotenv(env_file, override=True)
+    assert "XBRL_PDF_NOTES_AUTO_FORMAT" in server.SETTINGS_FILE.read_text()
     assert server._pdf_notes_auto_format_enabled() is True
 
 
@@ -132,9 +130,7 @@ def test_notes_coverage_toggle_round_trips(tmp_path, monkeypatch):
 
     resp = client.post("/api/settings", json={"notes_coverage": False})
     assert resp.status_code == 200
-    assert "XBRL_NOTES_COVERAGE" in env_file.read_text()
-    from dotenv import load_dotenv
-    load_dotenv(env_file, override=True)
+    assert "XBRL_NOTES_COVERAGE" in server.SETTINGS_FILE.read_text()
     assert client.get("/api/settings").json()["notes_coverage"] is False
     assert server._notes_coverage_enabled() is False
 
@@ -176,8 +172,8 @@ def test_spot_check_mode_rejects_invalid_value(tmp_path, monkeypatch):
 
 
 def test_notes_source_integrity_round_trips(tmp_path, monkeypatch):
-    """Gotcha #31's rollout mode is operator-settable from Settings rather than
-    .env-only. All three values are offered — the operator asked for the full
+    """Gotcha #31's rollout mode is operator-settable from Settings. All three
+    values are offered — the operator asked for the full
     ladder, and `shadow` is useless without `enforce` to graduate to."""
     from notes.source_models import IntegrityMode
 
@@ -243,7 +239,7 @@ def test_notes_formatter_model_round_trips(tmp_path, monkeypatch):
 
 
 def test_notes_table_style_round_trips(tmp_path, monkeypatch):
-    """The firm notes-table theme persists to .env and reads back via both
+    """The firm notes-table theme persists locally and reads back via both
     /api/settings and /api/config (docs/PLAN-notes-table-theme.md)."""
     env_file = tmp_path / ".env"
     monkeypatch.setattr(server, "ENV_FILE", env_file)
@@ -278,7 +274,7 @@ def test_notes_table_style_round_trips(tmp_path, monkeypatch):
 
 
 def test_notes_table_style_rejects_malformed(tmp_path, monkeypatch):
-    """Bad colour / enum / range fails loudly (400), never lands in .env."""
+    """Bad colour / enum / range fails loudly (400), never lands in settings."""
     env_file = tmp_path / ".env"
     monkeypatch.setattr(server, "ENV_FILE", env_file)
     for bad in (
@@ -386,6 +382,7 @@ def _env(tmp_path, monkeypatch):
     # config_routes reads server.ENV_FILE at call time, so patching the one
     # attribute is enough.
     monkeypatch.setattr(server, "ENV_FILE", env_file)
+    monkeypatch.setattr(server, "SETTINGS_FILE", tmp_path / "settings.json")
     monkeypatch.delenv("XBRL_THINKING_LEVELS", raising=False)
     return env_file
 
@@ -403,21 +400,21 @@ def test_settings_exposes_thinking_levels_and_its_choices(tmp_path, monkeypatch)
 
 
 def test_a_level_can_be_saved_and_read_back(tmp_path, monkeypatch):
-    env_file = _env(tmp_path, monkeypatch)
+    _env(tmp_path, monkeypatch)
     r = client.post("/api/settings", json={"thinking_levels": {"SOFP": "high"}})
     assert r.status_code == 200
-    assert '"SOFP": "high"' in env_file.read_text(encoding="utf-8")
+    assert server._thinking_levels()["SOFP"] == "high"
 
 
 @pytest.mark.parametrize("level", ["xhigh", "max"])
 def test_gpt56_levels_can_be_saved(tmp_path, monkeypatch, level):
     """The API accepts every level it advertises for a GPT-5.6 role."""
-    env_file = _env(tmp_path, monkeypatch)
+    _env(tmp_path, monkeypatch)
     r = client.post(
         "/api/settings", json={"thinking_levels": {"SOFP": level}},
     )
     assert r.status_code == 200, r.json()
-    assert f'"SOFP": "{level}"' in env_file.read_text(encoding="utf-8")
+    assert server._thinking_levels()["SOFP"] == level
 
 
 def test_invalid_thinking_level_does_not_partially_save_model(
@@ -438,7 +435,9 @@ def test_invalid_thinking_level_does_not_partially_save_model(
     assert r.status_code == 400
     written = env_file.read_text(encoding="utf-8")
     assert "TEST_MODEL=openai.gpt-5.4" in written
-    assert "openai.gpt-5.6" not in written
+    assert not server.SETTINGS_FILE.exists(), (
+        "validation must finish before the local settings file is created"
+    )
 
 
 def test_clearing_a_role_returns_it_to_the_provider_default(tmp_path, monkeypatch):
@@ -447,15 +446,71 @@ def test_clearing_a_role_returns_it_to_the_provider_default(tmp_path, monkeypatc
     env_file = _env(tmp_path, monkeypatch)
     client.post("/api/settings", json={"thinking_levels": {"SOFP": "high"}})
     client.post("/api/settings", json={"thinking_levels": {"SOFP": ""}})
-    assert "SOFP" not in env_file.read_text(encoding="utf-8")
+    assert "SOFP" not in server._thinking_levels()
 
 
 def test_other_roles_survive_an_update_to_one(tmp_path, monkeypatch):
-    env_file = _env(tmp_path, monkeypatch)
+    _env(tmp_path, monkeypatch)
     client.post("/api/settings", json={"thinking_levels": {"SOFP": "high"}})
     client.post("/api/settings", json={"thinking_levels": {"scout": "low"}})
-    written = env_file.read_text(encoding="utf-8")
-    assert '"SOFP": "high"' in written and '"scout": "low"' in written
+    assert server._thinking_levels() == {"SOFP": "high", "scout": "low"}
+
+
+def test_one_role_model_override_does_not_pin_every_role(tmp_path, monkeypatch):
+    _env(tmp_path, monkeypatch)
+    monkeypatch.setenv("TEST_MODEL", "openai.gpt-5.4")
+    monkeypatch.delenv("XBRL_DEFAULT_MODELS", raising=False)
+
+    response = client.post(
+        "/api/settings",
+        json={"default_models": {"scout": "openai.gpt-5.6"}},
+    )
+
+    assert response.status_code == 200
+    stored = __import__("json").loads(server.SETTINGS_FILE.read_text())
+    assert __import__("json").loads(stored["XBRL_DEFAULT_MODELS"]) == {
+        "scout": "openai.gpt-5.6",
+    }
+
+
+def test_role_model_can_return_to_following_global(tmp_path, monkeypatch):
+    _env(tmp_path, monkeypatch)
+    monkeypatch.setenv("TEST_MODEL", "openai.gpt-5.4")
+    monkeypatch.delenv("XBRL_DEFAULT_MODELS", raising=False)
+    client.post(
+        "/api/settings",
+        json={"default_models": {"scout": "openai.gpt-5.6"}},
+    )
+
+    response = client.post(
+        "/api/settings", json={"default_models": {"scout": ""}},
+    )
+
+    assert response.status_code == 200
+    assert server._configured_default_models() == {}
+    assert server._load_extended_settings()["default_models"]["scout"] == (
+        "openai.gpt-5.4"
+    )
+
+
+def test_reset_key_removes_local_override_and_restores_env_fallback(
+    tmp_path, monkeypatch,
+):
+    env_file = _env(tmp_path, monkeypatch)
+    env_file.write_text("TEST_MODEL=openai.gpt-5.4\n", encoding="utf-8")
+    import runtime_settings
+    runtime_settings._FALLBACKS.pop("TEST_MODEL", None)
+    runtime_settings._APPLIED.pop("TEST_MODEL", None)
+    server._reload_runtime_settings()
+    client.post("/api/settings", json={"model": "openai.gpt-5.6"})
+    assert client.get("/api/settings").json()["model"] == "openai.gpt-5.6"
+
+    response = client.post("/api/settings", json={"reset_keys": ["model"]})
+
+    assert response.status_code == 200
+    assert client.get("/api/settings").json()["model"] == "openai.gpt-5.4"
+    saved = __import__("json").loads(server.SETTINGS_FILE.read_text())
+    assert "TEST_MODEL" not in saved
 
 
 def test_an_unknown_level_is_refused(tmp_path, monkeypatch):
@@ -505,20 +560,13 @@ def test_every_notes_role_the_runtime_looks_up_is_an_accepted_key(
     never be read — a silent no-op rather than an error."""
     from notes_types import NotesTemplateType
 
-    env_file = _env(tmp_path, monkeypatch)
+    _env(tmp_path, monkeypatch)
     for nt in NotesTemplateType:
         r = client.post(
             "/api/settings", json={"thinking_levels": {nt.value: "low"}},
         )
         assert r.status_code == 200, (nt.value, r.json())
 
-    monkeypatch.setenv(
-        "XBRL_THINKING_LEVELS",
-        env_file.read_text(encoding="utf-8")
-        .split("XBRL_THINKING_LEVELS=", 1)[1]
-        .strip()
-        .strip("'\""),
-    )
     for nt in NotesTemplateType:
         assert server.thinking_level_for(nt.value) == "low", nt.value
 

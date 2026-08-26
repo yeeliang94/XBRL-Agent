@@ -1,10 +1,18 @@
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# This must run at conftest import time, before pytest imports any test module
+# that imports ``server``. A fixture is too late: server applies local settings
+# during module import, so a developer's real output/settings.json would have
+# already polluted os.environ before the fixture could redirect the path.
+_TEST_SETTINGS_ROOT = Path(tempfile.mkdtemp(prefix="xbrl-agent-test-settings-"))
+os.environ["XBRL_SETTINGS_FILE"] = str(_TEST_SETTINGS_ROOT / "settings.json")
 
 
 @pytest.fixture(autouse=True)
@@ -72,7 +80,7 @@ def _isolate_env_file_from_repo_dotenv(tmp_path_factory, monkeypatch):
     """Point ``server.ENV_FILE`` at an empty temp file for every test.
 
     The run path (`api/run_control.py`), scout, reviewer, and settings endpoints
-    all call ``load_dotenv(server.ENV_FILE, override=True)`` on each invocation.
+    all reload deployment and local runtime settings on each invocation.
     With ``override=True`` that re-reads the developer's real repo ``.env`` and
     **clobbers** the env-var defaults the autouse fixtures above set — e.g. a
     local ``.env`` carrying ``XBRL_SPOT_CHECK='true'`` re-enables the spot-check
@@ -88,8 +96,10 @@ def _isolate_env_file_from_repo_dotenv(tmp_path_factory, monkeypatch):
     """
     empty_env = tmp_path_factory.mktemp("env") / ".env-test"
     empty_env.write_text("", encoding="utf-8")
+    settings_file = empty_env.with_name("settings-test.json")
     import server
     monkeypatch.setattr(server, "ENV_FILE", empty_env)
+    monkeypatch.setattr(server, "SETTINGS_FILE", settings_file)
     # The CLI (`run.py`) loads its own hard-pathed copy with override=True too.
     import run
     monkeypatch.setattr(run, "ENV_FILE", empty_env)

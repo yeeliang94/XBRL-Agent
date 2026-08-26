@@ -666,7 +666,7 @@ export function RunDetailView({
             >
               Resume setup
             </button>
-          ) : isErrorOutcome ? (
+          ) : isErrorOutcome && activeTab === "overview" ? (
             <button
               type="button"
               onClick={() => selectTab("checks")}
@@ -700,56 +700,62 @@ export function RunDetailView({
           </button>}
           {/* The "Figures" tab is the single door to reviewing values — the
               old duplicate "Review values" button was removed (Phase 2). */}
-          <button
-            type="button"
-            onClick={() => setMtoolOpen(true)}
-            disabled={!canFillMtool}
-            // Outline secondary, NOT a ghost/text link: the header actions
-            // should share one visual language (filled primary + outline
-            // secondaries). A bare orange text label here read as a hyperlink
-            // sitting between two buttons (run-168 design critique).
-            className={uiClass.btnSecondary}
-            style={ui.buttonSecondary}
-            title={
-              canFillMtool
-                ? "Fill an mTool template from this run's figures"
-                : "mTool fill needs a completed run"
-            }
-          >
-            Fill mTool template
-          </button>
-          {/* Hairline divider so the destructive action doesn't sit shoulder
-              to shoulder with the most-clicked buttons. */}
-          <span aria-hidden="true" style={styles.actionsDivider} />
-          {isRunning && onForceAbort ? (
-            // A run wedged in `running` can never be deleted (Delete is disabled
-            // and the API 409s). Give the user an escape hatch: abort it, which
-            // flips a dead row to `aborted` so Delete/Download become usable
-            // (UX-QA #2).
-            <button
-              type="button"
-              onClick={() => setConfirmAbort(true)}
-              className={uiClass.btnDanger}
-              style={ui.buttonDanger}
-              title="Stop this run and mark it aborted — use this if a run has been stuck for a long time."
-            >
-              Abort run
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={handleDelete}
-              disabled={!canDelete}
-              className={uiClass.btnDanger}
-              style={ui.buttonDanger}
-              title={
-                canDelete
-                  ? "Delete run from history (on-disk files are kept)"
-                  : "Can't delete a run that's still in progress — wait for it to finish or abort it first."
-              }
-            >
-              Delete run
-            </button>
+          {/* ONE rule for the header: every run-level action except Download
+              lives on Overview — "Review issues" above follows it too. The
+              other tabs are work surfaces (figures, notes, checks) and should
+              not carry competing controls. Permissions are unchanged and no
+              action was removed; Overview is the landing tab, one click away.
+              That includes Abort for a wedged run (UX-QA #2): the escape
+              hatch still exists, it just lives with the other management
+              actions. */}
+          {activeTab === "overview" && (
+            <>
+              <button
+                type="button"
+                onClick={() => setMtoolOpen(true)}
+                disabled={!canFillMtool}
+                className={uiClass.btnSecondary}
+                style={ui.buttonSecondary}
+                title={
+                  canFillMtool
+                    ? "Fill an mTool template from this run's figures"
+                    : "mTool fill needs a completed run"
+                }
+              >
+                Fill mTool template
+              </button>
+              <span aria-hidden="true" style={styles.actionsDivider} />
+              {isRunning && onForceAbort ? (
+                // A run wedged in `running` can never be deleted (Delete is disabled
+                // and the API 409s). Give the user an escape hatch: abort it, which
+                // flips a dead row to `aborted` so Delete/Download become usable
+                // (UX-QA #2).
+                <button
+                  type="button"
+                  onClick={() => setConfirmAbort(true)}
+                  className={uiClass.btnDanger}
+                  style={ui.buttonDanger}
+                  title="Stop this run and mark it aborted — use this if a run has been stuck for a long time."
+                >
+                  Abort run
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleDelete}
+                  disabled={!canDelete}
+                  className={uiClass.btnDanger}
+                  style={ui.buttonDanger}
+                  title={
+                    canDelete
+                      ? "Delete run from history (on-disk files are kept)"
+                      : "Can't delete a run that's still in progress — wait for it to finish or abort it first."
+                  }
+                >
+                  Delete run
+                </button>
+              )}
+            </>
           )}
         </div>
       </header>

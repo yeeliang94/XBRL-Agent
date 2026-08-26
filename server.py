@@ -47,12 +47,12 @@ from typing import (
     AsyncIterator, Callable, Dict, List, Literal, NamedTuple, Optional, Set, Any,
 )
 
-from dotenv import load_dotenv, set_key
+from dotenv import load_dotenv
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse, Response
 from starlette.background import BackgroundTask
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 # Suppress LiteLLM SSL warnings (enterprise firewall blocks GitHub pricing fetch)
 try:
@@ -84,9 +84,20 @@ load_dotenv(ENV_FILE, override=False)
 # wins; otherwise the historical default is unchanged.
 OUTPUT_DIR = Path(os.environ.get("XBRL_OUTPUT_DIR") or (BASE_DIR / "output"))
 CONFIG_DIR = BASE_DIR / "config"
+SETTINGS_FILE = Path(
+    os.environ.get("XBRL_SETTINGS_FILE") or (OUTPUT_DIR / "settings.json")
+)
+from runtime_settings import apply_settings as _apply_local_settings
+_apply_local_settings(SETTINGS_FILE)
 MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB
 # Shared SQLite audit store (one file per installation, grows over time).
 AUDIT_DB_PATH = OUTPUT_DIR / "xbrl_agent.db"
+
+
+def _reload_runtime_settings() -> None:
+    """Reload deployment fallbacks, then operator-managed local settings."""
+    load_dotenv(ENV_FILE, override=True)
+    _apply_local_settings(SETTINGS_FILE)
 
 # Canonical-mode health: set in the lifespan handler after the face-template
 # bootstrap runs. None = not yet attempted (or canonical mode off); True =
@@ -1200,7 +1211,8 @@ def _create_proxy_model(model_name: str, proxy_url: str, api_key: str):
         openai_key = os.environ.get("OPENAI_API_KEY", "")
         if not openai_key:
             raise ValueError(
-                f"Model '{model_name}' requires OPENAI_API_KEY in .env but it is not set."
+                f"Model '{model_name}' requires OPENAI_API_KEY in runtime settings "
+                "or the deployment environment, but it is not set."
             )
         provider = OpenAIProvider(api_key=openai_key)
         if use_responses_api(bare_name):
@@ -1216,7 +1228,8 @@ def _create_proxy_model(model_name: str, proxy_url: str, api_key: str):
         anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
         if not anthropic_key:
             raise ValueError(
-                f"Model '{model_name}' requires ANTHROPIC_API_KEY in .env but it is not set."
+                f"Model '{model_name}' requires ANTHROPIC_API_KEY in runtime settings "
+                "or the deployment environment, but it is not set."
             )
         provider = AnthropicProvider(api_key=anthropic_key)
         return AnthropicModel(bare_name, provider=provider)
@@ -2834,7 +2847,14 @@ class RunConfigRequest(BaseModel):
     variants: Dict[str, str] = {}  # e.g. {"SOFP": "CuNonCu"}
     models: Dict[str, str] = {}  # per-statement model overrides
     infopack: Optional[Dict] = None  # serialised Infopack JSON (nullable)
-    use_scout: bool = False  # informational — actual infopack presence controls behaviour
+    use_scout: bool = False
+    # Explicit operator signal for image-only PDFs. The run-owned scout must
+    # receive this too; previously only the optional preview honoured it.
+    scanned_pdf: bool = False
+    # Human corrections to the preview's note list. Kept separate from scout
+    # output so a mandatory fresh scan can improve its hints without erasing
+    # additions/deletions the operator deliberately made.
+    notes_inventory_overrides: Optional["NotesInventoryOverrides"] = None
     filing_level: Literal["company", "group"] = "company"
     # Filing standard axis, orthogonal to filing_level. Defaults to "mfrs"
     # so existing frontends (and persisted `run_config_json` blobs on
@@ -2922,6 +2942,8 @@ class RunConfigPatchRequest(BaseModel):
     variants: Optional[Dict[str, str]] = None
     models: Optional[Dict[str, str]] = None
     use_scout: Optional[bool] = None
+    scanned_pdf: Optional[bool] = None
+    notes_inventory_overrides: Optional["NotesInventoryOverrides"] = None
     filing_level: Optional[Literal["company", "group"]] = None
     filing_standard: Optional[Literal["mfrs", "mpers"]] = None
     # Mirrors RunConfigRequest.denomination. Must be present here too, or a
@@ -2969,6 +2991,66 @@ class RunConfigPatchRequest(BaseModel):
     # it here; otherwise PATCH→DB→start strips it and the coordinator
     # runs without scout's page hints (peer-review HIGH #1).
     infopack: Optional[Dict] = None
+
+
+class OperatorNoteOverride(BaseModel):
+    note_num: int = Field(ge=1, le=999)
+    title: str = Field(min_length=1, max_length=500)
+    page_range: tuple[int, int] = (0, 0)
+
+    @field_validator("title")
+    @classmethod
+    def _clean_title(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("title must not be blank")
+        return cleaned
+
+    @field_validator("page_range")
+    @classmethod
+    def _valid_page_range(cls, value: tuple[int, int]) -> tuple[int, int]:
+        start, end = value
+        if value != (0, 0) and (start < 1 or end < start):
+            raise ValueError("page_range must be [0, 0] or a positive inclusive range")
+        return value
+
+
+class NotesInventoryOverrides(BaseModel):
+    added: list[OperatorNoteOverride] = Field(default_factory=list)
+    removed_note_nums: list[int] = Field(default_factory=list)
+
+    @field_validator("removed_note_nums")
+    @classmethod
+    def _valid_removed_note_nums(cls, values: list[int]) -> list[int]:
+        if any(isinstance(value, bool) or value < 1 or value > 999 for value in values):
+            raise ValueError("removed_note_nums must contain integers from 1 to 999")
+        return sorted(set(values))
+
+
+# Resolve the forward references now that the override models are declared.
+RunConfigRequest.model_rebuild()
+RunConfigPatchRequest.model_rebuild()
+
+
+def _apply_notes_inventory_overrides(infopack, overrides) -> None:
+    """Reapply human note-list decisions over one freshly scouted infopack."""
+    if infopack is None or overrides is None:
+        return
+    from scout.notes_discoverer import NoteInventoryEntry
+
+    removed = set(overrides.removed_note_nums)
+    by_number = {
+        entry.note_num: entry
+        for entry in (getattr(infopack, "notes_inventory", None) or [])
+        if entry.note_num not in removed
+    }
+    for added in overrides.added:
+        by_number[added.note_num] = NoteInventoryEntry(
+            note_num=added.note_num,
+            title=added.title,
+            page_range=tuple(added.page_range),
+        )
+    infopack.notes_inventory = [by_number[n] for n in sorted(by_number)]
 
 
 # --- Settings helpers ---
@@ -3512,25 +3594,19 @@ def _load_available_models() -> list[dict]:
 
 
 def _load_extended_settings() -> dict:
-    """Read extended settings (default_models, scout toggle, tolerance) from .env.
+    """Read extended settings from the resolved runtime environment.
 
-    Extended keys are stored as dotenv entries with an XBRL_ prefix:
+    Extended keys are stored as runtime entries with an XBRL_ prefix:
       XBRL_DEFAULT_MODELS = JSON object
-      XBRL_SCOUT_ENABLED_DEFAULT = true/false
       XBRL_TOLERANCE_RM = float
     """
-    raw_models = os.environ.get("XBRL_DEFAULT_MODELS", "")
-    try:
-        default_models = json.loads(raw_models) if raw_models else {}
-    except json.JSONDecodeError:
-        default_models = {}
+    default_model_overrides = _configured_default_models()
+    default_models = dict(default_model_overrides)
 
     # Ensure every agent role has a key (fall back to the global model)
     global_model = os.environ.get("TEST_MODEL", "openai.gpt-5.4")
     for role in _AGENT_ROLES:
         default_models.setdefault(role, global_model)
-
-    scout_enabled = os.environ.get("XBRL_SCOUT_ENABLED_DEFAULT", "true").lower() == "true"
 
     try:
         tolerance = float(os.environ.get("XBRL_TOLERANCE_RM", "1.0"))
@@ -3539,7 +3615,10 @@ def _load_extended_settings() -> dict:
 
     return {
         "default_models": default_models,
-        "scout_enabled_default": scout_enabled,
+        # The Settings form needs the sparse map as well as the resolved map so
+        # it can distinguish "follow the global model" from an explicit role
+        # override that happens to equal the current global model.
+        "default_model_overrides": default_model_overrides,
         "tolerance_rm": tolerance,
         # Reviewer pass auto-trigger (docs/Archive/PLAN-reviewer-agent.md). Default on.
         "auto_review": _auto_review_enabled(),
@@ -3565,6 +3644,27 @@ def _load_extended_settings() -> dict:
         # drives the notes editor preview + clipboard paste. {} = each surface
         # keeps its historic look until the firm sets a colour.
         "notes_table_style": _notes_table_style(),
+    }
+
+
+def _configured_default_models() -> dict[str, str]:
+    """Return only explicitly configured per-role model overrides.
+
+    ``_load_extended_settings`` expands missing roles for convenient runtime
+    consumption. Settings writes must never merge against that expanded map or
+    changing one role silently pins every other role to today's global model.
+    """
+    raw = os.environ.get("XBRL_DEFAULT_MODELS", "")
+    try:
+        parsed = json.loads(raw) if raw else {}
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {
+        str(key): value
+        for key, value in parsed.items()
+        if isinstance(key, str) and isinstance(value, str) and value
     }
 
 
@@ -4572,9 +4672,9 @@ async def run_multi_agent_stream(
     runs cross-checks, and persists everything to the audit DB.
 
     Phase pipeline (rewrite Phase 5.2): the run proceeds through explicit
-    phases — **Validate** → **Extract** → **Cascade** → **Merge/Render** →
+    phases — **Validate** → **Scout** → **Extract** → **Cascade** → **Merge/Render** →
     **Check** → **Review** → **Persist/Finalize**. Phase boundaries are marked
-    by ``_emit_stage(...)`` events (extracting | merging | cross_checking |
+    by ``_emit_stage(...)`` events (scouting | extracting | merging | cross_checking |
     reviewing | re_checking | reviewing_notes | formatting_notes | done). The first phase is a
     standalone unit (:func:`_validate_and_build_run`) returning one structured
     result; the remaining phases stay inline in this generator because each is
@@ -4779,6 +4879,7 @@ async def run_multi_agent_stream(
     variants: Dict[StatementType, str] = {}
     models: Dict[StatementType, Any] = {}
     config: Optional[RunConfig] = None
+    client_connected = True
 
     try:
         # --- Phase 3 fix: validate & construct INSIDE the outer try so
@@ -4806,13 +4907,21 @@ async def run_multi_agent_stream(
         if validated is None:
             # On failure `pre_events` carries the `_fail_run` error events.
             for ev in pre_events:
-                yield ev
+                if client_connected:
+                    try:
+                        yield ev
+                    except (asyncio.CancelledError, GeneratorExit):
+                        client_connected = False
             terminal_status = fail_status or terminal_status
             return
         # On success `pre_events` carries any non-fatal pre-flight warnings
         # (e.g. scout completeness) — surface them before extraction starts.
         for ev in pre_events:
-            yield ev
+            if client_connected:
+                try:
+                    yield ev
+                except (asyncio.CancelledError, GeneratorExit):
+                    client_connected = False
         statements_to_run = validated.statements_to_run
         variants = validated.variants
         models = validated.models
@@ -4822,31 +4931,20 @@ async def run_multi_agent_stream(
         model = validated.model
         config = validated.config
 
-        yield {"event": "status", "data": {
-            "phase": "starting",
-            "message": f"Starting extraction for {len(statements_to_run)} statements...",
+        if client_connected:
+            try:
+                yield {"event": "status", "data": {
+                    "phase": "starting",
+                    "message": f"Starting extraction for {len(statements_to_run)} statements...",
             # Surface the new run_id so clients that kicked off a
             # rerun / regenerate (which creates a fresh run row) can
             # navigate to the new run once it finishes, instead of
             # sitting on the stale id they POSTed to. Matches the
             # run_complete event below which also carries it now.
-            "run_id": run_id,
-        }}
-
-        # PLAN-pdf-source-sidecar Phase 2: scanned-PDF runs with notes get an
-        # LLM-transcribed source.html BEFORE agents launch, so notes agents
-        # find it via the ordinary has_source_html gate. Dark by default
-        # (XBRL_PDF_SIDECAR); helper is best-effort and never raises.
-        sidecar_event = await _maybe_build_pdf_sidecar(
-            config.pdf_path, notes_to_run, infopack, model, model_name,
-        )
-        if sidecar_event is not None:
-            # Persist alongside the emit so the History run page can show the
-            # same notice after a reload (the live event is otherwise gone —
-            # the transcript caveat matters most when reviewing the workbook).
-            from ingest.pdf_sidecar import write_sidecar_outcome
-            write_sidecar_outcome(output_dir, sidecar_event)
-            yield {"event": "pdf_sidecar", "data": sidecar_event}
+                    "run_id": run_id,
+                }}
+            except (asyncio.CancelledError, GeneratorExit):
+                client_connected = False
 
         # Phase 6.5: create run_agents rows UP FRONT so tool events can be
         # keyed to the right agent as they stream out of the coordinator.
@@ -4864,8 +4962,19 @@ async def run_multi_agent_stream(
         # Same idea for notes — keyed by NotesTemplateType so the post-run
         # loop can find the row to finalize.
         run_agent_ids_by_notes: Dict[NotesTemplateType, int] = {}
+        scout_run_agent_id: Optional[int] = None
+        scout_model_name = (
+            _configured_default_models().get("scout")
+            or os.environ.get("SCOUT_MODEL", "").strip()
+            or model_name
+        )
         if db_conn is not None and run_id is not None:
             try:
+                if run_config.use_scout:
+                    scout_run_agent_id = repo.reset_or_create_scout_agent_row(
+                        db_conn, run_id, model=scout_model_name,
+                    )
+                    run_agent_ids_by_agent_id["scout"] = scout_run_agent_id
                 # Iterate in sorted order so run_agents row IDs are
                 # deterministic across test runs (statements_to_run is a
                 # Set; its iteration order is hash-based and unstable).
@@ -5042,7 +5151,6 @@ async def run_multi_agent_stream(
         # and this point (a hypothetical race; the test harness
         # surfaced it deterministically because TestClient sets up the
         # generator fully before consuming).
-        client_connected = True
         import time as _time
 
         def _stage_event(stage: str) -> dict:
@@ -5068,6 +5176,253 @@ async def run_multi_agent_stream(
                 logger.warning(
                     "event_queue full; pipeline_stage=%s dropped", stage,
                 )
+
+        # A normal web run owns its scout pass. The pre-run scan remains an
+        # optional preview for old drafts, but its result is never required:
+        # clicking Start always performs a fresh pass before extraction.
+        if run_config.use_scout:
+            _emit_stage("scouting")
+            scout_usage: dict = {}
+            scout_status = "failed"
+            scout_error = "Scout failed before completing."
+            scout_task = None
+            try:
+                from scout.runner import run_scout_streaming
+                import task_registry
+
+                scout_model = _create_proxy_model(
+                    scout_model_name, proxy_url, api_key,
+                )
+
+                async def _on_scout_event(event_type: str, data: dict) -> None:
+                    await event_queue.put({
+                        "event": event_type,
+                        "data": {
+                            **data,
+                            "agent_id": "scout",
+                            "agent_role": "SCOUT",
+                        },
+                    })
+
+                scout_task = asyncio.create_task(run_scout_streaming(
+                    pdf_path=session_dir / "uploaded.pdf",
+                    model=scout_model,
+                    statements_to_find=statements_to_run,
+                    on_event=_on_scout_event,
+                    output_dir=output_dir,
+                    usage_out=scout_usage,
+                    force_vision_inventory=run_config.scanned_pdf,
+                ))
+                task_registry.register(session_id, "scout", scout_task)
+
+                while not scout_task.done() or not event_queue.empty():
+                    try:
+                        event = await asyncio.wait_for(
+                            event_queue.get(), timeout=0.3,
+                        )
+                    except asyncio.TimeoutError:
+                        continue
+                    persist_event(event)
+                    if client_connected:
+                        try:
+                            yield event
+                        except (asyncio.CancelledError, GeneratorExit):
+                            client_connected = False
+                            logger.info(
+                                "Client disconnected during document scan; continuing run",
+                                extra={"session_id": session_id},
+                            )
+
+                fresh_infopack = scout_task.result()
+                infopack = fresh_infopack
+                _apply_notes_inventory_overrides(
+                    infopack, run_config.notes_inventory_overrides,
+                )
+                scout_status = (
+                    "failed" if getattr(fresh_infopack, "degraded", False)
+                    else "succeeded"
+                )
+                scout_error = (
+                    getattr(fresh_infopack, "degraded_reason", None)
+                    or scout_error
+                )
+                try:
+                    completeness_warnings = infopack.completeness_warnings()
+                except Exception:
+                    completeness_warnings = []
+                    logger.warning(
+                        "Integrated scout completeness probe failed",
+                        exc_info=True,
+                    )
+                for warning in completeness_warnings:
+                    await event_queue.put({
+                        "event": "scout_warnings",
+                        "data": {"warnings": [warning]},
+                    })
+
+                # Keep the durable draft/run config aligned with what the
+                # downstream agents actually received. This also lets notes
+                # regeneration reuse the latest inventory without re-scouting.
+                if db_conn is not None and run_id is not None:
+                    stored_config = run_config.model_dump()
+                    stored_config["infopack"] = json.loads(infopack.to_json())
+                    db_conn.execute(
+                        "UPDATE runs SET run_config_json = ? WHERE id = ?",
+                        (json.dumps(stored_config), run_id),
+                    )
+                    db_conn.commit()
+
+                # Entity memory depends on the scout's entity and periods, so
+                # resolve it here for the automatic path.
+                try:
+                    from entity_memory import (
+                        entity_memory_enabled, fetch_prior_runs,
+                        find_prior_year_match, persist_infopack,
+                    )
+                    persist_infopack(output_dir, infopack)
+                    if entity_memory_enabled() and infopack.entity_name:
+                        config.prior_year_advisory = find_prior_year_match(
+                            fetch_prior_runs(db_conn, exclude_run_id=run_id),
+                            entity_name=infopack.entity_name,
+                            exclude_run_id=run_id,
+                        )
+                except Exception:
+                    logger.warning("Entity-memory match failed", exc_info=True)
+
+                await event_queue.put({
+                    "event": "scout_complete",
+                    "data": {
+                        "success": scout_status == "succeeded",
+                        "degraded": scout_status != "succeeded",
+                        "message": scout_error if scout_status != "succeeded" else "Document scan complete.",
+                    },
+                })
+                await event_queue.put({
+                    "event": "complete",
+                    "data": {
+                        "success": scout_status == "succeeded",
+                        "error": None if scout_status == "succeeded" else scout_error,
+                        "agent_id": "scout",
+                        "agent_role": "SCOUT",
+                    },
+                })
+                while True:
+                    try:
+                        event = event_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                    persist_event(event)
+                    if client_connected:
+                        try:
+                            yield event
+                        except (asyncio.CancelledError, GeneratorExit):
+                            client_connected = False
+            except asyncio.CancelledError:
+                scout_status = "cancelled"
+                scout_error = "Scout cancelled by user."
+                if _safe_mark_finished(db_conn, run_id, "aborted"):
+                    terminal_status = "aborted"
+                if client_connected:
+                    try:
+                        yield {"event": "complete", "data": {
+                            "success": False,
+                            "error": "Cancelled by user",
+                            "agent_id": "scout",
+                            "agent_role": "SCOUT",
+                        }}
+                        yield {"event": "error", "data": {
+                            "message": "Run cancelled", "bucket": ERROR_BUCKET_FATAL,
+                        }}
+                    except (asyncio.CancelledError, GeneratorExit):
+                        client_connected = False
+                return
+            except Exception as exc:
+                scout_error = str(exc) or scout_error
+                logger.exception(
+                    "Integrated scout failed; extraction continues without fresh hints",
+                    extra={"session_id": session_id},
+                )
+                _enqueue_system_error({
+                    "type": "scout_failed",
+                    "message": "The document scan could not finish. Extraction is continuing without its page suggestions.",
+                })
+                await event_queue.put({
+                    "event": "complete",
+                    "data": {
+                        "success": False,
+                        "error": scout_error,
+                        "agent_id": "scout",
+                        "agent_role": "SCOUT",
+                    },
+                })
+            finally:
+                # Stop a child scan if the generator itself is cancelled or
+                # another unexpected error unwinds this block. A viewer-only
+                # disconnect is caught above and deliberately keeps running.
+                if scout_task is not None and not scout_task.done():
+                    scout_task.cancel()
+                    try:
+                        await scout_task
+                    except asyncio.CancelledError:
+                        pass
+                try:
+                    import task_registry
+                    task_registry.unregister(session_id, "scout")
+                except Exception:
+                    pass
+                if scout_run_agent_id is not None:
+                    try:
+                        from pricing import estimate_cost as _estimate_scout_cost
+                        prompt_t = int(scout_usage.get("prompt_tokens", 0) or 0)
+                        completion_t = int(scout_usage.get("completion_tokens", 0) or 0)
+                        cost = _estimate_scout_cost(
+                            prompt_t, completion_t, 0, scout_model_name,
+                        )
+                        repo.finish_run_agent(
+                            db_conn, scout_run_agent_id, scout_status,
+                            total_tokens=int(scout_usage.get("total_tokens", 0) or 0),
+                            total_cost=cost,
+                            prompt_tokens=prompt_t,
+                            completion_tokens=completion_t,
+                            turn_count=int(scout_usage.get("turn_count", 0) or 0),
+                            tool_call_count=int(scout_usage.get("tool_call_count", 0) or 0),
+                            error_type=_agent_row_error_type(
+                                scout_status, None, scout_error,
+                            ),
+                        )
+                        db_conn.commit()
+                    except Exception:
+                        logger.warning(
+                            "Could not finalize integrated SCOUT row",
+                            exc_info=True,
+                        )
+
+        # If the fresh pass crashed before producing a pack (or this is a
+        # deliberate no-scout regeneration), retain the saved hints but still
+        # apply the operator's explicit note-list decisions. Idempotent on the
+        # successful fresh-scout path.
+        _apply_notes_inventory_overrides(
+            infopack, run_config.notes_inventory_overrides,
+        )
+
+        # PLAN-pdf-source-sidecar Phase 2: scanned-PDF runs with notes get an
+        # LLM-transcribed source.html BEFORE extraction agents launch. This
+        # deliberately follows the pipeline-owned scout so it can use the
+        # freshest notes inventory and page guidance.
+        sidecar_event = await _maybe_build_pdf_sidecar(
+            config.pdf_path, notes_to_run, infopack, model, model_name,
+        )
+        if sidecar_event is not None:
+            # Persist alongside the emit so the History run page can show the
+            # same notice after a reload (the live event is otherwise gone —
+            # the transcript caveat matters most when reviewing the workbook).
+            from ingest.pdf_sidecar import write_sidecar_outcome
+            write_sidecar_outcome(output_dir, sidecar_event)
+            if client_connected:
+                try:
+                    yield {"event": "pdf_sidecar", "data": sidecar_event}
+                except (asyncio.CancelledError, GeneratorExit):
+                    client_connected = False
 
         # Notes source integrity, plan Phases 3.5 / 4.3. Read the uploaded
         # Word file into a frozen manifest BEFORE any agent sees a template,
@@ -5248,7 +5603,6 @@ async def run_multi_agent_stream(
         #   3. Skip the trailing ``yield`` of run_complete — once a
         #      generator has caught GeneratorExit it can never yield again
         #      without raising RuntimeError, and there's no one listening.
-        client_connected = True
         try:
             while True:
                 event = await event_queue.get()

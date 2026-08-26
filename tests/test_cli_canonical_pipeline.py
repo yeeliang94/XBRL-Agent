@@ -20,6 +20,7 @@ import server
 from statement_types import StatementType
 from coordinator import AgentResult as CoordAgentResult, CoordinatorResult
 from cross_checks.framework import CrossCheckResult
+from scout.infopack import Infopack, StatementPageRef
 
 
 @pytest.fixture
@@ -77,9 +78,20 @@ def test_cli_run_agent_drives_canonical_pipeline(cli_env):
         diff=0.0, tolerance=1.0, message="OK",
     )]
 
+    async def mock_scout(**_kwargs):
+        return Infopack(
+            toc_page=1,
+            page_offset=0,
+            statements={
+                StatementType.SOFP: StatementPageRef("CuNonCu", 1),
+                StatementType.SOPL: StatementPageRef("Function", 1),
+            },
+        )
+
     with patch("server._create_proxy_model", return_value="fake-model"), \
          patch("concept_model.bootstrap.import_all_face_templates",
                return_value=[1, 2]), \
+         patch("scout.runner.run_scout_streaming", side_effect=mock_scout), \
          patch("coordinator.run_extraction", side_effect=mock_coordinator_run), \
          patch("cross_checks.framework.run_all", return_value=fake_checks), patch("cross_checks.framework.run_all_facts", return_value=fake_checks):
         result = run.run_agent(
@@ -101,6 +113,11 @@ def test_cli_run_agent_drives_canonical_pipeline(cli_env):
         assert len(runs) == 1
         assert runs[0]["status"] == "completed"
         agents = conn.execute("SELECT * FROM run_agents").fetchall()
-        assert len(agents) == 2
+        assert len(agents) == 3
+        assert any(
+            agent["statement_type"] == "SCOUT"
+            and agent["status"] == "succeeded"
+            for agent in agents
+        )
     finally:
         conn.close()

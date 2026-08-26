@@ -624,7 +624,9 @@ describe("ConceptsPage", () => {
 
     // The exception-led default hides an optional blank. Switch to All for
     // this visual comparison of mandatory vs optional blank styling.
-    fireEvent.click(await screen.findByTestId("filter-all"));
+    fireEvent.change(await screen.findByTestId("row-filter"), {
+      target: { value: "all" },
+    });
 
     const mandatoryInput = (await waitFor(() =>
       screen.getByTestId("value-input-mandatory-empty")
@@ -1194,7 +1196,7 @@ describe("ConceptsPage", () => {
     // rule on a NEUTRAL surface, not an amber fill (matches the app's alerts).
     const card = within(strip).getByText("Checks passing").closest("div")!;
     const cardStyle = getComputedStyle(card);
-    expect(cardStyle.backgroundColor).toBe("rgb(250, 250, 250)"); // grey50, not warningBg
+    expect(cardStyle.backgroundColor).toBe("rgba(0, 0, 0, 0)");
     expect(cardStyle.borderLeftColor).toBe("rgb(239, 164, 23)"); // warning left rule
     // The old row-count metrics are gone.
     expect(within(strip).queryByText("Fields shown")).toBeNull();
@@ -1509,12 +1511,14 @@ describe("ConceptsPage", () => {
       return {};
     });
     render(<ConceptsPage runId={42} />);
-    // Nothing outstanding → the Needs-attention panel shows its all-clear line.
+    // Nothing outstanding → the panel stays closed by default so the review
+    // workspace does not spend vertical space on an all-clear message.
+    const toggle = screen.getByTestId("panel-attention-toggle");
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
     await waitFor(() => screen.getByTestId("needs-attention-clear"));
-    fireEvent.click(screen.getByTestId("panel-attention-toggle"));
-    expect(screen.queryByTestId("needs-attention-clear")).toBeNull();
-    // Toggling again restores it.
-    fireEvent.click(screen.getByTestId("panel-attention-toggle"));
+    expect(screen.getByTestId("needs-attention-clear").parentElement).toHaveStyle({ display: "none" });
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByTestId("needs-attention-clear")).toBeTruthy();
   });
 

@@ -29,6 +29,7 @@ from unittest.mock import patch
 import pytest
 
 from coordinator import AgentResult, CoordinatorResult
+from scout.infopack import Infopack
 from statement_types import StatementType
 from workbook_merger import MergeResult
 
@@ -189,3 +190,71 @@ async def test_disconnect_after_agent_complete_still_finalizes_run(session_env):
     )
     assert agent_row["ended_at"] is not None, "run_agents.ended_at must be stamped"
     assert agent_row["workbook_path"] == str(sofp_wb)
+
+
+@pytest.mark.asyncio
+async def test_disconnect_during_integrated_scout_still_finishes_run(session_env):
+    """The run-owned document scan uses the same disconnect contract as the
+    extraction drain: closing the viewer does not fail the run or orphan SCOUT.
+    """
+    from server import RunConfigRequest, run_multi_agent_stream
+
+    session_id, out = session_env
+    session_dir = out / session_id
+    db_path = out / "xbrl_agent.db"
+    sofp_wb = session_dir / "SOFP_filled.xlsx"
+    sofp_wb.write_bytes(b"fake per-agent xlsx")
+    merged_wb = session_dir / "filled.xlsx"
+
+    async def scout(**_kwargs):
+        await asyncio.sleep(0)
+        return Infopack(toc_page=1, page_offset=0)
+
+    async def coordinator(config, event_queue=None, **_kwargs):
+        result = AgentResult(
+            statement_type=StatementType.SOFP,
+            variant="CuNonCu",
+            status="succeeded",
+            workbook_path=str(sofp_wb),
+        )
+        return CoordinatorResult(agent_results=[result])
+
+    body = RunConfigRequest(
+        statements=["SOFP"],
+        variants={"SOFP": "CuNonCu"},
+        use_scout=True,
+    )
+    with patch("server._create_proxy_model", return_value="fake-model"), \
+         patch("scout.runner.run_scout_streaming", side_effect=scout), \
+         patch("coordinator.run_extraction", side_effect=coordinator), \
+         patch("workbook_merger.merge", return_value=MergeResult(
+             success=True, output_path=str(merged_wb), sheets_copied=1,
+         )), \
+         patch("cross_checks.framework.run_all", return_value=[]), \
+         patch("cross_checks.framework.run_all_facts", return_value=[]), \
+         patch("cross_checks.notes_consistency.check_notes_consistency", return_value=[]):
+        gen = run_multi_agent_stream(
+            session_id=session_id,
+            session_dir=session_dir,
+            run_config=body,
+            api_key="test-key",
+            proxy_url="",
+            model_name="test-model",
+        )
+        await gen.__anext__()  # starting
+        scouting = await gen.__anext__()
+        assert scouting["event"] == "pipeline_stage"
+        assert scouting["data"]["stage"] == "scouting"
+        await gen.aclose()
+
+    conn = _open_db(db_path)
+    try:
+        run = conn.execute("SELECT status FROM runs").fetchone()
+        scout_row = conn.execute(
+            "SELECT status, ended_at FROM run_agents WHERE statement_type='SCOUT'"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert run["status"] in {"completed", "completed_with_errors"}
+    assert scout_row["status"] == "succeeded"
+    assert scout_row["ended_at"] is not None

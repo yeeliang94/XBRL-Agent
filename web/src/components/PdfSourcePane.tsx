@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { pwc } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 import { pdfPageUrl, fetchPdfPageCount } from "../lib/api";
@@ -11,10 +11,9 @@ import { pdfPageUrl, fetchPdfPageCount } from "../lib/api";
 // just an <img> with paging + zoom — no browser PDF library (gotcha #7: the
 // frontend avoids heavyweight deps that misbehaved on Windows).
 //
-// `pages` are the page numbers cited in the selected value's evidence. When
-// present, prev/next step through that cited set and the numbers show as
-// clickable chips. When empty, the user can still page through the whole
-// document via the manual jumper — bad/absent evidence is never fatal.
+// `pages` are the physical PDF page numbers cited in the selected value's
+// evidence. They are shortcuts, not navigation bounds: previous/next always
+// move one page through the document so a reviewer can inspect nearby context.
 // ---------------------------------------------------------------------------
 
 export interface PdfSourcePaneProps {
@@ -82,8 +81,8 @@ export function PdfSourcePane({
   }, [runId, totalPages]);
 
   // When the selection changes (new cited pages), jump to the first cited
-  // page. If there are no cited pages, default to page 1 so the reviewer
-  // still has somewhere to start paging from.
+  // physical PDF page. Page-count resolution is deliberately NOT a dependency:
+  // it often arrives after the image, and used to reset a quick manual move.
   //
   // Keyed on a STABLE string of the page list — not the array identity.
   // Callers commonly pass `parseEvidencePages(...)`, a fresh array every
@@ -92,47 +91,45 @@ export function PdfSourcePane({
   // edit, conflict reload).
   const pagesKey = pages.join(",");
   useEffect(() => {
-    const next = pages[0] ?? (resolvedTotal ? 1 : null);
-    setCurrent(next);
+    setCurrent(pages[0] ?? null);
     setZoom(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- pagesKey is the
     // stable stand-in for `pages`; depending on `pages` itself defeats the fix.
-  }, [pagesKey, resolvedTotal]);
+  }, [runId, pagesKey]);
+
+  // Once the page count is known, initialise an evidence-free viewer at page
+  // 1. Navigation performed while the count request was in flight is
+  // preserved. Deliberately NO clamping here: a cited page beyond the
+  // document (bad evidence) must surface as a visible failed page load, not
+  // silently open the last page — the reviewer would verify against the
+  // wrong page believing it's the citation. Same for a manual overshoot
+  // typed before the count arrived: the error state is visible and the page
+  // box stays editable. Bad evidence becomes visible, not fatal.
+  useEffect(() => {
+    if (resolvedTotal == null) return;
+    setCurrent((page) => (page == null ? 1 : page));
+  }, [runId, pagesKey, resolvedTotal]);
 
   // Reset the load state whenever the page or a retry changes.
   useEffect(() => {
     setImgState("loading");
   }, [current, retryKey]);
 
-  // Navigation set: the cited pages when present, otherwise the whole doc.
-  const navList = useMemo(() => {
-    if (pages.length > 0) return pages;
-    if (resolvedTotal) {
-      return Array.from({ length: resolvedTotal }, (_, i) => i + 1);
-    }
-    return [];
-  }, [pages, resolvedTotal]);
-
-  const idx = current == null ? -1 : navList.indexOf(current);
-  // Prev/next step through navList when the current page is in it; if the
-  // user manually jumped outside the cited set, fall back to ±1 paging.
-  const canPrev =
-    current != null && (idx > 0 || (idx === -1 && current > 1));
+  const canPrev = current != null && current > 1;
   const canNext =
     current != null &&
-    ((idx >= 0 && idx < navList.length - 1) ||
-      (idx === -1 && resolvedTotal != null && current < resolvedTotal));
+    resolvedTotal != null &&
+    current < resolvedTotal;
 
   function goPrev() {
-    if (current == null) return;
-    if (idx > 0) setCurrent(navList[idx - 1]);
-    else if (idx === -1 && current > 1) setCurrent(current - 1);
+    setCurrent((page) => page != null && page > 1 ? page - 1 : page);
   }
   function goNext() {
-    if (current == null) return;
-    if (idx >= 0 && idx < navList.length - 1) setCurrent(navList[idx + 1]);
-    else if (idx === -1 && resolvedTotal != null && current < resolvedTotal)
-      setCurrent(current + 1);
+    setCurrent((page) =>
+      page != null && resolvedTotal != null && page < resolvedTotal
+        ? page + 1
+        : page,
+    );
   }
   function jumpTo(raw: string) {
     const n = Number(raw);
@@ -216,13 +213,14 @@ export function PdfSourcePane({
 
       {pages.length > 0 && (
         <div style={styles.chipRow} data-testid="pdf-cited-chips">
-          <span style={styles.chipLabel}>Cited:</span>
+          <span style={styles.chipLabel}>Source pages</span>
           {pages.map((p) => (
             <button
               key={p}
               type="button"
               data-testid={`pdf-cited-${p}`}
               onClick={() => setCurrent(p)}
+              aria-label={`Open cited PDF page ${p}`}
               style={{
                 ...styles.chip,
                 background: p === current ? pwc.orange50 : pwc.white,
@@ -241,14 +239,17 @@ export function PdfSourcePane({
           data-testid="pdf-prev"
           onClick={goPrev}
           disabled={!canPrev}
+          aria-label="Previous PDF page"
           style={{ ...styles.navButton, opacity: canPrev ? 1 : 0.4 }}
         >
           ‹ Prev
         </button>
         <span style={styles.pageIndicator}>
+          <span style={styles.pageLabel}>PDF page</span>
           <input
             data-testid="pdf-page-input"
             inputMode="numeric"
+            aria-label="PDF page number"
             value={current ?? ""}
             onChange={(e) => jumpTo(e.target.value)}
             style={styles.pageInput}
@@ -262,6 +263,7 @@ export function PdfSourcePane({
           data-testid="pdf-next"
           onClick={goNext}
           disabled={!canNext}
+          aria-label="Next PDF page"
           style={{ ...styles.navButton, opacity: canNext ? 1 : 0.4 }}
         >
           Next ›
@@ -337,7 +339,7 @@ const styles = {
   zoomGroup: { display: "flex", gap: pwc.space.xs } as React.CSSProperties,
   iconButton: {
     ...ui.buttonSecondary,
-    minHeight: 28,
+    minHeight: 36,
     padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
     fontSize: 12,
   } as React.CSSProperties,
@@ -382,7 +384,7 @@ const styles = {
   } as React.CSSProperties,
   navButton: {
     ...ui.buttonSecondary,
-    minHeight: 30,
+    minHeight: 36,
     padding: `${pwc.space.xs}px ${pwc.space.md}px`,
     fontSize: 12,
   } as React.CSSProperties,
@@ -391,6 +393,12 @@ const styles = {
     alignItems: "center",
     fontSize: 13,
     color: pwc.grey800,
+  } as React.CSSProperties,
+  pageLabel: {
+    marginRight: pwc.space.sm,
+    color: pwc.grey700,
+    fontSize: 12,
+    whiteSpace: "nowrap" as const,
   } as React.CSSProperties,
   pageInput: {
     width: 56,

@@ -26,8 +26,8 @@ import { ClipboardFormatControls } from "./ClipboardFormatControls";
 // ---------------------------------------------------------------------------
 
 interface Props {
-  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; spot_check?: boolean; spot_check_mode?: string; entity_memory?: boolean; pdf_sidecar?: boolean; pdf_notes_auto_format?: boolean; notes_source_integrity?: SourceIntegrityMode; notes_source_integrity_choices?: string[]; default_models?: Record<string, string>; thinking_levels?: Record<string, string>; thinking_level_choices?: string[]; thinking_level_choices_by_model?: Record<string, string[]>; notes_table_style?: Partial<ClipboardFormatOptions>; available_models?: ModelEntry[] }>;
-  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; auto_review: boolean; spot_check: boolean; spot_check_mode: "light" | "full"; entity_memory: boolean; pdf_sidecar: boolean; pdf_notes_auto_format: boolean; notes_source_integrity: SourceIntegrityMode; thinking_levels: Record<string, string>; notes_table_style: ClipboardFormatOptions }>) => Promise<{ status: string }>;
+  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; notes_auto_review?: boolean; notes_coverage?: boolean; tolerance_rm?: number; spot_check?: boolean; spot_check_mode?: string; entity_memory?: boolean; pdf_sidecar?: boolean; pdf_notes_auto_format?: boolean; notes_source_integrity?: SourceIntegrityMode; notes_source_integrity_choices?: string[]; default_models?: Record<string, string>; default_model_overrides?: Record<string, string>; local_override_keys?: string[]; thinking_levels?: Record<string, string>; thinking_level_choices?: string[]; thinking_level_choices_by_model?: Record<string, string[]>; notes_table_style?: Partial<ClipboardFormatOptions>; available_models?: ModelEntry[] }>;
+  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; default_models: Record<string, string>; reset_keys: string[]; auto_review: boolean; notes_auto_review: boolean; notes_coverage: boolean; spot_check: boolean; spot_check_mode: "light" | "full"; entity_memory: boolean; pdf_sidecar: boolean; pdf_notes_auto_format: boolean; notes_source_integrity: SourceIntegrityMode; tolerance_rm: number; thinking_levels: Record<string, string>; notes_table_style: ClipboardFormatOptions }>) => Promise<{ status: string }>;
   testConnection: (body: Partial<{ proxy_url: string; api_key: string; model: string }>) => Promise<{ status: string; model?: string; latency_ms?: number; message?: string }>;
   // When provided, a Cancel button is shown (used by the modal wrapper). The
   // page host omits it — there's nothing to cancel out of.
@@ -296,6 +296,9 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
   const [apiKeyPreview, setApiKeyPreview] = useState("");
   // Reviewer auto-trigger toggle (docs/Archive/PLAN-reviewer-agent.md). Default on.
   const [autoReview, setAutoReview] = useState(true);
+  const [notesAutoReview, setNotesAutoReview] = useState(true);
+  const [notesCoverage, setNotesCoverage] = useState(true);
+  const [toleranceRm, setToleranceRm] = useState<number | "">(1);
   // Clean-run spot-check (issue 1): toggle + depth. Default on / light.
   const [spotCheck, setSpotCheck] = useState(true);
   const [spotCheckMode, setSpotCheckMode] = useState<"light" | "full">("light");
@@ -306,6 +309,10 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
     useState<Record<string, string>>({});
   const [defaultModels, setDefaultModels] =
     useState<Record<string, string>>({});
+  const [roleModelUpdates, setRoleModelUpdates] =
+    useState<Record<string, string>>({});
+  const [localOverrideKeys, setLocalOverrideKeys] = useState<Set<string>>(new Set());
+  const [showRoleModels, setShowRoleModels] = useState(false);
   const [levelChoices, setLevelChoices] = useState<string[]>([]);
   // Per-model vocabulary. GPT-5.6 dropped `minimal`, so offering it there
   // means the operator picks a level the run then substitutes — the picker
@@ -368,10 +375,14 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         setApiKey("");
         // Default to on when the field is absent (older backend).
         setAutoReview(s.auto_review !== false);
+        setNotesAutoReview(s.notes_auto_review !== false);
+        setNotesCoverage(s.notes_coverage !== false);
+        setToleranceRm(typeof s.tolerance_rm === "number" ? s.tolerance_rm : 1);
         setSpotCheck(s.spot_check !== false);
         setSpotCheckMode(s.spot_check_mode === "full" ? "full" : "light");
         setThinkingLevels(s.thinking_levels || {});
-        setDefaultModels(s.default_models || {});
+        setDefaultModels(s.default_model_overrides || s.default_models || {});
+        setLocalOverrideKeys(new Set(s.local_override_keys || []));
         setLevelChoices(s.thinking_level_choices || []);
         setLevelChoicesByModel(s.thinking_level_choices_by_model || {});
         setEntityMemory(s.entity_memory !== false);
@@ -415,6 +426,10 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
   // --- Save ---
   const handleSave = useCallback(async () => {
     if (!dirty) return;
+    if (toleranceRm === "") {
+      setLoadError("Enter a cross-check tolerance of 0 or more before saving.");
+      return;
+    }
     // Re-run validation against current values (user may have pressed Enter
     // before blur fired, leaving `errors` stale).
     const live = validate({ proxyUrl, apiKey, model });
@@ -428,7 +443,13 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
       await saveSettings({
         model,
         proxy_url: proxyUrl,
+        ...(Object.keys(roleModelUpdates).length > 0
+          ? { default_models: roleModelUpdates }
+          : {}),
         auto_review: autoReview,
+        notes_auto_review: notesAutoReview,
+        notes_coverage: notesCoverage,
+        tolerance_rm: toleranceRm,
         spot_check: spotCheck,
         spot_check_mode: spotCheckMode,
         entity_memory: entityMemory,
@@ -445,6 +466,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         ),
         ...(apiKey ? { api_key: apiKey } : {}),
       });
+      setRoleModelUpdates({});
       setDirty(false);
       setSaved(true);
       if (savedToastTimerRef.current !== null) {
@@ -459,7 +481,35 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
     } finally {
       setSaving(false);
     }
-  }, [dirty, model, proxyUrl, apiKey, autoReview, spotCheck, spotCheckMode, entityMemory, pdfSidecar, sourceIntegrity, thinkingLevels, saveSettings]);
+  }, [dirty, model, proxyUrl, apiKey, roleModelUpdates, autoReview, notesAutoReview, notesCoverage, toleranceRm, spotCheck, spotCheckMode, entityMemory, pdfSidecar, pdfNotesAutoFormat, sourceIntegrity, thinkingLevels, saveSettings]);
+
+  const handleUseDeploymentDefault = useCallback(async (key: "model" | "proxy_url" | "api_key") => {
+    setSaving(true);
+    setLoadError(null);
+    try {
+      await saveSettings({ reset_keys: [key] });
+      const fresh = await getSettings();
+      setModel(fresh.model);
+      setProxyUrl(fresh.proxy_url);
+      setApiKeyPreview(fresh.api_key_preview);
+      setApiKey("");
+      setDefaultModels(fresh.default_model_overrides || fresh.default_models || {});
+      setLocalOverrideKeys(new Set(fresh.local_override_keys || []));
+      setDirty(false);
+      setSaved(true);
+      if (savedToastTimerRef.current !== null) {
+        clearTimeout(savedToastTimerRef.current);
+      }
+      savedToastTimerRef.current = setTimeout(() => {
+        setSaved(false);
+        savedToastTimerRef.current = null;
+      }, 2000);
+    } catch (e) {
+      setLoadError(userMessage(e));
+    } finally {
+      setSaving(false);
+    }
+  }, [getSettings, saveSettings]);
 
   // --- Test connection ---
   const handleTestConnection = useCallback(async () => {
@@ -557,6 +607,16 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
             team if you&apos;re unsure. Must start with https://.
           </p>
         )}
+        {localOverrideKeys.has("proxy_url") && (
+          <button
+            type="button"
+            onClick={() => void handleUseDeploymentDefault("proxy_url")}
+            disabled={readOnly || saving}
+            style={{ ...ui.buttonSecondary, ...ui.buttonSm, alignSelf: "flex-start" }}
+          >
+            Use deployment service address
+          </button>
+        )}
       </div>
 
       {/* API Key */}
@@ -593,6 +653,16 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
           <p style={styles.helperText}>
             The access key for your organisation&apos;s AI service.
           </p>
+        )}
+        {localOverrideKeys.has("api_key") && (
+          <button
+            type="button"
+            onClick={() => void handleUseDeploymentDefault("api_key")}
+            disabled={readOnly || saving}
+            style={{ ...ui.buttonSecondary, ...ui.buttonSm, alignSelf: "flex-start" }}
+          >
+            Use deployment access key
+          </button>
         )}
       </div>
 
@@ -649,6 +719,64 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
             Which AI model runs the extraction. Ask your team if unsure.
           </p>
         )}
+        {localOverrideKeys.has("model") && (
+          <button
+            type="button"
+            onClick={() => void handleUseDeploymentDefault("model")}
+            disabled={readOnly || saving}
+            style={{ ...ui.buttonSecondary, ...ui.buttonSm, alignSelf: "flex-start" }}
+          >
+            Follow deployment model
+          </button>
+        )}
+      </div>
+
+      <div style={styles.fieldGroup}>
+        <label style={styles.label}>Model by pipeline role</label>
+        <p style={styles.helperText}>
+          Most runs use the model above. Open this only when a pipeline role
+          needs a different default.
+        </p>
+        <button
+          type="button"
+          aria-expanded={showRoleModels}
+          aria-controls="role-model-defaults"
+          onClick={() => setShowRoleModels((open) => !open)}
+          style={{ ...ui.buttonSecondary, ...ui.buttonSm, alignSelf: "flex-start" }}
+        >
+          {showRoleModels ? "Hide role-specific models" : "Customize role-specific models"}
+        </button>
+        {showRoleModels && (
+          <div id="role-model-defaults">
+            {THINKING_ROLES.map(({ key, label }) => {
+              const selected = defaultModels[key] || "";
+              return (
+                <div key={`model-${key}`} style={styles.thinkingRow}>
+                  <span style={styles.thinkingRoleLabel}>{label}</span>
+                  <select
+                    aria-label={`Default model for ${label}`}
+                    value={selected}
+                    disabled={readOnly}
+                    onChange={(e) => {
+                      setDefaultModels((prev) => ({ ...prev, [key]: e.target.value }));
+                      setRoleModelUpdates((prev) => ({ ...prev, [key]: e.target.value }));
+                      setDirty(true);
+                    }}
+                    style={{ ...ui.select, width: 260 }}
+                  >
+                    <option value="">Follow global model ({model})</option>
+                    {selected && !availableModels.some((m) => m.id === selected) && (
+                      <option value={selected}>{selected} (custom)</option>
+                    )}
+                    {availableModels.map((m) => (
+                      <option key={m.id} value={m.id}>{m.display_name || m.id}</option>
+                    ))}
+                  </select>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       <SettingsSectionHeading
@@ -671,6 +799,57 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
           When off, runs with failed cross-checks finish without the reviewer;
           you can still trigger it manually from a run's Review tab.
         </p>
+      </div>
+
+      <div style={styles.fieldGroup}>
+        <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            checked={notesAutoReview}
+            onChange={(e) => { setNotesAutoReview(e.target.checked); setDirty(true); }}
+            disabled={readOnly}
+            aria-label="Automatically review extracted notes"
+          />
+          <span style={styles.label}>Automatically review extracted notes</span>
+        </label>
+        <p style={styles.helperText}>
+          Checks prose notes after extraction and applies grounded corrections.
+        </p>
+      </div>
+
+      <div style={styles.fieldGroup}>
+        <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            checked={notesCoverage}
+            onChange={(e) => { setNotesCoverage(e.target.checked); setDirty(true); }}
+            disabled={readOnly}
+            aria-label="Check notes coverage against the document inventory"
+          />
+          <span style={styles.label}>Check notes coverage against the document inventory</span>
+        </label>
+      </div>
+
+      <div style={styles.fieldGroup}>
+        <label style={styles.label} htmlFor="cross-check-tolerance">Cross-check tolerance (RM)</label>
+        <input
+          id="cross-check-tolerance"
+          type="number"
+          min={0}
+          step="0.01"
+          value={toleranceRm}
+          disabled={readOnly}
+          onChange={(e) => {
+            if (e.target.value === "") {
+              setToleranceRm("");
+            } else {
+              const next = Number(e.target.value);
+              if (Number.isFinite(next) && next >= 0) setToleranceRm(next);
+            }
+            setDirty(true);
+          }}
+          style={{ ...ui.input, width: 180 }}
+        />
       </div>
 
       {/* Clean-run spot-check toggle + depth (issue 1) */}
@@ -981,7 +1160,7 @@ function SettingsSectionHeading({ title, description }: { title: string; descrip
 
 // Firm-wide notes-table style theme (docs/PLAN-notes-table-theme.md). Unlike
 // the old per-browser localStorage paste format, this is the SHARED firm
-// default stored server-side (.env via /api/settings) — so the whole firm
+// default stored server-side (the local runtime settings file via the API) — so the whole firm
 // inherits one house style for both the editor preview and the clipboard paste.
 // It auto-saves on every change (its own POST), independent of the form's main
 // Save button.

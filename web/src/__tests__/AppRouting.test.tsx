@@ -28,7 +28,6 @@ vi.mock("../lib/api", async () => {
       api_key_preview: "",
       available_models: [],
       default_models: {},
-      scout_enabled_default: false,
       tolerance_rm: 1,
     })),
     // HistoryPage fetches on mount when the history view is active, and
@@ -224,7 +223,7 @@ describe("App routing", () => {
         getExtendedSettings: vi.fn(async () => ({
           model: "x", proxy_url: "", api_key_set: true, api_key_preview: "",
           available_models: [], default_models: {},
-          scout_enabled_default: false, tolerance_rm: 1,
+          tolerance_rm: 1,
         })),
         fetchRuns: vi.fn(async () => ({ runs: [], total: 0 })),
         fetchRunDetail: vi.fn(async () => ({
@@ -289,7 +288,7 @@ describe("App routing", () => {
         getExtendedSettings: vi.fn(async () => ({
           model: "x", proxy_url: "", api_key_set: true, api_key_preview: "",
           available_models: [], default_models: {},
-          scout_enabled_default: false, tolerance_rm: 1,
+          tolerance_rm: 1,
         })),
         fetchRuns: vi.fn(async () => ({ runs: [], total: 0 })),
         listTemplates: vi.fn(async () => ({ templates: [] })),
@@ -333,7 +332,7 @@ describe("App routing", () => {
         getExtendedSettings: vi.fn(async () => ({
           model: "x", proxy_url: "", api_key_set: true, api_key_preview: "",
           available_models: [], default_models: {},
-          scout_enabled_default: false, tolerance_rm: 1,
+          tolerance_rm: 1,
         })),
         fetchRuns: vi.fn(async () => ({ runs: [], total: 0 })),
         // The UploadResponse type carries run_id under the new contract.
@@ -391,7 +390,7 @@ describe("App routing", () => {
         getExtendedSettings: vi.fn(async () => ({
           model: "x", proxy_url: "", api_key_set: true, api_key_preview: "",
           available_models: [], default_models: {},
-          scout_enabled_default: false, tolerance_rm: 1,
+          tolerance_rm: 1,
         })),
         fetchRuns: vi.fn(async () => ({ runs: [], total: 0 })),
         uploadPdf: vi.fn(async () => ({

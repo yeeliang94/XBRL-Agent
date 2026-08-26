@@ -20,7 +20,6 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-from dotenv import load_dotenv
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -113,7 +112,7 @@ async def re_review_notes(run_id: int, body: Optional[dict] = None):
     filing_level = config.get("filing_level", "company")
     filing_standard = config.get("filing_standard", "mfrs")
 
-    load_dotenv(server.ENV_FILE, override=True)
+    server._reload_runtime_settings()
     api_key = server._resolve_api_key()
     proxy_url = os.environ.get("LLM_PROXY_URL", "")
 

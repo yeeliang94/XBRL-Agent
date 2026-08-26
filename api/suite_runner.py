@@ -32,7 +32,6 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-from dotenv import load_dotenv
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator
 
@@ -393,7 +392,7 @@ def _run_batch_thread(suite_run_id: int, suite_id: int, launch: dict,
 
     def _thread_main() -> None:
         try:
-            load_dotenv(server.ENV_FILE, override=True)
+            server._reload_runtime_settings()
             api_key = server._resolve_api_key()
             proxy_url = os.environ.get("LLM_PROXY_URL", "")
             model_name = launch.get("model") or os.environ.get("TEST_MODEL", "openai.gpt-5.4")
@@ -524,7 +523,7 @@ async def estimate_suite_run_endpoint(suite_id: int, body: SuiteRunLaunch):
     # path does — otherwise the common default-model UI path (model=null) samples
     # mixed-model history that says nothing about what will actually run
     # (peer-review Step 6).
-    load_dotenv(server.ENV_FILE, override=True)
+    server._reload_runtime_settings()
     resolved_model = body.model or os.environ.get("TEST_MODEL", "openai.gpt-5.4")
     stats = _recent_run_stats(resolved_model)
     avg = stats["avg_seconds"]
@@ -602,7 +601,7 @@ async def launch_suite_run_endpoint(suite_id: int, body: SuiteRunLaunch):
         # environment used" (Step 13) — trends compare runs by model, so the
         # stamp must state what actually ran even when the user left the
         # picker on the default.
-        load_dotenv(server.ENV_FILE, override=True)
+        server._reload_runtime_settings()
         resolved_model = body.model or os.environ.get(
             "TEST_MODEL", "openai.gpt-5.4"
         )

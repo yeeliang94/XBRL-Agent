@@ -182,7 +182,9 @@ def test_settings_round_trip(tmp_path, monkeypatch):
     from api.config_routes import _ADMIN_ONLY_SETTINGS_KEYS
 
     env_file = tmp_path / ".env"
+    settings_file = tmp_path / "settings.json"
     monkeypatch.setattr(server, "ENV_FILE", env_file)
+    monkeypatch.setattr(server, "SETTINGS_FILE", settings_file)
     monkeypatch.delenv("XBRL_PDF_SIDECAR", raising=False)
 
     assert client.get("/api/settings").json()["pdf_sidecar"] is False
@@ -190,9 +192,7 @@ def test_settings_round_trip(tmp_path, monkeypatch):
 
     resp = client.post("/api/settings", json={"pdf_sidecar": True})
     assert resp.status_code == 200
-    assert "XBRL_PDF_SIDECAR" in env_file.read_text()
-    from dotenv import load_dotenv
-    load_dotenv(env_file, override=True)
+    assert "XBRL_PDF_SIDECAR" in settings_file.read_text()
     assert client.get("/api/settings").json()["pdf_sidecar"] is True
     assert server._pdf_sidecar_enabled() is True
 

@@ -967,6 +967,11 @@ describe("RunDetailView", () => {
       const tablist = screen.getByRole("tablist", { name: /run detail sections/i });
       const valuesTab = within(tablist).getByRole("tab", { name: /^figures$/i });
       expect(valuesTab.getAttribute("aria-selected")).toBe("true");
+      // Run management and output setup stay on Overview. The review surface
+      // keeps the workbook download but drops unrelated destructive/tools UI.
+      expect(screen.queryByRole("button", { name: /fill mtool template/i })).toBeNull();
+      expect(screen.queryByRole("button", { name: /delete run/i })).toBeNull();
+      expect(screen.getByRole("button", { name: /download filled excel/i })).toBeTruthy();
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -1139,6 +1144,26 @@ describe("RunDetailView", () => {
     expect(screen.getByRole("button", { name: /review issues/i }).className).toMatch(/primary/i);
   });
 
+  test("header actions follow one rule: everything except Download lives on Overview", () => {
+    render(
+      <RunDetailView
+        detail={makeDetail({ status: "completed_with_errors", agents: [makeAgent()] })}
+        onDelete={() => {}}
+        onDownload={() => {}}
+      />,
+    );
+    // On Overview (the landing tab) the full action set renders.
+    expect(screen.getByRole("button", { name: /review issues/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /fill mtool template/i })).toBeTruthy();
+    // On a work surface only Download remains — "Review issues" follows the
+    // same Overview-only rule as run management, not a rule of its own.
+    fireEvent.click(screen.getByRole("tab", { name: /cross-checks/i }));
+    expect(screen.queryByRole("button", { name: /review issues/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /fill mtool template/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /delete run/i })).toBeNull();
+    expect(screen.getByRole("button", { name: /download draft/i })).toBeTruthy();
+  });
+
   test("flagged run confirms before downloading an investigation draft", () => {
     const onDownload = vi.fn();
     render(
@@ -1204,8 +1229,8 @@ describe("RunDetailView", () => {
     clickRunTab(/activity/i);
     const cards = screen.getAllByTestId("run-detail-agent");
     const order = cards.map((c) => c.textContent);
-    // Scout first, then face statements in reading order (SOCF last).
-    expect(order[0]).toMatch(/scout/i);
+    // Document scan first, then face statements in reading order (SOCF last).
+    expect(order[0]).toMatch(/document scan/i);
     expect(order[1]).toMatch(/SOFP/);
     expect(order[2]).toMatch(/SOPL/);
     expect(order[3]).toMatch(/SOCF/);
