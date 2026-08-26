@@ -262,3 +262,72 @@ def test_sub_agent_helper_no_rejection_summary_when_all_accepted(
     msg = _sub_agent_sink_write(deps, [good], parse_errors=[])
     assert "Rejected" not in msg
     assert "Collected 1" in msg
+
+
+def test_sub_agent_rejects_one_note_targeting_two_fields_in_one_call(
+    tmp_path: Path,
+):
+    """The old peer-topic split must not reach the shared payload sink."""
+    from notes.agent import _sub_agent_sink_write
+
+    deps = _deps_in_sub_agent_mode(tmp_path)
+    first = _payload("Disclosure of financial instruments")
+    second = _payload("Disclosure of credit risk")
+    first.note_num = second.note_num = 12
+
+    msg = _sub_agent_sink_write(deps, [first, second], parse_errors=[])
+
+    assert deps.payload_sink == []
+    assert "Rejected split routing" in msg
+    assert "exactly one field" in msg
+    assert "full note" in msg
+    assert "already has accepted content" in msg
+
+
+def test_coverage_accepts_two_spellings_that_resolve_to_one_field(
+    tmp_path: Path,
+):
+    """Fuzzy aliases for one real row must not consume a receipt retry."""
+    from notes.agent import (
+        _sub_agent_sink_write,
+        _submit_coverage_receipt_impl,
+    )
+    from notes.coverage import CoverageEntry, CoverageReceipt
+
+    deps = _deps_in_sub_agent_mode(tmp_path)
+    deps.batch_note_nums = [12]
+    exact = _payload("Disclosure of financial instruments")
+    fuzzy = _payload("Disclosure of financial instrumentss")
+    exact.note_num = fuzzy.note_num = 12
+
+    write_msg = _sub_agent_sink_write(deps, [exact, fuzzy], parse_errors=[])
+    assert "Collected 2" in write_msg
+    assert len(deps.payload_sink) == 2
+
+    receipt = CoverageReceipt(entries=[CoverageEntry(
+        note_num=12,
+        action="written",
+        row_labels=["Disclosure of financial instruments"],
+    )])
+    receipt_msg = _submit_coverage_receipt_impl(deps, receipt)
+
+    assert receipt_msg == "Coverage receipt accepted: 1 written, 0 skipped."
+
+
+def test_sub_agent_later_single_field_write_replaces_prior_route(
+    tmp_path: Path,
+):
+    """A model can correct an earlier row choice without retaining both rows."""
+    from notes.agent import _sub_agent_sink_write
+
+    deps = _deps_in_sub_agent_mode(tmp_path)
+    first = _payload("Disclosure of financial instruments")
+    replacement = _payload("Disclosure of other notes to accounts")
+    first.note_num = replacement.note_num = 12
+
+    _sub_agent_sink_write(deps, [first], parse_errors=[])
+    msg = _sub_agent_sink_write(deps, [replacement], parse_errors=[])
+
+    assert deps.payload_sink == [replacement]
+    assert "Re-routed note(s) 12" in msg
+    assert "complete top-level note" in msg

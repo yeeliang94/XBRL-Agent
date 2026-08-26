@@ -186,28 +186,22 @@ def test_listofnotes_keeps_profit_before_tax_together():
     assert "do not scatter its individual line items" in flat
 
 
-# --- Concern #7 (2026-08-05 user validation): note-splitting granularity ------
-# Users confirmed the placement logic: a note stays whole by default; a split
-# cuts only at first-level sub-section boundaries and must account for every
-# paragraph; no note is duplicated except share capital (two named rows); the
-# related-party note lives only on its own sheet. Each assertion below pins
-# one of those confirmed rules.
+# --- Concern #7: strict one-note/one-field routing ----------------------------
+# A List-of-Notes disclosure stays complete in one field. Internal topics and
+# first-level sub-sections never create additional Sheet-12 placements.
 
-def test_notes_base_split_granularity_floor():
+def test_notes_base_requires_one_complete_field():
     flat = _flat("_notes_base.md")
-    # Whole-by-default is stated up front, not only in the hierarchy section.
-    assert "a note stays whole in one cell by default" in flat
-    # The split unit is whole first-level sub-sections, never lines.
-    assert "first-level sub-section boundaries" in flat
-    assert "never a fragment" in flat
-    assert "only the lines" not in flat
-    # Completeness: the pieces must sum to the whole note.
-    assert "every paragraph appears in exactly one payload" in flat
+    assert "one top-level pdf note goes to one template field" in flat
+    assert "copy the full note into that one field" in flat
+    assert "materially different peer topics" in flat
+    assert "stay in its one list-of-notes field" in flat
+    assert "never break it apart" in flat
 
 
 def test_notes_base_grouping_is_default_not_optional():
     flat = _flat("_notes_base.md")
-    assert "sub-notes belong with their parent by default" in flat
+    assert "all of its sub-notes belong together in one field" in flat
     assert "sub-notes can be grouped" not in flat
 
 
@@ -220,11 +214,12 @@ def test_notes_base_share_capital_names_both_target_rows():
     assert "do not put a second copy there" in flat
 
 
-def test_listofnotes_states_keep_whole_vs_distribute_rule():
+def test_listofnotes_forbids_distribution_across_fields():
     flat = _flat("notes_listofnotes.md")
-    assert "captures the note as a whole" in flat
-    assert "only when no single row captures the whole note" in flat
-    assert "never dropped" in flat
+    assert "one note, one field" in flat
+    assert "complete top-level note stays in one field" in flat
+    assert "do not distribute" in flat
+    assert "catch-all is preferable to fragmenting" in flat
 
 
 def test_listofnotes_never_cites_a_related_party_row():
@@ -245,8 +240,9 @@ def test_accounting_policies_multi_topic_paragraph_goes_to_one_row():
 
 
 def test_notes_reviewer_split_rule_matches_extraction_rule():
-    # The reviewer is the backstop for flagged splits; its acceptance rule
-    # must carry the same granularity floor as the extraction prompts.
+    # The reviewer is the backstop for flagged splits and must apply the same
+    # strict one-note/one-field rule as extraction.
     flat = _flat("notes_reviewer.md")
-    assert "whole first-level sub-section boundaries" in flat
-    assert "entire note present across the rows" in flat
+    assert "always a routing violation" in flat
+    assert "complete in exactly one list-of-notes field" in flat
+    assert "never approve a multi-row" in flat

@@ -230,15 +230,12 @@ def detect_topline_splits(
     of Notes sheet — top-line routing-rule candidates (PRD:
     docs/PRD-notes-coverage-and-routing.md, Rule 1).
 
-    The confirmed business rule (2026-07-04): content follows its top-line
-    note, whole. A note fragmented across several fields (a right-of-use
-    paragraph pulled out of the PP&E note into the leases row) is the
-    "too eager to split" failure mode. But a single note MAY legitimately
-    feed several rows when the PDF presents materially different peer
-    disclosures (the combined financial-instruments note) — provenance
-    alone cannot tell the two apart, so this detector reports CANDIDATES
-    by note_num + coordinates only (gotcha-#14-safe) and the reviewer
-    judges each against the PDF.
+    The current business rule: content follows its top-line note, whole, into
+    exactly one List-of-Notes field. A note fragmented across several fields
+    is always a routing violation, including when it contains materially
+    different peer topics. This detector reports the violation by note_num +
+    coordinates only (gotcha-#14-safe); the reviewer reads the PDF to identify
+    the one authoritative destination row without matching content in code.
 
     Scoped to Sheet 12 ONLY (mirrors ``detect_same_sheet_row_collisions``):
     it is the one sheet whose rows are per-topic disclosure concepts where

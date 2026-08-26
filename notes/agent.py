@@ -1388,6 +1388,45 @@ def _sub_agent_sink_write(
     """
     entries = _ensure_label_index(deps)
     accepted, rejections = resolve_payload_labels(entries, payloads)
+
+    # One top-level disclosure note owns exactly one List-of-Notes field. The
+    # prompt states this rule, but enforcing it here prevents a model from
+    # successfully submitting the old "one peer topic per row" shape anyway.
+    # Multiple payloads for the SAME resolved row remain valid: a long note may
+    # be authored in chunks and the final writer combines those chunks.
+    accepted_rows_by_note: dict[int, set[int]] = {}
+    accepted_ids_by_note: dict[int, set[int]] = {}
+    for payload in accepted:
+        if payload.note_num is None:
+            continue
+        resolved = _resolve_row(entries, payload.chosen_row_label)
+        if resolved is None:  # defensive; resolve_payload_labels accepted it
+            continue
+        note_num = int(payload.note_num)
+        accepted_rows_by_note.setdefault(note_num, set()).add(resolved[0])
+        accepted_ids_by_note.setdefault(note_num, set()).add(id(payload))
+
+    split_note_nums = {
+        note_num for note_num, rows in accepted_rows_by_note.items()
+        if len(rows) > 1
+    }
+    routing_rejections: list[str] = []
+    if split_note_nums:
+        rejected_ids = set().union(
+            *(accepted_ids_by_note[note_num] for note_num in split_note_nums)
+        )
+        accepted = [p for p in accepted if id(p) not in rejected_ids]
+        for note_num in sorted(split_note_nums):
+            deps.failed_write_notes.add(note_num)
+            routing_rejections.append(
+                f"Note {note_num} targeted {len(accepted_rows_by_note[note_num])} "
+                "different List-of-Notes fields. One top-level note must be "
+                "copied complete into exactly one field. Choose the row that "
+                "best represents its top-level heading (or the catch-all), "
+                "then use only that label. If that field already has accepted "
+                "content for this note from an earlier call, send only the "
+                "missing content; otherwise re-send the full note."
+            )
     # Record what actually failed, before any of the advisory messaging below.
     # A rejected payload never reaches the sheet; if the agent then reports the
     # note as "skipped", `_write_notes12_skips` must not believe it (run-84).
@@ -1425,6 +1464,7 @@ def _sub_agent_sink_write(
     # corrects (the rebuild compresses headers and year rows), which is how
     # Note 6 and Note 9 each landed TWICE in one cell — rebuilt version plus
     # full source version, concatenated.
+    rerouted_note_nums: set[int] = set()
     for p in accepted:
         resolved = _resolve_row(entries, p.chosen_row_label)
         p_row = resolved[0] if resolved else None
@@ -1437,6 +1477,18 @@ def _sub_agent_sink_write(
         for e in deps.payload_sink:
             e_resolved = _resolve_row(entries, e.chosen_row_label)
             same_row = e_resolved is not None and e_resolved[0] == p_row
+            # A later one-field write for the same assigned note is a routing
+            # correction. Replace every earlier row for that note so the agent
+            # can recover after choosing the wrong destination on a prior turn.
+            # The prompt/tool response requires this replacement payload to be
+            # the COMPLETE note, not merely the fragment that motivated the
+            # correction.
+            if (
+                p.note_num is not None and e.note_num is not None
+                and int(p.note_num) == int(e.note_num) and not same_row
+            ):
+                rerouted_note_nums.add(int(p.note_num))
+                continue
             if same_row and _content_supersede_key(e.content) == p_key:
                 continue  # equivalent resend — the new payload supersedes
             if (
@@ -1464,6 +1516,16 @@ def _sub_agent_sink_write(
             "call, or skip this note if none fit."
         )
         msg += "\n" + "\n".join(lines)
+    if routing_rejections:
+        msg += "\nRejected split routing:\n  - " + "\n  - ".join(
+            routing_rejections
+        )
+    if rerouted_note_nums:
+        nums = ", ".join(str(n) for n in sorted(rerouted_note_nums))
+        msg += (
+            f"\nRe-routed note(s) {nums}: earlier field payloads were replaced. "
+            "Confirm each replacement contains the complete top-level note."
+        )
     if parse_errors:
         msg += "\nParse errors: " + "; ".join(parse_errors)
     # Run-79 Note-9 case: an unrelated top-level note appended into an
@@ -2768,8 +2830,8 @@ def create_notes_agent(
             Each entry is:
 
               - {"note_num": <int>, "action": "written",
-                 "row_labels": ["<template label>", ...]}
-                for notes you wrote to the template.
+                 "row_labels": ["<one template label>"]}
+                for a note you wrote complete to exactly one field.
               - {"note_num": <int>, "action": "skipped",
                  "reason": "<one sentence>"}
                 ONLY for a note that belongs on a DIFFERENT sheet

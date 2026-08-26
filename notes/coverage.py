@@ -5,10 +5,11 @@ Label-comparison normalization (peer-review S6):
   normalization the writer uses (`_normalize` — strip leading `*`,
   lowercase). The agent often picks the template's raw label
   (`*Disclosure of X`) for the receipt while passing a plain
-  `Disclosure of X` to write_notes; without normalization the
-  validator would force a spurious retry. The writer's fuzzy logic
-  uses identical normalization so the two paths agree on what
-  "matches" means.
+  `Disclosure of X` to write_notes; without normalization the validator
+  would force a spurious retry. Coverage validates provenance only. It
+  does not infer template-field identity from requested sink-label
+  spellings because distinct fuzzy spellings can resolve to the same real
+  row; the write guard owns that resolved-row invariant.
 
 Per-note provenance (peer-review MEDIUM #1):
   `validate(written_row_labels=...)` accepts EITHER a flat `set[str]`
@@ -22,7 +23,7 @@ Every Sheet-12 sub-agent is handed a batch of N notes from scout's
 inventory. Before finishing, the sub-agent must submit a CoverageReceipt
 — one entry per batch note, either:
 
-- `"written"` with the row labels where it landed content, or
+- `"written"` with the single row label where the complete note landed, or
 - `"skipped"` with a one-sentence reason (e.g. "belongs on Sheet 10",
   "no Sheet-12 row fits this disclosure").
 
@@ -202,6 +203,17 @@ class CoverageReceipt:
         for entry in self.entries:
             if entry.action != "written":
                 continue
+            # Constrain the model-authored receipt itself. Do not count sink
+            # strings here: the sink preserves requested label spellings, and
+            # several fuzzy spellings may resolve to one template row. The
+            # write guard enforces one-field routing against resolved rows.
+            if len(entry.row_labels) != 1:
+                errors.append(
+                    f"Note {entry.note_num}: a complete top-level note must land "
+                    f"in exactly one List-of-Notes field, but the receipt lists "
+                    f"{len(entry.row_labels)} row labels. Choose one row from "
+                    f"the note's top-level heading and put the full note there."
+                )
             for label in entry.row_labels:
                 normalized = _normalize_label(label)
                 if per_note_sink:
