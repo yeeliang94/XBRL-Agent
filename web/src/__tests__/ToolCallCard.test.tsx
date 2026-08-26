@@ -41,12 +41,13 @@ describe("ToolCallCard", () => {
     expect(card?.getAttribute("style")).toContain("rgb(253, 81, 8)");
   });
 
-  test("completed card has grey200 border and white background", () => {
+  test("completed tool call is a flat timeline row on white", () => {
     const { container } = render(<ToolCallCard entry={completedEntry} />);
     const card = container.querySelector("[data-testid='tool-card']");
     const style = card?.getAttribute("style") || "";
-    // white background
     expect(style).toContain("rgb(255, 255, 255)");
+    expect((card as HTMLElement).style.borderRadius).toBe("0");
+    expect((card as HTMLElement).style.borderBottom).toContain("rgb(222, 222, 222)");
   });
 
   test("shows duration badge when result arrives", () => {

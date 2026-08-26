@@ -1,19 +1,47 @@
-import type { EventPhase } from "../lib/types";
+import type { EventPhase, PipelineStage } from "../lib/types";
 import { pwc } from "../lib/theme";
 
 interface Props {
   currentPhase: EventPhase | null;
+  pipelineStage?: PipelineStage | null;
   isRunning: boolean;
   isComplete: boolean;
 }
 
-const PHASES: { key: EventPhase; label: string }[] = [
-  { key: "reading_template", label: "Reading template" },
-  { key: "viewing_pdf", label: "Viewing PDF" },
-  { key: "filling_workbook", label: "Filling workbook" },
-  { key: "verifying", label: "Verifying" },
-  { key: "complete", label: "Complete" },
+const PHASES = [
+  { key: "prepare", label: "Prepare document" },
+  { key: "extract", label: "Extract data" },
+  { key: "check", label: "Combine & check" },
+  { key: "review", label: "Review issues" },
+  { key: "ready", label: "Ready" },
 ];
+
+function runStageIndex(stage: PipelineStage | null | undefined): number | null {
+  if (!stage) return null;
+  if (stage === "scouting" || stage === "reading_source") return 0;
+  if (stage === "extracting") return 1;
+  if (stage === "merging" || stage === "cross_checking") return 2;
+  if (["correcting", "reviewing", "re_checking", "reviewing_notes", "formatting_notes", "validating_notes"].includes(stage)) return 3;
+  if (stage === "done") return 4;
+  return null;
+}
+
+function agentPhaseIndex(phase: EventPhase | null): number {
+  if (!phase) return -1;
+  const indexes: Record<EventPhase, number> = {
+    starting: 0,
+    scouting: 0,
+    started: 0,
+    reading_template: 0,
+    viewing_pdf: 1,
+    writing_notes: 2,
+    filling_workbook: 2,
+    verifying: 3,
+    cancelled: 3,
+    complete: 4,
+  };
+  return indexes[phase];
+}
 
 type StepStatus = "completed" | "active" | "pending";
 
@@ -32,25 +60,26 @@ function getStepStatus(
 
 const styles = {
   container: {
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: 0,
-    background: pwc.white,
-    borderRadius: pwc.radius.md,
-    border: `1px solid ${pwc.grey200}`,
-    boxShadow: pwc.shadow.card,
-    padding: `${pwc.space.lg}px ${pwc.space.xl}px`,
+    overflowX: "auto" as const,
+    paddingBottom: pwc.space.xs,
   },
+  track: {
+    display: "grid",
+    gridTemplateColumns: "repeat(5, minmax(116px, 1fr))",
+    minWidth: 640,
+  } as React.CSSProperties,
+  stepWrap: {
+    minWidth: 0,
+  } as React.CSSProperties,
   step: {
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.md,
-    height: 32,
+    width: "100%",
   },
   // Circle indicators
   completeCircle: {
-    width: 24,
-    height: 24,
+    width: 18,
+    height: 18,
     borderRadius: "50%",
     display: "flex",
     alignItems: "center",
@@ -60,22 +89,22 @@ const styles = {
     flexShrink: 0,
   } as React.CSSProperties,
   completeDot: {
-    width: 8,
-    height: 8,
+    width: 6,
+    height: 6,
     borderRadius: "50%",
     background: pwc.success,
   } as React.CSSProperties,
   activeCircle: {
-    width: 24,
-    height: 24,
+    width: 18,
+    height: 18,
     borderRadius: "50%",
     background: pwc.orange400,
     animation: "pulse-subtle 1.5s ease-in-out infinite",
     flexShrink: 0,
   } as React.CSSProperties,
   pendingCircle: {
-    width: 24,
-    height: 24,
+    width: 18,
+    height: 18,
     borderRadius: "50%",
     border: `2px solid ${pwc.grey300}`,
     background: "transparent",
@@ -83,49 +112,50 @@ const styles = {
     alignItems: "center",
     justifyContent: "center",
     color: pwc.grey300,
-    fontSize: 12,
+    fontSize: 10,
     fontFamily: pwc.fontMono,
     flexShrink: 0,
   } as React.CSSProperties,
   // Labels
   completedLabel: {
     fontFamily: pwc.fontBody,
-    fontSize: 14,
+    fontSize: 12,
     color: pwc.grey700,
+    marginTop: pwc.space.sm,
   },
   activeLabel: {
     fontFamily: pwc.fontBody,
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: 600,
     color: pwc.grey900,
+    marginTop: pwc.space.sm,
   },
   pendingLabel: {
     fontFamily: pwc.fontBody,
-    fontSize: 14,
-    color: pwc.grey500,
+    fontSize: 12,
+    color: pwc.grey700,
+    marginTop: pwc.space.sm,
   },
   // Connector
   connector: {
-    width: 2,
-    height: 8,
-    marginLeft: 11, // Center under 24px circle
-    flexShrink: 0,
+    height: 2,
+    flex: 1,
+    margin: `0 ${pwc.space.sm}px`,
   },
 };
 
-export function PipelineStages({ currentPhase, isRunning, isComplete }: Props) {
-  const currentIndex = currentPhase
-    ? PHASES.findIndex((p) => p.key === currentPhase)
-    : -1;
+export function PipelineStages({ currentPhase, pipelineStage, isRunning, isComplete }: Props) {
+  const currentIndex = runStageIndex(pipelineStage) ?? agentPhaseIndex(currentPhase);
 
   return (
-    <div style={styles.container}>
-      {PHASES.map((phase, i) => {
-        const status = getStepStatus(i, currentIndex, isRunning, isComplete);
+    <div aria-label="Extraction progress" style={styles.container}>
+      <div style={styles.track}>
+        {PHASES.map((phase, i) => {
+          const status = getStepStatus(i, currentIndex, isRunning, isComplete);
 
-        return (
-          <div key={phase.key}>
-            <div style={styles.step}>
+          return (
+            <div key={phase.key} style={styles.stepWrap}>
+              <div style={styles.step}>
               {/* Step indicator */}
               {status === "completed" && (
                 <div data-testid="step-complete" style={styles.completeCircle}>
@@ -141,8 +171,23 @@ export function PipelineStages({ currentPhase, isRunning, isComplete }: Props) {
                 </div>
               )}
 
-              {/* Label */}
-              <span
+                {/* Connector line between steps */}
+                {i < PHASES.length - 1 && (
+                  <div
+                    data-testid="connector"
+                    style={{
+                      ...styles.connector,
+                      background:
+                        status === "completed" &&
+                        getStepStatus(i + 1, currentIndex, isRunning, isComplete) !== "pending"
+                          ? pwc.success
+                          : pwc.grey200,
+                    }}
+                  />
+                )}
+              </div>
+
+              <div
                 style={
                   status === "completed"
                     ? styles.completedLabel
@@ -152,26 +197,11 @@ export function PipelineStages({ currentPhase, isRunning, isComplete }: Props) {
                 }
               >
                 {phase.label}
-              </span>
+              </div>
             </div>
-
-            {/* Connector line between steps */}
-            {i < PHASES.length - 1 && (
-              <div
-                data-testid="connector"
-                style={{
-                  ...styles.connector,
-                  background:
-                    status === "completed" &&
-                    getStepStatus(i + 1, currentIndex, isRunning, isComplete) !== "pending"
-                      ? pwc.success
-                      : pwc.grey200,
-                }}
-              />
-            )}
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
     </div>
   );
 }

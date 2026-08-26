@@ -5,6 +5,7 @@ import { AnimatedNumber } from "./AnimatedNumber";
 interface Props {
   tokens: TokenData | null;
   isRunning: boolean;
+  embedded?: boolean;
 }
 
 const styles = {
@@ -35,6 +36,7 @@ const styles = {
   metrics: {
     display: "flex",
     gap: pwc.space.xl,
+    flexWrap: "wrap" as const,
   } as React.CSSProperties,
   metric: {
     textAlign: "center" as const,
@@ -97,9 +99,13 @@ const styles = {
   } as React.CSSProperties,
 };
 
-export function TokenDashboard({ tokens, isRunning }: Props) {
+export function TokenDashboard({ tokens, isRunning, embedded = false }: Props) {
   if (!tokens) {
-    return <div style={styles.waiting}>Waiting for token data...</div>;
+    return (
+      <div style={embedded ? { ...styles.waiting, border: "none", padding: pwc.space.md } : styles.waiting}>
+        Waiting for token data...
+      </div>
+    );
   }
 
   // Raw numeric values so the live counters COUNT UP as SSE token events land,
@@ -116,7 +122,7 @@ export function TokenDashboard({ tokens, isRunning }: Props) {
   ];
 
   return (
-    <div style={styles.container}>
+    <div style={embedded ? { ...styles.container, border: "none", boxShadow: "none", padding: pwc.space.lg } : styles.container}>
       <div style={styles.row}>
         <div style={styles.metrics}>
           {metrics.map((m) => (

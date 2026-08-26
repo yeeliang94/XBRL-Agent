@@ -34,13 +34,13 @@ describe("AgentTimeline", () => {
     expect(screen.getByText(/No timeline activity was recorded/i)).toBeInTheDocument();
   });
 
-  test("timeline container keeps inner padding without adding another border", () => {
+  test("timeline rows use the parent pane without another padded card shell", () => {
     const { container } = render(
       <AgentTimeline events={[]} toolTimeline={[makeEntry({ result_summary: "ok", endTime: 1 })]} isRunning={false} />,
     );
     const scrollArea = container.querySelector(".agent-scroll") as HTMLElement;
     expect(scrollArea).toBeTruthy();
-    expect(scrollArea.style.padding).toBe("12px");
+    expect(scrollArea.style.padding).toBe("0px");
     expect(scrollArea.style.border).toBe("");
   });
 

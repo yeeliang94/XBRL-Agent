@@ -661,9 +661,10 @@
       <div class="rules">
         <div class="rule-item"><span class="num">L1</span><span class="txt"><strong>Form page.</strong> A constrained readable column for setup and account forms. Use <code class="inline">ui.pageForm</code>.</span></div>
         <div class="rule-item"><span class="num">L2</span><span class="txt"><strong>List page.</strong> A wide table or object list with sticky filters and stable columns. Use <code class="inline">ui.pageWide</code>.</span></div>
-        <div class="rule-item"><span class="num">L3</span><span class="txt"><strong>Run report.</strong> Full-width outcome header, section tabs, then task-specific content. Readiness comes before telemetry.</span></div>
-        <div class="rule-item"><span class="num">L4</span><span class="txt"><strong>Review workspace.</strong> Collapsible document navigation, financial grid, and source evidence panes. Preserve working context when panes change.</span></div>
-        <div class="rule-item"><span class="num">L5</span><span class="txt"><strong>Grouping.</strong> Prefer section spacing, then a bordered group, then a static card. Use an interactive card only for a selectable or navigable object.</span></div>
+        <div class="rule-item"><span class="num">L3</span><span class="txt"><strong>Live multi-agent run.</strong> One run-level progress story, a grouped vertical workstream navigator, and one focused activity pane. Surface active work, completed work, and exceptions before tokens or tool-level detail.</span></div>
+        <div class="rule-item"><span class="num">L4</span><span class="txt"><strong>Run report.</strong> Full-width outcome header, section tabs, then task-specific content. Readiness comes before telemetry.</span></div>
+        <div class="rule-item"><span class="num">L5</span><span class="txt"><strong>Review workspace.</strong> Collapsible document navigation, financial grid, and source evidence panes. Preserve working context when panes change.</span></div>
+        <div class="rule-item"><span class="num">L6</span><span class="txt"><strong>Grouping.</strong> Prefer section spacing, then a bordered group, then a static card. Use an interactive card only for a selectable or navigable object.</span></div>
       </div>
       <div class="note-box"><strong>Responsive contract:</strong> wide screens show the complete review workspace; laptops may collapse side panes; narrow screens retain monitoring and simple actions rather than pretending the financial grid is comfortably editable.</div>
       <div class="note-box"><strong>Density contract:</strong> setup and explanation surfaces use comfortable spacing; operational lists use standard density; financial grids offer compact and standard modes. Density changes row height and padding, never typography contrast or target accessibility.</div>
@@ -886,7 +887,7 @@
           <button class="tab">Technical details</button>
         </div>
       </div>
-      <div class="note-box"><strong>Semantics:</strong> destinations are links with stable URLs and <code class="inline">aria-current</code>. Tabs switch views of the same resource and use <code class="inline">role="tablist"</code> / <code class="inline">role="tab"</code> / <code class="inline">role="tabpanel"</code>, roving tabindex, and arrow navigation. AI activity, models, token use, and traces belong under Technical details rather than competing with review outcomes.</div>
+      <div class="note-box"><strong>Semantics:</strong> destinations are links with stable URLs and <code class="inline">aria-current</code>. Tabs switch views of the same resource and use <code class="inline">role="tablist"</code> / <code class="inline">role="tab"</code> / <code class="inline">role="tabpanel"</code>, roving tabindex, and arrow navigation. A live multi-agent run presents these selectors as a grouped vertical workstream list, not a dense horizontal strip. AI activity, models, token use, and traces remain secondary to run progress and review outcomes.</div>
     </section>
 
     <!-- ACCESSIBILITY -->

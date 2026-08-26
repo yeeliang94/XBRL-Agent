@@ -2,6 +2,7 @@ import { describe, test, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { ExtractPage } from "../pages/ExtractPage";
 import { initialState } from "../lib/appReducer";
+import { createAgentState } from "../lib/types";
 import type { AppState } from "../lib/appReducer";
 
 // Bare minimum no-op props for the component. Each test overrides `state`
@@ -119,5 +120,70 @@ describe("ExtractPage — render-gate regression guards", () => {
     render(<ExtractPage {...props} />);
 
     expect(screen.queryByRole("button", { name: /stop all/i })).not.toBeInTheDocument();
+  });
+
+  test("live run uses one progress surface and a grouped workstream workspace", () => {
+    const agent = createAgentState("sofp_0", "SOFP", "SOFP");
+    agent.status = "running";
+    agent.currentPhase = "viewing_pdf";
+    const props = makeProps({
+      state: {
+        sessionId: "test-session",
+        filename: "test.pdf",
+        isRunning: true,
+        currentPhase: "viewing_pdf",
+        pipelineStage: "extracting",
+        agents: { sofp_0: agent },
+        agentTabOrder: ["sofp_0"],
+        activeTab: "sofp_0",
+        statementsInRun: ["SOFP", "SOPL"],
+        tokens: {
+          prompt_tokens: 100,
+          completion_tokens: 20,
+          thinking_tokens: 0,
+          cumulative: 120,
+          cost_estimate: 0.0123,
+        },
+      },
+    });
+    const { container } = render(<ExtractPage {...props} />);
+
+    expect(screen.getByRole("heading", { name: /agents are working in parallel/i })).toBeInTheDocument();
+    expect(screen.getByTestId("pipeline-stage-label")).toHaveAttribute("aria-live", "polite");
+    expect(screen.getByTestId("pipeline-stage-label")).toHaveAttribute("aria-atomic", "true");
+    expect(screen.getByLabelText("Extraction progress")).toBeInTheDocument();
+    expect(screen.getByRole("tablist", { name: "Run workstreams" })).toHaveAttribute("aria-orientation", "vertical");
+    expect(screen.getByRole("tabpanel", { name: /SOFP activity/i })).toBeInTheDocument();
+    expect(screen.getByText("0 of 2 complete")).toBeInTheDocument();
+    const usage = container.querySelector("details") as HTMLDetailsElement;
+    expect(usage.open).toBe(false);
+    expect(usage.querySelector("summary")?.textContent).toContain("$0.0123");
+    expect(usage.querySelector("summary [aria-hidden='true']")).toBeInTheDocument();
+  });
+
+  test("a stopped run is not described as still running", () => {
+    const props = makeProps({
+      state: {
+        sessionId: "test-session",
+        filename: "test.pdf",
+        isRunning: false,
+        isComplete: false,
+        hasError: true,
+        currentPhase: "viewing_pdf",
+        pipelineStage: "extracting",
+        tokens: {
+          prompt_tokens: 100,
+          completion_tokens: 20,
+          thinking_tokens: 0,
+          cumulative: 120,
+          cost_estimate: 0.0123,
+        },
+      },
+    });
+    render(<ExtractPage {...props} />);
+
+    expect(screen.getByRole("heading", { name: "Run stopped" })).toBeInTheDocument();
+    expect(screen.getByText(/the run is no longer active/i)).toBeInTheDocument();
+    expect(screen.queryByText(/while the run continues/i)).not.toBeInTheDocument();
   });
 });
