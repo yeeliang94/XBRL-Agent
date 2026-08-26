@@ -1174,6 +1174,70 @@ describe("NotesReviewTab edited_count fail-closed", () => {
 // ---------------------------------------------------------------------------
 
 describe("NotesReviewTab unmount flush", () => {
+  test("opening and closing an untouched table note does not PATCH", async () => {
+    const storedHtml =
+      '<h3>8. Other payables</h3><table data-source-styled="true">' +
+      "<tr><th>Item</th><th>2024<br/>RM</th></tr>" +
+      "<tr><td>Accruals</td><td>1,200</td></tr></table>";
+    const tableSample: NotesCellsResponse = {
+      sheets: [
+        {
+          sheet: "Notes-Listofnotes",
+          rows: [
+            {
+              row: 4,
+              label: "Other payables",
+              html: storedHtml,
+              evidence: "Page 29",
+              source_pages: [29],
+              updated_at: "2026-04-24T10:00:00Z",
+              content_revision: 1,
+            },
+          ],
+        },
+      ],
+    };
+    const patchCalls: Array<{ url: string; init: RequestInit }> = [];
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "PATCH") {
+        patchCalls.push({ url, init });
+      }
+      return new Response(JSON.stringify(tableSample), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const { unmount } = render(<NotesReviewTab runId={42} />);
+    await waitFor(() =>
+      expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
+    );
+    expandAllSheets();
+    await waitFor(() =>
+      expect(screen.getByText("Other payables")).toBeInTheDocument(),
+    );
+
+    // TipTap's table schema normalises the canonical stored HTML even though
+    // the user-visible document is unchanged. Model the representation-only
+    // transaction that can arrive after mount by asking the test hook to feed
+    // the editor's own current serialisation back through onUpdate.
+    const wrapper = document.querySelector(
+      "[data-testid='notes-review-editor']",
+    );
+    expect(wrapper).not.toBeNull();
+    wrapper!.dispatchEvent(
+      new CustomEvent("notes-review-test-edit", {
+        detail: { useCurrentHtml: true },
+        bubbles: true,
+      }),
+    );
+
+    unmount();
+
+    expect(patchCalls).toHaveLength(0);
+  });
+
   test("oversized pending save skips keepalive and warns the user", async () => {
     // Peer-review [MEDIUM] I-4: browser keepalive cap is 64KB. The naive
     // fire-and-forget path silently swallows the rejection — a long edit

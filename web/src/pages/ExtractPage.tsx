@@ -289,6 +289,7 @@ export function ExtractPage({
         && state.isRunning && (
         <div role="status" data-testid="pipeline-stage-label" style={styles.pipelineStageBox}>
           <span style={styles.pipelineStageDot} />
+          {state.pipelineStage === "scouting" && "Scanning the document and preparing page guidance…"}
           {state.pipelineStage === "reading_source" && "Reading the Word document…"}
           {state.pipelineStage === "merging" && "Combining the statements into one Excel file…"}
           {state.pipelineStage === "cross_checking" && "Running the cross-checks…"}

@@ -61,14 +61,6 @@ class TestGetSettings:
         assert "SOCF" in defaults
         assert "SOCIE" in defaults
 
-    def test_returns_scout_enabled_default(self, client):
-        resp = client.get("/api/settings")
-        data = resp.json()
-        assert "scout_enabled_default" in data
-        assert isinstance(data["scout_enabled_default"], bool)
-        # Default should be True
-        assert data["scout_enabled_default"] is True
-
     def test_returns_tolerance(self, client):
         resp = client.get("/api/settings")
         data = resp.json()
@@ -101,15 +93,6 @@ class TestUpdateSettings:
         data = resp2.json()
         assert data["default_models"]["SOFP"] == "claude-opus-4-6"
         assert data["default_models"]["scout"] == "claude-haiku-4-5"
-
-    def test_update_scout_enabled_default(self, client):
-        resp = client.post("/api/settings", json={
-            "scout_enabled_default": False,
-        })
-        assert resp.status_code == 200
-
-        resp2 = client.get("/api/settings")
-        assert resp2.json()["scout_enabled_default"] is False
 
     def test_update_tolerance(self, client):
         resp = client.post("/api/settings", json={
@@ -146,7 +129,7 @@ class TestUpdateSettings:
             "default_models": {"scout": {"nested": [1, 2, 3]}},
         })
         assert resp.status_code == 400
-        assert "non-empty string" in resp.json()["detail"]
+        assert "model id" in resp.json()["detail"]
 
     def test_default_models_rejects_overlong_string(self, client):
         resp = client.post("/api/settings", json={

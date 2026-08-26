@@ -11,7 +11,6 @@ import shutil
 import uuid
 from typing import Optional
 
-from dotenv import load_dotenv
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 
@@ -233,7 +232,7 @@ async def scout_pdf(session_id: str, request: Request):
     if isinstance(body, dict) and body.get("scanned_pdf") is True:
         force_vision_inventory = True
 
-    load_dotenv(server.ENV_FILE, override=True)
+    server._reload_runtime_settings()
     api_key = server._resolve_api_key()
     proxy_url = os.environ.get("LLM_PROXY_URL", "")
     global_model = os.environ.get("TEST_MODEL", "openai.gpt-5.4")
@@ -243,8 +242,11 @@ async def scout_pdf(session_id: str, request: Request):
 
     # Resolve scout model from per-agent settings (Phase 8), falling back to
     # the global model if no scout-specific override has been configured.
-    extended = server._load_extended_settings()
-    scout_model_name = extended["default_models"].get("scout", global_model)
+    scout_model_name = (
+        server._configured_default_models().get("scout")
+        or os.environ.get("SCOUT_MODEL", "").strip()
+        or global_model
+    )
 
     # Build a provider-backed model so the scout uses the same proxy/direct
     # wiring as extraction agents (critical for enterprise proxy on Windows).

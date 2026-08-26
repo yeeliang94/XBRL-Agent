@@ -16,50 +16,12 @@ def test_parser_defaults_scout_on_with_explicit_off_switch():
     assert parser.parse_args(["--no-scout"]).use_scout is False
 
 
-def test_run_cli_scout_returns_infopack_json_and_threads_model(monkeypatch, tmp_path):
-    from scout.infopack import Infopack
+def test_run_agent_delegates_scout_to_canonical_pipeline(tmp_path, monkeypatch):
+    """CLI and web both ask the canonical pipeline to run the scout.
 
-    seen = {}
-
-    async def fake_run_scout(pdf_path, model=None, statements_to_find=None, **kw):
-        seen["pdf"] = pdf_path
-        seen["model"] = model
-        seen["stmts"] = statements_to_find
-        seen["output_dir"] = kw.get("output_dir")
-        return Infopack(toc_page=3, page_offset=0)
-
-    monkeypatch.setenv("SCOUT_MODEL", "openai.gpt-5.4")
-    with patch("server._create_proxy_model", return_value="scout-model") as mk, \
-         patch("scout.runner.run_scout", side_effect=fake_run_scout):
-        out = run._run_cli_scout(
-            pdf_path=str(tmp_path / "uploaded.pdf"),
-            statements={StatementType.SOFP},
-            model="openai.gpt-5.4-mini", proxy_url="", api_key="k",
-            output_dir=str(tmp_path),
-        )
-    assert isinstance(out, dict) and out.get("toc_page") == 3
-    assert mk.call_args.args[0] == "openai.gpt-5.4"          # SCOUT_MODEL wins
-    assert seen["model"] == "scout-model" and seen["stmts"] == {StatementType.SOFP}
-    assert seen["output_dir"] == str(tmp_path)
-
-
-def test_scout_failure_is_advisory_not_fatal(capsys):
-    async def boom(*a, **k):
-        raise RuntimeError("scout exploded")
-
-    with patch("server._create_proxy_model", return_value="m"), \
-         patch("scout.runner.run_scout", side_effect=boom):
-        out = run._run_cli_scout(
-            pdf_path="/nope.pdf", statements={StatementType.SOFP}, model="m",
-            proxy_url="", api_key="k", output_dir="/tmp",
-        )
-    assert out is None
-    assert "scout failed" in capsys.readouterr().out
-
-
-def test_run_agent_passes_infopack_into_run_config(tmp_path, monkeypatch):
-    """The scout output reaches ``RunConfigRequest.infopack`` (the pipeline
-    keys behaviour on infopack presence); ``--no-scout`` leaves it None."""
+    The CLI must not run a separate pre-scan and then trigger a second scout
+    inside ``run_multi_agent_stream``.
+    """
     import server
 
     out = tmp_path / "output"
@@ -78,29 +40,15 @@ def test_run_agent_passes_infopack_into_run_config(tmp_path, monkeypatch):
         yield {"event": "run_complete", "data": {"success": True, "run_id": 1}}
 
     with patch("concept_model.bootstrap.import_all_face_templates", return_value=[1]), \
-         patch("server.run_multi_agent_stream", side_effect=fake_stream), \
-         patch("run._run_cli_scout", return_value={"pdf_length": 9}) as scout:
-        run.run_agent(pdf_path=str(pdf), model="m", output_dir=str(out),
-                      statements={StatementType.SOFP})
-    assert scout.called
-    assert captured["cfg"].infopack == {"pdf_length": 9}
-    assert captured["cfg"].use_scout is True
-
-    # A failed scout: no infopack, but the History flag still records that
-    # scout was requested (same meaning as the web checkbox).
-    with patch("concept_model.bootstrap.import_all_face_templates", return_value=[1]), \
-         patch("server.run_multi_agent_stream", side_effect=fake_stream), \
-         patch("run._run_cli_scout", return_value=None):
+         patch("server.run_multi_agent_stream", side_effect=fake_stream):
         run.run_agent(pdf_path=str(pdf), model="m", output_dir=str(out),
                       statements={StatementType.SOFP})
     assert captured["cfg"].infopack is None
     assert captured["cfg"].use_scout is True
 
     with patch("concept_model.bootstrap.import_all_face_templates", return_value=[1]), \
-         patch("server.run_multi_agent_stream", side_effect=fake_stream), \
-         patch("run._run_cli_scout") as scout:
+         patch("server.run_multi_agent_stream", side_effect=fake_stream):
         run.run_agent(pdf_path=str(pdf), model="m", output_dir=str(out),
                       statements={StatementType.SOFP}, use_scout=False)
-    assert not scout.called
     assert captured["cfg"].infopack is None
     assert captured["cfg"].use_scout is False

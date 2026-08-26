@@ -16,18 +16,6 @@ import type { SSEFailureKind } from "../lib/sse";
 let captureOnEvent: ((event: SSEEvent) => void) | null = null;
 let captureOnTransportError: ((error: string, kind: SSEFailureKind) => void) | null = null;
 
-function selectRequiredFormats() {
-  const values = ["CuNonCu", "Function", "BeforeTax", "Indirect", "Default"];
-  const selects = screen.getAllByRole("combobox").filter((element) =>
-    values.some((value) => element.querySelector(`option[value='${value}']`)),
-  ) as HTMLSelectElement[];
-  selects.forEach((select, index) => {
-    if (!select.disabled && !select.value) {
-      fireEvent.change(select, { target: { value: values[index] } });
-    }
-  });
-}
-
 vi.mock("../lib/api", async () => {
   const actual = await vi.importActual<typeof import("../lib/api")>("../lib/api");
   return {
@@ -52,7 +40,6 @@ vi.mock("../lib/api", async () => {
       api_key_preview: "",
       available_models: [],
       default_models: {},
-      scout_enabled_default: false,
       tolerance_rm: 1,
     })),
     uploadPdf: vi.fn(async () => ({ session_id: "sess_1", filename: "FINCO.pdf" })),
@@ -129,7 +116,6 @@ describe("App — AgentTimeline integration", () => {
     );
 
     // 3. Click Run — this invokes the mocked SSE factory and captures onEvent.
-    selectRequiredFormats();
     await act(async () => {
       fireEvent.click(runButton);
     });
@@ -188,7 +174,6 @@ describe("App — AgentTimeline integration", () => {
     const runButton = await waitFor(() =>
       screen.getByRole("button", { name: /start extraction/i }),
     );
-    selectRequiredFormats();
     await act(async () => fireEvent.click(runButton));
 
     await act(async () => {
@@ -251,7 +236,7 @@ describe("App — AgentTimeline integration", () => {
         getExtendedSettings: vi.fn(async () => ({
           model: "x", proxy_url: "", api_key_set: true, api_key_preview: "",
           available_models: [], default_models: {},
-          scout_enabled_default: false, tolerance_rm: 1,
+          tolerance_rm: 1,
         })),
         uploadPdf: vi.fn(async () => ({
           session_id: "sess_1", filename: "FINCO.pdf", run_id: 99,
@@ -276,7 +261,6 @@ describe("App — AgentTimeline integration", () => {
     }, { timeout: 2000 });
 
     // Click Run → handleMultiRun → PATCH rejects.
-    selectRequiredFormats();
     await act(async () => {
       fireEvent.click(runButton);
     });

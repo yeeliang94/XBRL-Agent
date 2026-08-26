@@ -954,7 +954,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
           // Append to the run's warnings banner list.
           const w = event.data as { warnings?: string[] };
           if (Array.isArray(w.warnings) && w.warnings.length > 0) {
-            updates.scoutWarnings = [...state.scoutWarnings, ...w.warnings];
+            updates.scoutWarnings = [...new Set([...state.scoutWarnings, ...w.warnings])];
           }
           break;
         }
@@ -964,7 +964,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
           // Surfaces a single message into the same warnings banner.
           const c = event.data as { message?: string };
           if (typeof c.message === "string" && c.message.length > 0) {
-            updates.scoutWarnings = [...state.scoutWarnings, c.message];
+            updates.scoutWarnings = [...new Set([...state.scoutWarnings, c.message])];
           }
           break;
         }

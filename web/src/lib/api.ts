@@ -179,9 +179,11 @@ export async function updateSettings(
     // dropdown (and any future per-agent-model controls) persist through
     // the same helper instead of re-implementing the fetch.
     default_models: Record<string, string>;
-    scout_enabled_default: boolean;
+    reset_keys: string[];
     tolerance_rm: number;
     auto_review: boolean;
+    notes_auto_review: boolean;
+    notes_coverage: boolean;
     // Clean-run spot-check (issue 1): toggle + depth.
     spot_check: boolean;
     spot_check_mode: "light" | "full";

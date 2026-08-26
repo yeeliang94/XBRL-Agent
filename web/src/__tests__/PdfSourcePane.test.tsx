@@ -1,5 +1,5 @@
 import { describe, test, expect, afterEach, vi } from "vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { PdfSourcePane } from "../components/PdfSourcePane";
 
 afterEach(cleanup);
@@ -11,7 +11,7 @@ describe("PdfSourcePane", () => {
     expect(img.getAttribute("src")).toBe("/api/runs/42/pdf/page/14.png");
   });
 
-  test("prev/next step through the cited set", () => {
+  test("prev/next move through adjacent PDF pages after a cited-page jump", () => {
     render(<PdfSourcePane runId={1} pages={[19, 20]} totalPages={50} />);
     const img = () => screen.getByTestId("pdf-page-image") as HTMLImageElement;
     expect(img().getAttribute("src")).toBe("/api/runs/1/pdf/page/19.png");
@@ -19,11 +19,22 @@ describe("PdfSourcePane", () => {
     fireEvent.click(screen.getByTestId("pdf-next"));
     expect(img().getAttribute("src")).toBe("/api/runs/1/pdf/page/20.png");
 
-    // At the end of the cited set, Next is disabled.
-    expect((screen.getByTestId("pdf-next") as HTMLButtonElement).disabled).toBe(true);
+    // Citation chips are shortcuts, not navigation boundaries. Reviewers must
+    // be able to inspect the pages immediately before and after the source.
+    fireEvent.click(screen.getByTestId("pdf-next"));
+    expect(img().getAttribute("src")).toBe("/api/runs/1/pdf/page/21.png");
 
     fireEvent.click(screen.getByTestId("pdf-prev"));
-    expect(img().getAttribute("src")).toBe("/api/runs/1/pdf/page/19.png");
+    expect(img().getAttribute("src")).toBe("/api/runs/1/pdf/page/20.png");
+  });
+
+  test("a single cited page still allows navigating to the previous PDF page", () => {
+    render(<PdfSourcePane runId={1} pages={[12]} totalPages={50} />);
+    const img = () => screen.getByTestId("pdf-page-image") as HTMLImageElement;
+
+    expect((screen.getByTestId("pdf-prev") as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByTestId("pdf-prev"));
+    expect(img().getAttribute("src")).toBe("/api/runs/1/pdf/page/11.png");
   });
 
   test("clicking a cited chip jumps to that page", () => {
@@ -31,6 +42,62 @@ describe("PdfSourcePane", () => {
     fireEvent.click(screen.getByTestId("pdf-cited-20"));
     const img = screen.getByTestId("pdf-page-image") as HTMLImageElement;
     expect(img.getAttribute("src")).toBe("/api/runs/3/pdf/page/20.png");
+  });
+
+  test("clearing a citation resets the viewer to the start of the PDF", () => {
+    const { rerender } = render(
+      <PdfSourcePane runId={3} pages={[20]} totalPages={50} />,
+    );
+    rerender(<PdfSourcePane runId={3} pages={[]} totalPages={50} />);
+
+    const img = screen.getByTestId("pdf-page-image") as HTMLImageElement;
+    expect(img.getAttribute("src")).toBe("/api/runs/3/pdf/page/1.png");
+  });
+
+  test("a cited page beyond the document is not silently redirected", () => {
+    // Bad evidence (the model cited a page the PDF doesn't have) must surface
+    // as a visible failed page load on the cited page — NOT silently open the
+    // last page, which would have the reviewer verify against the wrong page
+    // believing it's the citation.
+    render(<PdfSourcePane runId={6} pages={[60]} totalPages={40} />);
+    const img = screen.getByTestId("pdf-page-image") as HTMLImageElement;
+    expect(img.getAttribute("src")).toBe("/api/runs/6/pdf/page/60.png");
+  });
+
+  test("a page count arriving late does not reset manual navigation", async () => {
+    // No totalPages prop → the pane fetches the count. The user pages around
+    // while that request is in flight; its arrival must not yank them back.
+    const originalFetch = globalThis.fetch;
+    let releaseCount!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseCount = resolve;
+    });
+    globalThis.fetch = vi.fn(async () => {
+      await gate;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ pages: 40 }),
+      };
+    }) as unknown as typeof fetch;
+    try {
+      render(<PdfSourcePane runId={11} pages={[]} />);
+      fireEvent.change(screen.getByTestId("pdf-page-input"), {
+        target: { value: "7" },
+      });
+      const img = () => screen.getByTestId("pdf-page-image") as HTMLImageElement;
+      expect(img().getAttribute("src")).toBe("/api/runs/11/pdf/page/7.png");
+
+      releaseCount();
+      // Next is disabled until the count lands (unknown end of document), so
+      // its enabling marks the count's arrival.
+      await waitFor(() =>
+        expect((screen.getByTestId("pdf-next") as HTMLButtonElement).disabled).toBe(false),
+      );
+      expect(img().getAttribute("src")).toBe("/api/runs/11/pdf/page/7.png");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   test("manual page jump works with no cited evidence", () => {

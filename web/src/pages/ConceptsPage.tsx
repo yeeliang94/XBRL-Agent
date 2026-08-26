@@ -993,6 +993,8 @@ export function ConceptsPage({
     (a, b) => a + b,
     0
   );
+  const attentionCount =
+    failingChecks.length + coverageGaps.length + totalOpenConflicts;
   const moveAttention = (delta: number) => {
     if (actionableChecks.length === 0) return;
     const next = (attentionIndex + delta + actionableChecks.length) % actionableChecks.length;
@@ -1053,7 +1055,16 @@ export function ConceptsPage({
           via onVisible, so we keep the panel chrome hidden (display:none, not
           unmounted) until there's content. */}
       <div style={coverageHasContent ? undefined : { display: "none" }}>
-        <CollapsiblePanel title="Notes checklist" testId="panel-notes-checklist">
+        <CollapsiblePanel
+          title={
+            notesCoverage && notesCoverage.total > 0
+              ? `Notes checklist (${notesCoverage.placed}/${notesCoverage.total})`
+              : "Notes checklist"
+          }
+          testId="panel-notes-checklist"
+          defaultOpen={false}
+          keepMounted
+        >
           <NotesCoverageNav
             runId={runId}
             activeSheet={notesActive ? activeNotesSheet : null}
@@ -1064,7 +1075,13 @@ export function ConceptsPage({
           />
         </CollapsiblePanel>
       </div>
-      <CollapsiblePanel title={TERMS.needsAttention} testId="panel-attention">
+      <CollapsiblePanel
+        title={`${TERMS.needsAttention}${attentionCount > 0 ? ` (${attentionCount})` : ""}`}
+        testId="panel-attention"
+        defaultOpen={attentionCount > 0}
+        openWhen={attentionCount > 0}
+        keepMounted
+      >
         <NeedsAttentionPanel
           failingChecks={failingChecks}
           onSelectCheck={handleSelectTarget}
@@ -1285,25 +1302,28 @@ export function ConceptsPage({
                 style={{ ...ui.input, width: "100%" }}
               />
             </div>
-            <div style={styles.rowFilters} role="group" aria-label="Figure rows">
-              {ROW_FILTERS.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  data-testid={option.value === "no_source" ? "filter-no-source" : `filter-${option.value}`}
-                  aria-pressed={rowFilter === option.value}
-                  onClick={() => setRowFilter(option.value)}
-                  className={rowFilter === option.value ? uiClass.btnSubtle : uiClass.btnSecondary}
-                  style={{
-                    ...(rowFilter === option.value ? ui.buttonSubtle : ui.buttonSecondary),
-                    ...ui.buttonSm,
-                  }}
-                >
-                  {option.label}{option.value === "no_source" && noSourceCount > 0 ? ` (${noSourceCount})` : ""}
-                </button>
-              ))}
+            <div style={styles.controlGroup}>
+              <label htmlFor="concept-row-filter" style={ui.fieldLabel}>
+                Rows
+              </label>
+              <select
+                id="concept-row-filter"
+                data-testid="row-filter"
+                value={rowFilter}
+                onChange={(e) => setRowFilter(e.target.value as RowFilter)}
+                style={ui.select}
+              >
+                {ROW_FILTERS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                    {option.value === "no_source" && noSourceCount > 0
+                      ? ` (${noSourceCount})`
+                      : ""}
+                  </option>
+                ))}
+              </select>
             </div>
-            <span style={styles.srOnly} role="status" aria-live="polite">
+            <span style={styles.visibleRowCount} role="status" aria-live="polite">
               {filtered.length} figure row{filtered.length === 1 ? "" : "s"} shown
             </span>
           </section>
@@ -1392,14 +1412,22 @@ function CollapsiblePanel({
   title,
   testId,
   defaultOpen = true,
+  openWhen = false,
+  keepMounted = false,
   children,
 }: {
   title: string;
   testId?: string;
   defaultOpen?: boolean;
+  /** Open when an important async result arrives after the panel mounted. */
+  openWhen?: boolean;
+  keepMounted?: boolean;
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  useEffect(() => {
+    if (openWhen) setOpen(true);
+  }, [openWhen]);
   return (
     <section data-testid={testId} style={styles.panelCard}>
       <button
@@ -1419,7 +1447,11 @@ function CollapsiblePanel({
           ▾
         </span>
       </button>
-      {open && <div style={styles.panelBody}>{children}</div>}
+      {(open || keepMounted) && (
+        <div style={{ ...styles.panelBody, display: open ? undefined : "none" }}>
+          {children}
+        </div>
+      )}
     </section>
   );
 }
@@ -2850,9 +2882,9 @@ const styles = {
     padding: pwc.space.lg,
   } as React.CSSProperties,
   reviewHeader: {
-    ...ui.card,
-    padding: pwc.space.xl,
-    marginBottom: pwc.space.xl,
+    padding: `${pwc.space.sm}px 0 ${pwc.space.lg}px`,
+    marginBottom: pwc.space.lg,
+    borderBottom: `1px solid ${pwc.grey200}`,
   } as React.CSSProperties,
   titleRow: {
     display: "flex",
@@ -2887,24 +2919,23 @@ const styles = {
     whiteSpace: "nowrap",
   } as React.CSSProperties,
   summaryStrip: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
-    gap: pwc.space.lg,
-    marginTop: pwc.space.xl,
+    display: "flex",
+    flexWrap: "wrap" as const,
+    gap: pwc.space.md,
+    marginTop: pwc.space.lg,
   } as React.CSSProperties,
   metric: {
-    background: pwc.grey50,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.lg,
-    padding: `${pwc.space.md}px ${pwc.space.lg}px`,
+    border: "none",
+    padding: `${pwc.space.xs}px ${pwc.space.lg}px`,
     display: "flex",
     flexDirection: "column" as const,
     gap: 2,
+    minWidth: 112,
   } as React.CSSProperties,
   metricValue: {
     fontFamily: pwc.fontBody,
     fontVariantNumeric: "tabular-nums",
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: pwc.weight.regular,
     color: pwc.grey900,
   } as React.CSSProperties,
@@ -2936,8 +2967,8 @@ const styles = {
   } as React.CSSProperties,
   toolbar: {
     ...ui.card,
-    padding: pwc.space.xl,
-    marginBottom: pwc.space.xl,
+    padding: pwc.space.lg,
+    marginBottom: pwc.space.lg,
     display: "flex",
     flexWrap: "wrap",
     gap: pwc.space.md,
@@ -2958,23 +2989,12 @@ const styles = {
     flexDirection: "column" as const,
     gap: pwc.space.xs,
   } as React.CSSProperties,
-  rowFilters: {
-    display: "flex",
-    alignItems: "center",
-    flexWrap: "wrap" as const,
-    gap: pwc.space.xs,
-    width: "100%",
-  } as React.CSSProperties,
-  srOnly: {
-    position: "absolute" as const,
-    width: 1,
-    height: 1,
-    padding: 0,
-    margin: -1,
-    overflow: "hidden",
-    clip: "rect(0, 0, 0, 0)",
+  visibleRowCount: {
+    color: pwc.grey700,
+    fontSize: 12,
+    marginLeft: "auto",
+    paddingBottom: pwc.space.sm,
     whiteSpace: "nowrap" as const,
-    border: 0,
   } as React.CSSProperties,
   segmented: {
     display: "inline-flex",

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Dict, Optional, Set
 
 from dotenv import load_dotenv
+from runtime_settings import apply_settings as apply_runtime_settings
 
 from token_tracker import TokenReport
 from statement_types import StatementType
@@ -19,6 +20,17 @@ _DEFAULT_OUTPUT_DIR = str(_SCRIPT_DIR / "output")
 # loads it with override=True, which would otherwise clobber test env defaults —
 # mirrors server.ENV_FILE).
 ENV_FILE = _SCRIPT_DIR / ".env"
+
+
+def _reload_cli_settings() -> None:
+    """Load deployment fallbacks, then Settings-page local overrides."""
+    load_dotenv(ENV_FILE, override=True)
+    settings_file = Path(
+        os.environ.get("XBRL_SETTINGS_FILE")
+        or Path(os.environ.get("XBRL_OUTPUT_DIR") or _DEFAULT_OUTPUT_DIR)
+        / "settings.json"
+    )
+    apply_runtime_settings(settings_file)
 
 
 @dataclass
@@ -136,7 +148,7 @@ def run_agent(
     # ``session_dir/uploaded.pdf``; stage the caller's input into place.
     _stage_input_document(pdf_path, session_dir)
 
-    load_dotenv(ENV_FILE, override=True)
+    server._reload_runtime_settings()
     proxy_url = os.environ.get("LLM_PROXY_URL", "")
     api_key = (os.environ.get("GOOGLE_API_KEY", "")
                or os.environ.get("GEMINI_API_KEY", ""))
@@ -155,17 +167,6 @@ def run_agent(
         server._CANONICAL_BOOTSTRAP_OK = False
         print(f"WARNING: canonical bootstrap failed: {exc}")
 
-    infopack_json: Optional[dict] = None
-    if use_scout:
-        infopack_json = _run_cli_scout(
-            pdf_path=str(session_dir / "uploaded.pdf"),
-            statements=statements,
-            model=model,
-            proxy_url=proxy_url,
-            api_key=api_key,
-            output_dir=str(session_dir),
-        )
-
     run_config = RunConfigRequest(
         statements=[s.value for s in statements],
         notes_to_run=sorted(n.value for n in notes),
@@ -176,11 +177,10 @@ def run_agent(
         # Without these the coordinator resolves the registry DEFAULT variant,
         # so a non-default benchmark would extract the wrong template shape.
         variants=dict(variants or {}),
-        # Scout infopack (soft hints) — the pipeline treats infopack presence
-        # as the truth. use_scout is the informational History flag and
-        # records what was REQUESTED (same meaning as the web checkbox), so a
-        # scout that failed still shows as a scout-on run.
-        infopack=infopack_json,
+        # The canonical pipeline owns the scout pass. No separate CLI pre-scan
+        # is needed; the fresh infopack is created and persisted before agents
+        # launch.
+        infopack=None,
         use_scout=use_scout,
     )
 
@@ -231,38 +231,6 @@ def run_agent(
     )
 
 
-def _run_cli_scout(
-    pdf_path: str,
-    statements: Set[StatementType],
-    model: str,
-    proxy_url: str,
-    api_key: str,
-    output_dir: str,
-) -> Optional[dict]:
-    """Run the scout for a CLI run and return its infopack as JSON (a dict), or
-    None when the scout fails. Mirrors the web scout endpoint's model wiring
-    (``SCOUT_MODEL`` falls back to the run model; built through
-    ``server._create_proxy_model`` so proxy/direct routing is identical) but
-    is best-effort: the run proceeds without hints on any failure."""
-    import server
-    from scout.runner import run_scout
-
-    scout_model_name = os.environ.get("SCOUT_MODEL") or model
-    print(f"Scout: {scout_model_name}")
-    try:
-        scout_model = server._create_proxy_model(scout_model_name, proxy_url, api_key)
-        infopack = asyncio.run(run_scout(
-            pdf_path,
-            model=scout_model,
-            statements_to_find=set(statements),
-            output_dir=output_dir,
-        ))
-        return json.loads(infopack.to_json())
-    except Exception as exc:  # noqa: BLE001 — scout is advisory, never fatal
-        print(f"WARNING: scout failed ({exc}); continuing without page hints")
-        return None
-
-
 def run_resume(
     parent_run_id: int,
     model: Optional[str] = None,
@@ -291,7 +259,7 @@ def run_resume(
         build_resume_plan, stage_resume, stage_resume_enabled,
     )
 
-    load_dotenv(ENV_FILE, override=True)
+    server._reload_runtime_settings()
     init_db(server.AUDIT_DB_PATH)
 
     def _fail(msg: str) -> AgentResult:
@@ -516,7 +484,7 @@ def build_parser():
                         help="Path to the PDF to extract from")
     parser.add_argument("--model", default=None,
                         help="Model to use (e.g. openai.gpt-5.4, gemini-3-flash-preview, claude-sonnet-4-6). "
-                             "Defaults to TEST_MODEL from .env")
+                             "Defaults to the resolved TEST_MODEL runtime setting")
     parser.add_argument("--statements", nargs="+", default=all_stmt_names,
                         choices=all_stmt_names,
                         help="Statements to extract (default: all 5)")
@@ -561,7 +529,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.resume_from is not None:
-        load_dotenv(ENV_FILE, override=True)
+        _reload_cli_settings()
         result = run_resume(
             args.resume_from,
             model=args.model or os.environ.get("TEST_MODEL") or None,
@@ -580,7 +548,7 @@ if __name__ == "__main__":
     notes_set = {_NOTES_CLI_MAP[n] for n in args.notes}
 
     # Resolve model: CLI flag > TEST_MODEL env var > default
-    load_dotenv(ENV_FILE, override=True)
+    _reload_cli_settings()
     model = args.model or os.environ.get("TEST_MODEL", "openai.gpt-5.4")
 
     print(f"Model: {model}")

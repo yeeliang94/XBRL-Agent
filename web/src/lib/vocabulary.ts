@@ -49,6 +49,7 @@ export const TERMS = {
  *  VALIDATOR is synthetic: created by the live reducer when cross_checks
  *  arrive, to carry the cross-check table. */
 const PSEUDO_AGENT_LABELS: Record<string, string> = {
+  SCOUT: "Document scan",
   CORRECTION: TERMS.aiReview,
   NOTES_VALIDATOR: TERMS.notesReview,
   VALIDATOR: "Cross-checks",

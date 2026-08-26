@@ -23,6 +23,7 @@ const SETTINGS = {
   spot_check: true,
   spot_check_mode: "light",
   entity_memory: true,
+  local_override_keys: ["model", "proxy_url", "api_key"],
   thinking_levels: { SOFP: "high" },
   default_models: {
     scout: "anthropic.claude-sonnet-4-5",
@@ -61,6 +62,62 @@ async function save() {
 }
 
 describe("thinking level in Settings", () => {
+  test("a local model setting can return to the deployment default", async () => {
+    fireEvent.click(await screen.findByRole("button", {
+      name: /follow deployment model/i,
+    }));
+    await waitFor(() => {
+      expect(saveSpy).toHaveBeenCalledWith({ reset_keys: ["model"] });
+    });
+  });
+
+  test("per-role model defaults are editable and submitted", async () => {
+    fireEvent.click(await screen.findByRole("button", {
+      name: /customize role-specific models/i,
+    }));
+    const scout = await screen.findByLabelText(/Default model for Scout/i);
+    expect((scout as HTMLSelectElement).value).toBe(
+      "anthropic.claude-sonnet-4-5",
+    );
+
+    const sofp = screen.getByLabelText(
+      /Default model for Statement of financial position/i,
+    );
+    fireEvent.change(sofp, { target: { value: "openai.gpt-5.4" } });
+    const body = await save();
+    expect((body.default_models as Record<string, string>).SOFP).toBe(
+      "openai.gpt-5.4",
+    );
+  });
+
+  test("a role can return to following the global model", async () => {
+    fireEvent.click(await screen.findByRole("button", {
+      name: /customize role-specific models/i,
+    }));
+    const scout = await screen.findByLabelText(/Default model for Scout/i);
+    fireEvent.change(scout, { target: { value: "" } });
+
+    const body = await save();
+
+    expect((body.default_models as Record<string, string>).scout).toBe("");
+  });
+
+  test("review and tolerance settings are submitted through the form", async () => {
+    const notesReview = await screen.findByLabelText(
+      /Automatically review extracted notes/i,
+    );
+    fireEvent.click(notesReview);
+    fireEvent.change(screen.getByLabelText(/Cross-check tolerance/i), {
+      target: { value: "2.5" },
+    });
+
+    const body = await save();
+    expect(body.notes_auto_review).toBe(false);
+    expect(body.notes_coverage).toBe(true);
+    expect(body.tolerance_rm).toBe(2.5);
+    expect(body.default_models).toBeUndefined();
+  });
+
   test("the saved level is shown when the form loads", async () => {
     const select = await screen.findByLabelText(
       /Thinking level for Statement of financial position/i,

@@ -235,6 +235,7 @@ export interface CrossCheckCompleteData {
  *  label the dead zones between agent activity (merge → cross-check →
  *  correct → re-check → notes-validate). */
 export type PipelineStage =
+  | "scouting"
   // Reading the uploaded Word file into a frozen source manifest, before any
   // agent sees a template (PLAN-notes-source-integrity-build Phase 4). Only
   // fires when the source-integrity mode is shadow or enforce.
@@ -511,10 +512,15 @@ export type SourceIntegrityMode = string;
 export interface ExtendedSettingsResponse extends SettingsResponse {
   available_models: ModelEntry[];
   default_models: Record<string, string>;
-  scout_enabled_default: boolean;
+  /** Sparse role overrides. Missing roles follow the global model. */
+  default_model_overrides?: Record<string, string>;
+  /** Settings currently stored in the local operator file rather than inherited. */
+  local_override_keys?: string[];
   tolerance_rm: number;
   /** Whether the reviewer pass auto-runs after extraction (Settings toggle). */
   auto_review: boolean;
+  notes_auto_review?: boolean;
+  notes_coverage?: boolean;
   /** Whether a clean run (no failed checks) still gets a spot-check (issue 1). */
   spot_check?: boolean;
   /** Spot-check depth: 'light' (default) | 'full'. */
@@ -606,6 +612,18 @@ export interface RunConfigPayload {
   models?: Record<string, string>;
   infopack: Record<string, unknown> | null;
   use_scout: boolean;
+  /** Operator-declared image-only PDF; forces the automatic scan's visual
+   * notes-inventory safety path. */
+  scanned_pdf?: boolean;
+  /** Human note-list corrections, reapplied after every fresh scan. */
+  notes_inventory_overrides?: {
+    added: Array<{
+      note_num: number;
+      title: string;
+      page_range?: [number, number];
+    }>;
+    removed_note_nums: number[];
+  };
   filing_level: FilingLevel;
   /** Filing standard — MFRS or MPERS. Defaults to MFRS server-side; the
    *  UI always sends it explicitly so history carries the toggle state. */

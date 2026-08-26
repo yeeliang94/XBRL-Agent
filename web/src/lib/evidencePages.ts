@@ -9,9 +9,11 @@
 //   "Page 3; Page 4"         -> [3, 4]
 //   "p.42"                   -> [42]
 //
-// Result is deduped and ascending. Unparseable / null input -> []. The PDF
-// pane uses an empty result to show "no source page recorded" rather than
-// breaking — bad evidence becomes visible, not fatal.
+// Result is deduped in citation order. The first mention is often the primary
+// note page and later mentions are supporting face-statement cross-references,
+// so sorting numerically makes the viewer open the wrong source. Unparseable /
+// null input -> []. The PDF pane uses an empty result to show "no source page
+// recorded" rather than breaking — bad evidence becomes visible, not fatal.
 
 // One matcher per page reference: "page"/"pages"/"p" + optional dot/space,
 // then a number, then optionally a "-N" range tail. The global flag lets a
@@ -40,5 +42,5 @@ export function parseEvidencePages(evidence: string | null | undefined): number[
     for (let p = start; p <= end; p++) found.add(p);
   }
 
-  return [...found].sort((a, b) => a - b);
+  return [...found];
 }

@@ -73,7 +73,7 @@ session's general operating rules):
 ./start.sh
 # Web UI at http://localhost:8002, LiteLLM proxy at http://localhost:4000
 
-# Mac — CLI, all 5 statements (uses TEST_MODEL from .env)
+# Mac — CLI, all 5 statements (uses the Settings-page model, then env fallback)
 python3 run.py data/FINCO-Audited-Financial-Statement-2021.pdf
 
 # Mac — CLI, specific model + statements
@@ -94,9 +94,9 @@ python3 run.py data/FINCO.pdf --notes corporate_info list_of_notes
 ## Architecture at a Glance
 
 ```
-PDF + scout (optional) → coordinator → N extraction agents (parallel) ─┐
-                                    → M notes agents (parallel)       ─┤→ workbook_merger → filled.xlsx
-                                                                       └→ cross_checks
+PDF → scout → coordinator → N extraction agents (parallel) ─┐
+                         → M notes agents (parallel)       ─┤→ workbook_merger → filled.xlsx
+                                                            └→ cross_checks
 ```
 
 Full module map, subsystems, and data flow: **not currently written** —
@@ -129,7 +129,15 @@ mode if the proxy fails to start.
 (OpenAI-compatible). Direct Google API calls are blocked (403).
 (`docs/PORTING-WINDOWS.md` is referenced historically but is not in the tree.)
 
-### .env
+### Runtime settings and deployment environment
+
+Operator-managed settings are edited in the web Settings page and persisted
+atomically to `output/settings.json` (or `XBRL_SETTINGS_FILE`). The web and CLI
+reload that file before work starts. Environment variables and `.env` remain
+fallbacks for deployment/bootstrap values. Administrators may also save the AI
+service key through Settings; the local JSON is written owner-only and is
+git-ignored. Saved local settings take precedence for keys the UI manages, and
+the form can remove an override to return to the deployment value.
 
 ```env
 # At least one provider API key
@@ -144,7 +152,7 @@ GOOGLE_API_KEY=                # real Google key; also the proxy auth key on Win
 
 # Model defaults
 TEST_MODEL=openai.gpt-5.4
-SCOUT_MODEL=openai.gpt-5.4     # falls back to TEST_MODEL when blank
+SCOUT_MODEL=openai.gpt-5.4     # legacy fallback; Settings → Document scan wins
 
 # Auth (gotcha #24). AUTH_MODE unset = real email+password login; AUTH_MODE=dev
 # auto-sessions as dev@localhost (CI / offline only; refuses to boot on Azure).
@@ -584,6 +592,12 @@ MPERS (private-entity) run inherited. Pinned by
 `tests/test_prompt_standard_neutrality.py`.
 
 ### 13. Scout page hints are soft guidance only
+
+Normal web and CLI runs execute a fresh scout pass inside
+`run_multi_agent_stream` before extraction. The pre-run page offers an optional
+preview, but a preview is never required and never replaces the run-owned pass.
+Specialized internal rerun paths may explicitly set `use_scout=False` when they
+are reprocessing persisted material rather than starting a normal extraction.
 
 Extraction agents receive `page_hints` (face_page + note_pages) as recommended
 starting points. Agents can freely view **any** PDF page — there is no
@@ -2027,7 +2041,7 @@ python -m pytest tests/ -n auto
 # worker spawn + per-worker imports make `-n auto` SLOWER, so just:
 #   python -m pytest tests/test_foo.py -q      (add `-n0` to force serial anywhere)
 
-# Live E2E (uses TEST_MODEL from .env, needs matching API key)
+# Live E2E (uses the resolved runtime model, needs matching API key)
 python -m pytest -m live -v
 
 # Frontend

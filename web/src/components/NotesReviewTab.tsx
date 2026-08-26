@@ -1294,8 +1294,14 @@ function CellRow({
     } catch {
       /* positions invalid after a structural change — harmless */
     }
-    liveHtmlRef.current = cell.html;
-    savedHtmlRef.current = cell.html;
+    // Keep the persisted baseline in TipTap's own serialisation form. Table
+    // parsing legitimately inserts browser/editor structure such as <tbody>
+    // and paragraph wrappers inside cells. Saving the raw API string here
+    // makes a later representation-only transaction look like a user edit,
+    // which arms the debounce and advances content_revision on unmount.
+    const settled = editor.getHTML();
+    liveHtmlRef.current = settled;
+    savedHtmlRef.current = settled;
     setFormatAdjusted(false);
   }, [editor, cell.html]);
 
@@ -1453,9 +1459,11 @@ function CellRow({
     const node = wrapperRef.current;
     if (!node) return;
     const handler = (ev: Event) => {
-      const ce = ev as CustomEvent<{ html: string }>;
+      const ce = ev as CustomEvent<{ html?: string; useCurrentHtml?: boolean }>;
       if (!editor) return;
-      editor.commands.setContent(ce.detail.html, { emitUpdate: true });
+      const html = ce.detail.useCurrentHtml ? editor.getHTML() : ce.detail.html;
+      if (html == null) return;
+      editor.commands.setContent(html, { emitUpdate: true });
     };
     node.addEventListener("notes-review-test-edit", handler);
     return () => node.removeEventListener("notes-review-test-edit", handler);

@@ -62,7 +62,7 @@ with TestClient(server.app) as client:
         "variants": {},
         "models": {},
         "infopack": None,
-        "use_scout": False,
+        "use_scout": True,
         "filing_level": LEVEL,
         "filing_standard": "mfrs",
         "notes_to_run": [],

@@ -26,7 +26,6 @@ import { ui, uiClass } from "../lib/uiStyles";
 import { CloseIcon } from "./icons";
 import { abortAgent, updateSettings, fetchBenchmarks } from "../lib/api";
 import { VariantSelector } from "./VariantSelector";
-import { ScoutToggle } from "./ScoutToggle";
 import { StatementRunConfig } from "./StatementRunConfig";
 import { NotesRunConfig } from "./NotesRunConfig";
 import { AgentTimeline } from "./AgentTimeline";
@@ -278,13 +277,6 @@ function _seedInfopack(
   return v && typeof v === "object" ? (v as Record<string, unknown>) : null;
 }
 
-function _seedScoutEnabled(
-  cfg: Record<string, unknown> | null | undefined,
-): boolean {
-  if (cfg && typeof cfg.use_scout === "boolean") return cfg.use_scout;
-  return true;  // Original default when no rehydration.
-}
-
 /** One scout-discovered note. Only the fields this editor touches are typed;
  *  the rest of the entry (page_range, subnotes) rides along untouched. */
 export type NotesInventoryEntry = {
@@ -293,6 +285,71 @@ export type NotesInventoryEntry = {
   page_range?: [number, number] | null;
   [k: string]: unknown;
 };
+
+type NotesInventoryOverrides = NonNullable<RunConfigPayload["notes_inventory_overrides"]>;
+
+function _seedScannedPdf(cfg: Record<string, unknown> | null | undefined): boolean {
+  return cfg?.scanned_pdf === true;
+}
+
+function _seedNotesInventoryOverrides(
+  cfg: Record<string, unknown> | null | undefined,
+): NotesInventoryOverrides {
+  const raw = cfg?.notes_inventory_overrides;
+  if (!raw || typeof raw !== "object") return { added: [], removed_note_nums: [] };
+  const value = raw as Partial<NotesInventoryOverrides>;
+  return {
+    added: Array.isArray(value.added) ? value.added : [],
+    removed_note_nums: Array.isArray(value.removed_note_nums)
+      ? value.removed_note_nums.filter((n): n is number => Number.isInteger(n))
+      : [],
+  };
+}
+
+function applyNotesInventoryOverrides(
+  base: NotesInventoryEntry[],
+  overrides: NotesInventoryOverrides,
+): NotesInventoryEntry[] {
+  const removed = new Set(overrides.removed_note_nums);
+  const byNumber = new Map<number, NotesInventoryEntry>();
+  for (const entry of base) {
+    if (typeof entry.note_num === "number" && !removed.has(entry.note_num)) {
+      byNumber.set(entry.note_num, entry);
+    }
+  }
+  for (const entry of overrides.added) byNumber.set(entry.note_num, entry);
+  return [...byNumber.values()].sort(
+    (a, b) => (a.note_num ?? 0) - (b.note_num ?? 0),
+  );
+}
+
+function deriveNotesInventoryOverrides(
+  base: NotesInventoryEntry[],
+  next: NotesInventoryEntry[],
+): NotesInventoryOverrides {
+  const baseByNumber = new Map(
+    base
+      .filter((entry): entry is NotesInventoryEntry & { note_num: number } =>
+        typeof entry.note_num === "number")
+      .map((entry) => [entry.note_num, entry]),
+  );
+  const nextNumbers = new Set(
+    next.map((entry) => entry.note_num).filter((n): n is number => typeof n === "number"),
+  );
+  return {
+    removed_note_nums: [...baseByNumber.keys()].filter((n) => !nextNumbers.has(n)).sort((a, b) => a - b),
+    added: next
+      .filter((entry): entry is NotesInventoryEntry & { note_num: number; title: string } =>
+        typeof entry.note_num === "number"
+        && typeof entry.title === "string"
+        && !baseByNumber.has(entry.note_num))
+      .map((entry) => ({
+        note_num: entry.note_num,
+        title: entry.title,
+        page_range: entry.page_range ?? [0, 0],
+      })),
+  };
+}
 
 /** Note numbers that should exist but don't — interior holes plus a missing
  *  run of leading notes.
@@ -322,8 +379,8 @@ export function findInventoryGaps(entries: NotesInventoryEntry[]): number[] {
   return gaps;
 }
 
-/** Add or remove notes scout missed. Edits the in-memory infopack; the
- *  existing debounced PATCH persists it with the rest of the draft config. */
+/** Add or remove notes the scout missed. The caller stores a compact override
+ *  set so a fresh run-owned scan cannot overwrite the operator's decisions. */
 function NotesInventoryEditor({
   entries,
   onChange,
@@ -476,12 +533,11 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
   const [scoutError, setScoutError] = useState<string | null>(null);
   const [scoutProgress, setScoutProgress] = useState<string | null>(null);
   const [scoutStartTime, setScoutStartTime] = useState<number | null>(null);
-  const [scoutEnabled, setScoutEnabled] = useState(() => _seedScoutEnabled(initialConfig));
   // Operator override for scanned (image-only) PDFs. When ticked, the scout
   // endpoint is told to skip the PyMuPDF-regex notes-inventory path and go
   // straight to the vision fallback. Default off — the LLM scout still
   // handles text PDFs fine and vision-only is more expensive.
-  const [scannedPdf, setScannedPdf] = useState(false);
+  const [scannedPdf, setScannedPdf] = useState(() => _seedScannedPdf(initialConfig));
   // Persisted scout model lives in XBRL_DEFAULT_MODELS.scout server-side
   // (see server.py `_load_extended_settings`). We hydrate this from the
   // /api/settings call so the dropdown shows the last-selected model; on
@@ -490,7 +546,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
   const [scoutModel, setScoutModel] = useState<string>("");
   // Tracks the in-flight POST /api/settings from a dropdown change. Peer-
   // review [HIGH]: without this, a fast change-then-click flow lets the
-  // scout endpoint read the stale .env because the browser fired the scout
+  // scout endpoint read stale runtime settings because the browser fired the scout
   // POST before the settings POST flushed. handleAutoDetect awaits this
   // ref so the scout call is always serialised after the persist. Held as
   // a ref (not state) to avoid an extra render on each save, and because
@@ -511,6 +567,8 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
   const [infopack, setInfopack] = useState<Record<string, unknown> | null>(
     () => _seedInfopack(initialConfig),
   );
+  const [notesInventoryOverrides, setNotesInventoryOverrides] =
+    useState<NotesInventoryOverrides>(() => _seedNotesInventoryOverrides(initialConfig));
 
   const [filingLevel, setFilingLevel] = useState<FilingLevel>(
     () => _seedFilingLevel(initialConfig),
@@ -667,13 +725,9 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
         // PLAN-persistent-draft-uploads.md (peer-review MEDIUM #5): when
         // we mounted with `initialConfig`, the user's saved choice for
         // each slot below MUST win over the global settings default.
-        // Without these guards a refresh would silently re-enable scout
-        // / re-pick the global default model even though the saved
-        // draft said otherwise.
+        // Without these guards a refresh would silently re-pick the global
+        // default model even though the saved draft said otherwise.
         const seedSrc = (initialConfig ?? {}) as Record<string, unknown>;
-        if (typeof seedSrc.use_scout !== "boolean") {
-          setScoutEnabled(settings.scout_enabled_default);
-        }
         setAvailableModels(settings.available_models);
         // Peer-review #7 defensive fallback: if the persisted scout model
         // has been removed from config/models.json between sessions, a
@@ -806,7 +860,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
 
   const handleAutoDetect = useCallback(async () => {
     // Peer-review [HIGH] race guard: await any pending scout-model persist
-    // so the scout endpoint reads the up-to-date .env. updateSettings's
+    // so the scout endpoint reads the up-to-date runtime settings. updateSettings's
     // rejection is swallowed here — the handler already surfaced the error
     // via scoutModelSaveError, and the scout call will fall back to the
     // previously-persisted model which is the sensible default for a
@@ -871,7 +925,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
         const infopackValue = data.infopack as Record<string, unknown> | undefined;
         if (!infopackValue) return;
         setInfopack(infopackValue);
-        setScoutProgress("Auto-detect complete");
+        setScoutProgress("Preview scan complete");
 
         // Preselect the filing-standard toggle from scout's deterministic
         // guess, but only if the operator hasn't already flipped it. User
@@ -1127,8 +1181,13 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       statements: enabledStmts,
       variants,
       models,
-      infopack: scoutEnabled ? infopack : null,
-      use_scout: scoutEnabled,
+      infopack,
+      // Normal web runs always begin with a fresh scout pass. A preview scan
+      // above may help the operator inspect suggestions, but it is never a
+      // prerequisite and never disables the pipeline-owned pass.
+      use_scout: true,
+      scanned_pdf: scannedPdf,
+      notes_inventory_overrides: notesInventoryOverrides,
       filing_level: filingLevel,
       filing_standard: filingStandard,
       denomination,
@@ -1144,8 +1203,9 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       ...(repeats > 1 ? { repeats } : {}),
     };
   }, [
-    statementsEnabled, variantSelections, modelOverrides, infopack,
-    scoutEnabled, filingLevel, filingStandard, denomination, notesEnabled,
+    statementsEnabled, variantSelections, modelOverrides, infopack, scannedPdf,
+    notesInventoryOverrides,
+    filingLevel, filingStandard, denomination, notesEnabled,
     notesModelOverrides, evalEnabled, evalBenchmarkId, isAdmin, repeats,
   ]);
 
@@ -1198,9 +1258,6 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
 
   const enabledStmts = STATEMENT_TYPES.filter((s) => statementsEnabled[s]);
   const enabledNotes = NOTES_TEMPLATE_TYPES.filter((n) => notesEnabled[n]);
-  const statementsMissingFormats = enabledStmts.filter(
-    (statement) => !variantSelections[statement]?.variant,
-  );
   // PLAN §4 D.2: submitting with no notes selected still runs face-only
   // (current behaviour). Notes-only runs are also allowed so an operator
   // can refill just the notes sheets after an earlier face extraction.
@@ -1208,7 +1265,6 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
   // toggle so a run never starts that the user expects to be graded but isn't.
   const canRun =
     (enabledStmts.length > 0 || enabledNotes.length > 0) &&
-    statementsMissingFormats.length === 0 &&
     !evalSelectionMissing;
 
   return (
@@ -1224,7 +1280,13 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           gap: pwc.space.md,
         }}
       >
-        <h2 style={styles.heading}>Run configuration</h2>
+        <div>
+          <h2 style={styles.heading}>Review and start</h2>
+          <p style={{ ...ui.supportingText, margin: `${pwc.space.xs}px 0 0` }}>
+            Confirm the filing details and choose what to extract. Document
+            scanning and page preparation run automatically after you start.
+          </p>
+        </div>
         <button
           type="button"
           onClick={() => setShowAdvanced((v) => !v)}
@@ -1249,6 +1311,24 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           <span aria-hidden="true">{showAdvanced ? "▾" : "▸"}</span>
           Advanced settings
         </button>
+      </div>
+
+      <div
+        data-testid="automatic-pipeline-summary"
+        style={{
+          padding: pwc.space.lg,
+          background: pwc.orange50,
+          border: `1px solid ${pwc.orange100}`,
+          borderLeft: `4px solid ${pwc.orange500}`,
+          borderRadius: pwc.radius.md,
+        }}
+      >
+        <div style={{ fontFamily: pwc.fontHeading, fontWeight: 600, fontSize: 14, color: pwc.grey900 }}>
+          Included automatically in every run
+        </div>
+        <div style={{ fontFamily: pwc.fontBody, fontSize: 13, color: pwc.grey700, marginTop: pwc.space.xs }}>
+          Document scan → statement extraction → cross-checks → AI review → final workbook
+        </div>
       </div>
 
       {/* Filing standard: MFRS (default) or MPERS. Mirrors the Filing Level
@@ -1472,33 +1552,44 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       </div>
       )}
 
+      {showAdvanced && (<>
+      {/* Optional preview of the pipeline-owned document scan. */}
+      <hr style={styles.divider} />
       {/* Document pre-scan (formerly "Scout"): reads the PDF first to suggest
           statements, formats and note locations. Results are suggestions to
           verify — never enforced (gotcha #13). */}
       <div style={styles.section}>
-        <span style={styles.sectionLabel}>Document pre-scan</span>
+        <span style={styles.sectionLabel}>Preview document scan</span>
         <span style={{ fontFamily: pwc.fontBody, fontSize: 12, color: pwc.grey500, marginTop: -4 }}>
-          Reads your document to suggest which statements it contains and how
-          they're laid out. You confirm everything below before the run.
+          Optional. Preview the scout's suggestions before starting. A fresh
+          scan still runs automatically as the first pipeline stage.
         </span>
-        <ScoutToggle
-          enabled={scoutEnabled}
-          onToggle={setScoutEnabled}
-          onAutoDetect={handleAutoDetect}
-          isDetecting={isDetecting}
-          canAutoDetect={!!sessionId}
-          // The scout model picker persists the firm-wide `default_models`
-          // (the scout endpoint reads it from .env), which is admin-only. A
-          // non-admin's change would 403 while the UI showed the new pick, so
-          // the picker is hidden for them (ScoutToggle drops it when the
-          // handler/models are absent). Auto-detect still runs on the persisted
-          // default.
-          availableModels={isAdmin ? availableModels : undefined}
-          scoutModel={scoutModel}
-          onScoutModelChange={isAdmin ? handleScoutModelChange : undefined}
-        />
-        {scoutEnabled && showAdvanced && (
-          <label
+        <div style={{ display: "flex", alignItems: "center", gap: pwc.space.sm }}>
+          <button
+            type="button"
+            aria-label="Auto-detect document — preview scan"
+            onClick={handleAutoDetect}
+            disabled={isDetecting || !sessionId}
+            className={uiClass.btnSecondary}
+            style={{ ...ui.buttonSecondary, ...ui.buttonSm }}
+          >
+            {isDetecting ? "Scanning document…" : "Preview scan"}
+          </button>
+          {isAdmin && availableModels.length > 0 && (
+            <select
+              aria-label="Scout model — pre-scan model"
+              value={scoutModel}
+              disabled={isDetecting}
+              onChange={(e) => handleScoutModelChange(e.target.value)}
+              style={{ ...ui.select, minWidth: 200 }}
+            >
+              {availableModels.map((m) => (
+                <option key={m.id} value={m.id}>{m.display_name || m.id}</option>
+              ))}
+            </select>
+          )}
+        </div>
+        <label
             style={{
               display: "flex", alignItems: "center", gap: pwc.space.sm,
               fontFamily: pwc.fontBody, fontSize: 13, color: pwc.grey800,
@@ -1518,7 +1609,6 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
               </span>
             </span>
           </label>
-        )}
         {scoutModelSaveError && (
           <p
             role="status"
@@ -1529,7 +1619,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
               margin: 0,
             }}
           >
-            Couldn't save the pre-scan model selection: {scoutModelSaveError}. The
+            Couldn't save the scan model selection: {scoutModelSaveError}. The
             next document scan will use the previously saved model.
           </p>
         )}
@@ -1615,58 +1705,17 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
             </span>
           </div>
         )}
-        {infopack && Array.isArray(infopack.notes_inventory) && (() => {
-          const entries = infopack.notes_inventory as NotesInventoryEntry[];
-          const count = entries.length;
-          const notesRequested = NOTES_TEMPLATE_TYPES.some((n) => notesEnabled[n]);
-          const hintVisible = count === 0 && notesRequested;
-          const gaps = findInventoryGaps(entries);
-          return (
-            <div
-              style={{
-                fontFamily: pwc.fontBody, fontSize: 12,
-                color: hintVisible ? pwc.error : pwc.grey800,
-                display: "flex", flexDirection: "column", gap: 4,
-              }}
-              role="status"
-            >
-              <span>Found {count} note{count === 1 ? "" : "s"} in the document.</span>
-              {hintVisible && (
-                <span>
-                  No notes were found in this document. If it's a scanned image,
-                  open Advanced settings, tick "My document is a scanned image",
-                  and run the pre-scan again.
-                </span>
-              )}
-              {gaps.length > 0 && (
-                <span style={{ color: pwc.error }}>
-                  Note {gaps.length === 1 ? "number" : "numbers"}{" "}
-                  {gaps.join(", ")} {gaps.length === 1 ? "was" : "were"} not
-                  found. If {gaps.length === 1 ? "it exists" : "they exist"} in
-                  the document, add {gaps.length === 1 ? "it" : "them"} below so
-                  the notes agents pick {gaps.length === 1 ? "it" : "them"} up.
-                </span>
-              )}
-              {count > 0 && (
-                <NotesInventoryEditor
-                  entries={entries}
-                  onChange={(next) =>
-                    setInfopack((prev) =>
-                      prev ? { ...prev, notes_inventory: next } : prev,
-                    )
-                  }
-                />
-              )}
-            </div>
-          );
-        })()}
       </div>
 
       <hr style={styles.divider} />
 
-      {/* Statement format (variant) selection */}
+      {/* Statement formats are optional overrides. The automatic scout picks
+          a supported format when a row is left blank. */}
       <div style={styles.section}>
-        <span style={styles.sectionLabel}>Statement format</span>
+        <span style={styles.sectionLabel}>Statement format overrides</span>
+        <span style={{ ...ui.supportingText, margin: 0 }}>
+          Leave a format blank to use the document scan's recommendation.
+        </span>
         <VariantSelector
           selections={variantSelections}
           enabledStatements={enabledStmts}
@@ -1674,6 +1723,8 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           filingStandard={filingStandard}
         />
       </div>
+
+      </>)}
 
       <hr style={styles.divider} />
 
@@ -1697,6 +1748,56 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           The per-note model picker also lives behind Advanced. */}
       <div style={styles.section}>
         <span style={styles.sectionLabel}>Notes to include</span>
+        {/* A saved preview may already contain a note inventory. Keep its
+            review controls beside the notes selection even when Advanced is
+            collapsed: the preview machinery is technical, but correcting a
+            missing or spurious note is part of the operator's run scope. */}
+        {infopack && Array.isArray(infopack.notes_inventory) && (() => {
+          const baseEntries = infopack.notes_inventory as NotesInventoryEntry[];
+          const entries = applyNotesInventoryOverrides(baseEntries, notesInventoryOverrides);
+          const count = entries.length;
+          const notesRequested = NOTES_TEMPLATE_TYPES.some((n) => notesEnabled[n]);
+          const hintVisible = count === 0 && notesRequested;
+          const gaps = findInventoryGaps(entries);
+          return (
+            <div
+              style={{
+                fontFamily: pwc.fontBody, fontSize: 12,
+                color: hintVisible ? pwc.error : pwc.grey800,
+                display: "flex", flexDirection: "column", gap: 4,
+              }}
+              role="status"
+            >
+              <span>Found {count} note{count === 1 ? "" : "s"} in the document.</span>
+              {hintVisible && (
+                <span>
+                  No notes were found in this document. If it's a scanned image,
+                  open Advanced settings, tick "My document is a scanned image",
+                  and preview the scan again.
+                </span>
+              )}
+              {gaps.length > 0 && (
+                <span style={{ color: pwc.error }}>
+                  Note {gaps.length === 1 ? "number" : "numbers"}{" "}
+                  {gaps.join(", ")} {gaps.length === 1 ? "was" : "were"} not
+                  found. If {gaps.length === 1 ? "it exists" : "they exist"} in
+                  the document, add {gaps.length === 1 ? "it" : "them"} below so
+                  the notes agents pick {gaps.length === 1 ? "it" : "them"} up.
+                </span>
+              )}
+              {count > 0 && (
+                <NotesInventoryEditor
+                  entries={entries}
+                  onChange={(next) =>
+                    setNotesInventoryOverrides(
+                      deriveNotesInventoryOverrides(baseEntries, next),
+                    )
+                  }
+                />
+              )}
+            </div>
+          );
+        })()}
         {/* Post-scan nudge (UX-QA #24): notes default OFF and read as
             "available, not selected" — but after a scan that found notes,
             invite the user to include them. Otherwise a scan that reports
@@ -1707,7 +1808,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           (infopack.notes_inventory as unknown[]).length > 0 &&
           !NOTES_TEMPLATE_TYPES.some((n) => notesEnabled[n]) && (
             <div style={styles.notesNudge} role="status">
-              The pre-scan found notes in this document. Tick any you’d like
+              The preview scan found notes in this document. Tick any you’d like
               extracted below — none are included by default.
             </div>
           )}
@@ -1732,12 +1833,6 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
         <p role="status" style={{ fontFamily: pwc.fontBody, fontSize: 12, color: pwc.orange700, margin: 0 }}>
           Accuracy grading is on but no benchmark is picked — choose one under
           Advanced settings, or turn grading off.
-        </p>
-      )}
-      {statementsMissingFormats.length > 0 && (
-        <p role="status" style={{ fontFamily: pwc.fontBody, fontSize: 12, color: pwc.orange700, margin: 0 }}>
-          Choose a format for {statementsMissingFormats.join(", ")} before starting.
-          Scan the document for suggestions, or select each format manually.
         </p>
       )}
       <button

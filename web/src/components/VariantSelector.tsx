@@ -137,7 +137,7 @@ export function VariantSelector({
               }
               style={isEnabled ? styles.select : styles.selectDisabled}
             >
-              <option value="">Select format…</option>
+              <option value="">Automatic scan</option>
               {variants.map((v) => (
                 <option key={v} value={v}>
                   {variantLabel(v)}
@@ -148,7 +148,7 @@ export function VariantSelector({
               data-testid={`confidence-${stmt}`}
               title={
                 sel.confidence == null
-                  ? "Not detected yet — run the document pre-scan or pick a format"
+                  ? "Automatic scan will choose a format — or set an override"
                   : sel.variant
                     ? sel.confidence === "high"
                       ? "Confident in this format — verify it matches the PDF"
