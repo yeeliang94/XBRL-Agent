@@ -1,8 +1,8 @@
 """detect_topline_splits — unit pins (Phase 2 of
 docs/PLAN-notes-coverage-and-routing.md).
 
-The detector reports top-level notes fragmented across ≥2 rows of the List
-of Notes sheet ONLY (Codex review 2026-07-04: every other sheet
+The detector reports every top-level note fragmented across ≥2 rows of the
+List of Notes sheet ONLY (every other sheet
 legitimately multi-rows one note — policies fan-out/carve-outs, Corporate
 Information field rows, numeric sheets). gotcha-#14-safe: candidates by
 note_num + coordinates only; the reviewer judges content against the PDF.
@@ -158,8 +158,8 @@ def test_packet_renders_topline_split_block():
     packet = ra.build_notes_reviewer_packet({"topline_splits": [_split_finding()]})
     assert "TOP-LINE SPLIT" in packet
     assert "row 31" in packet and "row 44" in packet
-    # The three verdict paths the reviewer must weigh.
-    assert "merely because a topic is MENTIONED" in packet
+    assert "always a routing violation" in packet
+    assert "exactly one field" in packet
     assert "material/significant accounting policy" in packet
     assert "raise_flag" in packet
 

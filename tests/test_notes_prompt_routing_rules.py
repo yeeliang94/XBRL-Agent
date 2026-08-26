@@ -134,3 +134,27 @@ def test_rendered_accounting_policies_prompt_carries_the_sweep():
         flat = _flatten(prompt)
         assert "accounting-policy carve-out" in flat, standard
         assert "search_pdf_text" in flat, standard
+
+
+def test_listofnotes_prompt_requires_one_complete_field_per_note():
+    flat = _flatten(
+        (_PROMPT_DIR / "notes_listofnotes.md").read_text(encoding="utf-8")
+    )
+    assert "choose exactly one template row" in flat
+    assert "emit one payload containing the complete note" in flat
+    assert "one note, one field" in flat
+    assert "multiple unrelated peer topics" in flat
+    assert "do not distribute" in flat
+
+
+def test_rendered_listofnotes_prompt_forbids_peer_topic_splitting():
+    prompt = render_notes_prompt(
+        NotesTemplateType.LIST_OF_NOTES,
+        filing_level="company",
+        inventory=[],
+        filing_standard="mfrs",
+    )
+    flat = _flatten(prompt)
+    assert "one top-level pdf note goes to one template field" in flat
+    assert "materially different peer topics" in flat
+    assert "stay in its one list-of-notes field" in flat

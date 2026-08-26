@@ -33,12 +33,14 @@ the whole PDF.
 2. For each note in YOUR batch (the INVENTORY section below):
    a. Call `view_pdf_pages` on that note's page range. Extend by a page
       or two if the note's content clearly runs past your stated range.
-   b. Decide which template row label(s) match the note's topic. One
-      PDF note may cover multiple template rows (e.g. a single "Financial
-      instruments" disclosure may populate rows for "Disclosure of trade
-      receivables" AND "Disclosure of financial risk management").
-   c. Emit a payload per matched row. Copy the PDF content verbatim
-      (light formatting clean-up only). **Tag every payload with
+   b. Choose exactly ONE template row for the note. Use the row that best
+      represents its top-level printed heading and primary subject. Do not
+      choose extra rows for sub-sections, secondary topics, individual table
+      lines, or topics merely mentioned inside the note.
+   c. Emit ONE payload containing the COMPLETE note for that chosen row,
+      excluding only an explicitly labelled Material/Significant Accounting
+      Policy carve-out. Copy the PDF content verbatim (light formatting
+      clean-up only). **Tag the payload with
       `note_num`** matching the batch note it came from — the coverage
       validator uses this tag to confirm each receipt entry's row
       labels came from that note's own writes (and not from another
@@ -64,15 +66,11 @@ JSON-encode it. This is how the system detects silent skips.
 
 Entry shapes:
 
-- For a note you wrote to one or more template rows:
-  `{"note_num": <int>, "action": "written", "row_labels": ["<label>", ...]}`
-  The `row_labels` must match the labels you passed to `write_notes`
-  (verbatim). A single note may have several row_labels — that happens
-  when a note legitimately splits across rows (the exception, not the
-  default: whole first-level sub-sections only, per the base prompt's
-  granularity rule; e.g. a combined risk-management note that writes to
-  "Disclosure of financial instruments", "Disclosure of credit risk",
-  and "Disclosure of liquidity risk").
+- For a note you wrote to its single template row:
+  `{"note_num": <int>, "action": "written", "row_labels": ["<label>"]}`
+  `row_labels` must contain exactly ONE label, matching the single label you
+  passed to `write_notes` verbatim. A note with several sub-topics still has
+  one row label because the complete top-level note stays in one field.
 - For a note you deliberately did NOT write to a Sheet-12 row:
   `{"note_num": <int>, "action": "skipped", "reason": "<one sentence>"}`
   **A skip is only valid when the note belongs on ANOTHER sheet.** The
@@ -179,13 +177,13 @@ on the face statement, not here — skip the row.
   `read_template`. Backend fuzzy matching exists only as recovery for minor
   case/punctuation drift; never shorten or paraphrase a catalog label.
 - Hierarchy beats visual granularity. A PDF note that uses "(a)", "(b)",
-  bullets, or table captions is not automatically multiple MBRS rows.
+  bullets, or table captions still uses one MBRS row.
   For example, Note 18 "Finance costs" with sub-sections "(a) interest
   on bank borrowings", "(b) interest on lease liabilities", and
   "unwinding of discount" should normally produce one finance-costs
   payload containing all those lines. Do NOT move the lease-interest
-  sub-section to a separate lease row unless it is a distinct numbered
-  note or a peer disclosure with its own materially different topic.
+  sub-section to a separate lease row, even when it has its own sub-number
+  or reads like a materially different peer topic.
 - A "Profit/(loss) before tax" note that lists the items charged or
   credited in arriving at the result (depreciation, auditors' remuneration,
   directors' emoluments, staff costs, etc.) is ONE disclosure — reproduce
@@ -193,25 +191,17 @@ on the face statement, not here — skip the row.
   catalog (copy its label verbatim). Do NOT scatter its individual line
   items across separate notes rows; the table stays intact under that one
   row.
-- The rule separating "keep whole" from "distribute": if your catalog has
-  a row that captures the note AS A WHOLE (as the profit-before-tax row
-  does), the whole note goes there intact — never distribute its lines to
-  topic rows. Distribute a combined note across topic rows ONLY when no
-  single row captures the whole note. When you do, cut only along the
-  note's own printed structure (its labelled sub-sections, or whole line
-  items of a mixed table), and account for every line: lines that fit no
-  specific row go to the catch-all row, never dropped.
-- A PDF note that genuinely lists multiple unrelated peer topics should
-  produce multiple payloads, one per row, with ONLY the relevant lines in
-  each. For example, a combined operating-expenses note breaking out
-  auditors' remuneration, shared-service charges, and miscellaneous
-  expenses must produce: one payload for the "Disclosure of auditors'
-  remuneration" row (just the auditor lines) and a SEPARATE payload for
-  whichever "other operating expense" row appears in your seeded catalog
-  (the remaining lines) — copy the label verbatim from the catalog, do
-  not hand-pluralise or hand-singularise it. Do not dump the whole mixed
-  table into every matching row — each row should contain only the
-  figures that actually belong to it.
+- **One note, one field.** Choose the row that represents the top-level note
+  as a whole and place the complete note there. This remains true when the
+  note contains multiple unrelated peer topics or a mixed table. Do not
+  distribute auditors' remuneration, shared-service charges, lease details,
+  credit risk, liquidity risk, or any other internal pieces to separate rows.
+- If no specific row adequately represents the complete top-level note, put
+  the complete note in the catch-all row. The catch-all is preferable to
+  fragmenting the disclosure across narrower fields.
+- Never copy the whole note into several rows and never put selected lines in
+  separate rows. Apart from an explicitly labelled accounting-policy
+  carve-out, every line stays in the one chosen field.
 
 === FAITHFULNESS ===
 

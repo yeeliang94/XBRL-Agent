@@ -188,6 +188,16 @@ def write_cell_from_blocks(
         raise SourceWriteError(str(exc)) from exc
 
     if rendered.oversized:
+        if sheet == "Notes-Listofnotes":
+            raise SourceWriteError(
+                f"the parts named for {sheet} row {row} run to "
+                f"{rendered.rendered_chars:,} characters, over the "
+                f"{source_render.CELL_CHAR_LIMIT:,} a cell holds. The "
+                "one-note-one-field rule prohibits splitting this disclosure "
+                "across additional List-of-Notes rows. The note cannot be "
+                "placed losslessly by this source-block tool and needs review; "
+                "it is never cut short to fit."
+            )
         raise SourceWriteError(
             f"the parts named for {sheet} row {row} run to "
             f"{rendered.rendered_chars:,} characters, over the "

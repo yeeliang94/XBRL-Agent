@@ -144,19 +144,26 @@ def test_validate_skipped_entries_still_independent_of_provenance():
     assert errors == []
 
 
-def test_validate_multiple_row_labels_on_one_note():
-    """Note 12 (financial risk management) splits across 3 rows. All
-    three labels must come from note 12's own provenance."""
+def test_validate_does_not_infer_field_count_from_sink_label_spellings():
+    """Field identity belongs to the row-resolving write guard.
+
+    The sink preserves the model's requested label spelling. Two distinct
+    spellings can resolve to the same template row, so coverage must only
+    verify that the receipt label belongs to this note's provenance.
+    """
     receipt = CoverageReceipt(entries=[
         CoverageEntry(
             note_num=12, action="written",
-            row_labels=["Disclosure of A", "Disclosure of B", "Disclosure of C"],
+            row_labels=["Disclosure of financial instruments"],
         ),
     ])
     errors = receipt.validate(
         batch_note_nums=[12],
         written_row_labels={
-            12: {"Disclosure of A", "Disclosure of B", "Disclosure of C"},
+            12: {
+                "Disclosure of financial instruments",
+                "Disclosure of financial instrumentss",
+            },
         },
     )
     assert errors == []

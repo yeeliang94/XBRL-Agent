@@ -182,10 +182,8 @@ def test_validate_accumulates_all_errors_not_just_first():
     assert len(errors) >= 3
 
 
-def test_validate_accepts_written_entry_with_multiple_row_labels():
-    """Note 12 "Financial risk management" legitimately splits into 3
-    Sheet-12 rows (instruments / credit risk / liquidity risk). The
-    validator must not insist on a 1:1 row mapping."""
+def test_validate_rejects_written_entry_with_multiple_row_labels():
+    """A complete top-level note must land in one Sheet-12 field."""
     receipt = CoverageReceipt(entries=[
         _written(
             12,
@@ -202,7 +200,7 @@ def test_validate_accepts_written_entry_with_multiple_row_labels():
             "Disclosure of liquidity risk",
         },
     )
-    assert errors == []
+    assert any("exactly one" in error.lower() for error in errors)
 
 
 def test_skipped_entry_does_not_require_row_labels_in_sink():
