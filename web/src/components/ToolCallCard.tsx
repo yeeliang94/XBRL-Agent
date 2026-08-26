@@ -81,22 +81,20 @@ function fieldDisplayLabel(f: FillField): string {
   return "(unnamed)";
 }
 
-// Per-state card chrome. Active rows stand out in the PwC orange tint; done
-// rows sit flat on white; failed/cancelled get a subdued grey-red border.
-// Keep the rows compact, but give them enough padding to read as distinct
-// items inside the activity container.
-const CARD_PADDING = "10px 12px";
+// Per-state timeline-row chrome. The surrounding workstream pane is the one
+// visual container, so individual tool calls use dividers instead of cards.
+const CARD_PADDING = "12px 16px";
 
 const CARD_BASE: React.CSSProperties = {
-  borderRadius: pwc.radius.sm,
+  borderRadius: 0,
   padding: CARD_PADDING,
-  border: `1px solid ${pwc.grey200}`,
+  border: "none",
+  borderBottom: `1px solid ${pwc.grey200}`,
 };
 
 const CARD_STYLES: Record<GlyphState, React.CSSProperties> = {
   active: {
     background: pwc.orange50,
-    border: `1px solid ${pwc.orange200}`,
     borderLeft: `3px solid ${pwc.orange500}`,
     animation: "fade-in 0.2s ease-out",
   },
@@ -158,13 +156,14 @@ const styles = {
   } as React.CSSProperties,
   detail: {
     marginTop: pwc.space.sm,
-    paddingTop: pwc.space.sm,
+    padding: pwc.space.md,
+    background: pwc.grey50,
     borderTop: `1px solid ${pwc.grey200}`,
   } as React.CSSProperties,
   detailLabel: {
     fontFamily: pwc.fontHeading,
     fontSize: 11,
-    color: pwc.grey500,
+    color: pwc.grey700,
     textTransform: "uppercase" as const,
     marginBottom: pwc.space.xs,
   } as React.CSSProperties,

@@ -47,27 +47,28 @@ const styles = {
   scrollArea: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.sm,
-    padding: pwc.space.md,
+    gap: 0,
+    padding: 0,
     overflowY: "auto" as const,
     maxHeight: 500,
   } as React.CSSProperties,
   empty: {
-    padding: pwc.space.md,
+    padding: `${pwc.space.xxl}px ${pwc.space.lg}px`,
     fontFamily: pwc.fontBody,
     fontSize: 13,
     color: pwc.grey500,
-    textAlign: "center" as const,
+    textAlign: "left" as const,
   } as React.CSSProperties,
   terminalRow: {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
     gap: pwc.space.sm,
-    padding: "10px 12px",
-    marginTop: pwc.space.xs,
-    borderRadius: pwc.radius.sm,
-    border: `1px solid ${pwc.grey200}`,
+    padding: `${pwc.space.md}px ${pwc.space.lg}px`,
+    marginTop: 0,
+    borderRadius: 0,
+    border: "none",
+    borderTop: `1px solid ${pwc.grey200}`,
     background: pwc.white,
   } as React.CSSProperties,
   terminalMain: {
@@ -99,11 +100,12 @@ const styles = {
     borderLeft: `3px solid ${pwc.error}`,
   } as React.CSSProperties,
   warningsBlock: {
-    marginTop: pwc.space.xs,
-    padding: "8px 10px",
-    borderRadius: pwc.radius.sm,
+    marginTop: 0,
+    padding: `${pwc.space.md}px ${pwc.space.lg}px`,
+    borderRadius: 0,
     background: pwc.white,
-    border: `1px solid ${pwc.grey200}`,
+    border: "none",
+    borderTop: `1px solid ${pwc.grey200}`,
     borderLeft: `3px solid ${pwc.warning}`,
     fontFamily: pwc.fontBody,
     fontSize: 12,
@@ -187,7 +189,7 @@ function TerminalRow({ event }: { event: TerminalEvent }) {
       return (
         <div
           data-terminal="completed-with-errors"
-          style={{ ...styles.terminalRow, border: `1px solid ${pwc.grey200}`, borderLeft: `3px solid ${display.accent}` }}
+          style={{ ...styles.terminalRow, borderLeft: `3px solid ${display.accent}` }}
         >
           <div style={styles.terminalMain}>
             <span

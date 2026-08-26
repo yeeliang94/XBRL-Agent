@@ -299,13 +299,26 @@ textarea:focus {
   scrollbar-width: none;
 }
 
-/* Underline-style agent tab — hover state. Inline styles can't address
-   :hover, so the AgentTabs button carries .agent-tab and the rest is
-   applied here. Skip when active or disabled so the rule doesn't fight
-   the active orange tint or the skeleton greyed-out state. */
+/* Multi-agent workstream row hover. Inline styles own its vertical
+   master-detail layout; this state hook adds the neutral hover response. */
 .agent-tab:hover:not([aria-selected="true"]):not([aria-disabled="true"]) {
   background: #FAFAFA; /* grey50 */
   color: #1A1A1A; /* grey900 */
+}
+
+@media (max-width: 900px) {
+  .multi-agent-workspace {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .multi-agent-workspace .workstream-nav {
+    max-height: 340px !important;
+  }
+
+  .multi-agent-workspace [role="tabpanel"] {
+    border-left: 0 !important;
+    border-top: 1px solid #DEDEDE !important; /* grey200 */
+  }
 }
 
 /* Deliberate responsive modes. Inline styles remain the production styling
@@ -323,6 +336,20 @@ textarea:focus {
 }
 
 @media (max-width: 720px) {
+  .live-run-header {
+    align-items: stretch !important;
+    flex-direction: column !important;
+  }
+
+  .live-run-summary {
+    border-left: 0 !important;
+    border-top: 1px solid #DEDEDE !important; /* grey200 */
+    min-width: 0 !important;
+    padding-left: 0 !important;
+    padding-top: 12px !important;
+    text-align: left !important;
+  }
+
   .app-header {
     align-items: stretch !important;
     flex-direction: column !important;

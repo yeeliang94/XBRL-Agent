@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useRef } from "react";
 import { pwc } from "../lib/theme";
 import type { AgentTabStatus } from "../lib/types";
 import { NON_AGENT_TAB_IDS } from "../lib/agentTabKinds";
@@ -88,6 +88,7 @@ function AgentTabsImpl({
   notesInRun,
   notesSkeletons,
 }: AgentTabsProps) {
+  const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   // Phase 8 + D.3 gating. The rule is:
   //   Render a tab if ANY of the following is true:
   //     1. The tab is a SPECIAL_TAB_IDS member (scout/validator) AND the
@@ -99,9 +100,8 @@ function AgentTabsImpl({
   //     4. The agent's role is in statementsInRun — i.e. the user actually
   //        picked this statement for the current run.
   //
-  // Ordering: statement tabs first, then notes tabs, then scout, then
-  // validator — so users always find Validator at the far right after a
-  // run completes, and notes slot into a predictable middle group.
+  // Ordering: statement workstreams first, then notes, then run checks.
+  // The visible navigator groups those buckets vertically.
   const gatedOrder = (() => {
     const statementIds: string[] = [];
     const notesIds: string[] = [];
@@ -115,8 +115,7 @@ function AgentTabsImpl({
       if (SPECIAL_TAB_IDS.has(id)) {
         // scout and validator ride their own lifecycle — always shown.
         // NOTES_VALIDATOR joins them (peer-review F1) so its skip-emit
-        // actually has a visible tab; bucketed with notes below since it
-        // is thematically adjacent to the notes agents that feed it.
+        // actually has a visible selector in the run-checks group.
         // CORRECTION (the reviewer pass) is the same shape — it must be
         // bucketed explicitly here, else it'd hit this branch, match no
         // `id === …` case, and fall through `continue` into nowhere (the
@@ -151,13 +150,8 @@ function AgentTabsImpl({
     ];
   })();
 
-  // Split gatedOrder into its four buckets so skeletons can slot in
-  // adjacent to their active counterparts. Rendering order:
-  //   [statement active, statement skeletons, notes active, notes skeletons,
-  //    scout, validator]
-  // Previously skeletons landed in one trailing block after scout/validator,
-  // which put notes skeletons at the far right of the bar instead of
-  // inside the notes bucket (peer-review LOW).
+  // Split gatedOrder into purpose-led buckets so queued workstreams stay
+  // adjacent to active work of the same type.
   const statementActive: string[] = [];
   const notesActive: string[] = [];
   let scoutActive: string | null = null;
@@ -172,11 +166,17 @@ function AgentTabsImpl({
     else if (id.startsWith(NOTES_TAB_PREFIX)) notesActive.push(id);
     else statementActive.push(id);
   }
+  const navigationOrder = [
+    ...statementActive,
+    ...notesActive,
+    ...(scoutActive ? [scoutActive] : []),
+    ...(notesValidatorActive ? [notesValidatorActive] : []),
+    ...(correctionActive ? [correctionActive] : []),
+    ...(validatorActive ? [validatorActive] : []),
+  ];
 
-  // Helper rendering one active tab. Closes over props so each bucket
-  // below can call it without threading them as arguments. Per-tab
-  // abort/rerun controls live in the activity-header toolbar below
-  // (ActiveTabPanel) so the tab strip stays a clean navigation row.
+  // Helper rendering one active workstream selector. Per-agent abort/rerun
+  // controls live in the focused activity pane.
   const renderTab = (agentId: string) => {
     const agent = agents[agentId];
     if (!agent) return null;
@@ -184,9 +184,28 @@ function AgentTabsImpl({
     return (
       <button
         key={agentId}
+        ref={(node) => { tabRefs.current[agentId] = node; }}
+        data-agent-label={agent.label}
         role="tab"
         aria-selected={isActive}
+        tabIndex={isActive ? 0 : -1}
         onClick={() => onTabClick(agentId)}
+        onKeyDown={(event) => {
+          if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+          event.preventDefault();
+          const currentIndex = navigationOrder.indexOf(agentId);
+          const nextIndex = event.key === "Home"
+            ? 0
+            : event.key === "End"
+              ? navigationOrder.length - 1
+              : event.key === "ArrowDown"
+                ? (currentIndex + 1) % navigationOrder.length
+                : (currentIndex - 1 + navigationOrder.length) % navigationOrder.length;
+          const nextId = navigationOrder[nextIndex];
+          if (!nextId) return;
+          onTabClick(nextId);
+          tabRefs.current[nextId]?.focus();
+        }}
         title={agent.label}
         className="agent-tab"
         style={{ ...styles.tab, ...(isActive ? styles.tabActive : {}) }}
@@ -217,33 +236,62 @@ function AgentTabsImpl({
             ⚠ Needs review
           </span>
         )}
+        {!agent.flag && (
+          <span style={{ ...styles.tabStatus, ...(agent.status === "running" ? styles.tabStatusRunning : {}) }}>
+            {STATUS_BADGES[agent.status].label}
+          </span>
+        )}
       </button>
     );
   };
 
+  const completedCount = gatedOrder.filter((id) => agents[id]?.status === "complete").length;
+
   return (
-    // Bug 3 — swapped from a single horizontal-scroll row (which truncated
-    // labels once the strip grew past 6 tabs) to a two-row flex-wrap layout
-    // with semantic buckets. Statements on top, notes + scout/validator
-    // below, so a user scanning 13 tabs sees the two mental groups at a
-    // glance instead of hunting through a collapsed row.
-    <div role="tablist" className="tab-bar-scroll" style={styles.tabBar}>
-      <div data-bucket="statements" style={styles.tabRow}>
-        {statementActive.map(renderTab)}
-        {skeletonTabs?.map((label) => (
-          <SkeletonTab key={`skeleton-${label}`} keyPrefix="skeleton" label={label} />
-        ))}
+    <div
+      role="tablist"
+      aria-label="Run workstreams"
+      aria-orientation="vertical"
+      className="workstream-nav"
+      style={styles.tabBar}
+    >
+      <div style={styles.navigatorHeader}>
+        <div>
+          <div style={styles.navigatorTitle}>Workstreams</div>
+          <div style={styles.navigatorHint}>Select a workstream to inspect its activity.</div>
+        </div>
+        <span style={styles.navigatorCount}>{completedCount} complete</span>
       </div>
-      <div data-bucket="notes-and-special" style={styles.tabRow}>
-        {notesActive.map(renderTab)}
-        {notesSkeletons?.map((label) => (
-          <SkeletonTab key={`notes-skeleton-${label}`} keyPrefix="notes-skeleton" label={label} />
-        ))}
-        {notesValidatorActive && renderTab(notesValidatorActive)}
-        {scoutActive && renderTab(scoutActive)}
-        {correctionActive && renderTab(correctionActive)}
-        {validatorActive && renderTab(validatorActive)}
-      </div>
+
+      {(statementActive.length > 0 || (skeletonTabs?.length ?? 0) > 0) && (
+        <div data-bucket="statements" style={styles.tabGroup}>
+          <div style={styles.groupLabel}>Financial statements</div>
+          {statementActive.map(renderTab)}
+          {skeletonTabs?.map((label) => (
+            <SkeletonTab key={`skeleton-${label}`} keyPrefix="skeleton" label={label} />
+          ))}
+        </div>
+      )}
+
+      {(notesActive.length > 0 || (notesSkeletons?.length ?? 0) > 0) && (
+        <div data-bucket="notes" style={styles.tabGroup}>
+          <div style={styles.groupLabel}>Notes</div>
+          {notesActive.map(renderTab)}
+          {notesSkeletons?.map((label) => (
+            <SkeletonTab key={`notes-skeleton-${label}`} keyPrefix="notes-skeleton" label={label} />
+          ))}
+        </div>
+      )}
+
+      {(notesValidatorActive || scoutActive || correctionActive || validatorActive) && (
+        <div data-bucket="run-checks" style={styles.tabGroup}>
+          <div style={styles.groupLabel}>Run checks</div>
+          {scoutActive && renderTab(scoutActive)}
+          {notesValidatorActive && renderTab(notesValidatorActive)}
+          {correctionActive && renderTab(correctionActive)}
+          {validatorActive && renderTab(validatorActive)}
+        </div>
+      )}
     </div>
   );
 }
@@ -253,6 +301,7 @@ function SkeletonTab({ keyPrefix, label }: { keyPrefix: string; label: string })
   return (
     <button
       key={`${keyPrefix}-${label}`}
+      data-agent-label={label}
       role="tab"
       aria-selected={false}
       aria-disabled="true"
@@ -262,6 +311,7 @@ function SkeletonTab({ keyPrefix, label }: { keyPrefix: string; label: string })
     >
       <span data-status="pending" style={badgeStyles.skeleton} />
       <span style={styles.tabLabelText}>{label}</span>
+      <span style={styles.tabStatus}>Queued</span>
     </button>
   );
 }
@@ -330,63 +380,82 @@ export const AgentTabs = React.memo(AgentTabsImpl, areAgentTabsPropsEqual);
 
 const styles = {
   tabBar: {
-    // Bug 3 — flex column of two rows, each row flex-wraps its own tabs.
-    // The wrap contract lives on `tabRow.flexWrap: wrap` below; the outer
-    // column only ever has two children (the two row divs), so an outer
-    // flexWrap would never fire and was a misleading style-prop. Tests
-    // now assert flexWrap on the row buckets directly (peer-review R-1).
     display: "flex",
     flexDirection: "column" as const,
-    alignItems: "stretch",
+    alignItems: "stretch" as const,
     background: pwc.white,
-    borderRadius: `${pwc.radius.md}px ${pwc.radius.md}px 0 0`,
-    border: `1px solid ${pwc.grey200}`,
-    paddingLeft: pwc.space.sm,
-    paddingRight: pwc.space.sm,
-    // Deliberately no overflowX — the two row buckets wrap internally, so
-    // an overflow scroll would only kick in on absurd narrow viewports,
-    // and even there wrap is the right failure mode.
-    minHeight: 44,
-    rowGap: 2,
+    minWidth: 0,
+    overflowY: "auto" as const,
+    maxHeight: 620,
   },
-  // One horizontal row of tabs inside tabBar. `flexWrap: wrap` on the row
-  // lets an individual row soft-break onto a third visual line if a user
-  // picks (say) all 5 statements plus an extra-long label; usually both
-  // rows sit single-line.
-  tabRow: {
+  navigatorHeader: {
     display: "flex",
-    flexWrap: "wrap" as const,
-    alignItems: "stretch",
-    gap: 0,
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: pwc.space.md,
+    padding: `${pwc.space.lg}px ${pwc.space.lg}px ${pwc.space.md}px`,
+    borderBottom: `1px solid ${pwc.grey200}`,
   },
-  // Underline-style tab button. Active state is signalled by an
-  // inset bottom shadow (acts as an underline that doesn't shift
-  // layout) plus a faint orange tint, matching the rest of the
-  // card-based page language. Hover styling lives in index.css
-  // (.agent-tab:hover) since inline styles can't address :hover.
+  navigatorTitle: {
+    fontFamily: pwc.fontHeading,
+    fontSize: 16,
+    lineHeight: 1.3,
+    fontWeight: pwc.weight.semibold,
+    color: pwc.grey900,
+  },
+  navigatorHint: {
+    marginTop: 2,
+    fontFamily: pwc.fontBody,
+    fontSize: 12,
+    lineHeight: 1.4,
+    color: pwc.grey700,
+  },
+  navigatorCount: {
+    flexShrink: 0,
+    fontFamily: pwc.fontMono,
+    fontSize: 11,
+    color: pwc.grey700,
+  },
+  tabGroup: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 2,
+    padding: `${pwc.space.md}px ${pwc.space.sm}px`,
+    borderBottom: `1px solid ${pwc.grey200}`,
+  },
+  groupLabel: {
+    padding: `0 ${pwc.space.sm}px ${pwc.space.xs}px`,
+    fontFamily: pwc.fontHeading,
+    fontSize: 11,
+    fontWeight: pwc.weight.semibold,
+    color: pwc.grey700,
+    letterSpacing: "0.02em",
+  },
   tab: {
-    display: "inline-flex",
+    display: "flex",
     alignItems: "center",
     gap: pwc.space.xs + 2,
-    padding: `${pwc.space.sm + 2}px ${pwc.space.md + 2}px`,
+    width: "100%",
+    minHeight: 42,
+    padding: `${pwc.space.sm}px ${pwc.space.sm}px`,
     fontFamily: pwc.fontHeading,
     fontSize: 13,
-    fontWeight: 500,
+    fontWeight: pwc.weight.medium,
     color: pwc.grey700,
     background: "transparent",
     border: "none",
-    borderRadius: 0,
+    borderLeft: "3px solid transparent",
+    borderRadius: pwc.radius.md,
     cursor: "pointer",
-    whiteSpace: "nowrap" as const,
-    transition: "color 0.15s, background 0.15s, box-shadow 0.15s",
+    textAlign: "left" as const,
+    transition: `color ${pwc.motion.duration.fast} ${pwc.motion.easing}, background ${pwc.motion.duration.fast} ${pwc.motion.easing}`,
     minWidth: 0,
-    maxWidth: 220,
   },
   tabActive: {
-    color: pwc.orange700,
-    fontWeight: 600,
-    background: pwc.orange50,
-    boxShadow: `inset 0 -2px 0 ${pwc.orange500}`,
+    color: pwc.grey900,
+    fontWeight: pwc.weight.semibold,
+    background: pwc.grey100,
+    borderLeftColor: pwc.orange500,
   },
   tabSkeleton: {
     color: pwc.grey300,
@@ -400,7 +469,7 @@ const styles = {
   // text node shrink so ellipsis truncation kicks in instead of forcing
   // the parent flex item wider.
   tabLabelStack: {
-    display: "inline-flex",
+    display: "flex",
     flexDirection: "column" as const,
     alignItems: "flex-start" as const,
     lineHeight: 1.15,
@@ -411,7 +480,7 @@ const styles = {
     overflow: "hidden",
     textOverflow: "ellipsis" as const,
     whiteSpace: "nowrap" as const,
-    maxWidth: 180,
+    maxWidth: 170,
   },
   tabSubLabel: {
     fontSize: 11,
@@ -421,7 +490,17 @@ const styles = {
     overflow: "hidden",
     textOverflow: "ellipsis" as const,
     whiteSpace: "nowrap" as const,
-    maxWidth: 180,
+    maxWidth: 170,
+  },
+  tabStatus: {
+    marginLeft: "auto",
+    flexShrink: 0,
+    fontFamily: pwc.fontBody,
+    fontSize: 11,
+    color: pwc.grey700,
+  },
+  tabStatusRunning: {
+    color: pwc.orange700,
   },
 } as const;
 

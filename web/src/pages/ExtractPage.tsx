@@ -40,6 +40,23 @@ export { NOTES_12_AGENT_ID };
 // persistent-draft contract; existing callers still receive it on success.
 type UploadResponseShape = { session_id: string; filename: string; run_id: number | null };
 
+function liveStageMessage(stage: AppState["pipelineStage"]): string {
+  switch (stage) {
+    case "scouting": return "Scanning the document and preparing page guidance.";
+    case "reading_source": return "Reading the source Word document.";
+    case "merging": return "Combining completed statements into one Excel file.";
+    case "cross_checking": return "Running cross-checks across the extracted statements.";
+    case "correcting": return "Reviewing flagged figures against the source document.";
+    case "reviewing": return "Tracing flagged figures back to the source document.";
+    case "re_checking": return "Re-running cross-checks after the review.";
+    case "reviewing_notes": return "Checking extracted notes against the source document.";
+    case "formatting_notes": return "Standardising note formatting for mTool.";
+    case "validating_notes": return "Validating the completed notes templates.";
+    case "done": return "All run stages have finished.";
+    default: return "Agents are working in parallel across the selected statements and notes.";
+  }
+}
+
 export interface ExtractPageProps {
   state: AppState;
   dispatch: React.Dispatch<AppAction>;
@@ -211,6 +228,20 @@ export function ExtractPage({
       .filter((n) => !state.agentTabOrder.some((id) => state.agents[id]?.role === n))
       .map((n) => notesTabLabel(n));
   }, [state.notesInRun, state.agentTabOrder, state.agents]);
+  const workstreamSummary = useMemo(() => {
+    const agents = Object.values(agentTabsAgents);
+    const requestedRoles = new Set([...state.statementsInRun, ...state.notesInRun]);
+    const requestedAgents = agents.filter((agent) => requestedRoles.has(agent.role));
+    const monitoredAgents = requestedRoles.size > 0 ? requestedAgents : agents;
+    return {
+      total: requestedRoles.size > 0 ? requestedRoles.size : agents.length,
+      complete: monitoredAgents.filter((agent) => agent.status === "complete").length,
+      running: monitoredAgents.filter((agent) => agent.status === "running" || agent.status === "aborting").length,
+      // Run-check agents are deliberately outside the requested-workstream
+      // denominator, but their failures must still be visible to operators.
+      attention: agents.filter((agent) => agent.status === "failed" || agent.flag).length,
+    };
+  }, [agentTabsAgents, state.statementsInRun, state.notesInRun]);
   // Stable tab-click handler. `dispatch` from useReducer is guaranteed
   // stable, so this callback's identity doesn't change — without this,
   // AgentTabs' React.memo bails on every SSE event because the inline
@@ -226,8 +257,10 @@ export function ExtractPage({
   return (
     <>
       <PageHeader
-        title={TERMS.newExtraction}
-        description="Upload an audited financial statement to create an SSM MBRS filing draft for review."
+        title={state.isRunning ? "Extraction in progress" : state.isComplete ? "Extraction complete" : TERMS.newExtraction}
+        description={state.isRunning
+          ? "Monitor the overall run, then inspect a workstream only when you need more detail."
+          : "Upload an audited financial statement to create an SSM MBRS filing draft for review."}
       />
 
       {/* Upload + Run. In the empty landing state the upload card sits in
@@ -268,46 +301,70 @@ export function ExtractPage({
         />
       )}
 
-      {/* Pipeline stage indicator */}
-      {(state.isRunning || state.currentPhase) && (
-        <PipelineStages
-          currentPhase={state.activeTab ? (state.agents[state.activeTab]?.currentPhase ?? state.currentPhase) : state.currentPhase}
-          isRunning={state.isRunning}
-          isComplete={state.isComplete}
-        />
-      )}
+      {/* One run-level surface replaces the former stack of progress, stage,
+          and token cards. Operators first see what the system is doing and
+          whether any workstream needs attention; technical usage is secondary. */}
+      {(state.isRunning || state.currentPhase || state.tokens) && (
+        <section aria-labelledby="live-run-heading" style={styles.runOverview}>
+          <div className="live-run-header" style={styles.runOverviewHeader}>
+            <div style={styles.runOverviewLead}>
+              <div style={styles.runEyebrow}>{state.isRunning ? "Live run" : "Run progress"}</div>
+              <h2
+                id="live-run-heading"
+                data-testid="pipeline-stage-label"
+                aria-live="polite"
+                aria-atomic="true"
+                style={styles.runOverviewTitle}
+              >
+                {state.isComplete
+                  ? "Extraction finished"
+                  : state.isRunning
+                    ? liveStageMessage(state.pipelineStage)
+                    : "Run stopped"}
+              </h2>
+              <p style={styles.runOverviewMessage}>
+                {state.isComplete
+                  ? "The filing draft is ready for review."
+                  : state.isRunning
+                    ? "This can take a few minutes. You can leave this page open while the run continues."
+                    : "The run is no longer active. Review any errors below before trying again."}
+              </p>
+            </div>
+            <div className="live-run-summary" style={styles.runSummary} aria-label="Workstream summary">
+              <div style={styles.runSummaryPrimary}>
+                {workstreamSummary.complete} of {workstreamSummary.total} complete
+              </div>
+              <div style={styles.runSummaryMeta}>
+                {workstreamSummary.running} active
+                {workstreamSummary.attention > 0 ? ` · ${workstreamSummary.attention} need attention` : ""}
+              </div>
+            </div>
+          </div>
 
-      {/* PLAN-stop-and-validation-visibility Phase 6: coordinator-level
-          stage label. Only shown for the post-extraction stages
-          (merging / cross-checking / correcting / re-checking /
-          validating notes) — those are the silent dead zones the user
-          had no signal for. "extracting" and "done" are already
-          conveyed by the agent timeline + ResultsView and don't need
-          a duplicate label. */}
-      {state.pipelineStage && state.pipelineStage !== "extracting"
-        && state.pipelineStage !== "done"
-        && state.isRunning && (
-        <div role="status" data-testid="pipeline-stage-label" style={styles.pipelineStageBox}>
-          <span style={styles.pipelineStageDot} />
-          {state.pipelineStage === "scouting" && "Scanning the document and preparing page guidance…"}
-          {state.pipelineStage === "reading_source" && "Reading the Word document…"}
-          {state.pipelineStage === "merging" && "Combining the statements into one Excel file…"}
-          {state.pipelineStage === "cross_checking" && "Running the cross-checks…"}
-          {state.pipelineStage === "correcting" && "AI review: re-checking flagged figures against the PDF…"}
-          {state.pipelineStage === "reviewing" && "AI review: tracing flagged figures back to the PDF…"}
-          {state.pipelineStage === "re_checking" && "Re-running the cross-checks after the AI review…"}
-          {state.pipelineStage === "reviewing_notes" && "AI review: checking the notes against the PDF…"}
-          {state.pipelineStage === "formatting_notes" && "AI formatting: standardising the notes for mTool…"}
-          {state.pipelineStage === "validating_notes" && "Checking the notes templates…"}
-          <span style={styles.pipelineStageHint}>
-            This can take a few minutes — you can leave this page open.
-          </span>
-        </div>
-      )}
+          {(state.isRunning || state.currentPhase) && (
+            <PipelineStages
+              currentPhase={state.currentPhase}
+              pipelineStage={state.pipelineStage}
+              isRunning={state.isRunning}
+              isComplete={state.isComplete}
+            />
+          )}
 
-      {/* Token dashboard (sticky while running) — above the tabs+feed card */}
-      {(state.isRunning || state.tokens) && (
-        <TokenDashboard tokens={state.tokens} isRunning={state.isRunning} />
+          {(state.isRunning || state.tokens) && (
+            <details style={styles.usageDisclosure}>
+              <summary style={styles.usageSummary}>
+                Usage and estimated cost
+                <span style={styles.usageSummaryEnd}>
+                  <span style={styles.usageSummaryValue}>
+                    {state.tokens ? `$${state.tokens.cost_estimate.toFixed(4)}` : "Waiting for usage data"}
+                  </span>
+                  <span aria-hidden="true" style={styles.usageChevron} />
+                </span>
+              </summary>
+              <TokenDashboard tokens={state.tokens} isRunning={state.isRunning} embedded />
+            </details>
+          )}
+        </section>
       )}
 
       {/* Agent tabs + monitor. The activity shell renders whenever a run
@@ -324,7 +381,7 @@ export function ExtractPage({
           placeholder when events are still empty, so the empty state is
           graceful. */}
       {(state.isRunning || state.agentTabOrder.length > 0) && (
-        <div style={styles.activitySection}>
+        <div className="multi-agent-workspace" style={styles.activitySection}>
           <AgentTabs
             agents={agentTabsAgents}
             tabOrder={state.agentTabOrder}
@@ -485,8 +542,8 @@ export function ExtractPage({
 }
 
 // ---------------------------------------------------------------------------
-// ActiveTabPanel — renders the card attached under the tab bar. The active
-// tab picks between the validator results and the per-agent timeline; when
+// ActiveTabPanel — renders the focused pane beside the workstream navigator.
+// The selection picks between validator results and the per-agent timeline; when
 // no tab is selected we fall back to the global event stream (single-agent
 // mode). Extracted from a nested IIFE in ExtractPage so the routing logic is
 // readable top-to-bottom and the component can be tested independently.
@@ -510,9 +567,8 @@ export function ActiveTabPanel({
 }: ActiveTabPanelProps) {
   // Sheet-12 sub-agent selection. null === "All" (the current/legacy view
   // that lumps every sub-agent's events together). Selection persists
-  // across tab switches — flipping to SOFP and back keeps the same sub
-  // highlighted, which matches the "preserve context" feel of the main
-  // tab bar. The state lives here (not on AppState) because it's purely a
+  // across workstream switches — flipping to SOFP and back keeps the same
+  // sub-agent highlighted. The state lives here (not on AppState) because it's purely a
   // UI detail that doesn't need to survive navigation away from /extract.
   const [notes12SubId, setNotes12SubId] = useState<string | null>(null);
   // Confirm before re-running one statement (it discards that statement's
@@ -580,11 +636,16 @@ export function ActiveTabPanel({
       ? "Re-checking after correction"
       : "Cross-checks";
     return (
-      <div style={styles.activityCardAttached}>
+      <div role="tabpanel" aria-label="Cross-check activity" style={styles.activityCardAttached}>
         <div style={styles.activityHeader}>
-          <span style={styles.activityTitle}>
-            {showLiveSubtitle ? phaseLabel : "Cross-checks"}
-          </span>
+          <div style={styles.activityHeaderLeft}>
+            <div>
+              <div style={styles.activityEyebrow}>Selected workstream</div>
+              <div style={styles.activityTitle}>
+                {showLiveSubtitle ? phaseLabel : "Cross-checks"}
+              </div>
+            </div>
+          </div>
           <div style={styles.activityHeaderRight}>
             <span style={styles.activityCount}>
               {showLiveSubtitle
@@ -623,10 +684,22 @@ export function ActiveTabPanel({
     !!onRerunAgent;
 
   return (
-    <div style={styles.activityCardAttached}>
+    <div
+      role="tabpanel"
+      aria-label={`${activeAgent?.label ?? "Run"} activity`}
+      style={styles.activityCardAttached}
+    >
       <div style={styles.activityHeader}>
         <div style={styles.activityHeaderLeft}>
-          <span style={styles.activityTitle}>Agent Activity</span>
+          <div>
+            <div style={styles.activityEyebrow}>Selected workstream</div>
+            <div style={styles.activityTitle}>{activeAgent?.label ?? "Run activity"}</div>
+          </div>
+          {activeAgent && (
+            <span style={styles.activeAgentStatus}>
+              {activeAgent.status === "complete" ? "Complete" : activeAgent.status.charAt(0).toUpperCase() + activeAgent.status.slice(1)}
+            </span>
+          )}
           {showStop && (
             <button
               type="button"
@@ -700,21 +773,118 @@ export function ActiveTabPanel({
 // ---------------------------------------------------------------------------
 
 const styles = {
-  activitySection: {
+  runOverview: {
+    background: pwc.white,
+    border: `1px solid ${pwc.grey200}`,
+    borderRadius: pwc.radius.lg,
+    padding: pwc.space.xl,
+  } as const,
+  runOverviewHeader: {
     display: "flex",
-    flexDirection: "column" as const,
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: pwc.space.xl,
+    marginBottom: pwc.space.xl,
+  } as const,
+  runOverviewLead: {
+    minWidth: 0,
+  } as const,
+  runEyebrow: {
+    fontFamily: pwc.fontHeading,
+    fontSize: 11,
+    fontWeight: pwc.weight.semibold,
+    color: pwc.orange700,
+    letterSpacing: "0.04em",
+    textTransform: "uppercase" as const,
+    marginBottom: pwc.space.xs,
+  } as const,
+  runOverviewTitle: {
+    margin: 0,
+    fontFamily: pwc.fontHeading,
+    fontSize: 20,
+    lineHeight: 1.3,
+    fontWeight: pwc.weight.semibold,
+    color: pwc.grey900,
+  } as const,
+  runOverviewMessage: {
+    margin: `${pwc.space.xs}px 0 0`,
+    fontFamily: pwc.fontBody,
+    fontSize: 14,
+    lineHeight: 1.5,
+    color: pwc.grey700,
+  } as const,
+  runSummary: {
+    flexShrink: 0,
+    minWidth: 160,
+    paddingLeft: pwc.space.xl,
+    borderLeft: `1px solid ${pwc.grey200}`,
+    textAlign: "right" as const,
+  } as const,
+  runSummaryPrimary: {
+    fontFamily: pwc.fontHeading,
+    fontSize: 14,
+    fontWeight: pwc.weight.semibold,
+    color: pwc.grey900,
+  } as const,
+  runSummaryMeta: {
+    marginTop: pwc.space.xs,
+    fontFamily: pwc.fontBody,
+    fontSize: 12,
+    color: pwc.grey700,
+  } as const,
+  usageDisclosure: {
+    marginTop: pwc.space.lg,
+    borderTop: `1px solid ${pwc.grey200}`,
+  } as const,
+  usageSummary: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: pwc.space.md,
+    paddingTop: pwc.space.md,
+    cursor: "pointer",
+    fontFamily: pwc.fontHeading,
+    fontSize: 13,
+    fontWeight: pwc.weight.medium,
+    color: pwc.grey700,
+  } as const,
+  usageSummaryValue: {
+    fontFamily: pwc.fontMono,
+    fontSize: 12,
+    fontWeight: pwc.weight.regular,
+    color: pwc.grey900,
+  } as const,
+  usageSummaryEnd: {
+    marginLeft: "auto",
+    display: "flex",
+    alignItems: "center",
+    gap: pwc.space.sm,
+  } as const,
+  usageChevron: {
+    width: 0,
+    height: 0,
+    borderLeft: "4px solid transparent",
+    borderRight: "4px solid transparent",
+    borderTop: `5px solid ${pwc.grey700}`,
+  } as const,
+  activitySection: {
+    display: "grid",
+    gridTemplateColumns: "minmax(240px, 280px) minmax(0, 1fr)",
     gap: 0,
+    background: pwc.white,
+    border: `1px solid ${pwc.grey200}`,
+    borderRadius: pwc.radius.lg,
+    overflow: "hidden" as const,
   } as const,
   activityCardAttached: {
     background: pwc.white,
-    border: `1px solid ${pwc.grey200}`,
-    borderTop: "none",
-    borderRadius: `0 0 ${pwc.radius.md}px ${pwc.radius.md}px`,
-    boxShadow: pwc.shadow.card,
+    border: "none",
+    borderLeft: `1px solid ${pwc.grey200}`,
+    borderRadius: 0,
     overflow: "hidden" as const,
     display: "flex",
     flexDirection: "column" as const,
-    marginTop: -1,
+    minWidth: 0,
   } as const,
   activityHeader: {
     display: "flex",
@@ -723,7 +893,7 @@ const styles = {
     gap: pwc.space.md,
     padding: `${pwc.space.md}px ${pwc.space.lg}px`,
     borderBottom: `1px solid ${pwc.grey200}`,
-    background: pwc.grey50,
+    background: pwc.white,
   } as const,
   activityHeaderLeft: {
     display: "flex",
@@ -738,10 +908,25 @@ const styles = {
   } as const,
   activityTitle: {
     fontFamily: pwc.fontHeading,
-    fontSize: 14,
+    fontSize: 16,
     fontWeight: 600,
     color: pwc.grey900,
     whiteSpace: "nowrap" as const,
+  } as const,
+  activityEyebrow: {
+    fontFamily: pwc.fontHeading,
+    fontSize: 11,
+    fontWeight: pwc.weight.semibold,
+    color: pwc.grey700,
+    letterSpacing: "0.02em",
+    marginBottom: 2,
+  } as const,
+  activeAgentStatus: {
+    fontFamily: pwc.fontBody,
+    fontSize: 12,
+    color: pwc.grey700,
+    paddingLeft: pwc.space.md,
+    borderLeft: `1px solid ${pwc.grey200}`,
   } as const,
   activityCount: {
     fontFamily: pwc.fontMono,
@@ -824,35 +1009,6 @@ const styles = {
     fontSize: 14,
     marginTop: pwc.space.xs,
     marginBottom: 0,
-  } as const,
-  // Phase 6 — pipeline stage label. Distinct from PipelineStages
-  // (which is per-agent phases inside one statement); this label
-  // surfaces the coordinator-level stage between agent activity.
-  pipelineStageBox: {
-    display: "flex",
-    alignItems: "center",
-    gap: pwc.space.sm,
-    background: pwc.grey50,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.md,
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-    fontFamily: pwc.fontBody,
-    fontSize: 13,
-    color: pwc.grey700,
-    marginTop: pwc.space.sm,
-  } as const,
-  pipelineStageHint: {
-    marginLeft: "auto",
-    color: pwc.grey500,
-    fontSize: 12,
-  } as const,
-  pipelineStageDot: {
-    width: 8,
-    height: 8,
-    borderRadius: "50%",
-    background: pwc.orange400,
-    animation: "pulse-subtle 1.5s ease-in-out infinite",
-    flexShrink: 0,
   } as const,
   resetLink: {
     fontFamily: pwc.fontBody,

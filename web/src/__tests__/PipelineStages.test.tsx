@@ -3,11 +3,11 @@ import { render, screen } from "@testing-library/react";
 import { PipelineStages } from "../components/PipelineStages";
 
 const PHASE_LABELS = [
-  "Reading template",
-  "Viewing PDF",
-  "Filling workbook",
-  "Verifying",
-  "Complete",
+  "Prepare document",
+  "Extract data",
+  "Combine & check",
+  "Review issues",
+  "Ready",
 ];
 
 describe("PipelineStages", () => {
@@ -70,6 +70,20 @@ describe("PipelineStages", () => {
     );
     const checks = container.querySelectorAll("[data-testid='step-complete']");
     expect(checks.length).toBe(5);
+  });
+
+  test("maps coordinator stages to the run-level progress story", () => {
+    const { container, rerender } = render(
+      <PipelineStages currentPhase="viewing_pdf" pipelineStage="cross_checking" isRunning={true} isComplete={false} />,
+    );
+    expect(container.querySelectorAll("[data-testid='step-complete']")).toHaveLength(2);
+    expect(screen.getByText("Combine & check")).toHaveStyle({ fontWeight: "600" });
+
+    rerender(
+      <PipelineStages currentPhase="reading_template" pipelineStage="reviewing_notes" isRunning={true} isComplete={false} />,
+    );
+    expect(container.querySelectorAll("[data-testid='step-complete']")).toHaveLength(3);
+    expect(screen.getByText("Review issues")).toHaveStyle({ fontWeight: "600" });
   });
 
   test("applies PwC theme colors (orange500 active, success completed, grey300 pending)", () => {

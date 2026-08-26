@@ -70,6 +70,41 @@ describe("AgentTabs", () => {
     expect(soplTab.getAttribute("aria-selected")).toBe("false");
   });
 
+  test("vertical workstream navigation supports roving arrow-key selection", () => {
+    const agents = makeAgentStates();
+    const clicked: string[] = [];
+    render(
+      <AgentTabs
+        agents={agents}
+        tabOrder={Object.keys(agents)}
+        activeTab="sofp_0"
+        onTabClick={(id) => clicked.push(id)}
+      />,
+    );
+
+    const sofpTab = screen.getByRole("tab", { name: /SOFP/ });
+    const soplTab = screen.getByRole("tab", { name: /SOPL/ });
+    expect(sofpTab).toHaveAttribute("tabindex", "0");
+    expect(soplTab).toHaveAttribute("tabindex", "-1");
+    fireEvent.keyDown(sofpTab, { key: "ArrowDown" });
+    expect(clicked).toEqual(["sopl_0"]);
+    expect(soplTab).toHaveFocus();
+  });
+
+  test("each workstream shows explicit status text", () => {
+    const agents = makeAgentStates();
+    render(
+      <AgentTabs
+        agents={agents}
+        tabOrder={Object.keys(agents)}
+        activeTab="sofp_0"
+        onTabClick={() => {}}
+      />,
+    );
+    expect(screen.getByRole("tab", { name: /SOFP/ })).toHaveTextContent("Running");
+    expect(screen.getByRole("tab", { name: /Scout/ })).toHaveTextContent("Complete");
+  });
+
   test("status badges reflect agent state", () => {
     const agents = makeAgentStates();
     render(
@@ -274,7 +309,7 @@ describe("AgentTabs", () => {
       />,
     );
     const tabs = screen.getAllByRole("tab");
-    const labels = tabs.map((t) => t.textContent?.trim() ?? "");
+    const labels = tabs.map((t) => t.getAttribute("data-agent-label"));
     expect(labels).toEqual(["SOPL", "SOFP", "SOCIE"]);
   });
 
@@ -413,7 +448,7 @@ describe("AgentTabs", () => {
       />,
     );
     const tabs = screen.getAllByRole("tab");
-    const labels = tabs.map((t) => t.textContent?.trim() ?? "");
+    const labels = tabs.map((t) => t.getAttribute("data-agent-label") ?? "");
     // Expected order: [SOFP, Notes 10: Corp Info, Validator]
     expect(labels[0]).toBe("SOFP");
     expect(labels[1]).toContain("Notes 10");
@@ -489,7 +524,7 @@ describe("AgentTabs", () => {
       />,
     );
     const tabs = screen.getAllByRole("tab");
-    const labels = tabs.map((t) => t.textContent?.trim() ?? "");
+    const labels = tabs.map((t) => t.getAttribute("data-agent-label") ?? "");
     const notesIdx = labels.findIndex((l) => l.includes("Notes 10"));
     const scoutIdx = labels.findIndex((l) => l === "Scout");
     const validatorIdx = labels.findIndex((l) => l === "Validator");
@@ -557,12 +592,11 @@ describe("AgentTabs", () => {
   // Bug 3 — tab strip grew from 6 tabs (5 face + scout) to 13 (5 face + 5
   // notes + scout + validator + NOTES_VALIDATOR). The single-row horizontal
   // scroll fit 6 cleanly but truncates everything beyond that. Swap to a
-  // wrapping layout with two visible groupings: face statements on top,
-  // notes + scout/validator below. Users read groups at a glance instead of
-  // hunting through an overflowing row.
+  // vertical master-detail navigation with three visible groupings. Users
+  // scan parallel workstreams by purpose without hunting through a long tab row.
   // -------------------------------------------------------------------------
 
-  describe("two-row wrapping layout (Bug 3)", () => {
+  describe("grouped vertical workstream navigation", () => {
     // Helper that mirrors a real post-run tab population: 5 face + 5 notes +
     // scout + Cross-checks + Notes Validator = 13 visible tabs.
     //
@@ -594,12 +628,7 @@ describe("AgentTabs", () => {
     const STATEMENTS = ["SOFP", "SOPL", "SOCI", "SOCF", "SOCIE"];
     const NOTES = ["CORP_INFO", "ACC_POLICIES", "LIST_OF_NOTES", "ISSUED_CAPITAL", "RELATED_PARTY"];
 
-    test("each row bucket flex-wraps its tabs instead of overflowing", () => {
-      // R-1 from peer-review: the wrap contract lives on the ROW buckets,
-      // not the outer column. Asserting on the outer was checking the
-      // wrong surface (the outer has two children and never wraps in
-      // practice). Each bucket must wrap so long labels soft-break
-      // rather than horizontally overflow.
+    test("uses a vertical tablist for the master-detail workspace", () => {
       const agents = twelveTabAgents();
       const { container } = render(
         <AgentTabs
@@ -611,13 +640,12 @@ describe("AgentTabs", () => {
           notesInRun={NOTES}
         />,
       );
-      const statementBucket = container.querySelector('[data-bucket="statements"]') as HTMLElement;
-      const notesBucket = container.querySelector('[data-bucket="notes-and-special"]') as HTMLElement;
-      expect(statementBucket.style.flexWrap).toBe("wrap");
-      expect(notesBucket.style.flexWrap).toBe("wrap");
+      const tablist = container.querySelector('[role="tablist"]');
+      expect(tablist?.getAttribute("aria-orientation")).toBe("vertical");
+      expect(tablist?.getAttribute("aria-label")).toBe("Run workstreams");
     });
 
-    test("tablist renders a 'statements' bucket and a 'notes-and-special' bucket", () => {
+    test("tablist separates statements, notes, and run checks", () => {
       const agents = twelveTabAgents();
       const { container } = render(
         <AgentTabs
@@ -630,9 +658,11 @@ describe("AgentTabs", () => {
         />,
       );
       const statementBucket = container.querySelector('[data-bucket="statements"]');
-      const notesBucket = container.querySelector('[data-bucket="notes-and-special"]');
+      const notesBucket = container.querySelector('[data-bucket="notes"]');
+      const checksBucket = container.querySelector('[data-bucket="run-checks"]');
       expect(statementBucket).toBeTruthy();
       expect(notesBucket).toBeTruthy();
+      expect(checksBucket).toBeTruthy();
 
       // Contract: face-statement tabs live in the statements bucket.
       const statementLabels = Array.from(statementBucket!.querySelectorAll('[role="tab"]'))
@@ -640,12 +670,13 @@ describe("AgentTabs", () => {
       for (const face of STATEMENTS) {
         expect(statementLabels.some((l) => l.includes(face))).toBe(true);
       }
-      // Contract: notes, scout, validator all live in the other bucket.
-      const otherLabels = Array.from(notesBucket!.querySelectorAll('[role="tab"]'))
+      const noteLabels = Array.from(notesBucket!.querySelectorAll('[role="tab"]'))
         .map((t) => t.textContent ?? "");
-      expect(otherLabels.some((l) => l.includes("Notes 10"))).toBe(true);
-      expect(otherLabels.some((l) => l.includes("Scout"))).toBe(true);
-      expect(otherLabels.some((l) => l.includes("Cross-checks"))).toBe(true);
+      expect(noteLabels.some((l) => l.includes("Notes 10"))).toBe(true);
+      const checkLabels = Array.from(checksBucket!.querySelectorAll('[role="tab"]'))
+        .map((t) => t.textContent ?? "");
+      expect(checkLabels.some((l) => l.includes("Scout"))).toBe(true);
+      expect(checkLabels.some((l) => l.includes("Cross-checks"))).toBe(true);
     });
 
     test("all 13 tabs render simultaneously (none dropped by the bucketer)", () => {
@@ -668,7 +699,7 @@ describe("AgentTabs", () => {
       expect(tabs).toHaveLength(13);
     });
 
-    test("NOTES_VALIDATOR tab renders in the notes-and-special bucket", () => {
+    test("NOTES_VALIDATOR tab renders in the run-checks bucket", () => {
       // F1 regression guard — the Notes Validator tab must be visible in
       // the live extract view so the short-circuit "skipped" emit we ship
       // from server.py actually has a tab to land in. If this regresses,
@@ -684,9 +715,9 @@ describe("AgentTabs", () => {
           notesInRun={NOTES}
         />,
       );
-      const notesBucket = container.querySelector('[data-bucket="notes-and-special"]');
-      expect(notesBucket).toBeTruthy();
-      const notesLabels = Array.from(notesBucket!.querySelectorAll('[role="tab"]'))
+      const checksBucket = container.querySelector('[data-bucket="run-checks"]');
+      expect(checksBucket).toBeTruthy();
+      const notesLabels = Array.from(checksBucket!.querySelectorAll('[role="tab"]'))
         .map((t) => t.textContent ?? "");
       expect(notesLabels.some((l) => l.includes("Notes Validator"))).toBe(true);
     });
