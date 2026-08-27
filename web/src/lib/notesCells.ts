@@ -39,6 +39,10 @@ export interface NotesCell {
   // came from notes_nodes; null on off-template/legacy filled rows.
   node_uuid?: string | null;
   xbrl_concept_id?: string | null;
+  /** Historical content on a heading or unknown row. It remains visible for
+   * recovery but is excluded from filing until moved or removed. */
+  invalid_target?: boolean;
+  invalid_target_reason?: string | null;
   // Numeric rows: the canonical concept + its per-column values. `values`
   // keys are cy/py (Company filings) or group_cy/group_py/company_cy/
   // company_py (Group filings); a null value means the cell is unfilled.
@@ -222,6 +226,17 @@ export async function patchNotesCell(
           : { html, expected_revision: expectedRevision },
       ),
     },
+  );
+}
+
+export async function removeInvalidNotesCell(
+  runId: number,
+  sheet: string,
+  row: number,
+): Promise<{ removed: boolean }> {
+  return apiFetch<{ removed: boolean }>(
+    `/api/runs/${runId}/notes_cells/${encodeURIComponent(sheet)}/${row}`,
+    { method: "DELETE" },
   );
 }
 

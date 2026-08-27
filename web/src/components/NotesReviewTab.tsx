@@ -74,6 +74,7 @@ import {
   launchNotesFormatter,
   revertNotesFormatter,
   patchNotesCell,
+  removeInvalidNotesCell,
   patchNotesFact,
   parseNumericInput,
   sortSheetsBySlot,
@@ -1108,6 +1109,9 @@ function CellRow({
   // human-readable signal is enough to explain why a saved edit looks a little
   // different without turning the review screen into a diagnostics panel.
   const [formatAdjusted, setFormatAdjusted] = useState(false);
+  const [removed, setRemoved] = useState(false);
+  const [removeBusy, setRemoveBusy] = useState(false);
+  const [removeError, setRemoveError] = useState<string | null>(null);
   // Keep a mutable ref to the current HTML so the debounced saver reads
   // the latest value without resubscribing every keystroke.
   const liveHtmlRef = useRef<string>(cell.html);
@@ -1473,6 +1477,22 @@ function CellRow({
     if (ok) setCopiedAt(Date.now());
   }, [editor, cell.html, theme]);
 
+  const handleRemoveInvalid = useCallback(async () => {
+    if (!window.confirm(
+      "Remove this quarantined content? It will no longer appear in the filing workbook.",
+    )) return;
+    setRemoveBusy(true);
+    setRemoveError(null);
+    try {
+      await removeInvalidNotesCell(runId, sheet, cell.row);
+      setRemoved(true);
+    } catch (error) {
+      setRemoveError(userMessage(error));
+    } finally {
+      setRemoveBusy(false);
+    }
+  }, [cell.row, runId, sheet]);
+
   // Auto-dismiss the "Copied" pill after 2 seconds so the UI goes back
   // to a neutral state without the user clicking anywhere.
   useEffect(() => {
@@ -1480,6 +1500,8 @@ function CellRow({
     const t = setTimeout(() => setCopiedAt(null), 2000);
     return () => clearTimeout(t);
   }, [copiedAt]);
+
+  if (removed) return null;
 
   return (
     <div
@@ -1498,6 +1520,25 @@ function CellRow({
       <aside style={styles.cellLeft}>
         <div style={styles.cellLabel}>{cell.label}</div>
         <div style={styles.cellRowNum}>Row {cell.row}</div>
+        {cell.invalid_target && (
+          <div
+            role="alert"
+            style={{ ...ui.alertWarning, marginTop: pwc.space.sm, fontSize: 12 }}
+          >
+            Not a filing field. Copy it into a writable field, then remove this
+            quarantined copy before filing.
+            <button
+              type="button"
+              className={uiClass.btnGhost}
+              style={{ ...ui.buttonGhost, display: "block", marginTop: pwc.space.sm }}
+              onClick={() => void handleRemoveInvalid()}
+              disabled={removeBusy}
+            >
+              {removeBusy ? "Removing…" : "Remove quarantined content"}
+            </button>
+            {removeError && <div style={{ marginTop: 4 }}>{removeError}</div>}
+          </div>
+        )}
         <StyleSourceChip source={cell.style_source} />
         {cell.evidence && (
           <div
@@ -1532,6 +1573,10 @@ function CellRow({
             type="button"
             style={styles.smallButton}
             onClick={() => setEditable((v) => !v)}
+            disabled={cell.invalid_target}
+            title={cell.invalid_target
+              ? "Move this content to a writable filing field before editing"
+              : undefined}
           >
             {editable ? "Done" : "Edit"}
           </button>

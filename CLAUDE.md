@@ -512,7 +512,7 @@ artifact — pinned by `tests/test_stop_all_preserves_partial.py`.
 
 ### 11. DB schema — version-stepped auto-migration on startup
 
-`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **39**). `init_db`
+`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **41**). `init_db`
 reads the stored version and walks an old DB up **one version at a time**
 through per-version, idempotent `ALTER TABLE` blocks, so any older DB reaches
 the current schema automatically. `db/schema.py` is the authoritative
@@ -1636,6 +1636,22 @@ Load-bearing invariants:
   and the canonical target hint. Scoped to the run's `{standard}-{level}-`
   family, deduped by `(concept_uuid, period, scope)`, reads
   `run_concept_facts` only.
+- **One field-semantics contract.** `concept_model/filing_targets.py` is shared
+  by extraction, review, persistence, and filing. Taxonomy capability
+  (`taxonomy_concepts`) and physical workbook slot role (`template_slots`) are
+  separate. Only reportable primary items on `INPUT` or `MATRIX_INPUT` slots
+  are agent-writable. Headers, abstracts, tables, axes, members, line-item
+  scaffolding, and formula-owned slots are never offered as writable fields.
+  `scripts/audit_template_field_semantics.py --check` pins complete MFRS/MPERS,
+  Company/Group, and statement-variant coverage against the committed snapshot.
+- **Missing mappings fail closed at filing.** Preflight carries the
+  `field_semantics` readiness block. A selected template with no manifest, an
+  unresolved slot, or historical content quarantined on a presentation-only
+  target blocks unless the operator records the existing audited override.
+  Receipts persist taxonomy and manifest versions, readiness, and coverage.
+  The named MFRS Issued Capital and Related Party wrapper omissions are the
+  only reviewed semantic-alignment exceptions; do not replace them with a
+  positional tolerance or weaken confirmation/degraded-report safeguards.
 - **Unit-aware translation; the global `scale` multiplier is GONE.** A single
   multiplier had no unit dimension, so a thousands conversion would have
   multiplied share COUNTS (MFRS sheet 13 puts "Number of shares issued" three

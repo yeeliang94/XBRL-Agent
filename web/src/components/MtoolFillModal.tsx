@@ -158,6 +158,22 @@ interface Preflight {
   ok: boolean;
   blockers: PreflightItem[];
   warnings: PreflightItem[];
+  field_semantics?: FieldSemantics;
+}
+
+interface FieldSemantics {
+  readiness: "ready" | "needs_review";
+  counts: {
+    catalog_templates: number;
+    selected_templates: number;
+    template_slots: number;
+    writable_fields: number;
+    unresolved_fields: number;
+    quarantined_values: number;
+  };
+  manifest_versions: string[];
+  taxonomy_versions?: string[];
+  reviewed_exceptions: { exception_code: string; count: number }[];
 }
 
 // Server's low-confidence auto-detection payload (422 detail.detected).
@@ -307,7 +323,28 @@ function normalisePreflight(body: unknown): Preflight | null {
   if (!body || typeof body !== "object") return null;
   const raw = body as Partial<Preflight>;
   if (!Array.isArray(raw.blockers) || !Array.isArray(raw.warnings)) return null;
-  return { ok: raw.ok !== false, blockers: raw.blockers, warnings: raw.warnings };
+  return {
+    ok: raw.ok !== false,
+    blockers: raw.blockers,
+    warnings: raw.warnings,
+    field_semantics: raw.field_semantics,
+  };
+}
+
+function reviewedExceptionLabel(code: string): string {
+  if (code === "MFRS_ISSUED_CAPITAL_WRAPPER_OMITTED") {
+    return "Issued capital template uses the approved SSM row alignment";
+  }
+  if (code === "MFRS_RELATED_PARTY_WRAPPER_OMITTED") {
+    return "Related party template uses the approved SSM row alignment";
+  }
+  if (code === "PRESENTATION_TITLE_WITHOUT_TAXONOMY_SLOT") {
+    return "Statement title is display-only";
+  }
+  if (code === "SOCIE_SECTION_HEADER_WITHOUT_TAXONOMY_SLOT") {
+    return "Equity section heading is display-only";
+  }
+  return "Reviewed display-only template difference";
 }
 
 /** One category of problem rows from the fill report, listed in FULL.
@@ -792,6 +829,56 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
               <div key={w.code}>{w.message}</div>
             ))}
           </div>
+        )}
+
+        {preflight?.field_semantics && (
+          <section
+            aria-label="Filing field coverage"
+            style={{
+              border: `1px solid ${pwc.grey200}`,
+              borderRadius: pwc.radius.md,
+              padding: pwc.space.md,
+              marginBottom: pwc.space.lg,
+              background: pwc.grey50,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <StatusIcon
+                symbol={preflight.field_semantics.readiness === "ready"
+                  ? STATUS_SYMBOLS.success
+                  : STATUS_SYMBOLS.attention}
+              />
+              <strong style={{ fontSize: 13, color: pwc.grey900 }}>
+                Filing fields {preflight.field_semantics.readiness === "ready"
+                  ? "are fully identified"
+                  : "need review"}
+              </strong>
+            </div>
+            <div style={{ ...styles.statLine, color: pwc.grey700, marginTop: 6 }}>
+              <strong>{preflight.field_semantics.counts.writable_fields}</strong> writable fields
+              across {preflight.field_semantics.counts.catalog_templates} template variant(s) in this filing family
+              {preflight.field_semantics.counts.unresolved_fields > 0
+                ? ` · ${preflight.field_semantics.counts.unresolved_fields} unmapped`
+                : " · no fields are missing"}
+              {preflight.field_semantics.counts.quarantined_values > 0
+                ? ` · ${preflight.field_semantics.counts.quarantined_values} value(s) need moving or removal`
+                : ""}
+            </div>
+            {preflight.field_semantics.reviewed_exceptions.length > 0 && (
+              <details style={{ marginTop: 6, fontSize: 12 }}>
+                <summary style={{ cursor: "pointer", color: pwc.grey700 }}>
+                  Reviewed template exceptions ({preflight.field_semantics.reviewed_exceptions.length})
+                </summary>
+                <ul style={{ margin: "4px 0 0", paddingLeft: 18, color: pwc.grey700 }}>
+                  {preflight.field_semantics.reviewed_exceptions.map((item) => (
+                    <li key={item.exception_code}>
+                      {reviewedExceptionLabel(item.exception_code)} ({item.count})
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </section>
         )}
 
         {meta && (
