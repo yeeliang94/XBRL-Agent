@@ -29,7 +29,8 @@ def test_fresh_init_has_semantic_address_table(tmp_path):
             "taxonomy_version",
             "address_version",
         } <= cols
-        assert _version(conn) == CURRENT_SCHEMA_VERSION == 40
+        assert CURRENT_SCHEMA_VERSION >= 40
+        assert _version(conn) == CURRENT_SCHEMA_VERSION
     finally:
         conn.close()
 
@@ -52,7 +53,7 @@ def test_v39_walks_forward_without_touching_canonical_facts(tmp_path):
     init_db(db)
     conn = sqlite3.connect(db)
     try:
-        assert _version(conn) == 40
+        assert _version(conn) == CURRENT_SCHEMA_VERSION
         assert conn.execute("SELECT status FROM runs WHERE id = ?", (run_id,)).fetchone()[0] == "completed"
         assert conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' "

@@ -143,7 +143,9 @@ def write_notes_workbook(
         )
 
     ws = wb[sheet_name]
-    label_index = _build_label_index(ws)
+    from concept_model.filing_targets import writable_rows
+    allowed_rows = writable_rows(template_path, sheet_name)
+    label_index = _build_label_index(ws, writable_rows=allowed_rows)
 
     # Concatenate duplicate labels so Sheet-12 "Disclosure of other notes"
     # can collect multiple unmatched notes into a single cell.
@@ -605,9 +607,13 @@ class _LabelEntry:
     original: str
 
 
-def _build_label_index(ws) -> list[_LabelEntry]:
+def _build_label_index(
+    ws, *, writable_rows: Optional[set[int] | frozenset[int]] = None,
+) -> list[_LabelEntry]:
     entries: list[_LabelEntry] = []
     for row in range(1, ws.max_row + 1):
+        if writable_rows is not None and row not in writable_rows:
+            continue
         v = ws.cell(row=row, column=1).value
         if v is None:
             continue

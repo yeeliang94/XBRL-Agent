@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Sequence
 
 from concept_model.notes_parser import NotesNode
+from concept_model.filing_targets import MANIFEST_VERSION
 
 
 def import_notes_template(
@@ -34,10 +35,15 @@ def import_notes_template(
         )
         conn.executemany(
             "INSERT INTO notes_nodes"
-            "(node_uuid, template_id, sheet, row, label, kind) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "(node_uuid, template_id, sheet, row, label, kind, slot_role, "
+            "taxonomy_element_id, xbrl_concept_id, manifest_version) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
-                (n.node_uuid, n.template_id, n.sheet, n.row, n.label, n.kind)
+                (
+                    n.node_uuid, n.template_id, n.sheet, n.row, n.label, n.kind,
+                    n.slot_role, n.taxonomy_element_id, n.taxonomy_element_id,
+                    MANIFEST_VERSION,
+                )
                 for n in nodes
             ],
         )

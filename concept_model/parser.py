@@ -194,6 +194,24 @@ def _attach_semantic_addresses(tree: ConceptTree, path: Path) -> None:
             address = addresses.get((key[0], key[1], None))
         if address is not None:
             rk["semantic_address"] = address
+        owns_formula = node.kind == "COMPUTED" or bool(node.edges)
+        if address is not None and not address.get("reportable", False):
+            # Taxonomy capability is authoritative.  Workbook styling remains
+            # an independent presentation-slot guard, so this only ever makes
+            # a row less writable; it never promotes an ABSTRACT row.
+            node.kind = "ABSTRACT"
+        if node.kind == "ABSTRACT":
+            rk["slot_role"] = "PRESENTATION_ONLY"
+        elif owns_formula:
+            rk["slot_role"] = (
+                "MATRIX_FORMULA" if rk.get("matrix_col") else "FORMULA"
+            )
+        elif address is None:
+            rk["slot_role"] = "UNMAPPED"
+        else:
+            rk["slot_role"] = (
+                "MATRIX_INPUT" if rk.get("matrix_col") else "INPUT"
+            )
 
 
 # ---------------------------------------------------------------------------

@@ -269,6 +269,17 @@ def fill_workbook(
 
     mappings = _coerce_facts(facts)
 
+    # The taxonomy/slot manifest is authoritative for writability. Workbook
+    # colour remains useful for section disambiguation, but it cannot decide
+    # whether an XBRL concept is allowed to carry a fact.
+    from concept_model.filing_targets import list_writable_targets
+
+    writable_targets = list_writable_targets(template)
+    writable_by_sheet = {
+        sheet: {target.row for target in writable_targets if target.sheet == sheet}
+        for sheet in {target.sheet for target in writable_targets}
+    }
+
     wb = openpyxl.load_workbook(template_path)
     errors: list[str] = []
     guard_rejections: dict[str, int] = {}
@@ -350,6 +361,25 @@ def fill_workbook(
             continue
 
         cell = ws.cell(row=target_row, column=mapping.col)
+
+        # Row 1 is the existing period-metadata carve-out. Every other write
+        # must resolve to a reportable primary item on an INPUT slot.
+        if (
+            writable_targets
+            and target_row != 1
+            and target_row not in writable_by_sheet.get(mapping.sheet, set())
+        ):
+            label_text = ws.cell(row=target_row, column=1).value
+            verdict = GuardResult.retry(
+                f"Refusing to write to {mapping.sheet}!{cell.coordinate}: "
+                f"row {target_row} ('{label_text}') is a heading, formula, or "
+                "other non-entry template row. Choose a writable canonical "
+                "field from read_template().",
+                kind="non_writable_template_slot",
+            )
+            errors.append(verdict.message)
+            guard_rejections[verdict.kind] = guard_rejections.get(verdict.kind, 0) + 1
+            continue
 
         # Never overwrite formula cells
         if cell.value is not None and str(cell.value).startswith("="):

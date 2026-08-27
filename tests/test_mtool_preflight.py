@@ -29,6 +29,7 @@ SOFP = REPO / "XBRL-template-MFRS" / "Company" / "01-SOFP-CuNonCu.xlsx"
 
 
 def _import_company_sofp(db_path) -> str:
+    from concept_model.filing_targets import persist_template_manifest
     from concept_model.importer import import_company_targets, import_template
     from concept_model.parser import parse_template
     tree = parse_template(str(SOFP))
@@ -36,6 +37,7 @@ def _import_company_sofp(db_path) -> str:
     jp.write_text(json.dumps(tree.to_json(), sort_keys=True), encoding="utf-8")
     tid = import_template(db_path, jp)
     import_company_targets(db_path, tid)
+    persist_template_manifest(db_path, SOFP)
     return tid
 
 
@@ -286,6 +288,57 @@ def test_conflict_outside_the_fill_warns_but_does_not_block(client):
     body = tc.get(f"/api/runs/{run_id}/mtool-fill/preflight").json()
     assert body["ok"] is True
     assert [w["code"] for w in body["warnings"]] == ["conflicts_outside_fill"]
+
+
+def test_value_on_presentation_heading_blocks_as_quarantined(client):
+    tc, db, _ = client
+    run_id = _make_run(db)
+    conn = sqlite3.connect(str(db))
+    try:
+        heading_uuid = conn.execute(
+            "SELECT concept_uuid FROM concept_nodes "
+            "WHERE canonical_label = 'Statement of financial position' "
+            "AND kind = 'ABSTRACT' LIMIT 1"
+        ).fetchone()[0]
+        conn.execute(
+            "INSERT INTO run_concept_facts(run_id, concept_uuid, period, "
+            "entity_scope, value, value_status, updated_at) "
+            "VALUES (?, ?, 'CY', 'Company', 123, 'observed', 't')",
+            (run_id, heading_uuid),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    body = tc.get(f"/api/runs/{run_id}/mtool-fill/preflight").json()
+
+    assert body["ok"] is False
+    blocker = next(
+        item for item in body["blockers"]
+        if item["code"] == "invalid_targets_quarantined"
+    )
+    assert blocker["count"] == 1
+
+
+def test_empty_field_manifest_never_reports_filing_ready(client):
+    tc, db, _ = client
+    run_id = _make_run(db)
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute("DELETE FROM template_slots")
+        conn.execute("DELETE FROM template_manifest_exceptions")
+        conn.commit()
+    finally:
+        conn.close()
+
+    body = tc.get(f"/api/runs/{run_id}/mtool-fill/preflight").json()
+
+    assert body["ok"] is False
+    assert body["field_semantics"]["readiness"] == "needs_review"
+    assert any(
+        item["code"] == "template_catalog_missing"
+        for item in body["blockers"]
+    )
 
 
 def test_explicit_acknowledgement_overrides_and_is_recorded(client):

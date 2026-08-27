@@ -17,6 +17,15 @@ def test_read_template_returns_fields():
     assert len(fields) > 0
 
 
+def test_taxonomy_abstract_without_header_style_is_not_offered_as_data_entry():
+    fields = read_template(TEMPLATE, sheet="SOFP-CuNonCu")
+    title = next(
+        field for field in fields
+        if field.row == 3 and field.value == "Statement of financial position"
+    )
+    assert title.is_abstract is True
+
+
 def test_main_sheet_field_count():
     fields = read_template(TEMPLATE, sheet="SOFP-CuNonCu")
     assert len(fields) >= 70

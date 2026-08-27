@@ -29,7 +29,7 @@ def _seed_notes_workbook(tmp_path: Path) -> Path:
     result = write_notes_workbook(
         template_path=str(tpl),
         payloads=[NotesPayload(
-            chosen_row_label="Financial reporting status",
+            chosen_row_label="*Disclosure of corporate information",
             content="Going concern.",
             evidence="Page 14",
             source_pages=[14],

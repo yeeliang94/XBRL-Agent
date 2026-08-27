@@ -76,13 +76,14 @@ def parsed_trees() -> dict[str, "concept_parser.ConceptTree"]:
 
 
 @pytest.mark.parametrize("fixture_name", _existing_fixtures())
-def test_abstract_rows_match_existing_section_headers_detection(
+def test_abstract_rows_include_style_headers_and_taxonomy_structures(
     fixture_name: str, parsed_trees
 ) -> None:
-    """Parser's ABSTRACT row set must equal section_headers' detection
-    on the same workbook.  Delegating keeps the writer guard (gotcha
-    #17) and the parser in lockstep — without this, an agent could
-    write to a row that the parser thought was a leaf."""
+    """Workbook styling is a floor; SSM taxonomy role is authoritative.
+
+    A taxonomy-abstract concept may have no header fill.  Requiring exact
+    equality with the style detector reintroduced the heading-as-field defect.
+    """
     import openpyxl
     from tools.section_headers import (
         discover_section_headers,
@@ -110,11 +111,21 @@ def test_abstract_rows_match_existing_section_headers_detection(
         if n.kind == "ABSTRACT"
     }
 
-    assert actual == expected, (
-        f"abstract-row mismatch on {fixture_name}: "
-        f"only_in_parser={actual - expected} "
-        f"only_in_section_headers={expected - actual}"
+    assert expected <= actual, (
+        f"styled headers became writable on {fixture_name}: {expected - actual}"
     )
+
+    from concept_model.taxonomy_semantics import taxonomy_concept
+
+    for node in tree.concepts:
+        address = node.render_key.get("semantic_address") or {}
+        primary = address.get("primary_concept")
+        concept = taxonomy_concept(primary) if primary else None
+        if concept is not None and not concept.reportable:
+            assert node.kind == "ABSTRACT", (
+                f"taxonomy structural concept became writable on {fixture_name}: "
+                f"{primary} at {node.render_key}"
+            )
 
 
 # -- helper ------------------------------------------------------------

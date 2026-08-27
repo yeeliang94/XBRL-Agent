@@ -167,6 +167,8 @@ def build_fill_doc(
     excluded_not_disclosed = 0
     excluded_no_value = 0
     excluded_out_of_scope = 0
+    excluded_invalid_target = 0
+    excluded_non_writable_slot = 0
     # Conflict-status facts still carry a value and ARE written (blanking a
     # cell the operator can't see is worse than an unresolved one they can),
     # but the count is surfaced so a conflicted figure never flows into a
@@ -184,6 +186,12 @@ def build_fill_doc(
     seen: set[tuple[str, str, str]] = set()
 
     for r in rows:
+        if r["invalid_target"]:
+            excluded_invalid_target += 1
+            continue
+        if r["has_template_manifest"] and not r["has_writable_slot"]:
+            excluded_non_writable_slot += 1
+            continue
         if r["kind"] not in {"LEAF", "MATRIX_CELL"}:
             continue  # ABSTRACT header or COMPUTED total — not fillable
         if r["kind"] == "MATRIX_CELL" and r["has_formula_edges"]:
@@ -230,6 +238,11 @@ def build_fill_doc(
                 "dimensions": dimensions,
                 "taxonomy_version": r["taxonomy_version"],
                 "address_version": r["address_version"],
+                "namespace_uri": r["namespace_uri"],
+                "local_name": r["local_name"],
+                "concept_role": r["concept_role"],
+                "data_type": r["data_type"],
+                "period_type": r["period_type"],
             }
             semantic_mapped += 1
         else:
@@ -284,6 +297,8 @@ def build_fill_doc(
             "excluded_not_disclosed": excluded_not_disclosed,
             "excluded_no_value": excluded_no_value,
             "excluded_out_of_scope": excluded_out_of_scope,
+            "excluded_invalid_target": excluded_invalid_target,
+            "excluded_non_writable_slot": excluded_non_writable_slot,
             "semantic_mapped": semantic_mapped,
             "semantic_missing": semantic_missing,
         },

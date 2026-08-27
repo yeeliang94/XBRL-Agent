@@ -64,7 +64,8 @@ def _prose_sheet_rows(conn, run_id: int, template_id: str, sheet: str) -> list[d
     by_row: dict[int, dict] = {}
     for n in conn.execute(
         "SELECT row, label, node_uuid, xbrl_concept_id FROM notes_nodes "
-        "WHERE template_id = ? AND kind = 'LEAF' ORDER BY row",
+        "WHERE template_id = ? AND kind = 'LEAF' AND slot_role = 'INPUT' "
+        "ORDER BY row",
         (template_id,),
     ).fetchall():
         by_row[n["row"]] = {
@@ -82,11 +83,13 @@ def _prose_sheet_rows(conn, run_id: int, template_id: str, sheet: str) -> list[d
             # v37: the optimistic version token. Null on a row with no cell
             # yet — there is nothing to conflict with.
             "content_revision": None,
+            "invalid_target": False,
+            "invalid_target_reason": None,
         }
 
     for c in conn.execute(
         "SELECT row, label, html, evidence, source_pages, updated_at, "
-        "style_source, content_revision "
+        "style_source, content_revision, invalid_target, invalid_target_reason "
         "FROM notes_cells WHERE run_id = ? AND sheet = ?",
         (run_id, sheet),
     ).fetchall():
@@ -104,6 +107,10 @@ def _prose_sheet_rows(conn, run_id: int, template_id: str, sheet: str) -> list[d
                 "updated_at": "",
                 "style_source": None,
                 "content_revision": None,
+                "invalid_target": True,
+                "invalid_target_reason": (
+                    "This content is stored on a heading or an unknown legacy row."
+                ),
             }
             by_row[c["row"]] = base
         base["html"] = c["html"]
@@ -112,6 +119,10 @@ def _prose_sheet_rows(conn, run_id: int, template_id: str, sheet: str) -> list[d
         base["updated_at"] = c["updated_at"] or ""
         base["style_source"] = c["style_source"]
         base["content_revision"] = c["content_revision"]
+        base["invalid_target"] = bool(c["invalid_target"]) or base["invalid_target"]
+        base["invalid_target_reason"] = (
+            c["invalid_target_reason"] or base["invalid_target_reason"]
+        )
 
     return [by_row[r] for r in sorted(by_row)]
 
@@ -388,56 +399,59 @@ async def patch_notes_cell_endpoint(
                 (run_id, sheet, row),
             ).fetchone()
 
+            config = run.config or {}
+            standard = config.get("filing_standard", "mfrs")
+            level = config.get("filing_level", "company")
+            template = next(
+                (
+                    e for e in _notes_template_index(standard, level)
+                    if e["sheet"] == sheet
+                ),
+                None,
+            )
+            if template is None:
+                conn.rollback()
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unknown notes sheet {sheet!r} for this run.",
+                )
+            if template["is_numeric"]:
+                conn.rollback()
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Numeric notes are edited through the facts API, "
+                        "not this endpoint."
+                    ),
+                )
+            node = conn.execute(
+                "SELECT label, node_uuid FROM notes_nodes "
+                "WHERE template_id = ? AND row = ? AND kind = 'LEAF' "
+                "AND slot_role = 'INPUT'",
+                (template["template_id"], row),
+            ).fetchone()
+            if node is None:
+                conn.rollback()
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Row {row} is a heading or another non-entry row of "
+                        f"sheet {sheet!r}. Choose a writable field instead."
+                    ),
+                )
+
             from db.repository import decode_source_pages as _decode_pages
 
             if existing is not None:
                 # Update path — preserve the existing label/evidence/pages and
-                # only swap the HTML (evidence stays read-only, gotcha #16).
-                upsert_label = existing["label"]
+                # swap the HTML while upgrading any legacy field identity to
+                # the exact template node (evidence stays read-only, gotcha #16).
+                upsert_label = node["label"]
                 upsert_evidence = existing["evidence"]
                 upsert_pages = _decode_pages(existing["source_pages"])
-                upsert_concept_uuid = None  # keep current identity (decision §9.5)
+                upsert_concept_uuid = node["node_uuid"]
             else:
                 # Insert path — the row must be a fillable prose registry node.
-                config = run.config or {}
-                standard = config.get("filing_standard", "mfrs")
-                level = config.get("filing_level", "company")
-                template = next(
-                    (
-                        e for e in _notes_template_index(standard, level)
-                        if e["sheet"] == sheet
-                    ),
-                    None,
-                )
-                if template is None:
-                    conn.rollback()
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Unknown notes sheet {sheet!r} for this run.",
-                    )
-                if template["is_numeric"]:
-                    conn.rollback()
-                    raise HTTPException(
-                        status_code=400,
-                        detail=(
-                            "Numeric notes are edited through the facts API, "
-                            "not this endpoint."
-                        ),
-                    )
-                node = conn.execute(
-                    "SELECT label, node_uuid FROM notes_nodes "
-                    "WHERE template_id = ? AND row = ? AND kind = 'LEAF'",
-                    (template["template_id"], row),
-                ).fetchone()
-                if node is None:
-                    conn.rollback()
-                    raise HTTPException(
-                        status_code=400,
-                        detail=(
-                            f"Row {row} is not a fillable row of sheet "
-                            f"{sheet!r}."
-                        ),
-                    )
                 # New write: stamp the template-scoped node_uuid as the cell's
                 # concept_uuid so it links to the registry (decision §9.2).
                 upsert_label = node["label"]
@@ -498,6 +512,69 @@ async def patch_notes_cell_endpoint(
         # treat it as a stable field.
         "sanitizer_warnings": warnings,
     }
+
+
+@router.delete("/api/runs/{run_id}/notes_cells/{sheet}/{row}")
+async def remove_invalid_notes_cell(run_id: int, sheet: str, row: int):
+    """Remove quarantined legacy content after an explicit operator choice."""
+    from db import repository as repo
+
+    conn = server._open_audit_conn()
+    try:
+        run = repo.fetch_run(conn, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        conn.execute("BEGIN IMMEDIATE")
+        existing = conn.execute(
+            "SELECT invalid_target FROM notes_cells "
+            "WHERE run_id = ? AND sheet = ? AND row = ?",
+            (run_id, sheet, row),
+        ).fetchone()
+        if existing is None:
+            conn.rollback()
+            raise HTTPException(status_code=404, detail="Notes cell not found")
+
+        config = run.config or {}
+        standard = config.get("filing_standard", "mfrs")
+        level = config.get("filing_level", "company")
+        template = next(
+            (entry for entry in _notes_template_index(standard, level)
+             if entry["sheet"] == sheet),
+            None,
+        )
+        writable = False
+        if template is not None and not template["is_numeric"]:
+            writable = bool(conn.execute(
+                "SELECT 1 FROM notes_nodes WHERE template_id = ? AND row = ? "
+                "AND kind = 'LEAF' AND slot_role = 'INPUT'",
+                (template["template_id"], row),
+            ).fetchone())
+        if writable and not existing["invalid_target"]:
+            conn.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="This is a valid filing field; clear it in the editor instead.",
+            )
+
+        conn.execute(
+            "DELETE FROM notes_cells WHERE run_id = ? AND sheet = ? AND row = ?",
+            (run_id, sheet, row),
+        )
+        repo.add_notes_tombstone(
+            conn,
+            run_id=run_id,
+            sheet=sheet,
+            row=row,
+        )
+        conn.commit()
+    except HTTPException:
+        raise
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return {"removed": True, "sheet": sheet, "row": row}
 
 
 # --------------------------------------------------------------------------

@@ -71,13 +71,30 @@ def snapshot_facts(
         rows = conn.execute(
             """
             SELECT f.concept_uuid, f.period, f.entity_scope, f.value,
-                   f.value_status, f.updated_at,
+                   f.value_status, f.updated_at, f.invalid_target,
+                   f.invalid_target_reason,
                    n.canonical_label, n.kind, n.render_sheet, n.render_row,
                    n.matrix_col, n.matrix_col_label, n.template_id,
                    tpl.shape AS shape,
                    t.target_sheet, t.target_row, t.target_col,
                    sa.primary_concept, sa.dimensions_json,
                    sa.taxonomy_version, sa.address_version,
+                   tc.namespace_uri, tc.local_name, tc.concept_role,
+                   tc.data_type, tc.period_type,
+                   EXISTS(
+                     SELECT 1 FROM template_slots ts
+                     WHERE ts.canonical_target_id = f.concept_uuid
+                   ) AS has_template_manifest,
+                   EXISTS(
+                     SELECT 1 FROM template_slots ts
+                     JOIN taxonomy_concepts tc
+                       ON tc.source_element_id = ts.taxonomy_element_id
+                     WHERE ts.canonical_target_id = f.concept_uuid
+                       AND ts.slot_role IN ('INPUT', 'MATRIX_INPUT')
+                       AND ts.validation_status = 'writable'
+                       AND tc.abstract = 0
+                       AND tc.concept_role = 'PRIMARY_ITEM'
+                   ) AS has_writable_slot,
                    EXISTS(
                      SELECT 1 FROM concept_edges e
                      WHERE e.parent_uuid = n.concept_uuid
@@ -91,6 +108,8 @@ def snapshot_facts(
              AND t.entity_scope = f.entity_scope
             LEFT JOIN concept_semantic_addresses sa
               ON sa.concept_uuid = f.concept_uuid
+            LEFT JOIN taxonomy_concepts tc
+              ON tc.source_element_id = sa.primary_concept
             WHERE f.run_id = ? AND n.template_id LIKE ?
             ORDER BY n.render_sheet, n.render_row, f.entity_scope, f.period
             """,
@@ -164,6 +183,11 @@ def write_fill_receipt(
     """
     conn = sqlite3.connect(str(db_path))
     try:
+        semantics = (preflight or {}).get("field_semantics") or {}
+        taxonomy_versions = semantics.get("taxonomy_versions") or []
+        taxonomy_version = (
+            taxonomy_versions[0] if len(taxonomy_versions) == 1 else None
+        )
         cur = conn.execute(
             "INSERT INTO mtool_fill_receipts("
             "run_id, snapshot_fact_count, snapshot_digest, "
@@ -172,8 +196,9 @@ def write_fill_receipt(
             "source_sha256, output_sha256, "
             "template_fingerprint, column_map_json, translation_version, "
             "preflight_json, preflight_override, status, report_json, "
-            "operator, created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "operator, created_at, readiness_classification, taxonomy_version, "
+            "manifest_versions_json, semantic_coverage_json) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 run_id,
                 (snapshot or {}).get("fact_count"),
@@ -193,6 +218,10 @@ def write_fill_receipt(
                 json.dumps(report) if report is not None else None,
                 operator,
                 _now(),
+                semantics.get("readiness"),
+                taxonomy_version,
+                json.dumps(semantics.get("manifest_versions", [])),
+                json.dumps(semantics) if semantics else None,
             ),
         )
         conn.commit()
@@ -242,7 +271,9 @@ def fetch_receipts(db_path: str | Path, run_id: int) -> list[dict[str, Any]]:
             "translation_version, snapshot_fact_count, snapshot_digest, "
             "snapshot_max_updated, snapshot_notes_count, "
             "snapshot_notes_digest, snapshot_notes_updated, column_map_json, "
-            "preflight_json, preflight_override, degraded_ack, report_json "
+            "preflight_json, preflight_override, degraded_ack, report_json, "
+            "readiness_classification, taxonomy_version, "
+            "manifest_versions_json, semantic_coverage_json "
             "FROM mtool_fill_receipts WHERE run_id = ? "
             "ORDER BY id DESC", (run_id,)).fetchall()
     finally:
@@ -266,6 +297,10 @@ def fetch_receipts(db_path: str | Path, run_id: int) -> list[dict[str, Any]]:
             "output_sha256": r["output_sha256"],
             "template_fingerprint": r["template_fingerprint"],
             "translation_version": r["translation_version"],
+            "readiness_classification": r["readiness_classification"],
+            "taxonomy_version": r["taxonomy_version"],
+            "manifest_versions": _decode(r["manifest_versions_json"]),
+            "field_semantics": _decode(r["semantic_coverage_json"]),
             "snapshot": {
                 "fact_count": r["snapshot_fact_count"],
                 "digest": r["snapshot_digest"],

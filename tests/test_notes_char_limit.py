@@ -18,6 +18,11 @@ from notes.payload import NotesPayload
 from notes.writer import CELL_CHAR_LIMIT, _truncate_with_footer, write_notes_workbook
 from notes_types import NotesTemplateType, notes_template_path
 
+CORP_INFO_FIELD = (
+    "Explanation of reasons for the restatement of previous financial "
+    "statements figures"
+)
+
 
 def test_short_content_is_passed_through_untouched():
     """Content under the cap must be preserved verbatim — no off-by-one
@@ -68,7 +73,7 @@ def test_writer_truncates_overlong_payload_end_to_end(tmp_path: Path):
 
     overflow_body = "LOREM " * 6_000  # ~36K chars
     payload = NotesPayload(
-        chosen_row_label="Financial reporting status",
+        chosen_row_label=CORP_INFO_FIELD,
         content=overflow_body,
         evidence="Page 12, Note 2",
         source_pages=[12],
@@ -91,7 +96,7 @@ def test_writer_truncates_overlong_payload_end_to_end(tmp_path: Path):
     written_cell = None
     for row in range(1, ws.max_row + 1):
         label = ws.cell(row=row, column=1).value
-        if label and "financial reporting status" in str(label).lower():
+        if label and CORP_INFO_FIELD.lower() in str(label).lower():
             written_cell = ws.cell(row=row, column=2).value
             break
     assert written_cell is not None, "expected the payload to be written"

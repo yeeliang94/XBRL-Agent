@@ -69,6 +69,58 @@ def test_notes_become_footnote_writes(notes_db):
     assert ppe["source_row"] == 17
 
 
+def test_registered_prose_slot_requires_the_exact_canonical_identity(notes_db):
+    db, run_id = notes_db
+    conn = sqlite3.connect(str(db))
+    try:
+        node_uuid = "mfrs-company-ci-row-5"
+        conn.execute(
+            "INSERT INTO notes_nodes(node_uuid, template_id, sheet, row, label, "
+            "kind, slot_role) VALUES (?, ?, 'Notes-CI', 5, ?, 'LEAF', 'INPUT')",
+            (
+                node_uuid,
+                "mfrs-company-notes-corporateinfo-v1",
+                "*Disclosure of corporate information",
+            ),
+        )
+        conn.execute(
+            "INSERT INTO template_slots(target_id, canonical_target_id, template_id, "
+            "sheet, row, col, label, slot_role, value_kind, dimensions_json, "
+            "mapping_source, manifest_version, workbook_fingerprint, validation_status) "
+            "VALUES (?, ?, ?, 'Notes-CI', 5, 'B', ?, 'INPUT', 'html', '{}', "
+            "'presentation_linkbase', 'v1', 'fingerprint', 'writable')",
+            (
+                node_uuid,
+                node_uuid,
+                "mfrs-company-notes-corporateinfo-v1",
+                "*Disclosure of corporate information",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    _add_note(
+        db, run_id, "Notes-CI", 5,
+        "*Disclosure of corporate information", "<p>Acme</p>",
+    )
+    blocked = build_notes_fill_doc(db, run_id, decorate=False)
+    assert blocked["footnotes"] == []
+    assert blocked["meta"]["counts"]["skipped_non_writable_slot"] == 1
+
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(
+            "UPDATE notes_cells SET concept_uuid = ? WHERE run_id = ?",
+            (node_uuid, run_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    accepted = build_notes_fill_doc(db, run_id, decorate=False)
+    assert len(accepted["footnotes"]) == 1
+
+
 def test_html_is_render_decorated_by_default(notes_db):
     """By default the emitted HTML carries the mTool-render inline styles so
     TX27 renders formatting instead of flat text (the reported bug)."""
@@ -208,6 +260,7 @@ def test_empty_and_unlabelled_notes_are_skipped_not_emitted(notes_db):
 
     assert doc["meta"]["counts"] == {
         "notes": 1, "skipped_empty": 1, "skipped_no_label": 1,
+        "skipped_invalid_target": 0, "skipped_non_writable_slot": 0,
         "formatting_compacted": 0, "formatting_reduced": 0,
         "formatting_dropped": 0, "source_styling_dropped": 0,
         "white_grid_dropped": 0}

@@ -40,6 +40,20 @@ def read_template(path: str, sheet: Optional[str] = None) -> list[TemplateField]
     wb = openpyxl.load_workbook(path, data_only=False)
     sheet_names = [sheet] if sheet else wb.sheetnames
     fields: list[TemplateField] = []
+    # Taxonomy structure is authoritative. Style-only detection remains the
+    # fallback for unknown legacy workbooks, and a useful presentation floor
+    # for active templates.
+    from concept_model.taxonomy_semantics import (
+        semantic_addresses_for,
+        taxonomy_concept,
+    )
+
+    semantic_addresses = semantic_addresses_for(path)
+    semantic_abstract_rows: dict[str, set[int]] = {}
+    for (target_sheet, target_row, _), address in semantic_addresses.items():
+        concept = taxonomy_concept(address.get("primary_concept"))
+        if concept is not None and not concept.reportable:
+            semantic_abstract_rows.setdefault(target_sheet, set()).add(target_row)
 
     for name in sheet_names:
         ws = wb[name]
@@ -49,7 +63,7 @@ def read_template(path: str, sheet: Optional[str] = None) -> list[TemplateField]
         fallback = keyword_fallback_for_sheet(name)
         abstract_rows = {
             h.row for h in discover_section_headers(ws, extra_keywords=fallback)
-        }
+        } | semantic_abstract_rows.get(name, set())
 
         for row in ws.iter_rows():
             for cell in row:

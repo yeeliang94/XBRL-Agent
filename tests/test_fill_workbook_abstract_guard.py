@@ -84,6 +84,25 @@ def _make_dup_label_sheet(tmp_path) -> str:
 # ---------------------------------------------------------------------------
 
 class TestRefusesWritesToAbstractRows:
+    def test_taxonomy_abstract_without_header_style_is_rejected(self, tmp_path):
+        template = str(
+            Path(__file__).resolve().parent.parent
+            / "XBRL-template-MFRS" / "Company" / "01-SOFP-CuNonCu.xlsx"
+        )
+        result = fill_workbook(
+            template,
+            str(tmp_path / "filled.xlsx"),
+            [{
+                "sheet": "SOFP-CuNonCu",
+                "field_label": "Statement of financial position",
+                "col": 2,
+                "value": 123,
+            }],
+        )
+
+        assert result.fields_written == 0
+        assert "non-entry" in " ".join(result.errors).lower()
+
     def test_refuses_write_to_abstract_section_header(self, tmp_path):
         template = _make_sopl_like(tmp_path)
         output = str(tmp_path / "filled.xlsx")

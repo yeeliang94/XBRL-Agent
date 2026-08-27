@@ -13,13 +13,13 @@ _HEADING_5 = {"number": "5", "title": "Revenue"}
 
 def test_notes_payload_constructs_prose_payload():
     p = NotesPayload(
-        chosen_row_label="Financial reporting status",
+        chosen_row_label="*Disclosure of corporate information",
         content="The Group is a going concern.",
         evidence="Page 14, Note 2(a)",
         source_pages=[14],
         parent_note=_HEADING_2A,
     )
-    assert p.chosen_row_label == "Financial reporting status"
+    assert p.chosen_row_label == "*Disclosure of corporate information"
     assert p.content == "The Group is a going concern."
     assert p.source_pages == [14]
     assert p.sub_agent_id is None  # default
@@ -68,7 +68,7 @@ def test_notes_payload_requires_evidence_when_content_nonempty():
     # must cite at least one source page.
     with pytest.raises(ValueError, match="evidence"):
         NotesPayload(
-            chosen_row_label="Financial reporting status",
+            chosen_row_label="*Disclosure of corporate information",
             content="The Group is a going concern.",
             evidence="",
             source_pages=[],

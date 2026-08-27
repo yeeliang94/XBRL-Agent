@@ -14,6 +14,7 @@ hot path or from a unit test.
 from __future__ import annotations
 
 import logging
+import json
 import shutil
 import tempfile
 from pathlib import Path
@@ -81,6 +82,21 @@ def persist_notes_cells(
     # us the right reader/writer behaviour, and the context manager's
     # commit is atomic at transaction end.
     with repo.db_session(db_path) as conn:
+        run_row = conn.execute(
+            "SELECT run_config_json FROM runs WHERE id = ?", (run_id,)
+        ).fetchone()
+        try:
+            run_config = json.loads(run_row["run_config_json"] or "{}") if run_row else {}
+        except (TypeError, json.JSONDecodeError):
+            run_config = {}
+        family_prefix = (
+            f"{str(run_config.get('filing_standard', 'mfrs')).lower()}-"
+            f"{str(run_config.get('filing_level', 'company')).lower()}-"
+        )
+        registry_available = bool(conn.execute(
+            "SELECT 1 FROM notes_nodes WHERE template_id LIKE ? LIMIT 1",
+            (family_prefix + "%",),
+        ).fetchone())
         # Source lineage must survive the clobber (peer review, 2026-08-01).
         # DELETE-then-INSERT drops the whole row, taking the v35 provenance
         # columns with it — so a source-linked cell came back as an ordinary
@@ -118,6 +134,24 @@ def persist_notes_cells(
             # may be None for rows the agent chose to leave uncited.
             source_pages = cell.get("source_pages") or []
             style_source = cell.get("style_source")
+            concept_uuid = None
+            if registry_available:
+                node = conn.execute(
+                    "SELECT node_uuid FROM notes_nodes "
+                    "WHERE template_id LIKE ? AND sheet = ? AND row = ? "
+                    "AND kind = 'LEAF' AND slot_role = 'INPUT'",
+                    (
+                        family_prefix + "%",
+                        str(cell.get("sheet") or sheet_name),
+                        int(cell["row"]),
+                    ),
+                ).fetchall()
+                if len(node) != 1:
+                    raise ValueError(
+                        "Notes persistence refused an unconfirmed filing field "
+                        f"at {cell.get('sheet') or sheet_name}!row {cell['row']}."
+                    )
+                concept_uuid = node[0]["node_uuid"]
             repo.upsert_notes_cell(
                 conn,
                 run_id=run_id,
@@ -134,6 +168,7 @@ def persist_notes_cells(
                 style_source=(
                     str(style_source) if style_source is not None else None
                 ),
+                concept_uuid=concept_uuid,
             )
         _restore_lineage(conn, run_id, sheet_name, cells_list, _prior_lineage)
     return len(cells_list)

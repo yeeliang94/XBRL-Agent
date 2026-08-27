@@ -47,6 +47,7 @@ from mtool.preflight import evaluate_preflight, written_keys_from_doc
 from mtool.receipt import (
     fetch_receipts, record_receipt_download, write_fill_receipt)
 from mtool.translation import UnknownUnitClass
+from concept_model.filing_targets import semantic_coverage_for_run
 
 logger = logging.getLogger("server")
 
@@ -239,6 +240,18 @@ def get_mtool_preflight(run_id: int):
         filing_standard=standard, filing_level=level,
         written_keys=written_keys_from_doc(doc),
         conflicts=doc["meta"].get("conflicts")))
+
+
+@router.get("/api/runs/{run_id}/filing-semantics")
+def get_filing_semantics(run_id: int):
+    """Explain which canonical fields can reach the selected filing family."""
+    _, standard, level, _ = _load_fillable_run(run_id)
+    return JSONResponse(semantic_coverage_for_run(
+        server.AUDIT_DB_PATH,
+        run_id,
+        filing_standard=standard,
+        filing_level=level,
+    ))
 
 
 @router.get("/api/runs/{run_id}/mtool-fill/receipts")
