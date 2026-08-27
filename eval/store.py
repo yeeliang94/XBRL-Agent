@@ -385,9 +385,8 @@ def create_benchmark_from_mtool(
             f"{len(report.unmatched_rows)} labelled row(s) matched no concept."
         )
 
-    # Surface only matrix concepts that still lack a semantic identity, plus
-    # runtime mapping failures. Supported SOCIE facts are now ingested; any
-    # residual gap remains counted so a grade cannot look falsely complete.
+    # Surface matrix concepts that still lack a semantic identity separately
+    # from per-workbook semantic resolution failures of any concept kind.
     report.matrix_deferred += count_deferred_matrix(
         conn, standard, level, [t for t, _ in template_set]
     )
@@ -439,11 +438,18 @@ def create_benchmark_from_mtool(
         )
 
     matrix_note = (
-        f"{report.matrix_deferred} SOCIE/matrix cell(s) were NOT ingested from "
-        "this mTool file (matrix reverse-mapping is deferred). Those slots are "
+        f"{report.matrix_deferred} SOCIE/matrix cell(s) have no semantic "
+        "filing identity. Those slots are "
         "absent from the gold, so they are not graded — seed a benchmark from a "
         "run if you need SOCIE coverage."
         if report.matrix_deferred else None
+    )
+    semantic_note = (
+        f"{report.semantic_deferred} semantic value destination(s) could not be "
+        "resolved uniquely in this workbook. Those slots are absent from the "
+        "gold and are not graded; review the selected template variant and "
+        "workbook compatibility."
+        if report.semantic_deferred else None
     )
     return {
         "id": benchmark_id,
@@ -454,6 +460,8 @@ def create_benchmark_from_mtool(
         "sheets_missing": report.sheets_missing,
         "prose_notes_captured": len(prose),
         "scale_warning": report.scale_warning,
+        "semantic_deferred": report.semantic_deferred,
+        "semantic_warning": semantic_note,
         "matrix_deferred": report.matrix_deferred,
         "matrix_warning": matrix_note,
         "statements": sorted({s for _, s in template_set}),

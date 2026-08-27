@@ -8,14 +8,66 @@ import pytest
 
 from concept_model.importer import import_template
 from concept_model.parser import parse_template
+from concept_model.taxonomy_semantics import (
+    _ROLES_BY_FILE,
+    semantic_addresses_for,
+)
 from db.schema import init_db
 from eval.mtool_ingest import build_catalogue, ingest_workbook
 from mtool.exporter import build_fill_doc
 from mtool.offline_fill import fill_workbook, validate_input
 from mtool.template_map import inspect_template, resolve_filing_doc
+from notes_types import NOTES_REGISTRY, notes_template_path
+from statement_types import VARIANTS, template_path
 
 
 REPO = Path(__file__).resolve().parent.parent
+
+
+def _semantic_template_cases():
+    cases = []
+    for statement, variant_name in VARIANTS:
+        for standard in ("mfrs", "mpers"):
+            for level in ("company", "group"):
+                try:
+                    path = template_path(
+                        statement, variant_name, level, standard)
+                except ValueError:
+                    continue
+                if path.exists() and path.name in _ROLES_BY_FILE:
+                    cases.append((standard, level, path))
+    for note_type, entry in NOTES_REGISTRY.items():
+        if not entry.is_numeric:
+            continue
+        for standard in ("mfrs", "mpers"):
+            for level in ("company", "group"):
+                path = notes_template_path(note_type, level, standard)
+                if path.exists() and path.name in _ROLES_BY_FILE:
+                    cases.append((standard, level, path))
+    return cases
+
+
+_KNOWN_EMPTY_SEMANTIC_TEMPLATES = {
+    ("mfrs", "13-Notes-IssuedCapital.xlsx"),
+    ("mfrs", "14-Notes-RelatedParty.xlsx"),
+}
+
+
+@pytest.mark.parametrize(
+    ("standard", "level", "template"),
+    _semantic_template_cases(),
+    ids=lambda value: value.name if isinstance(value, Path) else str(value),
+)
+def test_registered_semantic_templates_do_not_silently_lose_all_addresses(
+    standard: str, level: str, template: Path,
+):
+    addresses = semantic_addresses_for(str(template))
+    expected_empty = (standard, template.name) in _KNOWN_EMPTY_SEMANTIC_TEMPLATES
+    assert bool(addresses) is not expected_empty, (
+        f"{standard}/{level}/{template.name} semantic coverage changed: "
+        f"{len(addresses)} address(es); update the mapping or the reviewed "
+        "exception list explicitly"
+    )
 
 
 def _run(db: Path) -> int:
@@ -105,6 +157,7 @@ def test_socie_resolves_to_explicit_generated_template_cell(
         filled, catalogue, filing_level=level, unit_scale=1.0)
     assert [(f.concept_uuid, f.period, f.entity_scope, f.value)
             for f in reverse.facts] == [(fact[0], fact[1], fact[2], 123.0)]
+    assert reverse.semantic_deferred == 0
     assert reverse.matrix_deferred == 0
 
 

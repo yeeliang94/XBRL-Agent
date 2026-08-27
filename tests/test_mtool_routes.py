@@ -182,6 +182,85 @@ def test_patch_auto_detects_column_map(client):
     assert report["counts"]["written"] >= 1
 
 
+def test_patch_unverified_semantic_candidate_still_requires_confirmation(
+    client, monkeypatch,
+):
+    """A recognised taxonomy id must not bypass an unverified column map.
+
+    Unknown/group layouts remain confirmation-gated even when some rows can be
+    addressed semantically, because other writes may still use legacy columns.
+    """
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_distinct_leaves(db, run_id)
+
+    import api.mtool as mtool_api
+
+    real_detect = mtool_api.detect_column_map
+    real_inspect = mtool_api.inspect_template
+
+    def confirmation_required(*args, **kwargs):
+        detected = real_detect(*args, **kwargs)
+        for layout in detected.values():
+            layout["confidence"] = "high"
+            layout["requires_confirmation"] = True
+            layout.setdefault("notes", []).append(
+                "this unverified template still needs confirmation"
+            )
+        return detected
+
+    def candidate_semantics(*args, **kwargs):
+        inspection = real_inspect(*args, **kwargs)
+        inspection["semantic_source"] = "taxonomy-identifiers"
+        inspection["mtool_compatibility"] = "candidate-2.2"
+        return inspection
+
+    monkeypatch.setattr(mtool_api, "detect_column_map", confirmation_required)
+    monkeypatch.setattr(mtool_api, "inspect_template", candidate_semantics)
+
+    resp = tc.post(
+        f"/api/runs/{run_id}/mtool-fill/patch",
+        files=_upload_our_template(),
+        data={"strict": "true"},
+    )
+    assert resp.status_code == 422, resp.text
+    assert "confirm" in str(resp.json()["detail"]).lower()
+
+
+def test_attention_filing_coverage_degrades_and_withholds_artifact(
+    client, monkeypatch,
+):
+    """Legacy/candidate mapping cannot be reported as a clean filing fill."""
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_distinct_leaves(db, run_id)
+
+    import api.mtool as mtool_api
+
+    real_resolve = mtool_api.resolve_filing_doc
+
+    def attention_coverage(*args, **kwargs):
+        ready, coverage = real_resolve(*args, **kwargs)
+        return ready, {
+            **coverage,
+            "status": "attention",
+            "legacy_label_writes": 1,
+        }
+
+    monkeypatch.setattr(mtool_api, "resolve_filing_doc", attention_coverage)
+
+    resp = tc.post(
+        f"/api/runs/{run_id}/mtool-fill/patch",
+        files=_upload_our_template(),
+        data={"strict": "true"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["filing_coverage"]["status"] == "attention"
+    assert body["status"] == "degraded"
+    assert tc.get(body["download_url"]).status_code == 409
+
+
 def test_detect_columns_returns_map_and_confidence(client):
     # The up-front pre-flight: detect the layout without writing, so the modal
     # can show the column confirmation alongside the notes check.

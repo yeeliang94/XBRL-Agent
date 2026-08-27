@@ -1650,9 +1650,11 @@ Load-bearing invariants:
   canonical templates. `mtool/template_map.py` is the one forward/reverse
   adapter. It resolves semantic addresses to explicit cells in the uploaded
   workbook; SOCIE uses `ComponentsOfEquityAxis` members. Repository-generated
-  templates use their verified exact target hints. Missing or ambiguous
-  semantic identities fail closed. Legacy workbooks may still use
-  `column_role` (CY/PY × company/group) plus exact labels.
+  templates use their verified exact target hints. Declared semantic identities
+  that are missing or ambiguous fail closed. Address-less legacy writes may
+  still use `column_role` (CY/PY × company/group) plus exact labels, but an
+  unverified template requires column confirmation and the resulting artifact
+  is degraded until the operator acknowledges it.
 
   `column_detect` reads mTool's own marker rows — `#PRIM#` (label column),
   `#ENDT#` (period end dates; current vs prior year comes from COMPARING

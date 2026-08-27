@@ -12,6 +12,7 @@ import re
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 # Repo-root anchor so the script works regardless of caller cwd — same pattern
@@ -349,6 +350,7 @@ def load_label_map() -> dict[str, dict[str, str]]:
 # Populated as a side effect of `load_label_map()`. Separate from the simple
 # map so callers can't accidentally depend on the private role table.
 _LABEL_ROLE_TABLE: dict[str, dict[str, str]] = {}
+_TAXONOMY_CONTEXT_LOCK = Lock()
 
 
 def _resolve_preferred_label(concept_id: str, preferred_role: str | None) -> str:
@@ -465,6 +467,47 @@ def walk_role(pre_file_path: Path) -> list[tuple[int, str, str, bool]]:
             dfs(root_label, 0, None)
 
     return rows
+
+
+def walk_role_for_taxonomy(
+    taxonomy_dir: Path, standard: str, role_number: str
+) -> list[tuple[int, str, str, bool]]:
+    """Walk one role from an explicitly selected SSM taxonomy.
+
+    The generator predates multi-standard callers and its label loader keeps a
+    module-level cache. This adapter owns the temporary context switch,
+    serialises it, and restores the generator defaults after the walk.
+    """
+    global _MPERS_TAXONOMY_DIR, _ROLE_XSD
+    global _LABEL_MAP_CACHE, _LABEL_ROLE_TABLE
+
+    standard = standard.lower()
+    taxonomy_dir = Path(taxonomy_dir)
+    role_xsd = taxonomy_dir / f"rol_ssmt-fs-{standard}_2022-12-31.xsd"
+    pre_file = (
+        taxonomy_dir
+        / f"pre_ssmt-fs-{standard}_2022-12-31_role-{role_number}.xml"
+    )
+    with _TAXONOMY_CONTEXT_LOCK:
+        old = (
+            _MPERS_TAXONOMY_DIR,
+            _ROLE_XSD,
+            _LABEL_MAP_CACHE,
+            _LABEL_ROLE_TABLE,
+        )
+        try:
+            _MPERS_TAXONOMY_DIR = taxonomy_dir
+            _ROLE_XSD = role_xsd
+            _LABEL_MAP_CACHE = None
+            _LABEL_ROLE_TABLE = {}
+            return walk_role(pre_file)
+        finally:
+            (
+                _MPERS_TAXONOMY_DIR,
+                _ROLE_XSD,
+                _LABEL_MAP_CACHE,
+                _LABEL_ROLE_TABLE,
+            ) = old
 
 
 # Column-layout constants — pinned by the Phase 1 MFRS format tests.

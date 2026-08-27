@@ -297,6 +297,8 @@ describe("BenchmarksPage", () => {
           sheets_missing: [],
           prose_notes_captured: 2,
           scale_warning: null,
+          semantic_deferred: 0,
+          semantic_warning: null,
           matrix_deferred: 0,
           matrix_warning: null,
           statements: ["SOFP"],
@@ -396,6 +398,8 @@ describe("BenchmarksPage — Step 14 (PLAN-evals-hardening)", () => {
           ambiguous: [{ sheet: "SOFP", label: "Other payables", detail: "label matches rows [12, 40]" }],
           sheets_missing: ["SOCIE"],
           prose_notes_captured: 0, scale_warning: null,
+          semantic_deferred: 3,
+          semantic_warning: "3 semantic value destinations could not be resolved uniquely.",
           matrix_deferred: 42,
           matrix_warning: "42 SOCIE/matrix cell(s) were NOT ingested from this mTool file (matrix reverse-mapping is deferred).",
           statements: ["SOFP"], template_ids: ["t1"],
@@ -414,6 +418,9 @@ describe("BenchmarksPage — Step 14 (PLAN-evals-hardening)", () => {
     fireEvent.click(screen.getByTestId("bench-submit"));
 
     await screen.findByTestId("bench-ingest-report");
+    expect(screen.getByTestId("bench-semantic-warning").textContent).toContain(
+      "3 semantic value destinations",
+    );
     expect(screen.getByTestId("bench-matrix-warning").textContent).toContain("NOT ingested");
     expect(screen.getByTestId("bench-ambiguous").textContent).toContain("Other payables");
     expect(screen.getByTestId("bench-sheets-missing").textContent).toContain("SOCIE");
@@ -436,6 +443,7 @@ describe("BenchmarksPage — Step 14 (PLAN-evals-hardening)", () => {
           ok: true, id: 9, ingested: 2, matched_by_statement: { SOFP: 2 },
           unmatched_rows: [], ambiguous: [], sheets_missing: [],
           prose_notes_captured: 0, scale_warning: null,
+          semantic_deferred: 0, semantic_warning: null,
           matrix_deferred: 0, matrix_warning: null,
           statements: ["SOFP"], template_ids: ["t1"],
         };
