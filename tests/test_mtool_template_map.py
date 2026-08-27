@@ -1,0 +1,129 @@
+from __future__ import annotations
+
+import json
+import sqlite3
+from pathlib import Path
+
+import pytest
+
+from concept_model.importer import import_template
+from concept_model.parser import parse_template
+from db.schema import init_db
+from eval.mtool_ingest import build_catalogue, ingest_workbook
+from mtool.exporter import build_fill_doc
+from mtool.offline_fill import fill_workbook, validate_input
+from mtool.template_map import inspect_template, resolve_filing_doc
+
+
+REPO = Path(__file__).resolve().parent.parent
+
+
+def _run(db: Path) -> int:
+    conn = sqlite3.connect(db)
+    try:
+        row = conn.execute(
+            "INSERT INTO runs(created_at,pdf_filename,status,started_at) "
+            "VALUES ('2026-08-25','source.pdf','completed','2026-08-25')"
+        )
+        conn.commit()
+        return int(row.lastrowid)
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize(
+    ("standard", "level"),
+    [("mfrs", "company"), ("mfrs", "group"),
+     ("mpers", "company"), ("mpers", "group")],
+)
+def test_socie_resolves_to_explicit_generated_template_cell(
+    tmp_path: Path, standard: str, level: str,
+):
+    template = (
+        REPO / f"XBRL-template-{standard.upper()}" / level.capitalize()
+        / "09-SOCIE.xlsx"
+    )
+    db = tmp_path / "audit.db"
+    init_db(db)
+    tree = parse_template(str(template))
+    payload = tmp_path / "tree.json"
+    payload.write_text(json.dumps(tree.to_json()), encoding="utf-8")
+    import_template(db, payload)
+    run_id = _run(db)
+
+    conn = sqlite3.connect(db)
+    try:
+        fact = conn.execute(
+            """
+            SELECT n.concept_uuid, t.period, t.entity_scope,
+                   t.target_sheet, t.target_row, t.target_col
+            FROM concept_nodes n
+            JOIN concept_targets t USING(concept_uuid)
+            WHERE n.kind = 'MATRIX_CELL'
+              AND NOT EXISTS (
+                SELECT 1 FROM concept_edges e
+                WHERE e.parent_uuid = n.concept_uuid
+              )
+            ORDER BY n.render_row, n.matrix_col, t.entity_scope, t.period
+            LIMIT 1
+            """
+        ).fetchone()
+        assert fact is not None
+        conn.execute(
+            "INSERT INTO run_concept_facts("
+            "run_id,concept_uuid,period,entity_scope,value,value_status,updated_at) "
+            "VALUES (?,?,?,?,123,'observed','2026-08-25')",
+            (run_id, fact[0], fact[1], fact[2]),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    doc = build_fill_doc(
+        db, run_id, filing_standard=standard, filing_level=level)
+    assert doc["meta"]["counts"]["excluded_matrix_socie"] == 0
+    assert doc["meta"]["counts"]["semantic_mapped"] == 1
+    assert doc["writes"][0]["kind"] == "MATRIX_CELL"
+
+    ready, coverage = resolve_filing_doc(str(template), doc)
+    assert coverage["status"] == "ready"
+    assert coverage["mapped"] == coverage["requested"] == 1
+    assert {k: ready["writes"][0][k] for k in ("sheet", "cell", "value")} == {
+        "sheet": fact[3], "cell": f"{fact[5]}{fact[4]}", "value": 123,
+    }
+    assert validate_input(ready) == []
+
+    filled = tmp_path / "filled.xlsx"
+    report = fill_workbook(str(template), ready, str(filled), strict=True)
+    assert report["status"] == "ok"
+    conn = sqlite3.connect(db)
+    try:
+        catalogue = build_catalogue(conn, standard, level, [tree.template_id])
+    finally:
+        conn.close()
+    reverse = ingest_workbook(
+        filled, catalogue, filing_level=level, unit_scale=1.0)
+    assert [(f.concept_uuid, f.period, f.entity_scope, f.value)
+            for f in reverse.facts] == [(fact[0], fact[1], fact[2], 123.0)]
+    assert reverse.matrix_deferred == 0
+
+
+def test_inspection_reports_supported_target_and_semantic_source(tmp_path: Path):
+    template = REPO / "XBRL-template-MFRS/Company/09-SOCIE.xlsx"
+    doc = {"writes": [], "sheets": {}}
+    report = inspect_template(str(template), doc)
+    assert report["supported_mtool_version"] == "2.2"
+    assert report["semantic_source"] == "generated-targets"
+    assert report["mtool_compatibility"] == "verified-generated"
+
+
+def test_generated_statement_family_match_uses_exact_token():
+    """SOCI must not pass merely because ``SOCIE`` contains that substring."""
+    template = REPO / "XBRL-template-MFRS/Company/09-SOCIE.xlsx"
+    doc = {
+        "meta": {"filing_standard": "mfrs", "filing_level": "company"},
+        "sheets": {"SOCI": {"columns": {}}},
+        "writes": [{"template_id": "mfrs-company-soci-beforetax-v1"}],
+    }
+    report = inspect_template(str(template), doc)
+    assert report["filing_family_match"] is False

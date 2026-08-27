@@ -267,10 +267,9 @@ def test_build_catalogue_scopes_to_family_and_leaves(tmp_path):
     assert cat["SOFP"][normalize_label("Cash and bank balances")].concept_uuid == "a"
 
 
-def test_matrix_cells_are_deferred_and_counted_not_silently_dropped(tmp_path):
-    """A MATRIX_CELL (SOCIE) concept is NOT ingested (mTool matrix reverse-map is
-    deferred, gotcha #28), but it IS counted so the coverage gap is visible —
-    never a silent denominator shrink (peer-review HIGH)."""
+def test_matrix_without_semantic_identity_is_counted_not_silently_dropped(tmp_path):
+    """Legacy matrix concepts enter the catalogue but remain visibly deferred
+    until they have a taxonomy identity; they are never label-guessed."""
     db = tmp_path / "matrix.db"
     init_db(db)
     conn = sqlite3.connect(str(db))
@@ -293,13 +292,12 @@ def test_matrix_cells_are_deferred_and_counted_not_silently_dropped(tmp_path):
     )
     conn.commit()
 
-    # build_catalogue stays LEAF-only (matrix needs column-aware matching mTool
-    # doesn't yet confirm) — the matrix concept is absent from the match set.
+    # The matrix concept is retained so semantic-capable workbooks can use it.
     cat = build_catalogue(conn, "mfrs", "company", [_TEMPLATE_ID])
-    assert "SOCIE" not in cat
+    assert next(iter(cat["SOCIE"].values())).concept_uuid == "m1"
     assert set(cat["SOFP"]) == {normalize_label("Cash and bank balances")}
 
-    # …but it is COUNTED as deferred, so the omission is visible.
+    # Without a semantic identity it is still COUNTED as deferred.
     assert count_deferred_matrix(conn, "mfrs", "company", [_TEMPLATE_ID]) == 1
 
 

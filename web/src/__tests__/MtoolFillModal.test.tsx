@@ -64,6 +64,8 @@ describe("MtoolFillModal", () => {
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
     await waitFor(() => expect(screen.getByText(/values will be written/i)).toBeTruthy());
     expect(screen.getByText(/7/)).toBeTruthy();
+    expect(screen.getByLabelText(/filing progress/i)).toHaveTextContent("1. Check run");
+    expect(screen.getByText(/advanced filing options/i)).toBeTruthy();
     // Excluded SOCIE count surfaced.
     expect(screen.getByText(/3 SOCIE\/matrix/i)).toBeTruthy();
   });

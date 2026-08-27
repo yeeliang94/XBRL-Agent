@@ -142,7 +142,9 @@ def parse_template(xlsx_path: str) -> ConceptTree:
     # SOCIE is a (row, col) matrix and doesn't fit the linear LEAF/
     # COMPUTED model.  Dispatch to the matrix parser instead.
     if "socie" in path.stem.lower():
-        return _parse_socie_matrix(path, template_id)
+        tree = _parse_socie_matrix(path, template_id)
+        _attach_semantic_addresses(tree, path)
+        return tree
 
     wb = openpyxl.load_workbook(str(path), data_only=False)
     nodes: list[ConceptNode] = []
@@ -169,7 +171,29 @@ def parse_template(xlsx_path: str) -> ConceptTree:
     # coordinate when writing back to xlsx.
     _resolve_cross_refs(nodes, coord_to_uuid, pending_cross_refs)
 
-    return ConceptTree(template_id=template_id, concepts=nodes)
+    tree = ConceptTree(template_id=template_id, concepts=nodes)
+    _attach_semantic_addresses(tree, path)
+    return tree
+
+
+def _attach_semantic_addresses(tree: ConceptTree, path: Path) -> None:
+    """Attach taxonomy identity without making it part of parser geometry.
+
+    Extraction remains valid when an address is absent; only mTool readiness
+    depends on this optional metadata.  That keeps an unsupported filing
+    adapter from breaking the canonical extraction bootstrap.
+    """
+    from concept_model.taxonomy_semantics import semantic_addresses_for
+
+    addresses = semantic_addresses_for(str(path.resolve()))
+    for node in tree.concepts:
+        rk = node.render_key
+        key = (rk.get("sheet", ""), int(rk.get("row", 0) or 0), rk.get("matrix_col"))
+        address = addresses.get(key)
+        if address is None and rk.get("matrix_col") is None:
+            address = addresses.get((key[0], key[1], None))
+        if address is not None:
+            rk["semantic_address"] = address
 
 
 # ---------------------------------------------------------------------------

@@ -35,6 +35,8 @@ interface FillMeta {
     excluded_not_disclosed: number;
     excluded_out_of_scope: number;
     excluded_no_value: number;
+    semantic_mapped?: number;
+    semantic_missing?: number;
   };
   sheets_covered: string[];
   filing_standard: string;
@@ -134,6 +136,14 @@ interface ReportSummary {
   filename?: string;
   receipt_id?: number | null;
   template_known?: boolean;
+  filing_coverage?: {
+    status: string;
+    requested: number;
+    mapped: number;
+    unmapped: number;
+    ambiguous: number;
+    coverage_percent: number;
+  };
 }
 
 /** One reason this run isn't ready to become a filing (mtool/preflight.py). */
@@ -580,14 +590,15 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
   // Dry-run diagnostic: what would fill / get created / stay unresolved, and
   // how many fn_* slots the uploaded template exposes. Writes nothing. Sends
   // the operator's placement decisions so a re-check reflects them.
-  const runPreview = async () => {
-    if (!file) return;
+  const runPreview = async (selectedFile?: File) => {
+    const targetFile = selectedFile ?? file;
+    if (!targetFile) return;
     setPreviewBusy(true);
     setPreviewErr(null);
     setPreview(null);
     try {
       const form = new FormData();
-      form.append("template", file);
+      form.append("template", targetFile);
       form.append("create_missing_notes", createMissingNotes ? "true" : "false");
       form.append("notes_styling", notesStyling);
       const targets = notesTargetsPayload();
@@ -601,7 +612,15 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
         const detail = (body as { detail?: unknown })?.detail;
         throw new Error(typeof detail === "string" ? detail : `HTTP ${resp.status}`);
       }
-      setPreview(body as NotesPreview);
+      const candidate = body as Partial<NotesPreview>;
+      if (
+        Array.isArray(candidate.will_fill_existing) &&
+        Array.isArray(candidate.will_create) &&
+        Array.isArray(candidate.unresolved) &&
+        Array.isArray(candidate.errors)
+      ) {
+        setPreview(candidate as NotesPreview);
+      }
     } catch (e) {
       setPreviewErr(userMessage(e));
     } finally {
@@ -634,7 +653,11 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
         throw new Error(typeof detail === "string" ? detail : `HTTP ${resp.status}`);
       }
       const detected = (body as { detected?: Record<string, DetectedSheet> }).detected;
-      if (detected) setColumnMap(detectedToColumnMap(detected));
+      const semanticSource = (
+        body as { filing_inspection?: { semantic_source?: string } }
+      ).filing_inspection?.semantic_source;
+      const needsLegacyColumns = !semanticSource || semanticSource === "legacy-labels";
+      if (detected && needsLegacyColumns) setColumnMap(detectedToColumnMap(detected));
       // `requires_confirmation` outranks `confidence`: a group layout or an
       // unrecognised template can look confident while nothing has actually
       // corroborated which column is which (finding 3).
@@ -644,7 +667,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
       setColumnConfidence(
         mustConfirm ? "low" : ((body as { confidence?: string }).confidence ?? null),
       );
-      if (mustConfirm) {
+      if (mustConfirm && needsLegacyColumns) {
         setColumnPrompt(
           "Please check the columns below before we write anything. " +
             (detected
@@ -699,9 +722,23 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
         <p style={styles.sub}>
           Upload the empty template you exported from mTool. We fill in this run&apos;s
           figures and written notes and give you back one file, ready to open in mTool
-          for Validate &amp; Generate. Totals are left to mTool&apos;s own formulas; the
-          statement of changes in equity (SOCIE) isn&apos;t filled yet.
+          for Validate &amp; Generate. Totals stay in mTool&apos;s own formulas, and
+          SOCIE is mapped by taxonomy concept and equity component.
         </p>
+
+        <div style={{ display: "flex", gap: pwc.space.sm, marginBottom: pwc.space.lg, fontSize: 12 }} aria-label="Filing progress">
+          {["1. Check run", "2. Choose template", "3. Review result"].map((label, index) => (
+            <span key={label} style={{
+              flex: 1,
+              padding: "8px 10px",
+              borderRadius: pwc.radius.sm,
+              background: report ? (index <= 2 ? pwc.orange50 : pwc.grey50)
+                : file ? (index <= 1 ? pwc.orange50 : pwc.grey50)
+                  : index === 0 ? pwc.orange50 : pwc.grey50,
+              color: pwc.grey800,
+            }}>{label}</span>
+          ))}
+        </div>
 
         {loadErr && (
           <div style={ui.alertError}>Could not load fill data: {loadErr}</div>
@@ -758,8 +795,8 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
             </div>
             {totalExcluded > 0 && (
               <div style={{ ...styles.statLine, color: pwc.grey700 }}>
-                Excluded: {c!.excluded_matrix_socie} SOCIE/matrix, {c!.excluded_not_disclosed}{" "}
-                not-disclosed, {c!.excluded_out_of_scope} out-of-scope
+                Excluded: {c!.excluded_matrix_socie > 0 ? `${c!.excluded_matrix_socie} SOCIE/matrix could not be semantically mapped, ` : ""}
+                {c!.excluded_not_disclosed} not-disclosed, {c!.excluded_out_of_scope} out-of-scope
               </div>
             )}
             {c!.conflict_writes > 0 && (
@@ -776,6 +813,10 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
           </div>
         )}
 
+        <details style={{ marginBottom: pwc.space.md }}>
+          <summary style={{ cursor: "pointer", fontSize: 13, color: pwc.grey700 }}>
+            Advanced filing options
+          </summary>
         {notesCount !== null && notesCount > 0 && (
           <label style={{ ...styles.statLine, display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
             <input
@@ -873,6 +914,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
             </label>
           </fieldset>
         )}
+        </details>
 
         <div style={{ marginBottom: pwc.space.md }}>
           <FileDropzone
@@ -897,6 +939,9 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
               setPreviewErr(null);
               setNoteTargets({}); // decisions were made against the old template
               runDetect(f); // confirm the column layout up front
+              if (notesCount !== null && notesCount > 0 && fillNotes) {
+                void runPreview(f);
+              }
             }}
           />
         </div>
@@ -917,8 +962,9 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
               <button
                 type="button"
-                onClick={runPreview}
+                onClick={() => void runPreview()}
                 disabled={!file || previewBusy}
+                aria-label="Check notes against this template"
                 className={uiClass.btnGhost}
                 style={{ ...ui.buttonGhost, fontSize: 12 }}
                 // Explain why it's inert before a file is chosen, rather than
@@ -1058,7 +1104,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                       </span>
                       <button
                         type="button"
-                        onClick={runPreview}
+                        onClick={() => void runPreview()}
                         disabled={previewBusy}
                         className={uiClass.btnGhost}
                         style={{ ...ui.buttonGhost, fontSize: 12 }}
@@ -1194,6 +1240,12 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                 ? `Clean — ${report.counts.written} values written. Safe to Validate in mTool.`
                 : `Degraded — review before Validate.`}
             </div>
+            {report.filing_coverage && (
+              <div style={{ fontSize: 12, marginTop: 4, color: pwc.grey700 }}>
+                Filing coverage: {report.filing_coverage.mapped}/{report.filing_coverage.requested}
+                {" "}values mapped ({report.filing_coverage.coverage_percent}%).
+              </div>
+            )}
             {/* FULL row detail, not counts (Step 11A). The old header-borne
                 report capped these at 20 rows and the UI showed only totals,
                 so "which rows didn't land?" was unanswerable. */}

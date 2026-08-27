@@ -13,15 +13,15 @@ What this module owns (mirrors the plan's Key Decisions):
   never the scratch xlsx (gotcha #21). Read through
   ``mtool.receipt.snapshot_facts``, so one fill corresponds to ONE revision of
   the data even though a completed run stays editable.
-* **LEAF only** — ABSTRACT section headers and COMPUTED totals are excluded;
-  mTool derives totals with its own template formulas (the fill tool's formula
-  guard is the second line of defence). MATRIX_CELL (SOCIE) is deferred and
-  **counted**, never silently dropped.
-* **Semantic, not physical** — writes carry a ``column_role``
-  (current_year / prior_year / group_* / company_*), NOT a physical column
-  letter. mTool's real column layout (observed: labels col D, values E/F —
-  different from ours) is resolved against the actual template at fill time
-  via :func:`apply_column_map`, not baked in here.
+* **Data-entry concepts only** — ABSTRACT section headers and COMPUTED totals
+  are excluded; LEAF and MATRIX_CELL facts are both emitted. SOCIE cells carry
+  their taxonomy concept, equity-component dimension and exact canonical
+  target hint so they can be resolved without ambiguous visible labels.
+* **Semantic, not physical** — writes carry taxonomy identity, dimensions and
+  period/scope. Repository templates also carry exact canonical target hints.
+  For legacy linear workbooks, ``column_role`` (current/prior year and
+  company/group) is resolved against the uploaded template at fill time via
+  :func:`apply_column_map`; physical columns are not baked into the exporter.
 * **Unit-aware translation** — see :mod:`mtool.translation`. The shipped
   manifest is identity, so today's doc carries the DB value verbatim; a
   non-identity manifest scales money and leaves share counts alone, and
@@ -64,6 +64,7 @@ Windows acceptance run before it is enabled.
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -160,7 +161,9 @@ def build_fill_doc(
 
     writes: list[dict[str, Any]] = []
     sheets: dict[str, dict[str, Any]] = {}
-    excluded_matrix = 0
+    excluded_matrix = 0  # compatibility counter; semantic SOCIE makes this 0
+    semantic_mapped = 0
+    semantic_missing = 0
     excluded_not_disclosed = 0
     excluded_no_value = 0
     excluded_out_of_scope = 0
@@ -181,11 +184,12 @@ def build_fill_doc(
     seen: set[tuple[str, str, str]] = set()
 
     for r in rows:
-        if r["shape"] == "matrix" or r["kind"] == "MATRIX_CELL":
-            excluded_matrix += 1
-            continue
-        if r["kind"] != "LEAF":
+        if r["kind"] not in {"LEAF", "MATRIX_CELL"}:
             continue  # ABSTRACT header or COMPUTED total — not fillable
+        if r["kind"] == "MATRIX_CELL" and r["has_formula_edges"]:
+            # SOCIE formulas remain owned by the workbook.  Only matrix cells
+            # without dependency edges are data-entry facts.
+            continue
         role = _column_role(r["period"], r["entity_scope"], filing_level)
         if role is None:
             excluded_out_of_scope += 1
@@ -215,12 +219,41 @@ def build_fill_doc(
             template_id=r["template_id"],
             label_normalized=normalize_label(label))
 
-        writes.append({
+        semantic = None
+        if r["primary_concept"]:
+            try:
+                dimensions = json.loads(r["dimensions_json"] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                dimensions = {}
+            semantic = {
+                "primary_concept": r["primary_concept"],
+                "dimensions": dimensions,
+                "taxonomy_version": r["taxonomy_version"],
+                "address_version": r["address_version"],
+            }
+            semantic_mapped += 1
+        else:
+            semantic_missing += 1
+
+        write = {
             "sheet": sheet,
             "label": label,
             "column_role": role,
             "value": _whole(value),
-        })
+            "concept_uuid": r["concept_uuid"],
+            "period": r["period"],
+            "entity_scope": r["entity_scope"],
+            "kind": r["kind"],
+            "template_id": r["template_id"],
+            "semantic_address": semantic,
+        }
+        if r["target_sheet"] and r["target_row"] and r["target_col"]:
+            write["target_hint"] = {
+                "sheet": r["target_sheet"],
+                "row": r["target_row"],
+                "col": r["target_col"],
+            }
+        writes.append(write)
         sheet_cfg = sheets.setdefault(sheet, {"label_column": None,
                                               "columns": {}})
         sheet_cfg["columns"].setdefault(role, None)
@@ -251,6 +284,8 @@ def build_fill_doc(
             "excluded_not_disclosed": excluded_not_disclosed,
             "excluded_no_value": excluded_no_value,
             "excluded_out_of_scope": excluded_out_of_scope,
+            "semantic_mapped": semantic_mapped,
+            "semantic_missing": semantic_missing,
         },
         "unit_classes": unit_counts,
         "unit_class_unknown": unknown_units,

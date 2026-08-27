@@ -73,11 +73,24 @@ def snapshot_facts(
             SELECT f.concept_uuid, f.period, f.entity_scope, f.value,
                    f.value_status, f.updated_at,
                    n.canonical_label, n.kind, n.render_sheet, n.render_row,
-                   n.template_id,
-                   tpl.shape AS shape
+                   n.matrix_col, n.matrix_col_label, n.template_id,
+                   tpl.shape AS shape,
+                   t.target_sheet, t.target_row, t.target_col,
+                   sa.primary_concept, sa.dimensions_json,
+                   sa.taxonomy_version, sa.address_version,
+                   EXISTS(
+                     SELECT 1 FROM concept_edges e
+                     WHERE e.parent_uuid = n.concept_uuid
+                   ) AS has_formula_edges
             FROM run_concept_facts f
             JOIN concept_nodes n ON n.concept_uuid = f.concept_uuid
             JOIN concept_templates tpl ON tpl.template_id = n.template_id
+            LEFT JOIN concept_targets t
+              ON t.concept_uuid = f.concept_uuid
+             AND t.period = f.period
+             AND t.entity_scope = f.entity_scope
+            LEFT JOIN concept_semantic_addresses sa
+              ON sa.concept_uuid = f.concept_uuid
             WHERE f.run_id = ? AND n.template_id LIKE ?
             ORDER BY n.render_sheet, n.render_row, f.entity_scope, f.period
             """,

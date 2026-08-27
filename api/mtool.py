@@ -37,7 +37,8 @@ import server
 from mtool.column_detect import (
     detect_column_map, describe_template, fingerprint_workbook,
     needs_confirmation, overall_confidence, unit_scale_mismatches)
-from mtool.exporter import apply_column_map, build_fill_doc
+from mtool.exporter import build_fill_doc
+from mtool.template_map import inspect_template, resolve_filing_doc
 from mtool.notes_decorate import NotesTableStyle
 from mtool.notes_exporter import build_notes_fill_doc, build_notes_snapshot
 from mtool.offline_fill import (
@@ -460,6 +461,8 @@ async def patch_mtool_template(
         # column is which.
         detected = _parse_template_or_422(
             "column detection", detect_column_map, str(src), doc, data=data)
+        inspection = _parse_template_or_422(
+            "template inspection", inspect_template, str(src), doc, data=data)
         if column_map:
             try:
                 cmap = json.loads(column_map)
@@ -470,8 +473,9 @@ async def patch_mtool_template(
             _validate_cmap_shape(cmap)
             _validate_cmap_semantics(cmap, doc)
         else:
+            semantic_template = inspection["semantic_source"] != "legacy-labels"
             if (overall_confidence(detected) != "high"
-                    or needs_confirmation(detected)):
+                    or needs_confirmation(detected)) and not semantic_template:
                 raise HTTPException(
                     status_code=422,
                     detail={
@@ -493,9 +497,18 @@ async def patch_mtool_template(
             _validate_cmap_semantics(cmap, doc)
 
         try:
-            ready = apply_column_map(doc, cmap)
+            ready, filing_coverage = resolve_filing_doc(
+                str(src), doc, data=data, column_map=cmap)
         except (ValueError, AttributeError, TypeError, KeyError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if filing_coverage["status"] == "blocked":
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "Some filing facts could not be mapped to a unique template cell.",
+                    "filing_coverage": filing_coverage,
+                },
+            )
 
         errors = validate_input(ready)
         if errors:
@@ -641,6 +654,7 @@ async def patch_mtool_template(
                         run_id, u.get("label"), u.get("detail"))
 
         summary = _full_report(report, notes_report)
+        summary["filing_coverage"] = filing_coverage
         # The template's own declared unit vs the run's denomination. Only the
         # translation manifest may change a VALUE — but a disagreement here is
         # the 1000×-inflation risk (finding 2), so it DEGRADES the fill: the
@@ -698,6 +712,8 @@ async def patch_mtool_template(
             "column_map": cmap,
             "template_fingerprint": fingerprint,
             "template_known": known is not None,
+            "template_inspection": inspection,
+            "filing_coverage": filing_coverage,
             "receipt_id": receipt_id,
         })
     except Exception:
@@ -782,8 +798,9 @@ async def detect_mtool_columns(
                 detail=f"Upload is not a readable .xlsx workbook: {exc}"
             ) from exc
 
-        detected = _parse_template_or_422(
-            "column detection", detect_column_map, str(src), doc, data=data)
+        inspection = _parse_template_or_422(
+            "template inspection", inspect_template, str(src), doc, data=data)
+        detected = inspection["column_map"]
         fingerprint = _parse_template_or_422(
             "fingerprint", fingerprint_workbook, data)
         known = describe_template(fingerprint)
@@ -797,6 +814,7 @@ async def detect_mtool_columns(
             "template_description": (known or {}).get("name"),
             "unit_scale_warnings": unit_scale_mismatches(
                 detected, doc["meta"].get("denomination")),
+            "filing_inspection": inspection,
         })
     finally:
         _cleanup(tmp)

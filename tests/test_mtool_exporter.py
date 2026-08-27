@@ -118,9 +118,13 @@ def test_leaf_fact_becomes_a_write(company_db):
     _seed(db, run_id, uuid, value=1500)
     doc = build_fill_doc(db, run_id, filing_standard="mfrs",
                          filing_level="company")
-    assert doc["writes"] == [
-        {"sheet": sheet, "label": label,
-         "column_role": "current_year", "value": 1500}]
+    assert len(doc["writes"]) == 1
+    write = doc["writes"][0]
+    assert {k: write[k] for k in ("sheet", "label", "column_role", "value")} == {
+        "sheet": sheet, "label": label,
+        "column_role": "current_year", "value": 1500}
+    assert write["semantic_address"]["primary_concept"].startswith("ssmt-")
+    assert write["target_hint"]["sheet"] == sheet
     assert doc["strict"] is True
     assert doc["meta"]["counts"]["writes"] == 1
 

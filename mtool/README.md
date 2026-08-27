@@ -11,7 +11,8 @@ identically on a laptop and in the cloud.
 | File | Role |
 |---|---|
 | `offline_fill.py` | The patcher. Single stdlib-only file — travels to the Windows box as one script. Writes numeric values into a *closed* mTool workbook by rewriting only the target worksheet XML inside the xlsx zip. Reused verbatim server-side (`fill_workbook`). |
-| `exporter.py` | The bridge. `build_fill_doc(db, run_id, …)` turns `run_concept_facts` into fill instructions (LEAF values only; SOCIE/matrix excluded and counted). |
+| `exporter.py` | The bridge. `build_fill_doc(db, run_id, …)` turns reviewed LEAF and data-entry SOCIE/MATRIX_CELL facts into semantic fill instructions. |
+| `template_map.py` | The semantic adapter. Resolves taxonomy concepts, periods, scopes and dimensions onto exact cells, and reports coverage/ambiguity. |
 | `column_detect.py` | Best-effort detection of a template's column layout (label column + value columns), with a confidence signal. |
 | `examples/` | Example input files, incl. the real observed mTool layout (labels col D, values E/F). |
 
@@ -22,11 +23,17 @@ Two ways to use it: **inside the app** (upload → download) or **the CLI**
 
 On any completed run's detail page, click **Fill mTool template**:
 
-1. The modal shows what will be written (value count + what's excluded).
-2. Upload the empty mTool template you generated in mTool.
-3. The app fills it from the run's reviewed figures and downloads one
-   workbook; a report tells you if anything was unresolved.
-4. Open that workbook in mTool → Validate → Generate.
+1. Check the run-readiness summary.
+2. Upload the empty mTool 2.2 template you generated in mTool. The app inspects
+   its taxonomy identities and previews note placement automatically.
+3. The app fills it from reviewed figures and notes, then shows the complete
+   coverage/read-back report before releasing the workbook.
+4. Download the workbook, open it in mTool, then Validate → Generate.
+
+SOCIE is resolved by primary taxonomy concept plus the Components of Equity
+dimension. Formula totals remain untouched. Templates without usable semantic
+identifiers fall back to the legacy label/column adapter and are reported as
+requiring attention; they are never silently guessed.
 
 API: `GET /api/runs/{id}/mtool-fill` (the fill doc) and
 `POST /api/runs/{id}/mtool-fill/patch` (upload template → filled workbook).
@@ -125,14 +132,18 @@ un-formatted table is left alone.
 
 ## Known limits (this phase)
 
-- **SOCIE (the equity matrix) is not filled** — SOCIE facts are counted as
-  excluded (notes prose IS filled — see *Notes formatting → mTool fidelity*).
+- **SOCIE is semantically mapped in code** — generated MFRS/MPERS,
+  Company/Group templates pass forward/reverse round trips. A genuine current
+  mTool 2.2 workbook still needs the Windows Validate/Generate acceptance run,
+  so an unknown uploaded layout is reported as a candidate, not verified.
 - **Sign/scale is identity by default** — the exporter emits DB values
   verbatim until the Windows recon confirms whether mTool wants the full
   unscaled value or the thousands figure (docs/MTOOL-ZIP-RECON-BRIEF.md
   Task 3.6). Do not enable a scale factor without that evidence.
-- **Column auto-detection is positional** (value columns immediately right of
-  the label column, in canonical order). It reports low confidence when
-  unsure and the server then requires an explicit `column_map`.
+- **Semantic identity is preferred over column guesses.** The resolver uses
+  taxonomy identifiers and dimensions when present. mTool marker rows supply
+  period and label columns for compatible linear sheets. Exact-label plus
+  positional mapping remains a reported fallback for legacy workbooks and
+  requires confirmation when the layout is unknown.
 
 Full plan and phase status: `docs/PLAN.md`.
