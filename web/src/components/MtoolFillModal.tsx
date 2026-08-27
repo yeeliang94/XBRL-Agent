@@ -720,6 +720,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
           <button
             type="button"
             aria-label="Close"
+            data-tooltip="Close"
             onClick={onClose}
             style={styles.closeX}
           >

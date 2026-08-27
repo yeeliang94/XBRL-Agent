@@ -408,8 +408,12 @@ Tailwind CSS v4 didn't load reliably on Windows (the upload button was
 unclickable). All components use inline `style={}` props. **Do not** convert
 back to className-based Tailwind.
 
-**Visual spec ([docs/pwc-design-system.html](docs/pwc-design-system.html)):**
-the canonical PwC design-system reference. Tokens live in
+**Visual spec ([docs/xbrl-design-system.html](docs/xbrl-design-system.html)):**
+the canonical application design system. Follow Direction A in
+[`docs/prototype-ui-overhaul.html`](docs/prototype-ui-overhaul.html) exactly
+for product composition and screen states. `docs/pwc-design-system.html` is a
+compatibility mirror for older pinning references, not a design authority.
+Tokens live in
 `web/src/lib/theme.ts` (the `pwc` object — imported by ~30 components, so it
 is the single cascade point); shared component primitives in
 `web/src/lib/uiStyles.ts`. Anything inline styles can't express (`:hover`,

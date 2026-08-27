@@ -106,6 +106,7 @@ export function NotesCoverageNav({
   const [data, setData] = useState<CoveragePayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
 
   // Keep the latest callbacks without re-firing the fetch when the parent
   // passes fresh closures each render.
@@ -176,12 +177,27 @@ export function NotesCoverageNav({
     unresolved: 0,
   };
   if (rows.length === 0 && data.banner !== "inventory_unavailable") return null;
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleRows = normalizedQuery
+    ? rows.filter((row) => `${row.note_num} ${row.title}`.toLowerCase().includes(normalizedQuery))
+    : rows;
 
   return (
     <div data-testid="notes-coverage-nav">
       <div style={styles.summary} data-testid="coverage-nav-summary">
         {s.placed} of {s.total} note{s.total === 1 ? "" : "s"} placed
       </div>
+
+      {rows.length > 1 && (
+        <input
+          type="search"
+          aria-label="Search notes"
+          placeholder="Search notes"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          style={styles.search}
+        />
+      )}
 
       {data.banner === "inventory_unavailable" && (
         <p
@@ -194,7 +210,7 @@ export function NotesCoverageNav({
       )}
 
       <ul style={styles.list}>
-        {rows.map((row) => {
+        {visibleRows.map((row) => {
           const isActive =
             row.placements.length > 0 &&
             !!activeSheet &&
@@ -222,6 +238,9 @@ export function NotesCoverageNav({
           );
         })}
       </ul>
+      {visibleRows.length === 0 && (
+        <p role="status" style={styles.empty}>No notes match your search.</p>
+      )}
     </div>
   );
 }
@@ -242,6 +261,18 @@ const styles = {
     fontSize: 12,
     margin: `0 0 ${pwc.space.sm}px`,
   } as const,
+  search: {
+    ...ui.input,
+    minHeight: 38,
+    padding: "8px 10px",
+    marginBottom: pwc.space.sm,
+    fontSize: 13,
+  } as React.CSSProperties,
+  empty: {
+    margin: `${pwc.space.sm}px 0 0`,
+    color: pwc.grey700,
+    fontSize: 12,
+  } as React.CSSProperties,
   list: {
     listStyle: "none",
     margin: 0,

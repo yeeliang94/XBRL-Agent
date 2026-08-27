@@ -72,6 +72,6 @@ describe("ElapsedTimer", () => {
     const now = Date.now();
     const { container } = render(<ElapsedTimer startTime={now} isRunning={true} />);
     const el = container.firstElementChild as HTMLElement;
-    expect(el.style.fontFamily).toContain("SF Mono");
+    expect(el.style.fontFamily).toContain("SFMono-Regular");
   });
 });

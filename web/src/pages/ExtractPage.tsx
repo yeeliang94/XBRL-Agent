@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RunConfigPayload } from "../lib/types";
 import { userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
+import { ui, uiClass } from "../lib/uiStyles";
 import type { AppState, AppAction } from "../lib/appReducer";
 import { notesTabLabel, agentSubAgentSummary } from "../lib/appReducer";
 import { fetchRunDetail, getResultJson, getExtendedSettings } from "../lib/api";
@@ -21,7 +22,6 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { buildToolTimeline, filterEventsBySubAgent } from "../lib/buildToolTimeline";
 import { NOTES_12_AGENT_ID, isNotes12AgentId } from "../lib/notes";
 import { isNonAgentTab } from "../lib/agentTabKinds";
-import { TERMS } from "../lib/vocabulary";
 import { describePdfSidecar } from "../lib/pdfSidecar";
 
 // Re-export so existing callers / tests that imported NOTES_12_AGENT_ID
@@ -61,6 +61,8 @@ function liveStageMessage(stage: AppState["pipelineStage"]): string {
 export interface ExtractPageProps {
   state: AppState;
   dispatch: React.Dispatch<AppAction>;
+  landingMode?: "queue" | "new";
+  onOpenNewExtraction?: () => void;
   handleUpload: (file: File) => Promise<UploadResponseShape>;
   handleMultiRun: (config: RunConfigPayload) => void;
   handleAbortAll: () => Promise<void>;
@@ -90,6 +92,8 @@ export interface ExtractPageProps {
 export function ExtractPage({
   state,
   dispatch,
+  landingMode = "queue",
+  onOpenNewExtraction,
   handleUpload,
   handleMultiRun,
   handleAbortAll,
@@ -255,33 +259,67 @@ export function ExtractPage({
   // Emitted once before the notes agents launch, only when the Settings
   // toggle is on and the PDF is a scan. Advisory in both outcomes.
   const sidecarNotice = state.pdfSidecar ? describePdfSidecar(state.pdfSidecar) : null;
+  const idle = state.sessionId == null && !state.isRunning;
+  const showQueue = idle && landingMode === "queue";
+  const isResumedDraft = state.currentRunId != null && state.sessionId != null
+    && !state.isRunning && !state.isComplete;
   return (
     <>
       <PageHeader
-        title={state.isRunning ? "Extraction in progress" : state.isComplete ? "Extraction complete" : TERMS.newExtraction}
+        eyebrow={state.isRunning || state.isComplete ? "Current filing" : undefined}
+        title={state.isRunning
+          ? state.filename ?? "Extraction in progress"
+          : state.isComplete
+            ? state.filename ?? "Extraction complete"
+            : isResumedDraft
+              ? "Continue setup"
+            : landingMode === "new"
+              ? "New extraction"
+              : "Work queue"}
         description={state.isRunning
           ? "Monitor the overall run, then inspect a workstream only when you need more detail."
-          : "Upload an audited financial statement to create an SSM MBRS filing draft for review."}
+          : isResumedDraft
+            ? "Confirm the saved filing scope and continue this draft when you are ready."
+          : landingMode === "new"
+            ? "Upload one audited financial statement. Confirm the filing scope before processing begins."
+            : "Continue an active filing, resolve reviews, or start from a new financial statement."}
+        actions={showQueue ? (
+          <button
+            type="button"
+            className={uiClass.btnPrimary}
+            style={{ ...ui.buttonPrimary, ...ui.buttonSm }}
+            onClick={() => {
+              onOpenNewExtraction?.();
+              const target = document.querySelector<HTMLElement>("[data-testid='drop-zone']");
+              const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+              target?.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "center" });
+              target?.focus({ preventScroll: true });
+            }}
+          >
+            New extraction
+          </button>
+        ) : undefined}
       />
 
-      {/* Upload + Run. In the empty landing state the upload card sits in
-          the left column of HomeHero, with the "home base" (recent runs +
-          stat tiles) on the right. Once an upload exists or a run starts
-          (`active` goes false), HomeHero collapses to just the upload card
-          at full width — and crucially keeps UploadPanel mounted in the same
-          tree position so its internal upload state survives the transition. */}
+      {/* Direction A keeps Work queue and New extraction as separate
+          destinations. The stable child slot is used only for the new-upload,
+          draft, and live-run states so UploadPanel does not remount mid-flow. */}
       <HomeHero
-        active={state.sessionId == null && !state.isRunning}
+        active={showQueue}
         onResumeDraft={onResumeDraft ?? (() => {})}
         onOpenRun={onOpenRun ?? (() => {})}
         onViewAllRuns={onViewAllRuns ?? (() => {})}
       >
-        <UploadPanel
-          onUpload={handleUpload}
-          isRunning={state.isRunning}
-          filename={state.filename}
-          startTime={state.runStartTime}
-        />
+        {(!idle || landingMode === "new") && (
+          <div id="new-extraction">
+            <UploadPanel
+              onUpload={handleUpload}
+              isRunning={state.isRunning}
+              filename={state.filename}
+              startTime={state.runStartTime}
+            />
+          </div>
+        )}
       </HomeHero>
 
       {/* Pre-run configuration panel — shown after upload, hidden once running.
@@ -611,6 +649,13 @@ export function ActiveTabPanel({
     }
     return { events: rawEvents, toolTimeline: aggregateTimeline };
   }, [rawEvents, notes12SubId, showSubTabs, aggregateTimeline]);
+  const latestStatusMessage = useMemo(() => {
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      const event = events[index];
+      if (event.event === "status" && event.data.message) return event.data.message;
+    }
+    return running ? "Waiting for the next workstream update…" : "No recent semantic update.";
+  }, [events, running]);
 
   if (state.activeTab === "validator") {
     // PLAN-stop-and-validation-visibility Phase 5.3: prefer the live
@@ -759,11 +804,30 @@ export function ActiveTabPanel({
           onSelect={setNotes12SubId}
         />
       )}
-      <AgentTimeline
-        events={events}
-        toolTimeline={toolTimeline}
-        isRunning={running}
-      />
+      <div
+        className="pwc-status-change"
+        role="status"
+        aria-label="Latest agent update"
+        aria-live="polite"
+        aria-atomic="true"
+        style={styles.recentUpdate}
+      >
+        <span style={styles.recentUpdateLabel}>Latest update</span>
+        <span>{latestStatusMessage}</span>
+      </div>
+      <details className="technical-activity" style={styles.technicalDisclosure}>
+        <summary style={styles.technicalSummary}>
+          Technical activity
+          <span aria-hidden="true" className="pwc-disclosure-chevron" style={styles.usageChevron} />
+        </summary>
+        <div className="pwc-disclosure-content">
+          <AgentTimeline
+            events={events}
+            toolTimeline={toolTimeline}
+            isRunning={running}
+          />
+        </div>
+      </details>
     </div>
   );
 }
@@ -777,7 +841,7 @@ const styles = {
   runOverview: {
     background: pwc.white,
     border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.lg,
+    borderRadius: pwc.radius.md,
     padding: pwc.space.xl,
   } as const,
   runOverviewHeader: {
@@ -874,7 +938,7 @@ const styles = {
     gap: 0,
     background: pwc.white,
     border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.lg,
+    borderRadius: pwc.radius.md,
     overflow: "hidden" as const,
   } as const,
   activityCardAttached: {
@@ -906,6 +970,41 @@ const styles = {
     display: "flex",
     alignItems: "center",
     gap: pwc.space.md,
+  } as const,
+  recentUpdate: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: pwc.space.xs,
+    padding: `${pwc.space.lg}px ${pwc.space.lg}px`,
+    borderBottom: `1px solid ${pwc.grey200}`,
+    fontFamily: pwc.fontBody,
+    fontSize: 14,
+    lineHeight: 1.5,
+    color: pwc.grey800,
+  } as const,
+  recentUpdateLabel: {
+    fontFamily: pwc.fontHeading,
+    fontSize: 11,
+    fontWeight: pwc.weight.semibold,
+    color: pwc.grey700,
+    textTransform: "uppercase" as const,
+    letterSpacing: "0.02em",
+  } as const,
+  technicalDisclosure: {
+    minWidth: 0,
+  } as const,
+  technicalSummary: {
+    minHeight: 44,
+    padding: `${pwc.space.md}px ${pwc.space.lg}px`,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: pwc.space.md,
+    cursor: "pointer",
+    fontFamily: pwc.fontHeading,
+    fontSize: 13,
+    fontWeight: pwc.weight.medium,
+    color: pwc.grey700,
   } as const,
   activityTitle: {
     fontFamily: pwc.fontHeading,

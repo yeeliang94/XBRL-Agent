@@ -198,7 +198,7 @@ describe("HistoryList", () => {
     const symbol = completed.parentElement!.querySelector('[aria-hidden="true"]');
     expect(symbol?.getAttribute("data-status-icon")).toBe("success");
     // grey700 symbol — never a status hue.
-    expect((symbol as HTMLElement).style.color).toBe("rgb(94, 94, 94)");
+    expect((symbol as HTMLElement).style.color).toBe("rgba(0, 0, 0, 0.64)");
     const failed = screen.getByText("Failed");
     expect(failed.parentElement!.querySelector('[aria-hidden="true"]')?.getAttribute("data-status-icon")).toBe("failure");
   });

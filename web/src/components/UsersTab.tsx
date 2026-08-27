@@ -215,7 +215,13 @@ export function UsersTab({ currentEmail }: UsersTabProps = {}) {
       {error && <p style={styles.error} role="alert">{error}</p>}
       {notice && <p style={styles.notice} role="status" aria-live="polite">{notice}</p>}
 
-      <table style={styles.table}>
+      <div
+        className="settings-users-table-wrap"
+        role="region"
+        aria-label="User accounts"
+        tabIndex={0}
+      >
+      <table className="settings-users-table" style={styles.table}>
         <thead>
           <tr>
             <th style={styles.th}>Email</th>
@@ -322,6 +328,7 @@ export function UsersTab({ currentEmail }: UsersTabProps = {}) {
           })}
         </tbody>
       </table>
+      </div>
 
       <div style={styles.addForm}>
         <p style={styles.heading}>Add user</p>
@@ -331,8 +338,8 @@ export function UsersTab({ currentEmail }: UsersTabProps = {}) {
             into Password. `off` / `new-password` defeat it — the same guard
             GeneralSettingsForm already uses. Visible <label>s so the fields are
             named even when placeholders vanish on input. */}
-        <div style={styles.addRow}>
-          <label style={styles.fieldLabel}>
+        <div className="settings-users-add-row" style={styles.addRow}>
+          <label className="settings-users-field" style={styles.fieldLabel}>
             Email
             <input
               type="email"
@@ -344,7 +351,7 @@ export function UsersTab({ currentEmail }: UsersTabProps = {}) {
               style={styles.input}
             />
           </label>
-          <label style={styles.fieldLabel}>
+          <label className="settings-users-field" style={styles.fieldLabel}>
             Name
             <input
               type="text"
@@ -356,7 +363,7 @@ export function UsersTab({ currentEmail }: UsersTabProps = {}) {
               style={styles.input}
             />
           </label>
-          <label style={styles.fieldLabel}>
+          <label className="settings-users-field" style={styles.fieldLabel}>
             Password (min 8 characters)
             <input
               type="password"
@@ -368,7 +375,7 @@ export function UsersTab({ currentEmail }: UsersTabProps = {}) {
               style={styles.input}
             />
           </label>
-          <label style={styles.checkboxLabel}>
+          <label className="settings-users-checkbox" style={styles.checkboxLabel}>
             <input
               type="checkbox"
               checked={newIsAdmin}
@@ -377,7 +384,7 @@ export function UsersTab({ currentEmail }: UsersTabProps = {}) {
             Administrator
           </label>
           <button
-            className={uiClass.btnPrimary}
+            className={`${uiClass.btnPrimary} settings-users-add-button`}
             style={styles.saveButton}
             disabled={busy}
             onClick={handleAdd}

@@ -94,7 +94,6 @@ const styles = {
     height: 8,
     borderRadius: "50%",
     background: pwc.orange400,
-    animation: "pulse-subtle 1.5s ease-in-out infinite",
     display: "inline-block",
   } as React.CSSProperties,
 };
@@ -135,7 +134,7 @@ export function TokenDashboard({ tokens, isRunning, embedded = false }: Props) {
         <div style={styles.costSection}>
           <div style={styles.costLabel}>
             Est. Cost
-            {isRunning && <span style={styles.pulsingDot} />}
+            {isRunning && <span className="pwc-working-indicator" style={styles.pulsingDot} />}
           </div>
           <AnimatedNumber
             value={tokens.cost_estimate}

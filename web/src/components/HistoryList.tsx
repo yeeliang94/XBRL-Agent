@@ -180,7 +180,7 @@ export function HistoryList({
               <tr
                 key={run.id}
                 onClick={handleActivate}
-                className={uiClass.tableRow}
+                className={`${uiClass.tableRow} pwc-view-enter`}
                 style={isSelected ? styles.rowSelected : styles.row}
               >
                 <td style={styles.tdFilename}>
@@ -338,10 +338,6 @@ const visuallyHidden: React.CSSProperties = {
 
 const rowBase: React.CSSProperties = {
   cursor: "pointer",
-  // Calm fade-in as the list renders. Rows are keyed by run.id, so selecting a
-  // row (row → rowSelected) keeps the same node and the same animation string,
-  // meaning it never re-plays; only genuinely new rows (pagination) animate.
-  animation: `fade-in ${pwc.motion.duration.base} ${pwc.motion.easing}`,
 };
 
 const styles = {
@@ -394,9 +390,7 @@ const styles = {
     fontWeight: pwc.weight.medium,
     color: pwc.grey900,
   } as React.CSSProperties,
-  // Filename cell gets a left "selection rail" via border-left on the
-  // row-selected variant below. Keeping padding identical to other cells
-  // so the rail doesn't shift content when a row becomes active.
+  // Filename cell keeps identical padding when a row becomes active.
   tdFilename: {
     ...ui.td,
     borderBottom: `1px solid ${pwc.grey100}`,
@@ -404,13 +398,10 @@ const styles = {
     overflow: "hidden",
   } as React.CSSProperties,
   row: { ...rowBase } as React.CSSProperties,
-  // Selection: a filled tint plus a thick orange left rail so the user can
-  // see at a glance which row spawned the currently-open detail. (Selection
-  // is an active-state indicator — allowed orange, unlike routine status.)
+  // Selection uses a filled tint without an accent rail.
   rowSelected: {
     ...rowBase,
     background: pwc.orange100,
-    boxShadow: `inset 3px 0 0 0 ${pwc.orange500}`,
   } as React.CSSProperties,
   // Filename + optional denomination tag share one truncating flex line.
   filenameRow: {

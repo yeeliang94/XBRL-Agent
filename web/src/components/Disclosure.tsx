@@ -61,10 +61,9 @@ export function Disclosure({ summary, children, defaultOpen = false, open, onTog
       >
         <span
           aria-hidden="true"
+          className={`pwc-disclosure-chevron${isOpen ? " is-open" : ""}`}
           style={{
             display: "inline-block",
-            transform: isOpen ? "rotate(90deg)" : "rotate(0deg)",
-            transition: `transform ${pwc.motion.duration.base} ${pwc.motion.easing}`,
             fontSize: 12,
             color: pwc.grey500,
           }}
@@ -76,11 +75,9 @@ export function Disclosure({ summary, children, defaultOpen = false, open, onTog
       {isOpen && (
         <div
           id={bodyId}
+          className="pwc-disclosure-content"
           style={{
-            // Slide open — animate max-height/opacity; the existing slide-down
-            // keyframe caps at 500px, which is fine for these developer panels.
             overflow: "hidden",
-            animation: `slide-down ${pwc.motion.duration.base} ${pwc.motion.easing}`,
           }}
         >
           {children}

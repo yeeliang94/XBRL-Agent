@@ -1,7 +1,8 @@
 import type { CSSProperties } from "react";
 import { pwc, tokens, component } from "./theme";
 
-// Shared inline component primitives, modelled on docs/pwc-design-system.html.
+// Shared inline component primitives, modelled on
+// docs/xbrl-design-system.html and Direction A of the UI prototype.
 // The app intentionally avoids Tailwind / className styling for Windows
 // compatibility (CLAUDE.md gotcha #7), so the common UI language lives here
 // instead of being recreated per page.
@@ -16,26 +17,22 @@ import { pwc, tokens, component } from "./theme";
 // style={ui.buttonPrimary}>`). Form-control focus rings are applied globally
 // to all inputs/selects/textareas in index.css and need no className.
 
-// Control boundaries are essential (WCAG 3:1): grey500, not the decorative
-// grey300 (design-system role map: "control border = grey500 · grey300
-// remains decorative or disabled only").
 const controlBase: CSSProperties = {
   fontFamily: pwc.fontBody,
-  fontSize: 15,
-  lineHeight: 1.45,
+  fontSize: 14,
+  lineHeight: 1.5,
   borderRadius: tokens.radius.control,
   border: `1px solid ${tokens.color.border.control}`,
   background: tokens.surface.default,
   color: tokens.color.text.primary,
 };
 
-// Shared button geometry. Variants differ only in colour. Default target is
-// 44px; compact desktop controls may use ui.buttonSm (40px) when separated.
+// Shared button geometry from the XBRL action specimen.
 const buttonBase: CSSProperties = {
-  minHeight: 44,
-  padding: "10px 20px",
+  minHeight: 40,
+  padding: "0 15px",
   fontFamily: pwc.fontHeading,
-  fontSize: 15,
+  fontSize: 14,
   fontWeight: pwc.weight.medium,
   borderRadius: tokens.radius.control,
   border: "1px solid transparent",
@@ -47,9 +44,6 @@ const buttonBase: CSSProperties = {
   gap: pwc.space.sm,
   whiteSpace: "nowrap",
   lineHeight: 1.2,
-  // Reads the shared motion budget (theme.ts pwc.motion) so buttons ease the
-  // same way as every other transition in the app.
-  transition: `background ${pwc.motion.duration.fast} ${pwc.motion.easing}, border-color ${pwc.motion.duration.fast} ${pwc.motion.easing}`,
 };
 
 // Outline pill (design-system Badges): transparent fill, a thin status-coloured
@@ -73,10 +67,9 @@ const badgeBase: CSSProperties = {
   border: `1px solid ${pwc.grey300}`,
 };
 
-// Restrained alert (design-system Alerts): neutral surface, hairline border,
-// a status-coloured left rule + coloured icon carry the state. No coloured
-// fills. Variants set the left-rule colour; pair the icon with
-// `ui.alertIcon(<hue>)`.
+// Restrained alert (design-system Alerts): neutral surface and one hairline
+// boundary. The icon and explicit copy carry status; side rails are avoided so
+// alerts do not reintroduce the accent-edge treatment used by old selections.
 const alertBase: CSSProperties = {
   display: "flex",
   gap: pwc.space.md,
@@ -85,7 +78,6 @@ const alertBase: CSSProperties = {
   borderRadius: tokens.radius.control,
   background: tokens.surface.default,
   border: `1px solid ${tokens.color.border.subtle}`,
-  borderLeft: `3px solid ${tokens.color.border.strong}`,
   color: tokens.color.text.body,
   fontFamily: pwc.fontBody,
   fontSize: 15,
@@ -114,10 +106,8 @@ const thBase: CSSProperties = {
 
 export const ui = {
   // --- Typography --------------------------------------------------------
-  // Compact semantic scale (design-system Typography): 28 Page title ·
-  // 22 Workspace title · 20 Section · 15–16 Subsection · 15 Body ·
-  // 13–14 Data/support · 12–13 Metadata · 11–12 Micro-label. Small text uses
-  // grey700 or darker; grey500 is decorative/disabled-adjacent only.
+  // Focused-workspace scale: 28 Page title · 16 Section/item · 14 Body.
+  // Short metadata and mono identifiers may step down to 12–13px.
   // Titles at 22-28px take a touch of negative tracking (design-system
   // Typography): a grotesk at display size reads loose at 0 tracking.
   pageTitle: {
@@ -131,7 +121,7 @@ export const ui = {
   } as CSSProperties,
   pageTitleCompact: {
     fontFamily: pwc.fontHeading,
-    fontSize: 22,
+    fontSize: 20,
     lineHeight: 1.2,
     letterSpacing: "-0.01em",
     fontWeight: pwc.weight.semibold,
@@ -140,7 +130,7 @@ export const ui = {
   } as CSSProperties,
   sectionTitle: {
     fontFamily: pwc.fontHeading,
-    fontSize: 20,
+    fontSize: 16,
     lineHeight: 1.25,
     fontWeight: pwc.weight.semibold,
     color: tokens.color.text.primary,
@@ -148,7 +138,7 @@ export const ui = {
   } as CSSProperties,
   subsectionTitle: {
     fontFamily: pwc.fontHeading,
-    fontSize: 16,
+    fontSize: 15,
     lineHeight: 1.35,
     fontWeight: pwc.weight.semibold,
     color: tokens.color.text.primary,
@@ -156,14 +146,14 @@ export const ui = {
   } as CSSProperties,
   bodyText: {
     fontFamily: pwc.fontBody,
-    fontSize: 15,
-    lineHeight: 1.55,
+    fontSize: 14,
+    lineHeight: 1.5,
     fontWeight: pwc.weight.regular,
     color: tokens.color.text.body,
   } as CSSProperties,
   supportingText: {
     fontFamily: pwc.fontBody,
-    fontSize: 14,
+    fontSize: 13,
     lineHeight: 1.5,
     fontWeight: pwc.weight.regular,
     color: tokens.color.text.secondary,
@@ -223,6 +213,47 @@ export const ui = {
   pageWorkspace: {
     width: "100%",
     maxWidth: "none",
+  } as CSSProperties,
+  // Persistent focused-workspace shell. Route-specific responsive and motion
+  // states live in index.css; these primitives own stable geometry only.
+  appShell: {
+    minHeight: "100vh",
+    display: "grid",
+    gridTemplateColumns: "220px minmax(0, 1fr)",
+    background: tokens.surface.canvas,
+  } as CSSProperties,
+  appRail: {
+    position: "sticky",
+    top: 0,
+    height: "100vh",
+    display: "flex",
+    flexDirection: "column",
+    background: tokens.surface.navigation,
+    padding: `20px 14px`,
+    zIndex: 30,
+  } as CSSProperties,
+  appTopbar: {
+    position: "sticky",
+    top: 0,
+    zIndex: 20,
+    height: 64,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: pwc.space.lg,
+    padding: `0 30px`,
+    background: "rgba(255, 255, 255, 0.94)",
+    backdropFilter: "blur(12px)",
+  } as CSSProperties,
+  paneDivider: {
+    borderLeft: `1px solid ${tokens.color.border.subtle}`,
+  } as CSSProperties,
+  flatList: {
+    borderTop: `1px solid ${tokens.color.border.subtle}`,
+  } as CSSProperties,
+  flatRow: {
+    borderBottom: `1px solid ${tokens.color.border.subtle}`,
+    background: tokens.surface.default,
   } as CSSProperties,
   toolbar: {
     display: "flex",
@@ -352,12 +383,12 @@ export const ui = {
   } as CSSProperties,
 
   // Size modifiers — spread after a variant: { ...ui.buttonPrimary, ...ui.buttonSm }
-  // Compact desktop control (40px) — use only where controls are separated;
+  // Compact desktop control (34px) — use only where controls are separated;
   // nothing interactive falls below the WCAG 24px minimum.
   buttonSm: {
-    minHeight: 40,
-    padding: "8px 14px",
-    fontSize: 14,
+    minHeight: 34,
+    padding: "0 12px",
+    fontSize: 13,
   } as CSSProperties,
 
   buttonLg: {
@@ -405,13 +436,12 @@ export const ui = {
   } as CSSProperties,
 
   // --- Tabs ---------------------------------------------------------------
-  // Shared underline tab geometry. Pages keep their own keyboard/selection
-  // logic (role="tablist" etc.); these styles only carry the appearance.
-  // Active = dark readable text + signature-orange indicator.
+  // Shared surface-tab geometry. Pages keep their own keyboard/selection
+  // logic (role="tablist" etc.); active state uses fill and weight without
+  // an accent underline or edge.
   tabBar: {
     display: "flex",
     gap: pwc.space.sm,
-    borderBottom: `1px solid ${tokens.color.border.subtle}`,
     maxWidth: "100%",
     overflowX: "auto",
   } as CSSProperties,
@@ -422,22 +452,19 @@ export const ui = {
     fontWeight: pwc.weight.medium,
     background: "none",
     border: "none",
-    borderBottom: "2px solid transparent",
+    borderRadius: tokens.radius.control,
     cursor: "pointer",
     color: tokens.color.text.secondary,
-    marginBottom: -1,
     whiteSpace: "nowrap",
     textDecoration: "none",
     display: "inline-flex",
     alignItems: "center",
     gap: pwc.space.sm,
   } as CSSProperties,
-  // Full borderBottom SHORTHAND on purpose: ui.tab sets the shorthand, and a
-  // longhand-only override here would leave a stale solid border behind when
-  // React removes the longhand on deactivation (shorthand/longhand mixing).
   tabActive: {
     color: tokens.color.text.primary,
-    borderBottom: `2px solid ${tokens.color.brand.indicator}`,
+    background: tokens.surface.sunken,
+    fontWeight: pwc.weight.semibold,
   } as CSSProperties,
 
   // --- Dialog -------------------------------------------------------------
@@ -524,23 +551,19 @@ export const ui = {
   }),
 
   // --- Alerts ------------------------------------------------------------
-  // Neutral surface + a status-coloured left rule. Pair the icon with
-  // ui.alertIcon(<hue>) so the icon (not a fill) carries the status.
+  // Neutral surface + one neutral boundary. Pair the icon with
+  // ui.alertIcon(<hue>) so the icon and copy carry the status.
   alertInfo: {
     ...alertBase,
-    borderLeft: `3px solid ${pwc.info}`,
   } as CSSProperties,
   alertSuccess: {
     ...alertBase,
-    borderLeft: `3px solid ${pwc.success}`,
   } as CSSProperties,
   alertWarning: {
     ...alertBase,
-    borderLeft: `3px solid ${pwc.warning}`,
   } as CSSProperties,
   alertError: {
     ...alertBase,
-    borderLeft: `3px solid ${pwc.error}`,
   } as CSSProperties,
 
   // Icon colour for an alert (the icon carries the status hue). 16px to match
@@ -567,9 +590,9 @@ export const ui = {
   // BenchmarksPage with a single shape). Quiet and FLAT — a metric is not an
   // elevated card.
   statTile: {
-    padding: pwc.space.lg,
-    border: `1px solid ${tokens.color.border.subtle}`,
-    borderRadius: tokens.radius.control,
+    padding: `${pwc.space.sm}px 0`,
+    border: "none",
+    borderRadius: 0,
     background: tokens.surface.default,
     minWidth: 110,
   } as CSSProperties,

@@ -52,29 +52,16 @@ const styles = {
   } as React.CSSProperties,
   tabBar: {
     display: "flex",
-    borderBottom: `1px solid ${pwc.grey200}`,
+    gap: pwc.space.sm,
   } as React.CSSProperties,
   tabActive: {
-    padding: `${pwc.space.md}px ${pwc.space.lg}px`,
-    fontFamily: pwc.fontHeading,
+    ...ui.tab,
+    ...ui.tabActive,
     fontSize: 14,
-    fontWeight: 600,
-    color: pwc.grey900,
-    background: "none",
-    border: "none",
-    borderBottom: `2px solid ${pwc.orange500}`,
-    cursor: "pointer",
   } as React.CSSProperties,
   tabInactive: {
-    padding: `${pwc.space.md}px ${pwc.space.lg}px`,
-    fontFamily: pwc.fontHeading,
+    ...ui.tab,
     fontSize: 14,
-    fontWeight: 500,
-    color: pwc.grey500,
-    background: "none",
-    border: "none",
-    borderBottom: "2px solid transparent",
-    cursor: "pointer",
   } as React.CSSProperties,
   content: {
     padding: pwc.space.xl,
@@ -292,6 +279,8 @@ export function ResultsView({ complete, sessionId, runStartTime, getResultJson, 
           <button
             key={tab.key}
             onClick={() => setActiveTab(tab.key)}
+            className={uiClass.tab}
+            aria-selected={activeTab === tab.key}
             style={activeTab === tab.key ? styles.tabActive : styles.tabInactive}
           >
             {tab.label}

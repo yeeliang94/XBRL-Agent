@@ -99,11 +99,29 @@ describe("SettingsPage", () => {
     expect(container.style.maxWidth).toBe("840px");
   });
 
-  test("active tab is dark text + orange indicator, not orange text (CS5)", () => {
+  test("active tab uses dark text and a quiet surface without an indicator line (CS5)", () => {
     render(<SettingsPage isAdmin={false} />);
     const active = screen.getByRole("tab", { name: "General" });
     expect(active.getAttribute("aria-selected")).toBe("true");
-    expect(active.style.color).toBe("rgb(26, 26, 26)"); // grey900
-    expect(active.style.borderBottom).toContain("rgb(253, 81, 8)"); // orange indicator
+    expect(active.style.color).toBe("rgb(0, 0, 0)");
+    expect(active.style.background).toBe("rgb(245, 247, 248)");
+    expect(active.style.borderBottom).toBe("");
+  });
+
+  test("pointer-selected tabs suppress the keyboard-only outline", () => {
+    render(<SettingsPage isAdmin={true} />);
+    const account = screen.getByRole("tab", { name: "Account" });
+    fireEvent.pointerDown(account);
+    fireEvent.click(account);
+    expect(account).toHaveAttribute("data-pointer-focus", "true");
+    fireEvent.keyDown(account, { key: "ArrowRight" });
+    expect(account).not.toHaveAttribute("data-pointer-focus");
+  });
+
+  test("long General-settings selects can shrink to the mobile content width", async () => {
+    render(<SettingsPage isAdmin={true} />);
+    const sourceMode = await screen.findByLabelText("Word source handling mode");
+    expect((sourceMode as HTMLElement).style.width).toBe("100%");
+    expect((sourceMode as HTMLElement).style.maxWidth).toBe("420px");
   });
 });
