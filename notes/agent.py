@@ -966,15 +966,28 @@ def _load_template_label_catalog(template_path: str, sheet_name: str) -> list[st
     agent falls back to the `read_template` tool).
     """
     try:
-        from concept_model.filing_targets import list_writable_targets
-        targets = list_writable_targets(template_path)
+        import openpyxl
+        from concept_model.filing_targets import writable_rows
+        allowed_rows = writable_rows(template_path, sheet_name)
+        wb = openpyxl.load_workbook(template_path, data_only=False)
     except Exception as e:  # noqa: BLE001 — intentional catch-all for IO
         logger.warning(
             "Could not open template %s for label catalog: %s",
             template_path, e,
         )
         return []
-    return [target.label for target in targets if target.sheet == sheet_name]
+    try:
+        if sheet_name not in wb.sheetnames:
+            return []
+        ws = wb[sheet_name]
+        return [
+            str(ws.cell(row=row, column=1).value).strip()
+            for row in range(1, ws.max_row + 1)
+            if ws.cell(row=row, column=1).value not in (None, "")
+            and (allowed_rows is None or row in allowed_rows)
+        ]
+    finally:
+        wb.close()
 
 
 def _render_single_page(
@@ -2450,7 +2463,7 @@ def create_notes_agent(
                 continue
             if f.col != 1 or not f.value:
                 continue
-            if f.row not in allowed_rows:
+            if allowed_rows is not None and f.row not in allowed_rows:
                 continue
             lines.append(f"  row {f.row:>3}: {f.value}")
         return f"Sheet: {ctx.deps.sheet_name}\nLabels (col A):\n" + "\n".join(lines)

@@ -42,6 +42,7 @@ def client(tmp_path, monkeypatch):
     db = tmp_path / "xbrl.db"
     srv.AUDIT_DB_PATH = db
     from concept_model.importer import import_company_targets, import_template
+    from concept_model.filing_targets import persist_template_manifest
     from concept_model.parser import parse_template
     from db.schema import init_db
     init_db(db)
@@ -49,6 +50,7 @@ def client(tmp_path, monkeypatch):
     jp = tmp_path / "tree.json"
     jp.write_text(json.dumps(tree.to_json(), sort_keys=True), encoding="utf-8")
     import_company_targets(db, import_template(db, jp))
+    persist_template_manifest(db, SOFP)
     return TestClient(srv.app), db, tmp_path
 
 

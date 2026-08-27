@@ -183,6 +183,22 @@ def _uuid_for(db, label):
     return row[0]
 
 
+def _make_unknown_unit_leaf(db) -> tuple[str, str]:
+    """Keep the unit-gap behavior pinned without treating a heading as data."""
+    label = "Unclassified issued capital measure"
+    uuid = _uuid_for(db, SHARES_LABEL)
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(
+            "UPDATE concept_nodes SET canonical_label = ? WHERE concept_uuid = ?",
+            (label, uuid),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return uuid, label
+
+
 @pytest.fixture
 def issued_capital_db(tmp_path: Path):
     db = tmp_path / "xbrl.db"
@@ -243,20 +259,20 @@ def test_unknown_unit_rows_are_reported_not_hidden(issued_capital_db):
     rows have no unit class, because those are exactly the rows a future
     non-identity manifest would refuse."""
     db, run_id = issued_capital_db
-    # 'Notes - Issued capital' is the sheet title row; it has no SSM unit type.
-    title_uuid = _uuid_for(db, "Notes - Issued capital")
-    _seed(db, run_id, title_uuid, 1)
+    unknown_uuid, unknown_label = _make_unknown_unit_leaf(db)
+    _seed(db, run_id, unknown_uuid, 1)
     doc = build_fill_doc(db, run_id, filing_standard="mfrs",
                          filing_level="company")
     unknown = doc["meta"]["unit_class_unknown"]
-    assert [u["label"] for u in unknown] == ["Notes - Issued capital"]
+    assert [u["label"] for u in unknown] == [unknown_label]
     assert doc["meta"]["unit_classes"]["unknown"] == 1
     assert doc["writes"][0]["value"] == 1  # identity passes it through
 
 
 def test_non_identity_fill_raises_on_an_unknown_unit(issued_capital_db):
     db, run_id = issued_capital_db
-    _seed(db, run_id, _uuid_for(db, "Notes - Issued capital"), 1)
+    unknown_uuid, _ = _make_unknown_unit_leaf(db)
+    _seed(db, run_id, unknown_uuid, 1)
     with pytest.raises(UnknownUnitClass):
         build_fill_doc(db, run_id, filing_standard="mfrs",
                        filing_level="company",
