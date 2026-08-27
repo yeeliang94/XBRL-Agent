@@ -38,14 +38,10 @@ interface Props {
 const styles = {
   overlay: {
     ...ui.scrim,
-    // Backdrop fades in alongside the dialog scaling in.
-    animation: `dialog-in ${pwc.motion.duration.fast} ${pwc.motion.easing}`,
   } as React.CSSProperties,
   modal: {
     ...ui.dialog,
     maxWidth: 440,
-    // Scale 97%→100% + fade (motion tokens; reduced-motion zeroes it globally).
-    animation: `dialog-in ${pwc.motion.duration.fast} ${pwc.motion.easing}`,
   } as React.CSSProperties,
   heading: {
     ...ui.dialogTitle,
@@ -133,6 +129,7 @@ export function ConfirmDialog({
   return (
     <div
       style={styles.overlay}
+      className="pwc-dialog-scrim-enter"
       onClick={(e) => {
         // Click-outside cancels, but never while the action is running.
         if (e.target === e.currentTarget && !busy) onCancel();
@@ -143,7 +140,7 @@ export function ConfirmDialog({
       aria-describedby="confirm-dialog-message"
       onKeyDown={onKeyDown}
     >
-      <div style={styles.modal}>
+      <div style={styles.modal} className="pwc-dialog-enter">
         <h2 style={styles.heading}>{title}</h2>
         <p id="confirm-dialog-message" style={styles.body}>{message}</p>
         <div style={styles.actions}>

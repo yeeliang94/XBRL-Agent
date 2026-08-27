@@ -1,5 +1,3 @@
-import { pwc } from "../lib/theme";
-
 // ---------------------------------------------------------------------------
 // TabPanelFade — re-runs the shared `fade-in` keyframe (opacity + 4px rise)
 // whenever `tabKey` changes, so switching a tab crossfades the new panel in
@@ -20,10 +18,7 @@ interface Props {
 
 export function TabPanelFade({ tabKey, children }: Props) {
   return (
-    <div
-      key={tabKey}
-      style={{ animation: `fade-in ${pwc.motion.duration.base} ${pwc.motion.easing}` }}
-    >
+    <div key={tabKey} className="pwc-view-enter">
       {children}
     </div>
   );

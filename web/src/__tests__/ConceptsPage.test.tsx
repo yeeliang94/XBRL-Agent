@@ -7,7 +7,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { ConceptsPage, formatGroupedInput, rowLacksSource } from "../pages/ConceptsPage";
+import { ConceptsPage, formatGroupedInput, rowLacksSource, resolveInitialWorkspaceTemplate } from "../pages/ConceptsPage";
 import type { ConceptRow } from "../pages/ConceptsPage";
 import type { CrossCheckResult } from "../lib/types";
 
@@ -39,6 +39,11 @@ describe("rowLacksSource", () => {
     expect(rowLacksSource({ ...base, kind: "ABSTRACT" })).toBe(false);
     expect(rowLacksSource({ ...base, is_alias: true })).toBe(false);
   });
+});
+
+test("an explicit Figures route overrides a persisted Notes preference", () => {
+  expect(resolveInitialWorkspaceTemplate("figures", "__notes__", ["mfrs-group-sofp-v1"]))
+    .toBe("mfrs-group-sofp-v1");
 });
 
 // Vitest setup stubs `fetch`; each test reassigns the implementation.
@@ -205,6 +210,9 @@ describe("ConceptsPage", () => {
     // redundant with the "Calculated" state badge. It must not be shown.
     const computedRow = await screen.findByTestId("concept-row-comp-1");
     expect(computedRow.textContent).not.toMatch(/cascade/i);
+    expect(
+      within(computedRow).queryByRole("button", { name: /open source/i }),
+    ).toBeNull();
     // A real provenance string (leaf-1, "pdf p.1") is still shown.
     const leafRow = screen.getByTestId("concept-row-leaf-1");
     expect(leafRow.textContent).toMatch(/pdf p\.1/);
@@ -436,6 +444,56 @@ describe("ConceptsPage", () => {
     // Click "Group" → row shows 200.
     fireEvent.click(screen.getByTestId("scope-btn-Group"));
     expect(input()).toBe("200");
+  });
+
+  test("entity_scope toggle swaps source evidence with the value", async () => {
+    const groupConcepts = {
+      run_id: 99,
+      concepts: [{
+        ...sampleConcepts.concepts[1],
+        value: 100,
+        source: "Company page 2",
+        evidence: "Company evidence page 2",
+        scope_facts: { Company: { CY: 100 }, Group: { CY: 200 } },
+        scope_fact_details: {
+          Company: { CY: { value: 100, value_status: "observed", children_status: null, source: "Company page 2", evidence: "Company evidence page 2" } },
+          Group: { CY: { value: 200, value_status: "observed", children_status: null, source: "Group pages 3-4", evidence: "Group evidence pages 3-4" } },
+        },
+      }],
+    };
+    mockFetch((url) => {
+      if (url.includes("/concepts")) return groupConcepts;
+      if (url.includes("/conflicts")) return { conflicts: [] };
+      return {};
+    });
+    render(<ConceptsPage runId={99} />);
+    await waitFor(() => screen.getByTestId("entity-scope-toggle"));
+    fireEvent.click(screen.getByTestId("scope-btn-Group"));
+    const row = screen.getByTestId("concept-row-leaf-1");
+    expect(within(row).getByRole("button", { name: /open source/i })).toHaveTextContent("Group pages 3-4");
+    fireEvent.click(screen.getByTestId("panel-details-toggle"));
+    expect(screen.getByText("Group evidence pages 3-4")).toBeInTheDocument();
+  });
+
+  test("editable values are named by line item, period, and entity scope", async () => {
+    mockFetch((url) => {
+      if (url.includes("/concepts")) return sampleConcepts;
+      if (url.includes("/conflicts")) return { conflicts: [] };
+      return {};
+    });
+    render(<ConceptsPage runId={42} />);
+    expect(await screen.findByRole("textbox", { name: /Biological assets.*Company.*current period/i })).toBeInTheDocument();
+  });
+
+  test("does not create a nested main landmark inside the app main", async () => {
+    mockFetch((url) => {
+      if (url.includes("/concepts")) return sampleConcepts;
+      if (url.includes("/conflicts")) return { conflicts: [] };
+      return {};
+    });
+    const { container } = render(<ConceptsPage runId={42} />);
+    await waitFor(() => screen.getByTestId("sheet-navigator"));
+    expect(container.querySelector("main")).toBeNull();
   });
 
   // -- Issue 4 (2026-06-21): thousands separators in the editable input ----
@@ -1028,6 +1086,9 @@ describe("ConceptsPage", () => {
     const navBtn = screen.getByTestId("sheet-nav-mfrs-company-sofp-cunoncu-v1");
     expect(navBtn.textContent).toContain("SOFP");
     expect(navBtn.textContent).not.toContain("mfrs-company-sofp");
+    expect(navBtn.style.background).toBe("rgb(245, 247, 248)");
+    expect(navBtn.style.color).toBe("rgb(0, 0, 0)");
+    expect(navBtn.style.borderColor).toBe("rgb(223, 227, 230)");
   });
 
   test("Notes expands into per-sheet sub-tabs with friendly names", async () => {
@@ -1197,7 +1258,7 @@ describe("ConceptsPage", () => {
     const card = within(strip).getByText("Checks passing").closest("div")!;
     const cardStyle = getComputedStyle(card);
     expect(cardStyle.backgroundColor).toBe("rgba(0, 0, 0, 0)");
-    expect(cardStyle.borderLeftColor).toBe("rgb(239, 164, 23)"); // warning left rule
+    expect(cardStyle.borderLeftColor).toBe("rgb(253, 81, 8)"); // attention left rule
     // The old row-count metrics are gone.
     expect(within(strip).queryByText("Fields shown")).toBeNull();
     expect(within(strip).queryByText("Templates")).toBeNull();

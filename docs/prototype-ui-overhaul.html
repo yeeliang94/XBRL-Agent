@@ -1,0 +1,1216 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="interaction-style" content="Interactive states use surface, text and icon changes; never accent edge or underline indicators">
+  <title>XBRL Agent — UI direction prototype</title>
+  <!--
+    PROTOTYPE — throwaway, not production.
+    Three full-product UI directions, switchable via ?variant=a|b|c.
+    Use the product navigation to inspect Work queue, New extraction,
+    Live run, Figures review, Notes review, and Runs.
+  -->
+  <style>
+    :root {
+      /* PwC 2025 visual identity: signature orange, black, neutral greys, white. */
+      --ink: #000000;
+      --text: #000000;
+      --muted: rgba(0, 0, 0, .64);
+      --faint: rgba(0, 0, 0, .46);
+      --grey-500: #6b7280;
+      --grey-400: #b5bcc4;
+      --grey-300: #cbd1d6;
+      --grey-200: #dfe3e6;
+      --grey-100: #eeeff1;
+      --grey-50: #f5f7f8;
+      --line: var(--grey-200);
+      --line-strong: var(--grey-300);
+      --canvas: #ffffff;
+      --surface: #ffffff;
+      --surface-2: var(--grey-50);
+      --orange-700: #d64000;
+      --orange-500: #fd5108;
+      --orange-400: #fe7c39;
+      --orange-300: #ffaa72;
+      --orange-200: #ffcda8;
+      --orange-100: #ffe8d4;
+      --orange-50: #fff5ed;
+      --accent: var(--orange-500);
+      --accent-400: var(--orange-400);
+      --accent-300: var(--orange-300);
+      --accent-200: var(--orange-200);
+      --accent-100: var(--orange-100);
+      --accent-soft: var(--orange-50);
+      --success: #000000;
+      --success-soft: var(--grey-50);
+      --warning: var(--orange-500);
+      --warning-soft: var(--orange-50);
+      --danger: var(--orange-500);
+      --danger-soft: var(--orange-50);
+      --info: #000000;
+      --radius-sm: 6px;
+      --radius: 10px;
+      --radius-lg: 16px;
+      --shadow-float: 0 14px 40px rgba(24, 24, 22, .13);
+      --sans: "Inter Variable", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; }
+    body {
+      margin: 0;
+      background: var(--canvas);
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 14px;
+      line-height: 1.45;
+      -webkit-font-smoothing: antialiased;
+    }
+    button, input, select { font: inherit; }
+    button, a { -webkit-tap-highlight-color: transparent; }
+    button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible {
+      outline: 2px solid var(--ink);
+      outline-offset: 2px;
+    }
+    button { color: inherit; }
+    .muted { color: var(--muted); }
+    .faint { color: var(--faint); }
+    .mono { font-family: var(--mono); font-size: 12px; }
+    .num { font-variant-numeric: tabular-nums; text-align: right; }
+    .nowrap { white-space: nowrap; }
+    .hidden { display: none !important; }
+
+    /* Shared atoms. The three directions deliberately do not share a shell. */
+    .mark {
+      width: 27px; height: 27px; display: inline-flex; align-items: center;
+      justify-content: center; color: var(--accent); flex: 0 0 auto;
+    }
+    .mark svg { width: 100%; height: 100%; }
+    .button {
+      min-height: 40px; padding: 0 15px; border-radius: 8px;
+      border: 1px solid var(--line-strong); background: var(--surface);
+      color: var(--ink); font-weight: 620; cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      transition: background-color .14s cubic-bezier(.2,0,0,1), border-color .14s cubic-bezier(.2,0,0,1), color .14s cubic-bezier(.2,0,0,1), transform .1s cubic-bezier(.2,0,0,1);
+    }
+    .button:hover { border-color: var(--grey-500); background: var(--canvas); }
+    .button.primary { background: var(--accent); border-color: var(--accent); color: var(--ink); }
+    .button.primary:hover { background: var(--accent-400); border-color: var(--accent-400); }
+    .button:active { transform: translateY(1px); }
+    .button.accent { background: var(--accent); border-color: var(--accent); color: var(--ink); }
+    .button.small { min-height: 34px; padding: 0 12px; font-size: 13px; }
+    .button.quiet { border-color: transparent; background: transparent; }
+    .button.danger { color: var(--danger); background: transparent; border-color: transparent; }
+    .icon-button { width: 36px; height: 36px; padding: 0; border-radius: 8px; }
+    .pill, .status {
+      display: inline-flex; align-items: center; gap: 7px; min-height: 24px;
+      padding: 2px 9px; border: 1px solid var(--line); border-radius: 999px;
+      color: var(--text); background: var(--surface); font-size: 12px; white-space: nowrap;
+    }
+    .status { border: 0; padding: 0; background: transparent; }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+    .dot.active { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+    .dot.success { background: var(--success); }
+    .dot.warning { background: var(--accent); }
+    .dot.danger { background: var(--danger); }
+    .card { background: transparent; border: 0; border-radius: 0; }
+    .section-title { margin: 0; color: var(--ink); font-size: 17px; letter-spacing: -.015em; }
+    .eyebrow { color: var(--muted); font-size: 11px; font-weight: 680; letter-spacing: .08em; text-transform: uppercase; }
+    .divider { height: 1px; background: var(--line); }
+    .inline-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .kebab { letter-spacing: 2px; transform: translateY(-1px); }
+    .plain-link { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+    .avatar {
+      width: 30px; height: 30px; display: grid; place-items: center; border-radius: 50%;
+      background: var(--ink); color: white; font-size: 11px; font-weight: 700;
+    }
+
+    .page-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; }
+    .page-heading h1 { margin: 0; color: var(--ink); font-size: clamp(24px, 2.2vw, 34px); line-height: 1.15; letter-spacing: -.035em; }
+    .page-heading p { max-width: 650px; margin: 9px 0 0; color: var(--muted); font-size: 15px; }
+    .page-actions { display: flex; align-items: center; gap: 8px; }
+    .page-content { display: grid; gap: 28px; }
+
+    .stat-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: clamp(18px, 4vw, 52px); }
+    .stat { padding: 8px 0; }
+    .stat .value { margin-top: 5px; color: var(--ink); font-size: 24px; letter-spacing: -.03em; }
+    .stat .detail { margin-top: 4px; color: var(--muted); font-size: 12px; }
+
+    .list { display: grid; gap: 2px; }
+    .list-row {
+      width: calc(100% + 24px); margin-left: -12px; display: grid; align-items: center; gap: 12px; padding: 14px 12px;
+      border: 0; border-radius: 8px; background: transparent;
+      text-align: left; cursor: pointer;
+    }
+    .list-row:hover { background: rgba(255,255,255,.65); }
+    .list-row strong { color: var(--ink); font-weight: 640; }
+    .run-row { grid-template-columns: minmax(260px, 1.5fr) 110px 140px 150px 92px 24px; }
+    .row-sub { margin-top: 3px; color: var(--muted); font-size: 12px; }
+
+    .upload-zone {
+      min-height: 230px; border: 1.5px dashed var(--line-strong); border-radius: var(--radius-lg);
+      background: var(--surface); display: grid; place-items: center; padding: 34px;
+      text-align: center; cursor: pointer;
+    }
+    .upload-zone:hover { border-color: var(--grey-500); background: var(--surface-2); }
+    .upload-icon { width: 46px; height: 56px; margin: 0 auto 18px; border: 1.5px solid var(--line-strong); border-radius: 5px; position: relative; background: white; }
+    .upload-icon:before { content: ""; position: absolute; left: 10px; right: 10px; top: 18px; height: 1px; background: var(--line-strong); box-shadow: 0 8px 0 var(--line-strong), 0 16px 0 var(--line-strong); }
+    .upload-zone h2 { margin: 0 0 7px; color: var(--ink); font-size: 18px; }
+    .upload-zone p { margin: 0 0 18px; color: var(--muted); }
+    .config-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 18px; }
+    .field label { display: block; margin: 0 0 7px; color: var(--text); font-size: 13px; font-weight: 620; }
+    .field select, .field input {
+      width: 100%; min-height: 42px; padding: 0 12px; border: 1px solid var(--line-strong);
+      border-radius: 8px; background: white; color: var(--ink);
+    }
+    .check-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px 18px; }
+    .check { display: flex; align-items: center; gap: 9px; min-height: 34px; }
+    .check input { accent-color: var(--accent); width: 16px; height: 16px; }
+
+    .run-hero { padding: 22px 0 10px; display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 20px; align-items: center; }
+    .run-title { display: flex; align-items: center; gap: 11px; }
+    .run-title h1 { margin: 0; color: var(--ink); font-size: 25px; letter-spacing: -.025em; }
+    .run-meta { margin-top: 6px; color: var(--muted); font-size: 13px; }
+    .progress-bar { height: 4px; border-radius: 999px; overflow: hidden; background: var(--surface-2); }
+    .progress-bar span { display: block; height: 100%; width: 68%; background: var(--accent); }
+
+    .scenario-switch { display: inline-flex; padding: 3px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); }
+    .scenario-switch button { border: 0; background: transparent; padding: 7px 10px; border-radius: 6px; color: var(--muted); cursor: pointer; font-size: 12px; }
+    .scenario-switch button.active { background: var(--surface-2); color: var(--ink); font-weight: 650; }
+
+    .stage-list { display: grid; }
+    .stage-row { display: grid; grid-template-columns: 28px minmax(0,1fr) auto; gap: 12px; padding: 12px 0; align-items: start; }
+    .stage-icon { width: 24px; height: 24px; border-radius: 50%; border: 1px solid var(--line-strong); display: grid; place-items: center; color: var(--muted); font-size: 11px; }
+    .stage-row.done .stage-icon { background: var(--ink); border-color: var(--ink); color: white; }
+    .stage-row.active .stage-icon { border-color: var(--accent); color: var(--accent); }
+    .stage-row h3 { margin: 1px 0 4px; color: var(--ink); font-size: 14px; }
+    .stage-row p { margin: 0; color: var(--muted); font-size: 12px; }
+
+    .workstreams { display: grid; grid-template-columns: 235px minmax(0,1fr); gap: 26px; min-height: 480px; }
+    .workstream-nav { padding: 0; background: transparent; }
+    .workstream-nav button { width: 100%; border: 0; padding: 10px 11px; border-radius: 7px; background: transparent; text-align: left; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .workstream-nav button.active { background: var(--surface); }
+    .workstream-body { padding: 2px 0; }
+    .activity-log { margin-top: 14px; }
+    .event { display: grid; grid-template-columns: 58px 22px 1fr; gap: 10px; padding: 11px 0; }
+    .event time { color: var(--faint); font-family: var(--mono); font-size: 11px; }
+    .event .event-line { width: 7px; height: 7px; margin-top: 5px; border-radius: 50%; background: var(--line-strong); }
+    .event.active .event-line { background: var(--accent); }
+    .event strong { display: block; color: var(--ink); font-size: 13px; }
+    .event p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+
+    /* Direction A live run: parallel agents first, technical telemetry on demand. */
+    .agent-run-time { color: var(--muted); font: 12px var(--mono); white-space: nowrap; }
+    .agent-workspace { display: grid; grid-template-columns: minmax(560px, 1.42fr) minmax(320px, .78fr); gap: clamp(28px, 3vw, 48px); align-items: start; min-width: 0; }
+    .agent-roster { min-width: 0; }
+    .agent-roster-head { min-height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+    .agent-roster-head h2 { margin: 0; color: var(--ink); font-size: 17px; }
+    .agent-roster-title p { margin: 2px 0 0; color: var(--muted); font-size: 10px; }
+    .agent-filter { display: flex; gap: 3px; }
+    .agent-filter button { min-height: 30px; padding: 0 9px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 11px; cursor: pointer; }
+    .agent-filter button:hover, .agent-filter button.active { background: var(--surface-2); color: var(--ink); }
+    .agent-filter button.active { font-weight: 650; }
+    .agent-list { display: grid; gap: 2px; margin-top: 7px; }
+    .agent-row { width: 100%; min-height: 58px; padding: 8px 9px; border: 0; border-radius: 8px; background: transparent; display: grid; grid-template-columns: 20px minmax(145px,.58fr) minmax(220px,1fr) 72px; gap: 11px; align-items: center; text-align: left; cursor: pointer; }
+    .agent-row:hover, .agent-row.active { background: var(--surface-2); }
+    .agent-row > .dot { justify-self: center; }
+    .agent-row.child { position: relative; width: calc(100% - 24px); margin-left: 24px; }
+    .agent-row.child::before { content: ""; position: absolute; left: -12px; top: 0; bottom: 0; width: 1px; background: var(--grey-200); }
+    .agent-row.child::after { content: ""; position: absolute; left: -12px; top: 29px; width: 12px; height: 1px; background: var(--grey-200); }
+    .agent-row[data-agent-state="working"] > .dot { animation: agent-pulse 1.8s ease-in-out infinite; }
+    .agent-row[data-agent-state="working"]:nth-child(2) > .dot { animation-delay: -.45s; }
+    .agent-row[data-agent-state="working"]:nth-child(3) > .dot { animation-delay: -.9s; }
+    .agent-row[data-agent-state="working"]:nth-child(4) > .dot { animation-delay: -1.35s; }
+    @keyframes agent-pulse { 0%, 100% { box-shadow: 0 0 0 2px var(--accent-soft); } 50% { box-shadow: 0 0 0 5px var(--accent-soft); } }
+    .agent-identity, .agent-task { min-width: 0; }
+    .agent-identity strong, .agent-task strong { display: block; overflow: hidden; color: var(--ink); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+    .agent-identity span, .agent-task span { display: block; margin-top: 2px; overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+    .agent-row-state { justify-self: end; color: var(--muted); font-size: 10px; white-space: nowrap; }
+    .agent-row[data-agent-state="working"] .agent-row-state { color: var(--ink); }
+    .agent-detail { position: sticky; top: 88px; min-width: 0; padding: 7px 0 8px 30px; border-left: 1px solid var(--grey-100); }
+    .agent-detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+    .agent-detail h2 { margin: 0; color: var(--ink); font-size: 19px; letter-spacing: -.02em; }
+    .agent-detail-role { margin-top: 3px; color: var(--muted); font-size: 10px; }
+    .agent-detail-copy { margin: 14px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+    .agent-now { min-height: 38px; margin-top: 18px; display: flex; align-items: center; gap: 9px; color: var(--ink); font-size: 11px; font-weight: 650; }
+    .agent-now small { margin-left: auto; color: var(--muted); font-size: 10px; font-weight: 500; }
+    .agent-focus { margin-top: 20px; }
+    .agent-focus strong { display: block; color: var(--ink); font-size: 13px; }
+    .agent-focus p { margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+    .agent-focus span { display: block; margin-top: 7px; color: var(--faint); font-size: 10px; }
+    .agent-detail-section { margin-top: 24px; }
+    .agent-detail-section h3 { margin: 0 0 9px; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
+    .agent-updates { display: grid; gap: 12px; }
+    .agent-update { display: grid; grid-template-columns: 50px minmax(0,1fr); gap: 10px; color: var(--ink); font-size: 11px; }
+    .agent-update time { color: var(--faint); font: 10px var(--mono); }
+    .agent-links { display: grid; grid-template-columns: 88px minmax(0,1fr); gap: 7px 10px; color: var(--muted); font-size: 10px; }
+    .agent-links strong { color: var(--ink); font-weight: 620; }
+    .agent-handoff { display: flex; align-items: center; gap: 7px; min-width: 0; color: var(--muted); font-size: 10px; }
+    .agent-handoff span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .agent-handoff strong { color: var(--ink); font-weight: 650; white-space: nowrap; }
+    .agent-handoff b { color: var(--grey-400); font-weight: 500; }
+    .agent-technical { margin-top: 22px; color: var(--muted); font-size: 10px; }
+    .agent-technical summary { width: max-content; cursor: pointer; }
+    .agent-technical p { margin: 8px 0 0; font-family: var(--mono); line-height: 1.6; }
+
+    .live-run-primary { width: min(1000px, 100%); }
+    .live-work { margin-top: 0; }
+    .live-work-head { min-height: 38px; display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 5px; }
+    .live-work-head h2 { margin: 0; color: var(--ink); font-size: 17px; }
+    .live-work-head span { color: var(--muted); font-size: 11px; }
+    .agent-tree { display: grid; gap: 2px; }
+    .agent-tree-row, .agent-group > summary, .agent-child > summary {
+      min-height: 54px; padding: 7px 10px; border-radius: 8px; display: grid;
+      grid-template-columns: 18px minmax(175px,.62fr) minmax(260px,1fr) auto 14px;
+      gap: 12px; align-items: center;
+    }
+    .agent-tree-row strong, .agent-group > summary strong, .agent-child > summary strong { color: var(--ink); font-size: 12px; }
+    .agent-tree-row > span:nth-child(3), .agent-group > summary > span:nth-child(3), .agent-child > summary > span:nth-child(3) { color: var(--muted); font-size: 11px; }
+    .agent-tree-meta { color: var(--faint); font-size: 10px; white-space: nowrap; }
+    .agent-tree-row { grid-template-columns: 18px minmax(175px,.62fr) minmax(260px,1fr) auto 14px; }
+    .agent-tree-row .row-end { color: var(--faint); font-size: 11px; }
+    .agent-group, .agent-child { border-radius: 8px; }
+    .agent-group > summary, .agent-child > summary { cursor: pointer; list-style: none; }
+    .agent-group > summary::-webkit-details-marker, .agent-child > summary::-webkit-details-marker { display: none; }
+    .agent-group > summary:focus, .agent-child > summary:focus { outline: 0; }
+    .agent-group > summary:focus-visible, .agent-child > summary:focus-visible { outline: 1px solid var(--grey-500); outline-offset: -1px; }
+    .agent-group > summary:hover, .agent-group[open] > summary, .agent-child > summary:hover, .agent-child[open] > summary { background: var(--surface-2); }
+    .agent-tree-chevron { color: var(--faint); font-size: 13px; transform-origin: center; transition: transform .14s ease; }
+    .agent-group[open] > summary .agent-tree-chevron, .agent-child[open] > summary .agent-tree-chevron { transform: rotate(90deg); }
+    .agent-children { position: relative; margin: 0 0 5px 28px; padding: 2px 0 2px 20px; }
+    .agent-children::before { content: ""; position: absolute; left: 7px; top: 0; bottom: 13px; width: 1px; background: var(--grey-200); }
+    .agent-child { position: relative; }
+    .agent-child::before { content: ""; position: absolute; left: -13px; top: 27px; width: 12px; height: 1px; background: var(--grey-200); }
+    .agent-child > summary { grid-template-columns: 18px minmax(165px,.58fr) minmax(240px,1fr) auto 14px; min-height: 50px; }
+    .agent-child-events { margin: -1px 10px 12px 40px; padding-left: 14px; }
+    .semantic-event { position: relative; display: grid; grid-template-columns: 38px minmax(0,1fr); gap: 10px; min-height: 26px; color: var(--ink); font-size: 10px; }
+    .semantic-event::before { content: ""; position: absolute; left: -14px; top: 7px; width: 5px; height: 5px; border-radius: 50%; background: var(--grey-400); }
+    .semantic-event:first-child::before { background: var(--accent); }
+    .semantic-event time { color: var(--faint); font: 9px var(--mono); }
+    .agent-child-context { margin-top: 6px; display: flex; gap: 16px; flex-wrap: wrap; color: var(--faint); font-size: 10px; }
+    .agent-child-context strong { color: var(--ink); font-weight: 580; }
+    .agent-technical-inline { margin-top: 8px; color: var(--faint); font-size: 9px; }
+    .agent-technical-inline summary { width: max-content; cursor: pointer; }
+    .agent-technical-inline p { margin: 5px 0 0; color: var(--muted); }
+    .agent-group-note { margin: -1px 10px 10px 40px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+    .agent-group-note strong { color: var(--ink); font-weight: 620; }
+    .agent-tree-row.attention { background: var(--accent-soft); }
+
+    .attention-banner { display: flex; align-items: flex-start; gap: 12px; padding: 16px 18px; border: 0; border-radius: 10px; background: var(--accent-soft); }
+    .attention-banner > span:first-child { width: 22px; height: 22px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 50%; background: var(--accent); color: var(--ink); font-weight: 750; }
+    .attention-banner strong { color: var(--ink); display: block; margin-bottom: 2px; }
+    .attention-banner p { margin: 0; color: var(--muted); font-size: 13px; }
+
+    .review-grid { display: grid; grid-template-columns: 240px minmax(520px, 1fr) minmax(300px, 34%); gap: clamp(20px, 2.5vw, 38px); min-height: 650px; }
+    .review-queue { align-self: start; background: transparent; }
+    .review-pane-head { padding: 0 6px 10px; }
+    .review-pane-head h2 { margin: 0; color: var(--ink); font-size: 14px; }
+    .review-pane-head p { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
+    .issue { width: 100%; margin: 2px 0; padding: 13px 12px; border: 0; border-radius: 8px; background: transparent; text-align: left; cursor: pointer; }
+    .issue.active { background: var(--accent-soft); }
+    .issue-title { display: flex; gap: 8px; align-items: center; color: var(--ink); font-weight: 630; font-size: 13px; }
+    .issue p { margin: 5px 0 0 15px; color: var(--muted); font-size: 11px; }
+    .sheet { min-width: 0; }
+    .sheet-toolbar { min-height: 60px; padding: 0 0 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .sheet-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .sheet-table th { position: sticky; top: 0; padding: 9px 10px; background: var(--surface-2); color: var(--muted); text-align: left; border-bottom: 0; font-weight: 620; }
+    .sheet-table th.num { text-align: right; }
+    .sheet-table td { padding: 8px 10px; border-bottom: 1px solid var(--grey-100); }
+    .sheet-table tr.section td { background: var(--canvas); color: var(--ink); font-weight: 650; }
+    .sheet-table tr.selected td { background: var(--accent-soft); }
+    .sheet-table td:first-child { width: 50%; }
+    .source-pane { border: 0; border-radius: 10px; background: var(--surface-2); display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+    .source-toolbar { min-height: 60px; padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; background: transparent; }
+    .pdf-page { width: calc(100% - 34px); margin: 18px auto; padding: 28px 25px 34px; background: white; border: 1px solid var(--line-strong); box-shadow: 0 4px 20px rgba(0,0,0,.08); color: var(--ink); font-family: Georgia, serif; font-size: 10px; }
+    .pdf-page h4 { margin: 0 0 15px; text-align: center; font-size: 12px; }
+    .pdf-line { height: 5px; margin: 5px 0; background: var(--line); border-radius: 2px; }
+    .pdf-table { margin-top: 17px; border-top: 1px solid var(--faint); }
+    .pdf-row { display: grid; grid-template-columns: 1fr 60px 60px; gap: 8px; padding: 5px 3px; border-bottom: 1px solid var(--line); }
+    .pdf-row.highlight { background: var(--accent-100); outline: 2px solid var(--accent); }
+
+    .notes-layout { display: grid; grid-template-columns: 210px minmax(520px,1fr) 290px; gap: 26px; min-height: 680px; }
+    .notes-nav { padding: 0; background: transparent; }
+    .notes-nav .label { padding: 8px 8px 6px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .07em; }
+    .notes-nav button { width: 100%; padding: 9px 10px; border: 0; border-radius: 7px; background: transparent; text-align: left; cursor: pointer; font-size: 12px; }
+    .notes-nav button.active { background: var(--accent-soft); color: var(--ink); font-weight: 640; }
+    .editor { min-width: 0; }
+    .editor-tools { min-height: 54px; padding: 0 0 8px; display: flex; align-items: center; gap: 6px; }
+    .editor-tools button { width: 30px; height: 30px; border: 0; border-radius: 5px; background: transparent; cursor: pointer; }
+    .editor-tools button:hover { background: var(--surface-2); }
+    .document-page { max-width: 760px; margin: 28px auto 80px; padding: 46px 54px; border: 1px solid var(--line); background: white; min-height: 520px; box-shadow: 0 5px 24px rgba(24,24,22,.06); }
+    .document-page h2 { margin: 0 0 20px; color: var(--ink); font-family: Georgia, serif; font-size: 18px; }
+    .document-page p { font-family: Arial, sans-serif; font-size: 12px; line-height: 1.7; }
+    .note-table { width: 100%; margin-top: 20px; border-collapse: collapse; font-family: Arial, sans-serif; font-size: 11px; }
+    .note-table th, .note-table td { padding: 7px 5px; border-bottom: 1px solid var(--faint); text-align: right; }
+    .note-table th:first-child, .note-table td:first-child { text-align: left; }
+    .note-aside { background: transparent; }
+    .check-item { padding: 13px 6px; }
+    .check-item strong { color: var(--ink); font-size: 12px; }
+    .check-item p { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
+
+    /* mTool-mirror review: the filing destination is the primary editing surface. */
+    .review-workspace { display: grid; grid-template-columns: minmax(600px, 1fr) 320px; gap: clamp(20px, 2.5vw, 36px); align-items: start; }
+    .review-main { min-width: 0; }
+    .sheet-tabs { display: flex; align-items: center; gap: 4px; margin-bottom: 22px; overflow-x: auto; }
+    .sheet-tab { min-height: 34px; padding: 0 11px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); white-space: nowrap; cursor: pointer; }
+    .sheet-tab:hover { background: var(--surface-2); color: var(--ink); }
+    .sheet-tab.active { background: var(--surface-2); color: var(--ink); font-weight: 650; }
+    .sheet-tab .mini-warning { margin-left: 6px; }
+    .mini-warning { width: 14px; height: 14px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--accent); display: inline-grid; place-items: center; font-size: 10px; line-height: 1; font-weight: 680; cursor: help; vertical-align: middle; opacity: .78; }
+    .mini-warning:hover { background: var(--accent-soft); opacity: 1; }
+    .mtool-heading { display: flex; justify-content: space-between; gap: 18px; align-items: end; margin-bottom: 12px; }
+    .mtool-heading h2 { margin: 0; color: var(--ink); font-size: 18px; }
+    .mtool-heading p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+    .mtool-location { color: var(--muted); font: 11px var(--mono); white-space: nowrap; }
+    .mtool-grid { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12px; }
+    .mtool-grid th { padding: 8px 10px; background: var(--surface-2); color: var(--muted); text-align: left; font-size: 11px; font-weight: 620; }
+    .mtool-grid th.num { text-align: right; }
+    .mtool-grid td { padding: 7px 10px; border-bottom: 1px solid var(--grey-100); vertical-align: middle; }
+    .mtool-grid .address { width: 50px; padding-left: 0; color: var(--faint); font: 10px var(--mono); text-align: right; }
+    .mtool-grid .label-cell { width: 48%; color: var(--ink); }
+    .mtool-grid .section-row td { padding-top: 16px; background: transparent; color: var(--ink); font-weight: 680; }
+    .mtool-grid .selected-row td { background: var(--accent-soft); }
+    .mtool-grid .selected-row td:first-child { border-radius: 7px 0 0 7px; }
+    .mtool-grid .selected-row td:last-child { border-radius: 0 7px 7px 0; }
+    .mtool-value { width: 100%; min-width: 90px; padding: 5px 7px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--ink); font: inherit; text-align: right; font-variant-numeric: tabular-nums; }
+    .mtool-value:hover { border-color: var(--grey-300); background: white; }
+    .mtool-value:focus { border-color: var(--ink); background: white; outline: 0; }
+    .formula-value { display: block; padding: 5px 7px; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+    .field-inspector { position: sticky; top: 86px; padding: 20px; border-radius: 10px; background: var(--surface-2); }
+    .inspector-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+    .inspector-head h2 { margin: 0; color: var(--ink); font-size: 16px; line-height: 1.3; }
+    .inspector-section { margin-top: 22px; }
+    .inspector-section h3 { margin: 0 0 8px; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
+    .inspector-section p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+    .inspector-values { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .inspector-value label { display: block; margin-bottom: 5px; color: var(--muted); font-size: 11px; }
+    .inspector-value input { width: 100%; min-height: 38px; padding: 0 9px; border: 1px solid var(--grey-300); border-radius: 7px; background: white; text-align: right; font-variant-numeric: tabular-nums; }
+    .source-values { display: grid; grid-template-columns: 1fr auto; gap: 7px 14px; align-items: baseline; }
+    .source-values strong { text-align: right; font-variant-numeric: tabular-nums; }
+    .inspector-actions { display: grid; gap: 8px; margin-top: 20px; }
+    .inspector-actions .button { width: 100%; }
+    .sheet-note { margin-top: 12px; color: var(--faint); font-size: 11px; }
+    .note-selector { display: flex; gap: 4px; margin-bottom: 18px; overflow-x: auto; }
+    .note-selector button { min-height: 34px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); white-space: nowrap; cursor: pointer; }
+    .note-selector button.active { background: var(--surface-2); color: var(--ink); font-weight: 650; }
+    .mtool-note-shell { display: grid; grid-template-columns: 54px minmax(0,1fr); }
+    .note-address { padding: 12px 10px 0 0; color: var(--faint); font: 10px var(--mono); text-align: right; }
+    .mtool-text-block { min-height: 520px; padding: 26px 32px; background: var(--surface-2); outline: 1px solid transparent; border-radius: 8px; }
+    .mtool-text-block:focus { background: white; outline-color: var(--ink); }
+    .mtool-text-block h2 { margin: 0 0 18px; color: var(--ink); font-family: Georgia, serif; font-size: 18px; }
+    .mtool-text-block p { font-family: Arial, sans-serif; font-size: 12px; line-height: 1.7; }
+    .mtool-text-block .note-table { background: transparent; }
+
+    /* Source-first review: editable filing surface + persistent PDF, with metadata on demand. */
+    .source-review-page { display: grid; gap: 16px; }
+    .review-context { min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+    .review-context strong { color: var(--ink); }
+    .review-context .context-line { color: var(--muted); font-size: 12px; }
+    .review-split { display: grid; grid-template-columns: minmax(540px, 1fr) minmax(350px, 38%); gap: 18px; align-items: start; min-width: 0; }
+    .compact-review-bar { min-height: 42px; display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; }
+    .sheet-picker { position: relative; }
+    .sheet-picker summary { min-height: 36px; padding: 0 10px; border-radius: 7px; display: flex; align-items: center; gap: 8px; color: var(--ink); font-weight: 650; cursor: pointer; list-style: none; }
+    .sheet-picker summary::-webkit-details-marker { display: none; }
+    .sheet-picker summary:hover, .sheet-picker[open] summary { background: var(--surface-2); }
+    .sheet-picker-menu { position: absolute; top: 42px; left: 0; z-index: 35; min-width: 260px; padding: 7px; border-radius: 9px; background: white; box-shadow: var(--shadow-float); }
+    .sheet-picker-menu button { width: 100%; min-height: 34px; padding: 0 9px; border: 0; border-radius: 6px; background: transparent; text-align: left; cursor: pointer; }
+    .sheet-picker-menu button:hover, .sheet-picker-menu button.active { background: var(--surface-2); }
+    .note-index { position: relative; }
+    .note-index summary { min-height: 38px; padding: 0 11px; border-radius: 7px; display: flex; align-items: center; gap: 9px; cursor: pointer; list-style: none; }
+    .note-index summary::-webkit-details-marker { display: none; }
+    .note-index summary:hover, .note-index[open] summary { background: var(--surface-2); }
+    .note-index-current { color: var(--ink); font-weight: 650; }
+    .note-index-coverage { color: var(--muted); font-size: 11px; font-weight: 450; }
+    .note-index-panel { position: absolute; top: 44px; left: 0; z-index: 38; width: min(430px, calc(100vw - 40px)); max-height: min(680px, calc(100vh - 150px)); padding: 14px; border-radius: 10px; background: white; box-shadow: var(--shadow-float); display: flex; flex-direction: column; }
+    .note-index-head { display: flex; justify-content: space-between; gap: 14px; align-items: flex-start; padding: 2px 3px 12px; }
+    .note-index-head h3 { margin: 0; color: var(--ink); font-size: 15px; }
+    .note-index-head p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
+    .note-index-search { width: 100%; min-height: 38px; padding: 0 11px; border: 0; border-radius: 7px; background: var(--surface-2); color: var(--ink); }
+    .note-index-filters { display: flex; gap: 4px; padding: 9px 0 7px; }
+    .note-index-filters button { min-height: 30px; padding: 0 9px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 11px; cursor: pointer; }
+    .note-index-filters button.active { background: var(--surface-2); color: var(--ink); font-weight: 650; }
+    .note-index-list { min-height: 0; overflow-y: auto; display: grid; gap: 1px; }
+    .note-index-row { width: 100%; min-height: 46px; padding: 6px 8px; border: 0; border-radius: 7px; background: transparent; display: grid; grid-template-columns: 26px minmax(0,1fr) auto; gap: 8px; align-items: center; text-align: left; cursor: pointer; }
+    .note-index-row:hover { background: var(--surface-2); }
+    .note-index-row.active { background: var(--accent-soft); }
+    .note-index-no { color: var(--faint); font: 11px var(--mono); text-align: right; }
+    .note-index-title { display: block; color: var(--ink); font-size: 12px; font-weight: 610; }
+    .note-index-destination { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; }
+    .note-index-status { color: var(--muted); font-size: 10px; white-space: nowrap; }
+    .note-index-status .checkmark { color: var(--ink); margin-right: 4px; }
+    .notes-three-pane { display: grid; grid-template-columns: 210px minmax(410px, 1fr) minmax(330px, 35%); gap: 18px; align-items: start; min-width: 0; }
+    .note-rail { position: sticky; top: 78px; height: calc(100vh - 174px); min-height: 500px; display: flex; flex-direction: column; min-width: 0; }
+    .note-rail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 1px 5px 10px; }
+    .note-rail-head strong { color: var(--ink); font-size: 12px; }
+    .note-rail-head p { margin: 2px 0 0; color: var(--muted); font-size: 10px; }
+    .note-rail-search { width: 100%; min-height: 34px; padding: 0 9px; border: 0; border-radius: 7px; background: var(--surface-2); color: var(--ink); font-size: 11px; }
+    .note-rail-list { min-height: 0; margin-top: 7px; overflow-y: auto; display: grid; gap: 1px; padding-right: 3px; }
+    .note-nav-row { width: 100%; min-height: 38px; padding: 5px 6px; border: 0; border-radius: 7px; background: transparent; display: grid; grid-template-columns: 22px minmax(0,1fr) 14px; gap: 6px; align-items: center; text-align: left; cursor: pointer; }
+    .note-nav-row:hover { background: var(--surface-2); }
+    .note-nav-row.active { background: var(--surface-2); }
+    .note-nav-number { color: var(--faint); font: 10px var(--mono); text-align: right; }
+    .note-nav-copy { min-width: 0; }
+    .note-nav-title { display: block; overflow: hidden; color: var(--ink); font-size: 11px; font-weight: 580; text-overflow: ellipsis; white-space: nowrap; }
+    .note-nav-page { display: block; margin-top: 1px; color: var(--faint); font-size: 9px; }
+    .note-nav-state { color: var(--faint); font-size: 10px; text-align: center; }
+    .note-editor-pane { position: relative; min-width: 0; }
+    .note-editor-pane .editor-tools { position: absolute; top: 38px; left: 8px; z-index: 12; width: max-content; min-height: 38px; padding: 4px; border-radius: 8px; background: white; box-shadow: 0 8px 24px rgba(0,0,0,.12); opacity: 0; pointer-events: none; transform: translateY(-4px); transition: opacity .14s ease, transform .14s ease; }
+    .note-editor-pane:focus-within .editor-tools { opacity: 1; pointer-events: auto; transform: translateY(0); }
+    .review-tool { width: 34px; height: 34px; padding: 0; border: 0; border-radius: 7px; background: transparent; cursor: pointer; }
+    .review-tool:hover { background: var(--surface-2); }
+    .review-tool .mini-warning { cursor: pointer; }
+    .template-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 8px 0 10px; }
+    .template-heading h2 { margin: 0; color: var(--ink); font-size: 17px; }
+    .template-table-wrap { min-width: 0; overflow: auto; }
+    .source-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12px; }
+    .source-table th { padding: 9px 10px; background: var(--surface-2); color: var(--muted); text-align: left; font-size: 11px; font-weight: 620; }
+    .source-table th.num { text-align: right; }
+    .source-table td { padding: 7px 10px; border-bottom: 1px solid var(--grey-100); }
+    .source-table .section-row td { padding-top: 16px; color: var(--ink); font-weight: 680; }
+    .source-jump { cursor: pointer; }
+    .source-jump:hover td { background: var(--grey-50); }
+    .source-jump.selected-row td { background: var(--accent-soft); }
+    .source-jump.selected-row td:first-child { border-radius: 7px 0 0 7px; }
+    .source-jump.selected-row td:last-child { border-radius: 0 7px 7px 0; }
+    .source-table .field-name { color: var(--ink); }
+    .source-table .field-name small { margin-left: 7px; color: var(--faint); opacity: 0; }
+    .source-jump:hover .field-name small, .source-jump.selected-row .field-name small { opacity: 1; }
+    .source-table .mtool-value { min-width: 82px; }
+    .hidden-meta { margin-top: 12px; color: var(--muted); font-size: 11px; }
+    .hidden-meta summary { cursor: pointer; width: max-content; }
+    .hidden-meta p { margin: 7px 0 0; }
+    .source-preview { position: sticky; top: 78px; height: calc(100vh - 174px); min-height: 500px; display: flex; flex-direction: column; overflow: hidden; background: white; }
+    .source-preview-head { min-height: 44px; padding: 6px 2px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .source-preview-head strong { color: var(--ink); font-size: 12px; }
+    .source-preview-head .row-sub { display: none; }
+    .page-control { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 11px; }
+    .page-control button { width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; cursor: pointer; }
+    .page-control button:hover { background: white; }
+    .pdf-viewport { min-height: 0; flex: 1; overflow: auto; padding: 10px; background: var(--surface-2); }
+    .pdf-sheet-compact { min-height: 520px; padding: 34px 28px 42px; background: white; color: var(--ink); font-family: Georgia, serif; font-size: 10px; }
+    .pdf-sheet-compact h4 { margin: 0 0 18px; text-align: center; font-size: 12px; }
+    .pdf-sheet-compact .pdf-line { background: var(--grey-200); }
+    .pdf-sheet-compact .pdf-row { grid-template-columns: 1fr 58px 58px; }
+    .pdf-dynamic-highlight { margin: 1px -4px; padding-left: 7px !important; padding-right: 7px !important; border-radius: 3px; background: rgba(253,81,8,.06); outline: 0; }
+    .source-decision { padding: 10px 2px 2px; }
+    .source-decision-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .source-decision-line strong { color: var(--ink); font-size: 12px; }
+    .source-decision-line p { margin: 2px 0 0; color: var(--muted); font-size: 11px; }
+    .source-decision .button { min-height: 32px; padding: 0 10px; font-size: 11px; }
+    .source-meta { margin-top: 8px; color: var(--muted); font-size: 11px; }
+    .source-meta summary { cursor: pointer; width: max-content; }
+    .source-meta-grid { display: grid; grid-template-columns: auto 1fr; gap: 5px 12px; margin-top: 9px; }
+    .source-meta-grid span:nth-child(odd) { color: var(--faint); }
+    .note-edit-surface { min-height: calc(100vh - 250px); padding: 18px 32px 70px; outline: 1px solid transparent; }
+    .note-edit-surface:focus { outline-color: var(--grey-300); border-radius: 8px; }
+    .note-edit-surface h2 { margin: 0 0 18px; color: var(--ink); font-family: Georgia, serif; font-size: 18px; }
+    .note-edit-surface p { font-family: Arial, sans-serif; font-size: 12px; line-height: 1.7; }
+
+    .ready-panel { display: grid; grid-template-columns: minmax(0,1fr) 320px; gap: 26px; }
+    .check-table { display: grid; gap: 2px; }
+    .check-row { display: grid; grid-template-columns: 28px minmax(0,1fr) 120px; gap: 10px; padding: 13px 0; align-items: center; }
+    .ready-action { padding: 22px; align-self: start; background: var(--surface-2); border-radius: 10px; }
+    .ready-action h2 { margin: 0 0 6px; color: var(--ink); font-size: 18px; }
+    .ready-action p { margin: 0 0 18px; color: var(--muted); font-size: 13px; }
+    .ready-action .button { width: 100%; margin-bottom: 8px; }
+
+    /* Direction A — focused workspace: stable rail + restrained canvas. */
+    .shell-a { display: grid; grid-template-columns: 220px minmax(0,1fr); min-height: 100vh; }
+    .a-sidebar { position: sticky; top: 0; height: 100vh; padding: 20px 14px; background: var(--surface-2); display: flex; flex-direction: column; }
+    .a-brand { display: flex; align-items: center; gap: 10px; padding: 2px 8px 24px; color: var(--ink); font-weight: 730; letter-spacing: -.02em; }
+    .a-nav-label { padding: 16px 10px 7px; color: var(--faint); font-size: 10px; text-transform: uppercase; letter-spacing: .09em; font-weight: 700; }
+    .a-nav button { width: 100%; min-height: 38px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; text-align: left; color: var(--muted); cursor: pointer; display: flex; align-items: center; gap: 10px; transition: background-color .14s cubic-bezier(.2,0,0,1), color .14s cubic-bezier(.2,0,0,1), transform .1s cubic-bezier(.2,0,0,1); }
+    .a-nav button:hover { color: var(--ink); background: rgba(255,255,255,.55); }
+    .a-nav button.active { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(24,24,22,.04); font-weight: 640; }
+    .a-nav button.active .nav-glyph { color: var(--accent); }
+    .nav-glyph { width: 18px; color: var(--faint); text-align: center; }
+    .shell-a .button.primary { background: var(--ink); border-color: var(--ink); color: white; }
+    .shell-a .button.primary:hover { background: var(--ink); border-color: var(--ink); color: white; opacity: .86; }
+    .shell-a .button.primary:focus-visible { outline-color: var(--accent); }
+    .a-sidebar-foot { margin-top: auto; padding: 14px 8px 0; display: flex; align-items: center; gap: 9px; }
+    .a-app { min-width: 0; }
+    .a-topbar { height: 64px; padding: 0 30px; background: rgba(255,255,255,.94); display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 10; backdrop-filter: blur(12px); }
+    .breadcrumb { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+    .breadcrumb strong { color: var(--ink); }
+    .a-main { padding: 34px clamp(28px, 4vw, 62px) 110px; max-width: 1500px; margin: 0 auto; }
+    .shell-a.review-mode { grid-template-columns: 72px minmax(0,1fr); }
+    .shell-a.review-mode .a-sidebar { padding: 16px 8px; }
+    .shell-a.review-mode .a-brand { justify-content: center; padding: 2px 0 22px; }
+    .shell-a.review-mode .a-brand > span, .shell-a.review-mode .a-nav-label, .shell-a.review-mode .a-sidebar-foot > div { display: none; }
+    .shell-a.review-mode .a-nav button { justify-content: center; padding: 0; }
+    .shell-a.review-mode .a-nav button > span:last-child { display: none; }
+    .shell-a.review-mode .a-sidebar-foot { justify-content: center; padding-left: 0; padding-right: 0; }
+    .shell-a.review-mode .a-main { max-width: none; padding-left: 28px; padding-right: 28px; }
+
+    /* Direction B — document studio: top shell + context rail. */
+    .shell-b { min-height: 100vh; background: var(--canvas); }
+    .b-topbar { height: 60px; padding: 0 22px; background: #000000; color: white; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 12; }
+    .b-brand { display: flex; align-items: center; gap: 10px; font-weight: 710; }
+    .b-topbar .mark { width: 24px; height: 24px; }
+    .b-global { display: flex; align-items: center; gap: 4px; }
+    .b-global button { min-height: 34px; padding: 0 12px; border: 0; border-radius: 6px; color: var(--grey-300); background: transparent; cursor: pointer; }
+    .b-global button.active { background: rgba(255,255,255,.14); color: white; }
+    .b-toolbar { min-height: 58px; padding: 10px 22px; background: white; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    .b-route { display: flex; align-items: center; gap: 18px; overflow-x: auto; }
+    .b-route button { min-height: 35px; padding: 0 11px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; white-space: nowrap; transition: background-color .14s cubic-bezier(.2,0,0,1), color .14s cubic-bezier(.2,0,0,1), transform .1s cubic-bezier(.2,0,0,1); }
+    .b-route button:hover, .b-route button.active { color: var(--ink); background: var(--surface-2); font-weight: 640; }
+    .b-main { padding: 26px 28px 110px; max-width: 1600px; margin: 0 auto; }
+    .shell-b .review-grid { grid-template-columns: minmax(330px, 35%) minmax(520px, 1fr) 230px; }
+    .shell-b .review-queue { order: 3; }
+    .shell-b .source-pane { order: 1; }
+    .shell-b .sheet { order: 2; }
+    .shell-b .notes-layout { grid-template-columns: minmax(620px,1fr) 235px; }
+    .shell-b .notes-nav { order: 2; }
+    .shell-b .editor { order: 1; }
+    .shell-b .note-aside { display: none; }
+
+    /* Direction C — review inbox: compact rail + queue-led content. */
+    .shell-c { display: grid; grid-template-columns: 72px minmax(0,1fr); min-height: 100vh; background: var(--canvas); }
+    .c-rail { position: sticky; top: 0; height: 100vh; background: white; padding: 16px 10px; display: flex; align-items: center; flex-direction: column; gap: 12px; }
+    .c-rail .mark { margin-bottom: 18px; }
+    .c-rail button { width: 44px; height: 44px; border: 0; border-radius: 11px; background: transparent; color: var(--muted); cursor: pointer; font-size: 16px; }
+    .c-rail button > span:last-child { display: none; }
+    .c-rail .nav-glyph { width: auto; color: inherit; font-size: 16px; }
+    .c-rail button.active { background: var(--accent); color: var(--ink); }
+    .c-rail .avatar { margin-top: auto; }
+    .c-app { min-width: 0; }
+    .c-topbar { min-height: 64px; padding: 10px 26px; background: white; display: flex; align-items: center; justify-content: space-between; gap: 16px; position: sticky; top: 0; z-index: 10; }
+    .c-search { width: min(480px, 45vw); min-height: 38px; padding: 0 14px; border: 0; border-radius: 9px; background: var(--surface-2); color: var(--muted); display: flex; align-items: center; gap: 9px; }
+    .c-search kbd { margin-left: auto; padding: 1px 5px; border: 1px solid var(--line); border-radius: 4px; background: white; font-size: 10px; }
+    .c-main { padding: 30px clamp(24px, 4vw, 56px) 110px; max-width: 1520px; margin: 0 auto; }
+    .shell-c .page-heading h1 { font-size: 29px; }
+    .shell-c .review-grid { grid-template-columns: 290px minmax(560px,1fr); }
+    .shell-c .source-pane { position: fixed; right: 18px; top: 82px; bottom: 82px; width: min(390px, 34vw); border-radius: 12px; box-shadow: var(--shadow-float); z-index: 20; }
+    .shell-c .sheet { padding-right: min(390px, 34vw); }
+    .shell-c .notes-layout { grid-template-columns: 220px minmax(560px,1fr); }
+    .shell-c .note-aside { position: fixed; right: 18px; top: 82px; width: 300px; border-radius: 12px; background: white; box-shadow: var(--shadow-float); z-index: 20; }
+    .shell-c .editor { padding-right: 300px; }
+
+    .inbox-grid { display: grid; grid-template-columns: minmax(0,1.65fr) minmax(290px,.75fr); gap: 26px; }
+    .inbox-item { display: grid; grid-template-columns: 42px minmax(0,1fr) auto; gap: 12px; align-items: center; padding: 15px 0; }
+    .inbox-count { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; background: var(--surface-2); color: var(--ink); font-weight: 700; }
+    .inbox-count.warn { background: var(--warning-soft); color: var(--warning); }
+    .inbox-count.good { background: var(--success-soft); color: var(--success); }
+    .inbox-item h3 { margin: 0; color: var(--ink); font-size: 14px; }
+    .inbox-item p { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
+
+    /* Prototype switcher — intentionally distinct from product chrome. */
+    .prototype-bar {
+      position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 100;
+      min-height: 50px; padding: 7px 9px; border-radius: 14px; background: #000000;
+      color: white; box-shadow: var(--shadow-float); display: flex; align-items: center; gap: 8px;
+    }
+    .prototype-bar button { width: 36px; height: 36px; border: 0; border-radius: 8px; background: rgba(255,255,255,.14); color: white; cursor: pointer; font-size: 18px; }
+    .prototype-label { min-width: 210px; text-align: center; }
+    .prototype-label strong { display: block; font-size: 12px; }
+    .prototype-label span { color: #cbd1d6; font-size: 10px; }
+    .prototype-tag { padding: 0 5px; color: #cbd1d6; font-size: 9px; letter-spacing: .1em; text-transform: uppercase; }
+    html[data-variant="a"][data-page="notes"] .prototype-bar,
+    html[data-variant="a"][data-page="activity"] .prototype-bar { display: none; }
+
+    @media (max-width: 1100px) {
+      .activity-layout { grid-template-columns: 1fr !important; }
+      .review-grid { grid-template-columns: 220px minmax(500px, 1fr); }
+      .source-pane { display: none; }
+      .notes-layout { grid-template-columns: 190px minmax(500px,1fr); }
+      .note-aside { display: none; }
+      .shell-c .sheet, .shell-c .editor { padding-right: 0; }
+      .shell-c .source-pane, .shell-c .note-aside { display: none; }
+      .review-workspace { grid-template-columns: 1fr; }
+      .field-inspector { position: static; }
+      .review-split { grid-template-columns: 1fr; }
+      .source-preview { position: static; height: 680px; }
+      .notes-three-pane { grid-template-columns: 180px minmax(0,1fr); }
+      .notes-three-pane > .source-preview { grid-column: 1 / -1; }
+      .agent-workspace { grid-template-columns: 1fr; }
+      .agent-detail { position: static; padding: 24px 0 0; border-left: 0; }
+      .run-row { grid-template-columns: minmax(240px,1.5fr) 100px 130px 120px 24px; }
+      .run-row > :nth-child(5) { display: none; }
+    }
+    @media (max-width: 780px) {
+      .shell-a, .shell-c { grid-template-columns: 1fr; }
+      .a-sidebar, .c-rail { position: fixed; left: 0; right: 0; bottom: 0; top: auto; width: auto; height: 64px; z-index: 40; border: 0; border-top: 1px solid var(--line); padding: 7px 10px; flex-direction: row; justify-content: space-around; }
+      .a-brand, .a-nav-label, .a-sidebar-foot { display: none; }
+      .a-nav { display: contents; }
+      .a-nav button { width: auto; min-width: 52px; justify-content: center; font-size: 0; }
+      .a-nav button .nav-glyph { font-size: 15px; }
+      .c-rail .mark, .c-rail .avatar { display: none; }
+      .c-rail button { flex: 1; }
+      .a-topbar, .c-topbar { padding-left: 16px; padding-right: 16px; }
+      .a-main, .b-main, .c-main { padding: 24px 16px 130px; }
+      .b-global { display: none; }
+      .b-toolbar { overflow-x: auto; }
+      .page-heading { display: grid; }
+      .stat-row { grid-template-columns: repeat(2,1fr); }
+      .config-grid { grid-template-columns: 1fr; }
+      .check-list { grid-template-columns: 1fr; }
+      .workstreams { grid-template-columns: 1fr; }
+      .workstream-nav { display: flex; overflow-x: auto; }
+      .workstream-nav button { min-width: 150px; }
+      .review-grid, .shell-b .review-grid, .shell-c .review-grid { display: block; overflow-x: auto; }
+      .review-queue { display: flex; gap: 4px; overflow-x: auto; }
+      .review-pane-head { min-width: 180px; }
+      .issue { min-width: 210px; }
+      .sheet { min-width: 720px; }
+      .notes-layout, .shell-b .notes-layout, .shell-c .notes-layout { display: block; }
+      .notes-nav { display: flex; gap: 4px; overflow-x: auto; }
+      .notes-nav .label { display: none; }
+      .notes-nav button { min-width: 150px; }
+      .editor { min-width: 680px; }
+      .ready-panel, .inbox-grid { grid-template-columns: 1fr; }
+      .notes-three-pane { grid-template-columns: 1fr; }
+      .note-rail { position: static; height: 260px; min-height: 0; }
+      .agent-roster-head { align-items: flex-start; }
+      .agent-row { grid-template-columns: 18px minmax(0,1fr) auto; }
+      .agent-task { grid-column: 2 / -1; padding-bottom: 3px; }
+      .live-task-row { grid-template-columns: 18px minmax(0,1fr) auto; }
+      .live-task-row > span:nth-child(3) { grid-column: 2 / -1; }
+      .live-agent summary { grid-template-columns: 18px minmax(0,1fr) 14px; }
+      .live-agent summary > span:nth-child(3) { grid-column: 2 / -1; }
+      .live-agent .live-agent-chevron { grid-column: 3; grid-row: 1; }
+      .agent-tree-row, .agent-group > summary, .agent-child > summary { grid-template-columns: 18px minmax(0,1fr) 14px; }
+      .agent-tree-row > span:nth-child(3), .agent-group > summary > span:nth-child(3), .agent-child > summary > span:nth-child(3) { grid-column: 2 / -1; }
+      .agent-tree-meta { grid-column: 2; }
+      .agent-tree-chevron, .agent-tree-row .row-end { grid-column: 3; grid-row: 1; }
+      .agent-children { margin-left: 15px; padding-left: 14px; }
+      .run-row { grid-template-columns: minmax(220px,1fr) 100px 24px; }
+      .run-row > :nth-child(3), .run-row > :nth-child(4), .run-row > :nth-child(5) { display: none; }
+      .prototype-bar { bottom: 74px; max-width: calc(100vw - 24px); }
+      .prototype-label { min-width: 155px; }
+    }
+    @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; transition: none !important; } }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <div class="prototype-bar" aria-label="Prototype direction switcher">
+    <span class="prototype-tag">Prototype</span>
+    <button id="prev-variant" type="button" aria-label="Previous direction">←</button>
+    <div class="prototype-label" aria-live="polite">
+      <strong id="variant-label"></strong>
+      <span>Use ← → to compare directions</span>
+    </div>
+    <button id="next-variant" type="button" aria-label="Next direction">→</button>
+  </div>
+
+  <script>
+    const directions = [
+      { key: "a", name: "A — Focused workspace" },
+      { key: "b", name: "B — Document studio" },
+      { key: "c", name: "C — Review inbox" },
+    ];
+    const pages = ["home", "new", "activity", "review", "notes", "runs"];
+    const pageNames = {
+      home: "Work queue", new: "New extraction", activity: "Live run",
+      review: "Figures review", notes: "Notes review", runs: "Runs"
+    };
+
+    const mark = `<span class="mark" aria-hidden="true"><svg viewBox="0 0 100 100" fill="none"><path d="M12 78 L40 22 L52 50 L66 30 L88 78" stroke="currentColor" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`;
+
+    function params() {
+      const p = new URLSearchParams(location.search);
+      return {
+        variant: directions.some(d => d.key === p.get("variant")) ? p.get("variant") : "a",
+        page: pages.includes(p.get("page")) ? p.get("page") : "home",
+        state: ["processing", "attention", "complete"].includes(p.get("state")) ? p.get("state") : "processing",
+      };
+    }
+
+    function setParams(next) {
+      const current = params();
+      const merged = { ...current, ...next };
+      history.replaceState(null, "", `?variant=${merged.variant}&page=${merged.page}&state=${merged.state}`);
+      render();
+    }
+
+    function navButton(page, current, label, glyph = "") {
+      return `<button type="button" class="${page === current ? "active" : ""}" data-page="${page}" title="${label}">${glyph ? `<span class="nav-glyph" aria-hidden="true">${glyph}</span>` : ""}<span>${label}</span></button>`;
+    }
+
+    function scenarioSwitch(state) {
+      return `<div class="scenario-switch" aria-label="Run state shown">
+        ${["processing", "attention", "complete"].map(s => `<button type="button" data-state="${s}" class="${state === s ? "active" : ""}">${s === "processing" ? "Processing" : s === "attention" ? "Needs attention" : "Complete"}</button>`).join("")}
+      </div>`;
+    }
+
+    function heading(title, description, actions = "") {
+      return `<header class="page-heading"><div><h1>${title}</h1><p>${description}</p></div>${actions ? `<div class="page-actions">${actions}</div>` : ""}</header>`;
+    }
+
+    function stats() {
+      return `<div class="stat-row">
+        <div class="stat"><div class="eyebrow">Open reviews</div><div class="value">4</div><div class="detail">2 need a decision today</div></div>
+        <div class="stat"><div class="eyebrow">Processing</div><div class="value">2</div><div class="detail">Longest running · 3m 42s</div></div>
+        <div class="stat"><div class="eyebrow">Ready to file</div><div class="value">7</div><div class="detail">Completed this week</div></div>
+        <div class="stat"><div class="eyebrow">First-pass quality</div><div class="value">94%</div><div class="detail">Across 18 recent runs</div></div>
+      </div>`;
+    }
+
+    function runList(limit = 5) {
+      const rows = [
+        ["Axiata Group Berhad · FY 2025", "Needs review", "MFRS · Group", "2 issues", "7 min ago", "warning"],
+        ["FINCO Holdings · FY 2024", "Processing", "MFRS · Company", "8 of 12", "Now", "active"],
+        ["Kelana Manufacturing · FY 2025", "Ready", "MPERS · Company", "All checks passed", "Yesterday", "success"],
+        ["Seri Pacific Group · FY 2024", "Draft", "MFRS · Group", "Not started", "Yesterday", ""],
+        ["Meridian Services · FY 2024", "Ready", "MPERS · Company", "All checks passed", "21 Aug", "success"],
+      ].slice(0, limit);
+      return `<div class="list">${rows.map((r, i) => `<button type="button" class="list-row run-row" data-page="${i === 1 ? "activity" : i === 0 ? "review" : "runs"}">
+        <div><strong>${r[0]}</strong><div class="row-sub">${i === 1 ? "FINCO-Audited-Financial-Statement-2024.pdf" : "Audited financial statements.pdf"}</div></div>
+        <span class="status"><span class="dot ${r[5]}"></span>${r[1]}</span><span class="muted">${r[2]}</span><span class="muted">${r[3]}</span><span class="muted nowrap">${r[4]}</span><span class="kebab">···</span>
+      </button>`).join("")}</div>`;
+    }
+
+    function homePage(variant) {
+      if (variant === "c") {
+        return `<div class="page-content">${heading("Your review inbox", "Start with filing decisions. Processing detail stays available, but it does not lead the workspace.", `<button class="button primary" data-page="new">New extraction</button>`)}
+          <div class="inbox-grid"><section><div class="eyebrow">Requires attention</div>
+            <div class="inbox-item"><div class="inbox-count warn">2</div><div><h3>Axiata Group · figures do not reconcile</h3><p>Statement of financial position · RM 43,000 difference · evidence ready</p></div><button class="button small" data-page="review">Review</button></div>
+            <div class="inbox-item"><div class="inbox-count">1</div><div><h3>FINCO · note placement needs confirmation</h3><p>Note 28 appears under two MBRS disclosure labels</p></div><button class="button small" data-page="notes">Open note</button></div>
+            <div class="inbox-item"><div class="inbox-count good">7</div><div><h3>Completed filings</h3><p>Ready for mTool or Excel download</p></div><button class="button small" data-page="runs">View</button></div>
+          </section><aside class="card ready-action"><div class="eyebrow">In progress</div><h2 style="margin-top:8px">FINCO Holdings</h2><p>Reviewing extracted figures · 8 of 12 workstreams complete</p><div class="progress-bar"><span></span></div><button class="button primary" style="margin-top:18px" data-page="activity">Follow live run</button></aside></div>
+          <section><div class="page-heading" style="align-items:center"><h2 class="section-title">Recent work</h2><button class="button quiet small" data-page="runs">View all →</button></div>${runList(4)}</section></div>`;
+      }
+      if (variant === "b") {
+        return `<div class="page-content">${heading("Documents", "Each filing starts from a source document and stays attached to that source through extraction and review.", `<button class="button primary" data-page="new">Add document</button>`)}
+          <div class="card" style="padding:20px"><div class="page-heading" style="align-items:center"><div><div class="eyebrow">Continue working</div><h2 class="section-title" style="margin-top:5px">FINCO-Audited-Financial-Statement-2024.pdf</h2></div><span class="status"><span class="dot active"></span>Reviewing figures</span></div><div class="progress-bar" style="margin-top:18px"><span></span></div><div style="display:flex;justify-content:space-between;margin-top:9px;font-size:12px;color:var(--muted)"><span>8 of 12 workstreams complete</span><button class="plain-link" style="border:0;background:transparent" data-page="activity">Open workspace</button></div></div>
+          <section><div class="page-heading" style="align-items:center"><h2 class="section-title">All documents</h2><button class="button quiet small" data-page="runs">Browse archive →</button></div>${runList(5)}</section></div>`;
+      }
+      return `<div class="page-content">${heading("Good morning, Aina", "Continue an active filing, resolve reviews, or start from a new financial statement.", `<button class="button primary" data-page="new">New extraction</button>`)}${stats()}
+        <section><div class="page-heading" style="align-items:center"><div><div class="eyebrow">Priority work</div><h2 class="section-title" style="margin-top:5px">Runs needing you</h2></div><button class="button quiet small" data-page="runs">View all runs →</button></div>${runList(4)}</section></div>`;
+    }
+
+    function newPage(variant) {
+      const actions = variant === "b" ? "" : `<button class="button quiet">Save draft</button>`;
+      return `<div class="page-content">${heading("New extraction", "Upload one audited financial statement. Confirm the filing scope before processing begins.", actions)}
+        <div class="upload-zone" role="button" tabindex="0"><div><div class="upload-icon"></div><h2>Drop a PDF or Word document</h2><p>or choose a file from your computer · up to 100 MB</p><button class="button">Choose document</button></div></div>
+        <section class="card" style="padding:22px"><div class="page-heading" style="align-items:center"><div><h2 class="section-title">Filing setup</h2><p style="font-size:13px;margin-top:4px">These choices determine the MBRS template family and review scope.</p></div><span class="pill">Defaults applied</span></div>
+          <div class="config-grid" style="margin-top:20px"><div class="field"><label>Filing standard</label><select><option>MFRS</option><option>MPERS</option></select></div><div class="field"><label>Filing level</label><select><option>Company</option><option>Group</option></select></div><div class="field"><label>Denomination</label><select><option>RM '000</option><option>RM</option></select></div></div>
+          <div class="divider" style="margin:20px 0"></div><div class="eyebrow" style="margin-bottom:9px">Statements and notes</div><div class="check-list">
+            ${["Statement of financial position", "Profit or loss", "Cash flows", "Changes in equity", "Other comprehensive income", "Corporate information", "Significant accounting policies", "List of notes"].map((x,i) => `<label class="check"><input type="checkbox" ${i < 6 ? "checked" : ""}>${x}</label>`).join("")}
+          </div><div style="display:flex;justify-content:flex-end;margin-top:22px"><button class="button primary" data-page="activity">Start extraction</button></div></section></div>`;
+    }
+
+    const liveAgentCatalog = [
+      { id: "borrowings", parentId: "notes-coordinator", name: "Borrowings note", role: "Notes extraction", state: "working", status: "Working", task: "Reading the maturity table", hint: "Pages 67–69 · updated just now", summary: "Finding the current and comparative balances before filling the Borrowings disclosure.", source: "Pages 67–69", input: "Notes coordinator", next: "Review checker", updates: [["Now", "Checking the year columns against the source table"], ["14s", "Mapped current and non-current balances"], ["20s", "Located the Borrowings disclosure"]], technical: "3 source pages · 1 prose block · 1 table" },
+      { id: "leases", parentId: "notes-coordinator", name: "Leases note", role: "Notes extraction", state: "working", status: "Working", task: "Comparing current and prior year", hint: "Pages 70–72 · updated 4s ago", summary: "Checking that lease liabilities and right-of-use asset movements agree across both years.", source: "Pages 70–72", input: "Notes coordinator", next: "Review checker", updates: [["4s", "Found the lease maturity analysis"], ["18s", "Matched right-of-use asset movements"], ["31s", "Started the Leases disclosure"]], technical: "3 source pages · 11 reported values" },
+      { id: "financial-instruments", parentId: "notes-coordinator", name: "Financial instruments", role: "Notes extraction", state: "working", status: "Working", task: "Organising disclosure tables", hint: "Pages 73–76 · updated 7s ago", summary: "Organising the financial risk tables into the filing template while retaining their source order.", source: "Pages 73–76", input: "Notes coordinator", next: "Review checker", updates: [["7s", "Grouped the liquidity risk tables"], ["22s", "Identified the currency risk section"], ["36s", "Opened the Financial instruments note"]], technical: "4 source pages · 4 disclosure tables" },
+      { id: "notes-coordinator", name: "Notes coordinator", role: "Coordination", state: "working", status: "12 of 16", task: "Placing notes into filing sections", hint: "4 note agents active · updated just now", summary: "Assigning source notes to specialist agents and placing each completed result into the correct filing section.", source: "28 source notes", input: "Document scanner", next: "Note agents and review checker", updates: [["Now", "Placed the Commitments disclosure"], ["9s", "Started three note agents in parallel"], ["24s", "Confirmed 12 of 16 note sections"]], technical: "4 note tasks active · 12 sections placed · 4 remaining" },
+      { id: "document-scan", name: "Document scanner", role: "Document understanding", state: "done", status: "Done", task: "Mapped the source document", hint: "92 pages · completed in 38s", summary: "Mapped the document structure and shared the relevant page ranges with the extraction agents.", source: "FINCO 2024.pdf", input: "Uploaded document", next: "All extraction agents", updates: [["38s", "Shared note and statement page ranges"], ["31s", "Identified 28 supporting notes"], ["12s", "Detected Company filing and MFRS"]], technical: "92 pages mapped · 33 source regions shared" },
+      { id: "financial-position", name: "Financial position", role: "Statement extraction", state: "done", status: "Done", task: "Filled assets and liabilities", hint: "68 figures · completed in 2m 06s", summary: "Completed the statement of financial position and handed its figures to the review checker.", source: "Pages 41–51", input: "Document scanner", next: "Review checker", updates: [["2:06", "Sent 68 figures for checking"], ["1:48", "Completed liabilities"], ["1:12", "Completed assets"]], technical: "68 facts written · 11 source pages consulted" },
+      { id: "profit-loss", name: "Profit or loss", role: "Statement extraction", state: "done", status: "Done", task: "Filled income and expenses", hint: "41 figures · completed in 1m 52s", summary: "Completed revenue, expenses and profit figures for the current and comparative years.", source: "Pages 34–37", input: "Document scanner", next: "Review checker", updates: [["1:52", "Sent 41 figures for checking"], ["1:31", "Completed operating expenses"], ["0:54", "Completed revenue lines"]], technical: "41 facts written · 4 source pages consulted" },
+      { id: "comprehensive-income", name: "Comprehensive income", role: "Statement extraction", state: "done", status: "Done", task: "Filled other comprehensive income", hint: "18 figures · completed in 1m 24s", summary: "Completed the other comprehensive income statement and checked the reported totals.", source: "Pages 38–39", input: "Document scanner", next: "Review checker", updates: [["1:24", "Confirmed the reported total"], ["1:03", "Mapped reclassification items"], ["0:42", "Found the statement"]], technical: "18 facts written · 2 source pages consulted" },
+      { id: "cash-flow", name: "Cash flow", role: "Statement extraction", state: "done", status: "Done", task: "Filled operating and financing flows", hint: "53 figures · completed in 2m 14s", summary: "Completed the cash flow statement and linked the closing cash balance for checking.", source: "Pages 52–58", input: "Document scanner", next: "Review checker", updates: [["2:14", "Sent 53 figures for checking"], ["1:49", "Completed financing activities"], ["1:20", "Completed operating activities"]], technical: "53 facts written · 7 source pages consulted" },
+      { id: "equity", name: "Changes in equity", role: "Statement extraction", state: "done", status: "Done", task: "Filled equity movements", hint: "47 figures · completed in 2m 01s", summary: "Completed share capital, reserves and retained earnings movements for both periods.", source: "Pages 59–63", input: "Document scanner", next: "Review checker", updates: [["2:01", "Sent 47 figures for checking"], ["1:35", "Completed retained earnings"], ["0:58", "Completed reserve movements"]], technical: "47 facts written · 5 source pages consulted" },
+      { id: "corporate-info", parentId: "notes-coordinator", name: "Corporate information", role: "Notes extraction", state: "done", status: "Done", task: "Placed company particulars", hint: "Completed in 44s", summary: "Placed the registered office, principal activities and company details into the filing template.", source: "Pages 5–7", input: "Notes coordinator", next: "Review checker", updates: [["44s", "Placed all company particulars"], ["31s", "Confirmed principal activities"], ["16s", "Found the registered office"]], technical: "8 text fields · 3 source pages" },
+      { id: "review-checker", name: "Review checker", role: "Validation", state: "waiting", status: "Waiting", task: "Waiting for extraction agents", hint: "Starts when required sections arrive", summary: "Waiting for the remaining extraction agents, then it will compare totals, periods and related disclosures.", source: "All completed sections", input: "Statement and note agents", next: "Human reviewer", updates: [["Now", "Waiting for four note sections"], ["1:02", "Received five primary statements"], ["1:18", "Prepared the filing checks"]], technical: "12 filing checks queued" },
+    ];
+
+    function agentsForState(state) {
+      if (state !== "attention") return liveAgentCatalog;
+      return liveAgentCatalog.map(agent => agent.id === "review-checker" ? {
+        ...agent, state: "attention", status: "Needs input", task: "One difference needs a decision", hint: "Other current liabilities · page 48", summary: "The balance sheet is short by RM 43,000. The source and extracted value differ for Other current liabilities.", source: "Page 48", input: "Financial position agent", next: "Human reviewer", updates: [["Now", "Paused for a reviewer decision"], ["12s", "Traced the difference to one field"], ["19s", "Compared balance sheet totals"]], technical: "1 unresolved check · 11 checks passed"
+      } : { ...agent, state: "done", status: "Done" });
+    }
+
+    function agentDetailMarkup(agent) {
+      const stateLabel = agent.state === "attention" ? "Needs a decision" : agent.state === "done" ? "Finished" : agent.state === "waiting" ? "Waiting" : "Working now";
+      const dotClass = agent.state === "working" ? "active" : agent.state === "done" ? "success" : agent.state === "attention" ? "warning" : "";
+      return `<div data-agent-detail-id="${agent.id}"><div class="agent-detail-head"><div><div class="eyebrow">${agent.role}</div><h2>${agent.name}</h2></div><span class="status"><span class="dot ${dotClass}"></span>${agent.status}</span></div><p class="agent-detail-copy">${agent.summary}</p><div class="agent-now"><span class="dot ${dotClass}"></span>${stateLabel}<small>${agent.source}</small></div><div class="agent-detail-section"><h3>Recent updates</h3><div class="agent-updates">${agent.updates.map(([time, copy]) => `<div class="agent-update"><time>${time}</time><span>${copy}</span></div>`).join("")}</div></div><div class="agent-detail-section"><h3>Works with</h3><div class="agent-links"><span>Receives from</span><strong>${agent.input}</strong><span>Hands off to</span><strong>${agent.next}</strong></div></div><details class="agent-technical"><summary>Technical details</summary><p>${agent.technical}</p></details></div>`;
+    }
+
+    function agentRowMarkup(agent, selectedId) {
+      const dotClass = agent.state === "working" ? "active" : agent.state === "done" ? "success" : agent.state === "attention" ? "warning" : "";
+      const hierarchyClass = agent.parentId ? "child" : agent.id === "notes-coordinator" ? "parent" : "";
+      const stateLabel = agent.state === "attention" ? "Needs input" : agent.state === "working" ? agent.status : agent.state === "done" ? "Done" : "Waiting";
+      return `<button type="button" class="agent-row ${hierarchyClass} ${agent.id === selectedId ? "active" : ""}" data-agent-id="${agent.id}" data-agent-state="${agent.state}"><span class="dot ${dotClass}"></span><span class="agent-identity"><strong>${agent.name}</strong><span>${agent.parentId ? `Sub-agent · ${agent.role}` : agent.role}</span></span><span class="agent-task"><strong>${agent.task}</strong><span>${agent.hint}</span></span><span class="agent-row-state">${stateLabel}</span></button>`;
+    }
+
+    function semanticEventsMarkup(agent) {
+      return `<div class="agent-child-events" aria-label="Recent activity">${agent.updates.map(([time, copy]) => `<div class="semantic-event"><time>${time}</time><span>${copy}</span></div>`).join("")}<div class="agent-child-context"><span>Source <strong>${agent.source}</strong></span><span>Hands off to <strong>${agent.next}</strong></span></div><details class="agent-technical-inline"><summary>Technical details</summary><p>${agent.technical}</p></details></div>`;
+    }
+
+    function agentChildMarkup(agent) {
+      const dotClass = agent.state === "done" ? "success" : agent.state === "attention" ? "warning" : "active";
+      return `<details class="agent-child" data-agent-id="${agent.id}" data-parent-agent-id="${agent.parentId || ""}"><summary><span class="dot ${dotClass}"></span><strong>${agent.name}</strong><span>${agent.task}</span><span class="agent-tree-meta">${agent.state === "done" ? "Done" : agent.source}</span><span class="agent-tree-chevron">›</span></summary>${semanticEventsMarkup(agent)}</details>`;
+    }
+
+    function compactDoneRow(agent) {
+      return `<div class="agent-tree-row"><span class="dot success"></span><strong>${agent.name}</strong><span>${agent.task}</span><span class="agent-tree-meta">Done</span><span class="row-end">✓</span></div>`;
+    }
+
+    function parallelAgentWorkspace(state) {
+      const agents = agentsForState(state);
+      const doneCount = agents.filter(agent => agent.state === "done").length;
+      const reviewAgent = agents.find(agent => agent.id === "review-checker");
+      const selectedId = state === "attention" ? "review-checker" : "borrowings";
+      const currentCount = agents.filter(agent => agent.state === "working" || agent.state === "attention").length;
+      const order = ["notes-coordinator", "borrowings", "leases", "financial-instruments", "corporate-info", "document-scan", "financial-position", "profit-loss", "comprehensive-income", "cash-flow", "equity", "review-checker"];
+      const orderedAgents = order.map(id => agents.find(agent => agent.id === id)).filter(Boolean);
+      const selectedAgent = agents.find(agent => agent.id === selectedId) || reviewAgent;
+      return `<section class="agent-workspace"><div class="agent-roster"><div class="agent-roster-head"><h2>Agents</h2><div class="agent-filter" aria-label="Filter agents"><button type="button" class="active" data-agent-filter="current">${state === "attention" ? "Needs input" : "Working"} ${currentCount}</button><button type="button" data-agent-filter="all">All ${agents.length}</button><button type="button" data-agent-filter="done">Finished ${doneCount}</button></div></div><div class="agent-list">${orderedAgents.map(agent => { const isCurrent = agent.state === "working" || agent.state === "attention"; return agentRowMarkup(agent, selectedId).replace('class="agent-row', `class="agent-row${isCurrent ? "" : " hidden"}`); }).join("")}</div></div><aside class="agent-detail" aria-live="polite">${agentDetailMarkup(selectedAgent)}</aside></section>`;
+    }
+
+    function stageRows(state) {
+      const attention = state === "attention";
+      const complete = state === "complete";
+      return `<div class="stage-list">
+        <div class="stage-row done"><span class="stage-icon">✓</span><div><h3>Read document structure</h3><p>92 pages · 28 notes · Company filing detected</p></div><span class="muted mono">38s</span></div>
+        <div class="stage-row done"><span class="stage-icon">✓</span><div><h3>Extract primary statements</h3><p>Five statements completed in parallel</p></div><span class="muted mono">2m 14s</span></div>
+        <div class="stage-row ${complete || attention ? "done" : "active"}"><span class="stage-icon">${complete || attention ? "✓" : "3"}</span><div><h3>Extract supporting notes</h3><p>${complete || attention ? "Five note templates completed" : "Reading note 19 · Borrowings"}</p></div><span class="status"><span class="dot ${complete || attention ? "success" : "active"}"></span>${complete || attention ? "Done" : "Active"}</span></div>
+        <div class="stage-row ${complete ? "done" : attention ? "active" : ""}"><span class="stage-icon">${complete ? "✓" : "4"}</span><div><h3>Check and review</h3><p>${attention ? "One difference needs a human decision" : complete ? "12 checks passed" : "Starts after extraction"}</p></div><span class="muted">${attention ? "Needs attention" : complete ? "Done" : "Waiting"}</span></div>
+        <div class="stage-row ${complete ? "done" : ""}"><span class="stage-icon">${complete ? "✓" : "5"}</span><div><h3>Prepare filing output</h3><p>${complete ? "Excel and mTool outputs are ready" : "Starts after review"}</p></div><span class="muted">${complete ? "Done" : "Waiting"}</span></div>
+      </div>`;
+    }
+
+    function workstreams() {
+      return `<div class="card workstreams"><aside class="workstream-nav"><button class="active"><span><span class="dot active" style="margin-right:8px"></span>Borrowings</span><span class="muted">19</span></button><button><span><span class="dot success" style="margin-right:8px"></span>Financial position</span><span>✓</span></button><button><span><span class="dot success" style="margin-right:8px"></span>Profit or loss</span><span>✓</span></button><button><span><span class="dot active" style="margin-right:8px"></span>List of notes</span><span>12/16</span></button><button><span><span class="dot" style="margin-right:8px"></span>Cash flows</span><span>✓</span></button><button><span><span class="dot" style="margin-right:8px"></span>Review checks</span><span>—</span></button></aside>
+        <section class="workstream-body"><div class="page-heading" style="align-items:center"><div><div class="eyebrow">Current workstream</div><h2 class="section-title" style="margin-top:5px">Note 19 · Borrowings</h2></div><span class="status"><span class="dot active"></span>Reading source</span></div>
+          <div class="activity-log"><div class="event"><time>10:42:08</time><span class="event-line"></span><div><strong>Located borrowings disclosure</strong><p>Pages 67–69 · current and comparative amounts present</p></div></div><div class="event"><time>10:42:14</time><span class="event-line"></span><div><strong>Mapped note structure</strong><p>Current, non-current, secured and unsecured balances</p></div></div><div class="event active"><time>10:42:22</time><span class="event-line"></span><div><strong>Extracting note table</strong><p>Reviewing the maturity analysis before writing</p></div></div></div>
+          <details style="margin-top:16px"><summary class="muted" style="cursor:pointer">Technical activity · 11 turns · 18,420 tokens</summary><div class="mono" style="margin-top:10px;color:var(--muted)">read_pdf_pages(67, 68, 69) · write_notes(3 cells) · verify_note_coverage()</div></details></section></div>`;
+    }
+
+    function readyContent() {
+      return `<div class="ready-panel"><section><div class="eyebrow">Filing readiness</div><h2 class="section-title" style="margin-top:6px">All required checks are complete</h2><div class="check-table" style="margin-top:16px"><div class="check-row"><span>✓</span><div><strong>Primary statements</strong><div class="row-sub">Five statements extracted and reconciled</div></div><span class="status"><span class="dot success"></span>Ready</span></div><div class="check-row"><span>✓</span><div><strong>Supporting notes</strong><div class="row-sub">28 of 28 source notes accounted for</div></div><span class="status"><span class="dot success"></span>Ready</span></div><div class="check-row"><span>✓</span><div><strong>Cross-checks</strong><div class="row-sub">12 checks passed after review</div></div><span class="status"><span class="dot success"></span>Passed</span></div><div class="check-row"><span>✓</span><div><strong>Human decisions</strong><div class="row-sub">2 reviewer changes recorded in the audit trail</div></div><span class="status"><span class="dot success"></span>Resolved</span></div></div></section><aside class="card ready-action"><div class="eyebrow">Output</div><h2>Filing draft ready</h2><p>Download the MBRS Excel workbook or fill an mTool template with the reviewed values.</p><button class="button primary">Download Excel</button><button class="button">Fill mTool template</button><button class="button quiet">View audit trail</button></aside></div>`;
+    }
+
+    function activityPage(variant, state) {
+      const stateTitle = state === "complete" ? "Filing draft ready" : state === "attention" ? "Review is ready" : "Reviewing supporting notes";
+      const stateDesc = state === "complete" ? "Extraction and review finished in 6 minutes 18 seconds." : state === "attention" ? "Extraction is complete. One field is flagged in the mTool mirror." : "Eight of twelve workstreams are complete. You can leave this page while processing continues.";
+      if (variant === "a") return `<div class="page-content"><div class="run-hero"><div><div class="run-title"><h1>FINCO Holdings · FY 2024</h1><span class="status"><span class="dot ${state === "complete" ? "success" : state === "attention" ? "warning" : "active"}"></span>${state === "complete" ? "Complete" : state === "attention" ? "Needs attention" : "Processing"}</span></div><div class="run-meta">MFRS · Company · RM '000 · ${state === "complete" ? "06:18" : state === "attention" ? "05:47" : "03:42"} elapsed</div></div><div class="inline-actions">${state === "attention" ? `<button class="button primary small" data-page="review">Review 1 item</button>` : state === "complete" ? "" : `<button class="button quiet small">Stop run</button>`}<button class="button quiet small" title="More run actions"><span class="kebab">···</span></button></div></div>${state === "complete" ? readyContent() : parallelAgentWorkspace(state)}</div>`;
+      return `<div class="page-content"><div class="run-hero"><div><div class="run-title"><h1>FINCO Holdings · FY 2024</h1><span class="status"><span class="dot ${state === "complete" ? "success" : state === "attention" ? "warning" : "active"}"></span>${state === "complete" ? "Complete" : state === "attention" ? "Needs attention" : "Processing"}</span></div><div class="run-meta">MFRS · Company · RM '000 · started by Aina Rahman</div></div><div class="inline-actions">${scenarioSwitch(state)}<button class="button quiet small"><span class="kebab">···</span></button></div></div>
+        <div><div class="page-heading" style="align-items:end"><div><div class="eyebrow">Current stage</div><h2 style="margin:5px 0 0;color:var(--ink);font-size:21px">${stateTitle}</h2><p>${stateDesc}</p></div><span class="mono muted">${state === "complete" ? "06:18" : "03:42 elapsed"}</span></div><div class="progress-bar" style="margin-top:16px"><span style="width:${state === "complete" ? "100" : state === "attention" ? "82" : "68"}%"></span></div></div>
+        ${state === "complete" ? readyContent() : variant === "c" ? `<div class="inbox-grid activity-layout"><section class="card" style="padding:18px 20px"><div class="eyebrow">Run stages</div>${stageRows(state)}</section><aside>${workstreams()}</aside></div>` : `<div class="activity-layout" style="display:grid;grid-template-columns:minmax(300px,.75fr) minmax(540px,1.4fr);gap:22px"><section class="card" style="padding:18px 20px"><div class="eyebrow">Run stages</div>${stageRows(state)}</section>${workstreams()}</div>`}
+      </div>`;
+    }
+
+    function figureTable() {
+      const rows = [
+        ["section", "Current assets", "", "", ""],
+        ["", "Cash and cash equivalents", "84,219", "71,844", "p. 42"],
+        ["", "Trade and other receivables", "212,606", "190,118", "p. 43"],
+        ["selected", "Other current liabilities", "123,881", "80,112", "p. 48"],
+        ["section", "Non-current assets", "", "", ""],
+        ["", "Property, plant and equipment", "461,244", "452,801", "p. 51"],
+        ["", "Right-of-use assets", "97,103", "103,553", "p. 55"],
+        ["section", "Totals", "", "", ""],
+        ["", "Total assets", "1,002,593", "984,720", "Calculated"],
+      ];
+      return `<table class="sheet-table"><thead><tr><th>Line item</th><th class="num">FY 2024</th><th class="num">FY 2023</th><th>Evidence</th></tr></thead><tbody>${rows.map(r => `<tr class="${r[0]}"><td>${r[1]}</td><td class="num">${r[2]}</td><td class="num">${r[3]}</td><td class="muted">${r[4]}</td></tr>`).join("")}</tbody></table>`;
+    }
+
+    function sourcePane() {
+      return `<aside class="source-pane"><div class="source-toolbar"><div><strong style="color:var(--ink);font-size:13px">Source · page 48</strong><div class="row-sub">FINCO 2024.pdf</div></div><div class="inline-actions"><button class="button quiet small">−</button><span class="mono">110%</span><button class="button quiet small">+</button></div></div><div style="overflow:auto"><div class="pdf-page"><h4>FINCO HOLDINGS BERHAD</h4>${Array(5).fill('<div class="pdf-line"></div>').join('')}<div class="pdf-table"><div class="pdf-row"><strong>Liabilities</strong><span>2024</span><span>2023</span></div><div class="pdf-row"><span>Trade payables</span><span>92,468</span><span>74,335</span></div><div class="pdf-row highlight"><span>Other current liabilities</span><span>80,881</span><span>80,112</span></div><div class="pdf-row"><span>Total current liabilities</span><span>284,220</span><span>256,104</span></div></div>${Array(8).fill('<div class="pdf-line"></div>').join('')}</div></div></aside>`;
+    }
+
+    function reviewPage(variant) {
+      return `<div class="page-content"><div class="run-hero"><div><div class="breadcrumb"><span>FINCO Holdings · FY 2024</span><span>›</span><strong>Figures review</strong></div><div class="run-meta">Company · MFRS · RM '000 · FY 2024 and FY 2023</div></div><div class="page-actions"><button class="button quiet small" data-page="activity">Run overview</button><button class="button primary small">Apply and continue</button></div></div>
+        <div class="attention-banner"><span>!</span><div><strong>One cross-check needs a decision</strong><p>Total assets exceed equity and liabilities by RM 43,000. The source shows RM 80,881 for Other current liabilities; extraction contains RM 123,881.</p></div></div>
+        <div class="review-grid"><aside class="review-queue"><div class="review-pane-head"><h2>Review queue</h2><p>1 open · 2 resolved</p></div><button class="issue active"><div class="issue-title"><span class="dot warning"></span>Balance sheet difference</div><p>RM 43,000 · page 48</p></button><button class="issue"><div class="issue-title"><span class="dot success"></span>Revenue classification</div><p>Resolved by reviewer</p></button><button class="issue"><div class="issue-title"><span class="dot success"></span>Cash flow sign</div><p>Resolved by reviewer</p></button></aside>
+          <section class="sheet"><div class="sheet-toolbar"><div><strong style="color:var(--ink);font-size:13px">Statement of financial position</strong><div class="row-sub">Current / non-current presentation</div></div><div class="inline-actions"><button class="button quiet small">Filter</button><button class="button quiet small">Density</button></div></div>${figureTable()}<div style="padding:20px 0 0;display:flex;justify-content:space-between;align-items:center"><div><strong style="color:var(--ink)">Proposed correction</strong><div class="row-sub">123,881 → 80,881 · source page 48</div></div><div class="inline-actions"><button class="button">Keep extracted</button><button class="button primary">Use source value</button></div></div></section>${sourcePane()}</div></div>`;
+    }
+
+    function notesPage() {
+      return `<div class="page-content"><div class="run-hero"><div><div class="breadcrumb"><span>FINCO Holdings · FY 2024</span><span>›</span><strong>Notes review</strong></div><div class="run-meta">28 source notes · 27 placed · 1 needs confirmation</div></div><div class="page-actions"><button class="button quiet small" data-page="activity">Run overview</button><button class="button primary small">Save changes</button></div></div>
+        <div class="notes-layout"><aside class="notes-nav"><div class="label">Disclosure</div><button>Corporate information <span class="faint">✓</span></button><button>Accounting policies <span class="faint">✓</span></button><button class="active">List of notes <span class="faint">1</span></button><button>Issued capital <span class="faint">✓</span></button><button>Related parties <span class="faint">✓</span></button></aside>
+          <section class="editor"><div class="editor-tools"><button><strong>B</strong></button><button><em>I</em></button><button>U</button><span class="divider" style="width:1px;height:22px"></span><button>≡</button><button>▦</button><button>↔</button><span style="margin-left:auto" class="status"><span class="dot success"></span>Saved</span></div><div style="overflow:auto;background:var(--surface-2);min-height:625px"><article class="document-page"><div class="eyebrow" style="font-family:var(--sans);margin-bottom:9px">MBRS disclosure</div><h2>19. Borrowings</h2><p>The Group's borrowings are secured by a fixed and floating charge over certain property, plant and equipment and are repayable as follows:</p><table class="note-table"><thead><tr><th></th><th>2024<br>RM'000</th><th>2023<br>RM'000</th></tr></thead><tbody><tr><td>Within one year</td><td>68,204</td><td>51,443</td></tr><tr><td>Between one and five years</td><td>174,884</td><td>190,182</td></tr><tr><td>More than five years</td><td>28,310</td><td>36,411</td></tr><tr><td><strong>Total borrowings</strong></td><td><strong>271,398</strong></td><td><strong>278,036</strong></td></tr></tbody></table><p style="margin-top:18px">The weighted average effective interest rate at the reporting date was 4.8% (2023: 4.6%).</p></article></div></section>
+          <aside class="note-aside"><div class="review-pane-head"><h2>Coverage and source</h2><p>Evidence is read-only</p></div><div class="check-item"><strong><span class="dot success" style="display:inline-block;margin-right:7px"></span>Source accounted for</strong><p>Note 19 · pages 67–69</p></div><div class="check-item"><strong><span class="dot warning" style="display:inline-block;margin-right:7px"></span>Placement to confirm</strong><p>Security information also appears in Commitments.</p><button class="button small" style="margin-top:10px">Review placement</button></div><div class="check-item"><strong>Formatting</strong><p>Source structure retained. Table preview matches the house filing style.</p></div></aside></div></div>`;
+    }
+
+    function sheetTabs(active) {
+      const tabs = [
+        ["SOFP", "review"], ["SOPL", "review"], ["SOCI", "review"],
+        ["SOCF", "review"], ["SOCIE", "review"], ["Notes", "notes"]
+      ];
+      return `<nav class="sheet-tabs" aria-label="mTool worksheets">${tabs.map(([label, page]) => `<button class="sheet-tab ${label.toLowerCase() === active ? "active" : ""}" data-page="${page}">${label}${label.toLowerCase() === active ? `<span class="mini-warning" title="One field needs review" aria-label="One field needs review">!</span>` : ""}</button>`).join("")}</nav>`;
+    }
+
+    function mtoolFigureTable() {
+      const rows = [
+        ["section-row", "D40", "Current liabilities", "", "", ""],
+        ["", "D45", "Trade payables", "92,468", "74,335", "input"],
+        ["", "D46", "Contract liabilities", "27,194", "24,880", "input"],
+        ["selected-row", "D48", "Other current liabilities", "123,881", "80,112", "warning"],
+        ["", "D49", "Current tax liabilities", "18,225", "16,777", "input"],
+        ["", "D50", "Borrowings — current", "22,452", "19,608", "input"],
+        ["section-row", "D56", "Non-current liabilities", "", "", ""],
+        ["", "D58", "Borrowings — non-current", "248,946", "258,428", "input"],
+        ["", "D59", "Deferred tax liabilities", "34,901", "32,718", "input"],
+        ["section-row", "D66", "Totals", "", "", ""],
+        ["", "D67", "Total liabilities", "568,267", "548,613", "formula"],
+      ];
+      return `<table class="mtool-grid"><thead><tr><th class="address"></th><th>D · mTool field</th><th class="num">E · FY 2024</th><th class="num">F · FY 2023</th></tr></thead><tbody>${rows.map(r => `<tr class="${r[0]}"><td class="address">${r[1]}</td><td class="label-cell">${r[2]}${r[5] === "warning" ? ` <button class="mini-warning" title="Cross-check difference. Select to review the source." aria-label="Cross-check difference">!</button>` : ""}</td><td>${r[5] === "formula" ? `<span class="formula-value">${r[3]}</span>` : r[3] ? `<input class="mtool-value" aria-label="${r[2]} FY 2024" value="${r[3]}">` : ""}</td><td>${r[5] === "formula" ? `<span class="formula-value">${r[4]}</span>` : r[4] ? `<input class="mtool-value" aria-label="${r[2]} FY 2023" value="${r[4]}">` : ""}</td></tr>`).join("")}</tbody></table>`;
+    }
+
+    function figureInspector() {
+      return `<aside class="field-inspector"><div class="inspector-head"><div><div class="eyebrow">Selected field</div><h2 style="margin-top:6px">Other current liabilities</h2><div class="row-sub mono">SOFP-Sub-CuNonCu · D48 / E48 / F48</div></div><button class="mini-warning" title="The current-year value breaks the balance-sheet cross-check" aria-label="Cross-check issue">!</button></div>
+        <div class="inspector-section"><h3>Filled in application</h3><div class="inspector-values"><div class="inspector-value"><label>FY 2024 · E48</label><input value="123,881" aria-label="Filled current year value"></div><div class="inspector-value"><label>FY 2023 · F48</label><input value="80,112" aria-label="Filled prior year value"></div></div><p>Edits update the canonical fact and the eventual mTool fill.</p></div>
+        <div class="inspector-section"><h3>Source evidence · page 48</h3><div class="source-values"><span>FY 2024</span><strong>80,881</strong><span>FY 2023</span><strong>80,112</strong></div><p>FINCO 2024.pdf · Current liabilities table</p></div>
+        <div class="inspector-section"><h3>Why it is flagged</h3><p>The FY 2024 extraction differs from the source by RM 43,000 and prevents the balance sheet from reconciling.</p></div>
+        <div class="inspector-actions"><button class="button primary">Use source value · 80,881</button><button class="button">Open source at page 48</button><button class="button quiet">View audit history</button></div></aside>`;
+    }
+
+    function reviewMirrorPage() {
+      return `<div class="page-content"><div class="run-hero"><div><div class="breadcrumb"><span>FINCO Holdings · FY 2024</span><span>›</span><strong>Figures review</strong></div><div class="run-meta">Company · MFRS · RM '000 · FY 2024 and FY 2023</div></div><div class="page-actions"><button class="button quiet small" data-page="activity">Run overview</button><button class="button primary small">Apply and continue</button></div></div>
+        <div class="review-workspace"><section class="review-main">${sheetTabs("sofp")}<div class="mtool-heading"><div><h2>Statement of financial position</h2><p>Current / non-current presentation · values are editable in place</p></div><span class="mtool-location">mTool sheet · SOFP-Sub-CuNonCu</span></div>${mtoolFigureTable()}<p class="sheet-note">Column positions mirror the observed Company mTool layout. Every editable value shows its target address.</p></section>${figureInspector()}</div></div>`;
+    }
+
+    function notesMirrorPage() {
+      return `<div class="page-content"><div class="run-hero"><div><div class="breadcrumb"><span>FINCO Holdings · FY 2024</span><span>›</span><strong>Notes review</strong></div><div class="run-meta">28 source notes · 27 placed · 1 field flagged</div></div><div class="page-actions"><button class="button quiet small" data-page="activity">Run overview</button><button class="button primary small">Save changes</button></div></div>
+        <div class="review-workspace"><section class="review-main">${sheetTabs("notes")}<div class="note-selector"><button>Corporate information</button><button>Accounting policies</button><button class="active">List of notes <span class="mini-warning" title="One note placement needs confirmation" aria-label="One note placement needs confirmation">!</span></button><button>Issued capital</button><button>Related parties</button></div><div class="mtool-heading"><div><h2>19. Borrowings</h2><p>Editable preview of the content that will occupy this mTool text block</p></div><span class="mtool-location">Notes-ListOfNotes · Note 19 text block</span></div><div class="editor-tools"><button><strong>B</strong></button><button><em>I</em></button><button>U</button><span class="divider" style="width:1px;height:22px"></span><button>≡</button><button>▦</button><button>↔</button><span style="margin-left:auto" class="status"><span class="dot success"></span>Saved</span></div><div class="mtool-note-shell"><div class="note-address">Text block 19</div><article class="mtool-text-block" contenteditable="true" aria-label="Editable mTool note text block"><h2>19. Borrowings</h2><p>The Group's borrowings are secured by a fixed and floating charge over certain property, plant and equipment and are repayable as follows:</p><table class="note-table"><thead><tr><th></th><th>2024<br>RM'000</th><th>2023<br>RM'000</th></tr></thead><tbody><tr><td>Within one year</td><td>68,204</td><td>51,443</td></tr><tr><td>Between one and five years</td><td>174,884</td><td>190,182</td></tr><tr><td>More than five years</td><td>28,310</td><td>36,411</td></tr><tr><td><strong>Total borrowings</strong></td><td><strong>271,398</strong></td><td><strong>278,036</strong></td></tr></tbody></table><p style="margin-top:18px">The weighted average effective interest rate at the reporting date was 4.8% (2023: 4.6%).</p></article></div></section>
+          <aside class="field-inspector"><div class="inspector-head"><div><div class="eyebrow">Selected text block</div><h2 style="margin-top:6px">19. Borrowings</h2><div class="row-sub mono">Notes-ListOfNotes · Note 19</div></div><button class="mini-warning" title="Security information may also belong in Commitments" aria-label="Placement to confirm">!</button></div><div class="inspector-section"><h3>Filled in application</h3><strong>1 prose block · 1 table · 14 values</strong><p>The text block is editable directly in the mTool mirror.</p></div><div class="inspector-section"><h3>Source evidence</h3><strong>FINCO 2024.pdf · pages 67–69</strong><p>All source content is accounted for. Security information also appears in Commitments.</p></div><div class="inspector-section"><h3>mTool target</h3><strong>Notes-ListOfNotes</strong><p>Note 19 text block. Formatting shown here is preserved when copied or filled into mTool.</p></div><div class="inspector-actions"><button class="button primary">Save text block</button><button class="button">Open source pages 67–69</button><button class="button quiet">Review placement</button></div></aside></div></div>`;
+    }
+
+    function compactSheetPicker(active, notes = false) {
+      return `<details class="sheet-picker"><summary>${notes ? "Notes · List of notes" : "SOFP · Current / non-current"}<span class="faint">⌄</span></summary><div class="sheet-picker-menu">${[
+        ["SOFP · Statement of financial position", "review", !notes],
+        ["SOPL · Profit or loss", "review", false],
+        ["SOCI · Comprehensive income", "review", false],
+        ["SOCF · Cash flows", "review", false],
+        ["SOCIE · Changes in equity", "review", false],
+        ["Notes · List of notes", "notes", notes]
+      ].map(([label, page, selected]) => `<button class="${selected ? "active" : ""}" data-page="${page}">${label}</button>`).join("")}</div></details>`;
+    }
+
+    function sourceLinkedFigureTable() {
+      const rows = [
+        { section: "Current liabilities" },
+        { label: "Trade payables", current: "92,468", prior: "74,335", page: "45", address: "D45 / E45 / F45", sourceCurrent: "92,468", sourcePrior: "74,335" },
+        { label: "Contract liabilities", current: "27,194", prior: "24,880", page: "46", address: "D46 / E46 / F46", sourceCurrent: "27,194", sourcePrior: "24,880" },
+        { label: "Other current liabilities", current: "123,881", prior: "80,112", page: "48", address: "D48 / E48 / F48", sourceCurrent: "80,881", sourcePrior: "80,112", mismatch: true, selected: true },
+        { label: "Current tax liabilities", current: "18,225", prior: "16,777", page: "49", address: "D49 / E49 / F49", sourceCurrent: "18,225", sourcePrior: "16,777" },
+        { label: "Borrowings — current", current: "22,452", prior: "19,608", page: "50", address: "D50 / E50 / F50", sourceCurrent: "22,452", sourcePrior: "19,608" },
+        { section: "Non-current liabilities" },
+        { label: "Borrowings — non-current", current: "248,946", prior: "258,428", page: "58", address: "D58 / E58 / F58", sourceCurrent: "248,946", sourcePrior: "258,428" },
+        { label: "Deferred tax liabilities", current: "34,901", prior: "32,718", page: "59", address: "D59 / E59 / F59", sourceCurrent: "34,901", sourcePrior: "32,718" },
+        { section: "Totals" },
+        { label: "Total liabilities", current: "568,267", prior: "548,613", page: "60", address: "D67 / E67 / F67", sourceCurrent: "568,267", sourcePrior: "548,613", formula: true },
+      ];
+      return `<table class="source-table"><thead><tr><th>mTool field</th><th class="num">FY 2024</th><th class="num">FY 2023</th></tr></thead><tbody>${rows.map(r => r.section ? `<tr class="section-row"><td colspan="3">${r.section}</td></tr>` : `<tr class="source-jump ${r.selected ? "selected-row" : ""}" tabindex="0" data-source-page="${r.page}" data-source-label="${r.label}" data-source-current="${r.sourceCurrent}" data-source-prior="${r.sourcePrior}" data-address="${r.address}" data-mismatch="${r.mismatch ? "true" : "false"}"><td class="field-name">${r.label}${r.mismatch ? ` <span class="mini-warning" title="Value differs from the source">!</span>` : ""}<small>↗ p.${r.page}</small></td><td>${r.formula ? `<span class="formula-value">${r.current}</span>` : `<input class="mtool-value" aria-label="${r.label} FY 2024" value="${r.current}">`}</td><td>${r.formula ? `<span class="formula-value">${r.prior}</span>` : `<input class="mtool-value" aria-label="${r.label} FY 2023" value="${r.prior}">`}</td></tr>`).join("")}</tbody></table>`;
+    }
+
+    function persistentSourcePreview(notes = false) {
+      if (notes) return `<aside class="source-preview live-source"><div class="source-preview-head"><div><strong>FINCO 2024.pdf</strong><div class="row-sub" data-source-note-title>Borrowings disclosure</div></div><div class="page-control"><button title="Previous page">‹</button><span>Page <strong data-pdf-page>67</strong> of 92</span><button title="Next page">›</button></div></div><div class="pdf-viewport"><div class="pdf-sheet-compact"><h4>FINCO HOLDINGS BERHAD</h4>${Array(5).fill('<div class="pdf-line"></div>').join('')}<div style="margin-top:20px"><strong data-pdf-note-title>19. Borrowings</strong><p style="line-height:1.6" data-pdf-note-excerpt>The Group's borrowings are secured by a fixed and floating charge over certain property, plant and equipment.</p></div><div class="pdf-table" data-pdf-note-table><div class="pdf-row"><strong>Maturity</strong><span>2024</span><span>2023</span></div><div class="pdf-row pdf-dynamic-highlight"><span>Within one year</span><span>68,204</span><span>51,443</span></div><div class="pdf-row"><span>Between one and five years</span><span>174,884</span><span>190,182</span></div><div class="pdf-row"><span>More than five years</span><span>28,310</span><span>36,411</span></div></div>${Array(7).fill('<div class="pdf-line"></div>').join('')}</div></div><div class="source-decision"><div class="source-decision-line"><div><strong data-source-pages>Pages 67–69</strong><p data-note-source-status>Matched to this note</p></div><button class="button small">Open full PDF</button></div><details class="source-meta"><summary>Details</summary><div class="source-meta-grid"><span>mTool target</span><strong>Notes-ListOfNotes · selected note</strong><span>Placement</span><strong>Document note mapped to its filing destination</strong><span>Audit</span><strong>Extracted 10:42 · last edited just now</strong></div></details></div></aside>`;
+      return `<aside class="source-preview live-source"><div class="source-preview-head"><div><strong>FINCO 2024.pdf</strong><div class="row-sub">Current liabilities table</div></div><div class="page-control"><button title="Previous page">‹</button><span>Page <strong data-pdf-page>48</strong> of 92</span><button title="Next page">›</button></div></div><div class="pdf-viewport"><div class="pdf-sheet-compact"><h4>FINCO HOLDINGS BERHAD</h4>${Array(5).fill('<div class="pdf-line"></div>').join('')}<div class="pdf-table"><div class="pdf-row"><strong>Liabilities</strong><span>2024</span><span>2023</span></div><div class="pdf-row"><span>Trade payables</span><span>92,468</span><span>74,335</span></div><div class="pdf-row pdf-dynamic-highlight"><span data-pdf-label>Other current liabilities</span><span data-pdf-current>80,881</span><span data-pdf-prior>80,112</span></div><div class="pdf-row"><span>Total current liabilities</span><span>284,220</span><span>256,104</span></div></div>${Array(9).fill('<div class="pdf-line"></div>').join('')}</div></div><div class="source-decision"><div class="source-decision-line"><div><strong data-decision-label>Other current liabilities</strong><p data-source-status>Extracted 123,881 · source 80,881</p></div><div class="inline-actions"><button class="button primary small" data-use-source>Use source</button><button class="review-tool" title="More field actions">•••</button></div></div><details class="source-meta"><summary>Details</summary><div class="source-meta-grid"><span>mTool location</span><strong data-source-address>SOFP-Sub-CuNonCu · D48 / E48 / F48</strong><span>Check</span><strong data-source-check>Balance sheet differs by RM 43,000</strong><span>Audit</span><strong>Extracted 10:41 · not yet edited</strong></div></details></div></aside>`;
+    }
+
+    function reviewSourcePage() {
+      return `<div class="source-review-page"><div class="review-context"><div><strong>FINCO Holdings · FY 2024</strong><span class="context-line"> · Company · MFRS · RM '000</span></div><div class="inline-actions"><button class="button quiet small" data-page="activity">Overview</button><button class="button primary small">Apply and continue</button></div></div><div class="review-split"><section class="review-main"><div class="compact-review-bar">${compactSheetPicker("sofp")}<div class="inline-actions"><button class="review-tool" title="Show the one flagged field"><span class="mini-warning">1</span></button><button class="review-tool" title="Search fields">⌕</button><button class="review-tool" title="View options">⌘</button></div></div><div class="template-heading"><h2>Statement of financial position</h2><span class="status"><span class="dot success"></span>Saved</span></div><div class="template-table-wrap">${sourceLinkedFigureTable()}</div><details class="hidden-meta"><summary>Template details</summary><p>SOFP-Sub-CuNonCu · observed mTool layout: labels in D, values in E/F. Addresses are resolved from the uploaded mTool version.</p></details></section>${persistentSourcePreview(false)}</div></div>`;
+    }
+
+    function notesSourcePage() {
+      return `<div class="source-review-page"><div class="review-context"><div><strong>FINCO Holdings · FY 2024</strong><span class="context-line"> · 28 notes · 27 placed</span></div><div class="inline-actions"><button class="button quiet small" data-page="activity">Overview</button><button class="button primary small">Save changes</button></div></div><div class="review-split"><section class="review-main"><div class="compact-review-bar"><div class="inline-actions">${compactSheetPicker("notes", true)}<details class="sheet-picker"><summary>19 · Borrowings <span class="faint">⌄</span></summary><div class="sheet-picker-menu"><button>18 · Commitments</button><button class="active">19 · Borrowings</button><button>20 · Leases</button><button>21 · Financial instruments</button></div></details></div><div class="inline-actions"><button class="review-tool" title="One placement detail"><span class="mini-warning">1</span></button><button class="review-tool source-jump-control" data-note-page="67" title="Jump PDF to source pages 67–69">↗</button></div></div><div class="editor-tools"><button><strong>B</strong></button><button><em>I</em></button><button>U</button><span class="divider" style="width:1px;height:22px"></span><button>≡</button><button>▦</button><button>↔</button><span style="margin-left:auto" class="status"><span class="dot success"></span>Saved</span></div><article class="note-edit-surface" contenteditable="true" aria-label="Editable mTool note text block"><h2>19. Borrowings</h2><p>The Group's borrowings are secured by a fixed and floating charge over certain property, plant and equipment and are repayable as follows:</p><table class="note-table"><thead><tr><th></th><th>2024<br>RM'000</th><th>2023<br>RM'000</th></tr></thead><tbody><tr><td>Within one year</td><td>68,204</td><td>51,443</td></tr><tr><td>Between one and five years</td><td>174,884</td><td>190,182</td></tr><tr><td>More than five years</td><td>28,310</td><td>36,411</td></tr><tr><td><strong>Total borrowings</strong></td><td><strong>271,398</strong></td><td><strong>278,036</strong></td></tr></tbody></table><p style="margin-top:18px">The weighted average effective interest rate at the reporting date was 4.8% (2023: 4.6%).</p></article><details class="hidden-meta"><summary>Text-block details</summary><p>mTool target: Notes-ListOfNotes · Note 19. One prose block, one table and 14 extracted values.</p></details></section>${persistentSourcePreview(true)}</div></div>`;
+    }
+
+    function noteIndexControl() {
+      const labels = [
+        "Corporate information", "Basis of preparation", "Material accounting policy information", "Critical accounting estimates and judgements",
+        "Revenue", "Cost of sales", "Employee benefits expense", "Finance costs", "Income tax expense", "Property, plant and equipment",
+        "Right-of-use assets", "Intangible assets", "Investment in subsidiaries", "Inventories", "Trade and other receivables",
+        "Cash and cash equivalents", "Share capital", "Commitments", "Borrowings", "Leases", "Financial instruments",
+        "Trade and other payables", "Provisions", "Deferred tax", "Related party disclosures", "Segment information", "Subsequent events", "Contingent liabilities"
+      ];
+      const pages = [5, 8, 11, 18, 24, 27, 30, 33, 36, 40, 44, 47, 50, 53, 56, 60, 63, 65, 67, 70, 73, 77, 80, 82, 84, 87, 89, 91];
+      const destination = (label, index) => index === 0 ? "Corporate information" : index === 1 || index === 2 ? "Accounting policies" : index === 16 ? "Issued capital" : index === 24 ? "Related parties" : "List of notes";
+      return `<details class="note-index"><summary><span class="note-index-current" data-note-picker-title>19 · Borrowings</span><span class="note-index-coverage">28 found · 27 filled · 1 review</span><span class="faint">⌄</span></summary><div class="note-index-panel"><div class="note-index-head"><div><h3>Source notes</h3><p>Document order · click to open and jump to the PDF</p></div><span class="status"><span class="dot success"></span>28 found</span></div><input class="note-index-search" aria-label="Search source notes" placeholder="Search note title or number"><div class="note-index-filters"><button class="active" data-note-filter="all">All 28</button><button data-note-filter="filled">Filled 27</button><button data-note-filter="review">Review 1</button></div><div class="note-index-list">${labels.map((label, index) => { const number = index + 1; const review = number === 28; return `<button class="note-index-row ${number === 19 ? "active" : ""}" data-note-page="${pages[index]}" data-note-number="${number}" data-note-title="${label}" data-note-review="${review ? "true" : "false"}"><span class="note-index-no">${number}</span><span><span class="note-index-title">${label}</span><span class="note-index-destination">p.${pages[index]} · ${destination(label, index)}</span></span><span class="note-index-status">${review ? `<span class="mini-warning">!</span> Review` : `<span class="checkmark">✓</span> Filled`}</span></button>`; }).join("")}</div></div></details>`;
+    }
+
+    function notesIndexPage() {
+      return `<div class="source-review-page"><div class="review-context"><div><strong>FINCO Holdings · FY 2024</strong><span class="context-line"> · Company · MFRS</span></div><div class="inline-actions"><button class="button quiet small" data-page="activity">Overview</button><button class="button primary small">Save changes</button></div></div><div class="review-split"><section class="review-main"><div class="compact-review-bar">${noteIndexControl()}<div class="inline-actions"><button class="review-tool source-jump-control" data-note-page="67" data-note-number="19" data-note-title="Borrowings" title="Jump PDF to source pages 67–69">↗</button><button class="review-tool" title="Search within this note">⌕</button></div></div><div class="editor-tools"><button><strong>B</strong></button><button><em>I</em></button><button>U</button><span class="divider" style="width:1px;height:22px"></span><button>≡</button><button>▦</button><button>↔</button><span style="margin-left:auto" class="status"><span class="dot success"></span>Saved</span></div><article class="note-edit-surface" contenteditable="true" aria-label="Editable mTool note text block"><h2 data-note-editor-title>19. Borrowings</h2><p data-note-editor-lead>The Group's borrowings are secured by a fixed and floating charge over certain property, plant and equipment and are repayable as follows:</p><table class="note-table" data-note-editor-table><thead><tr><th></th><th>2024<br>RM'000</th><th>2023<br>RM'000</th></tr></thead><tbody><tr><td>Within one year</td><td>68,204</td><td>51,443</td></tr><tr><td>Between one and five years</td><td>174,884</td><td>190,182</td></tr><tr><td>More than five years</td><td>28,310</td><td>36,411</td></tr><tr><td><strong>Total borrowings</strong></td><td><strong>271,398</strong></td><td><strong>278,036</strong></td></tr></tbody></table><p style="margin-top:18px" data-note-editor-tail>The weighted average effective interest rate at the reporting date was 4.8% (2023: 4.6%).</p></article><details class="hidden-meta"><summary>Text-block details</summary><p>mTool target: Notes-ListOfNotes · Note 19. One prose block, one table and 14 extracted values.</p></details></section>${persistentSourcePreview(true)}</div></div>`;
+    }
+
+    function persistentNoteRail() {
+      const labels = [
+        "Corporate information", "Basis of preparation", "Material accounting policies", "Critical estimates and judgements", "Revenue", "Cost of sales",
+        "Employee benefits", "Finance costs", "Income tax expense", "Property, plant and equipment", "Right-of-use assets", "Intangible assets",
+        "Investment in subsidiaries", "Inventories", "Trade and other receivables", "Cash and cash equivalents", "Share capital", "Commitments",
+        "Borrowings", "Leases", "Financial instruments", "Trade and other payables", "Provisions", "Deferred tax", "Related parties",
+        "Segment information", "Subsequent events", "Contingent liabilities"
+      ];
+      const pages = [5, 8, 11, 18, 24, 27, 30, 33, 36, 40, 44, 47, 50, 53, 56, 60, 63, 65, 67, 70, 73, 77, 80, 82, 84, 87, 89, 91];
+      return `<aside class="note-rail"><div class="note-rail-head"><div><strong>Notes</strong><p>28 notes · 1 review</p></div></div><input class="note-rail-search" aria-label="Search source notes" placeholder="Search notes"><nav class="note-rail-list" aria-label="Source notes">${labels.map((label, index) => { const number = index + 1; const review = number === 28; return `<button class="note-nav-row ${number === 19 ? "active" : ""}" data-note-page="${pages[index]}" data-note-number="${number}" data-note-title="${label}" data-note-review="${review ? "true" : "false"}" title="${number}. ${label} · source page ${pages[index]}"><span class="note-nav-number">${number}</span><span class="note-nav-copy"><span class="note-nav-title">${label}</span></span><span class="note-nav-state">${review ? `<span class="mini-warning" title="Placement needs review">!</span>` : ""}</span></button>`; }).join("")}</nav></aside>`;
+    }
+
+    function notesPersistentPage() {
+      return `<div class="source-review-page"><div class="review-context"><div><strong>FINCO Holdings · FY 2024</strong><span class="context-line"> · Company · MFRS</span></div><div class="inline-actions"><button class="button quiet small" data-page="activity">Overview</button><button class="button primary small">Save changes</button></div></div><div class="notes-three-pane">${persistentNoteRail()}<section class="note-editor-pane"><div class="template-heading"><h2 data-note-editor-title>19. Borrowings</h2></div><div class="editor-tools"><button><strong>B</strong></button><button><em>I</em></button><button>U</button><span class="divider" style="width:1px;height:22px"></span><button>≡</button><button>▦</button><button>↔</button><button class="review-tool source-jump-control" style="margin-left:auto" data-note-page="67" data-note-number="19" data-note-title="Borrowings" title="Jump PDF to source pages 67–69">↗</button></div><article class="note-edit-surface" contenteditable="true" aria-label="Editable mTool note text block"><p data-note-editor-lead>The Group's borrowings are secured by a fixed and floating charge over certain property, plant and equipment and are repayable as follows:</p><table class="note-table" data-note-editor-table><thead><tr><th></th><th>2024<br>RM'000</th><th>2023<br>RM'000</th></tr></thead><tbody><tr><td>Within one year</td><td>68,204</td><td>51,443</td></tr><tr><td>Between one and five years</td><td>174,884</td><td>190,182</td></tr><tr><td>More than five years</td><td>28,310</td><td>36,411</td></tr><tr><td><strong>Total borrowings</strong></td><td><strong>271,398</strong></td><td><strong>278,036</strong></td></tr></tbody></table><p style="margin-top:18px" data-note-editor-tail>The weighted average effective interest rate at the reporting date was 4.8% (2023: 4.6%).</p></article><details class="hidden-meta"><summary>Text-block details</summary><p>mTool target: Notes-ListOfNotes · Note 19. One prose block, one table and 14 extracted values.</p></details></section>${persistentSourcePreview(true)}</div></div>`;
+    }
+
+    function runsPage(variant) {
+      return `<div class="page-content">${heading(variant === "b" ? "Document archive" : "Runs", "Find any filing, resume a draft, or open its review and audit trail.", `<button class="button primary" data-page="new">New extraction</button>`)}
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><div class="field" style="min-width:280px;flex:1"><input aria-label="Search runs" placeholder="Search company or filename"></div><button class="button small">All statuses</button><button class="button small">All standards</button><button class="button small">Date range</button></div>
+        <section><div class="page-heading" style="align-items:center"><div class="eyebrow">32 runs</div><span class="muted">Sorted by most recent</span></div>${runList(5)}${runList(5)}</section></div>`;
+    }
+
+    function contentFor(variant, page, state) {
+      if (page === "new") return newPage(variant);
+      if (page === "activity") return activityPage(variant, state);
+      if (page === "review") return variant === "a" ? reviewSourcePage() : reviewMirrorPage();
+      if (page === "notes") return variant === "a" ? notesPersistentPage() : notesMirrorPage();
+      if (page === "runs") return runsPage(variant);
+      return homePage(variant);
+    }
+
+    function shellA(page, state) {
+      return `<div class="shell-a ${["review","notes"].includes(page) ? "review-mode" : ""}"><aside class="a-sidebar"><div class="a-brand">${mark}<span>XBRL Agent</span></div><nav class="a-nav" aria-label="Primary">
+        ${navButton("home",page,"Work queue","⌂")}${navButton("new",page,"New extraction","＋")}${navButton("runs",page,"Runs","▤")}
+        <div class="a-nav-label">Current filing</div>${navButton("activity",page,"Overview","◉")}${navButton("review",page,"Figures review","⌗")}${navButton("notes",page,"Notes review","¶")}
+      </nav><div class="a-sidebar-foot"><span class="avatar">AR</span><div><strong style="font-size:12px;color:var(--ink)">Aina Rahman</strong><div class="row-sub">Administrator</div></div></div></aside>
+      <div class="a-app"><header class="a-topbar"><div class="breadcrumb"><span>Workspace</span><span>›</span><strong>${pageNames[page]}</strong></div><div class="inline-actions"><button class="button quiet small">Help</button><button class="button quiet small">Settings</button></div></header><main class="a-main">${contentFor("a",page,state)}</main></div></div>`;
+    }
+
+    function shellB(page, state) {
+      return `<div class="shell-b"><header class="b-topbar"><div class="b-brand">${mark}<span>XBRL Agent</span></div><nav class="b-global" aria-label="Primary">${navButton("home",page,"Documents")}${navButton("runs",page,"Archive")}${navButton("new",page,"New extraction")}</nav><div class="inline-actions"><span class="muted" style="color:#cbd1d6">Aina Rahman</span><span class="avatar" style="background:#eeeff1;color:#000000">AR</span></div></header>
+        <div class="b-toolbar"><nav class="b-route" aria-label="Document workspace"><strong style="color:var(--ink);font-size:13px">FINCO Holdings · FY 2024</strong>${navButton("activity",page,"Process")}${navButton("review",page,"Figures")}${navButton("notes",page,"Notes")}</nav><div class="inline-actions"><span class="status"><span class="dot active"></span>Working copy</span><button class="button primary small">Export</button></div></div>
+        <main class="b-main">${contentFor("b",page,state)}</main></div>`;
+    }
+
+    function shellC(page, state) {
+      return `<div class="shell-c"><aside class="c-rail" aria-label="Primary">${mark}${navButton("home",page,"Inbox","⌂")}${navButton("new",page,"New extraction","＋")}${navButton("activity",page,"Live run","◉")}${navButton("review",page,"Figures","⌗")}${navButton("notes",page,"Notes","¶")}${navButton("runs",page,"Runs","▤")}<span class="avatar">AR</span></aside>
+        <div class="c-app"><header class="c-topbar"><div><strong style="color:var(--ink)">${pageNames[page]}</strong>${["activity","review","notes"].includes(page) ? `<span class="muted"> · FINCO Holdings · FY 2024</span>` : ""}</div><div class="c-search"><span>⌕</span><span>Search filings, values or notes</span><kbd>⌘ K</kbd></div><div class="inline-actions"><button class="button quiet small">?</button><button class="button quiet small">⚙</button></div></header><main class="c-main">${contentFor("c",page,state)}</main></div></div>`;
+    }
+
+    function render() {
+      const { variant, page, state } = params();
+      document.documentElement.dataset.variant = variant;
+      document.documentElement.dataset.page = page;
+      document.getElementById("app").innerHTML = variant === "b" ? shellB(page,state) : variant === "c" ? shellC(page,state) : shellA(page,state);
+      document.getElementById("variant-label").textContent = directions.find(d => d.key === variant).name;
+      document.querySelectorAll("button[data-page]").forEach(el => el.addEventListener("click", () => setParams({ page: el.dataset.page })));
+      document.querySelectorAll("button[data-state]").forEach(el => el.addEventListener("click", () => setParams({ state: el.dataset.state })));
+      let activeSourceRow = document.querySelector(".source-jump.selected-row");
+      const selectSourceRow = row => {
+        const pane = document.querySelector(".live-source");
+        if (!pane) return;
+        document.querySelectorAll(".source-jump").forEach(item => item.classList.remove("selected-row"));
+        row.classList.add("selected-row");
+        activeSourceRow = row;
+        const values = row.querySelectorAll(".mtool-value");
+        const extracted = values[0]?.value || row.dataset.sourceCurrent;
+        pane.querySelector("[data-pdf-page]").textContent = row.dataset.sourcePage;
+        pane.querySelector("[data-pdf-label]").textContent = row.dataset.sourceLabel;
+        pane.querySelector("[data-pdf-current]").textContent = row.dataset.sourceCurrent;
+        pane.querySelector("[data-pdf-prior]").textContent = row.dataset.sourcePrior;
+        pane.querySelector("[data-decision-label]").textContent = row.dataset.sourceLabel;
+        pane.querySelector("[data-source-address]").textContent = `SOFP-Sub-CuNonCu · ${row.dataset.address}`;
+        const mismatch = row.dataset.mismatch === "true";
+        pane.querySelector("[data-source-status]").textContent = mismatch ? `Extracted ${extracted} · source ${row.dataset.sourceCurrent}` : `Matches source · ${row.dataset.sourceCurrent}`;
+        pane.querySelector("[data-source-check]").textContent = mismatch ? "Balance sheet differs by RM 43,000" : "No review issue";
+        pane.querySelector("[data-use-source]").classList.toggle("hidden", !mismatch);
+        pane.querySelector(".pdf-dynamic-highlight")?.scrollIntoView({ block: "center" });
+      };
+      document.querySelectorAll(".source-jump").forEach(row => {
+        row.addEventListener("click", () => selectSourceRow(row));
+        row.addEventListener("keydown", event => {
+          if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectSourceRow(row); }
+        });
+      });
+      document.querySelector("[data-use-source]")?.addEventListener("click", event => {
+        event.stopPropagation();
+        if (!activeSourceRow) return;
+        const input = activeSourceRow.querySelector(".mtool-value");
+        if (input) input.value = activeSourceRow.dataset.sourceCurrent;
+        activeSourceRow.dataset.mismatch = "false";
+        activeSourceRow.querySelector(".mini-warning")?.remove();
+        selectSourceRow(activeSourceRow);
+        event.currentTarget.textContent = "Source applied";
+        event.currentTarget.disabled = true;
+      });
+      document.querySelectorAll("[data-note-page]").forEach(button => button.addEventListener("click", () => {
+        const page = button.dataset.notePage;
+        const number = button.dataset.noteNumber || "19";
+        const title = button.dataset.noteTitle || "Borrowings";
+        const isBorrowings = number === "19";
+        const pageLabel = document.querySelector(".live-source [data-pdf-page]");
+        if (pageLabel) pageLabel.textContent = page;
+        const pickerTitle = document.querySelector("[data-note-picker-title]");
+        if (pickerTitle) pickerTitle.textContent = `${number} · ${title}`;
+        const editorTitle = document.querySelector("[data-note-editor-title]");
+        if (editorTitle) editorTitle.textContent = `${number}. ${title}`;
+        const editorLead = document.querySelector("[data-note-editor-lead]");
+        if (editorLead) editorLead.textContent = isBorrowings ? "The Group's borrowings are secured by a fixed and floating charge over certain property, plant and equipment and are repayable as follows:" : `Extracted disclosure content for ${title}. Select any text or value to review and edit it in place.`;
+        const editorTable = document.querySelector("[data-note-editor-table]");
+        if (editorTable) editorTable.classList.toggle("hidden", !isBorrowings);
+        const editorTail = document.querySelector("[data-note-editor-tail]");
+        if (editorTail) editorTail.textContent = isBorrowings ? "The weighted average effective interest rate at the reporting date was 4.8% (2023: 4.6%)." : "The full extracted note is retained in this editable mTool text block.";
+        const sourceTitle = document.querySelector("[data-source-note-title]");
+        if (sourceTitle) sourceTitle.textContent = `${title} disclosure`;
+        const pdfTitle = document.querySelector("[data-pdf-note-title]");
+        if (pdfTitle) pdfTitle.textContent = `${number}. ${title}`;
+        const pdfExcerpt = document.querySelector("[data-pdf-note-excerpt]");
+        if (pdfExcerpt) pdfExcerpt.textContent = isBorrowings ? "The Group's borrowings are secured by a fixed and floating charge over certain property, plant and equipment." : `Source disclosure for ${title}, located on page ${page}.`;
+        const pdfTable = document.querySelector("[data-pdf-note-table]");
+        if (pdfTable) pdfTable.classList.toggle("hidden", !isBorrowings);
+        const sourcePages = document.querySelector("[data-source-pages]");
+        if (sourcePages) sourcePages.textContent = isBorrowings ? "Pages 67–69" : `Page ${page}`;
+        const sourceStatus = document.querySelector("[data-note-source-status]");
+        if (sourceStatus) sourceStatus.textContent = button.dataset.noteReview === "true" ? "Placement needs review" : "Matched to this note";
+        document.querySelectorAll(".note-index-row, .note-nav-row").forEach(row => row.classList.toggle("active", row === button));
+        const noteIndex = document.querySelector(".note-index");
+        if (noteIndex && button.classList.contains("note-index-row")) noteIndex.open = false;
+        document.querySelector(".live-source .pdf-dynamic-highlight")?.scrollIntoView({ block: "center" });
+      }));
+      const applyNoteIndexFilter = () => {
+        const query = (document.querySelector(".note-index-search")?.value || "").trim().toLowerCase();
+        const filter = document.querySelector("[data-note-filter].active")?.dataset.noteFilter || "all";
+        document.querySelectorAll(".note-index-row").forEach(row => {
+          const matchesText = row.textContent.toLowerCase().includes(query);
+          const isReview = row.dataset.noteReview === "true";
+          const matchesFilter = filter === "all" || (filter === "review" ? isReview : !isReview);
+          row.classList.toggle("hidden", !matchesText || !matchesFilter);
+        });
+      };
+      document.querySelector(".note-index-search")?.addEventListener("input", applyNoteIndexFilter);
+      document.querySelectorAll("[data-note-filter]").forEach(button => button.addEventListener("click", () => {
+        document.querySelectorAll("[data-note-filter]").forEach(item => item.classList.toggle("active", item === button));
+        applyNoteIndexFilter();
+      }));
+      document.querySelector(".note-rail-search")?.addEventListener("input", event => {
+        const query = event.currentTarget.value.trim().toLowerCase();
+        document.querySelectorAll(".note-nav-row").forEach(row => row.classList.toggle("hidden", !row.textContent.toLowerCase().includes(query)));
+      });
+      const noteRail = document.querySelector(".note-rail-list");
+      const selectedNote = noteRail?.querySelector(".note-nav-row.active");
+      if (noteRail && selectedNote) requestAnimationFrame(() => {
+        noteRail.scrollTop = Math.max(0, selectedNote.offsetTop - noteRail.clientHeight / 2);
+      });
+      const selectAgent = row => {
+        const agent = agentsForState(state).find(item => item.id === row.dataset.agentId);
+        const detail = document.querySelector(".agent-detail");
+        if (!agent || !detail) return;
+        document.querySelectorAll(".agent-row").forEach(item => item.classList.toggle("active", item === row));
+        detail.innerHTML = agentDetailMarkup(agent);
+      };
+      document.querySelectorAll(".agent-row").forEach(row => row.addEventListener("click", () => selectAgent(row)));
+      document.querySelectorAll("[data-agent-filter]").forEach(button => button.addEventListener("click", () => {
+        const filter = button.dataset.agentFilter;
+        document.querySelectorAll("[data-agent-filter]").forEach(item => item.classList.toggle("active", item === button));
+        document.querySelectorAll(".agent-row").forEach(row => {
+          const isCurrent = row.dataset.agentState === "working" || row.dataset.agentState === "attention";
+          const visible = filter === "all" || (filter === "current" && isCurrent) || (filter === "done" && row.dataset.agentState === "done");
+          row.classList.toggle("hidden", !visible);
+        });
+        const selectedRow = document.querySelector(".agent-row.active");
+        if (selectedRow?.classList.contains("hidden")) document.querySelector(".agent-row:not(.hidden)")?.click();
+      }));
+    }
+
+    function cycle(delta) {
+      const current = directions.findIndex(d => d.key === params().variant);
+      const next = directions[(current + delta + directions.length) % directions.length];
+      setParams({ variant: next.key });
+    }
+
+    document.getElementById("prev-variant").addEventListener("click", () => cycle(-1));
+    document.getElementById("next-variant").addEventListener("click", () => cycle(1));
+    document.addEventListener("keydown", event => {
+      const tag = event.target.tagName;
+      if (["INPUT", "TEXTAREA", "SELECT"].includes(tag) || event.target.isContentEditable) return;
+      if (event.key === "ArrowLeft") cycle(-1);
+      if (event.key === "ArrowRight") cycle(1);
+    });
+    window.addEventListener("popstate", render);
+    render();
+  </script>
+</body>
+</html>

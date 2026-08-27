@@ -89,7 +89,7 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
             </tr>
           </thead>
           <tbody>
-            {numericChecks.map((check, i) => {
+            {numericChecks.map((check) => {
               const display = STATUS_DISPLAY[check.status];
               const [firstName, secondName] = crossCheckParties(check.name);
               const checkLabel = check.status === "failed"
@@ -106,25 +106,22 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
                 <tr
                   key={check.name}
                   data-testid={`cross-check-row-${check.name}`}
+                  className="pwc-view-enter"
                   onClick={
                     clickable
                       ? () => onSelectTarget!(check.target_sheet!, check.target_row!)
                       : undefined
                   }
+                  role={clickable ? "button" : undefined}
+                  tabIndex={clickable ? 0 : undefined}
+                  onKeyDown={clickable ? (event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      onSelectTarget!(check.target_sheet!, check.target_row!);
+                    }
+                  } : undefined}
                   style={{
                     ...(isMuted ? styles.rowMuted : styles.row),
-                    // Fade-up entrance. React keys rows by check.name, so on a
-                    // LIVE run only a newly-arrived check mounts and animates —
-                    // rows already on screen keep their node and stay put. On
-                    // first paint the batch staggers in (capped so a long list
-                    // doesn't crawl); backwards fill holds opacity 0 during the
-                    // delay so there's no flash. Reduced-motion zeroes it all.
-                    animation: `fade-in ${pwc.motion.duration.base} ${pwc.motion.easing} both`,
-                    // Per-row stagger DELAY (not a duration): 40ms/row, capped
-                    // at 6 rows. Deliberately a plain constant — pwc.motion is a
-                    // duration/easing budget and has no stagger token; the
-                    // fade itself still uses the tokened duration/easing above.
-                    animationDelay: `${Math.min(i, 6) * 40}ms`,
                     cursor: clickable ? "pointer" : "default",
                   }}
                 >
@@ -139,9 +136,9 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
                         instead of snapping. */}
                     <span
                       key={check.status}
+                      className="pwc-status-change"
                       style={{
                         ...ui.status,
-                        animation: `fade-in ${pwc.motion.duration.fast} ${pwc.motion.easing}`,
                       }}
                     >
                       <StatusIcon symbol={display.symbol} />

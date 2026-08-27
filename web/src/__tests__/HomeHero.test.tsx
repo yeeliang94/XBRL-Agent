@@ -35,17 +35,17 @@ const noop = () => {};
 describe("HomeHero", () => {
   beforeEach(() => mockFetch.mockReset());
 
-  test("renders the upload child and, when active, the stats + history sections", async () => {
+  test("renders the queue slot and, when active, the stats + history sections", async () => {
     primeFetch();
     render(
       <HomeHero active onResumeDraft={noop} onOpenRun={noop} onViewAllRuns={noop}>
         <div>UPLOAD CARD</div>
       </HomeHero>,
     );
-    // Upload child (middle section) is always present.
+    // The optional slot is present, but production supplies it only outside
+    // the queue destination.
     expect(screen.getByText("UPLOAD CARD")).toBeTruthy();
-    // Stats band on top + history pane at the bottom once the fetches resolve.
-    expect(screen.getByText("Needs review")).toBeTruthy();
+    expect(screen.getByText("Open reviews")).toBeTruthy();
     await waitFor(() => expect(screen.getByText("RECENT.pdf")).toBeTruthy());
   });
 
@@ -56,7 +56,7 @@ describe("HomeHero", () => {
       </HomeHero>,
     );
     expect(screen.getByText("UPLOAD CARD")).toBeTruthy();
-    expect(screen.queryByText("Needs review")).toBeNull();
+    expect(screen.queryByText("Open reviews")).toBeNull();
     expect(screen.queryByText(/recent runs/i)).toBeNull();
     expect(mockFetch).not.toHaveBeenCalled();
   });
@@ -117,16 +117,16 @@ describe("HomeHero", () => {
     expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(4);
   });
 
-  test("upload leads the page — rendered before the metrics band (CS3)", async () => {
+  test("keeps any supplied slot before the queue metrics", async () => {
     primeFetch();
     render(
       <HomeHero active onResumeDraft={noop} onOpenRun={noop} onViewAllRuns={noop}>
         <div data-testid="upload-card">UPLOAD CARD</div>
       </HomeHero>,
     );
-    await waitFor(() => expect(screen.getByText("Needs review")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Open reviews")).toBeTruthy());
     const upload = screen.getByTestId("upload-card");
-    const stats = screen.getByText("Needs review");
+    const stats = screen.getByText("Open reviews");
     expect(
       upload.compareDocumentPosition(stats) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();

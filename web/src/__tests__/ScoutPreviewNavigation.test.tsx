@@ -91,6 +91,7 @@ describe("preview scan navigation", () => {
     const { default: App } = await import("../App");
     render(<App />);
 
+    fireEvent.click(screen.getByRole("link", { name: /new extraction/i }));
     const input = document.querySelector("input[type='file']") as HTMLInputElement;
     await act(async () => {
       fireEvent.change(input, {

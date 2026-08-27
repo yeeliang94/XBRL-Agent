@@ -96,6 +96,7 @@ describe("App — AgentTimeline integration", () => {
     render(<App />);
 
     // 1. Upload a PDF via the hidden file input.
+    fireEvent.click(screen.getByRole("link", { name: /new extraction/i }));
     const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
     expect(fileInput).toBeTruthy();
     const file = new File(["dummy"], "FINCO.pdf", { type: "application/pdf" });
@@ -165,6 +166,7 @@ describe("App — AgentTimeline integration", () => {
     const { default: App } = await import("../App");
     render(<App />);
 
+    fireEvent.click(screen.getByRole("link", { name: /new extraction/i }));
     const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
     await act(async () => {
       fireEvent.change(fileInput, {
@@ -195,6 +197,38 @@ describe("App — AgentTimeline integration", () => {
       expect(window.location.pathname).toBe("/history/321");
     });
     expect(screen.queryByText("The connection to the run was lost.")).toBeNull();
+  });
+
+  test("New extraction preserves the active run URL while work is streaming", async () => {
+    const { default: App } = await import("../App");
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("link", { name: /new extraction/i }));
+    const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(fileInput, {
+        target: { files: [new File(["x"], "FINCO.pdf", { type: "application/pdf" })] },
+      });
+    });
+    const runButton = await waitFor(() =>
+      screen.getByRole("button", { name: /start extraction/i }),
+    );
+    fireEvent.click(runButton);
+    await waitFor(() => expect(captureOnEvent).not.toBeNull());
+    await screen.findByRole("button", { name: /stop all/i });
+    await act(async () => {
+      captureOnEvent!({
+        event: "status",
+        data: { phase: "starting", message: "Starting", run_id: 99 },
+        timestamp: Date.now() / 1000,
+      });
+    });
+    expect(window.location.pathname).toMatch(/^\/(?:run|history)\/99$/);
+    const activeRunPath = window.location.pathname;
+
+    fireEvent.click(screen.getByRole("link", { name: /new extraction/i }));
+
+    await waitFor(() => expect(window.location.pathname).toBe(activeRunPath));
   });
 
   // ---------------------------------------------------------------------------
@@ -249,6 +283,7 @@ describe("App — AgentTimeline integration", () => {
     render(<App />);
 
     // Upload to land us on /run/99 with a session+filename.
+    fireEvent.click(screen.getByRole("link", { name: /new extraction/i }));
     const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
     const file = new File(["x"], "FINCO.pdf", { type: "application/pdf" });
     await act(async () => {

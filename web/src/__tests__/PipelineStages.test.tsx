@@ -35,7 +35,7 @@ describe("PipelineStages", () => {
     );
     const activeDot = container.querySelector("[data-testid='step-active']");
     expect(activeDot).toBeInTheDocument();
-    expect(activeDot?.getAttribute("style")).toContain("animation");
+    expect(activeDot).toHaveClass("pwc-working-indicator");
   });
 
   test("marks pending phases with grey circle", () => {
@@ -106,12 +106,12 @@ describe("PipelineStages", () => {
     const activeDot = container.querySelector("[data-testid='step-active']");
     expect(activeDot?.getAttribute("style")).toContain("rgb(254, 124, 57)");
 
-    // Completed step should use success green (#1FAB76 → rgb(31, 171, 118))
+    // Completed step should use focused-workspace finished black.
     const check = container.querySelector("[data-testid='step-complete']");
-    expect(check?.getAttribute("style")).toContain("rgb(31, 171, 118)");
+    expect(check?.getAttribute("style")).toContain("rgb(0, 0, 0)");
 
-    // Pending step should use grey300 (#C9C9C9 → rgb(201, 201, 201))
+    // Pending step should use focused-workspace grey300.
     const pending = container.querySelector("[data-testid='step-pending']");
-    expect(pending?.getAttribute("style")).toContain("rgb(201, 201, 201)");
+    expect(pending?.getAttribute("style")).toContain("rgb(203, 209, 214)");
   });
 });

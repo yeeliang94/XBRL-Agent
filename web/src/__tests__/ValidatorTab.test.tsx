@@ -35,6 +35,19 @@ describe("ValidatorTab", () => {
     expect(onSelectTarget).toHaveBeenCalledWith("SOFP-CuNonCu", 42);
   });
 
+  test("a targeted check is keyboard reachable and activates with Enter", () => {
+    const checks: CrossCheckResult[] = [
+      { name: "sofp_balance", status: "failed", expected: 1000, actual: 990, diff: 10, tolerance: 1, message: "off", target_sheet: "SOFP-CuNonCu", target_row: 42 },
+    ];
+    const onSelectTarget = vi.fn();
+    render(<ValidatorTab crossChecks={checks} onSelectTarget={onSelectTarget} />);
+    const row = screen.getByTestId("cross-check-row-sofp_balance");
+    expect(row).toHaveAttribute("tabindex", "0");
+    expect(row).toHaveAttribute("role", "button");
+    fireEvent.keyDown(row, { key: "Enter" });
+    expect(onSelectTarget).toHaveBeenCalledWith("SOFP-CuNonCu", 42);
+  });
+
   test("a check without a target is not clickable", () => {
     const checks: CrossCheckResult[] = [
       { name: "sofp_balance", status: "failed", expected: 1000, actual: 990, diff: 10, tolerance: 1, message: "off" },

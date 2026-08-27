@@ -50,6 +50,18 @@ async function openAdvanced() {
 }
 
 describe("PreRunPanel", () => {
+  test("filing choices expose their selected state", async () => {
+    render(<PreRunPanel sessionId="abc-123" getSettings={vi.fn().mockResolvedValue(mockSettings)} onRun={vi.fn()} />);
+    await waitFor(() => expect(screen.getAllByRole("checkbox")).toHaveLength(10));
+
+    expect(screen.getByRole("button", { name: "MFRS" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "MPERS" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "Company" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Group" })).toHaveAttribute("aria-pressed", "false");
+    await openAdvanced();
+    expect(screen.getByRole("button", { name: "RM '000" })).toHaveAttribute("aria-pressed", "true");
+  });
+
   test("renders all major sections", async () => {
     const getSettings = vi.fn().mockResolvedValue(mockSettings);
     render(

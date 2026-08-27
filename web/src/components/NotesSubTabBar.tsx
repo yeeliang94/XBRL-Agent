@@ -64,6 +64,7 @@ export function NotesSubTabBar({
             aria-selected={active}
             onClick={() => onSelect(s.subAgentId)}
             title={`${noteRange}, ${pageRange}`}
+            className="notes-subtab"
             style={chipStyle(active)}
           >
             Sub {labelNum} · {noteRange}
@@ -83,13 +84,12 @@ function chipStyle(active: boolean): React.CSSProperties {
     fontFamily: pwc.fontBody,
     fontSize: 12,
     fontWeight: active ? 600 : 500,
-    color: active ? pwc.orange700 : pwc.grey700,
-    background: active ? pwc.orange50 : pwc.white,
-    border: `1px solid ${active ? pwc.orange400 : pwc.grey200}`,
+    color: active ? pwc.black : pwc.grey700,
+    background: active ? pwc.grey50 : pwc.white,
+    border: `1px solid ${active ? pwc.grey300 : pwc.grey200}`,
     borderRadius: 999,
     cursor: "pointer",
     whiteSpace: "nowrap",
-    transition: "color 0.15s, background 0.15s, border-color 0.15s",
   };
 }
 

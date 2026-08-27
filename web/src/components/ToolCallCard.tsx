@@ -46,7 +46,6 @@ const GLYPH_STYLES: Record<GlyphState, React.CSSProperties> = {
   active: {
     background: pwc.orange400,
     boxShadow: `0 0 0 3px ${pwc.orange50}`,
-    animation: "glyph-pulse 1s ease-in-out infinite",
   },
   done: {
     background: pwc.success,
@@ -95,8 +94,6 @@ const CARD_BASE: React.CSSProperties = {
 const CARD_STYLES: Record<GlyphState, React.CSSProperties> = {
   active: {
     background: pwc.orange50,
-    borderLeft: `3px solid ${pwc.orange500}`,
-    animation: "fade-in 0.2s ease-out",
   },
   done: {
     background: pwc.white,
@@ -282,12 +279,19 @@ function ToolCallCardImpl({ entry }: Props) {
     <div
       data-testid="tool-card"
       data-state={glyphState}
+      className="pwc-status-change"
       style={cardStyleFor(glyphState)}
     >
-      <button onClick={() => setExpanded(!expanded)} style={styles.header}>
+      <button
+        type="button"
+        onClick={() => setExpanded(!expanded)}
+        aria-expanded={expanded}
+        style={styles.header}
+      >
         <div style={styles.headerLeft}>
           <span
             data-glyph={glyphState}
+            className={glyphState === "active" ? "pwc-working-indicator" : undefined}
             style={glyphStyleFor(glyphState)}
           />
           <span style={styles.toolName}>{humanToolName(entry.tool_name)}</span>

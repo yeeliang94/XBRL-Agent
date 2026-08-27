@@ -174,9 +174,7 @@ const styles = {
     padding: `10px ${pwc.space.xs}px`,
     border: "none",
     borderBottom: `1px solid ${tokens.color.border.subtle}`,
-    background: "transparent",
     cursor: "pointer",
-    transition: `background ${pwc.motion.duration.fast} ${pwc.motion.easing}`,
   } as React.CSSProperties,
   filename: {
     fontFamily: pwc.fontBody,

@@ -15,7 +15,7 @@ interface PageHeaderProps {
 
 export function PageHeader({ eyebrow, title, description, actions, compact = false }: PageHeaderProps) {
   return (
-    <header style={compact ? styles.wrapCompact : styles.wrap}>
+    <header className="page-header" style={compact ? styles.wrapCompact : styles.wrap}>
       <div style={styles.textCol}>
         {eyebrow && <div style={styles.eyebrow}>{eyebrow}</div>}
         <h1 style={compact ? styles.titleCompact : styles.title}>{title}</h1>
@@ -29,21 +29,20 @@ export function PageHeader({ eyebrow, title, description, actions, compact = fal
 const wrapBase: CSSProperties = {
   display: "flex",
   justifyContent: "space-between",
-  alignItems: "flex-end",
+  alignItems: "flex-start",
   gap: pwc.space.lg,
   flexWrap: "wrap",
-  borderBottom: `1px solid ${pwc.grey200}`,
 };
 
 const styles: Record<string, CSSProperties> = {
   wrap: {
     ...wrapBase,
-    paddingBottom: pwc.space.lg,
+    paddingBottom: 0,
     marginBottom: 0,
   },
   wrapCompact: {
     ...wrapBase,
-    paddingBottom: pwc.space.md,
+    paddingBottom: 0,
     marginBottom: 0,
   },
   textCol: {
@@ -55,12 +54,15 @@ const styles: Record<string, CSSProperties> = {
     fontWeight: pwc.weight.semibold,
     textTransform: "uppercase",
     letterSpacing: 0,
-    color: tokens.color.action.primary,
+    color: tokens.color.brand.accent,
     marginBottom: pwc.space.sm,
   },
   title: {
     ...ui.pageTitle,
-    letterSpacing: 0,
+    fontSize: "clamp(24px, 2.2vw, 34px)",
+    lineHeight: 1.15,
+    fontWeight: pwc.weight.bold,
+    letterSpacing: "-0.035em",
   },
   titleCompact: {
     ...ui.pageTitleCompact,
@@ -68,9 +70,10 @@ const styles: Record<string, CSSProperties> = {
   },
   description: {
     ...ui.bodyText,
+    fontSize: 15,
     color: tokens.color.text.secondary,
-    maxWidth: "60ch",
-    marginTop: pwc.space.md,
+    maxWidth: 650,
+    marginTop: 9,
     marginBottom: 0,
   },
   actions: {

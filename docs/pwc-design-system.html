@@ -3,12 +3,15 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>XBRL Agent — Application Design System</title>
+<title>XBRL Agent — Compatibility Design Mirror</title>
 <style>
   /* =========================================================
-     XBRL AGENT — APPLICATION DESIGN SYSTEM (v3 · production)
+     XBRL AGENT — COMPATIBILITY DESIGN MIRROR
      -----------------------------------------------------------
-     The behavioural and visual specification for the web UI. The
+      Archived compatibility reference retained for historical audit context. The
+      canonical specification is docs/xbrl-design-system.html and the exact
+      product composition is Direction A in docs/prototype-ui-overhaul.html.
+      The
      production implementation owners are:
 
          web/src/lib/theme.ts      → `pwc` global tokens + the `tokens` /
@@ -21,9 +24,8 @@
      variables (gotcha #7: inline styles only). Each property is
      named to express the global, semantic, and component layers.
 
-     LOCKSTEP RULE: when a shared design rule or token changes, the
-     specification, the production implementation, and the parity tests
-     move in ONE change set. The Token Map at the bottom names each owner.
+     Values and examples in this document are historical and need not remain in
+     lockstep with production. Follow the canonical specification instead.
      ========================================================= */
   :root {
     /* ---- Brand orange (pwc.orange*) ---- */
@@ -35,70 +37,66 @@
     --orange-100: #FFE8D4;   /* highlighted-content backgrounds */
     --orange-50:  #FFF5ED;   /* hover bg, focus ring, soft fill */
 
-    /* ---- Semantic action colours. Brand orange remains the identity colour;
-            interactive foregrounds use darker, independently accessible roles. ---- */
-    --action-primary: #C63D00;       /* 5.16:1 with white */
-    --action-primary-hover: #A83A00; /* 6.42:1 with white */
-    --action-quiet-hover: #FFF5ED;
-    --focus-strong: #1A1A1A;
+    /* ---- Action colours. Black/white carry hierarchy; orange stays a small
+            identity/activity/attention cue rather than a large button fill. ---- */
+    --action-primary: #000000;
+    --action-primary-hover: #000000;
+    --action-quiet-hover: #EEEFF1;
+    --focus-strong: #000000;
 
     --black: #000000;
     --white: #FFFFFF;
 
-    /* ---- Neutral greys (pwc.grey*). NOTE the gaps: code has NO
-            grey25 / grey400 / grey600 — only these eight steps. ---- */
-    --grey-50:  #FAFAFA;     /* page background */
-    --grey-100: #F4F4F4;     /* card bg, alt rows, table headers */
-    --grey-200: #DEDEDE;     /* borders, dividers */
-    --grey-300: #C9C9C9;     /* strong borders, disabled, control borders */
-    --grey-500: #7D7D7D;     /* muted text, timestamps */
-    --grey-700: #5E5E5E;     /* field labels, tertiary text */
-    --grey-800: #2D2D2D;     /* body text */
-    --grey-900: #1A1A1A;     /* headings, primary text */
+    /* ---- Focused-workspace cool neutrals (pwc.grey*). ---- */
+    --grey-50:  #F5F7F8;
+    --grey-100: #EEEFF1;
+    --grey-200: #DFE3E6;
+    --grey-300: #CBD1D6;
+    --grey-400: #B5BCC4;
+    --grey-500: #A1A8B3;
+    --grey-700: rgba(0,0,0,.64);
+    --grey-800: #000000;
+    --grey-900: #000000;
 
-    /* ---- Status base hues — a bright, clean family pitched to sit on the
-            light theme without going dark or muddy. Used for dots, icons,
-            left-borders and accents — NOT for coloured fills. Labels use the
-            darker *-text tokens below for contrast.
-            (pwc.success / warning / error / info / thinking) ---- */
-    --success:  #1FAB76;     /* fresh green */
-    --warning:  #EFA417;     /* warm gold — yellower than brand orange, reads as caution */
-    --error:    #E5484D;     /* clean red — kept clearly red so it doesn't blur into orange */
-    --info:     #3E84CC;     /* clean blue */
-    --thinking: #8B5CF6;     /* violet — agent reasoning, functional not brand */
+    /* ---- Status base hues. Text/icon/shape always carries the meaning. ---- */
+    --success:  #000000;     /* finished */
+    --warning:  #FD5108;     /* attention */
+    --error:    #FD5108;     /* failed/blocking, with explicit copy */
+    --info:     #000000;
+    --thinking: #A1A8B3;
 
     /* ---- Status text — darker shade of each hue, AA-legible on light.
             Carries status LABELS (the bright base is for dots/icons/borders). ---- */
-    --success-text: #157A53;  --error-text: #C0303A;  --error-text-alt: #D14A4E;
-    --warning-text: #8A6111;  --info-text:  #2C6299;
+    --success-text: #000000;  --error-text: #000000;  --error-text-alt: rgba(0,0,0,.64);
+    --warning-text: #000000;  --info-text:  #000000;
 
     /* ---- Soft tints — RESERVED for rare emphasis (e.g. highlighting one
             reconciliation row), NOT the default surface for status/alerts.
             Light + airy versions of the hues above. ---- */
-    --success-bg: #E8F6EF;  --success-border: #C8E9DA;
-    --error-bg:   #FCECEC;  --error-border:   #F6D5D6;
-    --info-bg:    #EAF2FB;  --info-border:    #D2E2F3;
-    --warning-bg: #FCF3DF;  --warning-border: #F3E2BB;
+    --success-bg: #F5F7F8;  --success-border: #CBD1D6;
+    --error-bg:   #FFF5ED;  --error-border:   #FFCDA8;
+    --info-bg:    #F5F7F8;  --info-border:    #DFE3E6;
+    --warning-bg: #FFF5ED;  --warning-border: #FFCDA8;
 
     /* ---- Surface roles (derived from greys; how the tokens are used) ---- */
-    --bg: var(--grey-50);
+    --bg: var(--white);
     --surface: var(--white);
     --border: var(--grey-200);
     --border-strong: var(--grey-300);
-    --text: var(--grey-900);
-    --text-body: var(--grey-800);
-    --text-muted: var(--grey-700);
-    --text-label: var(--grey-700);
-    --text-placeholder: var(--grey-700);
+    --text: var(--black);
+    --text-body: rgba(0,0,0,.82);
+    --text-muted: rgba(0,0,0,.64);
+    --text-label: rgba(0,0,0,.64);
+    --text-placeholder: rgba(0,0,0,.46);
     --control-border: var(--grey-500);
 
     /* ---- Typography (pwc.font* / pwc.weight) ---- */
-    --font-sans: "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif;
-    --font-mono: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    --font-sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
     --fw-light: 300; --fw-regular: 400; --fw-medium: 500; --fw-semibold: 600;
 
     /* ---- Radius (pwc.radius) ---- */
-    --r-sm: 3px; --r-md: 6px; --r-lg: 8px; --r-xl: 10px; --r-pill: 999px;
+    --r-sm: 6px; --r-md: 8px; --r-lg: 12px; --r-xl: 12px; --r-pill: 999px;
 
     /* ---- Spacing (pwc.space — 4px base) ---- */
     --s-xs: 4px;  --s-sm: 8px;  --s-md: 12px; --s-lg: 16px;
@@ -119,8 +117,8 @@
   html { scroll-behavior: smooth; background: var(--bg); }
   body {
     font-family: var(--font-sans); font-weight: var(--fw-regular);
-    color: var(--text-body); background: var(--bg); line-height: 1.55;
-    -webkit-font-smoothing: antialiased; font-size: 15px;
+    color: var(--text-body); background: var(--bg); line-height: 1.5;
+    -webkit-font-smoothing: antialiased; font-size: 14px;
   }
 
   /* =========================================================
@@ -136,7 +134,7 @@
   /* ---------- Layout shell ---------- */
   .shell { display: flex; min-height: 100vh; }
   .sidebar {
-    width: 240px; flex-shrink: 0; background: var(--surface);
+    width: 220px; flex-shrink: 0; background: var(--grey-50);
     border-right: 1px solid var(--border); position: sticky; top: 0;
     height: 100vh; overflow-y: auto; padding: var(--s-xl) 0;
   }
@@ -147,11 +145,11 @@
 
   .nav-group { margin-bottom: var(--s-xl); }
   .nav-group h4 { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); font-weight: var(--fw-semibold); padding: 0 var(--s-xl) var(--s-sm); }
-  .nav-group a { display: block; padding: 7px var(--s-xl); color: var(--text-muted); text-decoration: none; font-size: 14px; border-left: 2px solid transparent; transition: color .15s ease, background .15s ease, border-color .15s ease; }
+  .nav-group a { display: block; padding: 7px var(--s-xl); color: var(--text-muted); text-decoration: none; font-size: 14px; border-radius: var(--r-md); transition: color .15s ease, background .15s ease, transform .1s ease; }
   .nav-group a:hover { color: var(--text); background: var(--grey-50); }
-  .nav-group a.active { color: var(--action-primary); border-left-color: var(--orange-500); font-weight: var(--fw-medium); }
+  .nav-group a.active { color: var(--action-primary); background: var(--grey-50); font-weight: var(--fw-semibold); }
 
-  .main { flex: 1; min-width:0; max-width: 1040px; padding: var(--s-xxxl) var(--s-xxxxl); }
+  .main { flex: 1; min-width:0; max-width: 1120px; padding: var(--s-xxxl) var(--s-xxxxl); }
   .mobile-index { display:none; }
   @media (max-width: 900px){
     .sidebar{ display:none; }
@@ -240,7 +238,7 @@
   .field label { display: block; font-size: 14px; font-weight: var(--fw-medium); color: var(--text-label); margin-bottom: 6px; }
   .field .hint { font-size: 12px; color: var(--text-muted); margin-top: 5px; }
   .input, .select, .textarea { width: 100%; font-family: inherit; font-size: 15px; line-height: 1.5; min-height: 44px; padding: 10px 14px; border: 1px solid var(--control-border); border-radius: var(--r-md); background: var(--surface); color: var(--grey-900); transition: border-color .15s, box-shadow .15s; }
-  .input:focus, .select:focus, .textarea:focus { outline: 2px solid var(--focus-strong); outline-offset: 1px; border-color: var(--action-primary); box-shadow: 0 0 0 4px var(--orange-50); }
+  .input:focus, .select:focus, .textarea:focus { outline: 2px solid var(--focus-strong); outline-offset: 2px; border-color: var(--action-primary); box-shadow: none; }
   .input::placeholder { color: var(--text-placeholder); }
   .textarea { resize: vertical; min-height: 80px; padding: 9px 12px; }
   .input-error { border-color: var(--error); }
@@ -283,25 +281,20 @@
   tbody tr:hover { background: var(--grey-50); }
 
   /* ---------- Alerts (mirror ui.alert*) ----------
-     Restrained: neutral surface; a coloured left rule + coloured icon carry the
-     status. No coloured fills. */
-  .alert { display: flex; gap: var(--s-md); padding: var(--s-lg); border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--grey-300); margin-bottom: var(--s-md); align-items: flex-start; font-size: 15px; line-height: 1.55; color: var(--text-body); }
+     Restrained: one neutral boundary; icon and explicit copy carry status. */
+  .alert { display: flex; gap: var(--s-md); padding: var(--s-lg); border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--border); margin-bottom: var(--s-md); align-items: flex-start; font-size: 15px; line-height: 1.55; color: var(--text-body); }
   .alert .ico { font-size: 16px; line-height: 1.4; flex-shrink: 0; color: var(--grey-500); }
   .alert .body strong { font-weight: var(--fw-semibold); display: block; margin-bottom: 2px; color: var(--text); }
-  .alert-info    { border-left-color: var(--info); }
   .alert-info .ico { color: var(--info); }
-  .alert-success { border-left-color: var(--success); }
   .alert-success .ico { color: var(--success); }
-  .alert-warning { border-left-color: var(--warning); }
   .alert-warning .ico { color: var(--warning); }
-  .alert-error   { border-left-color: var(--error); }
   .alert-error .ico { color: var(--error); }
 
-  /* ---------- Tabs (mirror TopNav underline tab) ---------- */
-  .tabbar { display: flex; max-width:100%; gap: var(--s-sm); border-bottom: 1px solid var(--border); overflow-x:auto; overscroll-behavior-inline:contain; }
-  .tab { padding: 8px 16px; font-size: 15px; font-weight: var(--fw-medium); background: none; border: none; border-bottom: 2px solid transparent; cursor: pointer; color: var(--grey-700); margin-bottom: -1px; }
-  .tab:hover { color: var(--grey-900); }
-  .tab.active { color: var(--grey-900); border-bottom-color: var(--orange-500); }
+  /* ---------- Tabs (mirror shared surface tabs) ---------- */
+  .tabbar { display: flex; max-width:100%; gap: var(--s-sm); overflow-x:auto; overscroll-behavior-inline:contain; }
+  .tab { padding: 8px 16px; font-size: 15px; font-weight: var(--fw-medium); background: none; border: none; border-radius: var(--r-md); cursor: pointer; color: var(--grey-700); transition: background-color .14s ease, color .14s ease, transform .1s ease; }
+  .tab:hover { color: var(--grey-900); background: var(--grey-50); }
+  .tab.active { color: var(--grey-900); background: var(--grey-50); font-weight: var(--fw-semibold); }
   a.tab { text-decoration:none; display:inline-flex; align-items:center; }
 
   .token-layers { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--s-lg); }
@@ -344,6 +337,11 @@
 </style>
 </head>
 <body>
+  <div style="padding:14px 24px;background:#000;color:#fff;font:13px/1.5 Inter,ui-sans-serif,sans-serif">
+    <strong>Compatibility mirror only.</strong>
+    The canonical production design system is <code style="color:#fff">docs/xbrl-design-system.html</code>;
+    exact product composition and states come from Direction A in <code style="color:#fff">docs/prototype-ui-overhaul.html</code>.
+  </div>
 <!-- Status icon sprite: the six monochrome status families, drawn with the same
      bold-weight paths the app vendors in web/src/components/iconGlyphs.tsx
      (Phosphor Icons 2.1.10, MIT) and renders via components/StatusIcon.tsx. -->
@@ -417,9 +415,9 @@
     </details>
 
     <header class="page-head">
-      <div class="eyebrow">Application UI Standards</div>
-      <h1>XBRL Agent Design System v3</h1>
-      <p>The behavioural and visual specification for the web UI. It keeps the PwC black-and-orange identity while strengthening accessibility, semantic hierarchy, financial-data density, responsive behaviour, and component governance.</p>
+      <div class="eyebrow">Legacy compatibility reference</div>
+      <h1>Archived XBRL Agent Design System v3</h1>
+      <p>This page preserves historical tokens and examples for audit context. It does not define current product behaviour; use the canonical XBRL design system and Direction A prototype.</p>
     </header>
 
     <!-- OVERVIEW -->
@@ -427,10 +425,10 @@
       <div class="section-head">
         <div class="rule"></div>
         <h2>Overview</h2>
-        <p>This document defines the visual language, task behaviour, responsive expectations, accessibility floor, and governance model for the application. It is deliberately optimized for evidence-led financial work rather than a generic SaaS dashboard.</p>
+        <p>This document records a previous visual language and governance model. It is not a production contract.</p>
       </div>
       <div class="note-box">
-        <strong>Governance:</strong> decisions begin here, flow through semantic tokens and component primitives, and end in tested product behaviour. Accessibility and responsive behaviour are part of every component contract, not a final polish pass. The CSS variables here exist only to render this document.
+        <strong>Governance:</strong> current decisions begin in <code>docs/xbrl-design-system.html</code>, with exact composition in Direction A of <code>docs/prototype-ui-overhaul.html</code>. The CSS variables here exist only to render this archive.
       </div>
     </section>
 
@@ -446,10 +444,10 @@
         <div class="rule-item"><span class="num">02</span><span class="txt"><strong>Choose meaning, not a hue.</strong> Components consume semantic roles such as primary action, muted text, subtle border, and success icon. Raw palette tokens are implementation ingredients, not component decisions.</span></div>
         <div class="rule-item"><span class="num">03</span><span class="txt"><strong>Reuse the primitives.</strong> Spread <code class="inline">ui.buttonPrimary</code>, <code class="inline">ui.card</code>, <code class="inline">ui.input</code>… from <code class="inline">lib/uiStyles</code> instead of rebuilding a button. Extend with a spread, don't fork.</span></div>
         <div class="rule-item"><span class="num">04</span><span class="txt"><strong>Hover/focus needs a class hook.</strong> Inline styles can't express <code class="inline">:hover</code>. Add the matching <code class="inline">uiClass.*</code> (e.g. <code class="inline">className={uiClass.btnPrimary}</code>) so the rule in <code class="inline">index.css</code> applies. Form-control focus rings are global — no class needed.</span></div>
-        <div class="rule-item"><span class="num">05</span><span class="txt"><strong>One dominant action per decision region.</strong> A page may contain several workflows, but locally competing primary actions are not allowed. Brand orange supports identity and indication; accessible action roles carry interactive text and fills.</span></div>
-        <div class="rule-item"><span class="num">06</span><span class="txt"><strong>Status colour is functional, not brand.</strong> Use success/error/warning/info only for state, and apply it as an accent — dot, icon, left-border, or dark text — on a neutral surface. Avoid coloured fills; reserve the soft-tint tokens for rare emphasis.</span></div>
+        <div class="rule-item"><span class="num">05</span><span class="txt"><strong>One dominant action per decision region.</strong> A page may contain several workflows, but locally competing primary actions are not allowed. Primary actions are black/white; orange supports identity, activity, and attention.</span></div>
+        <div class="rule-item"><span class="num">06</span><span class="txt"><strong>Status is explicit.</strong> Working and attention use orange, finished uses black, and waiting uses grey. Every state also includes text or an icon; colour is never the only signal.</span></div>
         <div class="rule-item"><span class="num">07</span><span class="txt"><strong>Stay on the scale and use its roles.</strong> A 4px base underpins spacing, but page, section, field, toolbar, and table-density roles determine which step is appropriate.</span></div>
-        <div class="rule-item"><span class="num">08</span><span class="txt"><strong>Compact, readable type.</strong> Regular 400 + Semibold 600 carry product text; Medium 500 is reserved for controls. Normal UI copy is 15px, supporting and data text is 13–14px, and 11px labels remain short, high-contrast, and exceptional.</span></div>
+        <div class="rule-item"><span class="num">08</span><span class="txt"><strong>Compact, readable type.</strong> Regular 400 + Semibold 600 carry product text; Medium 500 is reserved for controls. Core levels are 28px page title, 16px section/item, and 14px body; 11–13px metadata stays short and high-contrast.</span></div>
         <div class="rule-item"><span class="num">09</span><span class="txt"><strong>Evidence before AI plumbing.</strong> Financial data, checks, source evidence, and filing state lead. Models, agents, tokens, and tool calls live in advanced or activity views.</span></div>
         <div class="rule-item"><span class="num">10</span><span class="txt"><strong>Choose the lightest structure.</strong> Use alignment, type, spacing, and dividers before adding a bordered group or card. Static surfaces stay flat; elevation is reserved for overlap.</span></div>
       </div>
@@ -532,39 +530,37 @@
       <h3 class="sub-label">Core neutrals</h3>
       <div class="swatch-grid">
         <div class="swatch"><div class="chip" style="background:var(--white); border-bottom:1px solid var(--border)"></div><div class="meta"><div class="name">White (surface)</div><div class="tok">white</div><div class="hex">#FFFFFF</div></div></div>
-        <div class="swatch"><div class="chip" style="background:var(--grey-900)"></div><div class="meta"><div class="name">Ink (headings, focus ring)</div><div class="tok">grey900</div><div class="hex">#1A1A1A</div></div></div>
+        <div class="swatch"><div class="chip" style="background:var(--grey-900)"></div><div class="meta"><div class="name">Ink (headings, focus ring)</div><div class="tok">grey900</div><div class="hex">#000000</div></div></div>
       </div>
-      <div class="note-box"><strong>No pure black.</strong> The interface's darkest value is <code class="inline">grey900</code>. The <code class="inline">pwc.black</code> token (#000000) is deprecated — kept for name stability, consumed by nothing, and must not be used for text, fills, or borders.</div>
+      <div class="note-box"><strong>Black carries hierarchy.</strong> Pure black is the primary text, focus, and action value. Orange is deliberately confined to small identity, activity, and attention cues.</div>
 
-      <h3 class="sub-label">Grey scale — <code class="inline">pwc.grey*</code> <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--grey-500)">(note: no grey25 / grey400 / grey600 in code)</span></h3>
+      <h3 class="sub-label">Grey scale — <code class="inline">pwc.grey*</code></h3>
       <div class="scale-strip">
-        <div class="cell" style="background:var(--grey-50); color:#999"><span>grey50</span><span>FAFAFA</span></div>
-        <div class="cell" style="background:var(--grey-100); color:#999"><span>grey100</span><span>F4F4F4</span></div>
-        <div class="cell" style="background:var(--grey-200); color:#777"><span>grey200</span><span>DEDEDE</span></div>
-        <div class="cell" style="background:var(--grey-300); color:#555"><span>grey300</span><span>C9C9C9</span></div>
-        <div class="cell" style="background:var(--grey-500); color:#fff"><span>grey500</span><span>7D7D7D</span></div>
-        <div class="cell" style="background:var(--grey-700); color:#fff"><span>grey700</span><span>5E5E5E</span></div>
-        <div class="cell" style="background:var(--grey-800); color:#fff"><span>grey800</span><span>2D2D2D</span></div>
-        <div class="cell" style="background:var(--grey-900); color:#fff"><span>grey900</span><span>1A1A1A</span></div>
+        <div class="cell" style="background:var(--grey-50); color:#555"><span>grey50</span><span>F5F7F8</span></div>
+        <div class="cell" style="background:var(--grey-100); color:#555"><span>grey100</span><span>EEEFF1</span></div>
+        <div class="cell" style="background:var(--grey-200); color:#555"><span>grey200</span><span>DFE3E6</span></div>
+        <div class="cell" style="background:var(--grey-300); color:#555"><span>grey300</span><span>CBD1D6</span></div>
+        <div class="cell" style="background:var(--grey-400); color:#333"><span>grey400</span><span>B5BCC4</span></div>
+        <div class="cell" style="background:var(--grey-500); color:#111"><span>grey500</span><span>A1A8B3</span></div>
+        <div class="cell" style="background:var(--grey-900); color:#fff"><span>black</span><span>000000</span></div>
       </div>
-      <div class="note-box"><strong>Role map:</strong> page bg = <code class="inline">grey50</code> · inset/header bg = <code class="inline">grey100</code> · subtle border = <code class="inline">grey200</code> · control border = <code class="inline">grey500</code> · secondary text = <code class="inline">grey700</code> · body text = <code class="inline">grey800</code> · headings = <code class="inline">grey900</code>. Grey300 remains decorative or disabled only.</div>
+      <div class="note-box"><strong>Role map:</strong> main canvas = white · persistent navigation and subtle inset = <code class="inline">grey50</code> · subtle border = <code class="inline">grey200</code> · control border = <code class="inline">grey500</code> · secondary text = black at 64% · tertiary text = black at 46% · headings/actions = black.</div>
 
       <h3 class="sub-label">Accessible interaction roles</h3>
       <div class="swatch-grid">
         <div class="swatch"><div class="chip" style="background:var(--orange-500)"></div><div class="meta"><div class="name">Brand accent</div><div class="tok">color.brand.accent</div><div class="hex">#FD5108 · marks, rules, indicators</div></div></div>
-        <div class="swatch"><div class="chip" style="background:var(--action-primary)"></div><div class="meta"><div class="name">Primary action</div><div class="tok">color.action.primary</div><div class="hex">#C63D00 · 5.16:1 with white</div></div></div>
-        <div class="swatch"><div class="chip" style="background:var(--action-primary-hover)"></div><div class="meta"><div class="name">Primary hover</div><div class="tok">color.action.primary.hover</div><div class="hex">#A83A00 · 6.42:1 with white</div></div></div>
-        <div class="swatch"><div class="chip" style="background:var(--grey-700)"></div><div class="meta"><div class="name">Muted readable text</div><div class="tok">color.text.secondary</div><div class="hex">#5E5E5E · 6.48:1 with white</div></div></div>
+        <div class="swatch"><div class="chip" style="background:var(--action-primary)"></div><div class="meta"><div class="name">Primary action</div><div class="tok">color.action.primary</div><div class="hex">#000000 · 21:1 with white</div></div></div>
+        <div class="swatch"><div class="chip" style="background:var(--action-primary-hover)"></div><div class="meta"><div class="name">Primary hover</div><div class="tok">color.action.primary.hover</div><div class="hex">#25282B</div></div></div>
+        <div class="swatch"><div class="chip" style="background:var(--grey-700)"></div><div class="meta"><div class="name">Muted readable text</div><div class="tok">color.text.secondary</div><div class="hex">rgba(0,0,0,.64)</div></div></div>
       </div>
 
-      <h3 class="sub-label">Functional hues <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--grey-700)">(alerts · charts · rare exception accents)</span></h3>
+      <h3 class="sub-label">Status roles</h3>
       <div class="swatch-grid">
-        <div class="swatch"><div class="chip" style="background:var(--success)"></div><div class="meta"><div class="name">Success</div><div class="tok">success</div><div class="hex">#1FAB76</div></div></div>
-        <div class="swatch"><div class="chip" style="background:var(--error)"></div><div class="meta"><div class="name">Error</div><div class="tok">error</div><div class="hex">#E5484D</div></div></div>
-        <div class="swatch"><div class="chip" style="background:var(--warning)"></div><div class="meta"><div class="name">Warning</div><div class="tok">warning</div><div class="hex">#EFA417</div></div></div>
-        <div class="swatch"><div class="chip" style="background:var(--info)"></div><div class="meta"><div class="name">Info</div><div class="tok">info</div><div class="hex">#3E84CC</div></div></div>
+        <div class="swatch"><div class="chip" style="background:var(--success)"></div><div class="meta"><div class="name">Finished</div><div class="tok">success</div><div class="hex">#000000</div></div></div>
+        <div class="swatch"><div class="chip" style="background:var(--warning)"></div><div class="meta"><div class="name">Working / attention</div><div class="tok">warning</div><div class="hex">#FD5108</div></div></div>
+        <div class="swatch"><div class="chip" style="background:var(--info)"></div><div class="meta"><div class="name">Waiting / information</div><div class="tok">info</div><div class="hex">#5C6268</div></div></div>
       </div>
-      <div class="note-box"><strong>Four functional hues, and orange.</strong> Nothing else. The former <code class="inline">thinking</code> violet (#8B5CF6, "AI activity") is deprecated — no component reads it, and it was the one hue outside the palette. Agent-reasoning and technical surfaces use neutral text, or <code class="inline">info</code> where a state must be coloured.</div>
+      <div class="note-box"><strong>One narrow visual language.</strong> Black, white, cool greys, and signature orange cover production app chrome. Failures share the attention accent and remain unmistakable through their explicit “Failed” text/icon and recovery guidance.</div>
 
       <h3 class="sub-label">Functional colour — optional and exceptional</h3>
       <div class="note-box"><strong>Routine status does not require colour.</strong> Prefer explicit text and neutral icons. When functional colour materially improves urgency or differentiation, confine it to an alert icon, attention rule, chart mark, or rare highlighted row. Darker <code class="inline">*Text</code> roles carry any readable coloured label.</div>
@@ -591,19 +587,19 @@
       <div class="section-head">
         <div class="rule"></div>
         <h2>Typography</h2>
-        <p>A compact grotesk scale optimized for a desktop financial workspace. The stack is <code class="inline">"Helvetica Neue", Helvetica, Arial, system-ui</code>: Mac renders Helvetica Neue, the production Windows estate renders <strong>Arial</strong> — an accepted decision (no licensed corporate face, no self-hosted font), so every size below must stay legible in Arial, whose semibold is lighter and whose letters run wider. Regular 400 and Semibold 600 carry product text; Medium 500 is reserved for controls. Smaller roles retain strong contrast and generous line height rather than becoming faint or compressed.</p>
+        <p>A compact financial-workspace scale using <code class="inline">Inter, "Segoe UI", system-ui</code>. Regular 400 and Semibold 600 carry product text; Medium 500 is reserved for controls. The three core levels are 28px page title, 16px section/item, and 14px body. Short metadata may step down while retaining contrast and readable line height.</p>
       </div>
       <div class="panel">
         <div class="type-row"><span class="label">Title</span><span class="t-title">Run detail</span><span class="spec">28px / 600</span></div>
-        <div class="type-row"><span class="label">Heading</span><span class="t-heading">Cross-checks</span><span class="spec">20px / 600</span></div>
-        <div class="type-row"><span class="label">Body</span><span class="t-body">Each agent fills its statement template in parallel.</span><span class="spec">15px / 400</span></div>
-        <div class="type-row"><span class="label">Body emphasis</span><span class="t-strong">Total non-current assets</span><span class="spec">15px / 600</span></div>
+        <div class="type-row"><span class="label">Heading</span><span class="t-heading">Cross-checks</span><span class="spec">16px / 600</span></div>
+        <div class="type-row"><span class="label">Body</span><span class="t-body">Each agent fills its statement template in parallel.</span><span class="spec">14px / 400</span></div>
+        <div class="type-row"><span class="label">Body emphasis</span><span class="t-strong">Total non-current assets</span><span class="spec">14px / 600</span></div>
         <div class="type-row"><span class="label">Supporting</span><span class="t-small">Last updated 2 minutes ago · gpt-5.4</span><span class="spec">13px / 400</span></div>
         <div class="type-row"><span class="label">Data / metadata</span><span style="font-size:13px;color:var(--grey-700)">FY 2024 · Company · RM '000</span><span class="spec">13–14px / 400</span></div>
         <div class="type-row"><span class="label">Label</span><span class="t-label">Filing standard · MFRS</span><span class="spec">11–12px / 600 · sentence case</span></div>
         <div class="type-row"><span class="label">Mono</span><span class="t-body" style="font-family:var(--font-mono);font-size:13px">SOFP-Sub-CuNonCu!B12 = 1,595</span><span class="spec">SF Mono</span></div>
       </div>
-      <div class="note-box"><strong>Compact semantic scale:</strong> 28 Page title · 22 Workspace title · 18–20 Section · 15 Body/control · 13–14 Data/support · 11–12 Metadata/label. Use sentence case by default. Small text uses <code class="inline">grey700</code> or darker; uppercase 11px is reserved for brief eyebrows, never long instructions.</div>
+      <div class="note-box"><strong>Compact semantic scale:</strong> 28 Page title · 20 compact workspace title · 16 Section/item · 14 Body/control/data · 12–13 Metadata/support. Use sentence case by default. Uppercase 11px is reserved for brief eyebrows, never long instructions.</div>
       <div class="note-box"><strong>Display details:</strong> titles at 22–28px carry <code class="inline">letter-spacing: -0.01em</code> (<code class="inline">ui.pageTitle</code> / <code class="inline">ui.pageTitleCompact</code>); body and data sizes stay at 0. Page-level <code class="inline">h1</code>/<code class="inline">h2</code> wrap with <code class="inline">text-wrap: balance</code> so a heading never leaves one word on its own line. Numbers in columns and tiles use <code class="inline">ui.numeric</code> (right-aligned, tabular figures) rather than hand-set <code class="inline">fontVariantNumeric</code>.</div>
     </section>
 
@@ -628,13 +624,13 @@
       </div>
       <h3 class="sub-label">Corner radius — <code class="inline">pwc.radius</code></h3>
       <div class="demo-row">
-        <div style="text-align:center"><div style="width:72px;height:48px;background:var(--grey-100);border:1px solid var(--border);border-radius:var(--r-sm)"></div><div class="lbl">sm · 3px</div></div>
-        <div style="text-align:center"><div style="width:72px;height:48px;background:var(--grey-100);border:1px solid var(--border);border-radius:var(--r-md)"></div><div class="lbl">md · 6px</div></div>
-        <div style="text-align:center"><div style="width:72px;height:48px;background:var(--grey-100);border:1px solid var(--border);border-radius:var(--r-lg)"></div><div class="lbl">lg · 8px (cards, panels)</div></div>
-        <div style="text-align:center"><div style="width:72px;height:48px;background:var(--grey-100);border:1px solid var(--border);border-radius:var(--r-xl)"></div><div class="lbl">xl · 10px (large feature surfaces only)</div></div>
+        <div style="text-align:center"><div style="width:72px;height:48px;background:var(--grey-100);border:1px solid var(--border);border-radius:var(--r-sm)"></div><div class="lbl">sm · 6px</div></div>
+        <div style="text-align:center"><div style="width:72px;height:48px;background:var(--grey-100);border:1px solid var(--border);border-radius:var(--r-md)"></div><div class="lbl">md · 8px</div></div>
+        <div style="text-align:center"><div style="width:72px;height:48px;background:var(--grey-100);border:1px solid var(--border);border-radius:var(--r-lg)"></div><div class="lbl">lg · 12px (large surfaces)</div></div>
+        <div style="text-align:center"><div style="width:72px;height:48px;background:var(--grey-100);border:1px solid var(--border);border-radius:var(--r-xl)"></div><div class="lbl">xl · 12px (compatibility alias)</div></div>
         <div style="text-align:center"><div style="width:72px;height:48px;background:var(--grey-100);border:1px solid var(--border);border-radius:var(--r-pill)"></div><div class="lbl">pill (toggles and exceptional compact tags)</div></div>
       </div>
-      <div class="note-box"><strong>Role guidance:</strong> 3px for cells and compact references · 6px for buttons, inputs, and alerts · 8px for cards and panels · 10px only for large feature surfaces. Avoid a uniformly rounded-everywhere SaaS appearance.</div>
+      <div class="note-box"><strong>Role guidance:</strong> 6px for compact references · 8px for buttons, inputs, and alerts · 12px for genuinely distinct large surfaces. Ordinary panes and rows remain square/divider-led rather than rounded by default.</div>
     </section>
 
     <!-- ELEVATION -->
@@ -661,13 +657,13 @@
       <div class="rules">
         <div class="rule-item"><span class="num">L1</span><span class="txt"><strong>Form page.</strong> A constrained readable column for setup and account forms. Use <code class="inline">ui.pageForm</code>.</span></div>
         <div class="rule-item"><span class="num">L2</span><span class="txt"><strong>List page.</strong> A wide table or object list with sticky filters and stable columns. Use <code class="inline">ui.pageWide</code>.</span></div>
-        <div class="rule-item"><span class="num">L3</span><span class="txt"><strong>Live multi-agent run.</strong> One run-level progress story, a grouped vertical workstream navigator, and one focused activity pane. Surface active work, completed work, and exceptions before tokens or tool-level detail.</span></div>
+        <div class="rule-item"><span class="num">L3</span><span class="txt"><strong>Live multi-agent run.</strong> One run-level progress story, Working/All/Finished roster filters, a grouped vertical workstream navigator, one semantic latest-update pane, and collapsed technical activity. Surface active work, completed work, and exceptions before tokens or tool-level detail.</span></div>
         <div class="rule-item"><span class="num">L4</span><span class="txt"><strong>Run report.</strong> Full-width outcome header, section tabs, then task-specific content. Readiness comes before telemetry.</span></div>
         <div class="rule-item"><span class="num">L5</span><span class="txt"><strong>Review workspace.</strong> Collapsible document navigation, financial grid, and source evidence panes. Preserve working context when panes change.</span></div>
         <div class="rule-item"><span class="num">L6</span><span class="txt"><strong>Grouping.</strong> Prefer section spacing, then a bordered group, then a static card. Use an interactive card only for a selectable or navigable object.</span></div>
         <div class="rule-item"><span class="num">L7</span><span class="txt"><strong>mTool preparation.</strong> Use a staged Check run → Choose template → Review result flow. Inspect on upload; show manual column and notes controls only as advanced or exception handling.</span></div>
       </div>
-      <div class="note-box"><strong>Responsive contract:</strong> wide screens show the complete review workspace; laptops may collapse side panes; narrow screens retain monitoring and simple actions rather than pretending the financial grid is comfortably editable.</div>
+      <div class="note-box"><strong>Responsive contract:</strong> a 220px Grey-50 rail and 64px sticky context bar frame desktop work; review mode collapses the rail to 72px. Tablet moves PDF/agent detail below the primary surface instead of hiding it. Mobile uses a compact bottom/horizontal destination rail, bounded note/worksheet navigation, and horizontal financial-table scrolling.</div>
       <div class="note-box"><strong>Density contract:</strong> setup and explanation surfaces use comfortable spacing; operational lists use standard density; financial grids offer compact and standard modes. Density changes row height and padding, never typography contrast or target accessibility.</div>
       <div class="note-box"><strong>Viewport modes:</strong> mobile = monitor, approve, read evidence, and take simple actions · tablet = simplified grid with one contextual pane · laptop = primary review workspace · wide desktop = full grid plus navigation and evidence panes.</div>
     </section>
@@ -680,11 +676,12 @@
         <p>Motion explains state or spatial continuity. It is never decoration and never competes with financial review.</p>
       </div>
       <div class="rules">
-        <div class="rule-item"><span class="num">M1</span><span class="txt">Use only <code class="inline">pwc.motion.duration</code> and <code class="inline">pwc.motion.easing</code>.</span></div>
+        <div class="rule-item"><span class="num">M1</span><span class="txt">Use only the shared 100/140/180/240ms conventions from <code class="inline">pwc.motion.duration</code> and the standard/emphasized non-overshooting curves from <code class="inline">pwc.motion.easing</code>.</span></div>
         <div class="rule-item"><span class="num">M2</span><span class="txt">Prefer opacity and transform; avoid layout-shifting animation.</span></div>
         <div class="rule-item"><span class="num">M3</span><span class="txt">Do not animate financial values while they are being reviewed or edited.</span></div>
-        <div class="rule-item"><span class="num">M4</span><span class="txt">Only interactive cards lift. Static groups and metric tiles remain still.</span></div>
-        <div class="rule-item"><span class="num">M5</span><span class="txt">Every transition has an immediate equivalent under <code class="inline">prefers-reduced-motion</code>.</span></div>
+        <div class="rule-item"><span class="num">M4</span><span class="txt">Navigation/view transitions, disclosure reveal, status arrival, loading, success, and press feedback stay restrained. Cards never lift; continuous motion is limited to genuine working/loading states.</span></div>
+        <div class="rule-item"><span class="num">M5</span><span class="txt">Every transition has an immediate, equally clear equivalent under <code class="inline">prefers-reduced-motion</code>. Motion never delays controls or masks pipeline state.</span></div>
+        <div class="rule-item"><span class="num">M6</span><span class="txt">Animation, hover, focus, press, and responsive selectors live in <code class="inline">web/src/index.css</code>. Do not animate <code class="inline">max-height</code> or other layout-thrashing properties.</span></div>
       </div>
     </section>
 
@@ -693,7 +690,7 @@
       <div class="section-head">
         <div class="rule"></div>
         <h2>Buttons</h2>
-        <p>One dominant action per decision region. Primary actions use an accessible dark-orange role; supporting actions remain neutral. Destructive actions stay quiet in ordinary contexts and become explicit at final confirmation.</p>
+        <p>One dominant action per decision region. Primary actions are black with white text and may gain a small orange inset cue on hover; supporting actions remain neutral. Destructive actions stay quiet in ordinary contexts and become explicit at final confirmation.</p>
       </div>
       <div class="panel">
         <h3 class="sub-label">Variants — <code class="inline">ui.button*</code></h3>
@@ -704,7 +701,7 @@
           <button class="btn btn-danger">Danger</button>
           <button class="btn btn-primary" disabled>Disabled</button>
         </div>
-        <div class="note-box"><strong>States:</strong> default · hover (darker fill / quiet surface via <code class="inline">uiClass.*</code>) · focus-visible (two-part ring) · pressed (<code class="inline">:active</code> settles the button 1px, instant, no transition — cards never move, buttons may) · disabled (45% opacity, <code class="inline">not-allowed</code> cursor) · busy (label swaps to the in-progress verb; never an unexplained spinner).</div>
+        <div class="note-box"><strong>States:</strong> default · hover (darker fill / quiet surface via <code class="inline">uiClass.*</code>) · focus-visible (two-part ring) · pressed (<code class="inline">:active</code> settles the button 1px within the 100ms immediate-response convention — cards never move, buttons may) · disabled (45% opacity, <code class="inline">not-allowed</code> cursor) · busy (label swaps to the in-progress verb; never an unexplained spinner).</div>
         <h3 class="sub-label">Sizes — <code class="inline">ui.buttonSm / buttonLg</code></h3>
         <div class="demo-row">
           <button class="btn btn-primary btn-sm">Small</button>
@@ -761,7 +758,7 @@
       <div class="section-head">
         <div class="rule"></div>
         <h2>Status</h2>
-        <p>Routine status uses a neutral icon plus explicit text. Shape improves scanning, text carries the meaning, and no status hue competes with financial data or the primary action. The six families are keyed in code by a text symbol (<code class="inline">STATUS_SYMBOLS</code>: ○ ✓ ! × – ◇) and drawn on screen by <code class="inline">StatusIcon</code> as one icon family at one stroke weight (bold-weight SVG paths vendored in <code class="inline">web/src/components/iconGlyphs.tsx</code>) — never as font glyphs, which Windows renders from a different fallback face at mismatched sizes.</p>
+        <p>Status always combines explicit text with the shared icon family. Working and attention use orange, finished uses black, and waiting/inactive uses grey. Failure uses the attention accent plus unmistakable “Failed” text/icon and recovery guidance. The six families are keyed in code by <code class="inline">STATUS_SYMBOLS</code> and drawn by <code class="inline">StatusIcon</code> at one stroke weight.</p>
       </div>
       <div class="panel">
         <div class="status-preview">
@@ -777,7 +774,7 @@
 <span class="c">// or the one-stop primitive:</span>
 &lt;StatusLabel state=<span class="s">"success"</span> label=<span class="s">"Completed"</span> /&gt;</pre>
       </div>
-      <div class="note-box"><strong>Status hierarchy:</strong> routine status stays monochrome · ordinary metadata remains plain text · actionable risk expands into an alert or attention row with recovery guidance · functional color is optional and confined to that exceptional treatment.</div>
+      <div class="note-box"><strong>Status hierarchy:</strong> finished = black · working/attention/failed = orange plus explicit text/icon · waiting = grey · ordinary metadata remains plain text · actionable risk stays on the affected row/object and expands to a banner only when the whole page is blocked.</div>
     </section>
 
     <!-- CARDS -->
@@ -855,7 +852,7 @@
       <div class="section-head">
         <div class="rule"></div>
         <h2>Alerts</h2>
-        <p>Inline messaging on a neutral surface. A coloured left rule and icon code the status; copy stays dark grey (<code class="inline">grey800</code>) for readability. No coloured backgrounds.</p>
+        <p>Inline messaging on a neutral surface with one neutral boundary. The icon and explicit copy communicate status; there are no coloured fills or side rails.</p>
       </div>
       <div class="alert alert-info"><span class="ico">ℹ</span><div class="body"><strong>Scout finished</strong>Page hints are advisory — agents may read any page.</div></div>
       <div class="alert alert-success"><span class="ico">✓</span><div class="body"><strong>Merged</strong>filled.xlsx is ready to download.</div></div>
@@ -869,12 +866,12 @@
       <div class="section-head">
         <div class="rule"></div>
         <h2>Tabs &amp; navigation</h2>
-        <p>The app shell uses horizontal destination links; run detail uses tabs for alternate views of one resource. The active destination is communicated by dark text plus an orange indicator, so brand color is not the only readable signal.</p>
+        <p>The app shell uses a persistent vertical destination rail on desktop and a compact horizontal/bottom rail on mobile; run detail uses tabs for alternate views of one resource. The active destination is communicated by readable black text, weight and a subtle grey surface. Interactive states never use accent edge or underline indicators.</p>
       </div>
       <div class="panel">
-        <h3 class="sub-label">Top nav — <code class="inline">TopNav.tsx</code></h3>
+        <h3 class="sub-label">Workspace rail — <code class="inline">TopNav.tsx</code></h3>
         <div class="tabbar">
-          <a class="tab active" href="#tabs" aria-current="page">New extraction</a>
+          <a class="tab active" href="#tabs" aria-current="page">Work queue</a>
           <a class="tab" href="#tabs">Runs</a>
           <a class="tab" href="#tabs">Administration</a>
         </div>
@@ -977,14 +974,14 @@
       <div class="section-head">
         <div class="rule"></div>
         <h2>Page adoption status</h2>
-        <p>Which product surfaces have adopted this specification. "Adopted" means the page uses its canonical layout mode, the semantic typography scale, shared primitives, and the monochrome status language, and its focused tests pin that adoption. Update this table in the same change set as the page work (docs/PLAN-app-wide-design-consistency.md).</p>
+        <p>Which product surfaces have adopted this specification. "Adopted" means the page uses the focused-workspace shell, semantic typography, shared primitives, explicit status language, responsive composition, and motion conventions, and focused tests pin that adoption.</p>
       </div>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Surface</th><th>Layout mode</th><th>Status</th></tr></thead>
           <tbody>
             <tr><td>Shared foundations (tokens, primitives, state hooks)</td><td>—</td><td>Adopted</td></tr>
-            <tr><td>App shell &amp; top navigation</td><td>—</td><td>Adopted</td></tr>
+            <tr><td>App shell &amp; navigation</td><td>220px rail · 72px review rail · mobile bottom rail</td><td>Adopted</td></tr>
             <tr><td>Login</td><td>Authentication · 380px</td><td>Adopted</td></tr>
             <tr><td>New extraction</td><td>Standard · 1120px</td><td>Adopted</td></tr>
             <tr><td>Runs (history list)</td><td>Wide list · 1440px</td><td>Adopted</td></tr>
@@ -1029,7 +1026,7 @@
     </section>
 
     <footer>
-      <p>XBRL Agent Design System v3 · promoted to the production contract 12 July 2026 · revised 21 August 2026 (status icons replace font glyphs; pressed state, skip link, title tracking, <code class="inline">ui.numeric</code>; <code class="inline">black</code> and <code class="inline">thinking</code> tokens deprecated; Arial-on-Windows and light-only theme recorded as decisions). Core orange remains the signature identity accent; accessible semantic roles carry interactive text and fills. Routine status may be entirely monochrome; functional hues are optional and exceptional. Not an official PwC brand publication.</p>
+      <p>Archived compatibility reference retained for historical bookmarks and audit context. Production code and pinning tests use docs/xbrl-design-system.html and Direction A in docs/prototype-ui-overhaul.html. Not an official PwC brand publication.</p>
     </footer>
 
   </main>

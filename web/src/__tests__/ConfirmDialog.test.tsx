@@ -62,11 +62,11 @@ describe("ConfirmDialog", () => {
     expect(onConfirm).not.toHaveBeenCalled();
   });
 
-  test("destructive confirm uses the quiet-outline danger role", () => {
+  test("destructive confirm remains monochrome in the focused workspace", () => {
     renderDialog();
     const confirm = screen.getByRole("button", { name: "Delete run" });
-    // errorText #C0303A outline — destructive stays quiet until hovered.
-    expect(confirm.style.color).toBe("rgb(192, 48, 58)");
+    // Orange is reserved for local attention/activity rather than text blocks.
+    expect(confirm.style.color).toBe("rgb(0, 0, 0)");
     expect(confirm.style.backgroundColor).toBe("rgb(255, 255, 255)");
   });
 

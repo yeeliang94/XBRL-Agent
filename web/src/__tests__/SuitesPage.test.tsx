@@ -157,7 +157,7 @@ describe("SuitesPage", () => {
     expect(row.textContent).toContain("Partial — resume to finish");
     const symbol = row.querySelector('[aria-hidden="true"]');
     expect(symbol?.getAttribute("data-status-icon")).toBe("attention");
-    expect((symbol as HTMLElement).style.color).toBe("rgb(94, 94, 94)");
+    expect((symbol as HTMLElement).style.color).toBe("rgba(0, 0, 0, 0.64)");
   });
 });
 

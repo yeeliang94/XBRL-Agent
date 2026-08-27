@@ -178,6 +178,8 @@ export function PdfSourcePane({
                 onClick={() => setZoom((z) => Math.min(z + 0.5, 3))}
                 style={styles.iconButton}
                 title="Zoom in"
+                aria-label="Zoom in"
+                data-tooltip="Zoom in"
               >
                 +
               </button>

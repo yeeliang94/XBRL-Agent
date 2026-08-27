@@ -2,206 +2,122 @@ import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import { pwc, tokens, component } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
-import { STATUS_SYMBOLS } from "../lib/runStatus";
-import { STATUS_ICON_NAMES } from "../components/StatusIcon";
 
-// The HTML is the behavioural/visual specification; theme.ts and uiStyles.ts
-// are the production implementation. This contract catches the costly kind
-// of drift (brand/foundation values, semantic roles, layout modes, status
-// language) without snapshotting presentation-only markup in the
-// documentation page.
-const designSystemUrl = new URL("../../../docs/pwc-design-system.html", import.meta.url);
-let designSystemPath = decodeURIComponent(designSystemUrl.pathname).replace(/^\/@fs\//, "/");
-// URL pathnames retain a leading slash before a Windows drive letter.
-if (/^\/[A-Za-z]:\//.test(designSystemPath)) designSystemPath = designSystemPath.slice(1);
-const designSystem = readFileSync(designSystemPath, "utf8");
+function readReference(relativePath: string): string {
+  const url = new URL(relativePath, import.meta.url);
+  let path = decodeURIComponent(url.pathname).replace(/^\/@fs\//, "/");
+  if (/^\/[A-Za-z]:\//.test(path)) path = path.slice(1);
+  return readFileSync(path, "utf8");
+}
 
-describe("design-system specification stays aligned with production tokens", () => {
-  const colours = [
-    "orange500",
-    "orange700",
-    "orange50",
-    "grey50",
-    "grey200",
-    "grey300",
-    "grey500",
-    "grey800",
-    "grey900",
-    "success",
-    "warning",
-    "error",
-    "info",
-  ] as const;
+const designSystem = readReference("../../../docs/xbrl-design-system.html");
+const prototype = readReference("../../../docs/prototype-ui-overhaul.html");
 
-  test.each(colours)("documents %s", (token) => {
-    expect(designSystem.toUpperCase()).toContain(pwc[token].toUpperCase());
+describe("XBRL design system is the production authority", () => {
+  test("declares the canonical production contract and Direction A", () => {
+    expect(designSystem).toContain("CANONICAL PRODUCTION DESIGN SYSTEM");
+    expect(designSystem).toContain("STATUS · PRODUCTION");
+    expect(designSystem).toContain("DIRECTION · A");
+    expect(prototype).toContain("Direction A — focused workspace");
   });
 
-  test("documents the production spacing and radius scales", () => {
-    for (const value of Object.values(pwc.space)) {
-      expect(designSystem).toContain(`${value}px`);
-    }
-    for (const value of Object.values(pwc.radius).filter((value) => value !== pwc.radius.pill)) {
-      expect(designSystem).toContain(`${value}px`);
-    }
+  test.each([
+    ["orange700", "--orange-700"],
+    ["orange500", "--orange-500"],
+    ["orange400", "--orange-400"],
+    ["orange300", "--orange-300"],
+    ["orange200", "--orange-200"],
+    ["orange100", "--orange-100"],
+    ["orange50", "--orange-50"],
+    ["grey500", "--grey-500"],
+    ["grey400", "--grey-400"],
+    ["grey300", "--grey-300"],
+    ["grey200", "--grey-200"],
+    ["grey100", "--grey-100"],
+    ["grey50", "--grey-50"],
+  ] as const)("pins %s to the canonical reference", (token, cssName) => {
+    const declaration = `${cssName}: ${pwc[token].toLowerCase()}`;
+    expect(designSystem.toLowerCase()).toContain(declaration);
+    expect(prototype.toLowerCase()).toContain(declaration);
   });
 
-  test("documents semantic layout and financial-number roles", () => {
-    expect(designSystem).toContain("ui.pageForm");
-    expect(designSystem).toContain("ui.pageWide");
-    expect(designSystem).toContain("font-variant-numeric:tabular-nums");
-    expect(ui.financialValue.fontVariantNumeric).toBe("tabular-nums");
+  test("pins black and white to the prototype's ink and canvas aliases", () => {
+    expect(designSystem.toLowerCase()).toContain(`--black: ${pwc.black.toLowerCase()}`);
+    expect(designSystem.toLowerCase()).toContain(`--white: ${pwc.white.toLowerCase()}`);
+    expect(prototype.toLowerCase()).toContain(`--ink: ${pwc.black.toLowerCase()}`);
+    expect(prototype.toLowerCase()).toContain(`--canvas: ${pwc.white.toLowerCase()}`);
   });
 
-  test("documents the shared motion contract", () => {
-    expect(designSystem).toContain("pwc.motion.duration");
-    expect(designSystem).toContain("pwc.motion.easing");
-    expect(designSystem).toContain("prefers-reduced-motion");
-  });
-});
-
-describe("semantic token layer (tokens / component)", () => {
-  test("accessible action roles are documented and independent of signature orange", () => {
-    // The reviewed action values from the app-wide consistency plan.
-    expect(tokens.color.action.primary).toBe("#C63D00");
-    expect(tokens.color.action.primaryHover).toBe("#A83A00");
-    expect(tokens.color.action.primary).not.toBe(pwc.orange500);
-    expect(designSystem.toUpperCase()).toContain("#C63D00");
-    expect(designSystem.toUpperCase()).toContain("#A83A00");
-    // The spec names the semantic role, not just the hex.
-    expect(designSystem).toContain("color.action.primary");
-  });
-
-  test("signature orange remains the brand indicator role", () => {
-    expect(tokens.color.brand.accent).toBe(pwc.orange500);
-    expect(component.nav.activeIndicator).toBe(pwc.orange500);
-  });
-
-  test("text roles map meaning to the neutral ladder", () => {
-    expect(tokens.color.text.primary).toBe(pwc.grey900);
-    expect(tokens.color.text.body).toBe(pwc.grey800);
-    // Smallest READABLE role is grey700; grey500 is decorative/disabled only.
-    expect(tokens.color.text.secondary).toBe(pwc.grey700);
-    expect(tokens.color.text.muted).toBe(pwc.grey500);
-    expect(designSystem).toContain("color.text.secondary");
-  });
-
-  test("component layer carries stable per-component decisions", () => {
-    expect(component.button.primary.background).toBe(tokens.color.action.primary);
-    expect(component.button.primary.backgroundHover).toBe(tokens.color.action.primaryHover);
-    expect(component.table.header.surface).toBe(pwc.grey100);
-    expect(component.dialog.scrim).toContain("rgba");
-    expect(designSystem).toContain("button.primary.background.hover");
-    expect(designSystem).toContain("table.header.surface");
-    expect(designSystem).toContain("dialog.scrim");
-  });
-});
-
-describe("canonical typography scale", () => {
-  test("compact semantic roles carry the documented sizes", () => {
-    expect(ui.pageTitle.fontSize).toBe(28);
-    expect(ui.pageTitleCompact.fontSize).toBe(22);
-    expect(ui.sectionTitle.fontSize).toBe(20);
-    expect(ui.bodyText.fontSize).toBe(15);
-    expect(ui.supportingText.fontSize).toBe(14);
-    expect(ui.metadata.fontSize).toBe(13);
-    expect(ui.microLabel.fontSize).toBe(11);
-  });
-
-  test("small text keeps readable contrast (grey700 or darker)", () => {
-    expect(ui.supportingText.color).toBe(pwc.grey700);
-    expect(ui.metadata.color).toBe(pwc.grey700);
-    expect(ui.microLabel.color).toBe(pwc.grey700);
-  });
-
-  test("titles use semibold; body regular", () => {
-    expect(ui.pageTitle.fontWeight).toBe(pwc.weight.semibold);
-    expect(ui.bodyText.fontWeight).toBe(pwc.weight.regular);
-  });
-});
-
-describe("canonical page layout modes", () => {
-  test("the five task-based widths are defined once", () => {
-    expect(tokens.layout.auth).toBe(380);
-    expect(tokens.layout.form).toBe(840);
-    expect(tokens.layout.standard).toBe(1120);
-    expect(tokens.layout.wideList).toBe(1440);
-    expect(ui.pageAuth.maxWidth).toBe(380);
-    expect(ui.pageForm.maxWidth).toBe(840);
-    expect(ui.pageStandard.maxWidth).toBe(1120);
-    expect(ui.pageWide.maxWidth).toBe(1440);
-    expect(ui.pageWorkspace.maxWidth).toBe("none");
-  });
-});
-
-describe("monochrome status language", () => {
-  test("the six canonical symbol families exist and are documented", () => {
-    // The family KEYS stay the text symbols (stable vocabulary for status
-    // maps and plain-text contexts)…
-    expect(STATUS_SYMBOLS.inProgress).toBe("○");
-    expect(STATUS_SYMBOLS.success).toBe("✓");
-    expect(STATUS_SYMBOLS.attention).toBe("!");
-    expect(STATUS_SYMBOLS.failure).toBe("×");
-    expect(STATUS_SYMBOLS.inactive).toBe("–");
-    expect(STATUS_SYMBOLS.derived).toBe("◇");
-    // …and every family RENDERS as a named SVG icon that the spec's Status
-    // section documents by that name (one icon family, one weight).
-    expect(Object.keys(STATUS_ICON_NAMES).sort()).toEqual(Object.keys(STATUS_SYMBOLS).sort());
-    for (const name of Object.values(STATUS_ICON_NAMES)) {
-      expect(designSystem).toContain(`data-status-icon="${name}"`);
-    }
-    // The icon paths are vendored in the app, not pulled from an npm package —
-    // the registry is unreachable from the enterprise Windows box.
-    expect(designSystem).toContain("iconGlyphs.tsx");
-  });
-
-  test("the status primitive is neutral — no coloured dot, border, or fill", () => {
-    expect(ui.status.color).toBe(pwc.grey800);
-    expect(ui.statusSymbol.color).toBe(pwc.grey700);
-    expect(ui.status.background).toBeUndefined();
-    expect(ui.status.border).toBeUndefined();
-    expect(ui.status.borderRadius).toBeUndefined();
-  });
-});
-
-describe("cards and elevation", () => {
-  test("static cards are flat (no shadow) and 8px radius", () => {
+  test("pins typography, spacing, radius, and flat-surface rules", () => {
+    expect(pwc.fontBody).toBe('"Inter Variable", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif');
+    expect(pwc.fontMono).toBe('"SFMono-Regular", Consolas, "Liberation Mono", monospace');
+    expect(pwc.radius).toMatchObject({ sm: 6, md: 8, lg: 12 });
+    expect(pwc.space).toEqual({ xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32, xxxl: 48, xxxxl: 64 });
+    expect(pwc.shadow.card).toBe("none");
+    expect(pwc.shadow.elevated).toBe("0 14px 40px rgba(0, 0, 0, 0.12)");
     expect(ui.card.boxShadow).toBeUndefined();
-    expect(ui.card.borderRadius).toBe(8);
-    expect(ui.borderedGroup.boxShadow).toBeUndefined();
-    expect(ui.statTile.boxShadow).toBeUndefined();
-  });
-
-  test("elevation is reserved for genuine overlap", () => {
-    expect(ui.dialog.boxShadow).toBe(pwc.shadow.modal);
-    expect(ui.stickyActionBar.boxShadow).toBe(pwc.shadow.elevated);
   });
 });
 
-describe("tab geometry", () => {
-  test("shared underline tab carries dark active text + orange indicator", () => {
-    expect(ui.tab.color).toBe(pwc.grey700);
-    expect(ui.tabActive.color).toBe(pwc.grey900);
-    expect(ui.tabActive.borderBottom).toBe(`2px solid ${pwc.orange500}`);
-    expect(ui.tabBar.borderBottom).toBe(`1px solid ${pwc.grey200}`);
+describe("Direction A semantic roles", () => {
+  test("black carries actions while orange stays activity/attention", () => {
+    expect(tokens.color.action.primary).toBe(pwc.black);
+    expect(tokens.color.action.primaryHover).toBe(pwc.black);
+    expect(component.button.primary.background).toBe(pwc.black);
+    expect(tokens.color.brand.accent).toBe(pwc.orange500);
+    expect(prototype).toContain(".shell-a .button.primary");
+    expect(designSystem).toContain("Orange identifies activity and attention");
+  });
+
+  test("text and control roles match the exact XBRL values", () => {
+    expect(tokens.color.text.primary).toBe(pwc.black);
+    expect(tokens.color.text.body).toBe(pwc.black);
+    expect(tokens.color.text.secondary).toBe("rgba(0, 0, 0, 0.64)");
+    expect(tokens.color.text.muted).toBe("rgba(0, 0, 0, 0.46)");
+    expect(tokens.color.border.control).toBe(pwc.grey500);
+  });
+
+  test("uses the three-level type scale and exact action geometry", () => {
+    expect(ui.pageTitle.fontSize).toBe(28);
+    expect(ui.sectionTitle.fontSize).toBe(16);
+    expect(ui.bodyText.fontSize).toBe(14);
+    expect(ui.buttonPrimary.minHeight).toBe(40);
+    expect(ui.buttonPrimary.padding).toBe("0 15px");
+    expect(ui.buttonSm.minHeight).toBe(34);
   });
 });
 
-describe("page adoption matrix", () => {
-  test("the specification carries the adoption matrix", () => {
-    expect(designSystem).toContain("Page adoption status");
-    for (const surface of [
-      "App shell",
-      "Login",
-      "New extraction",
-      "Runs (history list)",
-      "Field labels",
-      "Benchmarks",
-      "Evaluation suites",
-      "Settings",
-      "Run report",
+describe("Direction A shell and responsive composition", () => {
+  test("pins the 220px rail, 64px top bar, 1500px canvas, and 72px review rail", () => {
+    expect(ui.appShell.gridTemplateColumns).toBe("220px minmax(0, 1fr)");
+    expect(ui.appTopbar.height).toBe(64);
+    expect(tokens.layout.standard).toBe(1500);
+    expect(tokens.layout.wideList).toBe(1500);
+    expect(prototype).toContain(".shell-a { display: grid; grid-template-columns: 220px minmax(0,1fr)");
+    expect(prototype).toContain(".a-topbar { height: 64px");
+    expect(prototype).toContain("max-width: 1500px");
+    expect(prototype).toContain(".shell-a.review-mode { grid-template-columns: 72px minmax(0,1fr)");
+  });
+
+  test("documents desktop, tablet, mobile, keyboard, and reduced-motion behavior", () => {
+    for (const requirement of [
+      "Large desktop:",
+      "Standard desktop:",
+      "Tablet:",
+      "Mobile:",
+      "Every icon-only control",
+      "prefers-reduced-motion",
     ]) {
-      expect(designSystem).toContain(surface);
+      expect(designSystem).toContain(requirement);
     }
+    expect(prototype).toContain("@media (max-width: 1100px)");
+    expect(prototype).toContain("@media (max-width: 780px)");
+  });
+
+  test("forbids line-based hover and selected-state indicators", () => {
+    expect(designSystem).toContain("Do not use accent lines for hover, pressed, active or selected states");
+    expect(prototype).toContain("Interactive states use surface, text and icon changes; never accent edge or underline indicators");
+    expect(designSystem).not.toContain("box-shadow: inset 0 -3px 0 var(--orange-500)");
+    expect(prototype).not.toContain("box-shadow: inset 0 -3px 0 var(--accent)");
   });
 });

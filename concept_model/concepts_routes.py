@@ -160,18 +160,31 @@ def register_concept_routes(app, audit_db_getter) -> None:
             # ``scope_facts`` on each concept.
             all_facts = conn.execute(
                 """
-                SELECT concept_uuid, period, entity_scope, value
+                SELECT concept_uuid, period, entity_scope, value,
+                       value_status, children_status, source, evidence
                 FROM run_concept_facts WHERE run_id = ?
                 """,
                 (run_id,),
             ).fetchall()
             scope_facts_by_uuid: dict[str, dict] = {}
+            scope_fact_details_by_uuid: dict[str, dict] = {}
             for f in all_facts:
                 bucket = scope_facts_by_uuid.setdefault(
                     f["concept_uuid"], {}
                 )
                 scope = bucket.setdefault(f["entity_scope"], {})
                 scope[f["period"]] = f["value"]
+                detail_bucket = scope_fact_details_by_uuid.setdefault(
+                    f["concept_uuid"], {}
+                )
+                detail_scope = detail_bucket.setdefault(f["entity_scope"], {})
+                detail_scope[f["period"]] = {
+                    "value": f["value"],
+                    "value_status": f["value_status"],
+                    "children_status": f["children_status"],
+                    "source": f["source"],
+                    "evidence": f["evidence"],
+                }
 
             # Aliases — secondary physical render coords for a single
             # canonical concept. The cross-sheet rollup case (face row
@@ -232,6 +245,9 @@ def register_concept_routes(app, audit_db_getter) -> None:
                     ),
                     "is_alias": alias is not None,
                     "scope_facts": scope_facts_by_uuid.get(
+                        r["concept_uuid"], {}
+                    ),
+                    "scope_fact_details": scope_fact_details_by_uuid.get(
                         r["concept_uuid"], {}
                     ),
                 }

@@ -1,5 +1,5 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup, within } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, within, waitFor } from "@testing-library/react";
 import { RunDetailView } from "../components/RunDetailView";
 import type { RunDetailJson, RunAgentJson, SSEEvent } from "../lib/types";
 
@@ -303,6 +303,11 @@ describe("RunDetailView", () => {
       />,
     );
     clickRunTab(/activity/i);
+    const failedRow = screen
+      .getAllByTestId("run-detail-agent-row")
+      .find((row) => row.textContent?.includes("SOPL"));
+    expect(failedRow).toBeTruthy();
+    fireEvent.click(failedRow!);
     const badges = screen.getAllByTestId("agent-error-type");
     expect(badges).toHaveLength(1); // only the failed agent carries it
     expect(badges[0].textContent).toBe("token budget exceeded");
@@ -548,29 +553,73 @@ describe("RunDetailView", () => {
     expect(agentsSection.textContent).not.toContain("GoogleModel(");
   });
 
-  // Phase 9.1: RunDetailView rebuilds the agents section as a stack of
-  // AgentTimeline cards (one per agent) instead of a stats table. Each
-  // agent card must render the persisted tool-call events through the
-  // same ToolCallCard rows used live.
-  test("renders one AgentTimeline per agent with persisted tool cards", () => {
-    const { container } = render(
+  test("uses a roster and focused detail while keeping technical events on demand", () => {
+    render(
       <RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />,
     );
-    // Agent cards default to collapsed — expand each before asserting on
-    // timeline contents so the tool rows are mounted.
     clickRunTab(/^activity$/i);
-    const agentCards = container.querySelectorAll("[data-testid='run-detail-agent']");
-    expect(agentCards.length).toBe(2);
-    agentCards.forEach((card) => {
-      const toggle = card.querySelector("button");
-      if (toggle) fireEvent.click(toggle);
+    expect(screen.getAllByTestId("run-detail-agent-row")).toHaveLength(2);
+    expect(screen.getAllByTestId("run-detail-agent")).toHaveLength(1);
+    const technicalActivity = screen.getByText("Technical activity").closest("details");
+    expect(technicalActivity).not.toHaveAttribute("open");
+    expect(within(technicalActivity!).queryByTestId("tool-card")).toBeNull();
+    fireEvent.click(screen.getByText("Technical activity"));
+    expect(technicalActivity).toHaveAttribute("open");
+    expect(within(technicalActivity!).getByTestId("tool-card")).toBeInTheDocument();
+    fireEvent.click(screen.getAllByTestId("run-detail-agent-row")[1]);
+    expect(screen.getAllByTestId("run-detail-agent")).toHaveLength(1);
+  });
+
+  test("source summary uses the numeric page range, not event arrival order", () => {
+    const detail = makeDetail({
+      agents: [
+        makeAgent({
+          events: [
+            {
+              event: "status",
+              data: { message: "Read page 14" },
+              timestamp: 1,
+            } as SSEEvent,
+            {
+              event: "status",
+              data: { message: "Compared with page 3" },
+              timestamp: 2,
+            } as SSEEvent,
+          ],
+        }),
+      ],
     });
-    const toolCards = container.querySelectorAll("[data-testid='tool-card']");
-    expect(toolCards.length).toBe(2);
+    render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
+    clickRunTab(/^activity$/i);
+
+    expect(screen.getAllByText("Source pages 3–14").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Source pages 14–3")).toBeNull();
+  });
+
+  test("completed-with-errors agents stay in Finished rather than Current", () => {
+    render(
+      <RunDetailView
+        detail={makeDetail({
+          agents: [
+            makeAgent({ id: 1, status: "completed_with_errors" }),
+            makeAgent({ id: 2, statement_type: "SOPL", status: "running" }),
+          ],
+        })}
+        onDelete={() => {}}
+        onDownload={() => {}}
+      />,
+    );
+    clickRunTab(/^activity$/i);
+    fireEvent.click(screen.getByRole("button", { name: "Current" }));
+    expect(screen.getAllByTestId("run-detail-agent-row")).toHaveLength(1);
+    expect(screen.getByTestId("run-detail-agent-list")).toHaveTextContent("SOPL");
+    fireEvent.click(screen.getByRole("button", { name: "Finished" }));
+    expect(screen.getAllByTestId("run-detail-agent-row")).toHaveLength(1);
+    expect(screen.getByTestId("run-detail-agent-list")).toHaveTextContent("SOFP");
   });
 
   test("agent with no events shows an empty timeline", () => {
-    const { container } = render(
+    render(
       <RunDetailView
         detail={makeDetail({
           agents: [makeAgent({ events: [] })],
@@ -579,13 +628,8 @@ describe("RunDetailView", () => {
         onDownload={() => {}}
       />,
     );
-    // Expand the (default-collapsed) card so the timeline empty-state
-    // copy is rendered.
     clickRunTab(/^activity$/i);
-    const toggle = container
-      .querySelector("[data-testid='run-detail-agent']")
-      ?.querySelector("button");
-    if (toggle) fireEvent.click(toggle);
+    fireEvent.click(screen.getByText("Technical activity"));
     // AgentTimeline's own empty-state copy — proves the timeline is
     // mounted even when the event list is empty. History runs aren't
     // "running", so the copy reflects no recorded activity rather than the
@@ -740,16 +784,11 @@ describe("RunDetailView", () => {
       ],
     });
 
-    const { container } = render(
+    render(
       <RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />,
     );
-    // Expand the (default-collapsed) agent card so the sub-tab bar
-    // and timeline mount.
     clickRunTab(/^activity$/i);
-    const toggle = container
-      .querySelector("[data-testid='run-detail-agent']")
-      ?.querySelector("button");
-    if (toggle) fireEvent.click(toggle);
+    fireEvent.click(screen.getByText("Technical activity"));
 
     // Sub-tab bar appears: "All" chip + one chip per sub-agent (2). Scope to
     // the Sheet-12 sub-tab bar so the run-detail top tabs aren't counted.
@@ -783,17 +822,11 @@ describe("RunDetailView", () => {
         }),
       ],
     });
-    const { container } = render(
+    render(
       <RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />,
     );
-    // Expand the agent card so we're actually testing "sub-tab bar
-    // absent after mount" and not just "body not rendered because
-    // collapsed".
     clickRunTab(/^activity$/i);
-    const toggle = container
-      .querySelector("[data-testid='run-detail-agent']")
-      ?.querySelector("button");
-    if (toggle) fireEvent.click(toggle);
+    fireEvent.click(screen.getByText("Technical activity"));
 
     // No sub-tab bar rendered for this agent.
     expect(screen.queryByRole("tablist", { name: /sheet-12/i })).not.toBeInTheDocument();
@@ -975,6 +1008,68 @@ describe("RunDetailView", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  test("Notes lazy-mounts the unified workspace directly in Notes mode", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/notes_cells")) {
+        return new Response(JSON.stringify({ sheets: [] }), { status: 200 });
+      }
+      if (url.includes("/notes-coverage")) {
+        return new Response(JSON.stringify({
+          run_id: 42,
+          banner: "pre_feature",
+          inventory_available: true,
+          rows: [],
+          summary: { placed: 0, missing: 0, skipped: 0, suspected_gap: 0, total: 0, unresolved: 0 },
+        }), { status: 200 });
+      }
+      if (url.includes("/facts/edited_count")) {
+        return new Response(JSON.stringify({ count: 0 }), { status: 200 });
+      }
+      if (url.includes("/conflicts")) {
+        return new Response(JSON.stringify({ conflicts: [] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ concepts: [] }), { status: 200 });
+    }) as unknown as typeof fetch;
+    try {
+      render(
+        <RunDetailView
+          detail={makeDetail()}
+          onDelete={() => {}}
+          onDownload={() => {}}
+          canonicalEnabled
+          initialTab="notes"
+        />,
+      );
+      const tablist = screen.getByRole("tablist", { name: /run detail sections/i });
+      expect(within(tablist).getByRole("tab", { name: /^notes$/i })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByTestId("review-notes-panel")).toBeInTheDocument();
+      expect(screen.getByTestId("sheet-nav-__notes__")).toHaveAttribute("aria-current", "true");
+      expect(screen.queryByTestId("run-detail-values")).toBeNull();
+      await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith(
+        "/api/runs/42/concepts",
+        expect.any(Object),
+      ));
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("heavy Figures and Notes workspaces stay unmounted on Overview", () => {
+    render(
+      <RunDetailView
+        detail={makeDetail()}
+        onDelete={() => {}}
+        onDownload={() => {}}
+        canonicalEnabled
+      />,
+    );
+    expect(screen.queryByTestId("concepts-page")).toBeNull();
+    expect(screen.queryByTestId("run-detail-notes-review")).toBeNull();
+    expect(screen.queryByTestId("run-detail-values")).toBeNull();
   });
 
   test("switching run IDs remounts the Figures workspace", () => {
@@ -1227,8 +1322,8 @@ describe("RunDetailView", () => {
     });
     render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
     clickRunTab(/activity/i);
-    const cards = screen.getAllByTestId("run-detail-agent");
-    const order = cards.map((c) => c.textContent);
+    const rows = screen.getAllByTestId("run-detail-agent-row");
+    const order = rows.map((row) => row.textContent);
     // Document scan first, then face statements in reading order (SOCF last).
     expect(order[0]).toMatch(/document scan/i);
     expect(order[1]).toMatch(/SOFP/);
@@ -1290,7 +1385,7 @@ describe("RunDetailView", () => {
     expect(screen.queryByRole("button", { name: /abort run/i })).toBeNull();
   });
 
-  test("run status is a monochrome symbol + label; active tab is dark text + orange indicator (CS6)", () => {
+  test("run status is monochrome; active tab uses a quiet surface without an indicator line (CS6)", () => {
     render(
       <RunDetailView detail={makeDetail({ status: "completed" })} onDelete={() => {}} onDownload={() => {}} />,
     );
@@ -1298,15 +1393,16 @@ describe("RunDetailView", () => {
     const label = screen.getAllByText("Completed")[0];
     const symbol = label.parentElement!.querySelector('[aria-hidden="true"]');
     expect(symbol?.getAttribute("data-status-icon")).toBe("success");
-    expect((symbol as HTMLElement).style.color).toBe("rgb(94, 94, 94)");
+    expect((symbol as HTMLElement).style.color).toBe("rgba(0, 0, 0, 0.64)");
 
-    // Shared tab treatment: dark active text, orange only on the indicator.
+    // Shared tab treatment: dark active text and a quiet selected surface.
     const tablist = screen.getByRole("tablist", { name: /run detail sections/i });
     const active = within(tablist)
       .getAllByRole("tab")
       .find((t) => t.getAttribute("aria-selected") === "true") as HTMLElement;
-    expect(active.style.color).toBe("rgb(26, 26, 26)");
-    expect(active.style.borderBottom).toContain("rgb(253, 81, 8)");
+    expect(active.style.color).toBe("rgb(0, 0, 0)");
+    expect(active.style.background).toBe("rgb(245, 247, 248)");
+    expect(active.style.borderBottom).toBe("");
   });
 });
 
@@ -1334,6 +1430,30 @@ describe("incomplete face statements", () => {
     expect(banner.textContent).toMatch(/did not finish extracting/i);
     expect(banner.textContent).toMatch(/Statement of Cash Flows/i);
     expect(banner.textContent).toMatch(/cannot be filed/i);
+  });
+
+  test("running statement agents are not described as failed or unfileable", () => {
+    render(
+      <RunDetailView
+        detail={makeDetail({
+          status: "running",
+          agents: [
+            makeAgent({ status: "running" }),
+            makeAgent({ id: 2, statement_type: "SOCF", status: "running" }),
+          ],
+        })}
+        onDelete={() => {}}
+        onDownload={() => {}}
+      />,
+    );
+    expect(screen.queryByText(/did not finish extracting/i)).toBeNull();
+    expect(screen.queryByText(/cannot be filed/i)).toBeNull();
+  });
+
+  test("overview exposes the filing name as the page heading", () => {
+    const detail = makeDetail();
+    render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
+    expect(screen.getByRole("heading", { level: 1, name: detail.pdf_filename })).toBeInTheDocument();
   });
 
   test("a skipped statement is not reported as unfinished", () => {

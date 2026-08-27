@@ -10,7 +10,7 @@ import type { ReactElement, SVGProps } from "react";
 // there while it succeeded on Mac. Eight paths are cheaper to carry than a
 // dependency that only resolves on some machines.
 //
-// docs/pwc-design-system.html already vendors the same six status paths into
+// The compatibility design-system mirror already vendors the same six status paths into
 // its own <symbol> sprite, so the spec page and the app stay byte-identical.
 //
 // Adding an icon: take the "bold" entry's `d` from the package's

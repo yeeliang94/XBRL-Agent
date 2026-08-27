@@ -8,10 +8,11 @@ import { pwc, tokens, component } from "../lib/theme";
 // these stay in lockstep with theme.
 
 describe("ui.statTile — canonical KPI tile", () => {
-  test("uses the 16px padding token, a hairline border, and stays flat", () => {
-    expect(ui.statTile.padding).toBe(pwc.space.lg); // 16
-    expect(ui.statTile.border).toBe(`1px solid ${pwc.grey200}`);
-    expect(ui.statTile.borderRadius).toBe(pwc.radius.md);
+  test("uses the flat whitespace-led treatment from Direction A", () => {
+    expect(ui.statTile.padding).toBe(`${pwc.space.sm}px 0`);
+    expect(ui.statTile.border).toBe("none");
+    expect(ui.statTile.borderTop).toBeUndefined();
+    expect(ui.statTile.borderRadius).toBe(0);
     expect(ui.statTile.boxShadow).toBeUndefined();
   });
 });
@@ -50,38 +51,50 @@ describe("buttons — four roles, canonical geometry", () => {
     expect(ui.buttonDanger.background).toBe(pwc.white);
   });
 
-  test("default target 44px; compact 40px; nothing below WCAG 24px", () => {
-    expect(ui.buttonPrimary.minHeight).toBe(44);
-    expect(ui.buttonSm.minHeight).toBe(40);
+  test("default target 40px; compact 34px; nothing below WCAG 24px", () => {
+    expect(ui.buttonPrimary.minHeight).toBe(40);
+    expect(ui.buttonSm.minHeight).toBe(34);
     expect(ui.buttonLg.minHeight).toBe(48);
     expect(ui.iconButton.minHeight).toBeGreaterThanOrEqual(24);
   });
 
-  test("buttons and inputs use the 6px control radius", () => {
-    expect(ui.buttonPrimary.borderRadius).toBe(6);
-    expect(ui.input.borderRadius).toBe(6);
-    expect(ui.alertInfo.borderRadius).toBe(6);
+  test("keeps stateful motion out of the inline primitive", () => {
+    expect(ui.buttonPrimary.transition).toBeUndefined();
+  });
+
+  test("buttons and inputs use the 8px control radius", () => {
+    expect(ui.buttonPrimary.borderRadius).toBe(8);
+    expect(ui.input.borderRadius).toBe(8);
+    expect(ui.alertInfo.borderRadius).toBe(8);
+  });
+
+  test("alerts use one neutral boundary without status side rails", () => {
+    for (const alert of [ui.alertInfo, ui.alertSuccess, ui.alertWarning, ui.alertError]) {
+      expect(alert.border).toBe(`1px solid ${tokens.color.border.subtle}`);
+      expect(alert.borderLeft).toBeUndefined();
+    }
   });
 });
 
-describe("ui.status — monochrome status primitive", () => {
+describe("ui.status — explicit status primitive", () => {
   test("neutral symbol + explicit text; no colour, pill, or fill", () => {
-    expect(ui.status.color).toBe(pwc.grey800);
-    expect(ui.statusSymbol.color).toBe(pwc.grey700);
+    expect(ui.status.color).toBe(tokens.color.text.body);
+    expect(ui.statusSymbol.color).toBe(tokens.color.text.secondary);
     expect(ui.status.background).toBeUndefined();
     expect(ui.status.borderRadius).toBeUndefined();
     expect(ui.statusSymbol.width).toBe(14);
   });
 });
 
-describe("ui.tab — shared underline tab", () => {
-  test("carries the canonical geometry", () => {
+describe("ui.tab — shared surface tab", () => {
+  test("uses fill and weight without an indicator line", () => {
     expect(ui.tab.padding).toBe("8px 16px");
-    expect(ui.tab.borderBottom).toBe("2px solid transparent");
-    expect(ui.tab.marginBottom).toBe(-1);
-    // Full shorthand on purpose — a longhand override leaves a stale solid
-    // border behind when React removes it on deactivation.
-    expect(ui.tabActive.borderBottom).toBe(`2px solid ${pwc.orange500}`);
+    expect(ui.tab.border).toBe("none");
+    expect(ui.tab.borderBottom).toBeUndefined();
+    expect(ui.tab.marginBottom).toBeUndefined();
+    expect(ui.tabActive.borderBottom).toBeUndefined();
+    expect(ui.tabActive.background).toBe(pwc.grey50);
+    expect(ui.tabActive.fontWeight).toBe(pwc.weight.semibold);
     expect(uiClass.tab).toBe("pwc-tab");
   });
 });
@@ -131,7 +144,7 @@ describe("table densities — header and body share the density", () => {
     expect(ui.th.textTransform).toBeUndefined();
     expect(ui.thDense.textTransform).toBeUndefined();
     expect(ui.thComfortable.textTransform).toBeUndefined();
-    expect(ui.th.color).toBe(pwc.grey700);
+    expect(ui.th.color).toBe(tokens.color.text.secondary);
   });
 });
 
@@ -144,8 +157,8 @@ describe("semantic design-system roles", () => {
   test("the five page modes carry the canonical widths", () => {
     expect(ui.pageAuth.maxWidth).toBe(380);
     expect(ui.pageForm.maxWidth).toBe(840);
-    expect(ui.pageStandard.maxWidth).toBe(1120);
-    expect(ui.pageWide.maxWidth).toBe(1440);
+    expect(ui.pageStandard.maxWidth).toBe(1500);
+    expect(ui.pageWide.maxWidth).toBe(1500);
     expect(ui.pageWorkspace.maxWidth).toBe("none");
   });
 
@@ -156,6 +169,6 @@ describe("semantic design-system roles", () => {
 
   test("empty state offers a quiet divided region", () => {
     expect(ui.emptyState.borderTop).toBe(`1px solid ${pwc.grey200}`);
-    expect(ui.emptyState.color).toBe(pwc.grey700);
+    expect(ui.emptyState.color).toBe(tokens.color.text.secondary);
   });
 });
