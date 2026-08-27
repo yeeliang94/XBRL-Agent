@@ -150,7 +150,7 @@ const styles = {
     padding: pwc.space.md,
     background: pwc.orange50,
     borderRadius: pwc.radius.sm,
-    borderLeft: `3px solid ${pwc.orange500}`,
+    border: `1px solid ${pwc.orange100}`,
     display: "flex",
     flexDirection: "column" as const,
     gap: pwc.space.xs,
@@ -464,6 +464,7 @@ function NotesInventoryEditor({
                     onChange(entries.filter((x) => x !== e))
                   }
                   aria-label={`Remove note ${e.note_num}`}
+                  data-tooltip={`Remove note ${e.note_num}`}
                   style={{
                     background: "none", border: "none", padding: "0 4px",
                     cursor: "pointer", color: pwc.grey700, fontSize: 12,
@@ -1319,7 +1320,6 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           padding: pwc.space.lg,
           background: pwc.orange50,
           border: `1px solid ${pwc.orange100}`,
-          borderLeft: `4px solid ${pwc.orange500}`,
           borderRadius: pwc.radius.md,
         }}
       >
@@ -1335,13 +1335,15 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           styling below so the two toggles read as a pair. */}
       <div style={styles.section}>
         <span style={styles.sectionLabel}>Filing standard</span>
-        <div style={{ display: "inline-flex", alignSelf: "flex-start", border: `1px solid ${pwc.grey200}`, borderRadius: pwc.radius.md, overflow: "hidden" }}>
+        <div className="segmented-control-group" style={{ display: "inline-flex", alignSelf: "flex-start", border: `1px solid ${pwc.grey200}`, borderRadius: pwc.radius.md, overflow: "hidden" }}>
           {(["mfrs", "mpers"] as const).map((standard) => {
             const active = filingStandard === standard;
             return (
               <button
                 key={standard}
                 type="button"
+                className="segmented-control-button"
+                aria-pressed={active}
                 onClick={() => handleFilingStandardChange(standard)}
                 style={{
                   fontFamily: pwc.fontHeading,
@@ -1351,10 +1353,9 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
                   border: "none",
                   borderRight: standard === "mfrs" ? `1px solid ${pwc.grey200}` : "none",
                   borderRadius: 0,
-                  background: active ? pwc.orange500 : pwc.white,
+                  background: active ? pwc.black : pwc.white,
                   color: active ? pwc.white : pwc.grey700,
                   cursor: "pointer",
-                  transition: "background 0.15s, color 0.15s",
                 }}
               >
                 {standard === "mfrs" ? "MFRS" : "MPERS"}
@@ -1367,13 +1368,15 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       {/* Filing level: Company or Group */}
       <div style={styles.section}>
         <span style={styles.sectionLabel}>Filing level</span>
-        <div style={{ display: "inline-flex", alignSelf: "flex-start", border: `1px solid ${pwc.grey200}`, borderRadius: pwc.radius.md, overflow: "hidden" }}>
+        <div className="segmented-control-group" style={{ display: "inline-flex", alignSelf: "flex-start", border: `1px solid ${pwc.grey200}`, borderRadius: pwc.radius.md, overflow: "hidden" }}>
           {(["company", "group"] as const).map((level) => {
             const active = filingLevel === level;
             return (
               <button
                 key={level}
                 type="button"
+                className="segmented-control-button"
+                aria-pressed={active}
                 onClick={() => setFilingLevel(level)}
                 style={{
                   fontFamily: pwc.fontHeading,
@@ -1383,10 +1386,9 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
                   border: "none",
                   borderRight: level === "company" ? `1px solid ${pwc.grey200}` : "none",
                   borderRadius: 0,
-                  background: active ? pwc.orange500 : pwc.white,
+                  background: active ? pwc.black : pwc.white,
                   color: active ? pwc.white : pwc.grey700,
                   cursor: "pointer",
-                  transition: "background 0.15s, color 0.15s",
                 }}
               >
                 {level === "company" ? "Company" : "Group"}
@@ -1401,13 +1403,15 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           values verbatim; the scout cross-checks it. Mirrors the toggles above. */}
       <div style={styles.section}>
         <span style={styles.sectionLabel}>Denomination</span>
-        <div style={{ display: "inline-flex", alignSelf: "flex-start", border: `1px solid ${pwc.grey200}`, borderRadius: pwc.radius.md, overflow: "hidden" }}>
+        <div className="segmented-control-group" style={{ display: "inline-flex", alignSelf: "flex-start", border: `1px solid ${pwc.grey200}`, borderRadius: pwc.radius.md, overflow: "hidden" }}>
           {(["units", "thousands", "millions"] as const).map((d, idx) => {
             const active = denomination === d;
             return (
               <button
                 key={d}
                 type="button"
+                className="segmented-control-button"
+                aria-pressed={active}
                 onClick={() => setDenomination(d)}
                 style={{
                   fontFamily: pwc.fontHeading,
@@ -1417,10 +1421,9 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
                   border: "none",
                   borderRight: idx < 2 ? `1px solid ${pwc.grey200}` : "none",
                   borderRadius: 0,
-                  background: active ? pwc.orange500 : pwc.white,
+                  background: active ? pwc.black : pwc.white,
                   color: active ? pwc.white : pwc.grey700,
                   cursor: "pointer",
-                  transition: "background 0.15s, color 0.15s",
                 }}
               >
                 {DENOMINATION_LABELS[d]}
@@ -1444,6 +1447,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
               <button
                 key={n}
                 type="button"
+                className="segmented-control-button"
                 aria-label={`Repeats ${n}`}
                 aria-pressed={active}
                 data-testid={`repeats-${n}`}
@@ -1456,10 +1460,9 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
                   border: "none",
                   borderRight: idx < 4 ? `1px solid ${pwc.grey200}` : "none",
                   borderRadius: 0,
-                  background: active ? pwc.orange500 : pwc.white,
+                  background: active ? pwc.black : pwc.white,
                   color: active ? pwc.white : pwc.grey700,
                   cursor: "pointer",
-                  transition: "background 0.15s, color 0.15s",
                 }}
               >
                 {n}
@@ -1494,6 +1497,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
         >
           <button
             type="button"
+            className="segmented-control-button"
             role="switch"
             aria-checked={evalEnabled}
             aria-label="Eval testing"
@@ -1504,12 +1508,11 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
               fontSize: 13,
               fontWeight: 600,
               padding: "8px 20px",
-              border: `1px solid ${evalEnabled ? pwc.orange500 : pwc.grey200}`,
+              border: `1px solid ${evalEnabled ? pwc.black : pwc.grey200}`,
               borderRadius: pwc.radius.md,
-              background: evalEnabled ? pwc.orange500 : pwc.white,
+              background: evalEnabled ? pwc.black : pwc.white,
               color: evalEnabled ? pwc.white : pwc.grey700,
               cursor: "pointer",
-              transition: "background 0.15s, color 0.15s",
             }}
           >
             {evalEnabled ? "On" : "Off"}
@@ -1627,10 +1630,10 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           <div style={styles.scoutProgressPanel}>
             <div style={styles.scoutProgressHeader}>
               <div style={{ display: "flex", alignItems: "center", gap: pwc.space.sm }}>
-                <span style={{
+                <span className="pwc-spinner" style={{
                   width: 16, height: 16, borderRadius: "50%",
                   border: `2px solid ${pwc.grey200}`, borderTop: `2px solid ${pwc.orange500}`,
-                  animation: "spin 0.8s linear infinite", flexShrink: 0, display: "inline-block",
+                  flexShrink: 0, display: "inline-block",
                 }} />
                 <span style={{ fontFamily: pwc.fontHeading, fontSize: 13, fontWeight: 600, color: pwc.grey800 }}>
                   {scoutProgress || "Starting document scan…"}

@@ -197,7 +197,6 @@ const styles = {
     border: `2px solid ${pwc.grey200}`,
     borderTop: `2px solid ${pwc.orange500}`,
     borderRadius: "50%",
-    animation: "spin 0.8s linear infinite",
     display: "inline-block",
   } as React.CSSProperties,
   savedBadge: {
@@ -240,13 +239,12 @@ const styles = {
     ...ui.supportingText,
     margin: `${pwc.space.xs}px 0 0`,
   } as React.CSSProperties,
-  // The auto-saving section — a subtle card with a left rule to set it apart
-  // from the Save-button-gated fields (C4).
+  // The auto-saving section uses one quiet surface and neutral boundary.
   autoSaveCard: {
     marginBottom: pwc.space.xl,
     padding: pwc.space.lg,
     background: pwc.grey100,
-    borderLeft: `3px solid ${pwc.grey300}`,
+    border: `1px solid ${pwc.grey200}`,
     borderRadius: pwc.radius.sm,
   } as React.CSSProperties,
   autoSaveHeader: {
@@ -904,7 +902,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
             setDirty(true);
           }}
           disabled={readOnly}
-          style={{ ...ui.input, maxWidth: 420 }}
+          style={{ ...ui.input, width: "100%", maxWidth: 420 }}
           aria-label="Word source handling mode"
         >
           {integrityChoices.map((mode) => (
@@ -1115,7 +1113,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
             >
               {testing ? (
                 <>
-                  <span style={styles.testSpinner} /> Testing...
+                  <span className="pwc-spinner" style={styles.testSpinner} /> Testing...
                 </>
               ) : (
                 "Test Connection"

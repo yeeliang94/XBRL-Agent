@@ -46,6 +46,18 @@ function makeProps(overrides?: { state?: Partial<AppState>; handleAbortAll?: () 
 // ---------------------------------------------------------------------------
 
 describe("ExtractPage — render-gate regression guards", () => {
+  test("idle work queue exposes a local New extraction action", () => {
+    render(<ExtractPage {...makeProps()} />);
+    expect(screen.getByRole("heading", { name: "Work queue" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "New extraction" })).toBeInTheDocument();
+  });
+
+  test("a resumed draft is headed as setup rather than Work queue", () => {
+    render(<ExtractPage {...makeProps({ state: { currentRunId: 42, sessionId: "draft-session", sessionRunId: 42, filename: "draft.pdf" } })} />);
+    expect(screen.getByRole("heading", { name: "Continue setup" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Work queue" })).toBeNull();
+  });
+
   test("Stop all is reachable in the RUN_STARTED → first-event window", () => {
     // State shape produced by RUN_STARTED before any SSE event lands:
     // isRunning flipped, statementsInRun populated, but agents/
@@ -159,6 +171,42 @@ describe("ExtractPage — render-gate regression guards", () => {
     expect(usage.open).toBe(false);
     expect(usage.querySelector("summary")?.textContent).toContain("$0.0123");
     expect(usage.querySelector("summary [aria-hidden='true']")).toBeInTheDocument();
+  });
+
+  test("keeps the live status region mounted while its message changes", () => {
+    const first = createAgentState("sofp_0", "SOFP", "SOFP");
+    first.status = "running";
+    first.events = [
+      { event: "status", data: { message: "Reading page 3" }, timestamp: 1 } as never,
+    ];
+    const base = {
+      sessionId: "test-session",
+      filename: "test.pdf",
+      isRunning: true,
+      activeTab: "sofp_0",
+      agentTabOrder: ["sofp_0"],
+      agents: { sofp_0: first },
+    };
+    const { rerender } = render(<ExtractPage {...makeProps({ state: base })} />);
+    const region = screen.getByRole("status", { name: "Latest agent update" });
+    expect(region).toHaveTextContent("Reading page 3");
+
+    const second = {
+      ...first,
+      events: [
+        ...first.events,
+        { event: "status", data: { message: "Writing figures" }, timestamp: 2 } as never,
+      ],
+    };
+    rerender(
+      <ExtractPage
+        {...makeProps({ state: { ...base, agents: { sofp_0: second } } })}
+      />,
+    );
+
+    const updatedRegion = screen.getByRole("status", { name: "Latest agent update" });
+    expect(updatedRegion).toBe(region);
+    expect(updatedRegion).toHaveTextContent("Writing figures");
   });
 
   test("a stopped run is not described as still running", () => {

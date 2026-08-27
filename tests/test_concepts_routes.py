@@ -81,6 +81,37 @@ def test_get_concepts_returns_tree_with_facts(client: TestClient) -> None:
     assert leaf["value"] == 42.0
 
 
+def test_scope_facts_keep_value_and_provenance_together(client: TestClient) -> None:
+    """Entity switching must not pair a Group value with Company evidence."""
+    conn = sqlite3.connect(str(client.db_path))
+    try:
+        conn.execute(
+            "UPDATE run_concept_facts SET evidence = ? WHERE run_id = ? "
+            "AND concept_uuid = ? AND period = 'CY' AND entity_scope = 'Company'",
+            ("Company source page 2", client.run_id, client.leaf_uuid),
+        )
+        conn.execute(
+            "INSERT INTO run_concept_facts(run_id, concept_uuid, period, "
+            "entity_scope, value, value_status, source, evidence, updated_at) "
+            "VALUES (?, ?, 'CY', 'Group', 126000, 'observed', 'pdf', ?, ?)",
+            (client.run_id, client.leaf_uuid, "Group source pages 3-4", "2026-08-27Z"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    payload = client.get(f"/api/runs/{client.run_id}/concepts").json()
+    leaf = next(c for c in payload["concepts"] if c["concept_uuid"] == client.leaf_uuid)
+    assert leaf["scope_fact_details"]["Company"]["CY"]["evidence"] == "Company source page 2"
+    assert leaf["scope_fact_details"]["Group"]["CY"] == {
+        "value": 126000.0,
+        "value_status": "observed",
+        "children_status": None,
+        "source": "pdf",
+        "evidence": "Group source pages 3-4",
+    }
+
+
 def test_get_concepts_surfaces_reporting_periods(client: TestClient) -> None:
     """D5: the endpoint exposes the scout's reporting periods so the Figures
     grid can label CY / PY with their years. Absent scout data → nulls."""

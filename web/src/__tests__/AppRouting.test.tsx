@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, vi } from "vitest";
-import { render, fireEvent, cleanup, act, screen } from "@testing-library/react";
+import { render, fireEvent, cleanup, act, screen, waitFor, within } from "@testing-library/react";
 
 // Stub out the settings/history API calls that App fires on mount so the
 // tests don't need a live backend. The real useEffect calls getExtendedSettings
@@ -69,7 +69,7 @@ describe("App routing", () => {
     fireEvent.click(getByRole("link", { name: /runs/i }));
     expect(window.location.pathname).toBe("/history");
 
-    fireEvent.click(getByRole("link", { name: /new extraction/i }));
+    fireEvent.click(getByRole("link", { name: /work queue/i }));
     expect(window.location.pathname).toBe("/");
   });
 
@@ -93,7 +93,7 @@ describe("App routing", () => {
     });
 
     expect(
-      getByRole("link", { name: /new extraction/i }).getAttribute("aria-current"),
+      getByRole("link", { name: /work queue/i }).getAttribute("aria-current"),
     ).toBe("page");
   });
 
@@ -120,6 +120,35 @@ describe("App routing", () => {
     expect(window.location.pathname).toBe("/history/42");
   });
 
+  test("current-filing rail links switch the mounted run tab", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ run_id: 42, concepts: [], conflicts: [], sheets: [] }),
+    })) as unknown as typeof fetch);
+    try {
+      window.history.replaceState({}, "", "/history/42?tab=notes");
+      const { default: App } = await import("../App");
+      render(<App />);
+
+      const tablist = await screen.findByRole("tablist", { name: /run detail sections/i });
+      expect(
+        screen.getByRole("tab", { name: "Notes" }),
+      ).toHaveAttribute("aria-selected", "true");
+
+      fireEvent.click(screen.getByRole("link", { name: "Overview" }));
+
+      await waitFor(() =>
+        expect(within(tablist).getByRole("tab", { name: "Overview" })).toHaveAttribute(
+          "aria-selected",
+          "true",
+        ),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   test("top-nav History click after viewing a run returns to the list, not the last run", async () => {
     // Peer-review [MEDIUM]: selectedRunId used to survive top-nav clicks,
     // so a user at /history/42 who clicked Extract then History would
@@ -134,7 +163,7 @@ describe("App routing", () => {
     expect(window.location.pathname).toBe("/history/42");
 
     // Click Extract → URL must clear back to /.
-    fireEvent.click(getByRole("link", { name: /new extraction/i }));
+    fireEvent.click(getByRole("link", { name: /work queue/i }));
     await new Promise((r) => setTimeout(r, 0));
     expect(window.location.pathname).toBe("/");
 
@@ -262,7 +291,7 @@ describe("App routing", () => {
     // The upload card now shows the rehydrated filename instead of the
     // empty drop zone. UploadPanel renders the filename in a span when
     // `filename` is non-null.
-    expect(screen.getByText("Annual-Report.pdf")).toBeInTheDocument();
+    expect(screen.getAllByText("Annual-Report.pdf").length).toBeGreaterThan(0);
     // URL stays at /run/42 — no rewrite back to /.
     expect(window.location.pathname).toBe("/run/42");
   });
@@ -355,6 +384,7 @@ describe("App routing", () => {
     const { default: App } = await import("../App");
     render(<App />);
 
+    fireEvent.click(screen.getByRole("link", { name: /new extraction/i }));
     const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
     const file = new File(["x"], "Z.pdf", { type: "application/pdf" });
     await act(async () => {
@@ -407,6 +437,7 @@ describe("App routing", () => {
     const { default: App } = await import("../App");
     const { getByRole } = render(<App />);
 
+    fireEvent.click(getByRole("link", { name: /new extraction/i }));
     const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
     const file = new File(["x"], "Z.pdf", { type: "application/pdf" });
     await act(async () => {
@@ -417,11 +448,11 @@ describe("App routing", () => {
 
     // Sanity: the upload landed — URL is /run/99 and the filename shows.
     expect(window.location.pathname).toBe("/run/99");
-    expect(screen.getByText("Z.pdf")).toBeInTheDocument();
+    expect(screen.getAllByText("Z.pdf").length).toBeGreaterThan(0);
 
     // Click Extract → fresh, empty box: URL back to "/" and filename gone.
     await act(async () => {
-      fireEvent.click(getByRole("link", { name: /new extraction/i }));
+      fireEvent.click(getByRole("link", { name: /work queue/i }));
     });
     await new Promise((r) => setTimeout(r, 0));
     expect(window.location.pathname).toBe("/");

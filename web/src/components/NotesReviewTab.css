@@ -14,20 +14,20 @@
 
 .notes-review-tab .tiptap {
   padding: 8px 10px;
-  border: 1px solid #C9C9C9; /* grey300 */
-  border-radius: 6px; /* radius.md */
+  border: 1px solid #CBD1D6; /* grey300 */
+  border-radius: 8px; /* radius.md */
   background: #fff;
-  font-family: "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif;
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 14px;
   line-height: 1.5;
-  color: #2D2D2D; /* grey800 body */
+  color: #000000;
   min-height: 40px;
   outline: none;
 }
 
 .notes-review-tab .tiptap:focus-within {
-  border-color: #FD5108; /* orange500 */
-  box-shadow: 0 0 0 3px #FFF5ED; /* orange50 soft ring */
+  border-color: #000000;
+  box-shadow: 0 0 0 3px #EEEFF1;
 }
 
 .notes-review-tab .tiptap p {
@@ -63,7 +63,7 @@
   font-size: var(--nt-heading-size, 15px);
   font-weight: var(--nt-heading-weight, 600);
   margin: 12px 0 6px 0;
-  color: #1A1A1A; /* grey900 heading */
+  color: #000000; /* grey900 heading */
 }
 
 .notes-review-tab .tiptap table {
@@ -80,7 +80,7 @@
    * The fallbacks below are the historic defaults — so an un-themed install (or
    * a render before the vars are set) looks exactly as it did before. A per-cell
    * inline `style=` still wins over these rules (manual overrides preserved). */
-  border: var(--nt-grid-border, 1px solid #C9C9C9); /* grey300 */
+  border: var(--nt-grid-border, 1px solid #CBD1D6); /* grey300 */
   padding: var(--nt-cell-padding, 4px 8px);
   text-align: left;
   vertical-align: top;
@@ -115,7 +115,7 @@
  * A per-cell inline style still wins (inline > class rule). */
 .notes-review-tab .tiptap td.is-totals-num,
 .notes-review-tab .tiptap th.is-totals-num {
-  border-bottom: var(--nt-totals-border, var(--nt-grid-border, 1px solid #C9C9C9));
+  border-bottom: var(--nt-totals-border, var(--nt-grid-border, 1px solid #CBD1D6));
 }
 
 /* ProseMirror tags every cell in a drag (multi-cell) selection with the
@@ -135,7 +135,7 @@
 }
 
 .notes-review-tab .tiptap th {
-  background: var(--nt-header-fill, #F4F4F4); /* grey100 */
+  background: var(--nt-header-fill, #EEEFF1); /* grey100 */
   font-weight: var(--nt-header-weight, 600);
   /* Accountant "ruled" look (theme `headerRule`): one rule under the header row
    * with no cell grid. Only VISIBLE when themeToCssVars sets --nt-header-rule;
@@ -143,7 +143,7 @@
    * un-themed editor renders exactly as before. A per-cell inline border still
    * wins, and a source-styled table's `border: 0` (above) still suppresses it —
    * that table carries the source's own rules. */
-  border-bottom: var(--nt-header-rule, var(--nt-grid-border, 1px solid #C9C9C9));
+  border-bottom: var(--nt-header-rule, var(--nt-grid-border, 1px solid #CBD1D6));
 }
 
 /* Numeric value cells right-align so the review preview matches the

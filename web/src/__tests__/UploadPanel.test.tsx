@@ -17,7 +17,7 @@ describe("UploadPanel — P1 enhancements", () => {
     );
     const spinner = container.querySelector("[data-testid='run-spinner']");
     expect(spinner).toBeInTheDocument();
-    expect(spinner?.getAttribute("style")).toContain("animation");
+    expect(spinner).toHaveClass("pwc-spinner");
   });
 
   test("shows ElapsedTimer when isRunning=true with startTime", () => {
@@ -59,10 +59,9 @@ describe("UploadPanel — P1 enhancements", () => {
         startTime={null}
       />,
     );
-    const button = screen.getByText("Choose file");
-    // jsdom converts hex to rgb — color.action.primary #C63D00 (design
-    // system v3: signature orange is identity, not a button fill).
-    expect(button.style.backgroundColor).toBe("rgb(198, 61, 0)");
+    const button = screen.getByText("Choose document");
+    // Focused-workspace primary action is pure black, not brand orange.
+    expect(button.style.backgroundColor).toBe("rgb(0, 0, 0)");
   });
 
   test("accepts a .docx file (converted server-side) and calls onUpload", async () => {
@@ -92,7 +91,7 @@ describe("UploadPanel — P1 enhancements", () => {
     expect(screen.getByText(/only pdf or word/i)).toBeInTheDocument();
   });
 
-  test("drag-drop zone uses grey50 background with grey300 dashed border", () => {
+  test("drag-drop zone uses the canonical white background with grey300 dashed border", () => {
     const { container } = render(
       <UploadPanel
         onUpload={noop}
@@ -105,8 +104,8 @@ describe("UploadPanel — P1 enhancements", () => {
     const dropZone = container.querySelector("[data-testid='drop-zone']");
     expect(dropZone).toBeInTheDocument();
     // jsdom converts hex to rgb in style attributes
-    expect(dropZone?.getAttribute("style")).toContain("rgb(250, 250, 250)"); // grey50 #FAFAFA
-    expect(dropZone?.getAttribute("style")).toContain("rgb(201, 201, 201)"); // grey300 #C9C9C9
+    expect(dropZone?.getAttribute("style")).toContain("rgb(255, 255, 255)");
+    expect(dropZone?.getAttribute("style")).toContain("rgb(203, 209, 214)");
   });
 
   test("drag highlight stays active while crossing children and clears on exit", () => {
@@ -124,6 +123,6 @@ describe("UploadPanel — P1 enhancements", () => {
     expect(dropZone.style.backgroundColor).toBe("rgb(255, 245, 237)");
 
     fireEvent.dragLeave(child);
-    expect(dropZone.style.backgroundColor).toBe("rgb(250, 250, 250)");
+    expect(dropZone.style.backgroundColor).toBe("rgb(255, 255, 255)");
   });
 });

@@ -17,6 +17,8 @@ interface Props {
 const styles = {
   table: {
     width: "100%",
+    maxWidth: "100%",
+    tableLayout: "fixed" as const,
     borderCollapse: "collapse" as const,
   } as React.CSSProperties,
   row: {
@@ -67,7 +69,8 @@ const styles = {
     color: pwc.grey900,
     background: pwc.white,
     outline: "none",
-    minWidth: 180,
+    minWidth: 0,
+    width: "100%",
   } as React.CSSProperties,
   selectDisabled: {
     padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
@@ -78,7 +81,8 @@ const styles = {
     color: pwc.grey300,
     background: pwc.grey50,
     outline: "none",
-    minWidth: 180,
+    minWidth: 0,
+    width: "100%",
   } as React.CSSProperties,
 };
 
@@ -112,6 +116,7 @@ export function StatementRunConfig({
                 <td style={styles.cell}>
                   <select
                     role="combobox"
+                    aria-label={`Model for ${stmt} — ${STATEMENT_LABELS[stmt]}`}
                     value={modelOverrides[stmt]}
                     disabled={!isEnabled}
                     onChange={(e) => onModelChange(stmt, e.target.value)}

@@ -87,6 +87,16 @@ export interface ConceptRow {
   // Shape: {Company: {CY: 100, PY: 110}, Group: {CY: 200, PY: 220}}.
   // Absent (or single-scope) on Company runs.
   scope_facts?: Record<string, Record<string, number | null>>;
+  scope_fact_details?: Record<
+    string,
+    Record<string, {
+      value: number | null;
+      value_status: string | null;
+      children_status: string | null;
+      source: string | null;
+      evidence: string | null;
+    }>
+  >;
 }
 
 // A value the reviewer can't check against the PDF (UX-QA #6): an editable
@@ -104,6 +114,10 @@ export function rowLacksSource(row: ConceptRow): boolean {
   // citation like "SOFP p.12" and falsely badge the row.
   if (parseEvidencePages(row.evidence).length > 0) return false;
   return parseEvidencePages(row.source).length === 0;
+}
+
+function rowHasOpenableSource(row: ConceptRow): boolean {
+  return parseEvidencePages(row.evidence).length > 0 || parseEvidencePages(row.source).length > 0;
 }
 
 export interface ConceptsPageProps {
@@ -128,6 +142,9 @@ export interface ConceptsPageProps {
   // this path once the Notes-tab link-out was removed). Optional — absent in
   // the standalone template view, where the button falls back to inert.
   onRegenerateNotes?: (runId: number) => void;
+  /** Open the unified review workspace directly on its persistent Notes
+   *  index/editor/source composition. Used by the run-detail Notes route. */
+  initialView?: "figures" | "notes";
 }
 
 type Period = "CY" | "PY";
@@ -164,6 +181,22 @@ function readWorkspacePreferences(runId: number | null): WorkspacePreferences {
   }
 }
 
+export function resolveInitialWorkspaceTemplate(
+  initialView: "figures" | "notes",
+  storedTemplate: string | null | undefined,
+  loadedTemplates: string[],
+): string | null {
+  if (initialView === "notes") return NOTES_KEY;
+  if (
+    storedTemplate &&
+    storedTemplate !== NOTES_KEY &&
+    loadedTemplates.includes(storedTemplate)
+  ) {
+    return storedTemplate;
+  }
+  return loadedTemplates[0] ?? null;
+}
+
 function valueEditKey(uuid: string, period: Period): string {
   return `${uuid}:${period}`;
 }
@@ -178,6 +211,23 @@ function periodValue(
     return scoped[period] ?? null;
   }
   return period === "CY" ? row.value ?? null : null;
+}
+
+function conceptForScope(
+  row: ConceptRow,
+  scope: "Company" | "Group",
+  period: Period = "CY",
+): ConceptRow {
+  const detail = row.scope_fact_details?.[scope]?.[period];
+  if (!detail) return row;
+  return {
+    ...row,
+    value: detail.value,
+    value_status: detail.value_status,
+    children_status: detail.children_status,
+    source: detail.source,
+    evidence: detail.evidence,
+  };
 }
 
 function isMandatoryConcept(row: ConceptRow): boolean {
@@ -224,6 +274,7 @@ export function ConceptsPage({
   benchmarkId = null,
   initialCrossChecks,
   onRegenerateNotes,
+  initialView = "figures",
 }: ConceptsPageProps) {
   const initialWorkspace = useRef<WorkspacePreferences>(readWorkspacePreferences(runId));
   // Gold-standard eval (v16): in benchmark mode we read/write gold facts; the
@@ -238,7 +289,13 @@ export function ConceptsPage({
   // didn't capture them — the headers stay plain "CY" / "PY".
   const [reportingCy, setReportingCy] = useState<string | null>(null);
   const [reportingPy, setReportingPy] = useState<string | null>(null);
-  const [activeTemplate, setActiveTemplate] = useState<string | null>(initialWorkspace.current.activeTemplate ?? null);
+  const [activeTemplate, setActiveTemplate] = useState<string | null>(
+    initialView === "notes"
+      ? NOTES_KEY
+      : initialWorkspace.current.activeTemplate === NOTES_KEY
+        ? null
+        : initialWorkspace.current.activeTemplate ?? null,
+  );
   const [loadError, setLoadError] = useState<string | null>(null);
   // Phase 2 (step 2.10): cross-template search.  We keep the search
   // index in the page rather than re-querying so multi-statement
@@ -399,13 +456,12 @@ export function ConceptsPage({
         setReportingCy(data.reporting_period_cy ?? null);
         setReportingPy(data.reporting_period_py ?? null);
         const loaded = (data.concepts || []) as ConceptRow[];
-        const firstTemplate = loaded[0]?.template_id || null;
-        const preferred = initialWorkspace.current.activeTemplate;
-        setActiveTemplate(
-          preferred && loaded.some((row) => row.template_id === preferred)
-            ? preferred
-            : firstTemplate,
-        );
+        const loadedTemplates = Array.from(new Set(loaded.map((row) => row.template_id)));
+        setActiveTemplate(resolveInitialWorkspaceTemplate(
+          initialView,
+          initialWorkspace.current.activeTemplate,
+          loadedTemplates,
+        ));
       })
       .catch((err) => {
         // AbortError is expected on cleanup — don't surface it.
@@ -415,7 +471,7 @@ export function ConceptsPage({
     return () => {
       controller.abort();
     };
-  }, [effectiveId, isBenchmark]);
+  }, [effectiveId, initialView, isBenchmark]);
 
   // Load the run's notes sheet names so the SheetNavigator can show Notes
   // sub-tabs. Run-only (the gold editor has no notes). A run with no notes
@@ -546,7 +602,7 @@ export function ConceptsPage({
             // Keep both the top-level value (Company linear runs) and the
             // scope_facts entry (Group runs) in sync so a scope/period
             // toggle after an edit still shows the new figure.
-            const next = {
+            const next: ConceptRow = {
               ...c,
               value: entity_scope === "Company" && period === "CY" ? v : c.value,
             };
@@ -556,6 +612,22 @@ export function ConceptsPage({
                 [entity_scope]: {
                   ...(c.scope_facts?.[entity_scope] || {}),
                   [period]: v,
+                },
+              };
+            }
+            if (c.scope_fact_details || period === "PY" || entity_scope !== "Company") {
+              const currentDetail = c.scope_fact_details?.[entity_scope]?.[period];
+              next.scope_fact_details = {
+                ...c.scope_fact_details,
+                [entity_scope]: {
+                  ...(c.scope_fact_details?.[entity_scope] || {}),
+                  [period]: {
+                    value: v,
+                    value_status: "user_override",
+                    children_status: currentDetail?.children_status ?? null,
+                    source: "manual edit",
+                    evidence: currentDetail?.evidence ?? null,
+                  },
                 },
               };
             }
@@ -746,15 +818,16 @@ export function ConceptsPage({
           check.target_row === row.render_row,
       );
     const matchesRowFilter = (row: ConceptRow) => {
+      const scopedRow = conceptForScope(row, activeScope);
       if (rowFilter === "all") return true;
       if (row.kind === "ABSTRACT") return false;
-      if (rowFilter === "attention") return rowHasIssue(row) || rowLacksSource(row);
+      if (rowFilter === "attention") return rowHasIssue(row) || rowLacksSource(scopedRow);
       if (rowFilter === "extracted") return row.kind !== "COMPUTED" && rowHasValue(row);
-      if (rowFilter === "edited") return rowWasEdited(row);
+      if (rowFilter === "edited") return rowWasEdited(scopedRow);
       if (rowFilter === "calculated") return row.kind === "COMPUTED" && rowHasValue(row);
-      if (rowFilter === "no_source") return rowLacksSource(row);
+      if (rowFilter === "no_source") return rowLacksSource(scopedRow);
       if (rowFilter === "blank") return Boolean(row.editable) && !rowHasValue(row);
-      return rowHasValue(row) || rowWasEdited(row) || rowHasIssue(row) || rowLacksSource(row) || isMandatoryConcept(row);
+      return rowHasValue(row) || rowWasEdited(scopedRow) || rowHasIssue(row) || rowLacksSource(scopedRow) || isMandatoryConcept(row);
     };
 
     const directMatches = baseRows.filter(matchesRowFilter);
@@ -807,6 +880,9 @@ export function ConceptsPage({
     selectedConceptUuid == null
       ? null
       : filtered.find((r) => r.concept_uuid === selectedConceptUuid) || null;
+  const selectedScopedConcept = selectedConcept
+    ? conceptForScope(selectedConcept, activeScope)
+    : null;
 
   // Memoised so the PDF pane isn't handed a fresh array on every unrelated
   // re-render (which would reset its current page + zoom). Keyed on the
@@ -816,10 +892,10 @@ export function ConceptsPage({
     // carries no page token, so a citation that lives in `source` (e.g.
     // "SOFP p.12") still drives the PDF pane instead of showing "no source
     // page recorded" (E7).
-    const fromEvidence = parseEvidencePages(selectedConcept?.evidence);
+    const fromEvidence = parseEvidencePages(selectedScopedConcept?.evidence);
     if (fromEvidence.length > 0) return fromEvidence;
-    return parseEvidencePages(selectedConcept?.source);
-  }, [selectedConcept?.evidence, selectedConcept?.source]);
+    return parseEvidencePages(selectedScopedConcept?.source);
+  }, [selectedScopedConcept?.evidence, selectedScopedConcept?.source]);
 
   // Clear the focused-note + coverage state on a run switch (this component is
   // reused across runs, not remounted). Without resetting notesCoverage /
@@ -844,6 +920,30 @@ export function ConceptsPage({
     setNotesPdfPages(pages);
     setNotesCellSelected(true);
   }, []);
+
+  // Audit panels are mounted beside this workspace and use the shared window
+  // event to request an exact notes cell. Keep the handler here, where the
+  // production editor state lives, so emitting the event is not mistaken for
+  // completed navigation.
+  useEffect(() => {
+    if (isBenchmark) return;
+    const onFocus = (event: Event) => {
+      const detail = (event as CustomEvent).detail;
+      if (!detail || typeof detail.sheet !== "string" || typeof detail.row !== "number") return;
+      setSearchQuery("");
+      setActiveTemplate(NOTES_KEY);
+      setActiveNotesSheet(detail.sheet);
+      setNotesPdfPages([]);
+      setNotesCellSelected(true);
+      setNotesFocusCell((current) => ({
+        sheet: detail.sheet,
+        row: detail.row,
+        key: (current?.key ?? 0) + 1,
+      }));
+    };
+    window.addEventListener("notes-coverage-focus", onFocus);
+    return () => window.removeEventListener("notes-coverage-focus", onFocus);
+  }, [isBenchmark, runId]);
 
   // The pages the Source PDF pane should show: a focused notes cell's pages
   // when the notes editor is active, otherwise the selected face concept's
@@ -1062,7 +1162,7 @@ export function ConceptsPage({
               : "Notes checklist"
           }
           testId="panel-notes-checklist"
-          defaultOpen={false}
+          defaultOpen={notesActive}
           keepMounted
         >
           <NotesCoverageNav
@@ -1128,7 +1228,7 @@ export function ConceptsPage({
           testId="panel-details"
           defaultOpen={false}
         >
-          <ConceptEvidenceBody concept={selectedConcept} />
+          <ConceptEvidenceBody concept={selectedScopedConcept} />
         </CollapsiblePanel>
       )}
     </div>
@@ -1156,7 +1256,7 @@ export function ConceptsPage({
       {/* Column 2 — Results + concept grid (always visible, flexes to fill).
           Sits directly beside the Source PDF so a value and the document page
           it came from are adjacent — no center-then-far-left eye travel. */}
-      <main style={styles.resultsCol}>
+      <section aria-label="Review results" style={styles.resultsCol}>
         <section style={styles.reviewHeader}>
           <div style={styles.titleRow}>
             <div>
@@ -1171,6 +1271,7 @@ export function ConceptsPage({
                     style={{ ...ui.buttonSecondary, ...ui.buttonSm }}
                     onClick={() => moveAttention(-1)}
                     aria-label="Previous issue"
+                    data-tooltip="Previous issue"
                   >
                     ←
                   </button>
@@ -1181,6 +1282,7 @@ export function ConceptsPage({
                     style={{ ...ui.buttonSecondary, ...ui.buttonSm }}
                     onClick={() => moveAttention(1)}
                     aria-label="Next issue"
+                    data-tooltip="Next issue"
                   >
                     →
                   </button>
@@ -1373,7 +1475,7 @@ export function ConceptsPage({
             pyLabel={reportingPy ? `PY (${reportingPy})` : "PY"}
           />
         )}
-      </main>
+      </section>
 
       {/* Column 3 — Source PDF, docked on the right so the value grid and its
           source page sit side by side. The resize handle is on the PDF's LEFT
@@ -1439,6 +1541,7 @@ function CollapsiblePanel({
       >
         <span style={styles.panelHeaderTitle}>{title}</span>
         <span
+          className="review-panel-chevron"
           style={{
             ...styles.panelChevron,
             transform: open ? "none" : "rotate(-90deg)",
@@ -1494,20 +1597,13 @@ function CollapsedRail({
   // A thin vertical button is easy to miss, so the rail carries an explicit
   // expand chevron at top + bottom and lifts to the accent colour on hover so
   // it clearly reads as "click to reveal" rather than a passive divider.
-  const [hover, setHover] = useState(false);
   return (
     <button
       type="button"
       data-testid={`col-show-${testId}`}
       onClick={onExpand}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      style={{
-        ...styles.collapsedRail,
-        background: hover ? pwc.orange50 : pwc.white,
-        borderColor: hover ? pwc.orange400 : pwc.grey200,
-        color: hover ? pwc.orange700 : pwc.grey700,
-      }}
+      className="review-collapsed-rail"
+      style={styles.collapsedRail}
       title={`Show ${label} panel`}
       aria-label={`Show ${label} panel`}
     >
@@ -1641,10 +1737,12 @@ function ConceptTree({
   return (
     <div
       role="tree"
+      className="concept-tree-shell"
       style={styles.tableShell}
     >
       <div
         role="row"
+        className="concept-tree-header"
         style={{ ...styles.treeHeaderRow, gridTemplateColumns: treeColumns(showPeriods) }}
       >
         {/* "Line item" (accountant vocabulary), not the internal "Concept"
@@ -1913,15 +2011,13 @@ function ConceptMatrixGrid({
                     textAlign: "right",
                     minWidth: 0,
                     background: selected ? pwc.orange50 : "transparent",
-                    boxShadow: selected
-                      ? `inset 0 -2px 0 ${pwc.orange400}`
-                      : undefined,
                     cursor: cell ? "pointer" : "default",
                   }}
                 >
                   {cell && cell.editable ? (
                     <EditableValueCell
                       uuid={cell.uuid}
+                      ariaLabel={`${g.label}, ${colLabels.get(col) || col}, ${activeScope}, ${period === "CY" ? "current" : "prior"} period`}
                       value={cell.values[period]}
                       onEditValue={onEditValue}
                       status={editStatus[valueEditKey(cell.uuid, period)]}
@@ -1996,6 +2092,7 @@ function ConceptRowView({
   // value at the alias coord); the backend already drops `editable` on
   // them, this is defence-in-depth in case the backend ever forgets.
   const isEditable = row.kind === "LEAF" && !isAlias;
+  const cyScopedRow = conceptForScope(row, activeScope, "CY");
   const cyValue = periodValue(row, activeScope, "CY");
   const pyValue = periodValue(row, activeScope, "PY");
   const cyIncompleteMandatory = isMandatory && isBlankValue(cyValue);
@@ -2013,11 +2110,12 @@ function ConceptRowView({
       ? cyValue != null || (showPeriods && pyValue != null)
         ? "Calculated"
         : ""
-      : displayValueStatus(row.value_status);
+      : displayValueStatus(cyScopedRow.value_status);
 
   return (
     <div
       ref={rowRef}
+      className="concept-tree-row"
       data-testid={`concept-row-${row.concept_uuid}`}
       data-kind={row.kind}
       // Section headers aren't selectable — they carry no value, so clicking
@@ -2056,6 +2154,7 @@ function ConceptRowView({
       }}
     >
       <div
+        className="concept-tree-label"
         title={
           isAlias
             ? `canonical: ${row.canonical_label} — linked to value from another sheet`
@@ -2110,7 +2209,7 @@ function ConceptRowView({
         {/* No-source badge (UX-QA #6): this value can't be checked against the
             PDF because no source page was recorded. Flag it for extra scrutiny
             rather than letting it look like any other verified row. */}
-        {rowLacksSource(row) && (
+        {rowLacksSource(cyScopedRow) && (
           <span
             data-testid={`no-source-chip-${row.concept_uuid}`}
             style={styles.noSourceChip}
@@ -2137,6 +2236,7 @@ function ConceptRowView({
             ) : isEditable ? (
               <EditableValueCell
                 uuid={row.concept_uuid}
+                ariaLabel={`${label}, ${activeScope}, current period`}
                 value={cyValue}
                 onEditValue={onEditValue}
                 status={cyStatus}
@@ -2167,6 +2267,7 @@ function ConceptRowView({
               ) : isEditable ? (
                 <EditableValueCell
                   uuid={row.concept_uuid}
+                  ariaLabel={`${label}, ${activeScope}, prior period`}
                   value={pyValue}
                   onEditValue={onEditValue}
                   status={pyStatus}
@@ -2192,7 +2293,7 @@ function ConceptRowView({
                     ? "error"
                     : isComputed
                     ? "neutral"
-                    : row.value_status === "user_override" ||
+                    : cyScopedRow.value_status === "user_override" ||
                       cyStatus === "saved" ||
                       pyStatus === "saved"
                     ? "accent"
@@ -2201,7 +2302,24 @@ function ConceptRowView({
               />
             ) : null}
           </div>
-          <div style={styles.sourceCell}>{displayConceptSource(row)}</div>
+          <div style={styles.sourceCell}>
+            {rowHasOpenableSource(cyScopedRow) ? (
+              <button
+                type="button"
+                className="concept-source-jump"
+                style={styles.sourceJump}
+                aria-label={`Open source for ${label}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onSelectRow(row.concept_uuid);
+                }}
+              >
+                {displayConceptSource(cyScopedRow)}
+              </button>
+            ) : (
+              <span>{displayConceptSource(cyScopedRow) || "—"}</span>
+            )}
+          </div>
         </>
       )}
     </div>
@@ -2410,9 +2528,9 @@ function SheetNavigator({
                 ...styles.sideNavItem,
                 // Highlight the template header only when it represents the
                 // current view (all sheets); a selected sub-sheet dims it.
-                background: active && activeSheet == null ? pwc.orange50 : pwc.white,
-                color: active && activeSheet == null ? pwc.orange700 : pwc.grey800,
-                borderColor: active ? pwc.orange400 : pwc.grey200,
+                background: active && activeSheet == null ? pwc.grey50 : pwc.white,
+                color: active && activeSheet == null ? pwc.grey900 : pwc.grey800,
+                borderColor: pwc.grey200,
                 fontWeight: active && activeSheet == null ? 600 : 500,
               }}
             >
@@ -2447,9 +2565,9 @@ function SheetNavigator({
                       onClick={() => onSelectSheet(tid, sheet)}
                       style={{
                         ...styles.sideNavSubItem,
-                        background: sheetActive ? pwc.orange50 : pwc.white,
-                        color: sheetActive ? pwc.orange700 : pwc.grey700,
-                        borderColor: sheetActive ? pwc.orange400 : pwc.grey200,
+                        background: sheetActive ? pwc.grey50 : pwc.white,
+                        color: sheetActive ? pwc.grey900 : pwc.grey700,
+                        borderColor: pwc.grey200,
                         fontWeight: sheetActive ? 600 : 400,
                       }}
                     >
@@ -2472,9 +2590,9 @@ function SheetNavigator({
             ...styles.sideNavItem,
             // Highlight the Notes header only when showing all notes; a
             // selected sub-tab dims it (mirrors the face-template behaviour).
-            background: notesActive && activeNotesSheet == null ? pwc.orange50 : pwc.white,
-            color: notesActive && activeNotesSheet == null ? pwc.orange700 : pwc.grey800,
-            borderColor: notesActive ? pwc.orange400 : pwc.grey200,
+            background: notesActive && activeNotesSheet == null ? pwc.grey50 : pwc.white,
+            color: notesActive && activeNotesSheet == null ? pwc.grey900 : pwc.grey800,
+            borderColor: pwc.grey200,
             fontWeight: notesActive && activeNotesSheet == null ? 600 : 500,
           }}
         >
@@ -2493,9 +2611,9 @@ function SheetNavigator({
                   onClick={() => onSelectNotesSheet(sheet)}
                   style={{
                     ...styles.sideNavSubItem,
-                    background: sheetActive ? pwc.orange50 : pwc.white,
-                    color: sheetActive ? pwc.orange700 : pwc.grey700,
-                    borderColor: sheetActive ? pwc.orange400 : pwc.grey200,
+                    background: sheetActive ? pwc.grey50 : pwc.white,
+                    color: sheetActive ? pwc.grey900 : pwc.grey700,
+                    borderColor: pwc.grey200,
                     fontWeight: sheetActive ? 600 : 400,
                   }}
                 >
@@ -2573,6 +2691,7 @@ const SAVE_DEBOUNCE_MS = 800;
 
 function EditableValueCell({
   uuid,
+  ariaLabel,
   value,
   onEditValue,
   status,
@@ -2582,6 +2701,7 @@ function EditableValueCell({
   compact = false,
 }: {
   uuid: string;
+  ariaLabel: string;
   value: number | null;
   onEditValue: EditValueFn;
   status?: "saving" | "saved" | "error";
@@ -2702,6 +2822,7 @@ function EditableValueCell({
       )}
       <input
         data-testid={inputTestId}
+        aria-label={ariaLabel}
         inputMode="decimal"
         title={status === "saved" ? "Saved" : undefined}
         value={displayValue}
@@ -2818,7 +2939,6 @@ const styles = {
     padding: `${pwc.space.md}px 0`,
     position: "sticky" as const,
     top: pwc.space.lg,
-    transition: "background 0.12s, border-color 0.12s, color 0.12s",
   } as React.CSSProperties,
   collapsedRailChevron: {
     fontSize: 14,
@@ -2876,7 +2996,6 @@ const styles = {
   panelChevron: {
     color: pwc.grey500,
     fontSize: 12,
-    transition: "transform 0.15s",
   } as React.CSSProperties,
   panelBody: {
     padding: pwc.space.lg,
@@ -3236,6 +3355,17 @@ const styles = {
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap" as const,
+  } as React.CSSProperties,
+  sourceJump: {
+    padding: 0,
+    border: 0,
+    background: "transparent",
+    color: pwc.black,
+    font: "inherit",
+    textDecoration: "underline",
+    textUnderlineOffset: 3,
+    cursor: "pointer",
+    textAlign: "left" as const,
   } as React.CSSProperties,
   matrixShell: {
     ...ui.card,

@@ -170,6 +170,16 @@ describe("SettingsModal — P3 enhancements", () => {
     );
   });
 
+  test("selected format swatches use a checkmark instead of an accent outline", async () => {
+    renderModal({ notes_table_style: {} });
+    const selected = await screen.findByRole("button", {
+      name: "Border colour: Default",
+    });
+    expect(selected).toHaveAttribute("aria-pressed", "true");
+    expect(selected.style.outline).toBe("none");
+    expect(selected.textContent).toContain("✓");
+  });
+
   test("an out-of-range font size is clamped BEFORE the save (no 400)", async () => {
     // Typing an out-of-range value used to POST it raw and get rejected
     // (peer-review HIGH #2). The save now debounces + clamps via
@@ -350,7 +360,7 @@ describe("SettingsModal — P3 enhancements", () => {
     );
   });
 
-  test("uses PwC theme colors for validation states", async () => {
+  test("uses the focused-workspace text role for validation states", async () => {
     renderModal();
     await waitFor(() => expect(screen.getByDisplayValue(defaultSettings.model)).toBeInTheDocument());
 
@@ -361,9 +371,8 @@ describe("SettingsModal — P3 enhancements", () => {
 
     await waitFor(() => {
       const errorText = screen.getByText(/Model name is required/);
-      // Error text uses the readable errorText role (#C0303A → rgb(192, 48, 58))
-      // — the bright error hue is reserved for icons/borders (design system v3).
-      expect(errorText.getAttribute("style")).toContain("rgb(192, 48, 58)");
+      // The canonical system keeps text black and uses orange only for local cues.
+      expect(errorText.getAttribute("style")).toContain("rgb(0, 0, 0)");
     });
   });
 });

@@ -26,6 +26,18 @@ describe("VariantSelector", () => {
     expect(selects).toHaveLength(5);
   });
 
+  test("each format selector is named for its statement", () => {
+    render(
+      <VariantSelector
+        selections={emptySelections}
+        enabledStatements={["SOFP", "SOPL", "SOCI", "SOCF", "SOCIE"]}
+        onChange={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("combobox", { name: /format for SOFP/i })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: /format for SOCF/i })).toBeInTheDocument();
+  });
+
   test("always renders all 5 dropdowns; disables those not in enabledStatements", () => {
     render(
       <VariantSelector

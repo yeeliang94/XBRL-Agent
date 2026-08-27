@@ -75,8 +75,13 @@ export function SettingsPage({ isAdmin, currentEmail }: Props) {
               aria-selected={active}
               tabIndex={active ? 0 : -1}
               className="pwc-tab"
+              onPointerDown={(e) => e.currentTarget.setAttribute("data-pointer-focus", "true")}
+              onBlur={(e) => e.currentTarget.removeAttribute("data-pointer-focus")}
               onClick={() => setActiveTab(t.key)}
-              onKeyDown={(e) => onTabKeyDown(e, i)}
+              onKeyDown={(e) => {
+                e.currentTarget.removeAttribute("data-pointer-focus");
+                onTabKeyDown(e, i);
+              }}
               style={active ? styles.tabActive : styles.tab}
             >
               {t.label}
@@ -123,7 +128,7 @@ const styles = {
   tabBar: {
     ...ui.tabBar,
   } as React.CSSProperties,
-  // Shared underline tab geometry; active = dark text + orange indicator.
+  // Shared surface-tab geometry; active = dark text + quiet fill.
   tab: ui.tab,
   tabActive: {
     ...ui.tab,

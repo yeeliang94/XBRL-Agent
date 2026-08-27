@@ -74,6 +74,7 @@ export function SuccessToast({ toast, onDismiss }: SuccessToastProps) {
     <div
       role="status"
       aria-live="polite"
+      className="pwc-toast-enter"
       style={{
         ...styles.toast,
         background: palette.background,
@@ -87,6 +88,7 @@ export function SuccessToast({ toast, onDismiss }: SuccessToastProps) {
         type="button"
         onClick={onDismiss}
         aria-label="Dismiss notification"
+        data-tooltip="Dismiss notification"
         style={{ ...styles.closeBtn, color: palette.accent }}
       >
         <CloseIcon />
@@ -110,10 +112,6 @@ const styles = {
     fontFamily: pwc.fontBody,
     fontSize: 14,
     minWidth: 260,
-    // Arrive from the right edge with a fade instead of popping into place.
-    // Entrance only — dismiss stays instant (kept simple on purpose so the
-    // ref-stable auto-dismiss timer is untouched). Reduced-motion zeroes it.
-    animation: `slide-in-right ${pwc.motion.duration.base} ${pwc.motion.easing}`,
   } as React.CSSProperties,
   message: {
     flex: 1,

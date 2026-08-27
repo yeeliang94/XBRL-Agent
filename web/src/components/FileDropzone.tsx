@@ -87,6 +87,7 @@ export function FileDropzone({
         onClick={() => inputRef.current?.click()}
         disabled={disabled}
         aria-label={`${label}. ${buttonLabel}`}
+        className={`file-drop-zone${isDragging ? " is-dragging" : ""}`}
         style={{
           ...styles.dropZone,
           ...(isDragging ? styles.dropZoneDragging : {}),
@@ -95,8 +96,8 @@ export function FileDropzone({
       >
         <svg
           aria-hidden="true"
-          width="28"
-          height="28"
+          width="46"
+          height="56"
           viewBox="0 0 24 24"
           fill="none"
           stroke={pwc.grey500}
@@ -110,6 +111,7 @@ export function FileDropzone({
           <polyline points="9.5 14.5 12 12 14.5 14.5" />
         </svg>
         <span style={styles.dropText}>{label}</span>
+        {children}
         <span
           aria-hidden="true"
           className={uiClass.btnPrimary}
@@ -117,7 +119,6 @@ export function FileDropzone({
         >
           {buttonLabel}
         </span>
-        {children}
       </button>
       <input
         ref={inputRef}
@@ -141,17 +142,17 @@ const styles = {
     flexDirection: "column" as const,
     alignItems: "center",
     justifyContent: "center",
-    gap: pwc.space.md,
-    borderWidth: 2,
+    gap: pwc.space.sm,
+    minHeight: 230,
+    borderWidth: 1.5,
     borderStyle: "dashed",
     borderColor: pwc.grey300,
     borderRadius: pwc.radius.lg,
-    padding: `${pwc.space.xl}px ${pwc.space.xl}px`,
+    padding: 34,
     textAlign: "center" as const,
-    background: pwc.grey50,
+    background: pwc.white,
     cursor: "pointer",
     fontFamily: pwc.fontBody,
-    transition: `border-color ${pwc.motion.duration.fast} ${pwc.motion.easing}, background ${pwc.motion.duration.fast} ${pwc.motion.easing}`,
   } as React.CSSProperties,
   dropZoneDragging: {
     borderColor: pwc.orange500,
@@ -163,8 +164,9 @@ const styles = {
   } as React.CSSProperties,
   dropText: {
     fontFamily: pwc.fontBody,
-    color: pwc.grey700,
-    fontSize: 15,
+    color: pwc.black,
+    fontSize: 18,
+    fontWeight: pwc.weight.semibold,
     margin: 0,
   } as React.CSSProperties,
   chooseButton: {

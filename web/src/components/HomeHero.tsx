@@ -9,17 +9,10 @@ import { RecentRunsList } from "./RecentRunsList";
 import { ConfirmDialog } from "./ConfirmDialog";
 
 // ---------------------------------------------------------------------------
-// HomeHero — the homepage landing layout (PLAN-homepage-redesign.md).
-//
-// Single column, three stacked sections in the empty landing state:
-//   1. Stat tiles — high-level counts across the top.
-//   2. Upload — the drop zone (passed in as children).
-//   3. Recent runs — history pane at the bottom.
-//
-// The upload card (children) is rendered in a stable tree position so it
-// never remounts when the page leaves the empty state (`active` → false),
-// preserving its internal upload state. When inactive, only the upload card
-// shows — the stats + history sections collapse away.
+// HomeHero — the Work queue data surface from Direction A. The production
+// queue supplies no upload child: New extraction is a separate destination.
+// A stable child slot remains for an uploaded draft/live run so upload state
+// does not remount while its pipeline workspace takes over the page.
 //
 // HomeHero owns the stats + recents fetch. Any failure degrades to
 // placeholders in the child components rather than blocking the upload card.
@@ -35,7 +28,7 @@ export interface HomeHeroProps {
   onOpenRun: (runId: number) => void;
   /** Jump to the full History list. */
   onViewAllRuns: () => void;
-  /** The upload card (middle section). */
+  /** Stable non-queue workspace slot used after choosing a document. */
   children: React.ReactNode;
 }
 
@@ -119,9 +112,8 @@ export function HomeHero({
 
   return (
     <div style={styles.stack}>
-      {/* Upload leads — it is the page's primary purpose. Rendering it first
-          ALWAYS (active or not) keeps UploadPanel in a stable tree position
-          so it never remounts and loses upload state. */}
+      {/* Production Work queue passes no child; draft/live work keeps this
+          stable slot mounted while the pipeline state changes. */}
       {children}
 
       {active && (
@@ -170,8 +162,7 @@ export function HomeHero({
 }
 
 const styles = {
-  // Single-column stack: stats band → upload → history pane. Generous gap so
-  // the three sections read as distinct bands rather than a cramped list.
+  // Single-column Direction A stack with whitespace between work regions.
   stack: {
     display: "flex",
     flexDirection: "column" as const,

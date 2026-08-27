@@ -17,7 +17,7 @@ interface EmptyStateProps {
 
 export function EmptyState({ title, explanation, action, style }: EmptyStateProps) {
   return (
-    <div style={{ ...ui.emptyState, ...style }}>
+    <div className="pwc-empty-state" style={{ ...ui.emptyState, ...style }}>
       <div
         style={{
           fontFamily: pwc.fontHeading,

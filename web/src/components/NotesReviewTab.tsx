@@ -578,7 +578,7 @@ export function NotesReviewTab({ runId, onRegenerate, focusSheet, focusCell, onA
 
       {isEmpty && (
         <p style={styles.dim}>
-          This run did not include note extraction.
+          No notes were extracted for this run. Review the configured notes scope and re-extract if disclosures were expected.
         </p>
       )}
 
@@ -863,12 +863,7 @@ function SheetSection({
   return (
     <section
       ref={sectionRef}
-      style={{
-        ...styles.sheetSection,
-        // Orange left accent when open draws the eye to the active section
-        // and visually separates an expanded sheet from its collapsed peers.
-        borderLeftColor: expanded ? pwc.orange500 : pwc.grey300,
-      }}
+      style={styles.sheetSection}
     >
       <div style={styles.sheetHeadingButton}>
         {/* Button-inside-h4 keeps the heading role so
@@ -1490,6 +1485,7 @@ function CellRow({
     <div
       data-testid="notes-review-row"
       data-cell-row={cell.row}
+      className="notes-review-row"
       style={styles.cellRow}
       // Focusing (click or keyboard-tab) any part of this row tells the
       // workspace which PDF pages the note came from, so the Source PDF pane
@@ -1639,6 +1635,7 @@ function NumericCellRow({
     <div
       data-testid="notes-numeric-row"
       data-cell-row={cell.row}
+      className="notes-review-row"
       style={styles.cellRow}
       onFocusCapture={() => reportCellPages(cell.source_pages, onActiveCellPages)}
       onMouseDown={() => reportCellPages(cell.source_pages, onActiveCellPages)}
@@ -1794,6 +1791,7 @@ function EditorToolbar({ editor }: { editor: Editor }) {
       type="button"
       aria-label={ariaLabel}
       title={ariaLabel}
+      data-tooltip={ariaLabel}
       style={active ? styles.toolbarButtonActive : styles.toolbarButton}
       {...guarded(onClick)}
     >
@@ -1843,6 +1841,7 @@ function EditorToolbar({ editor }: { editor: Editor }) {
         type="button"
         title={s.label}
         aria-label={`${kind === "text" ? "Text colour" : "Highlight"} ${s.label}`}
+        data-tooltip={`${kind === "text" ? "Text colour" : "Highlight"} ${s.label}`}
         {...guarded(apply)}
         style={{
           ...styles.swatchButton,
@@ -1955,6 +1954,7 @@ function EditorToolbar({ editor }: { editor: Editor }) {
                 aria-label={`Border colour ${label}`}
                 aria-pressed={borderPaint === color}
                 title={`Use ${label.toLowerCase()} for the border buttons`}
+                data-tooltip={`Border colour ${label}`}
                 // Select-only: pick the colour, then click an edge / All to
                 // paint it. Decoupling colour from application is what lets a
                 // cell hold a different colour per side.
@@ -1974,6 +1974,7 @@ function EditorToolbar({ editor }: { editor: Editor }) {
               aria-label="Border colour erase"
               aria-pressed={eraseActive}
               title="Erase the chosen edge(s) — no line, not the grey grid"
+              data-tooltip="Border colour erase"
               {...guarded(() => setBorderPaint(BORDER_HIDDEN))}
               style={{
                 ...styles.swatchButton,
@@ -2362,8 +2363,8 @@ const styles = {
   } as React.CSSProperties,
   // A small constrained-palette colour/highlight swatch button.
   swatchButton: {
-    width: 19,
-    height: 19,
+    width: 28,
+    height: 28,
     padding: 0,
     border: `1px solid ${pwc.grey300 ?? "#d1d5db"}`,
     borderRadius: 3,
@@ -2376,8 +2377,8 @@ const styles = {
     justifyContent: "center",
   } as React.CSSProperties,
   toolbarButton: {
-    minWidth: 25,
-    height: 23,
+    minWidth: 28,
+    height: 28,
     padding: "2px 5px",
     fontSize: 13,
     fontFamily: pwc.fontBody,
@@ -2391,8 +2392,8 @@ const styles = {
     justifyContent: "center",
   } as React.CSSProperties,
   toolbarButtonActive: {
-    minWidth: 25,
-    height: 23,
+    minWidth: 28,
+    height: 28,
     padding: "2px 5px",
     fontSize: 13,
     fontFamily: pwc.fontBody,

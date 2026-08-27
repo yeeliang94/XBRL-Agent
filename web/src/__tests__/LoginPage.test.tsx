@@ -57,7 +57,7 @@ describe("LoginPage", () => {
   test("Sign in uses the accessible action colour, not signature orange (CS5)", () => {
     render(<LoginPage onAuthenticated={() => {}} />);
     const btn = screen.getByRole("button", { name: /sign in/i });
-    expect(btn.style.backgroundColor).toBe("rgb(198, 61, 0)"); // color.action.primary
+    expect(btn.style.backgroundColor).toBe("rgb(0, 0, 0)");
   });
 
   test("stays at the Authentication width (380px card)", () => {

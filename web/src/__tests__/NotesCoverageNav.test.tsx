@@ -66,6 +66,17 @@ describe("NotesCoverageNav", () => {
     expect(onSelectNote).toHaveBeenCalledWith(PLACED);
   });
 
+  test("filters the persistent note index by number or title", async () => {
+    mockCoverage(SAMPLE);
+    render(<NotesCoverageNav runId={42} onSelectNote={() => {}} />);
+    const search = await screen.findByRole("searchbox", { name: "Search notes" });
+    fireEvent.change(search, { target: { value: "conting" } });
+    expect(screen.queryByTestId("coverage-nav-note-5")).toBeNull();
+    expect(screen.getByTestId("coverage-nav-note-8")).toBeTruthy();
+    fireEvent.change(search, { target: { value: "5" } });
+    expect(screen.getByTestId("coverage-nav-note-5")).toBeTruthy();
+  });
+
   test("highlights the note whose sheet is currently shown", async () => {
     mockCoverage(SAMPLE);
     render(

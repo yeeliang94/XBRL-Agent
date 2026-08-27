@@ -41,6 +41,7 @@ const styles = {
     display: "flex",
     alignItems: "center",
     gap: pwc.space.md,
+    minWidth: 0,
   } as React.CSSProperties,
   label: {
     fontFamily: pwc.fontHeading,
@@ -52,6 +53,7 @@ const styles = {
   } as React.CSSProperties,
   select: {
     flex: 1,
+    minWidth: 0,
     padding: `${pwc.space.sm}px ${pwc.space.md}px`,
     border: `1px solid ${pwc.grey200}`,
     borderRadius: pwc.radius.md,
@@ -64,6 +66,7 @@ const styles = {
   } as React.CSSProperties,
   selectDisabled: {
     flex: 1,
+    minWidth: 0,
     padding: `${pwc.space.sm}px ${pwc.space.md}px`,
     border: `1px solid ${pwc.grey100}`,
     borderRadius: pwc.radius.md,
@@ -130,6 +133,7 @@ export function VariantSelector({
             </span>
             <select
               role="combobox"
+              aria-label={`Format for ${stmt} — ${STATEMENT_LABELS[stmt]}`}
               value={sel.variant}
               disabled={!isEnabled}
               onChange={(e) =>

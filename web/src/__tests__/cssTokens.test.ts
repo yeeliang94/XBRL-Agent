@@ -31,8 +31,7 @@ const INDEX_TOKENS = [
 ] as const;
 
 const NOTES_TOKENS = [
-  "orange500", // editor focus border
-  "orange50", // editor focus ring
+  "black", // editor focus border
   "grey100", // table header bg
   "grey300", // editor + table cell borders
   "grey800", // editor body text

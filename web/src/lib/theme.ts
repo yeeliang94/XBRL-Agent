@@ -1,84 +1,79 @@
-// PwC design tokens — the single cascade point for the whole web UI.
-// ~30 components import this `pwc` object and build inline styles from it
-// (CLAUDE.md gotcha #7 bans a utility framework like Tailwind), so changing a
-// value here re-themes the app. Values are anchored to the committed
-// reference at docs/pwc-design-system.html. Token NAMES are kept stable so
-// the cascade doesn't break; new tokens are added rather than renamed.
+// XBRL focused-workspace design tokens — the single cascade point for the
+// whole web UI. `pwc` remains the object name only for source compatibility
+// with existing imports; docs/xbrl-design-system.html and Direction A in
+// docs/prototype-ui-overhaul.html are the visual source of truth.
 //
 // NOTE: several frontend tests assert the exact rgb() form of these hexes.
 // Change a value and update its pinning test in the same commit.
 export const pwc = {
-  // Primary
-  // @deprecated — pure #000000 is not used anywhere in the UI; the ink is
-  // grey900 (#1A1A1A). Kept only for token-name stability; do not consume.
+  // Primary — the focused-workspace visual language is deliberately narrow:
+  // black and white carry hierarchy, while orange is reserved for identity,
+  // current activity, and attention.
   black: '#000000',
   white: '#FFFFFF',
   orange500: '#FD5108',   // Core orange (Pantone 1655C) — primary accent, active states, links
-  orange700: '#E0470A',   // Darkened orange — hover / pressed states
+  orange700: '#D64000',   // Accessible orange for small text and interactive labels
   orange400: '#FE7C39',   // Light accent — progress bars, active indicators
   orange300: '#FFAA72',   // Tint
   orange200: '#FFCDA8',   // Tint
   orange100: '#FFE8D4',   // Tint — backgrounds for highlighted content
   orange50:  '#FFF5ED',   // Subtle tint — hover backgrounds, empty field highlight, focus ring
 
-  // Greys — pure-neutral scale (was blue-tinted; now matches the design
-  // system's neutral ladder). Mapped by visual role so layouts don't shift.
-  grey50:  '#FAFAFA',     // Page background (design n-25)
-  grey100: '#F4F4F4',     // Card backgrounds, alternating rows, table headers (n-50)
-  grey200: '#DEDEDE',     // Borders, dividers (n-200)
-  grey300: '#C9C9C9',     // Strong borders, disabled text, pending connectors (n-300)
-  grey500: '#7D7D7D',     // Secondary / muted text, timestamps (n-500)
-  grey700: '#5E5E5E',     // Tertiary text, field labels (n-600)
-  grey800: '#2D2D2D',     // Body text (n-800)
-  grey900: '#1A1A1A',     // Headings, primary text (n-900)
+  // Greys — the cool-neutral ladder defined by the XBRL focused-workspace
+  // specification. Existing token names stay stable for component consumers.
+  grey50:  '#F5F7F8',
+  grey100: '#EEEFF1',
+  grey200: '#DFE3E6',
+  grey300: '#CBD1D6',
+  grey400: '#B5BCC4',
+  grey500: '#6B7280',     // Readable muted text and essential control boundaries
+  grey700: 'rgba(0, 0, 0, 0.64)', // compatibility alias: secondary text
+  grey800: '#000000',              // compatibility alias: primary text
+  grey900: '#000000',
 
   // Semantic — bright, clean status family pitched to sit on the light theme
   // without going dark or muddy (design-system Color section). Base hues drive
   // dots, icons and left-rules; the *Text tokens below carry status LABELS.
-  success:      '#1FAB76',  // Fresh green — completed steps, success dot/border
-  warning:      '#EFA417',  // Warm gold — caution dot/border/left-rule
-  error:        '#E5484D',  // Clean red — errors, failed states
-  info:         '#3E84CC',  // Clean blue — informational states
-  // @deprecated — violet is the one off-palette hue and no component reads
-  // it (agent-reasoning surfaces use neutral/info). Kept for token-name
-  // stability only; do not consume.
-  thinking:     '#8B5CF6',
+  success:      '#000000',  // Finished — black, always paired with text/icon
+  warning:      '#FD5108',  // Attention — orange, always paired with text/icon
+  error:        '#FD5108',  // Blocking/failed — orange plus explicit error copy
+  info:         '#000000',  // Information stays monochrome
+  thinking:     '#6B7280', // @deprecated compatibility alias
 
   // Status text — darker shade of each hue, AA-legible on neutral/light
   // surfaces. Carries status LABELS and inline coloured text (card deltas,
   // do/don't headers); the bright base hue is for dots/icons/borders.
-  successText:  '#157A53',  // Foreground text for success status
-  errorText:    '#C0303A',  // Strong error text (headings, badge labels)
-  errorTextAlt: '#D14A4E',  // Secondary error text (body copy, tracebacks)
-  warningText:  '#8A6111',  // Warning status text
-  infoText:     '#2C6299',  // Info status text
+  successText:  '#000000',
+  errorText:    '#000000',
+  errorTextAlt: 'rgba(0, 0, 0, 0.64)',
+  warningText:  '#000000',
+  infoText:     '#000000',
 
   // Soft tints — RESERVED for rare emphasis (e.g. highlighting one
   // reconciliation row), NOT the default surface for badges/alerts (those are
   // now outline/left-rule on a neutral surface). Light, airy, near-neutral
   // versions of the hues above; centralized so the look can be themed in one
   // place instead of replicating literals across components.
-  successBg:    '#E8F6EF',  // Tinted background for rare success emphasis
-  successBorder:'#C8E9DA',  // Border colour that pairs with successBg
-  errorBg:      '#FCECEC',  // Tinted background for rare error emphasis
-  errorBorder:  '#F6D5D6',  // Border colour that pairs with errorBg
-  infoBg:       '#EAF2FB',  // Tinted background for rare info emphasis
-  infoBorder:   '#D2E2F3',  // Border colour that pairs with infoBg
-  warningBg:     '#FCF3DF',
-  warningBorder: '#F3E2BB',
+  successBg:    '#F5F7F8',
+  successBorder:'#CBD1D6',
+  errorBg:      '#FFF5ED',
+  errorBorder:  '#FFCDA8',
+  infoBg:       '#F5F7F8',
+  infoBorder:   '#DFE3E6',
+  warningBg:     '#FFF5ED',
+  warningBorder: '#FFCDA8',
 
-  // Typography — single Helvetica Neue family across the system (no licensed
-  // PwC corporate face available). Hierarchy comes from SIZE, not a wide weight
-  // range: two text weights carry everything (design system Typography).
-  fontHeading: '"Helvetica Neue", Helvetica, Arial, system-ui, sans-serif',
-  fontBody:    '"Helvetica Neue", Helvetica, Arial, system-ui, sans-serif',
-  fontMono:    '"SF Mono", ui-monospace, Menlo, Consolas, monospace',
+  // Typography — Inter where available, then the native UI stack. Hierarchy
+  // stays intentionally compact: page, section, body.
+  fontHeading: '"Inter Variable", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  fontBody:    '"Inter Variable", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  fontMono:    '"SFMono-Regular", Consolas, "Liberation Mono", monospace',
 
   // Weight scale. Product UI uses TWO text weights — regular (body/data) +
   // semibold (titles/headings/emphasis/labels); medium only on interactive
   // controls. `light` (300) is retained for token-name stability but is NOT
   // used in product UI (it reads as a different typeface); never 700+.
-  weight: { light: 300, regular: 400, medium: 500, semibold: 600 },
+  weight: { light: 300, regular: 400, medium: 650, semibold: 680, bold: 700 },
 
   // Spacing scale (px) — 4px base. xxxl/xxxxl added to match the design
   // system's larger section rhythm (s-7 / s-8).
@@ -88,26 +83,22 @@ export const pwc = {
   // dense cells / compact references · md for buttons, inputs, alerts ·
   // lg for cards and panels · xl only for large feature surfaces · pill for
   // toggles and exceptional compact tags.
-  radius: { sm: 3, md: 6, lg: 8, xl: 10, pill: 999 },
+  radius: { sm: 6, md: 8, lg: 12, xl: 12, pill: 999 },
 
-  // Shadows — soft, low-contrast, diffuse (design system's three levels).
+  // Resting surfaces are flat. Only UI that overlaps content may float.
   shadow: {
-    // Resting elevation for cards. Two faint layers read cleaner than a
-    // single hard drop-shadow when cards nest (the review workspace stacks
-    // several).
-    card: '0 1px 2px rgba(26,26,25,0.04), 0 1px 3px rgba(26,26,25,0.06)',
-    elevated: '0 2px 4px rgba(26,26,25,0.04), 0 4px 12px rgba(26,26,25,0.07)',
-    modal: '0 8px 28px rgba(26,26,25,0.10)',
+    card: 'none',
+    elevated: '0 14px 40px rgba(0, 0, 0, 0.12)',
+    modal: '0 14px 40px rgba(0, 0, 0, 0.12)',
   },
 
-  // Motion — one restraint budget for the whole UI ("depth felt, not seen").
-  // Every transition/animation reads from these so nothing is bouncy or slow;
-  // a single decelerate curve (no overshoot) and three short durations. A
-  // global prefers-reduced-motion block in index.css zeroes these out.
+  // Motion — short, purposeful transitions that clarify causality. Components
+  // animate transform/opacity only; progress state itself always updates
+  // immediately. Reduced-motion parity is enforced globally in index.css.
   motion: {
-    duration: { fast: '150ms', base: '200ms', slow: '250ms' },
-    // Decelerate, no overshoot — enterprise-calm, never playful.
+    duration: { instant: '100ms', fast: '140ms', base: '180ms', slow: '240ms' },
     easing: 'cubic-bezier(0.2, 0, 0, 1)',
+    easingEmphasized: 'cubic-bezier(0.16, 1, 0.3, 1)',
   },
 } as const;
 
@@ -124,13 +115,13 @@ export const pwc = {
 // ---------------------------------------------------------------------------
 // Accessible action values (plan: app-wide design consistency). Semantic and
 // independently changeable from signature orange.
-const ACTION_PRIMARY = '#C63D00';
-const ACTION_PRIMARY_HOVER = '#A83A00';
+const ACTION_PRIMARY = '#000000';
+const ACTION_PRIMARY_HOVER = '#000000';
 
 export const tokens = {
   color: {
-    // Signature orange is IDENTITY — marks, rules, progress, active
-    // indicators. It is not the default button fill or small-text colour.
+    // Signature orange is IDENTITY — marks, progress and compact attention
+    // icons. Interactive selection uses surfaces, never accent edge lines.
     brand: {
       accent: pwc.orange500,
       indicator: pwc.orange500,
@@ -144,27 +135,28 @@ export const tokens = {
       quietHover: pwc.grey100,
     },
     text: {
-      primary: pwc.grey900,     // headings, primary content
-      body: pwc.grey800,        // ordinary copy
-      secondary: pwc.grey700,   // helper/metadata text — smallest readable role
-      muted: pwc.grey500,       // decorative/disabled-adjacent ONLY (low contrast)
+      primary: pwc.black,
+      body: pwc.black,
+      secondary: 'rgba(0, 0, 0, 0.64)',
+      muted: 'rgba(0, 0, 0, 0.46)',
       onAction: pwc.white,      // text on a filled primary action
     },
     border: {
       subtle: pwc.grey200,      // hairline dividers, card borders
       strong: pwc.grey300,      // decorative emphasis borders, disabled
-      control: pwc.grey500,     // essential control boundaries (WCAG 3:1)
+      control: pwc.grey500,
     },
     focus: {
-      ring: ACTION_PRIMARY,     // form-control focus border
-      halo: pwc.orange50,       // soft supporting halo (never the only signal)
-      strong: pwc.grey900,      // two-part focus outline for buttons/links
+      ring: pwc.black,
+      halo: pwc.grey100,
+      strong: pwc.black,
     },
   },
   surface: {
-    canvas: pwc.grey50,         // page background
-    default: pwc.white,         // cards, panels, controls
-    sunken: pwc.grey100,        // insets, table headers, alternating rows
+    canvas: pwc.white,
+    default: pwc.white,
+    sunken: pwc.grey50,
+    navigation: pwc.grey50,
   },
   space: {
     inset: pwc.space.md,        // dense inner padding
@@ -183,8 +175,8 @@ export const tokens = {
   layout: {
     auth: 380,                  // Login
     form: 840,                  // Settings, focused configuration forms
-    standard: 1120,             // New extraction, Benchmarks, Evaluation suites
-    wideList: 1440,             // Runs, Field labels
+    standard: 1500,
+    wideList: 1500,
     // Workspace mode (run report, Figures, PDF review) is full available width.
   },
 } as const;
@@ -213,7 +205,6 @@ export const component = {
   },
   nav: {
     activeText: tokens.color.text.primary,
-    activeIndicator: tokens.color.brand.indicator,
     hoverSurface: tokens.surface.canvas,
   },
 } as const;

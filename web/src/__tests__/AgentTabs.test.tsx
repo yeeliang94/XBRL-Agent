@@ -1,5 +1,5 @@
-import { describe, test, expect } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { describe, test, expect, vi } from "vitest";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 import { AgentTabs, areAgentTabsPropsEqual, type AgentTabState } from "../components/AgentTabs";
 import type { AgentTabsProps } from "../components/AgentTabs";
 
@@ -123,10 +123,57 @@ describe("AgentTabs", () => {
     // Running shows spinner indicator
     const sofpTab = screen.getByRole("tab", { name: /SOFP/ });
     expect(sofpTab.querySelector("[data-status='running']")).toBeTruthy();
+    expect(sofpTab.querySelector(".pwc-working-indicator")).toBeTruthy();
 
     // Pending shows dot
     const soplTab = screen.getByRole("tab", { name: /SOPL/ });
     expect(soplTab.querySelector("[data-status='pending']")).toBeTruthy();
+  });
+
+  test("filters the roster without changing status truth", () => {
+    const agents = makeAgentStates();
+    const onTabClick = vi.fn();
+    render(
+      <AgentTabs
+        agents={agents}
+        tabOrder={Object.keys(agents)}
+        activeTab="sofp_0"
+        onTabClick={onTabClick}
+      />,
+    );
+
+    const tablist = screen.getByRole("tablist", { name: "Run workstreams" });
+    expect(within(tablist).queryByRole("button", { name: "Finished" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Finished" }));
+    expect(screen.getByRole("tab", { name: /Scout/ })).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: /SOFP/ })).toBeNull();
+    expect(screen.getByRole("tab", { name: /Scout/ })).toHaveAttribute("tabindex", "0");
+    expect(onTabClick).toHaveBeenCalledWith("scout");
+    fireEvent.click(screen.getByRole("button", { name: "Working" }));
+    expect(screen.getByRole("tab", { name: /SOFP/ })).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: /Scout/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "Working" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  test("explains an empty filtered roster", () => {
+    const agents: Record<string, AgentTabState> = {
+      scout: { agentId: "scout", label: "Scout", status: "complete", role: "scout" },
+      sofp_0: { agentId: "sofp_0", label: "SOFP", status: "complete", role: "SOFP" },
+    };
+    render(
+      <AgentTabs
+        agents={agents}
+        tabOrder={Object.keys(agents)}
+        activeTab="sofp_0"
+        onTabClick={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Working" }));
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "No agents match the Working filter.",
+    );
   });
 
   test("failed status renders error badge", () => {
@@ -275,6 +322,14 @@ describe("AgentTabs", () => {
         agents: { sofp_0: { ...baseAgent, subLabel: "2/5 done" } },
       };
       expect(areAgentTabsPropsEqual(a, b)).toBe(false);
+    });
+
+    test("flag-only change invalidates equality so attention never goes stale", () => {
+      const flagged: AgentTabsProps = {
+        ...baseProps,
+        agents: { sofp_0: { ...baseAgent, flag: "Balance requires review" } },
+      };
+      expect(areAgentTabsPropsEqual(baseProps, flagged)).toBe(false);
     });
 
     test("same subLabel (including undefined ↔ undefined) preserves equality", () => {
