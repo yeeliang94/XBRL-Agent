@@ -1441,12 +1441,46 @@ def _sub_agent_sink_write(
             deps.failed_write_notes.add(int(p.note_num))
     # A payload that failed to construct carries no note number at all.
     deps.unattributed_write_failures += len(parse_errors)
-    # Supersede-on-resend: source-copy correction can re-send a row with
-    # equivalent content. In sink mode
-    # multiple payloads for one row are normally CONCATENATED at the final
-    # write (`_combine_payloads`), which would duplicate the content — so an
-    # accepted payload replaces any earlier sink entry that resolves to the
-    # same TEMPLATE ROW with equivalent content instead of piling on.
+    # Supersede-on-resend. One write_notes CALL may contain several deliberate
+    # chunks for the same note and row; those chunks stay together. A LATER
+    # call for that same attributed note and resolved row is a revision of the
+    # complete note, so it replaces every earlier-call chunk. Without this
+    # call-boundary rule, a sub-agent that re-read the PDF and corrected a
+    # table (for example by adding a missing reference column) kept both the
+    # incomplete and corrected versions in the sink, and the final writer
+    # concatenated them into one field.
+    #
+    # Payloads without note_num retain the narrower equivalent-content rule;
+    # guessing their identity from prose would violate the LLM-judgement-only
+    # routing contract. Different notes may still deliberately share a catch-
+    # all row because replacement is scoped by BOTH note_num and resolved row.
+    revision_targets: set[tuple[int, int]] = set()
+    for p in accepted:
+        if p.note_num is None:
+            continue
+        resolved = _resolve_row(entries, p.chosen_row_label)
+        if resolved is not None:
+            revision_targets.add((resolved[0], int(p.note_num)))
+
+    revised_note_nums: set[int] = set()
+    if revision_targets:
+        kept = []
+        for e in deps.payload_sink:
+            e_resolved = _resolve_row(entries, e.chosen_row_label)
+            e_target = (
+                (e_resolved[0], int(e.note_num))
+                if e_resolved is not None and e.note_num is not None
+                else None
+            )
+            if e_target in revision_targets:
+                revised_note_nums.add(e_target[1])
+                continue
+            kept.append(e)
+        deps.payload_sink[:] = kept
+
+    # Equivalent-content defence for unattributed payloads and same-call
+    # duplicates. Content comparison is on the resolved template row and the
+    # normalized rendered text rather than raw HTML.
     # Row comparison is by `_resolve_row` (peer-review HIGH→MEDIUM fix), not
     # the raw label string: acceptance is fuzzy, so a first send under a
     # fuzzy-but-accepted label and a re-send under the exact template label are
@@ -1525,6 +1559,12 @@ def _sub_agent_sink_write(
         msg += (
             f"\nRe-routed note(s) {nums}: earlier field payloads were replaced. "
             "Confirm each replacement contains the complete top-level note."
+        )
+    if revised_note_nums:
+        nums = ", ".join(str(n) for n in sorted(revised_note_nums))
+        msg += (
+            f"\nRevised note(s) {nums}: the later complete write replaced "
+            "the earlier version in the same field."
         )
     if parse_errors:
         msg += "\nParse errors: " + "; ".join(parse_errors)

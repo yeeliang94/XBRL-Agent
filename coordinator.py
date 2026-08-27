@@ -89,12 +89,59 @@ def _resolve_face_wallclock() -> float:
 
 FACE_WALLCLOCK_TIMEOUT: float = _resolve_face_wallclock()
 
+# Provider response timeouts get two fresh whole-attempt retries. Together
+# with the initial request this gives a congested upstream three chances,
+# while the increasing backoff prevents parallel face agents from immediately
+# resending their large PDF context in lockstep.
+FACE_RESPONSE_TIMEOUT_RETRIES: int = 2
+
+
+def _is_provider_response_timeout(e: BaseException) -> bool:
+    """True for native or PydanticAI-wrapped provider response timeouts.
+
+    Keep ``httpx.ConnectTimeout`` out of this lane: connection establishment
+    already has its existing one-retry policy. OpenAI and Anthropic timeout
+    exceptions are not ``httpx.TimeoutException`` instances, and PydanticAI
+    wraps both as ``ModelAPIError``. Walk the explicit exception chain so the
+    production SDK shape is classified, not only a top-level test double.
+    Native Google uses PydanticAI's injected HTTPX client and therefore reaches
+    this predicate as an ``httpx.ReadTimeout`` (possibly through a wrapper).
+    """
+    import httpx
+    from openai import APITimeoutError
+
+    timeout_types: tuple[type[BaseException], ...] = (APITimeoutError,)
+    try:
+        from anthropic import APITimeoutError as AnthropicAPITimeoutError
+
+        timeout_types += (AnthropicAPITimeoutError,)
+    except ImportError:
+        # Anthropic is an optional transport in some installations.
+        pass
+
+    current: Optional[BaseException] = e
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, timeout_types):
+            return True
+        if (
+            isinstance(current, httpx.TimeoutException)
+            and not isinstance(current, httpx.ConnectTimeout)
+        ):
+            return True
+        next_error = current.__cause__
+        if next_error is None and not current.__suppress_context__:
+            next_error = current.__context__
+        current = next_error
+    return False
+
 
 def _is_transient_error(e: BaseException) -> bool:
     """Shared transient-error predicate for the face retry path (item 10).
 
-    True for provider 429s and connection-class errors — the only classes
-    ``_run_single_agent_attempt`` re-raises and the retry wrapper in
+    True for provider 429s, connection errors, and response timeouts — the
+    classes ``_run_single_agent_attempt`` re-raises and the retry wrapper in
     ``_run_single_agent`` retries. One definition for both sites (code-review
     fix, 2026-06-13) so the classifications can't drift apart.
     """
@@ -103,6 +150,7 @@ def _is_transient_error(e: BaseException) -> bool:
 
     return bool(
         is_rate_limit_error(e)
+        or _is_provider_response_timeout(e)
         or isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout))
     )
 
@@ -665,8 +713,9 @@ async def _run_single_agent(
     Each attempt is whole (fresh agent + deps — never resume a half-run
     conversation, matching the notes loop). Only errors classified
     transient retry: provider 429s consume the shared rate-limit budget
-    with honoured retry-after backoff; connection-class errors get exactly
-    one retry. Generic exceptions keep the fail-fast behaviour — face
+    with honoured retry-after backoff; provider response timeouts get two
+    staggered retries; connection-class errors get exactly one retry. Generic
+    exceptions keep the fail-fast behaviour — face
     retries re-bill a large PDF context, so there is no blanket budget.
     The DB fact projection is idempotent per write-batch (gotcha #21
     Phase B), so a retried attempt re-projecting is safe.
@@ -757,8 +806,9 @@ async def _run_single_agent(
     async def _attempt(_retry_index: int) -> AgentResult:
         # _run_single_agent_attempt is unchanged — a whole attempt (fresh
         # agent + deps) that returns a structured AgentResult on every path
-        # except errors classified transient (429s + connection-class), which
-        # it re-raises so the scaffold can decide whether to retry.
+        # except errors classified transient (429s, provider response timeouts,
+        # and connection-class failures), which it re-raises so the scaffold
+        # can decide whether to retry.
         return await _run_single_agent_attempt(
             statement_type=statement_type,
             variant=variant,
@@ -826,19 +876,23 @@ async def _run_single_agent(
             error_type=terminal_error_type,
         )
 
-    # Face budgets: 1 connection retry + RATE_LIMIT_MAX_RETRIES rate-limit
-    # retries; no generic budget (face retries re-bill a large PDF context, so
-    # a genuine code error fails fast — the attempt already converted it to a
-    # structured result and never re-raised it here).
+    # Face budgets: 2 staggered response-timeout retries + 1 connection retry
+    # + RATE_LIMIT_MAX_RETRIES rate-limit retries; no generic budget (face
+    # retries re-bill a large PDF context, so a genuine code error fails fast
+    # — the attempt already converted it to a structured result and never
+    # re-raised it here).
     policy = RetryPolicy(
         rate_limit_retries=RATE_LIMIT_MAX_RETRIES,
         connection_retries=1,
+        timeout_retries=FACE_RESPONSE_TIMEOUT_RETRIES,
         generic_retries=0,
         is_rate_limit=is_rate_limit_error,
         is_connection=lambda e: isinstance(
             e, (httpx.ConnectError, httpx.ConnectTimeout)
         ),
+        is_timeout=_is_provider_response_timeout,
         compute_backoff=compute_backoff_delay,
+        compute_timeout_backoff=compute_backoff_delay,
     )
     return await run_agent_with_retries(
         attempt=_attempt,

@@ -278,3 +278,58 @@ def test_builder_outcome_is_persisted_by_the_stream(tmp_path, monkeypatch):
     emit = src.index('yield {"event": "pdf_sidecar", "data": sidecar_event}')
     persist = src.index("write_sidecar_outcome(output_dir, sidecar_event)")
     assert persist < emit
+
+
+def test_builder_announces_applicable_transcription_before_model_calls(
+    tmp_path, monkeypatch,
+):
+    """The live run can show a stage before the paid page pass begins."""
+    from ingest.pdf_sidecar import TranscribeResult
+
+    pdf = tmp_path / "uploaded.pdf"
+    pdf.write_bytes(b"%PDF")
+    notes = NOTES
+    infopack = SimpleNamespace(notes_inventory=[
+        SimpleNamespace(page_range=(8, 9)),
+    ])
+    order = []
+
+    monkeypatch.setenv("XBRL_PDF_SIDECAR", "true")
+    monkeypatch.setattr("ingest.pdf_sidecar.pdf_has_text_layer", lambda _p: False)
+
+    async def fake_transcribe(_pdf, pages, _model):
+        order.append(("transcribe", pages))
+        return TranscribeResult(
+            pages_html={8: "<p>a</p>", 9: "<p>b</p>"},
+        )
+
+    monkeypatch.setattr("ingest.pdf_sidecar.transcribe_pages", fake_transcribe)
+    monkeypatch.setattr(
+        "ingest.pdf_sidecar.write_pdf_sidecar", lambda *_a, **_k: pdf,
+    )
+
+    asyncio.run(_maybe_build_pdf_sidecar(
+        str(pdf), notes, infopack, object(), "m-test",
+        on_start=lambda pages: order.append(("start", pages)),
+    ))
+
+    assert order == [("start", [8, 9]), ("transcribe", [8, 9])]
+
+
+def test_stream_drains_transcription_stage_before_waiting_for_sidecar():
+    """The stage must reach SSE while the sidecar task is still running."""
+    import inspect
+
+    source = inspect.getsource(server.run_multi_agent_stream)
+    task_start = source.find(
+        "sidecar_task = asyncio.create_task(_maybe_build_pdf_sidecar("
+    )
+    stage = source.find('on_start=lambda _pages: _emit_stage("transcribing_source")')
+    drain = source.find(
+        "async for event in _drain_while_running(sidecar_task):", task_start,
+    )
+    wait = source.find("sidecar_event = await sidecar_task", drain)
+    extraction = source.find('_emit_stage("extracting")', wait)
+
+    assert -1 not in (task_start, stage, drain, wait, extraction)
+    assert task_start < stage < drain < wait < extraction

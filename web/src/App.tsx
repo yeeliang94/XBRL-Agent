@@ -578,6 +578,46 @@ export default function App() {
     return <LoginPage onAuthenticated={checkAuth} />;
   }
 
+  // Settings is a utility surface opened from the header, not a signal that
+  // the operator abandoned the uploaded draft. Keep the extract workspace in
+  // one stable React tree position while Settings is open so component-owned
+  // work such as the optional preview scan is not cancelled by an unmount.
+  // The wrapper is display:contents on the extract route so it does not change
+  // the main flex layout, and display:none while Settings is visible.
+  const extractWorkspace = (
+    <ExtractPage
+      state={state}
+      dispatch={dispatch}
+      isAdmin={Boolean(user?.is_admin)}
+      handleUpload={handleUpload}
+      handleMultiRun={handleMultiRun}
+      handleAbortAll={handleAbortAll}
+      handleAbortAgent={handleAbortAgent}
+      handleRerunAgent={handleRerunAgent}
+      handleReset={handleReset}
+      handleConfigChange={handleDraftConfigChange}
+      // Homepage home-base navigation. Drafts resume at /run/{id}
+      // (same as History's draft click); finished runs open in
+      // History's detail; "View all" jumps to the History list.
+      onResumeDraft={(id) => {
+        dispatch({ type: "SET_VIEW", payload: "extract" });
+        dispatch({ type: "SET_SELECTED_RUN_ID", payload: null });
+        dispatch({ type: "SET_CURRENT_RUN_ID", payload: id });
+      }}
+      onOpenRun={(id) => {
+        dispatch({ type: "SET_VIEW", payload: "history" });
+        dispatch({ type: "SET_SELECTED_RUN_ID", payload: id });
+      }}
+      onViewAllRuns={() => {
+        dispatch({ type: "SET_VIEW", payload: "history" });
+        dispatch({ type: "SET_SELECTED_RUN_ID", payload: null });
+      }}
+    />
+  );
+  const keepExtractWorkspaceMounted =
+    state.view === "extract"
+    || (state.view === "settings" && state.sessionId != null);
+
   return (
     <div style={styles.page}>
       {/* Keyboard users can jump past the header + nav straight to the page
@@ -674,12 +714,22 @@ export default function App() {
             : styles.main
         }
       >
-        {state.view === "settings" ? (
+        {state.view === "settings" && (
           // Consolidated settings page (replaces the gear's settings modal):
           // General · Account · Users. The Users tab is admin-gated (and the
           // server enforces it independently).
           <SettingsPage isAdmin={Boolean(user?.is_admin)} currentEmail={user?.email} />
-        ) : state.view === "benchmarks" ? (
+        )}
+        {keepExtractWorkspaceMounted && (
+          <div
+            aria-hidden={state.view === "settings" ? true : undefined}
+            style={{ display: state.view === "extract" ? "contents" : "none" }}
+          >
+            {extractWorkspace}
+          </div>
+        )}
+        {state.view !== "settings" && state.view !== "extract" && (
+          state.view === "benchmarks" ? (
           // Gold-standard eval (v16): the benchmark library + gold editor.
           // selectedRunId carries the selected benchmark id (the generic
           // selected-entity slot).
@@ -723,7 +773,7 @@ export default function App() {
           ) : (
             <ConceptsPage runId={state.selectedRunId} />
           )
-        ) : state.view === "history" ? (
+        ) : (
           <HistoryPage
             canonicalEnabled={canonicalEnabled}
             selectedId={state.selectedRunId}
@@ -740,36 +790,7 @@ export default function App() {
               dispatch({ type: "SET_CURRENT_RUN_ID", payload: id });
             }}
           />
-        ) : (
-          <ExtractPage
-            state={state}
-            dispatch={dispatch}
-            isAdmin={Boolean(user?.is_admin)}
-            handleUpload={handleUpload}
-            handleMultiRun={handleMultiRun}
-            handleAbortAll={handleAbortAll}
-            handleAbortAgent={handleAbortAgent}
-            handleRerunAgent={handleRerunAgent}
-            handleReset={handleReset}
-            handleConfigChange={handleDraftConfigChange}
-            // Homepage home-base navigation. Drafts resume at /run/{id}
-            // (same as History's draft click); finished runs open in
-            // History's detail; "View all" jumps to the History list.
-            onResumeDraft={(id) => {
-              dispatch({ type: "SET_VIEW", payload: "extract" });
-              dispatch({ type: "SET_SELECTED_RUN_ID", payload: null });
-              dispatch({ type: "SET_CURRENT_RUN_ID", payload: id });
-            }}
-            onOpenRun={(id) => {
-              dispatch({ type: "SET_VIEW", payload: "history" });
-              dispatch({ type: "SET_SELECTED_RUN_ID", payload: id });
-            }}
-            onViewAllRuns={() => {
-              dispatch({ type: "SET_VIEW", payload: "history" });
-              dispatch({ type: "SET_SELECTED_RUN_ID", payload: null });
-            }}
-          />
-        )}
+        ))}
       </main>
 
       {/* Phase 9: Run-complete success toast — top-right, auto-dismiss 4 s */}

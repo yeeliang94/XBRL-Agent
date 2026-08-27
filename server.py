@@ -1828,10 +1828,34 @@ async def _run_reviewer_pass(
             "flags_raised": deps.flags_raised,
             "turns_used": turn_count, "max_turns": max_turns,
         })
-    except _asyncio.CancelledError:
-        await _emit("complete", {"success": False, "error": "Cancelled by user"})
-        outcome["error"] = "cancelled"
-        raise
+    except _asyncio.CancelledError as exc:
+        import task_registry as _task_registry
+
+        if _task_registry.is_user_abort(exc):
+            await _emit("complete", {
+                "success": False, "error": "Cancelled by user"})
+            outcome["error"] = "cancelled"
+            raise
+
+        # A nested provider timeout can surface as a bare CancelledError. It
+        # is a recoverable reviewer interruption, not evidence that the
+        # operator pressed Stop All. Preserve any fixes already made and let
+        # the run continue as completed-with-errors.
+        outcome["error"] = "reviewer_interrupted"
+        outcome["writes_performed"] = deps.writes_performed
+        outcome["flags_raised"] = deps.flags_raised
+        msg = (
+            "AI review was interrupted by the model provider. Partial "
+            "review edits were preserved; the run will continue."
+        )
+        logger.warning(msg)
+        await _emit("error", {
+            "type": "reviewer_interrupted", "message": msg})
+        await _emit("complete", {
+            "success": False,
+            "error": "reviewer_interrupted",
+            "writes_performed": deps.writes_performed,
+        })
     except CallToolsCapExceeded:
         # Exhausted the turn budget. Record + emit here, then fall through to
         # the shared cascade so pre-exhaustion leaf writes propagate (peer-
@@ -2047,6 +2071,51 @@ def _jsonsafe_reviewer_context(context: dict) -> dict:
     return safe
 
 
+def _refresh_merged_notes_workbook(
+    *, run_id: int, db_path: str, merged_workbook_path: Optional[str],
+    filing_level: str,
+) -> None:
+    """Refresh the durable merged workbook from canonical notes cells.
+
+    Automatic face and notes review may run together, so their tasks never
+    write the merged workbook concurrently. The auto notes pass receives no
+    workbook path and this helper runs once both reviewers are finished.
+    Manual notes review still calls the same helper directly.
+    """
+    if not merged_workbook_path:
+        return
+    import shutil
+    from notes.persistence import overlay_notes_cells_into_workbook
+
+    nxt = overlay_notes_cells_into_workbook(
+        xlsx_path=merged_workbook_path,
+        run_id=run_id,
+        db_path=db_path,
+        filing_level=filing_level,
+    )
+    if str(nxt) == str(merged_workbook_path):
+        return
+    import tempfile
+
+    destination = Path(merged_workbook_path)
+    fd, staged = tempfile.mkstemp(
+        suffix=".xlsx", dir=str(destination.resolve().parent),
+    )
+    os.close(fd)
+    try:
+        shutil.copyfile(nxt, staged)
+        os.replace(staged, destination)
+    finally:
+        try:
+            Path(staged).unlink(missing_ok=True)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            Path(nxt).unlink(missing_ok=True)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 async def _run_notes_reviewer_pass(
     *,
     run_id: int,
@@ -2076,7 +2145,6 @@ async def _run_notes_reviewer_pass(
     ``completed_with_errors``).
     """
     import asyncio as _asyncio
-    import shutil as _shutil
     import time as _wc_time
     import server as _server_self
     from agent_runner import (
@@ -2283,17 +2351,12 @@ async def _run_notes_reviewer_pass(
         # reviewer's edits (the download overlay already reflects notes_cells).
         if deps.writes_performed and merged_workbook_path:
             try:
-                from notes.persistence import overlay_notes_cells_into_workbook
-                nxt = overlay_notes_cells_into_workbook(
-                    xlsx_path=merged_workbook_path, run_id=run_id, db_path=db_path,
+                _refresh_merged_notes_workbook(
+                    run_id=run_id,
+                    db_path=db_path,
+                    merged_workbook_path=merged_workbook_path,
                     filing_level=filing_level,
                 )
-                if str(nxt) != str(merged_workbook_path):
-                    _shutil.copyfile(nxt, merged_workbook_path)
-                    try:
-                        Path(nxt).unlink(missing_ok=True)
-                    except Exception:  # noqa: BLE001
-                        pass
             except Exception:  # noqa: BLE001
                 logger.warning("Failed to refresh merged workbook after notes review",
                                exc_info=True)
@@ -3224,6 +3287,7 @@ async def _maybe_build_pdf_sidecar(
     infopack,
     model,
     model_name: str,
+    on_start: Optional[Callable[[list[int]], None]] = None,
 ) -> Optional[dict]:
     """Build the transcribed sidecar for a scanned-PDF run (Phase 2 wiring).
 
@@ -3268,7 +3332,10 @@ async def _maybe_build_pdf_sidecar(
             return {"status": "skipped", "reason": "too_many_pages",
                     "pages_requested": len(pages), "page_cap": cap}
 
-        result = await transcribe_pages(pdf_path, sorted(pages), model)
+        ordered_pages = sorted(pages)
+        if on_start is not None:
+            on_start(ordered_pages)
+        result = await transcribe_pages(pdf_path, ordered_pages, model)
         out = write_pdf_sidecar(pdf_path, result, model_name=model_name)
         if out is None:
             # All-or-nothing publication: any failed page refuses the sidecar
@@ -5177,6 +5244,33 @@ async def run_multi_agent_stream(
                     "event_queue full; pipeline_stage=%s dropped", stage,
                 )
 
+        async def _drain_while_running(task: asyncio.Task):
+            """Yield queued events while ``task`` runs, then flush the tail.
+
+            Defined before the pre-extraction sidecar pass because that pass
+            can itself take minutes. Keeping the event bridge active there is
+            what makes its stage visible instead of delivering the label only
+            after transcription has already finished.
+            """
+            while not task.done():
+                try:
+                    event = await asyncio.wait_for(
+                        event_queue.get(), timeout=0.3,
+                    )
+                except asyncio.TimeoutError:
+                    continue
+                if event is None:
+                    continue
+                yield event
+            while True:
+                try:
+                    event = event_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                if event is None:
+                    continue
+                yield event
+
         # A normal web run owns its scout pass. The pre-run scan remains an
         # optional preview for old drafts, but its result is never required:
         # clicking Start always performs a fresh pass before extraction.
@@ -5409,9 +5503,22 @@ async def run_multi_agent_stream(
         # LLM-transcribed source.html BEFORE extraction agents launch. This
         # deliberately follows the pipeline-owned scout so it can use the
         # freshest notes inventory and page guidance.
-        sidecar_event = await _maybe_build_pdf_sidecar(
-            config.pdf_path, notes_to_run, infopack, model, model_name,
-        )
+        sidecar_task = asyncio.create_task(_maybe_build_pdf_sidecar(
+            config.pdf_path,
+            notes_to_run,
+            infopack,
+            model,
+            model_name,
+            on_start=lambda _pages: _emit_stage("transcribing_source"),
+        ))
+        async for event in _drain_while_running(sidecar_task):
+            persist_event(event)
+            if client_connected:
+                try:
+                    yield event
+                except (asyncio.CancelledError, GeneratorExit):
+                    client_connected = False
+        sidecar_event = await sidecar_task
         if sidecar_event is not None:
             # Persist alongside the emit so the History run page can show the
             # same notice after a reload (the live event is otherwise gone —
@@ -5690,37 +5797,6 @@ async def run_multi_agent_stream(
                 recompute_after_turn(AUDIT_DB_PATH, run_id)
             except Exception:
                 logger.exception("canonical cascade failed for run %s", run_id)
-
-        # Peer-review C1: the main drain loop has exited (it stopped when
-        # the fan-in sentinel arrived). The post-pipeline stages below —
-        # correction agent + notes post-validator — still push events into
-        # `event_queue`. Without this helper those events would be
-        # stranded: no DB persistence, no SSE yields. The helper drains
-        # the queue while a helper task runs, persisting and yielding
-        # each event through the outer generator so the frontend + DB
-        # see live updates from the pseudo-agents.
-        async def _drain_while_running(task: asyncio.Task):
-            """Yield events from the queue while ``task`` runs, then flush
-            anything left behind after it completes. Swallows the sentinel
-            value (None) so a stale sentinel doesn't break the outer loop."""
-            while not task.done():
-                try:
-                    event = await asyncio.wait_for(event_queue.get(), timeout=0.3)
-                except asyncio.TimeoutError:
-                    continue
-                if event is None:
-                    continue
-                yield event
-            # Final non-blocking sweep — agent events enqueued in the last
-            # ms before the task completed might still be sitting here.
-            while True:
-                try:
-                    event = event_queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    break
-                if event is None:
-                    continue
-                yield event
 
         # Notes coordinator: per-agent failures are already captured in each
         # NotesAgentResult.status and don't raise here. If the coordinator
@@ -6312,6 +6388,193 @@ async def run_multi_agent_stream(
         canonical_reexport_failed = False
         validator_run_agent_id: Optional[int] = None
 
+        async def _run_auto_notes_review(notes_outputs: dict) -> tuple[Optional[dict], bool]:
+            """Run the automatic notes reviewer without owning the SSE drain.
+
+            The outer pipeline drains the shared queue while the face reviewer
+            runs. Keeping this lifecycle in its own task lets both paid agents
+            start together without two consumers racing to remove each other's
+            events from that queue.
+            """
+            nonlocal validator_run_agent_id
+
+            if db_conn is not None and run_id is not None:
+                try:
+                    validator_run_agent_id = repo.create_run_agent(
+                        db_conn,
+                        run_id,
+                        statement_type=NOTES_VALIDATOR_AGENT_ID,
+                        variant=None,
+                        model=_model_id(config.model),
+                    )
+                    run_agent_ids_by_agent_id[
+                        NOTES_VALIDATOR_AGENT_ID.lower()
+                    ] = validator_run_agent_id
+                    db_conn.commit()
+                except Exception:
+                    logger.warning(
+                        "Failed to pre-create notes-validator row",
+                        exc_info=True,
+                    )
+
+            _emit_stage("reviewing_notes")
+            _inv_nums = []
+            _inv_subnotes: dict = {}
+            _inv_records: list[dict] = []
+            try:
+                for _e in getattr(infopack, "notes_inventory", None) or []:
+                    _n = getattr(_e, "note_num", None)
+                    if _n is None:
+                        continue
+                    _inv_nums.append(int(_n))
+                    _subs = [
+                        str(getattr(_s, "subnote_ref", "")).strip()
+                        for _s in getattr(_e, "subnotes", None) or []
+                    ]
+                    _subs = [s for s in _subs if s]
+                    if _subs:
+                        _inv_subnotes[int(_n)] = _subs
+                    _pr = getattr(_e, "page_range", None) or (None, None)
+                    _inv_records.append({
+                        "note_num": int(_n),
+                        "title": str(getattr(_e, "title", "") or ""),
+                        "subnote_refs": _subs,
+                        "page_lo": _pr[0] if _pr else None,
+                        "page_hi": _pr[1] if len(_pr) > 1 else None,
+                    })
+            except Exception:  # noqa: BLE001
+                _inv_nums = []
+                _inv_subnotes = {}
+                _inv_records = []
+
+            from notes.writer import payload_sidecar_path as _sidecar_path
+            _sidecar_paths = [
+                str(_sidecar_path(p)) for p in notes_outputs.values() if p
+            ]
+            try:
+                from notes.persistence import persist_notes_review_inputs
+                from notes.detectors import load_sidecar_entries
+                persist_notes_review_inputs(
+                    db_path=str(AUDIT_DB_PATH),
+                    run_id=run_id,
+                    sidecar_entries=load_sidecar_entries(_sidecar_paths),
+                    inventory=_inv_records,
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "Failed to persist notes-review inputs for run %s",
+                    run_id,
+                    exc_info=True,
+                )
+
+            try:
+                _ntc = _open_audit_conn()
+                try:
+                    repo.upsert_notes_review_task(
+                        _ntc,
+                        run_id,
+                        "running",
+                        model=_model_id(config.model),
+                    )
+                    _ntc.commit()
+                finally:
+                    _ntc.close()
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "Failed to register notes-review task for run %s",
+                    run_id,
+                    exc_info=True,
+                )
+
+            validator_outcome = None
+            validator_cancelled_without_outcome = False
+            validator_task = asyncio.create_task(_run_notes_reviewer_pass(
+                run_id=run_id,
+                db_path=str(AUDIT_DB_PATH),
+                pdf_path=str(session_dir / "uploaded.pdf"),
+                filing_level=run_config.filing_level,
+                filing_standard=run_config.filing_standard,
+                model=model,
+                output_dir=output_dir,
+                # The face reviewer may re-export and re-merge this file while
+                # both agents overlap. Defer the notes overlay until both are
+                # complete so there is only one workbook writer at a time.
+                merged_workbook_path=None,
+                event_queue=event_queue,
+                sidecar_paths=_sidecar_paths,
+                inventory_note_nums=_inv_nums,
+                inventory_subnotes=_inv_subnotes,
+            ))
+            import task_registry
+            lifecycle_task = asyncio.current_task()
+            if lifecycle_task is not None:
+                task_registry.register(
+                    session_id, NOTES_VALIDATOR_AGENT_ID, lifecycle_task,
+                )
+            try:
+                validator_outcome = await validator_task
+            except asyncio.CancelledError:
+                logger.info(
+                    "Notes validator cancelled by user",
+                    extra={"session_id": session_id},
+                )
+                if not validator_task.done():
+                    validator_task.cancel(task_registry.USER_ABORT_REASON)
+                # Let the child run its cancellation finalizer (partial flags,
+                # coverage state, usage and trace) and retrieve its exception
+                # so the lifecycle task never leaves an orphan behind.
+                try:
+                    settled = await validator_task
+                    if isinstance(settled, dict):
+                        validator_outcome = settled
+                except asyncio.CancelledError:
+                    pass
+                validator_cancelled_without_outcome = True
+            finally:
+                task_registry.unregister(session_id, NOTES_VALIDATOR_AGENT_ID)
+                try:
+                    _ntc = _open_audit_conn()
+                    try:
+                        repo.upsert_notes_review_task(
+                            _ntc,
+                            run_id,
+                            "done",
+                            model=_model_id(config.model),
+                            outcome=(
+                                validator_outcome
+                                if isinstance(validator_outcome, dict)
+                                else None
+                            ),
+                        )
+                        _ntc.commit()
+                    finally:
+                        _ntc.close()
+                except Exception:  # noqa: BLE001
+                    logger.warning(
+                        "Failed to release notes-review task for run %s",
+                        run_id,
+                        exc_info=True,
+                    )
+            return validator_outcome, validator_cancelled_without_outcome
+
+        notes_review_lifecycle_task: Optional[asyncio.Task] = None
+        if merge_result.success and notes_result is not None:
+            notes_outputs = {
+                r.template_type: r.workbook_path
+                for r in notes_result.agent_results
+                if r.workbook_path
+            }
+            from notes_types import NOTES_REGISTRY as _NOTES_REG
+            _prose_types = {
+                t for t, e in _NOTES_REG.items()
+                if not getattr(e, "is_numeric", False)
+            }
+            have_prose_sheet = any(t in notes_outputs for t in _prose_types)
+            if have_prose_sheet and _notes_auto_review_enabled():
+                notes_review_lifecycle_task = asyncio.create_task(
+                    _run_auto_notes_review(notes_outputs),
+                )
+
         # Phase 3: if any hard cross-check failed, spawn the correction
         # agent once. It edits the merged workbook in place; on completion
         # we re-run the full cross-check registry so the Validator tab
@@ -6462,6 +6725,39 @@ async def run_multi_agent_stream(
                     logger.info(
                         "Reviewer cancelled by user",
                         extra={"session_id": session_id})
+                    # The notes reviewer now overlaps this pass. Stop and
+                    # settle it before closing the run so its pseudo-agent row
+                    # and durable review-task interlock cannot be left running
+                    # under an aborted parent.
+                    if notes_review_lifecycle_task is not None:
+                        if not notes_review_lifecycle_task.done():
+                            notes_review_lifecycle_task.cancel(
+                                task_registry.USER_ABORT_REASON,
+                            )
+                        try:
+                            validator_outcome, _ = (
+                                await notes_review_lifecycle_task
+                            )
+                        except asyncio.CancelledError:
+                            validator_outcome = {"error": "cancelled"}
+                        if (
+                            validator_run_agent_id is not None
+                            and db_conn is not None
+                        ):
+                            try:
+                                _finish_reviewer_agent_row(
+                                    db_conn,
+                                    validator_run_agent_id,
+                                    validator_outcome,
+                                    status="cancelled",
+                                )
+                                db_conn.commit()
+                            except Exception:  # noqa: BLE001
+                                logger.warning(
+                                    "Failed to finalize concurrent "
+                                    "NOTES_VALIDATOR row on reviewer cancel",
+                                    exc_info=True,
+                                )
                     # Finalize the CORRECTION pseudo-agent audit row too — this
                     # early return skips the normal finish_run_agent block, so
                     # without this the row stays 'running' under an 'aborted'
@@ -6683,226 +6979,67 @@ async def run_multi_agent_stream(
                             except (asyncio.CancelledError, GeneratorExit):
                                 client_connected = False
 
-        # Phase 5.5: notes post-validator. Runs only when BOTH Sheet 11
-        # (ACC_POLICIES) and Sheet 12 (LIST_OF_NOTES) were produced in
-        # this run. Operates on the merged workbook (so cross-sheet
-        # visibility is real), after cross-checks + any Phase 3
-        # correction pass, so it sees the final state the user will
-        # download. Bounded to 1 iteration per PLAN D4.
-        if merge_result.success and notes_result is not None:
-            notes_outputs = {
-                r.template_type: r.workbook_path
-                for r in notes_result.agent_results
-                if r.workbook_path
-            }
-            # Peer-review #7: the reviewer runs whenever ANY prose notes sheet
-            # was targeted (10/11/12) — each check family fires only where its
-            # inputs exist (cross-sheet dup still needs both 11 & 12). Gated by
-            # the XBRL_NOTES_AUTO_REVIEW toggle (Step 11; default on, off in the
-            # test suite via conftest so pipeline counts stay deterministic).
-            from notes_types import NOTES_REGISTRY as _NOTES_REG
-            _prose_types = {
-                t for t, e in _NOTES_REG.items() if not getattr(e, "is_numeric", False)
-            }
-            have_prose_sheet = any(t in notes_outputs for t in _prose_types)
-            if have_prose_sheet and _notes_auto_review_enabled():
-                # Lazy pseudo-agent row — created only when the validator
-                # will actually run. Without this gate, short-circuit
-                # cases (no sheet 11/12) would still mint an audit row
-                # and break run_agent counts in tests that expect only
-                # the real extraction agents.
-                if db_conn is not None and run_id is not None:
+        # The automatic notes reviewer was launched before the face reviewer,
+        # so both model passes overlap. Drain any remaining notes events now
+        # and wait for it before formatting, final workbook refresh and status.
+        if notes_review_lifecycle_task is not None:
+            async for event in _drain_while_running(notes_review_lifecycle_task):
+                persist_event(event)
+                if client_connected:
                     try:
-                        validator_run_agent_id = repo.create_run_agent(
-                            db_conn, run_id,
-                            statement_type=NOTES_VALIDATOR_AGENT_ID,
-                            variant=None,
-                            model=_model_id(config.model),
+                        yield event
+                    except (asyncio.CancelledError, GeneratorExit):
+                        client_connected = False
+            validator_outcome, validator_cancelled_without_outcome = (
+                await notes_review_lifecycle_task
+            )
+
+            if (
+                isinstance(validator_outcome, dict)
+                and validator_outcome.get("writes_performed", 0) > 0
+            ):
+                try:
+                    _refresh_merged_notes_workbook(
+                        run_id=run_id,
+                        db_path=str(AUDIT_DB_PATH),
+                        merged_workbook_path=merged_path,
+                        filing_level=run_config.filing_level,
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.warning(
+                        "Failed to refresh merged workbook after parallel notes review",
+                        exc_info=True,
+                    )
+
+            if (
+                validator_cancelled_without_outcome
+                or (
+                    isinstance(validator_outcome, dict)
+                    and validator_outcome.get("error") == "cancelled"
+                )
+            ):
+                if validator_run_agent_id is not None and db_conn is not None:
+                    try:
+                        _finish_reviewer_agent_row(
+                            db_conn,
+                            validator_run_agent_id,
+                            validator_outcome,
+                            status="cancelled",
                         )
-                        run_agent_ids_by_agent_id[
-                            NOTES_VALIDATOR_AGENT_ID.lower()
-                        ] = validator_run_agent_id
                         db_conn.commit()
-                    except Exception:
+                    except Exception:  # noqa: BLE001
                         logger.warning(
-                            "Failed to pre-create notes-validator row",
+                            "Failed to finalize NOTES_VALIDATOR row on cancel",
                             exc_info=True,
                         )
-                # Stage boundary — about to run the notes reviewer. Fires
-                # whenever a prose notes sheet was targeted and the auto-review
-                # toggle is on.
-                _emit_stage("reviewing_notes")
-                # N3 Stage 1: hand the scout's inventory note numbers to the
-                # validator so it can report coverage gaps (notes with no
-                # content on any sheet). Best-effort — degrades to no gaps.
-                _inv_nums = []
-                # Phase 1b sub-note structure, keyed by top-level note_num, so
-                # the validator's detect_subnote_coverage_gaps can spot a note
-                # that was only partly covered at sub-reference granularity
-                # (e.g. a leases policy citing 3.3 + (b) but dropping (a)).
-                _inv_subnotes: dict = {}
-                # Rich inventory records (note_num + title + sub-refs + page
-                # span) for the durable DB store the reviewer recomputes from.
-                _inv_records: list[dict] = []
-                try:
-                    for _e in getattr(infopack, "notes_inventory", None) or []:
-                        _n = getattr(_e, "note_num", None)
-                        if _n is None:
-                            continue
-                        _inv_nums.append(int(_n))
-                        _subs = [
-                            str(getattr(_s, "subnote_ref", "")).strip()
-                            for _s in getattr(_e, "subnotes", None) or []
-                        ]
-                        _subs = [s for s in _subs if s]
-                        if _subs:
-                            _inv_subnotes[int(_n)] = _subs
-                        _pr = getattr(_e, "page_range", None) or (None, None)
-                        _inv_records.append({
-                            "note_num": int(_n),
-                            "title": str(getattr(_e, "title", "") or ""),
-                            "subnote_refs": _subs,
-                            "page_lo": _pr[0] if _pr else None,
-                            "page_hi": _pr[1] if len(_pr) > 1 else None,
-                        })
-                except Exception:  # noqa: BLE001
-                    _inv_nums = []
-                    _inv_subnotes = {}
-                    _inv_records = []
-                # Step 1: persist the reviewer's detector inputs (per-cell
-                # provenance + scout inventory) into the DB so a later manual
-                # re-review recomputes findings durably, not from run-dir files.
-                # Best-effort: a provenance-write failure must never fail the run
-                # (the factory falls back to the on-disk sidecars).
-                from notes.writer import payload_sidecar_path as _sidecar_path
-                _sidecar_paths = [
-                    str(_sidecar_path(p)) for p in notes_outputs.values() if p
-                ]
-                try:
-                    from notes.persistence import persist_notes_review_inputs
-                    from notes.detectors import load_sidecar_entries
-                    persist_notes_review_inputs(
-                        db_path=str(AUDIT_DB_PATH),
-                        run_id=run_id,
-                        sidecar_entries=load_sidecar_entries(_sidecar_paths),
-                        inventory=_inv_records,
-                    )
-                except Exception:  # noqa: BLE001
-                    logger.warning(
-                        "Failed to persist notes-review inputs for run %s",
-                        run_id, exc_info=True,
-                    )
-                # Register a durable 'running' notes-review task so a MANUAL
-                # re-review (or revert) can't race this auto pass — the manual
-                # re-entrancy guard + revert guard both read this row. The auto
-                # and manual passes hold independent in-process locks, so the DB
-                # task state is the only cross-launch interlock.
-                try:
-                    _ntc = _open_audit_conn()
-                    try:
-                        repo.upsert_notes_review_task(
-                            _ntc, run_id, "running",
-                            model=_model_id(config.model))
-                        _ntc.commit()
-                    finally:
-                        _ntc.close()
-                except Exception:  # noqa: BLE001 — guard is best-effort
-                    logger.warning(
-                        "Failed to register notes-review task for run %s",
-                        run_id, exc_info=True)
-                # Step 9: the notes REVIEWER (acting successor to the validator)
-                # — it FIXES findings in notes_cells, not just flags them.
-                validator_outcome = None
-                validator_task = asyncio.create_task(_run_notes_reviewer_pass(
-                    run_id=run_id,
-                    db_path=str(AUDIT_DB_PATH),
-                    pdf_path=str(session_dir / "uploaded.pdf"),
-                    filing_level=run_config.filing_level,
-                    filing_standard=run_config.filing_standard,
-                    model=model,
-                    output_dir=output_dir,
-                    merged_workbook_path=merged_path,
-                    event_queue=event_queue,
-                    sidecar_paths=_sidecar_paths,
-                    inventory_note_nums=_inv_nums,
-                    inventory_subnotes=_inv_subnotes,
-                ))
-                # Register so Stop-All reaches the notes-validator too (same
-                # gap the reviewer had — see the reviewer block above).
-                import task_registry
-                task_registry.register(
-                    session_id, NOTES_VALIDATOR_AGENT_ID, validator_task)
-                validator_cancelled_without_outcome = False
-                try:
-                    async for event in _drain_while_running(validator_task):
-                        persist_event(event)
-                        if client_connected:
-                            try:
-                                yield event
-                            except (asyncio.CancelledError, GeneratorExit):
-                                client_connected = False
-                    validator_outcome = await validator_task
-                except asyncio.CancelledError:
-                    # Defensive fallback for cancellation outside the review
-                    # pass. A tagged cancellation handled inside the pass
-                    # returns a telemetry-bearing outcome instead.
-                    logger.info(
-                        "Notes validator cancelled by user",
-                        extra={"session_id": session_id})
-                    validator_cancelled_without_outcome = True
-                finally:
-                    task_registry.unregister(
-                        session_id, NOTES_VALIDATOR_AGENT_ID)
-                    # Release the durable notes-review interlock on every exit
-                    # (success / cancel / exception) so a later manual re-review
-                    # or revert isn't blocked. Startup reconcile is the backstop
-                    # if the process dies before this runs.
-                    try:
-                        _ntc = _open_audit_conn()
-                        try:
-                            repo.upsert_notes_review_task(
-                                _ntc, run_id, "done",
-                                model=_model_id(config.model),
-                                outcome=validator_outcome
-                                if isinstance(validator_outcome, dict) else None)
-                            _ntc.commit()
-                        finally:
-                            _ntc.close()
-                    except Exception:  # noqa: BLE001 — best-effort release
-                        logger.warning(
-                            "Failed to release notes-review task for run %s",
-                            run_id, exc_info=True)
-
-                if (
-                    validator_cancelled_without_outcome
-                    or (
-                        isinstance(validator_outcome, dict)
-                        and validator_outcome.get("error") == "cancelled"
-                    )
-                ):
-                    # User hit Stop All during notes validation. The merged
-                    # workbook is already durable. Persist any captured spend,
-                    # then make the parent run terminal before returning.
-                    if validator_run_agent_id is not None and db_conn is not None:
-                        try:
-                            _finish_reviewer_agent_row(
-                                db_conn,
-                                validator_run_agent_id,
-                                validator_outcome,
-                                status="cancelled",
-                            )
-                            db_conn.commit()
-                        except Exception:  # noqa: BLE001
-                            logger.warning(
-                                "Failed to finalize NOTES_VALIDATOR row on cancel",
-                                exc_info=True)
-                    if _safe_mark_finished(db_conn, run_id, "aborted"):
-                        terminal_status = "aborted"
-                    if client_connected:
-                        yield {"event": "error", "data": {
-                            "message": "Run cancelled during notes validation",
-                            "bucket": ERROR_BUCKET_FATAL}}
-                    return
+                if _safe_mark_finished(db_conn, run_id, "aborted"):
+                    terminal_status = "aborted"
+                if client_connected:
+                    yield {"event": "error", "data": {
+                        "message": "Run cancelled during notes validation",
+                        "bucket": ERROR_BUCKET_FATAL,
+                    }}
+                return
 
         # PDF notes use one styling author. Extraction stores content/table
         # geometry, then this optional pass reads the PDF and applies the

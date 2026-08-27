@@ -240,6 +240,9 @@ export type PipelineStage =
   // agent sees a template (PLAN-notes-source-integrity-build Phase 4). Only
   // fires when the source-integrity mode is shadow or enforce.
   | "reading_source"
+  // Transcribing note pages from an image-only PDF into structure-only HTML
+  // before extraction agents start.
+  | "transcribing_source"
   | "extracting"
   | "merging"
   | "cross_checking"

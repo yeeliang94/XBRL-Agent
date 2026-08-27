@@ -609,6 +609,9 @@ class RetryPolicy:
     * **connection** (``connection_retries``): connection-class errors
       (``is_connection``); retried immediately, no backoff. The face
       coordinator's 1-shot connection retry; notes/Sheet-12 leave this 0.
+    * **timeout** (``timeout_retries``): provider response/read timeouts;
+      retried after an increasing backoff so parallel agents do not resend
+      their large PDF requests at the same instant. Exhaustion is terminal.
     * **generic** (``generic_retries``): any other exception; retried
       immediately, no backoff. The notes coordinators' ``max_retries``; the
       face coordinator leaves this 0 because its attempt only re-raises
@@ -617,10 +620,15 @@ class RetryPolicy:
 
     rate_limit_retries: int
     connection_retries: int = 0
+    timeout_retries: int = 0
     generic_retries: int = 0
     is_rate_limit: Callable[[BaseException], bool] = _default_is_rate_limit
     is_connection: Callable[[BaseException], bool] = lambda e: False
+    is_timeout: Callable[[BaseException], bool] = lambda e: False
     compute_backoff: Callable[[BaseException, int], float] = _default_compute_backoff
+    compute_timeout_backoff: Callable[
+        [BaseException, int], float
+    ] = _default_compute_backoff
 
 
 async def run_agent_with_retries(
@@ -676,6 +684,7 @@ async def run_agent_with_retries(
 
     rl_retries = 0
     connect_retries_used = 0
+    timeout_retries_used = 0
     generic_retries = 0
     total_attempts = 0
     last_error: Optional[str] = None
@@ -721,6 +730,7 @@ async def run_agent_with_retries(
             if on_attempt_error is not None:
                 on_attempt_error(e)
             rate_limited = bool(policy.is_rate_limit(e))
+            timed_out = not rate_limited and bool(policy.is_timeout(e))
             if rate_limited and rl_retries < policy.rate_limit_retries:
                 pending_backoff = policy.compute_backoff(e, rl_retries)
                 rl_retries += 1
@@ -730,8 +740,21 @@ async def run_agent_with_retries(
                     pending_backoff, e,
                 )
                 continue
+            if timed_out and timeout_retries_used < policy.timeout_retries:
+                pending_backoff = policy.compute_timeout_backoff(
+                    e, timeout_retries_used,
+                )
+                timeout_retries_used += 1
+                logger.warning(
+                    "%s hit a provider timeout (retry %d/%d) — sleeping "
+                    "%.2fs: %s",
+                    label, timeout_retries_used, policy.timeout_retries,
+                    pending_backoff, e,
+                )
+                continue
             if (
                 not rate_limited
+                and not timed_out
                 and policy.connection_retries
                 and policy.is_connection(e)
                 and connect_retries_used < policy.connection_retries
@@ -744,6 +767,7 @@ async def run_agent_with_retries(
                 continue
             if (
                 not rate_limited
+                and not timed_out
                 and policy.generic_retries
                 and generic_retries < policy.generic_retries
             ):
