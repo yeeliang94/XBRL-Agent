@@ -1,20 +1,27 @@
 # Audit: mTool Template Field Semantics and Filing Readiness
 
-Status: Design proposal for independent review
+Status: Implemented; independent code review and Windows mTool acceptance pending
 
 Branch reviewed: `codex/mtool-socie-audit`
 
 Audit date: 2026-08-27
 
-Implementation status: Not implemented
+Implementation status: Implemented on `codex/mtool-field-semantics`
 
-Evidence status: Counts reproduced locally, but the audit probe is not yet a
-committed repository artifact
+Evidence status: The versioned registry, audit command, and reviewed snapshot
+are committed. Run `python scripts/audit_template_field_semantics.py --check`.
+
+Implementation note (2026-08-28): schema v41 separates taxonomy capability
+from template slot role; extraction, review, writers, preflight, receipts, and
+the current filing UI consume the same contract. The two MFRS numeric-note
+wrapper omissions are named reviewed exceptions. This does not claim external
+Windows mTool 2.2 acceptance; that final acceptance step remains outstanding.
 
 ## Executive conclusion
 
-The current branch does not resolve the defect where structural headings can be
-presented to an AI agent as writable fields. It also does not yet provide a
+The audited `codex/mtool-socie-audit` branch did not resolve the defect where
+structural headings could be presented to an AI agent as writable fields. It
+also did not provide a
 complete or sufficiently strict semantic foundation for filing-grade mTool or
 XBRL generation.
 
@@ -710,6 +717,6 @@ Merge decisions should be separated:
 2. Treat the taxonomy/slot registry, canonical filing identity, and Windows
    acceptance as the separately approved filing-readiness program.
 
-The pending semantic-address changes should not become the durable
+The semantic-address changes that were pending on the audited branch should not become the durable
 canonical-to-mTool filing foundation until their taxonomy/slot assumptions and
 incomplete variant mappings are corrected.

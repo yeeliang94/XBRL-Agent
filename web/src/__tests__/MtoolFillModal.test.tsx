@@ -70,6 +70,46 @@ describe("MtoolFillModal", () => {
     expect(screen.getByText(/3 SOCIE\/matrix/i)).toBeTruthy();
   });
 
+  test("shows canonical filing-field coverage and reviewed exceptions", async () => {
+    const preflight = {
+      ok: true,
+      blockers: [],
+      warnings: [],
+      field_semantics: {
+        readiness: "ready",
+        counts: {
+          catalog_templates: 15,
+          selected_templates: 1,
+          template_slots: 420,
+          writable_fields: 317,
+          unresolved_fields: 0,
+          quarantined_values: 0,
+        },
+        manifest_versions: ["2022-v1-slot-semantics-1"],
+        reviewed_exceptions: [
+          { exception_code: "MFRS_ISSUED_CAPITAL_WRAPPER_OMITTED", count: 2 },
+        ],
+      },
+    };
+    mockFetch((url) => {
+      if (url.endsWith("/preflight")) {
+        return new Response(JSON.stringify(preflight), { status: 200 });
+      }
+      if (url.includes("/mtool-fill")) {
+        return new Response(JSON.stringify(FILL_DOC), { status: 200 });
+      }
+      return new Response("{}", { status: 200 });
+    });
+
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+
+    const coverage = await screen.findByRole("region", { name: /filing field coverage/i });
+    expect(screen.getByText(/filing fields are fully identified/i)).toBeTruthy();
+    expect(coverage).toHaveTextContent(/317.*writable fields/i);
+    expect(coverage).toHaveTextContent(/no fields are missing/i);
+    expect(screen.getByText(/reviewed template exceptions/i)).toBeTruthy();
+  });
+
   test("uploads a template and shows a clean report", async () => {
     const reportHeader = JSON.stringify({
       status: "ok",

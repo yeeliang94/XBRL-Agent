@@ -178,6 +178,44 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     expect(rows.length).toBe(3);
   });
 
+  test("quarantined content is explained and can be removed accessibly", async () => {
+    const invalid: NotesCellsResponse = {
+      sheets: [{
+        sheet: "Notes-CI",
+        rows: [{
+          row: 6,
+          label: "Financial reporting status",
+          html: "<p>Legacy content</p>",
+          evidence: null,
+          source_pages: [],
+          updated_at: "2026-04-24T10:00:00Z",
+          invalid_target: true,
+        }],
+      }],
+    };
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    globalThis.fetch = vi.fn(async (_input, init) => {
+      if (init?.method === "DELETE") {
+        return new Response(JSON.stringify({ removed: true }), { status: 200 });
+      }
+      return new Response(JSON.stringify(invalid), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    render(<NotesReviewTab runId={42} />);
+    await waitFor(() => expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0));
+    expandAllSheets();
+
+    expect(screen.getByText("Financial reporting status")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(/not a filing field/i);
+    expect(screen.getByRole("button", { name: "Edit" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: /remove quarantined content/i }));
+    await waitFor(() => expect(screen.queryByText("Financial reporting status")).toBeNull());
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "/api/runs/42/notes_cells/Notes-CI/6",
+      { method: "DELETE" },
+    );
+  });
+
   // Review-workspace Phase 1: focusing a notes cell reports its source PDF
   // pages so the workspace's Source PDF pane can follow the note.
   test("focusing a cell reports its source_pages via onActiveCellPages", async () => {
