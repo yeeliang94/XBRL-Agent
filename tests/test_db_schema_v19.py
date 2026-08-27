@@ -54,6 +54,9 @@ def test_fresh_init_has_notes_nodes_table(tmp_path):
             "label",
             "kind",
             "xbrl_concept_id",
+            "slot_role",
+            "taxonomy_element_id",
+            "manifest_version",
         }
         assert _schema_version(conn) == CURRENT_SCHEMA_VERSION
     finally:

@@ -402,6 +402,11 @@ async def patch_notes_cell_endpoint(
             config = run.config or {}
             standard = config.get("filing_standard", "mfrs")
             level = config.get("filing_level", "company")
+            family_prefix = f"{str(standard).lower()}-{str(level).lower()}-"
+            registry_available = bool(conn.execute(
+                "SELECT 1 FROM notes_nodes WHERE template_id LIKE ? LIMIT 1",
+                (family_prefix + "%",),
+            ).fetchone())
             template = next(
                 (
                     e for e in _notes_template_index(standard, level)
@@ -409,13 +414,13 @@ async def patch_notes_cell_endpoint(
                 ),
                 None,
             )
-            if template is None:
+            if registry_available and template is None:
                 conn.rollback()
                 raise HTTPException(
                     status_code=400,
                     detail=f"Unknown notes sheet {sheet!r} for this run.",
                 )
-            if template["is_numeric"]:
+            if registry_available and template["is_numeric"]:
                 conn.rollback()
                 raise HTTPException(
                     status_code=400,
@@ -424,13 +429,15 @@ async def patch_notes_cell_endpoint(
                         "not this endpoint."
                     ),
                 )
-            node = conn.execute(
-                "SELECT label, node_uuid FROM notes_nodes "
-                "WHERE template_id = ? AND row = ? AND kind = 'LEAF' "
-                "AND slot_role = 'INPUT'",
-                (template["template_id"], row),
-            ).fetchone()
-            if node is None:
+            node = None
+            if registry_available:
+                node = conn.execute(
+                    "SELECT label, node_uuid FROM notes_nodes "
+                    "WHERE template_id = ? AND row = ? AND kind = 'LEAF' "
+                    "AND slot_role = 'INPUT'",
+                    (template["template_id"], row),
+                ).fetchone()
+            if registry_available and node is None:
                 conn.rollback()
                 raise HTTPException(
                     status_code=400,
@@ -446,12 +453,25 @@ async def patch_notes_cell_endpoint(
                 # Update path — preserve the existing label/evidence/pages and
                 # swap the HTML while upgrading any legacy field identity to
                 # the exact template node (evidence stays read-only, gotcha #16).
-                upsert_label = node["label"]
+                upsert_label = (
+                    node["label"] if node is not None else existing["label"]
+                )
                 upsert_evidence = existing["evidence"]
                 upsert_pages = _decode_pages(existing["source_pages"])
-                upsert_concept_uuid = node["node_uuid"]
+                upsert_concept_uuid = (
+                    node["node_uuid"] if node is not None else None
+                )
             else:
                 # Insert path — the row must be a fillable prose registry node.
+                if node is None:
+                    conn.rollback()
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "The notes field catalog is unavailable; rebuild it "
+                            "before adding a new cell."
+                        ),
+                    )
                 # New write: stamp the template-scoped node_uuid as the cell's
                 # concept_uuid so it links to the registry (decision §9.2).
                 upsert_label = node["label"]

@@ -142,8 +142,13 @@ def test_related_party_reproduces_table_into_textblock_row(tmp_path: Path):
     assert table_cells[0]["row"] == tb_row
 
 
-@pytest.mark.parametrize("standard", ["mfrs", "mpers"])
-def test_textblock_rows_are_writable_on_both_standards(standard: str, tmp_path: Path):
+@pytest.mark.parametrize("standard,label", [
+    ("mfrs", "Disclosure of transactions between related parties"),
+    ("mpers", "Disclosure of related parties"),
+])
+def test_textblock_rows_are_writable_on_both_standards(
+    standard: str, label: str, tmp_path: Path,
+):
     """The reproduced-table home row must accept a prose write (not a
     formula / abstract-guarded cell) on both filing standards."""
     tpl = notes_template_path(
@@ -152,7 +157,7 @@ def test_textblock_rows_are_writable_on_both_standards(standard: str, tmp_path: 
     out = tmp_path / f"rp_{standard}.xlsx"
     payloads = [
         NotesPayload(
-            chosen_row_label="Disclosure of transactions between related parties",
+            chosen_row_label=label,
             content="<table><tr><th>X</th></tr><tr><td>1</td></tr></table>",
             evidence="Page 1",
             source_pages=[1],

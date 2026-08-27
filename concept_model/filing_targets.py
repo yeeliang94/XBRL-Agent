@@ -78,6 +78,29 @@ def active_template_paths(repository_root: str | Path) -> list[Path]:
     )
 
 
+def _is_managed_template(path_value: str | Path) -> bool:
+    """Whether the file is one of this repository's active SSM templates.
+
+    Synthetic and legacy workbooks intentionally retain the existing
+    style/label guards. They have no authoritative taxonomy manifest, so
+    trying to parse them as an active variant would turn an unavailable
+    contract into a false rejection (or a parser error).
+    """
+    path = Path(path_value).resolve()
+    root = Path(__file__).resolve().parent.parent
+    try:
+        relative = path.relative_to(root)
+    except ValueError:
+        return False
+    parts = relative.parts
+    return (
+        len(parts) == 3
+        and parts[0] in {"XBRL-template-MFRS", "XBRL-template-MPERS"}
+        and parts[1] in {"Company", "Group"}
+        and path.suffix.lower() == ".xlsx"
+    )
+
+
 def _workbook_fingerprint(path: Path) -> str:
     return sha256(path.read_bytes()).hexdigest()
 
@@ -180,10 +203,16 @@ def targets_for_template(path_value: str | Path) -> tuple[str, list[FilingTarget
 
 
 def list_writable_targets(path_value: str | Path) -> list[FilingTarget]:
+    if not _is_managed_template(path_value):
+        return []
     return [target for target in targets_for_template(path_value)[1] if target.writable]
 
 
-def writable_rows(path_value: str | Path, sheet: str) -> frozenset[int]:
+def writable_rows(
+    path_value: str | Path, sheet: str,
+) -> frozenset[int] | None:
+    if not _is_managed_template(path_value):
+        return None
     return frozenset(
         target.row for target in list_writable_targets(path_value)
         if target.sheet == sheet

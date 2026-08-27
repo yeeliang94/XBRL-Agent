@@ -47,10 +47,7 @@ def _semantic_template_cases():
     return cases
 
 
-_KNOWN_EMPTY_SEMANTIC_TEMPLATES = {
-    ("mfrs", "13-Notes-IssuedCapital.xlsx"),
-    ("mfrs", "14-Notes-RelatedParty.xlsx"),
-}
+_KNOWN_EMPTY_SEMANTIC_TEMPLATES: set[tuple[str, str]] = set()
 
 
 @pytest.mark.parametrize(
