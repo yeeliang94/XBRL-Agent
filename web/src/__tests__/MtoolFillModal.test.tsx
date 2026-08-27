@@ -317,6 +317,35 @@ describe("MtoolFillModal", () => {
     expect(screen.getByText(/no \+FootnoteTexts sheet/i)).toBeTruthy();
   });
 
+  test("preview surfaces a malformed successful response", async () => {
+    mockFetch((url) => {
+      if (url.includes("/notes-preview")) {
+        return new Response(JSON.stringify({ notes_in_run: 1 }), { status: 200 });
+      }
+      if (url.includes("/mtool-notes-fill")) {
+        return new Response(
+          JSON.stringify({ meta: { counts: { notes: 1 } }, footnotes: [] }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("/mtool-fill")) {
+        return new Response(JSON.stringify(FILL_DOC), { status: 200 });
+      }
+      return new Response("{}", { status: 200 });
+    });
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    await waitFor(() =>
+      expect(screen.getByText(/written note\(s\) will be filled/i)).toBeTruthy(),
+    );
+    fireEvent.change(screen.getByLabelText(/mtool template file/i), {
+      target: { files: [new File(["x"], "t.xlsx")] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /check notes/i }));
+    await waitFor(() =>
+      expect(screen.getByText(/notes preview returned an invalid response/i)).toBeTruthy(),
+    );
+  });
+
   test("changing the create-missing toggle invalidates a stale preview", async () => {
     mockFetch((url) => {
       if (url.includes("/notes-preview"))
@@ -539,6 +568,47 @@ describe("MtoolFillModal", () => {
     expect(screen.getByText(/columns detected/i)).toBeTruthy();
     expect((screen.getByLabelText(/label column/i) as HTMLInputElement).value).toBe("D");
     expect((screen.getByLabelText(/current_year column/i) as HTMLInputElement).value).toBe("E");
+  });
+
+  test("unverified semantic candidates still show column confirmation", async () => {
+    mockFetch((url) => {
+      if (url.includes("/mtool-fill/detect-columns")) {
+        return new Response(
+          JSON.stringify({
+            confidence: "high",
+            requires_confirmation: true,
+            filing_inspection: {
+              semantic_source: "taxonomy-identifiers",
+              mtool_compatibility: "candidate-2.2",
+            },
+            detected: {
+              "Notes-Issuedcapital": {
+                label_column: "D",
+                columns: { current_year: "E", prior_year: "F" },
+                confidence: "high",
+                requires_confirmation: true,
+                notes: ["this template has not been confirmed"],
+              },
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("/mtool-fill")) {
+        return new Response(JSON.stringify(FILL_DOC), { status: 200 });
+      }
+      return new Response("{}", { status: 200 });
+    });
+
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText(/values will be written/i)).toBeTruthy());
+    fireEvent.change(screen.getByLabelText(/mtool template file/i), {
+      target: { files: [new File(["x"], "candidate.xlsx")] },
+    });
+
+    await waitFor(() => expect(screen.getByLabelText(/column layout editor/i)).toBeTruthy());
+    expect(screen.getByText(/please check the columns/i)).toBeTruthy();
+    expect((screen.getByLabelText(/label column/i) as HTMLInputElement).value).toBe("D");
   });
 
   test("ignores a stale column-detect response after the file changed", async () => {

@@ -423,6 +423,7 @@ def detect_column_map(
     doc: dict[str, Any],
     *,
     data: dict | None = None,
+    cells_by_sheet: dict[str, dict] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Propose a column map for every sheet in ``doc``.
 
@@ -435,8 +436,9 @@ def detect_column_map(
     unattended only when every sheet says ``False``.
 
     ``data`` is an optional pre-loaded ``{entry_path: bytes}`` map (from
-    :func:`load_workbook_entries`); passing it lets a caller that already read
-    the zip avoid a redundant full re-read.
+    :func:`load_workbook_entries`). ``cells_by_sheet`` may additionally reuse
+    an existing worksheet index so detection does not parse the sheet XML
+    again.
     """
     if data is None:
         _, data, _ = load_workbook_entries(template_path)
@@ -455,7 +457,11 @@ def detect_column_map(
                 "declared_unit_scales": {},
                 "notes": [f"sheet {sheet!r} not in template"]}
             continue
-        cells = read_sheet_cells(data[entry], sst)
+        cells = (
+            cells_by_sheet[sheet]
+            if cells_by_sheet is not None and sheet in cells_by_sheet
+            else read_sheet_cells(data[entry], sst)
+        )
         roles = _order_roles(list(cfg.get("columns", {})))
         layout = _semantic_layout(cells, roles,
                                   template_known=template_known)

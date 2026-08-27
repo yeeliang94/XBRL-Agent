@@ -777,6 +777,11 @@ function AddBenchmarkForm({ onCreated }: { onCreated: () => void }) {
               </ul>
             </div>
           )}
+          {!!report.semantic_warning && (
+            <div style={styles.reportRow} data-testid="bench-semantic-warning">
+              ⚠️ {report.semantic_warning}
+            </div>
+          )}
           {!!report.matrix_warning && (
             <div style={styles.reportRow} data-testid="bench-matrix-warning">
               ⚠️ {report.matrix_warning}

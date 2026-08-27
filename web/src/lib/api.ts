@@ -573,6 +573,8 @@ export interface MtoolIngestResult {
   sheets_missing: string[];
   prose_notes_captured: number;
   scale_warning: string | null;
+  semantic_deferred: number;
+  semantic_warning: string | null;
   matrix_deferred: number;
   matrix_warning: string | null;
   statements: string[];

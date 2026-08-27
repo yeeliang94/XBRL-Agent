@@ -184,6 +184,76 @@ def test_explicit_column_map_bypasses_detection(tmp_path):
     assert report.fact_count == 2
 
 
+def test_semantic_resolution_failures_are_not_misreported_as_matrix(tmp_path, monkeypatch):
+    path = _mtool_file(tmp_path, [("Cash and bank balances", 1595, 1420)])
+    target = _target("Cash and bank balances")
+    target.primary_concept = "ifrs-full_CashAndCashEquivalents"
+    catalogue = {"SOFP": {normalize_label(target.canonical_label): target}}
+    override = {
+        "SOFP": {
+            "label_column": "A",
+            "columns": {"current_year": "B", "prior_year": "C"},
+        }
+    }
+
+    def unresolved(_path, doc, **_kwargs):
+        return doc, {"unmapped": 1, "ambiguous": 1}
+
+    monkeypatch.setattr("eval.mtool_ingest.resolve_filing_doc", unresolved)
+    report = ingest_workbook(
+        path, catalogue, filing_level="company", column_map_override=override
+    )
+
+    assert report.fact_count == 2  # strict legacy fallback still reads values
+    assert report.semantic_deferred == 2
+    assert report.matrix_deferred == 0
+
+
+def test_semantic_reverse_ingest_parses_each_sheet_once(tmp_path, monkeypatch):
+    path = _mtool_file(tmp_path, [("Cash and bank balances", 1595, 1420)])
+    target = _target("Cash and bank balances")
+    target.primary_concept = "ifrs-full_CashAndCashEquivalents"
+    catalogue = {"SOFP": {normalize_label(target.canonical_label): target}}
+    override = {
+        "SOFP": {
+            "label_column": "A",
+            "columns": {"current_year": "B", "prior_year": "C"},
+        }
+    }
+    ready_writes = [
+        {
+            "sheet": "SOFP",
+            "cell": cell,
+            "concept_uuid": target.concept_uuid,
+            "period": period,
+            "entity_scope": "Company",
+        }
+        for cell, period in (("B3", "CY"), ("C3", "PY"))
+    ]
+
+    def resolved(_path, doc, **_kwargs):
+        return {**doc, "writes": ready_writes}, {"unmapped": 0, "ambiguous": 0}
+
+    from mtool import template_map
+
+    original_reader = template_map.read_sheet_cells
+    calls = 0
+
+    def counted_reader(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original_reader(*args, **kwargs)
+
+    monkeypatch.setattr("eval.mtool_ingest.resolve_filing_doc", resolved)
+    monkeypatch.setattr(template_map, "read_sheet_cells", counted_reader)
+    report = ingest_workbook(
+        path, catalogue, filing_level="company", column_map_override=override
+    )
+
+    assert report.fact_count == 2
+    assert calls == 1
+
+
 # --- DB catalogue ----------------------------------------------------------
 
 # --- prose capture (C2) ----------------------------------------------------

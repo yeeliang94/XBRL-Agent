@@ -17,7 +17,6 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-from threading import Lock
 from typing import Any
 
 import openpyxl
@@ -73,9 +72,6 @@ _MFRS_SOCIE_COMPONENTS: tuple[str, ...] = (
     "ifrs-full_EquityMember",
 )
 
-_GENERATOR_LOCK = Lock()
-
-
 def _standard_and_level(path: Path) -> tuple[str, str] | None:
     lowered = [part.lower() for part in path.parts]
     standard = (
@@ -93,40 +89,14 @@ def _standard_and_level(path: Path) -> tuple[str, str] | None:
 def _role_rows(standard: str, role: str) -> tuple[tuple[int, str, str, bool], ...]:
     """Read one role through the generator's tested presentation walker.
 
-    The generator keeps its taxonomy paths in module globals.  Bootstrap is
-    sequential today, but the lock and restore make this helper safe if a
-    future caller parses templates concurrently.
+    The generator's public adapter owns its cache/context isolation, so this
+    consumer does not reach into generator-private globals.
     """
     from scripts import generate_mpers_templates as taxonomy
 
     root = Path(__file__).resolve().parent.parent
     tax_dir = root / "SSMxT_2022v1.0/rep/ssm/ca-2016/fs" / standard
-    with _GENERATOR_LOCK:
-        old = (
-            taxonomy._MPERS_TAXONOMY_DIR,
-            taxonomy._ROLE_XSD,
-            taxonomy._LABEL_MAP_CACHE,
-            taxonomy._LABEL_ROLE_TABLE,
-            taxonomy._pre_file_for_role,
-        )
-        try:
-            taxonomy._MPERS_TAXONOMY_DIR = tax_dir
-            taxonomy._ROLE_XSD = tax_dir / f"rol_ssmt-fs-{standard}_2022-12-31.xsd"
-            taxonomy._LABEL_MAP_CACHE = None
-            taxonomy._LABEL_ROLE_TABLE = {}
-            taxonomy._pre_file_for_role = (
-                lambda role_number: tax_dir
-                / f"pre_ssmt-fs-{standard}_2022-12-31_role-{role_number}.xml"
-            )
-            return tuple(taxonomy.walk_role(taxonomy._pre_file_for_role(role)))
-        finally:
-            (
-                taxonomy._MPERS_TAXONOMY_DIR,
-                taxonomy._ROLE_XSD,
-                taxonomy._LABEL_MAP_CACHE,
-                taxonomy._LABEL_ROLE_TABLE,
-                taxonomy._pre_file_for_role,
-            ) = old
+    return tuple(taxonomy.walk_role_for_taxonomy(tax_dir, standard, role))
 
 
 def _address(primary: str, dimensions: dict[str, str] | None = None) -> dict[str, Any]:
@@ -143,62 +113,68 @@ def _linear_addresses(path: Path, standard: str) -> dict[tuple[str, int, str | N
     if not roles:
         return {}
     wb = openpyxl.load_workbook(path, read_only=True, data_only=False)
-    if len(wb.worksheets) != len(roles):
-        return {}
-    out: dict[tuple[str, int, str | None], dict[str, Any]] = {}
-    for ws, role in zip(wb.worksheets, roles):
-        sheet_rows = [
-            row for row in range(1, ws.max_row + 1)
-            if ws.cell(row, 1).value not in (None, "")
-        ]
-        taxonomy_rows = list(_role_rows(standard, role))
-        # One MFRS SOCI template carries a display-only title above the exact
-        # linkbase rows.  A larger discrepancy means the template drifted and
-        # must not receive guessed identities.
-        if len(sheet_rows) == len(taxonomy_rows) + 1:
-            sheet_rows = sheet_rows[1:]
-        if len(sheet_rows) != len(taxonomy_rows):
-            continue
-        for row, (_depth, concept_id, _label, _abstract) in zip(sheet_rows, taxonomy_rows):
-            out[(ws.title, row, None)] = _address(concept_id)
-    return out
+    try:
+        if len(wb.worksheets) != len(roles):
+            return {}
+        out: dict[tuple[str, int, str | None], dict[str, Any]] = {}
+        for ws, role in zip(wb.worksheets, roles):
+            sheet_rows = [
+                row for row in range(1, ws.max_row + 1)
+                if ws.cell(row, 1).value not in (None, "")
+            ]
+            taxonomy_rows = list(_role_rows(standard, role))
+            # One MFRS SOCI template carries a display-only title above the exact
+            # linkbase rows.  A larger discrepancy means the template drifted and
+            # must not receive guessed identities.
+            if len(sheet_rows) == len(taxonomy_rows) + 1:
+                sheet_rows = sheet_rows[1:]
+            if len(sheet_rows) != len(taxonomy_rows):
+                continue
+            for row, (_depth, concept_id, _label, _abstract) in zip(sheet_rows, taxonomy_rows):
+                out[(ws.title, row, None)] = _address(concept_id)
+        return out
+    finally:
+        wb.close()
 
 
 def _matrix_addresses(path: Path, standard: str, level: str) -> dict[tuple[str, int, str | None], dict[str, Any]]:
     wb = openpyxl.load_workbook(path, read_only=True, data_only=False)
-    ws = wb["SOCIE"] if "SOCIE" in wb.sheetnames else wb[wb.sheetnames[0]]
-    taxonomy_rows = list(_role_rows(standard, "610000"))
-
-    if standard == "mpers":
-        # MPERS's single value column is not a component dimension.  The
-        # canonical parser starts at Equity and excludes the two title rows.
-        line_items = taxonomy_rows[2:]
-        # Company begins at row 5; Group has one additional block heading.
-        base_row = 6 if level == "group" else 5
-        rows = list(range(base_row, base_row + len(line_items)))
-        return {
-            (ws.title, row, "B"): _address(concept_id)
-            for row, (_depth, concept_id, _label, _abstract) in zip(rows, line_items)
-        }
-
-    marker = "ifrs-full_StatementOfChangesInEquityLineItems"
     try:
-        start = next(i for i, item in enumerate(taxonomy_rows) if item[1] == marker) + 1
-    except StopIteration:
-        return {}
-    line_items = taxonomy_rows[start:]
-    # The MFRS canonical matrix uses its first CY block, rows 6..25, as the
-    # concept home; later blocks are render targets for period/scope.
-    rows = list(range(6, 6 + len(line_items)))
-    if len(line_items) != 20 or ws.max_column < 24:
-        return {}
-    axis = "ifrs-full_ComponentsOfEquityAxis"
-    out: dict[tuple[str, int, str | None], dict[str, Any]] = {}
-    for row, (_depth, primary, _label, _abstract) in zip(rows, line_items):
-        for offset, member in enumerate(_MFRS_SOCIE_COMPONENTS, start=2):
-            col = openpyxl.utils.get_column_letter(offset)
-            out[(ws.title, row, col)] = _address(primary, {axis: member})
-    return out
+        ws = wb["SOCIE"] if "SOCIE" in wb.sheetnames else wb[wb.sheetnames[0]]
+        taxonomy_rows = list(_role_rows(standard, "610000"))
+
+        if standard == "mpers":
+            # MPERS's single value column is not a component dimension.  The
+            # canonical parser starts at Equity and excludes the two title rows.
+            line_items = taxonomy_rows[2:]
+            # Company begins at row 5; Group has one additional block heading.
+            base_row = 6 if level == "group" else 5
+            rows = list(range(base_row, base_row + len(line_items)))
+            return {
+                (ws.title, row, "B"): _address(concept_id)
+                for row, (_depth, concept_id, _label, _abstract) in zip(rows, line_items)
+            }
+
+        marker = "ifrs-full_StatementOfChangesInEquityLineItems"
+        try:
+            start = next(i for i, item in enumerate(taxonomy_rows) if item[1] == marker) + 1
+        except StopIteration:
+            return {}
+        line_items = taxonomy_rows[start:]
+        # The MFRS canonical matrix uses its first CY block, rows 6..25, as the
+        # concept home; later blocks are render targets for period/scope.
+        rows = list(range(6, 6 + len(line_items)))
+        if len(line_items) != 20 or ws.max_column < 24:
+            return {}
+        axis = "ifrs-full_ComponentsOfEquityAxis"
+        out: dict[tuple[str, int, str | None], dict[str, Any]] = {}
+        for row, (_depth, primary, _label, _abstract) in zip(rows, line_items):
+            for offset, member in enumerate(_MFRS_SOCIE_COMPONENTS, start=2):
+                col = openpyxl.utils.get_column_letter(offset)
+                out[(ws.title, row, col)] = _address(primary, {axis: member})
+        return out
+    finally:
+        wb.close()
 
 
 @lru_cache(maxsize=64)

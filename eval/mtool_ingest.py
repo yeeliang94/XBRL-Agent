@@ -42,7 +42,7 @@ from mtool.column_detect import (
     detect_column_map,
     fingerprint_workbook,
 )
-from mtool.template_map import resolve_filing_doc
+from mtool.template_map import index_workbook, resolve_filing_doc
 from mtool.offline_fill import (
     build_label_map,
     get_shared_strings,
@@ -50,7 +50,6 @@ from mtool.offline_fill import (
     load_workbook_entries,
     normalize_label,
     read_footnote_rows,
-    read_sheet_cells,
 )
 
 # A value column role maps to exactly one (period, entity_scope) slot — the
@@ -130,6 +129,9 @@ class IngestReport:
     ambiguous: list[dict[str, Any]] = field(default_factory=list)
     scale_warning: Optional[str] = None
     template_ids: set[str] = field(default_factory=set)
+    # Semantic writes of any concept kind that could not resolve uniquely in
+    # this particular workbook. Kept separate from matrix identity coverage.
+    semantic_deferred: int = 0
     # MATRIX_CELL concepts in scope that could not be mapped semantically.
     # Supported SOCIE cells are ingested; missing identities and ambiguous
     # workbook destinations stay counted so coverage cannot look falsely clean.
@@ -296,7 +298,8 @@ def ingest_workbook(
 
     _, data, _ = load_workbook_entries(str(path))
     sheet_paths = get_sheet_paths(data)
-    sst = get_shared_strings(data)
+    workbook_index = index_workbook(data)
+    _, cells_by_sheet = workbook_index
 
     descriptor = describe_template(fingerprint_workbook(data)) or {}
     if column_map_override is not None:
@@ -311,9 +314,19 @@ def ingest_workbook(
                 for sheet in catalogue
             }
         }
-        column_map = detect_column_map(str(path), probe_doc, data=data)
+        column_map = detect_column_map(
+            str(path), probe_doc, data=data, cells_by_sheet=cells_by_sheet
+        )
     else:
-        column_map = _detect(path, catalogue, roles, data)
+        column_map = _detect(
+            path, catalogue, roles, data, cells_by_sheet=cells_by_sheet
+        )
+
+    target_by_uuid = {
+        target.concept_uuid: target
+        for targets in catalogue.values()
+        for target in targets.values()
+    }
 
     report = IngestReport()
     semantic_writes: list[dict[str, Any]] = []
@@ -367,7 +380,8 @@ def ingest_workbook(
             "meta": {},
         }
         ready, coverage = resolve_filing_doc(
-            str(path), semantic_doc, data=data, column_map=column_map)
+            str(path), semantic_doc, data=data, column_map=column_map,
+            workbook_index=workbook_index)
         for write in ready["writes"]:
             # Semantic resolution returns exact cells.  Its legacy adapter
             # deliberately preserves label/role writes for ``offline_fill``;
@@ -375,10 +389,9 @@ def ingest_workbook(
             # below, where the numeric source cell can be read safely.
             if not write.get("cell"):
                 continue
-            entry = sheet_paths.get(write["sheet"])
-            if not entry:
+            cells = cells_by_sheet.get(write["sheet"])
+            if cells is None:
                 continue
-            cells = read_sheet_cells(data[entry], sst)
             from mtool.offline_fill import split_ref
             col, row_num = split_ref(write["cell"])
             value = _numeric(cells.get(row_num, {}).get(col))
@@ -388,13 +401,11 @@ def ingest_workbook(
             report.facts.append(GoldFact(
                 write["concept_uuid"], write["period"],
                 write["entity_scope"], value * unit_scale))
-            target = next(
-                t for ts in catalogue.values() for t in ts.values()
-                if t.concept_uuid == write["concept_uuid"])
+            target = target_by_uuid[write["concept_uuid"]]
             report.template_ids.add(target.template_id)
             report.matched_by_statement[target.statement_type] = (
                 report.matched_by_statement.get(target.statement_type, 0) + 1)
-        report.matrix_deferred += coverage["unmapped"] + coverage["ambiguous"]
+        report.semantic_deferred += coverage["unmapped"] + coverage["ambiguous"]
 
     for sheet, targets in catalogue.items():
         entry = sheet_paths.get(sheet)
@@ -408,7 +419,7 @@ def ingest_workbook(
             report.sheets_missing.append(sheet)
             continue
 
-        cells = read_sheet_cells(data[entry], sst)
+        cells = cells_by_sheet[sheet]
         label_map = build_label_map(cells, label_col)
         matched_rows: set[int] = set()
 
@@ -455,7 +466,9 @@ def ingest_workbook(
     return report
 
 
-def _detect(path, catalogue, roles, data) -> dict[str, dict[str, Any]]:
+def _detect(
+    path, catalogue, roles, data, *, cells_by_sheet
+) -> dict[str, dict[str, Any]]:
     """Run column detection over the catalogue's sheets, refusing low
     confidence (the caller must then supply an explicit map)."""
     doc = {
@@ -464,7 +477,9 @@ def _detect(path, catalogue, roles, data) -> dict[str, dict[str, Any]]:
             for sheet in catalogue
         }
     }
-    column_map = detect_column_map(str(path), doc, data=data)
+    column_map = detect_column_map(
+        str(path), doc, data=data, cells_by_sheet=cells_by_sheet
+    )
     # A sheet absent from the file is 'missing', not a detection failure — only
     # sheets that ARE present but couldn't be read confidently block ingest.
     sheet_paths = get_sheet_paths(data)

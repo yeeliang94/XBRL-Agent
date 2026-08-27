@@ -620,6 +620,8 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
         Array.isArray(candidate.errors)
       ) {
         setPreview(candidate as NotesPreview);
+      } else {
+        throw new Error("Notes preview returned an invalid response.");
       }
     } catch (e) {
       setPreviewErr(userMessage(e));
@@ -656,8 +658,13 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
       const semanticSource = (
         body as { filing_inspection?: { semantic_source?: string } }
       ).filing_inspection?.semantic_source;
-      const needsLegacyColumns = !semanticSource || semanticSource === "legacy-labels";
-      if (detected && needsLegacyColumns) setColumnMap(detectedToColumnMap(detected));
+      // Only a fingerprint-verified generated template can safely omit the
+      // column confirmation. Candidate mTool workbooks may contain some
+      // taxonomy identifiers while other values still use legacy columns.
+      const needsColumnConfirmation = semanticSource !== "generated-targets";
+      if (detected && needsColumnConfirmation) {
+        setColumnMap(detectedToColumnMap(detected));
+      }
       // `requires_confirmation` outranks `confidence`: a group layout or an
       // unrecognised template can look confident while nothing has actually
       // corroborated which column is which (finding 3).
@@ -667,7 +674,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
       setColumnConfidence(
         mustConfirm ? "low" : ((body as { confidence?: string }).confidence ?? null),
       );
-      if (mustConfirm && needsLegacyColumns) {
+      if (mustConfirm && needsColumnConfirmation) {
         setColumnPrompt(
           "Please check the columns below before we write anything. " +
             (detected

@@ -473,9 +473,16 @@ async def patch_mtool_template(
             _validate_cmap_shape(cmap)
             _validate_cmap_semantics(cmap, doc)
         else:
-            semantic_template = inspection["semantic_source"] != "legacy-labels"
+            # Only our fingerprint-verified generated templates may bypass a
+            # detector confirmation.  An unverified mTool workbook can expose
+            # some taxonomy identifiers while other writes still take the
+            # legacy label/column path; treating that mixed case as fully
+            # semantic recreates the wrong-column incident this gate prevents.
+            trusted_generated = (
+                inspection["semantic_source"] == "generated-targets"
+            )
             if (overall_confidence(detected) != "high"
-                    or needs_confirmation(detected)) and not semantic_template:
+                    or needs_confirmation(detected)) and not trusted_generated:
                 raise HTTPException(
                     status_code=422,
                     detail={
@@ -655,6 +662,12 @@ async def patch_mtool_template(
 
         summary = _full_report(report, notes_report)
         summary["filing_coverage"] = filing_coverage
+        # Candidate/legacy resolution is intentionally usable, but it is not a
+        # clean filing result.  Mark it degraded so report-before-file requires
+        # the existing acknowledgement and the receipt records that decision.
+        if (filing_coverage.get("status") == "attention"
+                and summary["status"] == "ok"):
+            summary["status"] = "degraded"
         # The template's own declared unit vs the run's denomination. Only the
         # translation manifest may change a VALUE — but a disagreement here is
         # the 1000×-inflation risk (finding 2), so it DEGRADES the fill: the

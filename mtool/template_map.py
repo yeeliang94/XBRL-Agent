@@ -28,7 +28,7 @@ from mtool.offline_fill import (
 )
 
 
-def _workbook_index(data: dict) -> tuple[dict, dict]:
+def index_workbook(data: dict) -> tuple[dict, dict]:
     """Return exact text occurrences and readable worksheet cells."""
     paths = get_sheet_paths(data)
     shared = get_shared_strings(data)
@@ -50,13 +50,14 @@ def inspect_template(
     doc: dict[str, Any],
     *,
     data: dict | None = None,
+    workbook_index: tuple[dict, dict] | None = None,
 ) -> dict[str, Any]:
     """Inspect one workbook and report its semantic filing capability."""
     if data is None:
         _, data, _ = load_workbook_entries(template_path)
     fingerprint = fingerprint_workbook(data)
     descriptor = describe_template(fingerprint)
-    occurrences, _ = _workbook_index(data)
+    occurrences, cells_by_sheet = workbook_index or index_workbook(data)
     requested = len(doc.get("writes", []))
     addressable = 0
     missing_address = 0
@@ -104,7 +105,9 @@ def inspect_template(
         "requested": requested,
         "identifier_addressable": addressable,
         "identifier_missing": missing_address,
-        "column_map": detect_column_map(template_path, doc, data=data),
+        "column_map": detect_column_map(
+            template_path, doc, data=data, cells_by_sheet=cells_by_sheet
+        ),
     }
 
 
@@ -133,6 +136,7 @@ def resolve_filing_doc(
     *,
     data: dict | None = None,
     column_map: dict[str, dict[str, Any]] | None = None,
+    workbook_index: tuple[dict, dict] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Resolve writes and return ``(offline_doc, coverage_report)``.
 
@@ -144,8 +148,11 @@ def resolve_filing_doc(
     """
     if data is None:
         _, data, _ = load_workbook_entries(template_path)
-    inspection = inspect_template(template_path, doc, data=data)
-    occurrences, _ = _workbook_index(data)
+    workbook_index = workbook_index or index_workbook(data)
+    inspection = inspect_template(
+        template_path, doc, data=data, workbook_index=workbook_index
+    )
+    occurrences, _ = workbook_index
     descriptor = inspection.get("template") or {}
     generated = descriptor.get("source") == "generated"
     if not inspection["filing_family_match"]:
@@ -273,4 +280,4 @@ def resolve_filing_doc(
     return out, report
 
 
-__all__ = ["inspect_template", "resolve_filing_doc"]
+__all__ = ["index_workbook", "inspect_template", "resolve_filing_doc"]
