@@ -38,6 +38,37 @@ describe("StatementRunConfig", () => {
     expect(selects).toHaveLength(5);
   });
 
+  test("each model selector is named for its statement", () => {
+    render(
+      <StatementRunConfig
+        enabled={allEnabled}
+        modelOverrides={defaultModels}
+        availableModels={mockModels}
+        onToggleStatement={vi.fn()}
+        onModelChange={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("combobox", { name: /model for SOFP/i })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: /model for SOCIE/i })).toBeInTheDocument();
+  });
+
+  test("model controls can shrink inside a narrow container", () => {
+    const { container } = render(
+      <StatementRunConfig
+        enabled={allEnabled}
+        modelOverrides={defaultModels}
+        availableModels={mockModels}
+        onToggleStatement={vi.fn()}
+        onModelChange={vi.fn()}
+      />,
+    );
+    const table = container.querySelector("table") as HTMLTableElement;
+    const select = screen.getAllByRole("combobox")[0] as HTMLSelectElement;
+    expect(table.style.tableLayout).toBe("fixed");
+    expect(select.style.minWidth).toBe("0");
+    expect(select.style.width).toBe("100%");
+  });
+
   test("checkbox reflects enabled state", () => {
     const enabled = { ...allEnabled, SOCIE: false };
     render(

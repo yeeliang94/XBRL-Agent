@@ -237,10 +237,10 @@ describe("ResultsView — P4", () => {
     });
   });
 
-  test("uses PwC theme: orange500 active tab", () => {
+  test("uses a quiet selected surface without an active underline", () => {
     renderResults();
     const summaryBtn = screen.getByRole("button", { name: /summary/i });
-    // Active tab should have orange bottom border (#FD5108 → rgb(253, 81, 8))
-    expect(summaryBtn.getAttribute("style")).toContain("rgb(253, 81, 8)");
+    expect(summaryBtn.style.background).toBe("rgb(245, 247, 248)");
+    expect(summaryBtn.style.borderBottom).toBe("");
   });
 });

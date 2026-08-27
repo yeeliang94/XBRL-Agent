@@ -1,17 +1,26 @@
-/* Keyframe animations for P0+ components.
-   Base colours/typography mirror the PwC design tokens in lib/theme.ts
-   (grey50 page bg, grey900 ink, Helvetica Neue family). */
+/* Focused-workspace state layer. Stable component geometry remains inline;
+   this file owns interaction, motion, responsive composition, and editor-only
+   states that inline styles cannot express. */
+:root {
+  --motion-instant: 100ms;
+  --motion-fast: 140ms;
+  --motion-base: 180ms;
+  --motion-slow: 240ms;
+  --motion-standard: cubic-bezier(0.2, 0, 0, 1);
+  --motion-emphasized: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
 html {
-  background: #FAFAFA;
+  background: #FFFFFF;
 }
 
 body {
   margin: 0;
-  background: #FAFAFA;
-  color: #1A1A1A;
-  font-family: "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif;
-  font-size: 15px;
-  line-height: 1.55;
+  background: #FFFFFF;
+  color: #000000;
+  font-family: "Inter Variable", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px;
+  line-height: 1.45;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   overflow-x: hidden;
@@ -39,14 +48,14 @@ h2 {
   z-index: 1000;
   padding: 10px 16px;
   border-radius: 6px;
-  background: #1A1A1A; /* grey900 */
+  background: #000000;
   color: #FFFFFF;
-  font-family: "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif;
+  font-family: "Inter Variable", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 14px;
   font-weight: 500;
   text-decoration: none;
   transform: translateY(-200%);
-  transition: transform 150ms cubic-bezier(0.2, 0, 0, 1);
+  transition: transform var(--motion-fast) var(--motion-standard);
 }
 .skip-link:focus,
 .skip-link:focus-visible {
@@ -85,9 +94,9 @@ h2 {
   to { opacity: 1; transform: translateY(0); }
 }
 
-@keyframes slide-down {
-  from { max-height: 0; opacity: 0; }
-  to { max-height: 500px; opacity: 1; }
+@keyframes reveal-content {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 @keyframes blink-caret {
@@ -129,15 +138,67 @@ h2 {
   to { opacity: 1; transform: translateX(0); }
 }
 
+@keyframes status-arrive {
+  from { opacity: 0; transform: scale(0.94); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+/* One shared motion vocabulary. State truth is immediate; these hooks only
+   help users relate the arriving content to the action that caused it. */
+.pwc-view-enter,
+.page-header,
+.pwc-empty-state {
+  animation: fade-in var(--motion-base) var(--motion-standard) both;
+}
+.pwc-reveal,
+details[open] > .pwc-disclosure-content {
+  animation: reveal-content var(--motion-base) var(--motion-emphasized) both;
+}
+.pwc-status-change {
+  animation: status-arrive var(--motion-fast) var(--motion-standard) both;
+}
+.pwc-toast-enter {
+  animation: slide-in-right var(--motion-base) var(--motion-standard) both;
+}
+.pwc-dialog-scrim-enter,
+.pwc-dialog-enter {
+  animation: dialog-in var(--motion-fast) var(--motion-standard) both;
+}
+.pwc-working-indicator {
+  animation: pulse-subtle 1.8s var(--motion-standard) infinite;
+  will-change: opacity;
+}
+.pwc-progress-fill {
+  transform-origin: left center;
+  transition: transform var(--motion-slow) var(--motion-emphasized);
+}
+.pwc-disclosure-chevron {
+  transition: transform var(--motion-fast) var(--motion-standard);
+}
+.pwc-disclosure-chevron.is-open {
+  transform: rotate(90deg);
+}
+details[open] > summary .pwc-disclosure-chevron {
+  transform: rotate(180deg);
+}
+.pwc-skeleton {
+  animation: skeleton-shimmer 1.8s var(--motion-standard) infinite;
+  will-change: opacity;
+}
+.pwc-spinner {
+  animation: spin 800ms linear infinite;
+  will-change: transform;
+}
+
 /* Two-part keyboard focus for inline-styled buttons and links (design system
    Accessibility rule A): a light outline plus a dark halo stays perceptible
    on white, grey, and tinted surfaces. Overrides outline:none set in JS. */
 button:focus-visible,
 a:focus-visible,
 summary:focus-visible {
-  outline: 2px solid #FFFFFF !important;
-  outline-offset: 1px;
-  box-shadow: 0 0 0 4px #1A1A1A !important; /* grey900 focus-strong */
+  outline: 2px solid #000000 !important;
+  outline-offset: 2px;
+  box-shadow: none !important;
 }
 
 /* Focused controls scrolled into view must clear sticky headers/action bars
@@ -154,30 +215,56 @@ summary:focus-visible {
 input:focus,
 select:focus,
 textarea:focus {
-  outline: 2px solid #1A1A1A; /* grey900 focus-strong */
-  outline-offset: 1px;
-  border-color: #C63D00 !important; /* color.action.primary */
-  box-shadow: 0 0 0 4px #FFF5ED !important; /* orange50 soft halo */
+  outline: 2px solid #000000;
+  outline-offset: 2px;
+  border-color: #000000 !important;
+  box-shadow: none !important;
+}
+
+/* Every interactive control shares one restrained motion contract. Components
+   can add state-specific colours, but navigation, hover and press feedback
+   should never snap because a class hook was omitted. */
+:where(button, a[href], summary, [role="button"], [role="tab"]) {
+  transition: background-color var(--motion-fast) var(--motion-standard),
+    border-color var(--motion-fast) var(--motion-standard),
+    color var(--motion-fast) var(--motion-standard),
+    opacity var(--motion-fast) var(--motion-standard),
+    transform var(--motion-instant) var(--motion-standard);
+}
+
+:where(button, a[href], summary, [role="button"], [role="tab"]):active {
+  transform: translateY(1px);
 }
 
 /* Button hover states for the shared primitives (lib/uiStyles.ts → uiClass).
    Inline styles can't express :hover, so components add the matching class
    alongside their inline style object. Primary uses the accessible action
    roles (color.action.primary/hover), not signature orange. */
+.pwc-btn-primary,
+.pwc-btn-secondary,
+.pwc-btn-quiet,
+.pwc-btn-danger {
+  transition: background var(--motion-fast) var(--motion-standard),
+    border-color var(--motion-fast) var(--motion-standard),
+    color var(--motion-fast) var(--motion-standard),
+    box-shadow var(--motion-fast) var(--motion-standard),
+    transform var(--motion-instant) var(--motion-standard);
+}
 .pwc-btn-primary:hover:not(:disabled) {
-  background: #A83A00 !important; /* button.primary.background.hover */
-  border-color: #A83A00 !important;
+  background: #000000 !important;
+  border-color: #000000 !important;
+  opacity: 0.86;
 }
 .pwc-btn-secondary:hover:not(:disabled) {
-  background: #FAFAFA !important; /* grey50 */
-  border-color: #C9C9C9 !important; /* grey300 */
+  background: #F5F7F8 !important;
+  border-color: #6B7280 !important;
 }
 .pwc-btn-quiet:hover:not(:disabled) {
-  background: #F4F4F4 !important; /* grey100 — button.quiet.background.hover */
+  background: #EEEFF1 !important;
 }
 .pwc-btn-danger:hover:not(:disabled) {
-  background: #FCECEC !important; /* errorBg */
-  border-color: #C0303A !important; /* errorText */
+  background: #FFF5ED !important;
+  border-color: #FD5108 !important;
 }
 /* Pressed feedback: a 1px settle while the pointer is down. Instant (not
    transitioned) so it reads as a physical click; released state springs back
@@ -200,29 +287,227 @@ textarea:focus {
    vertically or gain elevation on hover — static cards omit this class
    entirely (flat surfaces stay flat). */
 .pwc-card {
-  transition: background 150ms cubic-bezier(0.2, 0, 0, 1),
-    border-color 150ms cubic-bezier(0.2, 0, 0, 1); /* pwc.motion fast + easing */
+  transition: background var(--motion-fast) var(--motion-standard),
+    border-color var(--motion-fast) var(--motion-standard);
 }
 .pwc-card:hover {
-  background: #FAFAFA; /* grey50 */
-  border-color: #7D7D7D; /* grey500 */
+  background: #F5F7F8;
+  border-color: #6B7280;
 }
 
 /* Quiet table-row hover. */
 .pwc-table-row:hover {
-  background: #FAFAFA; /* grey50 */
+  background: #F5F7F8;
 }
 
-/* Shared underline tab hover (ui.tab). Skip active tabs so the rule doesn't
-   fight the dark active text + orange indicator. */
+.agent-tab:hover:not(:disabled),
+.agent-tab[aria-selected="true"] {
+  background: #F5F7F8 !important;
+}
+
+.historical-agent-row {
+  transition: background var(--motion-fast) var(--motion-standard),
+    color var(--motion-fast) var(--motion-standard);
+}
+
+.historical-agent-row:hover,
+.historical-agent-row[aria-pressed="true"] {
+  background: #F5F7F8 !important;
+}
+
+.pwc-table-row,
+.agent-tab,
+.file-drop-zone,
+.pwc-tab,
+.notes-subtab,
+.segmented-control-button,
+.review-collapsed-rail,
+.review-panel-chevron {
+  transition: background var(--motion-fast) var(--motion-standard),
+    border-color var(--motion-fast) var(--motion-standard),
+    color var(--motion-fast) var(--motion-standard);
+}
+
+.review-collapsed-rail:hover {
+  background: #F5F7F8 !important;
+  border-color: #6B7280 !important;
+  color: #000000 !important;
+}
+
+.review-panel-chevron {
+  transition-property: transform;
+}
+
+.file-drop-zone:hover:not(:disabled),
+.file-drop-zone.is-dragging {
+  border-color: #6B7280 !important;
+  background: #F5F7F8 !important;
+}
+
+.notes-subtab:hover:not([aria-selected="true"]),
+.segmented-control-button:hover:not([aria-pressed="true"]):not([aria-selected="true"]) {
+  background: #F5F7F8 !important;
+  color: #000000 !important;
+}
+
+/* Shared surface-tab states. Selection uses fill and weight, never an accent
+   underline or edge. */
 .pwc-tab:hover:not([aria-selected="true"]):not([aria-current="page"]) {
-  color: #1A1A1A; /* grey900 */
+  color: #000000;
+  background: #F5F7F8 !important;
+}
+.pwc-tab[aria-selected="true"],
+.pwc-tab[aria-current="page"] {
+  background: #F5F7F8 !important;
+}
+
+/* Pointer-selected tabs keep the quiet selected surface. Keyboard focus still
+   receives the global two-part outline after any key interaction. */
+.settings-page .pwc-tab[data-pointer-focus="true"]:focus-visible {
+  outline: none !important;
+}
+
+.settings-format-swatch:hover:not([data-color-swatch="true"]) {
+  background: #F5F7F8 !important;
+}
+
+.settings-format-swatch[data-color-swatch="true"]:hover {
+  opacity: 0.82;
+}
+
+.settings-users-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
+
+.settings-users-table {
+  min-width: 640px;
 }
 
 /* Inactive top-nav destination hover — quiet surface + readable text. */
 .app-main-nav-tab:hover:not([aria-current="page"]):not([aria-selected="true"]) {
-  background: #FAFAFA; /* grey50 */
-  color: #1A1A1A; /* grey900 */
+  background: rgba(255, 255, 255, 0.55);
+  color: #000000;
+}
+
+/* Canonical icon-only help. The accessible name remains on the control; this
+   visual copy appears for both pointer hover and keyboard focus. */
+[data-tooltip] {
+  position: relative;
+}
+[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  z-index: 120;
+  width: max-content;
+  max-width: 210px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #000000;
+  color: #FFFFFF;
+  font-family: "Inter Variable", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.25;
+  text-align: left;
+  white-space: normal;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translate(-50%, 2px);
+  transition: opacity var(--motion-instant) var(--motion-standard),
+    transform var(--motion-instant) var(--motion-standard),
+    visibility 0s linear var(--motion-instant);
+}
+[data-tooltip]:hover::after,
+[data-tooltip]:focus-visible::after {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(-50%, 0);
+  transition-delay: 0s;
+}
+
+/* Persistent workspace shell. The 220px/72px geometry originates in shared
+   inline primitives; these selectors express route and viewport states. */
+.app-main-nav-tab {
+  position: relative;
+  transition: background var(--motion-fast) var(--motion-standard),
+    color var(--motion-fast) var(--motion-standard),
+    border-color var(--motion-fast) var(--motion-standard);
+}
+.app-shell--review .app-rail-brand-label,
+.app-shell--review .app-rail-section-label,
+.app-shell--review .app-user-copy {
+  display: none;
+}
+.app-shell--review .app-main-nav-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  border: 0;
+  white-space: nowrap;
+}
+.app-shell--review .app-sidebar {
+  padding: 16px 8px !important;
+}
+.app-shell--review .app-rail-brand {
+  justify-content: center;
+}
+.app-shell--review .app-main-nav-glyph {
+  display: inline-block;
+}
+.app-shell--review .app-main-nav-tab {
+  justify-content: center !important;
+  padding-inline: 8px !important;
+}
+.app-shell--review .app-main-nav-tab:hover .app-main-nav-label,
+.app-shell--review .app-main-nav-tab:focus-visible .app-main-nav-label {
+  display: block !important;
+  position: absolute;
+  left: calc(100% + 8px);
+  top: 50%;
+  z-index: 90;
+  width: max-content;
+  max-width: 220px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #000000;
+  color: #FFFFFF;
+  font-size: 11px;
+  line-height: 1.25;
+  transform: translateY(-50%);
+  pointer-events: none;
+  width: max-content;
+  height: auto;
+  margin: 0;
+  overflow: visible;
+  clip: auto;
+  clip-path: none;
+  white-space: normal;
+}
+.app-shell--review .app-rail-footer {
+  justify-content: center;
+  padding-inline: 0 !important;
+}
+.app-shell--review .app-main {
+  max-width: none !important;
+  padding-left: 28px !important;
+  padding-right: 28px !important;
+}
+
+.technical-activity > summary {
+  list-style: none;
+}
+.technical-activity > summary::-webkit-details-marker {
+  display: none;
 }
 
 /* Forced-colors / high-contrast: keep control boundaries and card borders
@@ -245,7 +530,7 @@ textarea:focus {
 .stat-tiles {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
+  gap: clamp(18px, 4vw, 52px);
 }
 @media (max-width: 960px) {
   .stat-tiles {
@@ -279,16 +564,16 @@ textarea:focus {
   background: transparent;
 }
 .agent-scroll::-webkit-scrollbar-thumb {
-  background: #C9C9C9; /* grey300 */
+  background: #CBD1D6; /* grey300 */
   border-radius: 3px;
 }
 .agent-scroll::-webkit-scrollbar-thumb:hover {
-  background: #7D7D7D; /* grey500 */
+  background: #6B7280; /* grey500 */
 }
 /* Firefox */
 .agent-scroll {
   scrollbar-width: thin;
-  scrollbar-color: #C9C9C9 transparent;
+  scrollbar-color: #CBD1D6 transparent;
 }
 
 /* Hide scrollbar on tab bar — still scrollable via drag/touch */
@@ -302,8 +587,8 @@ textarea:focus {
 /* Multi-agent workstream row hover. Inline styles own its vertical
    master-detail layout; this state hook adds the neutral hover response. */
 .agent-tab:hover:not([aria-selected="true"]):not([aria-disabled="true"]) {
-  background: #FAFAFA; /* grey50 */
-  color: #1A1A1A; /* grey900 */
+  background: #F5F7F8; /* grey50 */
+  color: #000000;
 }
 
 @media (max-width: 900px) {
@@ -317,25 +602,163 @@ textarea:focus {
 
   .multi-agent-workspace [role="tabpanel"] {
     border-left: 0 !important;
-    border-top: 1px solid #DEDEDE !important; /* grey200 */
+    border-top: 1px solid #DFE3E6 !important; /* grey200 */
   }
 }
 
 /* Deliberate responsive modes. Inline styles remain the production styling
    contract; these class hooks only express viewport-dependent composition. */
 @media (max-width: 1000px) {
-  .review-workspace .review-source-column,
+  .historical-agent-workspace {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .historical-agent-workspace > aside {
+    position: static !important;
+    padding-top: 24px !important;
+    padding-left: 0 !important;
+    border-top: 1px solid #EEEFF1 !important;
+    border-left: 0 !important;
+  }
+
+  .review-workspace {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    height: auto !important;
+    min-height: 0 !important;
+  }
+
+  .review-workspace .review-source-column {
+    display: block !important;
+    flex: 1 0 100% !important;
+    width: 100% !important;
+    min-height: 520px !important;
+    border-left: 0 !important;
+    border-top: 1px solid #DFE3E6 !important;
+  }
+
   .review-workspace .review-resize-handle {
     display: none !important;
   }
 
   .review-workspace .review-menu-column {
-    flex-basis: 220px !important;
-    width: 220px !important;
+    flex-basis: 210px !important;
+    width: 210px !important;
   }
 }
 
-@media (max-width: 720px) {
+@media (max-width: 780px) {
+  .historical-agent-row {
+    grid-template-columns: 20px minmax(0, 1fr) auto !important;
+  }
+
+  .historical-agent-row > :nth-child(3) {
+    grid-column: 2 / -1;
+  }
+
+  .app-shell,
+  .app-shell--review {
+    display: block !important;
+    padding-bottom: 72px;
+  }
+
+  .app-sidebar {
+    position: fixed !important;
+    inset: auto 0 0 0 !important;
+    width: 100% !important;
+    height: 64px !important;
+    padding: 6px 8px !important;
+    border: 0 !important;
+    border-top: 1px solid #DFE3E6 !important;
+    z-index: 80 !important;
+  }
+
+  .app-rail-brand,
+  .app-rail-section-label,
+  .app-rail-footer {
+    display: none !important;
+  }
+
+  .app-rail-nav {
+    overflow: hidden !important;
+  }
+
+  .app-main-nav {
+    flex-direction: row !important;
+    align-items: stretch !important;
+    gap: 2px !important;
+    width: 100% !important;
+    overflow-x: auto !important;
+    overscroll-behavior-inline: contain;
+  }
+
+  .app-main-nav-tab,
+  .app-shell--review .app-main-nav-tab {
+    flex: 1 0 52px !important;
+    min-width: 52px !important;
+    min-height: 50px !important;
+    justify-content: center !important;
+    gap: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    border-radius: 8px !important;
+    font-size: 0 !important;
+  }
+
+  .app-main-nav-glyph,
+  .app-shell--review .app-main-nav-glyph {
+    display: inline-block;
+    font-size: 15px !important;
+  }
+
+  .app-main-nav-label,
+  .app-shell--review .app-main-nav-label {
+    display: block !important;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    border: 0;
+    white-space: nowrap;
+  }
+
+  .app-main-nav-tab:hover .app-main-nav-label,
+  .app-main-nav-tab:focus-visible .app-main-nav-label,
+  .app-shell--review .app-main-nav-tab:hover .app-main-nav-label,
+  .app-shell--review .app-main-nav-tab:focus-visible .app-main-nav-label {
+    display: block !important;
+    position: absolute;
+    left: 50%;
+    top: auto;
+    bottom: calc(100% + 8px);
+    z-index: 90;
+    width: max-content;
+    max-width: 180px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: #000000;
+    color: #FFFFFF;
+    font-size: 11px !important;
+    line-height: 1.25;
+    transform: translateX(-50%);
+    pointer-events: none;
+    height: auto;
+    margin: 0;
+    overflow: visible;
+    clip: auto;
+    clip-path: none;
+    white-space: normal;
+  }
+
+  .app-topbar {
+    height: 64px !important;
+    padding-inline: 16px !important;
+  }
+
   .live-run-header {
     align-items: stretch !important;
     flex-direction: column !important;
@@ -343,45 +766,15 @@ textarea:focus {
 
   .live-run-summary {
     border-left: 0 !important;
-    border-top: 1px solid #DEDEDE !important; /* grey200 */
+    border-top: 1px solid #DFE3E6 !important; /* grey200 */
     min-width: 0 !important;
     padding-left: 0 !important;
     padding-top: 12px !important;
     text-align: left !important;
   }
 
-  .app-header {
-    align-items: stretch !important;
-    flex-direction: column !important;
-    gap: 8px !important;
-    padding: 12px 16px !important;
-  }
-
-  .app-header-left {
-    align-items: flex-start !important;
-    flex-direction: column !important;
-    gap: 4px !important;
-    min-width: 0 !important;
-    width: 100% !important;
-  }
-
-  .app-main-nav {
-    gap: 0 !important;
-    max-width: 100% !important;
-    overflow-x: auto !important;
-    overscroll-behavior-inline: contain;
-    scroll-padding-inline: 4px;
-    width: 100% !important;
-  }
-
-  .app-main-nav-tab {
-    flex: 0 0 auto;
-    padding: 8px 12px !important;
-    white-space: nowrap !important;
-  }
-
   .app-header-right {
-    justify-content: space-between !important;
+    justify-content: flex-end !important;
     min-width: 0 !important;
     width: 100% !important;
   }
@@ -393,9 +786,48 @@ textarea:focus {
     white-space: nowrap;
   }
 
+  .app-header-right button,
+  .segmented-control-button {
+    min-height: 44px !important;
+  }
+
+  .segmented-control-group {
+    max-width: 100% !important;
+  }
+
+  .segmented-control-group > .segmented-control-button {
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+  }
+
+  .settings-page button {
+    min-height: 44px !important;
+  }
+
+  .settings-page select {
+    max-width: 100% !important;
+  }
+
+  .settings-users-add-row {
+    align-items: stretch !important;
+    flex-direction: column !important;
+  }
+
+  .settings-users-field,
+  .settings-users-field input,
+  .settings-users-add-button {
+    width: 100% !important;
+  }
+
+  .settings-users-checkbox {
+    min-height: 44px;
+  }
+
   .app-main {
     min-width: 0 !important;
-    padding: 24px 16px !important;
+    padding: 24px 16px 130px !important;
     width: 100% !important;
   }
 
@@ -425,17 +857,70 @@ textarea:focus {
     min-width: 0 !important;
   }
 
-  /* Narrow screens are intended for monitoring and simple actions. The
-     financial editor remains a laptop/wide-screen workflow. */
   .review-workspace .review-menu-column {
-    display: none !important;
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    flex: 1 0 100% !important;
+    width: 100% !important;
+    max-height: none !important;
+    gap: 8px !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    border-bottom: 1px solid #DFE3E6 !important;
+    scroll-snap-type: x proximity;
+  }
+
+  .review-workspace .review-menu-column > * {
+    flex: 0 0 min(78vw, 280px) !important;
+    max-height: 220px !important;
+    overflow: auto !important;
+    scroll-snap-align: start;
+  }
+
+  .review-workspace .review-menu-column > :first-child {
+    flex: 0 0 auto !important;
+    min-width: max-content !important;
+  }
+
+  .concept-tree-shell {
+    overflow-x: auto !important;
+  }
+
+  .concept-tree-header > :first-child,
+  .concept-tree-row > .concept-tree-label {
+    position: sticky !important;
+    left: 0 !important;
+    z-index: 3 !important;
+    background: inherit !important;
+    box-shadow: 1px 0 0 #DFE3E6;
+  }
+
+  .concept-tree-header > :first-child {
+    z-index: 5 !important;
+    background: #F5F7F8 !important;
+  }
+
+  .notes-review-row {
+    grid-template-columns: minmax(0, 1fr) !important;
   }
 
   .review-workspace {
-    display: block !important;
+    display: flex !important;
   }
 
   .settings-page {
     max-width: none !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pwc-working-indicator,
+  .pwc-status-change,
+  .pwc-view-enter,
+  .pwc-reveal,
+  .page-header,
+  .pwc-empty-state {
+    animation: none !important;
   }
 }

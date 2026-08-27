@@ -49,7 +49,7 @@ export function NeedsAttentionPanel({
 
   if (total === 0) {
     return (
-      <div data-testid="needs-attention-clear" style={styles.clear}>
+      <div data-testid="needs-attention-clear" className="pwc-status-change" style={styles.clear}>
         <StatusIcon symbol={STATUS_SYMBOLS.success} />
         All clear — nothing needs your attention.
       </div>
@@ -57,7 +57,7 @@ export function NeedsAttentionPanel({
   }
 
   return (
-    <div data-testid="needs-attention" style={styles.panel}>
+    <div data-testid="needs-attention" className="pwc-status-change" style={styles.panel}>
       <div style={styles.header} data-testid="needs-attention-count">
         Needs attention ({total})
       </div>
@@ -140,9 +140,6 @@ const styles = {
     display: "flex",
     flexDirection: "column" as const,
     gap: pwc.space.sm,
-    // Fade in on reveal / when swapping between the all-clear line and the
-    // queue as checks resolve. Reduced-motion zeroes it (index.css).
-    animation: `fade-in ${pwc.motion.duration.base} ${pwc.motion.easing}`,
   } as const,
   clear: {
     display: "flex",
@@ -150,7 +147,6 @@ const styles = {
     gap: pwc.space.sm,
     color: pwc.grey500,
     fontSize: 13,
-    animation: `fade-in ${pwc.motion.duration.base} ${pwc.motion.easing}`,
   } as const,
   header: {
     fontFamily: pwc.fontHeading,

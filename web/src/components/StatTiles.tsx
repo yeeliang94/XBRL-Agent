@@ -1,7 +1,5 @@
 import { pwc, tokens } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
-import { STATUS_SYMBOLS } from "../lib/runStatus";
-import { StatusIcon } from "./StatusIcon";
 import { AnimatedNumber } from "./AnimatedNumber";
 
 // ---------------------------------------------------------------------------
@@ -49,19 +47,15 @@ export function StatTiles({
     <div className="stat-tiles" style={styles.grid}>
       {/* Actionable work leads: review queue first, unstarted drafts second. */}
       <div style={styles.tile}>
+        <span style={styles.label}>Open reviews</span>
         <Count n={needsReview} />
-        <span style={styles.label}>
-          <StatusIcon symbol={STATUS_SYMBOLS.attention} style={styles.symbol} />
-          Needs review
-        </span>
+        <span style={styles.detail}>Needs a decision</span>
       </div>
       <div style={styles.tile}>
+        <span style={styles.label}>Not started</span>
         <Count n={drafts} />
         <span style={styles.labelRow}>
-          <span style={styles.label}>
-            <StatusIcon symbol={STATUS_SYMBOLS.inactive} style={styles.symbol} />
-            Not started
-          </span>
+          <span style={styles.detail}>Saved drafts</span>
           {canClearDrafts && (
             <button
               type="button"
@@ -76,12 +70,14 @@ export function StatTiles({
         </span>
       </div>
       <div style={styles.tile}>
+        <span style={styles.label}>Processing</span>
         <Count n={active} />
-        <span style={styles.label}>Active runs</span>
+        <span style={styles.detail}>Active runs</span>
       </div>
       <div style={styles.tile}>
+        <span style={styles.label}>Ready to file</span>
         <Count n={completedThisMonth} />
-        <span style={styles.label}>Completed this month</span>
+        <span style={styles.detail}>Completed this month</span>
       </div>
     </div>
   );
@@ -117,7 +113,7 @@ const styles = {
     // Regular weight on the large number — hierarchy from size, not boldness
     // (design system: two text weights, no Light 300).
     fontWeight: pwc.weight.regular,
-    fontSize: 28,
+    fontSize: 24,
     lineHeight: 1.1,
     color: pwc.grey900,
     // Fixed-width digits so a counting value doesn't jitter and tiles line up.
@@ -125,14 +121,15 @@ const styles = {
   } as React.CSSProperties,
   label: {
     fontFamily: pwc.fontBody,
-    fontSize: 13,
+    fontSize: 11,
+    fontWeight: pwc.weight.semibold,
+    letterSpacing: "0.08em",
+    textTransform: "uppercase" as const,
     color: tokens.color.text.secondary,
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 6,
   } as React.CSSProperties,
-  symbol: {
-    ...ui.statusSymbol,
-    width: "auto",
+  detail: {
+    fontFamily: pwc.fontBody,
+    fontSize: 12,
+    color: tokens.color.text.secondary,
   } as React.CSSProperties,
 } as const;

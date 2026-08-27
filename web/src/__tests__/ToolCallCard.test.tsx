@@ -32,13 +32,12 @@ describe("ToolCallCard", () => {
     expect(screen.getByText(/template\.xlsx/)).toBeInTheDocument();
   });
 
-  test("active card (no result yet) has orange50 background and orange500 left border", () => {
+  test("active card uses a soft fill and status glyph without an accent rail", () => {
     const { container } = render(<ToolCallCard entry={activeEntry} />);
     const card = container.querySelector("[data-testid='tool-card']");
     // orange50 #FFF5ED → rgb(255, 245, 237)
     expect(card?.getAttribute("style")).toContain("rgb(255, 245, 237)");
-    // orange500 #FD5108 → rgb(253, 81, 8)
-    expect(card?.getAttribute("style")).toContain("rgb(253, 81, 8)");
+    expect(card?.getAttribute("style")).not.toContain("border-left");
   });
 
   test("completed tool call is a flat timeline row on white", () => {
@@ -47,7 +46,7 @@ describe("ToolCallCard", () => {
     const style = card?.getAttribute("style") || "";
     expect(style).toContain("rgb(255, 255, 255)");
     expect((card as HTMLElement).style.borderRadius).toBe("0");
-    expect((card as HTMLElement).style.borderBottom).toContain("rgb(222, 222, 222)");
+    expect((card as HTMLElement).style.borderBottom).toContain("rgb(223, 227, 230)");
   });
 
   test("shows duration badge when result arrives", () => {
@@ -134,13 +133,12 @@ describe("ToolCallCard", () => {
     const matches = screen.getByText(/Matches PDF: False/);
     expect(balanced).toBeInTheDocument();
     expect(matches).toBeInTheDocument();
-    // Design-system "neutral-surface accent": status is now a coloured left
-    // rule on a white surface, not a tinted fill. Pass → success rule,
-    // fail → error rule.
+    // Focused-workspace status: finished black and attention/error orange,
+    // both on a neutral surface with explicit text.
     expect(balanced.style.background).toBe("rgb(255, 255, 255)");           // white surface
-    expect(balanced.style.borderLeft).toContain("rgb(31, 171, 118)");      // success #1FAB76
+    expect(balanced.style.borderLeft).toContain("rgb(0, 0, 0)");           // finished black
     expect(matches.style.background).toBe("rgb(255, 255, 255)");            // white surface
-    expect(matches.style.borderLeft).toContain("rgb(229, 72, 77)");        // error #E5484D
+    expect(matches.style.borderLeft).toContain("rgb(253, 81, 8)");         // attention/error
   });
 
   // --- Step 11: collapsed preview is human-readable ---
@@ -304,12 +302,11 @@ describe("ToolCallCard", () => {
     const { container, rerender } = render(<ToolCallCard entry={activeEntry} />);
     const activeGlyph = container.querySelector("[data-glyph='active']") as HTMLElement;
     expect(activeGlyph).toBeTruthy();
-    // Inline animation style set only while active.
-    expect(activeGlyph.style.animation).toMatch(/glyph-pulse/);
+    expect(activeGlyph).toHaveClass("pwc-working-indicator");
 
     rerender(<ToolCallCard entry={completedEntry} />);
     const doneGlyph = container.querySelector("[data-glyph='done']") as HTMLElement;
     expect(doneGlyph).toBeTruthy();
-    expect(doneGlyph.style.animation || "").not.toMatch(/glyph-pulse/);
+    expect(doneGlyph).not.toHaveClass("pwc-working-indicator");
   });
 });

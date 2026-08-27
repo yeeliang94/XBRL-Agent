@@ -99,7 +99,6 @@ const styles = {
     height: 18,
     borderRadius: "50%",
     background: pwc.orange400,
-    animation: "pulse-subtle 1.5s ease-in-out infinite",
     flexShrink: 0,
   } as React.CSSProperties,
   pendingCircle: {
@@ -163,7 +162,7 @@ export function PipelineStages({ currentPhase, pipelineStage, isRunning, isCompl
                 </div>
               )}
               {status === "active" && (
-                <div data-testid="step-active" style={styles.activeCircle} />
+                <div data-testid="step-active" className="pwc-working-indicator" style={styles.activeCircle} />
               )}
               {status === "pending" && (
                 <div data-testid="step-pending" style={styles.pendingCircle}>

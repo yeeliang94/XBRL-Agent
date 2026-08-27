@@ -24,44 +24,118 @@ import { ExtractPage } from "./pages/ExtractPage";
 import { ConceptsPage } from "./pages/ConceptsPage";
 import { BenchmarksPage } from "./pages/BenchmarksPage";
 import { SuitesPage } from "./pages/SuitesPage";
+import { TERMS } from "./lib/vocabulary";
+import {
+  announceRunTabChange,
+  readRunTabFromUrl,
+  RUN_TAB_CHANGE_EVENT,
+} from "./lib/runTabs";
+import type { RunTabKey } from "./lib/runTabs";
 import "./index.css";
 
 // ---------------------------------------------------------------------------
-// Inline styles using PwC theme — only the app-chrome pieces (page/header/main)
+// Inline styles using the XBRL focused-workspace tokens — only the app-chrome pieces (page/header/main)
 // live here. ExtractPage-scoped styles live next to ExtractPage.
 // ---------------------------------------------------------------------------
 
 const styles = {
   page: {
-    minHeight: "100vh",
-    background: pwc.grey50,
+    ...ui.appShell,
   } as const,
-  header: {
-    background: pwc.white,
-    borderBottom: `1px solid ${pwc.grey200}`,
-    padding: `${pwc.space.lg}px ${pwc.space.xl}px`,
+  rail: {
+    ...ui.appRail,
+  } as const,
+  railBrand: {
     display: "flex",
     alignItems: "center",
-    justifyContent: "space-between",
+    gap: 10,
+    padding: "2px 8px 24px",
   } as const,
-  headerLeft: {
-    display: "flex",
-    alignItems: "center",
-    gap: pwc.space.xl,
+  brandMark: {
+    width: 27,
+    height: 27,
+    color: pwc.orange500,
+    flexShrink: 0,
   } as const,
   headerTitle: {
     fontFamily: pwc.fontHeading,
     // Brand wordmark at semibold — the design system sets titles, headings
     // and the wordmark at 600 (two text weights: regular for body/data,
     // semibold for headings; no Light 300).
-    fontWeight: pwc.weight.semibold,
-    fontSize: 20,
-    letterSpacing: 0,
-    color: pwc.grey900,
+    fontWeight: pwc.weight.bold,
+    fontSize: 17,
+    letterSpacing: "-0.02em",
+    color: pwc.black,
     margin: 0,
   } as const,
+  railSectionLabel: {
+    padding: "16px 10px 7px",
+    fontFamily: pwc.fontBody,
+    fontSize: 10,
+    fontWeight: pwc.weight.bold,
+    color: tokens.color.text.muted,
+    textTransform: "uppercase" as const,
+    letterSpacing: "0.09em",
+  } as const,
+  railNav: {
+    flex: 1,
+    minHeight: 0,
+    overflowY: "auto" as const,
+  } as const,
+  railFooter: {
+    marginTop: "auto",
+    padding: "14px 8px 0",
+    display: "flex",
+    alignItems: "center",
+    gap: 9,
+    minWidth: 0,
+  } as const,
+  avatar: {
+    width: 30,
+    height: 30,
+    display: "grid",
+    placeItems: "center",
+    flex: "0 0 auto",
+    borderRadius: "50%",
+    background: pwc.black,
+    color: pwc.white,
+    fontFamily: pwc.fontBody,
+    fontSize: 11,
+    fontWeight: pwc.weight.bold,
+  } as const,
+  userCopy: {
+    minWidth: 0,
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 2,
+  } as const,
+  workspace: {
+    minWidth: 0,
+    background: tokens.surface.canvas,
+  } as const,
+  topbar: {
+    ...ui.appTopbar,
+  } as const,
+  context: {
+    minWidth: 0,
+  } as const,
+  breadcrumb: {
+    display: "flex",
+    alignItems: "center",
+    gap: pwc.space.sm,
+    fontFamily: pwc.fontBody,
+    fontSize: 13,
+    color: tokens.color.text.secondary,
+  } as const,
+  contextTitle: {
+    color: pwc.black,
+    fontWeight: pwc.weight.medium,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap" as const,
+  } as const,
   settingsButton: {
-    ...ui.buttonSubtle,
+    ...ui.buttonQuiet,
     ...ui.buttonSm,
   } as const,
   headerRight: {
@@ -71,25 +145,29 @@ const styles = {
   } as const,
   userEmail: {
     fontFamily: pwc.fontBody,
-    fontSize: 13,
-    color: pwc.grey700,
+    fontSize: 12,
+    fontWeight: pwc.weight.medium,
+    color: pwc.black,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap" as const,
   } as const,
   logoutButton: {
     ...ui.buttonGhost,
     ...ui.buttonSm,
-    color: pwc.grey700,
+    color: tokens.color.text.secondary,
   } as const,
   // Standard page mode (design-system Layouts) — the shell owns the
   // route-level width.
   main: {
-    maxWidth: tokens.layout.standard,
+    maxWidth: 1500,
     margin: "0 auto",
-    padding: `${pwc.space.xxl}px ${pwc.space.xl}px`,
+    padding: "34px clamp(28px, 4vw, 62px) 110px",
     display: "flex",
     flexDirection: "column" as const,
     // 32px between major stacked blocks gives the airier section rhythm the
     // design language calls for (was 24px).
-    gap: pwc.space.xxl,
+    gap: 28,
   } as const,
   // The concepts review workspace is a 3-column side-by-side surface that
   // genuinely benefits from the full viewport — the max-width cap left wide
@@ -98,21 +176,21 @@ const styles = {
   mainFull: {
     maxWidth: "100%",
     margin: "0 auto",
-    padding: `${pwc.space.lg}px ${pwc.space.lg}px`,
+    padding: "28px 28px 110px",
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.lg,
+    gap: 28,
   } as const,
   // History is full-width like the concepts workspace but keeps the same
   // generous side padding as the standard (capped) page so it reads
   // consistently with the Template/Extract pages.
   mainHistory: {
-    maxWidth: "100%",
+    maxWidth: 1500,
     margin: "0 auto",
-    padding: `${pwc.space.xxl}px clamp(${pwc.space.xxl}px, 3vw, ${pwc.space.xxxl}px)`,
+    padding: "34px clamp(28px, 4vw, 62px) 110px",
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.xxl,
+    gap: 28,
   } as const,
 };
 
@@ -122,6 +200,25 @@ const styles = {
 
 export default function App() {
   const [state, dispatch] = useReducer(appReducer, undefined, bootState);
+  const [extractMode, setExtractMode] = useState<"queue" | "new">(
+    () => window.location.hash === "#new-extraction" ? "new" : "queue",
+  );
+  const [runTab, setRunTab] = useState<RunTabKey>(
+    () => readRunTabFromUrl() ?? "overview",
+  );
+  useEffect(() => {
+    const onTabChange = (event: Event) => {
+      const next = (event as CustomEvent<RunTabKey>).detail;
+      if (next) setRunTab(next);
+    };
+    const onPop = () => setRunTab(readRunTabFromUrl() ?? "overview");
+    window.addEventListener(RUN_TAB_CHANGE_EVENT, onTabChange);
+    window.addEventListener("popstate", onPop);
+    return () => {
+      window.removeEventListener(RUN_TAB_CHANGE_EVENT, onTabChange);
+      window.removeEventListener("popstate", onPop);
+    };
+  }, []);
   // Canonical-mode feature flag from the backend (peer-review finding 5).
   // Canonical mode is now MANDATORY (gotcha #21 — `_canonical_mode_enabled()`
   // is hardcoded True), so the flag's real value is always `true`; the
@@ -573,6 +670,16 @@ export default function App() {
     sseControllerRef.current = startSSERun(s.sessionId, config, `/api/rerun/${s.sessionId}`);
   }, [startSSERun]);
 
+  useEffect(() => {
+    if (state.selectedRunId == null) {
+      setRunTab("overview");
+    } else if (state.view === "concepts") {
+      setRunTab("values");
+    } else if (state.view === "history") {
+      setRunTab(readRunTabFromUrl() ?? "overview");
+    }
+  }, [state.selectedRunId, state.view]);
+
   // Auth gate: once /api/auth/me (or any 401) reports anonymous, show login.
   if (authStatus === "anon") {
     return <LoginPage onAuthenticated={checkAuth} />;
@@ -588,6 +695,13 @@ export default function App() {
     <ExtractPage
       state={state}
       dispatch={dispatch}
+      landingMode={extractMode}
+      onOpenNewExtraction={() => {
+        setExtractMode("new");
+        window.requestAnimationFrame(() => {
+          document.getElementById("new-extraction")?.scrollIntoView({ block: "start" });
+        });
+      }}
       isAdmin={Boolean(user?.is_admin)}
       handleUpload={handleUpload}
       handleMultiRun={handleMultiRun}
@@ -617,32 +731,105 @@ export default function App() {
   const keepExtractWorkspaceMounted =
     state.view === "extract"
     || (state.view === "settings" && state.sessionId != null);
+  const navigationView =
+    state.view === "concepts" && state.selectedRunId != null
+      ? "history"
+      : state.view;
+  const contextLabel = state.view === "extract"
+    ? state.currentRunId != null && state.filename
+      ? state.filename
+      : extractMode === "new" ? "New extraction" : "Work queue"
+    : state.view === "history" || (state.view === "concepts" && state.selectedRunId != null)
+      ? state.selectedRunId != null ? "Current filing" : "Runs"
+      : state.view === "concepts"
+        ? "Field labels"
+        : state.view === "benchmarks"
+          ? "Benchmarks"
+          : state.view === "suites"
+            ? TERMS.evaluationSuites
+            : "Settings";
+  const reviewFocused = state.selectedRunId != null &&
+    (runTab === "notes" || runTab === "values");
+  const filingRunId = state.selectedRunId ?? state.currentRunId;
+  const currentFilingTab = state.view === "concepts"
+    ? "values"
+    : runTab === "notes"
+      ? "notes"
+      : runTab === "overview"
+        ? "overview"
+        : null;
 
   return (
-    <div style={styles.page}>
+    <div
+      className={`app-shell${reviewFocused ? " app-shell--review" : ""}`}
+      style={{ ...styles.page, ...(reviewFocused ? { gridTemplateColumns: "72px minmax(0, 1fr)" } : {}) }}
+    >
       {/* Keyboard users can jump past the header + nav straight to the page
           content. Visually hidden until focused (index.css .skip-link). */}
       <a href="#main-content" className="skip-link">
         Skip to main content
       </a>
-      {/* Header */}
-      <header className="app-header" style={styles.header}>
-        <div className="app-header-left" style={styles.headerLeft}>
-          {/* Brand wordmark — deliberately NOT an h1: each destination owns
-              its single page-level heading (design-system Tabs & navigation). */}
-          <span style={styles.headerTitle}>XBRL Agent</span>
+      <aside className="app-sidebar" style={styles.rail} aria-label="Workspace navigation">
+        <div className="app-rail-brand" style={styles.railBrand}>
+          <svg
+            className="app-rail-mark"
+            style={styles.brandMark}
+            viewBox="0 0 100 100"
+            fill="none"
+            aria-hidden="true"
+          >
+            <path
+              d="M12 78 L40 22 L52 50 L66 30 L88 78"
+              stroke="currentColor"
+              strokeWidth="11"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+          <span className="app-rail-brand-label" style={styles.headerTitle}>XBRL Agent</span>
+        </div>
+        <div className="app-rail-nav" style={styles.railNav}>
           <TopNav
             // The `concepts` view with a run id is the unified run page (a
             // History activity reached via "Review values" / the /concepts
             // alias), so highlight History — not Template. "Template" stays
             // highlighted only for the bare concept landing (no run id).
-            view={
-              state.view === "concepts" && state.selectedRunId != null
-                ? "history"
-                : state.view
-            }
+            view={navigationView}
+            extractMode={extractMode}
+            currentRunId={filingRunId}
+            currentFilingTab={currentFilingTab}
             showConcepts={canonicalEnabled}
             isAdmin={Boolean(user?.is_admin)}
+            onNewExtraction={() => {
+              // Read the mirrored state at click time. The navigation callback
+              // can otherwise retain the render that preceded RUN_STARTED
+              // while the stream is already active.
+              if (stateRef.current.isRunning) {
+                // A second upload cannot start while this stream owns the
+                // session. Preserve the active monitoring surface and URL.
+                return;
+              }
+              setExtractMode("new");
+              handleReset();
+              window.history.replaceState({}, "", "/#new-extraction");
+              window.requestAnimationFrame(() => {
+                document.getElementById("new-extraction")?.scrollIntoView?.({ block: "start" });
+              });
+            }}
+            onOpenCurrentFiling={(tab) => {
+              if (filingRunId == null) return;
+              if (tab === "values") {
+                window.history.pushState({}, "", `/concepts/${filingRunId}`);
+                announceRunTabChange("values");
+                dispatch({ type: "SET_VIEW", payload: "concepts" });
+                dispatch({ type: "SET_SELECTED_RUN_ID", payload: filingRunId });
+                return;
+              }
+              window.history.pushState({}, "", `/history/${filingRunId}?tab=${tab}`);
+              announceRunTabChange(tab);
+              dispatch({ type: "SET_VIEW", payload: "history" });
+              dispatch({ type: "SET_SELECTED_RUN_ID", payload: filingRunId });
+            }}
             onViewChange={(v) => {
               // Tabs are "go to the top of that section" — clicking
               // History from anywhere must show the list, not the last
@@ -662,7 +849,9 @@ export default function App() {
               // while a run is still streaming surfaces it instead of
               // killing it.
               if (v === "extract" && !state.isRunning) {
+                setExtractMode("queue");
                 handleReset();
+                window.history.replaceState({}, "", "/");
                 return;
               }
               dispatch({ type: "SET_VIEW", payload: v });
@@ -670,10 +859,41 @@ export default function App() {
             }}
           />
         </div>
-        <div className="app-header-right" style={styles.headerRight}>
-          {user && <span style={styles.userEmail}>{user.email}</span>}
-          {user && user.provider !== "dev" && (
-            <button onClick={handleLogout} style={styles.logoutButton} className={uiClass.btnGhost}>
+        <div className="app-rail-footer" style={styles.railFooter}>
+          {user && (
+            <>
+              <span style={styles.avatar} aria-hidden="true">
+                {user.email.slice(0, 2).toUpperCase()}
+              </span>
+              <span className="app-user-copy" style={styles.userCopy}>
+                <span className="app-user-email" style={styles.userEmail}>{user.email}</span>
+                <span style={styles.breadcrumb}>{user.is_admin ? "Administrator" : "User"}</span>
+              </span>
+            </>
+          )}
+        </div>
+      </aside>
+
+      <div className="app-workspace" style={styles.workspace}>
+        <header className="app-topbar" style={styles.topbar}>
+          <div style={styles.context}>
+            <span style={styles.breadcrumb}>
+              <span>Workspace</span>
+              <span aria-hidden="true">›</span>
+              <strong style={styles.contextTitle} title={state.filename ?? contextLabel}>
+                {reviewFocused && state.filename ? state.filename : contextLabel}
+              </strong>
+            </span>
+          </div>
+          <div className="app-header-right" style={styles.headerRight}>
+          {user?.provider !== "dev" && (
+            <button
+              onClick={handleLogout}
+              style={styles.logoutButton}
+              className={uiClass.btnGhost}
+              aria-label="Log out"
+              title="Log out"
+            >
               Log out
             </button>
           )}
@@ -689,8 +909,8 @@ export default function App() {
             <SettingsIcon />
             <span>Settings</span>
           </button>
-        </div>
-      </header>
+          </div>
+        </header>
 
       <main
         id="main-content"
@@ -798,6 +1018,7 @@ export default function App() {
         toast={state.toast}
         onDismiss={() => dispatch({ type: "DISMISS_TOAST" })}
       />
+      </div>
     </div>
   );
 }

@@ -17,8 +17,8 @@ describe("StatusLabel", () => {
   test("the symbol is monochrome — no status hue, pill, or fill", () => {
     render(<StatusLabel state="failure" label="Failed" />);
     const symbol = (document.querySelector('[data-status-icon="failure"]') as HTMLElement);
-    // grey700 → rgb(94, 94, 94); the wrapper carries no background/border.
-    expect(symbol).toHaveStyle({ color: "rgb(94, 94, 94)" });
+    // Secondary black at 64%; the wrapper carries no background/border.
+    expect(symbol).toHaveStyle({ color: "rgba(0, 0, 0, 0.64)" });
     const wrapper = symbol.parentElement!;
     expect(wrapper.style.backgroundColor).toBe("");
     expect(wrapper.style.borderWidth).toBe("");

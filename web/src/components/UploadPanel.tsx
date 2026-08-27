@@ -2,7 +2,6 @@ import { useCallback, useState } from "react";
 import { userMessage } from "../lib/errors";
 import type { UploadResponse } from "../lib/types";
 import { pwc } from "../lib/theme";
-import { ui } from "../lib/uiStyles";
 import { ElapsedTimer } from "./ElapsedTimer";
 import { FileDropzone } from "./FileDropzone";
 
@@ -22,8 +21,7 @@ const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
 const styles = {
   // Flat static surface (design system: elevation is reserved for overlap).
   container: {
-    ...ui.card,
-    padding: pwc.space.xl,
+    background: "transparent",
   } as React.CSSProperties,
   fileRow: {
     display: "flex",
@@ -78,7 +76,6 @@ const styles = {
     border: `3px solid ${pwc.grey200}`,
     borderTop: `3px solid ${pwc.orange500}`,
     borderRadius: "50%",
-    animation: "spin 0.8s linear infinite",
   } as React.CSSProperties,
   error: {
     fontFamily: pwc.fontBody,
@@ -141,13 +138,14 @@ export function UploadPanel({ onUpload, isRunning, filename, startTime }: Props)
       {!filename ? (
         <FileDropzone
           accept=".pdf,.docx"
-          label="Drop your financial statement here"
+          label="Drop a PDF or Word document"
+          buttonLabel="Choose document"
           inputLabel="Upload document"
           disabled={disabled}
           onFile={handleFile}
         >
           <span style={styles.uploadHint}>
-            PDF or Word (.docx) · up to {MAX_UPLOAD_MB} MB · next you'll choose statements and start the extraction
+            or choose a file from your computer · up to {MAX_UPLOAD_MB} MB
           </span>
           {uploading && <span style={styles.uploading} role="status" aria-live="polite">Uploading…</span>}
         </FileDropzone>
@@ -162,7 +160,7 @@ export function UploadPanel({ onUpload, isRunning, filename, startTime }: Props)
 
           {isRunning && (
             <div style={styles.runningRow}>
-              <div data-testid="run-spinner" style={styles.spinner} />
+              <div data-testid="run-spinner" className="pwc-spinner" style={styles.spinner} />
               {startTime && <ElapsedTimer startTime={startTime} isRunning={isRunning} />}
             </div>
           )}

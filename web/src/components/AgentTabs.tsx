@@ -1,4 +1,4 @@
-import React, { useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { pwc } from "../lib/theme";
 import type { AgentTabStatus } from "../lib/types";
 import { NON_AGENT_TAB_IDS } from "../lib/agentTabKinds";
@@ -68,7 +68,12 @@ const NOTES_TAB_PREFIX = "notes:";
 function StatusBadge({ status }: { status: AgentTabStatus }) {
   const spec = STATUS_BADGES[status];
   return (
-    <span data-status={status} style={spec.wrapper} aria-label={spec.label}>
+    <span
+      data-status={status}
+      className={`pwc-status-change${status === "running" ? " pwc-working-indicator" : ""}`}
+      style={spec.wrapper}
+      aria-label={spec.label}
+    >
       <span style={spec.dot} />
     </span>
   );
@@ -89,6 +94,7 @@ function AgentTabsImpl({
   notesSkeletons,
 }: AgentTabsProps) {
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const [filter, setFilter] = useState<"all" | "working" | "finished">("all");
   // Phase 8 + D.3 gating. The rule is:
   //   Render a tab if ANY of the following is true:
   //     1. The tab is a SPECIAL_TAB_IDS member (scout/validator) AND the
@@ -166,21 +172,37 @@ function AgentTabsImpl({
     else if (id.startsWith(NOTES_TAB_PREFIX)) notesActive.push(id);
     else statementActive.push(id);
   }
+  const matchesFilterFor = (id: string, value: typeof filter) => {
+    const status = agents[id]?.status;
+    if (value === "all") return true;
+    if (value === "working") return status === "running" || status === "aborting" || status === "pending";
+    return status === "complete" || status === "failed" || status === "cancelled";
+  };
+  const matchesFilter = (id: string) => matchesFilterFor(id, filter);
+  const visibleStatementActive = statementActive.filter(matchesFilter);
+  const visibleNotesActive = notesActive.filter(matchesFilter);
+  const visibleChecks = [scoutActive, notesValidatorActive, correctionActive, validatorActive]
+    .filter((id): id is string => id != null && matchesFilter(id));
   const navigationOrder = [
-    ...statementActive,
-    ...notesActive,
-    ...(scoutActive ? [scoutActive] : []),
-    ...(notesValidatorActive ? [notesValidatorActive] : []),
-    ...(correctionActive ? [correctionActive] : []),
-    ...(validatorActive ? [validatorActive] : []),
+    ...visibleStatementActive,
+    ...visibleNotesActive,
+    ...visibleChecks,
   ];
+  const focusableTab = navigationOrder.includes(activeTab) ? activeTab : navigationOrder[0];
+  const navigationKey = navigationOrder.join("\u0000");
+
+  // Filtering must never leave a vertical tablist with no selected/focusable
+  // tab while its detail pane still describes a hidden workstream.
+  useEffect(() => {
+    if (focusableTab && focusableTab !== activeTab) onTabClick(focusableTab);
+  }, [activeTab, focusableTab, navigationKey, onTabClick]);
 
   // Helper rendering one active workstream selector. Per-agent abort/rerun
   // controls live in the focused activity pane.
   const renderTab = (agentId: string) => {
     const agent = agents[agentId];
     if (!agent) return null;
-    const isActive = agentId === activeTab;
+    const isActive = agentId === focusableTab;
     return (
       <button
         key={agentId}
@@ -248,50 +270,66 @@ function AgentTabsImpl({
   const completedCount = gatedOrder.filter((id) => agents[id]?.status === "complete").length;
 
   return (
-    <div
-      role="tablist"
-      aria-label="Run workstreams"
-      aria-orientation="vertical"
-      className="workstream-nav"
-      style={styles.tabBar}
-    >
+    <div className="workstream-nav" style={styles.tabBar}>
       <div style={styles.navigatorHeader}>
         <div>
-          <div style={styles.navigatorTitle}>Workstreams</div>
-          <div style={styles.navigatorHint}>Select a workstream to inspect its activity.</div>
+          <div style={styles.navigatorTitle}>Agents</div>
+          <div style={styles.navigatorHint}>Select an agent to inspect its current work.</div>
         </div>
-        <span style={styles.navigatorCount}>{completedCount} complete</span>
+        <span style={styles.navigatorCount}>{completedCount} finished</span>
       </div>
 
-      {(statementActive.length > 0 || (skeletonTabs?.length ?? 0) > 0) && (
-        <div data-bucket="statements" style={styles.tabGroup}>
-          <div style={styles.groupLabel}>Financial statements</div>
-          {statementActive.map(renderTab)}
-          {skeletonTabs?.map((label) => (
-            <SkeletonTab key={`skeleton-${label}`} keyPrefix="skeleton" label={label} />
-          ))}
-        </div>
-      )}
+      <div role="group" aria-label="Filter workstreams" style={styles.filters}>
+        {(["working", "all", "finished"] as const).map((value) => (
+          <button
+            key={value}
+            type="button"
+            aria-pressed={filter === value}
+            onClick={() => setFilter(value)}
+            style={{ ...styles.filterButton, ...(filter === value ? styles.filterButtonActive : {}) }}
+          >
+            {value.charAt(0).toUpperCase() + value.slice(1)}
+          </button>
+        ))}
+      </div>
 
-      {(notesActive.length > 0 || (notesSkeletons?.length ?? 0) > 0) && (
-        <div data-bucket="notes" style={styles.tabGroup}>
-          <div style={styles.groupLabel}>Notes</div>
-          {notesActive.map(renderTab)}
-          {notesSkeletons?.map((label) => (
-            <SkeletonTab key={`notes-skeleton-${label}`} keyPrefix="notes-skeleton" label={label} />
-          ))}
-        </div>
-      )}
+      <div role="tablist" aria-label="Run workstreams" aria-orientation="vertical" style={styles.tabList}>
+        {(visibleStatementActive.length > 0 || (filter !== "finished" && (skeletonTabs?.length ?? 0) > 0)) && (
+          <div role="presentation" data-bucket="statements" style={styles.tabGroup}>
+            <div role="presentation" style={styles.groupLabel}>Financial statements</div>
+            {visibleStatementActive.map(renderTab)}
+            {filter !== "finished" && skeletonTabs?.map((label) => (
+              <SkeletonTab key={`skeleton-${label}`} keyPrefix="skeleton" label={label} />
+            ))}
+          </div>
+        )}
 
-      {(notesValidatorActive || scoutActive || correctionActive || validatorActive) && (
-        <div data-bucket="run-checks" style={styles.tabGroup}>
-          <div style={styles.groupLabel}>Run checks</div>
-          {scoutActive && renderTab(scoutActive)}
-          {notesValidatorActive && renderTab(notesValidatorActive)}
-          {correctionActive && renderTab(correctionActive)}
-          {validatorActive && renderTab(validatorActive)}
-        </div>
-      )}
+        {(visibleNotesActive.length > 0 || (filter !== "finished" && (notesSkeletons?.length ?? 0) > 0)) && (
+          <div role="presentation" data-bucket="notes" style={styles.tabGroup}>
+            <div role="presentation" style={styles.groupLabel}>Notes</div>
+            {visibleNotesActive.map(renderTab)}
+            {filter !== "finished" && notesSkeletons?.map((label) => (
+              <SkeletonTab key={`notes-skeleton-${label}`} keyPrefix="notes-skeleton" label={label} />
+            ))}
+          </div>
+        )}
+
+        {visibleChecks.length > 0 && (
+          <div role="presentation" data-bucket="run-checks" style={styles.tabGroup}>
+            <div role="presentation" style={styles.groupLabel}>Run checks</div>
+            {scoutActive && matchesFilter(scoutActive) && renderTab(scoutActive)}
+            {notesValidatorActive && matchesFilter(notesValidatorActive) && renderTab(notesValidatorActive)}
+            {correctionActive && matchesFilter(correctionActive) && renderTab(correctionActive)}
+            {validatorActive && matchesFilter(validatorActive) && renderTab(validatorActive)}
+          </div>
+        )}
+        {navigationOrder.length === 0 &&
+        (filter === "finished" || ((skeletonTabs?.length ?? 0) + (notesSkeletons?.length ?? 0) === 0)) ? (
+          <p role="status" style={styles.emptyFilter}>
+            No agents match the {filter.charAt(0).toUpperCase() + filter.slice(1)} filter.
+          </p>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -356,6 +394,7 @@ export function areAgentTabsPropsEqual(
       // the parent status flipped (peer review [MEDIUM]). Normalise null
       // and undefined so "absent ↔ absent" stays equal.
       (a.subLabel ?? null) !== (b.subLabel ?? null)
+      || (a.flag ?? null) !== (b.flag ?? null)
     ) {
       return false;
     }
@@ -388,17 +427,29 @@ const styles = {
     overflowY: "auto" as const,
     maxHeight: 620,
   },
+  tabList: {
+    display: "flex",
+    flexDirection: "column" as const,
+    alignItems: "stretch" as const,
+  } as React.CSSProperties,
+  emptyFilter: {
+    margin: `${pwc.space.md}px ${pwc.space.sm}px`,
+    color: pwc.grey700,
+    fontFamily: pwc.fontBody,
+    fontSize: 12,
+    lineHeight: 1.45,
+  } as React.CSSProperties,
   navigatorHeader: {
     display: "flex",
     alignItems: "flex-start",
     justifyContent: "space-between",
     gap: pwc.space.md,
-    padding: `${pwc.space.lg}px ${pwc.space.lg}px ${pwc.space.md}px`,
-    borderBottom: `1px solid ${pwc.grey200}`,
+    minHeight: 42,
+    padding: `0 9px`,
   },
   navigatorTitle: {
     fontFamily: pwc.fontHeading,
-    fontSize: 16,
+    fontSize: 17,
     lineHeight: 1.3,
     fontWeight: pwc.weight.semibold,
     color: pwc.grey900,
@@ -416,12 +467,32 @@ const styles = {
     fontSize: 11,
     color: pwc.grey700,
   },
+  filters: {
+    display: "flex",
+    gap: pwc.space.xs,
+    padding: `7px 9px`,
+  },
+  filterButton: {
+    minHeight: 30,
+    padding: `0 9px`,
+    border: 0,
+    borderRadius: pwc.radius.sm,
+    background: "transparent",
+    color: pwc.grey700,
+    fontFamily: pwc.fontBody,
+    fontSize: 11,
+    cursor: "pointer",
+  },
+  filterButtonActive: {
+    background: pwc.grey50,
+    color: pwc.black,
+    fontWeight: pwc.weight.medium,
+  },
   tabGroup: {
     display: "flex",
     flexDirection: "column" as const,
     gap: 2,
-    padding: `${pwc.space.md}px ${pwc.space.sm}px`,
-    borderBottom: `1px solid ${pwc.grey200}`,
+    padding: `${pwc.space.sm}px 0`,
   },
   groupLabel: {
     padding: `0 ${pwc.space.sm}px ${pwc.space.xs}px`,
@@ -436,26 +507,23 @@ const styles = {
     alignItems: "center",
     gap: pwc.space.xs + 2,
     width: "100%",
-    minHeight: 42,
-    padding: `${pwc.space.sm}px ${pwc.space.sm}px`,
+    minHeight: 58,
+    padding: `8px 9px`,
     fontFamily: pwc.fontHeading,
     fontSize: 13,
     fontWeight: pwc.weight.medium,
     color: pwc.grey700,
     background: "transparent",
     border: "none",
-    borderLeft: "3px solid transparent",
     borderRadius: pwc.radius.md,
     cursor: "pointer",
     textAlign: "left" as const,
-    transition: `color ${pwc.motion.duration.fast} ${pwc.motion.easing}, background ${pwc.motion.duration.fast} ${pwc.motion.easing}`,
     minWidth: 0,
   },
   tabActive: {
     color: pwc.grey900,
     fontWeight: pwc.weight.semibold,
-    background: pwc.grey100,
-    borderLeftColor: pwc.orange500,
+    background: pwc.grey50,
   },
   tabSkeleton: {
     color: pwc.grey300,
@@ -518,7 +586,7 @@ const badgeStyles = {
     width: 6,
     height: 6,
     borderRadius: "50%",
-    background: pwc.success,
+    background: pwc.black,
   } as React.CSSProperties,
   running: {
     display: "inline-flex",
@@ -535,7 +603,6 @@ const badgeStyles = {
     height: 8,
     borderRadius: "50%",
     background: pwc.orange400,
-    animation: "pulse 1.2s ease-in-out infinite",
   } as React.CSSProperties,
   failed: {
     display: "inline-flex",
@@ -550,7 +617,7 @@ const badgeStyles = {
     width: 6,
     height: 6,
     borderRadius: "50%",
-    background: pwc.error,
+    background: pwc.orange500,
   } as React.CSSProperties,
   cancelled: {
     display: "inline-flex",
@@ -581,8 +648,7 @@ const badgeStyles = {
     width: 8,
     height: 8,
     borderRadius: "50%",
-    background: pwc.error,
-    animation: "pulse 0.8s ease-in-out infinite",
+    background: pwc.orange500,
   } as React.CSSProperties,
   pending: {
     display: "inline-flex",

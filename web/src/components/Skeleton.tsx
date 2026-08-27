@@ -22,13 +22,13 @@ export function Skeleton({ width = "100%", height = 14, radius = pwc.radius.sm, 
   return (
     <span
       aria-hidden="true"
+      className="pwc-skeleton"
       style={{
         display: "block",
         width,
         height,
         borderRadius: radius,
         background: pwc.grey100,
-        animation: `skeleton-shimmer 1.4s ease-in-out infinite`,
         ...style,
       }}
     />

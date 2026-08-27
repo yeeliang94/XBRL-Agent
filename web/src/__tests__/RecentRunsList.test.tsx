@@ -91,6 +91,13 @@ describe("RecentRunsList", () => {
     const completed = screen.getByText("Completed");
     const symbol = completed.parentElement!.parentElement!.querySelector('[aria-hidden="true"]');
     expect(symbol?.getAttribute("data-status-icon")).toBe("success");
-    expect((symbol as HTMLElement).style.color).toBe("rgb(94, 94, 94)");
+    expect((symbol as HTMLElement).style.color).toBe("rgba(0, 0, 0, 0.64)");
+  });
+
+  test("row hover is owned by the shared table-row state", () => {
+    render(<RecentRunsList {...makeProps()} />);
+    const row = screen.getByRole("button", { name: /DRAFT-2024\.pdf/i });
+    expect(row.classList.contains("pwc-table-row")).toBe(true);
+    expect(row.style.background).toBe("");
   });
 });

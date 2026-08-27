@@ -1,0 +1,558 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>XBRL Agent — Focused Workspace Design System</title>
+  <!--
+    CANONICAL PRODUCTION DESIGN SYSTEM.
+
+    Direction A in docs/prototype-ui-overhaul.html is the exact product
+    composition and state reference. docs/pwc-design-system.html remains only
+    as an archived compatibility reference and is not a production authority.
+  -->
+  <style>
+    :root {
+      --orange-700: #d64000;
+      --orange-500: #fd5108;
+      --orange-400: #fe7c39;
+      --orange-300: #ffaa72;
+      --orange-200: #ffcda8;
+      --orange-100: #ffe8d4;
+      --orange-50: #fff5ed;
+      --black: #000000;
+      --white: #ffffff;
+      --grey-500: #6b7280;
+      --grey-400: #b5bcc4;
+      --grey-300: #cbd1d6;
+      --grey-200: #dfe3e6;
+      --grey-100: #eeeff1;
+      --grey-50: #f5f7f8;
+      --text: #000000;
+      --text-secondary: rgba(0, 0, 0, .64);
+      --text-tertiary: rgba(0, 0, 0, .46);
+      --line: #dfe3e6;
+      --line-soft: #eeeff1;
+      --canvas: #ffffff;
+      --surface-subtle: #f5f7f8;
+      --font-sans: "Inter Variable", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      --radius-sm: 6px;
+      --radius-md: 8px;
+      --radius-lg: 12px;
+      --space-1: 4px;
+      --space-2: 8px;
+      --space-3: 12px;
+      --space-4: 16px;
+      --space-5: 24px;
+      --space-6: 32px;
+      --space-7: 48px;
+      --space-8: 64px;
+      --shadow-float: 0 14px 40px rgba(0, 0, 0, .12);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--canvas);
+      color: var(--text);
+      font: 14px/1.5 var(--font-sans);
+      -webkit-font-smoothing: antialiased;
+    }
+    button, input { font: inherit; }
+    button { color: inherit; }
+    button:focus-visible, a:focus-visible, summary:focus-visible, input:focus-visible {
+      outline: 2px solid var(--black);
+      outline-offset: 2px;
+    }
+    a { color: inherit; }
+    code { font-family: var(--font-mono); font-size: .9em; }
+
+    .doc-shell { display: grid; grid-template-columns: 250px minmax(0, 1fr); min-height: 100vh; }
+    .doc-nav {
+      position: sticky; top: 0; height: 100vh; overflow: auto;
+      padding: 28px 20px; background: var(--grey-50); border-right: 1px solid var(--grey-200);
+    }
+    .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 34px; font-size: 17px; font-weight: 720; }
+    .mark { width: 28px; color: var(--orange-500); }
+    .doc-state { margin-bottom: 26px; color: var(--text-tertiary); font-size: 11px; line-height: 1.5; }
+    .doc-state strong { display: block; color: var(--text); font-size: 11px; }
+    .nav-label { margin: 24px 8px 8px; color: var(--text-tertiary); font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+    .doc-nav a { display: block; padding: 7px 8px; border-radius: var(--radius-sm); color: var(--text-secondary); font-size: 12px; text-decoration: none; }
+    .doc-nav a:hover { background: var(--white); color: var(--text); }
+
+    main { width: min(1180px, 100%); padding: 58px 64px 100px; }
+    .hero { max-width: 820px; margin-bottom: 76px; }
+    .hero-kicker { color: var(--orange-700); font-size: 11px; font-weight: 750; letter-spacing: .1em; text-transform: uppercase; }
+    h1 { margin: 12px 0 18px; font-size: clamp(32px, 4vw, 42px); line-height: 1.08; letter-spacing: -.035em; }
+    .hero p { max-width: 680px; margin: 0; color: var(--text-secondary); font-size: 14px; }
+    .hero-meta { display: flex; gap: 20px; flex-wrap: wrap; margin-top: 26px; color: var(--text-tertiary); font: 11px var(--font-mono); }
+
+    section { margin-bottom: 88px; scroll-margin-top: 28px; }
+    .section-head { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 28px; margin-bottom: 28px; }
+    .section-head h2 { margin: 0; font-size: 18px; letter-spacing: -.02em; }
+    .section-head p { max-width: 680px; margin: 2px 0 0; color: var(--text-secondary); }
+    h3 { margin: 34px 0 14px; font-size: 14px; }
+    .eyebrow { color: var(--text-tertiary); font-size: 10px; font-weight: 720; letter-spacing: .1em; text-transform: uppercase; }
+    .muted { color: var(--text-secondary); }
+    .micro { color: var(--text-tertiary); font-size: 10px; }
+    .rule { width: 30px; height: 3px; margin: 0 0 14px; background: var(--orange-500); }
+
+    .principles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px 44px; }
+    .principle { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 12px; }
+    .principle > span { color: var(--orange-500); font: 12px var(--font-mono); }
+    .principle strong { display: block; margin-bottom: 4px; }
+    .principle p { margin: 0; color: var(--text-secondary); font-size: 14px; }
+
+    .swatches { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
+    .swatch { min-width: 0; }
+    .swatch-chip { height: 74px; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); }
+    .swatch strong { display: block; margin-top: 8px; font-size: 11px; }
+    .swatch code { color: var(--text-tertiary); font-size: 9px; }
+    .token-table { width: 100%; border-collapse: collapse; }
+    .token-table th, .token-table td { padding: 12px 10px; border-bottom: 1px solid var(--line-soft); text-align: left; vertical-align: top; font-size: 12px; }
+    .token-table th { color: var(--text-tertiary); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+    .token-table td:first-child { color: var(--text); font-weight: 650; }
+
+    .type-specimen { display: grid; gap: 0; }
+    .type-row { display: grid; grid-template-columns: 150px minmax(0, 1fr) 130px; gap: 22px; align-items: baseline; padding: 14px 0; border-bottom: 1px solid var(--line-soft); }
+    .type-row > span:first-child, .type-row code { color: var(--text-tertiary); font-size: 10px; }
+    .type-title { font-size: 28px; font-weight: 700; letter-spacing: -.025em; }
+    .type-section { font-size: 16px; font-weight: 680; }
+    .type-body { font-size: 14px; }
+    .type-body.muted-example { color: var(--text-secondary); }
+
+    .button-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    .button {
+      min-height: 40px; padding: 0 15px; border: 1px solid var(--grey-300); border-radius: var(--radius-md);
+      background: var(--white); color: var(--black); font-weight: 650; cursor: pointer;
+      transition: background-color .14s cubic-bezier(.2,0,0,1), border-color .14s cubic-bezier(.2,0,0,1), color .14s cubic-bezier(.2,0,0,1), transform .1s cubic-bezier(.2,0,0,1);
+    }
+    .button:hover { background: var(--grey-50); border-color: var(--grey-500); }
+    .button.primary { background: var(--black); border-color: var(--black); color: var(--white); }
+    .button.primary:hover { background: var(--black); border-color: var(--black); opacity: .86; }
+    .button:active { transform: translateY(1px); }
+    .button.quiet { border-color: transparent; background: transparent; }
+    .button.icon { width: 38px; padding: 0; }
+    .button:disabled { opacity: .38; cursor: not-allowed; }
+
+    .do-dont { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 30px; }
+    .do-dont h4 { margin: 0 0 8px; font-size: 12px; }
+    .do-dont .do h4::before { content: "✓"; margin-right: 8px; }
+    .do-dont .dont h4::before { content: "×"; margin-right: 8px; color: var(--orange-500); }
+    .do-dont p { margin: 0; color: var(--text-secondary); font-size: 12px; }
+
+    .status-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+    .status { display: flex; align-items: center; gap: 8px; min-height: 42px; font-size: 12px; }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--grey-500); flex: 0 0 auto; }
+    .dot.working, .dot.attention { background: var(--orange-500); }
+    .dot.done { background: var(--black); }
+    .dot.working { box-shadow: 0 0 0 3px var(--orange-50); animation: pulse 1.8s ease-in-out infinite; }
+    @keyframes pulse { 0%, 100% { box-shadow: 0 0 0 2px var(--orange-50); } 50% { box-shadow: 0 0 0 5px var(--orange-50); } }
+    .warning-icon { width: 18px; height: 18px; display: inline-grid; place-items: center; border-radius: 50%; color: var(--orange-500); font-size: 12px; font-weight: 800; }
+
+    .specimen { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--white); }
+    .specimen-caption { display: flex; justify-content: space-between; gap: 20px; padding: 11px 14px; border-bottom: 1px solid var(--line-soft); color: var(--text-tertiary); font-size: 10px; }
+    .specimen-body { min-height: 260px; }
+
+    .shell-demo { display: grid; grid-template-columns: 170px minmax(0, 1fr); min-height: 360px; }
+    .shell-sidebar { padding: 20px 14px; background: var(--grey-50); }
+    .shell-brand { display: flex; gap: 8px; align-items: center; margin-bottom: 28px; font-weight: 720; }
+    .shell-brand .mark { width: 22px; }
+    .shell-nav { display: grid; gap: 3px; }
+    .shell-nav span { padding: 8px 10px; border-radius: var(--radius-md); color: var(--text-secondary); font-size: 11px; }
+    .shell-nav span.active { background: var(--white); color: var(--black); font-weight: 650; }
+    .shell-main { padding: 28px 32px; }
+    .shell-main h3 { margin: 0; font-size: 20px; }
+    .shell-main p { margin: 5px 0 22px; color: var(--text-secondary); }
+    .flat-list { display: grid; }
+    .flat-row { display: grid; grid-template-columns: minmax(180px, 1fr) 110px 110px; gap: 14px; padding: 13px 0; border-bottom: 1px solid var(--line-soft); font-size: 11px; }
+    .flat-row strong { font-size: 12px; }
+
+    .agent-demo { display: grid; grid-template-columns: minmax(480px, 1.35fr) minmax(290px, .72fr); min-height: 430px; }
+    .agent-list { padding: 26px 28px; }
+    .agent-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+    .agent-head h3 { margin: 0; font-size: 17px; }
+    .filters { display: flex; gap: 3px; }
+    .filter { min-height: 30px; padding: 0 9px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-secondary); font-size: 10px; cursor: pointer; }
+    .filter.active { background: var(--grey-50); color: var(--black); font-weight: 700; }
+    .agent-row { position: relative; width: 100%; min-height: 58px; padding: 8px 9px; border: 0; border-radius: var(--radius-md); background: transparent; display: grid; grid-template-columns: 18px minmax(125px,.6fr) minmax(180px,1fr) auto; gap: 10px; align-items: center; text-align: left; cursor: pointer; }
+    .agent-row:hover, .agent-row.active { background: var(--grey-50); }
+    .agent-row.child { width: calc(100% - 22px); margin-left: 22px; }
+    .agent-row.child::before { content: ""; position: absolute; left: -10px; top: 0; bottom: 0; width: 1px; background: var(--grey-200); }
+    .agent-row.child::after { content: ""; position: absolute; left: -10px; top: 29px; width: 10px; height: 1px; background: var(--grey-200); }
+    .agent-name strong, .agent-task strong { display: block; font-size: 12px; }
+    .agent-name span, .agent-task span { display: block; margin-top: 2px; color: var(--text-secondary); font-size: 11px; }
+    .agent-state { color: var(--text-secondary); font-size: 11px; white-space: nowrap; }
+    .agent-detail { padding: 28px 0 24px 30px; border-left: 1px solid var(--line-soft); }
+    .agent-detail-inner { padding-right: 26px; }
+    .agent-detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    .agent-detail h4 { margin: 5px 0 0; font-size: 16px; }
+    .detail-copy { margin: 14px 0 20px; color: var(--text-secondary); font-size: 14px; }
+    .detail-now { display: flex; gap: 8px; align-items: center; font-size: 12px; font-weight: 700; }
+    .detail-now span:last-child { margin-left: auto; color: var(--text-secondary); font-weight: 400; }
+    .updates { display: grid; gap: 11px; margin-top: 12px; }
+    .update { display: grid; grid-template-columns: 38px minmax(0,1fr); gap: 9px; font-size: 12px; }
+    .update time { color: var(--text-tertiary); font: 11px var(--font-mono); }
+    .detail-links { display: grid; grid-template-columns: 88px minmax(0,1fr); gap: 6px; margin-top: 12px; color: var(--text-secondary); font-size: 12px; }
+    .detail-links strong { color: var(--black); }
+    .technical { margin-top: 20px; color: var(--text-secondary); font-size: 11px; }
+    .technical summary { cursor: pointer; }
+
+    .review-demo { display: grid; grid-template-columns: 160px minmax(390px, 1fr) minmax(260px, .72fr); min-height: 460px; }
+    .review-rail { padding: 22px 14px; background: var(--grey-50); }
+    .review-rail h4 { margin: 0 0 4px; }
+    .rail-meta { color: var(--text-secondary); font-size: 9px; }
+    .rail-search { width: 100%; margin: 14px 0 8px; padding: 8px 9px; border: 1px solid var(--grey-300); border-radius: var(--radius-sm); background: var(--white); font-size: 10px; }
+    .rail-item { width: 100%; padding: 8px 7px; border: 0; border-radius: var(--radius-sm); background: transparent; display: grid; grid-template-columns: 20px minmax(0,1fr) 16px; gap: 5px; text-align: left; font-size: 9px; cursor: pointer; }
+    .rail-item.active { background: var(--white); font-weight: 650; }
+    .review-editor { min-width: 0; padding: 24px 28px; }
+    .review-editor h4 { margin: 0; font-size: 17px; }
+    .template-table { width: 100%; margin-top: 18px; border-collapse: collapse; font-size: 10px; }
+    .template-table th, .template-table td { padding: 10px 8px; border-bottom: 1px solid var(--line-soft); text-align: right; }
+    .template-table th:first-child, .template-table td:first-child { text-align: left; }
+    .template-table tr.selected { background: var(--orange-50); }
+    .source-jump { border: 0; background: transparent; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+    .pdf-pane { padding: 20px; border-left: 1px solid var(--line-soft); background: var(--white); }
+    .pdf-toolbar { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 16px; font-size: 10px; }
+    .pdf-page { width: min(100%, 280px); min-height: 350px; margin: 0 auto; padding: 28px 22px; border: 1px solid var(--grey-200); background: var(--white); box-shadow: 0 5px 18px rgba(0,0,0,.07); }
+    .pdf-line { height: 5px; margin-bottom: 8px; border-radius: 2px; background: var(--grey-100); }
+    .pdf-highlight { margin: 18px -7px; padding: 8px 7px; border-radius: var(--radius-sm); background: var(--orange-50); font-size: 9px; }
+
+    .attention-demo { display: flex; align-items: center; gap: 12px; padding: 14px 0; }
+    .attention-demo strong { font-size: 12px; }
+    .attention-demo p { margin: 1px 0 0; color: var(--text-secondary); font-size: 11px; }
+    .tooltip-wrap { position: relative; }
+    .tooltip { position: absolute; left: 50%; bottom: calc(100% + 8px); width: 210px; padding: 9px 10px; border-radius: var(--radius-sm); background: var(--black); color: var(--white); font-size: 9px; box-shadow: var(--shadow-float); transform: translateX(-50%); opacity: 0; pointer-events: none; transition: opacity .12s ease; }
+    .tooltip-wrap:hover .tooltip, .tooltip-wrap:focus-within .tooltip { opacity: 1; }
+
+    .checklist { display: grid; gap: 10px; }
+    .check { display: grid; grid-template-columns: 20px minmax(0,1fr); gap: 10px; color: var(--text-secondary); font-size: 12px; }
+    .check span { color: var(--black); }
+    .handoff { padding: 18px 20px; border: 1px solid var(--grey-200); border-radius: var(--radius-sm); background: var(--grey-50); font-size: 12px; }
+    .handoff strong { display: block; margin-bottom: 4px; }
+
+    @media (max-width: 980px) {
+      .doc-shell { grid-template-columns: 1fr; }
+      .doc-nav { position: static; width: 100%; height: auto; padding: 16px 20px; border: 0; border-bottom: 1px solid var(--grey-200); }
+      .doc-nav .brand { margin: 0; }
+      .doc-state, .nav-label, .doc-nav nav { display: none; }
+      main { padding: 40px 24px 80px; }
+      .agent-demo, .review-demo { grid-template-columns: 1fr; }
+      .agent-detail, .pdf-pane { border-left: 0; border-top: 1px solid var(--line-soft); }
+      .review-rail { max-height: 220px; overflow: auto; }
+    }
+    @media (max-width: 680px) {
+      .section-head { grid-template-columns: 1fr; gap: 8px; }
+      .principles, .do-dont { grid-template-columns: 1fr; }
+      .swatches { grid-template-columns: repeat(3, minmax(0,1fr)); }
+      .status-row { grid-template-columns: repeat(2, minmax(0,1fr)); }
+      .type-row { grid-template-columns: 90px minmax(0,1fr); }
+      .type-row code { display: none; }
+      .shell-demo { grid-template-columns: 1fr; }
+      .shell-sidebar { display: none; }
+      .agent-list { padding: 20px 14px; }
+      .agent-head { align-items: flex-start; }
+      .agent-row { grid-template-columns: 18px minmax(0,1fr) auto; }
+      .agent-task { grid-column: 2 / -1; }
+      .review-editor { overflow-x: auto; }
+      .template-table { min-width: 520px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="doc-shell">
+    <aside class="doc-nav">
+      <div class="brand">
+        <svg class="mark" viewBox="0 0 100 100" fill="none" aria-hidden="true"><path d="M12 78 L40 22 L52 50 L66 30 L88 78" stroke="currentColor" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>XBRL Agent</span>
+      </div>
+      <div class="doc-state"><strong>Focused Workspace · v1</strong>Canonical production reference<br>28 August 2026</div>
+      <nav aria-label="Design system sections">
+        <div class="nav-label">Direction</div>
+        <a href="#overview">Overview</a>
+        <a href="#principles">Principles</a>
+        <div class="nav-label">Foundations</div>
+        <a href="#colour">Colour</a>
+        <a href="#type">Typography</a>
+        <a href="#surfaces">Surfaces and borders</a>
+        <a href="#actions">Actions and status</a>
+        <div class="nav-label">Product patterns</div>
+        <a href="#shell">Application shell</a>
+        <a href="#agents">Live agent workspace</a>
+        <a href="#review">Figures and notes review</a>
+        <a href="#attention">Attention and warnings</a>
+        <a href="#states">Run transitions</a>
+        <div class="nav-label">Delivery</div>
+        <a href="#responsive">Responsive behaviour</a>
+        <a href="#accessibility">Accessibility</a>
+        <a href="#implementation">Implementation contract</a>
+      </nav>
+    </aside>
+
+    <main>
+      <header class="hero" id="overview">
+        <div class="hero-kicker">Application design system</div>
+        <h1>Focused workspace for document-heavy XBRL review.</h1>
+        <p>A clean, minimal interface for extracting, locating, reviewing and editing financial statement data. The design prioritises the source document, the mTool destination and the reviewer’s next decision.</p>
+        <div class="hero-meta"><span>STATUS · PRODUCTION</span><span>PALETTE · BLACK / ORANGE / GREY / WHITE</span><span>DIRECTION · A</span></div>
+      </header>
+
+      <section id="principles">
+        <div class="section-head"><h2>Principles</h2><p>These rules control composition. They are more important than any individual component treatment.</p></div>
+        <div class="principles">
+          <div class="principle"><span>01</span><div><strong>Show the work, not an explanation of the work.</strong><p>Use current tasks, values, evidence and dependencies. Remove preambles that restate what the screen already shows.</p></div></div>
+          <div class="principle"><span>02</span><div><strong>Keep recorded evidence one click away.</strong><p>When authoritative page evidence exists, link directly to that PDF page. Highlight the exact region only when coordinates exist. Without page evidence, show a non-interactive manual-verification state rather than an empty source control.</p></div></div>
+          <div class="principle"><span>03</span><div><strong>Mirror the destination.</strong><p>Review values and notes in a layout that closely matches their mTool fields, order and period columns.</p></div></div>
+          <div class="principle"><span>04</span><div><strong>Use progressive disclosure.</strong><p>Keep audit history, technical activity and secondary metadata available but collapsed until requested.</p></div></div>
+          <div class="principle"><span>05</span><div><strong>Flatten the interface.</strong><p>Prefer whitespace and alignment. Do not place cards inside a larger panel or divide every region with a border.</p></div></div>
+          <div class="principle"><span>06</span><div><strong>Reserve orange for meaning.</strong><p>Use orange for identity, active work, source emphasis and compact attention icons. Selected controls use quiet surfaces, readable text and weight instead of accent lines.</p></div></div>
+          <div class="principle"><span>07</span><div><strong>Make parallel work legible without inference.</strong><p>Show each agent's authoritative role, status, task, timestamp and page activity. Show hierarchy, handoffs or waiting dependencies only when the event contract supplies those relationships.</p></div></div>
+          <div class="principle"><span>08</span><div><strong>Make editing direct.</strong><p>Reviewers should edit the canonical value or note in place and understand where that change will land in mTool.</p></div></div>
+        </div>
+      </section>
+
+      <section id="colour">
+        <div class="section-head"><h2>Colour</h2><p>One white canvas, one restrained grey surface and a controlled orange accent. Black carries text and primary actions.</p></div>
+        <h3>Core palette</h3>
+        <div class="swatches">
+          <div class="swatch"><div class="swatch-chip" style="background:#fd5108"></div><strong>Orange 500</strong><code>#FD5108</code></div>
+          <div class="swatch"><div class="swatch-chip" style="background:#ffffff"></div><strong>White</strong><code>#FFFFFF</code></div>
+          <div class="swatch"><div class="swatch-chip" style="background:#000000"></div><strong>Black</strong><code>#000000</code></div>
+        </div>
+        <h3>Orange tints</h3>
+        <div class="swatches">
+          <div class="swatch"><div class="swatch-chip" style="background:#fd5108"></div><strong>500</strong><code>#FD5108</code></div>
+          <div class="swatch"><div class="swatch-chip" style="background:#fe7c39"></div><strong>400</strong><code>#FE7C39</code></div>
+          <div class="swatch"><div class="swatch-chip" style="background:#ffaa72"></div><strong>300</strong><code>#FFAA72</code></div>
+          <div class="swatch"><div class="swatch-chip" style="background:#ffcda8"></div><strong>200</strong><code>#FFCDA8</code></div>
+          <div class="swatch"><div class="swatch-chip" style="background:#ffe8d4"></div><strong>100</strong><code>#FFE8D4</code></div>
+          <div class="swatch"><div class="swatch-chip" style="background:#fff5ed"></div><strong>50</strong><code>#FFF5ED</code></div>
+        </div>
+        <h3>Neutral scale</h3>
+        <div class="swatches">
+          <div class="swatch"><div class="swatch-chip" style="background:#6b7280"></div><strong>Grey 500</strong><code>#6B7280</code></div>
+          <div class="swatch"><div class="swatch-chip" style="background:#b5bcc4"></div><strong>Grey 400</strong><code>#B5BCC4</code></div>
+          <div class="swatch"><div class="swatch-chip" style="background:#cbd1d6"></div><strong>Grey 300</strong><code>#CBD1D6</code></div>
+          <div class="swatch"><div class="swatch-chip" style="background:#dfe3e6"></div><strong>Grey 200</strong><code>#DFE3E6</code></div>
+          <div class="swatch"><div class="swatch-chip" style="background:#eeeff1"></div><strong>Grey 100</strong><code>#EEEFF1</code></div>
+          <div class="swatch"><div class="swatch-chip" style="background:#f5f7f8"></div><strong>Grey 50</strong><code>#F5F7F8</code></div>
+        </div>
+        <h3>Usage</h3>
+        <table class="token-table">
+          <thead><tr><th>Role</th><th>Token</th><th>Use</th></tr></thead>
+          <tbody>
+            <tr><td>Canvas</td><td><code>#FFFFFF</code></td><td>Main workspace, document review and content areas.</td></tr>
+            <tr><td>Subtle surface</td><td><code>#F5F7F8</code></td><td>Sidebar, hover, selected rows and table headers. Avoid stacking it inside other grey panels.</td></tr>
+            <tr><td>Primary text</td><td><code>#000000</code></td><td>Headings, values, labels and primary controls.</td></tr>
+            <tr><td>Secondary text</td><td><code>rgba(0,0,0,.64)</code></td><td>Descriptions, metadata and timestamps.</td></tr>
+            <tr><td>Active or attention</td><td><code>#FD5108</code></td><td>Small dots, focus cues, source highlights and isolated warning icons.</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="type">
+        <div class="section-head"><h2>Typography</h2><p>Use three levels only. Create secondary hierarchy with weight and muted colour, not another font size.</p></div>
+        <div class="type-specimen">
+          <div class="type-row"><span>Page title</span><div class="type-title">Figures review</div><code>28 / 700</code></div>
+          <div class="type-row"><span>Section and item title</span><div class="type-section">Statement agents</div><code>16 / 680</code></div>
+          <div class="type-row"><span>Body and metadata</span><div><div class="type-body">Review the extracted value against its source.</div><div class="type-body muted-example">Pages 67–69 · updated just now</div></div><code>14 / 400</code></div>
+        </div>
+        <div class="handoff" style="margin-top:20px"><strong>Financial values</strong>Use tabular numerals, right alignment and consistent denomination. Keep figures visually stronger than helper text: <code>font-variant-numeric: tabular-nums</code>.</div>
+      </section>
+
+      <section id="surfaces">
+        <div class="section-head"><h2>Surfaces and borders</h2><p>The default composition is white and flat. Borders explain an actual boundary; they do not decorate every block.</p></div>
+        <div class="do-dont">
+          <div class="do"><h4>Use</h4><p>Whitespace, column alignment, one subtle sidebar surface, a divider between persistent panes, and a light row hover or selection.</p></div>
+          <div class="dont"><h4>Avoid</h4><p>Cards inside panels, multiple background tints, full-width warning bands, coloured borders around routine information and repeated header rules. Do not use accent lines for hover, pressed, active or selected states.</p></div>
+        </div>
+        <table class="token-table" style="margin-top:20px">
+          <thead><tr><th>Boundary</th><th>Treatment</th><th>Reason</th></tr></thead>
+          <tbody>
+            <tr><td>App navigation</td><td>Grey 50 surface</td><td>Separates navigation from the white workspace without a heavy container.</td></tr>
+            <tr><td>Persistent PDF pane</td><td>One Grey 100 divider</td><td>Marks a functional split between editable content and evidence.</td></tr>
+            <tr><td>Selected row</td><td>Grey 50 or Orange 50</td><td>Grey for neutral selection; Orange 50 only when the source or issue requires attention.</td></tr>
+            <tr><td>Floating UI</td><td>Shadow</td><td>Reserved for dropdowns, tooltips and modals that overlap content.</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="actions">
+        <div class="section-head"><h2>Actions and status</h2><p>Primary actions are black with white text. Orange identifies activity and attention; it is not used as a large button fill.</p></div>
+        <h3>Buttons</h3>
+        <div class="button-row">
+          <button class="button primary">Save changes</button>
+          <button class="button">Open source</button>
+          <button class="button quiet">View audit history</button>
+          <button class="button icon" aria-label="More actions">···</button>
+          <button class="button" disabled>Unavailable</button>
+        </div>
+        <h3>Status language</h3>
+        <div class="status-row">
+          <div class="status"><span class="dot working"></span><span>Working</span></div>
+          <div class="status"><span class="dot done"></span><span>Finished</span></div>
+          <div class="status"><span class="dot attention"></span><span>Needs attention</span></div>
+          <div class="status"><span class="dot"></span><span>Waiting</span></div>
+        </div>
+        <p class="muted" style="margin-top:12px;font-size:12px">Always pair colour with text or an icon. Routine success stays monochrome. Use orange only for the currently active or exceptional state.</p>
+      </section>
+
+      <section id="shell">
+        <div class="section-head"><h2>Application shell</h2><p>Keep navigation stable and the content surface white. Each page begins with one compact context header and moves directly into the work.</p></div>
+        <div class="specimen">
+          <div class="specimen-caption"><span>Pattern · Focused application shell</span><span>One grey navigation surface</span></div>
+          <div class="specimen-body shell-demo">
+            <aside class="shell-sidebar">
+              <div class="shell-brand"><svg class="mark" viewBox="0 0 100 100" fill="none"><path d="M12 78 L40 22 L52 50 L66 30 L88 78" stroke="currentColor" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/></svg><span>XBRL Agent</span></div>
+              <div class="shell-nav"><span>Work queue</span><span>New extraction</span><span class="active">Runs</span><span>Figures review</span><span>Notes review</span></div>
+            </aside>
+            <div class="shell-main">
+              <h3>Runs</h3><p>Find a filing, resume a draft or open its review.</p>
+              <div class="flat-list">
+                <div class="flat-row"><strong>Axiata Group · FY 2025</strong><span><span class="dot attention" style="display:inline-block;margin-right:6px"></span>Needs review</span><span>2 issues</span></div>
+                <div class="flat-row"><strong>FINCO Holdings · FY 2024</strong><span><span class="dot working" style="display:inline-block;margin-right:6px"></span>Processing</span><span>8 of 12</span></div>
+                <div class="flat-row"><strong>Kelana Manufacturing · FY 2025</strong><span><span class="dot done" style="display:inline-block;margin-right:6px"></span>Ready</span><span>Checks passed</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="agents">
+        <div class="section-head"><h2>Live agent workspace</h2><p>Show asynchronous work in the list and focused context in the detail pane. Do not stream raw tool calls by default.</p></div>
+        <div class="specimen">
+          <div class="specimen-caption"><span>Capability-gated pattern · Select an agent</span><span>Hierarchy appears only when supplied</span></div>
+          <div class="specimen-body agent-demo">
+            <div class="agent-list">
+              <div class="agent-head"><h3>Agents</h3><div class="filters"><button class="filter active">Working 4</button><button class="filter">All 12</button><button class="filter">Finished 7</button></div></div>
+              <button class="agent-row" data-agent="coordinator"><span class="dot working"></span><span class="agent-name"><strong>Notes coordinator</strong><span>Coordination</span></span><span class="agent-task"><strong>Placing notes into filing sections</strong><span>4 note agents active · updated just now</span></span><span class="agent-state">12 of 16</span></button>
+              <button class="agent-row child active" data-agent="borrowings"><span class="dot working"></span><span class="agent-name"><strong>Borrowings note</strong><span>Sub-agent · Notes extraction</span></span><span class="agent-task"><strong>Reading the maturity table</strong><span>Pages 67–69 · updated just now</span></span><span class="agent-state">Working</span></button>
+              <button class="agent-row child" data-agent="leases"><span class="dot working"></span><span class="agent-name"><strong>Leases note</strong><span>Sub-agent · Notes extraction</span></span><span class="agent-task"><strong>Comparing current and prior year</strong><span>Pages 70–72 · updated 4s ago</span></span><span class="agent-state">Working</span></button>
+              <button class="agent-row child" data-agent="instruments"><span class="dot working"></span><span class="agent-name"><strong>Financial instruments</strong><span>Sub-agent · Notes extraction</span></span><span class="agent-task"><strong>Organising disclosure tables</strong><span>Pages 73–76 · updated 7s ago</span></span><span class="agent-state">Working</span></button>
+            </div>
+            <aside class="agent-detail"><div class="agent-detail-inner" id="agent-detail"></div></aside>
+          </div>
+        </div>
+        <h3>What the stream contains</h3>
+        <table class="token-table">
+          <thead><tr><th>Show by default</th><th>Keep under technical details</th></tr></thead>
+          <tbody>
+            <tr><td>Source located, values being extracted, result written, checking totals, retrying, waiting, completed, reviewer input needed.</td><td>Raw tool names, prompts, tokens, request counts, stack traces and provider payloads.</td></tr>
+          </tbody>
+        </table>
+        <div class="handoff" style="margin-top:20px"><strong>Current event contract</strong>The production roster consumes <code>agent_id</code>, role, task, status, semantic update, timestamp and optional page evidence. General <code>parent_agent_id</code> and <code>waiting_for</code> relationships are optional future capabilities; without them, the UI remains a truthful flat roster. Announce only the selected agent's semantic update in a stable polite status region, never the entire detail pane.</div>
+      </section>
+
+      <section id="review">
+        <div class="section-head"><h2>Figures and notes review</h2><p>The stable workspace has three functions: navigate the extracted destination, edit it in context and verify it against the source PDF.</p></div>
+        <div class="specimen">
+          <div class="specimen-caption"><span>Pattern · Persistent navigation + mTool mirror + PDF</span><span>One-click source jump</span></div>
+          <div class="specimen-body review-demo">
+            <aside class="review-rail"><h4>Notes</h4><div class="rail-meta">28 notes · 1 review</div><input class="rail-search" placeholder="Search notes" aria-label="Search notes"><button class="rail-item"><span>18</span><span>Commitments</span><span></span></button><button class="rail-item active"><span>19</span><span>Borrowings</span><span></span></button><button class="rail-item"><span>20</span><span>Leases</span><span></span></button><button class="rail-item"><span>21</span><span>Financial instruments</span><span></span></button><button class="rail-item"><span>28</span><span>Contingent liabilities</span><span class="warning-icon" title="Placement needs review">!</span></button></aside>
+            <section class="review-editor"><div class="eyebrow">mTool · Notes-ListOfNotes</div><h4>19. Borrowings</h4><table class="template-table"><thead><tr><th>Disclosure</th><th>FY 2024</th><th>FY 2023</th><th>Source</th></tr></thead><tbody><tr><td>Within one year</td><td>68,204</td><td>51,443</td><td><button class="source-jump" data-page="67">p. 67</button></td></tr><tr class="selected"><td>Between one and five years</td><td>174,884</td><td>190,182</td><td><button class="source-jump" data-page="68">p. 68</button></td></tr><tr><td>More than five years</td><td>28,310</td><td>36,411</td><td><button class="source-jump" data-page="68">p. 68</button></td></tr><tr><td><strong>Total borrowings</strong></td><td><strong>271,398</strong></td><td><strong>278,036</strong></td><td><button class="source-jump" data-page="69">p. 69</button></td></tr></tbody></table><details class="technical"><summary>Field and audit details</summary><p>Template destination, canonical fact ID, edit history and confidence.</p></details></section>
+            <aside class="pdf-pane"><div class="pdf-toolbar"><strong>Source · page <span id="pdf-page">68</span></strong><span>110%</span></div><div class="pdf-page"><div class="pdf-line" style="width:55%"></div><div class="pdf-line" style="width:82%"></div><div class="pdf-line" style="width:74%"></div><div class="pdf-highlight"><strong>Borrowings maturity analysis</strong><br>Between one and five years&nbsp;&nbsp;&nbsp;174,884</div><div class="pdf-line" style="width:88%"></div><div class="pdf-line" style="width:62%"></div><div class="pdf-line" style="width:78%"></div></div></aside>
+          </div>
+        </div>
+        <div class="do-dont" style="margin-top:24px">
+          <div class="do"><h4>Figures</h4><p>Match mTool row order and period columns. Let the reviewer edit canonical values in place. Selecting a row immediately updates the PDF evidence.</p></div>
+          <div class="do"><h4>Notes</h4><p>Keep the full note index persistently visible and searchable. Use one click to switch notes and jump the PDF. Show editing tools only when the editor has focus.</p></div>
+        </div>
+      </section>
+
+      <section id="attention">
+        <div class="section-head"><h2>Attention and warnings</h2><p>Prefer a small icon at the affected object. Explain the issue on hover, focus or selection. Use a banner only when the whole page is blocked, with one neutral boundary rather than a coloured or heavy side rail.</p></div>
+        <div class="attention-demo">
+          <span class="tooltip-wrap"><button class="button icon quiet" aria-label="Review issue"><span class="warning-icon">!</span></button><span class="tooltip" role="tooltip">FY 2024 differs from the source on page 48. Select this field to review.</span></span>
+          <div><strong>Other current liabilities</strong><p>RM 123,881 · source page 48</p></div>
+        </div>
+        <div class="do-dont">
+          <div class="do"><h4>Use an icon or inline state</h4><p>One field, note, row or agent needs attention and the rest of the page remains usable.</p></div>
+          <div class="dont"><h4>Avoid a full-width warning header</h4><p>The message repeats information, pushes the work below the fold or forces the reviewer to scan a large coloured area.</p></div>
+        </div>
+      </section>
+
+      <section id="states">
+        <div class="section-head"><h2>Run transitions</h2><p>The same agent rows change state as work moves through the pipeline. Do not replace the screen with a separate progress narrative.</p></div>
+        <table class="token-table">
+          <thead><tr><th>Transition</th><th>Visible change</th><th>Reviewer outcome</th></tr></thead>
+          <tbody>
+            <tr><td>Document read → extraction</td><td>Scanner becomes finished and the statement or note agents supplied by the stream appear.</td><td>The reviewer sees that parallel extraction has started.</td></tr>
+            <tr><td>Agent work progresses</td><td>Each row carries its own authoritative task, state and timestamp. Indentation appears only for explicit parent metadata.</td><td>The reviewer can identify slow or blocked work without inferred relationships or technical logs.</td></tr>
+            <tr><td>Extraction → review</td><td>Review work changes from waiting to working when reported by the stream.</td><td>The automatic handoff is explicit when the contract supplies it.</td></tr>
+            <tr><td>Review → needs input</td><td>The affected row moves to the top, gains a small attention icon and opens its detail panel.</td><td>The reviewer sees one clear decision and a direct action.</td></tr>
+            <tr><td>Resolved → complete</td><td>Active work collapses into finished counts. Download and mTool actions become available.</td><td>The interface confirms readiness without retaining the live-run clutter.</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="responsive">
+        <div class="section-head"><h2>Responsive behaviour</h2><p>Preserve task order when space becomes constrained. Do not simply shrink three desktop panes until the content is unreadable.</p></div>
+        <div class="checklist">
+          <div class="check"><span>01</span><div><strong>Large desktop:</strong> persistent navigation, working surface and PDF or agent detail pane remain visible.</div></div>
+          <div class="check"><span>02</span><div><strong>Standard desktop:</strong> narrow secondary rails first; keep the editable mTool surface dominant.</div></div>
+          <div class="check"><span>03</span><div><strong>Tablet:</strong> move PDF or agent detail below the primary surface while retaining one-click selection.</div></div>
+          <div class="check"><span>04</span><div><strong>Mobile:</strong> convert persistent rails to compact horizontal navigation. Financial tables may scroll horizontally; labels and period headers remain visible.</div></div>
+        </div>
+      </section>
+
+      <section id="accessibility">
+        <div class="section-head"><h2>Accessibility</h2><p>Minimal interfaces still require visible state, keyboard access and complete labels.</p></div>
+        <div class="checklist">
+          <div class="check"><span>✓</span><div>Every icon-only control has an accessible name and a visible tooltip on hover and keyboard focus.</div></div>
+          <div class="check"><span>✓</span><div>Colour never carries status alone. Pair the orange dot with Working or Needs attention.</div></div>
+          <div class="check"><span>✓</span><div>Focus rings are black or neutral and clearly visible. They do not introduce a second accent colour.</div></div>
+          <div class="check"><span>✓</span><div>Agent filters and run-detail navigation use correct button or tab semantics with keyboard movement.</div></div>
+          <div class="check"><span>✓</span><div>Live agent updates use a polite live region. Do not announce every token or raw tool event.</div></div>
+          <div class="check"><span>✓</span><div>Respect <code>prefers-reduced-motion</code>; replace pulsing indicators with a static orange dot.</div></div>
+        </div>
+      </section>
+
+      <section id="implementation">
+        <div class="section-head"><h2>Implementation contract</h2><p>This document is the production design authority. Direction A in the prototype defines the exact product composition and screen states.</p></div>
+        <div class="handoff"><strong>Current status</strong>The canonical production contract is <code>docs/xbrl-design-system.html</code>. <code>docs/pwc-design-system.html</code> is retained only for historical bookmarks and audit context; production code and pinning tests do not treat it as authority.</div>
+        <table class="token-table" style="margin-top:20px">
+          <thead><tr><th>Decision</th><th>Production owner</th><th>Verification</th></tr></thead>
+          <tbody>
+            <tr><td>Shared colours, spacing, radii and motion</td><td><code>web/src/lib/theme.ts</code></td><td>Design-system parity and CSS token tests.</td></tr>
+            <tr><td>Buttons, rows, panes, tables and page layouts</td><td><code>web/src/lib/uiStyles.ts</code></td><td>Focused component tests and production build.</td></tr>
+            <tr><td>Hover, focus, responsive and reduced motion states</td><td><code>web/src/index.css</code></td><td>CSS pinning tests and browser QA.</td></tr>
+            <tr><td>Notes editor source-styled content</td><td><code>NotesReviewTab.css</code> and clipboard decorator</td><td>Notes and clipboard parity tests.</td></tr>
+            <tr><td>Agent roster and semantic stream</td><td>Run event contract and run-detail components</td><td>Tests pin the current flat roster; hierarchy and dependencies remain capability-gated.</td></tr>
+          </tbody>
+        </table>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const agentDetails = {
+      coordinator: { role: "Coordination", name: "Notes coordinator", status: "12 of 16", copy: "Assigning source notes to specialist agents and placing completed results into the correct filing sections.", source: "28 source notes", updates: [["Now", "Placed the Commitments disclosure"], ["9s", "Started three note agents in parallel"], ["24s", "Confirmed 12 of 16 note sections"]], from: "Document scanner", to: "Note agents and review checker" },
+      borrowings: { role: "Notes extraction", name: "Borrowings note", status: "Working", copy: "Finding the current and comparative balances before filling the Borrowings disclosure.", source: "Pages 67–69", updates: [["Now", "Checking the year columns against the source table"], ["14s", "Mapped current and non-current balances"], ["20s", "Located the Borrowings disclosure"]], from: "Notes coordinator", to: "Review checker" },
+      leases: { role: "Notes extraction", name: "Leases note", status: "Working", copy: "Checking lease liabilities and right-of-use asset movements across both reporting periods.", source: "Pages 70–72", updates: [["4s", "Found the lease maturity analysis"], ["18s", "Matched right-of-use asset movements"], ["31s", "Started the Leases disclosure"]], from: "Notes coordinator", to: "Review checker" },
+      instruments: { role: "Notes extraction", name: "Financial instruments", status: "Working", copy: "Organising the financial risk tables into the filing template while retaining their source order.", source: "Pages 73–76", updates: [["7s", "Grouped the liquidity risk tables"], ["22s", "Identified the currency risk section"], ["36s", "Opened the Financial instruments note"]], from: "Notes coordinator", to: "Review checker" }
+    };
+
+    function renderAgentDetail(id) {
+      const agent = agentDetails[id];
+      document.getElementById("agent-detail").innerHTML = `<div class="agent-detail-head"><div><div class="eyebrow">${agent.role}</div><h4>${agent.name}</h4></div><span class="status"><span class="dot working"></span>${agent.status}</span></div><p class="detail-copy">${agent.copy}</p><div class="detail-now"><span class="dot working"></span><span>Working now</span><span>${agent.source}</span></div><h3 class="eyebrow">Recent updates</h3><div class="updates">${agent.updates.map(([time, text]) => `<div class="update"><time>${time}</time><span>${text}</span></div>`).join("")}</div><h3 class="eyebrow">Works with</h3><div class="detail-links"><span>Receives from</span><strong>${agent.from}</strong><span>Hands off to</span><strong>${agent.to}</strong></div><details class="technical"><summary>Technical details</summary><p>Raw tools, request counts and provider activity remain available here.</p></details>`;
+    }
+
+    document.querySelectorAll("[data-agent]").forEach(button => button.addEventListener("click", () => {
+      document.querySelectorAll("[data-agent]").forEach(row => row.classList.toggle("active", row === button));
+      renderAgentDetail(button.dataset.agent);
+    }));
+    document.querySelectorAll(".source-jump").forEach(button => button.addEventListener("click", () => {
+      document.querySelectorAll(".template-table tr").forEach(row => row.classList.remove("selected"));
+      button.closest("tr").classList.add("selected");
+      document.getElementById("pdf-page").textContent = button.dataset.page;
+    }));
+    renderAgentDetail("borrowings");
+  </script>
+</body>
+</html>

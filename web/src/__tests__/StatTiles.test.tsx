@@ -7,7 +7,8 @@ describe("StatTiles", () => {
     render(
       <StatTiles needsReview={42} active={2} drafts={3} completedThisMonth={7} />,
     );
-    expect(screen.getByText("Needs review")).toBeTruthy();
+    expect(screen.getByText("Open reviews")).toBeTruthy();
+    expect(screen.getByText("Needs a decision")).toBeTruthy();
     expect(screen.getByText("Active runs")).toBeTruthy();
     expect(screen.getByText("Not started")).toBeTruthy();
     expect(screen.getByText("Completed this month")).toBeTruthy();

@@ -257,7 +257,7 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     render(<NotesReviewTab runId={42} />);
     await waitFor(() => {
       expect(
-        screen.getByText(/did not include note extraction/i),
+        screen.getByText(/no notes were extracted/i),
       ).toBeInTheDocument();
     });
   });
@@ -1673,6 +1673,16 @@ describe("NotesReviewTab — table format bar", () => {
     expect(screen.getByRole("button", { name: "Insert table" })).toHaveTextContent("▦");
     expect(screen.getByRole("button", { name: "Fill Grey" })).toHaveTextContent("■");
     expect(screen.getByRole("button", { name: "Border Top" })).toHaveTextContent("▔");
+    for (const control of [
+      screen.getByRole("button", { name: "Bold" }),
+      screen.getByRole("button", { name: "Text colour Blue" }),
+      screen.getByRole("button", { name: "Border Top" }),
+    ]) {
+      const width = Number.parseFloat(control.style.width || control.style.minWidth);
+      const height = Number.parseFloat(control.style.height || control.style.minHeight);
+      expect(width).toBeGreaterThanOrEqual(24);
+      expect(height).toBeGreaterThanOrEqual(24);
+    }
   });
 
   test("applying a fill preset persists a background-color via PATCH", async () => {

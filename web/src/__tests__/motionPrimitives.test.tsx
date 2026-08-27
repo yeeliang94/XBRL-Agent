@@ -7,23 +7,46 @@ import { Skeleton } from "../components/Skeleton";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 
 // ---------------------------------------------------------------------------
-// Phase 7 foundation: motion tokens + shared primitives. Snapshot-level only —
-// we assert the reduced-motion block exists and the primitives render/behave,
-// but never pin animation durations (the plan forbids duration assertions so
-// timings can be retuned without breaking tests).
+// Focused-workspace motion foundation. State truth is immediate; shared CSS
+// hooks provide restrained transform/opacity feedback and reduced-motion
+// equivalents.
 // ---------------------------------------------------------------------------
 
 afterEach(cleanup);
 
 describe("motion tokens", () => {
   test("theme exposes a motion budget", () => {
-    expect(pwc.motion.duration.base).toBeTruthy();
+    expect(pwc.motion.duration).toEqual({
+      instant: "100ms",
+      fast: "140ms",
+      base: "180ms",
+      slow: "240ms",
+    });
     expect(pwc.motion.easing).toContain("cubic-bezier");
+    expect(pwc.motion.easingEmphasized).toContain("cubic-bezier");
   });
 
-  test("index.css honours prefers-reduced-motion", () => {
+  test("index.css owns performant state motion and reduced-motion parity", () => {
     const css = readFileSync("src/index.css", "utf8");
+    expect(css).toContain(`--motion-instant: ${pwc.motion.duration.instant}`);
+    expect(css).toContain(`--motion-fast: ${pwc.motion.duration.fast}`);
+    expect(css).toContain(`--motion-base: ${pwc.motion.duration.base}`);
+    expect(css).toContain(`--motion-slow: ${pwc.motion.duration.slow}`);
+    expect(css).toContain(`--motion-standard: ${pwc.motion.easing}`);
+    expect(css).toContain(`--motion-emphasized: ${pwc.motion.easingEmphasized}`);
     expect(css).toContain("prefers-reduced-motion: reduce");
+    expect(css).toContain(".pwc-working-indicator");
+    expect(css).toContain(".pwc-view-enter");
+    expect(css).toContain(".pwc-disclosure-content");
+    expect(css).toContain("transform:");
+    expect(css).toContain("opacity:");
+    expect(css).toContain(".pwc-btn-primary,");
+    expect(css).toContain(':where(button, a[href], summary, [role="button"], [role="tab"])');
+    expect(css).toContain(':where(button, a[href], summary, [role="button"], [role="tab"]):active');
+    expect(css).not.toContain("box-shadow: inset 0 -3px 0 #FD5108");
+    expect(css).not.toContain("border-top-color: #FD5108");
+    expect(css).not.toContain("@keyframes slide-down");
+    expect(css).not.toContain("from { max-height:");
   });
 });
 
@@ -36,7 +59,8 @@ describe("Disclosure", () => {
     );
     expect(screen.queryByText("hidden body")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /technical details/i }));
-    expect(screen.getByText("hidden body")).toBeTruthy();
+    const body = screen.getByText("hidden body").parentElement;
+    expect(body?.classList.contains("pwc-disclosure-content")).toBe(true);
   });
 
   test("respects controlled open prop", () => {
@@ -55,6 +79,7 @@ describe("Skeleton", () => {
     const bar = container.firstChild as HTMLElement;
     expect(bar).toBeTruthy();
     expect(bar.getAttribute("aria-hidden")).toBe("true");
+    expect(bar.classList.contains("pwc-skeleton")).toBe(true);
   });
 });
 
@@ -81,6 +106,7 @@ describe("ConfirmDialog", () => {
     );
     expect(screen.getByText("Delete this run?")).toBeTruthy();
     expect(screen.getByText("This permanently removes the run.")).toBeTruthy();
+    expect(screen.getByRole("dialog").querySelector(".pwc-dialog-enter")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     expect(onConfirm).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));

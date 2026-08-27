@@ -57,6 +57,7 @@ const styles = {
     display: "flex",
     gap: pwc.space.md,
     alignItems: "flex-end",
+    flexWrap: "wrap" as const,
   } as React.CSSProperties,
   numberField: {
     display: "flex",
@@ -144,16 +145,24 @@ export function ClipboardFormatControls({
               key={sw.label}
               type="button"
               aria-label={`${fieldLabel}: ${sw.label}`}
+              data-tooltip={`${fieldLabel}: ${sw.label}`}
+              data-color-swatch={showsColor ? "true" : "false"}
+              className="settings-format-swatch"
               aria-pressed={selected}
               onClick={() => patch({ [field]: sw.color } as Partial<ClipboardFormatOptions>)}
               style={{
                 ...styles.swatch,
-                ...(showsColor ? { background: sw.color, color: "transparent" } : null),
-                outline: selected ? `2px solid ${pwc.orange500}` : "none",
-                outlineOffset: 1,
+                ...(showsColor ? { background: sw.color } : null),
+                ...(selected && !showsColor
+                  ? { background: pwc.grey50, color: pwc.grey900, fontWeight: pwc.weight.semibold }
+                  : null),
+                color: showsColor
+                  ? (sw.color === "#000000" || sw.color === "#185fa5" ? pwc.white : pwc.grey900)
+                  : undefined,
+                outline: "none",
               }}
             >
-              {showsColor ? " " : sw.label}
+              {selected ? `✓${showsColor ? "" : ` ${sw.label}`}` : showsColor ? " " : sw.label}
             </button>
           );
         })}

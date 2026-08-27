@@ -13,7 +13,7 @@ describe("TabPanelFade", () => {
     );
     const body = screen.getByText("panel body");
     const wrapper = body.parentElement!;
-    expect(wrapper.style.animation).toContain("fade-in");
+    expect(wrapper).toHaveClass("pwc-view-enter");
   });
 
   test("remounts the wrapper when tabKey changes (restarts the animation)", () => {

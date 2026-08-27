@@ -19,9 +19,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { AgentTimeline } from "./AgentTimeline";
 import { NotesSubTabBar } from "./NotesSubTabBar";
 import { TabPanelFade } from "./TabPanelFade";
-import { NotesReviewTab } from "./NotesReviewTab";
 import { NotesReviewerPanel } from "./NotesReviewerPanel";
-import { NotesCoveragePanel } from "./NotesCoveragePanel";
 import { NotesTablesPanel } from "./NotesTablesPanel";
 import { NotesIntegrityPanel } from "./NotesIntegrityPanel";
 import { ConsistencyPanel } from "./ConsistencyPanel";
@@ -37,6 +35,14 @@ import { denominationLabel, pseudoAgentLabel, variantLabel, crossCheckFailureLab
 import { isNotes12StatementType } from "../lib/notes";
 import { statementCodeSubtitle, statementCodeOrder } from "../lib/sheetLabels";
 import { describePdfSidecar } from "../lib/pdfSidecar";
+import {
+  readRunTabFromUrl,
+  RUN_TAB_CHANGE_EVENT,
+  writeRunTabToUrl,
+} from "../lib/runTabs";
+import type { RunTabKey } from "../lib/runTabs";
+
+export type { RunTabKey } from "../lib/runTabs";
 
 // ---------------------------------------------------------------------------
 // RunDetailView — hydrated detail panel for a single past run.
@@ -211,17 +217,53 @@ function agentActivityOrder(agent: RunAgentJson): number {
   return statementCodeOrder(t);
 }
 
-function AgentCard({ agent }: { agent: RunAgentJson }) {
+function agentDisplayName(agent: RunAgentJson): string {
+  const pseudoLabel = pseudoAgentLabel(agent.statement_type);
+  if (pseudoLabel) return pseudoLabel;
+  if (agent.statement_type.startsWith("NOTES_")) return notesTabLabel(agent.statement_type);
+  return agent.statement_type;
+}
+
+function agentSemanticUpdates(agent: RunAgentJson): string[] {
+  const updates: string[] = [];
+  for (let index = agent.events.length - 1; index >= 0 && updates.length < 3; index -= 1) {
+    const event = agent.events[index];
+    if (event.event === "status" && event.data.message) {
+      updates.push(event.data.message);
+    } else if (event.event === "error" && event.data.message) {
+      updates.push(event.data.message);
+    } else if (event.event === "complete") {
+      updates.push("Finished its assigned work");
+    }
+  }
+  return updates;
+}
+
+function agentSourceReference(agent: RunAgentJson): string | null {
+  let first = Number.POSITIVE_INFINITY;
+  let last = Number.NEGATIVE_INFINITY;
+  for (const event of agent.events) {
+    const pages = parseEvidencePages(JSON.stringify(event.data));
+    for (const page of pages) {
+      if (page < first) first = page;
+      if (page > last) last = page;
+    }
+  }
+  if (!Number.isFinite(first) || !Number.isFinite(last)) return null;
+  return first === last ? `Source page ${first}` : `Source pages ${first}–${last}`;
+}
+
+interface AgentSummary {
+  updates: string[];
+  sourceReference: string | null;
+}
+
+function AgentCard({ agent, summary }: { agent: RunAgentJson; summary: AgentSummary }) {
   // Sheet-12 sub-tab selection — mirrors the live ExtractPage path so
   // replay looks identical to live once the operator picks a sub. null =
   // "All" (every sub-agent merged, same as pre-sub-tab behaviour).
   const [notes12SubId, setNotes12SubId] = useState<string | null>(null);
-  // Collapsed by default: the detail page used to render every agent's
-  // full tool timeline inline, producing a tall, hard-to-scan view when a
-  // run had 5+ agents. Operators said they only occasionally need the
-  // raw event stream, so we hide it until the header is clicked.
-  const [expanded, setExpanded] = useState(false);
-
+  const [technicalOpen, setTechnicalOpen] = useState(false);
   // Notes agents are persisted with statement_type = "NOTES_<TEMPLATE>"
   // — render with the same friendly chip the live UI uses so history
   // doesn't fall back to the raw DB enum value (peer-review MEDIUM).
@@ -229,15 +271,8 @@ function AgentCard({ agent }: { agent: RunAgentJson }) {
   // through the central vocabulary so this row wears the same name as
   // the tab describing the same work ("AI review" / "Notes review") —
   // three drifting local maps were the run-168 QA finding.
-  let displayName: string;
-  const pseudoLabel = pseudoAgentLabel(agent.statement_type);
-  if (pseudoLabel) {
-    displayName = pseudoLabel;
-  } else if (agent.statement_type.startsWith("NOTES_")) {
-    displayName = notesTabLabel(agent.statement_type);
-  } else {
-    displayName = agent.statement_type;
-  }
+  const displayName = agentDisplayName(agent);
+  const { updates, sourceReference } = summary;
 
   // Notes-12 branch: derive the sub-agent list from the persisted events
   // (live path gets this for free from the reducer). Only render the
@@ -255,25 +290,18 @@ function AgentCard({ agent }: { agent: RunAgentJson }) {
   // full event list. Memoised on the same keys as the filter so switching
   // subs is the only trigger that rebuilds the timeline.
   const { events, toolTimeline } = useMemo(() => {
+    if (!technicalOpen) return { events: [], toolTimeline: [] };
     if (showSubTabs && notes12SubId !== null) {
       const filtered = filterEventsBySubAgent(agent.events, notes12SubId);
       return { events: filtered, toolTimeline: buildToolTimeline(filtered) };
     }
     return { events: agent.events, toolTimeline: buildToolTimeline(agent.events) };
-  }, [agent.events, notes12SubId, showSubTabs]);
+  }, [agent.events, notes12SubId, showSubTabs, technicalOpen]);
 
   return (
-    <article data-testid="run-detail-agent" style={styles.agentCard}>
-      <button
-        type="button"
-        onClick={() => setExpanded((prev) => !prev)}
-        aria-expanded={expanded}
-        style={styles.agentHeaderButton}
-      >
+    <article data-testid="run-detail-agent" className="pwc-view-enter" style={styles.agentDetail}>
+      <div style={styles.agentHeaderButton}>
         <div style={styles.agentTitleRow}>
-          <span style={styles.agentChevron} aria-hidden="true">
-            {expanded ? "▾" : "▸"}
-          </span>
           <span style={styles.agentStatement}>{displayName}</span>
           {/* Plain-English gloss for face-statement codes (UX-QA #12/legend) —
               "SOFP" alone assumes the reader speaks MBRS shorthand. */}
@@ -313,9 +341,36 @@ function AgentCard({ agent }: { agent: RunAgentJson }) {
             {agent.total_cost != null ? ` · ${formatCost(agent.total_cost)}` : ""}
           </span>
         </div>
-      </button>
-      {expanded && (
-        <div style={styles.agentBody}>
+      </div>
+      <div style={styles.agentSummary}>
+        <strong>{updates[0] ?? agentStatusDisplay(agent.status).label}</strong>
+        <span>{sourceReference ?? "No source page was recorded for this activity."}</span>
+      </div>
+      {updates.length > 1 && (
+        <div style={styles.agentRecentUpdates}>
+          <h4 style={styles.agentDetailLabel}>Recent updates</h4>
+          {updates.slice(1).map((update, index) => (
+            <div key={`${update}:${index}`} style={styles.agentRecentUpdate}>
+              <span aria-hidden="true" style={styles.agentUpdateDot} />
+              <span>{update}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      <details
+        style={styles.agentTechnicalDetails}
+        open={technicalOpen}
+      >
+        <summary
+          style={styles.perfSummary}
+          onClick={(event) => {
+            event.preventDefault();
+            setTechnicalOpen((open) => !open);
+          }}
+        >
+          Technical activity
+        </summary>
+        {technicalOpen ? <div style={styles.agentBody}>
           {showSubTabs && (
             <NotesSubTabBar
               subAgents={subAgents}
@@ -328,41 +383,119 @@ function AgentCard({ agent }: { agent: RunAgentJson }) {
             toolTimeline={toolTimeline}
             isRunning={false}
           />
-        </div>
-      )}
+        </div> : null}
+      </details>
     </article>
+  );
+}
+
+function HistoricalAgentWorkspace({ agents }: { agents: RunAgentJson[] }) {
+  const orderedAgents = useMemo(
+    () => [...agents].sort((a, b) => agentActivityOrder(a) - agentActivityOrder(b)),
+    [agents],
+  );
+  const [filter, setFilter] = useState<"all" | "current" | "finished">("all");
+  const [selectedId, setSelectedId] = useState<number | null>(orderedAgents[0]?.id ?? null);
+  const visibleAgents = orderedAgents.filter((agent) => {
+    if (filter === "all") return true;
+    const finished = [
+      "succeeded",
+      "complete",
+      "completed_with_errors",
+      "failed",
+      "cancelled",
+      "skipped",
+    ].includes(agent.status);
+    return filter === "finished" ? finished : !finished;
+  });
+  const visibleKey = visibleAgents.map((agent) => agent.id).join(":");
+  const selectedAgent = visibleAgents.find((agent) => agent.id === selectedId) ?? visibleAgents[0] ?? null;
+  const summaries = useMemo(() => {
+    const next = new Map<number, AgentSummary>();
+    for (const agent of orderedAgents) {
+      next.set(agent.id, {
+        updates: agentSemanticUpdates(agent),
+        sourceReference: agentSourceReference(agent),
+      });
+    }
+    return next;
+  }, [orderedAgents]);
+
+  useEffect(() => {
+    if (selectedAgent && selectedAgent.id !== selectedId) setSelectedId(selectedAgent.id);
+  }, [selectedAgent, selectedId, visibleKey]);
+
+  return (
+    <div className="historical-agent-workspace" style={styles.historicalAgentWorkspace}>
+      <section style={styles.historicalAgentRoster} aria-label="Recorded agents">
+        <div style={styles.historicalAgentRosterHeader}>
+          <div>
+            <h3 style={styles.sectionHeading}>Agents</h3>
+            <p style={styles.agentRosterHint}>Select an agent to inspect its recorded work.</p>
+          </div>
+          <div role="group" aria-label="Filter recorded agents" style={styles.agentFilters}>
+            {(["current", "all", "finished"] as const).map((value) => (
+              <button
+                key={value}
+                type="button"
+                aria-pressed={filter === value}
+                onClick={() => setFilter(value)}
+                style={{ ...styles.agentFilterButton, ...(filter === value ? styles.agentFilterButtonActive : {}) }}
+              >
+                {value.charAt(0).toUpperCase() + value.slice(1)}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div style={styles.historicalAgentList} data-testid="run-detail-agent-list">
+          {visibleAgents.map((agent) => {
+            const selected = agent.id === selectedAgent?.id;
+            const summary = summaries.get(agent.id);
+            const update = summary?.updates[0] ?? agentStatusDisplay(agent.status).label;
+            return (
+              <button
+                key={agent.id}
+                type="button"
+                data-testid="run-detail-agent-row"
+                aria-pressed={selected}
+                onClick={() => setSelectedId(agent.id)}
+                className="historical-agent-row"
+                style={{ ...styles.historicalAgentRow, ...(selected ? styles.historicalAgentRowActive : {}) }}
+              >
+                <StatusIcon symbol={agentStatusDisplay(agent.status).symbol} />
+                <span style={styles.historicalAgentIdentity}>
+                  <strong>{agentDisplayName(agent)}</strong>
+                  <span>{statementCodeSubtitle(agent.statement_type) ?? displayModelId(agent.model)}</span>
+                </span>
+                <span style={styles.historicalAgentTask}>
+                  <strong>{update}</strong>
+                  <span>{summary?.sourceReference ?? formatAgentDuration(agent)}</span>
+                </span>
+                <span style={styles.historicalAgentState}>{agentStatusDisplay(agent.status).label}</span>
+              </button>
+            );
+          })}
+          {visibleAgents.length === 0 && <p style={styles.dim}>No agents match this filter.</p>}
+        </div>
+      </section>
+      <aside style={styles.historicalAgentDetailPane}>
+        <span role="status" aria-live="polite" aria-atomic="true" style={styles.visuallyHidden}>
+          {selectedAgent ? `Selected ${agentDisplayName(selectedAgent)} activity.` : "No agent selected."}
+        </span>
+        {selectedAgent && (
+          <AgentCard
+            key={selectedAgent.id}
+            agent={selectedAgent}
+            summary={summaries.get(selectedAgent.id) ?? { updates: [], sourceReference: null }}
+          />
+        )}
+      </aside>
+    </div>
   );
 }
 
 // Tab identity for the run-detail surface. Review + Values are gated on
 // canonical mode (the reviewer diff + concept tree only exist there).
-export type RunTabKey = "overview" | "agents" | "notes" | "checks" | "telemetry" | "review" | "values" | "eval";
-
-const RUN_TAB_KEYS: readonly RunTabKey[] = [
-  "overview", "agents", "notes", "checks", "telemetry", "review", "values", "eval",
-];
-
-/** Read the active run-detail tab from the URL's `?tab=` param so a specific
- *  tab is bookmarkable / shareable / restored on reload (docs/
- *  PLAN-design-qa-fixes.md R3). Returns null when absent or unrecognised. */
-function readRunTabFromUrl(): RunTabKey | null {
-  if (typeof window === "undefined") return null;
-  const raw = new URLSearchParams(window.location.search).get("tab");
-  return raw && (RUN_TAB_KEYS as readonly string[]).includes(raw)
-    ? (raw as RunTabKey)
-    : null;
-}
-
-/** Write the active tab into the URL without adding history entries (a tab
- *  switch shouldn't need a Back press per tab). Only touches the `?tab=`
- *  query — the pathname (managed by App.tsx) is left untouched. */
-function writeRunTabToUrl(key: RunTabKey): void {
-  if (typeof window === "undefined") return;
-  const url = new URL(window.location.href);
-  url.searchParams.set("tab", key);
-  window.history.replaceState(window.history.state, "", url.toString());
-}
-
 export function RunDetailView({
   detail, onDownload, onDelete, onResumeDraft, onForceAbort, onRegenerateNotes,
   canonicalEnabled = false, initialTab = "overview",
@@ -387,8 +520,16 @@ export function RunDetailView({
       const fromUrl = readRunTabFromUrl();
       if (fromUrl) setTab(fromUrl);
     };
+    const onTabChange = (event: Event) => {
+      const key = (event as CustomEvent<RunTabKey>).detail;
+      if (key) setTab(key);
+    };
     window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
+    window.addEventListener(RUN_TAB_CHANGE_EVENT, onTabChange);
+    return () => {
+      window.removeEventListener("popstate", onPop);
+      window.removeEventListener(RUN_TAB_CHANGE_EVENT, onTabChange);
+    };
   }, []);
   // mTool fill modal (button, NOT a tab — gotcha #7).
   const [mtoolOpen, setMtoolOpen] = useState(false);
@@ -401,6 +542,7 @@ export function RunDetailView({
   // but the action is explicitly a draft download and confirms the filing
   // risk at action time. This is not persistent review sign-off.
   const [confirmDraftDownload, setConfirmDraftDownload] = useState(false);
+  const [notesAuditOpen, setNotesAuditOpen] = useState(false);
 
   // Step 8/12 — clicking a failed cross-check drives the source-PDF pane to
   // the cited page(s) of the cell it targets. We resolve (target_sheet,
@@ -414,38 +556,13 @@ export function RunDetailView({
   const [evidenceByCell, setEvidenceByCell] = useState<Map<string, string | null>>(
     new Map()
   );
-  // Cell focus for the Notes tab. NotesCoveragePanel and NotesTablesPanel both
-  // dispatch a `notes-coverage-focus` window event when the user clicks a
-  // placement or a table, and NotesReviewTab has always accepted a `focusCell`
-  // prop that opens the sheet and scrolls the row into view — but nothing
-  // joined the two, so every one of those clicks was a no-op. This listener is
-  // the missing hop; it fixes both panels at once. `key` bumps on every event
-  // so re-clicking the same cell re-scrolls.
-  const [notesFocusCell, setNotesFocusCell] = useState<
-    { sheet: string; row: number; key: number } | null
-  >(null);
-  useEffect(() => {
-    const onFocus = (e: Event) => {
-      const detailPayload = (e as CustomEvent).detail;
-      if (
-        !detailPayload ||
-        typeof detailPayload.sheet !== "string" ||
-        typeof detailPayload.row !== "number"
-      ) {
-        return;
-      }
-      setNotesFocusCell((prev) => ({
-        sheet: detailPayload.sheet,
-        row: detailPayload.row,
-        key: (prev?.key ?? 0) + 1,
-      }));
-    };
-    window.addEventListener("notes-coverage-focus", onFocus);
-    return () => window.removeEventListener("notes-coverage-focus", onFocus);
-  }, []);
   // Keyed on detail.id so switching runs (RunDetailView is NOT remounted per
   // run — no key in HistoryPage) refetches and clears stale state, instead of
   // resolving run B's targets against run A's concept map.
+  useEffect(() => {
+    setNotesAuditOpen(false);
+  }, [detail.id]);
+
   useEffect(() => {
     let cancelled = false;
     setEvidenceByCell(new Map());
@@ -511,7 +628,7 @@ export function RunDetailView({
   // of the run-level banners above fire and the download looks finished. Mirror
   // of `statement_types.SETTLED_AGENT_STATUSES`; keep the two in step.
   const settledAgentStatuses = ["succeeded", "completed_with_errors", "skipped"];
-  const incompleteStatements = (detail.agents ?? []).filter(
+  const incompleteStatements = (isRunning || isDraft ? [] : detail.agents ?? []).filter(
     (a) =>
       (Object.keys(STATEMENT_LABELS) as string[]).includes(a.statement_type) &&
       !settledAgentStatuses.includes(a.status),
@@ -634,7 +751,7 @@ export function RunDetailView({
       <header style={styles.header}>
         <div style={styles.headerText}>
           <div style={styles.kicker}>Run {detail.id}</div>
-          <h3 style={styles.filename}>{detail.pdf_filename}</h3>
+          <h1 style={styles.filename}>{detail.pdf_filename}</h1>
           <div style={styles.filingProfile}>{filingProfile}</div>
           <div style={styles.metaRow}>
             {statusBadge(runStatusDisplay(detail.status))}
@@ -1007,18 +1124,7 @@ export function RunDetailView({
           {detail.agents.length === 0 ? (
             <p style={styles.dim}>Nothing was recorded for this run yet.</p>
           ) : (
-            <div style={styles.agentStack} data-testid="run-detail-agent-list">
-              {/* Statement reading order (UX-QA #14), matching the Figures
-                  sheet-nav so the app orders statements one way everywhere:
-                  scout first, then face statements in reading order, then notes
-                  / AI-review pseudo-agents (stable, keeping their arrival
-                  order). Beats the backend's incidental alphabetical order. */}
-              {[...detail.agents]
-                .sort((a, b) => agentActivityOrder(a) - agentActivityOrder(b))
-                .map((agent) => (
-                  <AgentCard key={agent.id} agent={agent} />
-                ))}
-            </div>
+            <HistoricalAgentWorkspace agents={detail.agents} />
           )}
           {/* Timing + AI-usage detail (the former Telemetry tab), tucked into a
               collapsed disclosure so the everyday view stays about what the AI
@@ -1042,16 +1148,28 @@ export function RunDetailView({
       )}
 
       {activeTab === "notes" && (
-        <section style={styles.section} role="tabpanel" data-testid="run-detail-notes-review">
-          <NotesCoveragePanel runId={detail.id} />
-          <NotesIntegrityPanel runId={detail.id} />
-          <NotesTablesPanel runId={detail.id} />
-          <NotesReviewerPanel runId={detail.id} />
-          <NotesReviewTab
+        <section style={styles.sectionFull} role="tabpanel" data-testid="run-detail-notes-review">
+          <ConceptsPage
+            key={`${detail.id}:notes`}
             runId={detail.id}
-            onRegenerate={onRegenerateNotes}
-            focusCell={notesFocusCell}
+            initialView="notes"
+            initialCrossChecks={crossChecksForValidator(detail.cross_checks)}
+            onRegenerateNotes={onRegenerateNotes}
           />
+          <details
+            style={styles.perfDetails}
+            data-testid="run-detail-notes-audit"
+            onToggle={(event) => setNotesAuditOpen(event.currentTarget.open)}
+          >
+            <summary style={styles.perfSummary}>Notes audit details</summary>
+            {notesAuditOpen && (
+              <div style={{ marginTop: pwc.space.md, display: "grid", gap: pwc.space.lg }}>
+                <NotesIntegrityPanel runId={detail.id} />
+                <NotesTablesPanel runId={detail.id} />
+                <NotesReviewerPanel runId={detail.id} />
+              </div>
+            )}
+          </details>
         </section>
       )}
 
@@ -1093,6 +1211,7 @@ export function RunDetailView({
           <ConceptsPage
             key={detail.id}
             runId={detail.id}
+            initialView="figures"
             initialCrossChecks={crossChecksForValidator(detail.cross_checks)}
             onRegenerateNotes={onRegenerateNotes}
           />
@@ -1251,26 +1370,20 @@ const styles = {
     background: pwc.grey200,
     margin: `0 ${pwc.space.xs}px`,
   } as React.CSSProperties,
-  // Tab bar: a thin row of buttons with the active one underlined in the
-  // brand orange. Data-dense chrome — keep it tight, not airy.
+  // Data-dense surface tabs: compact selected fill, no accent edge line.
   tabBar: {
     display: "flex",
     gap: pwc.space.xs,
-    borderBottom: `1px solid ${pwc.grey200}`,
     flexWrap: "wrap" as const,
   } as React.CSSProperties,
   tab: {
     ...ui.tab,
     fontSize: 14,
-    // Crossfade the active-tab indicator + label colour when switching
-    // (Phase 7 motion tokens).
-    transition: `color ${pwc.motion.duration.fast} ${pwc.motion.easing}, border-color ${pwc.motion.duration.fast} ${pwc.motion.easing}`,
   } as React.CSSProperties,
   tabActive: {
     ...ui.tab,
     ...ui.tabActive,
     fontSize: 14,
-    transition: `color ${pwc.motion.duration.fast} ${pwc.motion.easing}, border-color ${pwc.motion.duration.fast} ${pwc.motion.easing}`,
   } as React.CSSProperties,
   // Full-bleed panel for the Values (Concepts) tab — its 3-column workspace
   // wants the whole width, unlike the prose-width Overview/Agents panels.
@@ -1361,13 +1474,103 @@ const styles = {
     margin: 0,
     color: pwc.grey900,
   } as React.CSSProperties,
-  // Phase 9: per-agent card stack replaces the stats table. Each card
-  // gets its own rounded border so the agent boundaries stay visible
-  // when several timelines share the detail view.
-  agentStack: {
+  historicalAgentWorkspace: {
+    display: "grid",
+    gridTemplateColumns: "minmax(520px, 1.35fr) minmax(300px, 0.72fr)",
+    gap: pwc.space.xxl,
+    alignItems: "start",
+    minWidth: 0,
+  } as React.CSSProperties,
+  historicalAgentRoster: {
+    minWidth: 0,
+  } as React.CSSProperties,
+  historicalAgentRosterHeader: {
+    minHeight: 42,
     display: "flex",
-    flexDirection: "column" as const,
+    alignItems: "flex-start",
+    justifyContent: "space-between",
     gap: pwc.space.md,
+  } as React.CSSProperties,
+  agentRosterHint: {
+    margin: "3px 0 0",
+    color: pwc.grey700,
+    fontSize: 11,
+  } as React.CSSProperties,
+  agentFilters: {
+    display: "flex",
+    gap: 3,
+  } as React.CSSProperties,
+  agentFilterButton: {
+    minHeight: 30,
+    padding: "0 9px",
+    border: 0,
+    borderRadius: pwc.radius.sm,
+    background: "transparent",
+    color: pwc.grey700,
+    fontFamily: pwc.fontBody,
+    fontSize: 11,
+    cursor: "pointer",
+  } as React.CSSProperties,
+  agentFilterButtonActive: {
+    background: pwc.grey50,
+    color: pwc.black,
+    fontWeight: pwc.weight.medium,
+  } as React.CSSProperties,
+  historicalAgentList: {
+    display: "grid",
+    gap: 2,
+    marginTop: 7,
+  } as React.CSSProperties,
+  historicalAgentRow: {
+    width: "100%",
+    minHeight: 58,
+    padding: "8px 9px",
+    border: 0,
+    borderRadius: pwc.radius.md,
+    background: "transparent",
+    display: "grid",
+    gridTemplateColumns: "20px minmax(145px, 0.58fr) minmax(210px, 1fr) auto",
+    gap: 11,
+    alignItems: "center",
+    textAlign: "left",
+    cursor: "pointer",
+    color: pwc.black,
+  } as React.CSSProperties,
+  historicalAgentRowActive: {
+    background: pwc.grey50,
+  } as React.CSSProperties,
+  historicalAgentIdentity: {
+    minWidth: 0,
+    display: "grid",
+    gap: 2,
+  } as React.CSSProperties,
+  historicalAgentTask: {
+    minWidth: 0,
+    display: "grid",
+    gap: 2,
+  } as React.CSSProperties,
+  historicalAgentState: {
+    color: pwc.grey700,
+    fontSize: 11,
+    whiteSpace: "nowrap",
+  } as React.CSSProperties,
+  historicalAgentDetailPane: {
+    position: "sticky",
+    top: 86,
+    minWidth: 0,
+    paddingLeft: pwc.space.xxl,
+    borderLeft: `1px solid ${pwc.grey100}`,
+  } as React.CSSProperties,
+  visuallyHidden: {
+    position: "absolute",
+    width: 1,
+    height: 1,
+    padding: 0,
+    margin: -1,
+    overflow: "hidden",
+    clip: "rect(0, 0, 0, 0)",
+    whiteSpace: "nowrap",
+    border: 0,
   } as React.CSSProperties,
   perfDetails: {
     marginTop: pwc.space.lg,
@@ -1381,20 +1584,12 @@ const styles = {
     fontWeight: pwc.weight.medium,
     color: pwc.grey700,
   } as React.CSSProperties,
-  agentCard: {
+  agentDetail: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.xs,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.sm,
+    gap: pwc.space.lg,
     background: pwc.white,
-    // Fade-up as cards render. Keyed by agent.id upstream, so during a live
-    // run only a newly-arrived agent animates; existing cards stay put.
-    animation: `fade-in ${pwc.motion.duration.base} ${pwc.motion.easing}`,
   } as React.CSSProperties,
-  // Clickable header serves as the collapse/expand toggle. Styled as a
-  // plain block (no button chrome) so it reads as a card row, not a
-  // standalone control — the chevron + aria-expanded carry the affordance.
   agentHeaderButton: {
     display: "flex",
     flexDirection: "column" as const,
@@ -1404,19 +1599,50 @@ const styles = {
     border: "none",
     width: "100%",
     textAlign: "left" as const,
-    cursor: "pointer",
     fontFamily: "inherit",
     font: "inherit",
     color: "inherit",
   } as React.CSSProperties,
   agentBody: {
-    borderTop: `1px solid ${pwc.grey100}`,
+    marginTop: pwc.space.md,
   } as React.CSSProperties,
-  agentChevron: {
-    color: pwc.grey500,
+  agentSummary: {
+    display: "grid",
+    gap: 4,
+    color: pwc.grey700,
     fontSize: 12,
-    width: 12,
-    display: "inline-block",
+    lineHeight: 1.55,
+  } as React.CSSProperties,
+  agentRecentUpdates: {
+    display: "grid",
+    gap: 9,
+  } as React.CSSProperties,
+  agentDetailLabel: {
+    margin: 0,
+    color: pwc.grey700,
+    fontSize: 10,
+    fontWeight: pwc.weight.semibold,
+    letterSpacing: "0.08em",
+    textTransform: "uppercase",
+  } as React.CSSProperties,
+  agentRecentUpdate: {
+    display: "grid",
+    gridTemplateColumns: "8px minmax(0, 1fr)",
+    gap: 8,
+    alignItems: "start",
+    color: pwc.black,
+    fontSize: 11,
+  } as React.CSSProperties,
+  agentUpdateDot: {
+    width: 5,
+    height: 5,
+    marginTop: 6,
+    borderRadius: "50%",
+    background: pwc.grey400,
+  } as React.CSSProperties,
+  agentTechnicalDetails: {
+    borderTop: `1px solid ${pwc.grey100}`,
+    paddingTop: pwc.space.md,
   } as React.CSSProperties,
   agentTitleRow: {
     display: "flex",

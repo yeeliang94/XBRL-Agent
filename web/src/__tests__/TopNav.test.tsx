@@ -7,8 +7,9 @@ import { TopNav } from "../components/TopNav";
 // (design-system Tabs & navigation).
 
 describe("TopNav", () => {
-  test("renders New extraction + Runs for everyone; Field labels only for admins", () => {
+  test("renders Work queue, New extraction, and Runs for everyone; Field labels only for admins", () => {
     render(<TopNav view="extract" onViewChange={() => {}} />);
+    expect(screen.getByRole("link", { name: /work queue/i })).toBeTruthy();
     expect(screen.getByRole("link", { name: /new extraction/i })).toBeTruthy();
     expect(screen.getByRole("link", { name: /runs/i })).toBeTruthy();
     // Field labels is admin-only — hidden for a non-admin.
@@ -35,12 +36,13 @@ describe("TopNav", () => {
     expect(screen.queryByRole("link", { name: /field labels/i })).toBeNull();
     expect(screen.queryByRole("link", { name: /benchmarks/i })).toBeNull();
     expect(screen.queryByRole("link", { name: /evaluation suites/i })).toBeNull();
-    expect(screen.getByRole("link", { name: /new extraction/i })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /work queue/i })).toBeTruthy();
   });
 
   test("destinations carry stable URLs for deep links / new tabs", () => {
     render(<TopNav view="extract" onViewChange={() => {}} isAdmin />);
-    expect(screen.getByRole("link", { name: /new extraction/i }).getAttribute("href")).toBe("/");
+    expect(screen.getByRole("link", { name: /work queue/i }).getAttribute("href")).toBe("/");
+    expect(screen.getByRole("link", { name: /new extraction/i }).getAttribute("href")).toBe("/#new-extraction");
     expect(screen.getByRole("link", { name: /runs/i }).getAttribute("href")).toBe("/history");
     expect(screen.getByRole("link", { name: /field labels/i }).getAttribute("href")).toBe(
       "/field-labels",
@@ -56,13 +58,13 @@ describe("TopNav", () => {
   test("active destination carries aria-current=page", () => {
     const { rerender } = render(<TopNav view="extract" onViewChange={() => {}} />);
     expect(
-      screen.getByRole("link", { name: /new extraction/i }).getAttribute("aria-current"),
+      screen.getByRole("link", { name: /work queue/i }).getAttribute("aria-current"),
     ).toBe("page");
     expect(screen.getByRole("link", { name: /runs/i }).getAttribute("aria-current")).toBeNull();
 
     rerender(<TopNav view="history" onViewChange={() => {}} />);
     expect(
-      screen.getByRole("link", { name: /new extraction/i }).getAttribute("aria-current"),
+      screen.getByRole("link", { name: /work queue/i }).getAttribute("aria-current"),
     ).toBeNull();
     expect(screen.getByRole("link", { name: /runs/i }).getAttribute("aria-current")).toBe("page");
   });
@@ -73,7 +75,7 @@ describe("TopNav", () => {
     fireEvent.click(screen.getByRole("link", { name: /runs/i }));
     expect(onViewChange).toHaveBeenCalledWith("history");
 
-    fireEvent.click(screen.getByRole("link", { name: /new extraction/i }));
+    fireEvent.click(screen.getByRole("link", { name: /work queue/i }));
     expect(onViewChange).toHaveBeenCalledWith("extract");
   });
 
@@ -88,13 +90,28 @@ describe("TopNav", () => {
     expect(onViewChange).not.toHaveBeenCalled();
   });
 
-  test("active destination is dark text + orange indicator, not orange text", () => {
+  test("active destination is a white row with black text and an orange glyph", () => {
     render(<TopNav view="history" onViewChange={() => {}} />);
     const active = screen.getByRole("link", { name: /runs/i }) as HTMLAnchorElement;
-    const inactive = screen.getByRole("link", { name: /new extraction/i }) as HTMLAnchorElement;
+    const inactive = screen.getByRole("link", { name: /work queue/i }) as HTMLAnchorElement;
     expect(active.getAttribute("style")).not.toBe(inactive.getAttribute("style"));
-    // grey900 active text; the orange lives on the border indicator only.
-    expect(active.style.color).toBe("rgb(26, 26, 26)");
-    expect(active.style.borderBottom).toContain("rgb(253, 81, 8)");
+    // Direction A uses an orange glyph, not an orange edge or text label.
+    expect(active.style.color).toBe("rgb(0, 0, 0)");
+    expect(active.style.background).toBe("rgb(255, 255, 255)");
+    expect(active.style.borderLeft).toBe("1px solid transparent");
+    expect(active.querySelector(".app-main-nav-glyph")?.getAttribute("style")).toContain("rgb(253, 81, 8)");
+  });
+
+  test("current filing exposes Overview, Figures review, and Notes review", () => {
+    render(<TopNav view="history" currentRunId={42} onViewChange={() => {}} />);
+    expect(screen.getByRole("link", { name: "Overview" })).toHaveAttribute("href", "/history/42?tab=overview");
+    expect(screen.getByRole("link", { name: "Figures review" })).toHaveAttribute("href", "/concepts/42");
+    expect(screen.getByRole("link", { name: "Notes review" })).toHaveAttribute("href", "/history/42?tab=notes");
+  });
+
+  test("a live filing selects Overview instead of Work queue", () => {
+    render(<TopNav view="extract" extractMode="queue" currentRunId={42} onViewChange={() => {}} />);
+    expect(screen.getByRole("link", { name: "Work queue" })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("link", { name: "Overview" })).toHaveAttribute("aria-current", "page");
   });
 });

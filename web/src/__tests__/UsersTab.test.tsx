@@ -35,6 +35,12 @@ describe("UsersTab", () => {
     render(<UsersTab />);
     await waitFor(() => expect(screen.getByText("admin@firm.com")).toBeInTheDocument());
     expect(screen.getByText("user@firm.com")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "User accounts" })).toHaveClass(
+      "settings-users-table-wrap",
+    );
+    expect(screen.getByLabelText("New user email").closest("label")).toHaveClass(
+      "settings-users-field",
+    );
   });
 
   test("disable button calls adminSetDisabled(email, true)", async () => {

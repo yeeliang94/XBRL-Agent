@@ -37,7 +37,8 @@ The canonical concept model is the only extraction, review, and export path.
 - `XBRL-template-MFRS/`, `XBRL-template-MPERS/`: generated filing templates.
 - `SSMxT_2022v1.0/`: source taxonomy and linkbases.
 - `tests/`, `web/src/__tests__/`: backend and frontend tests.
-- `docs/pwc-design-system.html`: canonical web visual and interaction spec.
+- `docs/xbrl-design-system.html`: canonical web visual and interaction spec.
+- `docs/prototype-ui-overhaul.html`: exact Direction A product reference.
 
 ## Run and Verify
 
@@ -205,7 +206,10 @@ needed credentials and fixtures are available.
 
 - Keep component styling in inline `style={}` props. Do not migrate it back to
   Tailwind or class-based utility styling.
-- Follow `docs/pwc-design-system.html`. Shared tokens live in
+- Follow `docs/xbrl-design-system.html` and Direction A in
+  `docs/prototype-ui-overhaul.html` exactly. `docs/pwc-design-system.html` is
+  a compatibility mirror for older pinning references, not a design authority.
+  Shared tokens live in
   `web/src/lib/theme.ts`, shared layout primitives in `web/src/lib/uiStyles.ts`,
   and hover, focus, animation, and responsive states in `web/src/index.css`.
   Update the spec, implementation, and pinning tests together for shared rules.
