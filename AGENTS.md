@@ -154,6 +154,9 @@ needed credentials and fixtures are available.
 - Model transport is model-specific. Preserve the GPT-5.6 Responses/Chat
   Completions routing, reasoning-level translation, and distinct cache option
   shapes documented in `CLAUDE.md` gotcha 2.
+- Preserve the face retry lanes: provider-response timeouts receive two retries
+  and must be recognized through PydanticAI's wrapped exception chain;
+  connection-establishment failures remain in their separate one-retry lane.
 
 ### Extraction and review
 
@@ -165,6 +168,12 @@ needed credentials and fixtures are available.
   Apply the MFRS Group SOCIE overlay only to MFRS Group SOCIE Default.
 - The reviewer resolves concepts within the run's exact template family and
   entity scope. Do not resolve by sheet and row globally.
+- Tag every deliberate cancellation of a registered reviewer task with
+  `task_registry.USER_ABORT_REASON`; reviewer passes treat bare cancellation as
+  a recoverable provider interruption.
+- Automatic figures and notes reviewers may overlap, but the automatic notes
+  reviewer must not receive the merged-workbook path. Apply its notes overlay
+  atomically only after both reviewers finish.
 - Preserve structured pipeline and cross-check progress events. Emit them
   through the existing queue so disconnect finalization remains safe.
 
@@ -172,6 +181,9 @@ needed credentials and fixtures are available.
 
 - `notes_cells` is the canonical notes store. Excel downloads are regenerated
   from database rows, including tombstones that represent reviewer deletions.
+- In Sheet-12 fan-out, a later call for the same structured note number and
+  resolved row replaces the earlier version; multiple chunks within one call
+  remain combinable. Never infer note identity from prose.
 - Extraction and reviewer agents must not author notes formatting. The formatter
   may apply validated style-only patches and must not change rendered text,
   numbers, table geometry, row or column structure, or placement.

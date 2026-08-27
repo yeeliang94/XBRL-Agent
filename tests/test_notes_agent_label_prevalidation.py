@@ -331,3 +331,28 @@ def test_sub_agent_later_single_field_write_replaces_prior_route(
     assert deps.payload_sink == [replacement]
     assert "Re-routed note(s) 12" in msg
     assert "complete top-level note" in msg
+
+
+def test_sub_agent_later_revision_replaces_same_note_in_same_field(
+    tmp_path: Path,
+):
+    """A second call for one top-level note is a revision, not another copy.
+
+    Multiple payloads in one call may still be deliberate chunks. Across
+    calls, the List-of-Notes contract requires the later complete note to
+    supersede the earlier version so both cannot be concatenated into one
+    field.
+    """
+    from notes.agent import _sub_agent_sink_write
+
+    deps = _deps_in_sub_agent_mode(tmp_path)
+    first = _payload("Disclosure of financial instruments")
+    revision = _payload("Disclosure of financial instruments")
+    first.note_num = revision.note_num = 12
+    first.content = "<p>Earlier incomplete version.</p>"
+    revision.content = "<p>Complete corrected version.</p>"
+
+    _sub_agent_sink_write(deps, [first], parse_errors=[])
+    _sub_agent_sink_write(deps, [revision], parse_errors=[])
+
+    assert deps.payload_sink == [revision]

@@ -13,7 +13,10 @@ _tasks: dict[str, dict[str, asyncio.Task]] = {}
 # Cancellation reason carried by asyncio.CancelledError for an explicit Stop
 # request. Provider/transport cancellations are deliberately left untagged so
 # reviewer passes can classify them as recoverable interruptions instead of
-# falsely attributing them to the operator.
+# falsely attributing them to the operator. Every deliberate cancellation of a
+# registered agent/reviewer task MUST call ``task.cancel(USER_ABORT_REASON)``;
+# a bare ``task.cancel()`` is intentionally interpreted as a provider-side
+# interruption by the reviewer passes.
 USER_ABORT_REASON = "user_abort"
 
 

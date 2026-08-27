@@ -7,6 +7,7 @@ tests/test_notes_retry_budget.py):
 
   * 429 → backoff → fresh whole attempt → success;
   * connection error → exactly one retry;
+  * provider response timeout → two staggered retries;
   * a real code error (ValueError) still fails fast on first occurrence;
   * cancel during backoff lands as status ``cancelled``.
 """
@@ -21,7 +22,9 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
-from pydantic_ai.exceptions import ModelHTTPError
+from anthropic import APITimeoutError as AnthropicAPITimeoutError
+from openai import APITimeoutError
+from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 
 from statement_types import StatementType
 
@@ -78,6 +81,46 @@ def _rate_limit_error() -> ModelHTTPError:
     return ModelHTTPError(
         status_code=429, model_name="test-model",
         body={"message": "Rate limit hit. Please try again in 100ms."},
+    )
+
+
+def _response_timeout_error() -> APITimeoutError:
+    return APITimeoutError(
+        request=httpx.Request("POST", "https://model-provider.invalid/v1"),
+    )
+
+
+def _wrapped_provider_error(cause: BaseException) -> ModelAPIError:
+    """Match PydanticAI's native-provider exception mapping."""
+    wrapped = ModelAPIError(model_name="test-model", message=str(cause))
+    wrapped.__cause__ = cause
+    return wrapped
+
+
+def test_response_timeout_classifier_covers_native_provider_shapes():
+    """Direct OpenAI/Anthropic are wrapped by PydanticAI; direct Google uses
+    the provider's injected HTTPX client. All three transports must enter the
+    same response-timeout retry lane, including the wrapped SDK shapes seen in
+    a real agent run rather than only a test-double's top-level exception."""
+    from coordinator import _is_provider_response_timeout
+
+    request = httpx.Request(
+        "POST", "https://model-provider.invalid/v1",
+    )
+    native_timeouts = [
+        APITimeoutError(request=request),
+        AnthropicAPITimeoutError(request=request),
+        httpx.ReadTimeout("Gemini response stalled", request=request),
+    ]
+
+    for timeout in native_timeouts:
+        assert _is_provider_response_timeout(timeout)
+        assert _is_provider_response_timeout(_wrapped_provider_error(timeout))
+
+    assert not _is_provider_response_timeout(
+        _wrapped_provider_error(
+            httpx.ConnectTimeout("connection stalled", request=request),
+        )
     )
 
 
@@ -176,6 +219,64 @@ async def test_connect_error_gets_exactly_one_retry(tmp_path):
     r2 = result2.agent_results[0]
     assert r2.status == "failed"
     assert calls2["n"] == 2
+
+
+@pytest.mark.asyncio
+async def test_response_timeout_gets_two_staggered_retries_then_recovers(tmp_path):
+    """A provider read timeout is transient, but retrying a full PDF request
+    immediately can hit the same congested upstream worker. Retry twice with
+    increasing delays, then accept the successful third attempt."""
+    from coordinator import run_extraction
+
+    wb = str(tmp_path / "SOFP_filled.xlsx")
+    factory, calls = _factory_failing_then_ok(
+        _response_timeout_error(), wb, fail_times=2,
+    )
+    config = _RunConfig(pdf_path="/tmp/t.pdf", output_dir=str(tmp_path))
+
+    sleeps: list[float] = []
+
+    async def _record_sleep(delay):
+        sleeps.append(delay)
+
+    with patch("coordinator.create_extraction_agent", side_effect=factory), \
+         patch("coordinator.asyncio.sleep", side_effect=_record_sleep):
+        result = await run_extraction(config, infopack=None)
+
+    r = result.agent_results[0]
+    assert r.status == "succeeded", r.error
+    assert calls["n"] == 3
+    assert len(sleeps) == 2
+    assert 0 < sleeps[0] < sleeps[1], sleeps
+
+
+@pytest.mark.asyncio
+async def test_response_timeout_exhaustion_is_transient_not_tool_failure(tmp_path):
+    """The third consecutive response timeout is terminal and retains the
+    transient-exhausted taxonomy instead of becoming a tool exception."""
+    from coordinator import run_extraction
+
+    wb = str(tmp_path / "SOFP_filled.xlsx")
+    factory, calls = _factory_failing_then_ok(
+        _response_timeout_error(), wb, fail_times=3,
+    )
+    config = _RunConfig(pdf_path="/tmp/t.pdf", output_dir=str(tmp_path))
+
+    sleeps: list[float] = []
+
+    async def _record_sleep(delay):
+        sleeps.append(delay)
+
+    with patch("coordinator.create_extraction_agent", side_effect=factory), \
+         patch("coordinator.asyncio.sleep", side_effect=_record_sleep):
+        result = await run_extraction(config, infopack=None)
+
+    r = result.agent_results[0]
+    assert r.status == "failed"
+    assert r.error_type == "transient_exhausted"
+    assert calls["n"] == 3
+    assert len(sleeps) == 2
+    assert 0 < sleeps[0] < sleeps[1], sleeps
 
 
 @pytest.mark.asyncio

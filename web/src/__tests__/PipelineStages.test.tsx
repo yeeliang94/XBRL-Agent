@@ -86,6 +86,18 @@ describe("PipelineStages", () => {
     expect(screen.getByText("Review issues")).toHaveStyle({ fontWeight: "600" });
   });
 
+  test("keeps scanned-note transcription visible in Prepare document", () => {
+    render(
+      <PipelineStages
+        currentPhase={null}
+        pipelineStage="transcribing_source"
+        isRunning={true}
+        isComplete={false}
+      />,
+    );
+    expect(screen.getByText("Prepare document")).toHaveStyle({ fontWeight: "600" });
+  });
+
   test("applies PwC theme colors (orange500 active, success completed, grey300 pending)", () => {
     const { container } = render(
       <PipelineStages currentPhase="viewing_pdf" isRunning={true} isComplete={false} />,

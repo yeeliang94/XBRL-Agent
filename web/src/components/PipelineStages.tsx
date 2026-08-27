@@ -18,7 +18,7 @@ const PHASES = [
 
 function runStageIndex(stage: PipelineStage | null | undefined): number | null {
   if (!stage) return null;
-  if (stage === "scouting" || stage === "reading_source") return 0;
+  if (["scouting", "reading_source", "transcribing_source"].includes(stage)) return 0;
   if (stage === "extracting") return 1;
   if (stage === "merging" || stage === "cross_checking") return 2;
   if (["correcting", "reviewing", "re_checking", "reviewing_notes", "formatting_notes", "validating_notes"].includes(stage)) return 3;

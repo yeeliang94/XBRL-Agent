@@ -377,8 +377,8 @@ _SOURCE_TABLE = (
 )
 
 
-def _send_payload(agent, deps, label, note, content, parent_number=None):
-    """One write_notes call carrying a single payload for `note` at `label`."""
+def _send_payload_batch(agent, deps, payloads):
+    """One write_notes call carrying one or more already-built payloads."""
     import asyncio
     from types import SimpleNamespace
 
@@ -389,6 +389,11 @@ def _send_payload(agent, deps, label, note, content, parent_number=None):
             break
     else:  # pragma: no cover - toolset accessor drift
         raise AssertionError("write_notes tool not found")
+    return asyncio.run(fn(SimpleNamespace(deps=deps), payloads))
+
+
+def _send_payload(agent, deps, label, note, content, parent_number=None):
+    """One write_notes call carrying a single payload for `note` at `label`."""
     payloads = [{
         "chosen_row_label": label,
         "content": content,
@@ -399,7 +404,7 @@ def _send_payload(agent, deps, label, note, content, parent_number=None):
             "number": parent_number or str(note), "title": "T",
         },
     }]
-    return asyncio.run(fn(SimpleNamespace(deps=deps), payloads))
+    return _send_payload_batch(agent, deps, payloads)
 
 
 def test_source_copy_resend_replaces_the_rebuilt_draft(tmp_path: Path):
@@ -423,25 +428,42 @@ def test_source_copy_subsumes_a_multipart_draft(tmp_path: Path):
     from notes.agent import _ensure_label_index
     label = _ensure_label_index(deps)[0].original
 
-    _send_payload(agent, deps, label, 1, "<p>Part one prose.</p>")
-    _send_payload(agent, deps, label, 1, _PLAIN_TABLE)
-    assert len(deps.payload_sink) == 2  # parts combine — today's semantics
+    # Multiple chunks remain valid when deliberately submitted together in
+    # ONE call. A later call is a complete-note revision and supersedes them.
+    _send_payload_batch(agent, deps, [
+        {
+            "chosen_row_label": label,
+            "content": "<p>Part one prose.</p>",
+            "evidence": "Page 3, Note 1",
+            "source_pages": [3],
+            "note_num": 1,
+            "parent_note": {"number": "1", "title": "T"},
+        },
+        {
+            "chosen_row_label": label,
+            "content": _PLAIN_TABLE,
+            "evidence": "Page 3, Note 1",
+            "source_pages": [3],
+            "note_num": 1,
+            "parent_note": {"number": "1", "title": "T"},
+        },
+    ])
+    assert len(deps.payload_sink) == 2
     _send_payload(agent, deps, label, 1, _SOURCE_TABLE)
     assert len(deps.payload_sink) == 1
     assert "style=" in deps.payload_sink[0].content
 
 
-def test_plain_resend_with_different_text_still_combines(tmp_path: Path):
-    """The replace rule is for SOURCE copies only. Two plain payloads with
-    genuinely different text keep the combine semantics — a note written in
-    parts must not lose part one."""
+def test_plain_later_revision_with_different_text_replaces(tmp_path: Path):
+    """A later same-note call is a revision even without source styling."""
     agent, deps = _make_word_sink_agent(tmp_path, with_source=True)
     from notes.agent import _ensure_label_index
     label = _ensure_label_index(deps)[0].original
 
     _send_payload(agent, deps, label, 1, _PLAIN_TABLE)
     _send_payload(agent, deps, label, 1, "<p>More prose for the note.</p>")
-    assert len(deps.payload_sink) == 2
+    assert len(deps.payload_sink) == 1
+    assert deps.payload_sink[0].content == "<p>More prose for the note.</p>"
 
 
 def test_source_copy_keeps_the_other_note_on_a_shared_row(tmp_path: Path):

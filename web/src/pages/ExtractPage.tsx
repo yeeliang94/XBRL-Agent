@@ -44,6 +44,7 @@ function liveStageMessage(stage: AppState["pipelineStage"]): string {
   switch (stage) {
     case "scouting": return "Scanning the document and preparing page guidance.";
     case "reading_source": return "Reading the source Word document.";
+    case "transcribing_source": return "Transcribing scanned note pages into structured source content.";
     case "merging": return "Combining completed statements into one Excel file.";
     case "cross_checking": return "Running cross-checks across the extracted statements.";
     case "correcting": return "Reviewing flagged figures against the source document.";

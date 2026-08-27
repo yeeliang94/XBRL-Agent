@@ -388,6 +388,12 @@ exception paths call a best-effort helper that falls back to
 `save_messages_trace` — so the trace viewer is useful exactly when debugging
 a failure. The Sheet-12 fan-out saves one trace per sub-agent
 (`NOTES_LIST_OF_NOTES_subN[_retryK]_conversation_trace.json`, run-63 fix).
+Face-agent provider response timeouts receive two fresh whole-attempt retries
+with increasing backoff. The timeout classifier walks PydanticAI's exception
+chain because direct OpenAI and Anthropic transports wrap their SDK timeout in
+`ModelAPIError`; native Google uses PydanticAI's injected HTTPX client. Raw
+`httpx.ConnectTimeout` remains in the separate one-retry connection lane.
+Pinned by `tests/test_face_transient_retry.py`.
 **Traces show the END-STATE history, not per-turn snapshots:** pydantic-ai
 1.x persists each turn's processed history back onto the run state, so
 token-saving compaction placeholders ("Page N was viewed earlier…") appear
@@ -664,6 +670,15 @@ Key invariants:
 
 - **Sheet 12 (`LIST_OF_NOTES`) fans out** into `N` sub-agents; `N` is
   model-aware via `pricing.resolve_notes_parallel(model)`.
+- **A later same-note/same-row Sheet-12 write is a revision.** Within one
+  `write_notes` call, multiple attributed payloads may be deliberate chunks
+  and remain combinable. Across calls, a later payload with the same
+  `note_num` and resolved template row replaces every earlier-call chunk for
+  that note. This is keyed on structured note identity plus row resolution,
+  never prose matching. It prevents a sub-agent's corrected table from being
+  concatenated after its incomplete first version. Pinned by
+  `tests/test_notes_agent_label_prevalidation.py` and
+  `tests/test_notes_source_prompt.py`.
 - **Retry budget:** every notes agent and Sheet-12 sub-agent retried at most
   once. Exhaustion writes `notes_<TEMPLATE>_failures.json` /
   `notes12_failures.json` / `notes12_unmatched.json` side-logs.
@@ -936,6 +951,12 @@ Key invariants:
     presentation attributes and unwraps presentation-only inline tags before
     publication. This stops the transcript model from becoming a second
     styling author and keeps scanned/text PDFs on one formatter path. When
+    the sidecar applies, it is built after the pipeline-owned scout and before
+    extraction. That paid page transcription can run for up to the sidecar's
+    600-second overall deadline, so the server drains SSE concurrently and
+    emits `pipeline_stage=transcribing_source` before the first model call.
+    The automatic formatter is unrelated to this pre-extraction interval: it
+    runs later, after notes review. When
     `XBRL_PDF_NOTES_AUTO_FORMAT=true`, the run formats unstyled/floor prose
     cells after the notes reviewer, in parallel by sheet, through the same
     content/number/geometry verifier, CAS writes, snapshots, task rows, limits,
@@ -1147,15 +1168,17 @@ Two new SSE event families surface the post-extraction silent dead
 zones (added 2026-04-27, Phases 5 & 6 of the same plan):
 
 - **`pipeline_stage`** — coordinator-level stage label, one of
-  `extracting | merging | cross_checking | reviewing | re_checking |
-  reviewing_notes | done`. Emitted at every phase boundary in
+  `scouting | reading_source | transcribing_source | extracting | merging |
+  cross_checking | reviewing | re_checking | reviewing_notes |
+  formatting_notes | done`. Emitted at every phase boundary in
   `run_multi_agent_stream`. The frontend captures the latest stage
   and labels the corresponding silent gap ("Notes reviewer fixing…",
   "Re-running cross-checks…"). The notes pass emits `reviewing_notes`
   (the old `validating_notes` label is retained in the frontend
   `PipelineStage` union for older in-flight streams). Both must stay in
   sync — `web/src/lib/types.ts` + `web/src/pages/ExtractPage.tsx`. Pinned by
-  `tests/test_pipeline_stage_events.py`.
+  `tests/test_pipeline_stage_events.py`, `tests/test_pdf_sidecar_wiring.py`,
+  and `web/src/__tests__/PipelineStages.test.tsx`.
 - **`cross_check_start` / `cross_check_result` / `cross_check_complete`**
   — per-pass progress for each cross-check run. ValidatorTab fills
   rows incrementally instead of waiting for `run_complete`. Two
@@ -1534,6 +1557,15 @@ Load-bearing invariants:
   `server._run_notes_reviewer_pass`): success → `reviewed`; crash/construction
   failure → `not_reviewed` draft; empty inventory → `inventory_unavailable` +
   a structured warning event. Manual re-review re-persists for free (same pass).
+- **Automatic face and notes review overlap.** Once the initial cross-check
+  rows and notes-review inputs are committed, both reviewer tasks launch on
+  the same event loop and share the existing SSE queue. They write separate
+  canonical stores (face facts versus `notes_cells`). The automatic notes
+  reviewer receives no merged-workbook path while they overlap; its notes
+  overlay is applied atomically only after both reviewers finish, so it cannot
+  race a face re-export/re-merge. Manual notes review keeps its immediate
+  refresh. Stop All settles both task rows and releases the durable notes-task
+  interlock. Pinned by `tests/test_reviewer_parallel_wiring.py`.
 - **Coverage tips run status.** An unresolved `missing` row / uninvestigated
   `suspected_gap` / unavailable inventory tips the run to
   `completed_with_errors` (`_notes_coverage_tips_status`, folded into the

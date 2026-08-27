@@ -200,6 +200,72 @@ async def test_reviewer_turn_count_survives_a_failure_exit(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_reviewer_bare_cancellation_is_provider_interruption(
+    tmp_path, monkeypatch,
+):
+    """A bare cancellation can come from a nested provider timeout. It must
+    not be reported as the operator pressing Stop All."""
+    import agent_runner
+    from server import _run_reviewer_pass
+
+    db, run_id = _seed(tmp_path)
+    failed = [CrossCheckResult(
+        name="sofp_assets_balance", status="failed", expected=170.0,
+        actual=150.0, diff=20.0, message="off by 20",
+        target_sheet="SOFP", target_row=10)]
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def _provider_interrupted(*_args, **_kwargs):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(agent_runner, "run_agent_loop", _provider_interrupted)
+    outcome = await _run_reviewer_pass(
+        failed_checks=failed, conflicts=[], model=FunctionModel(_fix_cash_scripted),
+        filing_level="company", event_queue=queue, db_path=db, run_id=run_id)
+
+    assert outcome["error"] == "reviewer_interrupted"
+    events = []
+    while not queue.empty():
+        events.append(queue.get_nowait())
+    assert any(
+        e["event"] == "error"
+        and e["data"].get("type") == "reviewer_interrupted"
+        for e in events
+    )
+    assert not any(
+        e["data"].get("error") == "Cancelled by user" for e in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_explicit_stop_still_propagates_user_abort(
+    tmp_path, monkeypatch,
+):
+    """The tagged cancellation from the Stop endpoints remains terminal."""
+    import agent_runner
+    import task_registry
+    from server import _run_reviewer_pass
+
+    db, run_id = _seed(tmp_path)
+    failed = [CrossCheckResult(
+        name="sofp_assets_balance", status="failed", expected=170.0,
+        actual=150.0, diff=20.0, message="off by 20",
+        target_sheet="SOFP", target_row=10)]
+
+    async def _user_stopped(*_args, **_kwargs):
+        raise asyncio.CancelledError(task_registry.USER_ABORT_REASON)
+
+    monkeypatch.setattr(agent_runner, "run_agent_loop", _user_stopped)
+    with pytest.raises(asyncio.CancelledError) as captured:
+        await _run_reviewer_pass(
+            failed_checks=failed, conflicts=[],
+            model=FunctionModel(_fix_cash_scripted), filing_level="company",
+            event_queue=asyncio.Queue(), db_path=db, run_id=run_id)
+
+    assert task_registry.is_user_abort(captured.value)
+
+
+@pytest.mark.asyncio
 async def test_reviewer_pass_saves_conversation_trace(tmp_path):
     """Phase 4 (holistic audit) — the reviewer's transcript is persisted to
     {output_dir}/CORRECTION_conversation_trace.json so its judgement is
