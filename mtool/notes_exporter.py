@@ -31,6 +31,7 @@ What this module owns:
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -66,14 +67,41 @@ def build_notes_fill_doc(
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     try:
+        run = conn.execute(
+            "SELECT run_config_json FROM runs WHERE id = ?", (run_id,)
+        ).fetchone()
+        try:
+            config = json.loads(run["run_config_json"] or "{}") if run else {}
+        except (TypeError, json.JSONDecodeError):
+            config = {}
+        family_prefix = (
+            f"{str(config.get('filing_standard', 'mfrs')).lower()}-"
+            f"{str(config.get('filing_level', 'company')).lower()}-"
+        )
         rows = conn.execute(
             """
-            SELECT sheet, row, label, html, updated_at
-            FROM notes_cells
-            WHERE run_id = ?
+            SELECT sheet, row, label, html, updated_at, invalid_target,
+                   invalid_target_reason,
+                   EXISTS(
+                     SELECT 1 FROM notes_nodes nn
+                     WHERE nn.template_id LIKE ?
+                       AND nn.sheet = c.sheet AND nn.row = c.row
+                   ) AS has_registered_slot,
+                   EXISTS(
+                     SELECT 1 FROM notes_nodes nn
+                     JOIN template_slots ts
+                       ON ts.canonical_target_id = nn.node_uuid
+                     WHERE nn.template_id LIKE ?
+                       AND nn.node_uuid = c.concept_uuid
+                       AND nn.sheet = c.sheet AND nn.row = c.row
+                       AND ts.validation_status = 'writable'
+                       AND ts.slot_role = 'INPUT'
+                   ) AS has_writable_slot
+            FROM notes_cells c
+            WHERE c.run_id = ?
             ORDER BY sheet, row
             """,
-            (run_id,),
+            (family_prefix + "%", family_prefix + "%", run_id),
         ).fetchall()
     finally:
         conn.close()
@@ -91,12 +119,20 @@ def build_notes_fill_doc(
     notes_revision: list[dict[str, Any]] = []
     skipped_empty = 0
     skipped_no_label = 0
+    skipped_invalid_target = 0
+    skipped_non_writable_slot = 0
     formatting_compacted = 0  # "compact" tier — same look, slimmer styling
     formatting_reduced = 0    # "lite" tier — cosmetic props dropped
     formatting_dropped = 0    # "flat" tier — all styling dropped
     source_styling_dropped = 0  # destyle retry — verbatim Word styling stripped
     white_grid_dropped = 0    # run-76 white grid dropped for size (grey grid)
     for r in rows:
+        if r["invalid_target"]:
+            skipped_invalid_target += 1
+            continue
+        if r["has_registered_slot"] and not r["has_writable_slot"]:
+            skipped_non_writable_slot += 1
+            continue
         html = (r["html"] or "").strip()
         label = (r["label"] or "").strip()
         if not html:
@@ -166,6 +202,8 @@ def build_notes_fill_doc(
             "notes": len(footnotes),
             "skipped_empty": skipped_empty,
             "skipped_no_label": skipped_no_label,
+            "skipped_invalid_target": skipped_invalid_target,
+            "skipped_non_writable_slot": skipped_non_writable_slot,
             # Deterministic size signals (full → compact → lite → flat ladder):
             #   formatting_compacted = same visible formatting, slimmer
             #     per-cell styling (table-level attrs carry the grid).

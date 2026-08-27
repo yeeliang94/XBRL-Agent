@@ -59,7 +59,7 @@ def test_overlay_uses_notes_cells_html_when_present(
     write_notes_workbook(
         template_path=str(tpl),
         payloads=[NotesPayload(
-            chosen_row_label="Financial reporting status",
+            chosen_row_label="*Disclosure of corporate information",
             content="Original plaintext",
             evidence="Page 1, Note 1", source_pages=[1],
             parent_note={"number": "1", "title": "Test Note"},
@@ -74,7 +74,7 @@ def test_overlay_uses_notes_cells_html_when_present(
     # status); look it up rather than hard-code.
     wb_probe = openpyxl.load_workbook(out)
     try:
-        row_num = _find_row(wb_probe["Notes-CI"], "Financial reporting status")
+        row_num = _find_row(wb_probe["Notes-CI"], "Disclosure of corporate information")
     finally:
         wb_probe.close()
 
@@ -83,7 +83,7 @@ def test_overlay_uses_notes_cells_html_when_present(
     persist_notes_cells(
         db_path=str(db_path), run_id=run_id, sheet_name="Notes-CI",
         cells_written=[{
-            "sheet": "Notes-CI", "row": row_num, "label": "Financial reporting status",
+            "sheet": "Notes-CI", "row": row_num, "label": "*Disclosure of corporate information",
             "html": "<p><strong>Active</strong> as of year end.</p>",
             "evidence": "Page 3", "source_pages": [3],
         }],
@@ -115,7 +115,7 @@ def test_overlay_falls_back_when_no_cells(
     write_notes_workbook(
         template_path=str(tpl),
         payloads=[NotesPayload(
-            chosen_row_label="Financial reporting status",
+            chosen_row_label="*Disclosure of corporate information",
             content="Keep me.",
             evidence="Page 1, Note 1", source_pages=[1],
             parent_note={"number": "1", "title": "Test Note"},
@@ -137,7 +137,7 @@ def test_overlay_falls_back_when_no_cells(
     # long as the content survives intact.
     wb = openpyxl.load_workbook(returned)
     try:
-        row_num = _find_row(wb["Notes-CI"], "Financial reporting status")
+        row_num = _find_row(wb["Notes-CI"], "Disclosure of corporate information")
         # Cell now carries heading prepend + body (Phase 2 of the notes-
         # heading plan). Substring check because the heading line precedes
         # the body in the flattened Excel text.
@@ -165,7 +165,7 @@ def test_download_endpoint_cleans_up_overlay_temp_file(
     write_notes_workbook(
         template_path=str(tpl),
         payloads=[NotesPayload(
-            chosen_row_label="Financial reporting status",
+            chosen_row_label="*Disclosure of corporate information",
             content="Original", evidence="Page 1", source_pages=[1],
             parent_note={"number": "1", "title": "Test Note"},
         )],
@@ -182,7 +182,7 @@ def test_download_endpoint_cleans_up_overlay_temp_file(
 
     wb_probe = openpyxl.load_workbook(merged)
     try:
-        row_num = _find_row(wb_probe["Notes-CI"], "Financial reporting status")
+        row_num = _find_row(wb_probe["Notes-CI"], "Disclosure of corporate information")
     finally:
         wb_probe.close()
     persist_notes_cells(
@@ -233,7 +233,7 @@ def test_overlay_applies_rendered_length_cap_defensively(
     write_notes_workbook(
         template_path=str(tpl),
         payloads=[NotesPayload(
-            chosen_row_label="Financial reporting status",
+            chosen_row_label="*Disclosure of corporate information",
             content="seed", evidence="Page 1", source_pages=[1],
             parent_note={"number": "1", "title": "Test Note"},
         )],
@@ -245,7 +245,7 @@ def test_overlay_applies_rendered_length_cap_defensively(
     run_id = _seed_run(db_path)
     wb_probe = openpyxl.load_workbook(out)
     try:
-        row_num = _find_row(wb_probe["Notes-CI"], "Financial reporting status")
+        row_num = _find_row(wb_probe["Notes-CI"], "Disclosure of corporate information")
     finally:
         wb_probe.close()
 
@@ -256,7 +256,7 @@ def test_overlay_applies_rendered_length_cap_defensively(
     with repo.db_session(db_path) as conn:
         repo.upsert_notes_cell(
             conn, run_id=run_id, sheet="Notes-CI", row=row_num,
-            label="Financial reporting status",
+            label="*Disclosure of corporate information",
             html="<p>" + ("Q" * 40_000) + "</p>",
             evidence="Page 3", source_pages=[3],
         )
@@ -288,7 +288,7 @@ def test_overlay_flattens_table_html_to_pipe_form(
     write_notes_workbook(
         template_path=str(tpl),
         payloads=[NotesPayload(
-            chosen_row_label="Financial reporting status",
+            chosen_row_label="*Disclosure of corporate information",
             content="ignored",
             evidence="Page 1, Note 1", source_pages=[1],
             parent_note={"number": "1", "title": "Test Note"},
@@ -301,7 +301,7 @@ def test_overlay_flattens_table_html_to_pipe_form(
     run_id = _seed_run(db_path)
     wb_probe = openpyxl.load_workbook(out)
     try:
-        row_num = _find_row(wb_probe["Notes-CI"], "Financial reporting status")
+        row_num = _find_row(wb_probe["Notes-CI"], "Disclosure of corporate information")
     finally:
         wb_probe.close()
 
@@ -314,7 +314,7 @@ def test_overlay_flattens_table_html_to_pipe_form(
     persist_notes_cells(
         db_path=str(db_path), run_id=run_id, sheet_name="Notes-CI",
         cells_written=[{
-            "sheet": "Notes-CI", "row": row_num, "label": "Financial reporting status",
+            "sheet": "Notes-CI", "row": row_num, "label": "*Disclosure of corporate information",
             "html": html, "evidence": "Page 3", "source_pages": [3],
         }],
     )
@@ -348,7 +348,7 @@ def test_overlay_logs_warning_when_cell_sheet_not_in_workbook(
     write_notes_workbook(
         template_path=str(tpl),
         payloads=[NotesPayload(
-            chosen_row_label="Financial reporting status",
+            chosen_row_label="*Disclosure of corporate information",
             content="OLD",
             evidence="Page 1", source_pages=[1],
             parent_note={"number": "1", "title": "Test Note"},

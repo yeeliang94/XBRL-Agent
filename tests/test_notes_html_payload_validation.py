@@ -97,7 +97,7 @@ def test_writer_surfaces_sanitiser_warnings(tmp_path) -> None:
     out = tmp_path / "Notes-CI_dirty.xlsx"
 
     payload = NotesPayload(
-        chosen_row_label="Financial reporting status",
+        chosen_row_label="*Disclosure of corporate information",
         content="<p>Active</p><script>alert(1)</script>",
         evidence="Page 12, Note 2",
         source_pages=[12],
@@ -123,7 +123,7 @@ def test_writer_surfaces_sanitiser_warnings(tmp_path) -> None:
     cell_value = None
     for row in range(1, ws.max_row + 1):
         label = ws.cell(row=row, column=1).value
-        if label and "financial reporting status" in str(label).lower():
+        if label and "disclosure of corporate information" in str(label).lower():
             cell_value = ws.cell(row=row, column=2).value
             break
     assert cell_value is not None

@@ -12,6 +12,11 @@ from notes_types import NotesTemplateType, notes_template_path
 
 # Notes-CI is the smallest template — perfect for round-trip tests.
 CORP_INFO_SHEET = "Notes-CI"
+CORP_INFO_FIELD = (
+    "Explanation of reasons for the restatement of previous financial "
+    "statements figures"
+)
+ISSUED_CAPITAL_FIELD = "*Number of shares issued and fully paid"
 
 
 def _first_matching_row(ws, label: str) -> int:
@@ -27,7 +32,7 @@ def test_company_prose_write_puts_content_in_b_and_evidence_in_d(tmp_path: Path)
     out = tmp_path / "Notes-CI_filled.xlsx"
     payloads = [
         NotesPayload(
-            chosen_row_label="Financial reporting status",
+            chosen_row_label=CORP_INFO_FIELD,
             content="The Group is a going concern.",
             evidence="Page 14, Note 2(a)",
             source_pages=[14],
@@ -46,7 +51,7 @@ def test_company_prose_write_puts_content_in_b_and_evidence_in_d(tmp_path: Path)
 
     wb = openpyxl.load_workbook(out)
     ws = wb[CORP_INFO_SHEET]
-    row = _first_matching_row(ws, "Financial reporting status")
+    row = _first_matching_row(ws, CORP_INFO_FIELD)
     # Cell now carries the heading prepend followed by the body text
     # (Phase 2 of the notes-heading plan). The heading-specific tests
     # below pin the prepend order; here we only care about column placement.
@@ -62,7 +67,7 @@ def test_group_prose_writes_to_group_column_only_not_company_columns(tmp_path: P
     out = tmp_path / "Notes-CI_group_filled.xlsx"
     payloads = [
         NotesPayload(
-            chosen_row_label="Financial reporting status",
+            chosen_row_label=CORP_INFO_FIELD,
             content="Consolidated entity is a going concern.",
             evidence="Page 15, Note 2(b)",
             source_pages=[15],
@@ -80,7 +85,7 @@ def test_group_prose_writes_to_group_column_only_not_company_columns(tmp_path: P
 
     wb = openpyxl.load_workbook(out)
     ws = wb[CORP_INFO_SHEET]
-    row = _first_matching_row(ws, "Financial reporting status")
+    row = _first_matching_row(ws, CORP_INFO_FIELD)
     # Section 2 #6: Group filing prose → Group col B only. Cell carries
     # heading prepend + body (Phase 2 notes-heading plan); substring check
     # because the heading line now precedes the body.
@@ -98,7 +103,7 @@ def test_group_numeric_writes_both_group_and_company_columns(tmp_path: Path):
     out = tmp_path / "Notes-IC_group_filled.xlsx"
     payloads = [
         NotesPayload(
-            chosen_row_label="Shares issued and fully paid",
+            chosen_row_label=ISSUED_CAPITAL_FIELD,
             content="",
             evidence="Page 42, Note 14",
             source_pages=[42],
@@ -122,7 +127,7 @@ def test_group_numeric_writes_both_group_and_company_columns(tmp_path: Path):
 
     wb = openpyxl.load_workbook(out)
     ws = wb["Notes-Issuedcapital"]
-    row = _first_matching_row(ws, "Shares issued and fully paid")
+    row = _first_matching_row(ws, ISSUED_CAPITAL_FIELD)
     assert ws.cell(row=row, column=2).value == 1000.0  # Group CY
     assert ws.cell(row=row, column=3).value == 900.0   # Group PY
     assert ws.cell(row=row, column=4).value == 800.0   # Company CY
@@ -137,7 +142,7 @@ def test_writer_truncates_overlong_content_with_footer(tmp_path: Path):
     huge = "A" * (CELL_CHAR_LIMIT + 500)
     payloads = [
         NotesPayload(
-            chosen_row_label="Financial reporting status",
+            chosen_row_label=CORP_INFO_FIELD,
             content=huge,
             evidence="Pages 10-12",
             source_pages=[10, 11, 12],
@@ -155,7 +160,7 @@ def test_writer_truncates_overlong_content_with_footer(tmp_path: Path):
 
     wb = openpyxl.load_workbook(out)
     ws = wb[CORP_INFO_SHEET]
-    row = _first_matching_row(ws, "Financial reporting status")
+    row = _first_matching_row(ws, CORP_INFO_FIELD)
     written = ws.cell(row=row, column=2).value
     assert len(written) <= CELL_CHAR_LIMIT
     assert "truncated" in written.lower()
@@ -197,7 +202,7 @@ def test_writer_surfaces_fuzzy_matches_in_result(tmp_path: Path):
     # fuzzy fallback should still resolve it but report the match.
     payloads = [
         NotesPayload(
-            chosen_row_label="Financial reporting statu",
+            chosen_row_label=CORP_INFO_FIELD[:-1],
             content="The Group is a going concern.",
             evidence="Page 14",
             source_pages=[14],
@@ -214,8 +219,8 @@ def test_writer_surfaces_fuzzy_matches_in_result(tmp_path: Path):
     assert result.success
     assert result.fuzzy_matches, "fuzzy fallback should have surfaced"
     req, chosen, score = result.fuzzy_matches[0]
-    assert req == "Financial reporting statu"
-    assert "financial reporting status" in chosen.lower()
+    assert req == CORP_INFO_FIELD[:-1]
+    assert chosen == CORP_INFO_FIELD
     assert 0.7 <= score < 1.0
 
 
@@ -328,13 +333,13 @@ def test_evidence_not_written_without_values(tmp_path: Path):
 
     wb0 = openpyxl.load_workbook(str(tpl))
     ws0 = wb0[CORP_INFO_SHEET]
-    target_row = _first_matching_row(ws0, "Financial reporting status")
+    target_row = _first_matching_row(ws0, CORP_INFO_FIELD)
     baseline_evidence = ws0.cell(row=target_row, column=4).value
     wb0.close()
 
     payloads = [
         NotesPayload(
-            chosen_row_label="Financial reporting status",
+            chosen_row_label=CORP_INFO_FIELD,
             content="",
             evidence="Page 14, Note 2(a)",
             source_pages=[14],
@@ -385,7 +390,7 @@ def test_notes_writer_persists_source_note_refs_for_post_validator(tmp_path: Pat
     out = tmp_path / "Notes-CI_filled.xlsx"
     payloads = [
         NotesPayload(
-            chosen_row_label="Financial reporting status",
+            chosen_row_label=CORP_INFO_FIELD,
             content="The Group is a going concern.",
             evidence="Page 14",
             source_pages=[14],
@@ -414,7 +419,7 @@ def test_notes_writer_persists_source_note_refs_for_post_validator(tmp_path: Pat
     # label to tell a catch-all row from a specific disclosure row, so the
     # writer must persist it in the sidecar.
     assert "row_label" in entry
-    assert "Financial reporting status" in entry["row_label"]
+    assert CORP_INFO_FIELD in entry["row_label"]
 
 
 def test_notes_writer_sidecar_concatenates_refs_for_row_with_multiple_payloads(tmp_path: Path):
@@ -427,7 +432,7 @@ def test_notes_writer_sidecar_concatenates_refs_for_row_with_multiple_payloads(t
     out = tmp_path / "Notes-CI_multi.xlsx"
     payloads = [
         NotesPayload(
-            chosen_row_label="Financial reporting status",
+            chosen_row_label=CORP_INFO_FIELD,
             content="First line.",
             evidence="Page 10",
             source_pages=[10],
@@ -435,7 +440,7 @@ def test_notes_writer_sidecar_concatenates_refs_for_row_with_multiple_payloads(t
             parent_note={"number": "1", "title": "Test Note"},
         ),
         NotesPayload(
-            chosen_row_label="Financial reporting status",
+            chosen_row_label=CORP_INFO_FIELD,
             content="Second line.",
             evidence="Page 11",
             source_pages=[11],
@@ -478,7 +483,7 @@ def test_writer_prepends_parent_heading_to_prose_cell(tmp_path: Path):
     out = tmp_path / "Notes-CI_heading_parent.xlsx"
     payloads = [
         NotesPayload(
-            chosen_row_label="Financial reporting status",
+            chosen_row_label=CORP_INFO_FIELD,
             content="<p>The Group is a going concern.</p>",
             evidence="Page 14, Note 2",
             source_pages=[14],
@@ -496,7 +501,7 @@ def test_writer_prepends_parent_heading_to_prose_cell(tmp_path: Path):
 
     wb = openpyxl.load_workbook(out)
     ws = wb[CORP_INFO_SHEET]
-    row = _first_matching_row(ws, "Financial reporting status")
+    row = _first_matching_row(ws, CORP_INFO_FIELD)
     written = ws.cell(row=row, column=2).value
     # Heading text appears before the body text.
     assert "2 Basis of Preparation" in written
@@ -513,7 +518,7 @@ def test_writer_prepends_parent_and_sub_headings_to_subnote_cell(tmp_path: Path)
     out = tmp_path / "Notes-CI_heading_sub.xlsx"
     payloads = [
         NotesPayload(
-            chosen_row_label="Financial reporting status",
+            chosen_row_label=CORP_INFO_FIELD,
             content="<p>PPE is stated at cost.</p>",
             evidence="Page 27, Note 5.4",
             source_pages=[27],
@@ -532,7 +537,7 @@ def test_writer_prepends_parent_and_sub_headings_to_subnote_cell(tmp_path: Path)
 
     wb = openpyxl.load_workbook(out)
     ws = wb[CORP_INFO_SHEET]
-    row = _first_matching_row(ws, "Financial reporting status")
+    row = _first_matching_row(ws, CORP_INFO_FIELD)
     written = ws.cell(row=row, column=2).value
     # Parent heading appears, then sub-heading, then body — in that order.
     parent_idx = written.index("5 Material Accounting Policies")
@@ -551,7 +556,7 @@ def test_writer_numeric_only_payload_has_no_headings_injected(tmp_path: Path):
     out = tmp_path / "Notes-IC_numeric.xlsx"
     payloads = [
         NotesPayload(
-            chosen_row_label="Shares issued and fully paid",
+            chosen_row_label=ISSUED_CAPITAL_FIELD,
             content="",  # numeric-only
             evidence="Page 42, Note 14",
             source_pages=[42],
@@ -570,7 +575,7 @@ def test_writer_numeric_only_payload_has_no_headings_injected(tmp_path: Path):
 
     wb = openpyxl.load_workbook(out)
     ws = wb["Notes-Issuedcapital"]
-    row = _first_matching_row(ws, "Shares issued and fully paid")
+    row = _first_matching_row(ws, ISSUED_CAPITAL_FIELD)
     # Numeric cells stay numbers — no heading prose injected.
     assert ws.cell(row=row, column=2).value == 1000.0
     assert ws.cell(row=row, column=3).value == 900.0
@@ -586,7 +591,7 @@ def test_writer_headings_count_toward_truncation_budget(tmp_path: Path):
     huge = "A" * (CELL_CHAR_LIMIT + 500)
     payloads = [
         NotesPayload(
-            chosen_row_label="Financial reporting status",
+            chosen_row_label=CORP_INFO_FIELD,
             content=f"<p>{huge}</p>",
             evidence="Pages 10-12",
             source_pages=[10, 11, 12],
@@ -604,7 +609,7 @@ def test_writer_headings_count_toward_truncation_budget(tmp_path: Path):
 
     wb = openpyxl.load_workbook(out)
     ws = wb[CORP_INFO_SHEET]
-    row = _first_matching_row(ws, "Financial reporting status")
+    row = _first_matching_row(ws, CORP_INFO_FIELD)
     written = ws.cell(row=row, column=2).value
     # Heading survives — it's prepended before truncation.
     assert "2 Basis of Preparation" in written

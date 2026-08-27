@@ -63,7 +63,7 @@ def test_resolve_row_rejects_score_below_0_85() -> None:
 
 
 def test_resolve_row_accepts_score_above_0_85() -> None:
-    """A ~0.98 near-match ("statu" → "status") must still resolve —
+    """A near-match missing its final letter must still resolve —
     legitimate minor typos should not be rejected."""
     tpl = notes_template_path(NotesTemplateType.CORP_INFO, level="company")
     wb = openpyxl.load_workbook(tpl)
@@ -71,11 +71,11 @@ def test_resolve_row_accepts_score_above_0_85() -> None:
     entries = _build_label_index(ws)
     wb.close()
 
-    # "Financial reporting statu" → "Financial reporting status" scores 0.98.
-    resolved = _resolve_row(entries, "Financial reporting statu")
+    field = "Explanation of reasons for using longer or shorter reporting period"
+    resolved = _resolve_row(entries, field[:-1])
     assert resolved is not None
     row, chosen, score = resolved
-    assert "financial reporting status" in chosen.lower()
+    assert chosen == field
     assert score >= 0.85
 
 

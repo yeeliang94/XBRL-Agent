@@ -26,6 +26,7 @@ from tools.template_reader import read_template
 # identities the same way (template-scoped uuid5). Private-but-stable helpers,
 # imported within the same package.
 from concept_model.parser import _derive_template_id, _mint_uuid
+from concept_model.taxonomy_semantics import semantic_addresses_for
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,9 @@ class NotesNode:
     row: int
     label: str
     kind: str  # 'ABSTRACT' (section header) | 'LEAF' (fillable)
+    slot_role: str
+    taxonomy_element_id: str | None
+    semantic_address: dict | None
 
 
 def parse_notes_template(
@@ -57,6 +61,7 @@ def parse_notes_template(
     template_id = _derive_template_id(path)
 
     nodes: list[NotesNode] = []
+    addresses = semantic_addresses_for(str(path.resolve()))
     # read_template flags `is_abstract` only on the col-A cell of header rows,
     # and only emits cells whose value is non-None — so filtering to col==1
     # gives exactly one entry per labelled row, already in row order.
@@ -66,7 +71,10 @@ def parse_notes_template(
         label = f.value.strip()
         if not label:
             continue
-        kind = "ABSTRACT" if f.is_abstract else "LEAF"
+        semantic = addresses.get((sheet_name, f.row, None))
+        reportable = bool(semantic and semantic.get("reportable"))
+        kind = "LEAF" if not f.is_abstract and reportable else "ABSTRACT"
+        slot_role = "INPUT" if kind == "LEAF" else "PRESENTATION_ONLY"
         nodes.append(
             NotesNode(
                 node_uuid=_mint_uuid(template_id, sheet_name, f.row, label),
@@ -75,6 +83,11 @@ def parse_notes_template(
                 row=f.row,
                 label=label,
                 kind=kind,
+                slot_role=slot_role,
+                taxonomy_element_id=(
+                    semantic.get("primary_concept") if semantic else None
+                ),
+                semantic_address=semantic,
             )
         )
     return template_id, nodes

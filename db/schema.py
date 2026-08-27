@@ -201,7 +201,13 @@ from pathlib import Path
 # not duplicated here.  Pure CREATE TABLE IF NOT EXISTS walk-forward.  An
 # address may be absent for a legacy or unsupported template without breaking
 # canonical extraction; mTool readiness reports the gap instead.
-CURRENT_SCHEMA_VERSION = 40
+#
+# v41 adds the shared filing-target semantics contract. `taxonomy_concepts`
+# records authoritative SSM element capability. `template_slots` records the
+# independent role of each physical workbook slot. Additive columns link prose
+# nodes to that contract, quarantine legacy invalid content without deleting
+# it, and stamp the same readiness evidence on mTool receipts.
+CURRENT_SCHEMA_VERSION = 41
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -449,6 +455,62 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
     )
     """,
 
+    # v41: authoritative SSM taxonomy capability. Source element id is kept as
+    # the adapter key used by mTool; namespace_uri + local_name are the filing
+    # identity future XBRL generation consumes.
+    """
+    CREATE TABLE IF NOT EXISTS taxonomy_concepts (
+        source_element_id   TEXT PRIMARY KEY,
+        taxonomy_version    TEXT NOT NULL,
+        namespace_uri       TEXT NOT NULL,
+        local_name          TEXT NOT NULL,
+        abstract            INTEGER NOT NULL DEFAULT 0,
+        concept_role        TEXT NOT NULL,
+        data_type           TEXT,
+        period_type         TEXT,
+        balance             TEXT,
+        substitution_group  TEXT
+    )
+    """,
+
+    # v41: variant-specific physical slot manifest. Writability is derived
+    # from slot_role plus the linked taxonomy concept; there is deliberately
+    # no separately maintained fillable flag.
+    """
+    CREATE TABLE IF NOT EXISTS template_slots (
+        target_id             TEXT PRIMARY KEY,
+        canonical_target_id   TEXT NOT NULL,
+        template_id           TEXT NOT NULL,
+        sheet                 TEXT NOT NULL,
+        row                   INTEGER NOT NULL,
+        col                   TEXT,
+        label                 TEXT NOT NULL,
+        slot_role             TEXT NOT NULL,
+        value_kind            TEXT NOT NULL,
+        taxonomy_element_id   TEXT REFERENCES taxonomy_concepts(source_element_id),
+        dimensions_json       TEXT NOT NULL DEFAULT '{}',
+        mapping_source        TEXT NOT NULL,
+        manifest_version      TEXT NOT NULL,
+        workbook_fingerprint  TEXT NOT NULL,
+        validation_status     TEXT NOT NULL,
+        exception_code        TEXT,
+        UNIQUE(template_id, sheet, row, col, target_id)
+    )
+    """,
+
+    # v41: reviewed exceptions that apply to a whole workbook variant rather
+    # than to a physical slot. Keeping these separate avoids pretending that
+    # an omitted taxonomy wrapper belongs to every writable row in the file.
+    """
+    CREATE TABLE IF NOT EXISTS template_manifest_exceptions (
+        template_id           TEXT NOT NULL,
+        exception_code        TEXT NOT NULL,
+        manifest_version      TEXT NOT NULL,
+        workbook_fingerprint  TEXT NOT NULL,
+        PRIMARY KEY(template_id, exception_code)
+    )
+    """,
+
     # Directed edges from a parent COMPUTED concept to its summands.
     # `coefficient` is signed (+1, -1, etc.). One row per edge.
     """
@@ -518,6 +580,8 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         source           TEXT,                    -- free-form provenance
         evidence         TEXT,                    -- pdf page + quoted text
         updated_at       TEXT NOT NULL DEFAULT '',
+        invalid_target   INTEGER NOT NULL DEFAULT 0,
+        invalid_target_reason TEXT,
         UNIQUE(run_id, concept_uuid, period, entity_scope)
     )
     """,
@@ -596,6 +660,8 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         -- digest) could never equal a source render — so editing a cell back
         -- to exactly its source text never cleared the divergence mark.
         source_render_version  TEXT,
+        invalid_target         INTEGER NOT NULL DEFAULT 0,
+        invalid_target_reason  TEXT,
         UNIQUE(run_id, sheet, row)
     )
     """,
@@ -623,6 +689,9 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         label            TEXT NOT NULL,
         kind             TEXT NOT NULL,           -- 'ABSTRACT' (header) | 'LEAF' (fillable)
         xbrl_concept_id  TEXT,                    -- reserved; NULL until XBRL-gen follow-up populates the SSM element id
+        slot_role        TEXT NOT NULL DEFAULT 'UNMAPPED',
+        taxonomy_element_id TEXT,
+        manifest_version TEXT,
         UNIQUE(template_id, sheet, row)
     )
     """,
@@ -1420,7 +1489,11 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         report_json           TEXT,        -- the full run report
         operator              TEXT,
         created_at            TEXT NOT NULL DEFAULT '',
-        downloaded_at         TEXT
+        downloaded_at         TEXT,
+        readiness_classification TEXT,
+        taxonomy_version      TEXT,
+        manifest_versions_json TEXT,
+        semantic_coverage_json TEXT
     )
     """,
 )
@@ -1461,6 +1534,10 @@ _CREATE_INDEXES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS ix_concept_nodes_template_id ON concept_nodes(template_id)",
     "CREATE INDEX IF NOT EXISTS ix_concept_semantic_primary "
     "ON concept_semantic_addresses(primary_concept)",
+    "CREATE INDEX IF NOT EXISTS ix_template_slots_template "
+    "ON template_slots(template_id, sheet, row)",
+    "CREATE INDEX IF NOT EXISTS ix_template_slots_taxonomy "
+    "ON template_slots(taxonomy_element_id)",
     "CREATE INDEX IF NOT EXISTS ix_concept_edges_parent_uuid ON concept_edges(parent_uuid)",
     "CREATE INDEX IF NOT EXISTS ix_concept_edges_child_uuid ON concept_edges(child_uuid)",
     "CREATE INDEX IF NOT EXISTS ix_concept_targets_concept_uuid ON concept_targets(concept_uuid)",
@@ -1729,6 +1806,20 @@ _V39_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("mtool_fill_receipts", "snapshot_notes_count", "INTEGER"),
     ("mtool_fill_receipts", "snapshot_notes_digest", "TEXT"),
     ("mtool_fill_receipts", "snapshot_notes_updated", "TEXT"),
+)
+
+_V41_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("notes_nodes", "slot_role", "TEXT NOT NULL DEFAULT 'UNMAPPED'"),
+    ("notes_nodes", "taxonomy_element_id", "TEXT"),
+    ("notes_nodes", "manifest_version", "TEXT"),
+    ("run_concept_facts", "invalid_target", "INTEGER NOT NULL DEFAULT 0"),
+    ("run_concept_facts", "invalid_target_reason", "TEXT"),
+    ("notes_cells", "invalid_target", "INTEGER NOT NULL DEFAULT 0"),
+    ("notes_cells", "invalid_target_reason", "TEXT"),
+    ("mtool_fill_receipts", "readiness_classification", "TEXT"),
+    ("mtool_fill_receipts", "taxonomy_version", "TEXT"),
+    ("mtool_fill_receipts", "manifest_versions_json", "TEXT"),
+    ("mtool_fill_receipts", "semantic_coverage_json", "TEXT"),
 )
 
 _V33_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
@@ -3044,6 +3135,40 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
                         (40,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        # v40 → v41: shared taxonomy/slot registry plus additive quarantine
+        # and receipt evidence columns. Tables are created above; ALTERs are
+        # guarded so concurrent and repeated startup remains idempotent.
+        if current_version is not None and current_version < 41:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 41:
+                    for table, col_name, col_ddl in _V41_MIGRATION_COLUMNS:
+                        existing_cols = {
+                            r[1] for r in conn.execute(
+                                f"PRAGMA table_info({table})"
+                            ).fetchall()
+                        }
+                        if col_name not in existing_cols:
+                            try:
+                                conn.execute(
+                                    f"ALTER TABLE {table} ADD COLUMN {col_name} {col_ddl}"
+                                )
+                            except sqlite3.OperationalError as exc:
+                                if "duplicate column" not in str(exc).lower():
+                                    raise
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (41,),
                     )
                 conn.commit()
             except Exception:

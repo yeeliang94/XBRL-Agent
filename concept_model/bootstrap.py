@@ -34,6 +34,7 @@ from concept_model.importer import (
 from concept_model.notes_importer import import_notes_template
 from concept_model.notes_parser import parse_notes_template
 from concept_model.parser import parse_template
+from concept_model.filing_targets import persist_template_manifest
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,7 @@ def import_all_notes_templates(db_path: str | Path) -> list[str]:
                         str(path), entry.sheet_name
                     )
                     import_notes_template(db_path, template_id, nodes)
+                    persist_template_manifest(db_path, path)
                 template_ids.append(template_id)
     return template_ids
 
@@ -133,6 +135,7 @@ def _import_one(db_path: str | Path, template_xlsx: Path, level: str) -> str:
             import_group_targets(db_path, template_id)
         else:
             import_company_targets(db_path, template_id)
+    persist_template_manifest(db_path, template_xlsx)
     return template_id
 
 

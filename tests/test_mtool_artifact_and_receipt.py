@@ -43,6 +43,7 @@ def client(tmp_path, monkeypatch):
     db = tmp_path / "xbrl.db"
     srv.AUDIT_DB_PATH = db
     from db.schema import init_db
+    from concept_model.filing_targets import persist_template_manifest
     from concept_model.importer import import_company_targets, import_template
     from concept_model.parser import parse_template
     init_db(db)
@@ -50,6 +51,7 @@ def client(tmp_path, monkeypatch):
     jp = tmp_path / "tree.json"
     jp.write_text(json.dumps(tree.to_json(), sort_keys=True), encoding="utf-8")
     import_company_targets(db, import_template(db, jp))
+    persist_template_manifest(db, SOFP)
     return TestClient(srv.app), db, srv
 
 
@@ -233,6 +235,10 @@ def test_a_fill_writes_exactly_one_receipt(client):
     assert r["source_sha256"] != r["output_sha256"]  # we did write something
     assert r["template_fingerprint"]
     assert r["translation_version"] == "identity-1"
+    assert r["readiness_classification"] == "ready"
+    assert r["taxonomy_version"] == "SSMxT_2022v1.0"
+    assert r["manifest_versions"] == ["2022-v1-slot-semantics-1"]
+    assert r["field_semantics"]["counts"]["unresolved_fields"] == 0
     assert r["column_map"]
     assert r["snapshot"]["fact_count"] == 4
     assert r["report"]["counts"]["written"] == 4

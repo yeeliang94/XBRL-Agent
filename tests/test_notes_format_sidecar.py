@@ -120,7 +120,7 @@ def test_house_style_floor_module_removed():
 
 def _payload(**overrides) -> NotesPayload:
     base = dict(
-        chosen_row_label="Financial reporting status",
+        chosen_row_label="*Disclosure of corporate information",
         content="<p>Body.</p>" + TABLE_HTML,
         evidence="Page 14, Note 2(a)",
         source_pages=[14],

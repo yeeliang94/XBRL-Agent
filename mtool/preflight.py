@@ -23,6 +23,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from concept_model.filing_targets import semantic_coverage_for_run
+
 # Cap the per-blocker example list so a run with hundreds of open conflicts
 # produces a readable message instead of a wall of labels. Counts stay exact.
 _EXAMPLE_CAP = 8
@@ -214,8 +216,17 @@ def evaluate_preflight(
     finally:
         conn.close()
 
+    semantic_coverage = semantic_coverage_for_run(
+        db_path,
+        run_id,
+        filing_standard=filing_standard,
+        filing_level=filing_level,
+    )
+
     blockers: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
+
+    blockers.extend(semantic_coverage["blockers"])
 
     def _describe(r: sqlite3.Row) -> str:
         return f"{r['canonical_label']} ({r['render_sheet']}, {r['period']})"
@@ -383,7 +394,12 @@ def evaluate_preflight(
             "examples": [],
         })
 
-    return {"ok": not blockers, "blockers": blockers, "warnings": warnings}
+    return {
+        "ok": not blockers,
+        "blockers": blockers,
+        "warnings": warnings,
+        "field_semantics": semantic_coverage,
+    }
 
 
 def written_keys_from_doc(doc: dict[str, Any]) -> set[tuple[str, str, str]]:

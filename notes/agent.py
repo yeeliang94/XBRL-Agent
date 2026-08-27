@@ -966,33 +966,15 @@ def _load_template_label_catalog(template_path: str, sheet_name: str) -> list[st
     agent falls back to the `read_template` tool).
     """
     try:
-        import openpyxl
-        wb = openpyxl.load_workbook(template_path, data_only=False)
+        from concept_model.filing_targets import list_writable_targets
+        targets = list_writable_targets(template_path)
     except Exception as e:  # noqa: BLE001 — intentional catch-all for IO
         logger.warning(
             "Could not open template %s for label catalog: %s",
             template_path, e,
         )
         return []
-    try:
-        if sheet_name not in wb.sheetnames:
-            logger.warning(
-                "Sheet %r missing from %s for label catalog",
-                sheet_name, template_path,
-            )
-            return []
-        ws = wb[sheet_name]
-        labels: list[str] = []
-        for row in range(1, ws.max_row + 1):
-            val = ws.cell(row=row, column=1).value
-            if val is None:
-                continue
-            text = str(val).strip()
-            if text:
-                labels.append(text)
-        return labels
-    finally:
-        wb.close()
+    return [target.label for target in targets if target.sheet == sheet_name]
 
 
 def _render_single_page(
@@ -1028,7 +1010,10 @@ def _ensure_label_index(deps: "NotesDeps") -> list:
     wb = openpyxl.load_workbook(deps.template_path)
     try:
         ws = wb[deps.sheet_name]
-        deps.label_index_cache = _build_label_index(ws)
+        from concept_model.filing_targets import writable_rows
+        deps.label_index_cache = _build_label_index(
+            ws, writable_rows=writable_rows(deps.template_path, deps.sheet_name)
+        )
     finally:
         wb.close()
     return deps.label_index_cache
@@ -2456,10 +2441,16 @@ def create_notes_agent(
         # Return a compact label list keyed by row — the agent only cares
         # about the col-A labels it may target.
         lines = []
+        from concept_model.filing_targets import writable_rows
+        allowed_rows = writable_rows(
+            ctx.deps.template_path, ctx.deps.sheet_name
+        )
         for f in ctx.deps.template_fields:
             if f.sheet != ctx.deps.sheet_name:
                 continue
             if f.col != 1 or not f.value:
+                continue
+            if f.row not in allowed_rows:
                 continue
             lines.append(f"  row {f.row:>3}: {f.value}")
         return f"Sheet: {ctx.deps.sheet_name}\nLabels (col A):\n" + "\n".join(lines)

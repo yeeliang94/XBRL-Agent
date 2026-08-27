@@ -57,7 +57,7 @@ def _seed_merged_workbook(tmp_path: Path) -> Path:
     result = write_notes_workbook(
         template_path=str(tpl),
         payloads=[NotesPayload(
-            chosen_row_label="Financial reporting status",
+            chosen_row_label="*Disclosure of corporate information",
             content="ORIGINAL prose from the agent",
             evidence="Page 14",
             source_pages=[14],
@@ -90,7 +90,7 @@ def _find_row(ws, needle: str) -> int:
 def _target_row(merged: Path) -> int:
     wb = openpyxl.load_workbook(merged)
     try:
-        return _find_row(wb[_SHEET], "Financial reporting status")
+        return _find_row(wb[_SHEET], "Disclosure of corporate information")
     finally:
         wb.close()
 
@@ -165,7 +165,7 @@ def test_rerun_after_review_does_not_blank_repopulated_cell(tmp_path, db_path):
     persist_notes_cells(
         db_path=str(db_path), run_id=run_id, sheet_name=_SHEET,
         cells_written=[{
-            "sheet": _SHEET, "row": row, "label": "Financial reporting status",
+            "sheet": _SHEET, "row": row, "label": "*Disclosure of corporate information",
             "html": "<p>FRESH rerun content</p>", "evidence": "Page 3",
             "source_pages": [3],
         }],
@@ -193,7 +193,7 @@ def test_overlay_never_blanks_live_coord_even_with_stale_tombstone(tmp_path, db_
     with repo.db_session(db_path) as conn:
         run_id = repo.create_run(conn, "x.pdf")
         repo.upsert_notes_cell(conn, run_id=run_id, sheet=_SHEET, row=row,
-                               label="Financial reporting status",
+                               label="*Disclosure of corporate information",
                                html="<p>LIVE</p>", evidence="Page 1")
         # Inject a stale tombstone directly (bypassing the persist cleanup).
         repo.add_notes_tombstone(conn, run_id=run_id, sheet=_SHEET, row=row)
@@ -219,7 +219,7 @@ def test_evidence_column_refreshed_from_notes_cells(tmp_path, db_path):
     persist_notes_cells(
         db_path=str(db_path), run_id=run_id, sheet_name=_SHEET,
         cells_written=[{
-            "sheet": _SHEET, "row": row, "label": "Financial reporting status",
+            "sheet": _SHEET, "row": row, "label": "*Disclosure of corporate information",
             "html": "<p>edited prose</p>", "evidence": "Pages 14, 99 — reviewer",
             "source_pages": [14, 99],
         }],
@@ -249,7 +249,7 @@ def test_revert_reconciles_tombstones(tmp_path, db_path):
     persist_notes_cells(
         db_path=str(db_path), run_id=run_id, sheet_name=_SHEET,
         cells_written=[{
-            "sheet": _SHEET, "row": orig_row, "label": "Financial reporting status",
+            "sheet": _SHEET, "row": orig_row, "label": "*Disclosure of corporate information",
             "html": "<p>ORIGINAL prose from the agent</p>", "evidence": "Page 14",
             "source_pages": [14],
         }],

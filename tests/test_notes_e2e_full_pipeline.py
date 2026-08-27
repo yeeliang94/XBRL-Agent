@@ -46,7 +46,7 @@ from scout.notes_discoverer import NoteInventoryEntry
 _FIXTURE_PAYLOADS: dict[NotesTemplateType, list[NotesPayload]] = {
     NotesTemplateType.CORP_INFO: [
         NotesPayload(
-            chosen_row_label="Financial reporting status",
+            chosen_row_label="*Disclosure of corporate information",
             content="The Group is a going concern and has adequate liquidity.",
             evidence="Page 14, Note 1",
             source_pages=[14],
@@ -71,7 +71,7 @@ _FIXTURE_PAYLOADS: dict[NotesTemplateType, list[NotesPayload]] = {
     ],
     NotesTemplateType.ISSUED_CAPITAL: [
         NotesPayload(
-            chosen_row_label="Issued capital",
+            chosen_row_label="*Disclosure of classes of share capital",
             content="",
             evidence="Page 55, Note 18",
             source_pages=[55],
@@ -81,7 +81,7 @@ _FIXTURE_PAYLOADS: dict[NotesTemplateType, list[NotesPayload]] = {
     ],
     NotesTemplateType.RELATED_PARTY: [
         NotesPayload(
-            chosen_row_label="Related party transactions",
+            chosen_row_label="*Disclosure of transactions between related parties",
             content="",
             evidence="Page 71, Note 24",
             source_pages=[71],
@@ -227,15 +227,16 @@ async def test_all_five_notes_sheets_run_end_to_end(tmp_path: Path):
     # Spot-check each sheet — prose, numeric, and Sheet-12 concatenation.
     wb_ci = openpyxl.load_workbook(by_type[NotesTemplateType.CORP_INFO].workbook_path)
     ws_ci = wb_ci["Notes-CI"]
-    assert _cell_contains(ws_ci, "Financial reporting status", col=2, needle="going concern")
+    assert _cell_contains(ws_ci, "Disclosure of corporate information", col=2, needle="going concern")
     wb_ci.close()
 
     wb_ic = openpyxl.load_workbook(by_type[NotesTemplateType.ISSUED_CAPITAL].workbook_path)
     ws_ic = wb_ic["Notes-Issuedcapital"]
     # Numeric values land in col B (CY) and C (PY). Exact-match on the
-    # data-row label so we don't collide with the sheet-header row
-    # "Notes - Issued capital" above it.
-    ic_row = _first_row_matching(ws_ic, "Issued capital", exact=True)
+    # canonical data-row label rather than the display-only sheet heading.
+    ic_row = _first_row_matching(
+        ws_ic, "Disclosure of classes of share capital", exact=True,
+    )
     assert ws_ic.cell(row=ic_row, column=2).value == 10_000_000
     assert ws_ic.cell(row=ic_row, column=3).value == 9_500_000
     wb_ic.close()
@@ -311,9 +312,7 @@ def _first_row_matching(ws, needle: str, *, exact: bool = False) -> int:
     """Find the first row whose column-A label contains (or equals) ``needle``.
 
     ``exact=True`` matches the normalized label (strip, lstrip '*', lower),
-    which is necessary when multiple labels share a common substring — e.g.
-    the Notes-Issuedcapital template has both 'Notes - Issued capital'
-    (section header) and 'Issued capital' (data row).
+    which is necessary when multiple labels share a common substring.
     """
     target = needle.strip().lstrip("*").strip().lower()
     for r in range(1, ws.max_row + 1):

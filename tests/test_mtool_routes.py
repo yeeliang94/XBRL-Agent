@@ -19,6 +19,7 @@ SOFP = REPO / "XBRL-template-MFRS" / "Company" / "01-SOFP-CuNonCu.xlsx"
 
 
 def _import_company_sofp(db_path) -> str:
+    from concept_model.filing_targets import persist_template_manifest
     from concept_model.importer import import_company_targets, import_template
     from concept_model.parser import parse_template
     tree = parse_template(str(SOFP))
@@ -26,6 +27,7 @@ def _import_company_sofp(db_path) -> str:
     jp.write_text(json.dumps(tree.to_json(), sort_keys=True), encoding="utf-8")
     tid = import_template(db_path, jp)
     import_company_targets(db_path, tid)
+    persist_template_manifest(db_path, SOFP)
     return tid
 
 
@@ -132,6 +134,22 @@ def test_get_fill_doc_on_running_run_is_409(client):
 def test_get_fill_doc_unknown_run_is_404(client):
     tc, _, _ = client
     assert tc.get("/api/runs/99999/mtool-fill").status_code == 404
+
+
+def test_filing_semantics_route_reports_versioned_writable_coverage(client):
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_distinct_leaves(db, run_id)
+
+    resp = tc.get(f"/api/runs/{run_id}/filing-semantics")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["readiness"] == "ready"
+    assert body["counts"]["writable_fields"] > 0
+    assert body["counts"]["unresolved_fields"] == 0
+    assert body["manifest_versions"] == ["2022-v1-slot-semantics-1"]
+    assert body["taxonomy_versions"] == ["SSMxT_2022v1.0"]
 
 
 # ---------------------------------------------------------------- POST patch

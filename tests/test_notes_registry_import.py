@@ -95,6 +95,19 @@ def test_numeric_lands_in_concept_model(imported_db):
             "AND template_id IN (SELECT DISTINCT template_id FROM concept_nodes)"
         ).fetchone()[0]
         assert leaked == 0
+
+        # v41: numeric notes share the same slot manifest as face statements;
+        # the two reviewed MFRS wrappers no longer leave these variants at 0%.
+        coverage = conn.execute(
+            "SELECT template_id, COUNT(*) AS total, "
+            "SUM(CASE WHEN slot_role = 'INPUT' AND taxonomy_element_id IS NOT NULL "
+            "THEN 1 ELSE 0 END) AS mapped_inputs "
+            "FROM template_slots WHERE template_id LIKE '%-notes-%' "
+            "AND value_kind = 'numeric' "
+            "GROUP BY template_id"
+        ).fetchall()
+        assert len(coverage) == _NUMERIC_TEMPLATES
+        assert all(row["mapped_inputs"] > 0 for row in coverage)
     finally:
         conn.close()
 
@@ -142,5 +155,130 @@ def test_reimport_is_idempotent(imported_db):
         ).fetchone()[0]
         assert after_prose == before_prose
         assert after_concept == before_concept
+    finally:
+        conn.close()
+
+
+def test_prose_registry_persists_taxonomy_and_slot_semantics(imported_db):
+    db, _ids = imported_db
+    conn = _conn(db)
+    try:
+        status = conn.execute(
+            "SELECT kind, slot_role, taxonomy_element_id, manifest_version "
+            "FROM notes_nodes WHERE template_id = ? AND label = ?",
+            (
+                "mfrs-company-notes-corporateinfo-v1",
+                "Financial reporting status",
+            ),
+        ).fetchone()
+        assert dict(status) == {
+            "kind": "ABSTRACT",
+            "slot_role": "PRESENTATION_ONLY",
+            "taxonomy_element_id": "ssmt-mfrs_FinancialReportingStatusAbstract",
+            "manifest_version": "2022-v1-slot-semantics-1",
+        }
+        assert conn.execute("SELECT COUNT(*) FROM taxonomy_concepts").fetchone()[0] > 0
+        assert conn.execute(
+            "SELECT COUNT(DISTINCT template_id) FROM template_slots"
+        ).fetchone()[0] == _PROSE_TEMPLATES + _NUMERIC_TEMPLATES
+    finally:
+        conn.close()
+
+
+def test_notes_persistence_uses_the_registry_node_identity(imported_db):
+    import json
+    from notes.persistence import persist_notes_cells
+
+    db, _ids = imported_db
+    conn = _conn(db)
+    try:
+        run_id = conn.execute(
+            "INSERT INTO runs(created_at, pdf_filename, status, run_config_json) "
+            "VALUES ('t', 'x.pdf', 'running', ?)",
+            (json.dumps({
+                "filing_standard": "mfrs",
+                "filing_level": "company",
+            }),),
+        ).lastrowid
+        expected = conn.execute(
+            "SELECT node_uuid FROM notes_nodes WHERE template_id = ? AND row = 5",
+            ("mfrs-company-notes-corporateinfo-v1",),
+        ).fetchone()[0]
+        conn.commit()
+    finally:
+        conn.close()
+
+    persist_notes_cells(
+        db_path=str(db),
+        run_id=run_id,
+        sheet_name="Notes-CI",
+        cells_written=[{
+            "sheet": "Notes-CI",
+            "row": 5,
+            "label": "*Disclosure of corporate information",
+            "html": "<p>Registered in Malaysia.</p>",
+        }],
+    )
+
+    conn = _conn(db)
+    try:
+        stored = conn.execute(
+            "SELECT concept_uuid, invalid_target FROM notes_cells WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        assert stored["concept_uuid"] == expected
+        assert stored["invalid_target"] == 0
+    finally:
+        conn.close()
+
+
+def test_manifest_upgrade_is_scoped_to_the_runs_exact_family(imported_db):
+    import json
+    from pathlib import Path
+
+    from concept_model.filing_targets import persist_template_manifest
+
+    db, _ids = imported_db
+    conn = _conn(db)
+    try:
+        run_ids = {}
+        for standard in ("mfrs", "mpers"):
+            run_ids[standard] = conn.execute(
+                "INSERT INTO runs(created_at, pdf_filename, status, run_config_json) "
+                "VALUES ('t', ?, 'completed', ?)",
+                (
+                    f"{standard}.pdf",
+                    json.dumps({
+                        "filing_standard": standard,
+                        "filing_level": "company",
+                    }),
+                ),
+            ).lastrowid
+            conn.execute(
+                "INSERT INTO notes_cells(run_id, sheet, row, label, html, updated_at) "
+                "VALUES (?, 'Notes-CI', 6, 'Financial reporting status', "
+                "'<p>legacy</p>', 't')",
+                (run_ids[standard],),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    root = Path(__file__).resolve().parent.parent
+    persist_template_manifest(
+        db,
+        root / "XBRL-template-MFRS/Company/10-Notes-CorporateInfo.xlsx",
+    )
+
+    conn = _conn(db)
+    try:
+        states = {
+            row["run_id"]: row["invalid_target"]
+            for row in conn.execute(
+                "SELECT run_id, invalid_target FROM notes_cells ORDER BY run_id"
+            )
+        }
+        assert states[run_ids["mfrs"]] == 1
+        assert states[run_ids["mpers"]] == 0
     finally:
         conn.close()

@@ -57,7 +57,7 @@ def _seed_merged_workbook(tmp_path: Path) -> Path:
     result = write_notes_workbook(
         template_path=str(tpl),
         payloads=[NotesPayload(
-            chosen_row_label="Financial reporting status",
+            chosen_row_label="*Disclosure of corporate information",
             content="OLD value from agent",
             evidence="Page 14",
             source_pages=[14],
@@ -111,7 +111,7 @@ def test_overlay_on_merged_workbook_preserves_face_sheets_verbatim(
         run_id = repo.create_run(conn, "sample.pdf")
     wb = openpyxl.load_workbook(merged)
     try:
-        row_num = _find_row(wb["Notes-CI"], "Financial reporting status")
+        row_num = _find_row(wb["Notes-CI"], "Disclosure of corporate information")
     finally:
         wb.close()
     persist_notes_cells(
@@ -121,7 +121,7 @@ def test_overlay_on_merged_workbook_preserves_face_sheets_verbatim(
         cells_written=[{
             "sheet": "Notes-CI",
             "row": row_num,
-            "label": "Financial reporting status",
+            "label": "*Disclosure of corporate information",
             "html": "<p>NEW value from editor</p>",
             "evidence": "Page 14",
             "source_pages": [14],
@@ -174,7 +174,7 @@ def test_overlay_on_merged_workbook_leaves_unclaimed_notes_cells_alone(
             val = ws.cell(row=row, column=2).value
             if val is not None:
                 before_col_b[row] = val
-        target_row = _find_row(ws, "Financial reporting status")
+        target_row = _find_row(ws, "Disclosure of corporate information")
     finally:
         wb.close()
 
@@ -188,7 +188,7 @@ def test_overlay_on_merged_workbook_leaves_unclaimed_notes_cells_alone(
         cells_written=[{
             "sheet": "Notes-CI",
             "row": target_row,
-            "label": "Financial reporting status",
+            "label": "*Disclosure of corporate information",
             "html": "<p>edited</p>",
             "evidence": "Page 14",
             "source_pages": [14],

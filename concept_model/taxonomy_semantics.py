@@ -15,9 +15,11 @@ readiness will report the missing filing identity.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+import xml.etree.ElementTree as ET
 
 import openpyxl
 
@@ -37,11 +39,108 @@ _ROLES_BY_FILE: dict[str, tuple[str, ...]] = {
     "08-SOCF-Direct.xlsx": ("510000",),
     "09-SOCIE.xlsx": ("610000",),
     "10-SoRE.xlsx": ("620000",),
+    "10-Notes-CorporateInfo.xlsx": ("710000",),
+    "11-Notes-CorporateInfo.xlsx": ("710000",),
+    "11-Notes-AccountingPolicies.xlsx": ("720000",),
+    "12-Notes-AccountingPolicies.xlsx": ("720000",),
+    "12-Notes-ListOfNotes.xlsx": ("730000",),
+    "13-Notes-ListOfNotes.xlsx": ("730000",),
     "13-Notes-IssuedCapital.xlsx": ("740000",),
     "14-Notes-RelatedParty.xlsx": ("750000",),
     "14-Notes-IssuedCapital.xlsx": ("740000",),
     "15-Notes-RelatedParty.xlsx": ("750000",),
 }
+
+# These presentation wrappers exist in the MFRS roles but have no physical
+# row in the reviewed SSM workbooks.  Naming them here makes the exception
+# auditable and prevents the old one-title-row tolerance from shifting every
+# later field by one row.
+_REVIEWED_ROLE_OMISSIONS: dict[tuple[str, str], frozenset[str]] = {
+    ("mfrs", "13-Notes-IssuedCapital.xlsx"): frozenset({
+        "ifrs-full_DisclosureOfClassesOfShareCapitalAbstract",
+    }),
+    ("mfrs", "14-Notes-RelatedParty.xlsx"): frozenset({
+        "ifrs-full_DisclosureOfTransactionsBetweenRelatedPartiesAbstract",
+    }),
+}
+
+
+@dataclass(frozen=True)
+class TaxonomyConcept:
+    taxonomy_version: str
+    namespace_uri: str
+    local_name: str
+    source_element_id: str
+    abstract: bool
+    concept_role: str
+    data_type: str | None
+    period_type: str | None
+    balance: str | None
+    substitution_group: str | None
+
+    @property
+    def reportable(self) -> bool:
+        return self.concept_role == "PRIMARY_ITEM" and not self.abstract
+
+
+def _concept_role(element_id: str, attrs: dict[str, str]) -> str:
+    if attrs.get("abstract", "false").lower() == "true":
+        return "ABSTRACT"
+    substitution = attrs.get("substitutionGroup", "")
+    local_name = attrs.get("name", "")
+    if substitution.endswith("dimensionItem") or local_name.endswith("Axis"):
+        return "DIMENSION"
+    if substitution.endswith("hypercubeItem") or local_name.endswith("Table"):
+        return "HYPERCUBE"
+    if local_name.endswith("Member") or element_id.endswith("Member"):
+        return "MEMBER"
+    if local_name.endswith("LineItems") or element_id.endswith("LineItems"):
+        return "LINE_ITEMS"
+    return "PRIMARY_ITEM"
+
+
+@lru_cache(maxsize=1)
+def taxonomy_registry() -> dict[str, TaxonomyConcept]:
+    """Read the committed SSM schemas into an element-id registry."""
+    root = Path(__file__).resolve().parent.parent / "SSMxT_2022v1.0"
+    xs_element = "{http://www.w3.org/2001/XMLSchema}element"
+    xbrli = "{http://www.xbrl.org/2003/instance}"
+    out: dict[str, TaxonomyConcept] = {}
+    for path in root.rglob("*.xsd"):
+        try:
+            schema = ET.parse(path).getroot()
+        except ET.ParseError:
+            continue
+        namespace_uri = schema.attrib.get("targetNamespace", "")
+        for element in schema.findall(xs_element):
+            element_id = element.attrib.get("id")
+            local_name = element.attrib.get("name")
+            if not element_id or not local_name:
+                continue
+            attrs = dict(element.attrib)
+            concept = TaxonomyConcept(
+                taxonomy_version=TAXONOMY_VERSION,
+                namespace_uri=namespace_uri,
+                local_name=local_name,
+                source_element_id=element_id,
+                abstract=attrs.get("abstract", "false").lower() == "true",
+                concept_role=_concept_role(element_id, attrs),
+                data_type=attrs.get("type"),
+                period_type=attrs.get(f"{xbrli}periodType"),
+                balance=attrs.get(f"{xbrli}balance"),
+                substitution_group=attrs.get("substitutionGroup"),
+            )
+            previous = out.get(element_id)
+            if previous is not None and previous != concept:
+                raise ValueError(
+                    f"Taxonomy element id {element_id!r} is defined inconsistently"
+                )
+            out[element_id] = concept
+    return out
+
+
+def taxonomy_concept(source_element_id: str) -> TaxonomyConcept | None:
+    return taxonomy_registry().get(source_element_id)
 
 # MFRS SOCIE's columns are explicit members of ComponentsOfEquityAxis.  The
 # presentation linkbase contains the core members; the SSM extension members
@@ -100,12 +199,25 @@ def _role_rows(standard: str, role: str) -> tuple[tuple[int, str, str, bool], ..
 
 
 def _address(primary: str, dimensions: dict[str, str] | None = None) -> dict[str, Any]:
-    return {
+    concept = taxonomy_concept(primary)
+    address = {
         "primary_concept": primary,
         "dimensions": dict(sorted((dimensions or {}).items())),
         "taxonomy_version": TAXONOMY_VERSION,
         "address_version": ADDRESS_VERSION,
     }
+    if concept is not None:
+        address.update({
+            "namespace_uri": concept.namespace_uri,
+            "local_name": concept.local_name,
+            "concept_role": concept.concept_role,
+            "abstract": concept.abstract,
+            "reportable": concept.reportable,
+            "data_type": concept.data_type,
+            "period_type": concept.period_type,
+            "balance": concept.balance,
+        })
+    return address
 
 
 def _linear_addresses(path: Path, standard: str) -> dict[tuple[str, int, str | None], dict[str, Any]]:
@@ -123,10 +235,23 @@ def _linear_addresses(path: Path, standard: str) -> dict[tuple[str, int, str | N
                 if ws.cell(row, 1).value not in (None, "")
             ]
             taxonomy_rows = list(_role_rows(standard, role))
+            if path.name in {"13-Notes-IssuedCapital.xlsx", "14-Notes-RelatedParty.xlsx"}:
+                omissions = _REVIEWED_ROLE_OMISSIONS.get((standard, path.name), frozenset())
+                taxonomy_rows = [
+                    item for item in taxonomy_rows
+                    if not item[1].lower().endswith(
+                        ("table", "axis", "member", "lineitems")
+                    )
+                    and item[1] not in omissions
+                ]
             # One MFRS SOCI template carries a display-only title above the exact
             # linkbase rows.  A larger discrepancy means the template drifted and
             # must not receive guessed identities.
-            if len(sheet_rows) == len(taxonomy_rows) + 1:
+            if (
+                standard == "mfrs"
+                and path.name == "05-SOCI-BeforeTax.xlsx"
+                and len(sheet_rows) == len(taxonomy_rows) + 1
+            ):
                 sheet_rows = sheet_rows[1:]
             if len(sheet_rows) != len(taxonomy_rows):
                 continue
@@ -198,4 +323,6 @@ __all__ = [
     "ADDRESS_VERSION",
     "TAXONOMY_VERSION",
     "semantic_addresses_for",
+    "taxonomy_concept",
+    "taxonomy_registry",
 ]

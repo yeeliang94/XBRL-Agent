@@ -43,13 +43,14 @@ def client_and_run(tmp_path: Path, monkeypatch) -> tuple[TestClient, int]:
             session_id="sess-a", output_dir=str(tmp_path / "sess-a"),
         )
         repo.upsert_notes_cell(
-            conn, run_id=run_id, sheet="Notes-CI", row=4,
-            label="Corporate info", html="<p>CI 4</p>",
+            conn, run_id=run_id, sheet="Notes-CI", row=5,
+            label="*Disclosure of corporate information", html="<p>CI 5</p>",
             evidence="Page 3", source_pages=[3],
         )
         repo.upsert_notes_cell(
-            conn, run_id=run_id, sheet="Notes-CI", row=12,
-            label="Registered office", html="<p>CI 12</p>",
+            conn, run_id=run_id, sheet="Notes-CI", row=7,
+            label="Explanation of reasons for the restatement of previous financial statements figures",
+            html="<p>CI 7</p>",
             evidence="Page 3", source_pages=[3],
         )
         repo.upsert_notes_cell(
@@ -85,11 +86,11 @@ def test_get_notes_cells_returns_full_template_with_blanks(client_and_run) -> No
 
     rows_by_num = {r["row"]: r for r in ci["rows"]}
     # The seeded cells are present and filled.
-    assert rows_by_num[4]["html"] == "<p>CI 4</p>"
-    assert rows_by_num[4]["evidence"] == "Page 3"
-    assert rows_by_num[4]["source_pages"] == [3]
-    assert rows_by_num[4]["updated_at"]
-    assert rows_by_num[4]["kind"] == "prose"
+    assert rows_by_num[5]["html"] == "<p>CI 5</p>"
+    assert rows_by_num[5]["evidence"] == "Page 3"
+    assert rows_by_num[5]["source_pages"] == [3]
+    assert rows_by_num[5]["updated_at"]
+    assert rows_by_num[5]["kind"] == "prose"
     # At least one unfilled template row is surfaced as a blank.
     blanks = [r for r in ci["rows"] if r["html"] == ""]
     assert blanks
@@ -106,6 +107,52 @@ def test_get_notes_cells_returns_404_for_unknown_run(tmp_path: Path) -> None:
 
     resp = client.get("/api/runs/999/notes_cells")
     assert resp.status_code == 404
+
+
+def test_legacy_heading_content_is_visible_but_cannot_be_edited(
+    client_and_run,
+) -> None:
+    """A historical note on a presentation heading is quarantined, not lost."""
+    import server as server_module
+
+    client, run_id = client_and_run
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        repo.upsert_notes_cell(
+            conn,
+            run_id=run_id,
+            sheet="Notes-CI",
+            row=6,
+            label="Financial reporting status",
+            html="<p>Legacy content</p>",
+        )
+
+    body = client.get(f"/api/runs/{run_id}/notes_cells").json()
+    row = next(
+        item
+        for sheet in body["sheets"] if sheet["sheet"] == "Notes-CI"
+        for item in sheet["rows"] if item["row"] == 6
+    )
+    assert row["html"] == "<p>Legacy content</p>"
+    assert row["invalid_target"] is True
+
+    response = client.patch(
+        f"/api/runs/{run_id}/notes_cells/Notes-CI/6",
+        json={"html": "<p>Changed</p>"},
+    )
+    assert response.status_code == 400
+    assert "heading" in response.json()["detail"].lower()
+
+    removed = client.delete(
+        f"/api/runs/{run_id}/notes_cells/Notes-CI/6"
+    )
+    assert removed.status_code == 200
+    assert removed.json()["removed"] is True
+    body = client.get(f"/api/runs/{run_id}/notes_cells").json()
+    assert all(
+        item["row"] != 6
+        for sheet in body["sheets"] if sheet["sheet"] == "Notes-CI"
+        for item in sheet["rows"]
+    )
 
 
 def test_get_notes_cells_returns_empty_for_run_with_no_notes(tmp_path: Path) -> None:
@@ -127,26 +174,40 @@ def test_get_notes_cells_returns_empty_for_run_with_no_notes(tmp_path: Path) -> 
 
 
 def test_patch_notes_cell_updates_html_and_updated_at(client_and_run) -> None:
+    import server as server_module
+
     client, run_id = client_and_run
 
     resp = client.patch(
-        f"/api/runs/{run_id}/notes_cells/Notes-CI/4",
-        json={"html": "<p>CI 4 <strong>edited</strong></p>"},
+        f"/api/runs/{run_id}/notes_cells/Notes-CI/5",
+        json={"html": "<p>CI 5 <strong>edited</strong></p>"},
     )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["row"] == 4
+    assert body["row"] == 5
     assert body["sheet"] == "Notes-CI"
     assert "<strong>edited</strong>" in body["html"]
     # updated_at is refreshed so the UI can show "Saved just now".
     assert body["updated_at"]
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        stored_identity = conn.execute(
+            "SELECT concept_uuid FROM notes_cells "
+            "WHERE run_id = ? AND sheet = 'Notes-CI' AND row = 5",
+            (run_id,),
+        ).fetchone()[0]
+        expected_identity = conn.execute(
+            "SELECT node_uuid FROM notes_nodes "
+            "WHERE template_id = 'mfrs-company-notes-corporateinfo-v1' "
+            "AND row = 5",
+        ).fetchone()[0]
+    assert stored_identity == expected_identity
 
 
 def test_patch_notes_cell_sanitises_input_html(client_and_run) -> None:
     client, run_id = client_and_run
 
     resp = client.patch(
-        f"/api/runs/{run_id}/notes_cells/Notes-CI/4",
+        f"/api/runs/{run_id}/notes_cells/Notes-CI/5",
         json={"html": '<p>ok</p><script>alert(1)</script>'},
     )
     assert resp.status_code == 200
@@ -164,7 +225,7 @@ def test_patch_notes_cell_returns_sanitizer_warnings(client_and_run) -> None:
     client, run_id = client_and_run
 
     resp = client.patch(
-        f"/api/runs/{run_id}/notes_cells/Notes-CI/4",
+        f"/api/runs/{run_id}/notes_cells/Notes-CI/5",
         json={"html": '<p>ok</p><script>alert(1)</script>'},
     )
     assert resp.status_code == 200
@@ -189,7 +250,7 @@ def test_patch_notes_cell_returns_empty_warnings_on_clean_input(
     client, run_id = client_and_run
 
     resp = client.patch(
-        f"/api/runs/{run_id}/notes_cells/Notes-CI/4",
+        f"/api/runs/{run_id}/notes_cells/Notes-CI/5",
         json={"html": "<p>all-clean</p>"},
     )
     assert resp.status_code == 200
@@ -211,7 +272,7 @@ def test_patch_notes_cell_persists_whitelisted_table_styles(client_and_run) -> N
         '</tr></table>'
     )
     resp = client.patch(
-        f"/api/runs/{run_id}/notes_cells/Notes-CI/4",
+        f"/api/runs/{run_id}/notes_cells/Notes-CI/5",
         json={"html": styled},
     )
     assert resp.status_code == 200
@@ -235,7 +296,7 @@ def test_patch_notes_cell_preserves_browser_rgb_border_colour(client_and_run) ->
         for side in ("top", "right", "bottom", "left")
     )
     resp = client.patch(
-        f"/api/runs/{run_id}/notes_cells/Notes-CI/4",
+        f"/api/runs/{run_id}/notes_cells/Notes-CI/5",
         json={"html": f'<table><tr><td style="{style}">x</td></tr></table>'},
     )
     assert resp.status_code == 200
@@ -249,7 +310,7 @@ def test_patch_notes_cell_reset_values_persist(client_and_run) -> None:
     client, run_id = client_and_run
 
     resp = client.patch(
-        f"/api/runs/{run_id}/notes_cells/Notes-CI/4",
+        f"/api/runs/{run_id}/notes_cells/Notes-CI/5",
         json={
             "html": (
                 '<table><tr>'
@@ -352,7 +413,7 @@ def test_patch_notes_cell_413_when_rendered_text_over_30k(client_and_run) -> Non
 
     giant = "<p>" + ("x" * 31_000) + "</p>"
     resp = client.patch(
-        f"/api/runs/{run_id}/notes_cells/Notes-CI/4",
+        f"/api/runs/{run_id}/notes_cells/Notes-CI/5",
         json={"html": giant},
     )
     assert resp.status_code == 413
@@ -378,7 +439,7 @@ def test_patch_notes_cell_413_before_sanitizer_runs_on_huge_body(
     # inside uvicorn's default body limit, so we hit the app handler.
     giant = "<p>" + ("y" * 500_000) + "</p>"
     resp = client.patch(
-        f"/api/runs/{run_id}/notes_cells/Notes-CI/4",
+        f"/api/runs/{run_id}/notes_cells/Notes-CI/5",
         json={"html": giant},
     )
     assert resp.status_code == 413
@@ -403,14 +464,14 @@ def test_patch_notes_cell_does_not_touch_evidence(client_and_run) -> None:
     # the extra key and answered 200 — the new strict path surfaces
     # a client typo (``htmll``, ``evdience``, …) early.
     resp = client.patch(
-        f"/api/runs/{run_id}/notes_cells/Notes-CI/4",
+        f"/api/runs/{run_id}/notes_cells/Notes-CI/5",
         json={"html": "<p>new</p>", "evidence": "HACKED"},
     )
     assert resp.status_code == 422
 
     # A clean PATCH still succeeds and leaves evidence untouched.
     resp = client.patch(
-        f"/api/runs/{run_id}/notes_cells/Notes-CI/4",
+        f"/api/runs/{run_id}/notes_cells/Notes-CI/5",
         json={"html": "<p>new</p>"},
     )
     assert resp.status_code == 200
@@ -476,7 +537,7 @@ def test_patch_wraps_select_and_upsert_in_begin_immediate(client_and_run, monkey
     monkeypatch.setattr(server, "_open_audit_conn", _patched_open)
 
     resp = client.patch(
-        f"/api/runs/{run_id}/notes_cells/Notes-CI/4",
+        f"/api/runs/{run_id}/notes_cells/Notes-CI/5",
         json={"html": "<p>tx test</p>"},
     )
     assert resp.status_code == 200
