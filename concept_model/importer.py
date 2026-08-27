@@ -151,6 +151,44 @@ def import_template(db_path: str | Path, json_path: str | Path) -> str:
                 ),
             )
 
+        # 2b. Taxonomy-semantic filing addresses (schema v40).  Replace this
+        # template's rows so a regenerated template cannot leave a stale
+        # address attached to a concept whose mapping disappeared.
+        conn.execute(
+            "DELETE FROM concept_semantic_addresses WHERE concept_uuid IN ("
+            "SELECT concept_uuid FROM concept_nodes WHERE template_id = ?"
+            ")",
+            (template_id,),
+        )
+        for c in seen.values():
+            semantic = (c.get("render_key") or {}).get("semantic_address")
+            if not isinstance(semantic, dict) or not semantic.get("primary_concept"):
+                continue
+            conn.execute(
+                """
+                INSERT INTO concept_semantic_addresses(
+                    concept_uuid, primary_concept, dimensions_json,
+                    taxonomy_version, address_version
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(concept_uuid) DO UPDATE SET
+                    primary_concept = excluded.primary_concept,
+                    dimensions_json = excluded.dimensions_json,
+                    taxonomy_version = excluded.taxonomy_version,
+                    address_version = excluded.address_version
+                """,
+                (
+                    c["concept_uuid"],
+                    semantic["primary_concept"],
+                    json.dumps(
+                        semantic.get("dimensions") or {},
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    semantic.get("taxonomy_version", ""),
+                    semantic.get("address_version", ""),
+                ),
+            )
+
         # 3a. Render aliases — flush + reinsert (same idempotency
         # discipline as edges). Scope the DELETE to this template by
         # joining through concept_nodes so a multi-template DB doesn't
@@ -363,6 +401,14 @@ def import_company_targets(db_path: str | Path, template_id: str) -> int:
     conn = sqlite3.connect(str(db_path))
     conn.execute("PRAGMA foreign_keys = ON")
     try:
+        template = conn.execute(
+            "SELECT shape FROM concept_templates WHERE template_id = ?",
+            (template_id,),
+        ).fetchone()
+        if template and template[0] == "matrix":
+            # import_template already installed the period/scope-aware SOCIE
+            # targets.  A linear helper must not erase them.
+            return 0
         rows = conn.execute(
             "SELECT concept_uuid, render_sheet, render_row, render_col "
             "FROM concept_nodes "
@@ -424,6 +470,12 @@ def import_group_targets(db_path: str | Path, template_id: str) -> int:
     conn = sqlite3.connect(str(db_path))
     conn.execute("PRAGMA foreign_keys = ON")
     try:
+        template = conn.execute(
+            "SELECT shape FROM concept_templates WHERE template_id = ?",
+            (template_id,),
+        ).fetchone()
+        if template and template[0] == "matrix":
+            return 0
         rows = conn.execute(
             "SELECT concept_uuid, render_sheet, render_row FROM concept_nodes "
             "WHERE template_id = ? AND kind != 'ABSTRACT'",

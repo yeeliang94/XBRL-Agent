@@ -155,9 +155,11 @@ def test_socf_mixed_formula_ready_signs_are_emitted_unchanged(
 
     doc = build_fill_doc(db, run_id, filing_standard="mfrs",
                          filing_level="company")
-    assert doc["writes"] == [{
+    assert len(doc["writes"]) == 1
+    assert {k: doc["writes"][0][k]
+            for k in ("sheet", "label", "column_role", "value")} == {
         "sheet": doc["writes"][0]["sheet"], "label": leaf[1],
-        "column_role": "current_year", "value": int(stored_value)}]
+        "column_role": "current_year", "value": int(stored_value)}
 
 
 def test_identity_manifest_flips_no_signs():

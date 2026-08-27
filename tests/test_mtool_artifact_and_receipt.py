@@ -130,7 +130,23 @@ def test_clean_fill_downloads_without_ceremony(client):
 
 def _degraded(tc, db, run_id):
     """Force a degraded fill: point the label column at an empty column so
-    every write goes unresolved."""
+    every legacy write goes unresolved. Remove semantic targets first because
+    verified generated templates correctly ignore a wrong manual label map."""
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(
+            "DELETE FROM concept_semantic_addresses WHERE concept_uuid IN ("
+            "SELECT concept_uuid FROM run_concept_facts WHERE run_id=?)",
+            (run_id,),
+        )
+        conn.execute(
+            "DELETE FROM concept_targets WHERE concept_uuid IN ("
+            "SELECT concept_uuid FROM run_concept_facts WHERE run_id=?)",
+            (run_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
     doc = tc.get(f"/api/runs/{run_id}/mtool-fill").json()
     sheet = doc["meta"]["sheets_covered"][0]
     cmap = {sheet: {"label_column": "Z", "columns": {"current_year": "B"}}}

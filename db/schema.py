@@ -193,7 +193,15 @@ from pathlib import Path
 # went into the fill, so it identifies the prose revision exactly. Nullable:
 # a numeric-only fill (`fill_notes=false`) legitimately has none, and a
 # pre-v39 receipt asserts nothing. Pinned by tests/test_db_schema_v39.py.
-CURRENT_SCHEMA_VERSION = 39
+#
+# v40 adds `concept_semantic_addresses`, the taxonomy identity used by the
+# mTool filing bridge.  One row stores a concept's primary taxonomy key plus
+# its intrinsic dimensions (SOCIE component axis/member).  Period and entity
+# scope remain fact dimensions in `run_concept_facts`; they are deliberately
+# not duplicated here.  Pure CREATE TABLE IF NOT EXISTS walk-forward.  An
+# address may be absent for a legacy or unsupported template without breaking
+# canonical extraction; mTool readiness reports the gap instead.
+CURRENT_SCHEMA_VERSION = 40
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -424,6 +432,20 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         render_col       TEXT NOT NULL,
         matrix_col       TEXT,                    -- P5: equity-component column letter on MATRIX_CELL; NULL on linear concepts
         matrix_col_label TEXT                     -- P9: human SOCIE component header; NULL on linear concepts
+    )
+    """,
+
+    # v40: filing identity, separate from Excel render geometry.  JSON is used
+    # for dimensions because a concept may carry zero or several axis/member
+    # pairs; the importer writes it with sorted keys for deterministic receipts.
+    """
+    CREATE TABLE IF NOT EXISTS concept_semantic_addresses (
+        concept_uuid      TEXT PRIMARY KEY
+                          REFERENCES concept_nodes(concept_uuid) ON DELETE CASCADE,
+        primary_concept   TEXT NOT NULL,
+        dimensions_json   TEXT NOT NULL DEFAULT '{}',
+        taxonomy_version  TEXT NOT NULL DEFAULT '',
+        address_version   TEXT NOT NULL DEFAULT ''
     )
     """,
 
@@ -1437,6 +1459,8 @@ _CREATE_INDEXES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS ix_notes_cells_run_id ON notes_cells(run_id)",
     # v4 indexes — every per-run query the canonical model needs.
     "CREATE INDEX IF NOT EXISTS ix_concept_nodes_template_id ON concept_nodes(template_id)",
+    "CREATE INDEX IF NOT EXISTS ix_concept_semantic_primary "
+    "ON concept_semantic_addresses(primary_concept)",
     "CREATE INDEX IF NOT EXISTS ix_concept_edges_parent_uuid ON concept_edges(parent_uuid)",
     "CREATE INDEX IF NOT EXISTS ix_concept_edges_child_uuid ON concept_edges(child_uuid)",
     "CREATE INDEX IF NOT EXISTS ix_concept_targets_concept_uuid ON concept_targets(concept_uuid)",
@@ -2999,6 +3023,27 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
                         (39,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        # v39 → v40: taxonomy-semantic identity for mTool filing.  The table
+        # is created by _CREATE_STATEMENTS above; this step only advances the
+        # marker under the same concurrent-init discipline as other pure
+        # CREATE migrations.
+        if current_version is not None and current_version < 40:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 40:
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (40,),
                     )
                 conn.commit()
             except Exception:

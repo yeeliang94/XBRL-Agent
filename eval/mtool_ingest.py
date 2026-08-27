@@ -28,6 +28,7 @@ The heavy lifting is split so it's testable in isolation:
 from __future__ import annotations
 
 import logging
+import json
 import sqlite3
 import statistics
 from dataclasses import dataclass, field
@@ -36,7 +37,12 @@ from typing import Any, Optional
 
 logger = logging.getLogger("server")
 
-from mtool.column_detect import detect_column_map
+from mtool.column_detect import (
+    describe_template,
+    detect_column_map,
+    fingerprint_workbook,
+)
+from mtool.template_map import resolve_filing_doc
 from mtool.offline_fill import (
     build_label_map,
     get_shared_strings,
@@ -89,6 +95,11 @@ class ConceptTarget:
     template_id: str
     canonical_label: str
     statement_type: str
+    kind: str = "LEAF"
+    primary_concept: str | None = None
+    dimensions: dict[str, str] = field(default_factory=dict)
+    render_targets: dict[tuple[str, str], tuple[str, int, str]] = field(
+        default_factory=dict)
 
 
 @dataclass
@@ -119,12 +130,9 @@ class IngestReport:
     ambiguous: list[dict[str, Any]] = field(default_factory=list)
     scale_warning: Optional[str] = None
     template_ids: set[str] = field(default_factory=set)
-    # SOCIE / MATRIX_CELL concepts in scope that were NOT ingested. Mirrors the
-    # mTool exporter's "deferred and counted, never silently dropped" contract
-    # (gotcha #28): matrix cells share row labels across equity-component
-    # columns and mTool's SOCIE layout is Windows-recon-gated, so reverse-
-    # mapping them is deferred — but the count is surfaced so the coverage gap
-    # is visible, not a silent denominator shrink.
+    # MATRIX_CELL concepts in scope that could not be mapped semantically.
+    # Supported SOCIE cells are ingested; missing identities and ambiguous
+    # workbook destinations stay counted so coverage cannot look falsely clean.
     matrix_deferred: int = 0
 
     @property
@@ -168,8 +176,14 @@ def build_catalogue(
         )
     rows = conn.execute(
         "SELECT n.concept_uuid, n.template_id, n.canonical_label, "
-        "n.render_sheet FROM concept_nodes n "
-        f"WHERE n.kind = 'LEAF' AND {scope_sql}",
+        "n.render_sheet, n.kind, sa.primary_concept, sa.dimensions_json, "
+        "t.period, t.entity_scope, t.target_sheet, t.target_row, t.target_col "
+        "FROM concept_nodes n "
+        "LEFT JOIN concept_semantic_addresses sa USING(concept_uuid) "
+        "LEFT JOIN concept_targets t USING(concept_uuid) "
+        f"WHERE n.kind IN ('LEAF','MATRIX_CELL') AND {scope_sql} "
+        "AND NOT EXISTS (SELECT 1 FROM concept_edges e "
+        "                WHERE e.parent_uuid=n.concept_uuid)",
         tuple(params),
     ).fetchall()
 
@@ -181,7 +195,11 @@ def build_catalogue(
         if not norm:
             continue
         sheet_map = out.setdefault(sheet, {})
-        prior = sheet_map.get(norm)
+        # Matrix rows intentionally repeat once per equity component.  Keep
+        # their UUID in the internal key; visible-label matching is not used
+        # for them.
+        catalogue_key = norm if r[4] == "LEAF" else f"{norm}::{uuid}"
+        prior = sheet_map.get(catalogue_key)
         if prior is not None and prior.template_id != template_id:
             # Two variants claim the same (sheet, label) — surface it rather
             # than silently overwriting.
@@ -191,12 +209,15 @@ def build_catalogue(
                 label, sheet, prior.template_id, template_id,
             )
             continue
-        sheet_map[norm] = ConceptTarget(
-            concept_uuid=uuid,
-            template_id=template_id,
-            canonical_label=label,
-            statement_type=stmt,
+        target = prior or ConceptTarget(
+            concept_uuid=uuid, template_id=template_id,
+            canonical_label=label, statement_type=stmt, kind=r[4],
+            primary_concept=r[5],
+            dimensions=json.loads(r[6] or "{}"),
         )
+        if r[7] and r[8] and r[9] and r[10] and r[11]:
+            target.render_targets[(r[7], r[8])] = (r[9], int(r[10]), r[11])
+        sheet_map[catalogue_key] = target
     return out
 
 
@@ -225,13 +246,11 @@ def count_deferred_matrix(
     filing_level: str,
     template_ids: Optional[list[str]] = None,
 ) -> int:
-    """Count MATRIX_CELL concepts in scope that ingest defers (SOCIE).
+    """Count MATRIX_CELL concepts that lack a semantic filing address.
 
-    The grader treats LEAF and MATRIX_CELL alike (gotcha #23), but the mTool
-    exporter defers matrix cells and so does this reverse path (gotcha #28) —
-    this makes the deferral COUNTED (never silently dropped) so the operator
-    knows SOCIE wasn't captured, rather than seeing an inflated-looking clean
-    grade over a silently smaller denominator."""
+    The grader treats LEAF and MATRIX_CELL alike (gotcha #23). A matrix cell
+    without taxonomy identity cannot be joined safely to an mTool dimension,
+    so it stays explicitly counted rather than shrinking coverage silently."""
     family = f"{filing_standard.lower()}-{filing_level.lower()}-"
     params: list[Any] = [family + "%"]
     scope_sql = "n.template_id LIKE ?"
@@ -241,7 +260,9 @@ def count_deferred_matrix(
         params.extend(template_ids)
     row = conn.execute(
         "SELECT COUNT(*) FROM concept_nodes n "
-        f"WHERE n.kind = 'MATRIX_CELL' AND {scope_sql}",
+        "LEFT JOIN concept_semantic_addresses sa USING(concept_uuid) "
+        f"WHERE n.kind = 'MATRIX_CELL' AND {scope_sql} "
+        "AND sa.concept_uuid IS NULL",
         tuple(params),
     ).fetchone()
     return int(row[0]) if row else 0
@@ -277,9 +298,104 @@ def ingest_workbook(
     sheet_paths = get_sheet_paths(data)
     sst = get_shared_strings(data)
 
-    column_map = column_map_override or _detect(path, catalogue, roles, data)
+    descriptor = describe_template(fingerprint_workbook(data)) or {}
+    if column_map_override is not None:
+        column_map = column_map_override
+    elif descriptor.get("source") == "generated":
+        # Exact concept_targets own every destination in generated templates;
+        # keep a best-effort map for any legacy rows mixed into an old import.
+        # Semantic writes ignore it, including Group SOCIE layouts.
+        probe_doc = {
+            "sheets": {
+                sheet: {"columns": {role: None for role in roles}}
+                for sheet in catalogue
+            }
+        }
+        column_map = detect_column_map(str(path), probe_doc, data=data)
+    else:
+        column_map = _detect(path, catalogue, roles, data)
 
     report = IngestReport()
+    semantic_writes: list[dict[str, Any]] = []
+    semantic_uuids: set[str] = set()
+    for targets in catalogue.values():
+        for target in targets.values():
+            if not target.primary_concept:
+                continue
+            for role in roles:
+                period, scope = _ROLE_TO_SLOT[role]
+                hint = target.render_targets.get((period, scope))
+                write = {
+                    "sheet": next((s for s, ts in catalogue.items()
+                                   if target in ts.values()), ""),
+                    "label": target.canonical_label,
+                    "column_role": role,
+                    "value": 0,
+                    "concept_uuid": target.concept_uuid,
+                    "template_id": target.template_id,
+                    "period": period,
+                    "entity_scope": scope,
+                    "semantic_address": {
+                        "primary_concept": target.primary_concept,
+                        "dimensions": target.dimensions,
+                    },
+                }
+                if hint:
+                    write["target_hint"] = {
+                        "sheet": hint[0], "row": hint[1], "col": hint[2]}
+                semantic_writes.append(write)
+
+    if semantic_writes:
+        # A benchmark may intentionally contain only one statement sheet.
+        # Limit the semantic/legacy compatibility adapter to worksheets that
+        # are actually present; the ordinary catalogue loop below records the
+        # others in ``sheets_missing``.  Passing absent sheets to
+        # ``apply_column_map`` would turn a valid partial benchmark into an
+        # unrelated "missing physical columns" failure.
+        semantic_writes = [
+            write for write in semantic_writes
+            if write["sheet"] in sheet_paths
+        ]
+        semantic_sheets = {
+            sheet: {"columns": {role: None for role in roles}}
+            for sheet in catalogue
+            if sheet in sheet_paths
+        }
+        semantic_doc = {
+            "writes": semantic_writes,
+            "sheets": semantic_sheets,
+            "meta": {},
+        }
+        ready, coverage = resolve_filing_doc(
+            str(path), semantic_doc, data=data, column_map=column_map)
+        for write in ready["writes"]:
+            # Semantic resolution returns exact cells.  Its legacy adapter
+            # deliberately preserves label/role writes for ``offline_fill``;
+            # reverse ingest handles those through the strict label loop
+            # below, where the numeric source cell can be read safely.
+            if not write.get("cell"):
+                continue
+            entry = sheet_paths.get(write["sheet"])
+            if not entry:
+                continue
+            cells = read_sheet_cells(data[entry], sst)
+            from mtool.offline_fill import split_ref
+            col, row_num = split_ref(write["cell"])
+            value = _numeric(cells.get(row_num, {}).get(col))
+            if value is None:
+                continue
+            semantic_uuids.add(write["concept_uuid"])
+            report.facts.append(GoldFact(
+                write["concept_uuid"], write["period"],
+                write["entity_scope"], value * unit_scale))
+            target = next(
+                t for ts in catalogue.values() for t in ts.values()
+                if t.concept_uuid == write["concept_uuid"])
+            report.template_ids.add(target.template_id)
+            report.matched_by_statement[target.statement_type] = (
+                report.matched_by_statement.get(target.statement_type, 0) + 1)
+        report.matrix_deferred += coverage["unmapped"] + coverage["ambiguous"]
+
     for sheet, targets in catalogue.items():
         entry = sheet_paths.get(sheet)
         if entry is None:
@@ -297,6 +413,8 @@ def ingest_workbook(
         matched_rows: set[int] = set()
 
         for norm_label, target in targets.items():
+            if target.concept_uuid in semantic_uuids:
+                continue
             # STRICT exact match only (after the shared normalize_label). No
             # fuzzy fallback — an off-template label must surface as unmatched,
             # not be silently coerced into a concept (gotcha #28).

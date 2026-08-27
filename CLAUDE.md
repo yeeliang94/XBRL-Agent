@@ -1598,7 +1598,7 @@ Pinned by `tests/test_coverage_checklist.py`,
 `tests/test_notes_detectors_splits.py`, `tests/test_db_schema_v28.py`, and the
 `NotesCoveragePanel` web tests.
 
-### 28. mTool fill pipeline — offline zip surgery, one patcher, receipts on v38
+### 28. mTool fill pipeline — semantic addressing, one patcher, receipts
 
 The `mtool/` package fills a run's figures into an SSM **mTool** MBRS template so
 the operator can Validate/Generate the XBRL inside mTool without hand-copying
@@ -1625,10 +1625,13 @@ Load-bearing invariants:
   or repo import (a test asserts this).
 - **One patcher, no fork.** The server endpoint imports `offline_fill.fill_workbook`
   — the SAME function the CLI runs. Never reimplement patching in `api/`.
-- **Exporter emits LEAF only** (`exporter.build_fill_doc`): ABSTRACT headers +
-  COMPUTED totals excluded (mTool derives totals). SOCIE/MATRIX_CELL is deferred
-  and **counted**, never silently dropped. Scoped to the run's `{standard}-{level}-`
-  family, deduped by `concept_uuid`, reads `run_concept_facts` only.
+- **Exporter emits data-entry LEAF and MATRIX_CELL facts**
+  (`exporter.build_fill_doc`): ABSTRACT headers, COMPUTED totals and SOCIE cells
+  with formula dependency edges are excluded because mTool owns totals. Each
+  write carries the taxonomy primary concept, sorted dimensions, period, scope,
+  and the canonical target hint. Scoped to the run's `{standard}-{level}-`
+  family, deduped by `(concept_uuid, period, scope)`, reads
+  `run_concept_facts` only.
 - **Unit-aware translation; the global `scale` multiplier is GONE.** A single
   multiplier had no unit dimension, so a thousands conversion would have
   multiplied share COUNTS (MFRS sheet 13 puts "Number of shares issued" three
@@ -1641,8 +1644,16 @@ Load-bearing invariants:
   manifest REFUSES an unclassified value rather than passing it through.
   Non-identity conversion stays **Windows-blocked** on recon Addendum A.
   `denomination` is surfaced in the doc meta.
-- **Semantic, not physical — columns by MEANING, not position:** writes carry a
-  `column_role` (CY/PY × company/group), NOT a column letter.
+- **Semantic, not physical — taxonomy identity before labels:**
+  `concept_semantic_addresses` (schema v40) stores the primary taxonomy concept
+  and dimensions derived from the same presentation roles that generate the
+  canonical templates. `mtool/template_map.py` is the one forward/reverse
+  adapter. It resolves semantic addresses to explicit cells in the uploaded
+  workbook; SOCIE uses `ComponentsOfEquityAxis` members. Repository-generated
+  templates use their verified exact target hints. Missing or ambiguous
+  semantic identities fail closed. Legacy workbooks may still use
+  `column_role` (CY/PY × company/group) plus exact labels.
+
   `column_detect` reads mTool's own marker rows — `#PRIM#` (label column),
   `#ENDT#` (period end dates; current vs prior year comes from COMPARING
   DATES), `#UNITSCALE#` (declared unit), `#DOM#` (columns are dimension
@@ -1652,6 +1663,11 @@ Load-bearing invariants:
   Notes-Issuedcapital lays its columns out as SHARE CLASSES, so positional
   mapping would have written the current year into "Ordinary shares".
   `exporter.apply_column_map` still fails loudly on a missing role.
+- **Current compatibility target is mTool 2.2.** Generated-template adapters
+  are verified in automated forward/reverse SOCIE round trips across
+  MFRS/MPERS and Company/Group. A genuine mTool 2.2 workbook fingerprint and
+  Windows Validate/Generate evidence are still required before describing an
+  unknown uploaded layout as verified; inspection reports it as a candidate.
 - **Preflight is the filing-readiness gate — run status never was one**
   (`mtool/preflight.py`). Blocks on conflicting figures that would REACH the
   workbook, open reviewer flags, and unresolved notes coverage; overriding

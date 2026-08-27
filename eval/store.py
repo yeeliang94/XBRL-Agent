@@ -385,10 +385,10 @@ def create_benchmark_from_mtool(
             f"{len(report.unmatched_rows)} labelled row(s) matched no concept."
         )
 
-    # Surface deferred SOCIE/matrix concepts (gotcha #28: counted, never
-    # silently dropped) so a clean-looking grade isn't hiding an uncaptured
-    # statement.
-    report.matrix_deferred = count_deferred_matrix(
+    # Surface only matrix concepts that still lack a semantic identity, plus
+    # runtime mapping failures. Supported SOCIE facts are now ingested; any
+    # residual gap remains counted so a grade cannot look falsely complete.
+    report.matrix_deferred += count_deferred_matrix(
         conn, standard, level, [t for t, _ in template_set]
     )
 
