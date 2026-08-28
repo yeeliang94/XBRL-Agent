@@ -86,6 +86,7 @@ def test_writer_emits_numeric_cells(tmp_path):
 @pytest.fixture()
 def client_with_numeric_run(tmp_path, monkeypatch):
     import server as server_module
+    from concept_model.filing_targets import resolve_writable_html_target
     from fastapi.testclient import TestClient
 
     server_module.OUTPUT_DIR = tmp_path
@@ -111,12 +112,25 @@ def client_with_numeric_run(tmp_path, monkeypatch):
         )
         run_id = int(cur.lastrowid)
 
-        # Seed one CY/Company fact on a LEAF concept of the numeric template.
-        leaf = conn.execute(
+        # Seed one CY/Company fact on a genuinely numeric LEAF. The template
+        # also has an HTML text-block LEAF, which belongs in notes_cells.
+        leaves = conn.execute(
             "SELECT concept_uuid, render_row FROM concept_nodes "
-            "WHERE template_id = ? AND kind = 'LEAF' ORDER BY render_row LIMIT 1",
+            "WHERE template_id = ? AND kind = 'LEAF' ORDER BY render_row",
             (_ISSUED_CAPITAL_TID,),
-        ).fetchone()
+        ).fetchall()
+        leaf = next(
+            (
+                candidate for candidate in leaves
+                if resolve_writable_html_target(
+                    conn,
+                    template_id=_ISSUED_CAPITAL_TID,
+                    sheet="Notes-Issuedcapital",
+                    row=candidate["render_row"],
+                ) is None
+            ),
+            None,
+        )
         assert leaf is not None, "numeric notes concepts must be imported"
         conn.execute(
             "INSERT INTO run_concept_facts(run_id, concept_uuid, period, "
@@ -146,7 +160,10 @@ def test_numeric_sheet_projects_with_values(client_with_numeric_run):
     assert rows[seeded_row]["kind"] == "numeric"
     assert rows[seeded_row]["values"]["cy"] == 4242.0
     assert rows[seeded_row]["concept_uuid"]
-    blanks = [r for r in cap["rows"] if r["values"]["cy"] is None]
+    blanks = [
+        r for r in cap["rows"]
+        if r["kind"] == "numeric" and r["values"]["cy"] is None
+    ]
     assert blanks  # full template → unfilled rows present as blanks
 
 

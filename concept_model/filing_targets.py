@@ -241,6 +241,69 @@ def writable_rows(
     )
 
 
+def resolve_writable_html_target(
+    conn: sqlite3.Connection,
+    *,
+    family_prefix: str | None = None,
+    template_id: str | None = None,
+    sheet: str,
+    row: int,
+) -> dict[str, Any] | None:
+    """Resolve one writable HTML field through the canonical slot manifest.
+
+    Most HTML note fields live in ``notes_nodes``. Numeric notes are different:
+    their figures live in ``concept_nodes``, while each sheet also has one
+    taxonomy text-block field for the reproduced disclosure table. The v41
+    slot manifest is the shared contract that represents both tracks, so HTML
+    persistence and editing must resolve through it rather than assuming every
+    HTML field belongs to the prose registry.
+
+    Callers resolving a run-scoped write pass ``family_prefix``; callers that
+    already selected one template may pass ``template_id``. Exactly one
+    selector is required. Ambiguity fails closed: the selected scope must
+    contain exactly one matching slot for a physical coordinate before callers
+    may write it.
+    """
+    if (family_prefix is None) == (template_id is None):
+        raise ValueError("Pass exactly one of family_prefix or template_id.")
+    template_predicate = (
+        "ts.template_id = ?" if template_id is not None
+        else "ts.template_id LIKE ?"
+    )
+    if template_id is not None:
+        template_selector = template_id
+    else:
+        assert family_prefix is not None
+        template_selector = family_prefix + "%"
+    matches = conn.execute(
+        f"""
+        SELECT ts.template_id,
+               ts.canonical_target_id AS concept_uuid,
+               ts.label
+        FROM template_slots ts
+        LEFT JOIN taxonomy_concepts tc
+          ON tc.source_element_id = ts.taxonomy_element_id
+        WHERE {template_predicate}
+          AND ts.sheet = ? AND ts.row = ? AND ts.col = 'B'
+          AND ts.validation_status = 'writable'
+          AND ts.slot_role = 'INPUT'
+          AND (
+            ts.value_kind = 'html'
+            OR LOWER(COALESCE(tc.data_type, '')) LIKE '%textblockitemtype'
+          )
+        """,
+        (template_selector, sheet, int(row)),
+    ).fetchall()
+    if len(matches) != 1:
+        return None
+    match = matches[0]
+    return {
+        "template_id": match[0],
+        "concept_uuid": match[1],
+        "label": match[2],
+    }
+
+
 def persist_template_manifest(db_path: str | Path, path_value: str | Path) -> int:
     """Replace one template's v41 taxonomy/slot manifest atomically."""
     path = Path(path_value).resolve()

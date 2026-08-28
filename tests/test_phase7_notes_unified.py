@@ -278,6 +278,63 @@ def test_listofnotes_rows_persist_distinct_uuids(client: TestClient) -> None:
     assert by_uuid == expected
 
 
+def test_numeric_notes_html_write_uses_slot_manifest(tmp_path: Path) -> None:
+    """The shared facts API accepts only the numeric sheet's text block."""
+    from fastapi import HTTPException
+
+    from concept_model.bootstrap import import_all_notes_templates
+    from concept_model.facts_api import FactWrite, write_fact
+    from db import repository as repo
+    from db.schema import init_db
+
+    db = tmp_path / "numeric-notes.db"
+    init_db(db)
+    import_all_notes_templates(db)
+    with repo.db_session(db) as conn:
+        run_id = repo.create_run(
+            conn,
+            "numeric.pdf",
+            config={"filing_standard": "mfrs", "filing_level": "company"},
+        )
+        expected_uuid = conn.execute(
+            "SELECT concept_uuid FROM concept_nodes "
+            "WHERE template_id = 'mfrs-company-notes-issuedcapital-v1' "
+            "AND render_row = 4 AND render_col = 'B'",
+        ).fetchone()[0]
+
+    result = write_fact(
+        db,
+        run_id,
+        FactWrite(
+            html="<table><tr><td>Ordinary shares</td></tr></table>",
+            sheet="Notes-Issuedcapital",
+            row=4,
+            label="Caller-supplied label",
+        ),
+    )
+    assert result["concept_uuid"] == expected_uuid
+    with repo.db_session(db) as conn:
+        stored = conn.execute(
+            "SELECT concept_uuid, label FROM notes_cells "
+            "WHERE run_id = ? AND sheet = 'Notes-Issuedcapital' AND row = 4",
+            (run_id,),
+        ).fetchone()
+    assert stored["concept_uuid"] == expected_uuid
+    assert stored["label"] != "Caller-supplied label"
+
+    with pytest.raises(HTTPException, match="not a writable filing field"):
+        write_fact(
+            db,
+            run_id,
+            FactWrite(
+                html="<p>Not allowed on a numeric row.</p>",
+                sheet="Notes-Issuedcapital",
+                row=5,
+                label="Invalid",
+            ),
+        )
+
+
 # -- 7.8 — E2E: face + notes in one run via the shared API ------------
 
 

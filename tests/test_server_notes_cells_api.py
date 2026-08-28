@@ -113,6 +113,86 @@ def test_get_notes_cells_returns_full_template_with_blanks(client_and_run) -> No
     assert blanks[0]["node_uuid"]  # blank rows carry the registry identity
 
 
+def test_numeric_disclosure_table_is_projected_as_editable_html(
+    client_and_run,
+) -> None:
+    """A numeric sheet exposes only its manifest text block as prose."""
+    import server as server_module
+
+    client, _ = client_and_run
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        run_id = repo.create_run(
+            conn,
+            "numeric.pdf",
+            session_id="numeric",
+            output_dir="/tmp/numeric",
+            config={
+                "filing_standard": "mfrs",
+                "filing_level": "company",
+                "notes_to_run": ["ISSUED_CAPITAL"],
+            },
+        )
+        concept_uuid = conn.execute(
+            "SELECT concept_uuid FROM concept_nodes "
+            "WHERE template_id = 'mfrs-company-notes-issuedcapital-v1' "
+            "AND render_row = 4 AND render_col = 'B'",
+        ).fetchone()[0]
+        numeric_row = conn.execute(
+            "SELECT concept_uuid, render_row FROM concept_nodes "
+            "WHERE template_id = 'mfrs-company-notes-issuedcapital-v1' "
+            "AND render_row <> 4 AND render_col = 'B' AND kind = 'LEAF' "
+            "ORDER BY render_row LIMIT 1",
+        ).fetchone()
+        # Simulate legacy/corrupt prose stored on a genuinely numeric row.
+        # Projection must not turn that numeric filing field into rich text.
+        repo.upsert_notes_cell(
+            conn,
+            run_id=run_id,
+            sheet="Notes-Issuedcapital",
+            row=numeric_row["render_row"],
+            label="Invalid prose",
+            html="<p>This must not become an editable prose row.</p>",
+            concept_uuid=numeric_row["concept_uuid"],
+        )
+
+    body = client.get(f"/api/runs/{run_id}/notes_cells").json()
+    sheet = next(s for s in body["sheets"] if s["sheet"] == "Notes-Issuedcapital")
+    row4 = next(r for r in sheet["rows"] if r["row"] == 4)
+    assert row4["kind"] == "prose"
+    assert row4["html"] == ""
+    assert row4["node_uuid"] == concept_uuid
+    projected_numeric = next(
+        r for r in sheet["rows"] if r["row"] == numeric_row["render_row"]
+    )
+    assert projected_numeric["kind"] == "numeric"
+
+    response = client.patch(
+        f"/api/runs/{run_id}/notes_cells/Notes-Issuedcapital/4",
+        json={"html": "<table><tr><td>Ordinary shares</td></tr></table>"},
+    )
+    assert response.status_code == 200
+
+    body = client.get(f"/api/runs/{run_id}/notes_cells").json()
+    sheet = next(s for s in body["sheets"] if s["sheet"] == "Notes-Issuedcapital")
+    row4 = next(r for r in sheet["rows"] if r["row"] == 4)
+    assert row4["kind"] == "prose"
+    assert "Ordinary shares" in row4["html"]
+
+    response = client.patch(
+        f"/api/runs/{run_id}/notes_cells/Notes-Issuedcapital/4",
+        json={"html": "<p>Updated disclosure</p>"},
+    )
+    assert response.status_code == 200
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        stored = conn.execute(
+            "SELECT concept_uuid, html FROM notes_cells "
+            "WHERE run_id = ? AND sheet = 'Notes-Issuedcapital' AND row = 4",
+            (run_id,),
+        ).fetchone()
+    assert stored["concept_uuid"] == concept_uuid
+    assert stored["html"] == "<p>Updated disclosure</p>"
+
+
 def test_get_notes_cells_returns_404_for_unknown_run(tmp_path: Path) -> None:
     import server as server_module
 

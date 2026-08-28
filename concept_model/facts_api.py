@@ -734,21 +734,49 @@ def _post_notes_fact(conn: sqlite3.Connection, run_id: int, body: "FactWrite"):
         f"{str(config.get('filing_standard', 'mfrs')).lower()}-"
         f"{str(config.get('filing_level', 'company')).lower()}-"
     )
-    registry_available = bool(conn.execute(
-        "SELECT 1 FROM notes_nodes WHERE template_id LIKE ? LIMIT 1",
-        (template_prefix + "%",),
+    manifest_available = bool(conn.execute(
+        "SELECT 1 FROM template_slots "
+        "WHERE template_id LIKE ? AND sheet = ? LIMIT 1",
+        (template_prefix + "%", body.sheet),
     ).fetchone())
-    node = repo.fetch_notes_node(
-        conn,
-        sheet=body.sheet,
-        row=body.row,
-        template_prefix=template_prefix,
-    )
-    if registry_available and (
-        node is None
-        or str(node.get("kind") or "").upper() != "LEAF"
-        or node.get("slot_role") != "INPUT"
-    ):
+    target = None
+    legacy_registry_available = False
+    if manifest_available:
+        from concept_model.filing_targets import resolve_writable_html_target
+
+        target = resolve_writable_html_target(
+            conn,
+            family_prefix=template_prefix,
+            sheet=body.sheet,
+            row=body.row,
+        )
+    else:
+        # Legacy/synthetic databases may predate the slot manifest while still
+        # carrying the prose notes registry. Preserve that compatibility path,
+        # but never use it when the authoritative manifest exists for a sheet.
+        node = repo.fetch_notes_node(
+            conn,
+            sheet=body.sheet,
+            row=body.row,
+            template_prefix=template_prefix,
+        )
+        legacy_registry_available = bool(conn.execute(
+            "SELECT 1 FROM notes_nodes WHERE template_id LIKE ? LIMIT 1",
+            (template_prefix + "%",),
+        ).fetchone())
+        if node is not None:
+            target = {
+                "concept_uuid": node["node_uuid"],
+                "label": node["label"],
+            }
+        if legacy_registry_available and (
+            node is None
+            or str(node.get("kind") or "").upper() != "LEAF"
+            or node.get("slot_role") != "INPUT"
+        ):
+            target = None
+
+    if (manifest_available or legacy_registry_available) and target is None:
         raise HTTPException(
             status_code=400,
             detail=(
@@ -762,8 +790,8 @@ def _post_notes_fact(conn: sqlite3.Connection, run_id: int, body: "FactWrite"):
     # no registry, so existing integrations degrade safely instead of cross-
     # linking a note to an arbitrary face-statement concept.
     expected_uuid = (
-        node["node_uuid"]
-        if node is not None
+        target["concept_uuid"]
+        if target is not None
         else mint_notes_concept_uuid(body.sheet, body.row, body.label)
     )
     if body.concept_uuid is not None and body.concept_uuid != expected_uuid:
@@ -781,7 +809,7 @@ def _post_notes_fact(conn: sqlite3.Connection, run_id: int, body: "FactWrite"):
         run_id=run_id,
         sheet=body.sheet,
         row=body.row,
-        label=(node or {}).get("label") or body.label,
+        label=(target or {}).get("label") or body.label,
         html=cleaned,
         evidence=body.evidence,
         concept_uuid=concept_uuid,

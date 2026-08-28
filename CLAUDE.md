@@ -699,6 +699,18 @@ Key invariants:
 - **Column rules:** prose rows write col B only; numeric rows (13, 14) fill
   all four value columns on group filings. Evidence always col D (Company) /
   col F (Group).
+- **Numeric notes also carry one HTML disclosure field.** Sheets 13/14 keep
+  their numeric grid in `run_concept_facts`, but the taxonomy text-block row
+  (currently row 4) is reproduced as rich HTML in `notes_cells` so it appears
+  in the Review tab. That row is resolved through the shared v41
+  `template_slots` field-semantics manifest, not `notes_nodes` (numeric notes
+  deliberately live in `concept_nodes`). The Review projection exposes the
+  slot even while blank, and the shared facts API uses the same resolver. The
+  remaining rows stay numeric even if legacy/corrupt prose exists there.
+  Pinned end-to-end by `tests/test_notes_cells_persistence.py`,
+  `tests/test_notes_structured_table_reproduction.py`, and
+  `tests/test_server_notes_cells_api.py`, plus the shared-write regression in
+  `tests/test_phase7_notes_unified.py`.
 - **Scanned-PDF fallback:** if the PyMuPDF-regex inventory pass returns empty,
   `scout.notes_discoverer_vision._vision_inventory` renders the notes section
   in 8-page batches and runs up to 5 vision batches in parallel.
@@ -1566,7 +1578,11 @@ Load-bearing invariants:
 - **Automatic face and notes review overlap.** Once the initial cross-check
   rows and notes-review inputs are committed, both reviewer tasks launch on
   the same event loop and share the existing SSE queue. They write separate
-  canonical stores (face facts versus `notes_cells`). The automatic notes
+  canonical stores (face facts versus `notes_cells`). Their paid model work
+  overlaps, but the notes pass waits on a per-run event-loop gate before its
+  final flags/checklist replacement; SQLite has one writer and the face
+  reviewer's post-pass cascade can hold that lock beyond the ordinary busy
+  timeout. The automatic notes
   reviewer receives no merged-workbook path while they overlap; its notes
   overlay is applied atomically only after both reviewers finish, so it cannot
   race a face re-export/re-merge. Manual notes review keeps its immediate

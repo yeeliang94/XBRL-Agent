@@ -7,6 +7,7 @@ persisted, and the outcome reflects the work.
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -315,6 +316,78 @@ def test_reviewer_pass_captures_usage_for_total_run_cost(
     assert outcome["cache_read_tokens"] == 25
     assert outcome["cache_write_tokens"] == 5
     assert "turn_records" in outcome
+
+
+def test_reviewer_defers_final_writes_until_parallel_face_review_finishes(
+    db_path: Path, tmp_path, monkeypatch,
+):
+    """The model passes may overlap, but their final SQLite writes may not.
+
+    The face reviewer can hold SQLite's single writer lock while its cascade
+    recomputes. The automatic notes reviewer therefore waits on the pipeline's
+    completion gate before replacing flags and the coverage checklist.
+    """
+    import server
+    import notes.reviewer_agent as ra_mod
+
+    run_id = _seed_reviewer_target(db_path, tmp_path)
+    context = {"duplicates": [{"note_ref": "1", "sheet_11": {}, "sheet_12": {}}]}
+    agent_run = _ImmediateAgentRun()
+    deps = _FakeReviewerDeps()
+    deps.flags = [{"kind": "needs_human", "reason": "check this"}]
+    monkeypatch.setattr(
+        ra_mod,
+        "create_notes_reviewer_agent",
+        lambda *a, **k: (_ImmediateAgent(agent_run), deps, context),
+    )
+
+    async def exercise() -> dict:
+        finalize_gate = asyncio.Event()
+        task = asyncio.create_task(server._run_notes_reviewer_pass(
+            run_id=run_id,
+            db_path=str(db_path),
+            pdf_path=str(tmp_path / "x.pdf"),
+            filing_level="company",
+            filing_standard="mfrs",
+            model="openai.gpt-5.4",
+            output_dir=str(tmp_path),
+            merged_workbook_path=None,
+            event_queue=asyncio.Queue(),
+            sidecar_paths=[],
+            finalize_gate=finalize_gate,
+        ))
+
+        for _ in range(100):
+            if agent_run._done:
+                break
+            await asyncio.sleep(0.01)
+        assert agent_run._done, "scripted notes reviewer did not finish"
+        await asyncio.sleep(0)
+        assert not task.done(), "reviewer persisted before the face-review gate opened"
+
+        # Model the face reviewer's still-active cascade transaction. The notes
+        # pass must not attempt its DELETE/INSERT while this writer owns SQLite.
+        blocker = sqlite3.connect(str(db_path))
+        blocker.execute("PRAGMA busy_timeout = 0")
+        blocker.execute("BEGIN IMMEDIATE")
+        try:
+            assert blocker.execute(
+                "SELECT COUNT(*) FROM notes_review_flags WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()[0] == 0
+        finally:
+            blocker.rollback()
+            blocker.close()
+
+        finalize_gate.set()
+        return await asyncio.wait_for(task, timeout=5.0)
+
+    outcome = asyncio.run(exercise())
+    assert outcome["flags_raised"] == 1
+    with repo.db_session(db_path) as conn:
+        flags = repo.fetch_notes_review_flags(conn, run_id)
+    assert len(flags) == 1
+    assert flags[0]["reason"] == "check this"
 
 
 def test_untagged_notes_reviewer_cancellation_is_recoverable(
