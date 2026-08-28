@@ -260,6 +260,13 @@ def test_manifest_upgrade_is_scoped_to_the_runs_exact_family(imported_db):
                 "'<p>legacy</p>', 't')",
                 (run_ids[standard],),
             )
+        # Model a real manifest upgrade. An unchanged manifest deliberately
+        # skips historical sweeps; current write paths enforce semantics at
+        # the boundary instead.
+        conn.execute(
+            "UPDATE template_slots SET manifest_version = 'stale' "
+            "WHERE template_id = 'mfrs-company-notes-corporateinfo-v1'"
+        )
         conn.commit()
     finally:
         conn.close()
@@ -282,3 +289,105 @@ def test_manifest_upgrade_is_scoped_to_the_runs_exact_family(imported_db):
         assert states[run_ids["mpers"]] == 0
     finally:
         conn.close()
+
+
+def test_manifest_repersist_clears_a_stale_note_quarantine(imported_db):
+    import json
+    from pathlib import Path
+
+    from concept_model.filing_targets import persist_template_manifest
+
+    db, _ids = imported_db
+    conn = _conn(db)
+    try:
+        run_id = conn.execute(
+            "INSERT INTO runs(created_at, pdf_filename, status, run_config_json) "
+            "VALUES ('t', 'mfrs.pdf', 'completed', ?)",
+            (json.dumps({
+                "filing_standard": "mfrs",
+                "filing_level": "company",
+            }),),
+        ).lastrowid
+        node = conn.execute(
+            "SELECT node_uuid, sheet, row, label FROM notes_nodes "
+            "WHERE template_id = 'mfrs-company-notes-corporateinfo-v1' "
+            "AND kind = 'LEAF' LIMIT 1"
+        ).fetchone()
+        conn.execute(
+            "INSERT INTO notes_cells(run_id, sheet, row, label, html, updated_at, "
+            "concept_uuid, invalid_target, invalid_target_reason) "
+            "VALUES (?, ?, ?, ?, '<p>valid</p>', 't', ?, 1, 'stale')",
+            (run_id, node["sheet"], node["row"], node["label"], node["node_uuid"]),
+        )
+        conn.execute(
+            "UPDATE template_slots SET manifest_version = 'stale' "
+            "WHERE template_id = 'mfrs-company-notes-corporateinfo-v1'"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    root = Path(__file__).resolve().parent.parent
+    persist_template_manifest(
+        db,
+        root / "XBRL-template-MFRS/Company/10-Notes-CorporateInfo.xlsx",
+    )
+
+    conn = _conn(db)
+    try:
+        state = conn.execute(
+            "SELECT invalid_target, invalid_target_reason FROM notes_cells "
+            "WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        assert state["invalid_target"] == 0
+        assert state["invalid_target_reason"] is None
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize(
+    ("standard", "level"),
+    [("mfrs", "company"), ("mfrs", "group"),
+     ("mpers", "company"), ("mpers", "group")],
+)
+def test_runtime_semantic_coverage_accepts_each_filing_family(
+    imported_db, standard, level,
+):
+    import json
+
+    from concept_model.filing_targets import semantic_coverage_for_run
+
+    db, _ids = imported_db
+    conn = _conn(db)
+    try:
+        run_id = conn.execute(
+            "INSERT INTO runs(created_at, pdf_filename, status, run_config_json) "
+            "VALUES ('t', 'family.pdf', 'completed', ?)",
+            (json.dumps({
+                "filing_standard": standard,
+                "filing_level": level,
+            }),),
+        ).lastrowid
+        node = conn.execute(
+            "SELECT node_uuid, sheet, row, label FROM notes_nodes "
+            "WHERE template_id LIKE ? AND kind = 'LEAF' LIMIT 1",
+            (f"{standard}-{level}-%",),
+        ).fetchone()
+        conn.execute(
+            "INSERT INTO notes_cells(run_id, sheet, row, label, html, updated_at, "
+            "concept_uuid) VALUES (?, ?, ?, ?, '<p>valid</p>', 't', ?)",
+            (run_id, node["sheet"], node["row"], node["label"], node["node_uuid"]),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    coverage = semantic_coverage_for_run(
+        db,
+        run_id,
+        filing_standard=standard,
+        filing_level=level,
+    )
+    assert coverage["readiness"] == "ready"
+    assert coverage["counts"]["quarantined_values"] == 0

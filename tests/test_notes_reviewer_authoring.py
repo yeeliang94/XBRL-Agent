@@ -41,11 +41,28 @@ def _seed_run(db_path: Path) -> int:
 
 
 def _seed_node(db_path, row, kind, label):
+    slot_role = "INPUT" if kind == "LEAF" else "PRESENTATION_ONLY"
+    validation = "writable" if kind == "LEAF" else "non_writable"
     with repo.db_session(db_path) as conn:
         conn.execute(
-            "INSERT INTO notes_nodes(node_uuid, template_id, sheet, row, label, kind) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (f"n{row}", f"{_PREFIX}notes-listofnotes-v1", _S12, row, label, kind),
+            "INSERT INTO notes_nodes(node_uuid, template_id, sheet, row, label, "
+            "kind, slot_role) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                f"n{row}", f"{_PREFIX}notes-listofnotes-v1", _S12, row,
+                label, kind, slot_role,
+            ),
+        )
+        conn.execute(
+            "INSERT INTO template_slots("
+            "target_id, canonical_target_id, template_id, sheet, row, col, label, "
+            "slot_role, value_kind, dimensions_json, mapping_source, "
+            "manifest_version, workbook_fingerprint, validation_status"
+            ") VALUES (?, ?, ?, ?, ?, 'B', ?, ?, 'html', '{}', 'test', "
+            "'test-v1', 'fixture', ?)",
+            (
+                f"n{row}", f"n{row}", f"{_PREFIX}notes-listofnotes-v1",
+                _S12, row, label, slot_role, validation,
+            ),
         )
 
 
@@ -114,6 +131,26 @@ def test_grounded_author_accepted_and_revertible(db_path):
     ])
     agent.run_sync("go", deps=deps)
     assert "grounded" in _cells(db_path, run_id)[50]
+    with repo.db_session(db_path) as conn:
+        stored_uuid = conn.execute(
+            "SELECT concept_uuid FROM notes_cells "
+            "WHERE run_id = ? AND sheet = ? AND row = 50",
+            (run_id, _S12),
+        ).fetchone()[0]
+    assert stored_uuid == "n50"
+
+    # This is the filing-preflight seam: reviewer-authored prose must remain
+    # linked to the writable registry slot, not appear as quarantined content.
+    from concept_model.filing_targets import semantic_coverage_for_run
+
+    coverage = semantic_coverage_for_run(
+        db_path,
+        run_id,
+        filing_standard="mfrs",
+        filing_level="company",
+    )
+    assert coverage["readiness"] == "ready"
+    assert coverage["counts"]["quarantined_values"] == 0
 
     # The authored cell is fully revertible back to the (empty) original.
     from notes.versioning import revert_notes_to_original

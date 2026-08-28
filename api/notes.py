@@ -89,7 +89,8 @@ def _prose_sheet_rows(conn, run_id: int, template_id: str, sheet: str) -> list[d
 
     for c in conn.execute(
         "SELECT row, label, html, evidence, source_pages, updated_at, "
-        "style_source, content_revision, invalid_target, invalid_target_reason "
+        "style_source, content_revision, concept_uuid, invalid_target, "
+        "invalid_target_reason "
         "FROM notes_cells WHERE run_id = ? AND sheet = ?",
         (run_id, sheet),
     ).fetchall():
@@ -119,9 +120,20 @@ def _prose_sheet_rows(conn, run_id: int, template_id: str, sheet: str) -> list[d
         base["updated_at"] = c["updated_at"] or ""
         base["style_source"] = c["style_source"]
         base["content_revision"] = c["content_revision"]
-        base["invalid_target"] = bool(c["invalid_target"]) or base["invalid_target"]
+        identity_mismatch = bool(
+            base.get("node_uuid")
+            and c["concept_uuid"] != base["node_uuid"]
+        )
+        base["invalid_target"] = (
+            bool(c["invalid_target"]) or base["invalid_target"] or identity_mismatch
+        )
         base["invalid_target_reason"] = (
-            c["invalid_target_reason"] or base["invalid_target_reason"]
+            c["invalid_target_reason"]
+            or (
+                "This content is not linked to this run's writable filing field."
+                if identity_mismatch else None
+            )
+            or base["invalid_target_reason"]
         )
 
     return [by_row[r] for r in sorted(by_row)]
@@ -546,7 +558,7 @@ async def remove_invalid_notes_cell(run_id: int, sheet: str, row: int):
             raise HTTPException(status_code=404, detail="Run not found")
         conn.execute("BEGIN IMMEDIATE")
         existing = conn.execute(
-            "SELECT invalid_target FROM notes_cells "
+            "SELECT concept_uuid, invalid_target FROM notes_cells "
             "WHERE run_id = ? AND sheet = ? AND row = ?",
             (run_id, sheet, row),
         ).fetchone()
@@ -563,13 +575,19 @@ async def remove_invalid_notes_cell(run_id: int, sheet: str, row: int):
             None,
         )
         writable = False
+        node = None
         if template is not None and not template["is_numeric"]:
-            writable = bool(conn.execute(
-                "SELECT 1 FROM notes_nodes WHERE template_id = ? AND row = ? "
+            node = conn.execute(
+                "SELECT node_uuid FROM notes_nodes "
+                "WHERE template_id = ? AND sheet = ? AND row = ? "
                 "AND kind = 'LEAF' AND slot_role = 'INPUT'",
-                (template["template_id"], row),
-            ).fetchone())
-        if writable and not existing["invalid_target"]:
+                (template["template_id"], sheet, row),
+            ).fetchone()
+            writable = node is not None
+        identity_valid = bool(
+            writable and node is not None and existing["concept_uuid"] == node["node_uuid"]
+        )
+        if identity_valid and not existing["invalid_target"]:
             conn.rollback()
             raise HTTPException(
                 status_code=409,

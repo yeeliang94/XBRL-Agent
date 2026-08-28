@@ -152,3 +152,41 @@ def test_agent_catalog_and_writer_share_the_same_writable_targets(tmp_path):
     )
     assert accepted.success is True
     assert accepted.rows_written == 1
+
+
+def test_template_target_parsing_is_cached_per_file_revision(monkeypatch):
+    import concept_model.filing_targets as filing_targets
+
+    template = ROOT / "XBRL-template-MFRS/Company/10-Notes-CorporateInfo.xlsx"
+    calls = 0
+    original = filing_targets._prose_targets
+
+    def counted(path):
+        nonlocal calls
+        calls += 1
+        return original(path)
+
+    filing_targets._targets_for_template_cached.cache_clear()
+    monkeypatch.setattr(filing_targets, "_prose_targets", counted)
+    filing_targets.writable_rows(template, "Notes-CI")
+    filing_targets.writable_rows(template, "Notes-CI")
+
+    assert calls == 1
+
+
+def test_unchanged_manifest_skips_reparse_and_historical_sweeps(
+    tmp_path, monkeypatch,
+):
+    import concept_model.filing_targets as filing_targets
+    from db.schema import init_db
+
+    db = tmp_path / "manifest.sqlite"
+    template = ROOT / "XBRL-template-MFRS/Company/10-Notes-CorporateInfo.xlsx"
+    init_db(db)
+    count = filing_targets.persist_template_manifest(db, template)
+
+    def unexpected_parse(_path):
+        raise AssertionError("unchanged manifests must not be parsed again")
+
+    monkeypatch.setattr(filing_targets, "targets_for_template", unexpected_parse)
+    assert filing_targets.persist_template_manifest(db, template) == count

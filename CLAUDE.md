@@ -556,7 +556,9 @@ content-provenance columns on `notes_cells` · v36 `runs.notes_integrity_mode`
 (#31, docs/PLAN-notes-source-integrity-build.md) · v38 `mtool_fill_receipts`
 (#28, mTool fill audit trail — one row per fill) · v39
 `mtool_fill_receipts.snapshot_notes_*` (#28, the PROSE revision — v38 recorded
-only the numeric one).
+only the numeric one) · v40 `concept_semantic_addresses` (#28, taxonomy identity
+for filing targets) · v41 `taxonomy_concepts` / `template_slots`, notes/facts
+quarantine state, and receipt filing-readiness evidence (#28).
 
 ### 12. Filing level — Company vs Group
 

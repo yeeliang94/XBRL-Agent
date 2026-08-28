@@ -193,7 +193,6 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
         }],
       }],
     };
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     globalThis.fetch = vi.fn(async (_input, init) => {
       if (init?.method === "DELETE") {
         return new Response(JSON.stringify({ removed: true }), { status: 200 });
@@ -206,14 +205,25 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     expandAllSheets();
 
     expect(screen.getByText("Financial reporting status")).toBeInTheDocument();
-    expect(screen.getByRole("alert")).toHaveTextContent(/not a filing field/i);
+    expect(screen.getByRole("status")).toHaveTextContent(/not a filing field/i);
     expect(screen.getByRole("button", { name: "Edit" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: /remove quarantined content/i }));
+    expect(screen.getByRole("dialog", { name: /remove quarantined content/i })).toBeTruthy();
+    expect(screen.getByText(/permanently erase/i)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /^remove content$/i }));
     await waitFor(() => expect(screen.queryByText("Financial reporting status")).toBeNull());
     expect(globalThis.fetch).toHaveBeenCalledWith(
       "/api/runs/42/notes_cells/Notes-CI/6",
       { method: "DELETE" },
     );
+
+    const heading = screen.getByRole("heading", {
+      level: 4,
+      name: "Corporate Information",
+    });
+    fireEvent.click(within(heading).getByRole("button"));
+    fireEvent.click(within(heading).getByRole("button"));
+    expect(screen.queryByText("Financial reporting status")).toBeNull();
   });
 
   // Review-workspace Phase 1: focusing a notes cell reports its source PDF
