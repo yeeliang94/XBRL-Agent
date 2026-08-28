@@ -252,9 +252,9 @@ export function NotesTablesPanel({ runId }: Props) {
 
 const styles: Record<string, React.CSSProperties> = {
   panel: {
-    border: `1px solid ${pwc.grey200}`,
-    background: pwc.white,
-    padding: pwc.space.lg,
+    border: "none",
+    background: "transparent",
+    padding: 0,
     marginBottom: pwc.space.lg,
     display: "flex",
     flexDirection: "column",

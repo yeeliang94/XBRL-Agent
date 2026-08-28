@@ -59,7 +59,29 @@ vi.mock("../lib/api", async () => {
 describe("App routing", () => {
   beforeEach(() => {
     window.history.replaceState({}, "", "/");
+    window.sessionStorage.clear();
     cleanup();
+  });
+
+  test("focused routes keep the rail expanded until the manual control is used", async () => {
+    window.history.replaceState({}, "", "/history/42?tab=figures");
+    const { default: App } = await import("../App");
+    const { container } = render(<App />);
+
+    const collapse = await screen.findByRole("button", { name: "Collapse navigation" });
+    const shell = container.querySelector(".app-shell");
+    expect(shell).not.toHaveClass("app-shell--collapsed");
+
+    fireEvent.click(collapse);
+    expect(shell).toHaveClass("app-shell--collapsed");
+    expect(window.sessionStorage.getItem("xbrl-navigation-collapsed")).toBe("true");
+
+    fireEvent.click(screen.getByRole("link", { name: "Overview" }));
+    expect(shell).toHaveClass("app-shell--collapsed");
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand navigation" }));
+    expect(shell).not.toHaveClass("app-shell--collapsed");
+    expect(window.sessionStorage.getItem("xbrl-navigation-collapsed")).toBe("false");
   });
 
   test("clicking History pushes /history; Extract pushes /", async () => {

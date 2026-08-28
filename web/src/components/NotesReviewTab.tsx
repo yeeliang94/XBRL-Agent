@@ -2133,15 +2133,15 @@ const styles = {
     padding: "8px 12px",
     background: pwc.errorBg,
     color: pwc.errorText,
-    border: `1px solid ${pwc.errorBorder}`,
+    border: "none",
     borderRadius: 4,
     fontSize: 13,
   } as React.CSSProperties,
   // Per-run "Table style" panel (docs/PLAN-notes-table-theme.md).
   stylePanel: {
-    border: `1px solid ${pwc.grey300}`,
-    borderRadius: 6,
-    background: pwc.white,
+    border: "none",
+    borderRadius: 0,
+    background: pwc.grey50,
     padding: 12,
     marginBottom: 12,
   } as React.CSSProperties,
@@ -2185,9 +2185,9 @@ const styles = {
     fontSize: 11.5,
     fontWeight: 600,
     letterSpacing: 0.2,
-    color: pwc.orange700,
-    background: pwc.orange50,
-    border: `1px solid ${pwc.orange500}`,
+    color: pwc.grey900,
+    background: pwc.grey100,
+    border: `1px solid ${pwc.grey300}`,
     borderRadius: pwc.radius.pill,
     cursor: "pointer",
   } as React.CSSProperties,
@@ -2202,18 +2202,16 @@ const styles = {
     flexDirection: "column" as const,
     gap: 10,
   } as React.CSSProperties,
-  // Each sheet is a white card with a clear header band + an orange left
-  // accent when open (set inline in SheetSection). The dominant header
-  // and flat row list (below) make sheet boundaries obvious instead of
-  // every container reading as an identical card.
+  // Each sheet is a flat section. A neutral bottom divider carries the section
+  // boundary without reintroducing the old card or active orange-rail style.
   sheetSection: {
     display: "flex",
     flexDirection: "column" as const,
-    border: `1px solid ${pwc.grey200}`,
-    borderLeft: `3px solid ${pwc.grey300}`,
-    borderRadius: 6,
-    background: pwc.white,
-    overflow: "hidden",
+    border: "none",
+    borderBottom: `1px solid ${pwc.grey200}`,
+    borderRadius: 0,
+    background: "transparent",
+    overflow: "visible",
   } as React.CSSProperties,
   // The <h4> wrapper strips default browser margins so the button
   // fills the card header cleanly.
@@ -2465,10 +2463,10 @@ const styles = {
     padding: "2px 5px",
     fontSize: 13,
     fontFamily: pwc.fontBody,
-    background: pwc.orange500,
-    border: `1px solid ${pwc.orange500}`,
+    background: pwc.grey100,
+    border: `1px solid ${pwc.grey300}`,
     borderRadius: 3,
-    color: pwc.white,
+    color: pwc.grey900,
     cursor: "pointer",
     display: "inline-flex",
     alignItems: "center",

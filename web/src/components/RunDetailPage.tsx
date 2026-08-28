@@ -113,7 +113,7 @@ const styles = {
     alignItems: "center",
     gap: pwc.space.md,
     paddingBottom: pwc.space.sm,
-    borderBottom: `1px solid ${pwc.grey200}`,
+    borderBottom: "none",
   } as React.CSSProperties,
   backButton: {
     ...ui.buttonGhost,
@@ -129,11 +129,10 @@ const styles = {
   } as React.CSSProperties,
   errorBanner: {
     padding: pwc.space.lg,
-    background: pwc.white,
+    background: pwc.orange50,
     color: pwc.grey800,
     borderRadius: pwc.radius.md,
-    border: `1px solid ${pwc.grey200}`,
-    borderLeft: `3px solid ${pwc.error}`,
+    border: "none",
     fontFamily: pwc.fontBody,
     fontSize: 14,
   } as React.CSSProperties,

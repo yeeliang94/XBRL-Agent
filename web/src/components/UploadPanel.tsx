@@ -36,9 +36,8 @@ const styles = {
   fileIcon: {
     width: 32,
     height: 32,
-    background: pwc.white,
-    border: `1px solid ${pwc.grey200}`,
-    borderLeft: `3px solid ${pwc.error}`,
+    background: pwc.grey50,
+    border: "none",
     borderRadius: pwc.radius.sm,
     display: "flex",
     alignItems: "center",
@@ -56,7 +55,7 @@ const styles = {
   } as React.CSSProperties,
   runButton: {
     padding: "10px 24px",
-    backgroundColor: pwc.orange500,
+    backgroundColor: pwc.black,
     color: pwc.white,
     border: "none",
     borderRadius: pwc.radius.md,

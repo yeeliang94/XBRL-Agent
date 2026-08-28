@@ -68,11 +68,10 @@ interface Props {
 
 const styles = {
   container: {
-    background: pwc.white,
-    borderRadius: pwc.radius.lg,
-    border: `1px solid ${pwc.grey200}`,
-    boxShadow: pwc.shadow.card,
-    padding: pwc.space.xl,
+    background: "transparent",
+    borderRadius: 0,
+    border: "none",
+    padding: 0,
     display: "flex",
     flexDirection: "column" as const,
     gap: pwc.space.xl,
@@ -103,7 +102,7 @@ const styles = {
     fontSize: 12,
     color: pwc.grey800,
     background: pwc.grey50,
-    border: `1px solid ${pwc.grey200}`,
+    border: "none",
     borderRadius: pwc.radius.sm,
     padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
     marginBottom: pwc.space.sm,
@@ -131,8 +130,7 @@ const styles = {
     padding: `${pwc.space.sm}px ${pwc.space.md}px`,
     background: pwc.white,
     borderRadius: pwc.radius.sm,
-    border: `1px solid ${pwc.grey200}`,
-    borderLeft: `3px solid ${pwc.error}`,
+    border: "none",
   } as React.CSSProperties,
   progressText: {
     fontFamily: pwc.fontBody,
@@ -141,16 +139,16 @@ const styles = {
     padding: `${pwc.space.sm}px ${pwc.space.md}px`,
     background: pwc.grey50,
     borderRadius: pwc.radius.sm,
-    border: `1px solid ${pwc.grey200}`,
+    border: "none",
     display: "flex",
     alignItems: "center",
     gap: pwc.space.sm,
   } as React.CSSProperties,
   scoutProgressPanel: {
     padding: pwc.space.md,
-    background: pwc.orange50,
+    background: pwc.grey50,
     borderRadius: pwc.radius.sm,
-    border: `1px solid ${pwc.orange100}`,
+    border: "none",
     display: "flex",
     flexDirection: "column" as const,
     gap: pwc.space.xs,
@@ -1297,6 +1295,8 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           style={{
             display: "inline-flex",
             alignItems: "center",
+            flexShrink: 0,
+            whiteSpace: "nowrap",
             gap: 6,
             padding: "6px 12px",
             background: showAdvanced ? pwc.grey50 : "none",
@@ -1318,8 +1318,8 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
         data-testid="automatic-pipeline-summary"
         style={{
           padding: pwc.space.lg,
-          background: pwc.orange50,
-          border: `1px solid ${pwc.orange100}`,
+          background: pwc.grey50,
+          border: "none",
           borderRadius: pwc.radius.md,
         }}
       >

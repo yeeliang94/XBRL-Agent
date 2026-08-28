@@ -262,7 +262,7 @@ const styles = {
     alignItems: "center",
     justifyContent: "space-between",
     gap: pwc.space.lg,
-    border: `1px solid ${pwc.orange700}`,
+    border: "none",
     background: pwc.orange50,
     color: pwc.grey900,
     fontSize: 13,

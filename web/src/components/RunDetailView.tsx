@@ -1275,10 +1275,8 @@ const styles = {
     alignItems: "flex-end",
     gap: pwc.space.lg,
     flexWrap: "wrap" as const,
-    // Page-header treatment: hairline rule + generous separation from the
-    // detail body, matching the design system's page-head.
     paddingBottom: pwc.space.lg,
-    borderBottom: `1px solid ${pwc.grey200}`,
+    borderBottom: "none",
   } as React.CSSProperties,
   headerText: {
     minWidth: 0,
@@ -1327,8 +1325,8 @@ const styles = {
     alignItems: "center",
     gap: pwc.space.sm,
   } as React.CSSProperties,
-  // Finished-but-flagged banner (#1): neutral surface with an amber left-rule,
-  // matching the design-system alert treatment (no loud full-bleed fill).
+  // Finished-but-flagged summary. The tint and explicit copy carry meaning;
+  // Direction A forbids accent edge rules.
   errorBanner: {
     display: "flex",
     justifyContent: "space-between",
@@ -1336,9 +1334,8 @@ const styles = {
     flexWrap: "wrap" as const,
     gap: pwc.space.md,
     padding: pwc.space.md,
-    background: pwc.white,
-    border: `1px solid ${pwc.grey200}`,
-    borderLeft: `3px solid ${pwc.warning}`,
+    background: pwc.orange50,
+    border: "none",
     borderRadius: pwc.radius.md,
   } as React.CSSProperties,
   errorBannerBody: {

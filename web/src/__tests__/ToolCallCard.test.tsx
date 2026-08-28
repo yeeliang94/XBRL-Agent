@@ -133,12 +133,12 @@ describe("ToolCallCard", () => {
     const matches = screen.getByText(/Matches PDF: False/);
     expect(balanced).toBeInTheDocument();
     expect(matches).toBeInTheDocument();
-    // Focused-workspace status: finished black and attention/error orange,
-    // both on a neutral surface with explicit text.
-    expect(balanced.style.background).toBe("rgb(255, 255, 255)");           // white surface
-    expect(balanced.style.borderLeft).toContain("rgb(0, 0, 0)");           // finished black
-    expect(matches.style.background).toBe("rgb(255, 255, 255)");            // white surface
-    expect(matches.style.borderLeft).toContain("rgb(253, 81, 8)");         // attention/error
+    // Direction A uses quiet status fills and explicit text, never a coloured
+    // rule on an otherwise card-like result row.
+    expect(balanced.style.background).toBe("rgb(245, 247, 248)");
+    expect(balanced.style.borderLeft).toBe("1px solid rgb(223, 227, 230)");
+    expect(matches.style.background).toBe("rgb(255, 245, 237)");
+    expect(matches.style.borderLeft).toBe("1px solid rgb(223, 227, 230)");
   });
 
   // --- Step 11: collapsed preview is human-readable ---

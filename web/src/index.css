@@ -283,21 +283,31 @@ textarea:focus {
   cursor: not-allowed;
 }
 
-/* Interactive-card hover: a quiet border/surface response. Cards never move
-   vertically or gain elevation on hover — static cards omit this class
-   entirely (flat surfaces stay flat). */
+/* Interactive grouped rows use a quiet surface response. Direction A cards
+   have no decorative boundary and never gain one on hover. */
 .pwc-card {
-  transition: background var(--motion-fast) var(--motion-standard),
-    border-color var(--motion-fast) var(--motion-standard);
+  transition: background var(--motion-fast) var(--motion-standard);
 }
 .pwc-card:hover {
   background: #F5F7F8;
-  border-color: #6B7280;
 }
 
 /* Quiet table-row hover. */
 .pwc-table-row:hover {
   background: #F5F7F8;
+}
+
+/* Work-queue recents are a plain divided list, not selected table rows.
+   Keep the surface clear and let the trailing action carry hover intent. */
+.recent-run-row:hover,
+.recent-run-row:focus-visible {
+  background: transparent;
+}
+
+.recent-run-row:hover .recent-run-action,
+.recent-run-row:focus-visible .recent-run-action {
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .agent-tab:hover:not(:disabled),
@@ -430,20 +440,20 @@ textarea:focus {
   transition-delay: 0s;
 }
 
-/* Persistent workspace shell. The 220px/72px geometry originates in shared
-   inline primitives; these selectors express route and viewport states. */
+/* Persistent workspace shell. The rail stays expanded unless the operator
+   uses its explicit toggle. Review routes never collapse it automatically. */
 .app-main-nav-tab {
   position: relative;
   transition: background var(--motion-fast) var(--motion-standard),
     color var(--motion-fast) var(--motion-standard),
     border-color var(--motion-fast) var(--motion-standard);
 }
-.app-shell--review .app-rail-brand-label,
-.app-shell--review .app-rail-section-label,
-.app-shell--review .app-user-copy {
+.app-shell--collapsed .app-rail-brand-label,
+.app-shell--collapsed .app-rail-section-label,
+.app-shell--collapsed .app-user-copy {
   display: none;
 }
-.app-shell--review .app-main-nav-label {
+.app-shell--collapsed .app-main-nav-label {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -455,21 +465,27 @@ textarea:focus {
   border: 0;
   white-space: nowrap;
 }
-.app-shell--review .app-sidebar {
+.app-shell--collapsed .app-sidebar {
   padding: 16px 8px !important;
 }
-.app-shell--review .app-rail-brand {
+.app-shell--collapsed .app-rail-brand {
   justify-content: center;
 }
-.app-shell--review .app-main-nav-glyph {
+.app-shell--collapsed .app-rail-brand-mark {
+  display: none;
+}
+.app-shell--collapsed .app-rail-toggle {
+  margin-left: 0 !important;
+}
+.app-shell--collapsed .app-main-nav-glyph {
   display: inline-block;
 }
-.app-shell--review .app-main-nav-tab {
+.app-shell--collapsed .app-main-nav-tab {
   justify-content: center !important;
   padding-inline: 8px !important;
 }
-.app-shell--review .app-main-nav-tab:hover .app-main-nav-label,
-.app-shell--review .app-main-nav-tab:focus-visible .app-main-nav-label {
+.app-shell--collapsed .app-main-nav-tab:hover .app-main-nav-label,
+.app-shell--collapsed .app-main-nav-tab:focus-visible .app-main-nav-label {
   display: block !important;
   position: absolute;
   left: calc(100% + 8px);
@@ -493,11 +509,11 @@ textarea:focus {
   clip-path: none;
   white-space: normal;
 }
-.app-shell--review .app-rail-footer {
+.app-shell--collapsed .app-rail-footer {
   justify-content: center;
   padding-inline: 0 !important;
 }
-.app-shell--review .app-main {
+.app-shell--collapsed .app-main {
   max-width: none !important;
   padding-left: 28px !important;
   padding-right: 28px !important;
@@ -591,7 +607,7 @@ textarea:focus {
   color: #000000;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1100px) {
   .multi-agent-workspace {
     grid-template-columns: minmax(0, 1fr) !important;
   }
@@ -601,8 +617,10 @@ textarea:focus {
   }
 
   .multi-agent-workspace [role="tabpanel"] {
+    position: static !important;
     border-left: 0 !important;
     border-top: 1px solid #DFE3E6 !important; /* grey200 */
+    padding: 24px 0 0 !important;
   }
 }
 
@@ -657,7 +675,7 @@ textarea:focus {
   }
 
   .app-shell,
-  .app-shell--review {
+  .app-shell--collapsed {
     display: block !important;
     padding-bottom: 72px;
   }
@@ -693,7 +711,7 @@ textarea:focus {
   }
 
   .app-main-nav-tab,
-  .app-shell--review .app-main-nav-tab {
+  .app-shell--collapsed .app-main-nav-tab {
     flex: 1 0 52px !important;
     min-width: 52px !important;
     min-height: 50px !important;
@@ -706,13 +724,13 @@ textarea:focus {
   }
 
   .app-main-nav-glyph,
-  .app-shell--review .app-main-nav-glyph {
+  .app-shell--collapsed .app-main-nav-glyph {
     display: inline-block;
     font-size: 15px !important;
   }
 
   .app-main-nav-label,
-  .app-shell--review .app-main-nav-label {
+  .app-shell--collapsed .app-main-nav-label {
     display: block !important;
     position: absolute;
     width: 1px;
@@ -728,8 +746,8 @@ textarea:focus {
 
   .app-main-nav-tab:hover .app-main-nav-label,
   .app-main-nav-tab:focus-visible .app-main-nav-label,
-  .app-shell--review .app-main-nav-tab:hover .app-main-nav-label,
-  .app-shell--review .app-main-nav-tab:focus-visible .app-main-nav-label {
+  .app-shell--collapsed .app-main-nav-tab:hover .app-main-nav-label,
+  .app-shell--collapsed .app-main-nav-tab:focus-visible .app-main-nav-label {
     display: block !important;
     position: absolute;
     left: 50%;

@@ -405,9 +405,9 @@ export function NotesIntegrityPanel({ runId }: Props) {
 
 const styles: Record<string, React.CSSProperties> = {
   panel: {
-    border: `1px solid ${pwc.grey200}`,
-    background: pwc.white,
-    padding: pwc.space.lg,
+    border: "none",
+    background: "transparent",
+    padding: 0,
     marginBottom: pwc.space.lg,
     display: "flex",
     flexDirection: "column",
@@ -487,7 +487,8 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     gap: 4,
     padding: "10px 12px",
-    border: `1px solid ${pwc.grey200}`,
+    border: "none",
+    borderBottom: `1px solid ${pwc.grey100}`,
     background: pwc.white,
     cursor: "pointer",
     font: "inherit",
@@ -499,7 +500,8 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     gap: 4,
     padding: "10px 12px",
-    border: `1px solid ${pwc.grey900}`,
+    border: "none",
+    borderBottom: `1px solid ${pwc.grey200}`,
     background: pwc.grey100,
     cursor: "pointer",
     font: "inherit",

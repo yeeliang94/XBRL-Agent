@@ -99,12 +99,10 @@ const CARD_STYLES: Record<GlyphState, React.CSSProperties> = {
     background: pwc.white,
   },
   failed: {
-    background: pwc.white,
-    borderLeft: `3px solid ${pwc.error}`,
+    background: pwc.orange50,
   },
   cancelled: {
     background: pwc.grey50,
-    borderLeft: `3px solid ${pwc.grey500}`,
   },
 };
 
@@ -221,19 +219,15 @@ function renderResult(toolName: string, summary: string): React.ReactNode {
           const isPass = /:\s*True/i.test(line);
           const isFail = /:\s*False/i.test(line);
           const isMismatch = line.startsWith("Mismatches:") || line.startsWith("Action required:");
-          // Status as an accent, not a fill: neutral surface + a coloured
-          // left rule (design-system "neutral-surface accent"). Pass → success,
-          // fail/mismatch → error, otherwise a quiet grey rule.
-          const ruleColor = isPass ? pwc.success : (isFail || isMismatch) ? pwc.error : pwc.grey300;
+          const resultBackground = isFail || isMismatch ? pwc.orange50 : isPass ? pwc.grey50 : pwc.white;
           return (
             <div key={i} style={{
               fontSize: 12,
               fontFamily: pwc.fontMono,
               padding: "4px 8px",
               borderRadius: 4,
-              background: pwc.white,
+              background: resultBackground,
               border: `1px solid ${pwc.grey200}`,
-              borderLeft: `3px solid ${ruleColor}`,
               color: pwc.grey800,
             }}>
               {line}

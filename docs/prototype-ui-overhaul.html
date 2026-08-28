@@ -138,15 +138,17 @@
     .stat .value { margin-top: 5px; color: var(--ink); font-size: 24px; letter-spacing: -.03em; }
     .stat .detail { margin-top: 4px; color: var(--muted); font-size: 12px; }
 
-    .list { display: grid; gap: 2px; }
+    .list { display: grid; gap: 0; border-top: 1px solid var(--line); }
     .list-row {
       width: calc(100% + 24px); margin-left: -12px; display: grid; align-items: center; gap: 12px; padding: 14px 12px;
-      border: 0; border-radius: 8px; background: transparent;
+      border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent;
       text-align: left; cursor: pointer;
     }
-    .list-row:hover { background: rgba(255,255,255,.65); }
+    .list-row:hover, .list-row:focus-visible { background: transparent; }
+    .list-row:hover .row-action, .list-row:focus-visible .row-action { text-decoration: underline; text-underline-offset: 3px; }
     .list-row strong { color: var(--ink); font-weight: 640; }
-    .run-row { grid-template-columns: minmax(260px, 1.5fr) 110px 140px 150px 92px 24px; }
+    .run-row { grid-template-columns: minmax(260px, 1.5fr) 110px 140px 150px 92px 82px; }
+    .row-action { justify-self: end; color: var(--ink); font-weight: 620; white-space: nowrap; }
     .row-sub { margin-top: 3px; color: var(--muted); font-size: 12px; }
 
     .upload-zone {
@@ -520,6 +522,8 @@
     .shell-a { display: grid; grid-template-columns: 220px minmax(0,1fr); min-height: 100vh; }
     .a-sidebar { position: sticky; top: 0; height: 100vh; padding: 20px 14px; background: var(--surface-2); display: flex; flex-direction: column; }
     .a-brand { display: flex; align-items: center; gap: 10px; padding: 2px 8px 24px; color: var(--ink); font-weight: 730; letter-spacing: -.02em; }
+    .a-rail-toggle { width: 32px; height: 32px; margin-left: auto; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
+    .a-rail-toggle:hover { background: var(--surface); color: var(--ink); }
     .a-nav-label { padding: 16px 10px 7px; color: var(--faint); font-size: 10px; text-transform: uppercase; letter-spacing: .09em; font-weight: 700; }
     .a-nav button { width: 100%; min-height: 38px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; text-align: left; color: var(--muted); cursor: pointer; display: flex; align-items: center; gap: 10px; transition: background-color .14s cubic-bezier(.2,0,0,1), color .14s cubic-bezier(.2,0,0,1), transform .1s cubic-bezier(.2,0,0,1); }
     .a-nav button:hover { color: var(--ink); background: rgba(255,255,255,.55); }
@@ -535,14 +539,15 @@
     .breadcrumb { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
     .breadcrumb strong { color: var(--ink); }
     .a-main { padding: 34px clamp(28px, 4vw, 62px) 110px; max-width: 1500px; margin: 0 auto; }
-    .shell-a.review-mode { grid-template-columns: 72px minmax(0,1fr); }
-    .shell-a.review-mode .a-sidebar { padding: 16px 8px; }
-    .shell-a.review-mode .a-brand { justify-content: center; padding: 2px 0 22px; }
-    .shell-a.review-mode .a-brand > span, .shell-a.review-mode .a-nav-label, .shell-a.review-mode .a-sidebar-foot > div { display: none; }
-    .shell-a.review-mode .a-nav button { justify-content: center; padding: 0; }
-    .shell-a.review-mode .a-nav button > span:last-child { display: none; }
-    .shell-a.review-mode .a-sidebar-foot { justify-content: center; padding-left: 0; padding-right: 0; }
-    .shell-a.review-mode .a-main { max-width: none; padding-left: 28px; padding-right: 28px; }
+    .shell-a.is-collapsed { grid-template-columns: 72px minmax(0,1fr); }
+    .shell-a.is-collapsed .a-sidebar { padding: 16px 8px; }
+    .shell-a.is-collapsed .a-brand { justify-content: center; padding: 2px 0 22px; }
+    .shell-a.is-collapsed .a-brand > span, .shell-a.is-collapsed .a-nav-label, .shell-a.is-collapsed .a-sidebar-foot > div { display: none; }
+    .shell-a.is-collapsed .a-rail-toggle { margin-left: 0; }
+    .shell-a.is-collapsed .a-nav button { justify-content: center; padding: 0; }
+    .shell-a.is-collapsed .a-nav button > span:last-child { display: none; }
+    .shell-a.is-collapsed .a-sidebar-foot { justify-content: center; padding-left: 0; padding-right: 0; }
+    .shell-a.is-collapsed .a-main { max-width: none; padding-left: 28px; padding-right: 28px; }
 
     /* Direction B — document studio: top shell + context rail. */
     .shell-b { min-height: 100vh; background: var(--canvas); }
@@ -626,7 +631,7 @@
       .notes-three-pane > .source-preview { grid-column: 1 / -1; }
       .agent-workspace { grid-template-columns: 1fr; }
       .agent-detail { position: static; padding: 24px 0 0; border-left: 0; }
-      .run-row { grid-template-columns: minmax(240px,1.5fr) 100px 130px 120px 24px; }
+      .run-row { grid-template-columns: minmax(240px,1.5fr) 100px 130px 120px 82px; }
       .run-row > :nth-child(5) { display: none; }
     }
     @media (max-width: 780px) {
@@ -675,7 +680,7 @@
       .agent-tree-meta { grid-column: 2; }
       .agent-tree-chevron, .agent-tree-row .row-end { grid-column: 3; grid-row: 1; }
       .agent-children { margin-left: 15px; padding-left: 14px; }
-      .run-row { grid-template-columns: minmax(220px,1fr) 100px 24px; }
+      .run-row { grid-template-columns: minmax(220px,1fr) 100px 82px; }
       .run-row > :nth-child(3), .run-row > :nth-child(4), .run-row > :nth-child(5) { display: none; }
       .prototype-bar { bottom: 74px; max-width: calc(100vw - 24px); }
       .prototype-label { min-width: 155px; }
@@ -706,6 +711,8 @@
       home: "Work queue", new: "New extraction", activity: "Live run",
       review: "Figures review", notes: "Notes review", runs: "Runs"
     };
+    let railCollapsed = false;
+    try { railCollapsed = sessionStorage.getItem("xbrl-prototype-navigation-collapsed") === "true"; } catch {}
 
     const mark = `<span class="mark" aria-hidden="true"><svg viewBox="0 0 100 100" fill="none"><path d="M12 78 L40 22 L52 50 L66 30 L88 78" stroke="currentColor" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`;
 
@@ -758,7 +765,7 @@
       ].slice(0, limit);
       return `<div class="list">${rows.map((r, i) => `<button type="button" class="list-row run-row" data-page="${i === 1 ? "activity" : i === 0 ? "review" : "runs"}">
         <div><strong>${r[0]}</strong><div class="row-sub">${i === 1 ? "FINCO-Audited-Financial-Statement-2024.pdf" : "Audited financial statements.pdf"}</div></div>
-        <span class="status"><span class="dot ${r[5]}"></span>${r[1]}</span><span class="muted">${r[2]}</span><span class="muted">${r[3]}</span><span class="muted nowrap">${r[4]}</span><span class="kebab">···</span>
+        <span class="status"><span class="dot ${r[5]}"></span>${r[1]}</span><span class="muted">${r[2]}</span><span class="muted">${r[3]}</span><span class="muted nowrap">${r[4]}</span><span class="row-action">${r[1] === "Draft" ? "Continue" : r[1] === "Needs review" ? "Review" : "Open"} →</span>
       </button>`).join("")}</div>`;
     }
 
@@ -1052,7 +1059,7 @@
     }
 
     function shellA(page, state) {
-      return `<div class="shell-a ${["review","notes"].includes(page) ? "review-mode" : ""}"><aside class="a-sidebar"><div class="a-brand">${mark}<span>XBRL Agent</span></div><nav class="a-nav" aria-label="Primary">
+      return `<div class="shell-a ${railCollapsed ? "is-collapsed" : ""}"><aside class="a-sidebar"><div class="a-brand">${mark}<span>XBRL Agent</span><button class="a-rail-toggle" type="button" data-rail-toggle aria-label="${railCollapsed ? "Expand" : "Collapse"} navigation" title="${railCollapsed ? "Expand" : "Collapse"} navigation">${railCollapsed ? "›" : "‹"}</button></div><nav class="a-nav" aria-label="Primary">
         ${navButton("home",page,"Work queue","⌂")}${navButton("new",page,"New extraction","＋")}${navButton("runs",page,"Runs","▤")}
         <div class="a-nav-label">Current filing</div>${navButton("activity",page,"Overview","◉")}${navButton("review",page,"Figures review","⌗")}${navButton("notes",page,"Notes review","¶")}
       </nav><div class="a-sidebar-foot"><span class="avatar">AR</span><div><strong style="font-size:12px;color:var(--ink)">Aina Rahman</strong><div class="row-sub">Administrator</div></div></div></aside>
@@ -1078,6 +1085,11 @@
       document.getElementById("variant-label").textContent = directions.find(d => d.key === variant).name;
       document.querySelectorAll("button[data-page]").forEach(el => el.addEventListener("click", () => setParams({ page: el.dataset.page })));
       document.querySelectorAll("button[data-state]").forEach(el => el.addEventListener("click", () => setParams({ state: el.dataset.state })));
+      document.querySelector("[data-rail-toggle]")?.addEventListener("click", () => {
+        railCollapsed = !railCollapsed;
+        try { sessionStorage.setItem("xbrl-prototype-navigation-collapsed", String(railCollapsed)); } catch {}
+        render();
+      });
       let activeSourceRow = document.querySelector(".source-jump.selected-row");
       const selectSourceRow = row => {
         const pane = document.querySelector(".live-source");

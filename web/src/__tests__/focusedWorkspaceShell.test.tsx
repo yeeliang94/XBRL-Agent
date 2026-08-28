@@ -20,9 +20,11 @@ describe("focused-workspace shell", () => {
     expect(tokens.surface.navigation).toBe(pwc.grey50);
   });
 
-  test("App keeps a labelled navigation landmark, focused review mode, and skip target", () => {
+  test("App keeps a labelled navigation landmark, manual rail control, and skip target", () => {
     expect(appSource).toContain('aria-label="Workspace navigation"');
-    expect(appSource).toContain("app-shell--review");
+    expect(appSource).toContain("app-shell--collapsed");
+    expect(appSource).toContain('aria-label={railCollapsed ? "Expand navigation" : "Collapse navigation"}');
+    expect(appSource).not.toContain('reviewFocused ? " app-shell--review"');
     expect(appSource).toContain('href="#main-content"');
     expect(appSource).toContain('id="main-content"');
     expect(appSource).toContain("reviewFocused && state.filename ? state.filename : contextLabel");

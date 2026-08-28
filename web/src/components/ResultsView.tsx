@@ -35,11 +35,10 @@ function formatElapsed(startTime: number | null): string {
 
 const styles = {
   container: {
-    background: pwc.white,
-    borderRadius: pwc.radius.lg,
-    border: `1px solid ${pwc.grey200}`,
-    boxShadow: pwc.shadow.card,
-    overflow: "hidden",
+    background: "transparent",
+    borderRadius: 0,
+    border: "none",
+    overflow: "visible",
   } as React.CSSProperties,
   aiDisclaimer: {
     margin: 0,
@@ -73,10 +72,10 @@ const styles = {
     gap: pwc.space.lg,
   } as React.CSSProperties,
   card: {
-    background: pwc.grey50,
-    borderRadius: pwc.radius.md,
-    padding: pwc.space.lg,
-    textAlign: "center" as const,
+    background: "transparent",
+    borderRadius: 0,
+    padding: `${pwc.space.sm}px 0`,
+    textAlign: "left" as const,
   } as React.CSSProperties,
   cardLabel: {
     fontFamily: pwc.fontHeading,
@@ -170,7 +169,7 @@ const styles = {
     margin: `${pwc.space.md}px 0`,
     padding: `${pwc.space.sm}px ${pwc.space.md}px`,
     background: pwc.orange50,
-    border: `1px solid ${pwc.orange400}`,
+    border: "none",
     borderRadius: pwc.radius.sm,
     color: pwc.grey800,
     fontSize: 13,
@@ -191,7 +190,7 @@ const styles = {
     margin: `${pwc.space.lg}px ${pwc.space.xl}px 0`,
     padding: `${pwc.space.md}px ${pwc.space.lg}px`,
     background: pwc.grey50,
-    border: `1px solid ${pwc.grey200}`,
+    border: "none",
     borderRadius: pwc.radius.md,
     display: "flex",
     alignItems: "center",

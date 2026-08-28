@@ -301,13 +301,14 @@ export const ui = {
     color: tokens.color.text.secondary,
   } as CSSProperties,
 
-  // Static card — a distinct object. FLAT: no shadow, no hover treatment.
-  // Interactive (selectable/navigable) cards add className={uiClass.card}
-  // for the quiet border/surface hover response — cards never lift.
+  // Direction A card — intentionally not a visual container. Production
+  // features may keep the semantic grouping and padding supplied at the call
+  // site, but routine sections are separated by spacing/alignment rather than
+  // a rounded rectangle.
   card: {
-    background: tokens.surface.default,
-    border: `1px solid ${tokens.color.border.subtle}`,
-    borderRadius: tokens.radius.panel,
+    background: "transparent",
+    border: "none",
+    borderRadius: 0,
   } as CSSProperties,
 
   // Static bordered group — related controls or data, lighter than a card.

@@ -1062,7 +1062,7 @@ const styles = {
   linkBtn: { background: "none", border: "none", color: tokens.color.action.primary, cursor: "pointer", fontSize: 13, padding: "4px 8px 4px 0" } as React.CSSProperties,
   estimate: { fontSize: 13, color: pwc.grey700, background: pwc.grey50, padding: pwc.space.md, borderRadius: pwc.radius.sm } as React.CSSProperties,
   error: { color: pwc.errorText, fontSize: 13 } as React.CSSProperties,
-  warn: { color: pwc.grey800, fontSize: 13, borderLeft: `3px solid ${pwc.warning}`, paddingLeft: pwc.space.md } as React.CSSProperties,
+  warn: { color: pwc.grey800, fontSize: 13, background: pwc.orange50, padding: pwc.space.md, borderRadius: pwc.radius.sm } as React.CSSProperties,
   muted: { color: pwc.grey700, fontSize: 14 } as React.CSSProperties,
   checkRow: {
     display: "flex",
