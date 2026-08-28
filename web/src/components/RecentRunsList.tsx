@@ -1,6 +1,6 @@
 import { pwc, tokens } from "../lib/theme";
 import { denominationLabel } from "../lib/vocabulary";
-import { ui, uiClass } from "../lib/uiStyles";
+import { ui } from "../lib/uiStyles";
 import { runStatusDisplay } from "../lib/runStatus";
 import { StatusLabel } from "./StatusLabel";
 import type { RunSummaryJson } from "../lib/types";
@@ -107,7 +107,7 @@ export function RecentRunsList({
                 type="button"
                 key={run.id}
                 onClick={activate}
-                className={`recent-run-row ${uiClass.tableRow}`}
+                className="recent-run-row"
                 style={styles.row}
               >
                 <span style={styles.filename} title={run.pdf_filename}>
@@ -122,7 +122,9 @@ export function RecentRunsList({
                 <span style={styles.date} title={date.exact}>
                   {date.concise}
                 </span>
-                <span style={styles.action}>{actionLabel}</span>
+                <span className="recent-run-action" style={styles.action}>
+                  {actionLabel} →
+                </span>
               </button>
             );
           })}
@@ -174,6 +176,7 @@ const styles = {
     padding: `10px ${pwc.space.xs}px`,
     border: "none",
     borderBottom: `1px solid ${tokens.color.border.subtle}`,
+    background: "transparent",
     cursor: "pointer",
   } as React.CSSProperties,
   filename: {

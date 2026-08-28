@@ -10,16 +10,16 @@ interface Props {
 
 const styles = {
   container: {
-    background: pwc.white,
-    borderRadius: pwc.radius.md,
-    border: `1px solid ${pwc.grey200}`,
-    boxShadow: pwc.shadow.card,
-    padding: pwc.space.lg,
+    background: "transparent",
+    borderRadius: 0,
+    border: "none",
+    boxShadow: "none",
+    padding: `${pwc.space.lg}px 0`,
   } as React.CSSProperties,
   waiting: {
-    background: pwc.white,
-    borderRadius: pwc.radius.md,
-    border: `1px solid ${pwc.grey200}`,
+    background: pwc.grey50,
+    borderRadius: 0,
+    border: "none",
     padding: pwc.space.lg,
     textAlign: "center" as const,
     fontFamily: pwc.fontBody,

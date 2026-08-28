@@ -90,23 +90,22 @@ const styles = {
     fontWeight: 600,
     color: pwc.grey900,
   } as React.CSSProperties,
-  // Status frames: neutral white surface, hairline border, a status-coloured
-  // left rule carries the state (design-system "neutral-surface accent"). No
-  // coloured fills — the badge + left rule signal done/error.
+  // Status is carried by the dot, icon and text. Direction A does not add a
+  // coloured edge to terminal rows.
   terminalDone: {
-    borderLeft: `3px solid ${pwc.success}`,
+    borderLeft: "none",
   } as React.CSSProperties,
   terminalError: {
-    borderLeft: `3px solid ${pwc.error}`,
+    borderLeft: "none",
+    background: pwc.orange50,
   } as React.CSSProperties,
   warningsBlock: {
     marginTop: 0,
     padding: `${pwc.space.md}px ${pwc.space.lg}px`,
     borderRadius: 0,
-    background: pwc.white,
+    background: pwc.orange50,
     border: "none",
     borderTop: `1px solid ${pwc.grey200}`,
-    borderLeft: `3px solid ${pwc.warning}`,
     fontFamily: pwc.fontBody,
     fontSize: 12,
     color: pwc.grey800,
@@ -189,7 +188,7 @@ function TerminalRow({ event }: { event: TerminalEvent }) {
       return (
         <div
           data-terminal="completed-with-errors"
-          style={{ ...styles.terminalRow, borderLeft: `3px solid ${display.accent}` }}
+          style={{ ...styles.terminalRow, background: pwc.orange50 }}
         >
           <div style={styles.terminalMain}>
             <span

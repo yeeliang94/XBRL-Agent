@@ -319,11 +319,11 @@ export function NotesCoveragePanel({ runId }: Props) {
 
 const styles = {
   panel: {
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.md,
-    padding: pwc.space.md,
+    border: "none",
+    borderRadius: 0,
+    padding: 0,
     marginBottom: pwc.space.lg,
-    background: pwc.grey50,
+    background: "transparent",
   } as const,
   dim: { color: pwc.grey500, fontSize: 13 },
   error: { color: pwc.errorText, fontSize: 13 },

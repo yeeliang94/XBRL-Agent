@@ -607,8 +607,8 @@ const styles = {
   } as const,
   flagStack: { display: "flex", flexDirection: "column" as const, gap: pwc.space.sm },
   flagCard: {
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.md,
+    border: "none",
+    borderRadius: 0,
     padding: pwc.space.md,
     background: pwc.grey50,
   } as const,

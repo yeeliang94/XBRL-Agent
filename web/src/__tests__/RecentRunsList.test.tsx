@@ -43,7 +43,7 @@ function makeProps(overrides?: Partial<React.ComponentProps<typeof RecentRunsLis
 }
 
 describe("RecentRunsList", () => {
-  test("renders a card per run with filename and status", () => {
+  test("renders a divided row per run with filename and status", () => {
     render(<RecentRunsList {...makeProps()} />);
     expect(screen.getByText("DRAFT-2024.pdf")).toBeTruthy();
     expect(screen.getByText("FINCO-2023.pdf")).toBeTruthy();
@@ -85,7 +85,7 @@ describe("RecentRunsList", () => {
 
   test("draft rows offer 'Continue setup' and statuses render monochrome (CS3)", () => {
     render(<RecentRunsList {...makeProps()} />);
-    expect(screen.getByText("Continue setup")).toBeInTheDocument();
+    expect(screen.getByText("Continue setup →")).toBeInTheDocument();
     expect(screen.queryByText("Resume")).toBeNull();
     // Monochrome status: aria-hidden neutral symbol next to the label.
     const completed = screen.getByText("Completed");
@@ -94,10 +94,12 @@ describe("RecentRunsList", () => {
     expect((symbol as HTMLElement).style.color).toBe("rgba(0, 0, 0, 0.64)");
   });
 
-  test("row hover is owned by the shared table-row state", () => {
+  test("rows stay transparent and use their own clean work-queue interaction", () => {
     render(<RecentRunsList {...makeProps()} />);
     const row = screen.getByRole("button", { name: /DRAFT-2024\.pdf/i });
-    expect(row.classList.contains("pwc-table-row")).toBe(true);
-    expect(row.style.background).toBe("");
+    expect(row.classList.contains("pwc-table-row")).toBe(false);
+    expect(row.classList.contains("recent-run-row")).toBe(true);
+    expect(row.style.background).toBe("transparent");
+    expect(screen.getByText("Continue setup →")).toHaveClass("recent-run-action");
   });
 });

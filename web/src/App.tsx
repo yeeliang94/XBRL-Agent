@@ -51,6 +51,16 @@ const styles = {
     gap: 10,
     padding: "2px 8px 24px",
   } as const,
+  railToggle: {
+    ...ui.buttonQuiet,
+    width: 32,
+    minWidth: 32,
+    minHeight: 32,
+    padding: 0,
+    marginLeft: "auto",
+    borderRadius: pwc.radius.sm,
+    color: tokens.color.text.secondary,
+  } as const,
   brandMark: {
     width: 27,
     height: 27,
@@ -200,6 +210,25 @@ const styles = {
 
 export default function App() {
   const [state, dispatch] = useReducer(appReducer, undefined, bootState);
+  const [railCollapsed, setRailCollapsed] = useState<boolean>(() => {
+    try {
+      return window.sessionStorage.getItem("xbrl-navigation-collapsed") === "true";
+    } catch {
+      return false;
+    }
+  });
+  const toggleRail = useCallback(() => {
+    setRailCollapsed((current) => {
+      const next = !current;
+      try {
+        window.sessionStorage.setItem("xbrl-navigation-collapsed", String(next));
+      } catch {
+        // Session storage can be unavailable in locked-down browsers. The
+        // explicit control still works for the current render.
+      }
+      return next;
+    });
+  }, []);
   const [extractMode, setExtractMode] = useState<"queue" | "new">(
     () => window.location.hash === "#new-extraction" ? "new" : "queue",
   );
@@ -761,8 +790,8 @@ export default function App() {
 
   return (
     <div
-      className={`app-shell${reviewFocused ? " app-shell--review" : ""}`}
-      style={{ ...styles.page, ...(reviewFocused ? { gridTemplateColumns: "72px minmax(0, 1fr)" } : {}) }}
+      className={`app-shell${railCollapsed ? " app-shell--collapsed" : ""}`}
+      style={{ ...styles.page, ...(railCollapsed ? { gridTemplateColumns: "72px minmax(0, 1fr)" } : {}) }}
     >
       {/* Keyboard users can jump past the header + nav straight to the page
           content. Visually hidden until focused (index.css .skip-link). */}
@@ -787,8 +816,20 @@ export default function App() {
             />
           </svg>
           <span className="app-rail-brand-label" style={styles.headerTitle}>XBRL Agent</span>
+          <button
+            type="button"
+            className={`${uiClass.btnQuiet} app-rail-toggle`}
+            style={styles.railToggle}
+            onClick={toggleRail}
+            aria-label={railCollapsed ? "Expand navigation" : "Collapse navigation"}
+            aria-expanded={!railCollapsed}
+            aria-controls="app-primary-navigation"
+            title={railCollapsed ? "Expand navigation" : "Collapse navigation"}
+          >
+            <span aria-hidden="true">{railCollapsed ? "›" : "‹"}</span>
+          </button>
         </div>
-        <div className="app-rail-nav" style={styles.railNav}>
+        <div id="app-primary-navigation" className="app-rail-nav" style={styles.railNav}>
           <TopNav
             // The `concepts` view with a run id is the unified run page (a
             // History activity reached via "Review values" / the /concepts

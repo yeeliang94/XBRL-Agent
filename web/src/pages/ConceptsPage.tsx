@@ -2371,26 +2371,18 @@ function ReviewMetric({
   caption?: string;
   captionTestId?: string;
 }) {
-  // Status is carried by a left rule + the label's dark text on a NEUTRAL
-  // surface — matching the app's alerts (ui.alertWarning) and error banner,
-  // not a full coloured fill. `rule` null keeps the plain all-round border for
-  // the neutral tone. (Design language: status colour is an accent, never a
-  // brand-competing background wash.)
+  // Direction A keeps metrics borderless. Tone is carried by the compact label
+  // only; active and warning states must not grow an accent rule of their own.
   const palette =
     tone === "accent"
-      ? { rule: pwc.orange500, label: pwc.orange700 }
+      ? { label: pwc.orange700 }
       : tone === "warning"
-      ? { rule: pwc.warning, label: pwc.warningText }
+      ? { label: pwc.warningText }
       : tone === "success"
-      ? { rule: pwc.success, label: pwc.successText }
-      : { rule: null as string | null, label: pwc.grey700 };
+      ? { label: pwc.successText }
+      : { label: pwc.grey700 };
   return (
-    <div
-      style={{
-        ...styles.metric,
-        ...(palette.rule ? { borderLeft: `3px solid ${palette.rule}` } : {}),
-      }}
-    >
+    <div style={styles.metric}>
       <span style={styles.metricValue}>{value}</span>
       <span style={{ ...styles.metricLabel, color: palette.label }}>{label}</span>
       {caption && (
@@ -3073,9 +3065,8 @@ const styles = {
   errorBanner: {
     marginBottom: pwc.space.md,
     padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-    background: pwc.white,
-    border: `1px solid ${pwc.grey200}`,
-    borderLeft: `3px solid ${pwc.error}`,
+    background: pwc.orange50,
+    border: "none",
     borderRadius: pwc.radius.sm,
     color: pwc.grey800,
     fontSize: 13,
@@ -3208,8 +3199,8 @@ const styles = {
     textAlign: "center" as const,
     padding: `1px ${pwc.space.xs}px`,
     borderRadius: 9,
-    background: pwc.white,
-    border: `1px solid ${pwc.error}`,
+    background: pwc.orange50,
+    border: "none",
     color: pwc.grey800,
     fontSize: 11,
     fontWeight: pwc.weight.semibold,
@@ -3299,7 +3290,7 @@ const styles = {
     width: "100%",
     boxSizing: "border-box",
     height: 32,
-    border: `1px solid ${pwc.orange400}`,
+    border: `1px solid ${pwc.grey300}`,
     borderRadius: pwc.radius.md,
     background: pwc.orange50,
   } as React.CSSProperties,

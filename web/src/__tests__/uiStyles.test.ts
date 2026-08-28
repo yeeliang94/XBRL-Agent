@@ -23,6 +23,15 @@ describe("ui.cardInset — dense inset box", () => {
   });
 });
 
+describe("ui.card — Direction A semantic group", () => {
+  test("uses spacing and alignment rather than a decorative container", () => {
+    expect(ui.card.background).toBe("transparent");
+    expect(ui.card.border).toBe("none");
+    expect(ui.card.borderRadius).toBe(0);
+    expect(ui.card.boxShadow).toBeUndefined();
+  });
+});
+
 describe("ui.iconButton — shared glyph control", () => {
   test("meets the 32px minimum hit area", () => {
     expect(ui.iconButton.minWidth).toBeGreaterThanOrEqual(32);

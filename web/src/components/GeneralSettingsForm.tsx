@@ -244,8 +244,8 @@ const styles = {
     marginBottom: pwc.space.xl,
     padding: pwc.space.lg,
     background: pwc.grey100,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.sm,
+    border: "none",
+    borderRadius: 0,
   } as React.CSSProperties,
   autoSaveHeader: {
     display: "flex",

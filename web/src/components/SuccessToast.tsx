@@ -20,24 +20,21 @@ export interface SuccessToastProps {
 
 const AUTO_DISMISS_MS = 4000;
 
-// Neutral surface for every tone (design-system: status is an accent, not a
-// fill). The tone is carried by a coloured left rule + close-button icon;
-// the surface itself is white with a hairline grey border and grey800 body.
+// Floating toast: the close icon and explicit message carry tone. No accent
+// edge is added to the elevated surface.
 const TONE_STYLES: Record<
   ToastState["tone"],
-  { background: string; border: string; borderLeft: string; color: string; accent: string }
+  { background: string; border: string; color: string; accent: string }
 > = {
   success: {
     background: pwc.white,
     border: `1px solid ${pwc.grey200}`,
-    borderLeft: `3px solid ${pwc.success}`,
     color: pwc.grey800,
     accent: pwc.success,
   },
   error: {
     background: pwc.white,
     border: `1px solid ${pwc.grey200}`,
-    borderLeft: `3px solid ${pwc.error}`,
     color: pwc.grey800,
     accent: pwc.error,
   },
@@ -79,7 +76,6 @@ export function SuccessToast({ toast, onDismiss }: SuccessToastProps) {
         ...styles.toast,
         background: palette.background,
         border: palette.border,
-        borderLeft: palette.borderLeft,
         color: palette.color,
       }}
     >

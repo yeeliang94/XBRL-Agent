@@ -88,7 +88,7 @@ describe("Direction A semantic roles", () => {
 });
 
 describe("Direction A shell and responsive composition", () => {
-  test("pins the 220px rail, 64px top bar, 1500px canvas, and 72px review rail", () => {
+  test("pins the 220px rail, 64px top bar, 1500px canvas, and manual 72px rail", () => {
     expect(ui.appShell.gridTemplateColumns).toBe("220px minmax(0, 1fr)");
     expect(ui.appTopbar.height).toBe(64);
     expect(tokens.layout.standard).toBe(1500);
@@ -96,7 +96,9 @@ describe("Direction A shell and responsive composition", () => {
     expect(prototype).toContain(".shell-a { display: grid; grid-template-columns: 220px minmax(0,1fr)");
     expect(prototype).toContain(".a-topbar { height: 64px");
     expect(prototype).toContain("max-width: 1500px");
-    expect(prototype).toContain(".shell-a.review-mode { grid-template-columns: 72px minmax(0,1fr)");
+    expect(prototype).toContain(".shell-a.is-collapsed { grid-template-columns: 72px minmax(0,1fr)");
+    expect(prototype).toContain('data-rail-toggle');
+    expect(prototype).not.toContain('["review","notes"].includes(page) ? "review-mode"');
   });
 
   test("documents desktop, tablet, mobile, keyboard, and reduced-motion behavior", () => {
