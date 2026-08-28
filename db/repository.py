@@ -848,11 +848,10 @@ def upsert_notes_cell(
     `delete_notes_cells_for_run_sheet`) or, if the delete was skipped,
     replaces the same (sheet, row) slot in place.
 
-    Phase 7: every notes row gets a stable canonical ``concept_uuid``. If
-    the caller doesn't supply one, it's minted deterministically from
-    (sheet, row, label) — so the live coordinator path and the shared
-    facts API agree on identity for the same cell (incl. Sheet-12
-    LIST_OF_NOTES fan-out rows).
+    Every notes row gets a stable canonical ``concept_uuid``. Live writers that
+    validated a registry target supply its template-scoped ``node_uuid``. The
+    deterministic (sheet, row, label) mint remains a compatibility fallback for
+    synthetic tests and legacy databases without a template registry.
     """
     from concept_model.parser import mint_notes_concept_uuid
 
@@ -886,9 +885,14 @@ def upsert_notes_cell(
         conn.execute(
             "UPDATE notes_cells SET label = ?, html = ?, evidence = ?, "
             "source_pages = ?, updated_at = ?, concept_uuid = ?, "
-            "style_source = ?, content_revision = COALESCE(content_revision, 0) + 1 "
+            "style_source = ?, content_revision = COALESCE(content_revision, 0) + 1, "
+            "invalid_target = CASE WHEN ? THEN 0 ELSE invalid_target END, "
+            "invalid_target_reason = CASE WHEN ? THEN NULL ELSE invalid_target_reason END "
             "WHERE id = ?",
-            (label, html, evidence, pages_json, now, cuid, style, cell_id),
+            (
+                label, html, evidence, pages_json, now, cuid, style,
+                concept_uuid is not None, concept_uuid is not None, cell_id,
+            ),
         )
         return cell_id
     cuid = concept_uuid or mint_notes_concept_uuid(sheet, row, label)
@@ -1146,7 +1150,7 @@ def fetch_notes_node(
     row: int,
     template_prefix: str,
 ) -> Optional[dict]:
-    """Return ``{"row","label","kind"}`` for a notes_nodes registry row, or None.
+    """Return the template-scoped notes registry row for a coordinate, or None.
 
     Scoped by ``template_prefix`` (``"{standard}-{level}-"``) so the lookup
     resolves the row in the RUN's template family — the same family-scoping the
@@ -1156,13 +1160,21 @@ def fetch_notes_node(
     target is a real LEAF row, never to pick a row by label similarity.
     """
     rows = conn.execute(
-        "SELECT row, label, kind, template_id FROM notes_nodes "
+        "SELECT node_uuid, row, label, kind, slot_role, template_id "
+        "FROM notes_nodes "
         "WHERE sheet = ? AND row = ?",
         (sheet, row),
     ).fetchall()
     for r in rows:
-        if str(r[3] or "").startswith(template_prefix):
-            return {"row": int(r[0]), "label": r[1], "kind": r[2]}
+        if str(r[5] or "").startswith(template_prefix):
+            return {
+                "node_uuid": r[0],
+                "row": int(r[1]),
+                "label": r[2],
+                "kind": r[3],
+                "slot_role": r[4],
+                "template_id": r[5],
+            }
     return None
 
 
@@ -1173,14 +1185,21 @@ def list_notes_node_rows(
     ordered by row. Feeds the reviewer's ``read_template_labels`` tool so it can
     pick an explicit target coordinate."""
     rows = conn.execute(
-        "SELECT row, label, kind, template_id FROM notes_nodes "
+        "SELECT node_uuid, row, label, kind, slot_role, template_id FROM notes_nodes "
         "WHERE sheet = ? ORDER BY row",
         (sheet,),
     ).fetchall()
     out: list[dict] = []
     for r in rows:
-        if str(r[3] or "").startswith(template_prefix):
-            out.append({"row": int(r[0]), "label": r[1], "kind": r[2]})
+        if str(r[5] or "").startswith(template_prefix):
+            out.append({
+                "node_uuid": r[0],
+                "row": int(r[1]),
+                "label": r[2],
+                "kind": r[3],
+                "slot_role": r[4],
+                "template_id": r[5],
+            })
     return out
 
 

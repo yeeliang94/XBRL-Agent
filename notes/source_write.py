@@ -106,8 +106,8 @@ def resolve_target(
     *,
     template_prefix: str,
     allowed_sheets: Optional[Sequence[str]] = None,
-) -> str:
-    """Validate a write target and return its template label.
+) -> dict:
+    """Validate a write target and return its template-scoped registry row.
 
     The writer used to accept any `(sheet, row)` — a write to `Ghost` row 999
     succeeded and got a clean verdict, because the agent fell back to an empty
@@ -135,7 +135,7 @@ def resolve_target(
             f"{sheet} row {row} is a section heading, not a writable row. "
             "Write to the rows beneath it."
         )
-    return node.get("label") or ""
+    return node
 
 
 def write_cell_from_blocks(
@@ -165,11 +165,14 @@ def write_cell_from_blocks(
     pure-unit tests can exercise rendering without a template registry; every
     live caller passes it.
     """
+    concept_uuid = None
     if template_prefix:
-        label = resolve_target(
+        target = resolve_target(
             conn, sheet, row,
             template_prefix=template_prefix, allowed_sheets=allowed_sheets,
-        ) or label
+        )
+        label = target.get("label") or label
+        concept_uuid = target.get("node_uuid")
 
     if not block_ids:
         raise SourceWriteError(
@@ -231,6 +234,7 @@ def write_cell_from_blocks(
             conn, run_id=run_id, sheet=sheet, row=row, label=label,
             html=rendered.html, evidence=evidence,
             source_pages=source_pages or [], style_source=rendered.style_source,
+            concept_uuid=concept_uuid,
         )
         _lineage.mark_source_render(
             conn, run_id, sheet, row,

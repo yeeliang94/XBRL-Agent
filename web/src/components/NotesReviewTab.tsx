@@ -354,6 +354,14 @@ export function NotesReviewTab({ runId, onRegenerate, focusSheet, focusCell, onA
     });
   }, [runId]);
 
+  const handleCellRemoved = useCallback((removedSheet: string, removedRow: number) => {
+    setSheets((current) => current?.map((item) => (
+      item.sheet === removedSheet
+        ? { ...item, rows: item.rows.filter((row) => row.row !== removedRow) }
+        : item
+    )) ?? current);
+  }, []);
+
   // Firm-default theme (declared AFTER the notes-cells fetch so the cells load
   // first — the editor renders with the CSS-var fallbacks until the theme
   // arrives, which is a no-op for an un-customised firm). Fires once on mount.
@@ -631,6 +639,7 @@ export function NotesReviewTab({ runId, onRegenerate, focusSheet, focusCell, onA
               focusKey={active.key}
               focusRow={active.sheet === sh.sheet ? focusRow : null}
               onFormatted={reloadNotes}
+              onCellRemoved={handleCellRemoved}
               onActiveCellPages={onActiveCellPages}
             />
           ))}
@@ -680,6 +689,7 @@ function SheetSection({
   formatterModels,
   formatterDefaultModel,
   onFormatted,
+  onCellRemoved,
   focus = false,
   focusKey = 0,
   focusRow = null,
@@ -693,6 +703,7 @@ function SheetSection({
   formatterModels: ModelEntry[];
   formatterDefaultModel: string;
   onFormatted: () => Promise<void>;
+  onCellRemoved: (sheet: string, row: number) => void;
   /** When true (the reviewer picked this notes sub-tab / nav chip), the
    *  section opens and scrolls into view. */
   focus?: boolean;
@@ -1021,6 +1032,7 @@ function SheetSection({
                 cell={cell}
                 theme={theme}
                 onSaveStatusChange={handleRowSaveStatus}
+                onCellRemoved={onCellRemoved}
                 onActiveCellPages={onActiveCellPages}
               />
             ),
@@ -1088,6 +1100,7 @@ function CellRow({
   cell,
   theme,
   onSaveStatusChange,
+  onCellRemoved,
   onActiveCellPages,
 }: {
   runId: number;
@@ -1097,6 +1110,7 @@ function CellRow({
    *  clipboard output matches the editor preview. */
   theme: ClipboardFormatOptions;
   onSaveStatusChange?: (row: number, status: SaveStatus) => void;
+  onCellRemoved: (sheet: string, row: number) => void;
   /** Fired on focus/click with this cell's source PDF pages so the workspace
    *  can jump the Source PDF pane to where the note came from. */
   onActiveCellPages?: (pages: number[]) => void;
@@ -1109,7 +1123,7 @@ function CellRow({
   // human-readable signal is enough to explain why a saved edit looks a little
   // different without turning the review screen into a diagnostics panel.
   const [formatAdjusted, setFormatAdjusted] = useState(false);
-  const [removed, setRemoved] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
   const [removeBusy, setRemoveBusy] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
   // Keep a mutable ref to the current HTML so the debounced saver reads
@@ -1478,20 +1492,18 @@ function CellRow({
   }, [editor, cell.html, theme]);
 
   const handleRemoveInvalid = useCallback(async () => {
-    if (!window.confirm(
-      "Remove this quarantined content? It will no longer appear in the filing workbook.",
-    )) return;
     setRemoveBusy(true);
     setRemoveError(null);
     try {
       await removeInvalidNotesCell(runId, sheet, cell.row);
-      setRemoved(true);
+      setConfirmRemove(false);
+      onCellRemoved(sheet, cell.row);
     } catch (error) {
       setRemoveError(userMessage(error));
     } finally {
       setRemoveBusy(false);
     }
-  }, [cell.row, runId, sheet]);
+  }, [cell.row, onCellRemoved, runId, sheet]);
 
   // Auto-dismiss the "Copied" pill after 2 seconds so the UI goes back
   // to a neutral state without the user clicking anywhere.
@@ -1500,8 +1512,6 @@ function CellRow({
     const t = setTimeout(() => setCopiedAt(null), 2000);
     return () => clearTimeout(t);
   }, [copiedAt]);
-
-  if (removed) return null;
 
   return (
     <div
@@ -1522,21 +1532,34 @@ function CellRow({
         <div style={styles.cellRowNum}>Row {cell.row}</div>
         {cell.invalid_target && (
           <div
-            role="alert"
             style={{ ...ui.alertWarning, marginTop: pwc.space.sm, fontSize: 12 }}
           >
-            Not a filing field. Copy it into a writable field, then remove this
-            quarantined copy before filing.
+            <div role="status">
+              Not a filing field. Copy it into a writable field, then remove this
+              quarantined copy before filing.
+            </div>
             <button
               type="button"
               className={uiClass.btnGhost}
               style={{ ...ui.buttonGhost, display: "block", marginTop: pwc.space.sm }}
-              onClick={() => void handleRemoveInvalid()}
+              onClick={() => setConfirmRemove(true)}
               disabled={removeBusy}
             >
               {removeBusy ? "Removing…" : "Remove quarantined content"}
             </button>
             {removeError && <div style={{ marginTop: 4 }}>{removeError}</div>}
+            <ConfirmDialog
+              isOpen={confirmRemove}
+              title="Remove quarantined content?"
+              message="This permanently erases the quarantined copy and adds a filing tombstone. There is no undo. Copy anything you need into a writable field before continuing."
+              confirmLabel="Remove content"
+              busyLabel="Removing…"
+              busy={removeBusy}
+              onConfirm={() => void handleRemoveInvalid()}
+              onCancel={() => {
+                if (!removeBusy) setConfirmRemove(false);
+              }}
+            />
           </div>
         )}
         <StyleSourceChip source={cell.style_source} />

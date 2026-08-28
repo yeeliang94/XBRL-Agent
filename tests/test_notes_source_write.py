@@ -85,6 +85,30 @@ def test_the_written_cell_holds_the_rendered_source(conn_gen):
     assert "Receivables" in html and "Stated at cost" in html
 
 
+def test_a_validated_source_write_stamps_the_registry_identity(conn_gen):
+    conn, run_id, gen = conn_gen
+    conn.execute(
+        "INSERT INTO notes_nodes(node_uuid, template_id, sheet, row, label, kind, "
+        "slot_role) VALUES ('registry-11', 'mfrs-company-notes-v1', "
+        "'Notes', 11, 'Receivables', 'LEAF', 'INPUT')"
+    )
+    source_write.write_cell_from_blocks(
+        conn,
+        run_id=run_id,
+        generation_id=gen,
+        sheet="Notes",
+        row=11,
+        block_ids=["b1", "b2"],
+        template_prefix="mfrs-company-",
+    )
+
+    stored = conn.execute(
+        "SELECT concept_uuid FROM notes_cells WHERE run_id = ? AND row = 11",
+        (run_id,),
+    ).fetchone()
+    assert stored["concept_uuid"] == "registry-11"
+
+
 def test_naming_half_a_split_table_pulls_in_the_rest(conn_gen):
     """Rendering half a table and calling the note complete is exactly what
     the table group exists to prevent."""

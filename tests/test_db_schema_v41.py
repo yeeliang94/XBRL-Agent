@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import sqlite3
 
+import pytest
+
 from db.schema import CURRENT_SCHEMA_VERSION, init_db
 
 
@@ -63,6 +65,21 @@ def test_v40_upgrade_is_idempotent_and_preserves_existing_content(tmp_path):
             "template_manifest_exceptions", "template_slots", "taxonomy_concepts",
         ):
             conn.execute(f"DROP TABLE {table}")
+        migration_columns = {
+            "notes_nodes": ("slot_role", "taxonomy_element_id", "manifest_version"),
+            "run_concept_facts": ("invalid_target", "invalid_target_reason"),
+            "notes_cells": ("invalid_target", "invalid_target_reason"),
+            "mtool_fill_receipts": (
+                "readiness_classification", "taxonomy_version",
+                "manifest_versions_json", "semantic_coverage_json",
+            ),
+        }
+        try:
+            for table, columns in migration_columns.items():
+                for column in columns:
+                    conn.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
+        except sqlite3.OperationalError as exc:  # pragma: no cover
+            pytest.skip(f"SQLite too old for DROP COLUMN: {exc}")
         conn.commit()
     finally:
         conn.close()
@@ -78,5 +95,31 @@ def test_v40_upgrade_is_idempotent_and_preserves_existing_content(tmp_path):
         assert conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='template_slots'"
         ).fetchone()
+        assert {"slot_role", "taxonomy_element_id", "manifest_version"} <= _columns(
+            conn, "notes_nodes"
+        )
+        assert {"invalid_target", "invalid_target_reason"} <= _columns(
+            conn, "notes_cells"
+        )
+    finally:
+        conn.close()
+
+
+def test_template_slots_reject_duplicate_physical_coordinates(tmp_path):
+    db = tmp_path / "slots.db"
+    init_db(db)
+    conn = sqlite3.connect(db)
+    insert = (
+        "INSERT INTO template_slots("
+        "target_id, canonical_target_id, template_id, sheet, row, col, label, "
+        "slot_role, value_kind, dimensions_json, mapping_source, "
+        "manifest_version, workbook_fingerprint, validation_status"
+        ") VALUES (?, 'canonical', 'template', 'Sheet', 7, 'B', 'Label', "
+        "'INPUT', 'html', '{}', 'test', 'v1', 'fingerprint', 'writable')"
+    )
+    try:
+        conn.execute(insert, ("target-1",))
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(insert, ("target-2",))
     finally:
         conn.close()

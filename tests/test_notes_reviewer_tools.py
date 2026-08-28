@@ -239,6 +239,13 @@ def test_move_reroutes_and_clears_source(db_path: Path) -> None:
     cells = _cells(db_path, run_id)
     assert 49 not in cells  # source cleared
     assert 80 in cells and "fair value of FI" in cells[80]
+    with repo.db_session(db_path) as conn:
+        stored_uuid = conn.execute(
+            "SELECT concept_uuid FROM notes_cells "
+            "WHERE run_id = ? AND sheet = ? AND row = 80",
+            (run_id, _S12),
+        ).fetchone()[0]
+    assert stored_uuid == "n80"
 
 
 def test_edit_with_script_only_html_is_refused_not_destructive(db_path: Path) -> None:

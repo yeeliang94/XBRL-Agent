@@ -483,7 +483,7 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         template_id           TEXT NOT NULL,
         sheet                 TEXT NOT NULL,
         row                   INTEGER NOT NULL,
-        col                   TEXT,
+        col                   TEXT NOT NULL DEFAULT '',
         label                 TEXT NOT NULL,
         slot_role             TEXT NOT NULL,
         value_kind            TEXT NOT NULL,
@@ -494,7 +494,7 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         workbook_fingerprint  TEXT NOT NULL,
         validation_status     TEXT NOT NULL,
         exception_code        TEXT,
-        UNIQUE(template_id, sheet, row, col, target_id)
+        UNIQUE(template_id, sheet, row, col)
     )
     """,
 
@@ -1530,6 +1530,8 @@ _CREATE_INDEXES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS ix_cross_checks_run_id ON cross_checks(run_id)",
     "CREATE INDEX IF NOT EXISTS ix_runs_created_at ON runs(created_at DESC)",
     "CREATE INDEX IF NOT EXISTS ix_notes_cells_run_id ON notes_cells(run_id)",
+    "CREATE INDEX IF NOT EXISTS ix_notes_cells_sheet_row_run "
+    "ON notes_cells(sheet, row, run_id)",
     # v4 indexes — every per-run query the canonical model needs.
     "CREATE INDEX IF NOT EXISTS ix_concept_nodes_template_id ON concept_nodes(template_id)",
     "CREATE INDEX IF NOT EXISTS ix_concept_semantic_primary "
@@ -1548,6 +1550,8 @@ _CREATE_INDEXES: tuple[str, ...] = (
     # composite UNIQUE constraint already serves the coord lookup.
     "CREATE INDEX IF NOT EXISTS ix_concept_render_aliases_concept_uuid ON concept_render_aliases(concept_uuid)",
     "CREATE INDEX IF NOT EXISTS ix_run_concept_facts_run_id ON run_concept_facts(run_id)",
+    "CREATE INDEX IF NOT EXISTS ix_run_concept_facts_concept_uuid "
+    "ON run_concept_facts(concept_uuid)",
     "CREATE INDEX IF NOT EXISTS ix_concept_fact_events_run_id ON concept_fact_events(run_id)",
     "CREATE INDEX IF NOT EXISTS ix_run_concept_conflicts_run_id ON run_concept_conflicts(run_id)",
     # v8: per-turn metrics are always queried by their owning agent.

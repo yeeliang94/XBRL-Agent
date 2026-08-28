@@ -8,6 +8,7 @@ label, style, or row-position rules.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 from hashlib import sha256
 from pathlib import Path
 import json
@@ -17,7 +18,7 @@ from typing import Any
 import openpyxl
 
 from concept_model.notes_parser import parse_notes_template
-from concept_model.parser import ConceptNode, parse_template
+from concept_model.parser import ConceptNode, _derive_template_id, parse_template
 from concept_model.taxonomy_semantics import taxonomy_concept
 
 
@@ -195,11 +196,32 @@ def _prose_targets(path: Path) -> tuple[str, list[FilingTarget]]:
     return template_id, targets
 
 
-def targets_for_template(path_value: str | Path) -> tuple[str, list[FilingTarget]]:
-    path = Path(path_value)
+@lru_cache(maxsize=128)
+def _targets_for_template_cached(
+    resolved_path: str, file_size: int, modified_ns: int,
+) -> tuple[str, tuple[FilingTarget, ...]]:
+    """Parse a static template once per on-disk revision.
+
+    Size and nanosecond mtime participate in the cache key so template
+    regeneration invalidates the entry without introducing mutable global
+    state or a manual cache-reset protocol.
+    """
+    del file_size, modified_ns  # cache-key material; parsing only needs the path
+    path = Path(resolved_path)
     if path.name in _PROSE_FILENAMES:
-        return _prose_targets(path)
-    return _numeric_targets(path)
+        template_id, targets = _prose_targets(path)
+    else:
+        template_id, targets = _numeric_targets(path)
+    return template_id, tuple(targets)
+
+
+def targets_for_template(path_value: str | Path) -> tuple[str, list[FilingTarget]]:
+    path = Path(path_value).resolve()
+    stat = path.stat()
+    template_id, targets = _targets_for_template_cached(
+        str(path), stat.st_size, stat.st_mtime_ns,
+    )
+    return template_id, list(targets)
 
 
 def list_writable_targets(path_value: str | Path) -> list[FilingTarget]:
@@ -221,9 +243,37 @@ def writable_rows(
 
 def persist_template_manifest(db_path: str | Path, path_value: str | Path) -> int:
     """Replace one template's v41 taxonomy/slot manifest atomically."""
-    path = Path(path_value)
-    template_id, targets = targets_for_template(path)
+    path = Path(path_value).resolve()
     fingerprint = _workbook_fingerprint(path)
+    template_id = _derive_template_id(path)
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("PRAGMA foreign_keys = ON")
+    existing = conn.execute(
+        "SELECT COUNT(*), MIN(manifest_version), MAX(manifest_version), "
+        "MIN(workbook_fingerprint), MAX(workbook_fingerprint) "
+        "FROM template_slots WHERE template_id = ?",
+        (template_id,),
+    ).fetchone()
+    if (
+        existing
+        and int(existing[0] or 0) > 0
+        and existing[1] == existing[2] == MANIFEST_VERSION
+        and existing[3] == existing[4] == fingerprint
+    ):
+        conn.close()
+        return int(existing[0])
+
+    try:
+        parsed_template_id, targets = targets_for_template(path)
+    except Exception:
+        conn.close()
+        raise
+    if parsed_template_id != template_id:
+        conn.close()
+        raise ValueError(
+            f"Template id changed while parsing {path}: "
+            f"{template_id!r} != {parsed_template_id!r}"
+        )
     linked_ids = {
         element_id
         for target in targets
@@ -231,8 +281,6 @@ def persist_template_manifest(db_path: str | Path, path_value: str | Path) -> in
             [target.taxonomy_element_id] if target.taxonomy_element_id else []
         ) + list(target.dimensions.keys()) + list(target.dimensions.values())
     }
-    conn = sqlite3.connect(str(db_path))
-    conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("BEGIN")
     try:
         for element_id in sorted(linked_ids):
@@ -293,7 +341,7 @@ def persist_template_manifest(db_path: str | Path, path_value: str | Path) -> in
                 (
                     target.target_id, target.canonical_target_id,
                     target.template_id, target.sheet,
-                    target.row, target.col, target.label, target.slot_role,
+                    target.row, target.col or "", target.label, target.slot_role,
                     target.value_kind, target.taxonomy_element_id,
                     json.dumps(target.dimensions, sort_keys=True, separators=(",", ":")),
                     target.mapping_source, MANIFEST_VERSION, fingerprint,
@@ -326,7 +374,9 @@ def persist_template_manifest(db_path: str | Path, path_value: str | Path) -> in
                       WHERE nn.template_id = ?
                         AND nn.sheet = c.sheet AND nn.row = c.row
                         AND nn.kind = 'LEAF' AND nn.slot_role = 'INPUT'
-                    )
+                    ),
+                    invalid_target = 0,
+                    invalid_target_reason = NULL
                 WHERE EXISTS (
                     SELECT 1 FROM runs r
                     WHERE r.id = c.run_id
@@ -582,7 +632,7 @@ def semantic_coverage_for_run(
             "code": "invalid_targets_quarantined",
             "count": quarantined,
             "message": (
-                "Stored values were found on headings or other non-entry rows. "
+                "Stored values are not linked to writable filing fields. "
                 "Move or remove them before filing."
             ),
             "examples": [],

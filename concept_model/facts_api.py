@@ -682,14 +682,14 @@ def _post_notes_fact(conn: sqlite3.Connection, run_id: int, body: "FactWrite"):
     Preserves the gotcha #16 invariants the PATCH endpoint and writer
     enforce: HTML is sanitised against the shared tag whitelist, then
     rejected with 413 if it exceeds the 30k *rendered* character cap. The
-    notes row gets a deterministic concept_uuid (minted from
-    sheet/row/label when the caller omits one) so it's addressable in the
-    unified store.
+    notes row gets the run's template-scoped registry UUID when available (or
+    the legacy deterministic sheet/row/label UUID in an unregistered synthetic
+    database) so it remains addressable in the unified store.
     """
     from notes.html_sanitize import sanitize_notes_html
     from notes.html_to_text import rendered_length
     from notes.writer import CELL_CHAR_LIMIT
-    from db.repository import upsert_notes_cell
+    from db import repository as repo
     from concept_model.parser import mint_notes_concept_uuid
 
     if not body.sheet or body.row is None or not body.label:
@@ -723,30 +723,65 @@ def _post_notes_fact(conn: sqlite3.Connection, run_id: int, body: "FactWrite"):
             ),
         )
 
-    # A notes cell's identity is fully determined by (sheet, row, label) —
-    # always mint it server-side. A caller-supplied concept_uuid is
-    # ignored (peer-review): trusting it would let a client attach an
-    # arbitrary UUID — e.g. a face-statement concept's — to a notes row,
-    # corrupting the unified store's identity invariant. If the caller did
-    # send one, it must match the deterministic value or we reject, so a
-    # genuine round-trip still works but a cross-link is refused.
-    deterministic = mint_notes_concept_uuid(body.sheet, body.row, body.label)
-    if body.concept_uuid is not None and body.concept_uuid != deterministic:
+    run_row = conn.execute(
+        "SELECT run_config_json FROM runs WHERE id = ?", (run_id,)
+    ).fetchone()
+    try:
+        config = json.loads(run_row["run_config_json"] or "{}") if run_row else {}
+    except (TypeError, json.JSONDecodeError):
+        config = {}
+    template_prefix = (
+        f"{str(config.get('filing_standard', 'mfrs')).lower()}-"
+        f"{str(config.get('filing_level', 'company')).lower()}-"
+    )
+    registry_available = bool(conn.execute(
+        "SELECT 1 FROM notes_nodes WHERE template_id LIKE ? LIMIT 1",
+        (template_prefix + "%",),
+    ).fetchone())
+    node = repo.fetch_notes_node(
+        conn,
+        sheet=body.sheet,
+        row=body.row,
+        template_prefix=template_prefix,
+    )
+    if registry_available and (
+        node is None
+        or str(node.get("kind") or "").upper() != "LEAF"
+        or node.get("slot_role") != "INPUT"
+    ):
         raise HTTPException(
             status_code=400,
             detail=(
-                "concept_uuid for a notes write must equal the deterministic "
-                "UUID for (sheet, row, label); omit it to have the server "
-                "derive it."
+                f"{body.sheet} row {body.row} is not a writable filing field "
+                "for this run."
             ),
         )
-    concept_uuid = deterministic
-    upsert_notes_cell(
+
+    # Template-scoped node identity is authoritative when the registry is
+    # available. The legacy mint remains only for old/synthetic databases with
+    # no registry, so existing integrations degrade safely instead of cross-
+    # linking a note to an arbitrary face-statement concept.
+    expected_uuid = (
+        node["node_uuid"]
+        if node is not None
+        else mint_notes_concept_uuid(body.sheet, body.row, body.label)
+    )
+    if body.concept_uuid is not None and body.concept_uuid != expected_uuid:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "concept_uuid for a notes write must equal the run's "
+                "template-scoped filing-field identity; omit it to have the "
+                "server derive it."
+            ),
+        )
+    concept_uuid = expected_uuid
+    repo.upsert_notes_cell(
         conn,
         run_id=run_id,
         sheet=body.sheet,
         row=body.row,
-        label=body.label,
+        label=(node or {}).get("label") or body.label,
         html=cleaned,
         evidence=body.evidence,
         concept_uuid=concept_uuid,

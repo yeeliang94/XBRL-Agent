@@ -327,8 +327,41 @@ function normalisePreflight(body: unknown): Preflight | null {
     ok: raw.ok !== false,
     blockers: raw.blockers,
     warnings: raw.warnings,
-    field_semantics: raw.field_semantics,
+    field_semantics: normaliseFieldSemantics(
+      (body as { field_semantics?: unknown }).field_semantics,
+    ),
   };
+}
+
+function normaliseFieldSemantics(body: unknown): FieldSemantics | undefined {
+  if (!body || typeof body !== "object") return undefined;
+  const raw = body as Partial<FieldSemantics>;
+  if (raw.readiness !== "ready" && raw.readiness !== "needs_review") {
+    return undefined;
+  }
+  if (!raw.counts || typeof raw.counts !== "object") return undefined;
+  const countKeys: (keyof FieldSemantics["counts"])[] = [
+    "catalog_templates",
+    "selected_templates",
+    "template_slots",
+    "writable_fields",
+    "unresolved_fields",
+    "quarantined_values",
+  ];
+  if (countKeys.some((key) => typeof raw.counts?.[key] !== "number")) {
+    return undefined;
+  }
+  if (!Array.isArray(raw.manifest_versions) || !Array.isArray(raw.reviewed_exceptions)) {
+    return undefined;
+  }
+  if (raw.reviewed_exceptions.some((item) => (
+    !item
+    || typeof item.exception_code !== "string"
+    || typeof item.count !== "number"
+  ))) {
+    return undefined;
+  }
+  return raw as FieldSemantics;
 }
 
 function reviewedExceptionLabel(code: string): string {

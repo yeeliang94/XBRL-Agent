@@ -42,21 +42,37 @@ def client_and_run(tmp_path: Path, monkeypatch) -> tuple[TestClient, int]:
             conn, "sample.pdf",
             session_id="sess-a", output_dir=str(tmp_path / "sess-a"),
         )
+        def node_uuid(template_id: str, row: int) -> str:
+            return conn.execute(
+                "SELECT node_uuid FROM notes_nodes "
+                "WHERE template_id = ? AND row = ?",
+                (template_id, row),
+            ).fetchone()[0]
+
         repo.upsert_notes_cell(
             conn, run_id=run_id, sheet="Notes-CI", row=5,
             label="*Disclosure of corporate information", html="<p>CI 5</p>",
             evidence="Page 3", source_pages=[3],
+            concept_uuid=node_uuid(
+                "mfrs-company-notes-corporateinfo-v1", 5,
+            ),
         )
         repo.upsert_notes_cell(
             conn, run_id=run_id, sheet="Notes-CI", row=7,
             label="Explanation of reasons for the restatement of previous financial statements figures",
             html="<p>CI 7</p>",
             evidence="Page 3", source_pages=[3],
+            concept_uuid=node_uuid(
+                "mfrs-company-notes-corporateinfo-v1", 7,
+            ),
         )
         repo.upsert_notes_cell(
             conn, run_id=run_id, sheet="Notes-SummaryofAccPol", row=7,
             label="Revenue", html="<p>Accrual</p>",
             evidence="Page 5", source_pages=[5],
+            concept_uuid=node_uuid(
+                "mfrs-company-notes-accountingpolicies-v1", 7,
+            ),
         )
 
     return TestClient(server_module.app), run_id
@@ -153,6 +169,51 @@ def test_legacy_heading_content_is_visible_but_cannot_be_edited(
         for sheet in body["sheets"] if sheet["sheet"] == "Notes-CI"
         for item in sheet["rows"]
     )
+
+
+def test_remove_endpoint_refuses_a_valid_filing_cell(client_and_run) -> None:
+    import server as server_module
+
+    client, run_id = client_and_run
+    response = client.delete(
+        f"/api/runs/{run_id}/notes_cells/Notes-CI/5"
+    )
+
+    assert response.status_code == 409
+    assert "valid filing field" in response.json()["detail"].lower()
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        assert conn.execute(
+            "SELECT 1 FROM notes_cells "
+            "WHERE run_id = ? AND sheet = 'Notes-CI' AND row = 5",
+            (run_id,),
+        ).fetchone()
+
+
+def test_identity_mismatch_is_visible_and_removable(client_and_run) -> None:
+    import server as server_module
+
+    client, run_id = client_and_run
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        conn.execute(
+            "UPDATE notes_cells SET concept_uuid = 'legacy-identity', "
+            "invalid_target = 0, invalid_target_reason = NULL "
+            "WHERE run_id = ? AND sheet = 'Notes-CI' AND row = 5",
+            (run_id,),
+        )
+
+    body = client.get(f"/api/runs/{run_id}/notes_cells").json()
+    row = next(
+        item
+        for sheet in body["sheets"] if sheet["sheet"] == "Notes-CI"
+        for item in sheet["rows"] if item["row"] == 5
+    )
+    assert row["invalid_target"] is True
+    assert "not linked" in row["invalid_target_reason"].lower()
+
+    removed = client.delete(
+        f"/api/runs/{run_id}/notes_cells/Notes-CI/5"
+    )
+    assert removed.status_code == 200
 
 
 def test_get_notes_cells_returns_empty_for_run_with_no_notes(tmp_path: Path) -> None:

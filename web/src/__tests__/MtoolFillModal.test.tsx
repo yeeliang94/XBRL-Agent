@@ -110,6 +110,69 @@ describe("MtoolFillModal", () => {
     expect(screen.getByText(/reviewed template exceptions/i)).toBeTruthy();
   });
 
+  test("shows filing-field coverage that needs review", async () => {
+    const preflight = {
+      ok: false,
+      blockers: [{
+        code: "invalid_targets_quarantined",
+        count: 1,
+        message: "A stored value is not linked to a writable filing field.",
+        examples: [],
+      }],
+      warnings: [],
+      field_semantics: {
+        readiness: "needs_review",
+        counts: {
+          catalog_templates: 15,
+          selected_templates: 1,
+          template_slots: 420,
+          writable_fields: 317,
+          unresolved_fields: 0,
+          quarantined_values: 1,
+        },
+        manifest_versions: ["2022-v1-slot-semantics-1"],
+        reviewed_exceptions: [],
+      },
+    };
+    mockFetch((url) => {
+      if (url.endsWith("/preflight")) {
+        return new Response(JSON.stringify(preflight), { status: 200 });
+      }
+      if (url.includes("/mtool-fill")) {
+        return new Response(JSON.stringify(FILL_DOC), { status: 200 });
+      }
+      return new Response("{}", { status: 200 });
+    });
+
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+
+    const coverage = await screen.findByRole("region", { name: /filing field coverage/i });
+    expect(coverage).toHaveTextContent(/filing fields need review/i);
+    expect(coverage).toHaveTextContent(/1 value\(s\) need moving or removal/i);
+  });
+
+  test("ignores a partial field-semantics payload instead of crashing", async () => {
+    mockFetch((url) => {
+      if (url.endsWith("/preflight")) {
+        return new Response(JSON.stringify({
+          ok: true,
+          blockers: [],
+          warnings: [],
+          field_semantics: { readiness: "ready" },
+        }), { status: 200 });
+      }
+      if (url.includes("/mtool-fill")) {
+        return new Response(JSON.stringify(FILL_DOC), { status: 200 });
+      }
+      return new Response("{}", { status: 200 });
+    });
+
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+
+    await waitFor(() => expect(screen.getByText(/values will be written/i)).toBeTruthy());
+    expect(screen.queryByRole("region", { name: /filing field coverage/i })).toBeNull();
+  });
+
   test("uploads a template and shows a clean report", async () => {
     const reportHeader = JSON.stringify({
       status: "ok",

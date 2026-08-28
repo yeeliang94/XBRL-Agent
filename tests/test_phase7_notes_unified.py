@@ -51,14 +51,53 @@ def client(tmp_path: Path, monkeypatch) -> TestClient:
     conn = sqlite3.connect(str(db))
     try:
         cur = conn.execute(
-            "INSERT INTO runs(created_at, pdf_filename, status, started_at) "
-            "VALUES ('Z', 'n.pdf', 'running', 'Z')"
+            "INSERT INTO runs(created_at, pdf_filename, status, started_at, "
+            "run_config_json) VALUES ('Z', 'n.pdf', 'running', 'Z', ?)",
+            (json.dumps({
+                "filing_standard": "mfrs",
+                "filing_level": "company",
+            }),),
         )
         run_id = cur.lastrowid
         leaf = conn.execute(
             "SELECT concept_uuid FROM concept_nodes "
             "WHERE render_sheet = 'SOFP-CuNonCu' AND kind = 'LEAF' LIMIT 1"
         ).fetchone()[0]
+        notes_nodes = [
+            (
+                f"registry-notes-ci-{row}",
+                "mfrs-company-notes-corporateinfo-v1",
+                "Notes-CI",
+                row,
+                label,
+                "LEAF",
+                "INPUT",
+            )
+            for row, label in (
+                (4, "Corporate information"),
+                (5, "L"),
+                (6, "L"),
+                (7, "L"),
+                (8, "L"),
+            )
+        ]
+        notes_nodes.extend(
+            (
+                f"registry-list-{row}",
+                "mfrs-company-notes-listofnotes-v1",
+                "Notes-Listofnotes",
+                row,
+                label,
+                "LEAF",
+                "INPUT",
+            )
+            for row, label in ((20, "Revenue note"), (21, "Tax note"))
+        )
+        conn.executemany(
+            "INSERT INTO notes_nodes(node_uuid, template_id, sheet, row, label, "
+            "kind, slot_role) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            notes_nodes,
+        )
         conn.commit()
     finally:
         conn.close()
@@ -95,6 +134,7 @@ def test_notes_write_routes_to_notes_cells(client: TestClient) -> None:
     assert len(rows) == 1
     assert rows[0]["sheet"] == "Notes-CI" and rows[0]["row"] == 4
     assert rows[0]["concept_uuid"] == body["concept_uuid"]
+    assert rows[0]["concept_uuid"] == "registry-notes-ci-4"
     assert "<p>Hello</p>" in rows[0]["html"]
 
 
@@ -209,10 +249,8 @@ def test_notes_write_rejects_mismatched_concept_uuid(client: TestClient) -> None
 
 
 def test_notes_write_accepts_matching_concept_uuid(client: TestClient) -> None:
-    """Round-trip: supplying the correct deterministic UUID is accepted."""
-    from concept_model.parser import mint_notes_concept_uuid
-
-    correct = mint_notes_concept_uuid("Notes-CI", 8, "L")
+    """Round-trip: supplying the template-scoped registry UUID is accepted."""
+    correct = "registry-notes-ci-8"
     r = client.post(
         f"/api/runs/{client.run_id}/facts",
         json={"html": "<p>x</p>", "sheet": "Notes-CI", "row": 8, "label": "L",
@@ -224,8 +262,7 @@ def test_notes_write_accepts_matching_concept_uuid(client: TestClient) -> None:
 
 def test_listofnotes_rows_persist_distinct_uuids(client: TestClient) -> None:
     """Two LIST_OF_NOTES rows written via the shared API land with
-    distinct, deterministic concept UUIDs in notes_cells."""
-    from concept_model.parser import mint_notes_concept_uuid
+    their distinct, template-scoped registry UUIDs in notes_cells."""
 
     for row, label in [(20, "Revenue note"), (21, "Tax note")]:
         resp = client.post(
@@ -237,11 +274,7 @@ def test_listofnotes_rows_persist_distinct_uuids(client: TestClient) -> None:
     rows = _notes_rows(client.db_path)
     by_uuid = {r["concept_uuid"] for r in rows}
     assert len(by_uuid) == 2
-    # Deterministic — matches the standalone mint.
-    expected = {
-        mint_notes_concept_uuid("Notes-Listofnotes", 20, "Revenue note"),
-        mint_notes_concept_uuid("Notes-Listofnotes", 21, "Tax note"),
-    }
+    expected = {"registry-list-20", "registry-list-21"}
     assert by_uuid == expected
 
 

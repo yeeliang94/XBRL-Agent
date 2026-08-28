@@ -1675,6 +1675,7 @@ def create_notes_reviewer_agent(
                     f"{detail} — refusing to overwrite the cell with nothing. "
                     "Re-send valid prose HTML."
                 )
+            node = None
             if action == "edit":
                 existing = _read_cell(ctx.deps.db_path, ctx.deps.run_id, sheet, row)
                 if existing is None:
@@ -1698,6 +1699,7 @@ def create_notes_reviewer_agent(
                 repo.upsert_notes_cell(
                     conn, run_id=ctx.deps.run_id, sheet=sheet, row=row,
                     label=label, html=cleaned, evidence=ev, source_pages=source_pages,
+                    concept_uuid=(node or {}).get("node_uuid"),
                 )
                 # The cell now holds content — it must not be blanked by a
                 # stale tombstone (e.g. authoring into a previously-cleared row).
@@ -1798,6 +1800,7 @@ def create_notes_reviewer_agent(
                 repo.upsert_notes_cell(
                     conn, run_id=ctx.deps.run_id, sheet=to_sheet, row=to_row,
                     label=label, html=cleaned, evidence=ev, source_pages=source_pages,
+                    concept_uuid=(node or {}).get("node_uuid"),
                 )
                 conn.execute(
                     "DELETE FROM notes_cells WHERE run_id = ? AND sheet = ? AND row = ?",
