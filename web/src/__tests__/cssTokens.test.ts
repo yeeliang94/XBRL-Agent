@@ -55,6 +55,13 @@ describe("CSS interaction colours stay in sync with theme tokens", () => {
     expect(indexCss).toContain(tokens.color.action.primary.toUpperCase());
   });
 
+  test("activity states use canonical theme colours", () => {
+    expect(indexCss).not.toContain("#D04A02");
+    expect(indexCss).not.toContain("#252525");
+    expect(indexCss).toContain(pwc.orange500.toUpperCase());
+    expect(indexCss).toContain(pwc.grey900.toUpperCase());
+  });
+
   test("interactive cards respond with border/surface, never a lift", () => {
     const cardHover = indexCss.slice(indexCss.indexOf(".PWC-CARD"));
     const hoverBlock = cardHover.slice(0, cardHover.indexOf("}") + 400);

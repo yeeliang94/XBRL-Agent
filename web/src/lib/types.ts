@@ -15,6 +15,10 @@ export interface SettingsResponse {
   proxy_url: string;
   api_key_set: boolean;
   api_key_preview: string;
+  /** Whole-scout deadline in seconds. Zero disables the deadline. */
+  scout_wallclock_seconds?: number;
+  /** Maximum model responses the scout may request (1-40). */
+  scout_max_turns?: number;
 }
 
 export type EventPhase =
@@ -451,6 +455,16 @@ export interface ToolTimelineEntry {
   state?: "active" | "done" | "failed" | "cancelled";
 }
 
+/** One provider-supplied reasoning block assembled from streamed deltas. */
+export interface ReasoningBlock {
+  thinking_id: string;
+  content: string;
+  startedAt: number;
+  endedAt: number | null;
+  duration_ms: number | null;
+  isComplete: boolean;
+}
+
 export interface ResultJsonData {
   fields: Record<string, unknown>;
   metadata?: Record<string, unknown>;
@@ -667,10 +681,8 @@ export type AgentTabStatus = "pending" | "running" | "complete" | "failed" | "ca
 /**
  * Per-agent streaming state — one per agent in a multi-agent run.
  *
- * Phase 6: the chat-view streaming fields (thinkingBuffer, activeThinkingId,
- * thinkingBlocks, streamingText, textSegments) were removed when the chat
- * feed was replaced by the tool-call timeline. We now only track the event
- * stream and the derived toolTimeline plus per-agent metadata.
+ * Provider-supplied reasoning is retained as structured blocks so it can be
+ * rendered without rebuilding the complete event history on every delta.
  */
 export interface AgentState {
   agentId: string;
@@ -680,6 +692,7 @@ export interface AgentState {
   currentPhase: EventPhase | null;
   events: SSEEvent[];
   toolTimeline: ToolTimelineEntry[];
+  reasoningBlocks: ReasoningBlock[];
   tokens: TokenData | null;
   error: ErrorData | null;
   workbookPath: string | null;
@@ -1222,6 +1235,7 @@ export function createAgentState(agentId: string, role: string, label: string): 
     currentPhase: null,
     events: [],
     toolTimeline: [],
+    reasoningBlocks: [],
     tokens: null,
     error: null,
     workbookPath: null,

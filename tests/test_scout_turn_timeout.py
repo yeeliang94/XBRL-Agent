@@ -264,6 +264,54 @@ async def test_scout_wallclock_cap_fires_between_fast_turns(tmp_path, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_scout_max_turns_reads_runtime_setting(tmp_path, monkeypatch):
+    """The saved turn cap is read for each new streaming Scout run."""
+    monkeypatch.setenv("XBRL_SCOUT_MAX_TURNS", "2")
+    monkeypatch.setattr(scout_agent, "SCOUT_TURN_TIMEOUT", 60.0)
+    monkeypatch.setattr(scout_agent, "SCOUT_WALLCLOCK_TIMEOUT", 60.0)
+    monkeypatch.setattr(
+        scout_agent.Agent, "is_call_tools_node", staticmethod(lambda _node: False),
+    )
+    monkeypatch.setattr(
+        scout_agent.Agent, "is_model_request_node", staticmethod(lambda _node: True),
+    )
+
+    class _ImmediateStream:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+    class _ModelNode:
+        def stream(self, _ctx):
+            return _ImmediateStream()
+
+    class _ModelNodeRun(_FakeAgentRun):
+        async def __anext__(self):
+            await super().__anext__()
+            return _ModelNode()
+
+    run = _ModelNodeRun(node_delay=0.0, n_nodes=3)
+    factory, deps = _fake_factory(run, tmp_path / "f.pdf")
+    monkeypatch.setattr(scout_agent, "create_scout_agent", factory)
+
+    with pytest.raises(RuntimeError, match=r"Scout hit turn limit \(2\)"):
+        await scout_agent.run_scout_streaming(
+            pdf_path=tmp_path / "f.pdf", model="test",
+        )
+    assert deps._model_turns_cap == 2
+    assert deps._model_turns_used == 2
+    assert not hasattr(deps, "_loop_max_iters")
+
+
+@pytest.mark.asyncio
 async def test_scout_timeout_keeps_already_saved_infopack(tmp_path, monkeypatch):
     """If the scout saved a valid infopack BEFORE stalling, the timeout path
     returns it rather than discarding the work."""
@@ -301,9 +349,12 @@ async def test_scout_success_path_saves_trace(tmp_path, monkeypatch):
 async def test_non_streaming_run_scout_wallclock(tmp_path, monkeypatch):
     """Item 1 step 4: the CLI-style ``run_scout`` is bounded too."""
     monkeypatch.setattr(scout_agent, "SCOUT_WALLCLOCK_TIMEOUT", 0.3)
+    monkeypatch.setenv("XBRL_SCOUT_MAX_TURNS", "7")
+    captured = {}
 
     class _HangingAgent:
-        async def run(self, prompt, deps=None):
+        async def run(self, prompt, deps=None, usage_limits=None):
+            captured["request_limit"] = usage_limits.request_limit
             await asyncio.sleep(3600)
 
     deps = scout_agent.ScoutDeps(
@@ -320,5 +371,6 @@ async def test_non_streaming_run_scout_wallclock(tmp_path, monkeypatch):
         pdf_path=tmp_path / "f.pdf", model="test",
     )
     assert time.monotonic() - start < 5.0
+    assert captured["request_limit"] == 7
     assert isinstance(infopack, Infopack)
     assert infopack.statements == {}

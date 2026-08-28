@@ -44,6 +44,28 @@ describe("PdfSourcePane", () => {
     expect(img.getAttribute("src")).toBe("/api/runs/3/pdf/page/20.png");
   });
 
+  test("groups source shortcuts, paging, and zoom in one compact toolbar", () => {
+    render(<PdfSourcePane runId={3} pages={[19, 20]} totalPages={50} embedded />);
+    const sourcesSummary = screen.getByText("Sources (2)");
+    const sourcesMenu = sourcesSummary.closest("details") as HTMLDetailsElement;
+    expect(sourcesSummary).toBeTruthy();
+    expect(screen.getByTestId("pdf-prev")).toHaveAttribute("data-tooltip", "Previous PDF page");
+    expect(screen.getByTestId("pdf-next")).toHaveAttribute("data-tooltip", "Next PDF page");
+    expect(screen.getByTestId("pdf-zoom-out")).toHaveAttribute("data-tooltip", "Zoom out");
+    expect(screen.queryByText("Source pages")).toBeNull();
+    fireEvent.click(sourcesSummary);
+    fireEvent.click(screen.getByRole("button", { name: "Open cited PDF page 20" }));
+    expect(sourcesMenu.open).toBe(false);
+    fireEvent.click(sourcesSummary);
+    fireEvent.pointerDown(document.body);
+    expect(sourcesMenu.open).toBe(false);
+    const img = screen.getByTestId("pdf-page-image") as HTMLImageElement;
+    fireEvent.click(screen.getByTestId("pdf-zoom-in"));
+    expect(img.style.width).toBe("150%");
+    fireEvent.click(screen.getByTestId("pdf-zoom-out"));
+    expect(img.style.width).toBe("100%");
+  });
+
   test("clearing a citation resets the viewer to the start of the PDF", () => {
     const { rerender } = render(
       <PdfSourcePane runId={3} pages={[20]} totalPages={50} />,

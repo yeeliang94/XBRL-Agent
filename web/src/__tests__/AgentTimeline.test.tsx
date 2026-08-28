@@ -61,6 +61,58 @@ describe("AgentTimeline", () => {
     expect(cards[2].getAttribute("data-state")).toBe("active");
   });
 
+  test("streams provider reasoning inline and keeps it interleaved with tool actions", () => {
+    const events = [
+      {
+        event: "thinking_delta",
+        data: { thinking_id: "scout_think_0", content: "The contents page is likely page 3." },
+        timestamp: 1,
+      },
+      {
+        event: "thinking_end",
+        data: { thinking_id: "scout_think_0", summary: "", full_length: 0 },
+        timestamp: 1.1,
+      },
+      {
+        event: "thinking_delta",
+        data: { thinking_id: "scout_think_1", content: "I will inspect the statement index next." },
+        timestamp: 3,
+      },
+      {
+        event: "thinking_end",
+        data: { thinking_id: "scout_think_1", summary: "", full_length: 0 },
+        timestamp: 3.2,
+      },
+    ] as unknown as SSEEvent[];
+    const timeline = [
+      makeEntry({
+        tool_call_id: "find_toc",
+        tool_name: "find_toc",
+        startTime: 2000,
+        result_summary: "Found page 3",
+        endTime: 2500,
+      }),
+    ];
+
+    const { container } = render(
+      <AgentTimeline events={events} toolTimeline={timeline} isRunning={false} />,
+    );
+
+    expect(screen.getAllByText("Model reasoning")).toHaveLength(2);
+    expect(screen.getAllByText("Provider-supplied")).toHaveLength(2);
+    expect(screen.getByText("The contents page is likely page 3.")).toBeInTheDocument();
+    expect(screen.getByText("I will inspect the statement index next.")).toBeInTheDocument();
+
+    const rows = container.querySelectorAll(
+      "[data-testid='reasoning-block'], [data-testid='tool-card']",
+    );
+    expect(Array.from(rows).map((row) => row.getAttribute("data-testid"))).toEqual([
+      "reasoning-block",
+      "tool-card",
+      "reasoning-block",
+    ]);
+  });
+
   test("Step 3.5 — successful complete event renders a completed terminal row", () => {
     // Cast through unknown: the test only needs `success` to drive the
     // terminal row. Full AgentCompleteData would demand agent_id etc. we

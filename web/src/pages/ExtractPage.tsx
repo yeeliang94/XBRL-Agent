@@ -12,6 +12,7 @@ import { HomeHero } from "../components/HomeHero";
 import { PreRunPanel } from "../components/PreRunPanel";
 import { PipelineStages } from "../components/PipelineStages";
 import { AgentTimeline } from "../components/AgentTimeline";
+import { ActivitySentenceCarousel } from "../components/ActivitySentenceCarousel";
 import { TokenDashboard } from "../components/TokenDashboard";
 import { ResultsView } from "../components/ResultsView";
 import { AgentTabs } from "../components/AgentTabs";
@@ -20,6 +21,7 @@ import { ValidatorTab } from "../components/ValidatorTab";
 import { NotesSubTabBar } from "../components/NotesSubTabBar";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { buildToolTimeline, filterEventsBySubAgent } from "../lib/buildToolTimeline";
+import { buildReasoningTimeline } from "../lib/buildReasoningTimeline";
 import { NOTES_12_AGENT_ID, isNotes12AgentId } from "../lib/notes";
 import { isNonAgentTab } from "../lib/agentTabKinds";
 import { describePdfSidecar } from "../lib/pdfSidecar";
@@ -472,6 +474,7 @@ export function ExtractPage({
         <AgentTimeline
           events={state.events}
           toolTimeline={state.toolTimeline}
+          reasoningBlocks={state.reasoningBlocks}
           isRunning={state.isRunning}
         />
       )}
@@ -657,24 +660,27 @@ export function ActiveTabPanel({
   const rawEvents = activeAgent ? activeAgent.events : state.events;
   const running = activeAgent ? activeAgent.status === "running" : state.isRunning;
   const aggregateTimeline = activeAgent ? activeAgent.toolTimeline : state.toolTimeline;
+  const aggregateReasoning = activeAgent ? activeAgent.reasoningBlocks : state.reasoningBlocks;
 
   // Memoised sub-agent filter — avoids redoing O(N) filter + timeline
   // rebuild on unrelated rerenders (e.g. token-delta churn from other
   // agents). For the "All" view we reuse the pre-computed aggregate
   // timeline and skip the rebuild entirely.
-  const { events, toolTimeline } = useMemo(() => {
+  const { events, toolTimeline, reasoningBlocks } = useMemo(() => {
     if (showSubTabs && notes12SubId !== null) {
       const filtered = filterEventsBySubAgent(rawEvents, notes12SubId);
-      return { events: filtered, toolTimeline: buildToolTimeline(filtered) };
+      return {
+        events: filtered,
+        toolTimeline: buildToolTimeline(filtered),
+        reasoningBlocks: buildReasoningTimeline(filtered),
+      };
     }
-    return { events: rawEvents, toolTimeline: aggregateTimeline };
-  }, [rawEvents, notes12SubId, showSubTabs, aggregateTimeline]);
-  const recentActivities = useMemo(
-    () => semanticActivities(events, toolTimeline, 4),
-    [events, toolTimeline],
-  );
-  const currentActivity = recentActivities[0] ?? null;
-
+    return {
+      events: rawEvents,
+      toolTimeline: aggregateTimeline,
+      reasoningBlocks: aggregateReasoning,
+    };
+  }, [rawEvents, notes12SubId, showSubTabs, aggregateTimeline, aggregateReasoning]);
   if (state.activeTab === "validator") {
     // PLAN-stop-and-validation-visibility Phase 5.3: prefer the live
     // progress feed while the run is still going. Once `run_complete`
@@ -746,7 +752,6 @@ export function ActiveTabPanel({
     !state.isRunning &&
     (activeAgent?.status === "failed" || activeAgent?.status === "cancelled") &&
     !!onRerunAgent;
-
   return (
     <div
       role="tabpanel"
@@ -819,52 +824,12 @@ export function ActiveTabPanel({
           onSelect={setNotes12SubId}
         />
       )}
-      <div style={styles.semanticActivity}>
-        <div
-          className="pwc-status-change"
-          role="status"
-          aria-label="Current agent activity"
-          aria-live="polite"
-          aria-atomic="true"
-          style={styles.currentActivity}
-        >
-          <span style={styles.recentUpdateLabel}>Current activity</span>
-          <span style={styles.currentActivityTitle}>
-            {currentActivity?.title ?? (running ? "Waiting for the next update…" : "Workstream finished")}
-          </span>
-          {currentActivity?.detail && <span style={styles.currentActivityDetail}>{currentActivity.detail}</span>}
-        </div>
-        {recentActivities.length > 1 && (
-          <div aria-label="Recent agent updates" style={styles.recentActivityList}>
-            <span style={styles.recentUpdateLabel}>Recent</span>
-            {recentActivities.slice(1).map((activity) => (
-              <div key={activity.id} style={styles.recentActivityRow}>
-                <time style={styles.recentActivityTime}>
-                  {activity.timestamp
-                    ? new Date(activity.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-                    : "Now"}
-                </time>
-                <span style={styles.recentActivityText}>
-                  {activity.title}{activity.detail ? ` · ${activity.detail}` : ""}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-      <details className="technical-activity" style={styles.technicalDisclosure}>
-        <summary style={styles.technicalSummary}>
-          Technical details
-          <span aria-hidden="true" className="pwc-disclosure-chevron" style={styles.usageChevron} />
-        </summary>
-        <div className="pwc-disclosure-content">
-          <AgentTimeline
-            events={events}
-            toolTimeline={toolTimeline}
-            isRunning={running}
-          />
-        </div>
-      </details>
+      <ActivitySentenceCarousel
+        events={events}
+        toolTimeline={toolTimeline}
+        reasoningBlocks={reasoningBlocks}
+        isRunning={running}
+      />
     </div>
   );
 }
@@ -1027,78 +992,6 @@ const styles = {
     alignItems: "center",
     gap: pwc.space.md,
     marginLeft: "auto",
-  } as const,
-  semanticActivity: {
-    padding: `${pwc.space.lg}px 0 ${pwc.space.md}px`,
-    borderBottom: `1px solid ${pwc.grey100}`,
-  } as const,
-  currentActivity: {
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: pwc.space.xs,
-    fontFamily: pwc.fontBody,
-    fontSize: 14,
-    lineHeight: 1.5,
-    color: pwc.grey800,
-  } as const,
-  currentActivityTitle: {
-    fontFamily: pwc.fontHeading,
-    fontSize: 16,
-    fontWeight: pwc.weight.medium,
-    color: pwc.grey900,
-  } as const,
-  currentActivityDetail: {
-    fontFamily: pwc.fontBody,
-    fontSize: 13,
-    color: pwc.grey700,
-  } as const,
-  recentActivityList: {
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: 0,
-    marginTop: pwc.space.lg,
-  } as const,
-  recentActivityRow: {
-    display: "grid",
-    gridTemplateColumns: "52px minmax(0, 1fr)",
-    gap: pwc.space.sm,
-    padding: `${pwc.space.sm}px 0`,
-    borderBottom: `1px solid ${pwc.grey100}`,
-    fontFamily: pwc.fontBody,
-    fontSize: 12,
-    lineHeight: 1.45,
-  } as const,
-  recentActivityTime: {
-    color: pwc.grey500,
-    fontVariantNumeric: "tabular-nums",
-  } as const,
-  recentActivityText: {
-    minWidth: 0,
-    color: pwc.grey700,
-  } as const,
-  recentUpdateLabel: {
-    fontFamily: pwc.fontHeading,
-    fontSize: 11,
-    fontWeight: pwc.weight.semibold,
-    color: pwc.grey700,
-    textTransform: "uppercase" as const,
-    letterSpacing: "0.02em",
-  } as const,
-  technicalDisclosure: {
-    minWidth: 0,
-  } as const,
-  technicalSummary: {
-    minHeight: 44,
-    padding: `${pwc.space.md}px 0`,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: pwc.space.md,
-    cursor: "pointer",
-    fontFamily: pwc.fontHeading,
-    fontSize: 13,
-    fontWeight: pwc.weight.medium,
-    color: pwc.grey700,
   } as const,
   activityTitle: {
     fontFamily: pwc.fontHeading,

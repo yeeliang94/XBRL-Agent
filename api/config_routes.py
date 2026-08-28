@@ -79,6 +79,8 @@ _ADMIN_ONLY_SETTINGS_KEYS = frozenset({
     "spot_check_mode",
     "notes_coverage",
     "pdf_sidecar",
+    "scout_wallclock_seconds",
+    "scout_max_turns",
     "notes_source_integrity",
     "entity_memory",
     "tolerance_rm",
@@ -98,6 +100,8 @@ _SETTING_ENV_KEYS = {
     "spot_check_mode": "XBRL_SPOT_CHECK_MODE",
     "notes_coverage": "XBRL_NOTES_COVERAGE",
     "pdf_sidecar": "XBRL_PDF_SIDECAR",
+    "scout_wallclock_seconds": "XBRL_SCOUT_WALLCLOCK_S",
+    "scout_max_turns": "XBRL_SCOUT_MAX_TURNS",
     "notes_source_integrity": "XBRL_NOTES_SOURCE_INTEGRITY",
     "entity_memory": "XBRL_ENTITY_MEMORY",
     "tolerance_rm": "XBRL_TOLERANCE_RM",
@@ -463,6 +467,42 @@ async def update_settings(body: dict, request: Request):
     # Default off; firm-wide + cost-changing, so admin-only (set below).
     if "pdf_sidecar" in body:
         updates["XBRL_PDF_SIDECAR"] = "true" if body["pdf_sidecar"] else "false"
+    if "scout_wallclock_seconds" in body:
+        if isinstance(body["scout_wallclock_seconds"], bool):
+            raise HTTPException(
+                status_code=400,
+                detail="scout_wallclock_seconds must be 0 or a positive number.",
+            )
+        try:
+            scout_wallclock = float(body["scout_wallclock_seconds"])
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400,
+                detail="scout_wallclock_seconds must be 0 or a positive number.",
+            )
+        if not 0 <= scout_wallclock < float("inf"):
+            raise HTTPException(
+                status_code=400,
+                detail="scout_wallclock_seconds must be 0 or a positive number.",
+            )
+        updates["XBRL_SCOUT_WALLCLOCK_S"] = str(scout_wallclock)
+    if "scout_max_turns" in body:
+        from scout.limits import MAX_SCOUT_MAX_TURNS
+
+        scout_max_turns = body["scout_max_turns"]
+        if (
+            not isinstance(scout_max_turns, int)
+            or isinstance(scout_max_turns, bool)
+            or not 1 <= scout_max_turns <= MAX_SCOUT_MAX_TURNS
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "scout_max_turns must be a whole number between 1 and "
+                    f"{MAX_SCOUT_MAX_TURNS}."
+                ),
+            )
+        updates["XBRL_SCOUT_MAX_TURNS"] = str(scout_max_turns)
     # Notes source integrity rollout mode (gotcha #31). Validated against the
     # enum rather than a typed-out list: `integrity_mode()` fails CLOSED to
     # `off` on an unrecognised value, so an unvalidated write here would look

@@ -80,7 +80,7 @@ vi.mock("../lib/sse", () => ({
   },
 }));
 
-describe("App — AgentTimeline integration", () => {
+describe("App — live activity integration", () => {
   beforeEach(() => {
     window.history.replaceState({}, "", "/");
     captureOnEvent = null;
@@ -91,7 +91,7 @@ describe("App — AgentTimeline integration", () => {
     cleanup();
   });
 
-  test("live extract view renders a tool-card row when a tool_call event arrives", async () => {
+  test("live extract view renders a flat activity sentence when a tool_call arrives", async () => {
     const { default: App } = await import("../App");
     render(<App />);
 
@@ -124,7 +124,7 @@ describe("App — AgentTimeline integration", () => {
 
     // 4. Feed a synthetic status + tool_call through the captured callback.
     // The status event establishes the agent tab; the tool_call should land
-    // in toolTimeline and render as a ToolCallCard row inside AgentTimeline.
+    // in toolTimeline and render as a sentence in the unified live carousel.
     await act(async () => {
       captureOnEvent!({
         event: "status",
@@ -150,14 +150,14 @@ describe("App — AgentTimeline integration", () => {
       });
     });
 
-    // 5. Assertions: the tool row is rendered via the new AgentTimeline /
-    // ToolCallCard stack, NOT the legacy ChatFeed chrome. Multiple cards
-    // may render (tabbed path + legacy single-agent path both visible in
-    // this state) so we assert presence, not uniqueness.
+    // 5. Assertions: the tool action is a flat sentence, not a tool card or
+    // legacy chat-feed row.
     await waitFor(() => {
-      expect(screen.getAllByTestId("tool-card").length).toBeGreaterThan(0);
+      expect(screen.getByRole("region", { name: /live activity/i })).toBeInTheDocument();
+      expect(screen.getByTestId("activity-sentence")).toBeInTheDocument();
     });
-    expect(screen.getAllByText("Reading template").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Reading template/i).length).toBeGreaterThan(0);
+    expect(screen.queryByTestId("tool-card")).toBeNull();
     // Legacy ChatFeed header must be gone — we stripped the whole component.
     expect(screen.queryByText(/Chat Feed/i)).toBeNull();
   });

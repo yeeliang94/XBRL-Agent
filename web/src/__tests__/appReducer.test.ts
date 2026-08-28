@@ -581,11 +581,7 @@ describe("appReducer", () => {
 
   // --- P0: New streaming event types ---
 
-  // Phase 6: the chat feed's thinking buffers were deleted along with the
-  // ChatFeed path. thinking_delta and thinking_end events still land in
-  // state.events[] for the audit trail, but no streaming buffer or
-  // per-block reasoning object is synthesised from them any more.
-  test("thinking_delta and thinking_end events accumulate in events[] without streaming buffers", () => {
+  test("thinking_delta and thinking_end build complete provider reasoning blocks", () => {
     let state = runningState();
 
     state = appReducer(state, {
@@ -606,6 +602,16 @@ describe("appReducer", () => {
     });
 
     expect(state.events).toHaveLength(2);
+    expect(state.reasoningBlocks).toEqual([
+      {
+        thinking_id: "think_1",
+        content: "Reasoning about SOFP fields",
+        startedAt: 1000,
+        endedAt: 2000,
+        duration_ms: 1000,
+        isComplete: true,
+      },
+    ]);
     // None of the old streaming fields should be on the state object.
     const shape = state as StrippedChatFields;
     expect(shape.thinkingBuffer).toBeUndefined();
@@ -1462,11 +1468,7 @@ describe("agentReducer", () => {
     expect(agent.toolTimeline[0].duration_ms).toBe(50);
   });
 
-  // Phase 6 — dead streaming state is gone from AgentState/AppState. The
-  // reducers must still accept thinking/text events (they're still streamed
-  // by some agents) but they append to `events` only and do not populate
-  // any streaming-buffer fields.
-  test("thinking_delta event is recorded in events[] but no streaming buffer is written", () => {
+  test("thinking_delta is retained as incremental reasoning without legacy chat buffers", () => {
     let agent = createAgentState("sofp_0", "SOFP", "SOFP");
     agent = agentReducer(agent, {
       event: "thinking_delta",
@@ -1475,6 +1477,16 @@ describe("agentReducer", () => {
     } as SSEEvent);
     // The event lands in events[] for completeness.
     expect(agent.events).toHaveLength(1);
+    expect(agent.reasoningBlocks).toEqual([
+      {
+        thinking_id: "t1",
+        content: "thinking...",
+        startedAt: 1000,
+        endedAt: null,
+        duration_ms: null,
+        isComplete: false,
+      },
+    ]);
     // AgentState type no longer has thinkingBuffer / activeThinkingId etc.,
     // so we assert the fields are not present on the returned object.
     const shape = agent as StrippedChatFields;

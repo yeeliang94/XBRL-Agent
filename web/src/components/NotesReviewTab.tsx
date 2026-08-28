@@ -23,7 +23,6 @@ import {
 } from "react";
 import { userMessage } from "../lib/errors";
 import { useEditor, EditorContent } from "@tiptap/react";
-import type { Editor } from "@tiptap/react";
 import { StarterKit } from "@tiptap/starter-kit";
 import { TableRow } from "@tiptap/extension-table-row";
 // Notes editor v2 marks. StarterKit already bundles bold/italic/strike/
@@ -40,33 +39,14 @@ import { Color } from "@tiptap/extension-color";
 import { Highlight } from "@tiptap/extension-highlight";
 import { TextAlign } from "@tiptap/extension-text-align";
 import {
-  TEXT_COLORS,
-  HIGHLIGHT_COLORS,
-  type PaletteSwatch,
-} from "../lib/notesPalette";
-import {
   StyledTable,
   StyledTableCell,
   StyledTableHeader,
-  currentCellAttrs,
-  applyCellFill,
-  applyCellBorderAll,
-  toggleCellBorderSide,
-  applyCellDoubleUnderline,
-  resetCellToTheme,
-  applyCellAlign,
-  type CellAlign,
   captureSelection,
   restoreSelection,
-  gridBorderValue,
-  DEFAULT_BORDER_COLOR,
-  BORDER_NONE,
-  BORDER_HIDDEN,
-  FILL_NONE,
-  type BorderSide,
 } from "../lib/cellFormatting";
-import { Indent, indentBlocks, outdentBlocks } from "../lib/notesIndent";
-import { pwc, component } from "../lib/theme";
+import { Indent } from "../lib/notesIndent";
+import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import {
   fetchNotesCells,
@@ -97,7 +77,8 @@ import {
 import { ClipboardFormatControls } from "./ClipboardFormatControls";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { notesSheetDisplayName } from "../lib/sheetLabels";
-import type { ModelEntry } from "../lib/types";
+import { ResizableDivider } from "./ResizableDivider";
+import { NotesEditorToolbar } from "./NotesEditorToolbar";
 import "./NotesReviewTab.css";
 
 // Debounce window for the PATCH save. Matched to the 1.5s decision in
@@ -113,8 +94,7 @@ export interface NotesReviewTabProps {
    *  render (e.g. in a screenshot test) still works. */
   onRegenerate?: (runId: number) => void;
   /** Sheet to focus when the reviewer picks a notes sub-tab in the
-   *  SheetNavigator: that section auto-expands and scrolls into view. null /
-   *  undefined = no focus (the default stacked, all-collapsed view). */
+   *  SheetNavigator. The section scrolls into view; null means no focus. */
   focusSheet?: string | null;
   /** Jump to a specific cell (sheet + row) and scroll it into view — driven by
    *  the workspace's notes checklist ("jump to where this note landed"). `key`
@@ -129,10 +109,59 @@ export interface NotesReviewTabProps {
    *  way a face figure already does. Optional — the standalone Notes tab
    *  renders identically without it. */
   onActiveCellPages?: (pages: number[]) => void;
-  /** Direction-A run workspace: show a persistent note index and only the
-   *  selected note editor. The standalone component keeps its historical
-   *  expandable sheet sections for compatibility. */
-  compactSingleCell?: boolean;
+}
+
+interface SourceNotePlacement {
+  sheet: string;
+  row: number;
+  row_label: string;
+  kind: "primary" | "fan_out" | "carve_out";
+}
+
+interface SourceNoteInventoryRow {
+  note_num: number;
+  title: string;
+  status: "placed" | "missing" | "skipped" | "suspected_gap";
+  placements: SourceNotePlacement[];
+  reviewer_added?: boolean;
+  page_lo: number | null;
+  page_hi: number | null;
+}
+
+function sourceNotePages(note: SourceNoteInventoryRow): number[] {
+  if (note.page_lo == null) return [];
+  const hi = Math.max(note.page_lo, note.page_hi ?? note.page_lo);
+  return Array.from({ length: hi - note.page_lo + 1 }, (_, index) => note.page_lo! + index);
+}
+
+function sourceNoteForCell(
+  notes: SourceNoteInventoryRow[],
+  cellKey: string,
+  current: number | null,
+): number | null {
+  const matches = notes.filter((note) =>
+    note.placements.some(
+      (placement) => `${placement.sheet}:${placement.row}` === cellKey,
+    ),
+  );
+  if (current != null && matches.some((note) => note.note_num === current)) {
+    return current;
+  }
+  return matches.length === 1 ? matches[0].note_num : null;
+}
+
+const NOTES_SHEET_INDEX: Record<string, number> = {
+  "Notes-CI": 0,
+  "Notes-SummaryofAccPol": 1,
+  "Notes-Listofnotes": 2,
+  "Notes-Issuedcapital": 3,
+  "Notes-RelatedPartytran": 4,
+};
+
+function notesSheetNumber(sheet: string, filingStandard: string): number | null {
+  const offset = NOTES_SHEET_INDEX[sheet];
+  if (offset == null) return null;
+  return (filingStandard.toLowerCase() === "mpers" ? 11 : 10) + offset;
 }
 
 /** Editor lifecycle status chip per cell. */
@@ -254,24 +283,26 @@ export function NotesReviewTab({
   focusSheet,
   focusCell,
   onActiveCellPages,
-  compactSingleCell = false,
 }: NotesReviewTabProps) {
   // sheets / loading / error are the basic fetch lifecycle. We keep them
   // at the tab level (not in the individual cell editor) so one network
   // failure surfaces in a single banner instead of per-cell flicker.
   const [sheets, setSheets] = useState<NotesSheet[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [sourceNotes, setSourceNotes] = useState<SourceNoteInventoryRow[] | null>(null);
+  const [sourceNotesError, setSourceNotesError] = useState(false);
+  const [selectedSourceNote, setSelectedSourceNote] = useState<number | null>(null);
+  const [sourceRailWidth, setSourceRailWidth] = useState(240);
+  const [filingStandard, setFilingStandard] = useState("mfrs");
+  const actionsMenuRef = useRef<HTMLDetailsElement | null>(null);
 
   // Regenerate-notes confirm modal state. `pendingCount` is populated
   // by the edited_count fetch; a truthy value opens the dialog and
   // stores the message "This will overwrite N edited cells".
   const [pendingCount, setPendingCount] = useState<number | null>(null);
 
-  // Formatter model picker (mirrors ReviewTab / NotesReviewerPanel). Loaded
-  // once at the tab level and threaded into every SheetSection so per-sheet
-  // sections don't each re-fetch /api/settings. `formatterDefaultModel` seeds
-  // each section's dropdown; empty = the server default (the run's model).
-  const [formatterModels, setFormatterModels] = useState<ModelEntry[]>([]);
+  // Formatter default is loaded once and threaded into each sheet. Empty lets
+  // the server use the run's model.
   const [formatterDefaultModel, setFormatterDefaultModel] = useState<string>("");
   // (The /api/settings fetch that populates these is declared AFTER the
   // notes-cells load effect below, so the notes GET stays the first request —
@@ -292,18 +323,15 @@ export function NotesReviewTab({
   );
   const themeVars = useMemo(() => themeToCssVars(theme), [theme]);
 
-  // Which sheet the navigator has focused. Clicking a nav chip expands +
-  // scrolls that sheet (via SheetSection's focus effect). `key` bumps on
-  // every click so re-clicking an already-focused-but-manually-collapsed
-  // sheet re-opens it. Initialised from the `focusSheet` prop so a deep
-  // link / Notes sub-tab pick still auto-opens its section.
+  // Which sheet the navigator has focused. `key` bumps on every click so
+  // re-clicking the active sheet still scrolls it into view.
   const [active, setActive] = useState<{ sheet: string | null; key: number }>(
     () => ({ sheet: focusSheet ?? null, key: 0 }),
   );
   // Reset the navigator focus when the run changes. `active`'s lazy
   // initializer only runs at mount, so without this a sheet the reviewer
   // focused in run A (via a nav chip) would survive the runId change and
-  // auto-expand + scroll a same-named section in run B — mirroring the
+  // scroll a same-named section in run B — mirroring the
   // sheets/loadError reset in the fetch effect below. Seed from focusSheet
   // so a deep-linked / sub-tab-focused run still opens its section.
   useEffect(() => {
@@ -337,6 +365,9 @@ export function NotesReviewTab({
   useEffect(() => {
     setSelectedCellKey(null);
     setNoteSearch("");
+    setSelectedSourceNote(null);
+    setSourceNotes(null);
+    setSourceNotesError(false);
   }, [runId]);
 
   useEffect(() => {
@@ -363,6 +394,40 @@ export function NotesReviewTab({
       cancelled = true;
     };
   }, [runId]);
+
+  // The coverage projection is the durable scout inventory plus its exact
+  // structured placements. It is the source-first index for the review
+  // workspace; no label matching is performed in the browser.
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch(`/api/runs/${runId}/notes-coverage`, { signal: controller.signal })
+      .then((response) => {
+        if (!response.ok) throw new Error(String(response.status));
+        return response.json();
+      })
+      .then((payload) => {
+        const rows = Array.isArray(payload?.rows)
+          ? payload.rows.filter((row: SourceNoteInventoryRow) => row.note_num > 0)
+          : [];
+        setSourceNotes(rows);
+        setSourceNotesError(false);
+      })
+      .catch((error) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setSourceNotes([]);
+        setSourceNotesError(true);
+      });
+    return () => controller.abort();
+  }, [runId]);
+
+  useEffect(() => {
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      const menu = actionsMenuRef.current;
+      if (menu?.open && !menu.contains(event.target as Node)) menu.open = false;
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePointer);
+  }, []);
 
   const reloadNotes = useCallback(() => {
     return fetchNotesCells(runId).then((resp) => {
@@ -411,7 +476,6 @@ export function NotesReviewTab({
       .then((r) => (r.ok ? r.json() : null))
       .then((s) => {
         if (cancelled || !s) return;
-        setFormatterModels(s.available_models || []);
         setFormatterDefaultModel(
           (s.default_models && s.default_models.notes_formatter) || "",
         );
@@ -442,6 +506,7 @@ export function NotesReviewTab({
           const override = d.notes_table_style ?? null;
           setRunTheme(override);
           lastSavedRunThemeRef.current = override;
+          setFilingStandard(d.filing_standard || "mfrs");
         }
       })
       .catch(() => {
@@ -457,7 +522,7 @@ export function NotesReviewTab({
     () => (sheets ?? []).flatMap((sheet) =>
       // The projection deliberately includes blank filing fields. They are
       // authorable review targets (including the numeric-note disclosure
-      // slot), not absent extraction results, so the compact workspace must
+      // slot), not absent extraction results, so the workspace must
       // keep them reachable just like the full-template view does.
       sheet.rows.map((cell) => ({
         key: `${sheet.sheet}:${cell.row}`,
@@ -467,31 +532,101 @@ export function NotesReviewTab({
     ),
     [sheets],
   );
-  const filteredNoteEntries = useMemo(() => {
+  const filteredSourceNotes = useMemo(() => {
     const query = noteSearch.trim().toLowerCase();
-    if (!query) return noteEntries;
-    return noteEntries.filter(({ sheet, cell }) =>
-      `${cell.label} ${notesSheetDisplayName(sheet.sheet)} ${cell.row}`
+    const inventory = sourceNotes ?? [];
+    if (!query) return inventory;
+    return inventory.filter((note) =>
+      `${note.note_num} ${note.title}`
         .toLowerCase()
         .includes(query),
     );
-  }, [noteEntries, noteSearch]);
-  const selectedEntry =
-    noteEntries.find((entry) => entry.key === selectedCellKey) ?? null;
+  }, [noteSearch, sourceNotes]);
+  // Avoid a transient all-read-only render while the scout inventory request
+  // settles. Inventory placement can replace this fallback selection later.
+  const activeCellKey = selectedCellKey
+    ?? (sourceNotes === null ? noteEntries[0]?.key : null)
+    ?? null;
 
   useEffect(() => {
-    if (!compactSingleCell || noteEntries.length === 0) return;
-    if (selectedCellKey && noteEntries.some((entry) => entry.key === selectedCellKey)) return;
-    const preferred = focusSheet
-      ? noteEntries.find((entry) => entry.sheet.sheet === focusSheet)
-      : null;
-    setSelectedCellKey((preferred ?? noteEntries[0]).key);
-  }, [compactSingleCell, focusSheet, noteEntries, selectedCellKey]);
+    if (sourceNotes == null || sourceNotes.length === 0) return;
+    if (selectedSourceNote != null && sourceNotes.some((note) => note.note_num === selectedSourceNote)) return;
+    if (selectedCellKey != null) {
+      setSelectedSourceNote(
+        sourceNoteForCell(sourceNotes, selectedCellKey, selectedSourceNote),
+      );
+      return;
+    }
+    const first = sourceNotes[0];
+    setSelectedSourceNote(first.note_num);
+    reportCellPages(sourceNotePages(first), onActiveCellPages);
+    const placement = first.placements[0];
+    if (placement) {
+      setActive((current) => ({ sheet: placement.sheet, key: current.key + 1 }));
+      setFocusRow(placement.row);
+      setSelectedCellKey(`${placement.sheet}:${placement.row}`);
+    }
+  }, [onActiveCellPages, selectedCellKey, selectedSourceNote, sourceNotes]);
+
+  // Legacy runs may have XBRL fields but no persisted scout inventory. Keep
+  // the review surface usable and initialise the PDF state from the first
+  // field, while the left rail states that the inventory is unavailable.
+  useEffect(() => {
+    if (
+      sourceNotes == null ||
+      sourceNotes.length > 0 ||
+      noteEntries.length === 0 ||
+      selectedCellKey
+    ) return;
+    const first = focusSheet
+      ? noteEntries.find((entry) => entry.sheet.sheet === focusSheet) ?? noteEntries[0]
+      : noteEntries[0];
+    setSelectedCellKey(first.key);
+    reportCellPages(first.cell.source_pages, onActiveCellPages);
+  }, [focusSheet, noteEntries, onActiveCellPages, selectedCellKey, sourceNotes]);
 
   useEffect(() => {
-    if (!compactSingleCell || !selectedEntry) return;
-    reportCellPages(selectedEntry.cell.source_pages, onActiveCellPages);
-  }, [compactSingleCell, onActiveCellPages, selectedEntry]);
+    if (!focusCell || sourceNotes == null) return;
+    const cellKey = `${focusCell.sheet}:${focusCell.row}`;
+    setSelectedSourceNote((current) =>
+      sourceNoteForCell(sourceNotes, cellKey, current),
+    );
+  }, [focusCell, sourceNotes]);
+
+  const selectSourcePlacement = useCallback((
+    note: SourceNoteInventoryRow,
+    placement: SourceNotePlacement,
+  ) => {
+    setSelectedSourceNote(note.note_num);
+    reportCellPages(sourceNotePages(note), onActiveCellPages);
+    setActive((current) => ({ sheet: placement.sheet, key: current.key + 1 }));
+    setFocusRow(placement.row);
+    setSelectedCellKey(`${placement.sheet}:${placement.row}`);
+  }, [onActiveCellPages]);
+
+  const selectSourceNote = useCallback((note: SourceNoteInventoryRow) => {
+    const placement = note.placements[0];
+    if (placement) {
+      selectSourcePlacement(note, placement);
+      return;
+    }
+    setSelectedSourceNote(note.note_num);
+    reportCellPages(sourceNotePages(note), onActiveCellPages);
+    setFocusRow(null);
+    setSelectedCellKey(null);
+  }, [onActiveCellPages, selectSourcePlacement]);
+
+  const handleWorkspaceCellActivate = useCallback((sheet: string, row: number) => {
+    const cellKey = `${sheet}:${row}`;
+    setSelectedCellKey(cellKey);
+    // A filing field can be intentionally blank or have no source placement.
+    // A field can also contain more than one source note. Preserve the note
+    // the reviewer arrived from when it is one of the valid matches; otherwise
+    // select only an unambiguous match and clear a stale or ambiguous claim.
+    setSelectedSourceNote((current) =>
+      sourceNoteForCell(sourceNotes ?? [], cellKey, current),
+    );
+  }, [sourceNotes]);
 
   // Per-run "Table style" panel state + handlers (docs/PLAN-notes-table-theme.md).
   const [styleOpen, setStyleOpen] = useState(false);
@@ -562,147 +697,238 @@ export function NotesReviewTab({
     }
   }, [runId, onRegenerate]);
 
-  if (compactSingleCell) {
-    return (
+  return (
       <div
         className="notes-review-tab"
-        data-testid="notes-single-cell-workspace"
+        data-testid="notes-source-first-workspace"
         style={{ ...styles.root, ...themeVars }}
       >
-        {sheets !== null && (
-          <header style={styles.topBar}>
-            {!isEmpty && (
-              <button
-                type="button"
-                className={uiClass.btnGhost}
-                style={styles.regenerateButton}
-                aria-expanded={styleOpen}
-                onClick={() => setStyleOpen((value) => !value)}
-              >
-                Table style
-              </button>
-            )}
-            <button
-              type="button"
-              className={uiClass.btnGhost}
-              style={styles.regenerateButton}
-              onClick={handleRegenerateClick}
-              disabled={!onRegenerate}
-              title={onRegenerate ? undefined : "Re-extract isn't available in this view"}
-            >
-              Re-extract notes (replaces your edits)
-            </button>
-          </header>
-        )}
-
-        {styleOpen && (
-          <div style={styles.stylePanel} data-testid="notes-table-style-panel">
-            <p style={styles.stylePanelHint}>
-              Style every table on this run — the on-screen preview and what you
-              paste into M-Tool. {runTheme ? "This run overrides the firm default." : "This run uses the firm default."}
-            </p>
-            {styleError && (
-              <p style={{ ...styles.stylePanelHint, color: pwc.error }} role="alert">
-                {styleError}
-              </p>
-            )}
-            <ClipboardFormatControls
-              value={theme}
-              onChange={(next) => persistRunTheme(next)}
-              idPrefix="run-fmt"
-            />
-            <button
-              type="button"
-              className={uiClass.btnGhost}
-              style={styles.regenerateButton}
-              disabled={!runTheme}
-              onClick={() => persistRunTheme(null)}
-            >
-              Reset style to firm default
-            </button>
-          </div>
-        )}
-
-        {loadError ? (
-          <p style={styles.dim}>Notes could not be loaded. Refresh the page to try again.</p>
-        ) : sheets === null ? (
-          <p style={styles.dim}>Loading notes…</p>
-        ) : noteEntries.length === 0 ? (
-          <p style={styles.dim}>No extracted notes are available for this run.</p>
-        ) : (
-          <div className="notes-single-cell-layout" style={styles.compactWorkspace}>
-            <aside style={styles.noteRail} aria-label="Extracted notes">
-              <div style={styles.noteRailHeader}>
-                <div>
-                  <strong style={styles.noteRailTitle}>Notes</strong>
-                  <p style={styles.noteRailCount}>{noteEntries.length} review fields</p>
-                </div>
+        <div
+          className="notes-source-first-layout"
+          style={{
+            ...styles.workspaceLayout,
+            gridTemplateColumns: `${sourceRailWidth}px 9px minmax(0, 1fr)`,
+          }}
+        >
+          <aside style={styles.noteRail} aria-label="Source note inventory">
+            <div style={styles.noteRailHeader}>
+              <div>
+                <strong style={styles.noteRailTitle}>Source notes</strong>
+                <p style={styles.noteRailCount}>
+                  {sourceNotes == null ? "Loading inventory…" : `${sourceNotes.length} found by document scan`}
+                </p>
               </div>
-              <input
-                type="search"
-                aria-label="Search notes"
-                placeholder="Search notes"
-                value={noteSearch}
-                onChange={(event) => setNoteSearch(event.target.value)}
-                style={styles.noteRailSearch}
-              />
-              <nav style={styles.noteRailList} aria-label="Note text blocks">
-                {filteredNoteEntries.map(({ key, sheet, cell }, index) => {
-                  const selected = key === selectedEntry?.key;
-                  return (
+            </div>
+            <input
+              type="search"
+              aria-label="Search source notes"
+              placeholder="Search source notes"
+              value={noteSearch}
+              onChange={(event) => setNoteSearch(event.target.value)}
+              style={styles.noteRailSearch}
+            />
+            <nav style={styles.noteRailList} aria-label="Source notes">
+              {sourceNotesError && (
+                <p style={styles.noteRailEmpty} role="status">
+                  The source-note inventory could not be loaded.
+                </p>
+              )}
+              {!sourceNotesError && sourceNotes?.length === 0 && (
+                <p style={styles.noteRailEmpty}>No source-note inventory is available for this run.</p>
+              )}
+              {!sourceNotesError && sourceNotes != null && sourceNotes.length > 0
+                && filteredSourceNotes.length === 0 && (
+                <p style={styles.noteRailEmpty} role="status">
+                  No source notes match your search.
+                </p>
+              )}
+              {filteredSourceNotes.map((note) => {
+                const selected = note.note_num === selectedSourceNote;
+                const pageLabel = note.page_lo == null
+                  ? "Page not recorded"
+                  : note.page_hi != null && note.page_hi !== note.page_lo
+                    ? `pp. ${note.page_lo}–${note.page_hi}`
+                    : `p. ${note.page_lo}`;
+                const destinationLabel = note.placements.length === 0
+                  ? "Not placed"
+                  : note.placements.length === 1
+                    ? notesSheetDisplayName(note.placements[0].sheet)
+                    : `${note.placements.length} destinations`;
+                const needsReview = note.status === "missing" || note.status === "suspected_gap";
+                return (
+                  <div key={note.note_num} style={styles.noteRailItemGroup}>
                     <button
-                      key={key}
                       type="button"
-                      data-testid={`note-index-${sheet.sheet}-${cell.row}`}
+                      data-testid={`source-note-${note.note_num}`}
                       aria-current={selected ? "true" : undefined}
-                      onClick={() => {
-                        setSelectedCellKey(key);
-                        reportCellPages(cell.source_pages, onActiveCellPages);
-                      }}
+                      data-tooltip={needsReview ? "Placement needs review" : undefined}
+                      title={needsReview ? "Placement needs review" : undefined}
+                      onClick={() => selectSourceNote(note)}
                       style={{
                         ...styles.noteRailItem,
                         ...(selected ? styles.noteRailItemActive : {}),
                       }}
                     >
-                      <span style={styles.noteRailNumber}>{index + 1}</span>
+                      <span style={styles.noteRailNumber}>{note.note_num}</span>
                       <span style={styles.noteRailCopy}>
-                        <span style={styles.noteRailLabel}>{cell.label}</span>
+                        <span style={styles.noteRailLabel}>{note.title || `Note ${note.note_num}`}</span>
                         <span style={styles.noteRailDestination}>
-                          {notesSheetDisplayName(sheet.sheet)}
+                          {pageLabel} · {destinationLabel}
                         </span>
                       </span>
+                      {needsReview && (
+                        <span style={styles.noteRailAttention} aria-label="Needs review">!</span>
+                      )}
                     </button>
-                  );
-                })}
-              </nav>
-            </aside>
+                    {selected && note.placements.length > 1 && (
+                      <div
+                        style={styles.noteRailPlacements}
+                        aria-label={`Destinations for note ${note.note_num}`}
+                      >
+                        {note.placements.map((placement) => (
+                          <button
+                            key={`${placement.sheet}:${placement.row}`}
+                            type="button"
+                            style={styles.noteRailPlacementButton}
+                            onClick={() => selectSourcePlacement(note, placement)}
+                          >
+                            {notesSheetDisplayName(placement.sheet)} · row {placement.row}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </nav>
+          </aside>
 
-            <section style={styles.compactEditorPane} aria-label="Selected note">
-              {selectedEntry && (
-                selectedEntry.cell.kind === "numeric" ? (
-                  <NumericCellRow
-                    key={`${runId}:${selectedEntry.key}`}
+          <ResizableDivider
+            testId="resize-source-notes"
+            label="Resize source note inventory"
+            onDelta={(dx) => setSourceRailWidth((width) => Math.max(190, Math.min(420, width + dx)))}
+          />
+
+          <section style={styles.editorPane} aria-label="XBRL notes fields">
+            {sheets !== null && !isEmpty && (
+              <div style={styles.workspaceToolbar}>
+                <nav style={styles.workspaceSheetNav} aria-label="Notes sheet navigator">
+                  {sheets.map((sheet) => {
+                    const number = notesSheetNumber(sheet.sheet, filingStandard);
+                    const selected = active.sheet === sheet.sheet;
+                    const label = number == null ? notesSheetDisplayName(sheet.sheet) : `Sheet ${number}`;
+                    return (
+                      <button
+                        key={sheet.sheet}
+                        type="button"
+                        aria-current={selected ? "true" : undefined}
+                        aria-label={`${label} — ${notesSheetDisplayName(sheet.sheet)}`}
+                        title={notesSheetDisplayName(sheet.sheet)}
+                        style={selected ? styles.workspaceSheetButtonActive : styles.workspaceSheetButton}
+                        onClick={() => {
+                          setFocusRow(null);
+                          setActive((current) => ({ sheet: sheet.sheet, key: current.key + 1 }));
+                        }}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </nav>
+                <details ref={actionsMenuRef} style={styles.actionsMenu}>
+                  <summary
+                    style={styles.actionsMenuSummary}
+                    aria-label="Notes actions"
+                    data-tooltip="Notes actions"
+                  >
+                    •••
+                  </summary>
+                  <div style={styles.actionsMenuPanel}>
+                    <button
+                      type="button"
+                      style={styles.actionsMenuItem}
+                      aria-expanded={styleOpen}
+                      onClick={() => {
+                        setStyleOpen((value) => !value);
+                        if (actionsMenuRef.current) actionsMenuRef.current.open = false;
+                      }}
+                    >
+                      Table style
+                    </button>
+                    <button
+                      type="button"
+                      style={styles.actionsMenuItem}
+                      onClick={() => {
+                        if (actionsMenuRef.current) actionsMenuRef.current.open = false;
+                        handleRegenerateClick();
+                      }}
+                      disabled={!onRegenerate}
+                      title={onRegenerate ? undefined : "Re-extract isn't available in this view"}
+                    >
+                      Re-extract notes…
+                    </button>
+                  </div>
+                </details>
+              </div>
+            )}
+
+            {styleOpen && (
+              <div style={styles.stylePanel} data-testid="notes-table-style-panel">
+                <p style={styles.stylePanelHint}>
+                  Applies to every table in this run and to copied content.
+                  {runTheme ? " This run has its own style." : " Using the firm default."}
+                </p>
+                {styleError && (
+                  <p style={{ ...styles.stylePanelHint, color: pwc.error }} role="alert">
+                    {styleError}
+                  </p>
+                )}
+                <ClipboardFormatControls
+                  value={theme}
+                  onChange={(next) => persistRunTheme(next)}
+                  idPrefix="run-fmt"
+                />
+                <button
+                  type="button"
+                  className={uiClass.btnGhost}
+                  style={styles.regenerateButton}
+                  disabled={!runTheme}
+                  onClick={() => persistRunTheme(null)}
+                >
+                  Use firm default
+                </button>
+              </div>
+            )}
+
+            {loadError ? (
+              <p style={styles.dim}>Notes could not be loaded. Refresh the page to try again.</p>
+            ) : sheets === null ? (
+              <p style={styles.dim}>Loading XBRL fields…</p>
+            ) : noteEntries.length === 0 ? (
+              <p style={styles.dim}>No notes were extracted for this run.</p>
+            ) : (
+              <div style={styles.sheetStack}>
+                {sheets.map((sheet) => (
+                  <SheetSection
+                    key={`${runId}:${sheet.sheet}`}
                     runId={runId}
-                    cell={selectedEntry.cell}
-                    onActiveCellPages={onActiveCellPages}
-                    compactPresentation
-                  />
-                ) : (
-                  <CellRow
-                    key={`${runId}:${selectedEntry.key}`}
-                    runId={runId}
-                    sheet={selectedEntry.sheet.sheet}
-                    cell={selectedEntry.cell}
+                    sheet={sheet}
                     theme={theme}
+                    formatterDefaultModel={formatterDefaultModel}
+                    focus={active.sheet === sheet.sheet}
+                    focusKey={active.key}
+                    focusRow={active.sheet === sheet.sheet ? focusRow : null}
+                    onFormatted={reloadNotes}
                     onCellRemoved={handleCellRemoved}
                     onActiveCellPages={onActiveCellPages}
-                    compactPresentation
+                    selectedCellKey={activeCellKey}
+                    onCellActivate={handleWorkspaceCellActivate}
                   />
-                )
-              )}
-            </section>
-          </div>
-        )}
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
         <ConfirmDialog
           isOpen={pendingCount !== null}
           title="Re-extract notes?"
@@ -732,180 +958,6 @@ export function NotesReviewTab({
           onCancel={() => setPendingCount(null)}
         />
       </div>
-    );
-  }
-
-  return (
-    <div
-      className="notes-review-tab"
-      // The `--nt-*` custom properties (themeToCssVars) cascade to every table
-      // cell rule in NotesReviewTab.css, so changing the theme re-paints all
-      // tables instantly with no per-cell writes.
-      style={{ ...styles.root, ...themeVars }}
-    >
-      {/* Regenerate action floats to the right of the section; the
-          "NOTES REVIEW" heading lives in the parent (RunDetailView) to
-          match the AGENTS / CROSS-CHECKS pattern, so no duplicate
-          heading + subtitle here. */}
-      {!isEmpty && <header style={styles.topBar}>
-        <button
-          type="button"
-          className={uiClass.btnGhost}
-          style={styles.regenerateButton}
-          aria-expanded={styleOpen}
-          onClick={() => setStyleOpen((v) => !v)}
-        >
-          Table style
-        </button>
-        <button
-          type="button"
-          className={uiClass.btnGhost}
-          style={styles.regenerateButton}
-          onClick={handleRegenerateClick}
-          // Disabled when no re-extract handler is wired — the button used to
-          // silently do nothing in that case.
-          disabled={!onRegenerate}
-          title={
-            onRegenerate
-              ? undefined
-              : "Re-extract isn't available in this view"
-          }
-        >
-          Re-extract notes (replaces your edits)
-        </button>
-      </header>}
-
-      {/* Per-run "Table style" panel: re-themes EVERY table on this run at once
-          (editor preview + paste), persisted as the run override. Manual
-          per-cell edits still win; "Use firm default" clears the override. */}
-      {styleOpen && (
-        <div style={styles.stylePanel} data-testid="notes-table-style-panel">
-          <p style={styles.stylePanelHint}>
-            Style every table on this run — the on-screen preview and what you
-            paste into M-Tool. {runTheme ? "This run overrides the firm default." : "This run uses the firm default."}
-          </p>
-          {styleError && (
-            <p style={{ ...styles.stylePanelHint, color: pwc.error }} role="alert">
-              {styleError}
-            </p>
-          )}
-          <ClipboardFormatControls
-            value={theme}
-            onChange={(next) => persistRunTheme(next)}
-            idPrefix="run-fmt"
-          />
-          <button
-            type="button"
-            className={uiClass.btnGhost}
-            style={styles.regenerateButton}
-            disabled={!runTheme}
-            onClick={() => persistRunTheme(null)}
-          >
-            Reset style to firm default
-          </button>
-        </div>
-      )}
-
-      {loadError && (
-        <div style={styles.errorBanner} role="alert">
-          Failed to load notes: {loadError}
-        </div>
-      )}
-
-      {sheets === null && !loadError && (
-        <p style={styles.dim}>Loading notes…</p>
-      )}
-
-      {isEmpty && (
-        <p style={styles.dim}>
-          No notes were extracted for this run. Review the configured notes scope and re-extract if disclosures were expected.
-        </p>
-      )}
-
-      {/* Sheet navigator — jump straight to a sheet instead of scrolling
-          the whole stack. Only shown when there's more than one sheet to
-          move between. Chips double as an at-a-glance index of which
-          sheets the run produced and how many rows each holds. */}
-      {sheets && sheets.length > 1 && (
-        <nav style={styles.sheetNav} aria-label="Jump to notes sheet">
-          {sheets.map((sh) => {
-            const isActive = active.sheet === sh.sheet;
-            return (
-              <button
-                key={sh.sheet}
-                type="button"
-                style={isActive ? styles.sheetNavChipActive : styles.sheetNavChip}
-                aria-current={isActive ? "true" : undefined}
-                onClick={() =>
-                  setActive((a) => ({ sheet: sh.sheet, key: a.key + 1 }))
-                }
-              >
-                {notesSheetDisplayName(sh.sheet)}
-                <span style={styles.sheetNavChipCount} aria-hidden="true">
-                  {sh.rows.length}
-                </span>
-              </button>
-            );
-          })}
-        </nav>
-      )}
-
-      {sheets && sheets.length > 0 && (
-        <div style={styles.sheetStack}>
-          {sheets.map((sh) => (
-            // `runId` in the key forces a full remount of every sheet
-            // section when the parent switches to a different run.
-            // Without it, React reuses the same SheetSection/CellRow
-            // component instances across runs — TipTap's editor state
-            // + save refs would carry over from the previous run and
-            // leak edits into the wrong run_id on PATCH.
-            <SheetSection
-              key={`${runId}:${sh.sheet}`}
-              runId={runId}
-              sheet={sh}
-              theme={theme}
-              formatterModels={formatterModels}
-              formatterDefaultModel={formatterDefaultModel}
-              focus={active.sheet === sh.sheet}
-              focusKey={active.key}
-              focusRow={active.sheet === sh.sheet ? focusRow : null}
-              onFormatted={reloadNotes}
-              onCellRemoved={handleCellRemoved}
-              onActiveCellPages={onActiveCellPages}
-            />
-          ))}
-        </div>
-      )}
-
-      <ConfirmDialog
-        isOpen={pendingCount !== null}
-        title="Re-extract notes?"
-        message={
-          pendingCount === UNKNOWN_COUNT ? (
-            <>
-              We couldn&apos;t verify whether your edits would be overwritten —
-              the safety check failed. Re-extracting will replace every cell on
-              this run&apos;s notes sheets. If you have unsaved edits, cancel and
-              try again in a moment.
-            </>
-          ) : (
-            <>
-              This starts a fresh notes extraction on this PDF. When it
-              finishes it will replace {pendingCount ?? 0} edited cell
-              {pendingCount === 1 ? "" : "s"} on this run&apos;s notes sheets.
-              Your current edits stay in place until the new run completes.
-            </>
-          )
-        }
-        confirmLabel="Re-extract notes"
-        danger={false}
-        onConfirm={() => {
-          setPendingCount(null);
-          onRegenerate?.(runId);
-        }}
-        onCancel={() => setPendingCount(null)}
-      />
-    </div>
   );
 }
 
@@ -917,7 +969,6 @@ function SheetSection({
   runId,
   sheet,
   theme,
-  formatterModels,
   formatterDefaultModel,
   onFormatted,
   onCellRemoved,
@@ -925,62 +976,43 @@ function SheetSection({
   focusKey = 0,
   focusRow = null,
   onActiveCellPages,
+  selectedCellKey = null,
+  onCellActivate,
 }: {
   runId: number;
   sheet: NotesSheet;
   /** Resolved notes-table theme — threaded to CellRow so Copy uses it. */
   theme: ClipboardFormatOptions;
-  /** Model list + configured notes_formatter default for the AI-format picker. */
-  formatterModels: ModelEntry[];
   formatterDefaultModel: string;
   onFormatted: () => Promise<void>;
   onCellRemoved: (sheet: string, row: number) => void;
   /** When true (the reviewer picked this notes sub-tab / nav chip), the
-   *  section opens and scrolls into view. */
+   *  section scrolls into view. */
   focus?: boolean;
-  /** Bumps on every nav-chip click so re-selecting an already-focused but
-   *  manually-collapsed section re-opens it (focus alone wouldn't change). */
+  /** Bumps on every nav-chip click so re-selecting the same section scrolls. */
   focusKey?: number;
   /** When set (and this is the focused section), scroll this specific row into
    *  view instead of the section top — the notes-checklist "jump to cell". */
   focusRow?: number | null;
   /** Threaded to each row so focusing a cell reports its source PDF pages. */
   onActiveCellPages?: (pages: number[]) => void;
+  selectedCellKey?: string | null;
+  onCellActivate?: (sheet: string, row: number) => void;
 }) {
-  // Collapsed by default so a run with 3-5 sheets doesn't mount every
-  // TipTap editor on first paint. Matches the agent-card pattern above
-  // in RunDetailView — reviewer clicks the heading to reveal rows. A focused
-  // section starts open so the picked note is immediately readable.
-  const [expanded, setExpanded] = useState(focus);
   const [formatStatus, setFormatStatus] = useState<NotesFormatStatus | null>(null);
   const [formatError, setFormatError] = useState<string | null>(null);
   const [rowSaveStatuses, setRowSaveStatuses] = useState<Record<number, SaveStatus>>({});
   // Which model the AI formatter runs on. Seeds from the configured
   // notes_formatter default; empty falls through to the server's fallback
   // (the run's extraction model — api/notes_formatter.py).
-  const [selectedModel, setSelectedModel] = useState<string>(formatterDefaultModel);
   // Confirm dialog for removing this sheet's formatting (shared dialog).
   const [confirmRevertFormat, setConfirmRevertFormat] = useState(false);
-  useEffect(() => {
-    setSelectedModel(formatterDefaultModel);
-  }, [formatterDefaultModel]);
-  const rowCount = sheet.rows.length;
   const sectionRef = useRef<HTMLElement | null>(null);
 
-  // When this section becomes the focused one (sub-tab click), expand it and
-  // bring it into view. Keyed on `focus` so switching between sub-tabs
-  // re-scrolls; the manual heading toggle stays independent.
+  // When this section becomes focused, bring the target row or section into
+  // view after the always-open field stack has laid out.
   useEffect(() => {
     if (!focus) return;
-    setExpanded(true);
-    // BOTH the cell-jump and the plain section-scroll must run AFTER the
-    // expand paints. This section was collapsed, so its rows don't exist
-    // yet at effect time; scrolling synchronously here lands on the tiny
-    // collapsed header and a smooth scroll stops short — the run-168 QA
-    // symptom where picking "List of Notes" left the panel parked at the
-    // top on "Summary of Accounting Policies". Deferring one frame lets
-    // the revealed rows lay out first so the scroll reaches the section.
-    // scrollIntoView is optional-chained for jsdom (no-op in tests).
     const raf =
       typeof requestAnimationFrame === "function"
         ? requestAnimationFrame
@@ -1052,14 +1084,13 @@ function SheetSection({
     setFormatError(null);
     try {
       const state = await launchNotesFormatter(
-        runId, sheet.sheet, selectedModel || undefined,
+        runId, sheet.sheet, formatterDefaultModel || undefined,
       );
       setFormatStatus(state);
-      setExpanded(true);
     } catch (err) {
       setFormatError(userMessage(err));
     }
-  }, [runId, sheet.sheet, selectedModel]);
+  }, [formatterDefaultModel, runId, sheet.sheet]);
 
   const handleRevert = useCallback(async () => {
     setFormatError(null);
@@ -1077,8 +1108,8 @@ function SheetSection({
 
   const handleRowSaveStatus = useCallback((row: number, status: SaveStatus) => {
     // Only pending states are tracked; anything else PRUNES the row's entry.
-    // A CellRow withdraws itself on unmount (reports "idle") so a section
-    // collapse mid-edit can't wedge the Format button at "Save pending".
+    // A CellRow withdraws itself on unmount (reports "idle") so switching the
+    // selected field mid-edit can't wedge Format at "Save pending".
     setRowSaveStatuses((prev) => {
       const pending =
         status === "dirty" || status === "saving" || status === "failed";
@@ -1104,58 +1135,17 @@ function SheetSection({
       : "Format";
 
   return (
-    <section
-      ref={sectionRef}
-      style={styles.sheetSection}
-    >
+    <section ref={sectionRef} style={styles.workspaceSheetSection}>
       <div style={styles.sheetHeadingButton}>
-        {/* Button-inside-h4 keeps the heading role so
-            getByRole("heading", { level: 4, name }) still works while
-            letting the title act as the toggle. Sheet actions live outside
-            the h4 so they do not pollute the heading's accessible name. */}
         <h4 style={styles.sheetHeadingWrap}>
-          <button
-            type="button"
-            onClick={() => setExpanded((prev) => !prev)}
-            aria-expanded={expanded}
-            style={styles.sheetHeadingToggle}
+          <span
+            style={styles.sheetHeadingText}
+            data-testid="sheet-title"
+            title={sheet.sheet}
           >
-            <span style={styles.sheetChevron} aria-hidden="true">
-              {expanded ? "▾" : "▸"}
-            </span>
-            <span
-              style={styles.sheetHeadingText}
-              data-testid="sheet-title"
-              title={sheet.sheet}
-            >
-              {notesSheetDisplayName(sheet.sheet)}
-            </span>
-          </button>
+            {notesSheetDisplayName(sheet.sheet)}
+          </span>
         </h4>
-        <span style={styles.sheetRowCount} aria-hidden="true">
-          {rowCount} {rowCount === 1 ? "row" : "rows"}
-        </span>
-        {canFormat && formatterModels.length > 0 && (
-          <select
-            style={styles.formatModelSelect}
-            value={selectedModel}
-            onChange={(e) => setSelectedModel(e.target.value)}
-            disabled={isFormatting}
-            aria-label={`Formatter model for ${notesSheetDisplayName(sheet.sheet)}`}
-            data-testid="notes-format-model"
-          >
-            {/* Show the configured default even if it isn't in the list yet. */}
-            {selectedModel
-              && !formatterModels.some((m) => m.id === selectedModel) && (
-              <option value={selectedModel}>{selectedModel}</option>
-            )}
-            {formatterModels.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.display_name || m.id}
-              </option>
-            ))}
-          </select>
-        )}
         {canFormat && (
           <button
             type="button"
@@ -1228,7 +1218,7 @@ function SheetSection({
         }}
         onCancel={() => setConfirmRevertFormat(false)}
       />
-      {expanded && isFormatting && (
+      {isFormatting && (
         <div
           style={styles.formattingBanner}
           role="status"
@@ -1239,8 +1229,7 @@ function SheetSection({
           paste, not the Excel download.
         </div>
       )}
-      {expanded && (
-        <div style={styles.rowStack}>
+      <div style={styles.rowStack}>
           {sheet.rows.map((cell) =>
             // Numeric notes (sheets 13/14) carry multi-column values, not
             // HTML prose — they get value inputs wired to the facts API
@@ -1251,6 +1240,16 @@ function SheetSection({
                 runId={runId}
                 cell={cell}
                 onActiveCellPages={onActiveCellPages}
+                selected={selectedCellKey === `${sheet.sheet}:${cell.row}`}
+                onActivate={() => onCellActivate?.(sheet.sheet, cell.row)}
+              />
+            ) : selectedCellKey !== `${sheet.sheet}:${cell.row}` ? (
+              <WorkspaceReadOnlyCellRow
+                key={`${runId}:${sheet.sheet}:${cell.row}`}
+                cell={cell}
+                theme={theme}
+                onActiveCellPages={onActiveCellPages}
+                onActivate={() => onCellActivate?.(sheet.sheet, cell.row)}
               />
             ) : (
               // Include `runId` in the CellRow key as well — belt-and-
@@ -1265,12 +1264,95 @@ function SheetSection({
                 onSaveStatusChange={handleRowSaveStatus}
                 onCellRemoved={onCellRemoved}
                 onActiveCellPages={onActiveCellPages}
+                onActivate={() => onCellActivate?.(sheet.sheet, cell.row)}
               />
             ),
           )}
-        </div>
-      )}
+      </div>
     </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Lightweight workspace row — keeps every field visible without constructing
+// a TipTap editor for every prose slot. Selecting the row swaps in CellRow,
+// which owns editing, saving, and the full toolbar.
+// ---------------------------------------------------------------------------
+
+function WorkspaceReadOnlyCellRow({
+  cell,
+  theme,
+  onActiveCellPages,
+  onActivate,
+}: {
+  cell: NotesCell;
+  theme: ClipboardFormatOptions;
+  onActiveCellPages?: (pages: number[]) => void;
+  onActivate: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), 2000);
+    return () => clearTimeout(timer);
+  }, [copied]);
+
+  // Numeric alignment is a render-time concern and must not be persisted in
+  // notes_cells. Apply the same shared tagger used by the selected TipTap
+  // editor so the lightweight browse view still matches clipboard output.
+  useEffect(() => {
+    if (contentRef.current) tagNumericCells(contentRef.current);
+  }, [cell.html]);
+
+  const activate = () => {
+    onActivate();
+    reportCellPages(cell.source_pages, onActiveCellPages);
+  };
+
+  return (
+    <div
+      data-testid="notes-review-row"
+      data-cell-row={cell.row}
+      className="notes-review-row"
+      style={styles.workspaceCellRow}
+      onMouseDown={(event) => {
+        if (!(event.target as HTMLElement).closest("button")) activate();
+      }}
+    >
+      <aside style={styles.cellLeft}>
+        <div style={styles.cellLabel}>{cell.label}</div>
+        <StyleSourceChip source={cell.style_source} />
+      </aside>
+      <div style={styles.cellRight}>
+        <div style={styles.cellToolbar}>
+          <div style={styles.cellToolbarSpacer} />
+          {copied && <span style={styles.copiedChip}>Copied</span>}
+          <button type="button" style={styles.smallButton} onClick={activate}>
+            Review
+          </button>
+          <button
+            type="button"
+            style={styles.smallButton}
+            onClick={async () => {
+              if (await copyHtmlAsRichText(cell.html, theme)) setCopied(true);
+            }}
+          >
+            Copy
+          </button>
+        </div>
+        {/* notes_cells HTML is sanitised before persistence by every write path;
+            this read-only projection avoids constructing a TipTap instance. */}
+        <div
+          ref={contentRef}
+          className="tiptap ProseMirror"
+          data-testid="notes-readonly-content"
+          style={styles.workspaceReadonlySurface}
+          dangerouslySetInnerHTML={{ __html: cell.html }}
+        />
+      </div>
+    </div>
   );
 }
 
@@ -1305,10 +1387,8 @@ function StyleSourceChip({
   );
 }
 
-/** Report a focused cell's source PDF pages to the workspace — but ONLY when
- *  the cell actually cites pages. A page-less note must leave the Source PDF
- *  pane on its current page rather than blanking it (review-workspace Phase 1
- *  spec: "a cell with no pages leaves the pane unchanged"). */
+/** Report a focused cell's source PDF pages to the workspace. An empty list is
+ *  significant: it clears evidence left behind by the previous selection. */
 function reportCellPages(
   pages: number[] | undefined,
   cb?: (pages: number[]) => void,
@@ -1333,7 +1413,7 @@ function CellRow({
   onSaveStatusChange,
   onCellRemoved,
   onActiveCellPages,
-  compactPresentation = false,
+  onActivate,
 }: {
   runId: number;
   sheet: string;
@@ -1346,9 +1426,10 @@ function CellRow({
   /** Fired on focus/click with this cell's source PDF pages so the workspace
    *  can jump the Source PDF pane to where the note came from. */
   onActiveCellPages?: (pages: number[]) => void;
-  compactPresentation?: boolean;
+  onActivate?: () => void;
 }) {
   const [editable, setEditable] = useState(false);
+  const [editorFocused, setEditorFocused] = useState(false);
   const [status, setStatus] = useState<SaveStatus>("idle");
   const [copiedAt, setCopiedAt] = useState<number | null>(null);
   // The API's warning strings are deliberately developer-facing (and verbose
@@ -1398,7 +1479,7 @@ function CellRow({
 
   useEffect(() => {
     return () => {
-      // Withdraw this row's save-status entry on unmount (section collapse).
+      // Withdraw this row's save-status entry when selection unmounts it.
       // Without this, a row unmounting while "dirty" leaves a stale entry
       // that wedges the sheet's Format button at "Save pending" — the
       // flush-on-unmount effect below saves the content anyway.
@@ -1494,6 +1575,8 @@ function CellRow({
     // transaction only affects the FOCUSED cell's editor (others receive no
     // transactions), so the cost is bounded.
     shouldRerenderOnTransaction: true,
+    onFocus: () => setEditorFocused(true),
+    onBlur: () => setEditorFocused(false),
     onUpdate: ({ editor: ed }) => {
       const nextHtml = ed.getHTML();
       liveHtmlRef.current = nextHtml;
@@ -1518,6 +1601,19 @@ function CellRow({
   useEffect(() => {
     if (editor) editor.setEditable(editable);
   }, [editor, editable]);
+
+  const toggleEditable = useCallback(() => {
+    if (!editor) return;
+    if (editable) {
+      editor.commands.blur();
+      setEditable(false);
+      return;
+    }
+    editor.setEditable(true);
+    setEditable(true);
+    setEditorFocused(true);
+    editor.commands.focus();
+  }, [editable, editor]);
 
   // Defensive sync for `cell.html` prop changes. `useEditor({ content })`
   // only consumes `content` on mount, so a subsequent parent refetch
@@ -1746,113 +1842,30 @@ function CellRow({
     return () => clearTimeout(t);
   }, [copiedAt]);
 
-  if (compactPresentation) {
-    return (
-      <div
-        data-testid="notes-review-row"
-        data-cell-row={cell.row}
-        className="notes-review-row"
-        style={styles.compactCell}
-        onFocusCapture={() => reportCellPages(cell.source_pages, onActiveCellPages)}
-        onMouseDown={() => reportCellPages(cell.source_pages, onActiveCellPages)}
-      >
-        <div style={styles.compactCellHeading}>
-          <div>
-            <h2 style={styles.compactCellTitle}>{cell.label}</h2>
-            <span style={styles.compactCellLocation}>
-              {notesSheetDisplayName(sheet)} · row {cell.row}
-            </span>
-          </div>
-          <div style={styles.compactCellActions}>
-            <SaveStatusBadge status={status} />
-            {copiedAt !== null && <span style={styles.copiedChip}>Copied</span>}
-            <button
-              type="button"
-              style={styles.smallButton}
-              onClick={() => setEditable((value) => !value)}
-              disabled={cell.invalid_target}
-            >
-              {editable ? "Done" : "Edit"}
-            </button>
-            <button type="button" style={styles.smallButton} onClick={handleCopy}>
-              Copy
-            </button>
-          </div>
-        </div>
-        {cell.invalid_target && (
-          <div style={{ ...ui.alertWarning, fontSize: 12 }} role="status">
-            Not a filing field. Copy this content into a writable field before removing it.
-            <button
-              type="button"
-              className={uiClass.btnGhost}
-              style={{ ...ui.buttonGhost, marginLeft: pwc.space.sm }}
-              onClick={() => setConfirmRemove(true)}
-              disabled={removeBusy}
-            >
-              {removeBusy ? "Removing…" : "Remove quarantined content"}
-            </button>
-            {removeError && <div style={{ marginTop: 4 }}>{removeError}</div>}
-          </div>
-        )}
-        {formatAdjusted && (
-          <span data-testid="format-adjusted-notice" role="status" style={styles.formatAdjustedNotice}>
-            Formatting adjusted
-          </span>
-        )}
-        {(cell.style_source === "unstyled" || cell.style_source === "floor" || cell.evidence) && (
-          <div style={styles.compactAuditMeta}>
-            <StyleSourceChip source={cell.style_source} />
-            {cell.evidence && (
-              <div
-                data-testid="notes-review-evidence"
-                style={styles.evidenceBlock}
-                title="Evidence column — read-only"
-              >
-                <span style={styles.evidenceLabel}>Evidence</span>
-                <span style={styles.evidenceText}>{cell.evidence}</span>
-              </div>
-            )}
-          </div>
-        )}
-        <div style={styles.compactEditor} ref={wrapperRef}>
-          {editable && editor && <EditorToolbar editor={editor} />}
-          <div data-testid="notes-review-editor" style={styles.compactEditorSurface}>
-            <EditorContent editor={editor} />
-          </div>
-        </div>
-        <ConfirmDialog
-          isOpen={confirmRemove}
-          title="Remove quarantined content?"
-          message="This permanently erases the quarantined copy and adds a filing tombstone. There is no undo."
-          confirmLabel="Remove content"
-          busyLabel="Removing…"
-          busy={removeBusy}
-          onConfirm={() => void handleRemoveInvalid()}
-          onCancel={() => {
-            if (!removeBusy) setConfirmRemove(false);
-          }}
-        />
-      </div>
-    );
-  }
-
   return (
     <div
       data-testid="notes-review-row"
       data-cell-row={cell.row}
       className="notes-review-row"
-      style={styles.cellRow}
+      style={{
+        ...styles.workspaceCellRow,
+        ...styles.workspaceCellRowSelected,
+      }}
       // Focusing (click or keyboard-tab) any part of this row tells the
       // workspace which PDF pages the note came from, so the Source PDF pane
-      // follows the note the way it follows a face figure. Capture phase so it
-      // fires even when focus lands on the nested editor. A page-less note
-      // leaves the pane unchanged (reportCellPages guards on non-empty).
-      onFocusCapture={() => reportCellPages(cell.source_pages, onActiveCellPages)}
-      onMouseDown={() => reportCellPages(cell.source_pages, onActiveCellPages)}
+      // follows the note the way it follows a face figure. Capture phase means
+      // this also fires when focus lands on the nested editor.
+      onFocusCapture={() => {
+        onActivate?.();
+        reportCellPages(cell.source_pages, onActiveCellPages);
+      }}
+      onMouseDown={() => {
+        onActivate?.();
+        reportCellPages(cell.source_pages, onActiveCellPages);
+      }}
     >
       <aside style={styles.cellLeft}>
         <div style={styles.cellLabel}>{cell.label}</div>
-        <div style={styles.cellRowNum}>Row {cell.row}</div>
         {cell.invalid_target && (
           <div
             style={{ ...ui.alertWarning, marginTop: pwc.space.sm, fontSize: 12 }}
@@ -1918,7 +1931,7 @@ function CellRow({
           <button
             type="button"
             style={styles.smallButton}
-            onClick={() => setEditable((v) => !v)}
+            onClick={toggleEditable}
             disabled={cell.invalid_target}
             title={cell.invalid_target
               ? "Move this content to a writable filing field before editing"
@@ -1935,7 +1948,7 @@ function CellRow({
             Copy
           </button>
         </div>
-        {editable && editor && <EditorToolbar editor={editor} />}
+          {editable && editorFocused && editor && <NotesEditorToolbar editor={editor} />}
         <div data-testid="notes-review-editor">
           <EditorContent editor={editor} />
         </div>
@@ -1955,12 +1968,14 @@ function NumericCellRow({
   runId,
   cell,
   onActiveCellPages,
-  compactPresentation = false,
+  selected = false,
+  onActivate,
 }: {
   runId: number;
   cell: NotesCell;
   onActiveCellPages?: (pages: number[]) => void;
-  compactPresentation?: boolean;
+  selected?: boolean;
+  onActivate?: () => void;
 }) {
   const values = cell.values ?? {};
   // Only render the columns this filing level actually uses, in a stable
@@ -2029,13 +2044,21 @@ function NumericCellRow({
       data-testid="notes-numeric-row"
       data-cell-row={cell.row}
       className="notes-review-row"
-      style={compactPresentation ? styles.compactNumericCell : styles.cellRow}
-      onFocusCapture={() => reportCellPages(cell.source_pages, onActiveCellPages)}
-      onMouseDown={() => reportCellPages(cell.source_pages, onActiveCellPages)}
+      style={{
+        ...styles.workspaceCellRow,
+        ...(selected ? styles.workspaceCellRowSelected : {}),
+      }}
+      onFocusCapture={() => {
+        onActivate?.();
+        reportCellPages(cell.source_pages, onActiveCellPages);
+      }}
+      onMouseDown={() => {
+        onActivate?.();
+        reportCellPages(cell.source_pages, onActiveCellPages);
+      }}
     >
-      <aside style={compactPresentation ? styles.compactNumericLabel : styles.cellLeft}>
+      <aside style={styles.cellLeft}>
         <div style={styles.cellLabel}>{cell.label}</div>
-        {!compactPresentation && <div style={styles.cellRowNum}>Row {cell.row}</div>}
       </aside>
       <div style={styles.cellRight}>
         <div style={styles.cellToolbar}>
@@ -2084,331 +2107,6 @@ function NumericCellRow({
 }
 
 // ---------------------------------------------------------------------------
-// Editor toolbar — the single docked two-tier formatting bar (notes editor v2,
-// docs/PRD-notes-editor-v2.md §7). Tier 1 (Text · Colour · Paragraph) always
-// shows in edit mode; Tier 2 (Table: fill / borders / structure) activates
-// only when the selection is inside a table. It replaces v1's separate
-// FormatToolbar + TableFormatBar. Reactive because the parent CellRow
-// re-renders on every editor transaction (`shouldRerenderOnTransaction`), so
-// active states + the in-table tier track the selection without a doc edit.
-// All cell formatting persists via the styled cell extensions
-// (web/src/lib/cellFormatting.ts); marks/colour/align persist as inline HTML
-// the backend sanitiser accepts in lock-step (notes/html_sanitize.py).
-// ---------------------------------------------------------------------------
-
-// Quick cell-fill presets (the convenience row). "Fill Grey" is depended on by
-// the component tests — keep that label stable.
-const FILL_PRESETS: ReadonlyArray<{ label: string; color: string }> = [
-  { label: "White", color: "#ffffff" },
-  { label: "Grey", color: "#f4f4f4" },
-  { label: "Highlight", color: "#fff6e5" },
-];
-
-// Border colours intentionally use buttons, not a native colour input. Native
-// pickers steal focus from ProseMirror and collapse a multi-cell selection
-// before the user applies the colour. White is explicit: it is a valid border
-// colour, never a proxy for the default grey grid.
-const BORDER_COLOURS: ReadonlyArray<{ label: string; color: string }> = [
-  { label: "Black", color: "#000000" },
-  { label: "Grey", color: "#c9c9c9" },
-  { label: "White", color: "#ffffff" },
-  { label: "Orange", color: "#fd5108" },
-  { label: "Blue", color: "#185fa5" },
-];
-
-const BORDER_SIDE_BTNS: ReadonlyArray<{ side: BorderSide; label: string }> = [
-  { side: "Top", label: "Top" },
-  { side: "Right", label: "Right" },
-  { side: "Bottom", label: "Bottom" },
-  { side: "Left", label: "Left" },
-];
-
-function EditorToolbar({ editor }: { editor: Editor }) {
-  // The active border "paint" the side / all buttons apply: a hex colour from
-  // BORDER_COLOURS, or the BORDER_HIDDEN sentinel (the eraser). Selecting a
-  // swatch only sets this — it no longer paints all four sides — so the user
-  // picks a colour (or the eraser), then clicks the edge(s) to paint. That
-  // two-step is what gives independent per-side control (e.g. top black, the
-  // other three white) which a single all-sides apply cannot express.
-  const [borderPaint, setBorderPaint] = useState<string>(DEFAULT_BORDER_COLOR);
-  const eraseActive = borderPaint === BORDER_HIDDEN;
-  // The concrete cell value for the active paint: a grid line, or `hidden`
-  // (which truly erases the edge in the collapsed table — see BORDER_HIDDEN).
-  const paintValue = eraseActive ? BORDER_HIDDEN : gridBorderValue(borderPaint);
-
-  const inTable = editor.isActive("table");
-  const toolbarSelectionRef = useRef<ReturnType<typeof captureSelection> | null>(
-    null,
-  );
-
-  const rememberToolbarSelection = () => {
-    toolbarSelectionRef.current = captureSelection(editor);
-  };
-
-  const restoreToolbarSelection = () => {
-    const captured = toolbarSelectionRef.current;
-    if (!captured) return;
-    try {
-      restoreSelection(editor, captured);
-    } catch {
-      /* structural edits can invalidate captured cell anchors */
-    }
-  };
-
-  // Every toolbar control shares one guard: preventDefault on mousedown so the
-  // click never blurs the editor / collapses a (multi-cell or text) selection
-  // before the command runs (the same fix that makes range fill work,
-  // Step 0.1), plus capture-on-mousedown / restore-before-click because real
-  // browsers can still briefly collapse a CellSelection during toolbar
-  // interaction (notably after drag-selecting cells), which made side-border /
-  // reset actions feel randomly dead.
-  const guarded = (run: () => void) => ({
-    onMouseDown: (e: React.MouseEvent) => {
-      rememberToolbarSelection();
-      e.preventDefault();
-    },
-    onClick: () => {
-      restoreToolbarSelection();
-      run();
-    },
-  });
-
-  const btn = (
-    label: React.ReactNode,
-    ariaLabel: string,
-    onClick: () => void,
-    active?: boolean,
-  ) => (
-    <button
-      key={ariaLabel}
-      type="button"
-      aria-label={ariaLabel}
-      title={ariaLabel}
-      data-tooltip={ariaLabel}
-      style={active ? styles.toolbarButtonActive : styles.toolbarButton}
-      {...guarded(onClick)}
-    >
-      {label}
-    </button>
-  );
-
-  // Each control group carries a short visible caption (not just a cryptic
-  // glyph) so a preparer can tell at a glance what the buttons in that section
-  // do — the icons alone weren't discoverable without hovering every one. The
-  // caption is aria-hidden because the group already exposes the same text as
-  // its accessible name; every button keeps its own tooltip + accessible name.
-  const group = (label: string, children: React.ReactNode) => (
-    <div role="group" aria-label={label} title={label} style={styles.toolbarGroup}>
-      <span aria-hidden="true" style={styles.toolbarGroupLabel}>
-        {label}
-      </span>
-      {children}
-    </div>
-  );
-
-  const alignIcon = (align: "left" | "center" | "right") => (
-    <span
-      aria-hidden="true"
-      style={{ ...styles.alignIcon, textAlign: align }}
-    >
-      ≡
-    </span>
-  );
-
-  // A constrained-palette colour swatch (text colour or highlight). `null`
-  // value is the reset (remove colour / no highlight).
-  const swatch = (s: PaletteSwatch, kind: "text" | "highlight") => {
-    const apply = () => {
-      const c = editor.chain().focus();
-      if (kind === "text") {
-        if (s.value === null) c.unsetColor().run();
-        else c.setColor(s.value).run();
-      } else {
-        if (s.value === null) c.unsetHighlight().run();
-        else c.toggleHighlight({ color: s.value }).run();
-      }
-    };
-    return (
-      <button
-        key={`${kind}-${s.label}`}
-        type="button"
-        title={s.label}
-        aria-label={`${kind === "text" ? "Text colour" : "Highlight"} ${s.label}`}
-        data-tooltip={`${kind === "text" ? "Text colour" : "Highlight"} ${s.label}`}
-        {...guarded(apply)}
-        style={{
-          ...styles.swatchButton,
-          background: s.value ?? pwc.white,
-        }}
-      >
-        {s.value === null ? "✕" : ""}
-      </button>
-    );
-  };
-
-  // Whether the focused cell's edge carries a visible painted border (not empty,
-  // not a `none`/`hidden` erase). Advisory — reads the anchor cell only — and
-  // used purely to light the matching per-side button.
-  const sidePainted = (side: BorderSide): boolean => {
-    const v = currentCellAttrs(editor)?.[`border${side}`];
-    return (
-      typeof v === "string" &&
-      v !== "" &&
-      v !== BORDER_NONE &&
-      v !== BORDER_HIDDEN
-    );
-  };
-
-  return (
-    <div style={styles.editorToolbar} data-testid="editor-format-bar">
-      {/* Tier 1 — always available in edit mode. */}
-      <div role="toolbar" aria-label="Formatting" style={styles.toolbarRow}>
-        {group("Text formatting", <>
-          {btn(<span style={{ fontWeight: 700 }}>B</span>, "Bold",
-            () => editor.chain().focus().toggleBold().run(), editor.isActive("bold"))}
-          {btn(<span style={{ fontStyle: "italic" }}>I</span>, "Italic",
-            () => editor.chain().focus().toggleItalic().run(), editor.isActive("italic"))}
-          {btn(<span style={{ textDecoration: "underline" }}>U</span>, "Underline",
-            () => editor.chain().focus().toggleUnderline().run(), editor.isActive("underline"))}
-          {btn(<span style={{ textDecoration: "line-through" }}>S</span>, "Strikethrough",
-            () => editor.chain().focus().toggleStrike().run(), editor.isActive("strike"))}
-          {btn("x²", "Superscript",
-            () => editor.chain().focus().toggleSuperscript().run(), editor.isActive("superscript"))}
-          {btn("x₂", "Subscript",
-            () => editor.chain().focus().toggleSubscript().run(), editor.isActive("subscript"))}
-        </>)}
-        {group("Text colour", TEXT_COLORS.map((s) => swatch(s, "text")))}
-        {group("Highlight", HIGHLIGHT_COLORS.map((s) => swatch(s, "highlight")))}
-        {group("Paragraph", <>
-          {btn(alignIcon("left"), "Align left",
-            () => editor.chain().focus().setTextAlign("left").run(), editor.isActive({ textAlign: "left" }))}
-          {btn(alignIcon("center"), "Align centre",
-            () => editor.chain().focus().setTextAlign("center").run(), editor.isActive({ textAlign: "center" }))}
-          {btn(alignIcon("right"), "Align right",
-            () => editor.chain().focus().setTextAlign("right").run(), editor.isActive({ textAlign: "right" }))}
-          {btn("•≡", "Bullet list",
-            () => editor.chain().focus().toggleBulletList().run(), editor.isActive("bulletList"))}
-          {btn("1≡", "Numbered list",
-            () => editor.chain().focus().toggleOrderedList().run(), editor.isActive("orderedList"))}
-          {btn("H3", "Heading",
-            () => editor.chain().focus().toggleHeading({ level: 3 }).run(), editor.isActive("heading", { level: 3 }))}
-          {btn("⇤", "Decrease indent", () => outdentBlocks(editor))}
-          {btn("⇥", "Increase indent", () => indentBlocks(editor))}
-          {btn("▦", "Insert table",
-            () => editor.chain().focus().insertTable({ rows: 2, cols: 2, withHeaderRow: true }).run())}
-        </>)}
-      </div>
-
-      {/* Tier 2 — table controls, only inside a table. The data-testid is kept
-          from v1's TableFormatBar so existing tests keep working. */}
-      {inTable && (
-        <div
-          role="toolbar"
-          aria-label="Table formatting"
-          data-testid="table-format-bar"
-          style={styles.tableFormatBar}
-        >
-          {group("Cell fill", <>
-            {FILL_PRESETS.map((p) =>
-              btn("■", `Fill ${p.label}`, () => applyCellFill(editor, p.color)),
-            )}
-            {btn("∅", "No fill", () => applyCellFill(editor, FILL_NONE))}
-          </>)}
-          {group("Borders", <>
-            {BORDER_SIDE_BTNS.map(({ side, label }) =>
-              btn(
-                side === "Top" ? "▔" : side === "Right" ? "▕" : side === "Bottom" ? "▁" : "▏",
-                `Border ${label}`,
-                // Toggle, applied to THIS side only (preserving the other
-                // three): re-clicking when the WHOLE selection already shows the
-                // active paint removes the edge (back to the default grid) — the
-                // Word-like undo; otherwise paints the colour onto the full
-                // selection (recolouring / filling cells that don't yet match).
-                () => toggleCellBorderSide(editor, side, paintValue),
-                sidePainted(side),
-              ),
-            )}
-            {btn("⊞", "Border all", () =>
-              applyCellBorderAll(editor, paintValue))}
-            {/* "Border none" erases all four edges with BORDER_HIDDEN (wins the
-                collapsed shared-edge conflict — see BORDER_HIDDEN), NOT
-                BORDER_NONE: `none` loses to a neighbour's grid line and shows
-                grey. BORDER_NONE remains the editor's own style-reset value
-                (resetCellToTheme), a separate concern from erasing a line. */}
-            {btn("⊠", "Border none", () =>
-              applyCellBorderAll(editor, BORDER_HIDDEN))}
-            {btn("═", "Double underline", () => applyCellDoubleUnderline(editor))}
-          </>)}
-          {group("Border colour", <>
-            {BORDER_COLOURS.map(({ label, color }) => (
-              <button
-                key={color}
-                type="button"
-                aria-label={`Border colour ${label}`}
-                aria-pressed={borderPaint === color}
-                title={`Use ${label.toLowerCase()} for the border buttons`}
-                data-tooltip={`Border colour ${label}`}
-                // Select-only: pick the colour, then click an edge / All to
-                // paint it. Decoupling colour from application is what lets a
-                // cell hold a different colour per side.
-                {...guarded(() => setBorderPaint(color))}
-                style={{
-                  ...styles.swatchButton,
-                  background: color,
-                  outline:
-                    borderPaint === color ? `2px solid ${pwc.orange500}` : "none",
-                  outlineOffset: 1,
-                }}
-              />
-            ))}
-            <button
-              key="erase"
-              type="button"
-              aria-label="Border colour erase"
-              aria-pressed={eraseActive}
-              title="Erase the chosen edge(s) — no line, not the grey grid"
-              data-tooltip="Border colour erase"
-              {...guarded(() => setBorderPaint(BORDER_HIDDEN))}
-              style={{
-                ...styles.swatchButton,
-                background: pwc.white,
-                outline: eraseActive ? `2px solid ${pwc.orange500}` : "none",
-                outlineOffset: 1,
-              }}
-            >
-              ✕
-            </button>
-          </>)}
-          {group("Cell alignment", (["left", "center", "right"] as CellAlign[]).map((a) =>
-            btn(
-              alignIcon(a),
-              `Cell align ${a}`,
-              () => applyCellAlign(editor, a),
-              (currentCellAttrs(editor)?.textAlign as string | undefined) === a,
-            ),
-          ))}
-          {/* Drop manual per-cell overrides so the cell re-inherits the
-              firm/run theme (docs/PLAN-notes-table-theme.md). */}
-          {group("Reset", btn("↺", "Reset cell to theme", () => resetCellToTheme(editor)))}
-          {group("Table structure", <>
-            {btn("▤↑", "Insert row above", () => editor.chain().focus().addRowBefore().run())}
-            {btn("▤↓", "Insert row below", () => editor.chain().focus().addRowAfter().run())}
-            {btn("▥←", "Insert column left", () => editor.chain().focus().addColumnBefore().run())}
-            {btn("▥→", "Insert column right", () => editor.chain().focus().addColumnAfter().run())}
-            {btn("⊞", "Merge cells", () => editor.chain().focus().mergeCells().run())}
-            {btn("⊟", "Split cell", () => editor.chain().focus().splitCell().run())}
-            {btn("━", "Toggle header row", () => editor.chain().focus().toggleHeaderRow().run())}
-            {btn("▤−", "Delete row", () => editor.chain().focus().deleteRow().run())}
-            {btn("▥−", "Delete column", () => editor.chain().focus().deleteColumn().run())}
-            {btn("▦×", "Delete table", () => editor.chain().focus().deleteTable().run())}
-          </>)}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Save status badge.
 // ---------------------------------------------------------------------------
 
@@ -2445,21 +2143,22 @@ const styles = {
     flexDirection: "column" as const,
     gap: 16,
   } as React.CSSProperties,
-  compactWorkspace: {
+  workspaceLayout: {
     display: "grid",
-    gridTemplateColumns: "210px minmax(0, 1fr)",
-    gap: 18,
+    gridTemplateColumns: "240px 9px minmax(0, 1fr)",
+    gap: 0,
     alignItems: "start",
     minWidth: 0,
   } as React.CSSProperties,
   noteRail: {
     position: "sticky" as const,
-    top: 16,
-    height: "calc(100vh - 190px)",
-    minHeight: 480,
+    top: pwc.space.lg,
+    height: "calc(100vh - 148px)",
+    minHeight: 420,
     display: "flex",
     flexDirection: "column" as const,
     minWidth: 0,
+    padding: `${pwc.space.sm}px ${pwc.space.lg}px ${pwc.space.lg}px 0`,
   } as React.CSSProperties,
   noteRailHeader: {
     display: "flex",
@@ -2496,9 +2195,14 @@ const styles = {
     gap: 1,
     paddingRight: 3,
   } as React.CSSProperties,
+  noteRailItemGroup: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 2,
+  } as React.CSSProperties,
   noteRailItem: {
     display: "grid",
-    gridTemplateColumns: "26px minmax(0, 1fr)",
+    gridTemplateColumns: "28px minmax(0, 1fr) 16px",
     gap: 7,
     alignItems: "center",
     width: "100%",
@@ -2541,85 +2245,133 @@ const styles = {
     fontSize: 9.5,
     color: pwc.grey500,
   } as React.CSSProperties,
-  compactEditorPane: {
-    minWidth: 0,
+  noteRailAttention: {
+    width: 16,
+    height: 16,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 4,
+    color: pwc.orange700,
+    background: pwc.orange50,
+    fontSize: 10,
+    fontWeight: 700,
   } as React.CSSProperties,
-  compactCell: {
+  noteRailPlacements: {
     display: "flex",
     flexDirection: "column" as const,
-    minWidth: 0,
-    background: pwc.white,
+    gap: 2,
+    padding: `0 ${pwc.space.sm}px ${pwc.space.xs}px 35px`,
   } as React.CSSProperties,
-  compactCellHeading: {
+  noteRailPlacementButton: {
+    minHeight: 28,
+    padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
+    border: 0,
+    borderRadius: pwc.radius.sm,
+    background: pwc.grey50,
+    color: pwc.grey700,
+    fontSize: 9.5,
+    textAlign: "left" as const,
+    cursor: "pointer",
+  } as React.CSSProperties,
+  noteRailEmpty: {
+    margin: 0,
+    padding: `${pwc.space.md}px ${pwc.space.sm}px`,
+    color: pwc.grey700,
+    fontSize: 11,
+    lineHeight: 1.45,
+  } as React.CSSProperties,
+  editorPane: {
+    minWidth: 0,
+    paddingLeft: pwc.space.lg,
+  } as React.CSSProperties,
+  workspaceToolbar: {
+    position: "sticky" as const,
+    top: 0,
+    zIndex: 20,
     minHeight: 48,
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    gap: 16,
-    paddingBottom: 10,
-    borderBottom: `1px solid ${pwc.grey200}`,
+    gap: pwc.space.md,
+    padding: `${pwc.space.sm}px 0 ${pwc.space.md}px`,
+    background: pwc.white,
+    borderBottom: `1px solid ${pwc.grey100}`,
   } as React.CSSProperties,
-  compactCellTitle: {
-    margin: 0,
-    color: pwc.grey900,
-    fontFamily: pwc.fontHeading,
-    fontSize: 18,
-    fontWeight: 600,
-  } as React.CSSProperties,
-  compactCellLocation: {
-    display: "block",
-    marginTop: 3,
-    color: pwc.grey500,
-    fontFamily: pwc.fontMono,
-    fontSize: 10,
-  } as React.CSSProperties,
-  compactCellActions: {
+  workspaceSheetNav: {
     display: "flex",
     alignItems: "center",
-    gap: 8,
+    gap: pwc.space.xs,
+    minWidth: 0,
+    overflowX: "auto" as const,
+  } as React.CSSProperties,
+  workspaceSheetButton: {
+    minHeight: 34,
+    padding: `0 ${pwc.space.md}px`,
+    border: "none",
+    borderRadius: pwc.radius.sm,
+    background: "transparent",
+    color: pwc.grey700,
+    fontSize: 12,
+    fontWeight: 600,
+    whiteSpace: "nowrap" as const,
+    cursor: "pointer",
+  } as React.CSSProperties,
+  workspaceSheetButtonActive: {
+    minHeight: 34,
+    padding: `0 ${pwc.space.md}px`,
+    border: "none",
+    borderRadius: pwc.radius.sm,
+    background: pwc.grey100,
+    color: pwc.grey900,
+    fontSize: 12,
+    fontWeight: 650,
+    whiteSpace: "nowrap" as const,
+    cursor: "pointer",
+  } as React.CSSProperties,
+  actionsMenu: {
+    position: "relative" as const,
     flexShrink: 0,
   } as React.CSSProperties,
-  compactEditor: {
-    minWidth: 0,
-  } as React.CSSProperties,
-  compactAuditMeta: {
-    display: "flex",
-    alignItems: "flex-start",
-    gap: 8,
-    flexWrap: "wrap" as const,
-    paddingTop: 10,
-  } as React.CSSProperties,
-  compactEditorSurface: {
-    minHeight: 520,
-    padding: "24px clamp(20px, 4vw, 42px)",
-    background: pwc.white,
-  } as React.CSSProperties,
-  compactNumericCell: {
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: 14,
-    minWidth: 0,
-  } as React.CSSProperties,
-  compactNumericLabel: {
-    paddingBottom: 10,
-    borderBottom: `1px solid ${pwc.grey200}`,
-  } as React.CSSProperties,
-  topBar: {
-    display: "flex",
-    justifyContent: "flex-end",
+  actionsMenuSummary: {
+    width: 34,
+    minHeight: 34,
+    display: "inline-flex",
     alignItems: "center",
+    justifyContent: "center",
+    borderRadius: pwc.radius.sm,
+    color: pwc.grey700,
+    cursor: "pointer",
+    listStyle: "none",
+    fontWeight: 700,
+  } as React.CSSProperties,
+  actionsMenuPanel: {
+    position: "absolute" as const,
+    top: 40,
+    right: 0,
+    zIndex: 30,
+    width: 210,
+    padding: pwc.space.xs,
+    border: `1px solid ${pwc.grey200}`,
+    borderRadius: pwc.radius.md,
+    background: pwc.white,
+    boxShadow: pwc.shadow.elevated,
+  } as React.CSSProperties,
+  actionsMenuItem: {
+    width: "100%",
+    minHeight: 36,
+    padding: `0 ${pwc.space.sm}px`,
+    border: "none",
+    borderRadius: pwc.radius.sm,
+    background: "transparent",
+    color: pwc.grey900,
+    textAlign: "left" as const,
+    fontSize: 12,
+    cursor: "pointer",
   } as React.CSSProperties,
   regenerateButton: {
     ...ui.buttonGhost,
     ...ui.buttonSm,
-  } as React.CSSProperties,
-  errorBanner: {
-    padding: "8px 12px",
-    background: pwc.errorBg,
-    color: pwc.errorText,
-    border: "none",
-    borderRadius: 4,
-    fontSize: 13,
   } as React.CSSProperties,
   // Per-run "Table style" panel (docs/PLAN-notes-table-theme.md).
   stylePanel: {
@@ -2640,47 +2392,6 @@ const styles = {
   } as React.CSSProperties,
   // Navigator chip bar — one chip per sheet, jumps to + opens that
   // section. Wraps on narrow widths. Sits above the stack.
-  sheetNav: {
-    display: "flex",
-    flexWrap: "wrap" as const,
-    gap: 6,
-  } as React.CSSProperties,
-  sheetNavChip: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 6,
-    padding: "4px 10px",
-    fontFamily: pwc.fontMono,
-    fontSize: 11.5,
-    fontWeight: 600,
-    letterSpacing: 0.2,
-    color: pwc.grey700,
-    background: pwc.white,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.pill,
-    cursor: "pointer",
-  } as React.CSSProperties,
-  sheetNavChipActive: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 6,
-    padding: "4px 10px",
-    fontFamily: pwc.fontMono,
-    fontSize: 11.5,
-    fontWeight: 600,
-    letterSpacing: 0.2,
-    color: pwc.grey900,
-    background: pwc.grey100,
-    border: `1px solid ${pwc.grey300}`,
-    borderRadius: pwc.radius.pill,
-    cursor: "pointer",
-  } as React.CSSProperties,
-  sheetNavChipCount: {
-    fontFamily: pwc.fontMono,
-    fontSize: 10.5,
-    fontWeight: 400,
-    color: pwc.grey500,
-  } as React.CSSProperties,
   sheetStack: {
     display: "flex",
     flexDirection: "column" as const,
@@ -2688,14 +2399,13 @@ const styles = {
   } as React.CSSProperties,
   // Each sheet is a flat section. A neutral bottom divider carries the section
   // boundary without reintroducing the old card or active orange-rail style.
-  sheetSection: {
+  workspaceSheetSection: {
     display: "flex",
     flexDirection: "column" as const,
-    border: "none",
     borderBottom: `1px solid ${pwc.grey200}`,
-    borderRadius: 0,
-    background: "transparent",
-    overflow: "visible",
+    background: pwc.white,
+    contentVisibility: "auto" as const,
+    containIntrinsicSize: "560px",
   } as React.CSSProperties,
   // The <h4> wrapper strips default browser margins so the button
   // fills the card header cleanly.
@@ -2720,20 +2430,6 @@ const styles = {
     color: "inherit",
     textAlign: "left" as const,
   } as React.CSSProperties,
-  sheetHeadingToggle: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 10,
-    minWidth: 0,
-    background: "transparent",
-    border: "none",
-    padding: 0,
-    cursor: "pointer",
-    fontFamily: "inherit",
-    font: "inherit",
-    color: "inherit",
-    textAlign: "left" as const,
-  } as React.CSSProperties,
   sheetHeadingText: {
     fontFamily: pwc.fontMono,
     fontSize: 14,
@@ -2742,33 +2438,10 @@ const styles = {
     textTransform: "uppercase" as const,
     letterSpacing: 0.4,
   } as React.CSSProperties,
-  sheetChevron: {
-    color: pwc.grey500,
-    fontSize: 12,
-    width: 12,
-    display: "inline-block",
-  } as React.CSSProperties,
-  sheetRowCount: {
-    marginLeft: "auto",
-    fontFamily: pwc.fontMono,
-    fontSize: 12,
-    color: pwc.grey500,
-  } as React.CSSProperties,
   sheetFormatButton: {
     ...ui.buttonGhost,
     ...ui.buttonSm,
     flexShrink: 0,
-  } as React.CSSProperties,
-  formatModelSelect: {
-    flexShrink: 0,
-    maxWidth: 180,
-    fontFamily: pwc.fontBody,
-    fontSize: 12,
-    padding: "3px 6px",
-    color: pwc.grey700,
-    border: `1px solid ${pwc.grey300}`,
-    borderRadius: 4,
-    background: pwc.white,
   } as React.CSSProperties,
   formatSummary: {
     display: "flex",
@@ -2800,13 +2473,24 @@ const styles = {
   // Flat list rows separated by hairlines — not bordered cards. With the
   // sheet header carrying the visual weight, rows read as content nested
   // under the sheet rather than as peer containers.
-  cellRow: {
+  workspaceCellRow: {
     display: "grid",
-    gridTemplateColumns: "220px 1fr",
-    gap: 16,
-    padding: "14px 4px",
+    gridTemplateColumns: "minmax(150px, 190px) minmax(0, 1fr)",
+    gap: pwc.space.lg,
+    padding: `${pwc.space.lg}px ${pwc.space.xs}px`,
     borderBottom: `1px solid ${pwc.grey100}`,
     background: pwc.white,
+    scrollMarginTop: 64,
+  } as React.CSSProperties,
+  workspaceCellRowSelected: {
+    background: pwc.grey100,
+  } as React.CSSProperties,
+  workspaceReadonlySurface: {
+    minHeight: 56,
+    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    border: `1px solid ${pwc.grey200}`,
+    borderRadius: pwc.radius.sm,
+    color: pwc.grey900,
   } as React.CSSProperties,
   cellLeft: {
     display: "flex",
@@ -2817,11 +2501,6 @@ const styles = {
     fontWeight: 600,
     fontSize: 13,
     color: pwc.grey900,
-  } as React.CSSProperties,
-  cellRowNum: {
-    fontSize: 11,
-    color: pwc.grey500,
-    fontFamily: pwc.fontMono,
   } as React.CSSProperties,
   styleSourceChip: {
     display: "inline-block",
@@ -2870,92 +2549,6 @@ const styles = {
   cellToolbarSpacer: {
     flex: 1,
   } as React.CSSProperties,
-  // The unified docked editor toolbar (notes editor v2): a column holding
-  // Tier 1 (text/colour/paragraph) and, when in a table, Tier 2 (table).
-  editorToolbar: {
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: 4,
-    marginTop: 4,
-  } as React.CSSProperties,
-  toolbarRow: {
-    display: "flex",
-    flexWrap: "wrap" as const,
-    alignItems: "center",
-    gap: 6,
-    padding: "7px 8px",
-    background: pwc.grey100,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: 4,
-  } as React.CSSProperties,
-  toolbarGroup: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 3,
-    padding: "3px 4px",
-    background: pwc.white,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: 4,
-  } as React.CSSProperties,
-  toolbarGroupLabel: {
-    color: pwc.grey700,
-    fontSize: 10,
-    fontWeight: 700,
-    letterSpacing: 0.3,
-    textTransform: "uppercase" as const,
-    whiteSpace: "nowrap" as const,
-    marginRight: 1,
-  } as React.CSSProperties,
-  alignIcon: {
-    display: "inline-block",
-    width: 13,
-    lineHeight: 1,
-  } as React.CSSProperties,
-  // A small constrained-palette colour/highlight swatch button.
-  swatchButton: {
-    width: 28,
-    height: 28,
-    padding: 0,
-    border: `1px solid ${pwc.grey300 ?? "#d1d5db"}`,
-    borderRadius: 3,
-    cursor: "pointer",
-    fontSize: 10,
-    lineHeight: 1,
-    color: pwc.grey700,
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-  } as React.CSSProperties,
-  toolbarButton: {
-    minWidth: 28,
-    height: 28,
-    padding: "2px 5px",
-    fontSize: 13,
-    fontFamily: pwc.fontBody,
-    background: pwc.white,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: 3,
-    color: pwc.grey700,
-    cursor: "pointer",
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-  } as React.CSSProperties,
-  toolbarButtonActive: {
-    minWidth: 28,
-    height: 28,
-    padding: "2px 5px",
-    fontSize: 13,
-    fontFamily: pwc.fontBody,
-    background: pwc.grey100,
-    border: `1px solid ${pwc.grey300}`,
-    borderRadius: 3,
-    color: pwc.grey900,
-    cursor: "pointer",
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-  } as React.CSSProperties,
   smallButton: {
     padding: "3px 10px",
     fontSize: 12,
@@ -2965,18 +2558,6 @@ const styles = {
     borderRadius: 3,
     color: pwc.grey900,
     cursor: "pointer",
-  } as React.CSSProperties,
-  // Selection-based table formatting bar (fill / borders / structure).
-  tableFormatBar: {
-    display: "flex",
-    flexWrap: "wrap" as const,
-    alignItems: "center",
-    gap: 6,
-    padding: "7px 8px",
-    marginTop: 4,
-    background: pwc.grey100,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: 4,
   } as React.CSSProperties,
   // Numeric notes: a small grid of value inputs (1-4 columns by filing level).
   numericGrid: {
@@ -3026,51 +2607,5 @@ const styles = {
     color: pwc.success,
     textTransform: "uppercase" as const,
     letterSpacing: 0.4,
-  } as React.CSSProperties,
-  modalBackdrop: {
-    position: "fixed" as const,
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    background: component.dialog.scrim,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    zIndex: 1000,
-  } as React.CSSProperties,
-  modalCard: {
-    ...ui.dialog,
-    padding: 20,
-    maxWidth: 400,
-    width: "90%",
-  } as React.CSSProperties,
-  modalTitle: {
-    fontFamily: pwc.fontHeading,
-    fontSize: 16,
-    fontWeight: pwc.weight.medium,
-    margin: 0,
-    marginBottom: 8,
-    color: pwc.grey900,
-  } as React.CSSProperties,
-  modalBody: {
-    fontSize: 14,
-    color: pwc.grey700,
-    margin: 0,
-    marginBottom: 16,
-    lineHeight: 1.5,
-  } as React.CSSProperties,
-  modalActions: {
-    display: "flex",
-    justifyContent: "flex-end",
-    gap: 8,
-  } as React.CSSProperties,
-  modalCancelButton: {
-    ...ui.buttonSecondary,
-    ...ui.buttonSm,
-  } as React.CSSProperties,
-  modalConfirmButton: {
-    ...ui.buttonPrimary,
-    ...ui.buttonSm,
   } as React.CSSProperties,
 } as const;

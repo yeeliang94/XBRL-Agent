@@ -14,7 +14,7 @@ import type {
 } from "../lib/clipboardFormat";
 
 // Border-colour swatches mirror the editor's per-cell border palette
-// (NotesReviewTab BORDER_COLOURS) so the firm default reads from the same
+// (NotesEditorToolbar BORDER_COLOURS) so the firm default reads from the same
 // vocabulary. "Default" (undefined) means each surface keeps its historic
 // grid colour (editor grey / clipboard #999).
 const BORDER_SWATCHES: ReadonlyArray<{ label: string; color?: string }> = [

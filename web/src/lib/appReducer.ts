@@ -18,9 +18,11 @@ import type {
   EvalScoreJson,
   PipelineStage,
   PipelineStageData,
+  ReasoningBlock,
 } from "./types";
 import { createAgentState } from "./types";
 import { pseudoAgentLabel } from "./vocabulary";
+import { applyReasoningEvent } from "./buildReasoningTimeline";
 
 // Backend-emitted error string for user-cancelled agents. Kept as a named
 // constant so the two sites that check it can't drift out of sync.
@@ -42,11 +44,10 @@ export interface AppState {
   error: ErrorData | null;
   complete: CompleteData | null;
   runStartTime: number | null;
-  // Phase 6: streaming chat state (thinkingBuffer, activeThinkingId,
-  // thinkingBlocks, streamingText, textSegments) was removed when the chat
-  // feed was replaced by the tool-call timeline. toolTimeline is now the
-  // only derived-from-events field we keep on AppState.
+  // Provider-supplied reasoning is assembled incrementally so high-frequency
+  // deltas do not rebuild the complete event history on each update.
   toolTimeline: ToolTimelineEntry[];
+  reasoningBlocks: ReasoningBlock[];
   // Phase 10: Per-agent state for tab UI
   agents: Record<string, AgentState>;
   agentTabOrder: string[];      // ordered agent IDs for tab rendering
@@ -168,6 +169,7 @@ export const initialState: AppState = {
   complete: null,
   runStartTime: null,
   toolTimeline: [],
+  reasoningBlocks: [],
   agents: {},
   agentTabOrder: [],
   activeTab: null,
@@ -297,15 +299,13 @@ export function bootState(): AppState {
 
 // ---------------------------------------------------------------------------
 // Shared derived-state shape — fields common to both AppState and AgentState
-// that get recomputed as events arrive. Phase 6 stripped the chat-streaming
-// fields (thinkingBuffer/activeThinkingId/thinkingBlocks/streamingText/
-// textSegments); what remains is the current pipeline phase and the tool
-// timeline derived via buildToolTimeline.
+// that get recomputed as events arrive.
 // ---------------------------------------------------------------------------
 
 interface DerivedStreamState {
   events: SSEEvent[];
   toolTimeline: ToolTimelineEntry[];
+  reasoningBlocks: ReasoningBlock[];
   currentPhase: EventPhase | null;
 }
 
@@ -371,9 +371,14 @@ function applyStreamingEvent(
       return changed ? { toolTimeline: nextTimeline } : null;
     }
 
+    case "thinking_delta":
+    case "thinking_end":
+      return {
+        reasoningBlocks: applyReasoningEvent(state.reasoningBlocks, event),
+      };
+
     default:
-      // thinking_delta / thinking_end / text_delta land in events[] via the
-      // caller but don't drive any derived state anymore.
+      // text_delta lands in events[] for the trace but has no standalone UI.
       return null;
   }
 }

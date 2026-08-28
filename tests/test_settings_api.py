@@ -135,6 +135,48 @@ def test_notes_coverage_toggle_round_trips(tmp_path, monkeypatch):
     assert server._notes_coverage_enabled() is False
 
 
+def test_scout_limits_round_trip_and_apply_without_restart(tmp_path, monkeypatch):
+    """The Settings controls persist the two Scout guards, and the runtime
+    resolvers see the new values immediately."""
+    settings_file = tmp_path / "settings.json"
+    monkeypatch.setattr(server, "SETTINGS_FILE", settings_file)
+    monkeypatch.delenv("XBRL_SCOUT_WALLCLOCK_S", raising=False)
+    monkeypatch.delenv("XBRL_SCOUT_MAX_TURNS", raising=False)
+
+    defaults = client.get("/api/settings").json()
+    assert defaults["scout_wallclock_seconds"] == 300
+    assert defaults["scout_max_turns"] == 20
+
+    response = client.post(
+        "/api/settings",
+        json={"scout_wallclock_seconds": 900, "scout_max_turns": 32},
+    )
+    assert response.status_code == 200
+
+    from scout.limits import resolve_scout_max_turns, resolve_scout_wallclock
+
+    assert resolve_scout_wallclock() == 900
+    assert resolve_scout_max_turns() == 32
+    saved = client.get("/api/settings").json()
+    assert saved["scout_wallclock_seconds"] == 900
+    assert saved["scout_max_turns"] == 32
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("scout_wallclock_seconds", -1),
+        ("scout_wallclock_seconds", "never"),
+        ("scout_max_turns", 0),
+        ("scout_max_turns", 41),
+        ("scout_max_turns", 2.5),
+    ],
+)
+def test_scout_limits_reject_unsafe_values(field, value):
+    response = client.post("/api/settings", json={field: value})
+    assert response.status_code == 400
+
+
 def test_spot_check_toggle_and_mode_round_trip(tmp_path, monkeypatch):
     """Issue 1: the clean-run spot-check toggle + depth persist to
     XBRL_SPOT_CHECK / XBRL_SPOT_CHECK_MODE and are reflected by GET

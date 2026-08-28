@@ -30,6 +30,7 @@ import {
   filterEventsBySubAgent,
   deriveSubAgentRangesFromEvents,
 } from "../lib/buildToolTimeline";
+import { buildReasoningTimeline } from "../lib/buildReasoningTimeline";
 import { displayModelId } from "../lib/modelId";
 import { notesTabLabel } from "../lib/appReducer";
 import { formatAccounting, formatCost } from "../lib/numberFormat";
@@ -291,13 +292,21 @@ function AgentCard({ agent, summary }: { agent: RunAgentJson; summary: AgentSumm
   // Filter + rebuild when a specific sub is selected, otherwise use the
   // full event list. Memoised on the same keys as the filter so switching
   // subs is the only trigger that rebuilds the timeline.
-  const { events, toolTimeline } = useMemo(() => {
-    if (!technicalOpen) return { events: [], toolTimeline: [] };
+  const { events, toolTimeline, reasoningBlocks } = useMemo(() => {
+    if (!technicalOpen) return { events: [], toolTimeline: [], reasoningBlocks: [] };
     if (showSubTabs && notes12SubId !== null) {
       const filtered = filterEventsBySubAgent(agent.events, notes12SubId);
-      return { events: filtered, toolTimeline: buildToolTimeline(filtered) };
+      return {
+        events: filtered,
+        toolTimeline: buildToolTimeline(filtered),
+        reasoningBlocks: buildReasoningTimeline(filtered),
+      };
     }
-    return { events: agent.events, toolTimeline: buildToolTimeline(agent.events) };
+    return {
+      events: agent.events,
+      toolTimeline: buildToolTimeline(agent.events),
+      reasoningBlocks: buildReasoningTimeline(agent.events),
+    };
   }, [agent.events, notes12SubId, showSubTabs, technicalOpen]);
 
   return (
@@ -384,6 +393,7 @@ function AgentCard({ agent, summary }: { agent: RunAgentJson; summary: AgentSumm
           <AgentTimeline
             events={events}
             toolTimeline={toolTimeline}
+            reasoningBlocks={reasoningBlocks}
             isRunning={false}
           />
         </div> : null}

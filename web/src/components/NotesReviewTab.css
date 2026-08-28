@@ -155,14 +155,33 @@
   text-align: right;
 }
 
+@media (max-width: 1000px) {
+  .notes-review-tab .notes-source-first-layout {
+    grid-template-columns: 220px minmax(0, 1fr) !important;
+  }
+
+  .notes-review-tab .notes-source-first-layout > [role="separator"] {
+    display: none !important;
+  }
+}
+
 @media (max-width: 780px) {
-  .notes-review-tab .notes-single-cell-layout {
+  .notes-review-tab .notes-source-first-layout {
     grid-template-columns: minmax(0, 1fr) !important;
   }
 
-  .notes-review-tab .notes-single-cell-layout > aside {
+  .notes-review-tab .notes-source-first-layout > aside {
     position: static !important;
     height: 260px !important;
     min-height: 0 !important;
+    padding-right: 0 !important;
+  }
+
+  .notes-review-tab .notes-source-first-layout > [role="separator"] {
+    display: none !important;
+  }
+
+  .notes-review-tab .notes-source-first-layout > section {
+    padding-left: 0 !important;
   }
 }

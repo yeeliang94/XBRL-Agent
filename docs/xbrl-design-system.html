@@ -377,10 +377,12 @@
           <tbody>
             <tr><td>App navigation</td><td>Grey 50 surface</td><td>Separates navigation from the white workspace without a heavy container.</td></tr>
             <tr><td>Persistent PDF pane</td><td>One Grey 100 divider</td><td>Marks a functional split between editable content and evidence.</td></tr>
+            <tr><td>Notes source inventory</td><td>One Grey 100 divider</td><td>Separates document-order navigation from filing-template fields.</td></tr>
             <tr><td>Selected row</td><td>Grey 50 or Orange 50</td><td>Grey for neutral selection; Orange 50 only when the source or issue requires attention.</td></tr>
             <tr><td>Floating UI</td><td>Shadow</td><td>Reserved for dropdowns, tooltips and modals that overlap content.</td></tr>
           </tbody>
         </table>
+        <div class="handoff" style="margin-top:20px"><strong>Notes review composition</strong>Use three persistent panes in this order: the scout source-note inventory, the complete scrolling XBRL field list, and the source PDF. The source inventory and PDF pane are independently resizable. Each resize target has a one-pixel visible Grey 100 rule and a wider transparent drag area. Keep the numbered sheet navigator sticky above the XBRL fields. Render inactive prose fields as lightweight read-only HTML and mount the rich-text editor only for the selected field. Put PDF paging, cited pages and zoom in one compact PDF toolbar. Put table style and re-extraction in the notes actions menu. Show source pages, sheet identity, placement and save status once in the surface that owns each fact.</div>
       </section>
 
       <section id="actions">
@@ -443,10 +445,11 @@
         <table class="token-table">
           <thead><tr><th>Show by default</th><th>Keep under technical details</th></tr></thead>
           <tbody>
-            <tr><td>Source located, values being extracted, result written, checking totals, retrying, waiting, completed, reviewer input needed.</td><td>Raw tool names, prompts, tokens, request counts, stack traces and provider payloads.</td></tr>
+            <tr><td>One current sentence drawn from source discovery, extraction, writing, checking, retries, waits, completion, reviewer input, tool activity or provider-supplied reasoning.</td><td>Raw tool names, prompts, tokens, request counts, stack traces and provider payloads.</td></tr>
           </tbody>
         </table>
         <div class="handoff" style="margin-top:20px"><strong>Current event contract</strong>The production roster consumes <code>agent_id</code>, role, task, status, semantic update, timestamp and optional page evidence. Document preparation appears first because every extraction workstream depends on its page map. Long-running page and formatting fan-outs expose a plain-language count in the run header. General <code>parent_agent_id</code> and <code>waiting_for</code> relationships are optional future capabilities; without them, the UI remains a truthful flat roster. Announce only the selected agent's semantic update in a stable polite status region, never the entire detail pane.</div>
+        <div class="handoff" style="margin-top:12px"><strong>Live activity sentences</strong>Merge current activity, tool actions and provider-returned reasoning into one flat <em>Live activity</em> sentence carousel for every active workstream. Show one sentence at a time with no event cards or nested activity panels. Default to the newest sentence and provide subtle older/newer controls so every retained sentence remains reachable. Fade the sentence when selection changes, frame-batch rapid reasoning updates, and label reasoning <em>Provider-supplied</em>. Never describe unavailable private chain-of-thought as exposed. Announce only semantic status or tool changes to assistive technology, not every reasoning token, and make all motion respect <code>prefers-reduced-motion</code>.</div>
       </section>
 
       <section id="review">

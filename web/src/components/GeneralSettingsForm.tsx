@@ -27,7 +27,7 @@ import { ClipboardFormatControls } from "./ClipboardFormatControls";
 
 interface Props {
   getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; notes_auto_review?: boolean; notes_coverage?: boolean; tolerance_rm?: number; spot_check?: boolean; spot_check_mode?: string; entity_memory?: boolean; pdf_sidecar?: boolean; pdf_notes_auto_format?: boolean; notes_source_integrity?: SourceIntegrityMode; notes_source_integrity_choices?: string[]; default_models?: Record<string, string>; default_model_overrides?: Record<string, string>; local_override_keys?: string[]; thinking_levels?: Record<string, string>; thinking_level_choices?: string[]; thinking_level_choices_by_model?: Record<string, string[]>; notes_table_style?: Partial<ClipboardFormatOptions>; available_models?: ModelEntry[] }>;
-  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; default_models: Record<string, string>; reset_keys: string[]; auto_review: boolean; notes_auto_review: boolean; notes_coverage: boolean; spot_check: boolean; spot_check_mode: "light" | "full"; entity_memory: boolean; pdf_sidecar: boolean; pdf_notes_auto_format: boolean; notes_source_integrity: SourceIntegrityMode; tolerance_rm: number; thinking_levels: Record<string, string>; notes_table_style: ClipboardFormatOptions }>) => Promise<{ status: string }>;
+  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; default_models: Record<string, string>; reset_keys: string[]; auto_review: boolean; notes_auto_review: boolean; notes_coverage: boolean; spot_check: boolean; spot_check_mode: "light" | "full"; entity_memory: boolean; pdf_sidecar: boolean; pdf_notes_auto_format: boolean; notes_source_integrity: SourceIntegrityMode; tolerance_rm: number; scout_wallclock_seconds: number; scout_max_turns: number; thinking_levels: Record<string, string>; notes_table_style: ClipboardFormatOptions }>) => Promise<{ status: string }>;
   testConnection: (body: Partial<{ proxy_url: string; api_key: string; model: string }>) => Promise<{ status: string; model?: string; latency_ms?: number; message?: string }>;
   // When provided, a Cancel button is shown (used by the modal wrapper). The
   // page host omits it — there's nothing to cancel out of.
@@ -297,6 +297,9 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
   const [notesAutoReview, setNotesAutoReview] = useState(true);
   const [notesCoverage, setNotesCoverage] = useState(true);
   const [toleranceRm, setToleranceRm] = useState<number | "">(1);
+  const [scoutWallclockSeconds, setScoutWallclockSeconds] =
+    useState<number | "">(300);
+  const [scoutMaxTurns, setScoutMaxTurns] = useState<number | "">(20);
   // Clean-run spot-check (issue 1): toggle + depth. Default on / light.
   const [spotCheck, setSpotCheck] = useState(true);
   const [spotCheckMode, setSpotCheckMode] = useState<"light" | "full">("light");
@@ -376,6 +379,14 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         setNotesAutoReview(s.notes_auto_review !== false);
         setNotesCoverage(s.notes_coverage !== false);
         setToleranceRm(typeof s.tolerance_rm === "number" ? s.tolerance_rm : 1);
+        setScoutWallclockSeconds(
+          typeof s.scout_wallclock_seconds === "number"
+            ? s.scout_wallclock_seconds
+            : 300,
+        );
+        setScoutMaxTurns(
+          typeof s.scout_max_turns === "number" ? s.scout_max_turns : 20,
+        );
         setSpotCheck(s.spot_check !== false);
         setSpotCheckMode(s.spot_check_mode === "full" ? "full" : "light");
         setThinkingLevels(s.thinking_levels || {});
@@ -428,6 +439,23 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
       setLoadError("Enter a cross-check tolerance of 0 or more before saving.");
       return;
     }
+    if (
+      scoutWallclockSeconds === "" ||
+      !Number.isFinite(scoutWallclockSeconds) ||
+      scoutWallclockSeconds < 0
+    ) {
+      setLoadError("Enter a Scout wall-clock timeout of 0 or more before saving.");
+      return;
+    }
+    if (
+      scoutMaxTurns === "" ||
+      !Number.isInteger(scoutMaxTurns) ||
+      scoutMaxTurns < 1 ||
+      scoutMaxTurns > 40
+    ) {
+      setLoadError("Enter a maximum Scout turn count between 1 and 40 before saving.");
+      return;
+    }
     // Re-run validation against current values (user may have pressed Enter
     // before blur fired, leaving `errors` stale).
     const live = validate({ proxyUrl, apiKey, model });
@@ -448,6 +476,8 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         notes_auto_review: notesAutoReview,
         notes_coverage: notesCoverage,
         tolerance_rm: toleranceRm,
+        scout_wallclock_seconds: scoutWallclockSeconds,
+        scout_max_turns: scoutMaxTurns,
         spot_check: spotCheck,
         spot_check_mode: spotCheckMode,
         entity_memory: entityMemory,
@@ -479,7 +509,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
     } finally {
       setSaving(false);
     }
-  }, [dirty, model, proxyUrl, apiKey, roleModelUpdates, autoReview, notesAutoReview, notesCoverage, toleranceRm, spotCheck, spotCheckMode, entityMemory, pdfSidecar, pdfNotesAutoFormat, sourceIntegrity, thinkingLevels, saveSettings]);
+  }, [dirty, model, proxyUrl, apiKey, roleModelUpdates, autoReview, notesAutoReview, notesCoverage, toleranceRm, scoutWallclockSeconds, scoutMaxTurns, spotCheck, spotCheckMode, entityMemory, pdfSidecar, pdfNotesAutoFormat, sourceIntegrity, thinkingLevels, saveSettings]);
 
   const handleUseDeploymentDefault = useCallback(async (key: "model" | "proxy_url" | "api_key") => {
     setSaving(true);
@@ -775,6 +805,70 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
             })}
           </div>
         )}
+      </div>
+
+      <SettingsSectionHeading
+        title="Scout limits"
+        description="Set how long the document scan may run before extraction continues without its page hints."
+      />
+      <div style={{ display: "flex", flexWrap: "wrap", gap: pwc.space.xl }}>
+        <div style={{ ...styles.fieldGroup, flex: "1 1 220px" }}>
+          <label style={styles.label} htmlFor="scout-wallclock-seconds">
+            Wall-clock timeout (seconds)
+          </label>
+          <input
+            id="scout-wallclock-seconds"
+            type="number"
+            min={0}
+            step={1}
+            value={scoutWallclockSeconds}
+            disabled={readOnly}
+            onChange={(e) => {
+              if (e.target.value === "") {
+                setScoutWallclockSeconds("");
+              } else {
+                const next = Number(e.target.value);
+                if (Number.isFinite(next)) setScoutWallclockSeconds(next);
+              }
+              setDirty(true);
+            }}
+            style={{ ...ui.input, width: "100%", maxWidth: 240 }}
+          />
+          <p style={styles.helperText}>
+            Default: 300 seconds. Increase this for long or scanned filings.
+            Enter 0 to remove the overall Scout deadline; the per-turn timeout
+            still applies.
+          </p>
+        </div>
+
+        <div style={{ ...styles.fieldGroup, flex: "1 1 220px" }}>
+          <label style={styles.label} htmlFor="scout-max-turns">
+            Maximum turns
+          </label>
+          <input
+            id="scout-max-turns"
+            type="number"
+            min={1}
+            max={40}
+            step={1}
+            value={scoutMaxTurns}
+            disabled={readOnly}
+            onChange={(e) => {
+              if (e.target.value === "") {
+                setScoutMaxTurns("");
+              } else {
+                const next = Number(e.target.value);
+                if (Number.isFinite(next)) setScoutMaxTurns(next);
+              }
+              setDirty(true);
+            }}
+            style={{ ...ui.input, width: "100%", maxWidth: 240 }}
+          />
+          <p style={styles.helperText}>
+            Default: 20 model responses. The safe maximum is 40 so Scout stops
+            before the model framework&apos;s internal 50-request limit.
+          </p>
+        </div>
       </div>
 
       <SettingsSectionHeading

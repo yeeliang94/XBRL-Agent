@@ -182,6 +182,8 @@ export async function updateSettings(
     default_models: Record<string, string>;
     reset_keys: string[];
     tolerance_rm: number;
+    scout_wallclock_seconds: number;
+    scout_max_turns: number;
     auto_review: boolean;
     notes_auto_review: boolean;
     notes_coverage: boolean;
