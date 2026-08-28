@@ -457,6 +457,24 @@ describe("appReducer", () => {
     }
   });
 
+  test("pipeline_stage retains plain-language bounded progress", () => {
+    const state = appReducer(runningState(), {
+      type: "EVENT",
+      payload: {
+        event: "pipeline_stage",
+        data: {
+          stage: "transcribing_source",
+          started_at: 1700000000,
+          message: "Reading scanned note pages: 2 of 5 complete.",
+          completed: 2,
+          total: 5,
+        },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+    expect(state.pipelineActivity).toMatchObject({ completed: 2, total: 5 });
+  });
+
   test("RUN_STARTED clears stale pipelineStage from previous run", () => {
     let state = runningState();
     state = appReducer(state, {
@@ -471,6 +489,30 @@ describe("appReducer", () => {
 
     const restarted = appReducer(state, { type: "RUN_STARTED" });
     expect(restarted.pipelineStage).toBeNull();
+    expect(restarted.pipelineActivity).toBeNull();
+  });
+
+  test("eval_score is retained live and cleared for the next run", () => {
+    let state = runningState();
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "eval_score",
+        data: {
+          benchmark_id: 7,
+          gold_cells: 10,
+          matched_cells: 9,
+          missing_cells: 1,
+          mismatch_cells: 0,
+          extra_cells: 0,
+          scale_mismatch: 0,
+          score: 0.9,
+        },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+    expect(state.evalScore?.score).toBe(0.9);
+    expect(appReducer(state, { type: "RUN_STARTED" }).evalScore).toBeNull();
   });
 
   test("RUN_STARTED clears any prior partial_merge banner", () => {

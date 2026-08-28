@@ -31,7 +31,12 @@ def _audit_role_cells(
     level: str,
     roles: list[tuple[str, str]],
 ) -> tuple[int, list[str]]:
-    wb = openpyxl.load_workbook(path, data_only=False, read_only=True)
+    # These audits address formulas by coordinate. In openpyxl's read-only
+    # mode every random cell lookup reparses worksheet XML from the start,
+    # making this small audit quadratic in practice. The shipped workbooks
+    # are small, so normal mode is both faster and still read-only at the
+    # application level: this command never saves the workbook.
+    wb = openpyxl.load_workbook(path, data_only=False)
     checked = 0
     issues: list[str] = []
     try:
@@ -60,7 +65,7 @@ def _audit_role_cells(
 
 
 def _audit_socie(path: Path) -> tuple[int, list[str]]:
-    wb = openpyxl.load_workbook(path, data_only=False, read_only=True)
+    wb = openpyxl.load_workbook(path, data_only=False)
     checked = 0
     issues: list[str] = []
     try:

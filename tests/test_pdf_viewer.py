@@ -45,11 +45,25 @@ def test_render_page_range(tmp_path):
 
 
 def test_render_all_pages(tmp_path):
+    # The contract is that an omitted range renders every page. A tiny local
+    # PDF exercises that loop without rasterising the 37-page FINCO fixture a
+    # second time; the real document's page count is pinned separately above.
+    import fitz
+
+    pdf_path = tmp_path / "three-pages.pdf"
+    document = fitz.open()
+    try:
+        for _ in range(3):
+            document.new_page()
+        document.save(pdf_path)
+    finally:
+        document.close()
+
     images = render_pages_to_images(
-        "data/FINCO-Audited-Financial-Statement-2021.pdf",
-        output_dir=str(tmp_path),
+        str(pdf_path),
+        output_dir=str(tmp_path / "rendered"),
     )
-    assert len(images) == 37
+    assert len(images) == 3
 
 
 def test_page_images_are_png(tmp_path):

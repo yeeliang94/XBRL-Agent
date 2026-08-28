@@ -51,18 +51,23 @@ async def test_auto_format_scopes_and_persists_the_manual_task_shape(auto_format
             "prompt_tokens": 100, "completion_tokens": 20,
         }
 
+    progress = []
     result = await run_pdf_auto_format(
         run_id=run_id, db_path=db_path,
         pdf_path=str(tmp_path / "uploaded.pdf"),
         sheets=["Notes-CI", "Notes-Listofnotes"], model_name="model-a",
         model_factory=object, output_dir=str(tmp_path), timeout_s=30,
         formatter=fake_formatter,
+        on_progress=lambda completed, total, sheet: progress.append(
+            (completed, total, sheet)
+        ),
     )
 
     assert result["formatted"] == 1
     assert result["failed"] == 0
     assert [call["sheet"] for call in calls] == ["Notes-CI"]
     assert calls[0]["style_sources"] == {"unstyled", "floor"}
+    assert progress == [(0, 1, None), (1, 1, "Notes-CI")]
     with repo.db_session(db_path) as conn:
         task = repo.fetch_notes_format_task(conn, run_id, "Notes-CI")
     assert task["status"] == "done"

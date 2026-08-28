@@ -40,7 +40,8 @@ def test_pdf_auto_format_stage_is_after_notes_review_and_before_recalc():
     """Pin the load-bearing stage ordering in the live generator."""
     source = inspect.getsource(server.run_multi_agent_stream)
 
-    format_stage = source.find('_emit_stage("formatting_notes")')
+    format_block = source.find("if _format_sheets:")
+    format_stage = source.find('"formatting_notes"', format_block)
     review_release = source.rfind(
         "Failed to release notes-review task", 0, format_stage,
     )
@@ -55,7 +56,8 @@ def test_pdf_auto_format_stage_is_after_notes_review_and_before_recalc():
 def test_pdf_auto_format_task_is_registered_and_always_unregistered():
     """Stop All must reach the group, and normal/error exits must release it."""
     source = inspect.getsource(server.run_multi_agent_stream)
-    start = source.find('_emit_stage("formatting_notes")')
+    format_block = source.find("if _format_sheets:")
+    start = source.find('"formatting_notes"', format_block)
     end = source.find("RUN-REVIEW peer-review #1", start)
     block = source[start:end]
 

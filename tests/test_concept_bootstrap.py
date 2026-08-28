@@ -31,7 +31,7 @@ def _count(db_path: Path, table: str) -> int:
         conn.close()
 
 
-def test_bootstrap_imports_face_templates(fresh_db: Path):
+def test_bootstrap_imports_targets_and_is_idempotent(fresh_db: Path):
     from concept_model.bootstrap import import_all_face_templates
 
     template_ids = import_all_face_templates(fresh_db)
@@ -51,23 +51,15 @@ def test_bootstrap_imports_face_templates(fresh_db: Path):
         assert n > 0
     finally:
         conn.close()
+    # Group linear templates get B/C/D/E per-scope concept_targets.
+    assert _count(fresh_db, "concept_targets") > 0
 
-
-def test_bootstrap_is_idempotent(fresh_db: Path):
-    from concept_model.bootstrap import import_all_face_templates
-
-    import_all_face_templates(fresh_db)
+    # Re-import on the same database to pin the startup idempotence contract
+    # without paying for two additional all-template bootstraps in separate
+    # pytest-xdist workers.
     nodes_first = _count(fresh_db, "concept_nodes")
     templates_first = _count(fresh_db, "concept_templates")
 
     import_all_face_templates(fresh_db)
     assert _count(fresh_db, "concept_nodes") == nodes_first
     assert _count(fresh_db, "concept_templates") == templates_first
-
-
-def test_bootstrap_populates_group_targets(fresh_db: Path):
-    from concept_model.bootstrap import import_all_face_templates
-
-    import_all_face_templates(fresh_db)
-    # Group linear templates get B/C/D/E per-scope concept_targets.
-    assert _count(fresh_db, "concept_targets") > 0

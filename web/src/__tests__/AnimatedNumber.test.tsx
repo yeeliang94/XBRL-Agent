@@ -1,5 +1,5 @@
 import { describe, test, expect, afterEach, vi } from "vitest";
-import { render, screen, waitFor, cleanup } from "@testing-library/react";
+import { act, render, screen, cleanup } from "@testing-library/react";
 import { AnimatedNumber } from "../components/AnimatedNumber";
 
 afterEach(() => {
@@ -51,15 +51,25 @@ describe("AnimatedNumber", () => {
     expect(screen.queryByText("10")).toBeNull();
   });
 
-  test("with motion allowed, a value change eventually reaches the target", async () => {
+  test("with motion allowed, a value change reaches the target on the animation clock", () => {
     stubReducedMotion(false);
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn((callback: FrameRequestCallback) => {
+        frames.push(callback);
+        return frames.length;
+      }),
+    );
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+
     const { rerender } = render(<AnimatedNumber value={0} />);
     rerender(<AnimatedNumber value={50} />);
-    // jsdom drives requestAnimationFrame off real timers, so the tween lands
-    // within a few hundred ms. Generous timeout: under a full parallel suite
-    // the event loop is contended, and the contract here is only EVENTUAL
-    // convergence, not a frame budget.
-    await waitFor(() => expect(screen.getByText("50")).toBeTruthy(), { timeout: 3000 });
+
+    act(() => frames.shift()?.(10_000));
+    expect(screen.getByText("0")).toBeTruthy();
+    act(() => frames.shift()?.(10_250));
+    expect(screen.getByText("50")).toBeTruthy();
   });
 
   test("passes through style and data-testid", () => {

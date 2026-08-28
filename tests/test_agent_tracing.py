@@ -12,11 +12,14 @@ Covers the v8 telemetry behaviour + peer-review [1]:
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from agent_tracing import (
     save_agent_trace,
     save_messages_trace,
+    purge_expired_diagnostics,
+    purge_run_diagnostics,
     _MAX_TRACE_STR_CHARS,
 )
 
@@ -164,3 +167,53 @@ def test_trace_note_stamped_on_every_trace(tmp_path: Path) -> None:
     trace = _read_trace(tmp_path, "SOFP")
     assert "compaction" in trace["trace_note"]
     assert "Do not infer" in trace["trace_note"]
+
+
+def test_purge_run_diagnostics_preserves_workbooks(tmp_path: Path) -> None:
+    output_root = tmp_path / "output"
+    run_dir = output_root / "run-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "SOFP_conversation_trace.json").write_text("{}")
+    (run_dir / "notes_CORP_INFO_failures.json").write_text("{}")
+    (run_dir / "notes12_failures.json").write_text("{}")
+    (run_dir / "notes12_unmatched.json").write_text("{}")
+    (run_dir / "filled.xlsx").write_bytes(b"xlsx")
+
+    removed = purge_run_diagnostics(run_dir, allowed_root=output_root)
+
+    assert set(removed) == {
+        "SOFP_conversation_trace.json",
+        "notes_CORP_INFO_failures.json",
+        "notes12_failures.json",
+        "notes12_unmatched.json",
+    }
+    assert (run_dir / "filled.xlsx").exists()
+
+
+def test_expired_diagnostic_retention_is_bounded_to_run_dirs(tmp_path: Path) -> None:
+    output_root = tmp_path / "output"
+    run_dir = output_root / "run-1"
+    run_dir.mkdir(parents=True)
+    old_trace = run_dir / "SOFP_conversation_trace.json"
+    fresh_trace = run_dir / "SOPL_conversation_trace.json"
+    repeat_dir = run_dir / "repeat_1"
+    repeat_dir.mkdir()
+    old_repeat_trace = repeat_dir / "NOTES_LIST_OF_NOTES_sub0_conversation_trace.json"
+    old_trace.write_text("{}")
+    fresh_trace.write_text("{}")
+    old_repeat_trace.write_text("{}")
+    now = 1_000_000.0
+    os.utime(old_trace, (now - 91 * 86400, now - 91 * 86400))
+    os.utime(fresh_trace, (now - 10 * 86400, now - 10 * 86400))
+    os.utime(old_repeat_trace, (now - 91 * 86400, now - 91 * 86400))
+
+    removed = purge_expired_diagnostics(
+        output_root,
+        retention_days=90,
+        now=now,
+    )
+
+    assert removed == 2
+    assert not old_trace.exists()
+    assert not old_repeat_trace.exists()
+    assert fresh_trace.exists()

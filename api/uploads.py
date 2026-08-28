@@ -48,6 +48,21 @@ def _scout_attempt_is_current(session_id: str, gen: int) -> bool:
     return _scout_attempt_gen.get(session_id) == gen
 
 
+def _commit_scout_incident_best_effort(conn) -> None:
+    """Commit advisory scout diagnostics without faulting the SSE handler."""
+    try:
+        conn.commit()
+    except Exception:  # noqa: BLE001 — preserve the user-facing scout error
+        try:
+            conn.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        logger.warning(
+            "Could not commit standalone scout incident",
+            exc_info=True,
+        )
+
+
 # --- Upload endpoint ---
 
 @router.post("/api/upload")
@@ -356,8 +371,37 @@ async def scout_pdf(session_id: str, request: Request):
 
         # Queue for structured events from the streaming scout agent
         event_queue: asyncio.Queue[tuple[str, dict]] = asyncio.Queue()
+        scout_audit_conn = None
+        scout_repo = None
+        scout_run_id: Optional[int] = None
+        scout_agent_row_id: Optional[int] = None
 
         async def on_event(event_type: str, data: dict) -> None:
+            if (
+                scout_audit_conn is not None
+                and scout_repo is not None
+                and scout_agent_row_id is not None
+                and event_type in {
+                    "status", "tool_call", "tool_result", "error", "complete",
+                }
+            ):
+                try:
+                    phase = data.get("phase") if isinstance(
+                        data.get("phase"), str,
+                    ) else None
+                    scout_repo.log_event(
+                        scout_audit_conn,
+                        scout_agent_row_id,
+                        event_type,
+                        payload=data,
+                        phase=phase,
+                    )
+                    scout_audit_conn.commit()
+                except Exception:  # noqa: BLE001 — telemetry is best effort
+                    logger.warning(
+                        "Could not persist standalone scout event",
+                        exc_info=True,
+                    )
             await event_queue.put((event_type, data))
 
         scout_task: Optional[asyncio.Task] = None
@@ -369,6 +413,32 @@ async def scout_pdf(session_id: str, request: Request):
             _record_scout_agent_row(scout_run_id)
             if scout_run_id is not None else None
         )
+        if scout_run_id is not None and scout_agent_row_id is not None:
+            try:
+                import sqlite3
+                from db import repository as _scout_repo
+
+                scout_audit_conn = sqlite3.connect(str(server.AUDIT_DB_PATH))
+                scout_audit_conn.execute("PRAGMA foreign_keys = ON")
+                scout_audit_conn.execute("PRAGMA busy_timeout = 5000")
+                scout_repo = _scout_repo
+                scout_repo.log_event(
+                    scout_audit_conn,
+                    scout_agent_row_id,
+                    "status",
+                    payload={"phase": "scouting", "message": "Starting scout..."},
+                    phase="scouting",
+                )
+                scout_audit_conn.commit()
+            except Exception:  # noqa: BLE001 — live scan still proceeds
+                logger.warning(
+                    "Could not open standalone scout event recorder",
+                    exc_info=True,
+                )
+                if scout_audit_conn is not None:
+                    scout_audit_conn.close()
+                scout_audit_conn = None
+                scout_repo = None
         scout_attempt = _claim_scout_attempt(session_id)
         scout_row_status = "failed"
         scout_error_detail = "scout failed"
@@ -447,7 +517,36 @@ async def scout_pdf(session_id: str, request: Request):
             # /api/test-connection). The client gets the exception summary.
             logger.exception("Scout failed", extra={"session_id": session_id})
             scout_error_detail = str(e) or "scout failed"
-            yield f"event: error\ndata: {json.dumps({'message': str(e)})}\n\n"
+            incident_id = None
+            if scout_audit_conn is not None and scout_run_id is not None:
+                from observability.incidents import capture_run_incident
+
+                incident_id = capture_run_incident(
+                    scout_audit_conn,
+                    scout_run_id,
+                    source="standalone_scout",
+                    stage="scouting",
+                    severity="recoverable",
+                    error_code="scout_failed",
+                    user_message=(
+                        "The document scan could not finish. Try Auto-detect "
+                        "again or continue without page suggestions."
+                    ),
+                    exception=e,
+                )
+                # Incident persistence is advisory.  A busy or damaged audit
+                # database must not replace the useful scout SSE response with
+                # a second exception from this failure handler.
+                _commit_scout_incident_best_effort(scout_audit_conn)
+            payload = {
+                "message": (
+                    "The document scan could not finish. Try Auto-detect "
+                    "again or continue without page suggestions."
+                ),
+                "error_code": "scout_failed",
+                "incident_id": incident_id,
+            }
+            yield f"event: error\ndata: {json.dumps(payload)}\n\n"
 
         finally:
             # Cancel THIS attempt's task if still running (e.g. client
@@ -472,6 +571,11 @@ async def scout_pdf(session_id: str, request: Request):
                         scout_agent_row_id, scout_row_status, scout_error_detail,
                         usage=scout_usage,
                     )
+            if scout_audit_conn is not None:
+                try:
+                    scout_audit_conn.close()
+                except Exception:  # noqa: BLE001
+                    pass
 
     return StreamingResponse(
         scout_stream(),

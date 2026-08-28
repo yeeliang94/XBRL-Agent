@@ -103,7 +103,11 @@ def test_fixed_sign_equity_rows_are_subtracted_in_every_live_formula(
     template: Path,
 ) -> None:
     """Pin layouts skipped by generic auditors, including MPERS Group SOCIE."""
-    wb = openpyxl.load_workbook(template, data_only=False, read_only=True)
+    # This test mixes coordinate lookups with whole-sheet iteration. In
+    # openpyxl's read-only mode each coordinate lookup reparses worksheet XML;
+    # normal mode materialises the small template once and makes both access
+    # patterns constant-time.
+    wb = openpyxl.load_workbook(template, data_only=False)
     try:
         for ws in wb.worksheets:
             sheet_key = ws.title.casefold()

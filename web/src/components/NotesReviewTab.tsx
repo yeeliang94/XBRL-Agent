@@ -129,6 +129,10 @@ export interface NotesReviewTabProps {
    *  way a face figure already does. Optional — the standalone Notes tab
    *  renders identically without it. */
   onActiveCellPages?: (pages: number[]) => void;
+  /** Direction-A run workspace: show a persistent note index and only the
+   *  selected note editor. The standalone component keeps its historical
+   *  expandable sheet sections for compatibility. */
+  compactSingleCell?: boolean;
 }
 
 /** Editor lifecycle status chip per cell. */
@@ -244,7 +248,14 @@ export function canonicalizeHtmlForCompare(html: string): string {
   return root.innerHTML;
 }
 
-export function NotesReviewTab({ runId, onRegenerate, focusSheet, focusCell, onActiveCellPages }: NotesReviewTabProps) {
+export function NotesReviewTab({
+  runId,
+  onRegenerate,
+  focusSheet,
+  focusCell,
+  onActiveCellPages,
+  compactSingleCell = false,
+}: NotesReviewTabProps) {
   // sheets / loading / error are the basic fetch lifecycle. We keep them
   // at the tab level (not in the individual cell editor) so one network
   // failure surfaces in a single banner instead of per-cell flicker.
@@ -312,13 +323,21 @@ export function NotesReviewTab({ runId, onRegenerate, focusSheet, focusCell, onA
   // row so the matching SheetSection scrolls that cell into view. Keyed on
   // focusCell.key so re-clicking the same cell re-scrolls.
   const [focusRow, setFocusRow] = useState<number | null>(null);
+  const [selectedCellKey, setSelectedCellKey] = useState<string | null>(null);
+  const [noteSearch, setNoteSearch] = useState("");
   useEffect(() => {
     if (!focusCell) return;
     setActive((a) => ({ sheet: focusCell.sheet, key: a.key + 1 }));
     setFocusRow(focusCell.row);
+    setSelectedCellKey(`${focusCell.sheet}:${focusCell.row}`);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- key is the stable
     // re-trigger; depending on the object identity would loop.
   }, [focusCell?.key]);
+
+  useEffect(() => {
+    setSelectedCellKey(null);
+    setNoteSearch("");
+  }, [runId]);
 
   useEffect(() => {
     // Clear prior-run state synchronously so the user never sees run
@@ -434,6 +453,45 @@ export function NotesReviewTab({ runId, onRegenerate, focusSheet, focusCell, onA
   }, [runId]);
 
   const isEmpty = sheets !== null && sheets.length === 0;
+  const noteEntries = useMemo(
+    () => (sheets ?? []).flatMap((sheet) =>
+      // The projection deliberately includes blank filing fields. They are
+      // authorable review targets (including the numeric-note disclosure
+      // slot), not absent extraction results, so the compact workspace must
+      // keep them reachable just like the full-template view does.
+      sheet.rows.map((cell) => ({
+        key: `${sheet.sheet}:${cell.row}`,
+        sheet,
+        cell,
+      })),
+    ),
+    [sheets],
+  );
+  const filteredNoteEntries = useMemo(() => {
+    const query = noteSearch.trim().toLowerCase();
+    if (!query) return noteEntries;
+    return noteEntries.filter(({ sheet, cell }) =>
+      `${cell.label} ${notesSheetDisplayName(sheet.sheet)} ${cell.row}`
+        .toLowerCase()
+        .includes(query),
+    );
+  }, [noteEntries, noteSearch]);
+  const selectedEntry =
+    noteEntries.find((entry) => entry.key === selectedCellKey) ?? null;
+
+  useEffect(() => {
+    if (!compactSingleCell || noteEntries.length === 0) return;
+    if (selectedCellKey && noteEntries.some((entry) => entry.key === selectedCellKey)) return;
+    const preferred = focusSheet
+      ? noteEntries.find((entry) => entry.sheet.sheet === focusSheet)
+      : null;
+    setSelectedCellKey((preferred ?? noteEntries[0]).key);
+  }, [compactSingleCell, focusSheet, noteEntries, selectedCellKey]);
+
+  useEffect(() => {
+    if (!compactSingleCell || !selectedEntry) return;
+    reportCellPages(selectedEntry.cell.source_pages, onActiveCellPages);
+  }, [compactSingleCell, onActiveCellPages, selectedEntry]);
 
   // Per-run "Table style" panel state + handlers (docs/PLAN-notes-table-theme.md).
   const [styleOpen, setStyleOpen] = useState(false);
@@ -503,6 +561,179 @@ export function NotesReviewTab({ runId, onRegenerate, focusSheet, focusCell, onA
       setPendingCount(UNKNOWN_COUNT);
     }
   }, [runId, onRegenerate]);
+
+  if (compactSingleCell) {
+    return (
+      <div
+        className="notes-review-tab"
+        data-testid="notes-single-cell-workspace"
+        style={{ ...styles.root, ...themeVars }}
+      >
+        {sheets !== null && (
+          <header style={styles.topBar}>
+            {!isEmpty && (
+              <button
+                type="button"
+                className={uiClass.btnGhost}
+                style={styles.regenerateButton}
+                aria-expanded={styleOpen}
+                onClick={() => setStyleOpen((value) => !value)}
+              >
+                Table style
+              </button>
+            )}
+            <button
+              type="button"
+              className={uiClass.btnGhost}
+              style={styles.regenerateButton}
+              onClick={handleRegenerateClick}
+              disabled={!onRegenerate}
+              title={onRegenerate ? undefined : "Re-extract isn't available in this view"}
+            >
+              Re-extract notes (replaces your edits)
+            </button>
+          </header>
+        )}
+
+        {styleOpen && (
+          <div style={styles.stylePanel} data-testid="notes-table-style-panel">
+            <p style={styles.stylePanelHint}>
+              Style every table on this run — the on-screen preview and what you
+              paste into M-Tool. {runTheme ? "This run overrides the firm default." : "This run uses the firm default."}
+            </p>
+            {styleError && (
+              <p style={{ ...styles.stylePanelHint, color: pwc.error }} role="alert">
+                {styleError}
+              </p>
+            )}
+            <ClipboardFormatControls
+              value={theme}
+              onChange={(next) => persistRunTheme(next)}
+              idPrefix="run-fmt"
+            />
+            <button
+              type="button"
+              className={uiClass.btnGhost}
+              style={styles.regenerateButton}
+              disabled={!runTheme}
+              onClick={() => persistRunTheme(null)}
+            >
+              Reset style to firm default
+            </button>
+          </div>
+        )}
+
+        {loadError ? (
+          <p style={styles.dim}>Notes could not be loaded. Refresh the page to try again.</p>
+        ) : sheets === null ? (
+          <p style={styles.dim}>Loading notes…</p>
+        ) : noteEntries.length === 0 ? (
+          <p style={styles.dim}>No extracted notes are available for this run.</p>
+        ) : (
+          <div className="notes-single-cell-layout" style={styles.compactWorkspace}>
+            <aside style={styles.noteRail} aria-label="Extracted notes">
+              <div style={styles.noteRailHeader}>
+                <div>
+                  <strong style={styles.noteRailTitle}>Notes</strong>
+                  <p style={styles.noteRailCount}>{noteEntries.length} review fields</p>
+                </div>
+              </div>
+              <input
+                type="search"
+                aria-label="Search notes"
+                placeholder="Search notes"
+                value={noteSearch}
+                onChange={(event) => setNoteSearch(event.target.value)}
+                style={styles.noteRailSearch}
+              />
+              <nav style={styles.noteRailList} aria-label="Note text blocks">
+                {filteredNoteEntries.map(({ key, sheet, cell }, index) => {
+                  const selected = key === selectedEntry?.key;
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      data-testid={`note-index-${sheet.sheet}-${cell.row}`}
+                      aria-current={selected ? "true" : undefined}
+                      onClick={() => {
+                        setSelectedCellKey(key);
+                        reportCellPages(cell.source_pages, onActiveCellPages);
+                      }}
+                      style={{
+                        ...styles.noteRailItem,
+                        ...(selected ? styles.noteRailItemActive : {}),
+                      }}
+                    >
+                      <span style={styles.noteRailNumber}>{index + 1}</span>
+                      <span style={styles.noteRailCopy}>
+                        <span style={styles.noteRailLabel}>{cell.label}</span>
+                        <span style={styles.noteRailDestination}>
+                          {notesSheetDisplayName(sheet.sheet)}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </nav>
+            </aside>
+
+            <section style={styles.compactEditorPane} aria-label="Selected note">
+              {selectedEntry && (
+                selectedEntry.cell.kind === "numeric" ? (
+                  <NumericCellRow
+                    key={`${runId}:${selectedEntry.key}`}
+                    runId={runId}
+                    cell={selectedEntry.cell}
+                    onActiveCellPages={onActiveCellPages}
+                    compactPresentation
+                  />
+                ) : (
+                  <CellRow
+                    key={`${runId}:${selectedEntry.key}`}
+                    runId={runId}
+                    sheet={selectedEntry.sheet.sheet}
+                    cell={selectedEntry.cell}
+                    theme={theme}
+                    onCellRemoved={handleCellRemoved}
+                    onActiveCellPages={onActiveCellPages}
+                    compactPresentation
+                  />
+                )
+              )}
+            </section>
+          </div>
+        )}
+        <ConfirmDialog
+          isOpen={pendingCount !== null}
+          title="Re-extract notes?"
+          message={
+            pendingCount === UNKNOWN_COUNT ? (
+              <>
+                We couldn&apos;t verify whether your edits would be overwritten —
+                the safety check failed. Re-extracting will replace every cell on
+                this run&apos;s notes sheets. If you have unsaved edits, cancel and
+                try again in a moment.
+              </>
+            ) : (
+              <>
+                This starts a fresh notes extraction on this PDF. When it
+                finishes it will replace {pendingCount ?? 0} edited cell
+                {pendingCount === 1 ? "" : "s"} on this run&apos;s notes sheets.
+                Your current edits stay in place until the new run completes.
+              </>
+            )
+          }
+          confirmLabel="Re-extract notes"
+          danger={false}
+          onConfirm={() => {
+            setPendingCount(null);
+            onRegenerate?.(runId);
+          }}
+          onCancel={() => setPendingCount(null)}
+        />
+      </div>
+    );
+  }
 
   return (
     <div
@@ -1102,6 +1333,7 @@ function CellRow({
   onSaveStatusChange,
   onCellRemoved,
   onActiveCellPages,
+  compactPresentation = false,
 }: {
   runId: number;
   sheet: string;
@@ -1114,6 +1346,7 @@ function CellRow({
   /** Fired on focus/click with this cell's source PDF pages so the workspace
    *  can jump the Source PDF pane to where the note came from. */
   onActiveCellPages?: (pages: number[]) => void;
+  compactPresentation?: boolean;
 }) {
   const [editable, setEditable] = useState(false);
   const [status, setStatus] = useState<SaveStatus>("idle");
@@ -1513,6 +1746,96 @@ function CellRow({
     return () => clearTimeout(t);
   }, [copiedAt]);
 
+  if (compactPresentation) {
+    return (
+      <div
+        data-testid="notes-review-row"
+        data-cell-row={cell.row}
+        className="notes-review-row"
+        style={styles.compactCell}
+        onFocusCapture={() => reportCellPages(cell.source_pages, onActiveCellPages)}
+        onMouseDown={() => reportCellPages(cell.source_pages, onActiveCellPages)}
+      >
+        <div style={styles.compactCellHeading}>
+          <div>
+            <h2 style={styles.compactCellTitle}>{cell.label}</h2>
+            <span style={styles.compactCellLocation}>
+              {notesSheetDisplayName(sheet)} · row {cell.row}
+            </span>
+          </div>
+          <div style={styles.compactCellActions}>
+            <SaveStatusBadge status={status} />
+            {copiedAt !== null && <span style={styles.copiedChip}>Copied</span>}
+            <button
+              type="button"
+              style={styles.smallButton}
+              onClick={() => setEditable((value) => !value)}
+              disabled={cell.invalid_target}
+            >
+              {editable ? "Done" : "Edit"}
+            </button>
+            <button type="button" style={styles.smallButton} onClick={handleCopy}>
+              Copy
+            </button>
+          </div>
+        </div>
+        {cell.invalid_target && (
+          <div style={{ ...ui.alertWarning, fontSize: 12 }} role="status">
+            Not a filing field. Copy this content into a writable field before removing it.
+            <button
+              type="button"
+              className={uiClass.btnGhost}
+              style={{ ...ui.buttonGhost, marginLeft: pwc.space.sm }}
+              onClick={() => setConfirmRemove(true)}
+              disabled={removeBusy}
+            >
+              {removeBusy ? "Removing…" : "Remove quarantined content"}
+            </button>
+            {removeError && <div style={{ marginTop: 4 }}>{removeError}</div>}
+          </div>
+        )}
+        {formatAdjusted && (
+          <span data-testid="format-adjusted-notice" role="status" style={styles.formatAdjustedNotice}>
+            Formatting adjusted
+          </span>
+        )}
+        {(cell.style_source === "unstyled" || cell.style_source === "floor" || cell.evidence) && (
+          <div style={styles.compactAuditMeta}>
+            <StyleSourceChip source={cell.style_source} />
+            {cell.evidence && (
+              <div
+                data-testid="notes-review-evidence"
+                style={styles.evidenceBlock}
+                title="Evidence column — read-only"
+              >
+                <span style={styles.evidenceLabel}>Evidence</span>
+                <span style={styles.evidenceText}>{cell.evidence}</span>
+              </div>
+            )}
+          </div>
+        )}
+        <div style={styles.compactEditor} ref={wrapperRef}>
+          {editable && editor && <EditorToolbar editor={editor} />}
+          <div data-testid="notes-review-editor" style={styles.compactEditorSurface}>
+            <EditorContent editor={editor} />
+          </div>
+        </div>
+        <ConfirmDialog
+          isOpen={confirmRemove}
+          title="Remove quarantined content?"
+          message="This permanently erases the quarantined copy and adds a filing tombstone. There is no undo."
+          confirmLabel="Remove content"
+          busyLabel="Removing…"
+          busy={removeBusy}
+          onConfirm={() => void handleRemoveInvalid()}
+          onCancel={() => {
+            if (!removeBusy) setConfirmRemove(false);
+          }}
+        />
+      </div>
+    );
+  }
+
   return (
     <div
       data-testid="notes-review-row"
@@ -1632,10 +1955,12 @@ function NumericCellRow({
   runId,
   cell,
   onActiveCellPages,
+  compactPresentation = false,
 }: {
   runId: number;
   cell: NotesCell;
   onActiveCellPages?: (pages: number[]) => void;
+  compactPresentation?: boolean;
 }) {
   const values = cell.values ?? {};
   // Only render the columns this filing level actually uses, in a stable
@@ -1704,13 +2029,13 @@ function NumericCellRow({
       data-testid="notes-numeric-row"
       data-cell-row={cell.row}
       className="notes-review-row"
-      style={styles.cellRow}
+      style={compactPresentation ? styles.compactNumericCell : styles.cellRow}
       onFocusCapture={() => reportCellPages(cell.source_pages, onActiveCellPages)}
       onMouseDown={() => reportCellPages(cell.source_pages, onActiveCellPages)}
     >
-      <aside style={styles.cellLeft}>
+      <aside style={compactPresentation ? styles.compactNumericLabel : styles.cellLeft}>
         <div style={styles.cellLabel}>{cell.label}</div>
-        <div style={styles.cellRowNum}>Row {cell.row}</div>
+        {!compactPresentation && <div style={styles.cellRowNum}>Row {cell.row}</div>}
       </aside>
       <div style={styles.cellRight}>
         <div style={styles.cellToolbar}>
@@ -2119,6 +2444,165 @@ const styles = {
     display: "flex",
     flexDirection: "column" as const,
     gap: 16,
+  } as React.CSSProperties,
+  compactWorkspace: {
+    display: "grid",
+    gridTemplateColumns: "210px minmax(0, 1fr)",
+    gap: 18,
+    alignItems: "start",
+    minWidth: 0,
+  } as React.CSSProperties,
+  noteRail: {
+    position: "sticky" as const,
+    top: 16,
+    height: "calc(100vh - 190px)",
+    minHeight: 480,
+    display: "flex",
+    flexDirection: "column" as const,
+    minWidth: 0,
+  } as React.CSSProperties,
+  noteRailHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    padding: "1px 5px 10px",
+  } as React.CSSProperties,
+  noteRailTitle: {
+    color: pwc.grey900,
+    fontFamily: pwc.fontBody,
+    fontSize: 12,
+  } as React.CSSProperties,
+  noteRailCount: {
+    margin: "2px 0 0",
+    color: pwc.grey700,
+    fontSize: 10,
+  } as React.CSSProperties,
+  noteRailSearch: {
+    ...ui.input,
+    width: "100%",
+    minHeight: 34,
+    padding: "0 9px",
+    border: "none",
+    borderRadius: 7,
+    background: pwc.grey50,
+    fontSize: 11,
+  } as React.CSSProperties,
+  noteRailList: {
+    minHeight: 0,
+    marginTop: 7,
+    overflowY: "auto" as const,
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 1,
+    paddingRight: 3,
+  } as React.CSSProperties,
+  noteRailItem: {
+    display: "grid",
+    gridTemplateColumns: "26px minmax(0, 1fr)",
+    gap: 7,
+    alignItems: "center",
+    width: "100%",
+    minHeight: 38,
+    padding: "6px 7px",
+    border: "none",
+    borderRadius: 7,
+    background: "transparent",
+    color: pwc.grey700,
+    textAlign: "left" as const,
+    cursor: "pointer",
+  } as React.CSSProperties,
+  noteRailItemActive: {
+    background: pwc.grey100,
+    color: pwc.grey900,
+  } as React.CSSProperties,
+  noteRailNumber: {
+    fontFamily: pwc.fontMono,
+    fontSize: 10,
+    color: pwc.grey500,
+    textAlign: "center" as const,
+  } as React.CSSProperties,
+  noteRailCopy: {
+    minWidth: 0,
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 1,
+  } as React.CSSProperties,
+  noteRailLabel: {
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap" as const,
+    fontSize: 11,
+    fontWeight: 600,
+  } as React.CSSProperties,
+  noteRailDestination: {
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap" as const,
+    fontSize: 9.5,
+    color: pwc.grey500,
+  } as React.CSSProperties,
+  compactEditorPane: {
+    minWidth: 0,
+  } as React.CSSProperties,
+  compactCell: {
+    display: "flex",
+    flexDirection: "column" as const,
+    minWidth: 0,
+    background: pwc.white,
+  } as React.CSSProperties,
+  compactCellHeading: {
+    minHeight: 48,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 16,
+    paddingBottom: 10,
+    borderBottom: `1px solid ${pwc.grey200}`,
+  } as React.CSSProperties,
+  compactCellTitle: {
+    margin: 0,
+    color: pwc.grey900,
+    fontFamily: pwc.fontHeading,
+    fontSize: 18,
+    fontWeight: 600,
+  } as React.CSSProperties,
+  compactCellLocation: {
+    display: "block",
+    marginTop: 3,
+    color: pwc.grey500,
+    fontFamily: pwc.fontMono,
+    fontSize: 10,
+  } as React.CSSProperties,
+  compactCellActions: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    flexShrink: 0,
+  } as React.CSSProperties,
+  compactEditor: {
+    minWidth: 0,
+  } as React.CSSProperties,
+  compactAuditMeta: {
+    display: "flex",
+    alignItems: "flex-start",
+    gap: 8,
+    flexWrap: "wrap" as const,
+    paddingTop: 10,
+  } as React.CSSProperties,
+  compactEditorSurface: {
+    minHeight: 520,
+    padding: "24px clamp(20px, 4vw, 42px)",
+    background: pwc.white,
+  } as React.CSSProperties,
+  compactNumericCell: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 14,
+    minWidth: 0,
+  } as React.CSSProperties,
+  compactNumericLabel: {
+    paddingBottom: 10,
+    borderBottom: `1px solid ${pwc.grey200}`,
   } as React.CSSProperties,
   topBar: {
     display: "flex",

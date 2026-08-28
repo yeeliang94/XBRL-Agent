@@ -132,6 +132,24 @@ def test_run_emits_pipeline_stage_at_each_boundary(session_env):
         f"cross_checking={cross_checking_idx}, done={done_idx}"
     )
 
+    # The same coordinator events must survive a reload through the durable
+    # run timeline.  This live-pipeline assertion catches an allowlist-order
+    # bug that repository-only round-trip tests cannot see.
+    conn = sqlite3.connect(out / "xbrl_agent.db")
+    try:
+        event_types = [
+            row[0]
+            for row in conn.execute(
+                "SELECT event_type FROM run_events ORDER BY id"
+            ).fetchall()
+        ]
+    finally:
+        conn.close()
+    assert event_types.count("pipeline_stage") >= 4
+    assert "cross_check_start" in event_types
+    assert "cross_check_complete" in event_types
+    assert "run_complete" in event_types
+
 
 def test_normal_run_scouts_before_extraction_and_persists_fresh_infopack(session_env):
     """The primary Run action owns a fresh scout pass.

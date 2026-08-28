@@ -120,9 +120,9 @@ async def test_single_agent_stall_after_write_returns_succeeded(tmp_path, monkey
         @property
         def usage(self):
             class U:  # noqa: D401 — tiny value object
-                total_tokens = 0
-                input_tokens = 0
-                output_tokens = 0
+                total_tokens = 30
+                input_tokens = 20
+                output_tokens = 10
             return U()
     class _FakeAgent:
         def iter(self, *a, **kw): return _FakeAgentRun()
@@ -160,6 +160,12 @@ async def test_single_agent_stall_after_write_returns_succeeded(tmp_path, monkey
     assert outcome.filled_path == fake_deps.filled_path, (
         "stall-after-write must return the already-written workbook path"
     )
+    assert outcome.total_tokens == 30
+    assert outcome.prompt_tokens == 20
+    assert outcome.completion_tokens == 10
+    assert (
+        tmp_path / "NOTES_CORP_INFO_conversation_trace.json"
+    ).exists(), "salvaged timeout must retain a partial conversation trace"
 
 
 @pytest.mark.asyncio
@@ -215,6 +221,10 @@ async def test_single_agent_stall_before_write_raises(tmp_path, monkeypatch):
             page_hints=None,
             page_offset=0,
         )
+
+    assert (
+        tmp_path / "NOTES_CORP_INFO_conversation_trace.json"
+    ).exists(), "failed notes attempt must retain a partial conversation trace"
 
 
 @pytest.mark.asyncio

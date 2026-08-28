@@ -66,7 +66,8 @@ export type SSEEventType =
   // docs/PLAN-pdf-source-sidecar.md: outcome of the pre-agent LLM
   // transcription pass on a scanned PDF (built / skipped + reason).
   // Run-level, advisory — the run proceeds either way.
-  | "pdf_sidecar";
+  | "pdf_sidecar"
+  | "eval_score";
 
 // Every multi-agent event carries these routing fields inside `data` (the
 // backend stamps them in agent_runner.build_agent_event). We keep them in `data`
@@ -110,6 +111,7 @@ interface SSEEventDataMap {
   scale_conflict: ScaleConflictData & AgentRouting;
   // Scanned-PDF source transcript outcome (run-level; no agent_id).
   pdf_sidecar: PdfSidecarData & AgentRouting;
+  eval_score: EvalScoreJson & AgentRouting;
 }
 
 export type SSEEvent = {
@@ -263,6 +265,13 @@ export interface PipelineStageData {
   stage: PipelineStage;
   /** Server-side timestamp (epoch seconds). */
   started_at: number;
+  /** Plain-language live activity within a long-running stage. */
+  message?: string;
+  /** Optional bounded progress for page/sheet fan-out work. */
+  completed?: number;
+  total?: number;
+  /** Current sheet or other unit, when useful to the activity view. */
+  item?: string;
 }
 
 /** PLAN-stop-and-validation-visibility Phase 2.2.
@@ -807,6 +816,15 @@ export interface AgentTraceJson {
   turns?: AgentTurnJson[];
 }
 
+export interface AgentTraceManifestJson {
+  statement: string;
+  traces: Array<{
+    id: string;
+    label: string;
+    size_bytes: number;
+  }>;
+}
+
 export interface RunCrossCheckJson {
   name: string;
   status: "passed" | "failed" | "not_applicable" | "pending";
@@ -836,6 +854,8 @@ export interface RunDetailJson {
   filing_standard?: FilingStandard;
   denomination?: Denomination;
   agents: RunAgentJson[];
+  incidents?: RunIncidentJson[];
+  run_events?: RunEventJson[];
   cross_checks: RunCrossCheckJson[];
   // v8 telemetry rollup. Optional for back-compat with older payloads.
   telemetry_rollup?: TelemetryRollupJson;
@@ -853,6 +873,26 @@ export interface RunDetailJson {
   // transcription pass, so the run page shows the notice after a reload.
   // Null/absent when the pass did not apply.
   pdf_sidecar?: PdfSidecarData | null;
+}
+
+export interface RunIncidentJson {
+  id: number;
+  created_at: string;
+  source: string;
+  stage: string | null;
+  severity: "fatal" | "recoverable" | "advisory" | string;
+  error_code: string;
+  user_message: string;
+  technical_message: string | null;
+  exception_type: string | null;
+  correlation_id: string | null;
+  details: Record<string, unknown> | null;
+}
+
+export interface RunEventJson {
+  event: string;
+  data: Record<string, unknown>;
+  timestamp: number;
 }
 
 // Evals workspace (v30): a repeat group + its computed consistency result,

@@ -129,7 +129,7 @@ needed credentials and fixtures are available.
   `_safe_mark_finished` exception-safe, and mark a successful merge before the
   final status update.
 - Database migrations are sequential and idempotent. Current schema version is
-  37. Preserve inert historical fields and tables documented in `CLAUDE.md` so
+  42. Preserve inert historical fields and tables documented in `CLAUDE.md` so
   old databases can migrate forward.
 - Any live workbook writer must use the shared atomic-save helper. Do not add a
   bare in-place `wb.save(path)` where another task may read the same workbook.

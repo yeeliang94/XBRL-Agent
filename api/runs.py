@@ -5,7 +5,7 @@ Endpoints:
   ``GET    /api/runs/{run_id}``                 — hydrated detail (agents + checks)
   ``GET    /api/runs/{run_id}/agents/{stmt}/trace`` — verbatim conversation trace
   ``PATCH  /api/runs/{run_id}``                 — persist pre-run config edits (draft)
-  ``DELETE /api/runs/{run_id}``                 — DB-only delete
+  ``DELETE /api/runs/{run_id}``                 — delete DB row + diagnostics
   ``GET    /api/runs/{run_id}/recheck``         — re-run cross-checks on current facts
 
 The ``?from=/?to=`` → ``date_from/date_to`` rewrite middleware stays on the
@@ -259,6 +259,34 @@ async def get_run_detail_endpoint(run_id: int):
             }
             for a in detail.agents
         ],
+        # v42: failures that occur before an agent exists, plus recoverable
+        # coordinator incidents. Keep the safe user message separate from the
+        # technical diagnostic so the UI can lead with an actionable summary
+        # while support/AI tooling retains the real cause.
+        "incidents": [
+            {
+                "id": incident.id,
+                "created_at": incident.created_at,
+                "source": incident.source,
+                "stage": incident.stage,
+                "severity": incident.severity,
+                "error_code": incident.error_code,
+                "user_message": incident.user_message,
+                "technical_message": incident.technical_message,
+                "exception_type": incident.exception_type,
+                "correlation_id": incident.correlation_id,
+                "details": incident.details,
+            }
+            for incident in detail.incidents
+        ],
+        "run_events": [
+            {
+                "event": event.event_type,
+                "data": event.payload,
+                "timestamp": _event_ts_to_epoch_seconds(event.ts),
+            }
+            for event in detail.run_events
+        ],
         # v8 run-level rollup so the Overview metric strip + Telemetry tab can
         # show totals without re-summing per-agent on the client.
         "telemetry_rollup": {
@@ -294,8 +322,66 @@ async def get_run_detail_endpoint(run_id: int):
     }
 
 
+def _agent_trace_paths(detail, statement: str) -> tuple[Path, list[Path]]:
+    """Resolve the whitelisted trace files for one recorded agent."""
+    known = {a.statement_type for a in detail.agents}
+    if statement not in known:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No agent '{statement}' in run {detail.run.id}",
+        )
+    if not detail.run.output_dir:
+        raise HTTPException(status_code=404, detail="Run has no output directory")
+
+    out_root = Path(detail.run.output_dir).resolve()
+    exact = (out_root / f"{statement}_conversation_trace.json").resolve()
+    paths = [exact] if exact.exists() else []
+    if statement == "NOTES_LIST_OF_NOTES":
+        paths.extend(sorted(
+            path.resolve()
+            for path in out_root.glob(
+                "NOTES_LIST_OF_NOTES_sub*_conversation_trace.json"
+            )
+        ))
+    safe_paths = [
+        path for path in paths
+        if path.is_relative_to(out_root) and path.is_file()
+    ]
+    return out_root, safe_paths
+
+
+@router.get("/api/runs/{run_id}/agents/{statement}/traces")
+async def list_agent_traces_endpoint(run_id: int, statement: str):
+    """List every trace captured for an agent, including Sheet-12 fan-out."""
+    from db import repository as repo
+
+    conn = server._open_audit_conn()
+    try:
+        detail = repo.get_run_detail(conn, run_id)
+    finally:
+        conn.close()
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    _out_root, paths = _agent_trace_paths(detail, statement)
+    suffix = "_conversation_trace.json"
+    return {
+        "statement": statement,
+        "traces": [
+            {
+                "id": path.name[:-len(suffix)],
+                "label": path.name[:-len(suffix)].replace("_", " "),
+                "size_bytes": path.stat().st_size,
+            }
+            for path in paths
+        ],
+    }
+
+
 @router.get("/api/runs/{run_id}/agents/{statement}/trace")
-async def get_agent_trace_endpoint(run_id: int, statement: str):
+async def get_agent_trace_endpoint(
+    run_id: int, statement: str, trace_id: Optional[str] = None,
+):
     """Serve the verbatim conversation trace for one agent of a run (v8).
 
     The trace holds exactly what was sent and returned each turn (text
@@ -317,28 +403,20 @@ async def get_agent_trace_endpoint(run_id: int, statement: str):
     if detail is None:
         raise HTTPException(status_code=404, detail="Run not found")
 
-    # Only statement_types that actually belong to this run are addressable.
-    known = {a.statement_type for a in detail.agents}
-    if statement not in known:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No agent '{statement}' in run {run_id}",
-        )
-
-    output_dir = detail.run.output_dir
-    if not output_dir:
-        raise HTTPException(status_code=404, detail="Run has no output directory")
-
-    # Defence-in-depth (peer-review [3]): `statement` is already whitelisted
-    # against this run's agents above, and statement_type is system-generated,
-    # so a traversal isn't reachable in normal operation. But a corrupt DB row
-    # shouldn't be able to read outside the run's output dir — confirm the
-    # resolved path stays under output_dir before touching the filesystem.
-    out_root = Path(output_dir).resolve()
-    trace_path = (out_root / f"{statement}_conversation_trace.json").resolve()
-    if not trace_path.is_relative_to(out_root):
-        raise HTTPException(status_code=400, detail="Invalid trace path")
-    if not trace_path.exists():
+    _out_root, trace_paths = _agent_trace_paths(detail, statement)
+    by_id = {
+        path.name.removesuffix("_conversation_trace.json"): path
+        for path in trace_paths
+    }
+    if trace_id is not None:
+        trace_path = by_id.get(trace_id)
+        if trace_path is None:
+            raise HTTPException(status_code=404, detail="Trace not found")
+    elif trace_paths:
+        # Backwards-compatible default for old clients. New clients read the
+        # manifest and let the user select every Sheet-12 subagent/retry trace.
+        trace_path = trace_paths[0]
+    else:
         raise HTTPException(
             status_code=404,
             detail=f"No trace captured for {statement} (older run or failed early)",
@@ -478,10 +556,12 @@ async def delete_draft_runs_endpoint():
 
 @router.delete("/api/runs/{run_id}")
 async def delete_run_endpoint(run_id: int):
-    """Hard-delete a run row from the DB.
+    """Hard-delete a run row and its trace/failure diagnostics.
 
-    By design, this does NOT touch the on-disk `output/{session_id}/`
-    folder. Safer default: disk cleanup can come later if needed.
+    Workbooks and uploaded source files remain available for deliberate file
+    retention workflows; request/response traces and failure side-logs are
+    removed immediately so deleting a run does not leave sensitive model and
+    document content behind indefinitely.
 
     Safety guards (peer-review fix for [CRITICAL] deletion of in-flight
     runs): reject deletion if the run is still executing. The DELETE
@@ -519,6 +599,29 @@ async def delete_run_endpoint(run_id: int):
                        "session. Cannot delete while it is still in flight.",
             )
 
+        removed_diagnostics: list[str] = []
+        if run.output_dir:
+            from agent_tracing import purge_run_diagnostics
+
+            try:
+                removed_diagnostics = purge_run_diagnostics(
+                    run.output_dir,
+                    allowed_root=server.OUTPUT_DIR,
+                )
+            except ValueError:
+                logger.warning(
+                    "Skipped diagnostic purge outside output root for run %s: %s",
+                    run_id, run.output_dir,
+                )
+            except OSError as exc:
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        "Could not remove the run's diagnostic traces. The run "
+                        "was not deleted; retry after checking file permissions."
+                    ),
+                ) from exc
+
         removed = repo.delete_run(conn, run_id)
         conn.commit()
     finally:
@@ -527,7 +630,10 @@ async def delete_run_endpoint(run_id: int):
         # Race: row vanished between fetch_run and delete_run. Treat as
         # "already deleted" and report 404.
         raise HTTPException(status_code=404, detail="Run not found")
-    return {"deleted": run_id}
+    return {
+        "deleted": run_id,
+        "diagnostic_files_removed": len(removed_diagnostics),
+    }
 
 
 @router.get("/api/runs/{run_id}/recheck")

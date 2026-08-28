@@ -66,6 +66,18 @@ def test_reconcile_closes_only_running_rows(db):
     assert row["ended_at"], "closed row must carry an ended_at stamp"
 
 
+def test_reconcile_marks_system_incident_as_failed_not_cancelled(db):
+    run_id = repo.create_run(db, pdf_filename="doc.pdf")
+    repo.create_run_agent(db, run_id, statement_type="SYSTEM")
+
+    closed = repo.reconcile_unfinished_run_agents(db, run_id)
+
+    assert closed == 1
+    assert _agent_statuses(db, run_id)["SYSTEM"] == (
+        "failed", "coordinator_incident",
+    )
+
+
 def test_reconcile_scoped_to_the_given_run(db):
     run_a = repo.create_run(db, pdf_filename="a.pdf")
     run_b = repo.create_run(db, pdf_filename="b.pdf")

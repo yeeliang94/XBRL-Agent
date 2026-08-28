@@ -207,7 +207,13 @@ from pathlib import Path
 # independent role of each physical workbook slot. Additive columns link prose
 # nodes to that contract, quarantine legacy invalid content without deleting
 # it, and stamp the same readiness evidence on mTool receipts.
-CURRENT_SCHEMA_VERSION = 41
+#
+# v42 adds durable run-level incidents. Agent failures already live on
+# `run_agents`, but validation and coordinator failures can happen before an
+# agent exists or outside any one agent. `run_incidents` preserves those
+# diagnostics across reloads with separate user-safe and technical messages,
+# stable codes, stages, and correlation ids. Pure CREATE TABLE migration.
+CURRENT_SCHEMA_VERSION = 42
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -284,6 +290,39 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
     )
     """,
 
+    # v42: durable run-level failures and recoverable coordinator incidents.
+    # Do not overload `runs.notes`: incidents are structured, may be multiple,
+    # and need a stable machine-readable code for support and AI diagnosis.
+    """
+    CREATE TABLE IF NOT EXISTS run_incidents (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id            INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        created_at        TEXT NOT NULL,
+        source            TEXT NOT NULL,
+        stage             TEXT,
+        severity          TEXT NOT NULL,
+        error_code        TEXT NOT NULL,
+        user_message      TEXT NOT NULL,
+        technical_message TEXT,
+        exception_type    TEXT,
+        correlation_id    TEXT,
+        details_json      TEXT
+    )
+    """,
+
+    # v42: durable, low-volume coordinator timeline. High-frequency model
+    # streams remain live-only and agent-owned activity stays in agent_events.
+    """
+    CREATE TABLE IF NOT EXISTS run_events (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id          INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        ts              TEXT NOT NULL,
+        event_type      TEXT NOT NULL,
+        phase           TEXT,
+        payload_json    TEXT
+    )
+    """,
+
     # One row per (run, statement) agent invocation. Scout is also recorded
     # here with statement_type='SCOUT' so all agent activity is uniform.
     """
@@ -342,7 +381,8 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
     )
     """,
 
-    # Every SSE event (tool call, thinking, status, error, ...) for auditing.
+    # Coarse agent-owned SSE events for auditing. High-frequency thinking/text
+    # deltas are intentionally omitted; run-owned events live in run_events.
     """
     CREATE TABLE IF NOT EXISTS agent_events (
         id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1503,6 +1543,10 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
 # ix_runs_created_at supports the History list's default DESC sort.
 _CREATE_INDEXES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS ix_run_agents_run_id ON run_agents(run_id)",
+    "CREATE INDEX IF NOT EXISTS ix_run_incidents_run_id_created "
+    "ON run_incidents(run_id, created_at, id)",
+    "CREATE INDEX IF NOT EXISTS ix_run_events_run_id_id "
+    "ON run_events(run_id, id)",
     "CREATE INDEX IF NOT EXISTS ix_mtool_fill_receipts_run_id "
     "ON mtool_fill_receipts(run_id)",
     "CREATE INDEX IF NOT EXISTS ix_run_lineage_child ON run_lineage(child_run_id)",
@@ -3173,6 +3217,26 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
                         (41,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        # v41 → v42: run-level incident records. The table is created by
+        # _CREATE_STATEMENTS above; this block advances the version under the
+        # same concurrent-init discipline as the other pure CREATE migrations.
+        if current_version is not None and current_version < 42:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 42:
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?",
+                        (42,),
                     )
                 conn.commit()
             except Exception:

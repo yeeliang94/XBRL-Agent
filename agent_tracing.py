@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -239,3 +240,74 @@ def save_messages_trace(
         _write_trace(messages, output_dir, prefix, turns, runtime_metadata)
     except Exception as e:
         logger.warning("Failed to save partial trace for %s: %s", prefix, e)
+
+
+_DIAGNOSTIC_GLOBS = (
+    "*_conversation_trace.json",
+    "notes*_failures.json",
+    "notes*_unmatched.json",
+)
+
+
+def purge_run_diagnostics(
+    output_dir: str | Path,
+    *,
+    allowed_root: str | Path,
+) -> list[str]:
+    """Delete diagnostic files for one exact run directory.
+
+    Workbooks, uploaded documents, and source evidence are preserved. The
+    directory must be a strict descendant of ``allowed_root``; a corrupt DB
+    row can therefore never turn run deletion into a broad filesystem delete.
+    """
+    root = Path(allowed_root).resolve()
+    run_dir = Path(output_dir).resolve()
+    if run_dir == root or not run_dir.is_relative_to(root):
+        raise ValueError("Run output directory is outside the configured output root")
+    if not run_dir.is_dir():
+        return []
+
+    removed: list[str] = []
+    for pattern in _DIAGNOSTIC_GLOBS:
+        for path in run_dir.glob(pattern):
+            if path.parent.resolve() != run_dir or not (path.is_file() or path.is_symlink()):
+                continue
+            path.unlink()
+            removed.append(path.name)
+    return sorted(set(removed))
+
+
+def purge_expired_diagnostics(
+    output_root: str | Path,
+    *,
+    retention_days: int,
+    now: float | None = None,
+) -> int:
+    """Remove trace/failure files older than the configured retention period."""
+    if retention_days <= 0:
+        return 0
+    root = Path(output_root).resolve()
+    if not root.is_dir():
+        return 0
+    cutoff = (time.time() if now is None else now) - retention_days * 86400
+    removed = 0
+    # Repeat/eval runs live in nested ``repeat_N`` directories.  Search below
+    # the output root rather than assuming every run is exactly one level
+    # deep, while resolving every match back under the configured root before
+    # deleting it.
+    for pattern in _DIAGNOSTIC_GLOBS:
+        for path in root.rglob(pattern):
+            try:
+                resolved = path.resolve()
+                if not resolved.is_relative_to(root) or not path.is_file():
+                    continue
+                if path.stat().st_mtime < cutoff:
+                    path.unlink()
+                    removed += 1
+            except OSError:
+                logger.warning(
+                    "Failed to inspect/purge expired diagnostic %s",
+                    path,
+                    exc_info=True,
+                )
+    return removed

@@ -194,13 +194,16 @@ async def transcribe_pages(
     page_timeout_s: float = PAGE_TIMEOUT_S,
     overall_timeout_s: float = OVERALL_TIMEOUT_S,
     _caller: Optional[Callable[[int, bytes], Awaitable[tuple[str, dict]]]] = None,
+    on_progress: Optional[Callable[[int, int, int, bool], None]] = None,
 ) -> TranscribeResult:
     """Render + transcribe ``pages`` (1-based). One retry per page, then skip.
 
     Each attempt is bounded by ``page_timeout_s`` and the whole pass by
     ``overall_timeout_s`` — pages still pending at the overall deadline are
     cancelled and counted as failed. ``_caller`` is the test seam:
-    ``async (page_no, png_bytes) -> (html, usage)``.
+    ``async (page_no, png_bytes) -> (html, usage)``. ``on_progress`` is a
+    best-effort synchronous notification after each page finishes, including
+    pages that exhaust their retry budget.
     """
     caller = _caller or (lambda p, b: _call_model(model, p, b))
 
@@ -209,25 +212,41 @@ async def transcribe_pages(
     sem = asyncio.Semaphore(concurrency)
     result = TranscribeResult(pages_html={})
     totals: dict[str, int] = {}
+    completed = 0
+    total = len(renders)
 
     async def one(page_no: int, png: bytes) -> None:
+        nonlocal completed
         async with sem:
-            for attempt in (1, 2):  # max-1-retry, like every notes agent
-                try:
-                    html, usage = await asyncio.wait_for(
-                        caller(page_no, png), timeout=page_timeout_s,
-                    )
-                    result.pages_html[page_no] = html
-                    for k, v in (usage or {}).items():
-                        totals[k] = totals.get(k, 0) + v
-                    return
-                except asyncio.CancelledError:
-                    raise  # overall deadline / caller cancellation — propagate
-                except Exception as exc:
-                    logger.warning(
-                        "pdf_sidecar: page %s attempt %s failed: %s",
-                        page_no, attempt, exc,
-                    )
+            try:
+                for attempt in (1, 2):  # max-1-retry, like every notes agent
+                    try:
+                        html, usage = await asyncio.wait_for(
+                            caller(page_no, png), timeout=page_timeout_s,
+                        )
+                        result.pages_html[page_no] = html
+                        for k, v in (usage or {}).items():
+                            totals[k] = totals.get(k, 0) + v
+                        return
+                    except asyncio.CancelledError:
+                        raise  # overall deadline / caller cancellation — propagate
+                    except Exception as exc:
+                        logger.warning(
+                            "pdf_sidecar: page %s attempt %s failed: %s",
+                            page_no, attempt, exc,
+                        )
+            finally:
+                completed += 1
+                if on_progress is not None:
+                    try:
+                        on_progress(
+                            page_no, completed, total,
+                            page_no in result.pages_html,
+                        )
+                    except Exception:  # noqa: BLE001 — progress is advisory
+                        logger.warning(
+                            "pdf_sidecar progress callback failed", exc_info=True,
+                        )
 
     try:
         await asyncio.wait_for(

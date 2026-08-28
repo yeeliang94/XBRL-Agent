@@ -15,7 +15,9 @@ import type {
   CrossCheckResultEventData,
   PartialMergeData,
   PdfSidecarData,
+  EvalScoreJson,
   PipelineStage,
+  PipelineStageData,
 } from "./types";
 import { createAgentState } from "./types";
 import { pseudoAgentLabel } from "./vocabulary";
@@ -103,6 +105,9 @@ export interface AppState {
   // one-line notice so the operator knows whether notes agents had a
   // transcript to copy from, and why not if they didn't.
   pdfSidecar: PdfSidecarData | null;
+  // Final benchmark grade emitted after the shipped workbook is evaluated.
+  // Null on ordinary runs and until grading finishes.
+  evalScore: EvalScoreJson | null;
   // PLAN-stop-and-validation-visibility Phase 5: live cross-check
   // progress per pass. The Validator tab uses this to render rows as
   // they arrive (with a spinner for not-yet-reported rows) instead of
@@ -119,6 +124,9 @@ export interface AppState {
   // stage so the user knows whether the silent gap is merge, cross-
   // check, correction, re-check, or notes validation.
   pipelineStage: PipelineStage | null;
+  // Full payload for the latest coordinator activity. Long-running stages
+  // reuse the same stage while updating message and bounded progress.
+  pipelineActivity: PipelineStageData | null;
 }
 
 export interface ToastState {
@@ -176,6 +184,7 @@ export const initialState: AppState = {
   partialMerge: null,
   scoutWarnings: [],
   pdfSidecar: null,
+  evalScore: null,
   crossCheckProgress: {
     phase: null,
     total: 0,
@@ -183,6 +192,7 @@ export const initialState: AppState = {
     isComplete: false,
   },
   pipelineStage: null,
+  pipelineActivity: null,
 };
 
 // Captures the numeric run id when the pathname is exactly `/history/<n>`
@@ -793,6 +803,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         scoutWarnings: [],
         // The transcript notice is per-run too.
         pdfSidecar: null,
+        evalScore: null,
         // Cross-check progress is per-run; start fresh.
         crossCheckProgress: {
           phase: null,
@@ -802,6 +813,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         },
         // Same per-run reset for the pipeline stage label.
         pipelineStage: null,
+        pipelineActivity: null,
       };
     }
 
@@ -976,6 +988,10 @@ export function appReducer(state: AppState, action: AppAction): AppState {
           updates.pdfSidecar = event.data as PdfSidecarData;
           break;
 
+        case "eval_score":
+          updates.evalScore = event.data as EvalScoreJson;
+          break;
+
         case "cross_check_start":
           // Phase 5: a new cross-check pass starts. Reset the working
           // result list so a post_correction pass replaces the initial
@@ -1028,6 +1044,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
 
         case "pipeline_stage":
           updates.pipelineStage = event.data.stage;
+          updates.pipelineActivity = event.data;
           break;
       }
 

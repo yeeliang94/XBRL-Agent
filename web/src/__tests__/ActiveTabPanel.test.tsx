@@ -104,16 +104,16 @@ describe("ActiveTabPanel — Sheet-12 sub-tabs", () => {
     render(<ActiveTabPanel state={state} />);
 
     // All view shows both tool rows.
-    expect(screen.getByText(/locating table of contents/i)).toBeInTheDocument();
-    expect(screen.getByText(/checking pdf pages/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/locating table of contents/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/checking pdf pages/i).length).toBeGreaterThan(0);
 
     // Click the Sub 1 chip (index 1 in tabs; index 0 is "All").
     const subChips = screen.getAllByRole("tab");
     fireEvent.click(subChips[1]);
 
     // Now only sub0's tool row is visible.
-    expect(screen.getByText(/locating table of contents/i)).toBeInTheDocument();
-    expect(screen.queryByText(/checking pdf pages/i)).not.toBeInTheDocument();
+    expect(screen.getAllByText(/locating table of contents/i).length).toBeGreaterThan(0);
+    expect(screen.queryAllByText(/checking pdf pages/i)).toHaveLength(0);
   });
 
   test("default activeSubId is null (All tab selected)", () => {

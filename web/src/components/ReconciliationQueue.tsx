@@ -32,6 +32,7 @@ export function ReconciliationQueue({
   runId,
   reloadKey,
   onSelectConcept,
+  onConflictResolved,
   embedded = false,
 }: {
   runId: number;
@@ -42,6 +43,8 @@ export function ReconciliationQueue({
   // Review Workspace M2: clicking a conflict selects its concept in the grid
   // (and drives the PDF pane). Optional so the queue still works standalone.
   onSelectConcept?: (conceptUuid: string) => void;
+  /** Refresh surrounding conflict counts after the server accepts an action. */
+  onConflictResolved?: () => void;
   // When true, drop the component's own card wrapper + "Reconciliation queue"
   // heading so a host CollapsiblePanel can own the chrome (3-column review
   // layout). Default keeps the standalone card for existing callers.
@@ -101,11 +104,12 @@ export function ReconciliationQueue({
         }
         setActionError(null);
         setConflicts((prev) => prev.filter((c) => c.id !== id));
+        onConflictResolved?.();
       } catch (err) {
         setActionError(`Resolve failed: ${userMessage(err)}`);
       }
     },
-    []
+    [onConflictResolved]
   );
 
   if (loadError) {

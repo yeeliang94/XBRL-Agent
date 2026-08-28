@@ -126,15 +126,15 @@ const sampleConcepts = {
 };
 
 describe("ConceptsPage", () => {
-  test("renders route with tree heading", async () => {
+  test("renders the figure tree without a duplicate review heading", async () => {
     mockFetch((url) => {
       if (url.includes("/concepts")) return sampleConcepts;
       if (url.includes("/conflicts")) return { conflicts: [] };
       return {};
     });
     render(<ConceptsPage runId={42} />);
-    expect(screen.getByText("Review extracted results")).toBeTruthy();
     await waitFor(() => screen.getByTestId("concept-row-leaf-1"));
+    expect(screen.queryByText("Review extracted results")).toBeNull();
   });
 
   test("renders ABSTRACT, LEAF, and COMPUTED rows with kind metadata", async () => {
@@ -266,17 +266,12 @@ describe("ConceptsPage", () => {
       return {};
     });
     render(<ConceptsPage runId={42} />);
-    // M3 — the dropdown was replaced by an always-visible sheet navigator.
-    await waitFor(() => screen.getByTestId("sheet-navigator"));
-    expect(
-      screen.getByTestId("sheet-nav-mfrs-company-sofp-cunoncu-v1")
-    ).toBeTruthy();
-    expect(
-      screen.getByTestId("sheet-nav-mfrs-company-sopl-function-v1")
-    ).toBeTruthy();
+    const picker = await screen.findByTestId("review-sheet-picker");
+    expect(within(picker).getByRole("option", { name: "SOFP" })).toBeTruthy();
+    expect(within(picker).getByRole("option", { name: "SOPL" })).toBeTruthy();
   });
 
-  test("navigator shows an open-conflict count badge per template (M3)", async () => {
+  test("compact attention control exposes open-conflict actions", async () => {
     mockFetch((url) => {
       if (url.includes("/concepts")) return sampleConcepts;
       if (url.includes("/conflicts"))
@@ -290,11 +285,12 @@ describe("ConceptsPage", () => {
       return {};
     });
     render(<ConceptsPage runId={42} />);
-    // Two OPEN conflicts map to SOFP's leaf-1; the resolved one is excluded.
-    const badge = await waitFor(() =>
-      screen.getByTestId("sheet-nav-count-mfrs-company-sofp-cunoncu-v1")
-    );
-    expect(badge.textContent).toBe("2");
+    const control = await screen.findByTestId("review-attention-control");
+    expect(control).toHaveTextContent("2");
+    fireEvent.click(control);
+    expect(await screen.findByTestId("review-attention-panel")).toBeInTheDocument();
+    expect(screen.getByTestId("resolve-btn-1")).toBeInTheDocument();
+    expect(screen.getByTestId("dismiss-btn-1")).toBeInTheDocument();
   });
 
   test("selecting template swaps the tree view", async () => {
@@ -326,14 +322,14 @@ describe("ConceptsPage", () => {
       return {};
     });
     render(<ConceptsPage runId={42} />);
-    await waitFor(() => screen.getByTestId("sheet-navigator"));
+    const picker = await screen.findByTestId("review-sheet-picker");
     // SOFP rows visible initially.
     expect(screen.getByTestId("concept-row-leaf-1")).toBeTruthy();
     expect(screen.queryByTestId("concept-row-leaf-2")).toBeNull();
 
-    fireEvent.click(
-      screen.getByTestId("sheet-nav-mfrs-company-sopl-function-v1")
-    );
+    fireEvent.change(picker, {
+      target: { value: "mfrs-company-sopl-function-v1::" },
+    });
 
     expect(screen.getByTestId("concept-row-leaf-2")).toBeTruthy();
     expect(screen.queryByTestId("concept-row-leaf-1")).toBeNull();
@@ -368,7 +364,7 @@ describe("ConceptsPage", () => {
       return {};
     });
     render(<ConceptsPage runId={42} />);
-    await waitFor(() => screen.getByTestId("sheet-navigator"));
+    await screen.findByTestId("review-sheet-picker");
 
     fireEvent.change(screen.getByTestId("concept-search"), {
       target: { value: "Revenue" },
@@ -492,7 +488,7 @@ describe("ConceptsPage", () => {
       return {};
     });
     const { container } = render(<ConceptsPage runId={42} />);
-    await waitFor(() => screen.getByTestId("sheet-navigator"));
+    await waitFor(() => screen.getByTestId("review-sheet-picker"));
     expect(container.querySelector("main")).toBeNull();
   });
 
@@ -967,20 +963,19 @@ describe("ConceptsPage", () => {
     const input = (await waitFor(() =>
       screen.getByTestId("value-input-leaf-1")
     )) as HTMLInputElement;
-    // Initially nothing needs attention (no checks / gaps / conflicts).
-    await waitFor(() => screen.getByTestId("needs-attention-clear"));
+    // Initially there is no attention control.
+    expect(screen.queryByTestId("review-attention-control")).toBeNull();
 
     fireEvent.change(input, { target: { value: "999" } });
     fireEvent.blur(input);
 
-    // After the edit, a conflict opens → the Needs-attention queue surfaces it
-    // via the embedded reconciliation queue.
-    await waitFor(() => screen.getByTestId("conflict-1"));
+    // After the edit, a conflict opens and the compact attention count updates.
+    expect(await screen.findByTestId("review-attention-control")).toHaveTextContent("1");
   });
 
   // -- Phase 3.2 / 3.3: unified notes panel + generate-final affordance --
 
-  test("selecting Notes swaps the panel to the notes editor", async () => {
+  test("figures navigation does not duplicate the Notes route", async () => {
     mockFetch((url) => {
       if (url.includes("/notes_cells")) return { sheets: [] };
       if (url.includes("/concepts")) return sampleConcepts;
@@ -988,13 +983,9 @@ describe("ConceptsPage", () => {
       return {};
     });
     render(<ConceptsPage runId={42} />);
-    await waitFor(() => screen.getByTestId("sheet-navigator"));
-    // Face statement visible first.
+    const picker = await screen.findByTestId("review-sheet-picker");
     expect(screen.getByTestId("concept-row-leaf-1")).toBeTruthy();
-    fireEvent.click(screen.getByTestId("sheet-nav-__notes__"));
-    expect(screen.getByTestId("review-notes-panel")).toBeTruthy();
-    // The face tree is gone while notes are shown.
-    expect(screen.queryByTestId("concept-row-leaf-1")).toBeNull();
+    expect(within(picker).queryByRole("option", { name: /notes/i })).toBeNull();
   });
 
   test("page-less notes cell reads as selected-without-evidence, not as no selection", async () => {
@@ -1027,26 +1018,11 @@ describe("ConceptsPage", () => {
       if (url.includes("/conflicts")) return { conflicts: [] };
       return {};
     });
-    const { container } = render(<ConceptsPage runId={42} />);
-    await waitFor(() => screen.getByTestId("sheet-navigator"));
-    fireEvent.click(screen.getByTestId("sheet-nav-__notes__"));
-    // No cell focused yet → neutral prompt, not the "no source page" notice.
-    await waitFor(() => screen.getByTestId("pdf-no-selection"));
-    expect(screen.queryByTestId("pdf-no-evidence")).toBeNull();
-    // Expand the sheet and focus its (page-less) cell.
-    screen.getAllByTestId("sheet-title").forEach((t) => {
-      const btn = t.closest("button");
-      if (btn) fireEvent.click(btn);
-    });
-    const row = await waitFor(() => {
-      const el = container.querySelector<HTMLElement>(
-        '[data-testid="notes-review-row"]',
-      );
-      if (!el) throw new Error("row not rendered yet");
-      return el;
-    });
-    fireEvent.mouseDown(row);
-    // Selected, but genuinely page-less → the honest notice, no stale pages.
+    render(<ConceptsPage runId={42} initialView="notes" />);
+    await waitFor(() => screen.getByTestId("notes-review-row"));
+    // The compact workspace selects its first note immediately. A page-less
+    // note therefore reports the honest no-evidence state without an extra
+    // expand/focus step.
     await waitFor(() => screen.getByTestId("pdf-no-evidence"));
     expect(screen.queryByTestId("pdf-no-selection")).toBeNull();
   });
@@ -1061,13 +1037,8 @@ describe("ConceptsPage", () => {
       if (url.includes("/conflicts")) return { conflicts: [] };
       return {};
     });
-    render(<ConceptsPage runId={42} />);
-    await waitFor(() => screen.getByTestId("sheet-navigator"));
-    // Face view: the toolbar (with Search) is present.
-    expect(screen.getByTestId("concept-search")).toBeTruthy();
-    expect(screen.getByLabelText("Review controls")).toBeTruthy();
-    fireEvent.click(screen.getByTestId("sheet-nav-__notes__"));
-    // Notes view: the toolbar section itself is gone — no empty shell.
+    render(<ConceptsPage runId={42} initialView="notes" />);
+    await waitFor(() => screen.getByTestId("review-notes-panel"));
     expect(screen.queryByLabelText("Review controls")).toBeNull();
     expect(screen.queryByTestId("concept-search")).toBeNull();
   });
@@ -1080,50 +1051,45 @@ describe("ConceptsPage", () => {
       return {};
     });
     render(<ConceptsPage runId={42} />);
-    await waitFor(() => screen.getByTestId("sheet-navigator"));
-    // The nav item keeps its raw-id testid (routing is unchanged) but the
-    // visible label is the short code.
-    const navBtn = screen.getByTestId("sheet-nav-mfrs-company-sofp-cunoncu-v1");
-    expect(navBtn.textContent).toContain("SOFP");
-    expect(navBtn.textContent).not.toContain("mfrs-company-sofp");
-    expect(navBtn.style.background).toBe("rgb(245, 247, 248)");
-    expect(navBtn.style.color).toBe("rgb(0, 0, 0)");
-    expect(navBtn.style.borderColor).toBe("rgb(223, 227, 230)");
+    const picker = await screen.findByTestId("review-sheet-picker");
+    expect(within(picker).getByRole("option", { name: "SOFP" })).toBeTruthy();
+    expect(picker.textContent).not.toContain("mfrs-company-sofp");
   });
 
-  test("Notes expands into per-sheet sub-tabs with friendly names", async () => {
+  test("Notes uses a persistent text-block index and one selected editor", async () => {
     mockFetch((url) => {
       if (url.includes("/notes_cells"))
         return {
           sheets: [
-            { sheet: "Notes-CI", rows: [] },
-            { sheet: "Notes-SummaryofAccPol", rows: [] },
+            { sheet: "Notes-CI", rows: [
+              { row: 4, label: "Corporate details", html: "<p>CI</p>", evidence: "PDF page 4", source_pages: [4], style_source: "unstyled" },
+              { row: 5, label: "Unused disclosure", html: "<p></p>", evidence: null, source_pages: [] },
+            ] },
+            { sheet: "Notes-SummaryofAccPol", rows: [{ row: 7, label: "Revenue policy", html: "<p>Policy</p>", evidence: null, source_pages: [] }] },
           ],
         };
       if (url.includes("/concepts")) return sampleConcepts;
       if (url.includes("/conflicts")) return { conflicts: [] };
       return {};
     });
-    render(<ConceptsPage runId={42} />);
-    await waitFor(() => screen.getByTestId("sheet-navigator"));
-    fireEvent.click(screen.getByTestId("sheet-nav-__notes__"));
-    // Sub-tabs appear once the notes_cells fetch resolves.
-    const ci = await waitFor(() =>
-      screen.getByTestId("sheet-nav-notes-Notes-CI")
-    );
-    expect(ci.textContent).toContain("Corporate Information");
-    expect(
-      screen.getByTestId("sheet-nav-notes-Notes-SummaryofAccPol").textContent
-    ).toContain("Summary of Accounting Policies");
-    // Picking a sub-tab keeps the notes panel and marks it current.
-    fireEvent.click(ci);
-    expect(screen.getByTestId("review-notes-panel")).toBeTruthy();
-    expect(ci.getAttribute("aria-current")).toBe("true");
+    render(<ConceptsPage runId={42} initialView="notes" />);
+    const ci = await screen.findByTestId("note-index-Notes-CI-4");
+    const blank = screen.getByTestId("note-index-Notes-CI-5");
+    const policy = screen.getByTestId("note-index-Notes-SummaryofAccPol-7");
+    expect(ci).toHaveAttribute("aria-current", "true");
+    expect(blank).toBeTruthy();
+    expect(screen.getByText("3 review fields")).toBeTruthy();
+    expect(screen.getAllByTestId("notes-review-row")).toHaveLength(1);
+    expect(screen.getByTestId("notes-review-evidence")).toHaveTextContent("PDF page 4");
+    expect(screen.getByTestId("notes-style-source-chip")).toHaveTextContent("Unstyled");
+    fireEvent.click(blank);
+    expect(screen.getByRole("heading", { name: "Unused disclosure" })).toBeTruthy();
+    fireEvent.click(policy);
+    expect(policy).toHaveAttribute("aria-current", "true");
+    expect(screen.getByRole("heading", { name: "Revenue policy" })).toBeTruthy();
   });
 
-  // Review-workspace Phase 2: the scout notes checklist lives in the left
-  // column and doubles as navigation — clicking a placed note opens its sheet.
-  test("notes checklist navigates to a placed note's sheet", async () => {
+  test("the old notes checklist card is not repeated in figures", async () => {
     mockFetch((url) => {
       if (url.includes("/notes-coverage"))
         return {
@@ -1180,19 +1146,12 @@ describe("ConceptsPage", () => {
       return {};
     });
     render(<ConceptsPage runId={42} />);
-    // The checklist panel appears (run has notes) and lists the note.
-    const note = await waitFor(() => screen.getByTestId("coverage-nav-note-5"));
-    expect(screen.getByTestId("panel-notes-checklist")).toBeTruthy();
-    // Face tree first; clicking the note swaps the panel to the notes editor.
-    expect(screen.getByTestId("concept-row-leaf-1")).toBeTruthy();
-    fireEvent.click(note);
-    expect(screen.getByTestId("review-notes-panel")).toBeTruthy();
-    expect(screen.queryByTestId("concept-row-leaf-1")).toBeNull();
+    await waitFor(() => screen.getByTestId("concept-row-leaf-1"));
+    expect(screen.queryByTestId("panel-notes-checklist")).toBeNull();
   });
 
-  // Codex review fix: the embedded notes editor's "Re-extract notes" button
-  // must actually launch a rerun (it used to no-op once the link-out was gone).
-  test("embedded notes editor's Re-extract button invokes the regenerate handler", async () => {
+  test("compact Notes review keeps the re-extract action reachable", async () => {
+    const onRegenerate = vi.fn();
     mockFetch((url) => {
       if (url.includes("edited_count")) return { count: 0 };
       if (url.includes("/notes-coverage")) return {};
@@ -1201,42 +1160,28 @@ describe("ConceptsPage", () => {
       if (url.includes("/conflicts")) return { conflicts: [] };
       return {};
     });
-    const onRegenerateNotes = vi.fn();
-    render(<ConceptsPage runId={42} onRegenerateNotes={onRegenerateNotes} />);
-    await waitFor(() => screen.getByTestId("sheet-navigator"));
-    fireEvent.click(screen.getByTestId("sheet-nav-__notes__"));
-    // With no unsaved edits (edited_count 0) the confirm dialog is skipped and
-    // the rerun fires straight away — proving the handler is actually wired.
-    const btn = await screen.findByRole("button", { name: /re-extract notes/i });
-    fireEvent.click(btn);
-    await waitFor(() => expect(onRegenerateNotes).toHaveBeenCalledWith(42));
+    render(<ConceptsPage runId={42} initialView="notes" onRegenerateNotes={onRegenerate} />);
+    await waitFor(() => screen.getByTestId("notes-single-cell-workspace"));
+    fireEvent.click(screen.getByRole("button", { name: /^table style$/i }));
+    expect(screen.getByTestId("notes-table-style-panel")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /re-extract notes/i }));
+    await waitFor(() => expect(onRegenerate).toHaveBeenCalledWith(42));
   });
 
-  // Codex review fix: coverage must be fetched even when the run produced no
-  // notes cells, so an inventory-unavailable state surfaces loudly.
-  test("coverage inventory-unavailable surfaces even with empty notes_cells", async () => {
+  test("notes coverage is not duplicated inside the everyday review workspace", async () => {
     mockFetch((url) => {
-      if (url.includes("/notes-coverage"))
-        return {
-          run_id: 42,
-          banner: "inventory_unavailable",
-          inventory_available: false,
-          rows: [],
-          summary: { placed: 0, missing: 0, skipped: 0, suspected_gap: 0, total: 0, unresolved: 0 },
-        };
       if (url.includes("/notes_cells")) return { sheets: [] };
       if (url.includes("/concepts")) return sampleConcepts;
       if (url.includes("/conflicts")) return { conflicts: [] };
       return {};
     });
-    render(<ConceptsPage runId={42} />);
-    await waitFor(() =>
-      screen.getByTestId("coverage-nav-inventory_unavailable"),
-    );
+    render(<ConceptsPage runId={42} initialView="notes" />);
+    await waitFor(() => screen.getByTestId("notes-single-cell-workspace"));
+    expect(screen.queryByTestId("notes-coverage-panel")).toBeNull();
+    expect(screen.queryByTestId("notes-coverage-nav")).toBeNull();
   });
 
-  // Review-workspace Phase 3: outcome-based summary strip.
-  test("outcome strip shows 'Checks passing X/Y' from the run's cross-checks", async () => {
+  test("figures review omits the repeated outcome strip", async () => {
     mockFetch((url) => {
       if (url.includes("/notes_cells")) return { sheets: [] };
       if (url.includes("/concepts")) return sampleConcepts;
@@ -1249,22 +1194,12 @@ describe("ConceptsPage", () => {
       { name: "n/a check", status: "not_applicable" },
     ] as CrossCheckResult[];
     render(<ConceptsPage runId={42} initialCrossChecks={checks} />);
-    const strip = await waitFor(() => screen.getByLabelText("Review summary"));
-    // 1 passed of 2 graded (the not_applicable check is excluded).
-    expect(within(strip).getByText("Checks passing")).toBeTruthy();
-    expect(within(strip).getByText("1/2")).toBeTruthy();
-    // Direction A keeps summary metrics borderless. The compact label carries
-    // the status without reviving an active orange edge.
-    const card = within(strip).getByText("Checks passing").closest("div")!;
-    const cardStyle = getComputedStyle(card);
-    expect(cardStyle.backgroundColor).toBe("rgba(0, 0, 0, 0)");
-    expect(cardStyle.borderLeftStyle).toBe("");
-    // The old row-count metrics are gone.
-    expect(within(strip).queryByText("Fields shown")).toBeNull();
-    expect(within(strip).queryByText("Templates")).toBeNull();
+    await waitFor(() => screen.getByTestId("concept-row-leaf-1"));
+    expect(screen.queryByLabelText("Review summary")).toBeNull();
+    expect(screen.queryByText("Checks passing")).toBeNull();
   });
 
-  test("issue navigation clamps when resolved checks shrink the queue", async () => {
+  test("issues collapse to one compact count without a duplicate pager", async () => {
     mockFetch((url) => {
       if (url.includes("/concepts")) return sampleConcepts;
       if (url.includes("/conflicts")) return { conflicts: [] };
@@ -1281,19 +1216,16 @@ describe("ConceptsPage", () => {
       target_sheet: "SOFP-CuNonCu",
       target_row: 10,
     });
-    const { rerender } = render(
+    render(
       <ConceptsPage
         runId={42}
         initialCrossChecks={[makeCheck("one"), makeCheck("two"), makeCheck("three")]}
       />,
     );
-    await screen.findByRole("button", { name: "Next issue" });
-    fireEvent.click(screen.getByRole("button", { name: "Next issue" }));
-    fireEvent.click(screen.getByRole("button", { name: "Next issue" }));
-    expect(screen.getByText("3 / 3")).toBeInTheDocument();
-
-    rerender(<ConceptsPage runId={42} initialCrossChecks={[makeCheck("one")]} />);
-    await waitFor(() => expect(screen.getByText("1 / 1")).toBeInTheDocument());
+    expect(await screen.findByTestId("review-attention-control")).toHaveTextContent("3");
+    expect(screen.queryByTestId("needs-attention")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Next issue" })).toBeNull();
+    expect(screen.queryByText("3 / 3")).toBeNull();
   });
 
   // Review-workspace Phase 3: technical metadata hidden behind a drawer.
@@ -1325,11 +1257,11 @@ describe("ConceptsPage", () => {
       return {};
     });
     render(<ConceptsPage runId={42} />);
-    await waitFor(() => screen.getByTestId("recheck-btn"));
+    await waitFor(() => screen.getByTestId("concept-row-leaf-1"));
     expect(screen.queryByTestId("generate-final-excel")).toBeNull();
   });
 
-  test("sheet navigator lists statements in reading order, not backend order", async () => {
+  test("statement picker lists statements in reading order, not backend order", async () => {
     // Backend order here is SOCF before SOFP (what an alphabetical template
     // scan produces); the navigator must re-order to the annual-report
     // sequence — balance sheet first, cash flows last.
@@ -1351,22 +1283,21 @@ describe("ConceptsPage", () => {
       return {};
     });
     render(<ConceptsPage runId={42} />);
-    const nav = await waitFor(() => screen.getByTestId("sheet-navigator"));
-    const html = nav.innerHTML;
-    expect(html.indexOf("sheet-nav-mfrs-company-sofp-cunoncu-v1")).toBeLessThan(
-      html.indexOf("sheet-nav-mfrs-company-socf-indirect-v1")
-    );
+    const picker = await screen.findByTestId("review-sheet-picker");
+    const labels = within(picker).getAllByRole("option").map((option) => option.textContent);
+    expect(labels.indexOf("SOFP")).toBeLessThan(labels.indexOf("SOCF"));
   });
 
-  test("sheet navigator glosses each statement acronym in plain English", async () => {
+  test("statement picker stays compact without a second explanatory rail", async () => {
     mockFetch((url) => {
       if (url.includes("/concepts")) return sampleConcepts;
       if (url.includes("/conflicts")) return { conflicts: [] };
       return {};
     });
     render(<ConceptsPage runId={42} />);
-    const nav = await waitFor(() => screen.getByTestId("sheet-navigator"));
-    expect(within(nav).getByText("Balance sheet")).toBeTruthy();
+    const picker = await screen.findByTestId("review-sheet-picker");
+    expect(within(picker).getByRole("option", { name: "SOFP" })).toBeTruthy();
+    expect(screen.queryByText("Balance sheet")).toBeNull();
   });
 
   test("a mandatory LEAF with no value carries a visible 'Required' explanation", async () => {
@@ -1396,7 +1327,7 @@ describe("ConceptsPage", () => {
     expect(screen.queryByTestId("required-chip-leaf-1")).toBeNull();
   });
 
-  test("Re-run checks button summarises cross-check results", async () => {
+  test("figures review leaves check reruns to the Cross-checks route", async () => {
     mockFetch((url) => {
       if (url.includes("/recheck"))
         return {
@@ -1412,35 +1343,25 @@ describe("ConceptsPage", () => {
       return {};
     });
     render(<ConceptsPage runId={42} />);
-    const btn = await waitFor(() => screen.getByTestId("recheck-btn"));
-    fireEvent.click(btn);
-    const summary = await waitFor(() => screen.getByTestId("recheck-summary"));
-    expect(summary.textContent).toMatch(/2 passed/);
-    expect(summary.textContent).toMatch(/1 failed/);
+    await waitFor(() => screen.getByTestId("concept-row-leaf-1"));
+    expect(screen.queryByTestId("recheck-btn")).toBeNull();
+    expect(screen.queryByTestId("recheck-summary")).toBeNull();
   });
 
-  test("a failed re-run check surfaces in the Needs-attention queue", async () => {
+  test("a stored failed check surfaces in the compact attention control", async () => {
     mockFetch((url) => {
-      if (url.includes("/recheck"))
-        return {
-          run_id: 42,
-          results: [
-            { name: "sofp_balance", status: "failed", expected: 999, actual: 900, diff: 99, tolerance: 1, message: "assets exceed equity+liabilities", target_sheet: null, target_row: null },
-            { name: "sopl_profit_tie", status: "passed", expected: null, actual: null, diff: null, tolerance: null, message: "" },
-          ],
-        };
       if (url.includes("/concepts")) return sampleConcepts;
       if (url.includes("/conflicts")) return { conflicts: [] };
       return {};
     });
-    render(<ConceptsPage runId={42} />);
-    const btn = await waitFor(() => screen.getByTestId("recheck-btn"));
-    // Nothing needs attention until a re-run produces a failure.
-    expect(screen.getByTestId("needs-attention-clear")).toBeTruthy();
-    fireEvent.click(btn);
-    const attn = await waitFor(() => screen.getByTestId("needs-attention"));
-    // The failing check is a named, visible finding (not just a count).
-    expect(attn.textContent).toMatch(/assets exceed equity\+liabilities/);
+    const results = [
+      { name: "sofp_balance", status: "failed", expected: 999, actual: 900, diff: 99, tolerance: 1, message: "assets exceed equity+liabilities", target_sheet: null, target_row: null },
+      { name: "sopl_profit_tie", status: "passed", expected: null, actual: null, diff: null, tolerance: null, message: "" },
+    ] as CrossCheckResult[];
+    render(<ConceptsPage runId={42} initialCrossChecks={results} />);
+    expect(await screen.findByTestId("review-attention-control")).toHaveTextContent("1");
+    fireEvent.click(screen.getByTestId("review-attention-control"));
+    expect(screen.getByText(/assets exceed equity\+liabilities/)).toBeInTheDocument();
   });
 
   test("clicking a targeted failed check selects the offending concept's sheet", async () => {
@@ -1467,31 +1388,24 @@ describe("ConceptsPage", () => {
       ],
     };
     mockFetch((url) => {
-      if (url.includes("/recheck"))
-        return {
-          run_id: 42,
-          results: [
-            // Target points at leaf-2 (SOPL), which is NOT the active template.
-            { name: "sopl_check", status: "failed", expected: 1, actual: 2, diff: 1, tolerance: 0, message: "mismatch", target_sheet: "SOPL-Function", target_row: 5 },
-          ],
-        };
       if (url.includes("/concepts")) return multi;
       if (url.includes("/conflicts")) return { conflicts: [] };
       return {};
     });
-    render(<ConceptsPage runId={42} />);
-    await waitFor(() => screen.getByTestId("sheet-navigator"));
+    const results = [
+      { name: "sopl_check", status: "failed", expected: 1, actual: 2, diff: 1, tolerance: 0, message: "mismatch", target_sheet: "SOPL-Function", target_row: 5 },
+    ] as CrossCheckResult[];
+    render(<ConceptsPage runId={42} initialCrossChecks={results} />);
+    await screen.findByTestId("review-sheet-picker");
     // SOFP active initially → leaf-2 hidden.
     expect(screen.queryByTestId("concept-row-leaf-2")).toBeNull();
-    fireEvent.click(screen.getByTestId("recheck-btn"));
-    // The failing check appears in the Needs-attention queue; clicking it jumps
-    // to its target cell (switching the active template to SOPL).
-    const row = await waitFor(() => screen.getByTestId("attention-check-0"));
-    fireEvent.click(row);
+    // Open the compact queue, then select the targeted check.
+    fireEvent.click(await screen.findByTestId("review-attention-control"));
+    fireEvent.click(screen.getByTestId("review-attention-check-0"));
     await waitFor(() => screen.getByTestId("concept-row-leaf-2"));
   });
 
-  test("navigator expands the active template into its sub-sheets and filters by sheet", async () => {
+  test("statement picker includes sub-sheets and filters by sheet", async () => {
     const subSheets = {
       run_id: 42,
       concepts: [
@@ -1520,35 +1434,29 @@ describe("ConceptsPage", () => {
       return {};
     });
     render(<ConceptsPage runId={42} />);
-    await waitFor(() => screen.getByTestId("sheet-navigator"));
-    // Active template has two render_sheets → nested sub-sheet entries appear.
+    const picker = await screen.findByTestId("review-sheet-picker");
     const tid = "mfrs-company-sofp-cunoncu-v1";
-    expect(screen.getByTestId(`sheet-nav-sheet-${tid}-SOFP-CuNonCu`)).toBeTruthy();
-    expect(screen.getByTestId(`sheet-nav-sheet-${tid}-SOFP-Cash`)).toBeTruthy();
+    expect(within(picker).getByRole("option", { name: "SOFP · SOFP-CuNonCu" })).toBeTruthy();
+    expect(within(picker).getByRole("option", { name: "SOFP · SOFP-Cash" })).toBeTruthy();
     // All sheets shown by default (no sub-sheet filter).
     expect(screen.getByTestId("concept-row-leaf-1")).toBeTruthy();
     expect(screen.getByTestId("concept-row-sub-leaf")).toBeTruthy();
     // Selecting a sub-sheet filters the tree to that render_sheet only.
-    fireEvent.click(screen.getByTestId(`sheet-nav-sheet-${tid}-SOFP-Cash`));
+    fireEvent.change(picker, { target: { value: `${tid}::SOFP-Cash` } });
     expect(screen.getByTestId("concept-row-sub-leaf")).toBeTruthy();
     expect(screen.queryByTestId("concept-row-leaf-1")).toBeNull();
   });
 
-  test("Menu column hides to a rail and restores", async () => {
+  test("Figures omits the repeated internal menu column", async () => {
     mockFetch((url) => {
       if (url.includes("/concepts")) return sampleConcepts;
       if (url.includes("/conflicts")) return { conflicts: [] };
       return {};
     });
     render(<ConceptsPage runId={42} />);
-    await waitFor(() => screen.getByTestId("sheet-navigator"));
-    // Hide the whole Menu column.
-    fireEvent.click(screen.getByTestId("col-hide-menu"));
+    await screen.findByTestId("review-sheet-picker");
     expect(screen.queryByTestId("sheet-navigator")).toBeNull();
-    // A collapsed rail offers to restore it.
-    const rail = screen.getByTestId("col-show-menu");
-    fireEvent.click(rail);
-    expect(screen.getByTestId("sheet-navigator")).toBeTruthy();
+    expect(screen.queryByTestId("col-hide-menu")).toBeNull();
   });
 
   test("Source PDF column hides to a rail and restores", async () => {
@@ -1565,25 +1473,19 @@ describe("ConceptsPage", () => {
     expect(screen.getByTestId("pdf-source-pane")).toBeTruthy();
   });
 
-  test("a panel toggle collapses its body (Needs attention)", async () => {
+  test("a clear run omits attention chrome entirely", async () => {
     mockFetch((url) => {
       if (url.includes("/concepts")) return sampleConcepts;
       if (url.includes("/conflicts")) return { conflicts: [] };
       return {};
     });
     render(<ConceptsPage runId={42} />);
-    // Nothing outstanding → the panel stays closed by default so the review
-    // workspace does not spend vertical space on an all-clear message.
-    const toggle = screen.getByTestId("panel-attention-toggle");
-    expect(toggle).toHaveAttribute("aria-expanded", "false");
-    await waitFor(() => screen.getByTestId("needs-attention-clear"));
-    expect(screen.getByTestId("needs-attention-clear").parentElement).toHaveStyle({ display: "none" });
-    fireEvent.click(toggle);
-    expect(toggle).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByTestId("needs-attention-clear")).toBeTruthy();
+    await screen.findByTestId("review-sheet-picker");
+    expect(screen.queryByTestId("review-attention-control")).toBeNull();
+    expect(screen.queryByTestId("panel-attention")).toBeNull();
   });
 
-  test("shows an edited-values banner when facts/edited_count > 0", async () => {
+  test("figures review keeps a compact saved-edits warning", async () => {
     mockFetch((url) => {
       if (url.includes("/facts/edited_count")) return { count: 3 };
       if (url.includes("/concepts")) return sampleConcepts;
@@ -1591,10 +1493,9 @@ describe("ConceptsPage", () => {
       return {};
     });
     render(<ConceptsPage runId={42} />);
-    const banner = await waitFor(() =>
-      screen.getByTestId("edited-values-banner")
-    );
-    expect(banner.textContent).toMatch(/3 values edited/);
+    await waitFor(() => screen.getByTestId("concept-row-leaf-1"));
+    expect(await screen.findByTestId("edited-values-summary")).toHaveTextContent(/3 saved edits/i);
+    expect(screen.getByTestId("edited-values-summary")).toHaveTextContent(/overwrites them/i);
   });
 
   test("rapid edits then blur save once with the final value (no dropped edit)", async () => {
@@ -1791,8 +1692,8 @@ describe("ConceptsPage", () => {
       // move the page — deep-linked run pages used to land scrolled ~2300px.
       expect(scrollSpy).not.toHaveBeenCalled();
 
-      // A reconciliation-conflict click IS an intentional jump — the target
-      // row scrolls into view (Review Workspace M2 behaviour preserved).
+      // Open the compact attention queue, then select its conflict row.
+      fireEvent.click(await screen.findByTestId("review-attention-control"));
       fireEvent.click(await screen.findByTestId("conflict-1"));
       await waitFor(() => expect(scrollSpy).toHaveBeenCalled());
     } finally {

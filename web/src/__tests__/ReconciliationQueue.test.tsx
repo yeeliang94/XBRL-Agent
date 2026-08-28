@@ -124,6 +124,7 @@ describe("ReconciliationQueue", () => {
 
   test("clicking Resolve calls endpoint and removes the row", async () => {
     let resolvedCalled = false;
+    const onConflictResolved = vi.fn();
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation(
       async (url: string, init?: RequestInit) => {
         if (init?.method === "POST" && url.includes("/resolve")) {
@@ -142,13 +143,16 @@ describe("ReconciliationQueue", () => {
       }
     );
 
-    render(<ReconciliationQueue runId={42} />);
+    render(
+      <ReconciliationQueue runId={42} onConflictResolved={onConflictResolved} />,
+    );
     const btn = await waitFor(() => screen.getByTestId("resolve-btn-7"));
     fireEvent.click(btn);
 
     await waitFor(() => {
       expect(resolvedCalled).toBe(true);
       expect(screen.queryByTestId("conflict-7")).toBeNull();
+      expect(onConflictResolved).toHaveBeenCalledTimes(1);
     });
   });
 });

@@ -552,11 +552,7 @@ describe("AgentTabs", () => {
     ).toBe("true");
   });
 
-  test("notes skeletons render with the notes bucket, BEFORE scout/validator (peer-review LOW)", () => {
-    // Before the fix, skeletons all landed in one trailing block after
-    // scout/validator. Pin the new rule: a selected-but-not-yet-started
-    // notes template must sit in the middle notes bucket, not at the
-    // right edge next to Validator.
+  test("document preparation renders before notes skeletons and run checks", () => {
     const agents: Record<string, AgentTabState> = {
       sofp_0: { agentId: "sofp_0", label: "SOFP", status: "complete", role: "SOFP" },
       scout: { agentId: "scout", label: "Scout", status: "complete", role: "scout" },
@@ -584,7 +580,7 @@ describe("AgentTabs", () => {
     const scoutIdx = labels.findIndex((l) => l === "Scout");
     const validatorIdx = labels.findIndex((l) => l === "Validator");
     expect(notesIdx).toBeGreaterThan(-1);
-    expect(notesIdx).toBeLessThan(scoutIdx);
+    expect(scoutIdx).toBeLessThan(notesIdx);
     expect(notesIdx).toBeLessThan(validatorIdx);
   });
 
@@ -700,7 +696,7 @@ describe("AgentTabs", () => {
       expect(tablist?.getAttribute("aria-label")).toBe("Run workstreams");
     });
 
-    test("tablist separates statements, notes, and run checks", () => {
+    test("tablist separates document preparation, statements, notes, and run checks", () => {
       const agents = twelveTabAgents();
       const { container } = render(
         <AgentTabs
@@ -712,9 +708,11 @@ describe("AgentTabs", () => {
           notesInRun={NOTES}
         />,
       );
+      const preparationBucket = container.querySelector('[data-bucket="preparation"]');
       const statementBucket = container.querySelector('[data-bucket="statements"]');
       const notesBucket = container.querySelector('[data-bucket="notes"]');
       const checksBucket = container.querySelector('[data-bucket="run-checks"]');
+      expect(preparationBucket).toBeTruthy();
       expect(statementBucket).toBeTruthy();
       expect(notesBucket).toBeTruthy();
       expect(checksBucket).toBeTruthy();
@@ -730,7 +728,8 @@ describe("AgentTabs", () => {
       expect(noteLabels.some((l) => l.includes("Notes 10"))).toBe(true);
       const checkLabels = Array.from(checksBucket!.querySelectorAll('[role="tab"]'))
         .map((t) => t.textContent ?? "");
-      expect(checkLabels.some((l) => l.includes("Scout"))).toBe(true);
+      expect(preparationBucket!.textContent).toContain("Scout");
+      expect(checkLabels.some((l) => l.includes("Scout"))).toBe(false);
       expect(checkLabels.some((l) => l.includes("Cross-checks"))).toBe(true);
     });
 

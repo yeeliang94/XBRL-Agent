@@ -64,9 +64,10 @@ def _fill_every_leaf(tmp_path: Path, template: Path, standard: str,
     jp = work_dir / "tree.json"
     jp.write_text(json.dumps(tree.to_json(), sort_keys=True), encoding="utf-8")
     template_id = import_template(db, jp)
-    import_company_targets(db, template_id)
     if level == "group":
         import_group_targets(db, template_id)
+    else:
+        import_company_targets(db, template_id)
 
     conn = sqlite3.connect(str(db))
     try:

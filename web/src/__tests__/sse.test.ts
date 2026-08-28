@@ -33,6 +33,23 @@ test("a rejected start response is classified as a request error", async () => {
   });
 });
 
+test("eval_score is accepted by the multi-agent event contract", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(
+    `event: eval_score\ndata: {"benchmark_id":7,"gold_cells":10,"matched_cells":9,"missing_cells":1,"mismatch_cells":0,"extra_cells":0,"scale_mismatch":0,"score":0.9}\n\nevent: run_complete\ndata: {"success":true}\n\n`,
+    { status: 200, headers: { "Content-Type": "text/event-stream" } },
+  )));
+  const onEvent = vi.fn();
+
+  createMultiAgentSSEByRunId(42, onEvent, vi.fn(), vi.fn());
+
+  await vi.waitFor(() => {
+    expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({
+      event: "eval_score",
+      data: expect.objectContaining({ score: 0.9 }),
+    }));
+  });
+});
+
 // Build a ReadableStream that yields the given UTF-8 chunks in order. Each
 // chunk is delivered as a separate `read()` call, letting us test partial-line
 // handling across chunk boundaries — the single realistic failure mode of

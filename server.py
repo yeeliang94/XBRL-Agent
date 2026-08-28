@@ -2701,8 +2701,28 @@ async def _lifespan(app: FastAPI):
     at startup keeps the schema-migration guarantee (v2/v3 migrations
     still land on first boot after deploy) without the per-request cost.
     """
+    from observability.logging import configure_logging
     from db.schema import init_db
+
+    # Uvicorn installs its handlers before lifespan begins. Add correlation to
+    # those handlers and attach the optional rotating JSONL sink now.
+    configure_logging()
     init_db(AUDIT_DB_PATH)
+    try:
+        from agent_tracing import purge_expired_diagnostics
+
+        retention_days = int(os.environ.get("XBRL_TRACE_RETENTION_DAYS", "90"))
+        purged = purge_expired_diagnostics(
+            OUTPUT_DIR,
+            retention_days=retention_days,
+        )
+        if purged:
+            logger.info(
+                "Purged %d expired diagnostic trace file(s)",
+                purged,
+            )
+    except Exception:  # noqa: BLE001 — retention must not block startup
+        logger.warning("Diagnostic retention sweep failed", exc_info=True)
 
     # Optional env-driven admin bootstrap (local-dev convenience): seed a REAL
     # auth_users admin from BOOTSTRAP_ADMIN_EMAIL / BOOTSTRAP_ADMIN_PASSWORD so
@@ -3306,6 +3326,7 @@ async def _maybe_build_pdf_sidecar(
     model,
     model_name: str,
     on_start: Optional[Callable[[list[int]], None]] = None,
+    on_progress: Optional[Callable[[int, int, int, bool], None]] = None,
 ) -> Optional[dict]:
     """Build the transcribed sidecar for a scanned-PDF run (Phase 2 wiring).
 
@@ -3353,7 +3374,12 @@ async def _maybe_build_pdf_sidecar(
         ordered_pages = sorted(pages)
         if on_start is not None:
             on_start(ordered_pages)
-        result = await transcribe_pages(pdf_path, ordered_pages, model)
+        progress_kwargs = (
+            {"on_progress": on_progress} if on_progress is not None else {}
+        )
+        result = await transcribe_pages(
+            pdf_path, ordered_pages, model, **progress_kwargs,
+        )
         out = write_pdf_sidecar(pdf_path, result, model_name=model_name)
         if out is None:
             # All-or-nothing publication: any failed page refuses the sidecar
@@ -4207,7 +4233,16 @@ ERROR_BUCKET_RECOVERABLE = "recoverable"
 ERROR_BUCKET_FATAL = "fatal"
 
 
-def _fail_run(db_conn: "Optional[Any]", run_id: Optional[int], msg: str):
+def _fail_run(
+    db_conn: "Optional[Any]",
+    run_id: Optional[int],
+    msg: str,
+    *,
+    error_code: str = "validation_failed",
+    stage: str = "validation",
+    exception: Optional[BaseException] = None,
+    technical_message: object | None = None,
+):
     """Build the error + run_complete SSE events and mark the run row failed.
 
     Extracted to dedupe the five-line failure quartet
@@ -4233,9 +4268,33 @@ def _fail_run(db_conn: "Optional[Any]", run_id: Optional[int], msg: str):
         terminal_status = new_status or terminal_status
         return
     """
+    from observability.incidents import capture_run_incident
+
+    incident_id = capture_run_incident(
+        db_conn,
+        run_id,
+        source="run_validation",
+        stage=stage,
+        severity=ERROR_BUCKET_FATAL,
+        error_code=error_code,
+        user_message=msg,
+        exception=exception,
+        technical_message=technical_message,
+    )
+    diagnostic = {
+        "message": msg,
+        "bucket": ERROR_BUCKET_FATAL,
+        "error_code": error_code,
+        "incident_id": incident_id,
+    }
     events = [
-        {"event": "error", "data": {"message": msg, "bucket": ERROR_BUCKET_FATAL}},
-        {"event": "run_complete", "data": {"success": False, "message": msg}},
+        {"event": "error", "data": diagnostic},
+        {"event": "run_complete", "data": {
+            "success": False,
+            "message": msg,
+            "error_code": error_code,
+            "incident_id": incident_id,
+        }},
     ]
     new_status = "failed" if _safe_mark_finished(db_conn, run_id, "failed") else None
     return events, new_status
@@ -4295,7 +4354,10 @@ def _validate_and_build_run(
         try:
             statements_to_run.add(StatementType(s))
         except ValueError:
-            events, new_status = _fail_run(db_conn, run_id, f"Unknown statement type: {s}")
+            events, new_status = _fail_run(
+                db_conn, run_id, f"Unknown statement type: {s}",
+                error_code="unknown_statement",
+            )
             return None, events, new_status
 
     # Parse notes templates up-front (before pre-creating run_agents rows),
@@ -4308,10 +4370,16 @@ def _validate_and_build_run(
         try:
             parsed_note = NotesTemplateType(n)
         except ValueError:
-            events, new_status = _fail_run(db_conn, run_id, f"Unknown notes template: {n}")
+            events, new_status = _fail_run(
+                db_conn, run_id, f"Unknown notes template: {n}",
+                error_code="unknown_notes_template",
+            )
             return None, events, new_status
         if parsed_note not in _PUBLIC_NOTES_TEMPLATES:
-            events, new_status = _fail_run(db_conn, run_id, f"Notes template not available yet: {n}")
+            events, new_status = _fail_run(
+                db_conn, run_id, f"Notes template not available yet: {n}",
+                error_code="notes_template_unavailable",
+            )
             return None, events, new_status
         notes_to_run.add(parsed_note)
 
@@ -4333,6 +4401,8 @@ def _validate_and_build_run(
         except KeyError as e:
             events, new_status = _fail_run(
                 db_conn, run_id, f"Unknown variant for {stmt.value}: {e}",
+                error_code="unknown_variant",
+                exception=e,
             )
             return None, events, new_status
         if run_config.filing_standard not in v.applies_to_standard:
@@ -4344,6 +4414,7 @@ def _validate_and_build_run(
                 f"{stmt.value}/{variant_name} is not available on "
                 f"{run_config.filing_standard.upper()} filings — "
                 f"only {allowed}.",
+                error_code="variant_standard_mismatch",
             )
             return None, events, new_status
 
@@ -4373,7 +4444,13 @@ def _validate_and_build_run(
         logger.exception(
             "Override model construction failed for session %s", session_id,
         )
-        events, new_status = _fail_run(db_conn, run_id, f"Model override failed: {e}")
+        events, new_status = _fail_run(
+            db_conn, run_id,
+            "One of the selected model overrides could not be configured. "
+            "Check the model settings and try again.",
+            error_code="model_override_failed",
+            exception=e,
+        )
         return None, events, new_status
 
     # Non-fatal pre-flight events surfaced to the client even on the success
@@ -4389,7 +4466,13 @@ def _validate_and_build_run(
             # from_json expects a JSON string; request body gives us a dict
             infopack = Infopack.from_json(json.dumps(run_config.infopack))
         except Exception as e:
-            events, new_status = _fail_run(db_conn, run_id, f"Invalid infopack: {e}")
+            events, new_status = _fail_run(
+                db_conn, run_id,
+                "The saved document analysis is invalid. Run Auto-detect "
+                "again, then retry the extraction.",
+                error_code="invalid_infopack",
+                exception=e,
+            )
             return None, events, new_status
 
         # Completeness probe (Plan 3): a degraded scout pack fans its loss out
@@ -4419,7 +4502,13 @@ def _validate_and_build_run(
         logger.exception(
             "Model construction failed for session %s", session_id,
         )
-        events, new_status = _fail_run(db_conn, run_id, f"Model setup failed: {e}")
+        events, new_status = _fail_run(
+            db_conn, run_id,
+            "The selected model could not be started. Check the model "
+            "connection and credentials, then try again.",
+            error_code="model_setup_failed",
+            exception=e,
+        )
         return None, events, new_status
 
     # Canonical mode is mandatory (rewrite Phase 1.1). The concept tree
@@ -4433,6 +4522,8 @@ def _validate_and_build_run(
             "Canonical concept-tree bootstrap failed at startup — cannot "
             "produce grounded facts. Check the server logs and restart "
             "the server; no run can proceed until the import succeeds.",
+            error_code="canonical_bootstrap_failed",
+            stage="startup",
         )
         return None, events, new_status
 
@@ -4465,6 +4556,7 @@ def _validate_and_build_run(
                 db_conn, run_id,
                 f"Eval benchmark {run_config.benchmark_id} not found. "
                 "Pick an existing benchmark or turn off eval testing.",
+                error_code="benchmark_not_found",
             )
             return None, events, new_status
         if (
@@ -4478,6 +4570,7 @@ def _validate_and_build_run(
                 f"but this run is {run_config.filing_standard.upper()} "
                 f"{run_config.filing_level}. Pick a matching benchmark or turn "
                 "off eval testing.",
+                error_code="benchmark_scope_mismatch",
             )
             return None, events, new_status
 
@@ -5003,6 +5096,25 @@ async def run_multi_agent_stream(
         # On success `pre_events` carries any non-fatal pre-flight warnings
         # (e.g. scout completeness) — surface them before extraction starts.
         for ev in pre_events:
+            if db_conn is not None and run_id is not None:
+                try:
+                    data = ev.get("data") if isinstance(ev, dict) else None
+                    payload = data if isinstance(data, dict) else {}
+                    repo.log_run_event(
+                        db_conn,
+                        run_id,
+                        str(ev.get("event") or "status"),
+                        payload=payload,
+                        phase=(payload.get("phase") if isinstance(
+                            payload.get("phase"), str,
+                        ) else None),
+                    )
+                    db_conn.commit()
+                except Exception:
+                    logger.warning(
+                        "Failed to persist pre-flight event for run %s",
+                        run_id, exc_info=True,
+                    )
             if client_connected:
                 try:
                     yield ev
@@ -5106,6 +5218,13 @@ async def run_multi_agent_stream(
         _COARSE_EVENT_TYPES_SET = frozenset({
             "status", "tool_call", "tool_result", "error", "complete",
         })
+        _RUN_EVENT_TYPES_SET = frozenset({
+            "status", "error", "pipeline_stage", "scout_warnings",
+            "scale_conflict", "pdf_sidecar", "partial_merge",
+            "cross_check_start", "cross_check_result",
+            "cross_check_complete", "scout_complete", "eval_score",
+            "run_complete",
+        })
 
         # Peer-review fix (2026-04-27): lazily create a SYSTEM
         # pseudo-agent row on first coordinator-level error event so
@@ -5160,6 +5279,22 @@ async def run_multi_agent_stream(
             field tells the frontend to keep the spinner spinning.
             """
             payload.setdefault("bucket", ERROR_BUCKET_RECOVERABLE)
+            from observability.incidents import capture_run_incident
+
+            capture_run_incident(
+                db_conn,
+                run_id,
+                source="run_orchestrator",
+                stage=str(payload.get("phase") or "orchestration"),
+                severity=str(payload.get("bucket") or ERROR_BUCKET_RECOVERABLE),
+                error_code=str(payload.get("type") or "coordinator_incident"),
+                user_message=str(payload.get("message") or "A coordinator step failed."),
+                technical_message=payload.get("technical_message"),
+                details={
+                    key: value for key, value in payload.items()
+                    if key not in {"message", "technical_message"}
+                },
+            )
             _ensure_system_pseudo_agent()
             # DB persistence — stamped copy, lazily-created SYSTEM row.
             if _system_run_agent_id is not None:
@@ -5187,13 +5322,41 @@ async def run_multi_agent_stream(
             if db_conn is None:
                 return
             event_type = str(evt.get("event", ""))
-            if event_type not in _COARSE_EVENT_TYPES_SET:
+            # Coordinator events and agent events have different allowlists.
+            # Check their union here, then route on the presence of an agent
+            # id below.  Filtering only on the agent allowlist made nearly the
+            # entire run-level timeline unreachable (pipeline stages,
+            # cross-check summaries, eval scores, and run completion).
+            if (
+                event_type not in _COARSE_EVENT_TYPES_SET
+                and event_type not in _RUN_EVENT_TYPES_SET
+            ):
                 return
             data = evt.get("data") or {}
             if not isinstance(data, dict):
                 return
             agent_id_raw = data.get("agent_id") or data.get("agent_role")
             if not isinstance(agent_id_raw, str) or not agent_id_raw:
+                if event_type not in _RUN_EVENT_TYPES_SET or run_id is None:
+                    return
+                try:
+                    phase_raw = data.get("phase") or data.get("stage")
+                    phase = phase_raw if isinstance(phase_raw, str) else None
+                    repo.log_run_event(
+                        db_conn,
+                        run_id=run_id,
+                        event_type=event_type,
+                        payload=data,
+                        phase=phase,
+                    )
+                    db_conn.commit()
+                except Exception:
+                    logger.warning(
+                        "Failed to persist run event %s for run %s",
+                        event_type, run_id, exc_info=True,
+                    )
+                return
+            if event_type not in _COARSE_EVENT_TYPES_SET:
                 return
             rai = run_agent_ids_by_agent_id.get(agent_id_raw.lower())
             if rai is None or rai in _persist_disabled:
@@ -5239,13 +5402,16 @@ async def run_multi_agent_stream(
         # generator fully before consuming).
         import time as _time
 
-        def _stage_event(stage: str) -> dict:
+        def _stage_event(stage: str, **activity) -> dict:
+            data = {"stage": stage, "started_at": _time.time()}
+            data.update({key: value for key, value in activity.items()
+                         if value is not None})
             return {
                 "event": "pipeline_stage",
-                "data": {"stage": stage, "started_at": _time.time()},
+                "data": data,
             }
 
-        def _emit_stage(stage: str) -> None:
+        def _emit_stage(stage: str, **activity) -> None:
             """Push a pipeline_stage event onto the queue so the drain
             loop yields it the same way it yields agent events. Direct
             ``yield`` from this generator was tried first, but it broke
@@ -5255,7 +5421,7 @@ async def run_multi_agent_stream(
             ``failed`` even though the agents had succeeded.
             """
             try:
-                event_queue.put_nowait(_stage_event(stage))
+                event_queue.put_nowait(_stage_event(stage, **activity))
             except asyncio.QueueFull:
                 # Best-effort — pipeline_stage labels are nice-to-have,
                 # never block the run.
@@ -5528,7 +5694,20 @@ async def run_multi_agent_stream(
             infopack,
             model,
             model_name,
-            on_start=lambda _pages: _emit_stage("transcribing_source"),
+            on_start=lambda pages: _emit_stage(
+                "transcribing_source",
+                message=f"Preparing {len(pages)} scanned note pages.",
+                completed=0,
+                total=len(pages),
+            ),
+            on_progress=lambda _page, completed, total, _ok: _emit_stage(
+                "transcribing_source",
+                message=(
+                    f"Reading scanned note pages: {completed} of {total} complete."
+                ),
+                completed=completed,
+                total=total,
+            ),
         ))
         async for event in _drain_while_running(sidecar_task):
             persist_event(event)
@@ -6830,7 +7009,26 @@ async def run_multi_agent_stream(
                         )
                         if remerge.success:
                             if db_conn is not None and run_id is not None:
-                                repo.mark_run_merged(db_conn, run_id, merged_path)
+                                # The notes reviewer is waiting on
+                                # ``notes_review_finalize_gate`` below before
+                                # replacing its flags and coverage rows on a
+                                # separate connection. Keep this pointer
+                                # durable before releasing that gate. Leaving
+                                # the UPDATE pending holds SQLite's single
+                                # writer lock through the re-check and makes
+                                # both notes replacements fail with
+                                # ``database is locked`` (run 97).
+                                try:
+                                    repo.mark_run_merged(
+                                        db_conn, run_id, merged_path,
+                                    )
+                                    db_conn.commit()
+                                except Exception:
+                                    try:
+                                        db_conn.rollback()
+                                    except Exception:
+                                        pass
+                                    raise
                         else:
                             # Re-merge failed: the download would be stale
                             # relative to the corrected facts.
@@ -7088,7 +7286,10 @@ async def run_multi_agent_stream(
                 and not _FORMAT_NOTES_REG[r.template_type].is_numeric
             })
             if _format_sheets:
-                _emit_stage("formatting_notes")
+                _emit_stage(
+                    "formatting_notes",
+                    message="Preparing note formatting.",
+                )
                 _format_model_name = _notes_formatter_model_name() or model_name
 
                 async def _auto_format_pdf_notes():
@@ -7105,6 +7306,18 @@ async def run_multi_agent_stream(
                         ),
                         output_dir=output_dir,
                         timeout_s=NOTES_FORMATTER_WALLCLOCK_TIMEOUT,
+                        on_progress=lambda completed, total, sheet: _emit_stage(
+                            "formatting_notes",
+                            message=(
+                                f"Formatting notes: {completed} of {total} "
+                                f"sections complete."
+                                if completed
+                                else f"Formatting {total} note sections."
+                            ),
+                            completed=completed,
+                            total=total,
+                            item=sheet,
+                        ),
                     )
 
                 _format_task = asyncio.create_task(_auto_format_pdf_notes())
@@ -7492,15 +7705,18 @@ async def run_multi_agent_stream(
             eval_score = _grade_run_against_benchmark(
                 AUDIT_DB_PATH, run_id, _benchmark_id
             )
-            if eval_score is not None and client_connected:
-                try:
-                    yield {"event": "eval_score", "data": eval_score}
-                except (asyncio.CancelledError, GeneratorExit):
-                    client_connected = False
-                    logger.info(
-                        "Client disconnected at eval_score yield; finalizing",
-                        extra={"session_id": session_id},
-                    )
+            if eval_score is not None:
+                eval_event = {"event": "eval_score", "data": eval_score}
+                persist_event(eval_event)
+                if client_connected:
+                    try:
+                        yield eval_event
+                    except (asyncio.CancelledError, GeneratorExit):
+                        client_connected = False
+                        logger.info(
+                            "Client disconnected at eval_score yield; finalizing",
+                            extra={"session_id": session_id},
+                        )
 
         # Emit cross-check results as SSE events
         checks_data = []
@@ -7532,20 +7748,20 @@ async def run_multi_agent_stream(
         # completion, but any further ``yield`` raises RuntimeError. The
         # run is already fully persisted in the DB (History will show it
         # correctly on reload); the client just won't see this event.
+        # Phase 6: stage boundary — pipeline finished. Persist it even when the
+        # browser disconnected so History reconstructs the complete timeline.
+        done_event = _stage_event("done")
+        persist_event(done_event)
         if client_connected:
-            # Phase 6: stage boundary — pipeline finished, run_complete
-            # carries the final aggregate. The "done" stage tells the
-            # frontend to stop spinning the active-stage indicator.
             try:
-                yield _stage_event("done")
+                yield done_event
             except (asyncio.CancelledError, GeneratorExit):
                 client_connected = False
                 logger.info(
                     "Client disconnected at done-stage yield; finalizing",
                     extra={"session_id": session_id},
                 )
-        if client_connected:
-            yield {"event": "run_complete", "data": {
+        run_complete_event = {"event": "run_complete", "data": {
                 # Derive success from the single authoritative terminal status
                 # so the live UI can't show a green badge next to a
                 # reconciliation warning (peer-review). overall_status already
@@ -7584,12 +7800,30 @@ async def run_multi_agent_stream(
                 # knows the run needs human reconciliation.
                 "open_conflicts": open_conflicts,
             }}
-    except BaseException:
+        persist_event(run_complete_event)
+        if client_connected:
+            yield run_complete_event
+    except BaseException as exc:
         # Belt-and-braces: if we reach the outer except without having
         # already recorded a terminal state, mark the run failed so History
         # never shows a dangling 'running' row. BaseException catches
         # CancelledError + KeyboardInterrupt too.
         if terminal_status is None:
+            from observability.incidents import capture_run_incident
+
+            capture_run_incident(
+                db_conn,
+                run_id,
+                source="run_orchestrator",
+                stage="orchestration",
+                severity=ERROR_BUCKET_FATAL,
+                error_code="unhandled_orchestration_exception",
+                user_message=(
+                    "The extraction stopped unexpectedly. Use the incident "
+                    "details in Activity when contacting support."
+                ),
+                exception=exc,
+            )
             _safe_mark_finished(db_conn, run_id, "failed")
             terminal_status = "failed"
         raise
@@ -8201,6 +8435,64 @@ async def _auth_guard(request: Request, call_next):
     return await call_next(request)
 
 
+@app.middleware("http")
+async def _request_observability(request: Request, call_next):
+    """Correlate, time, and safely log every HTTP request and exception."""
+    import re
+    import time as _request_time
+    import uuid
+
+    from observability.context import bind_correlation_id, reset_correlation_id
+
+    supplied = request.headers.get("X-Request-ID", "").strip()
+    request_id = (
+        supplied
+        if re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", supplied)
+        else uuid.uuid4().hex
+    )
+    request.state.correlation_id = request_id
+    token = bind_correlation_id(request_id)
+    started = _request_time.perf_counter()
+    try:
+        response = await call_next(request)
+        duration_ms = round(
+            (_request_time.perf_counter() - started) * 1000,
+            2,
+        )
+        response.headers["X-Request-ID"] = request_id
+        logger.info(
+            "HTTP request completed",
+            extra={
+                "request_id": request_id,
+                "http_method": request.method,
+                "http_path": request.url.path,
+                "http_status": response.status_code,
+                "duration_ms": duration_ms,
+                "auth_email": getattr(request.state, "auth_email", None),
+            },
+        )
+        return response
+    except Exception:
+        duration_ms = round(
+            (_request_time.perf_counter() - started) * 1000,
+            2,
+        )
+        logger.exception(
+            "Unhandled HTTP request exception",
+            extra={
+                "request_id": request_id,
+                "http_method": request.method,
+                "http_path": request.url.path,
+                "http_status": 500,
+                "duration_ms": duration_ms,
+                "auth_email": getattr(request.state, "auth_email", None),
+            },
+        )
+        raise
+    finally:
+        reset_correlation_id(token)
+
+
 # --- Serve built frontend (Vite output in dist/) ---
 #
 # Two-layer wiring:
@@ -8379,8 +8671,14 @@ def resolve_bind_host(env: Optional[dict] = None) -> tuple[str, bool]:
 
 if __name__ == "__main__":
     import uvicorn
+    from observability.logging import configure_logging
 
     load_dotenv(ENV_FILE)
+    os.environ.setdefault(
+        "XBRL_APP_LOG_PATH",
+        str(BASE_DIR / "logs" / "xbrl-agent.jsonl"),
+    )
+    configure_logging()
     host, exposed = resolve_bind_host()
     port = int(os.environ.get("PORT", "8002"))
     if exposed:

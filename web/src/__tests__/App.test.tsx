@@ -162,6 +162,19 @@ describe("App — AgentTimeline integration", () => {
     expect(screen.queryByText(/Chat Feed/i)).toBeNull();
   });
 
+  test("figures review uses the full workspace width with navigation expanded", async () => {
+    window.history.replaceState({}, "", "/concepts/42");
+    const { default: App } = await import("../App");
+    render(<App />);
+
+    const main = await waitFor(() => {
+      const element = document.getElementById("main-content");
+      if (!element) throw new Error("Main content not ready");
+      return element;
+    });
+    expect(main).toHaveStyle({ maxWidth: "100%" });
+  });
+
   test("lost live stream resumes monitoring from the durable run detail", async () => {
     const { default: App } = await import("../App");
     render(<App />);

@@ -69,6 +69,7 @@ async def run_pdf_auto_format(
     output_dir: str,
     timeout_s: float,
     formatter=run_notes_formatter,
+    on_progress: Callable[[int, int, str | None], None] | None = None,
 ) -> dict[str, Any]:
     """Format eligible PDF-note sheets and return an advisory summary.
 
@@ -78,6 +79,14 @@ async def run_pdf_auto_format(
     selected = candidate_sheets(db_path, run_id, sheets)
     if not selected:
         return {"sheets": {}, "formatted": 0, "failed": 0, "skipped": 0}
+    if on_progress is not None:
+        try:
+            on_progress(0, len(selected), None)
+        except Exception:  # noqa: BLE001 — display progress is advisory
+            logger.warning(
+                "automatic PDF formatter progress callback failed",
+                exc_info=True,
+            )
 
     async def one(sheet: str) -> tuple[str, dict[str, Any]]:
         try:
@@ -161,7 +170,23 @@ async def run_pdf_auto_format(
         _persist_outcome(db_path, run_id, sheet, model_name, result)
         return sheet, result
 
-    pairs = await asyncio.gather(*(one(sheet) for sheet in selected))
+    completed = 0
+
+    async def tracked(sheet: str) -> tuple[str, dict[str, Any]]:
+        nonlocal completed
+        pair = await one(sheet)
+        completed += 1
+        if on_progress is not None:
+            try:
+                on_progress(completed, len(selected), sheet)
+            except Exception:  # noqa: BLE001 — display progress is advisory
+                logger.warning(
+                    "automatic PDF formatter progress callback failed",
+                    exc_info=True,
+                )
+        return pair
+
+    pairs = await asyncio.gather(*(tracked(sheet) for sheet in selected))
     outcomes = dict(pairs)
     return {
         "sheets": outcomes,

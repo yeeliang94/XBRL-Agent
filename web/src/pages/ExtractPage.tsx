@@ -23,6 +23,7 @@ import { buildToolTimeline, filterEventsBySubAgent } from "../lib/buildToolTimel
 import { NOTES_12_AGENT_ID, isNotes12AgentId } from "../lib/notes";
 import { isNonAgentTab } from "../lib/agentTabKinds";
 import { describePdfSidecar } from "../lib/pdfSidecar";
+import { semanticActivities } from "../lib/semanticActivity";
 
 // Re-export so existing callers / tests that imported NOTES_12_AGENT_ID
 // from ExtractPage keep working. The single source of truth lives in
@@ -196,13 +197,15 @@ export function ExtractPage({
   const agentTabsAgents = useMemo(
     () =>
       Object.fromEntries(
-        Object.entries(state.agents).map(([id, a]) => [
-          id,
-          {
+        Object.entries(state.agents).map(([id, a]) => {
+          const activity = semanticActivities(a.events, a.toolTimeline, 1)[0];
+          return [id, {
             agentId: a.agentId,
             label: a.label,
             status: a.status,
             role: a.role,
+            task: activity?.title ?? null,
+            taskDetail: activity?.detail ?? null,
             // Phase 5.2 / peer-review [M1]: only Notes-12's fan-out
             // populates sub-agent batch metadata today; for every other
             // agent `agentSubAgentSummary` returns null and the tab
@@ -212,8 +215,8 @@ export function ExtractPage({
             // acknowledged-gap flag so the tab renders the "needs review"
             // ⚠ chip. Null for the common (clean-completion) case.
             flag: a.flag ?? null,
-          } as AgentTabState,
-        ]),
+          } as AgentTabState];
+        }),
       ),
     [state.agents],
   );
@@ -277,7 +280,7 @@ export function ExtractPage({
               ? "New extraction"
               : "Work queue"}
         description={state.isRunning
-          ? "Monitor the overall run, then inspect a workstream only when you need more detail."
+          ? "You can leave this page while processing continues."
           : isResumedDraft
             ? "Confirm the saved filing scope and continue this draft when you are ready."
           : landingMode === "new"
@@ -358,7 +361,7 @@ export function ExtractPage({
                 {state.isComplete
                   ? "Extraction finished"
                   : state.isRunning
-                    ? liveStageMessage(state.pipelineStage)
+                    ? state.pipelineActivity?.message ?? liveStageMessage(state.pipelineStage)
                     : "Run stopped"}
               </h2>
               <p style={styles.runOverviewMessage}>
@@ -368,6 +371,23 @@ export function ExtractPage({
                     ? "This can take a few minutes. You can leave this page open while the run continues."
                     : "The run is no longer active. Review any errors below before trying again."}
               </p>
+              {state.isRunning && state.pipelineActivity?.total != null && state.pipelineActivity.total > 0 && (
+                <div
+                  role="progressbar"
+                  aria-label="Current stage progress"
+                  aria-valuemin={0}
+                  aria-valuemax={state.pipelineActivity.total}
+                  aria-valuenow={state.pipelineActivity.completed ?? 0}
+                  style={styles.stageProgress}
+                >
+                  <span
+                    style={{
+                      ...styles.stageProgressFill,
+                      width: `${Math.min(100, ((state.pipelineActivity.completed ?? 0) / state.pipelineActivity.total) * 100)}%`,
+                    }}
+                  />
+                </div>
+              )}
             </div>
             <div className="live-run-summary" style={styles.runSummary} aria-label="Workstream summary">
               <div style={styles.runSummaryPrimary}>
@@ -649,13 +669,11 @@ export function ActiveTabPanel({
     }
     return { events: rawEvents, toolTimeline: aggregateTimeline };
   }, [rawEvents, notes12SubId, showSubTabs, aggregateTimeline]);
-  const latestStatusMessage = useMemo(() => {
-    for (let index = events.length - 1; index >= 0; index -= 1) {
-      const event = events[index];
-      if (event.event === "status" && event.data.message) return event.data.message;
-    }
-    return running ? "Waiting for the next workstream update…" : "No recent semantic update.";
-  }, [events, running]);
+  const recentActivities = useMemo(
+    () => semanticActivities(events, toolTimeline, 4),
+    [events, toolTimeline],
+  );
+  const currentActivity = recentActivities[0] ?? null;
 
   if (state.activeTab === "validator") {
     // PLAN-stop-and-validation-visibility Phase 5.3: prefer the live
@@ -782,9 +800,6 @@ export function ActiveTabPanel({
           />
         </div>
         <div style={styles.activityHeaderRight}>
-          <span style={styles.activityCount}>
-            {events.length} {events.length === 1 ? "event" : "events"}
-          </span>
           {showStopAll && (
             <button
               type="button"
@@ -804,20 +819,42 @@ export function ActiveTabPanel({
           onSelect={setNotes12SubId}
         />
       )}
-      <div
-        className="pwc-status-change"
-        role="status"
-        aria-label="Latest agent update"
-        aria-live="polite"
-        aria-atomic="true"
-        style={styles.recentUpdate}
-      >
-        <span style={styles.recentUpdateLabel}>Latest update</span>
-        <span>{latestStatusMessage}</span>
+      <div style={styles.semanticActivity}>
+        <div
+          className="pwc-status-change"
+          role="status"
+          aria-label="Current agent activity"
+          aria-live="polite"
+          aria-atomic="true"
+          style={styles.currentActivity}
+        >
+          <span style={styles.recentUpdateLabel}>Current activity</span>
+          <span style={styles.currentActivityTitle}>
+            {currentActivity?.title ?? (running ? "Waiting for the next update…" : "Workstream finished")}
+          </span>
+          {currentActivity?.detail && <span style={styles.currentActivityDetail}>{currentActivity.detail}</span>}
+        </div>
+        {recentActivities.length > 1 && (
+          <div aria-label="Recent agent updates" style={styles.recentActivityList}>
+            <span style={styles.recentUpdateLabel}>Recent</span>
+            {recentActivities.slice(1).map((activity) => (
+              <div key={activity.id} style={styles.recentActivityRow}>
+                <time style={styles.recentActivityTime}>
+                  {activity.timestamp
+                    ? new Date(activity.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+                    : "Now"}
+                </time>
+                <span style={styles.recentActivityText}>
+                  {activity.title}{activity.detail ? ` · ${activity.detail}` : ""}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
       <details className="technical-activity" style={styles.technicalDisclosure}>
         <summary style={styles.technicalSummary}>
-          Technical activity
+          Technical details
           <span aria-hidden="true" className="pwc-disclosure-chevron" style={styles.usageChevron} />
         </summary>
         <div className="pwc-disclosure-content">
@@ -877,6 +914,19 @@ const styles = {
     fontSize: 14,
     lineHeight: 1.5,
     color: pwc.grey700,
+  } as const,
+  stageProgress: {
+    width: "min(420px, 100%)",
+    height: 3,
+    marginTop: pwc.space.md,
+    overflow: "hidden",
+    background: pwc.grey100,
+  } as const,
+  stageProgressFill: {
+    display: "block",
+    height: "100%",
+    background: pwc.orange500,
+    transition: "width 220ms ease",
   } as const,
   runSummary: {
     flexShrink: 0,
@@ -978,16 +1028,53 @@ const styles = {
     gap: pwc.space.md,
     marginLeft: "auto",
   } as const,
-  recentUpdate: {
+  semanticActivity: {
+    padding: `${pwc.space.lg}px 0 ${pwc.space.md}px`,
+    borderBottom: `1px solid ${pwc.grey100}`,
+  } as const,
+  currentActivity: {
     display: "flex",
     flexDirection: "column" as const,
     gap: pwc.space.xs,
-    padding: `${pwc.space.lg}px 0`,
-    borderBottom: "none",
     fontFamily: pwc.fontBody,
     fontSize: 14,
     lineHeight: 1.5,
     color: pwc.grey800,
+  } as const,
+  currentActivityTitle: {
+    fontFamily: pwc.fontHeading,
+    fontSize: 16,
+    fontWeight: pwc.weight.medium,
+    color: pwc.grey900,
+  } as const,
+  currentActivityDetail: {
+    fontFamily: pwc.fontBody,
+    fontSize: 13,
+    color: pwc.grey700,
+  } as const,
+  recentActivityList: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 0,
+    marginTop: pwc.space.lg,
+  } as const,
+  recentActivityRow: {
+    display: "grid",
+    gridTemplateColumns: "52px minmax(0, 1fr)",
+    gap: pwc.space.sm,
+    padding: `${pwc.space.sm}px 0`,
+    borderBottom: `1px solid ${pwc.grey100}`,
+    fontFamily: pwc.fontBody,
+    fontSize: 12,
+    lineHeight: 1.45,
+  } as const,
+  recentActivityTime: {
+    color: pwc.grey500,
+    fontVariantNumeric: "tabular-nums",
+  } as const,
+  recentActivityText: {
+    minWidth: 0,
+    color: pwc.grey700,
   } as const,
   recentUpdateLabel: {
     fontFamily: pwc.fontHeading,
@@ -1002,7 +1089,7 @@ const styles = {
   } as const,
   technicalSummary: {
     minHeight: 44,
-    padding: `${pwc.space.md}px ${pwc.space.lg}px`,
+    padding: `${pwc.space.md}px 0`,
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",

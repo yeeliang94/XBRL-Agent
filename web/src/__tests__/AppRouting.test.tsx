@@ -153,19 +153,20 @@ describe("App routing", () => {
       const { default: App } = await import("../App");
       render(<App />);
 
-      const tablist = await screen.findByRole("tablist", { name: /run detail sections/i });
+      expect(await screen.findByTestId("run-detail-notes-review")).toBeInTheDocument();
       expect(
-        screen.getByRole("tab", { name: "Notes" }),
-      ).toHaveAttribute("aria-selected", "true");
+        screen.queryByRole("tablist", { name: /run detail sections/i }),
+      ).not.toBeInTheDocument();
 
       fireEvent.click(screen.getByRole("link", { name: "Overview" }));
 
-      await waitFor(() =>
+      const tablist = await screen.findByRole("tablist", { name: /run detail sections/i });
+      await waitFor(() => {
         expect(within(tablist).getByRole("tab", { name: "Overview" })).toHaveAttribute(
           "aria-selected",
           "true",
-        ),
-      );
+        );
+      });
     } finally {
       vi.unstubAllGlobals();
     }

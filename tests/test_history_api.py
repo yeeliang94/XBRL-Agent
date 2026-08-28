@@ -3,7 +3,7 @@
 Covers the four new endpoints under /api/runs:
   GET    /api/runs                    — list with filters + pagination
   GET    /api/runs/{id}               — detail hydration
-  DELETE /api/runs/{id}               — remove from DB (leaves disk alone)
+  DELETE /api/runs/{id}               — remove DB row and sensitive diagnostics
   GET    /api/runs/{id}/download/filled — stream merged workbook
 
 All tests use a fresh tmp_path DB so runs don't leak between cases.
@@ -200,10 +200,139 @@ def test_get_run_detail_returns_full_payload(api_env):
     assert body["config"]["statements"] == ["SOFP", "SOPL"]
 
 
+def test_get_run_detail_returns_run_level_incidents(api_env):
+    client, db_path, _ = api_env
+    run_id = _seed_run(
+        db_path,
+        session_id="incident-detail",
+        pdf_filename="failed.pdf",
+        output_dir="/tmp/incident-detail",
+        status="failed",
+    )
+    with repo.db_session(db_path) as conn:
+        repo.record_run_incident(
+            conn,
+            run_id,
+            source="run_validation",
+            stage="validation",
+            severity="fatal",
+            error_code="unknown_statement",
+            user_message="Unknown statement type: BOGUS",
+            technical_message="ValueError: BOGUS",
+            exception_type="ValueError",
+            correlation_id="request-42",
+            details={"statement": "BOGUS"},
+        )
+        repo.log_run_event(
+            conn,
+            run_id,
+            "pipeline_stage",
+            payload={"stage": "validation"},
+            phase="validation",
+        )
+
+    body = client.get(f"/api/runs/{run_id}").json()
+    assert body["incidents"] == [{
+        "id": body["incidents"][0]["id"],
+        "created_at": body["incidents"][0]["created_at"],
+        "source": "run_validation",
+        "stage": "validation",
+        "severity": "fatal",
+        "error_code": "unknown_statement",
+        "user_message": "Unknown statement type: BOGUS",
+        "technical_message": "ValueError: BOGUS",
+        "exception_type": "ValueError",
+        "correlation_id": "request-42",
+        "details": {"statement": "BOGUS"},
+    }]
+    assert body["run_events"][0]["event"] == "pipeline_stage"
+    assert body["run_events"][0]["data"] == {"stage": "validation"}
+
+
+def test_get_run_detail_keeps_per_turn_cache_telemetry(api_env):
+    client, db_path, _ = api_env
+    run_id = _seed_run(
+        db_path,
+        session_id="cache-turns",
+        pdf_filename="cache.pdf",
+        output_dir="/tmp/cache-turns",
+        agent_models=[("SOFP", "m")],
+    )
+    with repo.db_session(db_path) as conn:
+        agent_id = conn.execute(
+            "SELECT id FROM run_agents WHERE run_id = ?", (run_id,),
+        ).fetchone()[0]
+        repo.insert_agent_turns(conn, agent_id, [{
+            "turn_index": 1,
+            "node_kind": "model_request",
+            "prompt_tokens": 100,
+            "completion_tokens": 20,
+            "total_tokens": 120,
+            "cumulative_tokens": 120,
+            "cache_read_tokens": 75,
+            "cache_write_tokens": 10,
+        }])
+
+    body = client.get(f"/api/runs/{run_id}").json()
+    turn = body["agents"][0]["turns"][0]
+    assert turn["cache_read_tokens"] == 75
+    assert turn["cache_write_tokens"] == 10
+
+
 def test_get_run_detail_404_on_missing(api_env):
     client, _, _ = api_env
     r = client.get("/api/runs/99999")
     assert r.status_code == 404
+
+
+def test_sheet12_trace_manifest_lists_subagents_and_retries(api_env, tmp_path):
+    client, db_path, _ = api_env
+    trace_dir = tmp_path / "sheet12-traces"
+    trace_dir.mkdir()
+    run_id = _seed_run(
+        db_path,
+        session_id="sheet12-traces",
+        pdf_filename="notes.pdf",
+        output_dir=str(trace_dir),
+        agent_models=[("NOTES_LIST_OF_NOTES", "m")],
+    )
+    traces = {
+        "NOTES_LIST_OF_NOTES_sub0_conversation_trace.json": {
+            "messages": [{"part": "first"}],
+        },
+        "NOTES_LIST_OF_NOTES_sub0_retry1_conversation_trace.json": {
+            "messages": [{"part": "retry"}],
+        },
+        "NOTES_LIST_OF_NOTES_sub1_conversation_trace.json": {
+            "messages": [{"part": "second"}],
+        },
+    }
+    for filename, payload in traces.items():
+        (trace_dir / filename).write_text(json.dumps(payload), encoding="utf-8")
+
+    manifest = client.get(
+        f"/api/runs/{run_id}/agents/NOTES_LIST_OF_NOTES/traces"
+    )
+    assert manifest.status_code == 200
+    trace_ids = [item["id"] for item in manifest.json()["traces"]]
+    assert trace_ids == [
+        "NOTES_LIST_OF_NOTES_sub0",
+        "NOTES_LIST_OF_NOTES_sub0_retry1",
+        "NOTES_LIST_OF_NOTES_sub1",
+    ]
+
+    selected = client.get(
+        f"/api/runs/{run_id}/agents/NOTES_LIST_OF_NOTES/trace",
+        params={"trace_id": "NOTES_LIST_OF_NOTES_sub0_retry1"},
+    )
+    assert selected.status_code == 200
+    assert selected.json()["messages"] == [{"part": "retry"}]
+
+    traversal = client.get(
+        f"/api/runs/{run_id}/agents/NOTES_LIST_OF_NOTES/trace",
+        params={"trace_id": "../../outside"},
+    )
+    assert traversal.status_code == 404
 
 
 def test_run_detail_endpoint_returns_agent_events(api_env):
@@ -331,13 +460,19 @@ def test_delete_drafts_skips_a_mid_start_draft(api_env, monkeypatch):
     assert client.get("/api/runs").json()["total"] == 1
 
 
-def test_delete_run_does_not_remove_output_directory(api_env, tmp_path):
-    """History delete is DB-only. The on-disk folder must remain intact."""
+def test_delete_run_purges_diagnostics_but_preserves_workbook(api_env, tmp_path):
+    """Run deletion removes sensitive traces but preserves filing artifacts."""
     client, db_path, out = api_env
     session_id = "preserve-me"
     session_dir = out / session_id
     session_dir.mkdir()
     (session_dir / "filled.xlsx").write_bytes(b"not-empty")
+    (session_dir / "SOFP_conversation_trace.json").write_text(
+        '{"messages": []}', encoding="utf-8",
+    )
+    (session_dir / "notes_CORP_INFO_failures.json").write_text(
+        '{"attempts": []}', encoding="utf-8",
+    )
 
     run_id = _seed_run(
         db_path, session_id=session_id, pdf_filename="keep.pdf",
@@ -347,9 +482,11 @@ def test_delete_run_does_not_remove_output_directory(api_env, tmp_path):
     r = client.delete(f"/api/runs/{run_id}")
     assert r.status_code == 200
 
-    # Disk state untouched.
+    assert r.json()["diagnostic_files_removed"] == 2
     assert session_dir.exists()
     assert (session_dir / "filled.xlsx").exists()
+    assert not (session_dir / "SOFP_conversation_trace.json").exists()
+    assert not (session_dir / "notes_CORP_INFO_failures.json").exists()
 
 
 def test_delete_run_404_on_missing(api_env):
