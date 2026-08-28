@@ -2131,6 +2131,7 @@ async def _run_notes_reviewer_pass(
     inventory_note_nums: Optional[list] = None,
     inventory_subnotes: Optional[dict] = None,
     agent_id: str = NOTES_VALIDATOR_AGENT_ID,
+    finalize_gate=None,
 ) -> dict:
     """Notes reviewer pass (docs/PLAN.md Step 9) — the acting successor to the
     notes validator. Inspects the five prose-notes check families and FIXES
@@ -2180,6 +2181,16 @@ async def _run_notes_reviewer_pass(
             "event": event_type,
             "data": {**data, "agent_id": agent_id, "agent_role": agent_id},
         })
+
+    async def _await_finalization_slot() -> None:
+        """Wait until the parallel face reviewer has released SQLite writes.
+
+        Automatic face and notes model passes still overlap. Only the notes
+        pass's final flag/checklist replacement is deferred. Manual review and
+        standalone tests omit the gate and retain immediate persistence.
+        """
+        if finalize_gate is not None:
+            await finalize_gate.wait()
 
     # Holstic coverage checklist (docs/PLAN-notes-coverage-and-routing.md
     # Phase 6). `_deps_box` lets the finalizer read the reviewer's accumulated
@@ -2239,6 +2250,7 @@ async def _run_notes_reviewer_pass(
         # Construction failed → persist the DRAFT checklist under a
         # not_reviewed banner (PRD Flow A error state) so the UI still shows
         # coverage instead of nothing.
+        await _await_finalization_slot()
         await _finalize_coverage(reviewed=False)
         await _emit("error", {"type": "notes_reviewer_exception",
                               "message": outcome["error"]})
@@ -2258,6 +2270,7 @@ async def _run_notes_reviewer_pass(
     # status + success so the tab flips terminal instead of stranding. The
     # draft checklist IS the final state here (nothing to resolve).
     if n_items == 0:
+        await _await_finalization_slot()
         await _finalize_coverage(reviewed=True)
         await _emit("status", {"phase": "complete",
                                "message": "No notes findings to review — skipped."})
@@ -2273,6 +2286,7 @@ async def _run_notes_reviewer_pass(
     except Exception:  # noqa: BLE001
         logger.exception("Notes reviewer snapshot failed for run %s", run_id)
         outcome["error"] = "snapshot_failed"
+        await _await_finalization_slot()
         await _finalize_coverage(reviewed=False)
         await _emit("error", {"type": "notes_reviewer_exception",
                               "message": "Notes reviewer snapshot failed."})
@@ -2367,6 +2381,7 @@ async def _run_notes_reviewer_pass(
             await run_agent_loop(agent_run, deps, loop_spec, _loop_emit, _turn_records)
         outcome["writes_performed"] = deps.writes_performed
         outcome["flags_raised"] = len(deps.flags)
+        await _await_finalization_slot()
         _persist_flags_and_refresh()
         try:
             log_path = Path(output_dir) / "notes_reviewer_log.json"
@@ -2433,6 +2448,7 @@ async def _run_notes_reviewer_pass(
             "writes_performed": deps.writes_performed,
             "flags_raised": len(deps.flags),
         })
+        await _await_finalization_slot()
         _persist_flags_and_refresh(replace_flags=False)
         await _finalize_coverage(reviewed=True)
         await _emit("error", {
@@ -2450,6 +2466,7 @@ async def _run_notes_reviewer_pass(
         logger.warning(msg)
         outcome["error"] = "notes_reviewer_wallclock_exceeded"
         outcome["writes_performed"] = deps.writes_performed
+        await _await_finalization_slot()
         _persist_flags_and_refresh(replace_flags=False)
         # Reviewer ran but exhausted its budget — persist what it resolved as
         # the FINAL state (any still-missing rows correctly tip run status).
@@ -2461,6 +2478,7 @@ async def _run_notes_reviewer_pass(
     except Exception as e:  # noqa: BLE001
         logger.exception("Notes reviewer pass failed")
         outcome["error"] = str(e)
+        await _await_finalization_slot()
         _persist_flags_and_refresh(replace_flags=False)
         # The pass crashed mid-way — persist what we have under a not_reviewed
         # banner (PRD Flow A: reviewer pass fails → draft with banner).
@@ -4810,6 +4828,7 @@ async def run_multi_agent_stream(
     # Tracks whether we've already written a terminal status to the runs
     # row. Prevents the finally block from clobbering an earlier-set state.
     terminal_status: Optional[str] = None
+    notes_review_finalize_gate: Optional[asyncio.Event] = None
     try:
         db_conn = sqlite3.connect(str(AUDIT_DB_PATH))
         db_conn.execute("PRAGMA foreign_keys = ON")
@@ -6387,6 +6406,11 @@ async def run_multi_agent_stream(
         # silently shipping a stale download (peer-review finding 4).
         canonical_reexport_failed = False
         validator_run_agent_id: Optional[int] = None
+        # Per-run, per-event-loop gate. The model passes overlap, but SQLite
+        # has one writer: the notes pass waits here before replacing its final
+        # flags/checklist so it cannot collide with the face reviewer's
+        # post-pass cascade transaction.
+        notes_review_finalize_gate = asyncio.Event()
 
         async def _run_auto_notes_review(notes_outputs: dict) -> tuple[Optional[dict], bool]:
             """Run the automatic notes reviewer without owning the SSE drain.
@@ -6504,6 +6528,7 @@ async def run_multi_agent_stream(
                 sidecar_paths=_sidecar_paths,
                 inventory_note_nums=_inv_nums,
                 inventory_subnotes=_inv_subnotes,
+                finalize_gate=notes_review_finalize_gate,
             ))
             import task_registry
             lifecycle_task = asyncio.current_task()
@@ -6978,6 +7003,10 @@ async def run_multi_agent_stream(
                                 yield evt
                             except (asyncio.CancelledError, GeneratorExit):
                                 client_connected = False
+
+        # The face reviewer's DB work and post-correction persistence are now
+        # complete. Release the notes pass to replace its flags and checklist.
+        notes_review_finalize_gate.set()
 
         # The automatic notes reviewer was launched before the face reviewer,
         # so both model passes overlap. Drain any remaining notes events now
@@ -7565,6 +7594,10 @@ async def run_multi_agent_stream(
             terminal_status = "failed"
         raise
     finally:
+        # An unexpected failure between reviewer launch and the normal gate
+        # release must not strand the notes task waiting forever.
+        if notes_review_finalize_gate is not None:
+            notes_review_finalize_gate.set()
         # Last-ditch cleanup: if no other code path left the row in a
         # terminal state (e.g. the event loop was torn down between yields),
         # call it aborted. Idempotent for rows that were already finalized.

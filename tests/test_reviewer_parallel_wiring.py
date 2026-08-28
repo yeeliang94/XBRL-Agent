@@ -92,7 +92,13 @@ def test_live_pipeline_reviewers_are_in_flight_together(tmp_path, monkeypatch):
             workbook_path=str(notes_path),
         )])
 
-    started = {"face": False, "notes": False, "overlap": False}
+    started = {
+        "face": False,
+        "face_done": False,
+        "notes": False,
+        "notes_finalized": False,
+        "overlap": False,
+    }
 
     async def wait_for_peer(peer: str):
         for _ in range(100):
@@ -105,12 +111,18 @@ def test_live_pipeline_reviewers_are_in_flight_together(tmp_path, monkeypatch):
     async def fake_face_review(**_kwargs):
         started["face"] = True
         await wait_for_peer("notes")
+        started["face_done"] = True
         return {"writes_performed": 0, "error": None}
 
     async def fake_notes_review(**kwargs):
         assert kwargs["merged_workbook_path"] is None
+        finalize_gate = kwargs["finalize_gate"]
+        assert not finalize_gate.is_set()
         started["notes"] = True
         await wait_for_peer("face")
+        await finalize_gate.wait()
+        assert started["face_done"] is True
+        started["notes_finalized"] = True
         return {"writes_performed": 0, "error": None}
 
     failing = [CrossCheckResult(
@@ -138,4 +150,10 @@ def test_live_pipeline_reviewers_are_in_flight_together(tmp_path, monkeypatch):
         })
 
     assert response.status_code == 200
-    assert started == {"face": True, "notes": True, "overlap": True}
+    assert started == {
+        "face": True,
+        "face_done": True,
+        "notes": True,
+        "notes_finalized": True,
+        "overlap": True,
+    }

@@ -94,7 +94,7 @@ def persist_notes_cells(
             f"{str(run_config.get('filing_level', 'company')).lower()}-"
         )
         registry_available = bool(conn.execute(
-            "SELECT 1 FROM notes_nodes WHERE template_id LIKE ? LIMIT 1",
+            "SELECT 1 FROM template_slots WHERE template_id LIKE ? LIMIT 1",
             (family_prefix + "%",),
         ).fetchone())
         # Source lineage must survive the clobber (peer review, 2026-08-01).
@@ -136,22 +136,22 @@ def persist_notes_cells(
             style_source = cell.get("style_source")
             concept_uuid = None
             if registry_available:
-                node = conn.execute(
-                    "SELECT node_uuid FROM notes_nodes "
-                    "WHERE template_id LIKE ? AND sheet = ? AND row = ? "
-                    "AND kind = 'LEAF' AND slot_role = 'INPUT'",
-                    (
-                        family_prefix + "%",
-                        str(cell.get("sheet") or sheet_name),
-                        int(cell["row"]),
-                    ),
-                ).fetchall()
-                if len(node) != 1:
+                from concept_model.filing_targets import (
+                    resolve_writable_html_target,
+                )
+
+                target = resolve_writable_html_target(
+                    conn,
+                    family_prefix=family_prefix,
+                    sheet=str(cell.get("sheet") or sheet_name),
+                    row=int(cell["row"]),
+                )
+                if target is None:
                     raise ValueError(
                         "Notes persistence refused an unconfirmed filing field "
                         f"at {cell.get('sheet') or sheet_name}!row {cell['row']}."
                     )
-                concept_uuid = node[0]["node_uuid"]
+                concept_uuid = str(target["concept_uuid"])
             repo.upsert_notes_cell(
                 conn,
                 run_id=run_id,

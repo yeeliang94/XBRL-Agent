@@ -142,10 +142,12 @@ def _prose_sheet_rows(conn, run_id: int, template_id: str, sheet: str) -> list[d
 def _numeric_sheet_rows(
     conn, run_id: int, template_id: str, sheet: str, level: str
 ) -> list[dict]:
-    """Full numeric template for one sheet: every LEAF concept row in template
-    order, with the run's `run_concept_facts` values shaped per filing level
-    (Company → cy/py; Group → group_cy/py + company_cy/py). Blank where the
-    run has no fact for that cell.
+    """Full numeric template with its manifest-declared HTML text block.
+
+    Every LEAF concept row is returned in template order. Numeric rows carry
+    the run's `run_concept_facts` values shaped per filing level (Company →
+    cy/py; Group → group_cy/py + company_cy/py). An HTML-capable slot is
+    projected as prose even while blank so the Review editor can author it.
     """
     nodes = conn.execute(
         "SELECT render_row AS row, canonical_label, display_label, concept_uuid "
@@ -167,8 +169,75 @@ def _numeric_sheet_rows(
             f["entity_scope"], {}
         )[f["period"]] = f["value"]
 
+    from concept_model.filing_targets import resolve_writable_html_target
+    from db.repository import decode_source_pages
+
+    html_cells = {
+        c["row"]: c
+        for c in conn.execute(
+            "SELECT row, label, html, evidence, source_pages, updated_at, "
+            "style_source, content_revision, concept_uuid, invalid_target, "
+            "invalid_target_reason FROM notes_cells "
+            "WHERE run_id = ? AND sheet = ?",
+            (run_id, sheet),
+        ).fetchall()
+    }
+
     rows: list[dict] = []
     for n in nodes:
+        html_target = resolve_writable_html_target(
+            conn,
+            template_id=template_id,
+            sheet=sheet,
+            row=n["row"],
+        )
+        html_cell = html_cells.get(n["row"])
+        if html_target is not None:
+            identity_mismatch = bool(
+                html_cell is not None
+                and html_cell["concept_uuid"] != html_target["concept_uuid"]
+            )
+            rows.append({
+                "row": n["row"],
+                "label": (
+                    html_cell["label"] if html_cell is not None
+                    else html_target["label"]
+                ),
+                "kind": "prose",
+                "node_uuid": html_target["concept_uuid"],
+                "xbrl_concept_id": None,
+                "html": html_cell["html"] if html_cell is not None else "",
+                "evidence": html_cell["evidence"] if html_cell is not None else None,
+                "source_pages": (
+                    decode_source_pages(html_cell["source_pages"])
+                    if html_cell is not None else []
+                ),
+                "updated_at": (
+                    (html_cell["updated_at"] or "")
+                    if html_cell is not None else ""
+                ),
+                "style_source": (
+                    html_cell["style_source"] if html_cell is not None else None
+                ),
+                "content_revision": (
+                    html_cell["content_revision"] if html_cell is not None else None
+                ),
+                "invalid_target": bool(
+                    html_cell is not None and html_cell["invalid_target"]
+                ) or identity_mismatch,
+                "invalid_target_reason": (
+                    (
+                        html_cell["invalid_target_reason"]
+                        if html_cell is not None else None
+                    )
+                    or (
+                        "This content is not linked to this run's writable filing field."
+                        if identity_mismatch else None
+                    )
+                ),
+            })
+            continue
+
         scope = facts.get(n["concept_uuid"], {})
         if level == "group":
             values = {
@@ -403,8 +472,8 @@ async def patch_notes_cell_endpoint(
             # An edit can target either a row already in notes_cells (update)
             # or a blank registry row the GET projection surfaced (insert).
             # The editor only ever offers cells that came from the projection,
-            # so an insert is restricted to rows that exist in notes_nodes —
-            # a PATCH to an unknown row is a 400, never a phantom insert.
+            # so an insert is restricted to a canonical HTML-capable slot — a
+            # PATCH to an unknown row is a 400, never a phantom insert.
             existing = conn.execute(
                 "SELECT id, label, evidence, source_pages FROM notes_cells "
                 "WHERE run_id = ? AND sheet = ? AND row = ?",
@@ -416,7 +485,7 @@ async def patch_notes_cell_endpoint(
             level = config.get("filing_level", "company")
             family_prefix = f"{str(standard).lower()}-{str(level).lower()}-"
             registry_available = bool(conn.execute(
-                "SELECT 1 FROM notes_nodes WHERE template_id LIKE ? LIMIT 1",
+                "SELECT 1 FROM template_slots WHERE template_id LIKE ? LIMIT 1",
                 (family_prefix + "%",),
             ).fetchone())
             template = next(
@@ -432,23 +501,23 @@ async def patch_notes_cell_endpoint(
                     status_code=400,
                     detail=f"Unknown notes sheet {sheet!r} for this run.",
                 )
-            if registry_available and template["is_numeric"]:
-                conn.rollback()
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        "Numeric notes are edited through the facts API, "
-                        "not this endpoint."
-                    ),
-                )
             node = None
             if registry_available:
-                node = conn.execute(
-                    "SELECT label, node_uuid FROM notes_nodes "
-                    "WHERE template_id = ? AND row = ? AND kind = 'LEAF' "
-                    "AND slot_role = 'INPUT'",
-                    (template["template_id"], row),
-                ).fetchone()
+                from concept_model.filing_targets import (
+                    resolve_writable_html_target,
+                )
+
+                target = resolve_writable_html_target(
+                    conn,
+                    family_prefix=family_prefix,
+                    sheet=sheet,
+                    row=row,
+                )
+                if target is not None:
+                    node = {
+                        "label": target["label"],
+                        "node_uuid": target["concept_uuid"],
+                    }
             if registry_available and node is None:
                 conn.rollback()
                 raise HTTPException(
@@ -474,7 +543,7 @@ async def patch_notes_cell_endpoint(
                     node["node_uuid"] if node is not None else None
                 )
             else:
-                # Insert path — the row must be a fillable prose registry node.
+                # Insert path — the row must be a confirmed HTML-capable slot.
                 if node is None:
                     conn.rollback()
                     raise HTTPException(
@@ -484,8 +553,7 @@ async def patch_notes_cell_endpoint(
                             "before adding a new cell."
                         ),
                     )
-                # New write: stamp the template-scoped node_uuid as the cell's
-                # concept_uuid so it links to the registry (decision §9.2).
+                # New write: stamp the template-scoped canonical identity.
                 upsert_label = node["label"]
                 upsert_evidence = None
                 upsert_pages = []
@@ -576,14 +644,18 @@ async def remove_invalid_notes_cell(run_id: int, sheet: str, row: int):
         )
         writable = False
         node = None
-        if template is not None and not template["is_numeric"]:
-            node = conn.execute(
-                "SELECT node_uuid FROM notes_nodes "
-                "WHERE template_id = ? AND sheet = ? AND row = ? "
-                "AND kind = 'LEAF' AND slot_role = 'INPUT'",
-                (template["template_id"], sheet, row),
-            ).fetchone()
-            writable = node is not None
+        if template is not None:
+            from concept_model.filing_targets import resolve_writable_html_target
+
+            target = resolve_writable_html_target(
+                conn,
+                family_prefix=f"{str(standard).lower()}-{str(level).lower()}-",
+                sheet=sheet,
+                row=row,
+            )
+            if target is not None:
+                node = {"node_uuid": target["concept_uuid"]}
+                writable = True
         identity_valid = bool(
             writable and node is not None and existing["concept_uuid"] == node["node_uuid"]
         )

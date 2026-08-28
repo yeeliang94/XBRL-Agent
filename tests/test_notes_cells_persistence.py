@@ -18,13 +18,16 @@ import pytest
 
 from db import repository as repo
 from db.schema import init_db
+from concept_model.bootstrap import import_all_notes_templates
 from notes.coordinator import (
     NotesAgentResult,
     NotesRunConfig,
     run_notes_extraction,
 )
+from notes.payload import NotesPayload
 from notes.persistence import persist_notes_cells
-from notes_types import NotesTemplateType
+from notes.writer import write_notes_workbook
+from notes_types import NotesTemplateType, notes_template_path
 
 
 @pytest.fixture()
@@ -123,6 +126,88 @@ def test_persist_roundtrips_evidence_and_source_pages(db_path: Path) -> None:
     assert len(got) == 1
     assert got[0].evidence == "Pages 3-5, Note 2(a)"
     assert got[0].source_pages == [3, 4, 5]
+
+
+@pytest.mark.parametrize(
+    ("template_type", "sheet", "label"),
+    [
+        (
+            NotesTemplateType.ISSUED_CAPITAL,
+            "Notes-Issuedcapital",
+            "Disclosure of classes of share capital",
+        ),
+        (
+            NotesTemplateType.RELATED_PARTY,
+            "Notes-RelatedPartytran",
+            "Disclosure of transactions between related parties",
+        ),
+    ],
+)
+def test_numeric_note_disclosure_table_persists_for_review(
+    db_path: Path,
+    tmp_path: Path,
+    template_type: NotesTemplateType,
+    sheet: str,
+    label: str,
+) -> None:
+    """The numeric sheets' row-4 explanatory table is also reviewable HTML.
+
+    The writer deliberately emits this one prose cell alongside the numeric
+    grid. Persistence must validate it against the numeric template's
+    canonical slot instead of looking only in the prose notes registry.
+    """
+    import_all_notes_templates(db_path)
+    with repo.db_session(db_path) as conn:
+        run_id = repo.create_run(
+            conn,
+            "sample.pdf",
+            session_id="sess",
+            output_dir=str(tmp_path),
+            config={"filing_standard": "mfrs", "filing_level": "company"},
+        )
+
+    result = write_notes_workbook(
+        template_path=str(notes_template_path(template_type, level="company")),
+        payloads=[NotesPayload(
+            chosen_row_label=label,
+            content=(
+                "<table><tr><th>Item</th><th>2024</th></tr>"
+                "<tr><td>Balance</td><td>100</td></tr></table>"
+            ),
+            evidence="Page 10",
+            source_pages=[10],
+            parent_note={"number": "14", "title": label},
+        )],
+        output_path=str(tmp_path / f"{template_type.value}.xlsx"),
+        filing_level="company",
+        sheet_name=sheet,
+    )
+    assert result.success, result.errors
+    assert [(c["row"], c["sheet"]) for c in result.cells_written] == [(4, sheet)]
+
+    persist_notes_cells(
+        db_path=str(db_path),
+        run_id=run_id,
+        sheet_name=sheet,
+        cells_written=result.cells_written,
+    )
+
+    with repo.db_session(db_path) as conn:
+        stored = conn.execute(
+            "SELECT concept_uuid, html FROM notes_cells "
+            "WHERE run_id = ? AND sheet = ? AND row = 4",
+            (run_id, sheet),
+        ).fetchone()
+        expected = conn.execute(
+            "SELECT concept_uuid FROM concept_nodes "
+            "WHERE template_id LIKE 'mfrs-company-%' "
+            "AND render_sheet = ? AND render_row = 4 AND render_col = 'B'",
+            (sheet,),
+        ).fetchone()[0]
+
+    assert stored is not None
+    assert stored["concept_uuid"] == expected
+    assert "<table" in stored["html"]
 
 
 # --- Coordinator-level integration ------------------------------------------
