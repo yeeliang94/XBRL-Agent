@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import asyncio
+import sqlite3
 from pathlib import Path
 from unittest.mock import patch, AsyncMock, MagicMock
 
@@ -86,6 +87,22 @@ class TestScoutEndpoint:
         assert ip["toc_page"] == 3
         assert "SOFP" in ip["statements"]
         assert ip["statements"]["SOFP"]["face_page"] == 42
+
+    def test_scout_incident_commit_failure_is_best_effort(self):
+        from api.uploads import _commit_scout_incident_best_effort
+
+        class BusyConnection:
+            rolled_back = False
+
+            def commit(self):
+                raise sqlite3.OperationalError("database is locked")
+
+            def rollback(self):
+                self.rolled_back = True
+
+        conn = BusyConnection()
+        _commit_scout_incident_best_effort(conn)
+        assert conn.rolled_back is True
 
     def test_scout_degraded_timeout_reports_failure_not_success(self, app_client):
         """Codex review: a scout that timed out returns a degraded pack. The
@@ -260,7 +277,9 @@ class TestScoutEndpoint:
         events = _parse_sse(resp.text)
         error_events = [e for e in events if e["event"] == "error"]
         assert len(error_events) >= 1
-        assert "LLM timeout" in error_events[0]["data"]["message"]
+        assert error_events[0]["data"]["error_code"] == "scout_failed"
+        assert "LLM timeout" not in error_events[0]["data"]["message"]
+        assert "Auto-detect" in error_events[0]["data"]["message"]
 
 
     def test_scout_task_registered_in_task_registry(self, app_client):
@@ -292,6 +311,19 @@ class TestScoutEndpoint:
         """Scout SSE stream should contain tool_call and tool_result events, not just text status."""
         client, session_id = app_client
         infopack = _fake_infopack()
+        import server
+        from db.schema import init_db
+        from db import repository as repo
+
+        init_db(server.AUDIT_DB_PATH)
+        with repo.db_session(server.AUDIT_DB_PATH) as conn:
+            repo.create_run(
+                conn,
+                "uploaded.pdf",
+                session_id=session_id,
+                output_dir=str(server.OUTPUT_DIR / session_id),
+                status="draft",
+            )
 
         # Mock run_scout_streaming to yield structured events
         async def fake_streaming(pdf_path, model, on_event=None, *, force_vision_inventory=False, **_kwargs):
@@ -329,6 +361,23 @@ class TestScoutEndpoint:
         tr = next(e for e in events if e["event"] == "tool_result")
         assert tr["data"]["tool_name"] == "find_toc"
         assert tr["data"]["duration_ms"] == 150
+
+        # The same timeline must survive reload; standalone scout events used
+        # to exist only in the live response.
+        conn = sqlite3.connect(str(server.AUDIT_DB_PATH))
+        try:
+            persisted = conn.execute(
+                "SELECT event_type FROM agent_events e "
+                "JOIN run_agents a ON a.id = e.run_agent_id "
+                "JOIN runs r ON r.id = a.run_id "
+                "WHERE r.session_id = ? ORDER BY e.id",
+                (session_id,),
+            ).fetchall()
+        finally:
+            conn.close()
+        persisted_types = [row[0] for row in persisted]
+        assert "tool_call" in persisted_types
+        assert "tool_result" in persisted_types
 
     def test_scout_cancellation_emits_event(self, app_client):
         """When scout task is cancelled, it should emit a cancellation SSE event."""

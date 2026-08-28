@@ -9,6 +9,7 @@ import type {
   RunsFilterParams,
   SSEEvent,
   AgentTraceJson,
+  AgentTraceManifestJson,
   SourceIntegrityMode,
 } from "./types";
 import type { ClipboardFormatOptions } from "./clipboardFormat";
@@ -356,7 +357,12 @@ export async function fetchRunDetail(runId: number): Promise<RunDetailJson> {
     // null-checking against legacy payloads.
     turns: Array.isArray(a.turns) ? a.turns : [],
   }));
-  return { ...raw, agents };
+  return {
+    ...raw,
+    agents,
+    incidents: Array.isArray(raw.incidents) ? raw.incidents : [],
+    run_events: Array.isArray(raw.run_events) ? raw.run_events : [],
+  };
 }
 
 /** Fetch the verbatim conversation trace for one agent of a run (v8).
@@ -365,15 +371,29 @@ export async function fetchRunDetail(runId: number): Promise<RunDetailJson> {
 export async function fetchAgentTrace(
   runId: number,
   statement: string,
+  traceId?: string,
 ): Promise<AgentTraceJson> {
   assertRunId("fetchAgentTrace", runId);
+  const query = traceId ? `?trace_id=${encodeURIComponent(traceId)}` : "";
   return apiFetch<AgentTraceJson>(
-    `/api/runs/${runId}/agents/${encodeURIComponent(statement)}/trace`,
+    `/api/runs/${runId}/agents/${encodeURIComponent(statement)}/trace${query}`,
   );
 }
 
-/** Hard-delete a run row (DB only — the on-disk output folder is left alone). */
-export async function deleteRun(runId: number): Promise<{ deleted: number }> {
+export async function fetchAgentTraceManifest(
+  runId: number,
+  statement: string,
+): Promise<AgentTraceManifestJson> {
+  assertRunId("fetchAgentTraceManifest", runId);
+  return apiFetch<AgentTraceManifestJson>(
+    `/api/runs/${runId}/agents/${encodeURIComponent(statement)}/traces`,
+  );
+}
+
+/** Delete a run row and sensitive traces; filing artifacts stay on disk. */
+export async function deleteRun(
+  runId: number,
+): Promise<{ deleted: number; diagnostic_files_removed?: number }> {
   return apiFetch(`/api/runs/${runId}`, { method: "DELETE" });
 }
 

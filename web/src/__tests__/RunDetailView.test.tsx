@@ -310,7 +310,11 @@ describe("RunDetailView", () => {
     fireEvent.click(failedRow!);
     const badges = screen.getAllByTestId("agent-error-type");
     expect(badges).toHaveLength(1); // only the failed agent carries it
-    expect(badges[0].textContent).toBe("token budget exceeded");
+    expect(badges[0].textContent).toBe("Token limit reached");
+    expect(badges[0]).toHaveAttribute(
+      "title",
+      "Review large or repeated context in the trace before retrying.",
+    );
   });
 
   test("succeeded agents render no error_type badge", () => {
@@ -333,6 +337,27 @@ describe("RunDetailView", () => {
     // Check name renders in plain language (D1); raw id is the title tooltip.
     expect(screen.getByTitle("sofp_balance")).toBeTruthy();
     expect(screen.getByText("Passed")).toBeTruthy();
+  });
+
+  test("refreshes cross-checks when the same run receives a newer snapshot", async () => {
+    const first = makeDetail({ cross_checks: [] });
+    const { rerender } = render(
+      <RunDetailView detail={first} onDelete={() => {}} onDownload={() => {}} />,
+    );
+    clickRunTab(/cross-checks/i);
+    expect(screen.queryByTestId("cross-check-row-sofp_balance")).toBeNull();
+
+    rerender(
+      <RunDetailView
+        detail={makeDetail()}
+        onDelete={() => {}}
+        onDownload={() => {}}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("cross-check-row-sofp_balance")).toBeTruthy(),
+    );
   });
 
   test("clicking a targeted cross-check drives the source-PDF pane (Step 8 integration)", async () => {
@@ -997,9 +1022,8 @@ describe("RunDetailView", () => {
           initialTab="values"
         />,
       );
-      const tablist = screen.getByRole("tablist", { name: /run detail sections/i });
-      const valuesTab = within(tablist).getByRole("tab", { name: /^figures$/i });
-      expect(valuesTab.getAttribute("aria-selected")).toBe("true");
+      expect(screen.getByTestId("run-detail-values")).toBeInTheDocument();
+      expect(screen.queryByRole("tablist", { name: /run detail sections/i })).toBeNull();
       // Run management and output setup stay on Overview. The review surface
       // keeps the workbook download but drops unrelated destructive/tools UI.
       expect(screen.queryByRole("button", { name: /fill mtool template/i })).toBeNull();
@@ -1044,15 +1068,90 @@ describe("RunDetailView", () => {
           initialTab="notes"
         />,
       );
-      const tablist = screen.getByRole("tablist", { name: /run detail sections/i });
-      expect(within(tablist).getByRole("tab", { name: /^notes$/i })).toHaveAttribute("aria-selected", "true");
       expect(screen.getByTestId("review-notes-panel")).toBeInTheDocument();
-      expect(screen.getByTestId("sheet-nav-__notes__")).toHaveAttribute("aria-current", "true");
+      expect(screen.queryByRole("tablist", { name: /run detail sections/i })).toBeNull();
+      expect(screen.queryByTestId("sheet-nav-__notes__")).toBeNull();
       expect(screen.queryByTestId("run-detail-values")).toBeNull();
       await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith(
         "/api/runs/42/concepts",
         expect.any(Object),
       ));
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("Notes review keeps inventory-unavailable coverage visible without expanding audit details", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/notes-coverage")) {
+        return new Response(JSON.stringify({
+          run_id: 42,
+          banner: "inventory_unavailable",
+          inventory_available: false,
+          rows: [],
+          summary: { placed: 0, missing: 0, skipped: 0, suspected_gap: 0, total: 0, unresolved: 0 },
+        }), { status: 200 });
+      }
+      if (url.includes("/notes_integrity")) {
+        return new Response(JSON.stringify({
+          run_id: 42,
+          state: "legacy",
+          mode: null,
+          notes: [],
+          summary: null,
+          findings: [],
+          input_kind: null,
+        }), { status: 200 });
+      }
+      if (url.includes("/notes_tables")) {
+        return new Response(JSON.stringify({
+          run_id: 42,
+          tables: [],
+          summary: { tables: 0, plain: 0, styled: 0, source: 0, flagged: 0, cells_with_tables: 0 },
+        }), { status: 200 });
+      }
+      if (url.includes("/notes-review/status")) {
+        return new Response(JSON.stringify({ status: "done" }), { status: 200 });
+      }
+      if (url.includes("/notes-review")) {
+        return new Response(JSON.stringify({
+          run_id: 42,
+          has_reviewer_version: false,
+          diff: [],
+          flags: [],
+        }), { status: 200 });
+      }
+      if (url.includes("/api/settings")) {
+        return new Response(JSON.stringify({
+          model: "",
+          available_models: [],
+          default_models: {},
+        }), { status: 200 });
+      }
+      if (url.includes("/notes_cells")) {
+        return new Response(JSON.stringify({ sheets: [] }), { status: 200 });
+      }
+      if (url.includes("/conflicts")) {
+        return new Response(JSON.stringify({ conflicts: [] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ concepts: [] }), { status: 200 });
+    }) as unknown as typeof fetch;
+    try {
+      render(
+        <RunDetailView
+          detail={makeDetail()}
+          onDelete={() => {}}
+          onDownload={() => {}}
+          canonicalEnabled
+          initialTab="notes"
+        />,
+      );
+      expect(
+        await screen.findByTestId("coverage-banner-inventory_unavailable"),
+      ).toBeInTheDocument();
+      expect(screen.getByText("Notes audit details").closest("details")).not.toHaveAttribute("open");
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -1072,6 +1171,126 @@ describe("RunDetailView", () => {
     expect(screen.queryByTestId("run-detail-values")).toBeNull();
   });
 
+  test.each(["values", "notes"] as const)(
+    "%s review keeps a run-wide warning visible",
+    async (initialTab) => {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/notes-coverage")) {
+          return new Response(JSON.stringify({
+            run_id: 42,
+            banner: "pre_feature",
+            inventory_available: true,
+            rows: [],
+            summary: { placed: 0, missing: 0, skipped: 0, suspected_gap: 0, total: 0, unresolved: 0 },
+          }), { status: 200 });
+        }
+        if (url.includes("/notes_cells")) {
+          return new Response(JSON.stringify({ sheets: [] }), { status: 200 });
+        }
+        if (url.includes("/conflicts")) {
+          return new Response(JSON.stringify({ conflicts: [] }), { status: 200 });
+        }
+        if (url.includes("edited_count")) {
+          return new Response(JSON.stringify({ count: 0 }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ concepts: [] }), { status: 200 });
+      }) as unknown as typeof fetch;
+      try {
+        render(
+          <RunDetailView
+            detail={makeDetail({
+              status: "completed_with_errors",
+              agents: [makeAgent()],
+              cross_checks: [{
+                name: "sofp_balance",
+                status: "failed",
+                expected: 100,
+                actual: 90,
+                diff: 10,
+                tolerance: 1,
+                message: "Mismatch",
+              }],
+            })}
+            onDelete={() => {}}
+            onDownload={() => {}}
+            canonicalEnabled
+            initialTab={initialTab}
+          />,
+        );
+        expect(await screen.findByTestId("review-run-warning")).toHaveTextContent(
+          /unresolved consistency checks/i,
+        );
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    },
+  );
+
+  test("Figures review warns when one statement did not finish", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/conflicts")) {
+        return new Response(JSON.stringify({ conflicts: [] }), { status: 200 });
+      }
+      if (url.includes("edited_count")) {
+        return new Response(JSON.stringify({ count: 0 }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ concepts: [] }), { status: 200 });
+    }) as unknown as typeof fetch;
+    try {
+      render(
+        <RunDetailView
+          detail={makeDetail({
+            status: "completed",
+            agents: [makeAgent(), makeAgent({ id: 2, statement_type: "SOCF", status: "failed" })],
+          })}
+          onDelete={() => {}}
+          onDownload={() => {}}
+          canonicalEnabled
+          initialTab="values"
+        />,
+      );
+      expect(await screen.findByTestId("review-incomplete-warning")).toHaveTextContent(
+        /cannot be filed/i,
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("Cross-checks can rerun checks against the current saved figures", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/recheck")) {
+        return new Response(JSON.stringify({
+          results: [
+            { name: "sofp_balance", status: "passed", expected: 100, actual: 100, diff: 0, tolerance: 1, message: "OK" },
+            { name: "socf_articulation", status: "warning", expected: null, actual: null, diff: null, tolerance: null, message: "Advisory" },
+          ],
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ concepts: [] }), { status: 200 });
+    }) as unknown as typeof fetch;
+    try {
+      render(<RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />);
+      clickRunTab(/^cross-checks$/i);
+      fireEvent.click(screen.getByTestId("recheck-btn"));
+      expect(await screen.findByTestId("recheck-summary")).toHaveTextContent(
+        "1 passed · 0 failed · 1 warnings",
+      );
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        "/api/runs/42/recheck",
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("switching run IDs remounts the Figures workspace", () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = vi.fn(async () => ({
@@ -1087,12 +1306,12 @@ describe("RunDetailView", () => {
         initialTab: "values" as const,
       };
       const { rerender } = render(<RunDetailView detail={makeDetail()} {...props} />);
-      fireEvent.click(screen.getByTestId("col-hide-menu"));
-      expect(screen.getByTestId("col-show-menu")).toBeInTheDocument();
+      fireEvent.click(screen.getByTestId("col-hide-pdf"));
+      expect(screen.getByTestId("col-show-pdf")).toBeInTheDocument();
 
       rerender(<RunDetailView detail={makeDetail({ id: 43 })} {...props} />);
-      expect(screen.getByTestId("col-hide-menu")).toBeInTheDocument();
-      expect(screen.queryByTestId("col-show-menu")).toBeNull();
+      expect(screen.getByTestId("col-hide-pdf")).toBeInTheDocument();
+      expect(screen.queryByTestId("col-show-pdf")).toBeNull();
     } finally {
       globalThis.fetch = originalFetch;
     }

@@ -21,6 +21,7 @@ keep emitting them — never silent again.
 from __future__ import annotations
 
 from pathlib import Path
+import sqlite3
 from unittest.mock import patch
 
 import pytest
@@ -524,7 +525,11 @@ def test_validation_failure_error_carries_fatal_bucket(session_env):
     }
 
     with patch("server._create_proxy_model", return_value="fake-model"):
-        resp = client.post(f"/api/run/{session_id}", json=run_config)
+        resp = client.post(
+            f"/api/run/{session_id}",
+            json=run_config,
+            headers={"X-Request-ID": "audit-validation-1"},
+        )
 
     assert resp.status_code == 200
     body = resp.text
@@ -534,6 +539,30 @@ def test_validation_failure_error_carries_fatal_bucket(session_env):
     )
     # And the run still finalizes via run_complete (success=false).
     assert "event: run_complete" in body
+    assert '"error_code": "unknown_statement"' in body
+
+    # The same cause must survive a reload; live SSE is not an audit record.
+    import server
+    conn = sqlite3.connect(server.AUDIT_DB_PATH)
+    try:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT i.error_code, i.stage, i.severity, i.user_message, "
+            "i.correlation_id "
+            "FROM run_incidents i JOIN runs r ON r.id = i.run_id "
+            "WHERE r.session_id = ? ORDER BY i.id DESC LIMIT 1",
+            (session_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is not None
+    assert dict(row) == {
+        "error_code": "unknown_statement",
+        "stage": "validation",
+        "severity": "fatal",
+        "user_message": "Unknown statement type: NOT_A_REAL_STATEMENT",
+        "correlation_id": "audit-validation-1",
+    }
 
 
 # ---------------------------------------------------------------------------

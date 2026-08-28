@@ -17,8 +17,11 @@ def test_fresh_schema_has_shared_filing_semantics_contract(tmp_path):
     init_db(db)
     conn = sqlite3.connect(db)
     try:
-        assert CURRENT_SCHEMA_VERSION == 41
-        assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 41
+        assert CURRENT_SCHEMA_VERSION >= 41
+        assert (
+            conn.execute("SELECT version FROM schema_version").fetchone()[0]
+            == CURRENT_SCHEMA_VERSION
+        )
         assert {
             "source_element_id", "taxonomy_version", "namespace_uri",
             "local_name", "abstract", "concept_role", "data_type",
@@ -88,7 +91,10 @@ def test_v40_upgrade_is_idempotent_and_preserves_existing_content(tmp_path):
     init_db(db)
     conn = sqlite3.connect(db)
     try:
-        assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 41
+        assert (
+            conn.execute("SELECT version FROM schema_version").fetchone()[0]
+            == CURRENT_SCHEMA_VERSION
+        )
         assert conn.execute(
             "SELECT pdf_filename FROM runs WHERE id = ?", (run_id,)
         ).fetchone()[0] == "legacy.pdf"

@@ -131,6 +131,34 @@ class RunAgent:
 
 
 @dataclass
+class RunIncident:
+    """A durable run-level diagnostic not owned by one agent invocation."""
+
+    id: int
+    run_id: int
+    created_at: str
+    source: str
+    stage: Optional[str]
+    severity: str
+    error_code: str
+    user_message: str
+    technical_message: Optional[str]
+    exception_type: Optional[str]
+    correlation_id: Optional[str]
+    details: Optional[dict[str, Any]] = None
+
+
+@dataclass
+class RunEvent:
+    id: int
+    run_id: int
+    ts: str
+    event_type: str
+    phase: Optional[str]
+    payload: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class AgentEvent:
     id: int
     run_agent_id: int
@@ -248,6 +276,8 @@ class RunDetail:
     run: "Run"
     agents: list["RunAgent"] = field(default_factory=list)
     cross_checks: list["CrossCheck"] = field(default_factory=list)
+    incidents: list["RunIncident"] = field(default_factory=list)
+    run_events: list["RunEvent"] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -359,6 +389,41 @@ def create_run(
             1 if scout_enabled else 0, started_at,
             orchestration or "split",
             app_version, repeat_group_id, repeat_index, suite_run_id,
+        ),
+    )
+    return int(cur.lastrowid)
+
+
+def record_run_incident(
+    conn: sqlite3.Connection,
+    run_id: int,
+    *,
+    source: str,
+    severity: str,
+    error_code: str,
+    user_message: str,
+    stage: str | None = None,
+    technical_message: str | None = None,
+    exception_type: str | None = None,
+    correlation_id: str | None = None,
+    details: dict[str, Any] | None = None,
+) -> int:
+    """Persist one structured run-level incident and return its id.
+
+    Transaction ownership remains with the caller, matching every repository
+    writer. `details` must be JSON-compatible; `default=str` keeps diagnostic
+    capture from masking the failure being reported.
+    """
+    cur = conn.execute(
+        "INSERT INTO run_incidents("
+        "run_id, created_at, source, stage, severity, error_code, "
+        "user_message, technical_message, exception_type, correlation_id, "
+        "details_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            run_id, _now(), source, stage, severity, error_code, user_message,
+            technical_message, exception_type, correlation_id,
+            json.dumps(details, ensure_ascii=False, default=str)
+            if details is not None else None,
         ),
     )
     return int(cur.lastrowid)
@@ -693,11 +758,18 @@ def reconcile_unfinished_run_agents(
     (`_persist_face_and_notes_agent_rows` in server.py); this only closes
     whatever is left, and it never invents 'succeeded' from the mere
     presence of a workbook or trace (an artifact can outlive a later
-    failure). Returns the number of rows closed.
+    failure). A lazily-created SYSTEM row exists only after a coordinator
+    incident, so it closes as failed/coordinator_incident rather than the
+    misleading cancelled state used for interrupted work. Returns the number
+    of rows closed.
     """
     cur = conn.execute(
-        "UPDATE run_agents SET status = 'cancelled', "
-        "error_type = COALESCE(error_type, 'cancelled'), ended_at = ? "
+        "UPDATE run_agents SET "
+        "status = CASE WHEN statement_type = 'SYSTEM' "
+        "THEN 'failed' ELSE 'cancelled' END, "
+        "error_type = COALESCE(error_type, CASE "
+        "WHEN statement_type = 'SYSTEM' THEN 'coordinator_incident' "
+        "ELSE 'cancelled' END), ended_at = ? "
         "WHERE run_id = ? AND status = 'running'",
         (_now(), run_id),
     )
@@ -777,6 +849,25 @@ def log_event(
         "INSERT INTO agent_events(run_agent_id, ts, event_type, phase, payload_json) "
         "VALUES (?, ?, ?, ?, ?)",
         (run_agent_id, _now(), event_type, phase, json.dumps(payload or {})),
+    )
+    return int(cur.lastrowid)
+
+
+def log_run_event(
+    conn: sqlite3.Connection,
+    run_id: int,
+    event_type: str,
+    payload: dict[str, Any] | None = None,
+    phase: str | None = None,
+) -> int:
+    """Append one low-volume coordinator/run event."""
+    cur = conn.execute(
+        "INSERT INTO run_events(run_id, ts, event_type, phase, payload_json) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (
+            run_id, _now(), event_type, phase,
+            json.dumps(payload or {}, ensure_ascii=False, default=str),
+        ),
     )
     return int(cur.lastrowid)
 
@@ -2158,6 +2249,49 @@ def fetch_run(conn: sqlite3.Connection, run_id: int) -> Optional[Run]:
     return _row_to_run(row)
 
 
+def fetch_run_incidents(
+    conn: sqlite3.Connection, run_id: int
+) -> list[RunIncident]:
+    """Return durable run-level incidents in occurrence order."""
+    prior_factory = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT * FROM run_incidents WHERE run_id = ? "
+            "ORDER BY created_at, id",
+            (run_id,),
+        ).fetchall()
+    finally:
+        conn.row_factory = prior_factory
+
+    incidents: list[RunIncident] = []
+    for row in rows:
+        raw_details = row["details_json"]
+        details: dict[str, Any] | None = None
+        if raw_details:
+            try:
+                parsed = json.loads(raw_details)
+                if isinstance(parsed, dict):
+                    details = parsed
+            except (TypeError, json.JSONDecodeError):
+                details = None
+        incidents.append(RunIncident(
+            id=row["id"],
+            run_id=row["run_id"],
+            created_at=row["created_at"],
+            source=row["source"],
+            stage=row["stage"],
+            severity=row["severity"],
+            error_code=row["error_code"],
+            user_message=row["user_message"],
+            technical_message=row["technical_message"],
+            exception_type=row["exception_type"],
+            correlation_id=row["correlation_id"],
+            details=details,
+        ))
+    return incidents
+
+
 def fetch_run_agents(conn: sqlite3.Connection, run_id: int) -> list[RunAgent]:
     rows = conn.execute(
         "SELECT * FROM run_agents WHERE run_id = ? ORDER BY id", (run_id,)
@@ -2246,6 +2380,20 @@ def fetch_events(conn: sqlite3.Connection, run_agent_id: int) -> list[AgentEvent
     return [
         AgentEvent(
             id=r["id"], run_agent_id=r["run_agent_id"], ts=r["ts"],
+            event_type=r["event_type"], phase=r["phase"],
+            payload=json.loads(r["payload_json"]) if r["payload_json"] else {},
+        )
+        for r in rows
+    ]
+
+
+def fetch_run_events(conn: sqlite3.Connection, run_id: int) -> list[RunEvent]:
+    rows = conn.execute(
+        "SELECT * FROM run_events WHERE run_id = ? ORDER BY id", (run_id,)
+    ).fetchall()
+    return [
+        RunEvent(
+            id=r["id"], run_id=r["run_id"], ts=r["ts"],
             event_type=r["event_type"], phase=r["phase"],
             payload=json.loads(r["payload_json"]) if r["payload_json"] else {},
         )
@@ -2565,12 +2713,22 @@ def get_run_detail(conn: sqlite3.Connection, run_id: int) -> Optional[RunDetail]
                 "cumulative_tokens": r["cumulative_tokens"] or 0,
                 "cost_estimate": r["cost_estimate"] or 0.0,
                 "duration_ms": r["duration_ms"] or 0,
+                "cache_read_tokens": _row_get(r, "cache_read_tokens", 0),
+                "cache_write_tokens": _row_get(r, "cache_write_tokens", 0),
             })
         for agent in agents:
             agent.turns = turns_by_agent.get(agent.id, [])
 
     checks = fetch_cross_checks(conn, run_id)
-    return RunDetail(run=run, agents=agents, cross_checks=checks)
+    incidents = fetch_run_incidents(conn, run_id)
+    run_events = fetch_run_events(conn, run_id)
+    return RunDetail(
+        run=run,
+        agents=agents,
+        cross_checks=checks,
+        incidents=incidents,
+        run_events=run_events,
+    )
 
 
 def delete_run(conn: sqlite3.Connection, run_id: int) -> bool:

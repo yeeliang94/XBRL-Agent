@@ -7,6 +7,7 @@ import { ConceptsPage } from "../pages/ConceptsPage";
 import type { ConceptRow } from "../pages/ConceptsPage";
 import { EvalTab } from "./EvalTab";
 import { runStatusDisplay, agentStatusDisplay } from "../lib/runStatus";
+import { errorGuidance } from "../lib/errorGuidance";
 import { StatusIcon } from "./StatusIcon";
 import type { RunStatusDisplay } from "../lib/runStatus";
 import type { RunDetailJson, RunAgentJson, CrossCheckResult } from "../lib/types";
@@ -22,6 +23,7 @@ import { TabPanelFade } from "./TabPanelFade";
 import { NotesReviewerPanel } from "./NotesReviewerPanel";
 import { NotesTablesPanel } from "./NotesTablesPanel";
 import { NotesIntegrityPanel } from "./NotesIntegrityPanel";
+import { NotesCoveragePanel } from "./NotesCoveragePanel";
 import { ConsistencyPanel } from "./ConsistencyPanel";
 import {
   buildToolTimeline,
@@ -320,8 +322,9 @@ function AgentCard({ agent, summary }: { agent: RunAgentJson; summary: AgentSumm
             <span
               data-testid="agent-error-type"
               style={styles.agentErrorType}
+              title={errorGuidance(agent.error_type).action}
             >
-              {agent.error_type.replace(/_/g, " ")}
+              {errorGuidance(agent.error_type).label}
             </span>
           )}
         </div>
@@ -543,6 +546,11 @@ export function RunDetailView({
   // risk at action time. This is not persistent review sign-off.
   const [confirmDraftDownload, setConfirmDraftDownload] = useState(false);
   const [notesAuditOpen, setNotesAuditOpen] = useState(false);
+  const [crossChecks, setCrossChecks] = useState<RunDetailJson["cross_checks"]>(
+    detail.cross_checks ?? [],
+  );
+  const [recheck, setRecheck] = useState({ running: false, summary: "" });
+  const recheckAbortRef = useRef<AbortController | null>(null);
 
   // Step 8/12 — clicking a failed cross-check drives the source-PDF pane to
   // the cited page(s) of the cell it targets. We resolve (target_sheet,
@@ -561,7 +569,19 @@ export function RunDetailView({
   // resolving run B's targets against run A's concept map.
   useEffect(() => {
     setNotesAuditOpen(false);
+    setRecheck({ running: false, summary: "" });
+    recheckAbortRef.current?.abort();
   }, [detail.id]);
+
+  // History can refresh a still-running record without changing its id. Keep
+  // the local recheck state in sync with those authoritative snapshots so a
+  // run that finishes while this page is open does not leave the first,
+  // usually-empty cross-check list frozen on screen.
+  useEffect(() => {
+    setCrossChecks(detail.cross_checks ?? []);
+  }, [detail.id, detail.cross_checks]);
+
+  useEffect(() => () => recheckAbortRef.current?.abort(), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -611,7 +631,7 @@ export function RunDetailView({
     detail.status === "completed_with_errors" ||
     detail.status === "correction_exhausted";
   const isInvestigationOutcome = isErrorOutcome || isFailed || isAborted;
-  const failingChecks = (detail.cross_checks ?? [])
+  const failingChecks = crossChecks
     .filter((c) => c.status === "failed");
   const failingCheckSummaries = failingChecks.map((c) => {
     const values = [
@@ -693,13 +713,14 @@ export function RunDetailView({
   // or still loading — without this, no tab is active and no panel renders,
   // leaving a blank page below the tab bar (peer-review [6]).
   const activeTab: RunTabKey = availableTabs.some((t) => t.key === tab) ? tab : "overview";
+  const reviewWorkspaceActive = activeTab === "values" || activeTab === "notes";
   const rollup = detail.telemetry_rollup;
   const sidecarNotice = detail.pdf_sidecar ? describePdfSidecar(detail.pdf_sidecar) : null;
 
   // Outcome summary for the Overview strip (E1). Cross-check status can carry
   // an advisory "warning" beyond the typed enum, so compare as strings.
   const outcomes = (() => {
-    const checks = (detail.cross_checks ?? []) as { status: string }[];
+    const checks = crossChecks as { status: string }[];
     const passed = checks.filter((c) => c.status === "passed").length;
     const failed = checks.filter((c) => c.status === "failed").length;
     const advisories = checks.filter((c) => c.status === "warning").length;
@@ -746,31 +767,70 @@ export function RunDetailView({
     btns?.[next]?.focus();
   };
 
+  const handleRecheck = useCallback(async () => {
+    recheckAbortRef.current?.abort();
+    const controller = new AbortController();
+    recheckAbortRef.current = controller;
+    setRecheck({ running: true, summary: "" });
+    try {
+      const response = await fetch(`/api/runs/${detail.id}/recheck`, {
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        setRecheck({ running: false, summary: "Checks could not be rerun." });
+        return;
+      }
+      const payload = (await response.json()) as {
+        results?: RunDetailJson["cross_checks"];
+      };
+      const results = payload.results ?? [];
+      const passed = results.filter((row) => row.status === "passed").length;
+      const failed = results.filter((row) => row.status === "failed").length;
+      const warnings = results.filter((row) => String(row.status) === "warning").length;
+      setCrossChecks(results);
+      setRecheck({
+        running: false,
+        summary: `${passed} passed · ${failed} failed · ${warnings} warnings`,
+      });
+    } catch (error) {
+      if ((error as { name?: string })?.name === "AbortError") return;
+      setRecheck({ running: false, summary: "Checks could not be rerun." });
+    }
+  }, [detail.id]);
+
   return (
     <div style={styles.container}>
-      <header style={styles.header}>
+      <header style={reviewWorkspaceActive ? styles.reviewContextHeader : styles.header}>
         <div style={styles.headerText}>
-          <div style={styles.kicker}>Run {detail.id}</div>
-          <h1 style={styles.filename}>{detail.pdf_filename}</h1>
-          <div style={styles.filingProfile}>{filingProfile}</div>
-          <div style={styles.metaRow}>
-            {statusBadge(runStatusDisplay(detail.status))}
-            {isLegacy && (
-              <span
-                style={styles.legacyBadge}
-                title="Some configuration and performance details were not recorded for this older run."
-              >
-                Limited historical details
-              </span>
-            )}
-            <span style={styles.dim}>
-              {new Date(detail.created_at).toLocaleString()}
-            </span>
+          {!reviewWorkspaceActive && <div style={styles.kicker}>Run {detail.id}</div>}
+          <h1 style={reviewWorkspaceActive ? styles.reviewContextFilename : styles.filename}>
+            {detail.pdf_filename}
+          </h1>
+          <div style={reviewWorkspaceActive ? styles.reviewContextProfile : styles.filingProfile}>
+            {filingProfile}
           </div>
-          {!isDraft && (canDownload || detail.status === "completed" || isErrorOutcome) && (
-            <p style={styles.aiDisclaimer} role="note">
-              Figures were extracted by AI — verify against the source PDF before filing.
-            </p>
+          {!reviewWorkspaceActive && (
+            <>
+              <div style={styles.metaRow}>
+                {statusBadge(runStatusDisplay(detail.status))}
+                {isLegacy && (
+                  <span
+                    style={styles.legacyBadge}
+                    title="Some configuration and performance details were not recorded for this older run."
+                  >
+                    Limited historical details
+                  </span>
+                )}
+                <span style={styles.dim}>
+                  {new Date(detail.created_at).toLocaleString()}
+                </span>
+              </div>
+              {!isDraft && (canDownload || detail.status === "completed" || isErrorOutcome) && (
+                <p style={styles.aiDisclaimer} role="note">
+                  Figures were extracted by AI — verify against the source PDF before filing.
+                </p>
+              )}
+            </>
           )}
         </div>
         <div style={styles.actions}>
@@ -881,7 +941,7 @@ export function RunDetailView({
           needs-review run must not look like a clean run. Name the failing
           check(s), link straight to the Cross-checks tab, and keep Download
           demoted until acknowledged. */}
-      {isErrorOutcome && (
+      {!reviewWorkspaceActive && isErrorOutcome && (
         <div style={styles.errorBanner} role="alert">
           <div style={styles.errorBannerBody}>
             <strong style={styles.errorBannerTitle}>
@@ -913,7 +973,7 @@ export function RunDetailView({
       {/* Run-84: fires on its own condition, NOT on run status — the case it
           exists for is a run that reports `completed` with one statement
           unfinished, which every banner around it misses. */}
-      {incompleteStatements.length > 0 && (
+      {!reviewWorkspaceActive && incompleteStatements.length > 0 && (
         <div style={styles.errorBanner} role="alert">
           <div style={styles.errorBannerBody}>
             <strong style={styles.errorBannerTitle}>
@@ -942,7 +1002,7 @@ export function RunDetailView({
         </div>
       )}
 
-      {(isFailed || isAborted) && (
+      {!reviewWorkspaceActive && (isFailed || isAborted) && (
         <div style={styles.errorBanner} role="alert">
           <div style={styles.errorBannerBody}>
             <strong style={styles.errorBannerTitle}>
@@ -965,7 +1025,59 @@ export function RunDetailView({
         </div>
       )}
 
-      {isDraft && (
+      {reviewWorkspaceActive && isErrorOutcome && (
+        <div style={styles.reviewWarningStrip} role="alert" data-testid="review-run-warning">
+          <span>
+            This run has unresolved consistency checks. Review them before relying on these results.
+          </span>
+          <button
+            type="button"
+            onClick={() => selectTab("checks")}
+            className={uiClass.btnGhost}
+            style={{ ...ui.buttonGhost, ...ui.buttonSm }}
+          >
+            View cross-checks
+          </button>
+        </div>
+      )}
+
+      {reviewWorkspaceActive && incompleteStatements.length > 0 && (
+        <div style={styles.reviewWarningStrip} role="alert" data-testid="review-incomplete-warning">
+          <span>
+            {incompleteStatements.length === 1
+              ? "One statement did not finish extracting."
+              : `${incompleteStatements.length} statements did not finish extracting.`}
+            {" "}This run cannot be filed until the incomplete extraction is resolved.
+          </span>
+          <button
+            type="button"
+            onClick={() => selectTab("agents")}
+            className={uiClass.btnGhost}
+            style={{ ...ui.buttonGhost, ...ui.buttonSm }}
+          >
+            View activity
+          </button>
+        </div>
+      )}
+
+      {reviewWorkspaceActive && (isFailed || isAborted) && (
+        <div style={styles.reviewWarningStrip} role="alert" data-testid="review-stopped-warning">
+          <span>
+            {isFailed ? "This extraction did not finish." : "This extraction was stopped."}
+            {" "}Treat any preserved figures as an investigation draft.
+          </span>
+          <button
+            type="button"
+            onClick={() => selectTab("agents")}
+            className={uiClass.btnGhost}
+            style={{ ...ui.buttonGhost, ...ui.buttonSm }}
+          >
+            View activity
+          </button>
+        </div>
+      )}
+
+      {!reviewWorkspaceActive && isDraft && (
         <div style={ui.alertInfo} role="status">
           Setup has not been completed. Resume setup to choose statement formats and start extraction.
         </div>
@@ -1033,35 +1145,37 @@ export function RunDetailView({
         onCancel={() => setConfirmDelete(false)}
       />
 
-      {/* Tab bar — one shared navigation for the whole run, replacing the
-          old long scroll of stacked sections + the disjointed /concepts jump. */}
-      <div
-        ref={tabBarRef}
-        style={styles.tabBar}
-        role="tablist"
-        aria-label="Run detail sections"
-      >
-        {availableTabs.map((t, i) => {
-          const active = t.key === activeTab;
-          return (
-            <button
-              key={t.key}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              // Roving tabindex: only the active tab is in the tab order;
-              // arrow keys reach the others (WAI-ARIA tabs pattern).
-              tabIndex={active ? 0 : -1}
-              className="pwc-tab"
-              onClick={() => selectTab(t.key)}
-              onKeyDown={(e) => onTabKeyDown(e, i)}
-              style={active ? styles.tabActive : styles.tab}
-            >
-              {t.label}
-            </button>
-          );
-        })}
-      </div>
+      {/* The application sidebar already owns Overview / Figures / Notes.
+          Repeating the run tab strip inside the two review workspaces created
+          a second navigation layer. Keep the full tab strip on audit pages,
+          where it remains the route to Activity, Cross-checks and AI review. */}
+      {!reviewWorkspaceActive && (
+        <div
+          ref={tabBarRef}
+          style={styles.tabBar}
+          role="tablist"
+          aria-label="Run detail sections"
+        >
+          {availableTabs.map((t, i) => {
+            const active = t.key === activeTab;
+            return (
+              <button
+                key={t.key}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                tabIndex={active ? 0 : -1}
+                className="pwc-tab"
+                onClick={() => selectTab(t.key)}
+                onKeyDown={(e) => onTabKeyDown(e, i)}
+                style={active ? styles.tabActive : styles.tab}
+              >
+                {t.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* One fade wrapper keyed on the active tab: switching tabs remounts it,
           replaying the shared fade-in so the new panel arrives instead of
@@ -1153,9 +1267,10 @@ export function RunDetailView({
             key={`${detail.id}:notes`}
             runId={detail.id}
             initialView="notes"
-            initialCrossChecks={crossChecksForValidator(detail.cross_checks)}
+            initialCrossChecks={crossChecksForValidator(crossChecks)}
             onRegenerateNotes={onRegenerateNotes}
           />
+          <NotesCoveragePanel runId={detail.id} />
           <details
             style={styles.perfDetails}
             data-testid="run-detail-notes-audit"
@@ -1175,9 +1290,24 @@ export function RunDetailView({
 
       {activeTab === "checks" && (
         <section style={styles.section} role="tabpanel">
+          <div style={styles.recheckBar}>
+            <span data-testid="recheck-summary" role="status" aria-live="polite" style={styles.recheckSummary}>
+              {recheck.summary}
+            </span>
+            <button
+              type="button"
+              data-testid="recheck-btn"
+              onClick={() => void handleRecheck()}
+              disabled={recheck.running}
+              className={uiClass.btnSecondary}
+              style={ui.buttonSecondary}
+            >
+              {recheck.running ? "Checking…" : "Rerun checks"}
+            </button>
+          </div>
           <div style={styles.crossCheckScroller}>
             <ValidatorTab
-              crossChecks={crossChecksForValidator(detail.cross_checks)}
+              crossChecks={crossChecksForValidator(crossChecks)}
               onSelectTarget={handleSelectTarget}
             />
           </div>
@@ -1212,7 +1342,7 @@ export function RunDetailView({
             key={detail.id}
             runId={detail.id}
             initialView="figures"
-            initialCrossChecks={crossChecksForValidator(detail.cross_checks)}
+            initialCrossChecks={crossChecksForValidator(crossChecks)}
             onRegenerateNotes={onRegenerateNotes}
           />
         </section>
@@ -1269,6 +1399,17 @@ const styles = {
     overflowX: "auto" as const,
     maxWidth: "100%",
   } as React.CSSProperties,
+  recheckBar: {
+    display: "flex",
+    justifyContent: "flex-end",
+    alignItems: "center",
+    gap: pwc.space.md,
+    minHeight: 40,
+  } as React.CSSProperties,
+  recheckSummary: {
+    color: pwc.grey700,
+    fontSize: 12,
+  } as React.CSSProperties,
   header: {
     display: "flex",
     justifyContent: "space-between",
@@ -1277,6 +1418,14 @@ const styles = {
     flexWrap: "wrap" as const,
     paddingBottom: pwc.space.lg,
     borderBottom: "none",
+  } as React.CSSProperties,
+  reviewContextHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: pwc.space.lg,
+    flexWrap: "wrap" as const,
+    minHeight: 44,
   } as React.CSSProperties,
   headerText: {
     minWidth: 0,
@@ -1297,6 +1446,21 @@ const styles = {
     letterSpacing: "-0.3px",
     color: pwc.grey900,
     margin: 0,
+  } as React.CSSProperties,
+  reviewContextFilename: {
+    display: "inline",
+    fontFamily: pwc.fontBody,
+    fontSize: 13,
+    fontWeight: pwc.weight.semibold,
+    color: pwc.grey900,
+    margin: 0,
+  } as React.CSSProperties,
+  reviewContextProfile: {
+    display: "inline",
+    marginLeft: pwc.space.sm,
+    fontFamily: pwc.fontBody,
+    fontSize: 12,
+    color: pwc.grey700,
   } as React.CSSProperties,
   metaRow: {
     display: "flex",
@@ -1359,6 +1523,18 @@ const styles = {
     display: "flex",
     alignItems: "center",
     gap: pwc.space.sm,
+  } as React.CSSProperties,
+  reviewWarningStrip: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: pwc.space.md,
+    padding: `${pwc.space.sm}px 0`,
+    borderTop: `1px solid ${pwc.grey200}`,
+    borderBottom: `1px solid ${pwc.grey200}`,
+    color: pwc.grey900,
+    fontFamily: pwc.fontBody,
+    fontSize: 12,
   } as React.CSSProperties,
   // Separates the destructive Delete from the everyday actions.
   actionsDivider: {

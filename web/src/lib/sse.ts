@@ -56,6 +56,9 @@ const MULTI_EVENT_TYPES: SSEEventType[] = [
   "scale_conflict",
   // Scanned-PDF source transcript outcome (run-level) → notice on the run page.
   "pdf_sidecar",
+  // Final benchmark grade; persisted separately too, but the live workspace
+  // should update without requiring a History reload.
+  "eval_score",
 ];
 
 // Generic parse result. Stays loose on `data` because not every consumer

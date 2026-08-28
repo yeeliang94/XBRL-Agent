@@ -13,7 +13,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
-from agent_tracing import MAX_AGENT_ITERATIONS, save_agent_trace  # noqa: F401
+from agent_tracing import (  # noqa: F401
+    MAX_AGENT_ITERATIONS,
+    save_agent_trace,
+    save_messages_trace,
+)
 from agent_runner import (
     AgentLoopSpec,
     RetryPolicy,
@@ -577,9 +581,9 @@ class _SingleAgentOutcome:
     # `NotesAgentResult.numeric_cells` for the entry shape.
     numeric_cells: list[dict] = field(default_factory=list)
     # End-of-run usage; bubbles up through the retry loop into
-    # NotesAgentResult.total_tokens / total_cost. Zero when the agent
-    # short-circuited via the post-write timeout path (no usage object
-    # is reachable after a mid-turn timeout).
+    # NotesAgentResult.total_tokens / total_cost. The post-write timeout path
+    # uses whatever aggregate usage is reachable, falling back to captured
+    # turn deltas so salvaged work is not reported as free.
     total_tokens: int = 0
     total_cost: float = 0.0
     # v8 per-turn telemetry (peer-review [2]); bubbles into NotesAgentResult.
@@ -767,6 +771,7 @@ async def _run_single_notes_agent(
             error=last_error,
             error_type=(
                 "turn_timeout" if last_exc_class == "TimeoutError"
+                else "transient_exhausted" if is_rate_limit_error(e)
                 else "tool_exception"
             ),
         )
@@ -845,6 +850,49 @@ async def _invoke_single_notes_agent_once(
     # run_agent_loop below; read after the loop for the outcome rollups.
     _turn_records: list[dict] = []
 
+    def _usage_snapshot(agent_run) -> dict[str, int | float]:
+        """Best-effort usage from aggregate state with turn-delta fallback."""
+        prompt_tokens = sum(
+            int(t.get("prompt_tokens") or 0) for t in _turn_records
+        )
+        completion_tokens = sum(
+            int(t.get("completion_tokens") or 0) for t in _turn_records
+        )
+        try:
+            # Keep the V2 field names explicit: this is the same aggregate
+            # usage value that bubbles into run_agents telemetry.
+            _u = agent_run.usage
+            prompt_tokens = int(_u.input_tokens or prompt_tokens)
+            completion_tokens = int(_u.output_tokens or completion_tokens)
+            total_tokens = int(
+                _u.total_tokens or prompt_tokens + completion_tokens
+            )
+        except Exception:  # noqa: BLE001 — fallback is the captured deltas
+            total_tokens = prompt_tokens + completion_tokens
+        try:
+            total_cost = estimate_cost(
+                prompt_tokens, completion_tokens, 0, model,
+            )
+        except Exception:  # noqa: BLE001 — pricing is advisory
+            total_cost = sum(
+                float(t.get("cost_estimate") or 0.0) for t in _turn_records
+            )
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+            "total_cost": total_cost,
+            "cache_read_tokens": sum(
+                int(t.get("cache_read_tokens") or 0) for t in _turn_records
+            ),
+            "cache_write_tokens": sum(
+                int(t.get("cache_write_tokens") or 0) for t in _turn_records
+            ),
+            "tool_call_count": sum(
+                int(t.get("_n_tool_calls") or 0) for t in _turn_records
+            ),
+        }
+
     async with agent.iter(prompt, deps=deps) as agent_run:
         try:
             # Per-turn timeout guard: if the LLM's next turn stalls past
@@ -882,9 +930,7 @@ async def _invoke_single_notes_agent_once(
                     "(rows already on disk at %s).",
                     template_type.value, NOTES_TURN_TIMEOUT, deps.filled_path,
                 )
-                # Short-circuit: skip trace save / token backfill (the
-                # agent_run.result may be unreachable after a mid-turn
-                # timeout) and return what we have.
+                usage = _usage_snapshot(agent_run)
                 return _SingleAgentOutcome(
                     filled_path=deps.filled_path,
                     write_errors=list(deps.write_skip_errors),
@@ -892,11 +938,46 @@ async def _invoke_single_notes_agent_once(
                     sanitizer_warnings=list(deps.write_sanitizer_warnings),
                     cells_written=list(deps.cells_written),
                     numeric_cells=list(deps.numeric_cells),
+                    total_tokens=int(usage["total_tokens"]),
+                    total_cost=float(usage["total_cost"]),
+                    turns=list(_turn_records),
+                    prompt_tokens=int(usage["prompt_tokens"]),
+                    completion_tokens=int(usage["completion_tokens"]),
+                    cache_read_tokens=int(usage["cache_read_tokens"]),
+                    cache_write_tokens=int(usage["cache_write_tokens"]),
+                    tool_call_count=int(usage["tool_call_count"]),
                 )
             raise RuntimeError(
                 f"{template_type.value}: LLM stalled past {NOTES_TURN_TIMEOUT}s "
                 "without writing any payloads"
             )
+        finally:
+            # Every exit path gets a debuggable trace, including pre-write
+            # failures, cancellation, and the post-write timeout salvage path.
+            # A completed run is saved once below from its final result.  Only
+            # incomplete exits need the partial-history fallback; writing both
+            # made every successful notes trace pay for two multi-megabyte
+            # serialisations of the same conversation.
+            try:
+                completed_result = agent_run.result
+            except (AttributeError, RuntimeError):
+                # Timeout/failure test doubles and incomplete pydantic runs do
+                # not necessarily expose a result object.
+                completed_result = None
+            if completed_result is None:
+                try:
+                    messages = list(agent_run.ctx.state.message_history)
+                except Exception:  # noqa: BLE001 — pydantic internals/test fakes
+                    messages = []
+                save_messages_trace(
+                    messages,
+                    output_dir,
+                    f"NOTES_{template_type.value}",
+                    turns=_turn_records,
+                    runtime_metadata=describe_model_runtime(
+                        model, role=template_type.value,
+                    ),
+                )
 
     result = agent_run.result
     save_agent_trace(
@@ -915,16 +996,7 @@ async def _invoke_single_notes_agent_once(
     # NotesAgentResult lands real numbers in run_agents.total_tokens.
     # Best-effort — if usage is unreachable we still return success
     # rather than failing the run on advisory telemetry.
-    _agent_tokens = 0
-    _agent_cost = 0.0
-    try:
-        _u = agent_run.usage
-        _prompt = int(_u.input_tokens or 0)
-        _completion = int(_u.output_tokens or 0)
-        _agent_tokens = int(_u.total_tokens or 0)
-        _agent_cost = estimate_cost(_prompt, _completion, 0, model)
-    except Exception:  # noqa: BLE001 — telemetry is best-effort
-        logger.debug("notes agent token bubble-up skipped for %s", template_type.value)
+    _usage = _usage_snapshot(agent_run)
 
     # Guard against silent no-op success — retryable per PLAN §4 E.1.
     if not deps.wrote_once or not deps.filled_path:
@@ -937,14 +1009,14 @@ async def _invoke_single_notes_agent_once(
         sanitizer_warnings=list(deps.write_sanitizer_warnings),
         cells_written=list(deps.cells_written),
         numeric_cells=list(deps.numeric_cells),
-        total_tokens=_agent_tokens,
-        total_cost=_agent_cost,
+        total_tokens=int(_usage["total_tokens"]),
+        total_cost=float(_usage["total_cost"]),
         turns=list(_turn_records),
-        prompt_tokens=sum(int(t.get("prompt_tokens") or 0) for t in _turn_records),
-        completion_tokens=sum(int(t.get("completion_tokens") or 0) for t in _turn_records),
-        cache_read_tokens=sum(int(t.get("cache_read_tokens") or 0) for t in _turn_records),
-        cache_write_tokens=sum(int(t.get("cache_write_tokens") or 0) for t in _turn_records),
-        tool_call_count=sum(int(t.get("_n_tool_calls") or 0) for t in _turn_records),
+        prompt_tokens=int(_usage["prompt_tokens"]),
+        completion_tokens=int(_usage["completion_tokens"]),
+        cache_read_tokens=int(_usage["cache_read_tokens"]),
+        cache_write_tokens=int(_usage["cache_write_tokens"]),
+        tool_call_count=int(_usage["tool_call_count"]),
     )
 
 

@@ -388,6 +388,11 @@ exception paths call a best-effort helper that falls back to
 `save_messages_trace` — so the trace viewer is useful exactly when debugging
 a failure. The Sheet-12 fan-out saves one trace per sub-agent
 (`NOTES_LIST_OF_NOTES_subN[_retryK]_conversation_trace.json`, run-63 fix).
+The Activity viewer discovers those files through the trace-manifest endpoint
+and lets the operator select each sub-agent/retry. Traces and notes failure
+logs are sensitive diagnostics: run deletion removes them, and startup purges
+files older than `XBRL_TRACE_RETENTION_DAYS` (default 90; `0` delegates
+retention to an external system) while preserving workbooks/source files.
 Face-agent provider response timeouts receive two fresh whole-attempt retries
 with increasing backoff. The timeout classifier walks PydanticAI's exception
 chain because direct OpenAI and Anthropic transports wrap their SDK timeout in
@@ -512,7 +517,7 @@ artifact — pinned by `tests/test_stop_all_preserves_partial.py`.
 
 ### 11. DB schema — version-stepped auto-migration on startup
 
-`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **41**). `init_db`
+`db/schema.py` carries `CURRENT_SCHEMA_VERSION` (committed: **42**). `init_db`
 reads the stored version and walks an old DB up **one version at a time**
 through per-version, idempotent `ALTER TABLE` blocks, so any older DB reaches
 the current schema automatically. `db/schema.py` is the authoritative
@@ -558,7 +563,9 @@ content-provenance columns on `notes_cells` · v36 `runs.notes_integrity_mode`
 `mtool_fill_receipts.snapshot_notes_*` (#28, the PROSE revision — v38 recorded
 only the numeric one) · v40 `concept_semantic_addresses` (#28, taxonomy identity
 for filing targets) · v41 `taxonomy_concepts` / `template_slots`, notes/facts
-quarantine state, and receipt filing-readiness evidence (#28).
+quarantine state, and receipt filing-readiness evidence (#28) · v42
+`run_incidents` / `run_events` (durable run-level failures and the
+low-volume coordinator timeline; request/response traces remain on disk).
 
 ### 12. Filing level — Company vs Group
 
@@ -2122,8 +2129,9 @@ Pinned by `tests/test_notes_integrity_false_greens.py`,
 # Backend (from repo root) — excludes live LLM tests by default
 python -m pytest tests/ -v
 
-# FULL SUITE, ~4x faster — parallelise across cores (needs pytest-xdist).
-# ~3100 tests: serial ~240s → ~60s. Use this for the whole-suite gate.
+# FULL SUITE — parallelise across cores (needs pytest-xdist).
+# ~5,000 tests: ~115s on the 10-core reference Mac (measured 2026-08-28).
+# Use this for the whole-suite gate.
 python -m pytest tests/ -n auto
 # Focused / TDD runs stay SERIAL on purpose — for one file or one test,
 # worker spawn + per-worker imports make `-n auto` SLOWER, so just:

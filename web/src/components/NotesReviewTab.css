@@ -154,3 +154,15 @@
 .notes-review-tab .tiptap td.is-numeric {
   text-align: right;
 }
+
+@media (max-width: 780px) {
+  .notes-review-tab .notes-single-cell-layout {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .notes-review-tab .notes-single-cell-layout > aside {
+    position: static !important;
+    height: 260px !important;
+    min-height: 0 !important;
+  }
+}

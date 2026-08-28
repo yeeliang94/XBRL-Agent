@@ -84,9 +84,14 @@ export function AnimatedNumber({
     const to = value;
     if (from === to) return;
 
-    const start = performance.now();
+    // Use the requestAnimationFrame clock for both endpoints. Browsers align
+    // rAF timestamps with performance.now(), but test and embedded runtimes
+    // are allowed to provide different time origins. Mixing those clocks can
+    // produce a negative progress value and an extreme number overshoot.
+    let start: number | null = null;
     const tick = (now: number) => {
-      const t = Math.min(1, (now - start) / DURATION_MS);
+      start ??= now;
+      const t = Math.min(1, Math.max(0, (now - start) / DURATION_MS));
       if (t >= 1) {
         displayRef.current = to;
         setDisplay(to);

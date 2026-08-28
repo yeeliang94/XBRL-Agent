@@ -116,6 +116,27 @@ def test_transcribe_pages_returns_html_per_page(tmp_path, monkeypatch):
     assert calls == {1: 1, 3: 1}
 
 
+def test_transcribe_pages_reports_bounded_progress(tmp_path):
+    pdf = _make_pdf(tmp_path / "scan.pdf", pages=3)
+    call, _calls = _fake_caller(fail_pages={2})
+    progress = []
+
+    result = asyncio.run(transcribe_pages(
+        pdf, [1, 2, 3], model=object(), _caller=call,
+        on_progress=lambda page, completed, total, ok: progress.append(
+            (page, completed, total, ok)
+        ),
+    ))
+
+    assert result.failed_pages == [2]
+    assert [entry[1] for entry in progress] == [1, 2, 3]
+    assert {entry[0] for entry in progress} == {1, 2, 3}
+    assert {entry[2] for entry in progress} == {3}
+    assert {entry[0]: entry[3] for entry in progress} == {
+        1: True, 2: False, 3: True,
+    }
+
+
 def test_transcribe_pages_retries_once_then_skips(tmp_path):
     pdf = _make_pdf(tmp_path / "scan.pdf", pages=3)
     call, calls = _fake_caller(fail_pages={2})

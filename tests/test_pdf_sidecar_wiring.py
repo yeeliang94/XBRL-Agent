@@ -324,12 +324,13 @@ def test_stream_drains_transcription_stage_before_waiting_for_sidecar():
     task_start = source.find(
         "sidecar_task = asyncio.create_task(_maybe_build_pdf_sidecar("
     )
-    stage = source.find('on_start=lambda _pages: _emit_stage("transcribing_source")')
+    stage = source.find("on_start=lambda pages:")
+    progress = source.find("on_progress=lambda _page, completed, total, _ok:")
     drain = source.find(
         "async for event in _drain_while_running(sidecar_task):", task_start,
     )
     wait = source.find("sidecar_event = await sidecar_task", drain)
     extraction = source.find('_emit_stage("extracting")', wait)
 
-    assert -1 not in (task_start, stage, drain, wait, extraction)
-    assert task_start < stage < drain < wait < extraction
+    assert -1 not in (task_start, stage, progress, drain, wait, extraction)
+    assert task_start < stage < progress < drain < wait < extraction

@@ -231,8 +231,12 @@ def _linear_addresses(path: Path, standard: str) -> dict[tuple[str, int, str | N
         out: dict[tuple[str, int, str | None], dict[str, Any]] = {}
         for ws, role in zip(wb.worksheets, roles):
             sheet_rows = [
-                row for row in range(1, ws.max_row + 1)
-                if ws.cell(row, 1).value not in (None, "")
+                row
+                for row, (value,) in enumerate(
+                    ws.iter_rows(min_col=1, max_col=1, values_only=True),
+                    start=1,
+                )
+                if value not in (None, "")
             ]
             taxonomy_rows = list(_role_rows(standard, role))
             if path.name in {"13-Notes-IssuedCapital.xlsx", "14-Notes-RelatedParty.xlsx"}:

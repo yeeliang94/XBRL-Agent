@@ -142,10 +142,18 @@ export function NotesCoveragePanel({ runId }: Props) {
       </p>
     );
   if (!data) return null;
+  const rows = Array.isArray(data.rows) ? data.rows : [];
   // A legacy run predating the feature has nothing to show — stay quiet.
-  if (data.banner === "pre_feature" && data.rows.length === 0) return null;
+  if (data.banner === "pre_feature" && rows.length === 0) return null;
 
-  const s = data.summary;
+  const s = data.summary ?? {
+    placed: 0,
+    missing: 0,
+    skipped: 0,
+    suspected_gap: 0,
+    total: 0,
+    unresolved: 0,
+  };
   // Auto-open the full checklist when there's a gap to look at; otherwise stay
   // folded. The user's explicit toggle always wins.
   const needsAttention =
@@ -194,7 +202,7 @@ export function NotesCoveragePanel({ runId }: Props) {
         </p>
       )}
 
-      {showTable && data.rows.length > 0 && (
+      {showTable && rows.length > 0 && (
         <table style={styles.table}>
           <thead>
             <tr>
@@ -205,7 +213,7 @@ export function NotesCoveragePanel({ runId }: Props) {
             </tr>
           </thead>
           <tbody>
-            {data.rows.map((row) => {
+            {rows.map((row) => {
               const hasSubs = row.subnotes.length > 0;
               const verifiedSubs = row.subnotes.filter(
                 (x) => x.state === "cited" || x.state === "verified",

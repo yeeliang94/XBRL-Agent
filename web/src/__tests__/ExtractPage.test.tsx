@@ -188,7 +188,7 @@ describe("ExtractPage — render-gate regression guards", () => {
       agents: { sofp_0: first },
     };
     const { rerender } = render(<ExtractPage {...makeProps({ state: base })} />);
-    const region = screen.getByRole("status", { name: "Latest agent update" });
+    const region = screen.getByRole("status", { name: "Current agent activity" });
     expect(region).toHaveTextContent("Reading page 3");
 
     const second = {
@@ -204,9 +204,32 @@ describe("ExtractPage — render-gate regression guards", () => {
       />,
     );
 
-    const updatedRegion = screen.getByRole("status", { name: "Latest agent update" });
+    const updatedRegion = screen.getByRole("status", { name: "Current agent activity" });
     expect(updatedRegion).toBe(region);
     expect(updatedRegion).toHaveTextContent("Writing figures");
+  });
+
+  test("shows bounded coordinator progress without exposing technical timings", () => {
+    const props = makeProps({
+      state: {
+        sessionId: "test-session",
+        filename: "scan.pdf",
+        isRunning: true,
+        pipelineStage: "transcribing_source",
+        pipelineActivity: {
+          stage: "transcribing_source",
+          started_at: 1,
+          message: "Reading scanned note pages: 3 of 8 complete.",
+          completed: 3,
+          total: 8,
+        },
+      },
+    });
+    render(<ExtractPage {...props} />);
+
+    expect(screen.getByRole("heading", { name: "Reading scanned note pages: 3 of 8 complete." })).toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: "Current stage progress" })).toHaveAttribute("aria-valuenow", "3");
+    expect(screen.queryByText(/30ms/i)).toBeNull();
   });
 
   test("a stopped run is not described as still running", () => {

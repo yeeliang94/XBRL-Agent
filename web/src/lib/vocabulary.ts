@@ -29,13 +29,6 @@ export const TERMS = {
   downloadFilled: "Download filled Excel",
   // Diagnostics grouping for developer artefacts (JSON / conversation log).
   diagnostics: "Diagnostics",
-  // Review-workspace surface (docs/PLAN-review-workspace.md Phase 5): plain,
-  // outcome-first labels in place of engineer vocabulary.
-  reviewWorkspaceTitle: "Review extracted results",
-  validateFigures: "Rerun checks",
-  validatingFigures: "Checking…",
-  documentColumn: "Document",
-  needsAttention: "Needs attention",
 } as const;
 
 /** Pseudo-agent rows persisted under fixed backend IDs (wire values —

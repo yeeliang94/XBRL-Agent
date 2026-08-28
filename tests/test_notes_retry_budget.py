@@ -519,6 +519,7 @@ class TestSingleAgentRateLimitRetry:
             )
 
         assert result.status == "failed"
+        assert result.error_type == "transient_exhausted"
         assert len(calls) == 1 + RATE_LIMIT_MAX_RETRIES
 
         log_path = tmp_path / "notes_RELATED_PARTY_failures.json"

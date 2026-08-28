@@ -14,6 +14,8 @@ export interface AgentTabState {
   label: string;
   status: AgentTabStatus;
   role: string;
+  task?: string | null;
+  taskDetail?: string | null;
   // Phase 5.2 / peer-review [M1]: when present, renders beneath the
   // main tab label as a secondary chip. Only Notes-12 populates this
   // today (via `agentSubAgentSummary`); other agents pass undefined.
@@ -106,7 +108,7 @@ function AgentTabsImpl({
   //     4. The agent's role is in statementsInRun — i.e. the user actually
   //        picked this statement for the current run.
   //
-  // Ordering: statement workstreams first, then notes, then run checks.
+  // Ordering: document preparation first, then statements, notes and checks.
   // The visible navigator groups those buckets vertically.
   const gatedOrder = (() => {
     const statementIds: string[] = [];
@@ -145,10 +147,10 @@ function AgentTabsImpl({
       }
     }
     return [
+      ...(scoutId ? [scoutId] : []),
       ...statementIds,
       ...notesIds,
       ...(notesValidatorId ? [notesValidatorId] : []),
-      ...(scoutId ? [scoutId] : []),
       // Reviewer sits just before Cross-checks (validator) — it runs right
       // after the cross-check pass, so this mirrors the run timeline.
       ...(correctionId ? [correctionId] : []),
@@ -181,9 +183,11 @@ function AgentTabsImpl({
   const matchesFilter = (id: string) => matchesFilterFor(id, filter);
   const visibleStatementActive = statementActive.filter(matchesFilter);
   const visibleNotesActive = notesActive.filter(matchesFilter);
-  const visibleChecks = [scoutActive, notesValidatorActive, correctionActive, validatorActive]
+  const visiblePreparation = scoutActive && matchesFilter(scoutActive) ? [scoutActive] : [];
+  const visibleChecks = [notesValidatorActive, correctionActive, validatorActive]
     .filter((id): id is string => id != null && matchesFilter(id));
   const navigationOrder = [
+    ...visiblePreparation,
     ...visibleStatementActive,
     ...visibleNotesActive,
     ...visibleChecks,
@@ -235,6 +239,11 @@ function AgentTabsImpl({
         <StatusBadge status={agent.status} />
         <span style={styles.tabLabelStack}>
           <span style={styles.tabLabelText}>{agent.label}</span>
+          {agent.task && (
+            <span style={styles.tabTask}>
+              {agent.task}{agent.taskDetail ? ` · ${agent.taskDetail}` : ""}
+            </span>
+          )}
           {agent.subLabel && (
             <span style={styles.tabSubLabel}>{agent.subLabel}</span>
           )}
@@ -294,6 +303,13 @@ function AgentTabsImpl({
       </div>
 
       <div role="tablist" aria-label="Run workstreams" aria-orientation="vertical" style={styles.tabList}>
+        {visiblePreparation.length > 0 && (
+          <div role="presentation" data-bucket="preparation" style={styles.tabGroup}>
+            <div role="presentation" style={styles.groupLabel}>Document preparation</div>
+            {visiblePreparation.map(renderTab)}
+          </div>
+        )}
+
         {(visibleStatementActive.length > 0 || (filter !== "finished" && (skeletonTabs?.length ?? 0) > 0)) && (
           <div role="presentation" data-bucket="statements" style={styles.tabGroup}>
             <div role="presentation" style={styles.groupLabel}>Financial statements</div>
@@ -317,7 +333,6 @@ function AgentTabsImpl({
         {visibleChecks.length > 0 && (
           <div role="presentation" data-bucket="run-checks" style={styles.tabGroup}>
             <div role="presentation" style={styles.groupLabel}>Run checks</div>
-            {scoutActive && matchesFilter(scoutActive) && renderTab(scoutActive)}
             {notesValidatorActive && matchesFilter(notesValidatorActive) && renderTab(notesValidatorActive)}
             {correctionActive && matchesFilter(correctionActive) && renderTab(correctionActive)}
             {validatorActive && matchesFilter(validatorActive) && renderTab(validatorActive)}
@@ -389,6 +404,8 @@ export function areAgentTabsPropsEqual(
       a.label !== b.label ||
       a.status !== b.status ||
       a.role !== b.role ||
+      (a.task ?? null) !== (b.task ?? null) ||
+      (a.taskDetail ?? null) !== (b.taskDetail ?? null) ||
       // subLabel renders a secondary chip beneath the main label (Notes-12
       // fan-out progress). Missing this let progress chips go stale until
       // the parent status flipped (peer review [MEDIUM]). Normalise null
@@ -559,6 +576,18 @@ const styles = {
     textOverflow: "ellipsis" as const,
     whiteSpace: "nowrap" as const,
     maxWidth: 170,
+  },
+  tabTask: {
+    marginTop: 4,
+    maxWidth: 210,
+    overflow: "hidden",
+    textOverflow: "ellipsis" as const,
+    whiteSpace: "nowrap" as const,
+    fontFamily: pwc.fontBody,
+    fontSize: 11,
+    lineHeight: 1.3,
+    fontWeight: pwc.weight.regular,
+    color: pwc.grey500,
   },
   tabStatus: {
     marginLeft: "auto",

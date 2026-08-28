@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import inspect
+import sqlite3
 from unittest.mock import patch
 
 import openpyxl
@@ -10,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from coordinator import AgentResult, CoordinatorResult
 from cross_checks.framework import CrossCheckResult
+from db import repository as repo
 from notes.coordinator import NotesAgentResult, NotesCoordinatorResult
 from notes_types import NotesTemplateType
 from statement_types import StatementType
@@ -112,7 +114,7 @@ def test_live_pipeline_reviewers_are_in_flight_together(tmp_path, monkeypatch):
         started["face"] = True
         await wait_for_peer("notes")
         started["face_done"] = True
-        return {"writes_performed": 0, "error": None}
+        return {"writes_performed": 1, "error": None}
 
     async def fake_notes_review(**kwargs):
         assert kwargs["merged_workbook_path"] is None
@@ -122,6 +124,30 @@ def test_live_pipeline_reviewers_are_in_flight_together(tmp_path, monkeypatch):
         await wait_for_peer("face")
         await finalize_gate.wait()
         assert started["face_done"] is True
+        # Reproduce the live run-97 failure at the real SQLite seam. A face
+        # review that changes facts re-marks the merged workbook on the
+        # lifecycle connection. If that write is not committed before the
+        # finalization gate opens, both notes-review replacements hit the same
+        # ``database is locked`` error shown in the operator's traceback.
+        conn = sqlite3.connect(str(server.AUDIT_DB_PATH), timeout=0.05)
+        conn.execute("PRAGMA busy_timeout = 50")
+        try:
+            repo.insert_notes_review_flag(
+                conn,
+                run_id=kwargs["run_id"],
+                kind="needs_human",
+                reason="confirm note placement",
+                sheet="Notes-CI",
+                row=4,
+            )
+            repo.replace_notes_coverage_for_run(conn, kwargs["run_id"], [{
+                "note_num": -1,
+                "subnote_ref": None,
+                "status": "reviewed",
+            }])
+            conn.commit()
+        finally:
+            conn.close()
         started["notes_finalized"] = True
         return {"writes_performed": 0, "error": None}
 
@@ -141,6 +167,7 @@ def test_live_pipeline_reviewers_are_in_flight_together(tmp_path, monkeypatch):
          patch("correction.reviewer_agent.load_open_conflicts", return_value=[]), \
          patch("server._run_reviewer_pass", side_effect=fake_face_review), \
          patch("server._run_notes_reviewer_pass", side_effect=fake_notes_review), \
+         patch("server._export_canonical_workbooks", return_value=None), \
          patch("tools.recalc.recalc_workbook", return_value=None):
         response = client.post(f"/api/run/{session_id}", json={
             "statements": ["SOFP"],
@@ -157,3 +184,13 @@ def test_live_pipeline_reviewers_are_in_flight_together(tmp_path, monkeypatch):
         "notes_finalized": True,
         "overlap": True,
     }
+    conn = sqlite3.connect(str(server.AUDIT_DB_PATH))
+    try:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM notes_review_flags"
+        ).fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT COUNT(*) FROM notes_coverage_rows"
+        ).fetchone()[0] == 1
+    finally:
+        conn.close()

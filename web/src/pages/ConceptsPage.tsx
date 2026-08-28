@@ -1,24 +1,17 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { ApiError, userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
-import { ui, uiClass } from "../lib/uiStyles";
+import { ui } from "../lib/uiStyles";
 import { STATUS_SYMBOLS } from "../lib/runStatus";
 import { StatusIcon } from "../components/StatusIcon";
-import { ReconciliationQueue } from "../components/ReconciliationQueue";
 import { NotesReviewTab } from "../components/NotesReviewTab";
-import { NotesCoverageNav } from "../components/NotesCoverageNav";
-import type { CoverageNavRow } from "../components/NotesCoverageNav";
-import { NeedsAttentionPanel } from "../components/NeedsAttentionPanel";
+import { ReconciliationQueue } from "../components/ReconciliationQueue";
 import { PdfSourcePane } from "../components/PdfSourcePane";
-import { fetchNotesCells, sortSheetsBySlot } from "../lib/notesCells";
 import {
   templateDisplayName,
-  templateSubtitle,
   templateSortKey,
-  notesSheetDisplayName,
 } from "../lib/sheetLabels";
 import { parseEvidencePages } from "../lib/evidencePages";
-import { TERMS } from "../lib/vocabulary";
 import {
   formatAccounting,
   formatGroupedInput,
@@ -128,14 +121,13 @@ export interface ConceptsPageProps {
   // a benchmark's gold facts (/api/benchmarks/{id}/concepts) and edits PATCH
   // /api/benchmarks/{id}/facts instead of the run-fact endpoints. A minimal
   // prop, NOT a component-library extraction (scope discipline): the run-only
-  // chrome (PDF pane, conflicts, notes, recheck, download) is suppressed and a
+  // chrome (PDF pane, conflicts, notes, download) is suppressed and a
   // compact gold editor is rendered. `runId` is null in this mode.
   source?: "run" | "benchmark";
   benchmarkId?: number | null;
-  // The run's stored cross-checks, passed by the run report so the outcome
-  // strip can show "Checks passing X/Y" on load (before any manual re-run).
-  // Optional — the standalone template view has none. A manual re-run's fresh
-  // results take precedence over this baseline.
+  // The current cross-checks, passed by the run report so the compact
+  // attention disclosure can target failing checks. Optional — the standalone
+  // template view has none.
   initialCrossChecks?: CrossCheckResult[];
   // Re-extract-notes handler, threaded to the embedded notes editor so its
   // "Re-extract notes" button actually launches a rerun (it used to no-op in
@@ -166,9 +158,7 @@ interface WorkspacePreferences {
   activeTemplate?: string | null;
   activeSheet?: string | null;
   selectedConceptUuid?: string | null;
-  menuWidth?: number;
   pdfWidth?: number;
-  menuCollapsed?: boolean;
   pdfCollapsed?: boolean;
 }
 
@@ -278,7 +268,7 @@ export function ConceptsPage({
 }: ConceptsPageProps) {
   const initialWorkspace = useRef<WorkspacePreferences>(readWorkspacePreferences(runId));
   // Gold-standard eval (v16): in benchmark mode we read/write gold facts; the
-  // run-only effects (edited_count, conflicts, recheck) all short-circuit on
+  // run-only effects (edited_count and conflicts) all short-circuit on
   // `runId == null`, which is exactly the state in benchmark mode, so they stay
   // inert without extra guards. `effectiveId` drives the one shared load.
   const isBenchmark = source === "benchmark";
@@ -305,7 +295,6 @@ export function ConceptsPage({
   // edits, mandatory relevance, or an issue instead of hundreds of blank
   // taxonomy rows. "All" remains one click away for expert inspection.
   const [rowFilter, setRowFilter] = useState<RowFilter>(initialWorkspace.current.rowFilter ?? "review");
-  const [attentionIndex, setAttentionIndex] = useState(0);
   // Phase 4 step 4.12 — Group runs toggle between Company / Group
   // value columns.  Defaults to Company; the toggle is rendered only
   // when at least one concept carries facts in both scopes.
@@ -318,34 +307,17 @@ export function ConceptsPage({
   const [editStatus, setEditStatus] = useState<
     Record<string, "saving" | "saved" | "error">
   >({});
-  // Bumped after every successful value edit so the reconciliation queue
-  // re-fetches — a leaf edit can open or clear a partial-state conflict
-  // via the cascade. Phase 2.2.
+  // Bumped after every successful value edit so the compact attention count
+  // re-fetches — a leaf edit can open or clear a partial-state conflict.
   const [conflictReloadKey, setConflictReloadKey] = useState(0);
-  // Phase 2.3 — how many values the user has edited since the run ended.
-  // Surfaced as a banner so the user knows overrides exist before they
-  // trigger a re-run (which would clobber them). Refreshed after each edit.
   const [editedCount, setEditedCount] = useState(0);
-  // Phase 4.3 — on-demand cross-check re-run summary (against current facts).
-  const [recheck, setRecheck] = useState<
-    { running: boolean; summary: string | null }
-  >({ running: false, summary: null });
-  // Full per-check results from the last re-run, so a failed cross-statement
-  // check (e.g. SOFP no longer balances after an edit) is actionable — not just
-  // an aggregate count. Cross-checks validate ACROSS statements; the
-  // reconciliation queue validates WITHIN a statement (parent vs children), so
-  // they intentionally don't share a surface.
-  const [crossChecks, setCrossChecks] = useState<CrossCheckResult[]>([]);
+  const [attentionOpen, setAttentionOpen] = useState(false);
   // Sub-sheet filter (M3 nested nav): when set, the tree shows only this
   // render_sheet within the active template. null = all sheets of the template.
   const [activeSheet, setActiveSheet] = useState<string | null>(initialWorkspace.current.activeSheet ?? null);
-  // Notes sub-tabs: the notes sheet names present for this run (in MBRS slot
-  // order), and which one the reviewer has selected. The names let the
-  // SheetNavigator expand Notes into per-sheet sub-tabs (mirroring the face
-  // statements); `activeNotesSheet` is forwarded to NotesReviewTab so it
-  // expands + scrolls to that section. Empty list = no notes → Notes stays a
-  // single entry. Notes only apply to runs (not the benchmark gold editor).
-  const [notesSheets, setNotesSheets] = useState<string[]>([]);
+  // The notes checklist can focus a specific filing sheet/cell in the
+  // dedicated Notes workspace. Figures and Notes have separate run tabs, so
+  // notes are intentionally not repeated in the figures statement picker.
   const [activeNotesSheet, setActiveNotesSheet] = useState<string | null>(null);
   // Source-PDF pages for the notes cell the reviewer last focused. A face
   // concept drives the PDF pane from its evidence string; a notes cell has no
@@ -365,27 +337,9 @@ export function ConceptsPage({
     row: number;
     key: number;
   } | null>(null);
-  // Notes-placed count for the outcome strip, reported up by the checklist nav
-  // (which already fetches coverage) so we don't fetch it twice.
-  const [notesCoverage, setNotesCoverage] = useState<{
-    placed: number;
-    total: number;
-  } | null>(null);
-  // Unresolved notes gaps for the Needs-attention queue, reported up by the
-  // checklist nav (same coverage fetch).
-  const [coverageGaps, setCoverageGaps] = useState<CoverageNavRow[]>([]);
-  // Whether the coverage nav has anything to show. We ALWAYS mount the nav (so
-  // coverage is fetched even when notes_cells is empty — e.g. inventory
-  // unavailable) but only reveal the panel chrome once it reports content.
-  const [coverageHasContent, setCoverageHasContent] = useState(false);
-  // 3-column workspace layout: the Menu and Source PDF columns are both
-  // resizable (drag handle) and hideable (collapse to a thin rail). The
-  // Results column flexes to fill the rest.
-  const [menuWidth, setMenuWidth] = useState(initialWorkspace.current.menuWidth ?? 280);
   // Wider default so the source PDF is actually readable at rest (UX-QA #7f) —
   // still user-resizable/collapsible for reviewers who want more table room.
   const [pdfWidth, setPdfWidth] = useState(initialWorkspace.current.pdfWidth ?? 520);
-  const [menuCollapsed, setMenuCollapsed] = useState(initialWorkspace.current.menuCollapsed ?? false);
   const [pdfCollapsed, setPdfCollapsed] = useState(initialWorkspace.current.pdfCollapsed ?? false);
   // Whether the row carrying the CURRENT selection may scroll itself into
   // view. True only for intentional jumps (row click, reconciliation
@@ -409,9 +363,7 @@ export function ConceptsPage({
       activeTemplate,
       activeSheet,
       selectedConceptUuid,
-      menuWidth,
       pdfWidth,
-      menuCollapsed,
       pdfCollapsed,
     };
     try {
@@ -420,21 +372,7 @@ export function ConceptsPage({
       // Storage can be unavailable in locked-down browsers; review remains
       // fully usable in-memory, so persistence failure is intentionally quiet.
     }
-  }, [runId, searchQuery, rowFilter, activeTemplate, activeSheet, selectedConceptUuid, menuWidth, pdfWidth, menuCollapsed, pdfCollapsed]);
-  // Abort an in-flight recheck on unmount AND on runId change — otherwise a
-  // slow /recheck from run A can land its results onto run B (this component
-  // re-renders rather than remounts when runId changes; the other fetches on
-  // this page already key their cleanup on runId, so recheck must too). Also
-  // clear the now-stale recheck summary + results when the run switches.
-  const recheckAbort = useRef<AbortController | null>(null);
-  useEffect(() => {
-    return () => {
-      recheckAbort.current?.abort();
-      setRecheck({ running: false, summary: null });
-      setCrossChecks([]);
-    };
-  }, [runId]);
-
+  }, [runId, searchQuery, rowFilter, activeTemplate, activeSheet, selectedConceptUuid, pdfWidth, pdfCollapsed]);
   // Initial load.  Peer-review #11: abort the in-flight request on
   // unmount / runId change so a slow response can't land on a stale
   // component or clobber a newer run's data.
@@ -473,44 +411,21 @@ export function ConceptsPage({
     };
   }, [effectiveId, initialView, isBenchmark]);
 
-  // Load the run's notes sheet names so the SheetNavigator can show Notes
-  // sub-tabs. Run-only (the gold editor has no notes). A run with no notes
-  // (404 / empty) leaves the list empty, so Notes stays a single entry.
-  useEffect(() => {
-    if (runId == null || isBenchmark) return;
-    let cancelled = false;
-    fetchNotesCells(runId)
-      .then((resp) => {
-        if (cancelled) return;
-        setNotesSheets(sortSheetsBySlot(resp.sheets).map((s) => s.sheet));
-      })
-      .catch(() => {
-        if (!cancelled) setNotesSheets([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [runId, isBenchmark]);
-
-  // Refresh the edited-values count on load and after every successful edit
-  // (conflictReloadKey is bumped on the same path).
   useEffect(() => {
     if (runId == null) return;
     const controller = new AbortController();
     fetch(`/api/runs/${runId}/facts/edited_count`, { signal: controller.signal })
-      .then((r) => (r.ok ? r.json() : { count: 0 }))
-      .then((d) => setEditedCount(d.count || 0))
-      .catch((err) => {
-        if (err?.name !== "AbortError") setEditedCount(0);
+      .then((response) => (response.ok ? response.json() : { count: 0 }))
+      .then((payload) => setEditedCount(payload.count || 0))
+      .catch((error) => {
+        if (error?.name !== "AbortError") setEditedCount(0);
       });
     return () => controller.abort();
   }, [runId, conflictReloadKey]);
 
-  // M3 — open-conflict counts per template, for the navigator's badges. We
-  // fetch the same /conflicts endpoint the reconciliation queue uses (keyed on
-  // conflictReloadKey so it refreshes after an edit) and roll them up by the
-  // owning concept's template. A separate lightweight fetch keeps the queue's
-  // own resolve/dismiss state untouched.
+  // Open-conflict counts feed the compact attention control. Keep the request
+  // keyed on conflictReloadKey so it refreshes after an edit or a manual
+  // resolve/dismiss action.
   const [conflictCounts, setConflictCounts] = useState<Record<string, number>>(
     {}
   );
@@ -524,16 +439,19 @@ export function ConceptsPage({
           concepts.map((c) => [c.concept_uuid, c.template_id])
         );
         const counts: Record<string, number> = {};
-        for (const cf of (data.conflicts || []).filter(
+        const openConflicts = (data.conflicts || []).filter(
           (c: { status: string }) => c.status === "open"
-        )) {
+        );
+        for (const cf of openConflicts) {
           const tid = templateByUuid.get(cf.concept_uuid);
           if (tid) counts[tid] = (counts[tid] || 0) + 1;
         }
         setConflictCounts(counts);
       })
       .catch((err) => {
-        if (err?.name !== "AbortError") setConflictCounts({});
+        if (err?.name !== "AbortError") {
+          setConflictCounts({});
+        }
       });
     return () => controller.abort();
   }, [runId, conflictReloadKey, concepts]);
@@ -636,7 +554,7 @@ export function ConceptsPage({
         );
         setEditStatus((s) => ({ ...s, [editKey]: "saved" }));
         // A leaf edit may open or clear a partial-state conflict in the
-        // cascade — refresh the reconciliation queue. (No-op for benchmark
+        // cascade — refresh the compact attention count. (No-op for benchmark
         // gold, which has no cascade/conflicts.)
         setConflictReloadKey((k) => k + 1);
       } catch (err) {
@@ -646,42 +564,6 @@ export function ConceptsPage({
     },
     [effectiveId, isBenchmark, activeScope]
   );
-
-  // Phase 4.3 — re-run cross-checks against the current (edited) facts and
-  // summarise the pass/fail counts so the user can validate without a full
-  // pipeline re-run.
-  const onRecheck = useCallback(async () => {
-    if (runId == null) return;
-    recheckAbort.current?.abort();
-    const controller = new AbortController();
-    recheckAbort.current = controller;
-    setRecheck({ running: true, summary: null });
-    try {
-      const resp = await fetch(`/api/runs/${runId}/recheck`, {
-        signal: controller.signal,
-      });
-      if (!resp.ok) {
-        setRecheck({ running: false, summary: "Re-check unavailable" });
-        return;
-      }
-      const data = await resp.json();
-      const results: CrossCheckResult[] = data.results || [];
-      // Backend statuses are "passed" / "failed" / "warning" /
-      // "not_applicable" / "pending" (cross_checks.framework). Match those
-      // exactly — "pass"/"fail" would always count 0.
-      const passed = results.filter((r) => r.status === "passed").length;
-      const failed = results.filter((r) => r.status === "failed").length;
-      const warnings = results.filter((r) => r.status === "warning").length;
-      setCrossChecks(results);
-      setRecheck({
-        running: false,
-        summary: `${passed} passed · ${failed} failed · ${warnings} warnings`,
-      });
-    } catch (err) {
-      if ((err as { name?: string })?.name === "AbortError") return;
-      setRecheck({ running: false, summary: "Re-check failed" });
-    }
-  }, [runId]);
 
   // Review Workspace M2 — select a concept from outside the grid (e.g. a
   // reconciliation conflict). The conflict only knows the concept_uuid, so we
@@ -719,7 +601,7 @@ export function ConceptsPage({
     [concepts, handleSelectConcept]
   );
 
-  // Distinct templates for the navigator, in financial-statement reading
+  // Distinct templates for the compact picker, in financial-statement reading
   // order (SOFP → SOPL → SOCI → SOCIE → SOCF) — the backend's incidental
   // order surfaced alphabetically, putting cash flows first (run-168 design
   // critique). Array.sort is stable, so unrecognised templates keep their
@@ -730,10 +612,8 @@ export function ConceptsPage({
   }
   templates.sort((a, b) => templateSortKey(a) - templateSortKey(b));
 
-  // Per-template ordered render_sheets — the navigator expands a face
-  // statement (one template, several sub-sheets) into nested entries so the
-  // reviewer can jump straight to a sub-sheet instead of scrolling one flat
-  // tree. Single-sheet templates have no children and behave as before.
+  // Per-template ordered render_sheets let the compact picker retain access to
+  // statement breakdowns without reintroducing a second sidebar.
   const sheetsByTemplate = useMemo(() => {
     const map: Record<string, string[]> = {};
     for (const c of concepts) {
@@ -743,17 +623,10 @@ export function ConceptsPage({
     return map;
   }, [concepts]);
 
-  // Cross-check state is needed both by the outcome strip and the row filter,
-  // so derive it before constructing the visible table rows.
-  const effectiveChecks = useMemo(
-    () => (crossChecks.length > 0 ? crossChecks : initialCrossChecks ?? []),
-    [crossChecks, initialCrossChecks],
-  );
-  const checksPassing = effectiveChecks.filter((c) => c.status === "passed").length;
-  const checksGraded = effectiveChecks.filter(
-    (c) => c.status === "passed" || c.status === "failed",
-  ).length;
-  const advisoryCount = effectiveChecks.filter((c) => c.status === "warning").length;
+  // Cross-check state drives the focused attention queue and row filter. The
+  // repeated summary cards and re-run action live on Overview/Cross-checks,
+  // not inside the editing surface.
+  const effectiveChecks = initialCrossChecks ?? [];
   const failingChecks = useMemo(
     () => effectiveChecks.filter(
       (c) => c.status === "failed" || c.status === "warning",
@@ -847,14 +720,6 @@ export function ConceptsPage({
   }, [concepts, searchQuery, activeTemplate, activeSheet, rowFilter, editStatus, actionableChecks]);
 
   useEffect(() => {
-    setAttentionIndex((current) =>
-      actionableChecks.length === 0
-        ? 0
-        : Math.min(current, actionableChecks.length - 1),
-    );
-  }, [actionableChecks.length]);
-
-  useEffect(() => {
     if (notesActive) {
       setSelectedConceptUuid(null);
       return;
@@ -897,20 +762,12 @@ export function ConceptsPage({
     return parseEvidencePages(selectedScopedConcept?.source);
   }, [selectedScopedConcept?.evidence, selectedScopedConcept?.source]);
 
-  // Clear the focused-note + coverage state on a run switch (this component is
-  // reused across runs, not remounted). Without resetting notesCoverage /
-  // coverageGaps, the previous run's "Notes placed" metric and Needs-attention
-  // rows would linger if the next run self-hides the coverage nav. (Not keyed
-  // on sheet/template change — the notes checklist sets both the target pages
-  // AND the sheet in one go, so an effect keyed on those would wipe the pages
-  // it just set.)
+  // Clear the focused note on a run switch. Not keyed on sheet/template change:
+  // a requested note focus sets the destination and PDF pages together.
   useEffect(() => {
     setNotesPdfPages([]);
     setNotesCellSelected(false);
     setNotesFocusCell(null);
-    setNotesCoverage(null);
-    setCoverageGaps([]);
-    setCoverageHasContent(false);
   }, [runId]);
 
   // Focusing a notes cell in the editor: follow its recorded pages (possibly
@@ -949,39 +806,6 @@ export function ConceptsPage({
   // when the notes editor is active, otherwise the selected face concept's
   // evidence pages.
   const pdfPages = notesActive ? notesPdfPages : selectedEvidencePages;
-
-  // Notes checklist click → navigate to that note. A placed note opens its
-  // sheet and scrolls to the exact cell; a missing note opens the Source PDF at
-  // the note's inventory pages so the reviewer can see what wasn't captured.
-  // Either way the PDF follows the note's page range.
-  const handleCoverageSelect = useCallback((row: CoverageNavRow) => {
-    setSearchQuery("");
-    setActiveTemplate(NOTES_KEY);
-    const pages =
-      row.page_lo != null
-        ? Array.from(
-            { length: Math.max(0, (row.page_hi ?? row.page_lo) - row.page_lo) + 1 },
-            (_, i) => (row.page_lo as number) + i,
-          )
-        : [];
-    setNotesPdfPages(pages);
-    const placement = row.placements[0];
-    // A placed note targets a specific cell (selected); a missing note has
-    // no cell to select — the pane just shows the note's inventory pages.
-    setNotesCellSelected(!!placement);
-    if (placement) {
-      setActiveNotesSheet(placement.sheet);
-      setNotesFocusCell((c) => ({
-        sheet: placement.sheet,
-        row: placement.row,
-        key: (c?.key ?? 0) + 1,
-      }));
-    } else {
-      // Nowhere placed — show all notes and let the PDF carry the evidence.
-      setActiveNotesSheet(null);
-      setNotesFocusCell(null);
-    }
-  }, []);
 
   // Eval (v16): benchmark gold editor — a compact reuse of the same grid,
   // without the run-only chrome (no PDF pane, conflicts, notes, download). Gold
@@ -1094,113 +918,7 @@ export function ConceptsPage({
     0
   );
   const attentionCount =
-    failingChecks.length + coverageGaps.length + totalOpenConflicts;
-  const moveAttention = (delta: number) => {
-    if (actionableChecks.length === 0) return;
-    const next = (attentionIndex + delta + actionableChecks.length) % actionableChecks.length;
-    setAttentionIndex(next);
-    const check = actionableChecks[next];
-    handleSelectTarget(check.target_sheet as string, check.target_row as number);
-  };
-
-  const menuColumn = (
-    <div className="review-menu-column" style={{ ...styles.column, flex: `0 0 ${menuWidth}px`, width: menuWidth }}>
-      <ColumnHeader
-        title={TERMS.documentColumn}
-        testId="menu"
-        onHide={() => setMenuCollapsed(true)}
-      />
-      <CollapsiblePanel title="Sheets" testId="panel-sheets">
-        <SheetNavigator
-          templates={templates}
-          sheetsByTemplate={sheetsByTemplate}
-          activeTemplate={activeTemplate}
-          activeSheet={activeSheet}
-          notesKey={NOTES_KEY}
-          notesSheets={notesSheets}
-          activeNotesSheet={activeNotesSheet}
-          conflictCounts={conflictCounts}
-          onSelectTemplate={(tid) => {
-            // Switching sheets clears any active search so the chosen sheet's
-            // rows are actually shown (search overrides the template view), and
-            // clears the sub-sheet filter so the whole template is shown.
-            setSearchQuery("");
-            setActiveTemplate(tid);
-            setActiveSheet(null);
-            // Selecting the Notes header (or any face template) clears the
-            // notes sub-sheet focus so the editor shows all notes again.
-            setActiveNotesSheet(null);
-          }}
-          onSelectSheet={(tid, sheet) => {
-            setSearchQuery("");
-            setActiveTemplate(tid);
-            setActiveSheet(sheet);
-          }}
-          onSelectNotesSheet={(sheet) => {
-            setSearchQuery("");
-            setActiveTemplate(NOTES_KEY);
-            setActiveNotesSheet(sheet);
-            // Manual sub-tab switch: drop the previous note's PDF pages AND
-            // its selection so the pane waits for a fresh cell focus rather
-            // than showing stale pages.
-            setNotesPdfPages([]);
-            setNotesCellSelected(false);
-          }}
-        />
-      </CollapsiblePanel>
-      {/* Always mounted so /notes-coverage is fetched for EVERY run — a run
-          whose notes extraction produced no cells can still have an
-          inventory-unavailable state that must surface loudly (gotcha #27).
-          The nav self-hides on a face-only / pre-feature run and reports that
-          via onVisible, so we keep the panel chrome hidden (display:none, not
-          unmounted) until there's content. */}
-      <div style={coverageHasContent ? undefined : { display: "none" }}>
-        <CollapsiblePanel
-          title={
-            notesCoverage && notesCoverage.total > 0
-              ? `Notes checklist (${notesCoverage.placed}/${notesCoverage.total})`
-              : "Notes checklist"
-          }
-          testId="panel-notes-checklist"
-          defaultOpen={notesActive}
-          keepMounted
-        >
-          <NotesCoverageNav
-            runId={runId}
-            activeSheet={notesActive ? activeNotesSheet : null}
-            onSelectNote={handleCoverageSelect}
-            onSummary={setNotesCoverage}
-            onGaps={setCoverageGaps}
-            onVisible={setCoverageHasContent}
-          />
-        </CollapsiblePanel>
-      </div>
-      <CollapsiblePanel
-        title={`${TERMS.needsAttention}${attentionCount > 0 ? ` (${attentionCount})` : ""}`}
-        testId="panel-attention"
-        defaultOpen={attentionCount > 0}
-        openWhen={attentionCount > 0}
-        keepMounted
-      >
-        <NeedsAttentionPanel
-          failingChecks={failingChecks}
-          onSelectCheck={handleSelectTarget}
-          coverageGaps={coverageGaps}
-          onSelectNote={handleCoverageSelect}
-          openConflicts={totalOpenConflicts}
-          reconciliation={
-            <ReconciliationQueue
-              runId={runId}
-              reloadKey={conflictReloadKey}
-              onSelectConcept={handleSelectConcept}
-              embedded
-            />
-          }
-        />
-      </CollapsiblePanel>
-    </div>
-  );
-
+    failingChecks.length + totalOpenConflicts;
   const pdfColumn = (
     <div className="review-source-column" style={{ ...styles.column, flex: `0 0 ${pdfWidth}px`, width: pdfWidth }}>
       <ColumnHeader
@@ -1236,140 +954,16 @@ export function ConceptsPage({
 
   return (
     <div data-testid="concepts-page" className="review-workspace" style={styles.shell}>
-      {/* Column 1 — Document (statements, notes checklist, needs-attention) */}
-      {menuCollapsed ? (
-        <CollapsedRail
-          label={TERMS.documentColumn}
-          testId="menu"
-          onExpand={() => setMenuCollapsed(false)}
-        />
-      ) : (
-        <>
-          {menuColumn}
-          <ResizeHandle
-            testId="resize-menu"
-            onDelta={(dx) => setMenuWidth((w) => clamp(w + dx, 200, 520))}
-          />
-        </>
-      )}
-
-      {/* Column 2 — Results + concept grid (always visible, flexes to fill).
+      {/* Results + concept grid (always visible, flexes to fill).
           Sits directly beside the Source PDF so a value and the document page
-          it came from are adjacent — no center-then-far-left eye travel. */}
+          it came from are adjacent. Sheet selection and attention are compact
+          controls here instead of a repeated second sidebar. */}
       <section aria-label="Review results" style={styles.resultsCol}>
-        <section style={styles.reviewHeader}>
-          <div style={styles.titleRow}>
-            <div>
-              <h1 style={styles.pageTitle}>{TERMS.reviewWorkspaceTitle}</h1>
-            </div>
-            <div style={styles.actionRow}>
-              {actionableChecks.length > 0 && (
-                <div style={styles.issueNav} aria-label="Issue navigation">
-                  <button
-                    type="button"
-                    className={uiClass.btnSecondary}
-                    style={{ ...ui.buttonSecondary, ...ui.buttonSm }}
-                    onClick={() => moveAttention(-1)}
-                    aria-label="Previous issue"
-                    data-tooltip="Previous issue"
-                  >
-                    ←
-                  </button>
-                  <span style={ui.metadata}>{Math.min(attentionIndex + 1, actionableChecks.length)} / {actionableChecks.length}</span>
-                  <button
-                    type="button"
-                    className={uiClass.btnSecondary}
-                    style={{ ...ui.buttonSecondary, ...ui.buttonSm }}
-                    onClick={() => moveAttention(1)}
-                    aria-label="Next issue"
-                    data-tooltip="Next issue"
-                  >
-                    →
-                  </button>
-                </div>
-              )}
-              {recheck.summary && (
-                <span data-testid="recheck-summary" style={styles.recheckSummary} role="status" aria-live="polite">
-                  {recheck.summary}
-                </span>
-              )}
-              <button
-                data-testid="recheck-btn"
-                className={uiClass.btnSecondary}
-                onClick={onRecheck}
-                disabled={recheck.running}
-                title="Rerun consistency checks using the current saved figures"
-                style={{
-                  ...ui.buttonSecondary,
-                  cursor: recheck.running ? "default" : "pointer",
-                  opacity: recheck.running ? 0.7 : 1,
-                }}
-              >
-                {recheck.running ? TERMS.validatingFigures : TERMS.validateFigures}
-              </button>
-              {/* No Download button here — the run header directly above this
-                  workspace already carries the one primary "Download filled
-                  Excel" action. Two identical primary CTAs on one screen made
-                  users ask whether they differ (run-168 design critique). */}
-            </div>
-          </div>
-
-          {/* Outcome strip — what a reviewer cares about (are the checks
-              passing, did the notes land, what have I changed), not row counts
-              (review-workspace Phase 3). Metrics only appear when their source
-              exists, so a face-only run drops "Notes placed" and a run with no
-              cross-checks drops "Checks passing". */}
-          <div style={styles.summaryStrip} aria-label="Review summary">
-            {checksGraded > 0 && (
-              <ReviewMetric
-                label="Checks passing"
-                value={`${checksPassing}/${checksGraded}`}
-                tone={checksPassing === checksGraded ? "success" : "warning"}
-                caption={
-                  advisoryCount > 0
-                    ? `${advisoryCount} advisory note${advisoryCount === 1 ? "" : "s"} to review (not counted above)`
-                    : undefined
-                }
-              />
-            )}
-            {notesCoverage && notesCoverage.total > 0 && (
-              <ReviewMetric
-                label="Notes placed"
-                value={`${notesCoverage.placed}/${notesCoverage.total}`}
-                tone={
-                  notesCoverage.placed === notesCoverage.total
-                    ? "success"
-                    : "warning"
-                }
-              />
-            )}
-            {/* Neutral, not amber: an edit count is information, not a
-                problem. Amber is reserved for the checks metric so its signal
-                stays meaningful. The explanation lives IN the card (it used
-                to be repeated in a separate banner directly below). */}
-            <ReviewMetric
-              label="Your edits"
-              value={String(editedCount)}
-              tone="neutral"
-              caption={
-                editedCount > 0
-                  ? `${editedCount} value${editedCount === 1 ? "" : "s"} edited since the run finished — included in the downloaded Excel; re-running an agent overwrites them.`
-                  : undefined
-              }
-              captionTestId="edited-values-banner"
-            />
-          </div>
-        </section>
-
         {loadError && (
           <div style={styles.errorBanner}>
             Failed to load concepts: {loadError}
           </div>
         )}
-
-        {/* Failing cross-checks now surface in the left-column "Needs
-            attention" queue (click-to-cell); the dedicated Cross-checks tab
-            keeps the full expected/actual detail. */}
 
         {/* Both toolbar controls only apply to figure sheets, so on a
             notes sheet the whole card is skipped — rendering the shell
@@ -1377,6 +971,38 @@ export function ConceptsPage({
             the outcome strip and the notes editor (run-168 QA finding). */}
         {!notesActive && (
           <section style={styles.toolbar} aria-label="Review controls">
+            <div style={styles.controlGroup}>
+              <label htmlFor="review-sheet-picker" style={ui.fieldLabel}>
+                Statement
+              </label>
+              <select
+                id="review-sheet-picker"
+                data-testid="review-sheet-picker"
+                value={`${activeTemplate ?? ""}::${activeSheet ?? ""}`}
+                onChange={(event) => {
+                  const [templateId, sheet = ""] = event.target.value.split("::");
+                  setSearchQuery("");
+                  setActiveTemplate(templateId || null);
+                  setActiveSheet(sheet || null);
+                }}
+                style={ui.select}
+              >
+                {templates.flatMap((templateId) => {
+                  const sheets = sheetsByTemplate[templateId] ?? [];
+                  const label = templateDisplayName(templateId);
+                  return [
+                    <option key={`${templateId}:all`} value={`${templateId}::`}>
+                      {label}
+                    </option>,
+                    ...(sheets.length > 1 ? sheets : []).map((sheet) => (
+                      <option key={`${templateId}:${sheet}`} value={`${templateId}::${sheet}`}>
+                        {label} · {sheet}
+                      </option>
+                    )),
+                  ];
+                })}
+              </select>
+            </div>
             {isGroupRun && (
               <div style={styles.controlGroup}>
                 <span style={ui.fieldLabel}>Entity</span>
@@ -1428,6 +1054,68 @@ export function ConceptsPage({
             <span style={styles.visibleRowCount} role="status" aria-live="polite">
               {filtered.length} figure row{filtered.length === 1 ? "" : "s"} shown
             </span>
+            {editedCount > 0 && (
+              <span data-testid="edited-values-summary" style={styles.editedValuesSummary}>
+                {editedCount} saved edit{editedCount === 1 ? "" : "s"} · included in the download;
+                re-running extraction overwrites {editedCount === 1 ? "it" : "them"}
+              </span>
+            )}
+            {attentionCount > 0 && (
+              <button
+                type="button"
+                data-testid="review-attention-control"
+                style={styles.attentionControl}
+                title={`${attentionCount} item${attentionCount === 1 ? "" : "s"} need attention`}
+                aria-expanded={attentionOpen}
+                onClick={() => setAttentionOpen((open) => !open)}
+              >
+                <span aria-hidden="true">!</span> {attentionCount}
+              </button>
+            )}
+          </section>
+        )}
+
+        {!notesActive && attentionOpen && attentionCount > 0 && (
+          <section data-testid="review-attention-panel" style={styles.attentionPanel}>
+            {failingChecks.length > 0 && (
+              <div>
+                <h2 style={styles.attentionHeading}>Checks needing attention</h2>
+                <ul style={styles.attentionList}>
+                  {failingChecks.map((check, index) => {
+                    const canSelect = Boolean(check.target_sheet && check.target_row != null);
+                    return (
+                      <li key={`${check.name}:${index}`}>
+                        <button
+                          type="button"
+                          data-testid={`review-attention-check-${index}`}
+                          style={styles.attentionItem}
+                          disabled={!canSelect}
+                          onClick={() => {
+                            if (canSelect) {
+                              handleSelectTarget(check.target_sheet as string, check.target_row as number);
+                            }
+                          }}
+                        >
+                          {check.message || check.name}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            )}
+            {totalOpenConflicts > 0 && (
+              <div>
+                <h2 style={styles.attentionHeading}>Figures to reconcile</h2>
+                <ReconciliationQueue
+                  runId={runId}
+                  reloadKey={conflictReloadKey}
+                  onSelectConcept={handleSelectConcept}
+                  onConflictResolved={() => setConflictReloadKey((key) => key + 1)}
+                  embedded
+                />
+              </div>
+            )}
           </section>
         )}
 
@@ -1441,6 +1129,7 @@ export function ConceptsPage({
               focusCell={notesFocusCell}
               onActiveCellPages={handleNotesCellPages}
               onRegenerate={onRegenerateNotes}
+              compactSingleCell
             />
           </div>
         ) : filtered.length > 0 && filtered.every((r) => r.shape === "matrix") ? (
@@ -1501,9 +1190,8 @@ export function ConceptsPage({
 }
 
 // ---------------------------------------------------------------------------
-// Layout primitives for the 3-column workspace — a generic collapsible panel,
-// per-column hide header + collapsed rail, and a drag-to-resize handle. Inline
-// styles only (gotcha #7).
+// Layout primitives for the review workspace — a generic collapsible panel,
+// Source-PDF hide header / collapsed rail, and a drag-to-resize handle.
 // ---------------------------------------------------------------------------
 
 function clamp(v: number, min: number, max: number): number {
@@ -2356,44 +2044,6 @@ function ReadOnlyValue({
   );
 }
 
-function ReviewMetric({
-  label,
-  value,
-  tone = "neutral",
-  caption,
-  captionTestId,
-}: {
-  label: string;
-  value: string;
-  tone?: "neutral" | "accent" | "warning" | "success";
-  /** Optional one-line explanation rendered inside the card — used by the
-   *  edits metric so the same fact isn't told twice (card + banner). */
-  caption?: string;
-  captionTestId?: string;
-}) {
-  // Direction A keeps metrics borderless. Tone is carried by the compact label
-  // only; active and warning states must not grow an accent rule of their own.
-  const palette =
-    tone === "accent"
-      ? { label: pwc.orange700 }
-      : tone === "warning"
-      ? { label: pwc.warningText }
-      : tone === "success"
-      ? { label: pwc.successText }
-      : { label: pwc.grey700 };
-  return (
-    <div style={styles.metric}>
-      <span style={styles.metricValue}>{value}</span>
-      <span style={{ ...styles.metricLabel, color: palette.label }}>{label}</span>
-      {caption && (
-        <span data-testid={captionTestId} style={styles.metricCaption}>
-          {caption}
-        </span>
-      )}
-    </div>
-  );
-}
-
 function SegmentedControl<T extends string>({
   testId,
   values,
@@ -2454,171 +2104,6 @@ function StatusBadge({
       <StatusIcon symbol={symbol} size={12} />
       {label.replace(/_/g, " ")}
     </span>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// SheetNavigator — M3. An always-visible left rail listing each template (and
-// the Notes editor) so reviewers switch sheets in one click instead of hunting
-// through a dropdown. Each item carries an open-conflict count badge so the
-// reviewer can triage where to look first.
-// ---------------------------------------------------------------------------
-
-function SheetNavigator({
-  templates,
-  sheetsByTemplate,
-  activeTemplate,
-  activeSheet,
-  notesKey,
-  notesSheets,
-  activeNotesSheet,
-  conflictCounts,
-  onSelectTemplate,
-  onSelectSheet,
-  onSelectNotesSheet,
-}: {
-  templates: string[];
-  sheetsByTemplate: Record<string, string[]>;
-  activeTemplate: string | null;
-  activeSheet: string | null;
-  notesKey: string;
-  notesSheets: string[];
-  activeNotesSheet: string | null;
-  conflictCounts: Record<string, number>;
-  onSelectTemplate: (templateId: string) => void;
-  onSelectSheet: (templateId: string, sheet: string) => void;
-  onSelectNotesSheet: (sheet: string) => void;
-}) {
-  const notesActive = activeTemplate === notesKey;
-  // Mirror the face-statement pattern: when Notes is the active surface and the
-  // run has notes sheets, expand them as sub-tabs so the reviewer jumps to one
-  // note directly instead of scrolling the single stacked editor.
-  const showNotesSubSheets = notesActive && notesSheets.length > 0;
-  return (
-    <nav
-      data-testid="sheet-navigator"
-      aria-label="Sheets"
-      style={styles.sideNav}
-    >
-      {templates.map((tid) => {
-        const active = tid === activeTemplate;
-        const count = conflictCounts[tid] || 0;
-        const sheets = sheetsByTemplate[tid] || [];
-        // A statement workbook is split across several sub-sheets (face +
-        // breakdowns). Expand them as nested entries under the active
-        // template so the reviewer can jump to one sub-sheet directly. Only
-        // worth showing when there's more than one sheet.
-        const showSubSheets = active && sheets.length > 1;
-        return (
-          <div key={tid}>
-            <button
-              type="button"
-              data-testid={`sheet-nav-${tid}`}
-              aria-current={active && activeSheet == null ? "true" : undefined}
-              onClick={() => onSelectTemplate(tid)}
-              style={{
-                ...styles.sideNavItem,
-                // Highlight the template header only when it represents the
-                // current view (all sheets); a selected sub-sheet dims it.
-                background: active && activeSheet == null ? pwc.grey50 : pwc.white,
-                color: active && activeSheet == null ? pwc.grey900 : pwc.grey800,
-                borderColor: pwc.grey200,
-                fontWeight: active && activeSheet == null ? 600 : 500,
-              }}
-            >
-              <span style={{ ...styles.sideNavLabel, ...styles.sideNavLabelStack }} title={tid}>
-                {templateDisplayName(tid)}
-                {/* Plain-English gloss under the MBRS acronym — "SOFP" alone
-                    assumes the reader speaks taxonomy shorthand. */}
-                {templateSubtitle(tid) && (
-                  <span style={styles.sideNavSubtitle}>{templateSubtitle(tid)}</span>
-                )}
-              </span>
-              {count > 0 && (
-                <span
-                  data-testid={`sheet-nav-count-${tid}`}
-                  style={styles.sideNavBadge}
-                  title={`${count} open conflict${count === 1 ? "" : "s"}`}
-                >
-                  {count}
-                </span>
-              )}
-            </button>
-            {showSubSheets && (
-              <div style={styles.sideNavSubGroup}>
-                {sheets.map((sheet) => {
-                  const sheetActive = active && activeSheet === sheet;
-                  return (
-                    <button
-                      key={sheet}
-                      type="button"
-                      data-testid={`sheet-nav-sheet-${tid}-${sheet}`}
-                      aria-current={sheetActive ? "true" : undefined}
-                      onClick={() => onSelectSheet(tid, sheet)}
-                      style={{
-                        ...styles.sideNavSubItem,
-                        background: sheetActive ? pwc.grey50 : pwc.white,
-                        color: sheetActive ? pwc.grey900 : pwc.grey700,
-                        borderColor: pwc.grey200,
-                        fontWeight: sheetActive ? 600 : 400,
-                      }}
-                    >
-                      <span style={styles.sideNavLabel}>{sheet}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        );
-      })}
-      <div>
-        <button
-          type="button"
-          data-testid={`sheet-nav-${notesKey}`}
-          aria-current={notesActive && activeNotesSheet == null ? "true" : undefined}
-          onClick={() => onSelectTemplate(notesKey)}
-          style={{
-            ...styles.sideNavItem,
-            // Highlight the Notes header only when showing all notes; a
-            // selected sub-tab dims it (mirrors the face-template behaviour).
-            background: notesActive && activeNotesSheet == null ? pwc.grey50 : pwc.white,
-            color: notesActive && activeNotesSheet == null ? pwc.grey900 : pwc.grey800,
-            borderColor: pwc.grey200,
-            fontWeight: notesActive && activeNotesSheet == null ? 600 : 500,
-          }}
-        >
-          <span style={styles.sideNavLabel}>Notes</span>
-        </button>
-        {showNotesSubSheets && (
-          <div style={styles.sideNavSubGroup}>
-            {notesSheets.map((sheet) => {
-              const sheetActive = notesActive && activeNotesSheet === sheet;
-              return (
-                <button
-                  key={sheet}
-                  type="button"
-                  data-testid={`sheet-nav-notes-${sheet}`}
-                  aria-current={sheetActive ? "true" : undefined}
-                  onClick={() => onSelectNotesSheet(sheet)}
-                  style={{
-                    ...styles.sideNavSubItem,
-                    background: sheetActive ? pwc.grey50 : pwc.white,
-                    color: sheetActive ? pwc.grey900 : pwc.grey700,
-                    borderColor: pwc.grey200,
-                    fontWeight: sheetActive ? 600 : 400,
-                  }}
-                >
-                  <span style={styles.sideNavLabel} title={sheet}>
-                    {notesSheetDisplayName(sheet)}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    </nav>
   );
 }
 
@@ -2868,7 +2353,7 @@ function EditableValueCell({
 }
 
 const styles = {
-  // 3-column workspace shell. No flex-wrap: columns keep their row so the
+  // Review workspace shell. No flex-wrap: columns keep their row so the
   // resize handles stay between them; the Results column flexes to fill.
   shell: {
     display: "flex",
@@ -2992,76 +2477,6 @@ const styles = {
   panelBody: {
     padding: pwc.space.lg,
   } as React.CSSProperties,
-  reviewHeader: {
-    padding: `${pwc.space.sm}px 0 ${pwc.space.lg}px`,
-    marginBottom: pwc.space.lg,
-    borderBottom: `1px solid ${pwc.grey200}`,
-  } as React.CSSProperties,
-  titleRow: {
-    display: "flex",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-    gap: pwc.space.xl,
-    flexWrap: "wrap",
-  } as React.CSSProperties,
-  pageTitle: {
-    fontFamily: pwc.fontHeading,
-    color: pwc.grey900,
-    fontSize: 24,
-    fontWeight: pwc.weight.medium,
-    lineHeight: 1.25,
-    margin: 0,
-  } as React.CSSProperties,
-  actionRow: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "flex-end",
-    gap: pwc.space.md,
-    flexWrap: "wrap",
-  } as React.CSSProperties,
-  issueNav: {
-    display: "flex",
-    alignItems: "center",
-    gap: pwc.space.sm,
-  } as React.CSSProperties,
-  recheckSummary: {
-    fontSize: 12,
-    color: pwc.grey700,
-    whiteSpace: "nowrap",
-  } as React.CSSProperties,
-  summaryStrip: {
-    display: "flex",
-    flexWrap: "wrap" as const,
-    gap: pwc.space.md,
-    marginTop: pwc.space.lg,
-  } as React.CSSProperties,
-  metric: {
-    border: "none",
-    padding: `${pwc.space.xs}px ${pwc.space.lg}px`,
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: 2,
-    minWidth: 112,
-  } as React.CSSProperties,
-  metricValue: {
-    fontFamily: pwc.fontBody,
-    fontVariantNumeric: "tabular-nums",
-    fontSize: 18,
-    fontWeight: pwc.weight.regular,
-    color: pwc.grey900,
-  } as React.CSSProperties,
-  metricLabel: {
-    fontFamily: pwc.fontHeading,
-    fontSize: 13,
-    fontWeight: 500,
-    letterSpacing: 0,
-  } as React.CSSProperties,
-  metricCaption: {
-    fontSize: 12,
-    lineHeight: 1.45,
-    color: pwc.grey700,
-    marginTop: 2,
-  } as React.CSSProperties,
   errorBanner: {
     marginBottom: pwc.space.md,
     padding: `${pwc.space.sm}px ${pwc.space.md}px`,
@@ -3072,12 +2487,8 @@ const styles = {
     fontSize: 13,
     lineHeight: 1.5,
   } as React.CSSProperties,
-  crossChecksWrap: {
-    marginBottom: pwc.space.lg,
-  } as React.CSSProperties,
   toolbar: {
-    ...ui.card,
-    padding: pwc.space.lg,
+    padding: `0 0 ${pwc.space.md}px`,
     marginBottom: pwc.space.lg,
     display: "flex",
     flexWrap: "wrap",
@@ -3106,6 +2517,57 @@ const styles = {
     paddingBottom: pwc.space.sm,
     whiteSpace: "nowrap" as const,
   } as React.CSSProperties,
+  editedValuesSummary: {
+    maxWidth: 280,
+    color: pwc.grey700,
+    fontSize: 12,
+    lineHeight: 1.35,
+  } as React.CSSProperties,
+  attentionControl: {
+    minWidth: 36,
+    minHeight: 36,
+    padding: `0 ${pwc.space.sm}px`,
+    border: `1px solid ${pwc.grey300}`,
+    borderRadius: pwc.radius.sm,
+    background: pwc.white,
+    color: pwc.orange500,
+    fontFamily: pwc.fontBody,
+    fontSize: 12,
+    fontWeight: 700,
+    cursor: "pointer",
+  } as React.CSSProperties,
+  attentionPanel: {
+    display: "grid",
+    gap: pwc.space.lg,
+    margin: `-${pwc.space.sm}px 0 ${pwc.space.lg}px`,
+    padding: pwc.space.lg,
+    border: `1px solid ${pwc.grey200}`,
+    borderRadius: pwc.radius.md,
+    background: pwc.white,
+  } as React.CSSProperties,
+  attentionHeading: {
+    margin: `0 0 ${pwc.space.sm}px`,
+    color: pwc.grey900,
+    fontFamily: pwc.fontHeading,
+    fontSize: 13,
+    fontWeight: pwc.weight.semibold,
+  } as React.CSSProperties,
+  attentionList: {
+    listStyle: "none",
+    margin: 0,
+    padding: 0,
+  } as React.CSSProperties,
+  attentionItem: {
+    width: "100%",
+    padding: `${pwc.space.sm}px 0`,
+    border: "none",
+    background: "transparent",
+    color: pwc.grey900,
+    fontFamily: pwc.fontBody,
+    fontSize: 13,
+    textAlign: "left" as const,
+    cursor: "pointer",
+  } as React.CSSProperties,
   segmented: {
     display: "inline-flex",
     border: `1px solid ${pwc.grey300}`,
@@ -3123,87 +2585,6 @@ const styles = {
     fontSize: 14,
     fontWeight: pwc.weight.medium,
     minWidth: 54,
-  } as React.CSSProperties,
-  sideNav: {
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: pwc.space.sm,
-    minWidth: 0,
-    // Bound the sheet list to its own scroll area so the lower entries —
-    // notably Notes and its sub-tabs — are always reachable even when the
-    // page is embedded in the Values tab (where the column's outer scroll
-    // can be clipped by the tab container). Without this the tail of the
-    // list got pushed off-screen with no way to scroll to it.
-    maxHeight: "min(52vh, 540px)",
-    overflowY: "auto" as const,
-    paddingRight: pwc.space.xs,
-  } as React.CSSProperties,
-  sideNavItem: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: pwc.space.sm,
-    width: "100%",
-    textAlign: "left" as const,
-    padding: `${pwc.space.md}px ${pwc.space.lg}px`,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.lg,
-    cursor: "pointer",
-    fontFamily: pwc.fontBody,
-    fontSize: 14,
-    fontWeight: 500,
-  } as React.CSSProperties,
-  sideNavLabel: {
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap" as const,
-    minWidth: 0,
-  } as React.CSSProperties,
-  // Stacks the statement code over its plain-English subtitle.
-  sideNavLabelStack: {
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: 1,
-  } as React.CSSProperties,
-  sideNavSubtitle: {
-    fontSize: 11,
-    fontWeight: pwc.weight.regular,
-    color: pwc.grey500,
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap" as const,
-  } as React.CSSProperties,
-  sideNavSubGroup: {
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: pwc.space.sm,
-    margin: `${pwc.space.sm}px 0 ${pwc.space.sm}px ${pwc.space.md}px`,
-    paddingLeft: pwc.space.sm,
-    borderLeft: `2px solid ${pwc.grey200}`,
-  } as React.CSSProperties,
-  sideNavSubItem: {
-    display: "flex",
-    alignItems: "center",
-    width: "100%",
-    textAlign: "left" as const,
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.md,
-    cursor: "pointer",
-    fontFamily: pwc.fontBody,
-    fontSize: 13,
-  } as React.CSSProperties,
-  sideNavBadge: {
-    flex: "0 0 auto",
-    minWidth: 18,
-    textAlign: "center" as const,
-    padding: `1px ${pwc.space.xs}px`,
-    borderRadius: 9,
-    background: pwc.orange50,
-    border: "none",
-    color: pwc.grey800,
-    fontSize: 11,
-    fontWeight: pwc.weight.semibold,
   } as React.CSSProperties,
   panelMuted: {
     margin: 0,
@@ -3329,16 +2710,6 @@ const styles = {
     fontSize: 12,
     color: pwc.warningText,
     fontWeight: pwc.weight.medium,
-  } as React.CSSProperties,
-  noSourceFilterLabel: {
-    display: "flex",
-    alignItems: "center",
-    gap: pwc.space.xs,
-    marginTop: pwc.space.xs,
-    fontFamily: pwc.fontBody,
-    fontSize: 12,
-    color: pwc.grey700,
-    cursor: "pointer",
   } as React.CSSProperties,
   sourceCell: {
     color: pwc.grey700,

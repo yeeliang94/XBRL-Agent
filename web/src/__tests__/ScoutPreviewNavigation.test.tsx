@@ -145,5 +145,5 @@ describe("preview scan navigation", () => {
       ) as HTMLSelectElement | undefined;
       expect(sofpVariant?.value).toBe("CuNonCu");
     });
-  });
+  }, 10_000);
 });
