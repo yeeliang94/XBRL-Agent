@@ -3724,6 +3724,8 @@ def _load_extended_settings() -> dict:
     except ValueError:
         tolerance = 1.0
 
+    from scout.limits import resolve_scout_max_turns, scout_wallclock_setting
+
     return {
         "default_models": default_models,
         # The Settings form needs the sparse map as well as the resolved map so
@@ -3731,6 +3733,10 @@ def _load_extended_settings() -> dict:
         # override that happens to equal the current global model.
         "default_model_overrides": default_model_overrides,
         "tolerance_rm": tolerance,
+        # Scout limits are resolved at the start of every scout run, so a
+        # Settings save applies without restarting the server.
+        "scout_wallclock_seconds": scout_wallclock_setting(),
+        "scout_max_turns": resolve_scout_max_turns(),
         # Reviewer pass auto-trigger (docs/Archive/PLAN-reviewer-agent.md). Default on.
         "auto_review": _auto_review_enabled(),
         # Notes reviewer auto-trigger (docs/PLAN.md — Notes Reviewer). Default on.

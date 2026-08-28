@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { pwc } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 import { pdfPageUrl, fetchPdfPageCount } from "../lib/api";
@@ -55,6 +55,7 @@ export function PdfSourcePane({
   // Bumping this forces the <img> to remount so a failed load can be retried.
   const [retryKey, setRetryKey] = useState(0);
   const [zoom, setZoom] = useState(1);
+  const sourcesMenuRef = useRef<HTMLDetailsElement | null>(null);
   // M3.11 — on narrow viewports the three-region layout has no room for a
   // third column, so the pane defaults collapsed to a toggle. matchMedia is
   // guarded for jsdom (test env), where it's undefined.
@@ -143,6 +144,15 @@ export function PdfSourcePane({
   // the narrow-viewport default.
   const isCollapsed = embedded ? false : collapsed;
 
+  useEffect(() => {
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      const menu = sourcesMenuRef.current;
+      if (menu?.open && !menu.contains(event.target as Node)) menu.open = false;
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePointer);
+  }, []);
+
   // No source PDF for this run — show a quiet empty state, not an error.
   if (!hasPdf) {
     return (
@@ -158,46 +168,20 @@ export function PdfSourcePane({
 
   return (
     <section style={styles.panel} data-testid="pdf-source-pane">
-      <div style={embedded ? styles.headerRowEmbedded : styles.headerRow}>
-        {!embedded && <h2 style={styles.title}>Source PDF</h2>}
-        <div style={styles.zoomGroup}>
-          {!isCollapsed && (
-            <>
-              <button
-                type="button"
-                data-testid="pdf-zoom-fit"
-                onClick={() => setZoom(1)}
-                style={styles.iconButton}
-                title="Fit to width"
-              >
-                Fit
-              </button>
-              <button
-                type="button"
-                data-testid="pdf-zoom-in"
-                onClick={() => setZoom((z) => Math.min(z + 0.5, 3))}
-                style={styles.iconButton}
-                title="Zoom in"
-                aria-label="Zoom in"
-                data-tooltip="Zoom in"
-              >
-                +
-              </button>
-            </>
-          )}
-          {!embedded && (
-            <button
-              type="button"
-              data-testid="pdf-collapse-toggle"
-              onClick={() => setCollapsed((c) => !c)}
-              style={styles.iconButton}
-              title={collapsed ? "Show source page" : "Hide source page"}
-            >
-              {collapsed ? "Show" : "Hide"}
-            </button>
-          )}
+      {!embedded && (
+        <div style={styles.headerRow}>
+          <h2 style={styles.title}>Source PDF</h2>
+          <button
+            type="button"
+            data-testid="pdf-collapse-toggle"
+            onClick={() => setCollapsed((c) => !c)}
+            style={styles.iconButton}
+            title={collapsed ? "Show source page" : "Hide source page"}
+          >
+            {collapsed ? "Show" : "Hide"}
+          </button>
         </div>
-      </div>
+      )}
 
       {isCollapsed ? null : (
         <>
@@ -213,63 +197,102 @@ export function PdfSourcePane({
           </p>
         ))}
 
-      {pages.length > 0 && (
-        <div style={styles.chipRow} data-testid="pdf-cited-chips">
-          <span style={styles.chipLabel}>Source pages</span>
-          {pages.map((p) => (
-            <button
-              key={p}
-              type="button"
-              data-testid={`pdf-cited-${p}`}
-              onClick={() => setCurrent(p)}
-              aria-label={`Open cited PDF page ${p}`}
-              style={{
-                ...styles.chip,
-                background: p === current ? pwc.orange50 : pwc.white,
-                borderColor: p === current ? pwc.orange400 : pwc.grey300,
-              }}
-            >
-              {p}
-            </button>
-          ))}
+      <div role="toolbar" style={styles.viewerToolbar} aria-label="PDF controls">
+        <div style={styles.navGroup}>
+          <button
+            type="button"
+            data-testid="pdf-prev"
+            onClick={goPrev}
+            disabled={!canPrev}
+            aria-label="Previous PDF page"
+            data-tooltip="Previous PDF page"
+            style={{ ...styles.compactButton, opacity: canPrev ? 1 : 0.4 }}
+          >
+            ‹
+          </button>
+          <span style={styles.pageIndicator}>
+            <input
+              data-testid="pdf-page-input"
+              inputMode="numeric"
+              aria-label="PDF page number"
+              value={current ?? ""}
+              onChange={(e) => jumpTo(e.target.value)}
+              style={styles.pageInput}
+            />
+            {resolvedTotal != null && <span style={styles.pageTotal}>/ {resolvedTotal}</span>}
+          </span>
+          <button
+            type="button"
+            data-testid="pdf-next"
+            onClick={goNext}
+            disabled={!canNext}
+            aria-label="Next PDF page"
+            data-tooltip="Next PDF page"
+            style={{ ...styles.compactButton, opacity: canNext ? 1 : 0.4 }}
+          >
+            ›
+          </button>
         </div>
-      )}
 
-      <div style={styles.navRow}>
-        <button
-          type="button"
-          data-testid="pdf-prev"
-          onClick={goPrev}
-          disabled={!canPrev}
-          aria-label="Previous PDF page"
-          style={{ ...styles.navButton, opacity: canPrev ? 1 : 0.4 }}
-        >
-          ‹ Prev
-        </button>
-        <span style={styles.pageIndicator}>
-          <span style={styles.pageLabel}>PDF page</span>
-          <input
-            data-testid="pdf-page-input"
-            inputMode="numeric"
-            aria-label="PDF page number"
-            value={current ?? ""}
-            onChange={(e) => jumpTo(e.target.value)}
-            style={styles.pageInput}
-          />
-          {resolvedTotal != null && (
-            <span style={styles.pageTotal}> / {resolvedTotal}</span>
-          )}
-        </span>
-        <button
-          type="button"
-          data-testid="pdf-next"
-          onClick={goNext}
-          disabled={!canNext}
-          aria-label="Next PDF page"
-          style={{ ...styles.navButton, opacity: canNext ? 1 : 0.4 }}
-        >
-          Next ›
-        </button>
+        {pages.length > 0 && (
+          <details ref={sourcesMenuRef} style={styles.sourcesMenu} data-testid="pdf-cited-chips">
+            <summary style={styles.sourcesSummary}>Sources ({pages.length})</summary>
+            <div style={styles.sourcesPanel}>
+              {pages.map((page) => (
+                <button
+                  key={page}
+                  type="button"
+                  data-testid={`pdf-cited-${page}`}
+                  onClick={() => {
+                    setCurrent(page);
+                    if (sourcesMenuRef.current) sourcesMenuRef.current.open = false;
+                  }}
+                  aria-label={`Open cited PDF page ${page}`}
+                  style={{
+                    ...styles.sourcePageButton,
+                    background: page === current ? pwc.grey100 : pwc.white,
+                  }}
+                >
+                  Page {page}
+                </button>
+              ))}
+            </div>
+          </details>
+        )}
+
+        <div style={styles.zoomGroup}>
+          <button
+            type="button"
+            data-testid="pdf-zoom-out"
+            onClick={() => setZoom((value) => Math.max(value - 0.5, 0.5))}
+            style={styles.compactButton}
+            title="Zoom out"
+            aria-label="Zoom out"
+            data-tooltip="Zoom out"
+          >
+            −
+          </button>
+          <button
+            type="button"
+            data-testid="pdf-zoom-fit"
+            onClick={() => setZoom(1)}
+            style={styles.fitButton}
+            title="Fit to width"
+          >
+            Fit
+          </button>
+          <button
+            type="button"
+            data-testid="pdf-zoom-in"
+            onClick={() => setZoom((value) => Math.min(value + 0.5, 3))}
+            style={styles.compactButton}
+            title="Zoom in"
+            aria-label="Zoom in"
+            data-tooltip="Zoom in"
+          >
+            +
+          </button>
+        </div>
       </div>
 
       <div style={styles.viewport}>
@@ -324,13 +347,6 @@ const styles = {
     alignItems: "center",
     justifyContent: "space-between",
   } as React.CSSProperties,
-  // Embedded (workspace) variant: no title on the left, so the zoom controls
-  // right-align on their own row.
-  headerRowEmbedded: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "flex-end",
-  } as React.CSSProperties,
   title: {
     margin: 0,
     fontFamily: pwc.fontHeading,
@@ -357,33 +373,17 @@ const styles = {
     fontSize: 12,
     lineHeight: 1.45,
   } as React.CSSProperties,
-  chipRow: {
-    display: "flex",
-    flexWrap: "wrap" as const,
-    alignItems: "center",
-    gap: pwc.space.xs,
-  } as React.CSSProperties,
-  chipLabel: {
-    fontSize: 11,
-    fontWeight: 600,
-    color: pwc.grey700,
-    textTransform: "uppercase" as const,
-    letterSpacing: "0.03em",
-  } as React.CSSProperties,
-  chip: {
-    border: `1px solid ${pwc.grey300}`,
-    borderRadius: pwc.radius.sm,
-    padding: `2px ${pwc.space.sm}px`,
-    fontFamily: pwc.fontMono,
-    fontSize: 12,
-    cursor: "pointer",
-  } as React.CSSProperties,
-  navRow: {
+  viewerToolbar: {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    gap: pwc.space.sm,
+    gap: pwc.space.xs,
+    minHeight: 38,
+    flexWrap: "wrap" as const,
+    paddingBottom: pwc.space.sm,
+    borderBottom: `1px solid ${pwc.grey100}`,
   } as React.CSSProperties,
+  navGroup: { display: "flex", alignItems: "center", gap: 2 } as React.CSSProperties,
   navButton: {
     ...ui.buttonSecondary,
     minHeight: 36,
@@ -396,22 +396,74 @@ const styles = {
     fontSize: 13,
     color: pwc.grey800,
   } as React.CSSProperties,
-  pageLabel: {
-    marginRight: pwc.space.sm,
-    color: pwc.grey700,
-    fontSize: 12,
-    whiteSpace: "nowrap" as const,
-  } as React.CSSProperties,
   pageInput: {
-    width: 56,
+    width: 42,
     textAlign: "center" as const,
-    padding: `${pwc.space.xs}px ${pwc.space.xs}px`,
-    border: `1px solid ${pwc.grey300}`,
+    padding: `${pwc.space.xs}px 2px`,
+    border: "none",
     borderRadius: pwc.radius.sm,
     fontFamily: pwc.fontMono,
     fontSize: 13,
   } as React.CSSProperties,
   pageTotal: { color: pwc.grey700, marginLeft: 4 } as React.CSSProperties,
+  compactButton: {
+    width: 32,
+    minHeight: 32,
+    padding: 0,
+    border: "none",
+    borderRadius: pwc.radius.sm,
+    background: "transparent",
+    color: pwc.grey900,
+    cursor: "pointer",
+    fontSize: 15,
+  } as React.CSSProperties,
+  fitButton: {
+    minWidth: 36,
+    minHeight: 32,
+    padding: `0 ${pwc.space.xs}px`,
+    border: "none",
+    borderRadius: pwc.radius.sm,
+    background: "transparent",
+    color: pwc.grey700,
+    cursor: "pointer",
+    fontSize: 11,
+  } as React.CSSProperties,
+  sourcesMenu: { position: "relative" as const } as React.CSSProperties,
+  sourcesSummary: {
+    minHeight: 32,
+    padding: `0 ${pwc.space.sm}px`,
+    display: "inline-flex",
+    alignItems: "center",
+    borderRadius: pwc.radius.sm,
+    color: pwc.grey700,
+    cursor: "pointer",
+    listStyle: "none",
+    fontSize: 11,
+    fontWeight: 600,
+  } as React.CSSProperties,
+  sourcesPanel: {
+    position: "absolute" as const,
+    top: 36,
+    right: 0,
+    zIndex: 20,
+    minWidth: 110,
+    padding: pwc.space.xs,
+    border: `1px solid ${pwc.grey200}`,
+    borderRadius: pwc.radius.md,
+    background: pwc.white,
+    boxShadow: pwc.shadow.elevated,
+  } as React.CSSProperties,
+  sourcePageButton: {
+    width: "100%",
+    minHeight: 32,
+    padding: `0 ${pwc.space.sm}px`,
+    border: "none",
+    borderRadius: pwc.radius.sm,
+    color: pwc.grey900,
+    textAlign: "left" as const,
+    cursor: "pointer",
+    fontSize: 12,
+  } as React.CSSProperties,
   viewport: {
     overflow: "auto",
     maxHeight: "70vh",

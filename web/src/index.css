@@ -160,6 +160,36 @@ details[open] > .pwc-disclosure-content {
 .pwc-toast-enter {
   animation: slide-in-right var(--motion-base) var(--motion-standard) both;
 }
+.reasoning-stream-enter {
+  animation: fade-in var(--motion-fast) var(--motion-standard) both;
+}
+.reasoning-stream-pulse {
+  animation: pulse 1.1s var(--motion-standard) infinite;
+}
+.reasoning-stream-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 3px;
+  vertical-align: -0.12em;
+  border-radius: 1px;
+  background: #FD5108;
+  animation: blink-caret 0.75s steps(1, end) infinite;
+}
+.activity-sentence-enter {
+  animation: fade-in var(--motion-base) var(--motion-standard) both;
+}
+.activity-sentence-pulse {
+  animation: pulse-subtle 1.8s var(--motion-standard) infinite;
+}
+.activity-carousel-control:hover:not(:disabled),
+.activity-carousel-control:focus-visible:not(:disabled) {
+  color: #000000 !important;
+}
+.activity-carousel-control:disabled {
+  cursor: default !important;
+  opacity: 0.28;
+}
 .pwc-dialog-scrim-enter,
 .pwc-dialog-enter {
   animation: dialog-in var(--motion-fast) var(--motion-standard) both;
@@ -626,6 +656,11 @@ textarea:focus {
 
 /* Deliberate responsive modes. Inline styles remain the production styling
    contract; these class hooks only express viewport-dependent composition. */
+.review-resize-handle:hover > span,
+.review-resize-handle:focus-visible > span {
+  background: #B5BCC4 !important; /* grey400 */
+}
+
 @media (max-width: 1000px) {
   .historical-agent-workspace {
     grid-template-columns: minmax(0, 1fr) !important;
@@ -937,6 +972,11 @@ textarea:focus {
   .pwc-status-change,
   .pwc-view-enter,
   .pwc-reveal,
+  .reasoning-stream-enter,
+  .reasoning-stream-pulse,
+  .reasoning-stream-cursor,
+  .activity-sentence-enter,
+  .activity-sentence-pulse,
   .page-header,
   .pwc-empty-state {
     animation: none !important;

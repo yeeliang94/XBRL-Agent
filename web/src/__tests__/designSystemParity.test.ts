@@ -122,4 +122,27 @@ describe("Direction A shell and responsive composition", () => {
     expect(designSystem).not.toContain("box-shadow: inset 0 -3px 0 var(--orange-500)");
     expect(prototype).not.toContain("box-shadow: inset 0 -3px 0 var(--accent)");
   });
+
+  test("pins the source-first Notes review composition", () => {
+    expect(designSystem).toContain("the scout source-note inventory, the complete scrolling XBRL field list, and the source PDF");
+    expect(designSystem).toContain("one-pixel visible Grey 100 rule");
+    expect(designSystem).toContain("mount the rich-text editor only for the selected field");
+    expect(designSystem).toContain("Put PDF paging, cited pages and zoom in one compact PDF toolbar");
+    expect(prototype).toContain(".notes-three-pane { display: grid; grid-template-columns: 240px 9px minmax(410px, 1fr) 9px minmax(330px, 35%)");
+    expect(prototype).toContain('aria-label="Notes sheet navigator"');
+    expect(prototype).toContain('aria-label="Resize source notes"');
+    expect(prototype).toContain("Sources (3)");
+  });
+
+  test("pins the Codex-style provider reasoning stream contract", () => {
+    expect(designSystem).toContain("Merge current activity, tool actions and provider-returned reasoning");
+    expect(designSystem).toContain("one flat <em>Live activity</em> sentence carousel");
+    expect(designSystem).toContain("no event cards or nested activity panels");
+    expect(designSystem).toContain("subtle older/newer controls");
+    expect(designSystem).toContain("Never describe unavailable private chain-of-thought as exposed");
+    expect(designSystem).toContain("frame-batch rapid reasoning updates");
+    expect(prototype).toContain("Live activity");
+    expect(prototype).toContain("1 / 8");
+    expect(prototype).toContain("Provider-supplied");
+  });
 });

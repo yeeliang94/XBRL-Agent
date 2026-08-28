@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useRef } from "react";
-import type { SSEEvent, ToolTimelineEntry } from "../lib/types";
+import { useCallback, useEffect, useMemo, useRef } from "react";
+import type { ReasoningBlock, SSEEvent, ToolTimelineEntry } from "../lib/types";
 import { ToolCallCard } from "./ToolCallCard";
 import { pwc } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 import { STATUS_SYMBOLS, runStatusDisplay } from "../lib/runStatus";
 import { StatusIcon } from "./StatusIcon";
+import { buildReasoningTimeline } from "../lib/buildReasoningTimeline";
+import { useFrameBatchedText } from "../lib/useFrameBatchedText";
 
 // AgentTimeline is the single replacement for ChatFeed. It renders one row
 // per tool call via ToolCallCard, plus a terminal row for the final
@@ -14,6 +16,7 @@ import { StatusIcon } from "./StatusIcon";
 interface Props {
   events: SSEEvent[];
   toolTimeline: ToolTimelineEntry[];
+  reasoningBlocks?: ReasoningBlock[];
   isRunning: boolean;
 }
 
@@ -121,7 +124,103 @@ const styles = {
     margin: 0,
     paddingLeft: 16,
   } as React.CSSProperties,
+  reasoningRow: {
+    display: "grid",
+    gridTemplateColumns: "18px minmax(0, 1fr)",
+    gap: pwc.space.sm,
+    padding: `${pwc.space.md}px ${pwc.space.lg}px`,
+    borderTop: `1px solid ${pwc.grey200}`,
+    background: pwc.white,
+  } as React.CSSProperties,
+  reasoningRail: {
+    display: "flex",
+    justifyContent: "center",
+    paddingTop: 3,
+  } as React.CSSProperties,
+  reasoningDot: {
+    width: 8,
+    height: 8,
+    borderRadius: "50%",
+    background: pwc.orange500,
+    boxShadow: `0 0 0 3px ${pwc.orange50}`,
+    flexShrink: 0,
+  } as React.CSSProperties,
+  reasoningBody: {
+    minWidth: 0,
+  } as React.CSSProperties,
+  reasoningHeader: {
+    display: "flex",
+    alignItems: "baseline",
+    flexWrap: "wrap" as const,
+    gap: pwc.space.xs,
+    marginBottom: pwc.space.xs,
+    fontFamily: pwc.fontHeading,
+    fontSize: 12,
+    fontWeight: 600,
+    color: pwc.grey800,
+  } as React.CSSProperties,
+  reasoningMeta: {
+    fontFamily: pwc.fontBody,
+    fontSize: 11,
+    fontWeight: 400,
+    color: pwc.grey500,
+  } as React.CSSProperties,
+  reasoningText: {
+    margin: 0,
+    fontFamily: pwc.fontBody,
+    fontSize: 13,
+    lineHeight: 1.6,
+    color: pwc.grey700,
+    whiteSpace: "pre-wrap" as const,
+    overflowWrap: "anywhere" as const,
+  } as React.CSSProperties,
 };
+
+function durationLabel(durationMs: number | null): string | null {
+  if (durationMs == null) return null;
+  if (durationMs < 1000) return `${durationMs} ms`;
+  return `${(durationMs / 1000).toFixed(durationMs < 10_000 ? 1 : 0)} s`;
+}
+
+function ReasoningRow({ block, isRunning }: { block: ReasoningBlock; isRunning: boolean }) {
+  const isActive = isRunning && !block.isComplete;
+  const content = useFrameBatchedText(block.content, isActive);
+  const duration = durationLabel(block.duration_ms);
+
+  return (
+    <section
+      className="reasoning-stream-enter"
+      data-testid="reasoning-block"
+      data-state={isActive ? "streaming" : "complete"}
+      aria-label={isActive ? "Model reasoning in progress" : "Completed model reasoning"}
+      style={styles.reasoningRow}
+    >
+      <span style={styles.reasoningRail} aria-hidden="true">
+        <span
+          className={isActive ? "reasoning-stream-pulse" : undefined}
+          style={{
+            ...styles.reasoningDot,
+            background: isActive ? pwc.orange500 : pwc.grey400,
+            boxShadow: isActive ? `0 0 0 3px ${pwc.orange50}` : "none",
+          }}
+        />
+      </span>
+      <div style={styles.reasoningBody}>
+        <div style={styles.reasoningHeader}>
+          <span>Model reasoning</span>
+          <span style={styles.reasoningMeta}>Provider-supplied</span>
+          <span style={{ ...styles.reasoningMeta, marginLeft: "auto" }}>
+            {isActive ? "Streaming…" : duration ?? "Complete"}
+          </span>
+        </div>
+        <p style={styles.reasoningText}>
+          {content}
+          {isActive ? <span className="reasoning-stream-cursor" aria-hidden="true" /> : null}
+        </p>
+      </div>
+    </section>
+  );
+}
 
 function TerminalRow({ event }: { event: TerminalEvent }) {
   // Discriminated on event.event:
@@ -261,7 +360,7 @@ function TerminalRow({ event }: { event: TerminalEvent }) {
   );
 }
 
-export function AgentTimeline({ events, toolTimeline, isRunning }: Props) {
+export function AgentTimeline({ events, toolTimeline, reasoningBlocks, isRunning }: Props) {
   // Auto-scroll — stick to bottom unless the user has scrolled up. Same
   // pattern ChatFeed used, so users get a consistent feel after the swap.
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -275,6 +374,23 @@ export function AgentTimeline({ events, toolTimeline, isRunning }: Props) {
   }, []);
 
   const terminal = findTerminalEvent(events);
+  const resolvedReasoning = useMemo(
+    () => reasoningBlocks ?? buildReasoningTimeline(events),
+    [events, reasoningBlocks],
+  );
+  const activityRows = useMemo(() => {
+    const rows: Array<
+      | { kind: "reasoning"; at: number; order: number; block: ReasoningBlock }
+      | { kind: "tool"; at: number; order: number; entry: ToolTimelineEntry }
+    > = [];
+    resolvedReasoning.forEach((block, order) => {
+      rows.push({ kind: "reasoning", at: block.startedAt, order, block });
+    });
+    toolTimeline.forEach((entry, order) => {
+      rows.push({ kind: "tool", at: entry.startTime, order, entry });
+    });
+    return rows.sort((a, b) => a.at - b.at || a.order - b.order);
+  }, [resolvedReasoning, toolTimeline]);
 
   // Scroll triggers: a new tool row OR the terminal row appearing. The
   // terminal row is its own visual element and doesn't change toolTimeline
@@ -285,8 +401,13 @@ export function AgentTimeline({ events, toolTimeline, isRunning }: Props) {
     if (!userScrolledUp.current && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [toolTimeline.length, terminal]);
-  const isEmpty = toolTimeline.length === 0 && terminal === null;
+  }, [
+    toolTimeline.length,
+    resolvedReasoning.length,
+    resolvedReasoning[resolvedReasoning.length - 1]?.content.length,
+    terminal,
+  ]);
+  const isEmpty = activityRows.length === 0 && terminal === null;
 
   if (isEmpty) {
     return (
@@ -312,9 +433,17 @@ export function AgentTimeline({ events, toolTimeline, isRunning }: Props) {
       style={styles.scrollArea}
       onScroll={handleScroll}
     >
-      {toolTimeline.map((entry) => (
-        <ToolCallCard key={entry.tool_call_id} entry={entry} />
-      ))}
+      {activityRows.map((row) =>
+        row.kind === "reasoning" ? (
+          <ReasoningRow
+            key={`reasoning:${row.block.thinking_id}`}
+            block={row.block}
+            isRunning={isRunning}
+          />
+        ) : (
+          <ToolCallCard key={`tool:${row.entry.tool_call_id}`} entry={row.entry} />
+        ),
+      )}
       {terminal && <TerminalRow event={terminal} />}
     </div>
   );

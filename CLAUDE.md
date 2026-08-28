@@ -172,6 +172,8 @@ SESSION_SECRET=                # REQUIRED in prod (startup fails without it); de
 # XBRL_TEMPLATE_IN_PROMPT=0        # face agents: template in the system prompt; read_template returns a pointer
 # XBRL_MAX_CONCURRENT_AGENTS=0     # cap on top-level agents running at once; 0 = unbounded
 # XBRL_CACHE_PROBE=0               # lift the per-turn cache / history-rewrite probe lines to INFO
+# XBRL_SCOUT_WALLCLOCK_S=300       # whole document-scan deadline; 0 disables
+# XBRL_SCOUT_MAX_TURNS=20          # Scout model responses; Settings caps this at 40
 # CLI: scout is ON by default (`--no-scout` to skip). Cost: run_agents.total_cost is
 # still the PRE-CACHE estimate; `scripts/report_run_economics.py` prints the
 # cache-adjusted figure beside it (pricing.estimate_cost_cache_adjusted).
@@ -617,6 +619,12 @@ Normal web and CLI runs execute a fresh scout pass inside
 preview, but a preview is never required and never replaces the run-owned pass.
 Specialized internal rerun paths may explicitly set `use_scout=False` when they
 are reprocessing persisted material rather than starting a normal extraction.
+
+The Settings page exposes the Scout's whole-run deadline and model-turn cap as
+`XBRL_SCOUT_WALLCLOCK_S` (default 300 seconds; 0 disables) and
+`XBRL_SCOUT_MAX_TURNS` (default 20; maximum 40). Both are resolved at the start
+of every new Scout run, so a saved change applies without a server restart.
+The maximum remains below PydanticAI's 50-request ceiling (gotcha #18).
 
 Extraction agents receive `page_hints` (face_page + note_pages) as recommended
 starting points. Agents can freely view **any** PDF page — there is no

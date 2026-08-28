@@ -19,6 +19,7 @@ run state, gotcha #6, and must not accumulate stale nudges).
 Three limits are tracked, read from the same sources the hard raises use:
 
 - iterations: ``ctx.usage.requests`` vs ``agent_tracing.MAX_AGENT_ITERATIONS``
+- model turns: exact per-run counters published by roles such as Scout
 - token budget: ``ctx.usage.total_tokens`` vs ``agent_runner.resolve_token_budget()``
   (0 = budget disabled = no token warning)
 - wall-clock: elapsed vs the per-run cap ``run_agent_loop`` publishes onto
@@ -69,6 +70,10 @@ WARN_FRACTION = 0.70
 # STEPS (graph nodes) — a model turn plus its tool batch is ~2 steps, so 5
 # remaining steps leaves the model roughly two turns: finish writes, save.
 CRITICAL_REMAINING_ITERATIONS = 5
+# Five graph steps represent roughly three model turns (request, tools,
+# request, tools, request). Keep model-turn budgets in their own unit rather
+# than applying the graph-step threshold directly.
+CRITICAL_REMAINING_MODEL_TURNS = 3
 CRITICAL_TOKEN_FRACTION = 0.95
 # Wall-clock escalates at 90%: on the reviewer's 300s cap that leaves ~30s
 # — one model turn to emit the batched fixes (which then execute even past
@@ -125,31 +130,50 @@ def _build_warning(ctx) -> Optional[str]:
     lines: List[str] = []
     critical = False
 
-    # --- Iterations / reviewer tool turns (always tracked) ---
+    # --- Loop steps / role-specific turns (always tracked) ---
     # UNIT CONTRACT (2026-07-12 V2-review fix): the hard cap in
     # agent_runner counts graph NODES (model-request and call-tools nodes
     # alternate), NOT model requests. Compare like with like: prefer the
     # live loop counter + per-run cap the runner publishes onto deps;
     # fall back to a documented nodes≈2×requests approximation for agents
-    # not driven by run_agent_loop (e.g. scout's own loop).
+    # that publish no exact loop or role-specific counter.
     deps = getattr(ctx, "deps", None)
     tool_used = getattr(deps, "_call_tools_seen", None)
     tool_cap = getattr(deps, "_call_tools_cap", None)
-    used = tool_used if tool_cap is not None else getattr(deps, "_loop_iteration", None)
-    cap = tool_cap if tool_cap is not None else getattr(deps, "_loop_max_iters", None)
+    model_used = getattr(deps, "_model_turns_used", None)
+    model_cap = getattr(deps, "_model_turns_cap", None)
+    if tool_cap is not None:
+        used = tool_used
+        cap = tool_cap
+        unit = "tool_turns"
+    elif model_cap is not None:
+        used = model_used
+        cap = model_cap
+        unit = "model_turns"
+    else:
+        used = getattr(deps, "_loop_iteration", None)
+        cap = getattr(deps, "_loop_max_iters", None)
+        unit = "loop_steps"
+        if used is None:
+            req = int(getattr(usage, "requests", 0) or 0)
+            used = max(2 * req - 1, 0)
+        if not cap:
+            cap = MAX_AGENT_ITERATIONS
     if used is None:
-        req = int(getattr(usage, "requests", 0) or 0)
-        used = max(2 * req - 1, 0)
-    if not cap:
-        cap = MAX_AGENT_ITERATIONS
+        used = 0
     used = int(used)
     cap = int(cap)
     if cap > 0 and used / cap >= WARN_FRACTION:
         remaining = max(cap - used, 0)
         pct = int(round(100 * used / cap))
-        if tool_cap is not None:
+        if unit == "tool_turns":
             lines.append(
                 f"Turns: {used}/{cap} tool turns used ({pct}%); "
+                f"{remaining} remaining."
+            )
+        elif unit == "model_turns":
+            lines.append(
+                f"Turns: {used}/{cap} model turns used ({pct}%); "
                 f"{remaining} remaining."
             )
         else:
@@ -157,7 +181,12 @@ def _build_warning(ctx) -> Optional[str]:
                 f"Turns: {used}/{cap} loop steps used ({pct}%); "
                 f"{remaining} remaining (a model turn + its tools is ~2 steps)."
             )
-        if remaining <= CRITICAL_REMAINING_ITERATIONS:
+        critical_remaining = (
+            CRITICAL_REMAINING_MODEL_TURNS
+            if unit == "model_turns"
+            else CRITICAL_REMAINING_ITERATIONS
+        )
+        if remaining <= critical_remaining:
             critical = True
 
     # --- Token budget (opt-in via XBRL_MAX_TOKENS_PER_AGENT; 0 = off) ---

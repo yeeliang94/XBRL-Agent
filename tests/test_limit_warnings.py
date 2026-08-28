@@ -71,6 +71,20 @@ def _reviewer_ctx(*, tool_turns: int, tool_cap: int, loop_steps: int, loop_cap: 
     )
 
 
+def _model_turn_ctx(*, model_turns: int, model_turn_cap: int):
+    """Scout runs publish their exact model-request budget."""
+    return SimpleNamespace(
+        usage=SimpleNamespace(requests=model_turns, total_tokens=0),
+        deps=SimpleNamespace(
+            _model_turns_used=model_turns,
+            _model_turns_cap=model_turn_cap,
+            # A stale graph-step value must not override the exact model-turn
+            # counter when both are present.
+            _loop_max_iters=model_turn_cap,
+        ),
+    )
+
+
 def _history():
     """A tiny plausible history ending in a pending ModelRequest."""
     return [
@@ -126,6 +140,24 @@ def test_reviewer_warning_uses_the_prompt_turn_budget_not_graph_steps():
     warning = _warning_texts(out)[0]
     assert "11/14 tool turns" in warning
     assert "30/38" not in warning
+
+
+def test_scout_warning_uses_exact_model_turn_budget():
+    """A 20-turn Scout budget must not warn after only eight turns."""
+    assert _warning_texts(
+        limit_warning_processor(
+            _model_turn_ctx(model_turns=8, model_turn_cap=20),
+            _history(),
+        )
+    ) == []
+
+    out = limit_warning_processor(
+        _model_turn_ctx(model_turns=14, model_turn_cap=20),
+        _history(),
+    )
+    warning = _warning_texts(out)[0]
+    assert "URGENT" in warning
+    assert "14/20 model turns used (70%)" in warning
 
 
 def test_critical_in_final_stretch():

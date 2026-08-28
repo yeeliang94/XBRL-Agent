@@ -4,6 +4,7 @@ import { ActiveTabPanel } from "../pages/ExtractPage";
 import { initialState } from "../lib/appReducer";
 import { createAgentState } from "../lib/types";
 import { buildToolTimeline } from "../lib/buildToolTimeline";
+import { buildReasoningTimeline } from "../lib/buildReasoningTimeline";
 import type { AppState } from "../lib/appReducer";
 import type { SSEEvent, AgentState } from "../lib/types";
 
@@ -41,6 +42,73 @@ function subToolCall(subId: string, tcId: string, name: string): SSEEvent {
     timestamp: 1,
   } as unknown as SSEEvent;
 }
+
+describe("ActiveTabPanel — unified activity carousel", () => {
+  test("merges scout reasoning and current activity into one flat sentence stream", () => {
+    const scout = createAgentState("scout", "scout", "Document scan");
+    scout.status = "running";
+    scout.events = [
+      {
+        event: "thinking_delta",
+        data: { thinking_id: "thought-1", content: "The contents page is page 3. I will inspect it first." },
+        timestamp: 1,
+      },
+      {
+        event: "thinking_end",
+        data: { thinking_id: "thought-1", duration_ms: 240 },
+        timestamp: 1.24,
+      },
+    ] as SSEEvent[];
+    scout.reasoningBlocks = buildReasoningTimeline(scout.events);
+
+    render(<ActiveTabPanel state={{ ...stateWithAgent("scout", scout), isRunning: true }} />);
+
+    const stream = screen.getByRole("region", { name: /live activity/i });
+    expect(within(stream).getByText("Live activity")).toBeInTheDocument();
+    expect(within(stream).getByText("Reasoning · Provider-supplied")).toBeInTheDocument();
+    expect(within(stream).getByText("I will inspect it first.")).toBeInTheDocument();
+    fireEvent.click(within(stream).getByRole("button", { name: /older activity/i }));
+    expect(within(stream).getByText("The contents page is page 3.")).toBeInTheDocument();
+    expect(screen.queryByText("Current activity")).not.toBeInTheDocument();
+    expect(screen.queryByText("Reasoning and actions")).not.toBeInTheDocument();
+    expect(screen.queryByText("Technical details")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("reasoning-block")).not.toBeInTheDocument();
+  });
+
+  test("uses the same flat carousel for other live agents", () => {
+    const sofp = createAgentState("sofp_0", "SOFP", "SOFP");
+    render(<ActiveTabPanel state={stateWithAgent("sofp_0", sofp)} />);
+
+    expect(screen.getByRole("region", { name: /live activity/i })).toBeInTheDocument();
+    expect(screen.queryByText("Technical details")).not.toBeInTheDocument();
+  });
+
+  test("shows the failure reason when an agent fails during a live run", () => {
+    const sofp = createAgentState("sofp_0", "SOFP", "SOFP");
+    sofp.status = "failed";
+    sofp.events = [{
+      event: "complete",
+      data: {
+        success: false,
+        agent_id: "sofp_0",
+        agent_role: "SOFP",
+        workbook_path: null,
+        error: "Provider timed out while reading page 18",
+      },
+      timestamp: 2,
+    }] as SSEEvent[];
+
+    render(
+      <ActiveTabPanel
+        state={{ ...stateWithAgent("sofp_0", sofp), isRunning: true }}
+      />,
+    );
+
+    expect(screen.getByTestId("activity-sentence")).toHaveTextContent(
+      "Provider timed out while reading page 18.",
+    );
+  });
+});
 
 describe("ActiveTabPanel — Sheet-12 sub-tabs", () => {
   test("renders NotesSubTabBar only when activeTab is Notes-12 and sub-agents exist", () => {
@@ -103,8 +171,10 @@ describe("ActiveTabPanel — Sheet-12 sub-tabs", () => {
     const state = stateWithAgent("notes:LIST_OF_NOTES", notes12);
     render(<ActiveTabPanel state={state} />);
 
-    // All view shows both tool rows.
+    // All view shows one tool sentence; the other remains reachable through
+    // the flat carousel instead of rendering both as cards.
     expect(screen.getAllByText(/locating table of contents/i).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: /show older activity/i }));
     expect(screen.getAllByText(/checking pdf pages/i).length).toBeGreaterThan(0);
 
     // Click the Sub 1 chip (index 1 in tabs; index 0 is "All").

@@ -1056,8 +1056,25 @@ describe("ConceptsPage", () => {
     expect(picker.textContent).not.toContain("mfrs-company-sofp");
   });
 
-  test("Notes uses a persistent text-block index and one selected editor", async () => {
+  test("Notes uses the scout inventory and keeps every XBRL field in the middle", async () => {
     mockFetch((url) => {
+      if (url.includes("/pdf/info")) return { pages: 30 };
+      if (url.includes("/notes-coverage"))
+        return {
+          run_id: 42,
+          banner: "reviewed",
+          inventory_available: true,
+          rows: [
+            { note_num: 1, title: "Corporate information", status: "placed", placements: [{ sheet: "Notes-CI", row: 4, row_label: "Corporate details", kind: "primary" }], page_lo: 4, page_hi: 4 },
+            { note_num: 2, title: "Accounting policies", status: "placed", placements: [{ sheet: "Notes-SummaryofAccPol", row: 7, row_label: "Revenue policy", kind: "primary" }], page_lo: 8, page_hi: 9 },
+            { note_num: 3, title: "Unplaced source note", status: "missing", placements: [], page_lo: 10, page_hi: 10 },
+            { note_num: 4, title: "Shared disclosure", status: "placed", placements: [
+              { sheet: "Notes-CI", row: 4, row_label: "Corporate details", kind: "primary" },
+              { sheet: "Notes-SummaryofAccPol", row: 7, row_label: "Revenue policy", kind: "carve_out" },
+            ], page_lo: 11, page_hi: 12 },
+          ],
+          summary: { placed: 3, missing: 1, skipped: 0, suspected_gap: 0, total: 4, unresolved: 1 },
+        };
       if (url.includes("/notes_cells"))
         return {
           sheets: [
@@ -1073,20 +1090,61 @@ describe("ConceptsPage", () => {
       return {};
     });
     render(<ConceptsPage runId={42} initialView="notes" />);
-    const ci = await screen.findByTestId("note-index-Notes-CI-4");
-    const blank = screen.getByTestId("note-index-Notes-CI-5");
-    const policy = screen.getByTestId("note-index-Notes-SummaryofAccPol-7");
-    expect(ci).toHaveAttribute("aria-current", "true");
-    expect(blank).toBeTruthy();
-    expect(screen.getByText("3 review fields")).toBeTruthy();
-    expect(screen.getAllByTestId("notes-review-row")).toHaveLength(1);
+    const corporate = await screen.findByTestId("source-note-1");
+    const policy = screen.getByTestId("source-note-2");
+    const missing = screen.getByTestId("source-note-3");
+    const shared = screen.getByTestId("source-note-4");
+    expect(corporate).toHaveAttribute("aria-current", "true");
+    expect(missing).toHaveAccessibleName(/needs review/i);
+    expect(missing).toHaveAttribute("data-tooltip", "Placement needs review");
+    expect(screen.getByText("4 found by document scan")).toBeTruthy();
+    expect(screen.getAllByTestId("notes-review-row")).toHaveLength(3);
+    expect(screen.getAllByTestId("notes-review-editor")).toHaveLength(1);
+    expect(screen.getByRole("navigation", { name: "Notes sheet navigator" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Sheet 10 — Corporate Information/i })).toBeTruthy();
     expect(screen.getByTestId("notes-review-evidence")).toHaveTextContent("PDF page 4");
     expect(screen.getByTestId("notes-style-source-chip")).toHaveTextContent("Unstyled");
-    fireEvent.click(blank);
-    expect(screen.getByRole("heading", { name: "Unused disclosure" })).toBeTruthy();
+    const sourceDivider = screen.getByTestId("resize-source-notes");
+    expect((sourceDivider.firstElementChild as HTMLElement).style.width).toBe("1px");
+    expect((sourceDivider.firstElementChild as HTMLElement).style.background).toBe("rgb(238, 239, 241)");
+    const layout = screen.getByTestId("notes-source-first-workspace").firstElementChild as HTMLElement;
+    fireEvent.keyDown(sourceDivider, { key: "ArrowRight" });
+    expect(layout.style.gridTemplateColumns).toContain("256px");
+    expect((screen.getByTestId("resize-pdf").firstElementChild as HTMLElement).style.width).toBe("1px");
     fireEvent.click(policy);
     expect(policy).toHaveAttribute("aria-current", "true");
-    expect(screen.getByRole("heading", { name: "Revenue policy" })).toBeTruthy();
+    expect(screen.getAllByTestId("notes-review-editor")).toHaveLength(1);
+    await waitFor(() => expect(screen.getByTestId("pdf-page-input")).toHaveValue("8"));
+    const unusedField = screen.getByText("Unused disclosure").closest(
+      '[data-testid="notes-review-row"]',
+    );
+    expect(unusedField).not.toBeNull();
+    fireEvent.mouseDown(unusedField!);
+    expect(screen.getAllByTestId("notes-review-editor")).toHaveLength(1);
+    expect(
+      screen.getByText("Unused disclosure").closest('[data-testid="notes-review-row"]'),
+    ).toHaveStyle({ background: "rgb(238, 239, 241)" });
+    expect(screen.queryAllByTestId(/^source-note-/).some(
+      (note) => note.getAttribute("aria-current") === "true",
+    )).toBe(false);
+    fireEvent.click(missing);
+    expect(screen.queryByTestId("notes-review-editor")).toBeNull();
+    fireEvent.click(shared);
+    const destinations = screen.getByLabelText("Destinations for note 4");
+    expect(within(destinations).getAllByRole("button")).toHaveLength(2);
+    fireEvent.click(within(destinations).getByRole("button", {
+      name: "Summary of Accounting Policies · row 7",
+    }));
+    expect(screen.getAllByTestId("notes-review-editor")).toHaveLength(1);
+    fireEvent.mouseDown(
+      screen.getByText("Revenue policy").closest('[data-testid="notes-review-row"]')!,
+    );
+    expect(shared).toHaveAttribute("aria-current", "true");
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search source notes" }), {
+      target: { value: "not in the inventory" },
+    });
+    expect(screen.getByText("No source notes match your search.")).toBeTruthy();
   });
 
   test("the old notes checklist card is not repeated in figures", async () => {
@@ -1161,9 +1219,18 @@ describe("ConceptsPage", () => {
       return {};
     });
     render(<ConceptsPage runId={42} initialView="notes" onRegenerateNotes={onRegenerate} />);
-    await waitFor(() => screen.getByTestId("notes-single-cell-workspace"));
+    await waitFor(() => screen.getByTestId("notes-source-first-workspace"));
+    const actionsSummary = screen.getByLabelText("Notes actions");
+    expect(actionsSummary).toHaveAttribute("data-tooltip", "Notes actions");
+    const actionsMenu = actionsSummary.closest("details") as HTMLDetailsElement;
+    fireEvent.click(actionsSummary);
     fireEvent.click(screen.getByRole("button", { name: /^table style$/i }));
     expect(screen.getByTestId("notes-table-style-panel")).toBeInTheDocument();
+    expect(actionsMenu.open).toBe(false);
+    fireEvent.click(actionsSummary);
+    fireEvent.pointerDown(document.body);
+    expect(actionsMenu.open).toBe(false);
+    fireEvent.click(actionsSummary);
     fireEvent.click(screen.getByRole("button", { name: /re-extract notes/i }));
     await waitFor(() => expect(onRegenerate).toHaveBeenCalledWith(42));
   });
@@ -1176,7 +1243,7 @@ describe("ConceptsPage", () => {
       return {};
     });
     render(<ConceptsPage runId={42} initialView="notes" />);
-    await waitFor(() => screen.getByTestId("notes-single-cell-workspace"));
+    await waitFor(() => screen.getByTestId("notes-source-first-workspace"));
     expect(screen.queryByTestId("notes-coverage-panel")).toBeNull();
     expect(screen.queryByTestId("notes-coverage-nav")).toBeNull();
   });

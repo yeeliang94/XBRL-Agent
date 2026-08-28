@@ -32,6 +32,7 @@ import { AgentTimeline } from "./AgentTimeline";
 import { humanToolName } from "../lib/toolLabels";
 import { parseSSEStream } from "../lib/sse";
 import { buildToolTimeline, isScoutTimelineEvent } from "../lib/buildToolTimeline";
+import { buildReasoningTimeline } from "../lib/buildReasoningTimeline";
 
 interface Props {
   sessionId: string;
@@ -1114,6 +1115,10 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
   // renders (React throws "Rendered more hooks than during the previous
   // render" if a hook sits after a conditional early-return).
   const scoutToolTimeline = useMemo(() => buildToolTimeline(scoutEvents), [scoutEvents]);
+  const scoutReasoningBlocks = useMemo(
+    () => buildReasoningTimeline(scoutEvents),
+    [scoutEvents],
+  );
 
   const handleScoutModelChange = useCallback((modelId: string) => {
     // Optimistic local update so the dropdown reflects the choice instantly,
@@ -1694,6 +1699,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
                 <AgentTimeline
                   events={scoutEvents}
                   toolTimeline={scoutToolTimeline}
+                  reasoningBlocks={scoutReasoningBlocks}
                   isRunning={isDetecting}
                 />
               </div>

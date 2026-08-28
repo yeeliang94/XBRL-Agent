@@ -5,6 +5,7 @@ import { ui } from "../lib/uiStyles";
 import { STATUS_SYMBOLS } from "../lib/runStatus";
 import { StatusIcon } from "../components/StatusIcon";
 import { NotesReviewTab } from "../components/NotesReviewTab";
+import { ResizableDivider } from "../components/ResizableDivider";
 import { ReconciliationQueue } from "../components/ReconciliationQueue";
 import { PdfSourcePane } from "../components/PdfSourcePane";
 import {
@@ -1129,7 +1130,6 @@ export function ConceptsPage({
               focusCell={notesFocusCell}
               onActiveCellPages={handleNotesCellPages}
               onRegenerate={onRegenerateNotes}
-              compactSingleCell
             />
           </div>
         ) : filtered.length > 0 && filtered.every((r) => r.shape === "matrix") ? (
@@ -1178,8 +1178,9 @@ export function ConceptsPage({
         />
       ) : (
         <>
-          <ResizeHandle
+          <ResizableDivider
             testId="resize-pdf"
+            label="Resize source PDF panel"
             onDelta={(dx) => setPdfWidth((w) => clamp(w - dx, 260, 720))}
           />
           {pdfColumn}
@@ -1303,60 +1304,6 @@ function CollapsedRail({
         »
       </span>
     </button>
-  );
-}
-
-function ResizeHandle({
-  testId,
-  onDelta,
-}: {
-  testId: string;
-  onDelta: (dx: number) => void;
-}) {
-  const [active, setActive] = useState(false);
-  // Hold the live drag listeners so an unmount mid-drag can tear them down —
-  // otherwise the window listeners (and the body user-select lock) leak if the
-  // component disappears between mousedown and mouseup.
-  const cleanupRef = useRef<(() => void) | null>(null);
-  useEffect(() => () => cleanupRef.current?.(), []);
-
-  const onMouseDown = (e: React.MouseEvent) => {
-    e.preventDefault();
-    let lastX = e.clientX;
-    setActive(true);
-    const move = (ev: MouseEvent) => {
-      const dx = ev.clientX - lastX;
-      lastX = ev.clientX;
-      onDelta(dx);
-    };
-    const teardown = () => {
-      window.removeEventListener("mousemove", move);
-      window.removeEventListener("mouseup", up);
-      document.body.style.userSelect = "";
-      cleanupRef.current = null;
-    };
-    const up = () => {
-      teardown();
-      setActive(false);
-    };
-    window.addEventListener("mousemove", move);
-    window.addEventListener("mouseup", up);
-    document.body.style.userSelect = "none";
-    // The unmount effect calls this; it skips setActive (the component is gone).
-    cleanupRef.current = teardown;
-  };
-  return (
-    <div
-      className="review-resize-handle"
-      role="separator"
-      aria-orientation="vertical"
-      data-testid={testId}
-      onMouseDown={onMouseDown}
-      style={{
-        ...styles.resizeHandle,
-        background: active ? pwc.orange400 : pwc.grey200,
-      }}
-    />
   );
 }
 
@@ -2358,7 +2305,7 @@ const styles = {
   shell: {
     display: "flex",
     alignItems: "flex-start",
-    gap: pwc.space.md,
+    gap: 0,
     fontFamily: pwc.fontBody,
   } as React.CSSProperties,
   column: {
@@ -2377,6 +2324,7 @@ const styles = {
     minWidth: 0,
     display: "flex",
     flexDirection: "column" as const,
+    paddingRight: pwc.space.lg,
   } as React.CSSProperties,
   columnHeader: {
     display: "flex",
@@ -2429,15 +2377,6 @@ const styles = {
     fontSize: 11,
     fontWeight: 600,
     letterSpacing: 0,
-  } as React.CSSProperties,
-  resizeHandle: {
-    flex: "0 0 6px",
-    alignSelf: "stretch",
-    minHeight: 240,
-    borderRadius: 3,
-    cursor: "col-resize",
-    position: "sticky" as const,
-    top: pwc.space.lg,
   } as React.CSSProperties,
   panelCard: {
     ...ui.card,

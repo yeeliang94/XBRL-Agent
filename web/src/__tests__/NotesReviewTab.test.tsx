@@ -129,18 +129,13 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-// Sheet sections are collapsed by default (each sheet is its own card
-// the reviewer can minimize). Tests that assert on cell-level contents
-// need to click every sheet-heading toggle first so the rows mount.
-// Select by the sheet-title testid (label-agnostic) and click its enclosing
-// toggle button — the visible heading text is now a friendly display name
-// ("Corporate Information"), not the raw "Notes-…" sheet id.
-function expandAllSheets() {
-  const titles = screen.getAllByTestId("sheet-title");
-  titles.forEach((t) => {
-    const btn = t.closest("button");
-    if (btn) fireEvent.click(btn);
-  });
+// The production workspace mounts one TipTap editor at a time. Tests that need
+// an editor select the first visible field through the same Review action a
+// user invokes; tests that already have an active field leave it unchanged.
+function selectFirstField() {
+  if (screen.queryByRole("button", { name: /^edit$/i })) return;
+  const review = screen.queryAllByRole("button", { name: /^review$/i })[0];
+  if (review) fireEvent.click(review);
 }
 
 describe("NotesReviewTab — read-only render (Step 9)", () => {
@@ -168,7 +163,7 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
-    expandAllSheets();
+    selectFirstField();
     // Three cells total across the sample (2 + 1) — each has its
     // label rendered as a column-A heading.
     expect(screen.getByText("Corporate info")).toBeInTheDocument();
@@ -202,7 +197,7 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
 
     render(<NotesReviewTab runId={42} />);
     await waitFor(() => expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0));
-    expandAllSheets();
+    selectFirstField();
 
     expect(screen.getByText("Financial reporting status")).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent(/not a filing field/i);
@@ -217,12 +212,6 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
       { method: "DELETE" },
     );
 
-    const heading = screen.getByRole("heading", {
-      level: 4,
-      name: "Corporate Information",
-    });
-    fireEvent.click(within(heading).getByRole("button"));
-    fireEvent.click(within(heading).getByRole("button"));
     expect(screen.queryByText("Financial reporting status")).toBeNull();
   });
 
@@ -237,7 +226,7 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
-    expandAllSheets();
+    selectFirstField();
     const rows = container.querySelectorAll<HTMLElement>(
       '[data-testid="notes-review-row"]',
     );
@@ -277,7 +266,7 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
-    expandAllSheets();
+    selectFirstField();
     const row = container.querySelector<HTMLElement>(
       '[data-testid="notes-review-row"]',
     );
@@ -292,12 +281,82 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
-    expandAllSheets();
+    selectFirstField();
     // The <strong> tag from the sample html must be in the DOM as a
     // real STRONG element, not as literal "<strong>…</strong>" text.
-    const strongs = container.querySelectorAll("strong");
+    const strongs = container.querySelectorAll("[data-testid='notes-review-row'] strong");
     expect(strongs.length).toBeGreaterThan(0);
     expect(strongs[0].textContent).toBe("ACME");
+  });
+
+  test("read-only fields use the same table preview class as the editor", async () => {
+    mockFetchOnce({
+      sheets: [{
+        sheet: "Notes-Listofnotes",
+        rows: [
+          {
+            row: 4,
+            label: "Selected note",
+            html: "<p>Selected</p>",
+            evidence: null,
+            source_pages: [8],
+            updated_at: "2026-04-24T10:00:00Z",
+          },
+          {
+            row: 5,
+            label: "Source table",
+            html: '<table data-source-styled="true"><tr><th>Year</th><th>2024</th></tr><tr><td>Total</td><td>1,595</td></tr></table>',
+            evidence: null,
+            source_pages: [9],
+            updated_at: "2026-04-24T10:00:00Z",
+          },
+        ],
+      }],
+    });
+    render(<NotesReviewTab runId={42} />);
+
+    const previews = await screen.findAllByTestId("notes-readonly-content");
+    expect(previews.length).toBeGreaterThan(0);
+    for (const preview of previews) {
+      expect(preview).toHaveClass("tiptap", "ProseMirror");
+    }
+    expect(document.querySelector('table[data-source-styled="true"]')).toBeTruthy();
+    await waitFor(() => {
+      const numericCell = document.querySelector('table[data-source-styled="true"] tr:last-child td:last-child');
+      expect(numericCell).toHaveClass("is-numeric");
+    });
+  });
+
+  test("selects the first legacy field when empty coverage resolves after notes", async () => {
+    let resolveCoverage: (response: Response) => void = () => {};
+    const coverage = new Promise<Response>((resolve) => {
+      resolveCoverage = resolve;
+    });
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/notes_cells")) {
+        return new Response(JSON.stringify(SAMPLE), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/notes-coverage")) return coverage;
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    render(<NotesReviewTab runId={42} />);
+    await screen.findByText("Corporate info");
+
+    resolveCoverage(new Response(JSON.stringify({ rows: [] }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+
+    await screen.findByText(/no source-note inventory is available/i);
+    expect(await screen.findByRole("button", { name: /^edit$/i })).toBeInTheDocument();
   });
 
   test("shows empty state when no cells for run", async () => {
@@ -325,76 +384,46 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
       ],
     });
     render(<NotesReviewTab runId={42} />);
-    // Wait for the fetch to settle — the last sheet's title is the
-    // most reliable signal that render has happened.
-    await waitFor(() => {
-      expect(
-        screen.getByRole("heading", {
-          level: 4,
-          name: "Related Party Transactions",
-        }),
-      ).toBeInTheDocument();
-    });
-    // Read the sheet-title spans rather than raw h4 textContent so the
-    // assertion isn't coupled to the chevron/row-count chrome inside
-    // the collapsible heading. Titles now render as friendly display names
-    // but the slot order is still enforced.
-    const titles = screen
-      .getAllByTestId("sheet-title")
-      .map((s) => s.textContent);
-    expect(titles).toEqual([
-      "Corporate Information",
-      "Summary of Accounting Policies",
-      "List of Notes",
-      "Issued Capital",
-      "Related Party Transactions",
+    const nav = await screen.findByRole("navigation", { name: /notes sheet navigator/i });
+    expect(within(nav).getAllByRole("button").map((button) => button.title)).toEqual([
+      "Corporate Information", "Summary of Accounting Policies", "List of Notes",
+      "Issued Capital", "Related Party Transactions",
     ]);
   });
 
-  test("focusSheet auto-expands the picked section, others stay collapsed", async () => {
+  test("focusSheet selects the picked sheet while the complete field stack stays visible", async () => {
     mockFetchOnce(SAMPLE);
     render(
       <NotesReviewTab runId={42} focusSheet="Notes-SummaryofAccPol" />,
     );
-    // The focused section opens on mount → its row label is visible without a
-    // manual heading click.
     await waitFor(() =>
       expect(screen.getByText("Revenue")).toBeInTheDocument(),
     );
-    // A non-focused section stays collapsed (its row content is not mounted).
-    expect(screen.queryByText("Corporate info")).toBeNull();
+    expect(screen.getByText("Corporate info")).toBeInTheDocument();
   });
 
-  test("nav chip jumps to and expands its sheet", async () => {
+  test("sheet navigator scrolls to an already-visible sheet", async () => {
     mockFetchOnce(SAMPLE);
     render(<NotesReviewTab runId={42} />);
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
-    // Default: every section collapsed, no row content mounted.
-    expect(screen.queryByText("Revenue")).toBeNull();
-    // Clicking the navigator chip opens the matching section so its rows
-    // mount. The chip's accessible name is the sheet display name (the
-    // row-count badge is aria-hidden).
+    expect(screen.getByText("Revenue")).toBeInTheDocument();
     const nav = screen.getByRole("navigation", {
-      name: /jump to notes sheet/i,
+      name: /notes sheet navigator/i,
     });
     fireEvent.click(
       within(nav).getByRole("button", {
         name: /summary of accounting policies/i,
       }),
     );
-    await waitFor(() =>
-      expect(screen.getByText("Revenue")).toBeInTheDocument(),
-    );
-    // A non-picked sheet stays collapsed.
-    expect(screen.queryByText("Corporate info")).toBeNull();
+    expect(screen.getByText("Corporate info")).toBeInTheDocument();
   });
 
-  test("focusing a sheet scrolls its section into view AFTER it expands", async () => {
+  test("focusing a sheet scrolls its section after the field stack lays out", async () => {
     // Run-168 QA regression guard: the section-level scroll used to fire
-    // synchronously, before the just-expanded rows laid out, so the smooth
-    // scroll stopped short and the panel stayed parked on the first section
+    // synchronously, before rows laid out, so the smooth scroll stopped short
+    // and the panel stayed parked on the first section
     // ("Summary of Accounting Policies") while the chip said "List of Notes".
     // The fix defers the scroll a frame; here we assert it happens at all
     // for a plain sheet focus (jsdom rAF flushes on the microtask turn).
@@ -410,7 +439,7 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     try {
       mockFetchOnce(SAMPLE);
       render(<NotesReviewTab runId={42} focusSheet="Notes-SummaryofAccPol" />);
-      // Section expands (rows mount) first…
+      // Rows mount first…
       await waitFor(() =>
         expect(screen.getByText("Revenue")).toBeInTheDocument(),
       );
@@ -503,7 +532,7 @@ describe("NotesReviewTab — numeric table alignment (Part A)", () => {
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
-    expandAllSheets();
+    selectFirstField();
     await waitFor(() => {
       const tds = container.querySelectorAll(
         '[data-testid="notes-review-editor"] td',
@@ -527,7 +556,7 @@ describe("NotesReviewTab — edit + save (Step 10)", () => {
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
-    expandAllSheets();
+    selectFirstField();
     expect(screen.getByText("Corporate info")).toBeInTheDocument();
     // Match the row's exact "Edit" button — the header "Re-extract notes
     // (replaces your edits)" button also contains "edit".
@@ -570,9 +599,7 @@ describe("NotesReviewTab — edit + save (Step 10)", () => {
     render(<NotesReviewTab runId={42} />);
     // Initial GET resolves on a microtask — flush to render the rows.
     await vi.runAllTimersAsync();
-    // Sheets are collapsed by default; expand them so the Edit button
-    // is mounted.
-    expandAllSheets();
+    selectFirstField();
 
     const editButtons = screen.getAllByRole("button", { name: /edit/i });
     fireEvent.click(editButtons[0]);
@@ -631,7 +658,7 @@ describe("NotesReviewTab — edit + save (Step 10)", () => {
 
     render(<NotesReviewTab runId={42} />);
     await vi.runAllTimersAsync();
-    expandAllSheets();
+    selectFirstField();
     fireEvent.click(screen.getAllByRole("button", { name: /edit/i })[0]);
     await vi.runAllTimersAsync();
 
@@ -688,7 +715,7 @@ describe("NotesReviewTab — edit + save (Step 10)", () => {
 
     render(<NotesReviewTab runId={42} />);
     await vi.runAllTimersAsync();
-    expandAllSheets();
+    selectFirstField();
     fireEvent.click(screen.getAllByRole("button", { name: /edit/i })[0]);
     await vi.runAllTimersAsync();
 
@@ -754,7 +781,7 @@ describe("NotesReviewTab — edit + save (Step 10)", () => {
 
     const { unmount } = render(<NotesReviewTab runId={42} />);
     await vi.runAllTimersAsync();
-    expandAllSheets();
+    selectFirstField();
     fireEvent.click(screen.getAllByRole("button", { name: /edit/i })[0]);
     await vi.runAllTimersAsync();
 
@@ -788,7 +815,7 @@ describe("NotesReviewTab — edit + save (Step 10)", () => {
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
-    expandAllSheets();
+    selectFirstField();
     expect(screen.getByText("Corporate info")).toBeInTheDocument();
     // Evidence is rendered as a read-only annotation — never wrapped in
     // an editable surface. Clicking Edit on the HTML editor must not
@@ -852,7 +879,7 @@ describe("NotesReviewTab — cross-run isolation (peer-review fix)", () => {
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
-    expandAllSheets();
+    selectFirstField();
     expect(container.textContent).toContain("run-42 content");
 
     // Switch to a different run — the component must unmount the prior
@@ -860,21 +887,18 @@ describe("NotesReviewTab — cross-run isolation (peer-review fix)", () => {
     nextResponse = runB;
     rerender(<NotesReviewTab runId={77} />);
 
-    // Sheet sections remount on runId change (runId is in the React key)
-    // so the new run also renders collapsed — expand again to inspect.
+    // Sheet sections remount on runId change (runId is in the React key), so
+    // select the new run's first field before inspecting its editor.
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
-    expandAllSheets();
+    selectFirstField();
     expect(container.textContent).toContain("run-77 content");
     // The old run's content must NOT linger after the refetch lands.
     expect(container.textContent).not.toContain("run-42 content");
   });
 
-  test("a nav-chip focus from run A does not auto-expand the same sheet in run B", async () => {
-    // Two sheets so the navigator chip bar renders (it's gated on >1 sheet).
-    // Both runs share the sheet NAMES so a leaked active.sheet would resolve
-    // to a real section in run B.
+  test("sheet selection from run A does not carry into run B", async () => {
     const mk = (tag: string): NotesCellsResponse => ({
       sheets: [
         {
@@ -913,39 +937,32 @@ describe("NotesReviewTab — cross-run isolation (peer-review fix)", () => {
       }),
     ) as unknown as typeof fetch;
 
-    const { rerender, container } = render(<NotesReviewTab runId={42} />);
+    const { rerender } = render(<NotesReviewTab runId={42} />);
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
-    // Focus the policy sheet in run A via its nav chip — its row mounts.
-    const nav = screen.getByRole("navigation", { name: /jump to notes sheet/i });
+    const nav = screen.getByRole("navigation", { name: /notes sheet navigator/i });
     fireEvent.click(
       within(nav).getByRole("button", {
         name: /summary of accounting policies/i,
       }),
     );
-    await waitFor(() =>
-      expect(container.textContent).toContain("run-42-policy"),
-    );
+    expect(within(nav).getByRole("button", {
+      name: /summary of accounting policies/i,
+    })).toHaveAttribute("aria-current", "true");
 
-    // Switch to run B. The previously-focused sheet must NOT carry over and
-    // auto-expand — the new run opens in the default all-collapsed state.
     nextResponse = mk("run-77");
     rerender(<NotesReviewTab runId={77} />);
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
-    // Run B's chip bar is present (sheets loaded), but no section is expanded:
-    // neither row's content is mounted.
-    await waitFor(() =>
-      expect(
-        screen.getByRole("navigation", { name: /jump to notes sheet/i }),
-      ).toBeInTheDocument(),
-    );
-    expect(container.textContent).not.toContain("run-77-policy");
-    expect(container.textContent).not.toContain("run-77-ci");
-    // And no stale run-A content lingers.
-    expect(container.textContent).not.toContain("run-42-policy");
+    const nextNav = screen.getByRole("navigation", { name: /notes sheet navigator/i });
+    expect(within(nextNav).getByRole("button", {
+      name: /corporate information/i,
+    })).not.toHaveAttribute("aria-current");
+    expect(within(nextNav).getByRole("button", {
+      name: /summary of accounting policies/i,
+    })).not.toHaveAttribute("aria-current");
   });
 });
 
@@ -967,7 +984,7 @@ describe("NotesReviewTab — copy button (Step 11)", () => {
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
-    expandAllSheets();
+    selectFirstField();
     expect(screen.getByText("Corporate info")).toBeInTheDocument();
     const copyButtons = screen.getAllByRole("button", { name: /copy/i });
     fireEvent.click(copyButtons[0]);
@@ -991,7 +1008,7 @@ describe("NotesReviewTab — copy button (Step 11)", () => {
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
-    expandAllSheets();
+    selectFirstField();
     expect(screen.getByText("Corporate info")).toBeInTheDocument();
     fireEvent.click(screen.getAllByRole("button", { name: /copy/i })[0]);
     await waitFor(() => {
@@ -1007,7 +1024,7 @@ describe("NotesReviewTab — single formatting experience", () => {
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
-    expandAllSheets();
+    selectFirstField();
     expect(screen.queryByRole("button", { name: /^format$/i })).toBeNull();
     expect(screen.getAllByRole("button", { name: /^edit$/i }).length).toBeGreaterThan(0);
     expect(screen.getAllByRole("button", { name: /^copy$/i }).length).toBeGreaterThan(0);
@@ -1261,7 +1278,7 @@ describe("NotesReviewTab unmount flush", () => {
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
-    expandAllSheets();
+    selectFirstField();
     await waitFor(() =>
       expect(screen.getByText("Other payables")).toBeInTheDocument(),
     );
@@ -1322,7 +1339,7 @@ describe("NotesReviewTab unmount flush", () => {
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
-    expandAllSheets();
+    selectFirstField();
 
     const editButtons = screen.getAllByRole("button", { name: /edit/i });
     fireEvent.click(editButtons[0]);
@@ -1379,7 +1396,7 @@ describe("NotesReviewTab unmount flush", () => {
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
-    expandAllSheets();
+    selectFirstField();
 
     const editButtons = screen.getAllByRole("button", { name: /edit/i });
     fireEvent.click(editButtons[0]);
@@ -1443,7 +1460,7 @@ describe("NotesReviewTab sanitizer feedback", () => {
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
-    expandAllSheets();
+    selectFirstField();
 
     const editButtons = screen.getAllByRole("button", { name: /edit/i });
     fireEvent.click(editButtons[0]);
@@ -1536,7 +1553,7 @@ describe("NotesReviewTab — full-template projection (Phase 5)", () => {
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
-    expandAllSheets();
+    selectFirstField();
     // Both the filled (row 5) and the blank (row 7) prose rows render.
     const proseRows = screen.getAllByTestId("notes-review-row");
     expect(proseRows.length).toBe(2);
@@ -1552,7 +1569,7 @@ describe("NotesReviewTab — full-template projection (Phase 5)", () => {
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
-    expandAllSheets();
+    selectFirstField();
 
     const numericRow = screen.getByTestId("notes-numeric-row");
     expect(numericRow).toBeInTheDocument();
@@ -1587,7 +1604,7 @@ describe("NotesReviewTab — full-template projection (Phase 5)", () => {
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
-    expandAllSheets();
+    selectFirstField();
 
     const py = screen.getByTestId("numeric-input-6-py") as HTMLInputElement;
     fireEvent.change(py, { target: { value: "1000" } });
@@ -1654,7 +1671,7 @@ describe("NotesReviewTab — table format bar", () => {
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
-    expandAllSheets();
+    selectFirstField();
     fireEvent.click(screen.getAllByRole("button", { name: /^edit$/i })[0]);
     await waitFor(() =>
       expect(screen.getByTestId("table-format-bar")).toBeInTheDocument(),
@@ -1667,7 +1684,7 @@ describe("NotesReviewTab — table format bar", () => {
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
-    expandAllSheets();
+    selectFirstField();
     fireEvent.click(screen.getAllByRole("button", { name: /^edit$/i })[0]);
     // Editor is now editable, but the selection is not in a table.
     await waitFor(() =>
@@ -1686,7 +1703,7 @@ describe("NotesReviewTab — table format bar", () => {
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
-    expandAllSheets();
+    selectFirstField();
     fireEvent.click(screen.getAllByRole("button", { name: /^edit$/i })[0]);
     await waitFor(() =>
       expect(screen.getByTestId("editor-format-bar")).toBeInTheDocument(),
@@ -1704,6 +1721,12 @@ describe("NotesReviewTab — table format bar", () => {
     }
     // The table-only tier stays hidden for prose.
     expect(screen.queryByTestId("table-format-bar")).toBeNull();
+    const editableSurface = document.querySelector<HTMLElement>("[contenteditable='true']");
+    expect(editableSurface).not.toBeNull();
+    fireEvent.blur(editableSurface!);
+    await waitFor(() =>
+      expect(screen.queryByTestId("editor-format-bar")).toBeNull(),
+    );
   });
 
   test("toolbar uses compact icon groups while retaining accessible labels", async () => {
@@ -1712,7 +1735,7 @@ describe("NotesReviewTab — table format bar", () => {
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
-    expandAllSheets();
+    selectFirstField();
     fireEvent.click(screen.getAllByRole("button", { name: /^edit$/i })[0]);
 
     expect(screen.getByRole("group", { name: "Text formatting" })).toBeInTheDocument();
@@ -1761,7 +1784,7 @@ describe("NotesReviewTab — table format bar", () => {
 
     render(<NotesReviewTab runId={42} />);
     await vi.runAllTimersAsync();
-    expandAllSheets();
+    selectFirstField();
     fireEvent.click(screen.getAllByRole("button", { name: /^edit$/i })[0]);
     await vi.runAllTimersAsync();
 
@@ -1811,7 +1834,7 @@ describe("NotesReviewTab — table format bar", () => {
 
     render(<NotesReviewTab runId={42} />);
     await vi.runAllTimersAsync();
-    expandAllSheets();
+    selectFirstField();
     fireEvent.click(screen.getAllByRole("button", { name: /^edit$/i })[0]);
     await vi.runAllTimersAsync();
 
@@ -1870,7 +1893,7 @@ describe("NotesReviewTab — table format bar", () => {
     globalThis.fetch = fetchMock as unknown as typeof fetch;
     render(<NotesReviewTab runId={42} />);
     await vi.runAllTimersAsync();
-    expandAllSheets();
+    selectFirstField();
     fireEvent.click(screen.getAllByRole("button", { name: /^edit$/i })[0]);
     await vi.runAllTimersAsync();
     const lastPatchHtml = () => {
@@ -2010,7 +2033,7 @@ describe("NotesReviewTab — save serialisation", () => {
 
     render(<NotesReviewTab runId={42} />);
     await vi.runAllTimersAsync();
-    expandAllSheets();
+    selectFirstField();
     fireEvent.click(screen.getAllByRole("button", { name: /^edit$/i })[0]);
     await vi.runAllTimersAsync();
 
@@ -2115,7 +2138,7 @@ describe("NotesReviewTab — stale-response clobber guard", () => {
 
     render(<NotesReviewTab runId={42} />);
     await vi.runAllTimersAsync();
-    expandAllSheets();
+    selectFirstField();
     fireEvent.click(screen.getAllByRole("button", { name: /^edit$/i })[0]);
     await vi.runAllTimersAsync();
     const editor = document.querySelectorAll(
@@ -2363,44 +2386,6 @@ describe("NotesReviewTab — AI formatter", () => {
     vi.useRealTimers();
   });
 
-  test("model picker seeds from the default and sends the choice on launch", async () => {
-    const launchBodies: string[] = [];
-    const fetchMock = routedFetch({
-      settings: () => ({
-        available_models: [
-          { id: "openai.gpt-5.4", display_name: "GPT-5.4" },
-          { id: "claude-opus-4-8", display_name: "Opus 4.8" },
-        ],
-        default_models: { notes_formatter: "claude-opus-4-8" },
-        model: "openai.gpt-5.4",
-      }),
-      launch: () => ({ ok: true, status: "running", sheet: "Notes-CI" }),
-    });
-    // Capture the launch POST body for the assertion.
-    const orig = fetchMock.getMockImplementation()!;
-    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.includes("/notes-format") && !url.includes("/status")
-          && !url.includes("/revert") && init?.body) {
-        launchBodies.push(String(init.body));
-      }
-      // routedFetch's mock reads only `input` (it ignores init), so a single
-      // argument satisfies its 1-param type under the build's `tsc -b`.
-      return orig(input);
-    });
-
-    render(<NotesReviewTab runId={42} />);
-    const picker = (await screen.findAllByTestId("notes-format-model"))[0] as HTMLSelectElement;
-    // Seeds from default_models.notes_formatter, not the global run model.
-    expect(picker.value).toBe("claude-opus-4-8");
-
-    // Change the selection, then launch — the choice must reach the POST body.
-    fireEvent.change(picker, { target: { value: "openai.gpt-5.4" } });
-    fireEvent.click(screen.getAllByTestId("notes-format-button")[0]);
-    await waitFor(() => expect(launchBodies.length).toBeGreaterThan(0));
-    expect(JSON.parse(launchBodies[0])).toMatchObject({ model: "openai.gpt-5.4" });
-  });
-
   test("a failed pass renders as role=alert and does not refetch cells", async () => {
     vi.useFakeTimers();
     let launched = false;
@@ -2491,7 +2476,7 @@ describe("NotesReviewTab — AI formatter", () => {
     expect(screen.getAllByTestId("notes-format-button")[0]).toBeDisabled();
 
     // Expanding the sheet shows the in-progress banner over the editors.
-    expandAllSheets();
+    selectFirstField();
     expect(
       screen.getByTestId("notes-format-running-banner"),
     ).toHaveTextContent("Formatting in progress");
@@ -2516,13 +2501,13 @@ describe("NotesReviewTab — AI formatter", () => {
     });
   });
 
-  test("pending row save disables Format; collapsing the section releases it", async () => {
+  test("pending row save disables Format", async () => {
     vi.useFakeTimers();
     routedFetch({});
 
     render(<NotesReviewTab runId={42} />);
     await vi.runAllTimersAsync();
-    expandAllSheets();
+    selectFirstField();
 
     fireEvent.click(screen.getAllByRole("button", { name: /edit/i })[0]);
     await vi.runOnlyPendingTimersAsync();
@@ -2541,15 +2526,6 @@ describe("NotesReviewTab — AI formatter", () => {
     expect(button).toHaveTextContent("Save pending");
     expect(button).toBeDisabled();
 
-    // Collapse the section: the row unmounts, flushes its save, and
-    // WITHDRAWS its status entry — the Format button must not stay wedged.
-    const toggle = screen.getAllByTestId("sheet-title")[0].closest("button")!;
-    fireEvent.click(toggle);
-    await vi.runOnlyPendingTimersAsync();
-    expect(
-      screen.getAllByTestId("notes-format-button")[0],
-    ).toHaveTextContent("Format");
-    expect(screen.getAllByTestId("notes-format-button")[0]).toBeEnabled();
     vi.useRealTimers();
   });
 

@@ -25,6 +25,7 @@ import time
 
 import fitz
 from pydantic_ai import Agent, RunContext
+from pydantic_ai.usage import UsageLimits
 from model_settings import build_model_settings, describe_model_runtime
 
 _THINKING_WARNED: set[str] = set()
@@ -63,11 +64,8 @@ from pydantic_ai.messages import (
 from pydantic_ai.models import Model
 
 from agent_runner import iter_with_turn_timeout
-from agent_tracing import (
-    MAX_AGENT_ITERATIONS,
-    save_agent_trace,
-    save_messages_trace,
-)
+from agent_tracing import save_agent_trace, save_messages_trace
+from scout.limits import resolve_scout_max_turns, resolve_scout_wallclock
 from statement_types import StatementType, variants_for, get_variant
 from scout.infopack import Infopack, ScoutInfopackInput, StatementPageRef
 from scout.toc_locator import find_toc_candidate_pages
@@ -97,22 +95,16 @@ MAX_VIEW_PAGES = 5
 SCOUT_TURN_TIMEOUT: float = 180.0
 
 
-def _resolve_scout_wallclock() -> float:
-    """XBRL_SCOUT_WALLCLOCK_S: positive seconds; 0/negative disables.
-
-    Same resolver semantics as XBRL_CORRECTION_WALLCLOCK_S (server.py).
-    """
-    raw = os.environ.get("XBRL_SCOUT_WALLCLOCK_S", "")
-    if not raw:
-        return 300.0
-    try:
-        v = float(raw)
-        return v if v > 0 else float("inf")
-    except ValueError:
-        return 300.0
+SCOUT_WALLCLOCK_TIMEOUT: float = resolve_scout_wallclock()
+_SCOUT_WALLCLOCK_AT_IMPORT = SCOUT_WALLCLOCK_TIMEOUT
 
 
-SCOUT_WALLCLOCK_TIMEOUT: float = _resolve_scout_wallclock()
+def _current_scout_wallclock() -> float:
+    """Read the saved setting while preserving module monkeypatch seams."""
+    current = float(SCOUT_WALLCLOCK_TIMEOUT)
+    if current != _SCOUT_WALLCLOCK_AT_IMPORT:
+        return current
+    return resolve_scout_wallclock()
 
 
 class ScoutWallclockExceeded(Exception):
@@ -1478,16 +1470,19 @@ async def run_scout(
         f"Start by calling find_toc to locate the Table of Contents."
     )
 
-    # Item 1: bound the whole non-streaming run with the wall-clock cap.
-    # ``agent.run`` is opaque (no per-turn hook), so the cap is the only
-    # guard here; the streaming path below adds the per-turn timeout too.
+    # Bound the opaque non-streaming run with PydanticAI's exact request cap
+    # plus the whole-run wall-clock cap. The streaming path below enforces the
+    # same model-turn budget itself and adds the per-turn timeout.
     # Read the module global at call time so tests can monkeypatch it.
-    import scout.agent as _self
-    wallclock = float(getattr(_self, "SCOUT_WALLCLOCK_TIMEOUT",
-                              SCOUT_WALLCLOCK_TIMEOUT))
+    wallclock = _current_scout_wallclock()
+    max_turns = resolve_scout_max_turns()
     try:
         result = await asyncio.wait_for(
-            agent.run(prompt, deps=deps),
+            agent.run(
+                prompt,
+                deps=deps,
+                usage_limits=UsageLimits(request_limit=max_turns),
+            ),
             timeout=None if wallclock == float("inf") else wallclock,
         )
     except (asyncio.TimeoutError, TimeoutError):
@@ -1620,23 +1615,26 @@ async def run_scout_streaming(
     # turn still terminates within the cap. Read the module globals at
     # call time so tests can monkeypatch them.
     import scout.agent as _self
-    wallclock = float(getattr(_self, "SCOUT_WALLCLOCK_TIMEOUT",
-                              SCOUT_WALLCLOCK_TIMEOUT))
+    wallclock = _current_scout_wallclock()
+    max_turns = resolve_scout_max_turns()
     turn_timeout = float(getattr(_self, "SCOUT_TURN_TIMEOUT",
                                  SCOUT_TURN_TIMEOUT))
     if wallclock < turn_timeout:
         turn_timeout = wallclock
     wc_start = time.monotonic()
+    # The limit-warning processor reads these exact model-turn counters from
+    # deps. Do not publish this cap through the graph-step field: model turns
+    # and graph steps are different units.
+    deps._model_turns_used = 0
+    deps._model_turns_cap = max_turns
+    deps._wallclock_started = wc_start
+    deps._wallclock_cap = None if wallclock == float("inf") else wallclock
 
-    iteration_count = 0
     agent_run_obj: Any = None
     try:
         async with agent.iter(prompt, deps=deps) as agent_run:
             agent_run_obj = agent_run
             async for node in iter_with_turn_timeout(agent_run, turn_timeout):
-                iteration_count += 1
-                if iteration_count > MAX_AGENT_ITERATIONS:
-                    raise RuntimeError(f"Scout hit iteration limit ({MAX_AGENT_ITERATIONS}).")
                 if time.monotonic() - wc_start > wallclock:
                     raise ScoutWallclockExceeded(
                         f"Scout exceeded its wall-clock cap of "
@@ -1690,7 +1688,12 @@ async def run_scout_streaming(
                                 })
 
                 elif Agent.is_model_request_node(node):
+                    if model_turn_count >= max_turns:
+                        raise RuntimeError(
+                            f"Scout hit turn limit ({max_turns})."
+                        )
                     model_turn_count += 1
+                    deps._model_turns_used = model_turn_count
                     thinking_id = f"scout_think_{thinking_counter}"
                     thinking_active = False
                     async with node.stream(agent_run.ctx) as model_stream:
