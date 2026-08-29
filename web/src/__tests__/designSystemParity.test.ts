@@ -136,13 +136,13 @@ describe("Direction A shell and responsive composition", () => {
 
   test("pins the Codex-style provider reasoning stream contract", () => {
     expect(designSystem).toContain("Merge current activity, tool actions and provider-returned reasoning");
-    expect(designSystem).toContain("one flat <em>Live activity</em> sentence carousel");
-    expect(designSystem).toContain("no event cards or nested activity panels");
-    expect(designSystem).toContain("subtle older/newer controls");
+    expect(designSystem).toContain("one flat chronological <em>Live activity</em> stream");
+    expect(designSystem).toContain("no event cards, navigation buttons or nested activity panels");
+    expect(designSystem).toContain("Follow new updates only while the operator remains at the bottom");
     expect(designSystem).toContain("Never describe unavailable private chain-of-thought as exposed");
-    expect(designSystem).toContain("frame-batch rapid reasoning updates");
+    expect(designSystem).toContain("Frame-batch rapid reasoning updates");
     expect(prototype).toContain("Live activity");
-    expect(prototype).toContain("1 / 8");
-    expect(prototype).toContain("Provider-supplied");
+    expect(prototype).toContain("Provider reasoning");
+    expect(prototype).not.toContain("1 / 8");
   });
 });

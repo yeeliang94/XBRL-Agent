@@ -124,7 +124,7 @@ describe("App — live activity integration", () => {
 
     // 4. Feed a synthetic status + tool_call through the captured callback.
     // The status event establishes the agent tab; the tool_call should land
-    // in toolTimeline and render as a sentence in the unified live carousel.
+    // in toolTimeline and render as an update in the unified live stream.
     await act(async () => {
       captureOnEvent!({
         event: "status",
@@ -150,7 +150,7 @@ describe("App — live activity integration", () => {
       });
     });
 
-    // 5. Assertions: the tool action is a flat sentence, not a tool card or
+    // 5. Assertions: the tool action is a flat update, not a tool card or
     // legacy chat-feed row.
     await waitFor(() => {
       expect(screen.getByRole("region", { name: /live activity/i })).toBeInTheDocument();

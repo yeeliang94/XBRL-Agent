@@ -27,7 +27,7 @@ export function useFrameBatchedText(content: string, isActive: boolean): string 
     return () => window.cancelAnimationFrame(frame);
   }, [content, displayed, isActive]);
 
-  // Switching carousel items can replace the whole string between renders.
-  // Show that replacement immediately so the old sentence never flashes.
+  // Replacing a streamed update can swap the whole string between renders.
+  // Show that replacement immediately so stale text never flashes.
   return content.startsWith(displayed) ? displayed : content;
 }
