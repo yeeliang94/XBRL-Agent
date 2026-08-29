@@ -20,6 +20,9 @@ Full module map in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Quick Start
 
+Python 3.10 or newer is required. The startup scripts create `venv` with a
+supported interpreter; macOS prefers Python 3.12 when it is installed.
+
 ### Mac/Linux
 
 ```bash
@@ -42,21 +45,38 @@ Web UI at http://localhost:8002
 
 ### CLI (bypass web UI)
 
+Use the repository virtual environment explicitly. Activation is local to one
+shell and does not carry into a new terminal or agent command.
+
+#### macOS/Linux
+
 ```bash
 # All 5 face statements (default MFRS, Company level)
-python3 run.py data/FINCO-Audited-Financial-Statement-2021.pdf
+venv/bin/python run.py data/FINCO-Audited-Financial-Statement-2021.pdf
 
 # Specific statements + model
-python3 run.py data/FINCO.pdf --model gpt-5.4 --statements SOFP SOPL
+venv/bin/python run.py data/FINCO.pdf --model gpt-5.4 --statements SOFP SOPL
 
 # Group filing (consolidated + company figures)
-python3 run.py data/FINCO.pdf --level group --statements SOFP SOPL
+venv/bin/python run.py data/FINCO.pdf --level group --statements SOFP SOPL
 
 # MPERS filing standard
-python3 run.py data/FINCO.pdf --standard mpers --statements SOFP SOCIE
+venv/bin/python run.py data/FINCO.pdf --standard mpers --statements SOFP SOCIE
 
 # With notes templates
-python3 run.py data/FINCO.pdf --notes corporate_info list_of_notes
+venv/bin/python run.py data/FINCO.pdf --notes corporate_info list_of_notes
+```
+
+#### Windows PowerShell
+
+```powershell
+$python = ".\venv\Scripts\python.exe"
+
+& $python run.py data\FINCO-Audited-Financial-Statement-2021.pdf
+& $python run.py data\FINCO.pdf --model gpt-5.4 --statements SOFP SOPL
+& $python run.py data\FINCO.pdf --level group --statements SOFP SOPL
+& $python run.py data\FINCO.pdf --standard mpers --statements SOFP SOCIE
+& $python run.py data\FINCO.pdf --notes corporate_info list_of_notes
 ```
 
 ## Data Setup
@@ -76,15 +96,27 @@ extract them.
 
 ## Testing
 
+macOS/Linux:
+
 ```bash
 # Backend (excludes live LLM tests by default)
-python -m pytest tests/ -v
+venv/bin/python -m pytest tests/ -v
 
 # Live E2E (requires API key for TEST_MODEL)
-python -m pytest -m live -v
+venv/bin/python -m pytest -m live -v
 
 # Frontend
 cd web && npx vitest run
+```
+
+Windows PowerShell:
+
+```powershell
+.\venv\Scripts\python.exe -m pytest tests\ -v
+.\venv\Scripts\python.exe -m pytest -m live -v
+
+cd web
+npx vitest run
 ```
 
 ## Configuration

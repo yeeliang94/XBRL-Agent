@@ -40,13 +40,16 @@ API: `GET /api/runs/{id}/mtool-fill` (the fill doc) and
 
 ## CLI
 
+Commands below use the macOS/Linux interpreter path. On Windows, replace
+`venv/bin/python` with `venv\Scripts\python.exe`.
+
 ```bash
 # 1. See a template's sheets / dump one sheet's labels + cell kinds
-python -m mtool.offline_fill inspect --workbook template.xlsx
-python -m mtool.offline_fill inspect --workbook template.xlsx --sheet SOFP-Sub-CuNonCu
+venv/bin/python -m mtool.offline_fill inspect --workbook template.xlsx
+venv/bin/python -m mtool.offline_fill inspect --workbook template.xlsx --sheet SOFP-Sub-CuNonCu
 
 # 2. Fill from an input file (see examples/)
-python -m mtool.offline_fill fill \
+venv/bin/python -m mtool.offline_fill fill \
     --workbook template.xlsx \
     --input fill.json \
     --output template_filled.xlsx \

@@ -48,7 +48,7 @@ source venv/bin/activate
 
 # Install Python deps
 echo "Installing Python dependencies..."
-pip install -r requirements.txt -c constraints.txt -q
+venv/bin/python -m pip install -r requirements.txt -c constraints.txt -q
 
 # Check Node.js
 if command -v node &> /dev/null; then
@@ -134,4 +134,4 @@ echo ""
 echo "Starting server on http://localhost:8002"
 echo ""
 
-python server.py
+venv/bin/python server.py

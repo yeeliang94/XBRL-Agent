@@ -7,9 +7,47 @@ HTML-editor contract that the notes pipeline now depends on.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_always_loaded_agent_instructions_stay_lean() -> None:
+    """Keep deep incident history out of the files loaded for every task."""
+    agents = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    claude = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+
+    assert len((agents + claude).encode("utf-8")) < 32 * 1024
+    assert "CLAUDE-REFERENCE.md" in agents
+    assert "CLAUDE-REFERENCE.md" in claude
+
+
+def test_agent_test_commands_use_repository_python() -> None:
+    """Fresh agent shells must not fall back to Apple's unsupported Python 3.9."""
+    agents = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    pytest_commands = [line for line in agents.splitlines() if "-m pytest" in line]
+
+    assert pytest_commands
+    assert all("venv/bin/python -m pytest" in line for line in pytest_commands)
+    assert "venv\\Scripts\\python.exe" in agents
+    assert ".\\venv\\Scripts\\python.exe" in readme
+
+
+def test_claude_router_covers_every_detailed_invariant() -> None:
+    """Every stable invariant number in the reference remains routable."""
+    router = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+    reference = (REPO_ROOT / "CLAUDE-REFERENCE.md").read_text(encoding="utf-8")
+    invariant_numbers = re.findall(r"^### (\d+a?)\.", reference, flags=re.MULTILINE)
+
+    assert invariant_numbers == [
+        "1", "2", "2a", "3", "4", "5", "6", "7", "8", "9", "10", "11",
+        "12", "13", "14", "15", "16", "17", "18", "19", "20", "21",
+        "22", "23", "24", "25", "26", "27", "28", "29", "30", "31",
+    ]
+    for number in invariant_numbers:
+        assert re.search(rf"^{re.escape(number)}\. \[", router, flags=re.MULTILINE)
 
 
 def test_notes_pipeline_doc_mentions_html_contract() -> None:
@@ -27,8 +65,8 @@ def test_notes_pipeline_doc_mentions_html_contract() -> None:
 
 def test_claude_md_has_notes_html_gotcha() -> None:
     doc = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
-    # The gotcha lives under the "Load-Bearing Invariants" section and
-    # advertises the HTML → DB → editor contract.
+    # The always-loaded router must preserve the stable notes invariant and
+    # advertise the HTML → DB contract without loading the full incident history.
     assert "notes_cells" in doc
     # Emphasise the clobber-on-rerun invariant — it's the single most
     # surprising behaviour for a future contributor.
