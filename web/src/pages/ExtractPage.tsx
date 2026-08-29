@@ -12,7 +12,7 @@ import { HomeHero } from "../components/HomeHero";
 import { PreRunPanel } from "../components/PreRunPanel";
 import { PipelineStages } from "../components/PipelineStages";
 import { AgentTimeline } from "../components/AgentTimeline";
-import { ActivitySentenceCarousel } from "../components/ActivitySentenceCarousel";
+import { ActivityStream } from "../components/ActivityStream";
 import { TokenDashboard } from "../components/TokenDashboard";
 import { ResultsView } from "../components/ResultsView";
 import { AgentTabs } from "../components/AgentTabs";
@@ -824,11 +824,12 @@ export function ActiveTabPanel({
           onSelect={setNotes12SubId}
         />
       )}
-      <ActivitySentenceCarousel
+      <ActivityStream
         events={events}
         toolTimeline={toolTimeline}
         reasoningBlocks={reasoningBlocks}
         isRunning={running}
+        streamKey={`${state.activeTab ?? "run"}:${notes12SubId ?? "all"}`}
       />
     </div>
   );

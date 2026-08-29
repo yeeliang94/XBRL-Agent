@@ -43,8 +43,8 @@ function subToolCall(subId: string, tcId: string, name: string): SSEEvent {
   } as unknown as SSEEvent;
 }
 
-describe("ActiveTabPanel — unified activity carousel", () => {
-  test("merges scout reasoning and current activity into one flat sentence stream", () => {
+describe("ActiveTabPanel — unified vertical activity stream", () => {
+  test("keeps every scout reasoning sentence visible in chronological order", () => {
     const scout = createAgentState("scout", "scout", "Document scan");
     scout.status = "running";
     scout.events = [
@@ -65,17 +65,17 @@ describe("ActiveTabPanel — unified activity carousel", () => {
 
     const stream = screen.getByRole("region", { name: /live activity/i });
     expect(within(stream).getByText("Live activity")).toBeInTheDocument();
-    expect(within(stream).getByText("Reasoning · Provider-supplied")).toBeInTheDocument();
-    expect(within(stream).getByText("I will inspect it first.")).toBeInTheDocument();
-    fireEvent.click(within(stream).getByRole("button", { name: /older activity/i }));
+    expect(within(stream).getByText("Provider reasoning")).toBeInTheDocument();
     expect(within(stream).getByText("The contents page is page 3.")).toBeInTheDocument();
+    expect(within(stream).getByText("I will inspect it first.")).toBeInTheDocument();
+    expect(within(stream).queryByRole("button", { name: /activity/i })).toBeNull();
     expect(screen.queryByText("Current activity")).not.toBeInTheDocument();
     expect(screen.queryByText("Reasoning and actions")).not.toBeInTheDocument();
     expect(screen.queryByText("Technical details")).not.toBeInTheDocument();
     expect(screen.queryByTestId("reasoning-block")).not.toBeInTheDocument();
   });
 
-  test("uses the same flat carousel for other live agents", () => {
+  test("uses the same flat vertical stream for other live agents", () => {
     const sofp = createAgentState("sofp_0", "SOFP", "SOFP");
     render(<ActiveTabPanel state={stateWithAgent("sofp_0", sofp)} />);
 
@@ -171,11 +171,15 @@ describe("ActiveTabPanel — Sheet-12 sub-tabs", () => {
     const state = stateWithAgent("notes:LIST_OF_NOTES", notes12);
     render(<ActiveTabPanel state={state} />);
 
-    // All view shows one tool sentence; the other remains reachable through
-    // the flat carousel instead of rendering both as cards.
+    // The All view shows both tool sentences together in the vertical stream.
     expect(screen.getAllByText(/locating table of contents/i).length).toBeGreaterThan(0);
-    fireEvent.click(screen.getByRole("button", { name: /show older activity/i }));
     expect(screen.getAllByText(/checking pdf pages/i).length).toBeGreaterThan(0);
+
+    const feed = screen.getByRole("list", { name: "Activity updates" });
+    Object.defineProperty(feed, "scrollHeight", { configurable: true, value: 400 });
+    Object.defineProperty(feed, "clientHeight", { configurable: true, value: 100 });
+    feed.scrollTop = 40;
+    fireEvent.scroll(feed);
 
     // Click the Sub 1 chip (index 1 in tabs; index 0 is "All").
     const subChips = screen.getAllByRole("tab");
@@ -184,6 +188,7 @@ describe("ActiveTabPanel — Sheet-12 sub-tabs", () => {
     // Now only sub0's tool row is visible.
     expect(screen.getAllByText(/locating table of contents/i).length).toBeGreaterThan(0);
     expect(screen.queryAllByText(/checking pdf pages/i)).toHaveLength(0);
+    expect(feed.scrollTop).toBe(400);
   });
 
   test("default activeSubId is null (All tab selected)", () => {

@@ -69,7 +69,7 @@ function statusSentence(message: string): string | null {
 
 /**
  * Flatten the visible run stream into newest-first sentences for the live
- * carousel. Reasoning remains complete and ordered, while tool/status events
+ * activity stream. Reasoning remains complete and ordered, while tool/status events
  * use the same plain-language vocabulary as the rest of the workspace.
  */
 export function buildActivitySentences(

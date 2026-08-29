@@ -182,14 +182,6 @@ details[open] > .pwc-disclosure-content {
 .activity-sentence-pulse {
   animation: pulse-subtle 1.8s var(--motion-standard) infinite;
 }
-.activity-carousel-control:hover:not(:disabled),
-.activity-carousel-control:focus-visible:not(:disabled) {
-  color: #000000 !important;
-}
-.activity-carousel-control:disabled {
-  cursor: default !important;
-  opacity: 0.28;
-}
 .pwc-dialog-scrim-enter,
 .pwc-dialog-enter {
   animation: dialog-in var(--motion-fast) var(--motion-standard) both;
