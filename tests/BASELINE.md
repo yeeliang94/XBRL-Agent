@@ -8,9 +8,12 @@ each phase and diff against this list.
 
 Commands:
 
+The commands below use the macOS/Linux interpreter path. On Windows, replace
+`venv/bin/python` with `venv\Scripts\python.exe`.
+
 ```bash
 # Backend
-python -m pytest tests/ -v
+venv/bin/python -m pytest tests/ -v
 
 # Frontend
 cd web && npx vitest run

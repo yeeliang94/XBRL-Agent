@@ -1,6 +1,6 @@
 """Regression guard for the `python server.py` entry point (rewrite Phase 5.1).
 
-start.sh launches the Mac server with `python server.py`, so the module runs
+start.sh launches the Mac server with `venv/bin/python server.py`, so the module runs
 under the name "__main__", not "server". The api/ routers do `import server`
 at import time — without the `sys.modules.setdefault("server", ...)` alias near
 the router-import block, that import re-executes this file a SECOND time as a
@@ -35,7 +35,7 @@ def test_python_server_py_entrypoint_has_no_circular_import():
         timeout=180,
     )
     assert result.returncode == 0, (
-        "`python server.py` (start.sh launch path) crashed on startup:\n"
+        "`venv/bin/python server.py` (start.sh launch path) crashed on startup:\n"
         f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
     )
     assert "circular import" not in result.stderr.lower(), result.stderr

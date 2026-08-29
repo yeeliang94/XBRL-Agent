@@ -40,10 +40,13 @@ Identical to MFRS:
 
 ## Pipeline Entry Points
 
+Commands below use the macOS/Linux interpreter path. On Windows, replace
+`venv/bin/python` with `venv\Scripts\python.exe`.
+
 ### CLI
 
 ```bash
-python3 run.py data/foo.pdf --standard mpers --level group --statements SOFP SOCIE
+venv/bin/python run.py data/foo.pdf --standard mpers --level group --statements SOFP SOCIE
 ```
 
 ### API
@@ -88,10 +91,10 @@ The framework honours `applies_to_standard` on each check (defaults to
 
 ```bash
 # Regenerate Company templates (15 files) + snapshot backup
-python3 scripts/generate_mpers_templates.py --level company --snapshot
+venv/bin/python scripts/generate_mpers_templates.py --level company --snapshot
 
 # Regenerate Group templates (15 files; SOCIE uses 4-block layout)
-python3 scripts/generate_mpers_templates.py --level group --snapshot
+venv/bin/python scripts/generate_mpers_templates.py --level group --snapshot
 ```
 
 **Always pass `--snapshot`** when regenerating — it writes the previous
@@ -240,18 +243,18 @@ When SSM ships a new MPERS taxonomy (e.g. 2024 vs 2022):
 
 ```bash
 # All MPERS regression tests
-python3 -m pytest tests/test_mpers_generator.py -v
+venv/bin/python -m pytest tests/test_mpers_generator.py -v
 
 # Per-phase
-python3 -m pytest -m mpers_inventory -v        # Phase 1 (inventory + format pins)
-python3 -m pytest -m mpers_generator_core -v   # Phase 2 (walker + emitter)
-python3 -m pytest -m mpers_company -v          # Phase 3 (Company xlsx on disk)
-python3 -m pytest -m mpers_formulas -v         # Phase 4 (calc linkbase + SUM)
-python3 -m pytest -m mpers_group -v            # Phase 5 (Group layout + SOCIE blocks)
-python3 -m pytest -m mpers_snapshot -v         # Phase 6 (backup-originals)
+venv/bin/python -m pytest -m mpers_inventory -v        # Phase 1 (inventory + format pins)
+venv/bin/python -m pytest -m mpers_generator_core -v   # Phase 2 (walker + emitter)
+venv/bin/python -m pytest -m mpers_company -v          # Phase 3 (Company xlsx on disk)
+venv/bin/python -m pytest -m mpers_formulas -v         # Phase 4 (calc linkbase + SUM)
+venv/bin/python -m pytest -m mpers_group -v            # Phase 5 (Group layout + SOCIE blocks)
+venv/bin/python -m pytest -m mpers_snapshot -v         # Phase 6 (backup-originals)
 
 # Pipeline wiring
-python3 -m pytest tests/test_mpers_wiring.py -v
+venv/bin/python -m pytest tests/test_mpers_wiring.py -v
 ```
 
 ## Key Files
