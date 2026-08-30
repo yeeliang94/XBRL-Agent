@@ -22,6 +22,7 @@ from fastapi import APIRouter, HTTPException
 
 import server
 from server import RunConfigPatchRequest
+from usage_metrics import derive_thinking_tokens
 
 logger = logging.getLogger("server")
 
@@ -51,6 +52,25 @@ def _pricing_is_unconfirmed(model: Optional[str]) -> bool:
         return pricing_is_unconfirmed(model)
     except Exception:
         return False
+
+
+def _agent_thinking_tokens(agent) -> int:
+    """Provider-reported reasoning tokens retained in persisted totals.
+
+    New telemetry stores visible completion separately from reasoning while
+    keeping the provider total unchanged. Per-turn rows are the most precise
+    source. Scout and other single-result agents have no turn rows, so use the
+    equivalent rollup difference there. Older rows stored all output as
+    completion and safely resolve to zero.
+    """
+    turns = getattr(agent, "turns", None) or []
+    if turns:
+        return sum(int(turn.get("thinking_tokens") or 0) for turn in turns)
+    return derive_thinking_tokens(
+        getattr(agent, "total_tokens", 0),
+        getattr(agent, "prompt_tokens", 0),
+        getattr(agent, "completion_tokens", 0),
+    )
 
 
 @router.get("/api/runs")
@@ -248,6 +268,7 @@ async def get_run_detail_endpoint(run_id: int):
                 "token_breakdown": {
                     "prompt_tokens": a.prompt_tokens,
                     "completion_tokens": a.completion_tokens,
+                    "thinking_tokens": _agent_thinking_tokens(a),
                     "turn_count": a.turn_count,
                     "tool_call_count": a.tool_call_count,
                     # v15 cache telemetry: cache_read > 0 proves caching hit.
@@ -294,6 +315,9 @@ async def get_run_detail_endpoint(run_id: int):
             "total_cost": sum(a.total_cost or 0.0 for a in detail.agents),
             "prompt_tokens": sum(a.prompt_tokens or 0 for a in detail.agents),
             "completion_tokens": sum(a.completion_tokens or 0 for a in detail.agents),
+            "thinking_tokens": sum(
+                _agent_thinking_tokens(a) for a in detail.agents
+            ),
             "turn_count": sum(a.turn_count or 0 for a in detail.agents),
             "tool_call_count": sum(a.tool_call_count or 0 for a in detail.agents),
             # v15 cache telemetry rollup — total cache reads/writes across the

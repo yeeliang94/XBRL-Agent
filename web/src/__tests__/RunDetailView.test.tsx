@@ -908,6 +908,7 @@ describe("RunDetailView", () => {
           token_breakdown: {
             prompt_tokens: 900,
             completion_tokens: 300,
+            thinking_tokens: 60,
             turn_count: 2,
             tool_call_count: 1,
           },
@@ -915,11 +916,13 @@ describe("RunDetailView", () => {
             {
               turn_index: 1, node_kind: "model_request", tool_names: null,
               prompt_tokens: 800, completion_tokens: 40, total_tokens: 840,
+              thinking_tokens: 20,
               cumulative_tokens: 840, cost_estimate: 0.004, duration_ms: 1200,
             },
             {
               turn_index: 2, node_kind: "call_tools", tool_names: "read_template",
               prompt_tokens: 100, completion_tokens: 260, total_tokens: 360,
+              thinking_tokens: 40,
               cumulative_tokens: 1200, cost_estimate: 0.002, duration_ms: 300,
             },
           ],
@@ -931,6 +934,8 @@ describe("RunDetailView", () => {
     const panel = screen.getByTestId("run-detail-telemetry");
     // Tool name from a turn row is shown, proving the per-turn table rendered.
     expect(within(panel).getByText("read_template")).toBeTruthy();
+    expect(within(panel).getByRole("columnheader", { name: "Reasoning" })).toBeTruthy();
+    expect(within(panel).getByText(/60 reasoning tokens/i)).toBeTruthy();
     // The on-demand trace button is offered.
     expect(
       within(panel).getByRole("button", { name: /view full request \/ response trace/i }),
@@ -968,6 +973,7 @@ describe("RunDetailView", () => {
         total_cost: 0.006,
         prompt_tokens: 1700,
         completion_tokens: 300,
+        thinking_tokens: 75,
         turn_count: 9,
         tool_call_count: 4,
       },
@@ -976,6 +982,8 @@ describe("RunDetailView", () => {
     fireEvent.click(screen.getByRole("tab", { name: /activity/i }));
     fireEvent.click(screen.getByText(/performance details/i));
     expect(screen.getByText("2,000")).toBeTruthy();
+    expect(screen.getByText("Reasoning tokens")).toBeTruthy();
+    expect(screen.getByText("75")).toBeTruthy();
     // Cost is rounded to cents now, not shown to 4 decimals ($0.0060 → $0.01).
     expect(screen.getByText("$0.01")).toBeTruthy();
   });

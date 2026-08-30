@@ -123,6 +123,7 @@ async def test_single_agent_stall_after_write_returns_succeeded(tmp_path, monkey
                 total_tokens = 30
                 input_tokens = 20
                 output_tokens = 10
+                details = {"reasoning_tokens": 4}
             return U()
     class _FakeAgent:
         def iter(self, *a, **kw): return _FakeAgentRun()
@@ -162,7 +163,8 @@ async def test_single_agent_stall_after_write_returns_succeeded(tmp_path, monkey
     )
     assert outcome.total_tokens == 30
     assert outcome.prompt_tokens == 20
-    assert outcome.completion_tokens == 10
+    assert outcome.completion_tokens == 6
+    assert outcome.total_tokens - outcome.prompt_tokens - outcome.completion_tokens == 4
     assert (
         tmp_path / "NOTES_CORP_INFO_conversation_trace.json"
     ).exists(), "salvaged timeout must retain a partial conversation trace"

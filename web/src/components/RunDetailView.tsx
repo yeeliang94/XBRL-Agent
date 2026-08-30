@@ -1259,6 +1259,10 @@ export function RunDetailView({
               {rollup && (
                 <div style={styles.metricStrip}>
                   <MetricTile label="Total tokens" value={rollup.total_tokens.toLocaleString()} />
+                  <MetricTile
+                    label="Reasoning tokens"
+                    value={(rollup.thinking_tokens ?? 0).toLocaleString()}
+                  />
                   <MetricTile label="Est. cost" value={formatCost(rollup.total_cost)} />
                   <MetricTile label="Turns" value={String(rollup.turn_count)} />
                   <MetricTile label="Tool calls" value={String(rollup.tool_call_count)} />

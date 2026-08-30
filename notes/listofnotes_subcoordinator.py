@@ -59,6 +59,7 @@ from utils.sanitize import sanitize as _sanitize_for_log
 from notes_types import NotesTemplateType
 from model_settings import describe_model_runtime
 from pricing import estimate_cost
+from usage_metrics import split_usage
 from prompts import sanitize_source_scalar
 from scout.notes_discoverer import NoteInventoryEntry
 
@@ -177,6 +178,7 @@ class SubAgentRunResult:
     retry_count: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    thinking_tokens: int = 0
     # Slice 5: the sub-agent's coverage receipt, if it submitted one.
     # None when the agent never called `submit_batch_coverage` (e.g.
     # hit the iteration cap before the terminal call, or failed
@@ -520,7 +522,7 @@ async def _run_list_of_notes_sub_agent(
     # threaded into _invoke_sub_agent_once so the usage from a FAILING attempt
     # isn't lost (the failure path reads it back, otherwise the aggregate cost
     # report under-reports every time a sub-agent spends tokens then raises).
-    cur_usage: dict[str, int] = {"prompt": 0, "completion": 0}
+    cur_usage: dict[str, int] = {"prompt": 0, "completion": 0, "thinking": 0}
     # Same accumulator pattern for the attempt's write failures (run-84): the
     # system's own record of writes that did not land, which outranks a coverage
     # receipt claiming those notes were skipped. Reset per attempt — a retry
@@ -531,7 +533,7 @@ async def _run_list_of_notes_sub_agent(
         nonlocal retries_performed, last_prompt_tokens, last_completion_tokens, cur_usage
         nonlocal cur_failures
         retries_performed = retry_index
-        cur_usage = {"prompt": 0, "completion": 0}
+        cur_usage = {"prompt": 0, "completion": 0, "thinking": 0}
         cur_failures = {"failed_notes": set(), "unattributed": 0}
         payloads, prompt_t, completion_t, coverage = await _invoke_sub_agent_once(
             sub_agent_id=sub_agent_id,
@@ -585,6 +587,7 @@ async def _run_list_of_notes_sub_agent(
             retry_count=retries_performed,
             prompt_tokens=last_prompt_tokens,
             completion_tokens=last_completion_tokens,
+            thinking_tokens=cur_usage["thinking"],
             coverage=coverage,
             failed_write_notes=set(cur_failures.get("failed_notes") or ()),
             unattributed_write_failures=int(
@@ -609,6 +612,7 @@ async def _run_list_of_notes_sub_agent(
             retry_count=retries_performed,
             prompt_tokens=last_prompt_tokens,
             completion_tokens=last_completion_tokens,
+            thinking_tokens=cur_usage["thinking"],
         )
 
     # Same two-budget treatment as notes.coordinator._run_single_notes_agent.
@@ -921,22 +925,26 @@ async def _invoke_sub_agent_once(
                         })
                         thinking_counter += 1
 
-                usage = agent_run.usage
-                total = usage.total_tokens or 0
-                prompt_t = usage.input_tokens or 0
-                completion_t = usage.output_tokens or 0
+                metrics = split_usage(agent_run.usage)
+                total = metrics.total_tokens
+                prompt_t = metrics.prompt_tokens
+                completion_t = metrics.completion_tokens
+                thinking_t = metrics.thinking_tokens
                 # Keep the caller's failure-path accumulator in sync so the
                 # retry wrapper can report accurate spend if the next
                 # iteration raises.
                 if usage_out is not None:
                     usage_out["prompt"] = int(prompt_t)
                     usage_out["completion"] = int(completion_t)
+                    usage_out["thinking"] = int(thinking_t)
                 await _emit("token_update", {
                     "prompt_tokens": prompt_t,
                     "completion_tokens": completion_t,
-                    "thinking_tokens": 0,
+                    "thinking_tokens": thinking_t,
                     "cumulative": total,
-                    "cost_estimate": estimate_cost(prompt_t, completion_t, 0, model),
+                    "cost_estimate": estimate_cost(
+                        prompt_t, completion_t, thinking_t, model,
+                    ),
                 })
 
         finally:
@@ -955,12 +963,13 @@ async def _invoke_sub_agent_once(
     # entered a model_request_node (empty batch short-circuit, cancel
     # before first turn) we'd still have prompt_t=completion_t=0 from
     # the locals above — ``try/except NameError`` would be overkill.
-    final_usage = agent_run.usage
-    final_prompt = int(final_usage.input_tokens or 0)
-    final_completion = int(final_usage.output_tokens or 0)
+    final_metrics = split_usage(agent_run.usage)
+    final_prompt = final_metrics.prompt_tokens
+    final_completion = final_metrics.completion_tokens
     if usage_out is not None:
         usage_out["prompt"] = final_prompt
         usage_out["completion"] = final_completion
+        usage_out["thinking"] = final_metrics.thinking_tokens
     # Slice 5: hand the coverage receipt back to the retry wrapper.
     # ``deps.coverage_receipt`` is set by the submit_batch_coverage tool
     # when it accepts a valid receipt; None means the agent never made

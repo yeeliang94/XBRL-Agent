@@ -334,9 +334,12 @@ async def scout_pdf(session_id: str, request: Request):
             usage = usage or {}
             prompt_t = int(usage.get("prompt_tokens", 0) or 0)
             completion_t = int(usage.get("completion_tokens", 0) or 0)
+            thinking_t = int(usage.get("thinking_tokens", 0) or 0)
             try:
                 from pricing import estimate_cost
-                cost = estimate_cost(prompt_t, completion_t, 0, scout_model_name)
+                cost = estimate_cost(
+                    prompt_t, completion_t, thinking_t, scout_model_name,
+                )
             except Exception:  # noqa: BLE001 — pricing is advisory
                 cost = 0.0
             conn = sqlite3.connect(str(server.AUDIT_DB_PATH))

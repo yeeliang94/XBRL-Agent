@@ -37,6 +37,7 @@ from pydantic_ai.messages import (
 
 from agent_tracing import MAX_AGENT_ITERATIONS
 from pricing import estimate_cost
+from usage_metrics import split_usage
 
 logger = logging.getLogger(__name__)
 
@@ -158,26 +159,6 @@ def resolve_token_budget() -> int:
         )
         return 0
     return v if v > 0 else 0
-
-
-def _in_tokens(u) -> int:
-    """Prompt/input token count from a pydantic-ai Usage, version-tolerant.
-
-    pydantic-ai renamed ``request_tokens`` → ``input_tokens`` (old names emit
-    DeprecationWarnings). Read the new name first, fall back to the old one.
-    """
-    val = getattr(u, "input_tokens", None)
-    if val is None:
-        val = getattr(u, "request_tokens", 0)
-    return int(val or 0)
-
-
-def _out_tokens(u) -> int:
-    """Completion/output token count from a pydantic-ai Usage (see _in_tokens)."""
-    val = getattr(u, "output_tokens", None)
-    if val is None:
-        val = getattr(u, "response_tokens", 0)
-    return int(val or 0)
 
 
 def _cache_read_tokens(u) -> int:
@@ -316,7 +297,7 @@ async def run_agent_loop(
     # Running cumulative usage so each node's per-turn figure is a delta
     # (pydantic-ai's usage() is cumulative). Cache read/write track the same
     # way so the per-turn rows show when a turn hit (or wrote) the cache.
-    prev_prompt = prev_completion = prev_total = 0
+    prev_prompt = prev_completion = prev_thinking = prev_total = 0
     prev_cache_read = prev_cache_write = 0
     # Step 8 probe: label the history-processor rewrite log lines with this
     # agent's role (contextvar; the processors run inside this task).
@@ -497,17 +478,19 @@ async def run_agent_loop(
 
         # Emit token usage after each node completes.
         usage = agent_run.usage
-        total = int(usage.total_tokens or 0)
-        prompt_t = _in_tokens(usage)
-        completion_t = _out_tokens(usage)
+        token_usage = split_usage(usage)
+        total = token_usage.total_tokens
+        prompt_t = token_usage.prompt_tokens
+        completion_t = token_usage.completion_tokens
+        thinking_t = token_usage.thinking_tokens
         cache_read_t = _cache_read_tokens(usage)
         cache_write_t = _cache_write_tokens(usage)
         await emit("token_update", {
             "prompt_tokens": prompt_t,
             "completion_tokens": completion_t,
-            "thinking_tokens": 0,  # pydantic-ai doesn't separate thinking tokens
+            "thinking_tokens": thinking_t,
             "cumulative": total,
-            "cost_estimate": estimate_cost(prompt_t, completion_t, 0, spec.model),
+            "cost_estimate": estimate_cost(prompt_t, completion_t, thinking_t, spec.model),
         })
 
         # v8 telemetry: per-turn metrics row (deltas vs the previous node's
@@ -516,6 +499,7 @@ async def run_agent_loop(
         try:
             d_prompt = max(prompt_t - prev_prompt, 0)
             d_completion = max(completion_t - prev_completion, 0)
+            d_thinking = max(thinking_t - prev_thinking, 0)
             d_total = max(total - prev_total, 0)
             turn_records.append({
                 "turn_index": iteration,
@@ -524,9 +508,10 @@ async def run_agent_loop(
                 "_n_tool_calls": len(node_tool_names),
                 "prompt_tokens": d_prompt,
                 "completion_tokens": d_completion,
+                "thinking_tokens": d_thinking,
                 "total_tokens": d_total,
                 "cumulative_tokens": total,
-                "cost_estimate": estimate_cost(d_prompt, d_completion, 0, spec.model),
+                "cost_estimate": estimate_cost(d_prompt, d_completion, d_thinking, spec.model),
                 "duration_ms": int((time.monotonic() - node_start) * 1000),
                 # v15 cache telemetry: this turn's contribution to cache
                 # read/write (delta of the cumulative usage).
@@ -548,7 +533,8 @@ async def run_agent_loop(
                     max(cache_read_t - prev_cache_read, 0),
                     max(cache_write_t - prev_cache_write, 0), prompt_t,
                 )
-            prev_prompt, prev_completion, prev_total = prompt_t, completion_t, total
+            prev_prompt, prev_completion = prompt_t, completion_t
+            prev_thinking, prev_total = thinking_t, total
             prev_cache_read, prev_cache_write = cache_read_t, cache_write_t
         except Exception:  # noqa: BLE001 — telemetry is advisory
             logger.debug("per-turn telemetry capture skipped for %s", spec.agent_role)

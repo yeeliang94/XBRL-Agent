@@ -18,6 +18,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional
 
+from usage_metrics import derive_thinking_tokens
+
 
 def _now() -> str:
     """UTC timestamp in ISO-8601 format. One place so every table agrees."""
@@ -783,9 +785,12 @@ def insert_agent_turns(
 ) -> None:
     """Persist per-turn telemetry rows for one agent (v8).
 
-    Each dict mirrors the run_agent_turns columns. Extra keys (e.g. the
-    coordinator's `_n_tool_calls`) are ignored. Best-effort by contract —
-    the caller wraps this so a telemetry write can never fault a run.
+    Each dict mirrors the run_agent_turns columns. ``thinking_tokens`` remains
+    in the in-memory record for salvage/cost rollups but is intentionally not
+    stored separately: reads recover it from total - prompt - completion via
+    ``derive_thinking_tokens``. Other extra keys (for example
+    ``_n_tool_calls``) are ignored. Best-effort by contract — the caller wraps
+    this so a telemetry write can never fault a run.
     """
     if not turns:
         return
@@ -2362,6 +2367,15 @@ def fetch_agent_turns(conn: sqlite3.Connection, run_agent_id: int) -> list[dict]
             "tool_names": r["tool_names"],
             "prompt_tokens": r["prompt_tokens"] or 0,
             "completion_tokens": r["completion_tokens"] or 0,
+            # Reasoning is provider-reported output that is intentionally
+            # excluded from completion_tokens by the live usage splitter. It
+            # can therefore be recovered without a schema migration. Legacy
+            # rows stored all output as completion and correctly derive 0.
+            "thinking_tokens": derive_thinking_tokens(
+                r["total_tokens"],
+                r["prompt_tokens"],
+                r["completion_tokens"],
+            ),
             "total_tokens": r["total_tokens"] or 0,
             "cumulative_tokens": r["cumulative_tokens"] or 0,
             "cost_estimate": r["cost_estimate"] or 0.0,
@@ -2709,6 +2723,11 @@ def get_run_detail(conn: sqlite3.Connection, run_id: int) -> Optional[RunDetail]
                 "tool_names": r["tool_names"],
                 "prompt_tokens": r["prompt_tokens"] or 0,
                 "completion_tokens": r["completion_tokens"] or 0,
+                "thinking_tokens": derive_thinking_tokens(
+                    r["total_tokens"],
+                    r["prompt_tokens"],
+                    r["completion_tokens"],
+                ),
                 "total_tokens": r["total_tokens"] or 0,
                 "cumulative_tokens": r["cumulative_tokens"] or 0,
                 "cost_estimate": r["cost_estimate"] or 0.0,
