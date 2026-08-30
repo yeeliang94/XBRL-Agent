@@ -50,6 +50,10 @@ function fmtCheckAmount(value: number | null | undefined): string {
   return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 
+function advisoryName(name: string): string {
+  return name.replace(/\s*↔\s*/g, " and ");
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -179,21 +183,27 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
       {warningChecks.length > 0 && (
         <div style={styles.warningsSection}>
           <h4 style={styles.subheading}>Advisory warnings</h4>
-          <p style={styles.warningsIntro}>
-            Non-blocking signals from post-run consistency checks — worth a human glance but did not fail the run.
-          </p>
-          <ul style={styles.warningList}>
-            {warningChecks.map((w) => (
-              <li key={w.name} style={styles.warningItem}>
-                <span style={{ ...ui.status, marginRight: pwc.space.sm }}>
-                  <StatusIcon symbol={STATUS_DISPLAY.warning.symbol} />
-                  {STATUS_DISPLAY.warning.label}
+          <details>
+            <summary style={styles.warningSummary}>
+              <span aria-hidden="true" style={styles.warningSummaryIcon}>
+                <StatusIcon symbol={STATUS_DISPLAY.warning.symbol} />
+              </span>
+              <span>
+                <strong>{warningChecks.length} advisory warning{warningChecks.length === 1 ? "" : "s"}</strong>
+                <span style={styles.warningSummaryText}>
+                  Non-blocking checks worth reviewing before filing. Expand to see each warning and its evidence.
                 </span>
-                <span style={styles.warningName}>{w.name}</span>
-                <div style={styles.warningMessage}>{w.message}</div>
-              </li>
-            ))}
-          </ul>
+              </span>
+            </summary>
+            <ul style={styles.warningList}>
+              {warningChecks.map((w) => (
+                <li key={w.name} style={styles.warningItem}>
+                  <span style={styles.warningName}>{advisoryName(w.name)}</span>
+                  <div style={styles.warningMessage}>{w.message}</div>
+                </li>
+              ))}
+            </ul>
+          </details>
         </div>
       )}
     </div>
@@ -285,11 +295,25 @@ const styles = {
     color: pwc.warningText,
     margin: `0 0 ${pwc.space.xs}px 0`,
   } as React.CSSProperties,
-  warningsIntro: {
+  warningSummary: {
+    display: "grid",
+    gridTemplateColumns: "auto 1fr",
+    gap: pwc.space.sm,
+    cursor: "pointer",
     fontFamily: pwc.fontBody,
     fontSize: 13,
+    color: pwc.grey900,
+  } as React.CSSProperties,
+  warningSummaryIcon: {
+    display: "inline-flex",
+    paddingTop: 1,
+  } as React.CSSProperties,
+  warningSummaryText: {
+    display: "block",
+    marginTop: 2,
     color: pwc.grey700,
-    margin: `0 0 ${pwc.space.md}px 0`,
+    fontWeight: 400,
+    lineHeight: 1.4,
   } as React.CSSProperties,
   warningList: {
     listStyle: "none",

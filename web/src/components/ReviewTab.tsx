@@ -131,6 +131,68 @@ async function pollReReviewStatus(runId: number): Promise<ReReviewOutcome> {
   throw new Error("Re-review timed out — reopen this tab later to see results.");
 }
 
+function DiffTable({
+  rows,
+  testId,
+  reasonHeading,
+  fallbackReason,
+  onSelectTarget,
+}: {
+  rows: DiffRow[];
+  testId: string;
+  reasonHeading: string;
+  fallbackReason: string;
+  onSelectTarget?: (sheet: string, row: number) => void;
+}) {
+  return (
+    <div data-testid={testId} style={styles.tableScroller}>
+      <table style={styles.table}>
+        <thead>
+          <tr>
+            <th style={styles.th}>Figure</th>
+            <th style={styles.th}>Change</th>
+            <th style={styles.th}>{reasonHeading}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((d) => (
+            <tr key={`${d.concept_uuid}@${d.sheet}:${d.row}:${d.period}:${d.entity_scope}`}>
+              <td style={styles.td}>
+                <div style={styles.cellLabel}>{d.label ?? d.concept_uuid}</div>
+                <div style={styles.dim}>
+                  {d.sheet ?? "?"} row {d.row ?? "?"} · {d.period}/{d.entity_scope}
+                </div>
+              </td>
+              <td style={styles.td}>
+                <span style={styles.oldVal}>{fmt(d.original)}</span>
+                <span style={styles.arrow}> → </span>
+                <span style={styles.newVal}>{fmt(d.current)}</span>
+              </td>
+              <td style={styles.td}>
+                <div>{d.reason ?? fallbackReason}</div>
+                {d.grounding && (
+                  <div style={styles.evidenceRow}>
+                    <span style={styles.evidenceLabel}>Evidence</span>
+                    {d.sheet && d.row != null && onSelectTarget ? (
+                      <button
+                        type="button"
+                        style={styles.linkBtn}
+                        onClick={() => onSelectTarget(d.sheet as string, d.row as number)}
+                      >
+                        {d.grounding}
+                      </button>
+                    ) : d.grounding}
+                  </div>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export function ReviewTab({ runId, onSelectTarget }: Props) {
   const [data, setData] = useState<ReviewPayload | null>(null);
   const [loading, setLoading] = useState(true);
@@ -302,6 +364,24 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
   if (error) return <p style={styles.error} role="alert">{error}</p>;
   if (!data) return null;
 
+  // A reviewer leaf correction can recalculate many dependent totals. Those
+  // cascade rows are useful audit detail, but they are not separate AI
+  // decisions and should not dominate the review surface.
+  const actorOf = (d: DiffRow) => d.actor?.trim().toLowerCase() ?? "";
+  const isCascade = (d: DiffRow) =>
+    actorOf(d) === "cascade"
+    || (!actorOf(d) && d.reason?.trim().toLowerCase() === "cascade");
+  const cascadeDiff = data.diff.filter(isCascade);
+  const reviewerDiff = data.diff.filter((d) => actorOf(d) === "reviewer");
+  const userDiff = data.diff.filter((d) => actorOf(d) === "user");
+  const otherDiff = data.diff.filter((d) =>
+    !isCascade(d) && actorOf(d) !== "reviewer" && actorOf(d) !== "user"
+  );
+  const openFlags = data.flags.filter((flag) => flag.status === "open");
+
+  const impactLabel = (count: number, singular: string, plural = `${singular}s`) =>
+    `${count} ${count === 1 ? singular : plural}`;
+
   return (
     <div data-testid="review-tab">
       {actionError && (
@@ -313,29 +393,64 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
       {warning && (
         <p style={styles.warning} role="alert" data-testid="review-warning">{warning}</p>
       )}
-      {/* Reviewer-version indicator + revert */}
-      <div style={styles.headerRow}>
-        {data.has_reviewer_version ? (
-          <span style={ui.status} data-testid="reviewer-version-indicator">
-            <StatusIcon symbol={STATUS_SYMBOLS.derived} />
-            Reviewer version
-          </span>
-        ) : (
-          <span style={styles.dim} data-testid="no-reviewer-version">
-            No reviewer changes — this run is the original extraction.
-          </span>
-        )}
-        {data.has_reviewer_version && (
-          <button
-            type="button"
-            style={styles.revertBtn}
-            onClick={() => setConfirmRevert(true)}
-            disabled={busy !== null}
-          >
-            {busy === "revert" ? "Restoring…" : "Restore original extraction"}
-          </button>
-        )}
-      </div>
+      <section aria-label="AI review outcome" style={styles.outcomeCard}>
+        <div style={styles.headerRow}>
+          <div>
+            <div style={styles.outcomeEyebrow}>AI review outcome</div>
+            <h2 style={styles.outcomeTitle}>
+              {data.has_reviewer_version ? "Review completed" : "Original extraction retained"}
+            </h2>
+            {data.has_reviewer_version ? (
+              <span style={ui.status} data-testid="reviewer-version-indicator">
+                <StatusIcon symbol={STATUS_SYMBOLS.derived} />
+                Reviewer version
+              </span>
+            ) : (
+              <span style={styles.dim} data-testid="no-reviewer-version">
+                The reviewer made no supported changes to the extracted figures.
+              </span>
+            )}
+          </div>
+          {data.has_reviewer_version && (
+            <button
+              type="button"
+              style={styles.revertBtn}
+              onClick={() => setConfirmRevert(true)}
+              disabled={busy !== null}
+            >
+              {busy === "revert" ? "Restoring…" : "Restore original extraction"}
+            </button>
+          )}
+        </div>
+        <div style={styles.impactGrid}>
+          <div style={styles.impactItem}>
+            <strong style={styles.impactValue}>{impactLabel(reviewerDiff.length, "source correction")}</strong>
+            <span style={styles.impactHelp}>Figures changed by the AI reviewer</span>
+          </div>
+          <div style={styles.impactItem}>
+            <strong style={styles.impactValue}>{impactLabel(userDiff.length, "human edit")}</strong>
+            <span style={styles.impactHelp}>Figures changed in the review workspace</span>
+          </div>
+          <div style={styles.impactItem}>
+            <strong style={styles.impactValue}>{impactLabel(cascadeDiff.length, "recalculated total")}</strong>
+            <span style={styles.impactHelp}>Formula-driven follow-on updates</span>
+          </div>
+          <div style={styles.impactItem}>
+            <strong style={openFlags.length > 0 ? styles.impactAttention : styles.impactValue}>
+              {openFlags.length > 0
+                ? impactLabel(openFlags.length, "decision needed", "decisions needed")
+                : "All reviewer decisions resolved"}
+            </strong>
+            <span style={styles.impactHelp}>Items still requiring human judgement</span>
+          </div>
+          {otherDiff.length > 0 && (
+            <div style={styles.impactItem}>
+              <strong style={styles.impactValue}>{impactLabel(otherDiff.length, "other change")}</strong>
+              <span style={styles.impactHelp}>Changes with no reviewer or user attribution</span>
+            </div>
+          )}
+        </div>
+      </section>
 
       <ConfirmDialog
         isOpen={confirmRevert}
@@ -351,63 +466,73 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
         onCancel={() => setConfirmRevert(false)}
       />
 
-      {/* Diff */}
-      <h3 style={styles.h3}>Changes ({data.diff.length})</h3>
-      {data.diff.length === 0 ? (
-        <p style={styles.dim}>No changes to review.</p>
+      {/* Direct reviewer decisions only. Cascaded totals are secondary audit
+          detail below because they are consequences, not additional fixes. */}
+      <h3 style={styles.h3}>What the AI changed</h3>
+      {reviewerDiff.length === 0 ? (
+        <p style={styles.dim}>The reviewer did not change any source figures.</p>
       ) : (
-        <table style={styles.table}>
-          <thead>
-            <tr>
-              <th style={styles.th}>Cell</th>
-              <th style={styles.th}>Original → Reviewer</th>
-              <th style={styles.th}>Reason</th>
-              <th style={styles.th}>Grounding</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.diff.map((d) => (
-              <tr key={`${d.concept_uuid}@${d.sheet}:${d.row}:${d.period}:${d.entity_scope}`}>
-                <td style={styles.td}>
-                  <div style={styles.cellLabel}>{d.label ?? d.concept_uuid}</div>
-                  <div style={styles.dim}>
-                    {d.sheet ?? "?"} row {d.row ?? "?"} · {d.period}/{d.entity_scope}
-                  </div>
-                </td>
-                <td style={styles.td}>
-                  <span style={styles.oldVal}>{fmt(d.original)}</span>
-                  <span style={styles.arrow}> → </span>
-                  <span style={styles.newVal}>{fmt(d.current)}</span>
-                </td>
-                <td style={styles.td}>{d.reason ?? "—"}</td>
-                <td style={styles.td}>
-                  {d.grounding ? (
-                    d.sheet && d.row != null && onSelectTarget ? (
-                      <button
-                        type="button"
-                        style={styles.linkBtn}
-                        onClick={() => onSelectTarget(d.sheet as string, d.row as number)}
-                      >
-                        {d.grounding}
-                      </button>
-                    ) : (
-                      d.grounding
-                    )
-                  ) : (
-                    "—"
-                  )}
-                </td>
-              </tr>
+        <DiffTable
+          rows={reviewerDiff}
+          testId="review-direct-changes"
+          reasonHeading="Why the reviewer changed it"
+          fallbackReason="The source evidence supported this correction."
+          onSelectTarget={onSelectTarget}
+        />
+      )}
+
+      {userDiff.length > 0 && (
+        <>
+          <h3 style={styles.h3}>What you changed</h3>
+          <DiffTable
+            rows={userDiff}
+            testId="review-human-changes"
+            reasonHeading="How it was changed"
+            fallbackReason="This figure was edited by a person."
+            onSelectTarget={onSelectTarget}
+          />
+        </>
+      )}
+
+      {otherDiff.length > 0 && (
+        <>
+          <h3 style={styles.h3}>Other recorded changes</h3>
+          <DiffTable
+            rows={otherDiff}
+            testId="review-other-changes"
+            reasonHeading="Recorded reason"
+            fallbackReason="No attribution was recorded for this change."
+            onSelectTarget={onSelectTarget}
+          />
+        </>
+      )}
+
+      {cascadeDiff.length > 0 && (
+        <details style={styles.cascadeDetails}>
+          <summary style={styles.cascadeSummary}>
+            {impactLabel(cascadeDiff.length, "total recalculated automatically", "totals recalculated automatically")}
+          </summary>
+          <p style={styles.cascadeHelp}>
+            These totals changed because the corrected source figures flowed through the calculation tree. They are not separate AI decisions.
+          </p>
+          <ul style={styles.cascadeList}>
+            {cascadeDiff.map((d) => (
+              <li key={`${d.concept_uuid}@${d.period}:${d.entity_scope}`}>
+                {d.label ?? d.concept_uuid} · {d.sheet ?? "?"} row {d.row ?? "?"}
+              </li>
             ))}
-          </tbody>
-        </table>
+          </ul>
+        </details>
       )}
 
       {/* Flags */}
-      <h3 style={styles.h3}>Flags ({data.flags.length})</h3>
-      {data.flags.length === 0 ? (
-        <p style={styles.dim}>No flags — the reviewer resolved everything it touched.</p>
-      ) : (
+      {data.flags.length > 0 && (
+        <>
+          <h3 style={styles.h3}>
+            {openFlags.length > 0
+              ? `Needs your decision (${openFlags.length})`
+              : "Reviewer decisions (all resolved)"}
+          </h3>
         <div style={styles.flagStack}>
           {data.flags.map((f) => (
             <div key={f.id} style={styles.flagCard} data-testid={`flag-${f.id}`}>
@@ -470,55 +595,59 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
             </div>
           ))}
         </div>
+        </>
       )}
 
       {/* Guidance + re-review */}
-      <h3 style={styles.h3}>Run AI review again</h3>
-      <p style={styles.dim}>
-        The reviewer will recheck open issues against the PDF and may update saved figures when the evidence supports a safe correction.
-      </p>
-      <textarea
-        style={styles.guidanceBox}
-        placeholder="Optional guidance for the next pass (e.g. 'the PPE note is on page 44')…"
-        value={guidance}
-        onChange={(e) => setGuidance(e.target.value)}
-        aria-label="Re-review guidance"
-      />
-      <div style={styles.reviewControls}>
-        <label style={styles.modelLabel}>
-          Model
-          <select
-            style={styles.modelSelect}
-            value={selectedModel}
-            onChange={(e) => setSelectedModel(e.target.value)}
-            aria-label="Reviewer model"
-          >
-            {/* If the configured default isn't in the list yet, still show it. */}
-            {selectedModel && !models.some((m) => m.id === selectedModel) && (
-              <option value={selectedModel}>{selectedModel}</option>
-            )}
-            {models.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.display_name || m.id}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button
-          type="button"
-          style={styles.reviewBtn}
-          onClick={reReview}
-          disabled={busy !== null}
-        >
-          {busy === "review" ? "Reviewing…" : "Run AI review again"}
-        </button>
-      </div>
-      {busy === "review" && (
-        <p style={styles.dim} role="status">
-          The reviewer reads the PDF and traces each failure — this can take a
-          few minutes. Leave this tab open; results appear when it finishes.
-        </p>
-      )}
+      <section style={styles.rerunDetails}>
+        <h3 style={styles.rerunSummary}>Run AI review again</h3>
+        <div style={styles.rerunBody}>
+          <p style={styles.dim}>
+            Recheck open issues against the PDF and optionally give the reviewer extra guidance.
+          </p>
+          <textarea
+            style={styles.guidanceBox}
+            placeholder="Optional guidance for the next pass (e.g. 'the PPE note is on page 44')…"
+            value={guidance}
+            onChange={(e) => setGuidance(e.target.value)}
+            aria-label="Re-review guidance"
+          />
+          <div style={styles.reviewControls}>
+            <label style={styles.modelLabel}>
+              Model
+              <select
+                style={styles.modelSelect}
+                value={selectedModel}
+                onChange={(e) => setSelectedModel(e.target.value)}
+                aria-label="Reviewer model"
+              >
+                {selectedModel && !models.some((m) => m.id === selectedModel) && (
+                  <option value={selectedModel}>{selectedModel}</option>
+                )}
+                {models.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.display_name || m.id}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              style={styles.reviewBtn}
+              onClick={reReview}
+              disabled={busy !== null}
+            >
+              {busy === "review" ? "Reviewing…" : "Run AI review again"}
+            </button>
+          </div>
+          {busy === "review" && (
+            <p style={styles.dim} role="status">
+              The reviewer reads the PDF and traces each failure — this can take a
+              few minutes. Leave this tab open; results appear when it finishes.
+            </p>
+          )}
+        </div>
+      </section>
     </div>
   );
 }
@@ -526,6 +655,59 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
 const styles = {
   dim: { color: pwc.grey500, fontSize: 13 },
   error: { color: pwc.errorText, fontSize: 13 },
+  outcomeCard: {
+    border: `1px solid ${pwc.grey200}`,
+    borderRadius: pwc.radius.md,
+    padding: pwc.space.lg,
+    background: pwc.white,
+  } as const,
+  outcomeEyebrow: {
+    fontFamily: pwc.fontHeading,
+    fontSize: 11,
+    fontWeight: 600,
+    color: pwc.orange700,
+    textTransform: "uppercase" as const,
+    letterSpacing: "0.04em",
+    marginBottom: 2,
+  } as const,
+  outcomeTitle: {
+    fontFamily: pwc.fontHeading,
+    fontSize: 18,
+    lineHeight: 1.3,
+    fontWeight: 600,
+    color: pwc.grey900,
+    margin: `0 0 ${pwc.space.xs}px`,
+  } as const,
+  impactGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+    gap: pwc.space.sm,
+    marginTop: pwc.space.lg,
+    paddingTop: pwc.space.md,
+    borderTop: `1px solid ${pwc.grey100}`,
+  } as const,
+  impactItem: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 2,
+  } as const,
+  impactValue: {
+    fontFamily: pwc.fontHeading,
+    fontSize: 14,
+    fontWeight: 600,
+    color: pwc.grey900,
+  } as const,
+  impactAttention: {
+    fontFamily: pwc.fontHeading,
+    fontSize: 14,
+    fontWeight: 600,
+    color: pwc.warningText,
+  } as const,
+  impactHelp: {
+    fontFamily: pwc.fontBody,
+    fontSize: 12,
+    color: pwc.grey500,
+  } as const,
   notice: {
     ...ui.alertInfo,
     padding: pwc.space.sm,
@@ -565,7 +747,7 @@ const styles = {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    marginBottom: pwc.space.md,
+    gap: pwc.space.lg,
   } as const,
   h3: {
     fontFamily: pwc.fontHeading,
@@ -578,6 +760,9 @@ const styles = {
     width: "100%",
     borderCollapse: "collapse" as const,
     fontSize: 13,
+  } as const,
+  tableScroller: {
+    overflowX: "auto" as const,
   } as const,
   th: {
     textAlign: "left" as const,
@@ -596,6 +781,19 @@ const styles = {
   oldVal: { color: pwc.grey500, textDecoration: "line-through" },
   newVal: { color: pwc.successText, fontWeight: 600 },
   arrow: { color: pwc.grey500 },
+  evidenceRow: {
+    display: "flex",
+    alignItems: "baseline",
+    gap: pwc.space.xs,
+    marginTop: pwc.space.xs,
+    color: pwc.grey500,
+  } as const,
+  evidenceLabel: {
+    fontSize: 11,
+    fontWeight: 600,
+    textTransform: "uppercase" as const,
+    letterSpacing: "0.03em",
+  } as const,
   linkBtn: {
     background: "none",
     border: "none",
@@ -627,6 +825,27 @@ const styles = {
     borderColor: pwc.error,
   } as const,
   flagReason: { color: pwc.grey800, fontSize: 13, margin: `${pwc.space.xs}px 0` },
+  cascadeDetails: {
+    marginTop: pwc.space.md,
+    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    background: pwc.grey50,
+    borderRadius: pwc.radius.sm,
+    color: pwc.grey700,
+    fontSize: 13,
+  } as const,
+  cascadeSummary: {
+    cursor: "pointer",
+    fontWeight: 600,
+    color: pwc.grey800,
+  } as const,
+  cascadeHelp: {
+    margin: `${pwc.space.sm}px 0`,
+    lineHeight: 1.45,
+  } as const,
+  cascadeList: {
+    margin: 0,
+    paddingLeft: pwc.space.lg,
+  } as const,
   technicalDetails: {
     color: pwc.grey500,
     fontSize: 12,
@@ -653,6 +872,20 @@ const styles = {
     fontFamily: pwc.fontBody,
     fontSize: 13,
     marginBottom: pwc.space.sm,
+  } as const,
+  rerunDetails: {
+    marginTop: pwc.space.xl,
+    borderTop: `1px solid ${pwc.grey200}`,
+    paddingTop: pwc.space.md,
+  } as const,
+  rerunSummary: {
+    fontFamily: pwc.fontHeading,
+    fontSize: 14,
+    fontWeight: 600,
+    color: pwc.grey800,
+  } as const,
+  rerunBody: {
+    paddingTop: pwc.space.sm,
   } as const,
   // Neutral secondary — a re-run action is not the screen's primary CTA, and
   // the design system reserves orange for that one action and forbids status

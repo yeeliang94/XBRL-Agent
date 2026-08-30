@@ -109,6 +109,51 @@ describe("ReviewTab", () => {
     expect(screen.getByText(/couldn't resolve/i)).toBeTruthy();
   });
 
+  test("leads with reviewer impact and separates automatic cascades", async () => {
+    const payload = {
+      ...reviewPayload,
+      diff: [
+        ...reviewPayload.diff,
+        {
+          concept_uuid: "total-1", period: "CY", entity_scope: "Company",
+          sheet: "SOFP", row: 10, col: "B", label: "Total assets",
+          original: 100, current: 120, reason: "cascade", grounding: null,
+          actor: "cascade",
+        },
+        {
+          concept_uuid: "leaf-2", period: "CY", entity_scope: "Company",
+          sheet: "SOFP", row: 6, col: "B", label: "Receivables",
+          original: 80, current: 85, reason: "manual edit", grounding: null,
+          actor: "user",
+        },
+      ],
+      flags: [],
+    };
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation(async (url: string) => {
+      if (url.includes("/api/settings")) {
+        return { ok: true, status: 200, json: async () => settingsPayload } as Response;
+      }
+      return { ok: true, status: 200, json: async () => payload } as Response;
+    });
+
+    render(<ReviewTab runId={7} />);
+    await waitFor(() => screen.getByTestId("review-tab"));
+
+    expect(screen.getByText("1 source correction")).toBeInTheDocument();
+    expect(screen.getByText("1 human edit")).toBeInTheDocument();
+    expect(screen.getByText("1 recalculated total")).toBeInTheDocument();
+    expect(screen.getByText(/all reviewer decisions resolved/i)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /what the ai changed/i })).toBeInTheDocument();
+    const directChanges = screen.getByTestId("review-direct-changes");
+    expect(within(directChanges).getByText("Cash")).toBeInTheDocument();
+    expect(within(directChanges).queryByText("Total assets")).toBeNull();
+    expect(within(directChanges).queryByText("Receivables")).toBeNull();
+    const humanChanges = screen.getByTestId("review-human-changes");
+    expect(within(humanChanges).getByText("Receivables")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /what you changed/i })).toBeInTheDocument();
+    expect(screen.getByText(/1 total recalculated automatically/i)).toBeInTheDocument();
+  });
+
   test("Re-review posts guidance + the selected model to /re-review", async () => {
     const posts: { url: string; init?: RequestInit }[] = [];
     mockApi(posts);

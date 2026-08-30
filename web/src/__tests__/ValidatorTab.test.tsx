@@ -136,13 +136,12 @@ describe("ValidatorTab", () => {
     const warningName = screen.getByText(/income tax policy/);
     expect(warningName.closest("tr")).toBeNull();
 
-    // The "Warning" status label appears exactly once — guard against
-    // accidentally duplicating it into the numeric table body. The
-    // monochrome status wraps an aria-hidden "!" symbol before the label.
+    // The disclosure summary owns the advisory state; individual rows do not
+    // repeat the same "Warning" label.
     const warningLabels = Array.from(container.querySelectorAll("span")).filter(
       (el) => /^!?Warning$/.test(el.textContent ?? ""),
     );
-    expect(warningLabels.length).toBe(1);
+    expect(warningLabels.length).toBe(0);
   });
 
   test("warning-only run still renders the advisory section", () => {
@@ -165,5 +164,31 @@ describe("ValidatorTab", () => {
     expect(screen.getByText(/Advisory Warnings/i)).toBeTruthy();
     // Numeric table not rendered.
     expect(container.querySelector("table")).toBeNull();
+  });
+
+  test("many advisories collapse behind one concise summary", () => {
+    const checks: CrossCheckResult[] = [
+      {
+        name: "Notes consistency: income tax policy ↔ income tax expense",
+        status: "warning", expected: null, actual: null, diff: null, tolerance: null,
+        message: "Sheet 11 cites page 21; Sheet 12 cites page 19. No overlap.",
+      },
+      {
+        name: "Notes↔face tie-out: Revenue",
+        status: "warning", expected: null, actual: null, diff: null, tolerance: null,
+        message: "Revenue in the notes differs from the income statement.",
+      },
+    ];
+    const { container } = render(<ValidatorTab crossChecks={checks} />);
+
+    expect(screen.getByText("2 advisory warnings")).toBeInTheDocument();
+    expect(screen.getByText(/non-blocking checks worth reviewing/i)).toBeInTheDocument();
+    expect(screen.queryByText(/can reflect printed folio numbers/i)).toBeNull();
+    expect(screen.getByText(/Notes consistency:/i)).toBeInTheDocument();
+    expect(screen.getByText(/Notes and face tie-out: Revenue/i)).toBeInTheDocument();
+    expect(container.querySelectorAll("details")).toHaveLength(1);
+    // The summary owns the warning state; individual items do not repeat a
+    // badge/label that turns a five-item advisory list into visual noise.
+    expect(screen.queryAllByText(/^Warning$/i)).toHaveLength(0);
   });
 });
