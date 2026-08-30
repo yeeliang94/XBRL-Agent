@@ -2,7 +2,7 @@
 //
 // Covers Steps 9–12 of docs/Archive/PLAN-NOTES-RICH-EDITOR.md:
 //
-//   9.  Read-only render of every cell's HTML grouped by sheet.
+//   9.  Read-only render of every cell's HTML, one active sheet at a time.
 //  10.  Per-cell edit mode with a formatting toolbar and a debounced
 //       PATCH save; inline "Saved / Saving / Save failed" status chip.
 //  11.  Copy-as-rich-text button that writes both text/html and
@@ -93,8 +93,8 @@ export interface NotesReviewTabProps {
    *  this to the existing rerun endpoint. Optional so a standalone
    *  render (e.g. in a screenshot test) still works. */
   onRegenerate?: (runId: number) => void;
-  /** Sheet to focus when the reviewer picks a notes sub-tab in the
-   *  SheetNavigator. The section scrolls into view; null means no focus. */
+  /** Sheet to open when the reviewer picks a notes sub-tab in the
+   *  SheetNavigator. null opens the first available sheet. */
   focusSheet?: string | null;
   /** Jump to a specific cell (sheet + row) and scroll it into view — driven by
    *  the workspace's notes checklist ("jump to where this note landed"). `key`
@@ -322,9 +322,10 @@ export function NotesReviewTab({
     [runTheme, firmTheme],
   );
   const themeVars = useMemo(() => themeToCssVars(theme), [theme]);
+  const [focusRow, setFocusRow] = useState<number | null>(null);
 
-  // Which sheet the navigator has focused. `key` bumps on every click so
-  // re-clicking the active sheet still scrolls it into view.
+  // Which sheet the navigator has opened. `key` bumps on every selection so a
+  // repeated source-note jump can still bring its target row into view.
   const [active, setActive] = useState<{ sheet: string | null; key: number }>(
     () => ({ sheet: focusSheet ?? null, key: 0 }),
   );
@@ -336,6 +337,7 @@ export function NotesReviewTab({
   // so a deep-linked / sub-tab-focused run still opens its section.
   useEffect(() => {
     setActive({ sheet: focusSheet ?? null, key: 0 });
+    setFocusRow(null);
     // focusSheet intentionally omitted: a later focusSheet change is handled
     // by the sync effect below; including it here would re-run on every nav
     // chip pick (which routes through setActive, not focusSheet).
@@ -343,14 +345,16 @@ export function NotesReviewTab({
   }, [runId]);
   // Keep in sync if the parent changes focusSheet after mount.
   useEffect(() => {
-    if (focusSheet) setActive((a) => ({ sheet: focusSheet, key: a.key + 1 }));
+    if (focusSheet) {
+      setFocusRow(null);
+      setActive((a) => ({ sheet: focusSheet, key: a.key + 1 }));
+    }
   }, [focusSheet]);
 
   // Cell-level focus from the workspace notes checklist ("jump to where this
   // note landed"). Opens the target sheet (like a nav chip) AND remembers the
   // row so the matching SheetSection scrolls that cell into view. Keyed on
   // focusCell.key so re-clicking the same cell re-scrolls.
-  const [focusRow, setFocusRow] = useState<number | null>(null);
   const [selectedCellKey, setSelectedCellKey] = useState<string | null>(null);
   const [noteSearch, setNoteSearch] = useState("");
   useEffect(() => {
@@ -547,6 +551,14 @@ export function NotesReviewTab({
   const activeCellKey = selectedCellKey
     ?? (sourceNotes === null ? noteEntries[0]?.key : null)
     ?? null;
+  // The sheet navigator is a real view switch: only this sheet is mounted.
+  // Falling back to the first available sheet keeps legacy runs usable before
+  // the source-note inventory resolves, and protects against a stale sheet id
+  // while a different run is loading.
+  const activeSheet = useMemo(
+    () => sheets?.find((sheet) => sheet.sheet === active.sheet) ?? sheets?.[0] ?? null,
+    [active.sheet, sheets],
+  );
 
   useEffect(() => {
     if (sourceNotes == null || sourceNotes.length === 0) return;
@@ -815,7 +827,7 @@ export function NotesReviewTab({
                 <nav style={styles.workspaceSheetNav} aria-label="Notes sheet navigator">
                   {sheets.map((sheet) => {
                     const number = notesSheetNumber(sheet.sheet, filingStandard);
-                    const selected = active.sheet === sheet.sheet;
+                    const selected = activeSheet?.sheet === sheet.sheet;
                     const label = number == null ? notesSheetDisplayName(sheet.sheet) : `Sheet ${number}`;
                     return (
                       <button
@@ -906,27 +918,24 @@ export function NotesReviewTab({
               <p style={styles.dim}>Loading XBRL fields…</p>
             ) : noteEntries.length === 0 ? (
               <p style={styles.dim}>No notes were extracted for this run.</p>
-            ) : (
-              <div style={styles.sheetStack}>
-                {sheets.map((sheet) => (
-                  <SheetSection
-                    key={`${runId}:${sheet.sheet}`}
-                    runId={runId}
-                    sheet={sheet}
-                    theme={theme}
-                    formatterDefaultModel={formatterDefaultModel}
-                    focus={active.sheet === sheet.sheet}
-                    focusKey={active.key}
-                    focusRow={active.sheet === sheet.sheet ? focusRow : null}
-                    onFormatted={reloadNotes}
-                    onCellRemoved={handleCellRemoved}
-                    onActiveCellPages={onActiveCellPages}
-                    selectedCellKey={activeCellKey}
-                    onCellActivate={handleWorkspaceCellActivate}
-                  />
-                ))}
+            ) : activeSheet ? (
+              <div style={styles.activeSheetPanel}>
+                <SheetSection
+                  key={`${runId}:${activeSheet.sheet}`}
+                  runId={runId}
+                  sheet={activeSheet}
+                  theme={theme}
+                  formatterDefaultModel={formatterDefaultModel}
+                  focusKey={active.key}
+                  focusRow={focusRow}
+                  onFormatted={reloadNotes}
+                  onCellRemoved={handleCellRemoved}
+                  onActiveCellPages={onActiveCellPages}
+                  selectedCellKey={activeCellKey}
+                  onCellActivate={handleWorkspaceCellActivate}
+                />
               </div>
-            )}
+            ) : null}
           </section>
         </div>
         <ConfirmDialog
@@ -962,7 +971,7 @@ export function NotesReviewTab({
 }
 
 // ---------------------------------------------------------------------------
-// Sheet section — one heading + a stack of CellRow rows per sheet.
+// Sheet section — one heading + a stack of CellRow rows for the active sheet.
 // ---------------------------------------------------------------------------
 
 function SheetSection({
@@ -972,7 +981,6 @@ function SheetSection({
   formatterDefaultModel,
   onFormatted,
   onCellRemoved,
-  focus = false,
   focusKey = 0,
   focusRow = null,
   onActiveCellPages,
@@ -986,10 +994,7 @@ function SheetSection({
   formatterDefaultModel: string;
   onFormatted: () => Promise<void>;
   onCellRemoved: (sheet: string, row: number) => void;
-  /** When true (the reviewer picked this notes sub-tab / nav chip), the
-   *  section scrolls into view. */
-  focus?: boolean;
-  /** Bumps on every nav-chip click so re-selecting the same section scrolls. */
+  /** Bumps on every source-note jump so re-selecting the same row scrolls. */
   focusKey?: number;
   /** When set (and this is the focused section), scroll this specific row into
    *  view instead of the section top — the notes-checklist "jump to cell". */
@@ -1009,29 +1014,25 @@ function SheetSection({
   const [confirmRevertFormat, setConfirmRevertFormat] = useState(false);
   const sectionRef = useRef<HTMLElement | null>(null);
 
-  // When this section becomes focused, bring the target row or section into
-  // view after the always-open field stack has laid out.
+  // A source-note/checklist jump can target a row within the active sheet.
+  // Plain sheet navigation does not scroll the page: swapping the mounted
+  // section already places the new sheet at the top of this panel.
   useEffect(() => {
-    if (!focus) return;
+    if (focusRow == null) return;
     const raf =
       typeof requestAnimationFrame === "function"
         ? requestAnimationFrame
         : (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0);
     raf(() => {
-      if (focusRow != null) {
-        // Jump to the specific cell (notes checklist "jump to where it landed").
-        const el = sectionRef.current?.querySelector<HTMLElement>(
-          `[data-cell-row="${focusRow}"]`,
-        );
-        (el ?? sectionRef.current)?.scrollIntoView?.({
-          block: "center",
-          behavior: "smooth",
-        });
-      } else {
-        sectionRef.current?.scrollIntoView?.({ block: "start", behavior: "smooth" });
-      }
+      const el = sectionRef.current?.querySelector<HTMLElement>(
+        `[data-cell-row="${focusRow}"]`,
+      );
+      (el ?? sectionRef.current)?.scrollIntoView?.({
+        block: "center",
+        behavior: "smooth",
+      });
     });
-  }, [focus, focusKey, focusRow]);
+  }, [focusKey, focusRow]);
 
   // Hydrate format state on mount so a pass launched in another tab/session
   // (or one that finished while this section was unmounted) is reflected here:
@@ -2390,22 +2391,18 @@ const styles = {
     color: pwc.grey700,
     fontSize: 13,
   } as React.CSSProperties,
-  // Navigator chip bar — one chip per sheet, jumps to + opens that
-  // section. Wraps on narrow widths. Sits above the stack.
-  sheetStack: {
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: 10,
+  // Only the active sheet is mounted. Keeping this wrapper flat prevents a
+  // second, document-length stack from forming beneath the sticky navigator.
+  activeSheetPanel: {
+    minWidth: 0,
   } as React.CSSProperties,
-  // Each sheet is a flat section. A neutral bottom divider carries the section
+  // The active sheet is a flat section. A neutral bottom divider keeps the
   // boundary without reintroducing the old card or active orange-rail style.
   workspaceSheetSection: {
     display: "flex",
     flexDirection: "column" as const,
     borderBottom: `1px solid ${pwc.grey200}`,
     background: pwc.white,
-    contentVisibility: "auto" as const,
-    containIntrinsicSize: "560px",
   } as React.CSSProperties,
   // The <h4> wrapper strips default browser margins so the button
   // fills the card header cleanly.

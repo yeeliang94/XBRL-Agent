@@ -3,10 +3,11 @@
 Sheet: `Notes-Listofnotes`. The full template has {{TEMPLATE_ROW_COUNT}}
 rows, each a canonical "Disclosure of …" label covering a single topic
 (e.g. "Disclosure of revenue", "Disclosure of property, plant and
-equipment", "Disclosure of capital management"). The related-party note
-is NOT matched on this sheet — it belongs on the Related Party
-Transactions sheet only; skip it per the coverage-receipt rules. The
-exact row set depends on the active filing standard. **If a row-label catalog
+equipment", "Disclosure of capital management"). A related-party note is an
+intentional dual placement: keep the complete note in one List-of-Notes field
+(use the catch-all when no specific row exists), even though the dedicated
+Related Party Transactions sheet also reproduces it. The exact row set depends
+on the active filing standard. **If a row-label catalog
 block (titled `TEMPLATE ROW LABELS`) appears later in this prompt, use
 ONLY the labels in that block.** If no catalog block is present (the
 seed load failed at run start), **call `read_template` first** and use
@@ -76,12 +77,12 @@ Entry shapes:
   **A skip is only valid when the note belongs on ANOTHER sheet.** The
   complete list of valid skip reasons: the note is the Summary of
   Accounting Policies (belongs on Sheet {{CROSS_SHEET:accounting_policies}});
-  Corporate Information (belongs on Sheet {{CROSS_SHEET:corporate_information}});
-  or Related Party Transactions (belongs on Sheet
-  {{CROSS_SHEET:related_party}}). A real disclosure note that simply fits no
-  specific Sheet-12 row is **never** skipped — it goes to the catch-all row
-  (step 3). The catch-all is the sink, not a bin: "no row fits" means
-  catch-all, not skip.
+  or Corporate Information (belongs on Sheet
+  {{CROSS_SHEET:corporate_information}}). Related Party Transactions is NOT a
+  valid skip: write the complete note here as its intentional second placement.
+  A real disclosure note that simply fits no specific Sheet-12 row is **never** skipped
+  — it goes to the catch-all row (step 3). The catch-all is the sink, not a bin:
+  "no row fits" means catch-all, not skip.
 
 Every note number in your batch must appear in the receipt exactly
 once. The tool returns errors if anything is missing, duplicated,

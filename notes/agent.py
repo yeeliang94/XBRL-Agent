@@ -2877,12 +2877,13 @@ def create_notes_agent(
                  "row_labels": ["<one template label>"]}
                 for a note you wrote complete to exactly one field.
               - {"note_num": <int>, "action": "skipped",
-                 "reason": "<one sentence>"}
+                "reason": "<one sentence>"}
                 ONLY for a note that belongs on a DIFFERENT sheet
-                (Accounting Policies, Corporate Information, or Related
-                Party Transactions). A real disclosure note that simply
-                fits no specific Sheet-12 row is NEVER skipped — it goes
-                to the catch-all row. "No row fits" means catch-all.
+                (Accounting Policies or Corporate Information). Related Party
+                Transactions is an intentional dual placement and is NOT a
+                valid skip. A real disclosure note that simply fits no specific
+                Sheet-12 row is NEVER skipped — it goes to the catch-all row.
+                "No row fits" means catch-all.
 
             Every note in your batch must appear exactly once. The tool
             validates against the batch and your written payloads — if

@@ -77,22 +77,25 @@ async def test_mpers_list_of_notes_lands_bare_form_labels(tmp_path: Path):
 
     # Per-note label choices mirroring what the real run #105 emitted.
     # Notes 1,2 = corp info / policies → skip (owned by other sheets).
-    # Notes 6,11 = share capital / related party → skip (other sheets).
+    # Notes 6,11 = share capital / related party → intentional dual placements
+    # that stay complete here as well as on their dedicated sheets.
     # Notes 13,14 = concepts genuinely absent from MPERS → must land on
     # the catch-all so nothing drops silently.
     label_for_note: dict[int, str] = {
         3: "Disclosure of cash and cash equivalents",
         4: "Disclosure of financial instruments at fair value through profit or loss",
         5: "Disclosure of trade and other payables",
+        6: "Disclosure of share capital",
         7: "Disclosure of deferred tax assets/(liabilities)",
         8: "Disclosure of other income",  # BARE — pre-fix silently rejected
         9: "Disclosure of auditors' remuneration",  # BARE — pre-fix rejected
         10: "Disclosure of income tax expense",  # BARE — pre-fix rejected
+        11: "Disclosure of other notes to accounts",  # dual placement via catch-all
         12: "Disclosure of credit risk",  # BARE — pre-fix rejected
         13: "Disclosure of other notes to accounts",  # catch-all
         14: "Disclosure of other notes to accounts",  # catch-all
     }
-    skip_notes = {1, 2, 6, 11}
+    skip_notes = {1, 2}
 
     async def fake_invoke(**kwargs):
         batch = kwargs["batch"]
@@ -135,13 +138,14 @@ async def test_mpers_list_of_notes_lands_bare_form_labels(tmp_path: Path):
     # Run #105 produced 3 rows. Post-fix we expect:
     # - 4 bare-label writes (notes 8, 9, 10, 12)
     # - 4 already-working writes (notes 3, 4, 5, 7)
-    # - 1 catch-all merged row for notes 13+14
-    # Total: 9 rows minimum. We assert >= 8 to allow 1 row of slack
+    # - 1 share-capital dual-placement row
+    # - 1 catch-all merged row for notes 11+13+14
+    # Total: 10 rows minimum. We assert >= 9 to allow 1 row of slack
     # if the fuzzy matcher collapses two into one (e.g. if "trade and
     # other payables" fuzzes to a similar row).
-    assert populated_rows >= 8, (
+    assert populated_rows >= 9, (
         f"Run-#105 regression: only {populated_rows} rows landed. "
-        f"Pre-fix baseline was 3; we expect >= 8 post-Phase-2+3."
+        f"Pre-fix baseline was 3; we expect >= 9 post-Phase-2+3."
     )
 
     # --- Canary rows: the four bare labels that run-#105 lost ---

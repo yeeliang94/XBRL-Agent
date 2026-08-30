@@ -1940,6 +1940,13 @@ async def _run_reviewer_pass(
                     exc_info=True,
                 )
 
+    # A tool write commits independently of the model's next response. Always
+    # report the completed work from deps, including when the provider fails
+    # after a successful apply_fixes call. The outer pipeline uses this count
+    # to re-export and run the durable post-review cross-check.
+    outcome["writes_performed"] = deps.writes_performed
+    outcome["flags_raised"] = deps.flags_raised
+
     # Telemetry rollups for the CORRECTION run_agents row — captured ONCE
     # here so every exit path (success, exhausted, wallclock, exception)
     # reports them: a failed pass still burned real turns and tokens.
@@ -2537,6 +2544,12 @@ async def _run_notes_reviewer_pass(
                 _in_tokens(usage), _out_tokens(usage), 0, model)
         except Exception:  # noqa: BLE001 — telemetry is advisory
             logger.debug("notes reviewer token capture skipped")
+
+    # Notes writes also commit before the model produces its next response.
+    # Preserve that completed-work signal on every loop exit so the outer
+    # pipeline refreshes the durable merged workbook after a provider failure.
+    outcome["writes_performed"] = deps.writes_performed
+    outcome["flags_raised"] = len(deps.flags)
 
     _stamp_elapsed()
     return outcome

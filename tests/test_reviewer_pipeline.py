@@ -193,6 +193,10 @@ async def test_reviewer_turn_count_survives_a_failure_exit(tmp_path):
 
     # The pass errored (generic-exception path)…
     assert outcome["error"] == "reviewer_exception"
+    # …but the grounded write completed before the provider failed. The outer
+    # pipeline relies on this counter to re-export and run its durable final
+    # cross-check, so reporting zero here would strand the canonical edit.
+    assert outcome["writes_performed"] == 1
     # …but it ran one real apply_fixes turn first, which MUST be reported —
     # not silently persisted as 0 (the pre-fix behaviour).
     assert outcome["turns_used"] >= 1

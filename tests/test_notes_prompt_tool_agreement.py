@@ -98,11 +98,17 @@ def test_batch_coverage_tool_matches_the_never_skip_contract(tmp_path):
     )
     desc = _tool_descriptions(agent).get("submit_batch_coverage", "")
     assert desc, "submit_batch_coverage not registered in Sheet-12 mode"
+    flat_desc = " ".join(desc.split())
     # The old wording offered a skip for a note that fits no row. That is the
     # exact case the body says must go to the catch-all.
-    assert "don't fit any Sheet-12 row or belong on" not in desc
-    assert "NEVER skipped" in desc
-    assert "catch-all" in desc
+    assert "don't fit any Sheet-12 row or belong on" not in flat_desc
+    assert "NEVER skipped" in flat_desc
+    assert "catch-all" in flat_desc
+    assert "(Accounting Policies or Corporate Information)" in flat_desc
+    assert (
+        "Related Party Transactions is an intentional dual placement and is "
+        "NOT a valid skip"
+    ) in flat_desc
 
 
 # --------------------------------------------------------------------------
