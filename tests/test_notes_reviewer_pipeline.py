@@ -418,6 +418,44 @@ def test_untagged_notes_reviewer_cancellation_is_recoverable(
     assert "user" not in errors[-1]["data"]["message"].lower()
 
 
+def test_notes_reviewer_failure_reports_completed_partial_writes(
+    db_path: Path, tmp_path, monkeypatch,
+):
+    """A provider failure after a notes write must not hide that write.
+
+    The outer pipeline uses ``writes_performed`` to refresh the durable merged
+    workbook. The canonical notes edit survives the exception, so the outcome
+    must carry the completed-write count instead of falling back to zero.
+    """
+    import server
+    import notes.reviewer_agent as ra_mod
+
+    run_id = _seed_reviewer_target(db_path, tmp_path)
+    context = {"duplicates": [{"note_ref": "1", "sheet_11": {}, "sheet_12": {}}]}
+    agent_run = _ImmediateAgentRun(RuntimeError("provider failed after write"))
+    deps = _FakeReviewerDeps()
+    deps.writes_performed = 1
+    deps.flags = [{"kind": "needs_human", "reason": "partial review"}]
+    monkeypatch.setattr(
+        ra_mod, "create_notes_reviewer_agent",
+        lambda *a, **k: (_ImmediateAgent(agent_run), deps, context),
+    )
+
+    outcome = asyncio.run(server._run_notes_reviewer_pass(
+        run_id=run_id, db_path=str(db_path), pdf_path=str(tmp_path / "x.pdf"),
+        filing_level="company", filing_standard="mfrs",
+        model="openai.gpt-5.4", output_dir=str(tmp_path),
+        merged_workbook_path=None, event_queue=asyncio.Queue(), sidecar_paths=[],
+    ))
+
+    assert outcome["error"] == "provider failed after write"
+    assert outcome["writes_performed"] == 1
+    assert outcome["flags_raised"] == 1
+    assert outcome["total_tokens"] == 150
+    assert outcome["prompt_tokens"] == 100
+    assert outcome["completion_tokens"] == 50
+
+
 def test_explicit_user_abort_returns_telemetry_for_run_finalization(
     db_path: Path, tmp_path, monkeypatch,
 ):

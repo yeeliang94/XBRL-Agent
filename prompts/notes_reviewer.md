@@ -33,6 +33,17 @@ Verify: `verify_findings()` — re-runs the detectors against your edits and rep
 
 === HOW TO HANDLE EACH FINDING ===
 
+- **Accounting-policy fan-out** — Sheet {{CROSS_SHEET:accounting_policies}} is
+  field-based, not note-based: one printed material or significant accounting
+  policies note commonly populates several independent topic-specific rows.
+  A shared top-level note number, source pages, introductory wording, or Basis
+  of Preparation row does NOT make those rows duplicates. Basis of Preparation
+  is not a substitute for a topic-specific policy. Before clearing a policy
+  row, compare the complete candidate and survivor and clear only when
+  substantially the same disclosure is repeated in the correct surviving
+  field with no field-specific content lost. If uncertain, preserve the
+  content without raising a flag solely because the fields share one source
+  note.
 - **Cross-sheet duplication** — the same note cited on Sheet {{CROSS_SHEET:accounting_policies}} AND Sheet {{CROSS_SHEET:list_of_notes}} has two legitimate shapes; confirm on the PDF which one you're looking at before clearing anything. (1) A **carve-out partition**: the Sheet {{CROSS_SHEET:accounting_policies}} cell holds ONLY an explicitly-labelled "material/significant accounting policy" sub-section of that note, and the Sheet {{CROSS_SHEET:list_of_notes}} cell holds the rest of the disclosure — different content, correct routing, leave both. (2) A **genuine duplicate**: the same prose on both sheets — material accounting policies belong on Sheet {{CROSS_SHEET:accounting_policies}}; the numbered disclosure (figures, breakdowns, movement tables) belongs on Sheet {{CROSS_SHEET:list_of_notes}}; `clear_note_cells` the copy on the wrong sheet.
 - **Top-line split** — one note's content fragmented across ≥2 rows of the List of Notes sheet. This is always a routing violation: one top-level disclosure note must remain complete in exactly one List-of-Notes field, even when it contains materially different peer topics. View the note's pages, identify the row that best represents its printed top-level heading and primary subject, and confirm the complete note belongs there. Because the clear guard deliberately refuses to collapse two same-Sheet-{{CROSS_SHEET:list_of_notes}} placements without a human choosing the authoritative MBRS row, restore any omitted content with `edit_note_cells` and `raise_flag(kind='needs_human', ...)` naming the one row that should survive. If one fragment is an explicitly-labelled "material/significant accounting policy" sub-section, move that fragment to Sheet {{CROSS_SHEET:accounting_policies}}'s matching policy row with `move_note_cell`; the remainder still stays whole in one List-of-Notes field. Preserve valid content and never approve a multi-row Sheet-{{CROSS_SHEET:list_of_notes}} placement as legitimate.
 - **Same-sheet collision** — one Sheet {{CROSS_SHEET:list_of_notes}} row holds prose from two unrelated top-level notes. Decide which note legitimately owns the row. `read_template_labels` to find an EMPTY leaf row for the other note, then `move_note_cell` it there. **If there is no clearly-correct alternative row** (e.g. two different "fair value information" sub-notes that both genuinely map to the one fair-value row), do NOT delete — `raise_flag` with kind `needs_human` and explain. Preserving valid content always beats a wrong deletion.

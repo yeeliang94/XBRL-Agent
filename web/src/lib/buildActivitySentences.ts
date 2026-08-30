@@ -135,5 +135,16 @@ export function buildActivitySentences(
     });
   }
 
-  return sentences.sort((left, right) => right.timestamp - left.timestamp);
+  sentences.sort((left, right) => right.timestamp - left.timestamp);
+
+  // Status events describe successive phases, so only the newest one can
+  // remain active. Tool calls and reasoning blocks may legitimately overlap.
+  let newestStatusSeen = false;
+  for (const sentence of sentences) {
+    if (sentence.source !== "status") continue;
+    if (newestStatusSeen) sentence.active = false;
+    newestStatusSeen = true;
+  }
+
+  return sentences;
 }

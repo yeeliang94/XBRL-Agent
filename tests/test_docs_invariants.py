@@ -13,6 +13,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+def _github_heading_fragment(heading: str) -> str:
+    """Return the anchor GitHub generates for the headings used here."""
+    without_punctuation = re.sub(r"[^\w\- ]", "", heading.lower())
+    return without_punctuation.replace(" ", "-")
+
+
 def test_always_loaded_agent_instructions_stay_lean() -> None:
     """Keep deep incident history out of the files loaded for every task."""
     agents = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
@@ -39,15 +45,26 @@ def test_claude_router_covers_every_detailed_invariant() -> None:
     """Every stable invariant number in the reference remains routable."""
     router = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
     reference = (REPO_ROOT / "CLAUDE-REFERENCE.md").read_text(encoding="utf-8")
-    invariant_numbers = re.findall(r"^### (\d+a?)\.", reference, flags=re.MULTILINE)
+    invariant_headings = re.findall(
+        r"^### ((\d+a?)\. .+)$",
+        reference,
+        flags=re.MULTILINE,
+    )
+    invariant_numbers = [number for _, number in invariant_headings]
 
     assert invariant_numbers == [
         "1", "2", "2a", "3", "4", "5", "6", "7", "8", "9", "10", "11",
         "12", "13", "14", "15", "16", "17", "18", "19", "20", "21",
         "22", "23", "24", "25", "26", "27", "28", "29", "30", "31",
     ]
-    for number in invariant_numbers:
-        assert re.search(rf"^{re.escape(number)}\. \[", router, flags=re.MULTILINE)
+    for heading, number in invariant_headings:
+        router_link = re.search(
+            rf"^{re.escape(number)}\. \[[^]]+\]\(CLAUDE-REFERENCE\.md#([^)]+)\)\.$",
+            router,
+            flags=re.MULTILINE,
+        )
+        assert router_link is not None
+        assert router_link.group(1) == _github_heading_fragment(heading)
 
 
 def test_notes_pipeline_doc_mentions_html_contract() -> None:

@@ -43,8 +43,8 @@ describe("isBlankHtml (phantom-save guard)", () => {
 // NotesReviewTab — Step 9 (read-only) + Step 10 (edit + debounced save) tests.
 //
 // The tab fetches /api/runs/{runId}/notes_cells on mount and renders one
-// section per sheet, one row per cell (label on the left, rich-rendered
-// HTML on the right). The editor is TipTap; in read-only mode the
+// active sheet at a time, with one row per cell (label on the left,
+// rich-rendered HTML on the right). The editor is TipTap; in read-only mode the
 // rendered HTML must survive as live DOM elements (not HTML-escaped text).
 // ---------------------------------------------------------------------------
 
@@ -138,23 +138,37 @@ function selectFirstField() {
   if (review) fireEvent.click(review);
 }
 
+function selectSheet(name: RegExp) {
+  const nav = screen.getByRole("navigation", { name: /notes sheet navigator/i });
+  fireEvent.click(within(nav).getByRole("button", { name }));
+}
+
 describe("NotesReviewTab — read-only render (Step 9)", () => {
-  test("renders one section per sheet", async () => {
+  test("renders one active sheet at a time", async () => {
     mockFetchOnce(SAMPLE);
     render(<NotesReviewTab runId={42} />);
-    // Scope to the section HEADING — the sheet display name also appears
-    // in the navigator chip bar now, so a bare getByText would match twice.
-    await waitFor(() => {
-      expect(
-        screen.getByRole("heading", { level: 4, name: "Corporate Information" }),
-      ).toBeInTheDocument();
-      expect(
-        screen.getByRole("heading", {
-          level: 4,
-          name: "Summary of Accounting Policies",
-        }),
-      ).toBeInTheDocument();
-    });
+    expect(await screen.findByRole("heading", {
+      level: 4,
+      name: "Corporate Information",
+    })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", {
+      level: 4,
+      name: "Summary of Accounting Policies",
+    })).toBeNull();
+
+    const nav = screen.getByRole("navigation", { name: /notes sheet navigator/i });
+    fireEvent.click(within(nav).getByRole("button", {
+      name: /summary of accounting policies/i,
+    }));
+
+    expect(screen.getByRole("heading", {
+      level: 4,
+      name: "Summary of Accounting Policies",
+    })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", {
+      level: 4,
+      name: "Corporate Information",
+    })).toBeNull();
   });
 
   test("renders one row per cell with label on left, html on right", async () => {
@@ -164,13 +178,12 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
     selectFirstField();
-    // Three cells total across the sample (2 + 1) — each has its
-    // label rendered as a column-A heading.
+    // Only the first sheet's two cells are mounted.
     expect(screen.getByText("Corporate info")).toBeInTheDocument();
     expect(screen.getByText("Registered office")).toBeInTheDocument();
-    expect(screen.getByText("Revenue")).toBeInTheDocument();
+    expect(screen.queryByText("Revenue")).toBeNull();
     const rows = container.querySelectorAll('[data-testid="notes-review-row"]');
-    expect(rows.length).toBe(3);
+    expect(rows.length).toBe(2);
   });
 
   test("quarantined content is explained and can be removed accessibly", async () => {
@@ -391,7 +404,7 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     ]);
   });
 
-  test("focusSheet selects the picked sheet while the complete field stack stays visible", async () => {
+  test("focusSheet loads only the picked sheet", async () => {
     mockFetchOnce(SAMPLE);
     render(
       <NotesReviewTab runId={42} focusSheet="Notes-SummaryofAccPol" />,
@@ -399,16 +412,16 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     await waitFor(() =>
       expect(screen.getByText("Revenue")).toBeInTheDocument(),
     );
-    expect(screen.getByText("Corporate info")).toBeInTheDocument();
+    expect(screen.queryByText("Corporate info")).toBeNull();
   });
 
-  test("sheet navigator scrolls to an already-visible sheet", async () => {
+  test("sheet navigator replaces the active sheet instead of extending the page", async () => {
     mockFetchOnce(SAMPLE);
     render(<NotesReviewTab runId={42} />);
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
-    expect(screen.getByText("Revenue")).toBeInTheDocument();
+    expect(screen.queryByText("Revenue")).toBeNull();
     const nav = screen.getByRole("navigation", {
       name: /notes sheet navigator/i,
     });
@@ -417,18 +430,11 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
         name: /summary of accounting policies/i,
       }),
     );
-    expect(screen.getByText("Corporate info")).toBeInTheDocument();
+    expect(screen.getByText("Revenue")).toBeInTheDocument();
+    expect(screen.queryByText("Corporate info")).toBeNull();
   });
 
-  test("focusing a sheet scrolls its section after the field stack lays out", async () => {
-    // Run-168 QA regression guard: the section-level scroll used to fire
-    // synchronously, before rows laid out, so the smooth scroll stopped short
-    // and the panel stayed parked on the first section
-    // ("Summary of Accounting Policies") while the chip said "List of Notes".
-    // The fix defers the scroll a frame; here we assert it happens at all
-    // for a plain sheet focus (jsdom rAF flushes on the microtask turn).
-    // jsdom doesn't implement scrollIntoView (the component optional-chains
-    // it), so install a mock on the prototype for the duration of this test.
+  test("plain sheet navigation does not scroll the document", async () => {
     const spy = vi.fn();
     const proto = Element.prototype as unknown as {
       scrollIntoView?: (arg?: unknown) => void;
@@ -438,17 +444,14 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     proto.scrollIntoView = spy;
     try {
       mockFetchOnce(SAMPLE);
-      render(<NotesReviewTab runId={42} focusSheet="Notes-SummaryofAccPol" />);
-      // Rows mount first…
-      await waitFor(() =>
-        expect(screen.getByText("Revenue")).toBeInTheDocument(),
-      );
-      // …then the deferred scroll runs. It targets the section start, which
-      // only lands correctly because the rows are already present.
-      await waitFor(() => expect(spy).toHaveBeenCalled());
-      expect(spy).toHaveBeenCalledWith(
-        expect.objectContaining({ block: "start" }),
-      );
+      render(<NotesReviewTab runId={42} />);
+      await screen.findByText("Corporate info");
+      const nav = screen.getByRole("navigation", { name: /notes sheet navigator/i });
+      fireEvent.click(within(nav).getByRole("button", {
+        name: /summary of accounting policies/i,
+      }));
+      expect(screen.getByText("Revenue")).toBeInTheDocument();
+      expect(spy).not.toHaveBeenCalled();
     } finally {
       if (had) proto.scrollIntoView = prev;
       else delete proto.scrollIntoView;
@@ -959,10 +962,98 @@ describe("NotesReviewTab — cross-run isolation (peer-review fix)", () => {
     const nextNav = screen.getByRole("navigation", { name: /notes sheet navigator/i });
     expect(within(nextNav).getByRole("button", {
       name: /corporate information/i,
-    })).not.toHaveAttribute("aria-current");
+    })).toHaveAttribute("aria-current", "true");
     expect(within(nextNav).getByRole("button", {
       name: /summary of accounting policies/i,
     })).not.toHaveAttribute("aria-current");
+  });
+
+  test("run changes clear a stale row target before the next sheet mounts", async () => {
+    const spy = vi.fn();
+    const proto = Element.prototype as unknown as {
+      scrollIntoView?: (arg?: unknown) => void;
+    };
+    const had = Object.prototype.hasOwnProperty.call(proto, "scrollIntoView");
+    const prev = proto.scrollIntoView;
+    proto.scrollIntoView = spy;
+    const mk = (tag: string): NotesCellsResponse => ({
+      sheets: [{
+        sheet: "Notes-CI",
+        rows: [{
+          row: 12,
+          label: "Registered office",
+          html: `<p>${tag}</p>`,
+          evidence: null,
+          source_pages: [],
+          updated_at: "2026-04-24T10:00:00Z",
+        }],
+      }],
+    });
+    let nextResponse = mk("run-42");
+    globalThis.fetch = vi.fn(async () =>
+      new Response(JSON.stringify(nextResponse), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    ) as unknown as typeof fetch;
+
+    try {
+      const { rerender } = render(
+        <NotesReviewTab
+          runId={42}
+          focusCell={{ sheet: "Notes-CI", row: 12, key: 1 }}
+        />,
+      );
+      await waitFor(() => expect(spy).toHaveBeenCalled());
+      spy.mockClear();
+
+      nextResponse = mk("run-77");
+      rerender(<NotesReviewTab runId={77} focusCell={null} />);
+      await screen.findByText("run-77");
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      if (had) proto.scrollIntoView = prev;
+      else delete proto.scrollIntoView;
+    }
+  });
+
+  test("sheet prop changes clear a stale row target before opening the sheet", async () => {
+    const spy = vi.fn();
+    const proto = Element.prototype as unknown as {
+      scrollIntoView?: (arg?: unknown) => void;
+    };
+    const had = Object.prototype.hasOwnProperty.call(proto, "scrollIntoView");
+    const prev = proto.scrollIntoView;
+    proto.scrollIntoView = spy;
+    mockFetchOnce(SAMPLE);
+
+    try {
+      const { rerender } = render(
+        <NotesReviewTab
+          runId={42}
+          focusCell={{ sheet: "Notes-CI", row: 12, key: 1 }}
+        />,
+      );
+      await waitFor(() => expect(spy).toHaveBeenCalled());
+      spy.mockClear();
+
+      rerender(
+        <NotesReviewTab
+          runId={42}
+          focusCell={null}
+          focusSheet="Notes-SummaryofAccPol"
+        />,
+      );
+      await screen.findByText("Revenue");
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      if (had) proto.scrollIntoView = prev;
+      else delete proto.scrollIntoView;
+    }
   });
 });
 
@@ -1569,7 +1660,7 @@ describe("NotesReviewTab — full-template projection (Phase 5)", () => {
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
-    selectFirstField();
+    selectSheet(/issued capital/i);
 
     const numericRow = screen.getByTestId("notes-numeric-row");
     expect(numericRow).toBeInTheDocument();
@@ -1604,7 +1695,7 @@ describe("NotesReviewTab — full-template projection (Phase 5)", () => {
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
-    selectFirstField();
+    selectSheet(/issued capital/i);
 
     const py = screen.getByTestId("numeric-input-6-py") as HTMLInputElement;
     fireEvent.change(py, { target: { value: "1000" } });

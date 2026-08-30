@@ -23,13 +23,16 @@ def _flat(name: str) -> str:
     return " ".join(text.split())
 
 
-# --- Concern 1: share-capital cross-sheet exception --------------------------
+# --- Concern 1: intentional cross-sheet dual placements ----------------------
 
-def test_notes_base_share_capital_exception():
+def test_notes_base_intentional_dual_placements():
     flat = _flat("_notes_base.md")
-    assert "single exception" in flat and "share capital" in flat
+    assert "intentional dual placements" in flat
+    assert "share capital" in flat
     assert "issued capital" in flat and "list of notes" in flat
     assert "same prose" in flat
+    assert "related-party transactions" in flat
+    assert "same disclosure content may appear in both places" in flat
 
 
 # --- Concern #1: no invented wording / no invented Total (notes only) --------
@@ -222,14 +225,14 @@ def test_listofnotes_forbids_distribution_across_fields():
     assert "catch-all is preferable to fragmenting" in flat
 
 
-def test_listofnotes_never_cites_a_related_party_row():
-    # No related-party row exists on the MFRS or MPERS List of Notes
-    # template; the note belongs on the Related Party Transactions sheet
-    # only. The old intro cited "Disclosure of related party transactions"
-    # as an example label, contradicting the skip rule below it.
+def test_listofnotes_keeps_related_party_dual_placement():
+    # No dedicated related-party row exists on the MFRS or MPERS List of
+    # Notes template, so the complete note uses the catch-all while the
+    # dedicated Related Party Transactions sheet carries its second copy.
     flat = _flat("notes_listofnotes.md")
-    assert "disclosure of related party transactions" not in flat
-    assert "related party transactions sheet only" in flat
+    assert "related-party note is an intentional dual placement" in flat
+    assert "use the catch-all when no specific row exists" in flat
+    assert "related party transactions is not a valid skip" in flat
 
 
 def test_accounting_policies_multi_topic_paragraph_goes_to_one_row():
@@ -246,3 +249,12 @@ def test_notes_reviewer_split_rule_matches_extraction_rule():
     assert "always a routing violation" in flat
     assert "complete in exactly one list-of-notes field" in flat
     assert "never approve a multi-row" in flat
+
+
+def test_notes_reviewer_preserves_accounting_policy_fan_out():
+    flat = _flat("notes_reviewer.md")
+    assert "accounting-policy fan-out" in flat
+    assert "field-based, not note-based" in flat
+    assert "basis of preparation is not a substitute" in flat
+    assert "no field-specific content lost" in flat
+    assert "preserve the content without raising a flag solely" in flat
