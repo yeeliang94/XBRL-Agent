@@ -41,6 +41,7 @@ from notes.writer import BORDERLINE_FUZZY_SCORE
 from notes_types import NotesTemplateType
 from model_settings import describe_model_runtime
 from pricing import estimate_cost
+from usage_metrics import split_usage
 from scout.infopack import Infopack
 from scout.notes_discoverer import NoteInventoryEntry
 
@@ -68,19 +69,10 @@ def _backfill_token_report(token_report, usage_callable, template_label: str) ->
     """
     try:
         usage = usage_callable() if callable(usage_callable) else usage_callable
-        # New-name-first: input_/output_tokens are the pydantic-ai 1.x
-        # primary API; request_/response_ are deprecated aliases that V2
-        # removes. Old-name-first here silently reported 0 under V2.
-        _prompt = getattr(usage, "input_tokens", None)
-        if _prompt is None:
-            _prompt = getattr(usage, "request_tokens", 0)
-        _completion = getattr(usage, "output_tokens", None)
-        if _completion is None:
-            _completion = getattr(usage, "response_tokens", 0)
-        token_report.total_prompt_tokens += int(_prompt or 0)
-        token_report.total_completion_tokens += int(_completion or 0)
-        # Thinking tokens aren't separately tracked by the OpenAI-compat
-        # proxy — leaving at 0 keeps the report internally consistent.
+        metrics = split_usage(usage)
+        token_report.total_prompt_tokens += metrics.prompt_tokens
+        token_report.total_completion_tokens += metrics.completion_tokens
+        token_report.total_thinking_tokens += metrics.thinking_tokens
     except Exception:  # noqa: BLE001 — cost telemetry is best-effort
         logger.debug("notes cost backfill skipped for %s", template_label)
 
@@ -861,17 +853,19 @@ async def _invoke_single_notes_agent_once(
         try:
             # Keep the V2 field names explicit: this is the same aggregate
             # usage value that bubbles into run_agents telemetry.
-            _u = agent_run.usage
-            prompt_tokens = int(_u.input_tokens or prompt_tokens)
-            completion_tokens = int(_u.output_tokens or completion_tokens)
-            total_tokens = int(
-                _u.total_tokens or prompt_tokens + completion_tokens
-            )
+            metrics = split_usage(agent_run.usage)
+            prompt_tokens = metrics.prompt_tokens
+            completion_tokens = metrics.completion_tokens
+            thinking_tokens = metrics.thinking_tokens
+            total_tokens = metrics.total_tokens
         except Exception:  # noqa: BLE001 — fallback is the captured deltas
-            total_tokens = prompt_tokens + completion_tokens
+            thinking_tokens = sum(
+                int(t.get("thinking_tokens") or 0) for t in _turn_records
+            )
+            total_tokens = prompt_tokens + completion_tokens + thinking_tokens
         try:
             total_cost = estimate_cost(
-                prompt_tokens, completion_tokens, 0, model,
+                prompt_tokens, completion_tokens, thinking_tokens, model,
             )
         except Exception:  # noqa: BLE001 — pricing is advisory
             total_cost = sum(
@@ -880,6 +874,7 @@ async def _invoke_single_notes_agent_once(
         return {
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
+            "thinking_tokens": thinking_tokens,
             "total_tokens": total_tokens,
             "total_cost": total_cost,
             "cache_read_tokens": sum(
@@ -1313,8 +1308,11 @@ async def _run_list_of_notes_fanout(
         # #6: the sub-agents merge into one row).
         total_prompt = sum(r.prompt_tokens for r in sub_result.sub_agent_results)
         total_completion = sum(r.completion_tokens for r in sub_result.sub_agent_results)
+        total_thinking = sum(r.thinking_tokens for r in sub_result.sub_agent_results)
         try:
-            rollup_cost = estimate_cost(total_prompt, total_completion, 0, model)
+            rollup_cost = estimate_cost(
+                total_prompt, total_completion, total_thinking, model,
+            )
         except Exception:  # noqa: BLE001 — an unknown model must not zero the token rollup
             rollup_cost = 0.0
 
@@ -1410,7 +1408,7 @@ async def _run_list_of_notes_fanout(
                     # Sub-agents still burned tokens deciding to skip.
                     prompt_tokens=total_prompt,
                     completion_tokens=total_completion,
-                    total_tokens=total_prompt + total_completion,
+                    total_tokens=total_prompt + total_completion + total_thinking,
                     total_cost=rollup_cost,
                 )
 
@@ -1428,7 +1426,7 @@ async def _run_list_of_notes_fanout(
                 # A failed pass still spent tokens — report them honestly.
                 prompt_tokens=total_prompt,
                 completion_tokens=total_completion,
-                total_tokens=total_prompt + total_completion,
+                total_tokens=total_prompt + total_completion + total_thinking,
                 total_cost=rollup_cost,
             )
 
@@ -1464,7 +1462,7 @@ async def _run_list_of_notes_fanout(
                 # failed — report them like the other failure branches.
                 prompt_tokens=total_prompt,
                 completion_tokens=total_completion,
-                total_tokens=total_prompt + total_completion,
+                total_tokens=total_prompt + total_completion + total_thinking,
                 total_cost=rollup_cost,
             )
 
@@ -1475,17 +1473,17 @@ async def _run_list_of_notes_fanout(
             report_lines = [
                 f"Sheet 12 (List of Notes) — aggregate across {len(sub_result.sub_agent_results)} sub-agent(s)",
                 "─" * 80,
-                f"{'Sub-agent':<30} {'Status':<10} {'Prompt':>10} {'Complete':>10}",
+                f"{'Sub-agent':<30} {'Status':<10} {'Prompt':>10} {'Complete':>10} {'Reasoning':>10}",
                 "─" * 80,
             ]
             for r in sub_result.sub_agent_results:
                 report_lines.append(
                     f"{r.sub_agent_id:<30} {r.status:<10} "
-                    f"{r.prompt_tokens:>10} {r.completion_tokens:>10}"
+                    f"{r.prompt_tokens:>10} {r.completion_tokens:>10} {r.thinking_tokens:>10}"
                 )
             report_lines.append("─" * 80)
             report_lines.append(
-                f"{'Total':<30} {'':<10} {total_prompt:>10} {total_completion:>10}"
+                f"{'Total':<30} {'':<10} {total_prompt:>10} {total_completion:>10} {total_thinking:>10}"
             )
             report_lines.append("")
             report_lines.append(f"Estimated cost: ${rollup_cost:.4f}")
@@ -1545,7 +1543,7 @@ async def _run_list_of_notes_fanout(
             # these the parent run_agents row records 0 tokens / $0.
             prompt_tokens=total_prompt,
             completion_tokens=total_completion,
-            total_tokens=total_prompt + total_completion,
+            total_tokens=total_prompt + total_completion + total_thinking,
             total_cost=rollup_cost,
         )
 

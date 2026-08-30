@@ -43,15 +43,17 @@ def test_no_silent_zero_on_real_v2_usage():
     assert (report.total_prompt_tokens, report.total_completion_tokens) != (0, 0)
 
 
-def test_bubble_up_reads_v2_field_names():
-    """The second capture path (run_agents.total_tokens bubble-up) reads
-    input_/output_tokens — source-level pin that the removed legacy names
-    are gone from notes/coordinator.py entirely."""
-    import inspect
+def test_backfill_separates_provider_reasoning_tokens():
+    report = _report()
+    usage = RunUsage(
+        input_tokens=123,
+        output_tokens=45,
+        details={"reasoning_tokens": 20},
+    )
 
-    import notes.coordinator as nc
+    _backfill_token_report(report, usage, "NOTES_TEST")
 
-    src = inspect.getsource(nc)
-    assert "_u.input_tokens" in src and "_u.output_tokens" in src
-    assert "_u.request_tokens" not in src
-    assert "_u.response_tokens" not in src
+    assert report.total_prompt_tokens == 123
+    assert report.total_completion_tokens == 25
+    assert report.total_thinking_tokens == 20
+    assert report.grand_total == 168

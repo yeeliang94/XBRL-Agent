@@ -65,6 +65,8 @@ from pydantic_ai.models import Model
 
 from agent_runner import iter_with_turn_timeout
 from agent_tracing import save_agent_trace, save_messages_trace
+from pricing import estimate_cost
+from usage_metrics import split_usage
 from scout.limits import resolve_scout_max_turns, resolve_scout_wallclock
 from statement_types import StatementType, variants_for, get_variant
 from scout.infopack import Infopack, ScoutInfopackInput, StatementPageRef
@@ -1599,9 +1601,11 @@ async def run_scout_streaming(
         try:
             u = agent_run_obj.usage if agent_run_obj is not None else None
             if u is not None:
-                usage_out["prompt_tokens"] = int(u.input_tokens or 0)
-                usage_out["completion_tokens"] = int(u.output_tokens or 0)
-                usage_out["total_tokens"] = int(u.total_tokens or 0)
+                metrics = split_usage(u)
+                usage_out["prompt_tokens"] = metrics.prompt_tokens
+                usage_out["completion_tokens"] = metrics.completion_tokens
+                usage_out["thinking_tokens"] = metrics.thinking_tokens
+                usage_out["total_tokens"] = metrics.total_tokens
         except Exception:  # noqa: BLE001 — telemetry is advisory
             logger.debug("scout usage capture skipped", exc_info=True)
 
@@ -1728,6 +1732,27 @@ async def run_scout_streaming(
                             "full_length": 0,
                         })
                         thinking_counter += 1
+
+                # PydanticAI publishes cumulative usage only after a node has
+                # completed. Emit that snapshot at every boundary so the live
+                # run cost meter is populated during scouting, not only when
+                # ``usage_out`` is persisted after the scout exits.
+                try:
+                    metrics = split_usage(agent_run.usage)
+                    await _emit("token_update", {
+                        "prompt_tokens": metrics.prompt_tokens,
+                        "completion_tokens": metrics.completion_tokens,
+                        "thinking_tokens": metrics.thinking_tokens,
+                        "cumulative": metrics.total_tokens,
+                        "cost_estimate": estimate_cost(
+                            metrics.prompt_tokens,
+                            metrics.completion_tokens,
+                            metrics.thinking_tokens,
+                            model,
+                        ),
+                    })
+                except Exception:  # noqa: BLE001 — telemetry is advisory
+                    logger.debug("live scout usage capture skipped", exc_info=True)
     except (asyncio.TimeoutError, TimeoutError, ScoutWallclockExceeded) as exc:
         # Item 1: a stalled turn (per-turn timeout) or the whole-run cap.
         # Emit a structured SSE error, persist the partial trace (item 2 —

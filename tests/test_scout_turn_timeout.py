@@ -346,6 +346,41 @@ async def test_scout_success_path_saves_trace(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_scout_streams_live_usage_before_completion(tmp_path, monkeypatch):
+    """A running integrated scout must populate the live cost meter.
+
+    End-of-run ``usage_out`` persistence is not enough: the live page consumes
+    token_update SSE events while the scout task is still active.
+    """
+    run = _FakeAgentRun(node_delay=0.0, n_nodes=1)
+    run.usage = SimpleNamespace(
+        input_tokens=100,
+        output_tokens=50,
+        total_tokens=150,
+        details={"reasoning_tokens": 30},
+    )
+    factory, deps = _fake_factory(run, tmp_path / "f.pdf")
+    monkeypatch.setattr(scout_agent, "create_scout_agent", factory)
+    deps.infopack = Infopack(toc_page=1, page_offset=0)
+    events: list[tuple[str, dict]] = []
+
+    async def on_event(event_type, data):
+        events.append((event_type, data))
+
+    await scout_agent.run_scout_streaming(
+        pdf_path=tmp_path / "f.pdf",
+        model="test",
+        on_event=on_event,
+    )
+
+    usage_events = [data for event_type, data in events if event_type == "token_update"]
+    assert usage_events, events
+    assert usage_events[-1]["thinking_tokens"] == 30
+    assert usage_events[-1]["completion_tokens"] == 20
+    assert usage_events[-1]["cost_estimate"] >= 0
+
+
+@pytest.mark.asyncio
 async def test_non_streaming_run_scout_wallclock(tmp_path, monkeypatch):
     """Item 1 step 4: the CLI-style ``run_scout`` is bounded too."""
     monkeypatch.setattr(scout_agent, "SCOUT_WALLCLOCK_TIMEOUT", 0.3)

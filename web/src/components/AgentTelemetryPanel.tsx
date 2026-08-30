@@ -262,6 +262,9 @@ function AgentTelemetry({ runId, agent }: { runId: number; agent: RunAgentJson }
             {agent.pricing_unconfirmed ? " (est. rate)" : ""}
           </span>
           {bd ? ` · ${bd.turn_count} turns · ${bd.tool_call_count} tool calls` : ""}
+          {bd?.thinking_tokens
+            ? ` · ${fmtInt(bd.thinking_tokens)} reasoning tokens`
+            : ""}
           {bd && (bd.cache_read_tokens || bd.cache_write_tokens)
             ? ` · cache ${fmtInt(bd.cache_read_tokens)} read / ${fmtInt(bd.cache_write_tokens)} write`
             : ""}
@@ -283,6 +286,7 @@ function AgentTelemetry({ runId, agent }: { runId: number; agent: RunAgentJson }
                 <th style={styles.th}>Tools</th>
                 <th style={styles.thNum}>Prompt</th>
                 <th style={styles.thNum}>Completion</th>
+                <th style={styles.thNum}>Reasoning</th>
                 <th style={styles.thNum}>Cache read</th>
                 <th style={styles.thNum}>Cache write</th>
                 <th style={styles.thNum}>Turn total</th>
@@ -301,6 +305,7 @@ function AgentTelemetry({ runId, agent }: { runId: number; agent: RunAgentJson }
                   <td style={styles.td}>{t.tool_names || "—"}</td>
                   <td style={styles.tdNum}>{fmtInt(t.prompt_tokens)}</td>
                   <td style={styles.tdNum}>{fmtInt(t.completion_tokens)}</td>
+                  <td style={styles.tdNum}>{fmtInt(t.thinking_tokens)}</td>
                   <td style={styles.tdNum}>{fmtInt(t.cache_read_tokens)}</td>
                   <td style={styles.tdNum}>{fmtInt(t.cache_write_tokens)}</td>
                   <td style={styles.tdNum}>{fmtInt(t.total_tokens)}</td>

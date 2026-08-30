@@ -279,6 +279,71 @@ def test_get_run_detail_keeps_per_turn_cache_telemetry(api_env):
     assert turn["cache_write_tokens"] == 10
 
 
+def test_get_run_detail_exposes_reasoning_tokens_from_persisted_totals(api_env):
+    client, db_path, _ = api_env
+    run_id = _seed_run(
+        db_path,
+        session_id="reasoning-turns",
+        pdf_filename="reasoning.pdf",
+        output_dir="/tmp/reasoning-turns",
+        agent_models=[("SOFP", "m")],
+    )
+    with repo.db_session(db_path) as conn:
+        agent_id = conn.execute(
+            "SELECT id FROM run_agents WHERE run_id = ?", (run_id,),
+        ).fetchone()[0]
+        repo.finish_run_agent(
+            conn,
+            agent_id,
+            status="succeeded",
+            prompt_tokens=100,
+            completion_tokens=20,
+            total_tokens=150,
+        )
+        repo.insert_agent_turns(conn, agent_id, [{
+            "turn_index": 1,
+            "node_kind": "model_request",
+            "prompt_tokens": 100,
+            "completion_tokens": 20,
+            "total_tokens": 150,
+            "cumulative_tokens": 150,
+        }])
+
+    body = client.get(f"/api/runs/{run_id}").json()
+    agent = body["agents"][0]
+    assert agent["turns"][0]["thinking_tokens"] == 30
+    assert agent["token_breakdown"]["thinking_tokens"] == 30
+    assert body["telemetry_rollup"]["thinking_tokens"] == 30
+
+
+def test_get_run_detail_exposes_scout_reasoning_without_turn_rows(api_env):
+    client, db_path, _ = api_env
+    run_id = _seed_run(
+        db_path,
+        session_id="scout-reasoning",
+        pdf_filename="scout.pdf",
+        output_dir="/tmp/scout-reasoning",
+        agent_models=[("SCOUT", "m")],
+    )
+    with repo.db_session(db_path) as conn:
+        agent_id = conn.execute(
+            "SELECT id FROM run_agents WHERE run_id = ?", (run_id,),
+        ).fetchone()[0]
+        repo.finish_run_agent(
+            conn,
+            agent_id,
+            status="succeeded",
+            prompt_tokens=200,
+            completion_tokens=25,
+            total_tokens=240,
+        )
+
+    body = client.get(f"/api/runs/{run_id}").json()
+    assert body["agents"][0]["turns"] == []
+    assert body["agents"][0]["token_breakdown"]["thinking_tokens"] == 15
+    assert body["telemetry_rollup"]["thinking_tokens"] == 15
+
+
 def test_get_run_detail_404_on_missing(api_env):
     client, _, _ = api_env
     r = client.get("/api/runs/99999")

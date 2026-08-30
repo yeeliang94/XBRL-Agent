@@ -135,27 +135,6 @@ def _canonical_facts_enabled() -> bool:
     return _CANONICAL_BOOTSTRAP_OK is not False
 
 
-def _in_tokens(u) -> int:
-    """Prompt/input token count from a pydantic-ai Usage, version-tolerant.
-
-    pydantic-ai renamed ``request_tokens`` → ``input_tokens`` (the old names
-    emit DeprecationWarnings). Read the new name first, fall back to the old
-    one so we work across versions. (PR-3.)
-    """
-    val = getattr(u, "input_tokens", None)
-    if val is None:
-        val = getattr(u, "request_tokens", 0)
-    return int(val or 0)
-
-
-def _out_tokens(u) -> int:
-    """Completion/output token count from a pydantic-ai Usage (see _in_tokens)."""
-    val = getattr(u, "output_tokens", None)
-    if val is None:
-        val = getattr(u, "response_tokens", 0)
-    return int(val or 0)
-
-
 def _reporting_periods_from_infopack(infopack) -> tuple[Optional[str], Optional[str]]:
     """Pull (reporting_period_cy, reporting_period_py) from a scout Infopack.
 
@@ -1773,14 +1752,13 @@ async def _run_reviewer_pass(
 
     # Item 17: the hand-rolled iteration loop (per-turn timeout + in-loop
     # wall-clock + call-tools turn cap + tool-event streaming) migrated onto
-    # agent_runner.run_agent_loop. Wire-contract preservation: the reviewer
-    # never emitted token_update / text_delta / thinking events, so the
-    # filtered emit below forwards only the tool events it always emitted.
+    # agent_runner.run_agent_loop. Reviewer model content stays private, but
+    # aggregate token updates are forwarded so live usage includes this pass.
     # The call-tools cap (NOT a raw node cap) keeps the reviewer's dynamic
     # 8-25 turn budget semantics; max_iters is set far above it so the
     # generic node cap can never fire first.
     async def _loop_emit(event_type: str, data: dict) -> None:
-        if event_type in ("tool_call", "tool_result"):
+        if event_type in ("tool_call", "tool_result", "token_update"):
             await _emit(event_type, data)
 
     _turn_records: list = []
@@ -1982,12 +1960,15 @@ async def _run_reviewer_pass(
         int(t.get("cache_write_tokens") or 0) for t in _turn_records)
     try:
         from pricing import estimate_cost as _ec
-        _u = agent_run.usage
-        outcome["total_tokens"] = int(_u.total_tokens or 0)
-        outcome["prompt_tokens"] = _in_tokens(_u)
-        outcome["completion_tokens"] = _out_tokens(_u)
+        from usage_metrics import split_usage
+        metrics = split_usage(agent_run.usage)
+        outcome["total_tokens"] = metrics.total_tokens
+        outcome["prompt_tokens"] = metrics.prompt_tokens
+        outcome["completion_tokens"] = metrics.completion_tokens
+        outcome["thinking_tokens"] = metrics.thinking_tokens
         outcome["total_cost"] = _ec(
-            _in_tokens(_u), _out_tokens(_u), 0, model)
+            metrics.prompt_tokens, metrics.completion_tokens,
+            metrics.thinking_tokens, model)
     except Exception:  # noqa: BLE001
         logger.debug("reviewer token capture skipped")
 
@@ -2323,7 +2304,7 @@ async def _run_notes_reviewer_pass(
     ))
 
     async def _loop_emit(event_type: str, data: dict) -> None:
-        if event_type in ("tool_call", "tool_result"):
+        if event_type in ("tool_call", "tool_result", "token_update"):
             await _emit(event_type, data)
 
     _turn_records: list = []
@@ -2526,10 +2507,13 @@ async def _run_notes_reviewer_pass(
             int(t.get("cache_write_tokens") or 0) for t in _turn_records)
         try:
             from pricing import estimate_cost as _estimate_cost
+            from usage_metrics import split_usage
             usage = agent_run.usage
-            outcome["total_tokens"] = int(usage.total_tokens or 0)
-            outcome["prompt_tokens"] = _in_tokens(usage)
-            outcome["completion_tokens"] = _out_tokens(usage)
+            metrics = split_usage(usage)
+            outcome["total_tokens"] = metrics.total_tokens
+            outcome["prompt_tokens"] = metrics.prompt_tokens
+            outcome["completion_tokens"] = metrics.completion_tokens
+            outcome["thinking_tokens"] = metrics.thinking_tokens
             # Usage objects expose aggregate cache figures even when a mocked
             # or interrupted run produced no per-turn rows.
             outcome["cache_read_tokens"] = max(
@@ -2541,7 +2525,8 @@ async def _run_notes_reviewer_pass(
                 int(getattr(usage, "cache_write_tokens", 0) or 0),
             )
             outcome["total_cost"] = _estimate_cost(
-                _in_tokens(usage), _out_tokens(usage), 0, model)
+                metrics.prompt_tokens, metrics.completion_tokens,
+                metrics.thinking_tokens, model)
         except Exception:  # noqa: BLE001 — telemetry is advisory
             logger.debug("notes reviewer token capture skipped")
 
@@ -5673,8 +5658,9 @@ async def run_multi_agent_stream(
                         from pricing import estimate_cost as _estimate_scout_cost
                         prompt_t = int(scout_usage.get("prompt_tokens", 0) or 0)
                         completion_t = int(scout_usage.get("completion_tokens", 0) or 0)
+                        thinking_t = int(scout_usage.get("thinking_tokens", 0) or 0)
                         cost = _estimate_scout_cost(
-                            prompt_t, completion_t, 0, scout_model_name,
+                            prompt_t, completion_t, thinking_t, scout_model_name,
                         )
                         repo.finish_run_agent(
                             db_conn, scout_run_agent_id, scout_status,

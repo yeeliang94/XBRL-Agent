@@ -753,6 +753,9 @@ export interface RunListResponse {
 export interface AgentTokenBreakdown {
   prompt_tokens: number;
   completion_tokens: number;
+  // Provider-reported internal reasoning/thought tokens. Optional for
+  // historical payloads created before this split was exposed.
+  thinking_tokens?: number;
   turn_count: number;
   tool_call_count: number;
   // v15 cache telemetry. Optional so a pre-v15 payload still type-checks;
@@ -770,6 +773,7 @@ export interface AgentTurnJson {
   tool_names: string | null;       // comma-joined; null for pure model turns
   prompt_tokens: number;
   completion_tokens: number;
+  thinking_tokens?: number;
   total_tokens: number;
   cumulative_tokens: number;
   cost_estimate: number;
@@ -814,6 +818,7 @@ export interface TelemetryRollupJson {
   total_cost: number;
   prompt_tokens: number;
   completion_tokens: number;
+  thinking_tokens?: number;
   turn_count: number;
   tool_call_count: number;
   // v15 cache telemetry rollup. Optional for back-compat; defaulted to 0.

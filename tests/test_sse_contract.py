@@ -9,6 +9,7 @@ import asyncio
 import pytest
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
 from statement_types import StatementType
@@ -102,9 +103,14 @@ class TestEventContract:
         mock_result = MagicMock()
         mock_result.all_messages = MagicMock(return_value=[])
         mock_run.result = mock_result
-        mock_run.usage = MagicMock(return_value=MagicMock(
-            input_tokens=100, output_tokens=50, total_tokens=150,
-        ))
+        mock_run.usage = SimpleNamespace(
+            input_tokens=100,
+            output_tokens=50,
+            total_tokens=150,
+            cache_read_tokens=0,
+            cache_write_tokens=0,
+            details={"reasoning_tokens": 30},
+        )
 
         # __aiter__ yields our mock nodes
         async def node_iter(self_ignored=None):
@@ -168,6 +174,10 @@ class TestEventContract:
         for data in by_type["token_update"]:
             assert TOKEN_UPDATE_REQUIRED.issubset(data.keys()), \
                 f"token_update missing fields: {TOKEN_UPDATE_REQUIRED - data.keys()}"
+        # Provider reasoning is a subset of output_tokens. It must be split
+        # out rather than hard-coded to zero or double-counted as completion.
+        assert by_type["token_update"][-1]["thinking_tokens"] == 30
+        assert by_type["token_update"][-1]["completion_tokens"] == 20
 
         assert "status" in by_type
         for data in by_type["status"]:

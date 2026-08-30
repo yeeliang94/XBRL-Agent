@@ -76,10 +76,7 @@ const styles = {
     fontWeight: pwc.weight.regular,
     color: pwc.success,
   } as React.CSSProperties,
-  // Honesty caption (UX-QA #23): this live meter sums only the extraction
-  // agents. The pre-scan (scout) runs on a separate stream and the AI-review
-  // pass emits no token events, so both land on the final total but not here —
-  // say so, or a user watching the meter under-reads the eventual bill by ~40%.
+  // Usage arrives at model-response boundaries rather than per streamed word.
   costCaption: {
     fontFamily: pwc.fontBody,
     fontSize: 11,
@@ -143,8 +140,7 @@ export function TokenDashboard({ tokens, isRunning, embedded = false }: Props) {
             style={styles.costValue}
           />
           <div style={styles.costCaption}>
-            Extraction only — the pre-scan and AI review add to the final total
-            on the run report.
+            Updates after each model response, including document scan and AI review.
           </div>
         </div>
       </div>

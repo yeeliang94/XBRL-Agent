@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Optional, Dict, Set, List, Union
 
 from pricing import estimate_cost
+from usage_metrics import split_usage
 
 from agent_tracing import save_agent_trace, save_messages_trace
 # MAX_AGENT_ITERATIONS is re-exported here (and used as the AgentLoopSpec
@@ -166,9 +167,13 @@ def _safe_usage_backfill(agent_run, model, label: str) -> tuple[int, float]:
     """
     try:
         u = agent_run.usage
-        prompt = int(u.input_tokens or 0)
-        completion = int(u.output_tokens or 0)
-        return int(u.total_tokens or 0), estimate_cost(prompt, completion, 0, model)
+        metrics = split_usage(u)
+        return metrics.total_tokens, estimate_cost(
+            metrics.prompt_tokens,
+            metrics.completion_tokens,
+            metrics.thinking_tokens,
+            model,
+        )
     except Exception:  # noqa: BLE001 — telemetry is advisory
         logger.debug("agent token backfill skipped for %s", label)
         return 0, 0.0
