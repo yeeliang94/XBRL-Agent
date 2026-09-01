@@ -358,6 +358,12 @@ function AgentCard({ agent, summary }: { agent: RunAgentJson; summary: AgentSumm
         <strong>{updates[0] ?? agentStatusDisplay(agent.status).label}</strong>
         <span>{sourceReference ?? "No source page was recorded for this activity."}</span>
       </div>
+      {agent.error_message && (
+        <div data-testid="agent-error-message" style={styles.agentErrorMessage}>
+          <strong>Terminal detail</strong>
+          <span>{agent.error_message}</span>
+        </div>
+      )}
       {updates.length > 1 && (
         <div style={styles.agentRecentUpdates}>
           <h4 style={styles.agentDetailLabel}>Recent updates</h4>
@@ -1799,6 +1805,19 @@ const styles = {
     color: pwc.grey700,
     fontSize: 12,
     lineHeight: 1.55,
+  } as React.CSSProperties,
+  agentErrorMessage: {
+    display: "grid",
+    gap: 4,
+    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    color: pwc.grey900,
+    background: pwc.grey50,
+    border: `1px solid ${pwc.grey200}`,
+    borderRadius: pwc.radius.sm,
+    fontSize: 12,
+    lineHeight: 1.55,
+    whiteSpace: "pre-wrap" as const,
+    overflowWrap: "anywhere" as const,
   } as React.CSSProperties,
   agentRecentUpdates: {
     display: "grid",

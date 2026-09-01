@@ -172,6 +172,17 @@ describe("App routing", () => {
     }
   });
 
+  test("notes review uses the full workspace width", async () => {
+    window.history.replaceState({}, "", "/history/42?tab=notes");
+    const { default: App } = await import("../App");
+    render(<App />);
+
+    await screen.findByTestId("run-detail-notes-review");
+    const main = document.getElementById("main-content");
+
+    expect(main).toHaveStyle({ maxWidth: "100%" });
+  });
+
   test("top-nav History click after viewing a run returns to the list, not the last run", async () => {
     // Peer-review [MEDIUM]: selectedRunId used to survive top-nav clicks,
     // so a user at /history/42 who clicked Extract then History would

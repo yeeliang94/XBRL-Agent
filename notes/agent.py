@@ -681,6 +681,7 @@ def render_notes_prompt(
     source_html_available: bool = False,
     source_blocks_available: bool = False,
     source_html_origin: str = "docx",
+    denomination: Optional[str] = None,
 ) -> str:
     """Compose the system prompt for a notes agent.
 
@@ -755,9 +756,20 @@ def render_notes_prompt(
     # inventory so the agent sees the verification framing first.
     # Empty string when scout couldn't enrich (rendered prompt
     # unchanged from pre-Phase-2 behaviour).
-    from prompts import _render_scout_context_block, _render_prior_year_advisory_block
+    from prompts import (
+        _render_denomination_block,
+        _render_prior_year_advisory_block,
+        _render_scout_context_block,
+    )
 
-    context_block_str = _render_scout_context_block(scout_context or {})
+    scout_scale = (scout_context or {}).get("scale_unit")
+    denomination_block_str = (
+        _render_denomination_block(denomination, scout_scale)
+        if denomination else ""
+    )
+    context_block_str = _render_scout_context_block(
+        scout_context or {}, suppress_scale=bool(denomination)
+    )
     # Item 28 — per-entity advisory memory. The matched prior-year payload rides
     # inside scout_context under "_prior_year" (notes path passes statement=None
     # so no per-statement variant line is rendered).
@@ -772,6 +784,8 @@ def render_notes_prompt(
         _render_column_rules(filing_level),
         specific,
     ]
+    if denomination_block_str:
+        parts.append(denomination_block_str)
     if context_block_str:
         parts.append(context_block_str)
     if prior_block_str:
@@ -840,6 +854,9 @@ class NotesDeps:
     # is wiring-only; Phase 6 uses it to inject MPERS overlays into the
     # notes prompts if the smoke run surfaces label mismatches.
     filing_standard: str = "mfrs"
+    # User-declared presentation scale. Numeric notes preserve the printed
+    # values at this scale; they never normalize them to base RM units.
+    denomination: str = "thousands"
     inventory: list[NoteInventoryEntry] = field(default_factory=list)
     # Absolute path to source.html for a Word upload or scanned-PDF transcript;
     # None when no sidecar exists. Powers the read_source_note tool.
@@ -2230,6 +2247,7 @@ def create_notes_agent(
     page_offset: int = 0,
     batch_note_nums: Optional[list[int]] = None,
     filing_standard: str = "mfrs",
+    denomination: str = "thousands",
     scout_context: Optional[dict] = None,
     run_id: Optional[int] = None,
     db_path: Optional[str] = None,
@@ -2320,6 +2338,7 @@ def create_notes_agent(
         sheet_name=entry.sheet_name,
         filing_level=filing_level,
         filing_standard=filing_standard,
+        denomination=denomination,
         inventory=list(inventory),
         source_html_path=source_html_path,
         source_html_origin=source_html_origin,
@@ -2364,6 +2383,7 @@ def create_notes_agent(
         source_html_available=source_html_available,
         source_blocks_available=bool(deps.source_block_notes),
         source_html_origin=source_html_origin,
+        denomination=deps.denomination,
     )
     # Fix B (2026-06-20): notes agents expose the same search_pdf_text tool, so
     # on a fully-scanned PDF they'd waste a turn on a guaranteed-empty search —

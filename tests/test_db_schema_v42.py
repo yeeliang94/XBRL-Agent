@@ -15,8 +15,11 @@ def test_fresh_schema_has_run_incidents(tmp_path):
     init_db(db)
     conn = sqlite3.connect(db)
     try:
-        assert CURRENT_SCHEMA_VERSION == 42
-        assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 42
+        assert CURRENT_SCHEMA_VERSION >= 42
+        assert (
+            conn.execute("SELECT version FROM schema_version").fetchone()[0]
+            == CURRENT_SCHEMA_VERSION
+        )
         assert {
             "id", "run_id", "created_at", "source", "stage", "severity",
             "error_code", "user_message", "technical_message",
@@ -49,7 +52,10 @@ def test_v41_upgrade_is_idempotent_and_preserves_runs(tmp_path):
     init_db(db)
     conn = sqlite3.connect(db)
     try:
-        assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 42
+        assert (
+            conn.execute("SELECT version FROM schema_version").fetchone()[0]
+            == CURRENT_SCHEMA_VERSION
+        )
         assert conn.execute(
             "SELECT pdf_filename FROM runs WHERE id = ?", (run_id,)
         ).fetchone()[0] == "legacy.pdf"

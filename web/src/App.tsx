@@ -961,7 +961,7 @@ export default function App() {
           // Review and Template workspaces need the full available width for
           // their side-by-side panes. History and ordinary content pages keep
           // their readable centred width.
-          state.view === "concepts"
+          reviewFocused || state.view === "concepts"
             ? styles.mainFull
             : state.view === "history"
               ? styles.mainHistory

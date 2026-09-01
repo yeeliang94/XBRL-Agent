@@ -123,7 +123,12 @@ def _reviewed_exception(path: Path, node: ConceptNode | None = None) -> str | No
 def _numeric_targets(path: Path) -> tuple[str, list[FilingTarget]]:
     tree = parse_template(str(path))
     targets: list[FilingTarget] = []
-    wb = openpyxl.load_workbook(path, read_only=True, data_only=False)
+    # A read-only worksheet resolves ``cell(row, col)`` by scanning its XML
+    # stream from the beginning.  SOCIE has more than 1,500 physical targets,
+    # so the per-target drift check below becomes quadratic (about 10 seconds
+    # for one live template).  A normal worksheet keeps cells addressable in
+    # memory and makes the same checks constant-time.
+    wb = openpyxl.load_workbook(path, read_only=False, data_only=False)
     try:
         for node in tree.concepts:
             rk = node.render_key
@@ -316,17 +321,31 @@ def writable_coordinates(
 ) -> frozenset[tuple[int, str]] | None:
     """Return authoritative writable ``(row, column-letter)`` slots.
 
-    ``None`` means the workbook is synthetic or legacy and therefore has no
-    repository manifest; callers retain the established formula/style guards
-    in that case. Managed templates return an exact coordinate set so a
-    writable row can never accidentally promote an unrelated matrix column.
+    ``None`` means either the workbook is synthetic/legacy or its current
+    linear manifest describes canonical rows but does not yet enumerate every
+    physical period/scope column.  Callers then retain the established
+    row-level taxonomy guard plus formula/style guards.  Matrix templates carry
+    explicit period/scope dimensions for every physical slot and therefore
+    return an exact coordinate set, so a writable SOCIE row can never promote
+    an unrelated matrix column.
     """
     if not _is_managed_template(path_value):
         return None
+    targets = [
+        target for target in list_writable_targets(path_value)
+        if target.sheet == sheet and target.col
+    ]
+    if not targets:
+        return frozenset()
+    if not all(
+        target.dimensions.get("period")
+        and target.dimensions.get("entity_scope")
+        for target in targets
+    ):
+        return None
     return frozenset(
         (target.row, str(target.col).upper())
-        for target in list_writable_targets(path_value)
-        if target.sheet == sheet and target.col
+        for target in targets
     )
 
 

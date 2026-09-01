@@ -1,9 +1,9 @@
 """N1 — notes↔face numeric tie-out checks.
 
 Builds synthetic workbooks pairing a face SOFP sheet with the issued-capital
-note and asserts: matched within tolerance → no warning; a 1000×-off note →
-WARN; unmapped topics stay silent (no fabricated pairings); a missing sheet is
-skipped.
+note and asserts: matched within tolerance → no finding; a 1000×-off note →
+failed cross-check; unmapped topics stay silent (no fabricated pairings); a
+missing sheet is skipped.
 """
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ import pytest
 from cross_checks.notes_face_tieouts import (
     _PAIRS,
     check_notes_face_tieouts,
-    TieoutWarning,
+    TieoutFailure,
 )
 from cross_checks.util import find_label_row, find_sheet
 
@@ -47,15 +47,49 @@ def test_matched_pair_within_tolerance_no_warning(tmp_path):
     assert check_notes_face_tieouts(str(p)) == []
 
 
-def test_1000x_off_note_warns(tmp_path):
+def test_1000x_off_note_fails(tmp_path):
     p = tmp_path / "wb.xlsx"
     # Note recorded in units while the face is in thousands → 1000× gap.
     _build(p, 5_000, 5_000_000)
-    warns = check_notes_face_tieouts(str(p))
-    assert len(warns) == 1
-    assert isinstance(warns[0], TieoutWarning)
-    assert warns[0].topic == "Share capital"
-    assert "reconcile" in warns[0].message.lower()
+    failures = check_notes_face_tieouts(str(p))
+    assert len(failures) == 1
+    assert isinstance(failures[0], TieoutFailure)
+    assert failures[0].status == "failed"
+    assert failures[0].topic == "Share capital"
+    assert failures[0].scope == ""
+    assert "reconcile" in failures[0].message.lower()
+
+
+def test_1000x_off_note_is_a_blocking_pipeline_cross_check(tmp_path):
+    """A confirmed notes/face contradiction must tip filing readiness."""
+    import server
+
+    p = tmp_path / "wb.xlsx"
+    _build(p, 2_500, 2_500_000)
+
+    results = server._run_notes_face_tieouts(
+        str(p), run_id=103, filing_level="company", filing_standard="mfrs"
+    )
+
+    assert len(results) == 1
+    assert results[0].status == "failed"
+    assert results[0].expected == 2_500
+    assert results[0].actual == 2_500_000
+
+
+def test_order_of_liquidity_sheet_is_checked(tmp_path):
+    p = tmp_path / "ordofliq.xlsx"
+    _build(
+        p,
+        2_500,
+        2_500_000,
+        face_sheet="SOFP-OrdOfLiq",
+    )
+
+    failures = check_notes_face_tieouts(str(p))
+
+    assert len(failures) == 1
+    assert failures[0].topic == "Share capital"
 
 
 def test_blank_note_side_is_silent(tmp_path):
@@ -101,7 +135,68 @@ def test_group_filing_checks_company_cy_column(tmp_path):
 
     warns = check_notes_face_tieouts(str(p), filing_level="group")
     assert len(warns) == 1
+    assert warns[0].scope == "Company"
     assert warns[0].message.startswith("Company ")
+
+
+def test_group_failures_have_distinct_scope_qualified_names(tmp_path):
+    import server
+
+    p = tmp_path / "wb.xlsx"
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    f = wb.create_sheet("SOFP-CuNonCu")
+    f.cell(2, 1, "Share capital")
+    f.cell(2, 2, 5_000_000)
+    f.cell(2, 4, 3_000_000)
+    n = wb.create_sheet("Notes-Issuedcapital")
+    n.cell(5, 1, "Balance at the end of period")
+    n.cell(5, 2, 5_000)
+    n.cell(5, 4, 3_000)
+    wb.save(str(p))
+
+    results = server._run_notes_face_tieouts(
+        str(p), run_id=103, filing_level="group", filing_standard="mfrs"
+    )
+
+    assert {result.name for result in results} == {
+        "Notes↔face tie-out: Share capital [group]",
+        "Notes↔face tie-out: Share capital [company]",
+    }
+
+
+def test_notes_face_failure_is_not_sent_to_face_facts_reviewer():
+    from cross_checks.framework import CrossCheckResult
+    from server import _reviewer_actionable_failures
+
+    tieout = CrossCheckResult(
+        name="Notes↔face tie-out: Share capital", status="failed",
+    )
+    face_failure = CrossCheckResult(name="sofp_balance", status="failed")
+
+    assert _reviewer_actionable_failures([tieout, face_failure]) == [face_failure]
+
+
+@pytest.mark.asyncio
+async def test_reviewer_pass_short_circuits_for_notes_face_failure(tmp_path):
+    from cross_checks.framework import CrossCheckResult
+    import server
+
+    outcome = await server._run_reviewer_pass(
+        failed_checks=[CrossCheckResult(
+            name="Notes↔face tie-out: Share capital", status="failed",
+        )],
+        conflicts=[],
+        model=None,
+        filing_level="company",
+        filing_standard="mfrs",
+        event_queue=None,
+        db_path=tmp_path / "unused.db",
+        run_id=103,
+    )
+
+    assert outcome["invoked"] is False
+    assert outcome["error"] is None
 
 
 def test_group_filing_both_columns_match_no_warning(tmp_path):

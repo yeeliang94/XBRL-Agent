@@ -164,12 +164,13 @@ class ExtractionDeps:
         # extracted data.
         self.completed_with_flag: bool = False
         self.unresolved_summary: Optional[str] = None
-        # Peer-review hardening: the honest-completion hatch only opens after
-        # the agent has already been refused for THIS gap (so it has seen the
-        # "re-examine / don't plug" guidance) AND supplies its own non-empty
-        # reason. `seen_unresolved_refusal` flips True the first time the gate
-        # refuses for a balance / mandatory gap; `unresolved_reason` is the
-        # agent's own words (kept separate from the verifier-derived summary).
+        # Peer-review hardening: each honest-completion hatch only opens after
+        # the agent has already been refused for that class of issue. A write
+        # rejection must not pre-authorize a later, unrelated balance gap.
+        # The flags therefore separately record the deterministic write-
+        # omission guidance and the verifier's "re-examine / don't plug"
+        # guidance. `unresolved_reason` is the agent's own explanation.
+        self.seen_fill_error_refusal: bool = False
         self.seen_unresolved_refusal: bool = False
         self.unresolved_reason: Optional[str] = None
         # Rewrite Phase 4.1 (store-first): the fact store is the PRIMARY,
@@ -328,20 +329,20 @@ def _check_save_gate(
     """
     result = deps.last_verify_result
     forced_allowed = _is_force_save_allowed(deps)
-
-    # A mixed write_facts batch may retain its valid cells while refusing an
-    # ambiguous, formula, or non-writable target. Verification can still
-    # balance on the retained subset, so deterministic writer errors are an
-    # independent completion gate and are never bypassed by the force-save or
-    # honest-source-gap paths.
-    if deps.last_fill_errors:
-        return (
-            "save_result refused: unresolved write error(s) remain from "
-            "write_facts: " + "; ".join(deps.last_fill_errors)
-            + ". Correct those exact writes and retry before saving."
-        )
+    fill_errors = list(deps.last_fill_errors)
 
     if result is None:
+        if fill_errors:
+            deps.seen_fill_error_refusal = True
+            return (
+                "save_result refused: unresolved write error(s) remain from "
+                "write_facts: " + "; ".join(fill_errors)
+                + ". Run verify_totals on the retained valid writes. If the "
+                "rejected request targeted an ambiguous or protected row that "
+                "must be omitted, then retry save_result with "
+                "acknowledge_unresolved=true and a non-empty "
+                "unresolved_reason."
+            )
         if forced_allowed:
             logger.warning(
                 "%s: save_result forced through without verify_totals "
@@ -361,10 +362,13 @@ def _check_save_gate(
     # block when False.
     balance_bad = result.is_balanced is False
     mandatory_bad = bool(result.mandatory_unfilled)
-    if not balance_bad and not mandatory_bad:
+    if not fill_errors and not balance_bad and not mandatory_bad:
         return None
 
-    if forced_allowed:
+    # A force-save can preserve a source imbalance, but it must never silently
+    # erase deterministic writer rejections. Those require the explicit,
+    # audited acknowledgement path below.
+    if forced_allowed and not fill_errors:
         logger.warning(
             "%s: save_result forced through despite verify gaps "
             "(iter %d, balanced=%s, unfilled=%s)",
@@ -381,13 +385,18 @@ def _check_save_gate(
     # an audited imbalance rather than hard-failing and discarding the data.
     #
     # Two guardrails keep this from becoming a lazy bypass (peer-review):
-    #   1. the agent must already have been refused for this gap
-    #      (`seen_unresolved_refusal`) — so it has seen the "re-examine /
-    #      never plug a catch-all" guidance before it can acknowledge; and
+    #   1. the agent must already have been refused for every active issue
+    #      class — write omission and verifier gap are deliberately separate,
+    #      so one cannot pre-authorize the other; and
     #   2. it must supply a non-empty reason of its own.
     if acknowledge_unresolved:
         reason = (acknowledge_reason or "").strip()
-        if not deps.seen_unresolved_refusal:
+        verify_gap = balance_bad or mandatory_bad
+        missing_prior_refusal = (
+            (bool(fill_errors) and not deps.seen_fill_error_refusal)
+            or (verify_gap and not deps.seen_unresolved_refusal)
+        )
+        if missing_prior_refusal:
             # First contact with the gap — refuse once (which sets the flag
             # below and surfaces the guidance) before honouring an ack.
             pass
@@ -400,6 +409,10 @@ def _check_save_gate(
             )
         else:
             summary_bits: list[str] = []
+            if fill_errors:
+                summary_bits.append(
+                    "rejected write(s) omitted: " + "; ".join(fill_errors)
+                )
             if balance_bad:
                 summary_bits.append(result.feedback or "unbalanced totals")
             if mandatory_bad:
@@ -410,6 +423,13 @@ def _check_save_gate(
             deps.completed_with_flag = True
             deps.unresolved_summary = "; ".join(summary_bits) or "verify gap"
             deps.unresolved_reason = reason
+            # The rejection remains durable in unresolved_summary/reason, but
+            # it is no longer an active poison flag after an explicit audited
+            # omission decision.
+            deps.last_fill_errors = []
+            state = getattr(deps, "_unresolved_fill_error_state", None)
+            if isinstance(state, dict):
+                state.clear()
             logger.warning(
                 "%s: save_result finalised WITH FLAG via acknowledge_unresolved "
                 "(iter %d, balanced=%s, unfilled=%s, reason=%r)",
@@ -421,16 +441,24 @@ def _check_save_gate(
             )
             return None
 
-    # Record that the agent has now been told about this gap, so a follow-up
-    # acknowledge_unresolved is allowed to finalise it.
-    deps.seen_unresolved_refusal = True
+    # Record exactly which guidance the agent has now seen. These flags cannot
+    # be combined: an earlier rejected write is not evidence that the agent
+    # re-examined a later balance or mandatory-field gap.
+    if fill_errors:
+        deps.seen_fill_error_refusal = True
+    if balance_bad or mandatory_bad:
+        deps.seen_unresolved_refusal = True
 
     # Compose a targeted error message so the agent knows exactly what to fix.
     # Combined "Action required:" block (peer-review S7) — two separate
     # blocks could leave the agent unsure which issue to address first.
-    parts: list[str] = ["save_result refused: the most recent verify_totals "
-                        "flagged issues that must be resolved before save."]
+    parts: list[str] = [
+        "save_result refused: unresolved write and/or verify_totals issues "
+        "must be resolved before save."
+    ]
     issues: list[str] = []
+    if fill_errors:
+        issues.append(f"- Rejected writes: {'; '.join(fill_errors)}")
     if balance_bad:
         issues.append(f"- Balance: {result.feedback or 'unbalanced totals'}")
     if mandatory_bad:
@@ -439,8 +467,12 @@ def _check_save_gate(
             f"{json.dumps(result.mandatory_unfilled)}"
         )
     parts.extend(issues)
-    parts.append("Correct the issues with write_facts, re-run "
-                 "verify_totals, then retry save_result.")
+    parts.append(
+        "Correct any valid target with write_facts, re-run verify_totals, "
+        "then retry save_result. If a rejected request is an ambiguous or "
+        "protected row that should not be written, omit it and use the "
+        "audited acknowledgement path below."
+    )
     # Tell the agent about the honest-completion escape hatch (gotcha #17):
     # if the gap is genuinely in the source, or the only row that would close
     # it is a protected formula cell, do NOT plug a catch-all — instead
@@ -479,13 +511,23 @@ def _update_unresolved_fill_errors(deps: "ExtractionDeps", result) -> None:
         if len(same_base) == 1:
             state.pop(same_base[0], None)
 
-    error_message = "; ".join(result.errors)
+    result_errors = list(dict.fromkeys(
+        getattr(result, "errors", []) or []
+    ))
+    fallback_message = (
+        "; ".join(result_errors)
+        or "Unresolved write request was rejected."
+    )
     for item in getattr(result, "failed_request_keys", []):
-        state[item["key"]] = (item["base_key"], error_message)
+        # New writer results bind each refusal to the mapping that caused it.
+        # Legacy/test-double results do not. Keep their errors as one batch
+        # message instead of guessing that two unrelated lists share order.
+        message = item.get("message") or fallback_message
+        state[item["key"]] = (item["base_key"], message)
 
-    deps.last_fill_errors = [
+    deps.last_fill_errors = list(dict.fromkeys(
         message for _base_key, message in state.values() if message
-    ]
+    ))
 
 
 def _format_verify_result(result) -> str:
@@ -554,6 +596,17 @@ def _format_verify_result(result) -> str:
             "correct):\n" + "\n".join(f"- {w}" for w in result.magnitude_warnings)
         )
     return "\n".join(lines)
+
+
+def _face_coverage_pre_save_nudge(deps: "ExtractionDeps") -> str:
+    """Return the actionable pre-save receipt reminder, when applicable."""
+    if not deps.face_line_refs or deps.face_coverage_submitted:
+        return ""
+    return (
+        "Before save_result, call submit_face_coverage once to record every "
+        "scout-observed face line as written or skipped. This is an advisory "
+        "audit receipt and does not change the verification result."
+    )
 
 
 def _template_summary_compact_enabled() -> bool:
@@ -699,7 +752,9 @@ def _summarize_template_compact(fields: list[TemplateField]) -> str:
         else:
             row["cells"].append(f)
 
-    lines: list[str] = []
+    lines: list[str] = [
+        "FORMULA lists formulas; other columns are inputs."
+    ]
     for sheet_name, info in sheets.items():
         lines.append(f"\n=== Sheet: {sheet_name} ===")
         lines.append(
@@ -1124,6 +1179,7 @@ def create_extraction_agent(
             output_path=output_path,
             facts=facts,
             filing_level=ctx.deps.filing_level,
+            canonical_template_path=ctx.deps.template_path,
         )
         _update_unresolved_fill_errors(ctx.deps, result)
         if result.errors:
@@ -1215,7 +1271,11 @@ def create_extraction_agent(
         # Phase 1.3: remember the last verification so save_result can
         # refuse to finalise if the agent skipped or failed verification.
         ctx.deps.last_verify_result = result
-        return _format_verify_result(result)
+        rendered = _format_verify_result(result)
+        coverage_nudge = _face_coverage_pre_save_nudge(ctx.deps)
+        if coverage_nudge:
+            rendered += "\n" + coverage_nudge
+        return rendered
 
     @agent.tool
     def save_result(
@@ -1236,11 +1296,12 @@ def create_extraction_agent(
 
         Set ``acknowledge_unresolved=True`` (with a non-empty
         ``unresolved_reason``) ONLY when you have re-examined the PDF and the
-        verify gap is genuinely in the source (or the only row that would close
-        it is a protected formula cell). This finalises the statement WITH the
-        gap flagged for human review (gotcha #17) instead of plugging a
-        catch-all row. It is honoured only after the gate has already refused
-        the same gap once. Never use it to skip legitimate corrections.
+        verify gap is genuinely in the source, or when a rejected write request
+        targeted an ambiguous/protected row that must be omitted. This
+        finalises the statement WITH the gap flagged for human review (gotcha
+        #17) instead of plugging a catch-all row. It is honoured only after the
+        gate has already refused the same gap once. Never use it to skip
+        legitimate corrections.
         """
         ctx.deps.save_attempts += 1
         gate_error = _check_save_gate(
@@ -1280,14 +1341,14 @@ def create_extraction_agent(
                 f"for human review. Cost report saved to {report_path}."
             )
         msg = f"Results saved to {json_path}. Cost report saved to {report_path}."
-        # Item 23: nudge (never block) — if the scout flagged face lines and the
-        # agent never submitted a coverage receipt, remind it once. The save
-        # ALWAYS succeeds regardless; coverage is advisory (gotcha #13/#17).
+        # Item 23: coverage is advisory. Deterministic completion now stops the
+        # loop as soon as this save succeeds, so do not issue an impossible
+        # post-save instruction to call another tool. Record the missing
+        # receipt plainly; the coordinator emits the detailed coverage warning.
         if ctx.deps.face_line_refs and not ctx.deps.face_coverage_submitted:
             msg += (
-                "\nReminder: the scout flagged face lines for this statement. "
-                "Call submit_face_coverage to record which you wrote or "
-                "skipped (this does not change the save — it's an audit trail)."
+                "\nFace coverage receipt was not submitted; the missing audit "
+                "receipt will be recorded as a coverage warning."
             )
         return msg
 

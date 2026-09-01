@@ -93,6 +93,10 @@ def _deps(filled_path: str = "", verify=None):
     deps.projection_failed = False
     deps.filled_path = filled_path
     deps.last_verify_result = verify
+    deps.last_fill_errors = []
+    deps.result_saved = False
+    deps.completed_with_flag = False
+    deps.unresolved_summary = None
     deps.statement_type = StatementType.SOFP
     return deps
 
@@ -159,6 +163,30 @@ async def test_wallclock_cap_does_not_salvage_dirty_verify(tmp_path):
         factory.return_value = (
             _make_slow_turning_agent(node_delay=0.05),
             _deps(filled_path=wb, verify=dirty),
+        )
+        result = await run_extraction(config, infopack=None)
+
+    r = result.agent_results[0]
+    assert r.status == "failed"
+    assert r.error_type == "wallclock"
+
+
+@pytest.mark.asyncio
+async def test_wallclock_cap_does_not_salvage_unacknowledged_write_rejection(
+    tmp_path,
+):
+    """A clean balance does not erase a rejected canonical write."""
+    from coordinator import run_extraction
+
+    wb = str(tmp_path / "SOFP_filled.xlsx")
+    deps = _deps(filled_path=wb, verify=_clean_verify())
+    deps.last_fill_errors = ["Protected formula row rejected"]
+    config = _RunConfig(pdf_path="/tmp/t.pdf", output_dir=str(tmp_path))
+    with patch("coordinator.FACE_WALLCLOCK_TIMEOUT", 0.3), \
+         patch("coordinator.FACE_TURN_TIMEOUT", 60.0), \
+         patch("coordinator.create_extraction_agent") as factory:
+        factory.return_value = (
+            _make_slow_turning_agent(node_delay=0.05), deps,
         )
         result = await run_extraction(config, infopack=None)
 

@@ -263,6 +263,10 @@ async def get_run_detail_endpoint(run_id: int):
                 # v17 (item 9): machine-readable failure class; None on
                 # success / legacy rows. Frontend renders it as a badge.
                 "error_type": getattr(a, "error_type", None),
+                # v43: exact terminal refusal/error detail. This is the
+                # operator-facing diagnostic for failures such as a blocked
+                # workbook write; legacy and successful rows return None.
+                "error_message": getattr(a, "error_message", None),
                 # v8 telemetry: per-agent token split + iteration counts, and
                 # the per-turn metrics rows the Telemetry tab renders.
                 "token_breakdown": {

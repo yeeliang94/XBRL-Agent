@@ -155,6 +155,134 @@ def test_save_result_refuses_unresolved_partial_fill_errors():
     assert "unresolved write" in gate_error.lower()
 
 
+def test_unresolved_acknowledgement_requires_verification_first():
+    from extraction.agent import ExtractionDeps, _check_save_gate
+    from token_tracker import TokenReport
+
+    deps = ExtractionDeps(
+        pdf_path="/tmp/x.pdf",
+        template_path="/tmp/t.xlsx",
+        model="test-model",
+        output_dir="/tmp",
+        token_report=TokenReport(model="test-model"),
+        statement_type=StatementType.SOCF,
+        variant="Indirect",
+    )
+    deps.last_fill_errors = ["Protected formula row rejected"]
+
+    refusal = _check_save_gate(
+        deps,
+        acknowledge_unresolved=True,
+        acknowledge_reason="The requested row is formula-owned.",
+    )
+
+    assert refusal is not None
+    assert "run verify_totals" in refusal.lower()
+    assert deps.completed_with_flag is False
+
+
+def test_rejected_non_writable_write_can_be_acknowledged_after_refusal():
+    """A protected-row request cannot be corrected by retrying the write.
+
+    The legal recovery is to omit it, verify the retained workbook, then
+    explicitly acknowledge the rejected request with an audit reason.  Run
+    103 had no such state transition and remained save-gate-refused forever.
+    """
+    from extraction.agent import ExtractionDeps, _check_save_gate
+    from token_tracker import TokenReport
+    from tools.verifier import VerificationResult
+
+    deps = ExtractionDeps(
+        pdf_path="/tmp/x.pdf",
+        template_path="/tmp/t.xlsx",
+        model="test-model",
+        output_dir="/tmp",
+        token_report=TokenReport(model="test-model"),
+        statement_type=StatementType.SOCF,
+        variant="Indirect",
+    )
+    deps.last_verify_result = VerificationResult(
+        is_balanced=True, matches_pdf=None, mismatches=[], mandatory_unfilled=[],
+    )
+    deps.last_fill_errors = [
+        "Target row 137 is a protected formula/non-entry cell."
+    ]
+    deps._unresolved_fill_error_state = {
+        "socf|137|b": (
+            "socf|137|b",
+            "Target row 137 is a protected formula/non-entry cell.",
+        )
+    }
+
+    first_refusal = _check_save_gate(deps)
+    assert first_refusal is not None
+    assert deps.seen_fill_error_refusal is True
+    assert deps.seen_unresolved_refusal is False
+
+    acknowledged = _check_save_gate(
+        deps,
+        acknowledge_unresolved=True,
+        acknowledge_reason=(
+            "Re-read the cash reconciliation; row 137 is a protected formula "
+            "total and the extracted statement row is already verified."
+        ),
+    )
+
+    assert acknowledged is None
+    assert deps.completed_with_flag is True
+    assert "rejected write" in (deps.unresolved_summary or "").lower()
+    assert deps.last_fill_errors == []
+    assert deps._unresolved_fill_error_state == {}
+
+
+def test_write_refusal_does_not_pre_acknowledge_a_later_verify_gap():
+    """Each audited escape hatch requires its own preceding guidance."""
+    from extraction.agent import ExtractionDeps, _check_save_gate
+    from token_tracker import TokenReport
+    from tools.verifier import VerificationResult
+
+    deps = ExtractionDeps(
+        pdf_path="/tmp/x.pdf",
+        template_path="/tmp/t.xlsx",
+        model="test-model",
+        output_dir="/tmp",
+        token_report=TokenReport(model="test-model"),
+        statement_type=StatementType.SOFP,
+        variant="CuNonCu",
+    )
+    deps.last_fill_errors = ["Protected formula row rejected"]
+
+    assert _check_save_gate(deps) is not None
+    assert deps.seen_fill_error_refusal is True
+    assert deps.seen_unresolved_refusal is False
+
+    deps.last_fill_errors = []
+    deps.last_verify_result = VerificationResult(
+        is_balanced=False,
+        matches_pdf=None,
+        mismatches=[],
+        mandatory_unfilled=[],
+        feedback="Assets do not equal equity and liabilities.",
+    )
+    first_gap_ack = _check_save_gate(
+        deps,
+        acknowledge_unresolved=True,
+        acknowledge_reason="The source statement itself does not reconcile.",
+    )
+
+    assert first_gap_ack is not None
+    assert "do not plug a catch-all" in first_gap_ack.lower()
+    assert deps.seen_unresolved_refusal is True
+    assert deps.completed_with_flag is False
+
+    assert _check_save_gate(
+        deps,
+        acknowledge_unresolved=True,
+        acknowledge_reason="The source statement itself does not reconcile.",
+    ) is None
+    assert deps.completed_with_flag is True
+
+
 def test_unrelated_clean_write_does_not_clear_prior_fill_error():
     from types import SimpleNamespace
 
@@ -182,6 +310,50 @@ def test_unrelated_clean_write_does_not_clear_prior_fill_error():
         failed_request_keys=[],
     ))
     assert deps.last_fill_errors == []
+
+
+def test_each_failed_write_retains_only_its_own_error_message():
+    from types import SimpleNamespace
+
+    from extraction.agent import _update_unresolved_fill_errors
+
+    deps = SimpleNamespace(_unresolved_fill_error_state={}, last_fill_errors=[])
+    _update_unresolved_fill_errors(deps, SimpleNamespace(
+        errors=["First label is unknown", "Second row is protected"],
+        successful_request_keys=[],
+        failed_request_keys=[
+            {"key": "first", "base_key": "first", "message": "First label is unknown"},
+            {"key": "second", "base_key": "second", "message": "Second row is protected"},
+        ],
+    ))
+
+    assert deps.last_fill_errors == [
+        "First label is unknown",
+        "Second row is protected",
+    ]
+
+
+def test_legacy_failed_writes_do_not_guess_error_pairing_by_position():
+    from types import SimpleNamespace
+
+    from extraction.agent import _update_unresolved_fill_errors
+
+    deps = SimpleNamespace(_unresolved_fill_error_state={}, last_fill_errors=[])
+    _update_unresolved_fill_errors(deps, SimpleNamespace(
+        errors=["First label is unknown", "Second row is protected"],
+        successful_request_keys=[],
+        failed_request_keys=[
+            {"key": "second", "base_key": "second"},
+            {"key": "first", "base_key": "first"},
+        ],
+    ))
+
+    batch_message = "First label is unknown; Second row is protected"
+    assert deps._unresolved_fill_error_state == {
+        "second": ("second", batch_message),
+        "first": ("first", batch_message),
+    }
+    assert deps.last_fill_errors == [batch_message]
 
 
 # ---------------------------------------------------------------------------
