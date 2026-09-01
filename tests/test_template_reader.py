@@ -17,6 +17,26 @@ def test_read_template_returns_fields():
     assert len(fields) > 0
 
 
+def test_agent_summary_preserves_complete_long_labels(tmp_path):
+    import openpyxl
+
+    from extraction.agent import _summarize_template
+
+    long_label = (
+        "Short-term lease payments, payments for leases of low-value assets "
+        "and variable lease payments not included in lease liabilities"
+    )
+    path = tmp_path / "long-label.xlsx"
+    wb = openpyxl.Workbook()
+    wb.active["A24"] = long_label
+    wb.save(path)
+    wb.close()
+
+    fields = read_template(str(path))
+    assert long_label in _summarize_template(fields, compact=False)
+    assert long_label in _summarize_template(fields, compact=True)
+
+
 def test_taxonomy_abstract_without_header_style_is_not_offered_as_data_entry():
     fields = read_template(TEMPLATE, sheet="SOFP-CuNonCu")
     title = next(

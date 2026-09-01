@@ -6,7 +6,11 @@ from pathlib import Path
 
 from concept_model.notes_parser import parse_notes_template
 from concept_model.parser import parse_template
-from concept_model.filing_targets import audit_active_templates
+from concept_model.filing_targets import (
+    audit_active_templates,
+    list_writable_targets,
+    targets_for_template,
+)
 from concept_model.taxonomy_semantics import taxonomy_concept
 from notes.agent import _load_template_label_catalog
 from notes.payload import NotesPayload
@@ -78,7 +82,7 @@ def test_all_active_variants_have_complete_writable_semantics():
 
     assert audit["templates"] == 58
     assert audit["worksheets"] == 74
-    assert audit["numeric_slots"] == 6356
+    assert audit["numeric_slots"] == 7988
     assert audit["prose_slots"] == 688
     assert audit["unclassified_slots"] == 0
     assert audit["missing_required_mappings"] == []
@@ -190,3 +194,97 @@ def test_unchanged_manifest_skips_reparse_and_historical_sweeps(
 
     monkeypatch.setattr(filing_targets, "targets_for_template", unexpected_parse)
     assert filing_targets.persist_template_manifest(db, template) == count
+
+
+def test_socie_manifest_exposes_every_period_scope_physical_slot():
+    template = ROOT / "XBRL-template-MFRS/Group/09-SOCIE.xlsx"
+    _template_id, targets = targets_for_template(template)
+
+    profit_b = [
+        target for target in targets
+        if target.label.lstrip("*") == "Profit (loss)" and target.col == "B"
+    ]
+
+    assert {
+        (target.row, target.dimensions["period"], target.dimensions["entity_scope"])
+        for target in profit_b
+    } == {
+        (11, "CY", "Group"),
+        (35, "PY", "Group"),
+        (59, "CY", "Company"),
+        (83, "PY", "Company"),
+    }
+    assert len({target.canonical_target_id for target in profit_b}) == 1
+    assert all(target.writable for target in profit_b)
+
+
+def test_socie_manifest_has_unique_physical_and_canonical_dimension_slots():
+    for standard in ("MFRS", "MPERS"):
+        for level in ("Company", "Group"):
+            template = ROOT / f"XBRL-template-{standard}/{level}/09-SOCIE.xlsx"
+            _template_id, targets = targets_for_template(template)
+
+            physical = [(t.sheet, t.row, t.col) for t in targets]
+            assert len(physical) == len(set(physical)), template
+
+            dimensional = [
+                (
+                    t.canonical_target_id,
+                    t.dimensions.get("period"),
+                    t.dimensions.get("entity_scope"),
+                )
+                for t in targets
+                if t.dimensions.get("period")
+            ]
+            assert len(dimensional) == len(set(dimensional)), template
+
+
+def test_socie_later_block_is_in_authoritative_writable_registry():
+    template = ROOT / "XBRL-template-MFRS/Company/09-SOCIE.xlsx"
+    writable = {
+        (target.sheet, target.row, target.col)
+        for target in list_writable_targets(template)
+    }
+    assert ("SOCIE", 35, "B") in writable
+
+
+def test_stale_socie_manifest_rebuilds_all_physical_slots(tmp_path):
+    import sqlite3
+
+    from concept_model.filing_targets import MANIFEST_VERSION, persist_template_manifest
+    from db.schema import init_db
+
+    db = tmp_path / "manifest.sqlite"
+    template = ROOT / "XBRL-template-MFRS/Company/09-SOCIE.xlsx"
+    init_db(db)
+    persist_template_manifest(db, template)
+
+    conn = sqlite3.connect(db)
+    try:
+        template_id = "mfrs-company-socie-v1"
+        conn.execute(
+            "DELETE FROM template_slots WHERE template_id=? AND row=35 AND col='B'",
+            (template_id,),
+        )
+        conn.execute(
+            "UPDATE template_slots SET manifest_version='stale' WHERE template_id=?",
+            (template_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    persist_template_manifest(db, template)
+    conn = sqlite3.connect(db)
+    try:
+        rebuilt = conn.execute(
+            "SELECT dimensions_json, manifest_version FROM template_slots "
+            "WHERE template_id=? AND row=35 AND col='B'",
+            (template_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert rebuilt is not None
+    assert '"period":"PY"' in rebuilt[0]
+    assert rebuilt[1] == MANIFEST_VERSION

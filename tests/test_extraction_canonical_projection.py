@@ -113,27 +113,29 @@ def test_projection_noops_in_legacy_mode(canonical_env, tmp_path):
         conn.close()
 
 
-def test_projection_warns_on_unmapped_cell(canonical_env, tmp_path):
+def test_writer_rejects_unmapped_managed_cell_before_projection(canonical_env, tmp_path):
     db_path, run_id, template_id, leaf = canonical_env
     deps = _deps(tmp_path, run_id=run_id, db_path=str(db_path), template_id=template_id)
-    # col 4 (evidence column) doesn't map to a concept on a Company sheet.
+    # col 4 is the evidence column, not a writable numeric filing slot. The
+    # exact-coordinate manifest guard now rejects it before projection.
     result = _fill(tmp_path, leaf, col=4, value=1.0)
+
+    assert result.success is False
+    assert result.resolved_writes == []
     warning = _project_facts_if_canonical(deps, result)
-    assert warning is not None
-    assert "unmapped" in warning.lower() or "0 fact" in warning.lower()
+    assert warning is None
 
 
 # --- Rewrite Phase 4.1: projection-CALL failure is FATAL ---------------------
 
 
 def test_unmapped_cell_is_not_fatal(canonical_env, tmp_path):
-    """`has_gaps` (some cells didn't map to a concept — e.g. row-1 date cells
-    or the evidence column) stays ADVISORY. It must not set the fatal flag, or
-    every real run (which writes date cells) would fail."""
-    db_path, run_id, template_id, leaf = canonical_env
+    """The row-1 metadata carve-out remains an advisory projection gap."""
+    db_path, run_id, template_id, _leaf = canonical_env
     deps = _deps(tmp_path, run_id=run_id, db_path=str(db_path), template_id=template_id)
-    result = _fill(tmp_path, leaf, col=4, value=1.0)
-    _project_facts_if_canonical(deps, result)
+    result = _fill(tmp_path, 1, col=4, value=1.0)
+    warning = _project_facts_if_canonical(deps, result)
+    assert warning is not None
     assert deps.projection_failed is False
 
 

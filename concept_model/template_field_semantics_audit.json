@@ -1,7 +1,7 @@
 {
-  "manifest_version": "2022-v1-slot-semantics-1",
+  "manifest_version": "2022-v1-slot-semantics-2",
   "missing_required_mappings": [],
-  "numeric_slots": 6356,
+  "numeric_slots": 7988,
   "prose_slots": 688,
   "reviewed_exceptions": [
     {
@@ -110,7 +110,7 @@
     {
       "filename": "01-SOFP-CuNonCu.xlsx",
       "fingerprint": "68b05b667c23277cc33266f7a93e6cde7d0cec513773ea269fdadcc6240062ae",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 325,
       "path": "XBRL-template-MFRS/Company/01-SOFP-CuNonCu.xlsx",
       "semantic_coverage": "complete",
@@ -122,7 +122,7 @@
     {
       "filename": "02-SOFP-OrderOfLiquidity.xlsx",
       "fingerprint": "33e9af4bfe86586bebb4fa0647991f13b333593e06e5b319bf2b906536bfb9dd",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 224,
       "path": "XBRL-template-MFRS/Company/02-SOFP-OrderOfLiquidity.xlsx",
       "semantic_coverage": "complete",
@@ -134,7 +134,7 @@
     {
       "filename": "03-SOPL-Function.xlsx",
       "fingerprint": "d3fba2f81c05fd4c73813d804df4499c75049aa0a88ed0508efaa5c5fbdad5ca",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 117,
       "path": "XBRL-template-MFRS/Company/03-SOPL-Function.xlsx",
       "semantic_coverage": "complete",
@@ -146,7 +146,7 @@
     {
       "filename": "04-SOPL-Nature.xlsx",
       "fingerprint": "15d08a2c6b536e71964603beea704d853ad4b9d1f6bbde653448606169d33d51",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 113,
       "path": "XBRL-template-MFRS/Company/04-SOPL-Nature.xlsx",
       "semantic_coverage": "complete",
@@ -158,7 +158,7 @@
     {
       "filename": "05-SOCI-BeforeTax.xlsx",
       "fingerprint": "7c3f805b6d596327604bd8276704dc311ce0eb59ddcb3d50493bb8586a0ce7a4",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 19,
       "path": "XBRL-template-MFRS/Company/05-SOCI-BeforeTax.xlsx",
       "semantic_coverage": "complete",
@@ -170,7 +170,7 @@
     {
       "filename": "06-SOCI-NetOfTax.xlsx",
       "fingerprint": "c22d444e3c8fe39797651b7d14c884e5e7b29b6756e88b037a6f8009f1c54ec8",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 18,
       "path": "XBRL-template-MFRS/Company/06-SOCI-NetOfTax.xlsx",
       "semantic_coverage": "complete",
@@ -182,7 +182,7 @@
     {
       "filename": "07-SOCF-Indirect.xlsx",
       "fingerprint": "f1df164ceb722b89b263e55c2404c30e76f6f4ad1c1a5f2f7c12b8454d246f3e",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 108,
       "path": "XBRL-template-MFRS/Company/07-SOCF-Indirect.xlsx",
       "semantic_coverage": "complete",
@@ -194,7 +194,7 @@
     {
       "filename": "08-SOCF-Direct.xlsx",
       "fingerprint": "9779169130b37fdf8d03e14efbf57c6eb84c2308fadfba523e9695132286a554",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 65,
       "path": "XBRL-template-MFRS/Company/08-SOCF-Direct.xlsx",
       "semantic_coverage": "complete",
@@ -206,19 +206,19 @@
     {
       "filename": "09-SOCIE.xlsx",
       "fingerprint": "fc6f996b2aea09ddb007cb29446d8308cdaecebcdb5e1bf0fcb9b17fcf321093",
-      "manifest_version": "2022-v1-slot-semantics-1",
-      "mapped_writable_slots": 234,
+      "manifest_version": "2022-v1-slot-semantics-2",
+      "mapped_writable_slots": 468,
       "path": "XBRL-template-MFRS/Company/09-SOCIE.xlsx",
       "semantic_coverage": "complete",
-      "slots": 394,
+      "slots": 785,
       "template_id": "mfrs-company-socie-v1",
       "worksheets": 1,
-      "writable_slots": 234
+      "writable_slots": 468
     },
     {
       "filename": "10-Notes-CorporateInfo.xlsx",
       "fingerprint": "b1f7aad8d96529afd07502d124fc734815eaea0633acb40e8eb6f1f0abe512c8",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 4,
       "path": "XBRL-template-MFRS/Company/10-Notes-CorporateInfo.xlsx",
       "semantic_coverage": "complete",
@@ -230,7 +230,7 @@
     {
       "filename": "11-Notes-AccountingPolicies.xlsx",
       "fingerprint": "80c03e1fa98561d51627624c1a4731fa11b7fc9a0558cdbc11b20a747596d9e5",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 54,
       "path": "XBRL-template-MFRS/Company/11-Notes-AccountingPolicies.xlsx",
       "semantic_coverage": "complete",
@@ -242,7 +242,7 @@
     {
       "filename": "12-Notes-ListOfNotes.xlsx",
       "fingerprint": "4c4da5bc08ca7a6a8769f071623a582632fa7750512acd9bd34f59d43619532d",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 138,
       "path": "XBRL-template-MFRS/Company/12-Notes-ListOfNotes.xlsx",
       "semantic_coverage": "complete",
@@ -254,7 +254,7 @@
     {
       "filename": "13-Notes-IssuedCapital.xlsx",
       "fingerprint": "6e68d84cbc43df0bf9c05488196e2ec90abfd3e30f3955bc277917952d86dd06",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 22,
       "path": "XBRL-template-MFRS/Company/13-Notes-IssuedCapital.xlsx",
       "semantic_coverage": "complete",
@@ -266,7 +266,7 @@
     {
       "filename": "14-Notes-RelatedParty.xlsx",
       "fingerprint": "19f419f3503ecd689c477fa0c8bc719ecd19323179902d65ce514b8b950d3905",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 32,
       "path": "XBRL-template-MFRS/Company/14-Notes-RelatedParty.xlsx",
       "semantic_coverage": "complete",
@@ -278,7 +278,7 @@
     {
       "filename": "01-SOFP-CuNonCu.xlsx",
       "fingerprint": "7ac28009d6221d97be4e6b6ef01ce66d388287c9e9cd767064708a3fc305d5fe",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 325,
       "path": "XBRL-template-MFRS/Group/01-SOFP-CuNonCu.xlsx",
       "semantic_coverage": "complete",
@@ -290,7 +290,7 @@
     {
       "filename": "02-SOFP-OrderOfLiquidity.xlsx",
       "fingerprint": "7fdac0068374ed72b341ce8dadee1f9f87e889de48a84af5ec35029695a46621",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 224,
       "path": "XBRL-template-MFRS/Group/02-SOFP-OrderOfLiquidity.xlsx",
       "semantic_coverage": "complete",
@@ -302,7 +302,7 @@
     {
       "filename": "03-SOPL-Function.xlsx",
       "fingerprint": "8cb7e7038de05df7128eba6e18c651169100cd932d2bf8e7994441a9b10ae0d7",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 117,
       "path": "XBRL-template-MFRS/Group/03-SOPL-Function.xlsx",
       "semantic_coverage": "complete",
@@ -314,7 +314,7 @@
     {
       "filename": "04-SOPL-Nature.xlsx",
       "fingerprint": "7e9301b7a253c1fe622f825e03a7b863b597cc3b7a7654ffdb83249279c33a6d",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 113,
       "path": "XBRL-template-MFRS/Group/04-SOPL-Nature.xlsx",
       "semantic_coverage": "complete",
@@ -326,7 +326,7 @@
     {
       "filename": "05-SOCI-BeforeTax.xlsx",
       "fingerprint": "2e9cb5b4d80823c59e9310bcdd200cff27dc2b7967eae906dbae98684a1f6631",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 19,
       "path": "XBRL-template-MFRS/Group/05-SOCI-BeforeTax.xlsx",
       "semantic_coverage": "complete",
@@ -338,7 +338,7 @@
     {
       "filename": "06-SOCI-NetOfTax.xlsx",
       "fingerprint": "4653f4fd209225469e4f5853443153835a130f02547d74395288159600df4bf1",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 18,
       "path": "XBRL-template-MFRS/Group/06-SOCI-NetOfTax.xlsx",
       "semantic_coverage": "complete",
@@ -350,7 +350,7 @@
     {
       "filename": "07-SOCF-Indirect.xlsx",
       "fingerprint": "98f8337976a22213a4bd9daf13640c64a52b487a2d3abb86882d76989313d9c9",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 108,
       "path": "XBRL-template-MFRS/Group/07-SOCF-Indirect.xlsx",
       "semantic_coverage": "complete",
@@ -362,7 +362,7 @@
     {
       "filename": "08-SOCF-Direct.xlsx",
       "fingerprint": "37d7de9576100089670ac10af937218b2193c7c352914384d2afbc694d159d19",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 65,
       "path": "XBRL-template-MFRS/Group/08-SOCF-Direct.xlsx",
       "semantic_coverage": "complete",
@@ -374,19 +374,19 @@
     {
       "filename": "09-SOCIE.xlsx",
       "fingerprint": "85a85bc5c0e706142cf8f05bc7d7085c0f2d2f8f8bf248bc889e6658b11ff6fd",
-      "manifest_version": "2022-v1-slot-semantics-1",
-      "mapped_writable_slots": 234,
+      "manifest_version": "2022-v1-slot-semantics-2",
+      "mapped_writable_slots": 936,
       "path": "XBRL-template-MFRS/Group/09-SOCIE.xlsx",
       "semantic_coverage": "complete",
-      "slots": 394,
+      "slots": 1567,
       "template_id": "mfrs-group-socie-v1",
       "worksheets": 1,
-      "writable_slots": 234
+      "writable_slots": 936
     },
     {
       "filename": "10-Notes-CorporateInfo.xlsx",
       "fingerprint": "ee812328499775328c15880b7220223a264d81ea7c8598c2f7a670312436878a",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 4,
       "path": "XBRL-template-MFRS/Group/10-Notes-CorporateInfo.xlsx",
       "semantic_coverage": "complete",
@@ -398,7 +398,7 @@
     {
       "filename": "11-Notes-AccountingPolicies.xlsx",
       "fingerprint": "d1e2a7d917b7fedb5e6f8a611840efbff0e4504a30c027adc96a701b5f3f7017",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 54,
       "path": "XBRL-template-MFRS/Group/11-Notes-AccountingPolicies.xlsx",
       "semantic_coverage": "complete",
@@ -410,7 +410,7 @@
     {
       "filename": "12-Notes-ListOfNotes.xlsx",
       "fingerprint": "de78541e467088c920b6a4a40fc037f0188ce34c63eafefb6b6e7f101db3b66f",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 138,
       "path": "XBRL-template-MFRS/Group/12-Notes-ListOfNotes.xlsx",
       "semantic_coverage": "complete",
@@ -422,7 +422,7 @@
     {
       "filename": "13-Notes-IssuedCapital.xlsx",
       "fingerprint": "d88275404a20b1e4af2267f0e7bb872fcb3a4fd2b0b4d1529db44a7d53a5bf19",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 22,
       "path": "XBRL-template-MFRS/Group/13-Notes-IssuedCapital.xlsx",
       "semantic_coverage": "complete",
@@ -434,7 +434,7 @@
     {
       "filename": "14-Notes-RelatedParty.xlsx",
       "fingerprint": "c4b3fea755aeb4ed1e87b4bf6f12c7b34b651f17df0d82cd031a1f413f4515ad",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 32,
       "path": "XBRL-template-MFRS/Group/14-Notes-RelatedParty.xlsx",
       "semantic_coverage": "complete",
@@ -446,7 +446,7 @@
     {
       "filename": "01-SOFP-CuNonCu.xlsx",
       "fingerprint": "6f0564cb80eee761a6470a52081d2965dd4ab15ca96336678e4064c3bd56edd5",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 197,
       "path": "XBRL-template-MPERS/Company/01-SOFP-CuNonCu.xlsx",
       "semantic_coverage": "complete",
@@ -458,7 +458,7 @@
     {
       "filename": "02-SOFP-OrderOfLiquidity.xlsx",
       "fingerprint": "71ef77db65669dc04bde8fdebb85f39d3a45ecc65b26054f3652293d2444cced",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 138,
       "path": "XBRL-template-MPERS/Company/02-SOFP-OrderOfLiquidity.xlsx",
       "semantic_coverage": "complete",
@@ -470,7 +470,7 @@
     {
       "filename": "03-SOPL-Function.xlsx",
       "fingerprint": "7464f838bfe8758b5d9d4ee8c334d4e04aee6247f20005b6b4efb69e8b64c52c",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 114,
       "path": "XBRL-template-MPERS/Company/03-SOPL-Function.xlsx",
       "semantic_coverage": "complete",
@@ -482,7 +482,7 @@
     {
       "filename": "04-SOPL-Nature.xlsx",
       "fingerprint": "c32a3e3ad80fff74547dc97884d0defe6d6e16aae9c427f8c6294881eb707685",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 109,
       "path": "XBRL-template-MPERS/Company/04-SOPL-Nature.xlsx",
       "semantic_coverage": "complete",
@@ -494,7 +494,7 @@
     {
       "filename": "05-SOCI-BeforeTax.xlsx",
       "fingerprint": "c5b8867b756bd6bd6ea28d8ef1346e6aa413d5ab5e1bbc1408bbb73fb2019e76",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 13,
       "path": "XBRL-template-MPERS/Company/05-SOCI-BeforeTax.xlsx",
       "semantic_coverage": "complete",
@@ -506,7 +506,7 @@
     {
       "filename": "06-SOCI-NetOfTax.xlsx",
       "fingerprint": "bab1f9deef8d8eef73435a6d993c0e6534fd6d8ac87db8ec180e3312c61a796d",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 11,
       "path": "XBRL-template-MPERS/Company/06-SOCI-NetOfTax.xlsx",
       "semantic_coverage": "complete",
@@ -518,7 +518,7 @@
     {
       "filename": "07-SOCF-Indirect.xlsx",
       "fingerprint": "056ac9cd26c1d601c13561642de9f20ed962cb572fa0534b77201c5e5d2ac2ca",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 72,
       "path": "XBRL-template-MPERS/Company/07-SOCF-Indirect.xlsx",
       "semantic_coverage": "complete",
@@ -530,7 +530,7 @@
     {
       "filename": "08-SOCF-Direct.xlsx",
       "fingerprint": "eed029c4356b28c52da38edaf290d8602adb22af69b16c1d3d23a4c567bbabdd",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 49,
       "path": "XBRL-template-MPERS/Company/08-SOCF-Direct.xlsx",
       "semantic_coverage": "complete",
@@ -542,19 +542,19 @@
     {
       "filename": "09-SOCIE.xlsx",
       "fingerprint": "5ec032ca23a47e6c65a5e24730683b2eddf67ded929eb3f9ea0115ce3dd3719a",
-      "manifest_version": "2022-v1-slot-semantics-1",
-      "mapped_writable_slots": 15,
+      "manifest_version": "2022-v1-slot-semantics-2",
+      "mapped_writable_slots": 30,
       "path": "XBRL-template-MPERS/Company/09-SOCIE.xlsx",
       "semantic_coverage": "complete",
-      "slots": 20,
+      "slots": 37,
       "template_id": "mpers-company-socie-v1",
       "worksheets": 1,
-      "writable_slots": 15
+      "writable_slots": 30
     },
     {
       "filename": "10-SoRE.xlsx",
       "fingerprint": "d1f4f454a99612adcc04ade77921df8a3aaaa56f73cbaaa3893042ae92c9b3f6",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 6,
       "path": "XBRL-template-MPERS/Company/10-SoRE.xlsx",
       "semantic_coverage": "complete",
@@ -566,7 +566,7 @@
     {
       "filename": "11-Notes-CorporateInfo.xlsx",
       "fingerprint": "daa74aed78af8c4f7198de6ec89c18ec19cba24d3a75bf5f2efbfcbd4948e0ca",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 4,
       "path": "XBRL-template-MPERS/Company/11-Notes-CorporateInfo.xlsx",
       "semantic_coverage": "complete",
@@ -578,7 +578,7 @@
     {
       "filename": "12-Notes-AccountingPolicies.xlsx",
       "fingerprint": "da211d661b9e845dc7108ccbab2f40047f058a1ef69fbce840dea38264d71270",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 51,
       "path": "XBRL-template-MPERS/Company/12-Notes-AccountingPolicies.xlsx",
       "semantic_coverage": "complete",
@@ -590,7 +590,7 @@
     {
       "filename": "13-Notes-ListOfNotes.xlsx",
       "fingerprint": "6a0da5ff490dd6c305a64390259547b1eb5ee2711d04d1a8f8eb7e9c26d93b6f",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 83,
       "path": "XBRL-template-MPERS/Company/13-Notes-ListOfNotes.xlsx",
       "semantic_coverage": "complete",
@@ -602,7 +602,7 @@
     {
       "filename": "14-Notes-IssuedCapital.xlsx",
       "fingerprint": "6e143a18f843887f08fdfedbb9c85465b48e537519de37efcaa4ce53cbb34e1b",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 23,
       "path": "XBRL-template-MPERS/Company/14-Notes-IssuedCapital.xlsx",
       "semantic_coverage": "complete",
@@ -614,7 +614,7 @@
     {
       "filename": "15-Notes-RelatedParty.xlsx",
       "fingerprint": "d66030f611250a3ea5a456f479df4784d031f54b07c7bd4207d1c2d08f9de991",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 32,
       "path": "XBRL-template-MPERS/Company/15-Notes-RelatedParty.xlsx",
       "semantic_coverage": "complete",
@@ -626,7 +626,7 @@
     {
       "filename": "01-SOFP-CuNonCu.xlsx",
       "fingerprint": "3bdcd2200adfc0de43e71b478d917442fc654534e986cf19330172cd80d07b98",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 197,
       "path": "XBRL-template-MPERS/Group/01-SOFP-CuNonCu.xlsx",
       "semantic_coverage": "complete",
@@ -638,7 +638,7 @@
     {
       "filename": "02-SOFP-OrderOfLiquidity.xlsx",
       "fingerprint": "b7471e202563cf0455efa1c07bccbcad2eef09b1d4b52458f9a50bc659ca2bbf",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 138,
       "path": "XBRL-template-MPERS/Group/02-SOFP-OrderOfLiquidity.xlsx",
       "semantic_coverage": "complete",
@@ -650,7 +650,7 @@
     {
       "filename": "03-SOPL-Function.xlsx",
       "fingerprint": "4fe3fe064b4dcc6754965bd1d1ccb99da105a002b0905bb71aaf24c92ce6301a",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 114,
       "path": "XBRL-template-MPERS/Group/03-SOPL-Function.xlsx",
       "semantic_coverage": "complete",
@@ -662,7 +662,7 @@
     {
       "filename": "04-SOPL-Nature.xlsx",
       "fingerprint": "62b3d9254739d4ac91e8f182fdc644b0cb685ac2fd9155131cc7583f23eea23e",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 109,
       "path": "XBRL-template-MPERS/Group/04-SOPL-Nature.xlsx",
       "semantic_coverage": "complete",
@@ -674,7 +674,7 @@
     {
       "filename": "05-SOCI-BeforeTax.xlsx",
       "fingerprint": "592495e66bd2a435cd0d097c0dd98c7ae6b6a299c2354c915ee944a335e20fd1",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 13,
       "path": "XBRL-template-MPERS/Group/05-SOCI-BeforeTax.xlsx",
       "semantic_coverage": "complete",
@@ -686,7 +686,7 @@
     {
       "filename": "06-SOCI-NetOfTax.xlsx",
       "fingerprint": "de67254f7c80eb085a31d1865ce1f12046eace795c9f45044d4b5ab4245f8997",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 11,
       "path": "XBRL-template-MPERS/Group/06-SOCI-NetOfTax.xlsx",
       "semantic_coverage": "complete",
@@ -698,7 +698,7 @@
     {
       "filename": "07-SOCF-Indirect.xlsx",
       "fingerprint": "36cc67a871f6a9fa4baed8cb1980bf22110117b095240a4ef830eb05a1e596ee",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 72,
       "path": "XBRL-template-MPERS/Group/07-SOCF-Indirect.xlsx",
       "semantic_coverage": "complete",
@@ -710,7 +710,7 @@
     {
       "filename": "08-SOCF-Direct.xlsx",
       "fingerprint": "bc3aab5ff39ba9274dea0f2e200b2c17aee0b84203602b0cdba64e9300a25b17",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 49,
       "path": "XBRL-template-MPERS/Group/08-SOCF-Direct.xlsx",
       "semantic_coverage": "complete",
@@ -722,19 +722,19 @@
     {
       "filename": "09-SOCIE.xlsx",
       "fingerprint": "03fa14d218de1f4654a3c8e62b7d9272ead24b79d8ddecd72352d1752acde678",
-      "manifest_version": "2022-v1-slot-semantics-1",
-      "mapped_writable_slots": 15,
+      "manifest_version": "2022-v1-slot-semantics-2",
+      "mapped_writable_slots": 60,
       "path": "XBRL-template-MPERS/Group/09-SOCIE.xlsx",
       "semantic_coverage": "complete",
-      "slots": 20,
+      "slots": 71,
       "template_id": "mpers-group-socie-v1",
       "worksheets": 1,
-      "writable_slots": 15
+      "writable_slots": 60
     },
     {
       "filename": "10-SoRE.xlsx",
       "fingerprint": "1b125f899f6e90b624379c5b73c3e2307ccf4ddd7fe6ac5d2b32b8475f92e208",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 6,
       "path": "XBRL-template-MPERS/Group/10-SoRE.xlsx",
       "semantic_coverage": "complete",
@@ -746,7 +746,7 @@
     {
       "filename": "11-Notes-CorporateInfo.xlsx",
       "fingerprint": "9941e7ba9db1a0d9aa66176c5339888289a9a68402ccddb2ce2587ac01ab72eb",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 4,
       "path": "XBRL-template-MPERS/Group/11-Notes-CorporateInfo.xlsx",
       "semantic_coverage": "complete",
@@ -758,7 +758,7 @@
     {
       "filename": "12-Notes-AccountingPolicies.xlsx",
       "fingerprint": "f961362e4bfb54e7df5b831b4462455a71b76823c7cf72a085cea6e46c3d52da",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 51,
       "path": "XBRL-template-MPERS/Group/12-Notes-AccountingPolicies.xlsx",
       "semantic_coverage": "complete",
@@ -770,7 +770,7 @@
     {
       "filename": "13-Notes-ListOfNotes.xlsx",
       "fingerprint": "ad2d16eaa9765682a896696831967103f59a8f4e499b22dbf90ebcded8b2aa4a",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 83,
       "path": "XBRL-template-MPERS/Group/13-Notes-ListOfNotes.xlsx",
       "semantic_coverage": "complete",
@@ -782,7 +782,7 @@
     {
       "filename": "14-Notes-IssuedCapital.xlsx",
       "fingerprint": "107d92170cdbaca324835eddfcd3ca13e1fdea62892299254f0a3fba382ca377",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 23,
       "path": "XBRL-template-MPERS/Group/14-Notes-IssuedCapital.xlsx",
       "semantic_coverage": "complete",
@@ -794,7 +794,7 @@
     {
       "filename": "15-Notes-RelatedParty.xlsx",
       "fingerprint": "cb67731fbbbca3453221054a88430d5a1dbaf83a6e79ecffeeb2f041694f6c77",
-      "manifest_version": "2022-v1-slot-semantics-1",
+      "manifest_version": "2022-v1-slot-semantics-2",
       "mapped_writable_slots": 32,
       "path": "XBRL-template-MPERS/Group/15-Notes-RelatedParty.xlsx",
       "semantic_coverage": "complete",

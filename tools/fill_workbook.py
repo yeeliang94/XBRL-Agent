@@ -1,4 +1,7 @@
 import logging
+import re
+import unicodedata
+from collections import Counter
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -89,6 +92,11 @@ class FillResult:
     # refusals in this call (e.g. {"abstract_row": 2}) — the machine-
     # countable side of the verdicts whose messages land in `errors`.
     guard_rejections: dict[str, int] = field(default_factory=dict)
+    # Stable request identities let the agent harness retain unresolved
+    # partial-write errors across later unrelated calls, while clearing an
+    # error when that same logical fact is successfully retried.
+    successful_request_keys: list[dict[str, str]] = field(default_factory=list)
+    failed_request_keys: list[dict[str, str]] = field(default_factory=list)
 
 
 # Default SOCIE evidence column for the MFRS 24-col equity-component matrix.
@@ -272,11 +280,14 @@ def fill_workbook(
     # The taxonomy/slot manifest is authoritative for writability. Workbook
     # colour remains useful for section disambiguation, but it cannot decide
     # whether an XBRL concept is allowed to carry a fact.
-    from concept_model.filing_targets import list_writable_targets
+    from concept_model.filing_targets import (
+        list_writable_targets,
+        writable_coordinates,
+    )
 
     writable_targets = list_writable_targets(template)
     writable_by_sheet = {
-        sheet: {target.row for target in writable_targets if target.sheet == sheet}
+        sheet: writable_coordinates(template, sheet) or frozenset()
         for sheet in {target.sheet for target in writable_targets}
     }
 
@@ -288,6 +299,8 @@ def fill_workbook(
     # booking guard only sees mappings that actually landed (skipped
     # writes shouldn't raise spurious warnings).
     successful_writes: list[FieldMapping] = []
+    successful_mapping_keys: list[tuple[str, str]] = []
+    resolved_cells: dict[tuple[str, int, int], object] = {}
 
     # Build section-aware label index per sheet
     label_index = _build_label_index(wb)
@@ -302,12 +315,33 @@ def fill_workbook(
         # Resolve the target row: match by label first, fall back to explicit row
         target_row = None
         if mapping.field_label:
-            target_row = _find_row_by_label(
+            allowed_rows = None
+            if writable_targets:
+                col_letter = openpyxl.utils.get_column_letter(mapping.col)
+                allowed_rows = {
+                    row for row, col in writable_by_sheet.get(mapping.sheet, ())
+                    if col == col_letter
+                }
+            resolution = _resolve_row_by_label(
                 label_index.get(mapping.sheet, []),
                 mapping.field_label,
                 section_hint=mapping.section,
+                allowed_rows=allowed_rows,
             )
+            target_row = resolution.row
             if target_row is None:
+                if resolution.error_kind == "ambiguous_label":
+                    rows = ", ".join(str(row) for row in resolution.candidate_rows)
+                    errors.append(
+                        f"Ambiguous label '{mapping.field_label}' in sheet "
+                        f"'{mapping.sheet}' matches writable rows {rows}. "
+                        "Supply the exact period/scope section from "
+                        "read_template(); no row was selected."
+                    )
+                    guard_rejections["ambiguous_label"] = (
+                        guard_rejections.get("ambiguous_label", 0) + 1
+                    )
+                    continue
                 msg = (
                     f"No matching label for '{mapping.field_label}'"
                     f"{f' (section: {mapping.section})' if mapping.section else ''}"
@@ -367,7 +401,10 @@ def fill_workbook(
         if (
             writable_targets
             and target_row != 1
-            and target_row not in writable_by_sheet.get(mapping.sheet, set())
+            and (
+                target_row,
+                openpyxl.utils.get_column_letter(mapping.col),
+            ) not in writable_by_sheet.get(mapping.sheet, frozenset())
         ):
             label_text = ws.cell(row=target_row, column=1).value
             verdict = GuardResult.retry(
@@ -428,7 +465,29 @@ def fill_workbook(
             )
             continue
 
+        target_key = (mapping.sheet, target_row, mapping.col)
+        if target_key in resolved_cells:
+            prior_value = resolved_cells[target_key]
+            if prior_value != mapping.value:
+                verdict = GuardResult.retry(
+                    f"Conflicting writes in one request for "
+                    f"{mapping.sheet}!{cell.coordinate}: {prior_value!r} and "
+                    f"{mapping.value!r}. Submit one grounded value for the "
+                    "physical slot; the later value was not written.",
+                    kind="conflicting_write",
+                )
+                errors.append(verdict.message)
+                guard_rejections[verdict.kind] = (
+                    guard_rejections.get(verdict.kind, 0) + 1
+                )
+            # An identical duplicate is an idempotent no-op, not a second
+            # field write or a second canonical projection.
+            if prior_value == mapping.value:
+                successful_mapping_keys.append(_mapping_request_keys(mapping))
+            continue
+
         cell.value = mapping.value
+        resolved_cells[target_key] = mapping.value
         fields_written += 1
         # Stash a copy with the resolved row coordinate so the double-
         # booking guard doesn't have to redo label/section matching.
@@ -441,6 +500,7 @@ def fill_workbook(
             row=target_row,
             evidence=mapping.evidence,
         ))
+        successful_mapping_keys.append(_mapping_request_keys(mapping))
 
         # Write evidence/source to a single column per sheet so notes don't repeat.
         #
@@ -489,6 +549,18 @@ def fill_workbook(
         if w.row is not None
     ]
 
+    requested_key_counts = Counter(_mapping_request_keys(m) for m in mappings)
+    successful_key_counts = Counter(successful_mapping_keys)
+    failed_mapping_keys = list((requested_key_counts - successful_key_counts).elements())
+    successful_request_keys = [
+        {"key": key, "base_key": base_key}
+        for key, base_key in successful_mapping_keys
+    ]
+    failed_request_keys = [
+        {"key": key, "base_key": base_key}
+        for key, base_key in failed_mapping_keys
+    ]
+
     if errors and fields_written == 0:
         return FillResult(
             success=False,
@@ -497,6 +569,8 @@ def fill_workbook(
             errors=errors,
             warnings=warnings,
             guard_rejections=guard_rejections,
+            successful_request_keys=successful_request_keys,
+            failed_request_keys=failed_request_keys,
         )
 
     return FillResult(
@@ -507,6 +581,8 @@ def fill_workbook(
         warnings=warnings,
         resolved_writes=resolved_writes,
         guard_rejections=guard_rejections,
+        successful_request_keys=successful_request_keys,
+        failed_request_keys=failed_request_keys,
     )
 
 
@@ -516,6 +592,10 @@ class _LabelEntry:
     normalized_label: str
     row: int
     section: str  # e.g. "non-current assets", "current liabilities"
+    # Ordered enclosing headers. Group SOCIE needs both the outer
+    # period/scope block and the nested subsection (for example
+    # "group - prior period" -> "comprehensive income").
+    section_path: tuple[str, ...] = ()
     # Bug A (2026-04-26): True when this label is itself a section-header
     # (XBRL-abstract) row. Used by `_find_row_by_label` to prefer leaves
     # over headers on duplicate labels, and by the writer to refuse writes
@@ -539,6 +619,7 @@ def _build_label_index(wb: openpyxl.Workbook) -> dict[str, list[_LabelEntry]]:
         ws = wb[name]
         entries: list[_LabelEntry] = []
         current_section = ""
+        current_block = ""
 
         # Detect header rows by row index (not label string). The legacy
         # form returned a set of normalised labels, which mis-marked any
@@ -559,16 +640,25 @@ def _build_label_index(wb: openpyxl.Workbook) -> dict[str, list[_LabelEntry]]:
             normalized = _normalize_label(str(cell_val))
             is_header = row in header_rows
             # Section transitions: every header switches the running
-            # section. Leaves that happen to share a header's label do
-            # not — they keep their parent's section because is_header
-            # is row-based.
+            # subsection. MPERS Group SOCIE block headers are outer context,
+            # so a nested "Comprehensive income" header must not erase the
+            # period/scope identity needed to route repeated labels.
             if is_header:
-                current_section = normalized
+                if _is_socie_block_section(normalized):
+                    current_block = normalized
+                    current_section = ""
+                else:
+                    current_section = normalized
+
+            section_path = tuple(
+                part for part in (current_block, current_section) if part
+            )
 
             entries.append(_LabelEntry(
                 normalized_label=normalized,
                 row=row,
-                section=current_section,
+                section=current_section or current_block,
+                section_path=section_path,
                 is_header=is_header,
             ))
 
@@ -577,8 +667,135 @@ def _build_label_index(wb: openpyxl.Workbook) -> dict[str, list[_LabelEntry]]:
 
 
 def _normalize_label(label: str) -> str:
-    """Strip leading *, whitespace, and lowercase for matching."""
-    return label.strip().lstrip("*").strip().lower()
+    """Normalize harmless Unicode/spacing variants without weakening identity."""
+    normalized = unicodedata.normalize("NFKC", label)
+    normalized = re.sub(r"[\u2010-\u2015\u2212]", "-", normalized)
+    normalized = " ".join(normalized.strip().lstrip("*").strip().split())
+    return normalized.casefold()
+
+
+def _mapping_request_keys(mapping: FieldMapping) -> tuple[str, str]:
+    """Return ``(scoped, base)`` identities for unresolved-write tracking."""
+    sheet = _normalize_label(mapping.sheet)
+    if mapping.field_label:
+        locator = f"label={_normalize_label(mapping.field_label)}"
+    else:
+        locator = f"row={mapping.row}"
+    base = f"{sheet}|col={mapping.col}|{locator}"
+    section = _normalize_label(mapping.section) if mapping.section else ""
+    return (f"{base}|section={section}", base)
+
+
+_SOCIE_BLOCK_SECTION_RE = re.compile(
+    r"^(group|company)\s*-\s*(current|prior)\s+period$",
+)
+
+
+def _is_socie_block_section(normalized: str) -> bool:
+    return bool(_SOCIE_BLOCK_SECTION_RE.fullmatch(normalized))
+
+
+def _entry_matches_section(entry: _LabelEntry, section_hint: str) -> bool:
+    hint = _normalize_label(section_hint)
+    if not hint:
+        return False
+    sections = entry.section_path or ((entry.section,) if entry.section else ())
+    if any(section == hint for section in sections):
+        return True
+    if any(section.startswith(hint) or hint.startswith(section) for section in sections):
+        return True
+
+    hint_has_current = "current" in hint
+    hint_has_noncurrent = "non-current" in hint
+    if hint_has_noncurrent:
+        return any("non-current" in section for section in sections)
+    if hint_has_current:
+        return any(
+            "current" in section and "non-current" not in section
+            for section in sections
+        )
+    return False
+
+
+@dataclass(frozen=True)
+class _LabelResolution:
+    row: Optional[int]
+    error_kind: Optional[str] = None
+    candidate_rows: tuple[int, ...] = ()
+
+
+def _resolve_row_by_label(
+    entries: list[_LabelEntry],
+    field_label: str,
+    section_hint: str = "",
+    threshold: float = 0.7,
+    allowed_rows: Optional[set[int]] = None,
+) -> _LabelResolution:
+    """Resolve one label, failing closed when context cannot make it unique."""
+    normalized = _normalize_label(field_label)
+
+    exact_matches = [e for e in entries if e.normalized_label == normalized]
+    if exact_matches and any(not e.is_header for e in exact_matches):
+        exact_matches = [e for e in exact_matches if not e.is_header]
+    if allowed_rows is not None:
+        writable_exact = [e for e in exact_matches if e.row in allowed_rows]
+        if writable_exact:
+            exact_matches = writable_exact
+
+    if exact_matches:
+        if len(exact_matches) == 1:
+            # A section hint is advisory when the label itself is unique.
+            return _LabelResolution(row=exact_matches[0].row)
+        if section_hint:
+            filtered = [
+                entry for entry in exact_matches
+                if _entry_matches_section(entry, section_hint)
+            ]
+            if len(filtered) == 1:
+                return _LabelResolution(row=filtered[0].row)
+            if filtered:
+                exact_matches = filtered
+        return _LabelResolution(
+            row=None,
+            error_kind="ambiguous_label",
+            candidate_rows=tuple(entry.row for entry in exact_matches),
+        )
+
+    candidates = [entry for entry in entries if not entry.is_header]
+    if allowed_rows is not None:
+        writable_candidates = [entry for entry in candidates if entry.row in allowed_rows]
+        if writable_candidates:
+            candidates = writable_candidates
+    if section_hint:
+        section_candidates = [
+            entry for entry in candidates
+            if _entry_matches_section(entry, section_hint)
+        ]
+        if section_candidates:
+            candidates = section_candidates
+
+    scored = sorted(
+        [
+            (
+                SequenceMatcher(None, normalized, entry.normalized_label).ratio(),
+                entry,
+            )
+            for entry in candidates
+        ],
+        key=lambda item: item[0],
+        reverse=True,
+    )
+    if not scored or scored[0][0] < threshold:
+        return _LabelResolution(row=None, error_kind="unknown_label")
+    best_score = scored[0][0]
+    near_best = [entry for score, entry in scored if best_score - score < 0.05]
+    if len(near_best) != 1:
+        return _LabelResolution(
+            row=None,
+            error_kind="ambiguous_label",
+            candidate_rows=tuple(entry.row for entry in near_best),
+        )
+    return _LabelResolution(row=near_best[0].row)
 
 
 def _writable_label_in_other_sheets(
@@ -623,68 +840,15 @@ def _find_row_by_label(
 ) -> Optional[int]:
     """Find the best matching row for a field label.
 
-    When section_hint is provided (e.g. "current"), uses it to disambiguate
-    duplicate labels by filtering to entries whose section contains the hint.
+    When section_hint is provided, it disambiguates duplicate labels against
+    their full enclosing section path. Unresolved duplicates return ``None``.
     """
-    normalized = _normalize_label(field_label)
-    section_hint_lower = (section_hint or "").strip().lower()
-
-    # Collect all exact matches
-    exact_matches = [e for e in entries if e.normalized_label == normalized]
-
-    # Bug A (2026-04-26): if the label has both a header occurrence and a
-    # leaf occurrence (the "Other fee and commission income" case on
-    # SOPL-Analysis), prefer the leaves. The header is XBRL-abstract — the
-    # writer's separate header guard will refuse it anyway, and bumping
-    # past it here lets the legitimate leaf write succeed without forcing
-    # the agent to add a section hint it shouldn't need.
-    if exact_matches and any(not e.is_header for e in exact_matches):
-        exact_matches = [e for e in exact_matches if not e.is_header]
-
-    if exact_matches:
-        if len(exact_matches) == 1:
-            return exact_matches[0].row
-
-        # Multiple matches — use section hint to disambiguate
-        if section_hint_lower:
-            # 1. Exact section match
-            filtered = [e for e in exact_matches if e.section == section_hint_lower]
-            if not filtered:
-                # 2. Section starts with hint or hint starts with section
-                filtered = [
-                    e for e in exact_matches
-                    if e.section.startswith(section_hint_lower) or section_hint_lower.startswith(e.section)
-                ]
-            if not filtered:
-                # 3. Keyword disambiguation: if hint contains "current" (but not
-                # "non-current"), prefer matches in a "current" section, and vice versa
-                hint_has_current = "current" in section_hint_lower
-                hint_has_noncurrent = "non-current" in section_hint_lower
-                if hint_has_current and not hint_has_noncurrent:
-                    filtered = [e for e in exact_matches if "current" in e.section and "non-current" not in e.section]
-                elif hint_has_noncurrent:
-                    filtered = [e for e in exact_matches if "non-current" in e.section]
-            if len(filtered) == 1:
-                return filtered[0].row
-            if filtered:
-                return filtered[0].row
-
-        # No section hint — return the first occurrence (legacy behavior)
-        return exact_matches[0].row
-
-    # No exact match — fuzzy match across all entries
-    best_score = 0.0
-    best_row = None
-    for entry in entries:
-        score = SequenceMatcher(None, normalized, entry.normalized_label).ratio()
-        if score > best_score:
-            best_score = score
-            best_row = entry.row
-
-    if best_score >= threshold and best_row is not None:
-        return best_row
-
-    return None
+    return _resolve_row_by_label(
+        entries,
+        field_label,
+        section_hint=section_hint,
+        threshold=threshold,
+    ).row
 
 
 def _coerce_facts(facts: Sequence[Union["FactWrite", dict]]) -> list[FieldMapping]:

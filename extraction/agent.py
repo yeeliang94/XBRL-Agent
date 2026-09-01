@@ -150,6 +150,7 @@ class ExtractionDeps:
         self.result_json_path: Optional[str] = None
         self.last_save_error: Optional[str] = None
         self.last_fill_errors: list[str] = []
+        self._unresolved_fill_error_state: dict[str, tuple[str, str]] = {}
         # Honest-completion path (2026-05-29): the save gate blocks on any
         # imbalance / unfilled-mandatory, but prompts (gotcha #17) tell the
         # agent that some discrepancies are genuinely in the source and it
@@ -328,6 +329,18 @@ def _check_save_gate(
     result = deps.last_verify_result
     forced_allowed = _is_force_save_allowed(deps)
 
+    # A mixed write_facts batch may retain its valid cells while refusing an
+    # ambiguous, formula, or non-writable target. Verification can still
+    # balance on the retained subset, so deterministic writer errors are an
+    # independent completion gate and are never bypassed by the force-save or
+    # honest-source-gap paths.
+    if deps.last_fill_errors:
+        return (
+            "save_result refused: unresolved write error(s) remain from "
+            "write_facts: " + "; ".join(deps.last_fill_errors)
+            + ". Correct those exact writes and retry before saving."
+        )
+
     if result is None:
         if forced_allowed:
             logger.warning(
@@ -443,6 +456,38 @@ def _check_save_gate(
     return "\n".join(parts)
 
 
+def _update_unresolved_fill_errors(deps: "ExtractionDeps", result) -> None:
+    """Merge one writer result into the persistent unresolved-error state.
+
+    A successful retry clears its exact scoped identity. If the retry changes
+    only the section hint, it also clears the sole older error for the same
+    sheet/label/column base identity. Unrelated successful writes cannot erase
+    earlier rejections.
+    """
+    state = getattr(deps, "_unresolved_fill_error_state", None)
+    if not isinstance(state, dict):
+        state = {}
+        deps._unresolved_fill_error_state = state
+    for item in getattr(result, "successful_request_keys", []):
+        key = item["key"]
+        base_key = item["base_key"]
+        state.pop(key, None)
+        same_base = [
+            existing_key for existing_key, (existing_base, _message) in state.items()
+            if existing_base == base_key
+        ]
+        if len(same_base) == 1:
+            state.pop(same_base[0], None)
+
+    error_message = "; ".join(result.errors)
+    for item in getattr(result, "failed_request_keys", []):
+        state[item["key"]] = (item["base_key"], error_message)
+
+    deps.last_fill_errors = [
+        message for _base_key, message in state.values() if message
+    ]
+
+
 def _format_verify_result(result) -> str:
     """Render a VerificationResult for the agent-visible tool output.
 
@@ -547,7 +592,10 @@ def _summarize_template(fields: list[TemplateField], compact: Optional[bool] = N
             {
                 "coord": f.coordinate,
                 "row": f.row,
-                "label": f.label[:80],
+                # Labels are writable identifiers, not display excerpts. A
+                # truncated label cannot round-trip through fill_workbook and
+                # two distinct fields may share the same prefix.
+                "label": f.label,
                 "is_data_entry": f.is_data_entry,
                 "is_abstract": getattr(f, "is_abstract", False),
                 "formula": f.formula[:60] if f.formula else None,
@@ -646,7 +694,7 @@ def _summarize_template_compact(fields: list[TemplateField]) -> str:
             info["data_entry"] += 1
         row = info["rows"].setdefault(f.row, {"label": None, "abstract": False, "cells": []})
         if f.col == 1:
-            row["label"] = f.label[:80]
+            row["label"] = f.label
             row["abstract"] = bool(f.is_abstract)
         else:
             row["cells"].append(f)
@@ -656,9 +704,8 @@ def _summarize_template_compact(fields: list[TemplateField]) -> str:
         lines.append(f"\n=== Sheet: {sheet_name} ===")
         lines.append(
             f"Total cells: {info['total']} | Data entry: {info['data_entry']} | "
-            f"Formulas: {info['formula']} | Rows: {len(info['rows'])} (one line per row; "
-            f"a FORMULA row names only its formula columns — value columns it does "
-            f"not name are data entry)"
+            f"Formulas: {info['formula']} | Rows: {len(info['rows'])} "
+            "(one line per row; FORMULA lists formula columns only)"
         )
         for row_num in sorted(info["rows"]):
             row = info["rows"][row_num]
@@ -1078,6 +1125,11 @@ def create_extraction_agent(
             facts=facts,
             filing_level=ctx.deps.filing_level,
         )
+        _update_unresolved_fill_errors(ctx.deps, result)
+        if result.errors:
+            # Even when no cell landed, the attempted extraction is newer than
+            # any prior save declaration and must be resolved before finalising.
+            ctx.deps.result_saved = False
         if result.success:
             # Sign checks are advisory and never mutate a fact. They compare
             # formula-determinable rows against the live template after label
@@ -1114,10 +1166,6 @@ def create_extraction_agent(
             ctx.deps.completed_with_flag = False
             ctx.deps.unresolved_summary = None
             ctx.deps.unresolved_reason = None
-            # Track unresolved blocking errors from this fill so the
-            # coordinator can see them even if a later save_result lands.
-            # Empty list when the fill is clean.
-            ctx.deps.last_fill_errors = list(result.errors)
             projection_warning = _project_facts_if_canonical(ctx.deps, result)
 
         if result.success:

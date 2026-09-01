@@ -15,6 +15,8 @@ section-header keyword registry must recognise them.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import openpyxl
 
 from tools.fill_workbook import fill_workbook, _build_label_index
@@ -194,3 +196,114 @@ class TestMpersGroupSocieBlockHeaders:
         assert wb["SOCIE"].cell(row=11, column=2).value == 100
         assert wb["SOCIE"].cell(row=35, column=2).value == 200
         wb.close()
+
+    def test_nested_header_does_not_erase_group_period_block_context(self, tmp_path):
+        """The real MPERS layout nests Comprehensive income in each block."""
+        path = str(tmp_path / "nested_group_socie.xlsx")
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "SOCIE"
+        ws["A3"] = "Group - Current period"
+        ws["A9"] = "Comprehensive income"
+        ws["A9"].fill = openpyxl.styles.PatternFill(
+            fill_type="solid", fgColor="1F3864",
+        )
+        ws["A11"] = "Profit (loss)"
+        ws["A27"] = "Group - Prior period"
+        ws["A33"] = "Comprehensive income"
+        ws["A33"].fill = openpyxl.styles.PatternFill(
+            fill_type="solid", fgColor="1F3864",
+        )
+        ws["A35"] = "Profit (loss)"
+        wb.save(path)
+        wb.close()
+
+        result = fill_workbook(path, str(tmp_path / "filled.xlsx"), [{
+            "sheet": "SOCIE",
+            "field_label": "Profit (loss)",
+            "section": "Group - Prior period",
+            "col": 2,
+            "value": 200,
+        }])
+
+        assert result.success, result.errors
+        wb = openpyxl.load_workbook(tmp_path / "filled.xlsx")
+        assert wb["SOCIE"]["B11"].value is None
+        assert wb["SOCIE"]["B35"].value == 200
+        wb.close()
+
+    def test_duplicate_without_context_fails_closed(self, tmp_path):
+        path = str(tmp_path / "ambiguous.xlsx")
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "SOCIE"
+        ws["A3"] = "Group - Current period"
+        ws["A11"] = "Profit (loss)"
+        ws["A27"] = "Group - Prior period"
+        ws["A35"] = "Profit (loss)"
+        wb.save(path)
+        wb.close()
+
+        result = fill_workbook(path, str(tmp_path / "filled.xlsx"), [{
+            "sheet": "SOCIE",
+            "field_label": "Profit (loss)",
+            "col": 2,
+            "value": 200,
+        }])
+
+        assert result.success is False
+        assert result.fields_written == 0
+        assert "ambiguous" in " ".join(result.errors).lower()
+
+
+def test_managed_mfrs_socie_allows_exact_later_block_coordinate(tmp_path):
+    template = (
+        Path(__file__).resolve().parent.parent
+        / "XBRL-template-MFRS/Company/09-SOCIE.xlsx"
+    )
+    output = tmp_path / "filled.xlsx"
+
+    result = fill_workbook(str(template), str(output), [{
+        "sheet": "SOCIE", "row": 35, "col": 2, "value": 116_035,
+    }])
+
+    assert result.success, result.errors
+    wb = openpyxl.load_workbook(output, data_only=False)
+    assert wb["SOCIE"]["B35"].value == 116_035
+    wb.close()
+
+
+def test_managed_socie_writability_is_coordinate_not_row_only(tmp_path):
+    template = (
+        Path(__file__).resolve().parent.parent
+        / "XBRL-template-MFRS/Company/09-SOCIE.xlsx"
+    )
+    result = fill_workbook(str(template), str(tmp_path / "filled.xlsx"), [{
+        "sheet": "SOCIE", "row": 35, "col": 25, "value": 116_035,
+    }])
+
+    assert result.success is False
+    assert result.fields_written == 0
+    assert "non-entry" in " ".join(result.errors)
+
+
+def test_live_mpers_group_socie_routes_nested_prior_block_by_section(tmp_path):
+    template = (
+        Path(__file__).resolve().parent.parent
+        / "XBRL-template-MPERS/Group/09-SOCIE.xlsx"
+    )
+    output = tmp_path / "filled.xlsx"
+
+    result = fill_workbook(str(template), str(output), [{
+        "sheet": "SOCIE",
+        "field_label": "Profit (loss)",
+        "section": "Group - Prior period",
+        "col": 2,
+        "value": 116_035,
+    }])
+
+    assert result.success, result.errors
+    wb = openpyxl.load_workbook(output, data_only=False)
+    assert wb["SOCIE"]["B11"].value is None
+    assert wb["SOCIE"]["B35"].value == 116_035
+    wb.close()

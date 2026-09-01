@@ -106,8 +106,8 @@ naming the block header exactly. The writer uses it to pick the right row.
   auto-link these across rows; you must enter each period's opening
   balance explicitly.
 - **On Group filings, every duplicate-label write needs a `section` hint.**
-  The four blocks share labels; without the hint the writer defaults to
-  block 1 and silently mis-files the other three blocks' values.
+  The four blocks share labels; without the exact block header the writer
+  rejects the write as ambiguous and does not select a row.
 - **Closing `Equity at end of period` must match SOFP `Total equity`** —
   this is the `socie_to_sofp_equity` cross-check and it runs after
   extraction.

@@ -19,6 +19,7 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 CO_SOFP = REPO / "XBRL-template-MFRS" / "Company" / "01-SOFP-CuNonCu.xlsx"
 GR_SOFP = REPO / "XBRL-template-MFRS" / "Group" / "01-SOFP-CuNonCu.xlsx"
+CO_SOCIE = REPO / "XBRL-template-MFRS" / "Company" / "09-SOCIE.xlsx"
 
 
 def _import(db_path: Path, xlsx: Path, *, group: bool) -> str:
@@ -144,6 +145,49 @@ def test_fill_workbook_resolved_writes_feed_projection(db, tmp_path):
         assert val == 555.0
     finally:
         conn.close()
+
+
+def test_later_socie_block_projects_to_prior_period_fact(tmp_path):
+    from concept_model.cell_resolver import project_writes
+    from db.schema import init_db
+    from tools.fill_workbook import fill_workbook
+
+    db_path = tmp_path / "socie.db"
+    init_db(db_path)
+    template_id = _import(db_path, CO_SOCIE, group=False)
+    conn = sqlite3.connect(db_path)
+    try:
+        run_id = conn.execute(
+            "INSERT INTO runs(created_at, pdf_filename, status, started_at) "
+            "VALUES ('t', 'x.pdf', 'running', 't')"
+        ).lastrowid
+        conn.commit()
+    finally:
+        conn.close()
+
+    filled = fill_workbook(str(CO_SOCIE), str(tmp_path / "socie.xlsx"), [{
+        "sheet": "SOCIE", "row": 35, "col": 2, "value": 116_035,
+        "evidence": "Page 12",
+    }])
+    assert filled.success, filled.errors
+
+    projection = project_writes(
+        db_path, run_id, template_id, filled.resolved_writes,
+        filing_level="company",
+    )
+    assert projection.projected == 1
+    assert not projection.has_gaps
+
+    conn = sqlite3.connect(db_path)
+    try:
+        fact = conn.execute(
+            "SELECT value, period, entity_scope FROM run_concept_facts "
+            "WHERE run_id=?",
+            (run_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert fact == (116_035.0, "PY", "Company")
 
 
 def test_project_writes_lands_facts(db):
