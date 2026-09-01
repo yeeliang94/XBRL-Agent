@@ -200,6 +200,38 @@ def test_get_run_detail_returns_full_payload(api_env):
     assert body["config"]["statements"] == ["SOFP", "SOPL"]
 
 
+def test_get_run_detail_exposes_agent_error_message(api_env):
+    client, db_path, _ = api_env
+    run_id = _seed_run(
+        db_path,
+        session_id="agent-error-detail",
+        pdf_filename="failed.pdf",
+        output_dir="/tmp/agent-error-detail",
+        status="completed_with_errors",
+        agent_models=[("SOCF", "gpt-5.4")],
+    )
+    refusal = (
+        "SOCF: workbook written but save_result never succeeded. "
+        "Last refusal: write to SOCF-Indirect!B137 was blocked."
+    )
+    with repo.db_session(db_path) as conn:
+        agent_id = conn.execute(
+            "SELECT id FROM run_agents WHERE run_id = ?", (run_id,),
+        ).fetchone()[0]
+        repo.finish_run_agent(
+            conn,
+            agent_id,
+            status="failed",
+            error_type="save_gate_refused",
+            error_message=refusal,
+        )
+
+    body = client.get(f"/api/runs/{run_id}").json()
+
+    assert body["agents"][0]["error_type"] == "save_gate_refused"
+    assert body["agents"][0]["error_message"] == refusal
+
+
 def test_get_run_detail_returns_run_level_incidents(api_env):
     client, db_path, _ = api_env
     run_id = _seed_run(

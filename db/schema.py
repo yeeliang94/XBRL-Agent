@@ -213,7 +213,12 @@ from pathlib import Path
 # agent exists or outside any one agent. `run_incidents` preserves those
 # diagnostics across reloads with separate user-safe and technical messages,
 # stable codes, stages, and correlation ids. Pure CREATE TABLE migration.
-CURRENT_SCHEMA_VERSION = 42
+#
+# v43 adds run_agents.error_message. error_type classifies a failure, but run
+# 103 showed that storing only "save_gate_refused" loses the exact terminal
+# refusal needed to diagnose which write or gate condition remained blocked.
+# Nullable additive column; legacy and successful rows remain NULL.
+CURRENT_SCHEMA_VERSION = 43
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -353,7 +358,10 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         -- v17: machine-readable failure class (item 9 taxonomy; see
         -- coordinator.py ERROR_TYPE_* constants). NULL on success and on
         -- legacy rows. No CHECK constraint on purpose.
-        error_type      TEXT
+        error_type      TEXT,
+        -- v43: exact terminal failure/refusal detail. Kept separate from the
+        -- stable error_type taxonomy and nullable for success/legacy rows.
+        error_message   TEXT
     )
     """,
 
@@ -1870,6 +1878,10 @@ _V41_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("mtool_fill_receipts", "semantic_coverage_json", "TEXT"),
 )
 
+_V43_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("run_agents", "error_message", "TEXT"),
+)
+
 _V33_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("eval_scores", "gold_fingerprint", "TEXT"),
     ("eval_benchmarks", "is_archived", "INTEGER NOT NULL DEFAULT 0"),
@@ -3237,6 +3249,40 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?",
                         (42,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        # v42 → v43: preserve the exact terminal agent failure/refusal text in
+        # addition to its stable error_type classification. Nullable additive
+        # ALTER; guarded for repeated/concurrent startup.
+        if current_version is not None and current_version < 43:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 43:
+                    for table, col_name, col_ddl in _V43_MIGRATION_COLUMNS:
+                        existing_cols = {
+                            r[1] for r in conn.execute(
+                                f"PRAGMA table_info({table})"
+                            ).fetchall()
+                        }
+                        if col_name not in existing_cols:
+                            try:
+                                conn.execute(
+                                    f"ALTER TABLE {table} ADD COLUMN "
+                                    f"{col_name} {col_ddl}"
+                                )
+                            except sqlite3.OperationalError as exc:
+                                if "duplicate column" not in str(exc).lower():
+                                    raise
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?", (43,),
                     )
                 conn.commit()
             except Exception:

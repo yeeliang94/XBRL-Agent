@@ -803,6 +803,9 @@ export interface RunAgentJson {
   // save_gate_refused, tool_exception, cancelled, no_write). Null on
   // success; optional so legacy payloads still type-check.
   error_type?: string | null;
+  // v43: exact terminal refusal/error detail for operator diagnosis. Null on
+  // success and optional for payloads produced before the migration.
+  error_message?: string | null;
   // v8 telemetry. Optional so a legacy detail payload (or an older backend)
   // still type-checks; the API client defaults them.
   token_breakdown?: AgentTokenBreakdown;

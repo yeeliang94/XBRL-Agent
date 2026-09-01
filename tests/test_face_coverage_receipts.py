@@ -199,6 +199,19 @@ def test_tool_registered_only_when_refs_present():
     assert "receipt_json" not in str(schema)
 
 
+def test_verify_reply_nudges_coverage_before_terminal_save():
+    from extraction.agent import _face_coverage_pre_save_nudge
+
+    _agent, deps = _make_agent({"face_line_refs": _REFS})
+
+    nudge = _face_coverage_pre_save_nudge(deps)
+
+    assert "Before save_result" in nudge
+    assert "submit_face_coverage" in nudge
+    deps.face_coverage_submitted = True
+    assert _face_coverage_pre_save_nudge(deps) == ""
+
+
 def test_tool_absent_without_refs():
     agent, deps = _make_agent({"face_page": 5, "note_pages": [6, 7]})
     assert "submit_face_coverage" not in _tool_names(agent)

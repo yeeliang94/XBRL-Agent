@@ -457,7 +457,7 @@ Two things are **retained but inert — do NOT "clean them up":**
   (gotcha #26); the table stays as an inert artifact so the migration chain
   replays intact. No code reads it.
 
-Migration history currently documented here through v42, with each feature
+Migration history currently documented here through v43, with each feature
 detailed in its linked gotcha: v11
 `concept_render_aliases` (#21) · v12–v13 reviewer tables `run_fact_snapshots`
 / `reviewer_flags` / `run_review_tasks` (#21) · v16 gold-eval tables +
@@ -483,7 +483,9 @@ only the numeric one) · v40 `concept_semantic_addresses` (#28, taxonomy identit
 for filing targets) · v41 `taxonomy_concepts` / `template_slots`, notes/facts
 quarantine state, and receipt filing-readiness evidence (#28) · v42
 `run_incidents` / `run_events` (durable run-level failures and the
-low-volume coordinator timeline; request/response traces remain on disk).
+low-volume coordinator timeline; request/response traces remain on disk) · v43
+`run_agents.error_message` (the exact terminal agent refusal/error alongside
+the stable `error_type` classification).
 
 ### 12. Filing level — Company vs Group
 
@@ -582,11 +584,11 @@ read as advisory only:
   `entity_name`, `reporting_period_cy`, `reporting_period_py`,
   `currency`, `scale_unit`, `consolidation_level`. Rendered into a
   `=== SCOUT-OBSERVED CONTEXT (VERIFY EACH BEFORE USING) ===` block in
-  every face and notes prompt. `scale_unit` carries especially loud
-  "verify or 1000× error" wording because a wrong unit silently
-  inflates every extracted value (gotcha #17's sibling failure mode).
-  `scale_unit="unknown"` is the safe default and the prompt block
-  upgrades from "verify" to "MUST read the header" in that case.
+  every face and notes prompt. The run's user-declared `denomination` is
+  threaded independently into both prompt families as the presentation-scale
+  contract: figures are transcribed exactly as printed and are never multiplied
+  or divided. The scout's `scale_unit` is retained only as an independent
+  disagreement check. `scale_unit="unknown"` is the safe scout default.
   Pinned by `tests/test_infopack_context_schema.py`,
   `tests/test_scout_populates_context.py`,
   `tests/test_prompts_render_context.py`.
@@ -628,6 +630,13 @@ Key invariants:
 - **Column rules:** prose rows write col B only; numeric rows (13, 14) fill
   all four value columns on group filings. Evidence always col D (Company) /
   col F (Group).
+- **Numeric presentation scale:** Sheets 13/14 receive the same declared
+  `denomination` as face statements. Values stay in the PDF's presentation
+  scale (for example RM'000 `2,500` remains `2,500`, never `2,500,000`). A
+  curated notes↔face contradiction is a failed cross-check that tips filing
+  readiness and requires human review; it is excluded from the face-facts
+  reviewer because that pass cannot re-check or safely repair note values. It
+  is never silently auto-scaled.
 - **Numeric notes also carry one HTML disclosure field.** Sheets 13/14 keep
   their numeric grid in `run_concept_facts`, but the taxonomy text-block row
   (currently row 4) is reproduced as rich HTML in `notes_cells` so it appears

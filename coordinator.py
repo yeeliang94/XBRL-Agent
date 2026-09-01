@@ -1149,9 +1149,18 @@ async def _run_single_agent_attempt(
                 error_type=ERROR_TYPE_PROJECTION_FAILED,
                 total_tokens=_tokens, total_cost=_cost,
             ))
-        salvageable = bool(deps.filled_path) and (
-            _verify_is_clean(deps.last_verify_result)
-            if require_clean_verify else True
+        unresolved_fill_errors = getattr(deps, "last_fill_errors", [])
+        has_unresolved_fill_errors = (
+            isinstance(unresolved_fill_errors, list)
+            and bool(unresolved_fill_errors)
+        )
+        salvageable = (
+            bool(deps.filled_path)
+            and not has_unresolved_fill_errors
+            and (
+                _verify_is_clean(deps.last_verify_result)
+                if require_clean_verify else True
+            )
         )
         if salvageable:
             logger.warning(
@@ -1237,14 +1246,14 @@ async def _run_single_agent_attempt(
             # monkeypatches of the module constant / env var take effect.
             wallclock_timeout=FACE_WALLCLOCK_TIMEOUT,
             token_budget=resolve_token_budget(),
+            completion_predicate=lambda current_deps: (
+                getattr(current_deps, "result_saved", False) is True
+            ),
         )
         async with agent.iter(prompt, deps=deps) as agent_run:
             await run_agent_loop(
                 agent_run, deps, loop_spec, _emit, _turn_records,
             )
-
-        # Get the final result — same RunResult as agent.run() returned
-        result = agent_run.result
 
         # Save per-statement conversation trace for debugging/audit. Pass the
         # captured per-turn metrics so the trace lines up token deltas + timing

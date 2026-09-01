@@ -479,8 +479,8 @@ def _render_scout_context_block(context: dict, suppress_scale: bool = False) -> 
 
     ``suppress_scale`` — when True, the scout-observed scale line is omitted
     because the caller renders the authoritative filer-declared denomination
-    block instead (see ``_render_denomination_block``). The notes path leaves
-    this False so its scale guidance is unchanged.
+    block instead (see ``_render_denomination_block``). Both face and notes
+    paths set this when a declared denomination is rendered separately.
     """
     entity = sanitize_source_scalar(context.get("entity_name"))
     period_cy = sanitize_source_scalar(context.get("reporting_period_cy"), 120)

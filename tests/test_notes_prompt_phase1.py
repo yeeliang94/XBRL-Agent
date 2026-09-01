@@ -83,6 +83,21 @@ def test_rendered_listofnotes_prompt_includes_schedules_rule():
     assert "SCHEDULES" in prompt or "SCHEDULE" in prompt
 
 
+def test_numeric_notes_prompt_forbids_presentation_scale_conversion():
+    """Run 103's RM'000 value must stay 2,500, never become 2,500,000."""
+    prompt = render_notes_prompt(
+        template_type=NotesTemplateType.ISSUED_CAPITAL,
+        filing_level="company",
+        inventory=[],
+        denomination="thousands",
+        scout_context={"scale_unit": "thousands"},
+    )
+
+    assert "PRESENTATION DENOMINATION" in prompt
+    assert "EXACTLY as printed" in prompt
+    assert "do NOT rescale, multiply, or divide" in prompt
+
+
 def test_subcoordinator_prompt_includes_batch_page_range():
     """Phase 1.3 — the per-sub prompt must name the batch's PDF page
     range so the model has something concrete to scope itself against."""

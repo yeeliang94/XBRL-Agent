@@ -287,6 +287,62 @@ def test_managed_socie_writability_is_coordinate_not_row_only(tmp_path):
     assert "non-entry" in " ".join(result.errors)
 
 
+def test_valid_row_with_non_value_column_blames_the_column(tmp_path):
+    template = (
+        Path(__file__).resolve().parent.parent
+        / "XBRL-template-MFRS/Company/01-SOFP-CuNonCu.xlsx"
+    )
+    result = fill_workbook(str(template), str(tmp_path / "filled.xlsx"), [{
+        "sheet": "SOFP-CuNonCu", "row": 10, "col": 4, "value": "source text",
+    }])
+
+    message = " ".join(result.errors)
+    assert result.success is False
+    assert result.fields_written == 0
+    assert "row 10" in message
+    assert "column D" in message
+    assert "row 10 ('Biological assets') is a heading" not in message
+
+
+def test_live_company_template_allows_current_and_prior_year_slots(tmp_path):
+    """Linear manifests are row-complete but not yet column-complete."""
+    template = (
+        Path(__file__).resolve().parent.parent
+        / "XBRL-template-MFRS/Company/01-SOFP-CuNonCu.xlsx"
+    )
+    output = tmp_path / "filled.xlsx"
+
+    result = fill_workbook(str(template), str(output), [
+        {"sheet": "SOFP-CuNonCu", "row": 10, "col": 2, "value": 100},
+        {"sheet": "SOFP-CuNonCu", "row": 10, "col": 3, "value": 90},
+    ])
+
+    assert result.success, result.errors
+    assert result.fields_written == 2
+    wb = openpyxl.load_workbook(output, data_only=False)
+    assert wb["SOFP-CuNonCu"]["B10"].value == 100
+    assert wb["SOFP-CuNonCu"]["C10"].value == 90
+    wb.close()
+
+
+def test_live_group_template_allows_all_four_period_scope_slots(tmp_path):
+    template = (
+        Path(__file__).resolve().parent.parent
+        / "XBRL-template-MFRS/Group/01-SOFP-CuNonCu.xlsx"
+    )
+    output = tmp_path / "filled.xlsx"
+
+    result = fill_workbook(str(template), str(output), [
+        {"sheet": "SOFP-CuNonCu", "row": 10, "col": 2, "value": 400},
+        {"sheet": "SOFP-CuNonCu", "row": 10, "col": 3, "value": 300},
+        {"sheet": "SOFP-CuNonCu", "row": 10, "col": 4, "value": 200},
+        {"sheet": "SOFP-CuNonCu", "row": 10, "col": 5, "value": 100},
+    ], filing_level="group")
+
+    assert result.success, result.errors
+    assert result.fields_written == 4
+
+
 def test_live_mpers_group_socie_routes_nested_prior_block_by_section(tmp_path):
     template = (
         Path(__file__).resolve().parent.parent
@@ -306,4 +362,51 @@ def test_live_mpers_group_socie_routes_nested_prior_block_by_section(tmp_path):
     wb = openpyxl.load_workbook(output, data_only=False)
     assert wb["SOCIE"]["B11"].value is None
     assert wb["SOCIE"]["B35"].value == 116_035
+    wb.close()
+
+
+def test_incremental_write_keeps_managed_template_writability_contract(tmp_path):
+    """A scratch workbook is mutable state, not the filing-target contract.
+
+    Run 103 reproduced this on SOCF: the first write loaded the managed
+    template manifest, while the second write loaded the scratch workbook and
+    lost that manifest.  The duplicate closing-cash label then became
+    ambiguous between the writable statement row and the protected formula
+    reconciliation row.
+    """
+    canonical_template = (
+        Path(__file__).resolve().parent.parent
+        / "XBRL-template-MFRS/Company/07-SOCF-Indirect.xlsx"
+    )
+    scratch = tmp_path / "SOCF_filled.xlsx"
+
+    first = fill_workbook(
+        str(canonical_template),
+        str(scratch),
+        [{
+            "sheet": "SOCF-Indirect",
+            "field_label": "Cash and cash equivalents at beginning of period",
+            "col": 2,
+            "value": 100,
+        }],
+    )
+    assert first.success, first.errors
+
+    second = fill_workbook(
+        str(scratch),
+        str(scratch),
+        [{
+            "sheet": "SOCF-Indirect",
+            "field_label": "Cash and cash equivalents at end of period",
+            "col": 2,
+            "value": 200,
+        }],
+        canonical_template_path=str(canonical_template),
+    )
+
+    assert second.success, second.errors
+    assert second.fields_written == 1
+    wb = openpyxl.load_workbook(scratch, data_only=False)
+    assert wb["SOCF-Indirect"]["B132"].value == 200
+    assert str(wb["SOCF-Indirect"]["B137"].value).startswith("=")
     wb.close()

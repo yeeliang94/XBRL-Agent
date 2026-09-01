@@ -122,6 +122,9 @@ class RunAgent:
     # v17 (item 9): machine-readable failure class. None on success and on
     # legacy rows.
     error_type: Optional[str] = None
+    # v43: exact terminal failure/refusal detail. Kept separate from the
+    # stable taxonomy above; None on success and legacy rows.
+    error_message: Optional[str] = None
     # Phase 7: per-agent SSE-equivalent events hydrated by get_run_detail().
     # Defaulted via field(default_factory=list) so legacy callers that build
     # RunAgent directly (e.g. fetch_run_agents) don't break — a bare `= []`
@@ -677,6 +680,7 @@ def reset_or_create_scout_agent_row(
         conn.execute(
             "UPDATE run_agents SET status = 'running', started_at = ?, "
             "ended_at = NULL, model = ?, error_type = NULL, "
+            "error_message = NULL, "
             "total_tokens = 0, total_cost = 0 "
             "WHERE id = ?",
             (_now(), model, agent_row_id),
@@ -700,6 +704,7 @@ def finish_run_agent(
     cache_read_tokens: int = 0,
     cache_write_tokens: int = 0,
     error_type: str | None = None,
+    error_message: str | None = None,
 ) -> None:
     """Mark an agent row as finished with final status + metrics.
 
@@ -719,6 +724,10 @@ def finish_run_agent(
     v17 (item 9): `error_type` is the machine-readable failure class
     (coordinator.py ERROR_TYPE_* constants). Defaults to None so legacy
     call sites keep working — same compatibility pattern as the v8 rollups.
+
+    v43: `error_message` is the exact terminal detail (for example the full
+    final save-gate refusal). It is nullable and defaults to None so existing
+    success and auxiliary-agent call sites remain compatible.
     """
     if variant is not None:
         conn.execute(
@@ -726,10 +735,10 @@ def finish_run_agent(
             "total_tokens = ?, total_cost = ?, prompt_tokens = ?, "
             "completion_tokens = ?, turn_count = ?, tool_call_count = ?, "
             "cache_read_tokens = ?, cache_write_tokens = ?, error_type = ?, "
-            "variant = ? WHERE id = ?",
+            "error_message = ?, variant = ? WHERE id = ?",
             (status, _now(), workbook_path, total_tokens, total_cost,
              prompt_tokens, completion_tokens, turn_count, tool_call_count,
-             cache_read_tokens, cache_write_tokens, error_type,
+             cache_read_tokens, cache_write_tokens, error_type, error_message,
              variant, run_agent_id),
         )
     else:
@@ -737,11 +746,12 @@ def finish_run_agent(
             "UPDATE run_agents SET status = ?, ended_at = ?, workbook_path = ?, "
             "total_tokens = ?, total_cost = ?, prompt_tokens = ?, "
             "completion_tokens = ?, turn_count = ?, tool_call_count = ?, "
-            "cache_read_tokens = ?, cache_write_tokens = ?, error_type = ? "
+            "cache_read_tokens = ?, cache_write_tokens = ?, error_type = ?, "
+            "error_message = ? "
             "WHERE id = ?",
             (status, _now(), workbook_path, total_tokens, total_cost,
              prompt_tokens, completion_tokens, turn_count, tool_call_count,
-             cache_read_tokens, cache_write_tokens, error_type,
+             cache_read_tokens, cache_write_tokens, error_type, error_message,
              run_agent_id),
         )
 
@@ -2319,6 +2329,8 @@ def fetch_run_agents(conn: sqlite3.Connection, run_id: int) -> list[RunAgent]:
             cache_write_tokens=_row_get(r, "cache_write_tokens", 0),
             # v17 (item 9) — pre-v17 rows hydrate as None.
             error_type=_row_get(r, "error_type", None),
+            # v43 — pre-v43 rows hydrate as None.
+            error_message=_row_get(r, "error_message", None),
         )
         for r in rows
     ]

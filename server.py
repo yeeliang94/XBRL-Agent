@@ -1531,6 +1531,11 @@ async def _run_reviewer_pass(
     )
     from concept_model.versioning import ensure_snapshot
 
+    # Manual re-review reads the same persisted failure set as the automatic
+    # path. Defend here as well as at automatic dispatch so a notes↔face
+    # workbook tie-out can never enter a face-only correction loop.
+    failed_checks = _reviewer_actionable_failures(failed_checks)
+
     outcome: dict = {
         "invoked": False, "writes_performed": 0, "flags_raised": 0,
         "error": None, "total_tokens": 0, "total_cost": 0.0,
@@ -3962,28 +3967,53 @@ def _run_notes_face_tieouts(merged_path: str, run_id: int,
                             filing_level: str, filing_standard: str) -> list:
     """N1: reconcile curated notes figures against their face counterparts.
 
-    Advisory + never raises — folded as ``warning`` cross-checks so a notes
-    numeric value that contradicts the face statement is visible in the
-    Cross-checks tab.
+    A curated numeric contradiction is a failed cross-check: both values cannot
+    be filing-correct, so it tips filing readiness and requires human review.
+    The wrapper itself never raises; infrastructure trouble returns no
+    fabricated contradiction.
     """
     from cross_checks.framework import CrossCheckResult
     try:
         from cross_checks.notes_face_tieouts import check_notes_face_tieouts
-        warns = check_notes_face_tieouts(
+        findings = check_notes_face_tieouts(
             merged_path, filing_level=filing_level, filing_standard=filing_standard)
-    except Exception:  # noqa: BLE001 — advisory, never fail a run
+    except Exception:  # noqa: BLE001 — never fabricate a filing contradiction
         logger.warning(
             "notes↔face tie-out check raised on run %s", run_id, exc_info=True)
         return []
     return [
         CrossCheckResult(
-            name=f"Notes↔face tie-out: {w.topic}",
-            status="warning",
+            name=(
+                f"Notes↔face tie-out: {w.topic}"
+                f"{f' [{w.scope.lower()}]' if w.scope else ''}"
+            ),
+            status=w.status,
             expected=w.face_value,
             actual=w.notes_value,
             message=w.message,
         )
-        for w in warns
+        for w in findings
+    ]
+
+
+_NOTES_FACE_TIEOUT_PREFIX = "Notes↔face tie-out:"
+
+
+def _reviewer_actionable_failures(failures: list) -> list:
+    """Return hard failures the face-facts reviewer can actually re-check.
+
+    Notes↔face tie-outs compare the merged notes workbook with face figures.
+    The face reviewer writes only canonical face facts and its ``verify_fixes``
+    tool runs the fact-based registry, which cannot re-evaluate this workbook
+    check.  Keep the tie-out failed for filing readiness and human review, but
+    never send it into a correction loop that cannot converge (and might alter
+    the correct face value to match a wrong note).
+    """
+    return [
+        failure for failure in (failures or [])
+        if not str(getattr(failure, "name", "")).startswith(
+            _NOTES_FACE_TIEOUT_PREFIX
+        )
     ]
 
 
@@ -4060,15 +4090,13 @@ def _run_socf_section_placement(merged_path: str, infopack, run_id: int) -> list
 
 
 async def _run_notes_advisory_bounded(fn, *args, run_id: int, label: str) -> list:
-    """Dispatch an advisory notes check off the event loop, bounded.
+    """Dispatch a supplemental workbook check off the event loop, bounded.
 
-    Both advisory passes (`_run_notes_citation_consistency`,
-    `_run_notes_face_tieouts`) load the full merged workbook with openpyxl —
-    blocking work that must never run on the event loop (the exact failure
-    mode ``_run_cross_checks_bounded`` exists for). Same executor + timeout
-    bound; but unlike the real cross-check pass these are advisory-only, so
-    this helper NEVER raises (invariant #10): a timeout or dispatch failure
-    logs + returns [].
+    The citation and notes↔face passes load the full merged workbook with
+    openpyxl — blocking work that must never run on the event loop (the exact
+    failure mode ``_run_cross_checks_bounded`` exists for). Same executor and
+    timeout bound. This helper NEVER raises (invariant #10): infrastructure
+    trouble cannot fabricate either an advisory or a filing contradiction.
     """
     loop = asyncio.get_running_loop()
     # Read the module global at call time so tests can monkeypatch it.
@@ -4148,8 +4176,9 @@ async def _run_notes_advisories(
     out.extend(await _run_notes_advisory_bounded(
         _run_notes_citation_consistency, merged_path, run_id,
         run_id=run_id, label="notes-citation"))
-    # N1: notes↔face numeric tie-outs — a notes figure contradicting its face
-    # counterpart surfaces as a WARN.
+    # N1: notes↔face numeric tie-outs — a curated contradiction is a hard
+    # filing-readiness failure. It is deliberately excluded from the face-only
+    # reviewer because that pass cannot re-check or safely repair note values.
     out.extend(await _run_notes_advisory_bounded(
         _run_notes_face_tieouts, merged_path, run_id,
         filing_level, filing_standard,
@@ -5858,6 +5887,7 @@ async def run_multi_agent_stream(
             notes_to_run=notes_to_run,
             filing_level=run_config.filing_level,
             filing_standard=run_config.filing_standard,
+            denomination=run_config.denomination,
             models=notes_models,
             page_hints=notes_page_hints,
             # Step 6 of the notes rich-editor plan: hand the audit run_id
@@ -6279,6 +6309,9 @@ async def run_multi_agent_stream(
                             getattr(agent_result, "error_type", None),
                             agent_result.error,
                         ),
+                        # v43: retain the exact final refusal/exception detail,
+                        # not only its stable error_type classification.
+                        error_message=agent_result.error,
                     )
                     # v8: persist the per-turn metrics rows. Telemetry is
                     # advisory — a write failure here must never fault the
@@ -6784,14 +6817,15 @@ async def run_multi_agent_stream(
                     _run_auto_notes_review(notes_outputs),
                 )
 
-        # Phase 3: if any hard cross-check failed, spawn the correction
-        # agent once. It edits the merged workbook in place; on completion
+        # Phase 3: if any reviewer-actionable hard cross-check failed, spawn
+        # the correction agent once. It edits canonical face facts; on completion
         # we re-run the full cross-check registry so the Validator tab
         # shows the post-correction state. Bounded to 1 iteration per
         # PLAN D4 — unresolved failures after this pass surface for human
         # review, they do NOT retry.
         if merge_result.success:
             hard_failures = [cr for cr in cross_check_results if cr.status == "failed"]
+            reviewer_failures = _reviewer_actionable_failures(hard_failures)
             # Phase D — the reviewer pass. Driven by OPEN conflicts in
             # run_concept_conflicts (cascade-detected partial-state /
             # parent-child disagreements) PLUS failing cross-checks. Its tools
@@ -6804,7 +6838,7 @@ async def run_multi_agent_stream(
                 c for c in load_open_conflicts(AUDIT_DB_PATH, run_id)
                 if c.get("kind") != "correction_exhausted"
             ]
-            has_issues = bool(hard_failures) or bool(canonical_conflicts)
+            has_issues = bool(reviewer_failures) or bool(canonical_conflicts)
             should_correct = has_issues
             # Reviewer auto-trigger toggle (Settings → XBRL_AUTO_REVIEW). When
             # off, a run with failures/conflicts simply finishes and the user
@@ -6822,7 +6856,7 @@ async def run_multi_agent_stream(
             # depth (light/full). Gated by its OWN toggle, independent of
             # XBRL_AUTO_REVIEW (that gates the failure-driven pass).
             spot_check_mode: Optional[str] = None
-            if not has_issues and _spot_check_enabled():
+            if not hard_failures and not has_issues and _spot_check_enabled():
                 spot_check_mode = _spot_check_mode()
                 should_correct = True
                 logger.info(
@@ -6892,7 +6926,7 @@ async def run_multi_agent_stream(
                 ]
                 correction_task = asyncio.create_task(
                     _run_reviewer_pass(
-                        failed_checks=hard_failures,
+                        failed_checks=reviewer_failures,
                         conflicts=canonical_conflicts,
                         model=reviewer_model,
                         filing_level=run_config.filing_level,

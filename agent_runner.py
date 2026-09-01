@@ -256,6 +256,12 @@ class AgentLoopSpec:
     # model-node streaming block; the node still executes when the loop
     # advances. Face/notes keep the default True.
     stream_model_nodes: bool = True
+    # Optional deterministic terminal condition evaluated after a node has
+    # fully executed and its telemetry has been captured. Face extraction uses
+    # this to stop immediately after save_result commits canonical completion,
+    # instead of paying for another open-ended model turn. Other callers keep
+    # the default graph-driven completion contract.
+    completion_predicate: Callable[[Any], bool] | None = None
 
 
 async def run_agent_loop(
@@ -538,6 +544,17 @@ async def run_agent_loop(
             prev_cache_read, prev_cache_write = cache_read_t, cache_write_t
         except Exception:  # noqa: BLE001 — telemetry is advisory
             logger.debug("per-turn telemetry capture skipped for %s", spec.agent_role)
+
+        if (
+            spec.completion_predicate is not None
+            and spec.completion_predicate(deps)
+        ):
+            logger.info(
+                "%s: deterministic completion condition reached after turn %d",
+                spec.agent_role,
+                iteration,
+            )
+            break
 
         # Item 7: token-budget check at the turn boundary, AFTER the turn's
         # telemetry is recorded so salvage paths still see the real spend.

@@ -92,6 +92,10 @@ class NotesRunConfig:
     # XBRL-template-MPERS/{Company,Group}/ with the shifted 11..15 numbering.
     # Defaults to "mfrs" so existing CLI / test callers keep working.
     filing_standard: str = "mfrs"
+    # User-declared presentation scale. Threaded independently of the scout's
+    # observation so numeric notes use the same run contract as face statements
+    # and preserve printed figures without rescaling.
+    denomination: str = "thousands"
     # Optional per-template model overrides. When present, the coordinator
     # passes ``models[template_type]`` into the agent factory instead of
     # ``model``; templates missing from this dict fall back to ``model``.
@@ -399,6 +403,7 @@ async def run_notes_extraction(
                 page_offset=page_offset,
                 launch_delay=stagger,
                 filing_standard=config.filing_standard,
+                denomination=config.denomination,
                 scout_context=scout_context,
                 run_id=config.run_id,
                 db_path=config.audit_db_path,
@@ -418,6 +423,7 @@ async def run_notes_extraction(
                 page_offset=page_offset,
                 launch_delay=stagger,
                 filing_standard=config.filing_standard,
+                denomination=config.denomination,
                 scout_context=scout_context,
                 run_id=config.run_id,
                 db_path=config.audit_db_path,
@@ -602,6 +608,7 @@ async def _run_single_notes_agent(
     page_offset: int = 0,
     launch_delay: float = 0.0,
     filing_standard: str = "mfrs",
+    denomination: str = "thousands",
     scout_context: Optional[dict] = None,
     run_id: Optional[int] = None,
     db_path: Optional[str] = None,
@@ -663,6 +670,7 @@ async def _run_single_notes_agent(
             page_hints=page_hints,
             page_offset=page_offset,
             filing_standard=filing_standard,
+            denomination=denomination,
             scout_context=scout_context,
             run_id=run_id,
             db_path=db_path,
@@ -802,6 +810,7 @@ async def _invoke_single_notes_agent_once(
     page_hints: Optional[List[int]] = None,
     page_offset: int = 0,
     filing_standard: str = "mfrs",
+    denomination: str = "thousands",
     scout_context: Optional[dict] = None,
     run_id: Optional[int] = None,
     db_path: Optional[str] = None,
@@ -825,6 +834,7 @@ async def _invoke_single_notes_agent_once(
         page_hints=page_hints,
         page_offset=page_offset,
         filing_standard=filing_standard,
+        denomination=denomination,
         scout_context=scout_context,
         run_id=run_id,
         db_path=db_path,
@@ -1184,6 +1194,7 @@ async def _run_list_of_notes_fanout(
     page_offset: int = 0,
     launch_delay: float = 0.0,
     filing_standard: str = "mfrs",
+    denomination: str = "thousands",
     scout_context: Optional[dict] = None,
     run_id: Optional[int] = None,
     db_path: Optional[str] = None,
@@ -1280,6 +1291,8 @@ async def _run_list_of_notes_fanout(
             parallel=parallel,
             page_hints=page_hints,
             page_offset=page_offset,
+            filing_standard=filing_standard,
+            denomination=denomination,
             scout_context=scout_context,
             run_id=run_id,
             db_path=db_path,

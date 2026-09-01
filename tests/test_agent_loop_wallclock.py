@@ -272,6 +272,48 @@ async def test_wallclock_none_never_fires():
         await run_agent_loop(_SlowTurningRun(), MagicMock(), spec, emit, [])
 
 
+@pytest.mark.asyncio
+async def test_completion_predicate_stops_before_another_model_request(monkeypatch):
+    """A successful canonical save is a deterministic terminal transition."""
+    monkeypatch.setattr(agent_runner, "Agent", _AgentShim)
+    deps = SimpleNamespace(result_saved=False)
+
+    class _SavingToolsNode(_ToolsNode):
+        def stream(self, _ctx):
+            node = self
+
+            class _CM:
+                async def __aenter__(self):
+                    node.executed = True
+                    deps.result_saved = True
+                    return _EmptyStream()
+
+                async def __aexit__(self, *args):
+                    return False
+
+            return _CM()
+
+    tools_node = _SavingToolsNode()
+    run = _ScriptedRun([tools_node, _ModelNode()])
+    spec = AgentLoopSpec(
+        agent_role="SOFP",
+        model="test-model",
+        turn_timeout=60.0,
+        phase_map={},
+        phase_message=lambda r, p: "",
+        stream_model_nodes=False,
+        completion_predicate=lambda current_deps: current_deps.result_saved,
+    )
+
+    async def emit(_t, _d):
+        pass
+
+    iterations = await run_agent_loop(run, deps, spec, emit, [])
+
+    assert iterations == 1
+    assert len(run._nodes) == 1, "the post-save model request must not execute"
+
+
 def test_notes_turn_timeout_reexport_survives():
     """notes/coordinator.py's `_iter_with_turn_timeout` alias is a test
     import contract (tests/test_notes_turn_timeout.py) — the item-17

@@ -178,6 +178,34 @@ def test_template_target_parsing_is_cached_per_file_revision(monkeypatch):
     assert calls == 1
 
 
+def test_numeric_manifest_uses_random_access_workbook(monkeypatch):
+    """SOCIE drift checks must not rescan read-only XML per physical slot."""
+    from types import SimpleNamespace
+
+    import concept_model.filing_targets as filing_targets
+
+    template = ROOT / "XBRL-template-MFRS/Group/09-SOCIE.xlsx"
+    calls = []
+    original = filing_targets.openpyxl.load_workbook
+
+    def recording_load_workbook(*args, **kwargs):
+        calls.append(kwargs.get("read_only"))
+        return original(*args, **kwargs)
+
+    filing_targets._targets_for_template_cached.cache_clear()
+    # Replace this module's dependency reference, not the shared openpyxl
+    # module object. Taxonomy semantics legitimately performs separate
+    # read-only workbook reads and must not pollute this focused assertion.
+    monkeypatch.setattr(filing_targets, "openpyxl", SimpleNamespace(
+        load_workbook=recording_load_workbook,
+        utils=filing_targets.openpyxl.utils,
+    ))
+    filing_targets.targets_for_template(template)
+
+    assert False in calls
+    assert True not in calls
+
+
 def test_unchanged_manifest_skips_reparse_and_historical_sweeps(
     tmp_path, monkeypatch,
 ):

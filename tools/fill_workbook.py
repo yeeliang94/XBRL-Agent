@@ -1,7 +1,6 @@
 import logging
 import re
 import unicodedata
-from collections import Counter
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -252,6 +251,7 @@ def fill_workbook(
     output_path: str,
     facts: Sequence[Union["FactWrite", dict]],
     filing_level: str = "company",
+    canonical_template_path: str | None = None,
 ) -> FillResult:
     """Apply typed cell writes to an Excel template.
 
@@ -265,6 +265,12 @@ def fill_workbook(
     same keys (the internal/test contract). Phase 3 of the rewrite removed the
     old ``fields_json`` string + its JSON-decode error branch — proposals are
     now typed end-to-end.
+
+    ``template_path`` is the mutable workbook to read.  On incremental writes
+    that is normally the agent's scratch workbook.  ``canonical_template_path``
+    identifies the immutable managed template whose filing-target manifest is
+    authoritative for writability; when omitted it defaults to
+    ``template_path`` for existing callers and synthetic workbooks.
     """
     template = Path(template_path)
     if not template.exists():
@@ -285,14 +291,42 @@ def fill_workbook(
         writable_coordinates,
     )
 
-    writable_targets = list_writable_targets(template)
-    writable_by_sheet = {
-        sheet: writable_coordinates(template, sheet) or frozenset()
+    canonical_template = Path(canonical_template_path or template_path)
+    if not canonical_template.exists():
+        return FillResult(
+            success=False,
+            fields_written=0,
+            output_path="",
+            errors=[f"Canonical template not found: {canonical_template}"],
+        )
+
+    writable_targets = list_writable_targets(canonical_template)
+    writable_rows_by_sheet = {
+        sheet: frozenset(
+            target.row for target in writable_targets if target.sheet == sheet
+        )
         for sheet in {target.sheet for target in writable_targets}
     }
+    writable_coordinates_by_sheet = {
+        sheet: writable_coordinates(canonical_template, sheet)
+        for sheet in {target.sheet for target in writable_targets}
+    }
+    linear_value_columns = (
+        frozenset({2, 3, 4, 5})
+        if filing_level == "group"
+        else frozenset({2, 3})
+    )
 
     wb = openpyxl.load_workbook(template_path)
     errors: list[str] = []
+    failed_mapping_messages: list[tuple[str, str, str]] = []
+
+    def reject(mapping: FieldMapping, message: str) -> None:
+        """Attach one deterministic refusal to its own request identity."""
+        errors.append(message)
+        key, base_key = _mapping_request_keys(mapping)
+        failed_mapping_messages.append((key, base_key, message))
+
     guard_rejections: dict[str, int] = {}
     fields_written = 0
     # RUN-REVIEW P1-1: track successful writes so the post-loop double-
@@ -307,7 +341,7 @@ def fill_workbook(
 
     for mapping in mappings:
         if mapping.sheet not in wb.sheetnames:
-            errors.append(f"Sheet '{mapping.sheet}' not found in template")
+            reject(mapping, f"Sheet '{mapping.sheet}' not found in template")
             continue
 
         ws = wb[mapping.sheet]
@@ -317,11 +351,16 @@ def fill_workbook(
         if mapping.field_label:
             allowed_rows = None
             if writable_targets:
-                col_letter = openpyxl.utils.get_column_letter(mapping.col)
-                allowed_rows = {
-                    row for row, col in writable_by_sheet.get(mapping.sheet, ())
-                    if col == col_letter
-                }
+                exact_coordinates = writable_coordinates_by_sheet.get(mapping.sheet)
+                if exact_coordinates is None:
+                    allowed_rows = writable_rows_by_sheet.get(
+                        mapping.sheet, frozenset()
+                    )
+                else:
+                    col_letter = openpyxl.utils.get_column_letter(mapping.col)
+                    allowed_rows = {
+                        row for row, col in exact_coordinates if col == col_letter
+                    }
             resolution = _resolve_row_by_label(
                 label_index.get(mapping.sheet, []),
                 mapping.field_label,
@@ -332,11 +371,12 @@ def fill_workbook(
             if target_row is None:
                 if resolution.error_kind == "ambiguous_label":
                     rows = ", ".join(str(row) for row in resolution.candidate_rows)
-                    errors.append(
+                    reject(
+                        mapping,
                         f"Ambiguous label '{mapping.field_label}' in sheet "
                         f"'{mapping.sheet}' matches writable rows {rows}. "
                         "Supply the exact period/scope section from "
-                        "read_template(); no row was selected."
+                        "read_template(); no row was selected.",
                     )
                     guard_rejections["ambiguous_label"] = (
                         guard_rejections.get("ambiguous_label", 0) + 1
@@ -361,7 +401,7 @@ def fill_workbook(
                     )
                 else:
                     msg += " Check the exact label text from read_template()."
-                errors.append(msg)
+                reject(mapping, msg)
                 continue
         elif mapping.row is not None:
             target_row = mapping.row
@@ -383,38 +423,70 @@ def fill_workbook(
                     # at the real fix: field_label matching, and cross-
                     # check against read_template if the agent believed
                     # the row was intentional.
-                    errors.append(
+                    reject(
+                        mapping,
                         f"Refusing to write to {mapping.sheet} row {target_row}: "
                         f"col A is empty — this row has no label. Use "
                         f"field_label matching, or call read_template() to "
-                        f"confirm the row is the one you intended."
+                        f"confirm the row is the one you intended.",
                     )
                     continue
         else:
-            errors.append(f"Field has neither label nor row: {mapping}")
+            reject(mapping, f"Field has neither label nor row: {mapping}")
             continue
 
         cell = ws.cell(row=target_row, column=mapping.col)
 
         # Row 1 is the existing period-metadata carve-out. Every other write
         # must resolve to a reportable primary item on an INPUT slot.
-        if (
-            writable_targets
-            and target_row != 1
-            and (
+        exact_coordinates = writable_coordinates_by_sheet.get(mapping.sheet)
+        if exact_coordinates is None:
+            coordinate_is_writable = (
+                target_row
+                in writable_rows_by_sheet.get(mapping.sheet, frozenset())
+                and mapping.col in linear_value_columns
+            )
+        else:
+            coordinate_is_writable = (
                 target_row,
                 openpyxl.utils.get_column_letter(mapping.col),
-            ) not in writable_by_sheet.get(mapping.sheet, frozenset())
-        ):
+            ) in exact_coordinates
+        if writable_targets and target_row != 1 and not coordinate_is_writable:
             label_text = ws.cell(row=target_row, column=1).value
+            row_is_writable = target_row in writable_rows_by_sheet.get(
+                mapping.sheet, frozenset()
+            )
+            if row_is_writable:
+                column_letter = openpyxl.utils.get_column_letter(mapping.col)
+                if exact_coordinates is None:
+                    allowed_columns = [
+                        openpyxl.utils.get_column_letter(col)
+                        for col in sorted(linear_value_columns)
+                    ]
+                else:
+                    allowed_columns = sorted(
+                        col for row, col in exact_coordinates if row == target_row
+                    )
+                allowed_text = ", ".join(allowed_columns) or "none"
+                message = (
+                    f"Refusing to write to {mapping.sheet}!{cell.coordinate}: "
+                    f"row {target_row} ('{label_text}') is writable, but column "
+                    f"{column_letter} is a non-entry template column for this "
+                    f"row. Use a value column shown by read_template() "
+                    f"({allowed_text})."
+                )
+            else:
+                message = (
+                    f"Refusing to write to {mapping.sheet}!{cell.coordinate}: "
+                    f"row {target_row} ('{label_text}') is a heading, formula, "
+                    "or other non-entry template row. Choose a writable "
+                    "canonical field from read_template()."
+                )
             verdict = GuardResult.retry(
-                f"Refusing to write to {mapping.sheet}!{cell.coordinate}: "
-                f"row {target_row} ('{label_text}') is a heading, formula, or "
-                "other non-entry template row. Choose a writable canonical "
-                "field from read_template().",
+                message,
                 kind="non_writable_template_slot",
             )
-            errors.append(verdict.message)
+            reject(mapping, verdict.message)
             guard_rejections[verdict.kind] = guard_rejections.get(verdict.kind, 0) + 1
             continue
 
@@ -424,7 +496,7 @@ def fill_workbook(
                 f"Refusing to overwrite formula cell {mapping.sheet}!{cell.coordinate}: {cell.value}",
                 kind="formula_cell",
             )
-            errors.append(verdict.message)
+            reject(mapping, verdict.message)
             guard_rejections[verdict.kind] = guard_rejections.get(verdict.kind, 0) + 1
             logger.warning(
                 "fill_workbook guard rejected (%s): %s!%s",
@@ -457,7 +529,7 @@ def fill_workbook(
                 f"into a catch-all to make totals reconcile.",
                 kind="abstract_row",
             )
-            errors.append(verdict.message)
+            reject(mapping, verdict.message)
             guard_rejections[verdict.kind] = guard_rejections.get(verdict.kind, 0) + 1
             logger.warning(
                 "fill_workbook guard rejected (%s): %s!%s",
@@ -476,7 +548,7 @@ def fill_workbook(
                     "physical slot; the later value was not written.",
                     kind="conflicting_write",
                 )
-                errors.append(verdict.message)
+                reject(mapping, verdict.message)
                 guard_rejections[verdict.kind] = (
                     guard_rejections.get(verdict.kind, 0) + 1
                 )
@@ -549,16 +621,13 @@ def fill_workbook(
         if w.row is not None
     ]
 
-    requested_key_counts = Counter(_mapping_request_keys(m) for m in mappings)
-    successful_key_counts = Counter(successful_mapping_keys)
-    failed_mapping_keys = list((requested_key_counts - successful_key_counts).elements())
     successful_request_keys = [
         {"key": key, "base_key": base_key}
         for key, base_key in successful_mapping_keys
     ]
     failed_request_keys = [
-        {"key": key, "base_key": base_key}
-        for key, base_key in failed_mapping_keys
+        {"key": key, "base_key": base_key, "message": message}
+        for key, base_key, message in failed_mapping_messages
     ]
 
     if errors and fields_written == 0:

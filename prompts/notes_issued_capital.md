@@ -40,8 +40,9 @@ shares and AMOUNT columns.
 
 === NOTES ===
 
-- Number-of-shares rows take integer counts. Amount rows take RM values
-  (check the unit at the top of the note — values may be in RM '000).
+- Number-of-shares rows take integer counts. Amount rows preserve the PDF's
+  presentation scale exactly. If the note shows 2,500 in RM '000, write 2,500
+  — never convert it to 2,500,000 RM. Do not multiply or divide any amount.
 - "Issued for cash under ESOS" and "Private placement" rows are only
   filled when the PDF specifically mentions these as movement causes.
   If the PDF shows a generic "Issue of shares" line, put it in

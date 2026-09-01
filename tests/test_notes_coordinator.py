@@ -142,6 +142,26 @@ async def test_coordinator_routes_per_template_model_override(tmp_path: Path):
     assert received_models[NotesTemplateType.CORP_INFO] == "default-model"
 
 
+@pytest.mark.asyncio
+async def test_coordinator_routes_declared_denomination_to_notes_agents(tmp_path: Path):
+    config = _make_config(tmp_path, [NotesTemplateType.ISSUED_CAPITAL])
+    config.denomination = "millions"
+    received = {}
+
+    async def fake_run(**kwargs):
+        received.update(kwargs)
+        return NotesAgentResult(
+            template_type=kwargs["template_type"],
+            status="succeeded",
+            workbook_path=str(tmp_path / "issued.xlsx"),
+        )
+
+    with patch("notes.coordinator._run_single_notes_agent", side_effect=fake_run):
+        await run_notes_extraction(config, infopack=None)
+
+    assert received["denomination"] == "millions"
+
+
 def test_notes_run_config_model_for_helper(tmp_path: Path):
     """Sanity check for the resolver — keeps the fallback contract documented."""
     config = NotesRunConfig(

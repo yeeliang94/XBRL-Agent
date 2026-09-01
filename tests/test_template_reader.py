@@ -321,6 +321,7 @@ def test_compact_keeps_every_row_of_the_verbose_rendering(path):
 def test_compact_preserves_abstract_data_entry_and_formula_markings():
     fields = read_template(_SOPL_FUNCTION_TEMPLATE, sheet="SOPL-Analysis-Function")
     out = _summarize_template_compact(fields)
+    assert "FORMULA lists formulas; other columns are inputs" in out
     lines = {int(l.split(":")[0].split()[1]): l for l in out.splitlines() if l.startswith("row ")}
     # Row 27 'Interest income' is the abstract header (gotcha #17) — same words.
     assert "Interest income" in lines[27]

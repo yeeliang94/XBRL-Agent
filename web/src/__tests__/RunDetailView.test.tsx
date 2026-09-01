@@ -317,6 +317,28 @@ describe("RunDetailView", () => {
     );
   });
 
+  test("failed agent renders the exact persisted terminal detail", () => {
+    const refusal = "Write to SOCF-Indirect!B137 was blocked because it is formula-owned.";
+    render(
+      <RunDetailView
+        detail={makeDetail({
+          agents: [makeAgent({
+            statement_type: "SOCF",
+            status: "failed",
+            error_type: "save_gate_refused",
+            error_message: refusal,
+          })],
+        })}
+        onDownload={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+
+    clickRunTab(/activity/i);
+    fireEvent.click(screen.getByTestId("run-detail-agent-row"));
+    expect(screen.getByTestId("agent-error-message")).toHaveTextContent(refusal);
+  });
+
   test("succeeded agents render no error_type badge", () => {
     render(
       <RunDetailView

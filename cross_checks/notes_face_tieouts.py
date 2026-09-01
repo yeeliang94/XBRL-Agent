@@ -3,9 +3,10 @@
 Numeric rows on the notes sheets are written by notes agents and never
 validated against the face statements' figures. A transcription error there
 (a wrong scale, a transposed digit) survives every existing check. This adds a
-conservative, WARN-only reconciliation: a hand-curated table of unambiguous
-notes-row ↔ face-row pairs, compared by label (never by reference-file cell
-coords — gotcha #4), flagging a mismatch as advisory.
+conservative reconciliation: a hand-curated table of unambiguous notes-row ↔
+face-row pairs, compared by label (never by reference-file cell coords —
+gotcha #4). A contradiction is a failed cross-check because both values cannot
+be filing-correct at the same time.
 
 Conservatism (gotcha #14): the pairing table is hand-curated and small. We
 never fabricate a pairing the disclosure doesn't clearly establish, and an
@@ -63,7 +64,7 @@ class TieoutPair:
 _PAIRS: list[TieoutPair] = [
     TieoutPair(
         topic="Share capital",
-        face_sheets=("SOFP-CuNonCu", "SOFP-OrderOfLiquidity"),
+        face_sheets=("SOFP-CuNonCu", "SOFP-OrdOfLiq"),
         face_labels=("share capital", "issued capital"),
         notes_sheets=("Notes-Issuedcapital", "Notes-IssuedCapital"),
         notes_labels=("balance at the end of period",),
@@ -73,10 +74,11 @@ _PAIRS: list[TieoutPair] = [
 
 
 @dataclass
-class TieoutWarning:
-    """One notes↔face numeric mismatch (always WARN — never blocks)."""
-    status: str  # always "warning"
+class TieoutFailure:
+    """One confirmed notes↔face numeric contradiction."""
+    status: str  # always "failed"
     topic: str
+    scope: str
     face_value: float
     notes_value: float
     message: str
@@ -94,22 +96,23 @@ def check_notes_face_tieouts(
     workbook_path: str,
     filing_level: str = "company",
     filing_standard: str = "mfrs",
-) -> list[TieoutWarning]:
+) -> list[TieoutFailure]:
     """Reconcile curated notes figures against their face counterparts.
 
     Compares the CY value (col B — Group CY on group filings, Company CY on
     company filings) of each paired row. A pair where both sides are present and
-    differ beyond a magnitude-scaled tolerance yields one WARN. Advisory only —
-    never raises (a read error returns []).
+    differ beyond a magnitude-scaled tolerance yields one failure. The check
+    never raises (a read error returns []) so validation infrastructure trouble
+    does not manufacture a filing contradiction.
     """
     if not Path(workbook_path).exists():
         return []
     try:
         wb = open_workbook(workbook_path)
-    except Exception:  # noqa: BLE001 — advisory, never raise
+    except Exception:  # noqa: BLE001 — validation infrastructure, never raise
         return []
     try:
-        warnings: list[TieoutWarning] = []
+        failures: list[TieoutFailure] = []
         for pair in _PAIRS:
             if pair.applies_to_standard not in ("all", filing_standard):
                 continue
@@ -130,9 +133,10 @@ def check_notes_face_tieouts(
                     continue  # one side blank → no reconciliation to make
                 if abs(face_val - notes_val) > _tolerance(face_val, notes_val):
                     scope_tag = f"{scope} " if scope else ""
-                    warnings.append(TieoutWarning(
-                        status="warning",
+                    failures.append(TieoutFailure(
+                        status="failed",
                         topic=pair.topic,
+                        scope=scope,
                         face_value=face_val,
                         notes_value=notes_val,
                         message=(
@@ -143,6 +147,6 @@ def check_notes_face_tieouts(
                             f"thousands/units mix-up)."
                         ),
                     ))
-        return warnings
+        return failures
     finally:
         wb.close()
