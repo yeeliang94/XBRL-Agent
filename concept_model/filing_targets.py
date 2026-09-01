@@ -22,7 +22,7 @@ from concept_model.parser import ConceptNode, _derive_template_id, parse_templat
 from concept_model.taxonomy_semantics import taxonomy_concept
 
 
-MANIFEST_VERSION = "2022-v1-slot-semantics-1"
+MANIFEST_VERSION = "2022-v1-slot-semantics-2"
 WRITABLE_SLOT_ROLES = frozenset({"INPUT", "MATRIX_INPUT"})
 SLOT_ROLES = frozenset({
     "PRESENTATION_ONLY",
@@ -123,41 +123,111 @@ def _reviewed_exception(path: Path, node: ConceptNode | None = None) -> str | No
 def _numeric_targets(path: Path) -> tuple[str, list[FilingTarget]]:
     tree = parse_template(str(path))
     targets: list[FilingTarget] = []
-    for node in tree.concepts:
-        rk = node.render_key
-        address = rk.get("semantic_address") or {}
-        element_id = address.get("primary_concept")
-        concept = taxonomy_concept(element_id) if element_id else None
-        slot_role = str(rk.get("slot_role") or "UNMAPPED")
-        exception = _reviewed_exception(path, node)
-        if slot_role == "UNMAPPED" and exception:
-            slot_role = "PRESENTATION_ONLY"
-        targets.append(FilingTarget(
-            template_id=tree.template_id,
-            sheet=str(rk.get("sheet") or ""),
-            row=int(rk.get("row") or 0),
-            col=rk.get("matrix_col") or rk.get("col"),
-            target_id=(
-                f"{node.concept_uuid}:{rk.get('sheet')}:{rk.get('row')}:"
-                f"{rk.get('matrix_col') or rk.get('col')}"
-            ),
-            canonical_target_id=node.concept_uuid,
-            label=node.canonical_label,
-            slot_role=slot_role,
-            value_kind="numeric",
-            taxonomy_element_id=element_id,
-            namespace_uri=concept.namespace_uri if concept else None,
-            local_name=concept.local_name if concept else None,
-            concept_role=concept.concept_role if concept else None,
-            reportable=bool(concept and concept.reportable),
-            dimensions=dict(address.get("dimensions") or {}),
-            mapping_source=(
-                "reviewed_exception" if exception and element_id
-                else "presentation_linkbase" if element_id
-                else "none"
-            ),
-            exception_code=exception,
-        ))
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=False)
+    try:
+        for node in tree.concepts:
+            rk = node.render_key
+            address = rk.get("semantic_address") or {}
+            element_id = address.get("primary_concept")
+            concept = taxonomy_concept(element_id) if element_id else None
+            base_slot_role = str(rk.get("slot_role") or "UNMAPPED")
+            exception = _reviewed_exception(path, node)
+            if base_slot_role == "UNMAPPED" and exception:
+                base_slot_role = "PRESENTATION_ONLY"
+
+            # SOCIE concepts are canonicalised in the first physical block,
+            # but their render_key owns every period/scope coordinate. The
+            # filing manifest must expose those physical slots individually;
+            # otherwise the canonical exporter can render them while the
+            # extraction writer incorrectly rejects them as non-writable.
+            physical_targets = list(rk.get("targets") or [])
+            if not physical_targets:
+                physical_targets = [{
+                    "sheet": rk.get("sheet") or "",
+                    "row": int(rk.get("row") or 0),
+                    "col": rk.get("matrix_col") or rk.get("col"),
+                }]
+
+            for physical in physical_targets:
+                sheet = str(physical.get("sheet") or rk.get("sheet") or "")
+                row = int(physical.get("row") or 0)
+                col = physical.get("col") or rk.get("matrix_col") or rk.get("col")
+                slot_role = base_slot_role
+
+                if rk.get("targets") and slot_role in {
+                    "MATRIX_INPUT", "MATRIX_FORMULA",
+                }:
+                    if not col:
+                        raise ValueError(
+                            f"SOCIE target has no column: {tree.template_id} "
+                            f"{sheet}!row {row}"
+                        )
+                    cell_value = wb[sheet].cell(
+                        row=row,
+                        column=openpyxl.utils.column_index_from_string(str(col)),
+                    ).value
+                    physical_is_formula = (
+                        isinstance(cell_value, str) and cell_value.startswith("=")
+                    )
+                    expected_is_formula = slot_role == "MATRIX_FORMULA"
+                    if physical_is_formula != expected_is_formula:
+                        raise ValueError(
+                            "SOCIE physical-slot role drift: "
+                            f"{tree.template_id} {sheet}!{col}{row} is "
+                            f"{'formula' if physical_is_formula else 'input'} but "
+                            f"its canonical slot is {slot_role}."
+                        )
+
+                dimensions = dict(address.get("dimensions") or {})
+                for dimension in ("period", "entity_scope"):
+                    if physical.get(dimension):
+                        dimensions[dimension] = str(physical[dimension])
+
+                targets.append(FilingTarget(
+                    template_id=tree.template_id,
+                    sheet=sheet,
+                    row=row,
+                    col=str(col) if col is not None else None,
+                    target_id=f"{node.concept_uuid}:{sheet}:{row}:{col}",
+                    canonical_target_id=node.concept_uuid,
+                    label=node.canonical_label,
+                    slot_role=slot_role,
+                    value_kind="numeric",
+                    taxonomy_element_id=element_id,
+                    namespace_uri=concept.namespace_uri if concept else None,
+                    local_name=concept.local_name if concept else None,
+                    concept_role=concept.concept_role if concept else None,
+                    reportable=bool(concept and concept.reportable),
+                    dimensions=dimensions,
+                    mapping_source=(
+                        "reviewed_exception" if exception and element_id
+                        else "presentation_linkbase" if element_id
+                        else "none"
+                    ),
+                    exception_code=exception,
+                ))
+    finally:
+        wb.close()
+
+    physical_slots = [(target.sheet, target.row, target.col) for target in targets]
+    if len(physical_slots) != len(set(physical_slots)):
+        raise ValueError(
+            f"Template {tree.template_id} contains duplicate physical filing slots."
+        )
+    dimensional_slots = [
+        (
+            target.canonical_target_id,
+            target.dimensions.get("period"),
+            target.dimensions.get("entity_scope"),
+        )
+        for target in targets
+        if target.dimensions.get("period")
+    ]
+    if len(dimensional_slots) != len(set(dimensional_slots)):
+        raise ValueError(
+            f"Template {tree.template_id} contains duplicate canonical "
+            "period/scope filing slots."
+        )
     return tree.template_id, targets
 
 
@@ -238,6 +308,25 @@ def writable_rows(
     return frozenset(
         target.row for target in list_writable_targets(path_value)
         if target.sheet == sheet
+    )
+
+
+def writable_coordinates(
+    path_value: str | Path, sheet: str,
+) -> frozenset[tuple[int, str]] | None:
+    """Return authoritative writable ``(row, column-letter)`` slots.
+
+    ``None`` means the workbook is synthetic or legacy and therefore has no
+    repository manifest; callers retain the established formula/style guards
+    in that case. Managed templates return an exact coordinate set so a
+    writable row can never accidentally promote an unrelated matrix column.
+    """
+    if not _is_managed_template(path_value):
+        return None
+    return frozenset(
+        (target.row, str(target.col).upper())
+        for target in list_writable_targets(path_value)
+        if target.sheet == sheet and target.col
     )
 
 
@@ -342,7 +431,12 @@ def persist_template_manifest(db_path: str | Path, path_value: str | Path) -> in
         for target in targets
         for element_id in (
             [target.taxonomy_element_id] if target.taxonomy_element_id else []
-        ) + list(target.dimensions.keys()) + list(target.dimensions.values())
+        ) + [
+            dimension_id
+            for key, value in target.dimensions.items()
+            if key not in {"period", "entity_scope"}
+            for dimension_id in (key, value)
+        ]
     }
     conn.execute("BEGIN")
     try:
@@ -820,5 +914,6 @@ __all__ = [
     "persist_template_manifest",
     "semantic_coverage_for_run",
     "targets_for_template",
+    "writable_coordinates",
     "writable_rows",
 ]

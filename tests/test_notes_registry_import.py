@@ -175,7 +175,7 @@ def test_prose_registry_persists_taxonomy_and_slot_semantics(imported_db):
             "kind": "ABSTRACT",
             "slot_role": "PRESENTATION_ONLY",
             "taxonomy_element_id": "ssmt-mfrs_FinancialReportingStatusAbstract",
-            "manifest_version": "2022-v1-slot-semantics-1",
+                "manifest_version": "2022-v1-slot-semantics-2",
         }
         assert conn.execute("SELECT COUNT(*) FROM taxonomy_concepts").fetchone()[0] > 0
         assert conn.execute(

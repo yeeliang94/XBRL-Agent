@@ -148,7 +148,7 @@ def test_filing_semantics_route_reports_versioned_writable_coverage(client):
     assert body["readiness"] == "ready"
     assert body["counts"]["writable_fields"] > 0
     assert body["counts"]["unresolved_fields"] == 0
-    assert body["manifest_versions"] == ["2022-v1-slot-semantics-1"]
+    assert body["manifest_versions"] == ["2022-v1-slot-semantics-2"]
     assert body["taxonomy_versions"] == ["SSMxT_2022v1.0"]
 
 

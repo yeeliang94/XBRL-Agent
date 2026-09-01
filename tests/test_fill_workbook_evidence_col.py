@@ -24,6 +24,7 @@ import openpyxl
 import pytest
 
 from tools.fill_workbook import fill_workbook
+from tools.template_reader import read_template
 
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -102,10 +103,20 @@ def test_socie_evidence_lands_in_source_column(
     assert src.exists(), f"missing template: {rel_path}"
     dst = _copy_template(src, tmp_path / src.name)
 
+    # This test isolates evidence placement. SOCIE labels legitimately repeat
+    # across period/scope blocks, so address the first occurrence explicitly
+    # rather than exercising the separate duplicate-label resolver contract.
+    target_row = next(
+        field.row for field in read_template(str(dst), sheet=sheet)
+        if field.col == 1
+        and field.label.strip().lstrip("*") == label
+        and not field.is_abstract
+    )
+
     facts = [
         {
             "sheet": sheet,
-            "field_label": label,
+            "row": target_row,
             "col": 2,
             "value": 12345,
             "evidence": "Page 14 statement of changes in equity",

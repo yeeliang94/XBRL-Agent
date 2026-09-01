@@ -130,6 +130,60 @@ def test_save_result_records_last_save_error_on_refusal():
     assert deps.result_saved is False
 
 
+def test_save_result_refuses_unresolved_partial_fill_errors():
+    from extraction.agent import ExtractionDeps, _check_save_gate
+    from token_tracker import TokenReport
+    from tools.verifier import VerificationResult
+
+    deps = ExtractionDeps(
+        pdf_path="/tmp/x.pdf",
+        template_path="/tmp/t.xlsx",
+        model="test-model",
+        output_dir="/tmp",
+        token_report=TokenReport(model="test-model"),
+        statement_type=StatementType.SOFP,
+        variant="CuNonCu",
+    )
+    deps.last_verify_result = VerificationResult(
+        is_balanced=True, matches_pdf=None, mismatches=[], mandatory_unfilled=[],
+    )
+    deps.last_fill_errors = ["Ambiguous label 'Lease liabilities'."]
+
+    gate_error = _check_save_gate(deps)
+
+    assert gate_error is not None
+    assert "unresolved write" in gate_error.lower()
+
+
+def test_unrelated_clean_write_does_not_clear_prior_fill_error():
+    from types import SimpleNamespace
+
+    from extraction.agent import _update_unresolved_fill_errors
+
+    deps = SimpleNamespace(
+        _unresolved_fill_error_state={},
+        last_fill_errors=[],
+    )
+    _update_unresolved_fill_errors(deps, SimpleNamespace(
+        errors=["Ambiguous label"],
+        successful_request_keys=[],
+        failed_request_keys=[{"key": "a|section=old", "base_key": "a"}],
+    ))
+    _update_unresolved_fill_errors(deps, SimpleNamespace(
+        errors=[],
+        successful_request_keys=[{"key": "b|section=", "base_key": "b"}],
+        failed_request_keys=[],
+    ))
+    assert deps.last_fill_errors == ["Ambiguous label"]
+
+    _update_unresolved_fill_errors(deps, SimpleNamespace(
+        errors=[],
+        successful_request_keys=[{"key": "a|section=correct", "base_key": "a"}],
+        failed_request_keys=[],
+    ))
+    assert deps.last_fill_errors == []
+
+
 # ---------------------------------------------------------------------------
 # Side 3: fill_workbook invalidates a stale save (a fresh write must force
 # the agent to re-call save_result before the coordinator accepts it)

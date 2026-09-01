@@ -237,7 +237,7 @@ def test_a_fill_writes_exactly_one_receipt(client):
     assert r["translation_version"] == "identity-1"
     assert r["readiness_classification"] == "ready"
     assert r["taxonomy_version"] == "SSMxT_2022v1.0"
-    assert r["manifest_versions"] == ["2022-v1-slot-semantics-1"]
+    assert r["manifest_versions"] == ["2022-v1-slot-semantics-2"]
     assert r["field_semantics"]["counts"]["unresolved_fields"] == 0
     assert r["column_map"]
     assert r["snapshot"]["fact_count"] == 4

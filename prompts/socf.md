@@ -105,6 +105,9 @@ For **Direct** method (82 rows, 71 data-entry):
   physically sits in the source statement — before or after the "Operating
   profit/surplus before changes in working capital" subtotal. Locate that
   subtotal first, then classify each line by its position relative to it.
+  When a template label occurs in more than one section, pass the exact
+  template section in `section`; the writer rejects unresolved duplicates
+  instead of choosing the first row.
 
 - **When several source lines fold into one template row, sum them with the
   calculator before writing, and re-check the section subtotal after.** The

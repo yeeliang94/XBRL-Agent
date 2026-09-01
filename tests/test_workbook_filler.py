@@ -166,6 +166,35 @@ def test_fill_duplicate_label_both_sections(tmp_path):
     wb.close()
 
 
+def test_unique_exact_label_ignores_advisory_wrong_section(tmp_path):
+    template = _make_template(tmp_path)
+    output = str(tmp_path / "filled.xlsx")
+
+    result = fill_workbook(str(template), output, [{
+        "sheet": "Sheet",
+        "field_label": "Right-of-use assets",
+        "section": "Operating Activities",
+        "col": 2,
+        "value": 100,
+    }])
+
+    assert result.success, result.errors
+    assert result.fields_written == 1
+
+
+def test_conflicting_same_cell_writes_are_not_clean(tmp_path):
+    template = _make_template(tmp_path)
+    output = str(tmp_path / "filled.xlsx")
+
+    result = fill_workbook(str(template), output, [
+        {"sheet": "Sheet", "field_label": "Right-of-use assets", "col": 2, "value": 100},
+        {"sheet": "Sheet", "field_label": "Right-of-use assets", "col": 2, "value": 200},
+    ])
+
+    assert result.fields_written == 1
+    assert "conflict" in " ".join(result.errors).lower()
+
+
 def test_fill_workbook_preserves_formulas(tmp_path):
     template = _make_template(tmp_path)
     output = str(tmp_path / "filled.xlsx")
