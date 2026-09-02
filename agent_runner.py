@@ -23,7 +23,7 @@ import json
 import logging
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, List, Mapping, Optional, TypeVar
 
 from pydantic_ai import Agent
@@ -40,6 +40,71 @@ from pricing import estimate_cost
 from usage_metrics import split_usage
 
 logger = logging.getLogger(__name__)
+
+REASONING_SUMMARY_RETENTION_CHARS = 12_000
+
+
+@dataclass
+class ReasoningBlockAccumulator:
+    """Bound one streamed provider-reasoning block for live and stored use."""
+
+    retention_chars: int = REASONING_SUMMARY_RETENTION_CHARS
+    active: bool = False
+    _started_at: float = 0.0
+    _chunks: list[str] = field(default_factory=list)
+    _full_length: int = 0
+    _retained_length: int = 0
+    _metadata_emitted: bool = False
+
+    def add_delta(self, chunk: str) -> bool:
+        """Add a chunk; return True on the first user-visible delta."""
+        started = not self.active
+        if started:
+            self.active = True
+            self._started_at = time.monotonic()
+        self._full_length += len(chunk)
+        if self._retained_length < self.retention_chars:
+            retained = chunk[: self.retention_chars - self._retained_length]
+            self._chunks.append(retained)
+            self._retained_length += len(retained)
+        should_emit_metadata = bool(chunk) and not self._metadata_emitted
+        if should_emit_metadata:
+            self._metadata_emitted = True
+        return should_emit_metadata
+
+    def finish(self) -> dict[str, Any] | None:
+        """Finish the active block, return its summary payload, and reset."""
+        if not self.active:
+            return None
+        payload = {
+            "summary": "".join(self._chunks),
+            "full_length": self._full_length,
+            "duration_ms": int((time.monotonic() - self._started_at) * 1000),
+        }
+        self.active = False
+        self._started_at = 0.0
+        self._chunks.clear()
+        self._full_length = 0
+        self._retained_length = 0
+        self._metadata_emitted = False
+        return payload
+
+
+def reasoning_event_metadata(model: Any, role: str) -> dict[str, Any]:
+    """Safe provenance attached to every readable reasoning block."""
+    from model_settings import describe_model_runtime
+
+    runtime = describe_model_runtime(model, role=role)
+    is_summary = (
+        runtime.get("transport") == "responses"
+        and runtime.get("reasoning_summary_visibility") not in (None, "off", "unknown")
+    )
+    return {
+        "kind": "summary" if is_summary else "provider_thinking",
+        "provider": runtime.get("provider", "unknown"),
+        "model": runtime.get("model", "unknown"),
+        "transport": runtime.get("transport", "automatic_or_unknown"),
+    }
 
 
 def build_agent_event(
@@ -291,6 +356,7 @@ async def run_agent_loop(
     """
     tool_start_times: dict[str, float] = {}
     thinking_counter = 0
+    reasoning_meta = reasoning_event_metadata(spec.model, str(spec.agent_role))
     iteration = 0
     call_tools_seen = 0
     # Items 6/17: whole-run wall-clock anchor for spec.wallclock_timeout.
@@ -452,33 +518,38 @@ async def run_agent_loop(
 
         elif Agent.is_model_request_node(node) and spec.stream_model_nodes:
             thinking_id = f"{spec.agent_role}_think_{thinking_counter}"
-            thinking_active = False
+            reasoning_block = ReasoningBlockAccumulator()
             async with node.stream(agent_run.ctx) as model_stream:
                 async for event in _inner(model_stream):
                     if isinstance(event, PartDeltaEvent):
                         delta = event.delta
                         if isinstance(delta, TextPartDelta):
-                            if thinking_active:
+                            completed_block = reasoning_block.finish()
+                            if completed_block is not None:
                                 await emit("thinking_end", {
                                     "thinking_id": thinking_id,
-                                    "summary": "",
-                                    "full_length": 0,
+                                    **completed_block,
+                                    **reasoning_meta,
                                 })
-                                thinking_active = False
                                 thinking_counter += 1
                                 thinking_id = f"{spec.agent_role}_think_{thinking_counter}"
                             await emit("text_delta", {"content": delta.content_delta})
                         elif isinstance(delta, ThinkingPartDelta):
-                            thinking_active = True
-                            await emit("thinking_delta", {
-                                "content": delta.content_delta or "",
+                            chunk = delta.content_delta or ""
+                            started_block = reasoning_block.add_delta(chunk)
+                            delta_payload = {
+                                "content": chunk,
                                 "thinking_id": thinking_id,
-                            })
-            if thinking_active:
+                            }
+                            if started_block:
+                                delta_payload.update(reasoning_meta)
+                            await emit("thinking_delta", delta_payload)
+            completed_block = reasoning_block.finish()
+            if completed_block is not None:
                 await emit("thinking_end", {
                     "thinking_id": thinking_id,
-                    "summary": "",
-                    "full_length": 0,
+                    **completed_block,
+                    **reasoning_meta,
                 })
                 thinking_counter += 1
 
@@ -515,6 +586,14 @@ async def run_agent_loop(
                 "prompt_tokens": d_prompt,
                 "completion_tokens": d_completion,
                 "thinking_tokens": d_thinking,
+                "usage_status": (
+                    "complete" if d_total > 0
+                    else "unavailable" if node_kind == "model_request"
+                    else "not_applicable"
+                ),
+                "provider": reasoning_meta.get("provider"),
+                "model": reasoning_meta.get("model"),
+                "transport": reasoning_meta.get("transport"),
                 "total_tokens": d_total,
                 "cumulative_tokens": total,
                 "cost_estimate": estimate_cost(d_prompt, d_completion, d_thinking, spec.model),

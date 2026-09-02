@@ -25,6 +25,8 @@ const SETTINGS = {
   entity_memory: true,
   local_override_keys: ["model", "proxy_url", "api_key"],
   thinking_levels: { SOFP: "high" },
+  reasoning_summary: "auto",
+  reasoning_summary_choices: ["off", "auto", "concise", "detailed"],
   default_models: {
     scout: "anthropic.claude-sonnet-4-5",
     SOFP: "openai.gpt-5.6",
@@ -90,6 +92,19 @@ describe("thinking level in Settings", () => {
     );
   });
 
+  test("one action migrates every role to GPT-5.6 Luna and enables summaries", async () => {
+    fireEvent.click(await screen.findByRole("button", {
+      name: /use gpt-5\.6 luna for every role/i,
+    }));
+    const body = await save();
+    expect(body.model).toBe("openai.global.gpt-5.6-luna");
+    expect(body.reasoning_summary).toBe("auto");
+    const overrides = body.default_models as Record<string, string>;
+    expect(overrides.scout).toBe("");
+    expect(overrides.SOFP).toBe("");
+    expect(overrides.LIST_OF_NOTES).toBe("");
+  });
+
   test("a role can return to following the global model", async () => {
     fireEvent.click(await screen.findByRole("button", {
       name: /customize role-specific models/i,
@@ -130,6 +145,14 @@ describe("thinking level in Settings", () => {
     fireEvent.change(select, { target: { value: "low" } });
     const body = await save();
     expect((body.thinking_levels as Record<string, string>).scout).toBe("low");
+  });
+
+  test("summary visibility is separate from thinking level", async () => {
+    const summary = await screen.findByLabelText(/provider reasoning summary visibility/i);
+    fireEvent.change(summary, { target: { value: "detailed" } });
+    const body = await save();
+    expect(body.reasoning_summary).toBe("detailed");
+    expect((body.thinking_levels as Record<string, string>).SOFP).toBe("high");
   });
 
   test("clearing a row submits an empty value rather than omitting the key", async () => {

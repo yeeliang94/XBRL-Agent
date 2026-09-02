@@ -41,6 +41,7 @@ import fitz  # PyMuPDF
 from bs4 import BeautifulSoup, Tag
 
 from model_settings import build_model_settings, configured_role_thinking_level
+from usage_metrics import split_usage
 from notes.source_snippets import source_html_path_for
 
 logger = logging.getLogger(__name__)
@@ -106,6 +107,8 @@ class TranscribeResult:
     pages_html: dict[int, str]
     failed_pages: list[int] = field(default_factory=list)
     usage: dict[str, int] = field(default_factory=dict)
+    page_usage: dict[int, dict[str, int]] = field(default_factory=dict)
+    reasoning_summaries: dict[int, str] = field(default_factory=dict)
 
 
 def normalize_transcription(html: str) -> str:
@@ -144,7 +147,27 @@ def pdf_has_text_layer(pdf_path: str | Path) -> bool:
     return chars >= _TEXT_LAYER_MIN_CHARS
 
 
-async def _call_model(model: Any, page_no: int, png_bytes: bytes) -> tuple[str, dict]:
+def _provider_reasoning_summary(result: Any) -> str:
+    """Extract only reasoning content the provider returned to the client."""
+    try:
+        from pydantic_ai.messages import ModelResponse, ThinkingPart
+
+        chunks = [
+            part.content
+            for message in result.all_messages()
+            if isinstance(message, ModelResponse)
+            for part in message.parts
+            if isinstance(part, ThinkingPart) and part.content
+        ]
+        return "\n\n".join(chunks)[:12_000]
+    except Exception:  # noqa: BLE001 — summary telemetry is advisory
+        logger.warning("Could not extract sidecar reasoning summary", exc_info=True)
+        return ""
+
+
+async def _call_model(
+    model: Any, page_no: int, png_bytes: bytes,
+) -> tuple[str, dict[str, int], str]:
     """One page → HTML via a one-shot pydantic-ai agent run.
 
     Kept tiny and un-unit-tested on purpose — everything above this seam is
@@ -164,10 +187,17 @@ async def _call_model(model: Any, page_no: int, png_bytes: bytes) -> tuple[str, 
         [TRANSCRIBE_PROMPT, BinaryContent(data=png_bytes, media_type="image/png")]
     )
     usage = result.usage  # property, not a method (gotcha #2)
-    return str(result.output), {
-        "in": getattr(usage, "input_tokens", 0) or 0,
-        "out": getattr(usage, "output_tokens", 0) or 0,
-    }
+    metrics = split_usage(usage)
+    return (
+        str(result.output),
+        {
+            "prompt_tokens": metrics.prompt_tokens,
+            "completion_tokens": metrics.completion_tokens,
+            "thinking_tokens": metrics.thinking_tokens,
+            "total_tokens": metrics.total_tokens,
+        },
+        _provider_reasoning_summary(result),
+    )
 
 
 def _render_pages(pdf_path: str | Path, pages: list[int]) -> dict[int, bytes]:
@@ -193,7 +223,7 @@ async def transcribe_pages(
     concurrency: int = TRANSCRIBE_CONCURRENCY,
     page_timeout_s: float = PAGE_TIMEOUT_S,
     overall_timeout_s: float = OVERALL_TIMEOUT_S,
-    _caller: Optional[Callable[[int, bytes], Awaitable[tuple[str, dict]]]] = None,
+    _caller: Optional[Callable[[int, bytes], Awaitable[tuple]]] = None,
     on_progress: Optional[Callable[[int, int, int, bool], None]] = None,
 ) -> TranscribeResult:
     """Render + transcribe ``pages`` (1-based). One retry per page, then skip.
@@ -221,12 +251,25 @@ async def transcribe_pages(
             try:
                 for attempt in (1, 2):  # max-1-retry, like every notes agent
                     try:
-                        html, usage = await asyncio.wait_for(
+                        response = await asyncio.wait_for(
                             caller(page_no, png), timeout=page_timeout_s,
                         )
+                        if len(response) == 3:
+                            html, usage, reasoning_summary = response
+                        else:
+                            html, usage = response
+                            reasoning_summary = ""
                         result.pages_html[page_no] = html
+                        result.page_usage[page_no] = {
+                            str(k): int(v or 0)
+                            for k, v in (usage or {}).items()
+                        }
                         for k, v in (usage or {}).items():
                             totals[k] = totals.get(k, 0) + v
+                        if reasoning_summary:
+                            result.reasoning_summaries[page_no] = str(
+                                reasoning_summary
+                            )[:12_000]
                         return
                     except asyncio.CancelledError:
                         raise  # overall deadline / caller cancellation — propagate

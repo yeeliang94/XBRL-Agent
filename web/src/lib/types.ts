@@ -136,6 +136,10 @@ export interface StatusData {
 export interface ThinkingDeltaData {
   content: string;       // Incremental thinking text chunk
   thinking_id: string;   // Groups chunks into blocks
+  kind?: "summary" | "provider_thinking" | "raw_open_weight" | "unavailable";
+  provider?: string;
+  model?: string;
+  transport?: string;
 }
 
 export interface ThinkingEndData {
@@ -143,6 +147,10 @@ export interface ThinkingEndData {
   summary: string;        // One-line summary (first ~80 chars)
   full_length: number;    // Character count of full thinking block
   duration_ms?: number;   // Actual reasoning time (server-measured, optional for backwards-compat)
+  kind?: "summary" | "provider_thinking" | "raw_open_weight" | "unavailable";
+  provider?: string;
+  model?: string;
+  transport?: string;
 }
 
 export interface TextDeltaData {
@@ -332,7 +340,22 @@ export interface PdfSidecarData {
   pages_requested?: number;
   page_cap?: number;
   failed_pages?: number[];
-  usage?: { in?: number; out?: number };
+  usage?: {
+    in?: number;
+    out?: number;
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    thinking_tokens?: number;
+    total_tokens?: number;
+  };
+  model_calls?: Array<{
+    page: number;
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    thinking_tokens?: number;
+    total_tokens?: number;
+  }>;
+  reasoning_summary?: string;
 }
 
 export interface CompleteData {
@@ -463,6 +486,10 @@ export interface ReasoningBlock {
   endedAt: number | null;
   duration_ms: number | null;
   isComplete: boolean;
+  kind?: "summary" | "provider_thinking" | "raw_open_weight" | "unavailable";
+  provider?: string;
+  model?: string;
+  transport?: string;
 }
 
 export interface ResultJsonData {
@@ -798,6 +825,7 @@ export interface RunAgentJson {
    *  a published one (config/models.json `pricing_unconfirmed`). Optional so
    *  legacy payloads still type-check; absent reads as confirmed. */
   pricing_unconfirmed?: boolean;
+  usage_status?: "complete" | "partial" | "unavailable" | string;
   // v17 (item 9): machine-readable failure class (turn_timeout,
   // iteration_capped, wallclock, token_budget_exceeded, projection_failed,
   // save_gate_refused, tool_exception, cancelled, no_write). Null on
@@ -827,6 +855,13 @@ export interface TelemetryRollupJson {
   // v15 cache telemetry rollup. Optional for back-compat; defaulted to 0.
   cache_read_tokens?: number;
   cache_write_tokens?: number;
+  coverage?: "complete" | "partial" | "unavailable";
+  call_count?: number;
+  successful_calls?: number;
+  failed_calls?: number;
+  calls_with_unavailable_usage?: number;
+  calls_with_unconfirmed_pricing?: number;
+  cache_adjusted_cost?: number | null;
 }
 
 // v8 conversation trace served by GET /api/runs/{id}/agents/{stmt}/trace.

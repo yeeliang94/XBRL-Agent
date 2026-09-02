@@ -99,7 +99,12 @@ def _fake_caller(fail_pages=(), fail_times=99):
         calls[page_no] = calls.get(page_no, 0) + 1
         if page_no in fail_pages and calls[page_no] <= fail_times:
             raise RuntimeError(f"boom page {page_no}")
-        return f"<p>page {page_no}</p>", {"in": 10, "out": 5}
+        return f"<p>page {page_no}</p>", {
+            "prompt_tokens": 10,
+            "completion_tokens": 4,
+            "thinking_tokens": 1,
+            "total_tokens": 15,
+        }
 
     return call, calls
 
@@ -112,8 +117,27 @@ def test_transcribe_pages_returns_html_per_page(tmp_path, monkeypatch):
     assert set(result.pages_html) == {1, 3}
     assert result.pages_html[1] == "<p>page 1</p>"
     assert result.failed_pages == []
-    assert result.usage == {"in": 20, "out": 10}
+    assert result.usage == {
+        "prompt_tokens": 20,
+        "completion_tokens": 8,
+        "thinking_tokens": 2,
+        "total_tokens": 30,
+    }
     assert calls == {1: 1, 3: 1}
+
+
+def test_transcribe_pages_collects_provider_reasoning_summary(tmp_path):
+    pdf = _make_pdf(tmp_path / "scan.pdf", pages=1)
+
+    async def call(page_no, _png):
+        return "<p>page</p>", {"total_tokens": 3}, "Located the note table."
+
+    result = asyncio.run(
+        transcribe_pages(pdf, [1], model=object(), _caller=call)
+    )
+
+    assert result.reasoning_summaries == {1: "Located the note table."}
+    assert result.page_usage == {1: {"total_tokens": 3}}
 
 
 def test_transcribe_pages_reports_bounded_progress(tmp_path):

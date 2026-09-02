@@ -80,12 +80,13 @@ def test_the_unconfirmed_flag_survives_prefix_stripping(model_id):
 # 2. the rates themselves
 # --------------------------------------------------------------------------
 
-# Vendor list prices, checked 2026-08-03 against the OpenAI API model docs and
-# ai.google.dev/gemini-api/docs/pricing. Update BOTH this table and
+# Vendor list prices. GPT-5.6 was checked 2026-09-02 against the OpenAI API
+# model docs; the remaining entries retain their dates in config/models.json.
+# Update BOTH this table and
 # config/models.json in the same commit — the point of pinning them is that a
 # rate cannot drift in one place only.
 _EXPECTED_RATES = {
-    "openai.global.gpt-5.6": (5.0, 30.0),         # alias of gpt-5.6-sol
+    "openai.global.gpt-5.6": (4.0, 20.0),         # alias of gpt-5.6-sol
     "openai.global.gpt-5.6-luna": (0.2, 1.2),
     "openai.global.gpt-5.6-terra": (2.0, 12.0),
     "openai.global.gpt-5.5-pro": (30.0, 180.0),

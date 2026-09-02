@@ -63,6 +63,9 @@ def _agent_thinking_tokens(agent) -> int:
     equivalent rollup difference there. Older rows stored all output as
     completion and safely resolve to zero.
     """
+    explicit = getattr(agent, "reasoning_tokens", None)
+    if explicit is not None:
+        return int(explicit or 0)
     turns = getattr(agent, "turns", None) or []
     if turns:
         return sum(int(turn.get("thinking_tokens") or 0) for turn in turns)
@@ -157,10 +160,19 @@ async def get_run_detail_endpoint(run_id: int):
             repo.fetch_eval_score_for_run(conn, run_id)
             if detail is not None else None
         )
+        usage_rollup = (
+            repo.fetch_model_usage_rollup(conn, run_id)
+            if detail is not None else {"coverage": "unavailable", "call_count": 0}
+        )
     finally:
         conn.close()
     if detail is None:
         raise HTTPException(status_code=404, detail="Run not found")
+    if usage_rollup.get("call_count", 0):
+        usage_rollup.update({
+            "turn_count": sum(a.turn_count or 0 for a in detail.agents),
+            "tool_call_count": sum(a.tool_call_count or 0 for a in detail.agents),
+        })
 
     def _event_ts_to_epoch_seconds(ts: str) -> float:
         """Convert the DB's ISO-string timestamp to float epoch seconds.
@@ -260,6 +272,7 @@ async def get_run_detail_endpoint(run_id: int):
                 # (2026-08-03). Derived, not stored: correcting a rate in
                 # config/models.json must clear the marker on old runs too.
                 "pricing_unconfirmed": _pricing_is_unconfirmed(a.model),
+                "usage_status": getattr(a, "usage_status", "unavailable"),
                 # v17 (item 9): machine-readable failure class; None on
                 # success / legacy rows. Frontend renders it as a badge.
                 "error_type": getattr(a, "error_type", None),
@@ -314,7 +327,9 @@ async def get_run_detail_endpoint(run_id: int):
         ],
         # v8 run-level rollup so the Overview metric strip + Telemetry tab can
         # show totals without re-summing per-agent on the client.
-        "telemetry_rollup": {
+        "telemetry_rollup": usage_rollup if usage_rollup.get("call_count", 0) else {
+            "coverage": "unavailable",
+            "call_count": 0,
             "total_tokens": sum(a.total_tokens or 0 for a in detail.agents),
             "total_cost": sum(a.total_cost or 0.0 for a in detail.agents),
             "prompt_tokens": sum(a.prompt_tokens or 0 for a in detail.agents),

@@ -14,7 +14,7 @@ from unittest.mock import patch, MagicMock
 
 from statement_types import StatementType
 from coordinator import run_extraction, RunConfig
-from agent_runner import build_agent_event
+from agent_runner import ReasoningBlockAccumulator, build_agent_event
 
 
 # --- Expected field contracts (from web/src/lib/types.ts) ---
@@ -27,6 +27,24 @@ THINKING_DELTA_REQUIRED = {"content", "thinking_id"}
 TEXT_DELTA_REQUIRED = {"content"}
 # All agent-scoped events must include agent routing fields
 AGENT_FIELDS = {"agent_id", "agent_role"}
+
+
+def test_reasoning_block_accumulator_bounds_and_resets_summary():
+    block = ReasoningBlockAccumulator(retention_chars=5)
+
+    # Providers may send a signature-only empty delta first. The first visible
+    # delta still needs the provenance metadata that the UI attaches to it.
+    assert block.add_delta("") is False
+    assert block.add_delta("abc") is True
+    assert block.add_delta("defg") is False
+    finished = block.finish()
+
+    assert finished is not None
+    assert finished["summary"] == "abcde"
+    assert finished["full_length"] == 7
+    assert finished["duration_ms"] >= 0
+    assert block.finish() is None
+    assert block.add_delta("next") is True
 
 
 class TestEventContract:

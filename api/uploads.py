@@ -15,6 +15,7 @@ from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 
 import server
+from model_settings import DEFAULT_MODEL_ID
 from utils.paths import validate_session_id
 
 logger = logging.getLogger("server")
@@ -250,7 +251,7 @@ async def scout_pdf(session_id: str, request: Request):
     server._reload_runtime_settings()
     api_key = server._resolve_api_key()
     proxy_url = os.environ.get("LLM_PROXY_URL", "")
-    global_model = os.environ.get("TEST_MODEL", "openai.gpt-5.4")
+    global_model = os.environ.get("TEST_MODEL", DEFAULT_MODEL_ID)
 
     if not api_key:
         raise HTTPException(status_code=400, detail="GEMINI_API_KEY (Mac) or GOOGLE_API_KEY (Windows proxy) must be set. Check Settings.")
@@ -350,6 +351,7 @@ async def scout_pdf(session_id: str, request: Request):
                     total_cost=cost,
                     prompt_tokens=prompt_t,
                     completion_tokens=completion_t,
+                    reasoning_tokens=thinking_t,
                     turn_count=int(usage.get("turn_count", 0) or 0),
                     tool_call_count=int(usage.get("tool_call_count", 0) or 0),
                     # v17 (item 9): SCOUT rows carry the failure class too.

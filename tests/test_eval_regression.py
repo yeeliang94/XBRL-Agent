@@ -303,7 +303,7 @@ def test_resolve_model_prefers_explicit_then_test_model(monkeypatch):
 
     # No flag, no TEST_MODEL → the hard default.
     monkeypatch.delenv("TEST_MODEL")
-    assert resolve_model(None) == "openai.gpt-5.4"
+    assert resolve_model(None) == "openai.global.gpt-5.6-luna"
 
 
 # ---------------------------------------------------------------------------

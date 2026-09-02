@@ -36,6 +36,10 @@ export function applyReasoningEvent(
           endedAt: null,
           duration_ms: null,
           isComplete: false,
+          kind: event.data.kind,
+          provider: event.data.provider,
+          model: event.data.model,
+          transport: event.data.transport,
         },
       ];
     }
@@ -63,6 +67,10 @@ export function applyReasoningEvent(
         endedAt,
         duration_ms: event.data.duration_ms ?? 0,
         isComplete: true,
+        kind: event.data.kind,
+        provider: event.data.provider,
+        model: event.data.model,
+        transport: event.data.transport,
       },
     ];
   }
@@ -77,6 +85,10 @@ export function applyReasoningEvent(
     duration_ms:
       event.data.duration_ms ?? Math.max(0, Math.round(endedAt - current.startedAt)),
     isComplete: true,
+    kind: event.data.kind ?? current.kind,
+    provider: event.data.provider ?? current.provider,
+    model: event.data.model ?? current.model,
+    transport: event.data.transport ?? current.transport,
   };
   return next;
 }

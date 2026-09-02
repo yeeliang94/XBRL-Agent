@@ -92,6 +92,19 @@ export interface ExtractPageProps {
   isAdmin?: boolean;
 }
 
+function ElapsedTime({ startTime, running }: { startTime: number; running: boolean }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    setNow(Date.now());
+    if (!running) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [running, startTime]);
+  const elapsedSeconds = Math.max(0, Math.floor((now - startTime) / 1000));
+  const label = `${Math.floor(elapsedSeconds / 60)}:${String(elapsedSeconds % 60).padStart(2, "0")}`;
+  return <div style={styles.runSummaryElapsed}>Elapsed {label}</div>;
+}
+
 export function ExtractPage({
   state,
   dispatch,
@@ -197,8 +210,8 @@ export function ExtractPage({
   // Memoize the tab-bar props so token-delta events don't churn references.
   // AgentTabs itself is React.memo — without stable refs the memo never fires.
   const agentTabsAgents = useMemo(
-    () =>
-      Object.fromEntries(
+    () => {
+      const agents = Object.fromEntries(
         Object.entries(state.agents).map(([id, a]) => {
           const activity = semanticActivities(a.events, a.toolTimeline, 1)[0];
           return [id, {
@@ -219,9 +232,32 @@ export function ExtractPage({
             flag: a.flag ?? null,
           } as AgentTabState];
         }),
-      ),
-    [state.agents],
+      );
+      if (state.pipelineStage === "transcribing_source" || state.pdfSidecar) {
+        agents["source-preparation"] = {
+          agentId: "source-preparation",
+          label: "Source preparation",
+          role: "SOURCE_PREPARATION",
+          status: state.pipelineStage === "transcribing_source" ? "running" : "complete",
+          task: state.pipelineActivity?.message ?? "Preparing scanned source pages",
+          taskDetail: state.pipelineActivity?.total
+            ? `${state.pipelineActivity.completed ?? 0} of ${state.pipelineActivity.total}`
+            : null,
+          subLabel: null,
+          flag: null,
+        } as AgentTabState;
+      }
+      return agents;
+    },
+    [state.agents, state.pipelineStage, state.pipelineActivity, state.pdfSidecar],
   );
+  const agentTabsOrder = useMemo(() => {
+    if (!("source-preparation" in agentTabsAgents)) return state.agentTabOrder;
+    const without = state.agentTabOrder.filter((id) => id !== "source-preparation");
+    const scoutIndex = without.indexOf("scout");
+    const insertAt = scoutIndex >= 0 ? scoutIndex + 1 : 0;
+    return [...without.slice(0, insertAt), "source-preparation", ...without.slice(insertAt)];
+  }, [agentTabsAgents, state.agentTabOrder]);
   const agentTabsSkeletons = useMemo(
     () =>
       state.statementsInRun.filter(
@@ -353,19 +389,24 @@ export function ExtractPage({
           <div className="live-run-header" style={styles.runOverviewHeader}>
             <div style={styles.runOverviewLead}>
               <div style={styles.runEyebrow}>{state.isRunning ? "Live run" : "Run progress"}</div>
-              <h2
-                id="live-run-heading"
-                data-testid="pipeline-stage-label"
-                aria-live="polite"
-                aria-atomic="true"
-                style={styles.runOverviewTitle}
-              >
-                {state.isComplete
-                  ? "Extraction finished"
-                  : state.isRunning
-                    ? state.pipelineActivity?.message ?? liveStageMessage(state.pipelineStage)
-                    : "Run stopped"}
-              </h2>
+              <div style={styles.runTitleRow}>
+                {state.isRunning && (
+                  <span className="pwc-spinner" aria-hidden="true" style={styles.runArc} />
+                )}
+                <h2
+                  id="live-run-heading"
+                  data-testid="pipeline-stage-label"
+                  aria-live="polite"
+                  aria-atomic="true"
+                  style={styles.runOverviewTitle}
+                >
+                  {state.isComplete
+                    ? "Extraction finished"
+                    : state.isRunning
+                      ? state.pipelineActivity?.message ?? liveStageMessage(state.pipelineStage)
+                      : "Run stopped"}
+                </h2>
+              </div>
               <p style={styles.runOverviewMessage}>
                 {state.isComplete
                   ? "The filing draft is ready for review."
@@ -399,6 +440,9 @@ export function ExtractPage({
                 {workstreamSummary.running} active
                 {workstreamSummary.attention > 0 ? ` · ${workstreamSummary.attention} need attention` : ""}
               </div>
+              {state.runStartTime != null && (
+                <ElapsedTime startTime={state.runStartTime} running={state.isRunning} />
+              )}
             </div>
           </div>
 
@@ -445,12 +489,12 @@ export function ExtractPage({
         <div className="multi-agent-workspace" style={styles.activitySection}>
           <AgentTabs
             agents={agentTabsAgents}
-            tabOrder={state.agentTabOrder}
+            tabOrder={agentTabsOrder}
             // Fallback to "" when both activeTab and agentTabOrder are empty
             // (the no-event window). No tab will match "", which is fine —
             // the strip renders only the skeleton tabs for selected
             // statements/notes until the first agent_id event lands.
-            activeTab={state.activeTab || state.agentTabOrder[0] || ""}
+            activeTab={state.activeTab || agentTabsOrder[0] || ""}
             onTabClick={handleTabClick}
             // Phase 8: gate statement tabs so nothing shows until a run starts.
             statementsInRun={state.statementsInRun}
@@ -681,6 +725,68 @@ export function ActiveTabPanel({
       reasoningBlocks: aggregateReasoning,
     };
   }, [rawEvents, notes12SubId, showSubTabs, aggregateTimeline, aggregateReasoning]);
+  if (state.activeTab === "source-preparation") {
+    const completed = state.pipelineActivity?.completed ?? 0;
+    const total = state.pipelineActivity?.total ?? 0;
+    const active = state.pipelineStage === "transcribing_source";
+    const sourceMessage = active
+      ? state.pipelineActivity?.message ?? "Preparing scanned source pages."
+      : state.pdfSidecar
+        ? describePdfSidecar(state.pdfSidecar).message
+        : "Scanned source preparation has finished.";
+    return (
+      <div role="tabpanel" aria-label="Source preparation activity" style={styles.activityCardAttached}>
+        <div style={styles.activityHeader}>
+          <div style={styles.activityHeaderLeft}>
+            <div>
+              <div style={styles.activityEyebrow}>Selected workstream</div>
+              <div style={styles.activityTitle}>Source preparation</div>
+            </div>
+            <span style={styles.activeAgentStatus}>{active ? "Working" : "Complete"}</span>
+          </div>
+          <div style={styles.activityHeaderRight}>
+            {showStopAll && (
+              <button type="button" onClick={onAbortAll} style={{ ...styles.toolbarBtnBase, ...styles.destructiveBtn }}>
+                Stop all
+              </button>
+            )}
+          </div>
+        </div>
+        <div style={{ padding: pwc.space.lg }}>
+          <p style={{ margin: 0, color: pwc.grey700, fontSize: 14 }}>
+            {sourceMessage}
+          </p>
+          {total > 0 && (
+            <div
+              role="progressbar"
+              aria-label="Source preparation progress"
+              aria-valuemin={0}
+              aria-valuemax={total}
+              aria-valuenow={completed}
+              style={styles.stageProgress}
+            >
+              <span style={{ ...styles.stageProgressFill, width: `${Math.min(100, completed / total * 100)}%` }} />
+            </div>
+          )}
+          {reasoningBlocks.length > 0 ? (
+            <ActivityStream
+              events={events}
+              toolTimeline={toolTimeline}
+              reasoningBlocks={reasoningBlocks}
+              isRunning={active}
+              streamKey="source-preparation"
+            />
+          ) : (
+            <p style={{ margin: `${pwc.space.lg}px 0 0`, color: pwc.grey500, fontSize: 13 }}>
+              {active
+                ? "Waiting for a provider reasoning summary…"
+                : "The provider did not return a readable reasoning summary for this step."}
+            </p>
+          )}
+        </div>
+      </div>
+    );
+  }
   if (state.activeTab === "validator") {
     // PLAN-stop-and-validation-visibility Phase 5.3: prefer the live
     // progress feed while the run is still going. Once `run_complete`
@@ -874,6 +980,21 @@ const styles = {
     fontWeight: pwc.weight.semibold,
     color: pwc.grey900,
   } as const,
+  runTitleRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: pwc.space.sm,
+  } as const,
+  runArc: {
+    width: 16,
+    height: 16,
+    boxSizing: "border-box" as const,
+    border: `2px solid ${pwc.grey200}`,
+    borderTopColor: pwc.orange500,
+    borderRightColor: pwc.orange500,
+    borderRadius: "50%",
+    flexShrink: 0,
+  } as const,
   runOverviewMessage: {
     margin: `${pwc.space.xs}px 0 0`,
     fontFamily: pwc.fontBody,
@@ -910,6 +1031,12 @@ const styles = {
   runSummaryMeta: {
     marginTop: pwc.space.xs,
     fontFamily: pwc.fontBody,
+    fontSize: 12,
+    color: pwc.grey700,
+  } as const,
+  runSummaryElapsed: {
+    marginTop: pwc.space.xs,
+    fontFamily: pwc.fontMono,
     fontSize: 12,
     color: pwc.grey700,
   } as const,

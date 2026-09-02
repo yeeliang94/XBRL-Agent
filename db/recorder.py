@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 # Only these SSE event types are worth persisting. Everything else (thinking_delta,
 # text_delta, token_update) is high-volume streaming noise.
 _COARSE_EVENT_TYPES = frozenset({
-    "status", "tool_call", "tool_result", "error", "complete",
+    "status", "tool_call", "tool_result", "thinking_end", "error", "complete",
 })
 
 # Hard caps to protect against runaway tool loops (a known Gemini-3 failure

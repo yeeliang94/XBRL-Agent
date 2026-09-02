@@ -36,6 +36,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator
 
 import server
+from model_settings import DEFAULT_MODEL_ID
 from server import RunConfigRequest
 
 logger = logging.getLogger("server")
@@ -395,7 +396,7 @@ def _run_batch_thread(suite_run_id: int, suite_id: int, launch: dict,
             server._reload_runtime_settings()
             api_key = server._resolve_api_key()
             proxy_url = os.environ.get("LLM_PROXY_URL", "")
-            model_name = launch.get("model") or os.environ.get("TEST_MODEL", "openai.gpt-5.4")
+            model_name = launch.get("model") or os.environ.get("TEST_MODEL", DEFAULT_MODEL_ID)
             repeats = max(1, min(5, int(launch.get("repeats", 1) or 1)))
 
             # The frozen corpus — NEVER the live suite docs (Step 2): editing
@@ -524,7 +525,7 @@ async def estimate_suite_run_endpoint(suite_id: int, body: SuiteRunLaunch):
     # mixed-model history that says nothing about what will actually run
     # (peer-review Step 6).
     server._reload_runtime_settings()
-    resolved_model = body.model or os.environ.get("TEST_MODEL", "openai.gpt-5.4")
+    resolved_model = body.model or os.environ.get("TEST_MODEL", DEFAULT_MODEL_ID)
     stats = _recent_run_stats(resolved_model)
     avg = stats["avg_seconds"]
     # Wall-clock: documents share the concurrency slots, but a document's
@@ -603,7 +604,7 @@ async def launch_suite_run_endpoint(suite_id: int, body: SuiteRunLaunch):
         # picker on the default.
         server._reload_runtime_settings()
         resolved_model = body.model or os.environ.get(
-            "TEST_MODEL", "openai.gpt-5.4"
+            "TEST_MODEL", DEFAULT_MODEL_ID
         )
         launch = body.model_dump()
         launch["model"] = resolved_model

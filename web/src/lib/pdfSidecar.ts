@@ -36,10 +36,22 @@ const SKIP_REASONS: Record<string, string> = {
  *  The toggle exists because the pass costs money, so the notice states what
  *  it actually consumed. */
 function usageSentence(usage: PdfSidecarData["usage"]): string {
-  if (!usage || (usage.in == null && usage.out == null)) return "";
+  if (!usage) return "";
+  if (usage.prompt_tokens == null && usage.completion_tokens == null && usage.thinking_tokens == null) {
+    if (usage.in == null && usage.out == null) return "";
+    const legacyParts: string[] = [];
+    if (usage.in != null) legacyParts.push(`${usage.in.toLocaleString()} in`);
+    if (usage.out != null) legacyParts.push(`${usage.out.toLocaleString()} out`);
+    return ` The transcription used ${legacyParts.join(" / ")} tokens.`;
+  }
+  const input = usage.prompt_tokens ?? usage.in;
+  const visibleOutput = usage.completion_tokens ?? usage.out;
+  const reasoning = usage.thinking_tokens;
+  if (input == null && visibleOutput == null && reasoning == null) return "";
   const parts: string[] = [];
-  if (usage.in != null) parts.push(`${usage.in.toLocaleString()} in`);
-  if (usage.out != null) parts.push(`${usage.out.toLocaleString()} out`);
+  if (input != null) parts.push(`${input.toLocaleString()} input`);
+  if (visibleOutput != null) parts.push(`${visibleOutput.toLocaleString()} visible output`);
+  if (reasoning != null) parts.push(`${reasoning.toLocaleString()} reasoning`);
   return ` The transcription used ${parts.join(" / ")} tokens.`;
 }
 

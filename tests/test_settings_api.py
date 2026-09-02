@@ -22,14 +22,15 @@ def test_get_settings_default(tmp_path, monkeypatch):
     resp = client.get("/api/settings")
     assert resp.status_code == 200
     data = resp.json()
-    assert data["model"] == "openai.gpt-5.4"
+    assert data["model"] == "openai.global.gpt-5.6-luna"
+    assert data["reasoning_summary"] == "auto"
     assert data["api_key_set"] is False
     assert "proxy_url" in data
 
 
-def test_default_model_is_gpt_5_4_for_every_agent_role(tmp_path, monkeypatch):
+def test_default_model_is_gpt_5_6_luna_for_every_agent_role(tmp_path, monkeypatch):
     """When TEST_MODEL and XBRL_DEFAULT_MODELS are unset, every agent role
-    (scout + 5 statement types) resolves to openai.gpt-5.4.
+    (scout + 5 statement types) resolves to GPT-5.6 Luna.
 
     Pins the decision that GPT-5.4 is the global default across platforms
     (Mac direct + Windows proxy). If someone reverts the settings/server
@@ -45,10 +46,20 @@ def test_default_model_is_gpt_5_4_for_every_agent_role(tmp_path, monkeypatch):
 
     defaults = _load_extended_settings()["default_models"]
     for role in _AGENT_ROLES:
-        assert defaults[role] == "openai.gpt-5.4", (
+        assert defaults[role] == "openai.global.gpt-5.6-luna", (
             f"Agent role {role!r} defaulted to {defaults[role]!r}, "
-            f"expected 'openai.gpt-5.4'."
+            f"expected 'openai.global.gpt-5.6-luna'."
         )
+
+
+def test_reasoning_summary_setting_roundtrips_and_validates(tmp_path, monkeypatch):
+    _env(tmp_path, monkeypatch)
+    response = client.post("/api/settings", json={"reasoning_summary": "detailed"})
+    assert response.status_code == 200
+    assert client.get("/api/settings").json()["reasoning_summary"] == "detailed"
+
+    bad = client.post("/api/settings", json={"reasoning_summary": "private_chain"})
+    assert bad.status_code == 400
 
 
 def test_post_settings_writes_local_file(tmp_path, monkeypatch):

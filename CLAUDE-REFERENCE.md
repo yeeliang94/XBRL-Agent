@@ -65,8 +65,8 @@ LLM_PROXY_API_KEY=             # proxy auth key; start.sh sets the local-dev mas
 GOOGLE_API_KEY=                # real Google key; also the proxy auth key on Windows (no LLM_PROXY_API_KEY there)
 
 # Model defaults
-TEST_MODEL=openai.gpt-5.4
-SCOUT_MODEL=openai.gpt-5.4     # legacy fallback; Settings → Document scan wins
+TEST_MODEL=openai.global.gpt-5.6-luna
+SCOUT_MODEL=openai.global.gpt-5.6-luna  # legacy fallback; Settings → Document scan wins
 
 # Auth (gotcha #24). AUTH_MODE unset = real email+password login; AUTH_MODE=dev
 # auto-sessions as dev@localhost (CI / offline only; refuses to boot on Azure).
@@ -457,7 +457,7 @@ Two things are **retained but inert — do NOT "clean them up":**
   (gotcha #26); the table stays as an inert artifact so the migration chain
   replays intact. No code reads it.
 
-Migration history currently documented here through v43, with each feature
+Migration history currently documented here through v44, with each feature
 detailed in its linked gotcha: v11
 `concept_render_aliases` (#21) · v12–v13 reviewer tables `run_fact_snapshots`
 / `reviewer_flags` / `run_review_tasks` (#21) · v16 gold-eval tables +
@@ -485,7 +485,8 @@ quarantine state, and receipt filing-readiness evidence (#28) · v42
 `run_incidents` / `run_events` (durable run-level failures and the
 low-volume coordinator timeline; request/response traces remain on disk) · v43
 `run_agents.error_message` (the exact terminal agent refusal/error alongside
-the stable `error_type` classification).
+the stable `error_type` classification) · v44 explicit reasoning-token and
+usage-coverage columns plus the request-level `model_usage_calls` ledger.
 
 ### 12. Filing level — Company vs Group
 
@@ -1625,20 +1626,25 @@ Load-bearing invariants:
   adapter. It resolves semantic addresses to explicit cells in the uploaded
   workbook; SOCIE uses `ComponentsOfEquityAxis` members. Repository-generated
   templates use their verified exact target hints. Declared semantic identities
-  that are missing or ambiguous fail closed. Address-less legacy writes may
-  still use `column_role` (CY/PY × company/group) plus exact labels, but an
-  unverified template requires column confirmation and the resulting artifact
-  is degraded until the operator acknowledges it.
+  that are missing or ambiguous fail closed. On period/entity sheets,
+  address-less legacy writes may still use `column_role` (CY/PY ×
+  company/group) plus exact labels, but an unverified template requires column
+  confirmation and the resulting artifact is degraded until the operator
+  acknowledges it. Category sheets never take that fallback: without one
+  exact taxonomy-addressed target they return structured blocked coverage.
 
   `column_detect` reads mTool's own marker rows — `#PRIM#` (label column),
   `#ENDT#` (period end dates; current vs prior year comes from COMPARING
   DATES), `#UNITSCALE#` (declared unit), `#DOM#` (columns are dimension
   members). `needs_confirmation()` is the gate, not a confidence score: Group
-  layouts and unknown template fingerprints (`mtool/known_templates.json`)
-  always need a human. This caught a real one — the sample template's
-  Notes-Issuedcapital lays its columns out as SHARE CLASSES, so positional
-  mapping would have written the current year into "Ordinary shares".
-  `exporter.apply_column_map` still fails loudly on a missing role.
+  period/entity layouts and unknown non-dimensional template fingerprints
+  (`mtool/known_templates.json`) need a human. Dimensional sheets do not show
+  CY/PY inputs: their columns are taxonomy members (share classes or equity
+  components), and `template_map.resolve_filing_doc` resolves one exact target
+  from the semantic address or blocks. This prevents the sample template's
+  Notes-Issuedcapital share-class columns from being mislabeled as current and
+  prior years. `exporter.apply_column_map` still fails loudly on a missing
+  legacy role.
 - **Current compatibility target is mTool 2.2.** Generated-template adapters
   are verified in automated forward/reverse SOCIE round trips across
   MFRS/MPERS and Company/Group. A genuine mTool 2.2 workbook fingerprint and
@@ -1657,6 +1663,14 @@ Load-bearing invariants:
 - **Machine docs are `strict`** (`build_fill_doc` sets `strict:true`): a non-exact
   label is a bug to surface, not a typo to forgive. Hand-authored operator runs
   stay lenient; fuzzy hits are still reported.
+- **Canonical note destinations scope mTool matching.**
+  `notes_exporter.build_notes_fill_doc` carries each stored note's
+  `source_sheet` into `offline_fill.fill_footnotes`. Both existing-`fn_*` and
+  create-missing label resolution search only that sheet. A missing sheet or a
+  same-sheet tie stays unresolved; it must never fall back to a matching label
+  elsewhere in the workbook. Explicit operator key/cell choices still override
+  label resolution. Pinned by the source-sheet scope tests in
+  `tests/test_mtool_offline_fill.py`.
 - **Created note slots REUSE the template's orphan `fn_` pool; the `+FootnoteTexts`
   column-A key is the join key and MUST stay unique** (2026-07-05 Amgen empty-popup
   incident). mTool joins visible cell → payload by that column-A string and reads

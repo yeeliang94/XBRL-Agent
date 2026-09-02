@@ -218,7 +218,10 @@ from pathlib import Path
 # 103 showed that storing only "save_gate_refused" loses the exact terminal
 # refusal needed to diagnose which write or gate condition remained blocked.
 # Nullable additive column; legacy and successful rows remain NULL.
-CURRENT_SCHEMA_VERSION = 43
+# v44 stores provider reasoning tokens explicitly and adds the universal
+# model-call ledger used for coverage-aware cost rollups. Missing provider
+# usage is represented as unavailable, never as a trustworthy zero.
+CURRENT_SCHEMA_VERSION = 44
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -355,6 +358,10 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         -- these at a premium, so cost accounting must see them). Default 0.
         cache_read_tokens  INTEGER DEFAULT 0,
         cache_write_tokens INTEGER DEFAULT 0,
+        -- v44: explicit provider reasoning subset and whether usage was
+        -- supplied. Do not reconstruct this from retry-inflated aggregates.
+        reasoning_tokens   INTEGER,
+        usage_status       TEXT DEFAULT 'unavailable',
         -- v17: machine-readable failure class (item 9 taxonomy; see
         -- coordinator.py ERROR_TYPE_* constants). NULL on success and on
         -- legacy rows. No CHECK constraint on purpose.
@@ -385,7 +392,43 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         duration_ms       INTEGER DEFAULT 0,
         cache_read_tokens  INTEGER DEFAULT 0,      -- v15: cache-hit delta this turn
         cache_write_tokens INTEGER DEFAULT 0,      -- v15: cache-write delta this turn
+        reasoning_tokens   INTEGER,                -- v44: NULL means pre-v44/unknown
+        usage_status       TEXT DEFAULT 'unavailable',
         ts                TEXT NOT NULL
+    )
+    """,
+
+    # v44: one row per observed provider model request (or one aggregate row
+    # for legacy/non-streamed helpers). This is additive: historical
+    # run_agents totals retain their original meaning.
+    """
+    CREATE TABLE IF NOT EXISTS model_usage_calls (
+        id                         INTEGER PRIMARY KEY AUTOINCREMENT,
+        invocation_id              TEXT NOT NULL UNIQUE,
+        run_id                     INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        run_agent_id               INTEGER REFERENCES run_agents(id) ON DELETE CASCADE,
+        role                       TEXT NOT NULL,
+        worker_id                  TEXT NOT NULL,
+        attempt_index              INTEGER NOT NULL DEFAULT 0,
+        request_index              INTEGER NOT NULL DEFAULT 0,
+        model                      TEXT,
+        provider                   TEXT,
+        transport                  TEXT,
+        started_at                 TEXT,
+        ended_at                   TEXT,
+        status                     TEXT NOT NULL,
+        provider_request_id        TEXT,
+        input_tokens               INTEGER DEFAULT 0,
+        cached_input_tokens        INTEGER DEFAULT 0,
+        cache_write_tokens         INTEGER DEFAULT 0,
+        visible_output_tokens      INTEGER DEFAULT 0,
+        reasoning_tokens           INTEGER DEFAULT 0,
+        total_tokens               INTEGER DEFAULT 0,
+        estimated_cost_pre_cache   REAL DEFAULT 0,
+        estimated_cost_adjusted    REAL,
+        pricing_status             TEXT DEFAULT 'unknown',
+        usage_status               TEXT NOT NULL DEFAULT 'unavailable',
+        error_type                 TEXT
     )
     """,
 
@@ -1608,6 +1651,8 @@ _CREATE_INDEXES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS ix_run_concept_conflicts_run_id ON run_concept_conflicts(run_id)",
     # v8: per-turn metrics are always queried by their owning agent.
     "CREATE INDEX IF NOT EXISTS ix_run_agent_turns_run_agent_id ON run_agent_turns(run_agent_id)",
+    "CREATE INDEX IF NOT EXISTS ix_model_usage_calls_run_id ON model_usage_calls(run_id)",
+    "CREATE INDEX IF NOT EXISTS ix_model_usage_calls_run_agent_id ON model_usage_calls(run_agent_id)",
     # v12: both reviewer tables are always queried per-run.
     "CREATE INDEX IF NOT EXISTS ix_run_fact_snapshots_run_id ON run_fact_snapshots(run_id)",
     "CREATE INDEX IF NOT EXISTS ix_reviewer_flags_run_id ON reviewer_flags(run_id)",
@@ -1880,6 +1925,13 @@ _V41_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
 
 _V43_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("run_agents", "error_message", "TEXT"),
+)
+
+_V44_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("run_agents", "reasoning_tokens", "INTEGER"),
+    ("run_agents", "usage_status", "TEXT DEFAULT 'unavailable'"),
+    ("run_agent_turns", "reasoning_tokens", "INTEGER"),
+    ("run_agent_turns", "usage_status", "TEXT DEFAULT 'unavailable'"),
 )
 
 _V33_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
@@ -3283,6 +3335,40 @@ def init_db(path: str | Path) -> None:
                                     raise
                     conn.execute(
                         "UPDATE schema_version SET version = ?", (43,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        # v43 → v44: explicit reasoning/coverage fields plus the additive
+        # model_usage_calls ledger (created above). Existing token rows remain
+        # readable and truthfully start with unavailable coverage.
+        if current_version is not None and current_version < 44:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 44:
+                    for table, col_name, col_ddl in _V44_MIGRATION_COLUMNS:
+                        existing_cols = {
+                            r[1] for r in conn.execute(
+                                f"PRAGMA table_info({table})"
+                            ).fetchall()
+                        }
+                        if col_name not in existing_cols:
+                            try:
+                                conn.execute(
+                                    f"ALTER TABLE {table} ADD COLUMN "
+                                    f"{col_name} {col_ddl}"
+                                )
+                            except sqlite3.OperationalError as exc:
+                                if "duplicate column" not in str(exc).lower():
+                                    raise
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?", (44,),
                     )
                 conn.commit()
             except Exception:

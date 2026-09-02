@@ -30,8 +30,10 @@ from __future__ import annotations
 import pytest
 
 from model_settings import (
+    DEFAULT_MODEL_ID,
     THINKING_LEVELS,
     build_model_settings,
+    configured_reasoning_summary,
     describe_model_runtime,
     normalize_thinking_level,
     use_responses_api,
@@ -54,6 +56,10 @@ class _FakeResponses:
 
 
 _FakeResponses.__name__ = "OpenAIResponsesModel"
+
+
+def test_product_default_is_gpt56_luna():
+    assert DEFAULT_MODEL_ID == "openai.global.gpt-5.6-luna"
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +179,49 @@ def test_gpt56_on_responses_keeps_the_operator_choice(level):
     assert "temperature" not in s
 
 
+def test_responses_requests_provider_reasoning_summary_by_default(monkeypatch):
+    monkeypatch.delenv("XBRL_REASONING_SUMMARY", raising=False)
+    from pydantic_ai.models import openai as openai_models
+
+    original = openai_models.OpenAIResponsesModelSettings
+    called = False
+
+    def responses_settings(**kwargs):
+        nonlocal called
+        called = True
+        return original(**kwargs)
+
+    monkeypatch.setattr(
+        openai_models, "OpenAIResponsesModelSettings", responses_settings,
+    )
+    settings = build_model_settings(_FakeResponses("gpt-5.6-luna"))
+    assert called
+    assert settings.get("openai_reasoning_summary") == "auto"
+    assert configured_reasoning_summary() == "auto"
+
+
+@pytest.mark.parametrize("visibility", ["auto", "concise", "detailed"])
+def test_responses_honours_configured_summary_visibility(monkeypatch, visibility):
+    monkeypatch.setenv("XBRL_REASONING_SUMMARY", visibility)
+    settings = build_model_settings(_FakeResponses("gpt-5.6-luna"))
+    assert settings.get("openai_reasoning_summary") == visibility
+
+
+def test_summary_visibility_is_independent_from_reasoning_effort(monkeypatch):
+    monkeypatch.setenv("XBRL_REASONING_SUMMARY", "off")
+    settings = build_model_settings(
+        _FakeResponses("gpt-5.6-luna"), thinking_level="high",
+    )
+    assert settings.get("openai_reasoning_effort") == "high"
+    assert "openai_reasoning_summary" not in settings
+
+
+def test_summary_option_is_never_sent_to_chat_completions(monkeypatch):
+    monkeypatch.setenv("XBRL_REASONING_SUMMARY", "detailed")
+    settings = build_model_settings(_FakeChat("gpt-5.6-luna"))
+    assert "openai_reasoning_summary" not in settings
+
+
 def test_chat_reasoning_none_keeps_supported_temperature():
     s = build_model_settings(_FakeChat("gpt-5.6"), thinking_level="medium")
     assert s["openai_reasoning_effort"] == "none"
@@ -192,14 +241,17 @@ def test_runtime_description_distinguishes_responses_from_chat(monkeypatch):
     import json
 
     monkeypatch.setenv("XBRL_THINKING_LEVELS", json.dumps({"SOFP": "medium"}))
+    monkeypatch.setenv("XBRL_REASONING_SUMMARY", "auto")
     responses = describe_model_runtime(_FakeResponses("gpt-5.6-luna"), role="SOFP")
     chat = describe_model_runtime(_FakeChat("gpt-5.6-luna"), role="SOFP")
 
     assert responses["transport"] == "responses"
     assert responses["effective_reasoning_effort"] == "medium"
+    assert responses["reasoning_summary_visibility"] == "auto"
     assert chat["transport"] == "chat_completions"
     assert chat["configured_reasoning_effort"] == "medium"
     assert chat["effective_reasoning_effort"] == "none"
+    assert chat["reasoning_summary_visibility"] == "off"
 
 
 def test_run_runtime_snapshot_records_each_planned_role(monkeypatch):

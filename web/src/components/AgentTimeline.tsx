@@ -186,6 +186,10 @@ function ReasoningRow({ block, isRunning }: { block: ReasoningBlock; isRunning: 
   const isActive = isRunning && !block.isComplete;
   const content = useFrameBatchedText(block.content, isActive);
   const duration = durationLabel(block.duration_ms);
+  const title = block.kind === "summary" ? "Reasoning summary" : "Model reasoning";
+  const provenance = [block.provider, block.model, block.transport]
+    .filter(Boolean)
+    .join(" · ") || "Provider-supplied";
 
   return (
     <section
@@ -207,8 +211,8 @@ function ReasoningRow({ block, isRunning }: { block: ReasoningBlock; isRunning: 
       </span>
       <div style={styles.reasoningBody}>
         <div style={styles.reasoningHeader}>
-          <span>Model reasoning</span>
-          <span style={styles.reasoningMeta}>Provider-supplied</span>
+          <span>{title}</span>
+          <span style={styles.reasoningMeta}>{provenance}</span>
           <span style={{ ...styles.reasoningMeta, marginLeft: "auto" }}>
             {isActive ? "Streaming…" : duration ?? "Complete"}
           </span>

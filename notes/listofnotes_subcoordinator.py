@@ -41,9 +41,11 @@ from pydantic_ai.messages import (
 )
 
 from agent_runner import (
+    ReasoningBlockAccumulator,
     RetryPolicy,
     iter_with_turn_timeout,
     make_emitter,
+    reasoning_event_metadata,
     run_agent_with_retries,
 )
 from agent_tracing import MAX_AGENT_ITERATIONS, save_messages_trace
@@ -835,6 +837,9 @@ async def _invoke_sub_agent_once(
     iteration_cap = _iteration_budget(len(batch))
     tool_start: dict[str, float] = {}
     thinking_counter = 0
+    reasoning_meta = reasoning_event_metadata(
+        model, NotesTemplateType.LIST_OF_NOTES.value,
+    )
 
     # Per-sub-agent trace file (run-63 fix, 2026-07-07): the fan-out used to
     # persist NO conversation traces, so a List-of-Notes defect (the sheet
@@ -903,7 +908,7 @@ async def _invoke_sub_agent_once(
                                 })
                 elif Agent.is_model_request_node(node):
                     tid = f"{sub_agent_id}_think_{thinking_counter}"
-                    active = False
+                    reasoning_block = ReasoningBlockAccumulator()
                     async with node.stream(agent_run.ctx) as model_stream:
                         async for event in iter_with_turn_timeout(
                             model_stream, NOTES12_TURN_TIMEOUT_SECS,
@@ -911,23 +916,32 @@ async def _invoke_sub_agent_once(
                             if isinstance(event, PartDeltaEvent):
                                 delta = event.delta
                                 if isinstance(delta, TextPartDelta):
-                                    if active:
+                                    completed_block = reasoning_block.finish()
+                                    if completed_block is not None:
                                         await _emit("thinking_end", {
-                                            "thinking_id": tid, "summary": "", "full_length": 0,
+                                            "thinking_id": tid,
+                                            **completed_block,
+                                            **reasoning_meta,
                                         })
-                                        active = False
                                         thinking_counter += 1
                                         tid = f"{sub_agent_id}_think_{thinking_counter}"
                                     await _emit("text_delta", {"content": delta.content_delta})
                                 elif isinstance(delta, ThinkingPartDelta):
-                                    active = True
-                                    await _emit("thinking_delta", {
-                                        "content": delta.content_delta or "",
+                                    chunk = delta.content_delta or ""
+                                    started_block = reasoning_block.add_delta(chunk)
+                                    delta_payload = {
+                                        "content": chunk,
                                         "thinking_id": tid,
-                                    })
-                    if active:
+                                    }
+                                    if started_block:
+                                        delta_payload.update(reasoning_meta)
+                                    await _emit("thinking_delta", delta_payload)
+                    completed_block = reasoning_block.finish()
+                    if completed_block is not None:
                         await _emit("thinking_end", {
-                            "thinking_id": tid, "summary": "", "full_length": 0,
+                            "thinking_id": tid,
+                            **completed_block,
+                            **reasoning_meta,
                         })
                         thinking_counter += 1
 

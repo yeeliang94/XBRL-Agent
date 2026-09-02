@@ -30,6 +30,9 @@ router = APIRouter()
 # Mirrors model_settings.THINKING_LEVELS; imported rather than
 # re-listed so the API and the builder cannot drift.
 from model_settings import ALL_THINKING_LEVELS as _ALL_THINKING_LEVELS
+from model_settings import DEFAULT_MODEL_ID as _DEFAULT_MODEL_ID
+from model_settings import REASONING_SUMMARY_CHOICES as _SUMMARY_CHOICES
+from model_settings import configured_reasoning_summary as _reasoning_summary
 from model_settings import supported_thinking_levels as _supported_levels
 from notes.source_models import IntegrityMode as _IntegrityMode
 
@@ -72,6 +75,7 @@ _ADMIN_ONLY_SETTINGS_KEYS = frozenset({
     # Firm-wide like default_models: it changes cost and behaviour for
     # everyone, so it is not a per-user cosmetic setting.
     "thinking_levels",
+    "reasoning_summary",
     "auto_review",
     "notes_auto_review",
     "pdf_notes_auto_format",
@@ -93,6 +97,7 @@ _SETTING_ENV_KEYS = {
     "proxy_url": "LLM_PROXY_URL",
     "default_models": "XBRL_DEFAULT_MODELS",
     "thinking_levels": "XBRL_THINKING_LEVELS",
+    "reasoning_summary": "XBRL_REASONING_SUMMARY",
     "auto_review": "XBRL_AUTO_REVIEW",
     "notes_auto_review": "XBRL_NOTES_AUTO_REVIEW",
     "pdf_notes_auto_format": "XBRL_PDF_NOTES_AUTO_FORMAT",
@@ -250,6 +255,8 @@ async def get_config():
         # for that model means the operator picks a level the run then
         # substitutes (peer review, 2026-08-02). The picker filters on this.
         "thinking_level_choices_by_model": _levels_by_model(),
+        "reasoning_summary": _reasoning_summary(),
+        "reasoning_summary_choices": list(_SUMMARY_CHOICES),
         # Firm-wide notes-table style theme (docs/PLAN-notes-table-theme.md).
         # Surfaced here so the Notes tab + clipboard read the firm default at
         # render time without a separate /api/settings round-trip.
@@ -270,7 +277,7 @@ async def get_settings():
     locally_saved = read_runtime_settings(server.SETTINGS_FILE)
     return {
         # Backward-compatible fields
-        "model": os.environ.get("TEST_MODEL", "openai.gpt-5.4"),
+        "model": os.environ.get("TEST_MODEL", _DEFAULT_MODEL_ID),
         "proxy_url": os.environ.get("LLM_PROXY_URL", ""),
         "api_key_set": bool(api_key),
         "api_key_preview": masked,
@@ -289,6 +296,7 @@ async def get_settings():
         # for that model means the operator picks a level the run then
         # substitutes (peer review, 2026-08-02). The picker filters on this.
         "thinking_level_choices_by_model": _levels_by_model(),
+        "reasoning_summary_choices": list(_SUMMARY_CHOICES),
         # Vocabulary for the Word-source picker. Served (not typed out in the
         # form) so a new IntegrityMode becomes selectable without a UI edit;
         # the VALUE itself rides in `extended`.
@@ -437,6 +445,17 @@ async def update_settings(body: dict, request: Request):
             existing.pop(key, None)
         existing.update(cleaned_levels)
         updates["XBRL_THINKING_LEVELS"] = json.dumps(existing)
+    if "reasoning_summary" in body:
+        summary = str(body["reasoning_summary"]).strip().lower()
+        if summary not in _SUMMARY_CHOICES:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "reasoning_summary must be one of "
+                    f"{', '.join(_SUMMARY_CHOICES)}."
+                ),
+            )
+        updates["XBRL_REASONING_SUMMARY"] = summary
     if "auto_review" in body:
         updates["XBRL_AUTO_REVIEW"] = "true" if body["auto_review"] else "false"
     if "notes_auto_review" in body:
@@ -563,7 +582,7 @@ async def test_connection(body: dict, request: Request):
 
     server._reload_runtime_settings()
 
-    model_name = body.get("model") or os.environ.get("TEST_MODEL", "openai.gpt-5.4")
+    model_name = body.get("model") or os.environ.get("TEST_MODEL", _DEFAULT_MODEL_ID)
     api_key = body.get("api_key") or os.environ.get("GOOGLE_API_KEY", "")
     proxy_url = body.get("proxy_url") or os.environ.get("LLM_PROXY_URL", "")
 
