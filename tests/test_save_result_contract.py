@@ -356,6 +356,65 @@ def test_legacy_failed_writes_do_not_guess_error_pairing_by_position():
     assert deps.last_fill_errors == [batch_message]
 
 
+def test_explicit_row_retry_clears_prior_ambiguous_label_candidate():
+    from types import SimpleNamespace
+
+    from extraction.agent import _update_unresolved_fill_errors
+
+    deps = SimpleNamespace(_unresolved_fill_error_state={}, last_fill_errors=[])
+    _update_unresolved_fill_errors(deps, SimpleNamespace(
+        errors=["Ambiguous label 'Interest paid'"],
+        successful_request_keys=[],
+        failed_request_keys=[{
+            "key": "socf|col=2|label=interest paid|section=",
+            "base_key": "socf|col=2|label=interest paid",
+            "message": "Ambiguous label 'Interest paid'",
+            "sheet": "socf", "col": 2, "candidate_rows": [60, 71],
+            "kind": "ambiguous_label",
+        }],
+    ))
+    _update_unresolved_fill_errors(deps, SimpleNamespace(
+        errors=[], failed_request_keys=[],
+        successful_request_keys=[{
+            "key": "socf|col=2|row=71|section=",
+            "base_key": "socf|col=2|row=71",
+            "sheet": "socf", "col": 2, "resolved_row": 71,
+        }],
+    ))
+
+    assert deps.last_fill_errors == []
+
+
+def test_formula_cell_refusal_is_audit_only_not_an_unresolved_write():
+    from types import SimpleNamespace
+
+    from extraction.agent import _update_unresolved_fill_errors
+
+    deps = SimpleNamespace(_unresolved_fill_error_state={}, last_fill_errors=[])
+    _update_unresolved_fill_errors(deps, SimpleNamespace(
+        errors=["Refusing to overwrite formula cell SOFP!B9"],
+        successful_request_keys=[],
+        failed_request_keys=[{
+            "key": "sofp|col=2|row=9|section=",
+            "base_key": "sofp|col=2|row=9",
+            "message": "Refusing to overwrite formula cell SOFP!B9",
+            "sheet": "sofp", "col": 2, "resolved_row": 9,
+            "kind": "formula_cell",
+        }],
+    ))
+
+    assert deps.last_fill_errors == []
+
+
+def test_successful_flagged_agent_keeps_attention_reason_for_history():
+    from server import _agent_row_error_message
+
+    reason = "Mandatory SOCIE rows are absent from the source statement."
+
+    assert _agent_row_error_message(None, reason) == reason
+    assert _agent_row_error_message("provider failed", reason) == "provider failed"
+
+
 # ---------------------------------------------------------------------------
 # Side 3: fill_workbook invalidates a stale save (a fresh write must force
 # the agent to re-call save_result before the coordinator accepts it)
@@ -485,6 +544,60 @@ async def test_coordinator_succeeds_when_workbook_written_and_save_called():
 
     assert result.status == "succeeded"
     assert result.workbook_path == "/tmp/SOFP_filled.xlsx"
+
+
+@pytest.mark.asyncio
+async def test_coordinator_refreshes_saved_cost_report_from_final_turns(tmp_path):
+    """save_result runs mid-loop; the coordinator must replace its zero report."""
+    import coordinator
+
+    report_path = tmp_path / "SOFP_cost_report.txt"
+    report_path.write_text("Estimated cost: $0.0000", encoding="utf-8")
+
+    agent = _make_completing_agent_iter()
+    deps = MagicMock()
+    deps.projection_failed = False
+    deps.filled_path = str(tmp_path / "SOFP_filled.xlsx")
+    deps.result_saved = True
+    deps.last_save_error = None
+    deps.last_fill_errors = []
+    deps.face_line_refs = []
+    deps.statement_type = StatementType.SOFP
+
+    async def record_live_usage(_run, _deps, _spec, _emit, turn_records):
+        turn_records.append({
+            "turn_index": 1,
+            "node_kind": "model_request",
+            "tool_names": None,
+            "_n_tool_calls": 0,
+            "prompt_tokens": 100,
+            "completion_tokens": 20,
+            "thinking_tokens": 5,
+            "total_tokens": 125,
+            "cumulative_tokens": 125,
+            "duration_ms": 200,
+        })
+
+    with (
+        patch("coordinator.create_extraction_agent", return_value=(agent, deps)),
+        patch("coordinator.run_agent_loop", side_effect=record_live_usage),
+    ):
+        result = await coordinator._run_single_agent(
+            statement_type=StatementType.SOFP,
+            variant="CuNonCu",
+            pdf_path="/tmp/x.pdf",
+            template_path="/tmp/t.xlsx",
+            model="openai.global.gpt-5.6-luna",
+            output_dir=str(tmp_path),
+        )
+
+    assert result.status == "succeeded"
+    report = report_path.read_text(encoding="utf-8")
+    assert "Total" in report
+    assert "100" in report
+    assert "20" in report
+    assert "5" in report
+    assert report != "Estimated cost: $0.0000"
 
 
 # ---------------------------------------------------------------------------

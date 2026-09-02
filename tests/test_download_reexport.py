@@ -152,6 +152,18 @@ def test_run_without_facts_skips_reexport(tmp_path):
     assert server._reexport_and_remerge_from_facts(run_id) is None
 
 
+def test_fact_presence_probe_failure_is_unknown(tmp_path, monkeypatch):
+    """A database error is not evidence that a run has zero facts."""
+    import server
+
+    def _locked(*_args, **_kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(sqlite3, "connect", _locked)
+
+    assert server._run_has_facts(tmp_path / "xbrl.db", 1) is None
+
+
 def test_durable_reexport_includes_numeric_note_edit(tmp_path):
     """`_reexport_remerge_durable` overlays numeric-note facts onto the durable
     on-disk merged workbook — so non-download consumers see the edit too

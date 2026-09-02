@@ -120,7 +120,8 @@ def _load_nodes(conn: sqlite3.Connection, template_id: str) -> list[dict]:
     rows = conn.execute(
         "SELECT concept_uuid, kind, canonical_label, render_sheet, render_row, "
         "       render_col, matrix_col "
-        "FROM concept_nodes WHERE template_id = ? ORDER BY render_sheet, render_row",
+        "FROM concept_nodes WHERE template_id = ? AND is_current = 1 "
+        "ORDER BY render_sheet, render_row",
         (template_id,),
     ).fetchall()
     return [

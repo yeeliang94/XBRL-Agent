@@ -184,6 +184,59 @@ class TestRefusesWritesToAbstractRows:
         assert wb["SOPL-Analysis-Function"].cell(row=5, column=2).value is None
         wb.close()
 
+    def test_formula_row_refusal_is_classified_as_formula(self, tmp_path):
+        template = _make_sopl_like(tmp_path)
+        result = fill_workbook(
+            template,
+            str(tmp_path / "filled.xlsx"),
+            [{
+                "sheet": "SOPL-Analysis-Function",
+                "row": 8,
+                "col": 2,
+                "value": 11_399,
+            }],
+        )
+
+        assert result.fields_written == 0
+        assert result.failed_request_keys[0]["kind"] == "formula_cell"
+
+    def test_formula_in_wrong_column_remains_an_unresolved_write(self, tmp_path):
+        """A formula cell on a writable SOCIE row is a locator error.
+
+        MFRS SOCIE row 6 accepts component values but computes column M as a
+        row total.  Targeting M must stay in the unresolved-write ledger; only
+        a formula on an entirely non-writable row is audit-only.
+        """
+        from types import SimpleNamespace
+
+        from extraction.agent import _update_unresolved_fill_errors
+
+        template = str(
+            Path(__file__).resolve().parent.parent
+            / "XBRL-template-MFRS" / "Company" / "09-SOCIE.xlsx"
+        )
+        result = fill_workbook(
+            template,
+            str(tmp_path / "filled.xlsx"),
+            [{
+                "sheet": "SOCIE",
+                "row": 6,
+                "col": 13,
+                "value": 100,
+                "evidence": "Page 8, equity at beginning of period",
+            }],
+        )
+
+        assert result.fields_written == 0
+        assert result.failed_request_keys[0]["kind"] == (
+            "non_writable_template_slot"
+        )
+
+        deps = SimpleNamespace()
+        _update_unresolved_fill_errors(deps, result)
+        assert deps.last_fill_errors
+        assert deps._unresolved_fill_error_state
+
 
 # ---------------------------------------------------------------------------
 # 1.6 — duplicate label: prefer leaf over header

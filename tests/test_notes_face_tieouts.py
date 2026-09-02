@@ -31,11 +31,12 @@ def _build(path: Path, face_share_capital, note_issued_capital,
         f.cell(2, 2, face_share_capital)
     n = wb.create_sheet(note_sheet)
     n.cell(3, 1, "Notes - Issued capital")
-    # Mirror the live sheet shape: "Issued capital" is an abstract section
-    # header whose value cell is always empty (gotcha #17); the closing
-    # amount lives at the "Balance at the end of period" leaf.
+    # Mirror the live sheet shape: the issued-capital closing amount is row 18;
+    # outstanding capital is a separate concept that may differ for treasury
+    # shares.
     n.cell(5, 1, "Issued capital")
     n.cell(18, 1, "Balance at the end of period")
+    n.cell(35, 1, "*Amount of shares outstanding at end of period")
     if note_issued_capital is not None:
         n.cell(18, 2, note_issued_capital)
     wb.save(str(path))
@@ -58,6 +59,18 @@ def test_1000x_off_note_fails(tmp_path):
     assert failures[0].topic == "Share capital"
     assert failures[0].scope == ""
     assert "reconcile" in failures[0].message.lower()
+
+
+def test_outstanding_capital_is_not_compared_to_face_issued_capital(tmp_path):
+    """Treasury shares can make outstanding capital differ from issued."""
+    p = tmp_path / "wb.xlsx"
+    _build(p, 100_000, 100_000)
+    wb = openpyxl.load_workbook(p)
+    wb["Notes-Issuedcapital"].cell(35, 2, 95_000)
+    wb.save(p)
+    wb.close()
+
+    assert check_notes_face_tieouts(str(p)) == []
 
 
 def test_1000x_off_note_is_a_blocking_pipeline_cross_check(tmp_path):

@@ -264,6 +264,34 @@ def test_get_concepts_excludes_templates_not_in_run(
     assert seen_templates == {"mfrs-company-sofp-cunoncu-v1"}, seen_templates
 
 
+def test_get_concepts_excludes_unreferenced_retired_nodes(
+    client: TestClient,
+) -> None:
+    """Current vocabulary excludes retired rows, but historical facts remain."""
+    conn = sqlite3.connect(str(client.db_path))
+    try:
+        retired_without_fact = conn.execute(
+            "SELECT concept_uuid FROM concept_nodes "
+            "WHERE concept_uuid != ? AND is_current = 1 LIMIT 1",
+            (client.leaf_uuid,),
+        ).fetchone()[0]
+        conn.execute(
+            "UPDATE concept_nodes SET is_current = 0, retired_at = 'retired' "
+            "WHERE concept_uuid IN (?, ?)",
+            (client.leaf_uuid, retired_without_fact),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    concepts = client.get(
+        f"/api/runs/{client.run_id}/concepts"
+    ).json()["concepts"]
+    uuids = {row["concept_uuid"] for row in concepts}
+    assert client.leaf_uuid in uuids
+    assert retired_without_fact not in uuids
+
+
 def test_linear_concepts_carry_matrix_metadata(client: TestClient) -> None:
     """Phase 5 step 5.6 — every concept row now carries `matrix_col`
     (NULL on linear templates) and the template `shape` so the UI can

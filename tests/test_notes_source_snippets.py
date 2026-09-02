@@ -6,6 +6,7 @@ real fixture through mammoth when it's installed.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -188,6 +189,53 @@ def test_read_note_snippet_from_disk(tmp_path: Path):
     other = tmp_path / "no_sidecar"
     other.mkdir()
     assert ss.read_note_snippet(other / "uploaded.pdf", 4) == ""
+
+
+def test_partial_pdf_sidecar_exposes_only_manifested_complete_notes(
+    tmp_path: Path,
+):
+    pdf = tmp_path / "uploaded.pdf"
+    pdf.write_bytes(b"%PDF")
+    ss.source_html_path_for(pdf).write_text(
+        "<!-- pdf-page: 3 --><h1>3. POLICIES</h1><p>complete</p>"
+        "<!-- pdf-page: 8 --><h1>8. REVENUE</h1><p>partial fragment</p>",
+        encoding="utf-8",
+    )
+    (tmp_path / "source_meta.json").write_text(
+        json.dumps({
+            "origin": "llm_transcription",
+            "partial": True,
+            "note_pages": {"3": [3]},
+        }),
+        encoding="utf-8",
+    )
+
+    assert "complete" in ss.read_note_snippet(pdf, 3)
+    assert ss.read_note_snippet(pdf, 8) == ""
+
+
+def test_complete_pdf_sidecar_manifest_does_not_limit_note_discovery(
+    tmp_path: Path,
+):
+    pdf = tmp_path / "uploaded.pdf"
+    pdf.write_bytes(b"%PDF")
+    ss.source_html_path_for(pdf).write_text(
+        "<!-- pdf-page: 3 --><h1>3. POLICIES</h1><p>three</p>"
+        "<!-- pdf-page: 8 --><h1>8. REVENUE</h1><p>eight</p>",
+        encoding="utf-8",
+    )
+    (tmp_path / "source_meta.json").write_text(
+        json.dumps({
+            "origin": "llm_transcription",
+            "partial": False,
+            "failed_pages": [],
+            "note_pages": {"3": [3]},
+        }),
+        encoding="utf-8",
+    )
+
+    assert "three" in ss.read_note_snippet(pdf, 3)
+    assert "eight" in ss.read_note_snippet(pdf, 8)
 
 
 def test_end_to_end_through_mammoth(tmp_path: Path):

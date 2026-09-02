@@ -29,6 +29,8 @@ from fastapi.testclient import TestClient
 
 from coordinator import AgentResult, CoordinatorResult
 from cross_checks.framework import CrossCheckResult
+from notes.coordinator import NotesAgentResult, NotesCoordinatorResult
+from notes_types import NotesTemplateType
 from statement_types import StatementType
 from workbook_merger import MergeResult
 
@@ -149,6 +151,139 @@ def test_merge_failure_emits_sse_error(session_env):
         "Merge-failure SSE error must carry bucket=recoverable so the "
         f"frontend keeps the run alive. Body[:600]: {body[:600]!r}"
     )
+
+
+def test_canonical_export_degradation_prevents_clean_run_status(session_env):
+    """A stale scratch fallback is downloadable, but never filing-ready."""
+    client, session_id, out = session_env
+    workbook_path = out / session_id / "SOFP_filled.xlsx"
+    workbook_path.write_bytes(b"scratch")
+    merged_path = out / session_id / "filled.xlsx"
+
+    agent_results = [AgentResult(
+        statement_type=StatementType.SOFP,
+        variant="CuNonCu",
+        status="succeeded",
+        workbook_path=str(workbook_path),
+    )]
+    run_config = {
+        "statements": ["SOFP"],
+        "variants": {"SOFP": "CuNonCu"},
+        "models": {},
+        "infopack": None,
+        "use_scout": False,
+    }
+
+    def degraded_export(**kwargs):
+        kwargs["event_sink"]({
+            "type": "canonical_export_degraded",
+            "message": "SOFP scratch workbook is stale relative to facts.",
+        })
+        return []
+
+    with patch("server._create_proxy_model", return_value="fake-model"), \
+         patch(
+             "coordinator.run_extraction",
+             side_effect=_happy_coordinator(agent_results),
+         ), \
+         patch("server._export_canonical_workbooks", side_effect=degraded_export), \
+         patch(
+             "workbook_merger.merge",
+             return_value=MergeResult(
+                 success=True,
+                 output_path=str(merged_path),
+                 sheets_copied=1,
+             ),
+         ), \
+         patch("cross_checks.framework.run_all", return_value=[]), \
+         patch("cross_checks.framework.run_all_facts", return_value=[]), \
+         patch(
+             "cross_checks.notes_consistency.check_notes_consistency",
+             return_value=[],
+         ):
+        response = client.post(f"/api/run/{session_id}", json=run_config)
+
+    assert response.status_code == 200
+    body = response.text
+    assert "canonical_export_degraded" in body
+    assert '"overall_status": "completed_with_errors"' in body
+    assert '"success": false' in body
+
+    db_path = out / "xbrl_agent.db"
+    conn = sqlite3.connect(str(db_path))
+    try:
+        status = conn.execute(
+            "SELECT status FROM runs ORDER BY id DESC LIMIT 1"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert status == "completed_with_errors"
+
+
+def test_notes_refresh_degradation_prevents_clean_run_status(
+    session_env,
+    monkeypatch,
+):
+    client, session_id, out = session_env
+    monkeypatch.setenv("XBRL_NOTES_AUTO_REVIEW", "true")
+    face_path = out / session_id / "SOFP_filled.xlsx"
+    notes_path = out / session_id / "NOTES_CORP_INFO_filled.xlsx"
+    face_path.write_bytes(b"face")
+    notes_path.write_bytes(b"notes")
+    merged_path = out / session_id / "filled.xlsx"
+
+    agent_results = [AgentResult(
+        statement_type=StatementType.SOFP,
+        variant="CuNonCu",
+        status="succeeded",
+        workbook_path=str(face_path),
+    )]
+
+    async def notes_run(*_args, **_kwargs):
+        return NotesCoordinatorResult(agent_results=[NotesAgentResult(
+            template_type=NotesTemplateType.CORP_INFO,
+            status="succeeded",
+            workbook_path=str(notes_path),
+        )])
+
+    async def notes_review(**_kwargs):
+        return {"writes_performed": 1, "error": None}
+
+    with patch("server._create_proxy_model", return_value="fake-model"), \
+         patch(
+             "coordinator.run_extraction",
+             side_effect=_happy_coordinator(agent_results),
+         ), \
+         patch("notes.coordinator.run_notes_extraction", side_effect=notes_run), \
+         patch("server._run_notes_reviewer_pass", side_effect=notes_review), \
+         patch(
+             "server._refresh_merged_notes_workbook",
+             side_effect=RuntimeError("refresh failed"),
+         ), \
+         patch(
+             "workbook_merger.merge",
+             return_value=MergeResult(
+                 success=True,
+                 output_path=str(merged_path),
+                 sheets_copied=2,
+             ),
+         ), \
+         patch("cross_checks.framework.run_all", return_value=[]), \
+         patch("cross_checks.framework.run_all_facts", return_value=[]), \
+         patch(
+             "cross_checks.notes_consistency.check_notes_consistency",
+             return_value=[],
+         ):
+        response = client.post(f"/api/run/{session_id}", json={
+            "statements": ["SOFP"],
+            "variants": {"SOFP": "CuNonCu"},
+            "notes_to_run": ["CORP_INFO"],
+            "use_scout": False,
+        })
+
+    assert response.status_code == 200
+    assert "canonical_notes_refresh_degraded" in response.text
+    assert '"overall_status": "completed_with_errors"' in response.text
 
 
 def test_cross_check_exception_emits_sse_error_and_finalizes(session_env):

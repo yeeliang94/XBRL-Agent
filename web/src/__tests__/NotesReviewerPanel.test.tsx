@@ -34,6 +34,9 @@ const reviewPayload = {
       reason: "two fair-value notes map to one row",
       sheet: "Notes-Listofnotes",
       row: 49,
+      finding_id: '["collision",49,[4,20]]',
+      source_pages: [36, 37],
+      evidence: "Pages 36-37 show both disclosures map to this row.",
       status: "open",
       answer: null,
     },
@@ -85,6 +88,8 @@ describe("NotesReviewerPanel", () => {
     expect(screen.getByText("Disclosure of financial instruments")).toBeTruthy();
     expect(screen.getByText("Authored")).toBeTruthy();
     expect(screen.getByText(/two fair-value notes/i)).toBeTruthy();
+    expect(screen.getByText(/source pages: 36, 37/i)).toBeTruthy();
+    expect(screen.getByText(/pages 36-37 show both disclosures/i)).toBeTruthy();
     // Flag kind renders in plain English (vocabulary map), not the raw enum.
     expect(screen.getByText(/needs your review/i)).toBeTruthy();
   });

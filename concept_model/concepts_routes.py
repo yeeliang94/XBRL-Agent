@@ -150,9 +150,17 @@ def register_concept_routes(app, audit_db_getter) -> None:
                   AND f.period = 'CY'
                   AND f.entity_scope = 'Company'
                 WHERE n.template_id IN ({placeholders})
+                  AND (
+                    n.is_current = 1
+                    OR EXISTS (
+                      SELECT 1 FROM run_concept_facts retained_fact
+                      WHERE retained_fact.run_id = ?
+                        AND retained_fact.concept_uuid = n.concept_uuid
+                    )
+                  )
                 ORDER BY n.template_id, n.render_sheet, n.render_row, n.render_col
                 """,
-                (run_id, *template_ids),
+                (run_id, *template_ids, run_id),
             ).fetchall()
 
             # Second pass: every fact for this run, grouped by
@@ -201,8 +209,16 @@ def register_concept_routes(app, audit_db_getter) -> None:
                 FROM concept_render_aliases a
                 JOIN concept_nodes n ON n.concept_uuid = a.concept_uuid
                 WHERE n.template_id IN ({placeholders})
+                  AND (
+                    n.is_current = 1
+                    OR EXISTS (
+                      SELECT 1 FROM run_concept_facts retained_fact
+                      WHERE retained_fact.run_id = ?
+                        AND retained_fact.concept_uuid = n.concept_uuid
+                    )
+                  )
                 """,
-                tuple(template_ids),
+                (*template_ids, run_id),
             ).fetchall()
             aliases_by_uuid: dict[str, list[sqlite3.Row]] = {}
             for ar in alias_rows:
@@ -310,7 +326,8 @@ def register_concept_routes(app, audit_db_getter) -> None:
             rows = conn.execute(
                 "SELECT concept_uuid, parent_uuid, kind, canonical_label, "
                 "display_label, render_sheet, render_row, render_col, "
-                "matrix_col, matrix_col_label FROM concept_nodes WHERE template_id = ? "
+                "matrix_col, matrix_col_label FROM concept_nodes "
+                "WHERE template_id = ? AND is_current = 1 "
                 "ORDER BY render_sheet, render_row, render_col",
                 (template_id,),
             ).fetchall()

@@ -206,15 +206,23 @@ def test_full_extraction_mocked(full_pipeline_env):
 
 @pytest.mark.live
 def test_full_extraction_live(tmp_path):
-    """Live E2E: upload FINCO PDF → 5 agents → merged workbook → cross-checks.
+    """Live canary: FINCO PDF → SOFP agent → filled workbook.
 
-    Requires GEMINI_API_KEY env var. Run with: pytest -m live
-    Skipped if no API key is set.
+    Uses TEST_MODEL through the production provider-routing factory. Run with:
+    pytest -m live. Skipped if neither a provider key nor proxy is configured.
     """
     import os
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        pytest.skip("GEMINI_API_KEY not set — skipping live E2E test")
+    model_name = os.environ.get("TEST_MODEL", "google:gemini-3.5-flash")
+    proxy_url = os.environ.get("LLM_PROXY_URL", "").strip()
+    api_key = (
+        os.environ.get("GOOGLE_API_KEY")
+        or os.environ.get("GEMINI_API_KEY")
+        or os.environ.get("OPENAI_API_KEY")
+        or os.environ.get("ANTHROPIC_API_KEY")
+        or ""
+    )
+    if not api_key and not proxy_url:
+        pytest.skip("No API key or proxy configured — skipping live E2E test")
 
     pdf_path = Path(__file__).resolve().parent.parent / "data" / "FINCO-Audited-Financial-Statement-2021.pdf"
     if not pdf_path.exists():
@@ -224,22 +232,22 @@ def test_full_extraction_live(tmp_path):
     # to avoid server setup complexity in live test
     import asyncio
     from coordinator import RunConfig, run_extraction
+    from server import _create_proxy_model
 
     output_dir = str(tmp_path / "live_output")
     Path(output_dir).mkdir(parents=True)
 
+    model = _create_proxy_model(model_name, proxy_url, api_key)
+
     config = RunConfig(
         pdf_path=str(pdf_path),
         output_dir=output_dir,
-        # V2 removed the google-gla: prefix (google: is the spelling) and
-        # gemini-2.0-flash is retired — use a current flash model. Caught
-        # live at the 2026-07-12 V2 upgrade's U3 gate (plan doc U3 note).
-        model="google:gemini-3.5-flash",
+        model=model,
         statements_to_run={StatementType.SOFP},  # Just SOFP for speed
         variants={StatementType.SOFP: "CuNonCu"},
     )
 
-    result = asyncio.get_event_loop().run_until_complete(run_extraction(config))
+    result = asyncio.run(run_extraction(config))
 
     # At least SOFP should succeed
     assert len(result.agent_results) == 1

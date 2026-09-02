@@ -346,6 +346,10 @@ def test_event_sink_fires_when_a_statement_export_fails(seeded, tmp_path, monkey
         statement_type=StatementType.SOFP, variant="CuNonCu",
         status="succeeded", workbook_path=str(scratch))]
 
+    # A failed presence probe is unknown, not proof of zero facts. The export
+    # must still be attempted so its failure can surface artifact degradation.
+    monkeypatch.setattr(server, "_run_has_facts", lambda *_args: None)
+
     # Force the per-statement export to raise.
     def _boom(*a, **k):
         raise RuntimeError("export blew up")

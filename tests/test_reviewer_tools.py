@@ -138,6 +138,77 @@ def test_trace_unknown_cell_returns_not_found(tmp_path):
     assert trace["found"] is False
 
 
+def test_trace_by_coord_ignores_retired_primary_node(tmp_path):
+    """Current coordinate resolution must not bind to an older retired row."""
+    db, run_id = _seed(tmp_path)
+    current_uuid = "00000000-0000-0000-0000-0000000000e1"
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(
+            "UPDATE concept_nodes SET is_current = 0, retired_at = 'retired' "
+            "WHERE concept_uuid = ?",
+            (LEAF1,),
+        )
+        conn.execute(
+            "INSERT INTO concept_nodes(concept_uuid, template_id, kind, "
+            "canonical_label, render_sheet, render_row, render_col) VALUES "
+            "(?, ?, 'LEAF', 'Freehold land renamed', "
+            "'SOFP-Sub-CuNonCu', 36, 'B')",
+            (current_uuid, _TEMPLATE),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    trace = trace_cascade_source(
+        db,
+        run_id,
+        sheet="SOFP-Sub-CuNonCu",
+        row=36,
+        template_prefix="mfrs-company-",
+    )
+    assert trace["found"] is True
+    assert trace["concept"]["concept_uuid"] == current_uuid
+
+
+def test_trace_by_alias_ignores_retired_primary_node(tmp_path):
+    """Alias fallback must apply the same current-membership rule."""
+    db, run_id = _seed(tmp_path)
+    current_uuid = "00000000-0000-0000-0000-0000000000e2"
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(
+            "UPDATE concept_nodes SET is_current = 0, retired_at = 'retired' "
+            "WHERE concept_uuid = ?",
+            (SUBTOTAL,),
+        )
+        conn.execute(
+            "INSERT INTO concept_nodes(concept_uuid, template_id, kind, "
+            "canonical_label, render_sheet, render_row, render_col) VALUES "
+            "(?, ?, 'COMPUTED', '*Total PPE renamed', "
+            "'SOFP-Sub-CuNonCu', 39, 'B')",
+            (current_uuid, _TEMPLATE),
+        )
+        conn.execute(
+            "INSERT INTO concept_render_aliases(concept_uuid, alias_sheet, "
+            "alias_row, alias_col) VALUES (?, 'SOFP-CuNonCu', 5, 'B')",
+            (current_uuid,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    trace = trace_cascade_source(
+        db,
+        run_id,
+        sheet="SOFP-CuNonCu",
+        row=5,
+        template_prefix="mfrs-company-",
+    )
+    assert trace["found"] is True
+    assert trace["concept"]["concept_uuid"] == current_uuid
+
+
 # ---------------------------------------------------------------------------
 # Step 6 — apply_fix guarded write
 # ---------------------------------------------------------------------------

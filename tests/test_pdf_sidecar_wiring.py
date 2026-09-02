@@ -162,6 +162,32 @@ def test_partial_transcription_is_a_structured_skip(tmp_path, monkeypatch):
     assert not (tmp_path / "source.html").exists()
 
 
+def test_partial_transcription_does_not_trust_scout_note_segments(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setenv("XBRL_PDF_SIDECAR", "true")
+    pdf = _make_pdf(tmp_path / "uploaded.pdf")
+
+    async def partial(pdf_path, pages, model, **kw):
+        from ingest.pdf_sidecar import TranscribeResult
+        return TranscribeResult(
+            pages_html={
+                2: "<h3>1. First</h3><p>one</p>",
+                4: "<h3>3. Third</h3><p>three</p>",
+            },
+            failed_pages=[3], usage={"in": 5, "out": 2},
+        )
+
+    out = _build(
+        pdf, _infopack([(2, 2), (3, 3), (4, 4)]), monkeypatch, fake=partial,
+    )
+
+    assert out["status"] == "skipped"
+    assert out["reason"] == "transcription_incomplete"
+    assert out["failed_pages"] == [3]
+    assert not (tmp_path / "source.html").exists()
+
+
 def test_repeat_staging_copies_the_sidecar_bundle(tmp_path):
     """Peer review 2026-08-11: source_meta.json must travel with source.html —
     without it repeat 2's sidecar reads as Word-origin and repeat prompts

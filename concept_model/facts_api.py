@@ -222,6 +222,41 @@ def _validate(fact: FactWrite, concept, is_formula: bool) -> None:
 # ---------------------------------------------------------------------------
 
 
+def validate_scalar_fact(
+    conn: sqlite3.Connection,
+    body: "FactWrite",
+) -> tuple[sqlite3.Row, bool]:
+    """Validate one scalar fact without changing canonical persistence.
+
+    Workbook writers use this before mutating a physical cell so the same
+    kind/status validation enforced by apply_fact cannot reject the canonical
+    representation after the scratch workbook has already accepted it. The
+    returned concept and formula flag let apply_fact reuse the lookup without
+    repeating policy.
+    """
+    if not body.concept_uuid:
+        raise HTTPException(
+            status_code=400,
+            detail="concept_uuid is required for a scalar fact write "
+                   "(omit it only for an HTML notes write).",
+        )
+
+    concept = _lookup_concept(conn, body.concept_uuid)
+    if concept is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unknown concept_uuid {body.concept_uuid!r}. "
+                "Use the importer's concept_nodes table for the "
+                "canonical set."
+            ),
+        )
+
+    is_formula = _concept_owns_formula(conn, body.concept_uuid, concept)
+    _validate(body, concept, is_formula)
+    return concept, is_formula
+
+
 def apply_fact(
     conn: sqlite3.Connection,
     run_id: int,
@@ -256,33 +291,13 @@ def apply_fact(
     if body.html is not None:
         return _post_notes_fact(conn, run_id, body)
 
-    if not body.concept_uuid:
-        raise HTTPException(
-            status_code=400,
-            detail="concept_uuid is required for a scalar fact write "
-                   "(omit it only for an HTML notes write).",
-        )
-
-    concept = _lookup_concept(conn, body.concept_uuid)
-    if concept is None:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Unknown concept_uuid {body.concept_uuid!r}. "
-                "Use the importer's concept_nodes table for the "
-                "canonical set."
-            ),
-        )
-
     # A concept owns a formula when it has outgoing edges. COMPUTED
     # rows always do; SOCIE totals are stored as MATRIX_CELL WITH
     # edges (a data-entry MATRIX_CELL has none). The formula-cell
     # guard below keys on this, not on kind, so a matrix total can't
     # be POSTed an observed literal without aggregate_only the way a
     # COMPUTED row can't.
-    is_formula = _concept_owns_formula(conn, body.concept_uuid, concept)
-
-    _validate(body, concept, is_formula)
+    concept, is_formula = validate_scalar_fact(conn, body)
 
     # The "parent and child both written" detection lives here
     # so neither the extraction nor the correction agent has to

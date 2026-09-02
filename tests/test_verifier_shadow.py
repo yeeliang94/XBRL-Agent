@@ -193,6 +193,34 @@ def test_mandatory_scan_treats_not_disclosed_as_resolved(sofp_run, monkeypatch):
         "a mandatory row with no fact at all must be flagged unfilled")
 
 
+def test_mandatory_scan_ignores_retired_template_rows(sofp_run):
+    """A renamed mandatory row must not remain in the current save gate."""
+    from concept_model.facts_api import read_run_facts
+    from tools.verifier_facts import _collect_unfilled_mandatory_facts, _load_nodes
+
+    _db, run_id, template_id, conn = sofp_run
+    retired_uuid = "00000000-0000-5000-8000-000000000046"
+    conn.execute(
+        "INSERT INTO concept_nodes("
+        "concept_uuid, template_id, kind, canonical_label, render_sheet, "
+        "render_row, render_col, is_current, retired_at"
+        ") VALUES (?, ?, 'LEAF', '*Retired mandatory row', "
+        "'SOFP-CuNonCu', 999, 'B', 0, '2026-09-02T00:00:00Z')",
+        (retired_uuid, template_id),
+    )
+    conn.commit()
+
+    nodes = _load_nodes(conn, template_id)
+    facts = read_run_facts(conn, run_id, [template_id])
+    unfilled = _collect_unfilled_mandatory_facts(
+        nodes, facts, "SOFP-CuNonCu", "company"
+    )
+    conn.close()
+
+    assert retired_uuid not in {node["uuid"] for node in nodes}
+    assert "*Retired mandatory row" not in unfilled
+
+
 def test_current_other_investments_never_satisfies_mandatory_noncurrent(sofp_run):
     """Run-83 hardening Phase 4 (docs/PLAN-run83-hardening.md Step 6).
 

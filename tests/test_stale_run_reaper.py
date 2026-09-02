@@ -63,6 +63,49 @@ def test_old_running_run_is_aborted(conn):
     assert row["ended_at"], "reaped run must carry a terminal ended_at timestamp"
 
 
+def test_restart_reconciliation_settles_parent_children_and_terminal_event(conn):
+    """One startup transaction leaves no contradictory lifecycle state."""
+    old = _iso(datetime.now(timezone.utc) - timedelta(hours=48))
+    run_id = _make_run(conn, status="running", started_at=old)
+    repo.create_run_agent(conn, run_id, statement_type="SOFP")
+    repo.create_run_agent(conn, run_id, statement_type="SYSTEM")
+    conn.commit()
+
+    assert repo.reconcile_stale_runs(conn) == 1
+    conn.commit()
+
+    run = conn.execute(
+        "SELECT status, ended_at FROM runs WHERE id = ?",
+        (run_id,),
+    ).fetchone()
+    assert run["status"] == "aborted"
+    assert run["ended_at"]
+
+    children = conn.execute(
+        "SELECT statement_type, status, error_type, ended_at "
+        "FROM run_agents WHERE run_id = ? ORDER BY id",
+        (run_id,),
+    ).fetchall()
+    assert [
+        (row["statement_type"], row["status"], row["error_type"])
+        for row in children
+    ] == [
+        ("SOFP", "cancelled", "cancelled"),
+        ("SYSTEM", "failed", "coordinator_incident"),
+    ]
+    assert all(row["ended_at"] for row in children)
+
+    events = repo.fetch_run_events(conn, run_id)
+    assert len(events) == 1
+    assert events[0].event_type == "run_complete"
+    assert events[0].phase == "restart_reconciliation"
+    assert events[0].payload == {
+        "success": False,
+        "overall_status": "aborted",
+        "reason": "server_restart",
+    }
+
+
 def test_fresh_running_run_is_left_alone(conn):
     fresh = _iso(datetime.now(timezone.utc) - timedelta(minutes=2))
     run_id = _make_run(conn, status="running", started_at=fresh)

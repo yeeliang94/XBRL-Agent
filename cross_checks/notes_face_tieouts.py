@@ -50,17 +50,14 @@ class TieoutPair:
 # Seed table — only unambiguous pairs. The face share-capital line must equal
 # the issued-capital note's closing issued-capital AMOUNT.
 #
-# Notes-side label choice (verified against live templates 2026-06-13): the
-# sheet's "Issued capital" row is an ABSTRACT section header (1F3864 fill,
-# gotcha #17) with an empty value cell on both MFRS (row 5) and MPERS
-# (rows 5-6), so anchoring on it made notes_val None on every real run and
-# the check silently no-op'd. The closing amount lives at the leaf
-# "Balance at the end of period" inside the "Amount of shares issued and
-# fully paid" block — that label is UNIQUE on the issued-capital sheet in
-# all four live templates (MFRS/MPERS × Company/Group; the shares-COUNT
-# block uses "Number of shares ..." labels instead), so a plain
-# find_value_by_label lookup is unambiguous. Pinned by the live-template
-# test in tests/test_notes_face_tieouts.py.
+# Notes-side label choice (verified against live templates 2026-09-02): the
+# sheet's "Issued capital" row is an ABSTRACT section header (gotcha #17).
+# The closing issued-capital amount lives at the unique "Balance at the end of
+# period" leaf inside the "Amount of shares issued and fully paid" block. The
+# separate "Amount of shares outstanding at end of period" leaf can differ
+# when the entity holds treasury shares, so it must not be tied to gross issued
+# capital on the face statement. Pinned by the live-template and treasury-share
+# tests in tests/test_notes_face_tieouts.py.
 _PAIRS: list[TieoutPair] = [
     TieoutPair(
         topic="Share capital",

@@ -36,6 +36,9 @@ interface NotesFlagRow {
   reason: string;
   sheet: string | null;
   row: number | null;
+  finding_id: string | null;
+  source_pages: number[];
+  evidence: string | null;
   status: string;
   answer: string | null;
 }
@@ -396,6 +399,14 @@ export function NotesReviewerPanel({ runId }: Props) {
                     )}
                   </div>
                   <p style={styles.flagReason}>{f.reason}</p>
+                  {f.source_pages.length > 0 && (
+                    <p style={styles.flagGrounding}>
+                      Source pages: {f.source_pages.join(", ")}
+                    </p>
+                  )}
+                  {f.evidence && (
+                    <p style={styles.flagEvidence}>{f.evidence}</p>
+                  )}
                   {f.answer ? (
                     <p style={styles.answerGiven}>Your answer: {f.answer}</p>
                   ) : (
@@ -535,6 +546,13 @@ const styles = {
     borderColor: pwc.warning,
   } as const,
   flagReason: { color: pwc.grey800, fontSize: 13, margin: `${pwc.space.xs}px 0` },
+  flagGrounding: { color: pwc.grey700, fontSize: 12, fontWeight: 600, margin: 0 },
+  flagEvidence: {
+    color: pwc.grey700,
+    fontSize: 13,
+    margin: `${pwc.space.xs}px 0 ${pwc.space.sm}px`,
+    whiteSpace: "pre-wrap" as const,
+  } as const,
   answerGiven: { color: pwc.successText, fontSize: 13, margin: 0 },
   answerRow: { display: "flex", gap: pwc.space.sm, alignItems: "flex-start" },
   answerBox: {

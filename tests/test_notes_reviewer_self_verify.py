@@ -78,6 +78,29 @@ def test_format_clean_when_all_resolved():
     assert "introduced none" in out
 
 
+def test_format_treats_grounded_human_disposition_as_terminal():
+    key = ("collision", 49, (4, 20))
+    after = {"row_collisions": [{"row": 49, "note_nums": [4, 20]}]}
+
+    out = format_notes_verification(after, {key}, {key})
+
+    assert "HANDLED" in out
+    assert "VERIFIED" not in out
+    assert "sent to human review" in out
+    assert "STILL open" not in out
+
+
+def test_introduced_finding_cannot_be_dispositioned_away():
+    introduced = ("coverage_gap", 5)
+
+    out = format_notes_verification(
+        {"coverage_gaps": [5]}, set(), {introduced},
+    )
+
+    assert "NEW" in out
+    assert "VERIFIED" not in out
+
+
 # --------------------------------------------------------------------------
 # Provenance sync helpers — clear deletes, move preserves refs
 # --------------------------------------------------------------------------
@@ -358,3 +381,96 @@ def test_clear_tool_deletes_provenance_and_tool_is_registered(db_path: Path):
         prov = {(p["sheet"], p["row"]) for p in repo.fetch_notes_provenance(conn, run_id)}
     assert (_S11, 42) not in prov
     assert (_S12, 49) in prov  # the other copy is untouched
+
+
+def test_grounded_flag_dispositions_exact_packet_finding(db_path: Path):
+    run_id = _seed_run(db_path)
+    persist_notes_review_inputs(
+        db_path=str(db_path), run_id=run_id,
+        sidecar_entries=[{
+            "sheet": _S12, "row": 49, "col": 2, "row_label": "Fair value",
+            "source_note_refs": ["4", "20"], "content_preview": "x",
+        }],
+        inventory=[],
+    )
+    expected_key = ("collision", 49, (4, 20))
+    finding_id = ra.finding_id(expected_key)
+    model = _scripted([
+        [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [1]})],
+        [ToolCallPart(tool_name="raise_flag", args={
+            "kind": "needs_human", "reason": "Both disclosures map here.",
+            "sheet": _S12, "row": 49, "finding_id": finding_id,
+            # Numeric strings are coerced by the typed PydanticAI tool boundary
+            # before raise_flag runs; they must not weaken stored grounding.
+            "source_pages": ["1"], "evidence": "page 1 shows both disclosures",
+        })],
+    ])
+    _agent, deps, context = ra.create_notes_reviewer_agent(
+        run_id=run_id, db_path=str(db_path), pdf_path="/tmp/x.pdf",
+        filing_level="company", filing_standard="mfrs",
+        model=model, output_dir=str(db_path.parent), inventory_note_nums=[],
+    )
+
+    _agent.run_sync("go", deps=deps)
+
+    assert expected_key in deps.dispositioned_finding_keys
+    assert deps.flags[0]["finding_id"] == finding_id
+    assert deps.flags[0]["source_pages"] == [1]
+    assert "sent to human review" in ra.format_notes_verification(
+        context, deps.original_finding_keys, deps.dispositioned_finding_keys,
+    )
+
+
+def test_packet_finding_flag_requires_evidence_to_be_terminal(db_path: Path):
+    run_id = _seed_run(db_path)
+    persist_notes_review_inputs(
+        db_path=str(db_path), run_id=run_id,
+        sidecar_entries=[{
+            "sheet": _S12, "row": 49, "col": 2, "row_label": "Fair value",
+            "source_note_refs": ["4", "20"], "content_preview": "x",
+        }],
+        inventory=[],
+    )
+    expected_key = ("collision", 49, (4, 20))
+    model = _scripted([
+        [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [1]})],
+        [ToolCallPart(tool_name="raise_flag", args={
+            "kind": "needs_human", "reason": "Cannot determine mapping.",
+            "sheet": _S12, "row": 49,
+            "finding_id": ra.finding_id(expected_key),
+            "source_pages": [1],
+        })],
+    ])
+    agent, deps, _context = ra.create_notes_reviewer_agent(
+        run_id=run_id, db_path=str(db_path), pdf_path="/tmp/x.pdf",
+        filing_level="company", filing_standard="mfrs",
+        model=model, output_dir=str(db_path.parent), inventory_note_nums=[],
+    )
+
+    agent.run_sync("go", deps=deps)
+
+    assert deps.flags == []
+    assert expected_key not in deps.dispositioned_finding_keys
+
+
+def test_notes_reviewer_always_compacts_images_and_warns_about_limits(
+    db_path: Path,
+):
+    from pydantic_ai.capabilities import ProcessHistory
+    from pydantic_ai.models.test import TestModel
+
+    run_id = _seed_run(db_path)
+    agent, _deps, _context = ra.create_notes_reviewer_agent(
+        run_id=run_id, db_path=str(db_path), pdf_path="/tmp/x.pdf",
+        filing_level="company", filing_standard="mfrs",
+        model=TestModel(call_tools=[]), output_dir=str(db_path.parent),
+        inventory_note_nums=[],
+    )
+    root = getattr(agent, "root_capability", None)
+    caps = [
+        cap for cap in (getattr(root, "capabilities", []) or [])
+        if isinstance(cap, ProcessHistory)
+    ]
+    names = [getattr(cap.processor, "__name__", "") for cap in caps]
+
+    assert names == ["strip_stale_reviewer_images", "limit_warning_processor"]

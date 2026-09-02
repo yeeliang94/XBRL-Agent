@@ -203,14 +203,15 @@ def _resolve_concept(
             node = conn.execute(
                 "SELECT concept_uuid, kind, canonical_label, render_sheet, "
                 "render_row, render_col FROM concept_nodes "
-                "WHERE render_sheet = ? AND render_row = ? AND template_id LIKE ?",
+                "WHERE render_sheet = ? AND render_row = ? "
+                "AND template_id LIKE ? AND is_current = 1",
                 (sheet, int(row), like),
             ).fetchone()
         else:
             node = conn.execute(
                 "SELECT concept_uuid, kind, canonical_label, render_sheet, "
                 "render_row, render_col FROM concept_nodes "
-                "WHERE render_sheet = ? AND render_row = ?",
+                "WHERE render_sheet = ? AND render_row = ? AND is_current = 1",
                 (sheet, int(row)),
             ).fetchone()
         if node is not None:
@@ -223,7 +224,7 @@ def _resolve_concept(
                 "FROM concept_render_aliases a "
                 "JOIN concept_nodes n ON n.concept_uuid = a.concept_uuid "
                 "WHERE a.alias_sheet = ? AND a.alias_row = ? "
-                "AND n.template_id LIKE ?",
+                "AND n.template_id LIKE ? AND n.is_current = 1",
                 (sheet, int(row), like),
             ).fetchone()
         else:
@@ -232,7 +233,8 @@ def _resolve_concept(
                 "n.render_sheet, n.render_row, n.render_col "
                 "FROM concept_render_aliases a "
                 "JOIN concept_nodes n ON n.concept_uuid = a.concept_uuid "
-                "WHERE a.alias_sheet = ? AND a.alias_row = ?",
+                "WHERE a.alias_sheet = ? AND a.alias_row = ? "
+                "AND n.is_current = 1",
                 (sheet, int(row)),
             ).fetchone()
         return alias

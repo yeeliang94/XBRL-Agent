@@ -126,6 +126,89 @@ def test_writer_rejects_unmapped_managed_cell_before_projection(canonical_env, t
     assert warning is None
 
 
+def test_write_facts_rejects_canonical_invalid_value_before_workbook_save(
+    canonical_env,
+    tmp_path,
+):
+    """A cell rejected by canonical validation never lands in the scratch xlsx.
+
+    The canonical fact store is the filing truth. A resolvable template cell
+    carrying prose used to be written to the scratch workbook first and only
+    rejected during the later projection, which left the agent able to verify
+    and save a workbook value that the canonical export would omit.
+    """
+    import openpyxl
+    from extraction.agent import _check_save_gate, create_extraction_agent
+    from pydantic_ai.models.test import TestModel
+    from tools.verifier import VerificationResult
+
+    db_path, run_id, template_id, leaf = canonical_env
+    agent, deps = create_extraction_agent(
+        statement_type=StatementType.SOFP,
+        variant="CuNonCu",
+        pdf_path="/tmp/x.pdf",
+        template_path=str(CO_SOFP),
+        model=TestModel(),
+        output_dir=str(tmp_path),
+        run_id=run_id,
+        db_path=str(db_path),
+        template_id=template_id,
+    )
+
+    write_tool = next(
+        tools["write_facts"]
+        for toolset in agent.toolsets
+        if "write_facts" in (tools := toolset.tools)
+    )
+    write_fn = getattr(write_tool, "function", None) or write_tool
+    ctx = type("Ctx", (), {"deps": deps})()
+
+    workbook = openpyxl.load_workbook(CO_SOFP, data_only=False)
+    try:
+        original_value = workbook["SOFP-CuNonCu"].cell(row=leaf, column=2).value
+    finally:
+        workbook.close()
+
+    message = write_fn(ctx, [{
+        "sheet": "SOFP-CuNonCu",
+        "row": leaf,
+        "col": 2,
+        "value": "not a numeric fact",
+        "evidence": "Page 12, statement heading",
+    }])
+
+    output_path = tmp_path / "SOFP_filled.xlsx"
+    workbook = openpyxl.load_workbook(output_path, data_only=False)
+    try:
+        assert (
+            workbook["SOFP-CuNonCu"].cell(row=leaf, column=2).value
+            == original_value
+        )
+    finally:
+        workbook.close()
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        fact_count = conn.execute(
+            "SELECT COUNT(*) FROM run_concept_facts WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    assert fact_count == 0
+    assert "canonical fact validation" in message.lower()
+    assert deps.last_fill_errors
+
+    deps.last_verify_result = VerificationResult(
+        is_balanced=True,
+        matches_pdf=None,
+        mismatches=[],
+        mandatory_unfilled=[],
+    )
+    assert "rejected writes" in (_check_save_gate(deps) or "").lower()
+
+
 # --- Rewrite Phase 4.1: projection-CALL failure is FATAL ---------------------
 
 
