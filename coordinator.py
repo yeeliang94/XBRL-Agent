@@ -42,7 +42,7 @@ from statement_types import (
     variants_for_standard,
 )
 from extraction.agent import create_extraction_agent
-from model_settings import describe_model_runtime
+from model_settings import DEFAULT_MODEL_ID, describe_model_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -226,7 +226,7 @@ class RunConfig:
     output_dir: str
     # Accepts str (PydanticAI resolves it) or a provider-backed Model object
     # (from server._create_proxy_model for enterprise proxy support).
-    model: Any = "openai.gpt-5.4"
+    model: Any = DEFAULT_MODEL_ID
     statements_to_run: Set[StatementType] = field(default_factory=lambda: set(StatementType))
     variants: Dict[StatementType, str] = field(default_factory=dict)
     # Per-agent model overrides — same typing as model (str or Model object)

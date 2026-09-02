@@ -43,6 +43,7 @@ export const TERMS = {
  *  arrive, to carry the cross-check table. */
 const PSEUDO_AGENT_LABELS: Record<string, string> = {
   SCOUT: "Document scan",
+  SOURCE_PREPARATION: "Source preparation",
   CORRECTION: TERMS.aiReview,
   NOTES_VALIDATOR: TERMS.notesReview,
   VALIDATOR: "Cross-checks",

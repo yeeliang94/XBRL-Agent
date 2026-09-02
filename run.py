@@ -12,6 +12,7 @@ from runtime_settings import apply_settings as apply_runtime_settings
 from token_tracker import TokenReport
 from statement_types import StatementType
 from notes_types import NotesTemplateType
+from model_settings import DEFAULT_MODEL_ID
 
 # Default output directory relative to this script, not the working directory
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -89,7 +90,7 @@ def _stage_input_document(src_path: str, session_dir: Path) -> None:
 def run_agent(
     pdf_path: str,
     template_path: Optional[str] = None,
-    model: str = "openai.gpt-5.4",  # resolved through _create_proxy_model
+    model: str = DEFAULT_MODEL_ID,  # resolved through _create_proxy_model
     output_dir: str = _DEFAULT_OUTPUT_DIR,
     statements: Optional[Set[StatementType]] = None,
     filing_level: str = "company",
@@ -397,7 +398,7 @@ def run_resume(
         proxy_url = os.environ.get("LLM_PROXY_URL", "")
         api_key = (os.environ.get("GOOGLE_API_KEY", "")
                    or os.environ.get("GEMINI_API_KEY", ""))
-        model = model or os.environ.get("TEST_MODEL", "openai.gpt-5.4")
+        model = model or os.environ.get("TEST_MODEL", DEFAULT_MODEL_ID)
 
         asyncio.run(_drive())
     except KeyboardInterrupt:
@@ -483,7 +484,7 @@ def build_parser():
     parser.add_argument("pdf", nargs="?", default="data/FINCO-Audited-Financial-Statement-2021.pdf",
                         help="Path to the PDF to extract from")
     parser.add_argument("--model", default=None,
-                        help="Model to use (e.g. openai.gpt-5.4, gemini-3-flash-preview, claude-sonnet-4-6). "
+                        help="Model to use (e.g. openai.global.gpt-5.6-luna, gemini-3-flash-preview, claude-sonnet-4-6). "
                              "Defaults to the resolved TEST_MODEL runtime setting")
     parser.add_argument("--statements", nargs="+", default=all_stmt_names,
                         choices=all_stmt_names,
@@ -549,7 +550,7 @@ if __name__ == "__main__":
 
     # Resolve model: CLI flag > TEST_MODEL env var > default
     _reload_cli_settings()
-    model = args.model or os.environ.get("TEST_MODEL", "openai.gpt-5.4")
+    model = args.model or os.environ.get("TEST_MODEL", DEFAULT_MODEL_ID)
 
     print(f"Model: {model}")
     print(f"Standard: {args.standard}   Level: {args.level}   Denomination: {args.denomination}")

@@ -25,6 +25,7 @@ from pydantic import BaseModel
 
 import server
 from db import repository as repo
+from model_settings import DEFAULT_MODEL_ID
 from notes.versioning import (
     compute_notes_review_diff,
     has_notes_snapshot,
@@ -131,7 +132,7 @@ async def re_review_notes(run_id: int, body: Optional[dict] = None):
         override
         or server._notes_reviewer_model_name()
         or config.get("model")
-        or os.environ.get("TEST_MODEL", "openai.gpt-5.4")
+        or os.environ.get("TEST_MODEL", DEFAULT_MODEL_ID)
     )
     if not api_key:
         raise HTTPException(status_code=400, detail="API key not set. Check Settings.")

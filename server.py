@@ -1341,6 +1341,7 @@ def _finish_reviewer_agent_row(
         total_cost=float(result.get("total_cost", 0.0) or 0.0),
         prompt_tokens=int(result.get("prompt_tokens", 0) or 0),
         completion_tokens=int(result.get("completion_tokens", 0) or 0),
+        reasoning_tokens=int(result.get("thinking_tokens", 0) or 0),
         turn_count=int(result.get("turns_used", 0) or 0),
         tool_call_count=int(result.get("tool_call_count", 0) or 0),
         cache_read_tokens=int(result.get("cache_read_tokens", 0) or 0),
@@ -3383,6 +3384,15 @@ async def _maybe_build_pdf_sidecar(
         result = await transcribe_pages(
             pdf_path, ordered_pages, model, **progress_kwargs,
         )
+        reasoning_summary = "\n\n".join(
+            f"Page {page}: {summary}"
+            for page, summary in sorted(result.reasoning_summaries.items())
+            if summary
+        )[:12_000]
+        model_calls = [
+            {"page": page, **usage}
+            for page, usage in sorted(result.page_usage.items())
+        ]
         out = write_pdf_sidecar(pdf_path, result, model_name=model_name)
         if out is None:
             # All-or-nothing publication: any failed page refuses the sidecar
@@ -3391,11 +3401,15 @@ async def _maybe_build_pdf_sidecar(
                       else "no_pages_transcribed")
             return {"status": "skipped", "reason": reason,
                     "failed_pages": result.failed_pages,
-                    "usage": result.usage}
+                    "usage": result.usage,
+                    "model_calls": model_calls,
+                    "reasoning_summary": reasoning_summary}
         return {
             "status": "built",
             "pages": len(result.pages_html),
             "usage": result.usage,
+            "model_calls": model_calls,
+            "reasoning_summary": reasoning_summary,
         }
     except Exception as exc:  # noqa: BLE001 — best-effort by contract
         # Class name only: provider exceptions can carry endpoint/request
@@ -3718,7 +3732,9 @@ def _load_extended_settings() -> dict:
     default_models = dict(default_model_overrides)
 
     # Ensure every agent role has a key (fall back to the global model)
-    global_model = os.environ.get("TEST_MODEL", "openai.gpt-5.4")
+    from model_settings import DEFAULT_MODEL_ID, configured_reasoning_summary
+
+    global_model = os.environ.get("TEST_MODEL", DEFAULT_MODEL_ID)
     for role in _AGENT_ROLES:
         default_models.setdefault(role, global_model)
 
@@ -3735,6 +3751,9 @@ def _load_extended_settings() -> dict:
         # it can distinguish "follow the global model" from an explicit role
         # override that happens to equal the current global model.
         "default_model_overrides": default_model_overrides,
+        # Readable provider output is independent of the per-role effort.
+        # It is applied only when the effective transport is OpenAI Responses.
+        "reasoning_summary": configured_reasoning_summary(),
         "tolerance_rm": tolerance,
         # Scout limits are resolved at the start of every scout run, so a
         # Settings save applies without restarting the server.
@@ -5194,6 +5213,7 @@ async def run_multi_agent_stream(
         # loop can find the row to finalize.
         run_agent_ids_by_notes: Dict[NotesTemplateType, int] = {}
         scout_run_agent_id: Optional[int] = None
+        source_preparation_run_agent_id: Optional[int] = None
         scout_model_name = (
             _configured_default_models().get("scout")
             or os.environ.get("SCOUT_MODEL", "").strip()
@@ -5242,14 +5262,12 @@ async def run_multi_agent_stream(
                                session_id, exc_info=True)
 
         # Phase 6.5: in-place persistence of tool-level SSE events.
-        # Mirrors db/recorder.py's _COARSE_EVENT_TYPES — we write status,
-        # tool_call, tool_result, error, and complete rows. Thinking/text
-        # deltas are intentionally dropped (too high-frequency, low audit
-        # value). Failures self-disable for that agent so we never block
-        # the live stream on a wedged DB.
+        # Mirrors db/recorder.py's _COARSE_EVENT_TYPES — deltas stay live-only,
+        # while one bounded thinking_end row retains each completed provider
+        # summary for History replay.
         _persist_disabled: Set[int] = set()
         _COARSE_EVENT_TYPES_SET = frozenset({
-            "status", "tool_call", "tool_result", "error", "complete",
+            "status", "tool_call", "tool_result", "thinking_end", "error", "complete",
         })
         _RUN_EVENT_TYPES_SET = frozenset({
             "status", "error", "pipeline_stage", "scout_warnings",
@@ -5697,6 +5715,7 @@ async def run_multi_agent_stream(
                             total_cost=cost,
                             prompt_tokens=prompt_t,
                             completion_tokens=completion_t,
+                            reasoning_tokens=thinking_t,
                             turn_count=int(scout_usage.get("turn_count", 0) or 0),
                             tool_call_count=int(scout_usage.get("tool_call_count", 0) or 0),
                             error_type=_agent_row_error_type(
@@ -5722,18 +5741,51 @@ async def run_multi_agent_stream(
         # LLM-transcribed source.html BEFORE extraction agents launch. This
         # deliberately follows the pipeline-owned scout so it can use the
         # freshest notes inventory and page guidance.
+        def _start_source_preparation(pages: list[int]) -> None:
+            """Make the paid scan-reading pass visible and auditable.
+
+            The callback fires only after the sidecar applicability and page
+            cap checks, so an inert digital-PDF run does not gain a phantom
+            worker row.
+            """
+            nonlocal source_preparation_run_agent_id
+            _emit_stage(
+                "transcribing_source",
+                message=f"Preparing {len(pages)} scanned note pages.",
+                completed=0,
+                total=len(pages),
+            )
+            if db_conn is None or run_id is None:
+                return
+            try:
+                source_preparation_run_agent_id = repo.create_run_agent(
+                    db_conn,
+                    run_id,
+                    statement_type="SOURCE_PREPARATION",
+                    variant=None,
+                    model=_model_id(model),
+                )
+                run_agent_ids_by_agent_id["source-preparation"] = (
+                    source_preparation_run_agent_id
+                )
+                db_conn.commit()
+            except Exception:
+                logger.warning(
+                    "Could not create SOURCE_PREPARATION audit row",
+                    exc_info=True,
+                )
+                try:
+                    db_conn.rollback()
+                except Exception:
+                    pass
+
         sidecar_task = asyncio.create_task(_maybe_build_pdf_sidecar(
             config.pdf_path,
             notes_to_run,
             infopack,
             model,
             model_name,
-            on_start=lambda pages: _emit_stage(
-                "transcribing_source",
-                message=f"Preparing {len(pages)} scanned note pages.",
-                completed=0,
-                total=len(pages),
-            ),
+            on_start=_start_source_preparation,
             on_progress=lambda _page, completed, total, _ok: _emit_stage(
                 "transcribing_source",
                 message=(
@@ -5751,6 +5803,154 @@ async def run_multi_agent_stream(
                 except (asyncio.CancelledError, GeneratorExit):
                     client_connected = False
         sidecar_event = await sidecar_task
+        if source_preparation_run_agent_id is not None and db_conn is not None:
+            try:
+                from pricing import estimate_cost as _estimate_sidecar_cost
+
+                sidecar_usage = (
+                    sidecar_event.get("usage", {})
+                    if isinstance(sidecar_event, dict) else {}
+                )
+                sidecar_prompt = int(
+                    sidecar_usage.get("prompt_tokens", sidecar_usage.get("in", 0))
+                    or 0
+                )
+                sidecar_completion = int(
+                    sidecar_usage.get(
+                        "completion_tokens", sidecar_usage.get("out", 0)
+                    ) or 0
+                )
+                sidecar_reasoning = int(
+                    sidecar_usage.get("thinking_tokens", 0) or 0
+                )
+                sidecar_total = int(
+                    sidecar_usage.get("total_tokens", 0)
+                    or sidecar_prompt + sidecar_completion + sidecar_reasoning
+                )
+                sidecar_built = bool(
+                    isinstance(sidecar_event, dict)
+                    and sidecar_event.get("status") == "built"
+                )
+                repo.finish_run_agent(
+                    db_conn,
+                    source_preparation_run_agent_id,
+                    status=(
+                        "succeeded" if sidecar_built
+                        else "completed_with_errors"
+                    ),
+                    total_tokens=sidecar_total,
+                    total_cost=_estimate_sidecar_cost(
+                        sidecar_prompt,
+                        sidecar_completion,
+                        sidecar_reasoning,
+                        _model_id(model),
+                    ),
+                    prompt_tokens=sidecar_prompt,
+                    completion_tokens=sidecar_completion,
+                    reasoning_tokens=sidecar_reasoning,
+                    usage_status=(
+                        "complete" if sidecar_built and sidecar_total > 0
+                        else "partial" if sidecar_total > 0
+                        else "unavailable"
+                    ),
+                    error_type=(
+                        None if sidecar_built
+                        else "source_preparation_incomplete"
+                    ),
+                    error_message=(
+                        None
+                        if sidecar_built or not isinstance(sidecar_event, dict)
+                        else str(
+                            sidecar_event.get("reason")
+                            or "Source preparation incomplete"
+                        )
+                    ),
+                )
+                from model_settings import describe_model_runtime
+
+                sidecar_runtime = describe_model_runtime(
+                    model, role="source_preparation",
+                )
+                sidecar_turns = []
+                sidecar_cumulative_tokens = 0
+                for turn_index, call in enumerate(
+                    sidecar_event.get("model_calls", [])
+                    if isinstance(sidecar_event, dict) else [],
+                    start=1,
+                ):
+                    call_prompt = int(call.get("prompt_tokens", 0) or 0)
+                    call_completion = int(
+                        call.get("completion_tokens", 0) or 0
+                    )
+                    call_reasoning = int(
+                        call.get("thinking_tokens", 0) or 0
+                    )
+                    call_total = int(
+                        call.get("total_tokens", 0)
+                        or call_prompt + call_completion + call_reasoning
+                    )
+                    sidecar_cumulative_tokens += call_total
+                    sidecar_turns.append({
+                        "turn_index": turn_index,
+                        "node_kind": "model_request",
+                        "model": _model_id(model),
+                        "provider": sidecar_runtime.get("provider"),
+                        "transport": sidecar_runtime.get("transport"),
+                        "prompt_tokens": call_prompt,
+                        "completion_tokens": call_completion,
+                        "thinking_tokens": call_reasoning,
+                        "total_tokens": call_total,
+                        "cumulative_tokens": sidecar_cumulative_tokens,
+                        "cost_estimate": _estimate_sidecar_cost(
+                            call_prompt,
+                            call_completion,
+                            call_reasoning,
+                            _model_id(model),
+                        ),
+                        "usage_status": "complete",
+                    })
+                if sidecar_turns:
+                    repo.insert_agent_turns(
+                        db_conn,
+                        source_preparation_run_agent_id,
+                        sidecar_turns,
+                    )
+                db_conn.commit()
+            except Exception:
+                logger.warning(
+                    "Could not finalize SOURCE_PREPARATION audit row",
+                    exc_info=True,
+                )
+                try:
+                    db_conn.rollback()
+                except Exception:
+                    pass
+        sidecar_reasoning_summary = (
+            str(sidecar_event.get("reasoning_summary") or "")
+            if isinstance(sidecar_event, dict) else ""
+        )
+        if sidecar_reasoning_summary:
+            from agent_runner import reasoning_event_metadata
+
+            reasoning_event = {
+                "event": "thinking_end",
+                "data": {
+                    "agent_id": "source-preparation",
+                    "agent_role": "SOURCE_PREPARATION",
+                    "summary": sidecar_reasoning_summary,
+                    "full_length": len(sidecar_reasoning_summary),
+                    "duration_ms": 0,
+                    **reasoning_event_metadata(
+                        model, role="source_preparation",
+                    ),
+                },
+            }
+            persist_event(reasoning_event)
+            if client_connected:
+                try:
+                    yield reasoning_event
+                except (asyncio.CancelledError, GeneratorExit):
+                    client_connected = False
         if sidecar_event is not None:
             # Persist alongside the emit so the History run page can show the
             # same notice after a reload (the live event is otherwise gone —
@@ -6297,6 +6497,10 @@ async def run_multi_agent_stream(
                         # v8 per-turn telemetry rollups.
                         prompt_tokens=getattr(agent_result, "prompt_tokens", 0),
                         completion_tokens=getattr(agent_result, "completion_tokens", 0),
+                        reasoning_tokens=sum(
+                            int(t.get("thinking_tokens") or 0)
+                            for t in (getattr(agent_result, "turns", []) or [])
+                        ),
                         turn_count=getattr(agent_result, "turn_count", 0),
                         tool_call_count=getattr(agent_result, "tool_call_count", 0),
                         # v15 cache telemetry rollups (§6 rec 1: measure first).
@@ -6380,6 +6584,10 @@ async def run_multi_agent_stream(
                         # v8 per-turn telemetry rollups (peer-review [2]).
                         prompt_tokens=getattr(notes_agent_result, "prompt_tokens", 0),
                         completion_tokens=getattr(notes_agent_result, "completion_tokens", 0),
+                        reasoning_tokens=sum(
+                            int(t.get("thinking_tokens") or 0)
+                            for t in (getattr(notes_agent_result, "turns", []) or [])
+                        ),
                         turn_count=getattr(notes_agent_result, "turn_count", 0),
                         tool_call_count=getattr(notes_agent_result, "tool_call_count", 0),
                         # v15 cache telemetry rollups (§6 rec 1: measure first).
@@ -7469,6 +7677,8 @@ async def run_multi_agent_stream(
                             prompt_tokens=int(_co.get("prompt_tokens", 0)),
                             completion_tokens=int(
                                 _co.get("completion_tokens", 0)),
+                            reasoning_tokens=int(
+                                _co.get("thinking_tokens", 0)),
                             turn_count=int(_co.get("turns_used", 0)),
                             tool_call_count=int(
                                 _co.get("tool_call_count", 0)),

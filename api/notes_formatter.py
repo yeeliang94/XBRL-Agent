@@ -21,6 +21,7 @@ from pydantic_ai.exceptions import UsageLimitExceeded
 import server
 from api.notes import _notes_template_index
 from db import repository as repo
+from model_settings import DEFAULT_MODEL_ID
 
 logger = logging.getLogger("server")
 
@@ -91,7 +92,7 @@ async def launch_notes_formatter(run_id: int, body: _NotesFormatLaunch):
         override
         or server._notes_formatter_model_name()
         or config.get("model")
-        or os.environ.get("TEST_MODEL", "openai.gpt-5.4")
+        or os.environ.get("TEST_MODEL", DEFAULT_MODEL_ID)
     )
 
     launch_conn = server._open_audit_conn()

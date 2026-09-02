@@ -20,6 +20,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 
 import server
+from model_settings import DEFAULT_MODEL_ID
 
 logger = logging.getLogger("server")
 
@@ -94,7 +95,7 @@ async def re_review(run_id: int, body: Optional[dict] = None):
         override
         or server._reviewer_model_name()
         or config.get("model")
-        or os.environ.get("TEST_MODEL", "openai.gpt-5.4")
+        or os.environ.get("TEST_MODEL", DEFAULT_MODEL_ID)
     )
     if not api_key:
         raise HTTPException(status_code=400, detail="API key not set. Check Settings.")
@@ -275,6 +276,8 @@ async def re_review(run_id: int, body: Optional[dict] = None):
                     prompt_tokens=int(outcome.get("prompt_tokens", 0) or 0),
                     completion_tokens=int(
                         outcome.get("completion_tokens", 0) or 0),
+                    reasoning_tokens=int(
+                        outcome.get("thinking_tokens", 0) or 0),
                     tool_call_count=int(
                         outcome.get("tool_call_count", 0) or 0),
                     # Step 0.1 companion fix: cache rollups (were always 0).

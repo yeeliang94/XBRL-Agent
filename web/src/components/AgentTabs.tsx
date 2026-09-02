@@ -114,6 +114,7 @@ function AgentTabsImpl({
     const statementIds: string[] = [];
     const notesIds: string[] = [];
     let scoutId: string | null = null;
+    let sourcePreparationId: string | null = null;
     let validatorId: string | null = null;
     let notesValidatorId: string | null = null;
     let correctionId: string | null = null;
@@ -129,6 +130,7 @@ function AgentTabsImpl({
         // `id === …` case, and fall through `continue` into nowhere (the
         // very disappearance we're fixing).
         if (id === "scout") scoutId = id;
+        else if (id === "source-preparation") sourcePreparationId = id;
         else if (id === "validator") validatorId = id;
         else if (id === "NOTES_VALIDATOR") notesValidatorId = id;
         else if (id === "CORRECTION") correctionId = id;
@@ -148,6 +150,7 @@ function AgentTabsImpl({
     }
     return [
       ...(scoutId ? [scoutId] : []),
+      ...(sourcePreparationId ? [sourcePreparationId] : []),
       ...statementIds,
       ...notesIds,
       ...(notesValidatorId ? [notesValidatorId] : []),
@@ -163,11 +166,13 @@ function AgentTabsImpl({
   const statementActive: string[] = [];
   const notesActive: string[] = [];
   let scoutActive: string | null = null;
+  let sourcePreparationActive: string | null = null;
   let validatorActive: string | null = null;
   let notesValidatorActive: string | null = null;
   let correctionActive: string | null = null;
   for (const id of gatedOrder) {
     if (id === "scout") scoutActive = id;
+    else if (id === "source-preparation") sourcePreparationActive = id;
     else if (id === "validator") validatorActive = id;
     else if (id === "NOTES_VALIDATOR") notesValidatorActive = id;
     else if (id === "CORRECTION") correctionActive = id;
@@ -183,7 +188,8 @@ function AgentTabsImpl({
   const matchesFilter = (id: string) => matchesFilterFor(id, filter);
   const visibleStatementActive = statementActive.filter(matchesFilter);
   const visibleNotesActive = notesActive.filter(matchesFilter);
-  const visiblePreparation = scoutActive && matchesFilter(scoutActive) ? [scoutActive] : [];
+  const visiblePreparation = [scoutActive, sourcePreparationActive]
+    .filter((id): id is string => id != null && matchesFilter(id));
   const visibleChecks = [notesValidatorActive, correctionActive, validatorActive]
     .filter((id): id is string => id != null && matchesFilter(id));
   const navigationOrder = [

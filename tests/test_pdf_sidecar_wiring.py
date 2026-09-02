@@ -99,11 +99,13 @@ def test_builds_sidecar_over_inventory_page_union(tmp_path, monkeypatch):
         return TranscribeResult(
             pages_html={p: f"<p>page {p}</p>" for p in pages},
             usage={"in": 100, "out": 50},
+            reasoning_summaries={2: "Located the first note table."},
         )
 
     out = _build(pdf, _infopack([(2, 4), (4, 5)]), monkeypatch, fake=fake)
     assert seen["pages"] == [2, 3, 4, 5]  # union, deduped, sorted
     assert out["status"] == "built" and out["pages"] == 4
+    assert out["reasoning_summary"] == "Page 2: Located the first note table."
     html = (tmp_path / "source.html").read_text(encoding="utf-8")
     assert "<p>page 2</p>" in html and "<p>page 5</p>" in html
     meta = json.loads((tmp_path / "source_meta.json").read_text())
@@ -324,7 +326,7 @@ def test_stream_drains_transcription_stage_before_waiting_for_sidecar():
     task_start = source.find(
         "sidecar_task = asyncio.create_task(_maybe_build_pdf_sidecar("
     )
-    stage = source.find("on_start=lambda pages:")
+    stage = source.find("def _start_source_preparation(pages:")
     progress = source.find("on_progress=lambda _page, completed, total, _ok:")
     drain = source.find(
         "async for event in _drain_while_running(sidecar_task):", task_start,
@@ -333,4 +335,20 @@ def test_stream_drains_transcription_stage_before_waiting_for_sidecar():
     extraction = source.find('_emit_stage("extracting")', wait)
 
     assert -1 not in (task_start, stage, progress, drain, wait, extraction)
-    assert task_start < stage < progress < drain < wait < extraction
+    assert stage < task_start < progress < drain < wait < extraction
+
+
+def test_stream_audits_source_preparation_worker_and_reasoning_summary():
+    """The Scout→extraction gap is a real worker, not title-only activity."""
+    import inspect
+
+    source = inspect.getsource(server.run_multi_agent_stream)
+
+    assert 'statement_type="SOURCE_PREPARATION"' in source
+    assert 'run_agent_ids_by_agent_id["source-preparation"]' in source
+    assert '"succeeded" if sidecar_built' in source
+    assert 'for turn_index, call in enumerate(' in source
+    assert '"cumulative_tokens": sidecar_cumulative_tokens' in source
+    assert '"event": "thinking_end"' in source
+    assert '"agent_id": "source-preparation"' in source
+    assert '"summary": sidecar_reasoning_summary' in source

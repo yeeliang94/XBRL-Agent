@@ -232,6 +232,44 @@ describe("ExtractPage — render-gate regression guards", () => {
     expect(screen.queryByText(/30ms/i)).toBeNull();
   });
 
+  test("shows source preparation as a worker with its provider summary", () => {
+    const preparation = createAgentState(
+      "source-preparation", "SOURCE_PREPARATION", "Source preparation",
+    );
+    preparation.status = "complete";
+    preparation.reasoningBlocks = [{
+      thinking_id: "source-preparation-thinking",
+      content: "Located the scanned notes table and preserved its row structure.",
+      startedAt: 1,
+      endedAt: 2,
+      duration_ms: 1,
+      isComplete: true,
+      kind: "summary",
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      transport: "responses",
+    }];
+    const props = makeProps({
+      state: {
+        sessionId: "test-session",
+        filename: "scan.pdf",
+        isRunning: true,
+        pipelineStage: "extracting",
+        activeTab: "source-preparation",
+        agents: { "source-preparation": preparation },
+        agentTabOrder: ["source-preparation"],
+        pdfSidecar: { status: "built", pages: 1 },
+      },
+    });
+
+    render(<ExtractPage {...props} />);
+
+    expect(screen.getByRole("tab", { name: /source preparation/i })).toBeInTheDocument();
+    expect(screen.getByRole("tabpanel", { name: /source preparation activity/i })).toBeInTheDocument();
+    expect(screen.getByText(/located the scanned notes table/i)).toBeInTheDocument();
+    expect(screen.getByText("Provider reasoning")).toBeInTheDocument();
+  });
+
   test("a stopped run is not described as still running", () => {
     const props = makeProps({
       state: {

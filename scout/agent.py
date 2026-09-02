@@ -26,7 +26,11 @@ import time
 import fitz
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.usage import UsageLimits
-from model_settings import build_model_settings, describe_model_runtime
+from model_settings import (
+    DEFAULT_MODEL_ID,
+    build_model_settings,
+    describe_model_runtime,
+)
 
 _THINKING_WARNED: set[str] = set()
 
@@ -63,7 +67,11 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models import Model
 
-from agent_runner import iter_with_turn_timeout
+from agent_runner import (
+    ReasoningBlockAccumulator,
+    iter_with_turn_timeout,
+    reasoning_event_metadata,
+)
 from agent_tracing import save_agent_trace, save_messages_trace
 from pricing import estimate_cost
 from usage_metrics import split_usage
@@ -1429,7 +1437,7 @@ def create_scout_agent(
 
 async def run_scout(
     pdf_path: Path | str,
-    model: Union[str, Model] = "openai.gpt-5.4",
+    model: Union[str, Model] = DEFAULT_MODEL_ID,
     statements_to_find: Optional[Set[StatementType]] = None,
     on_progress: Optional[Any] = None,
     *,
@@ -1535,7 +1543,7 @@ async def run_scout(
 
 async def run_scout_streaming(
     pdf_path: Path | str,
-    model: Union[str, Model] = "openai.gpt-5.4",
+    model: Union[str, Model] = DEFAULT_MODEL_ID,
     statements_to_find: Optional[Set[StatementType]] = None,
     on_event: Optional[Any] = None,
     *,
@@ -1584,6 +1592,7 @@ async def run_scout_streaming(
 
     tool_start_times: dict[str, float] = {}
     thinking_counter = 0
+    reasoning_meta = reasoning_event_metadata(model, "scout")
 
     # Telemetry counters for the SCOUT run_agents row. A "turn" here is
     # one model request (matching the face coordinator's meaning); tool
@@ -1699,7 +1708,7 @@ async def run_scout_streaming(
                     model_turn_count += 1
                     deps._model_turns_used = model_turn_count
                     thinking_id = f"scout_think_{thinking_counter}"
-                    thinking_active = False
+                    reasoning_block = ReasoningBlockAccumulator()
                     async with node.stream(agent_run.ctx) as model_stream:
                         # Same per-step timeout on the model token stream —
                         # a stalled model request used to hang here forever.
@@ -1709,27 +1718,32 @@ async def run_scout_streaming(
                             if isinstance(event, PartDeltaEvent):
                                 delta = event.delta
                                 if isinstance(delta, TextPartDelta):
-                                    if thinking_active:
+                                    completed_block = reasoning_block.finish()
+                                    if completed_block is not None:
                                         await _emit("thinking_end", {
                                             "thinking_id": thinking_id,
-                                            "summary": "",
-                                            "full_length": 0,
+                                            **completed_block,
+                                            **reasoning_meta,
                                         })
-                                        thinking_active = False
                                         thinking_counter += 1
                                         thinking_id = f"scout_think_{thinking_counter}"
                                     await _emit("text_delta", {"content": delta.content_delta})
                                 elif isinstance(delta, ThinkingPartDelta):
-                                    thinking_active = True
-                                    await _emit("thinking_delta", {
-                                        "content": delta.content_delta or "",
+                                    chunk = delta.content_delta or ""
+                                    started_block = reasoning_block.add_delta(chunk)
+                                    delta_payload = {
+                                        "content": chunk,
                                         "thinking_id": thinking_id,
-                                    })
-                    if thinking_active:
+                                    }
+                                    if started_block:
+                                        delta_payload.update(reasoning_meta)
+                                    await _emit("thinking_delta", delta_payload)
+                    completed_block = reasoning_block.finish()
+                    if completed_block is not None:
                         await _emit("thinking_end", {
                             "thinking_id": thinking_id,
-                            "summary": "",
-                            "full_length": 0,
+                            **completed_block,
+                            **reasoning_meta,
                         })
                         thinking_counter += 1
 

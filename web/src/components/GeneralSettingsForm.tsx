@@ -26,8 +26,8 @@ import { ClipboardFormatControls } from "./ClipboardFormatControls";
 // ---------------------------------------------------------------------------
 
 interface Props {
-  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; notes_auto_review?: boolean; notes_coverage?: boolean; tolerance_rm?: number; spot_check?: boolean; spot_check_mode?: string; entity_memory?: boolean; pdf_sidecar?: boolean; pdf_notes_auto_format?: boolean; notes_source_integrity?: SourceIntegrityMode; notes_source_integrity_choices?: string[]; default_models?: Record<string, string>; default_model_overrides?: Record<string, string>; local_override_keys?: string[]; thinking_levels?: Record<string, string>; thinking_level_choices?: string[]; thinking_level_choices_by_model?: Record<string, string[]>; notes_table_style?: Partial<ClipboardFormatOptions>; available_models?: ModelEntry[] }>;
-  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; default_models: Record<string, string>; reset_keys: string[]; auto_review: boolean; notes_auto_review: boolean; notes_coverage: boolean; spot_check: boolean; spot_check_mode: "light" | "full"; entity_memory: boolean; pdf_sidecar: boolean; pdf_notes_auto_format: boolean; notes_source_integrity: SourceIntegrityMode; tolerance_rm: number; scout_wallclock_seconds: number; scout_max_turns: number; thinking_levels: Record<string, string>; notes_table_style: ClipboardFormatOptions }>) => Promise<{ status: string }>;
+  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; notes_auto_review?: boolean; notes_coverage?: boolean; tolerance_rm?: number; spot_check?: boolean; spot_check_mode?: string; entity_memory?: boolean; pdf_sidecar?: boolean; pdf_notes_auto_format?: boolean; notes_source_integrity?: SourceIntegrityMode; notes_source_integrity_choices?: string[]; default_models?: Record<string, string>; default_model_overrides?: Record<string, string>; local_override_keys?: string[]; thinking_levels?: Record<string, string>; thinking_level_choices?: string[]; thinking_level_choices_by_model?: Record<string, string[]>; reasoning_summary?: string; reasoning_summary_choices?: string[]; notes_table_style?: Partial<ClipboardFormatOptions>; available_models?: ModelEntry[] }>;
+  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; default_models: Record<string, string>; reset_keys: string[]; auto_review: boolean; notes_auto_review: boolean; notes_coverage: boolean; spot_check: boolean; spot_check_mode: "light" | "full"; entity_memory: boolean; pdf_sidecar: boolean; pdf_notes_auto_format: boolean; notes_source_integrity: SourceIntegrityMode; tolerance_rm: number; scout_wallclock_seconds: number; scout_max_turns: number; thinking_levels: Record<string, string>; reasoning_summary: string; notes_table_style: ClipboardFormatOptions }>) => Promise<{ status: string }>;
   testConnection: (body: Partial<{ proxy_url: string; api_key: string; model: string }>) => Promise<{ status: string; model?: string; latency_ms?: number; message?: string }>;
   // When provided, a Cancel button is shown (used by the modal wrapper). The
   // page host omits it — there's nothing to cancel out of.
@@ -94,6 +94,9 @@ const THINKING_ROLES: { key: string; label: string; hint: string }[] = [
   { key: "ISSUED_CAPITAL", label: "Notes: issued capital", hint: "" },
   { key: "RELATED_PARTY", label: "Notes: related party", hint: "" },
 ];
+
+const GPT56_LUNA_MODEL = "openai.global.gpt-5.6-luna";
+const SUMMARY_VISIBILITY_FALLBACK = ["off", "auto", "concise", "detailed"];
 
 // Plain-language labels for the Word-source modes. The SERVER owns the list of
 // modes (`notes_source_integrity_choices`); this map only supplies wording for
@@ -308,6 +311,9 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
   // every agent did before this setting existed.
   const [thinkingLevels, setThinkingLevels] =
     useState<Record<string, string>>({});
+  const [reasoningSummary, setReasoningSummary] = useState("auto");
+  const [reasoningSummaryChoices, setReasoningSummaryChoices] =
+    useState<string[]>(SUMMARY_VISIBILITY_FALLBACK);
   const [defaultModels, setDefaultModels] =
     useState<Record<string, string>>({});
   const [roleModelUpdates, setRoleModelUpdates] =
@@ -390,6 +396,16 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         setSpotCheck(s.spot_check !== false);
         setSpotCheckMode(s.spot_check_mode === "full" ? "full" : "light");
         setThinkingLevels(s.thinking_levels || {});
+        const summaryChoices =
+          Array.isArray(s.reasoning_summary_choices) && s.reasoning_summary_choices.length > 0
+            ? s.reasoning_summary_choices
+            : SUMMARY_VISIBILITY_FALLBACK;
+        setReasoningSummaryChoices(summaryChoices);
+        setReasoningSummary(
+          s.reasoning_summary && summaryChoices.includes(s.reasoning_summary)
+            ? s.reasoning_summary
+            : "auto",
+        );
         setDefaultModels(s.default_model_overrides || s.default_models || {});
         setLocalOverrideKeys(new Set(s.local_override_keys || []));
         setLevelChoices(s.thinking_level_choices || []);
@@ -492,6 +508,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         thinking_levels: Object.fromEntries(
           THINKING_ROLES.map(({ key }) => [key, thinkingLevels[key] || ""]),
         ),
+        reasoning_summary: reasoningSummary,
         ...(apiKey ? { api_key: apiKey } : {}),
       });
       setRoleModelUpdates({});
@@ -509,7 +526,18 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
     } finally {
       setSaving(false);
     }
-  }, [dirty, model, proxyUrl, apiKey, roleModelUpdates, autoReview, notesAutoReview, notesCoverage, toleranceRm, scoutWallclockSeconds, scoutMaxTurns, spotCheck, spotCheckMode, entityMemory, pdfSidecar, pdfNotesAutoFormat, sourceIntegrity, thinkingLevels, saveSettings]);
+  }, [dirty, model, proxyUrl, apiKey, roleModelUpdates, autoReview, notesAutoReview, notesCoverage, toleranceRm, scoutWallclockSeconds, scoutMaxTurns, spotCheck, spotCheckMode, entityMemory, pdfSidecar, pdfNotesAutoFormat, sourceIntegrity, thinkingLevels, reasoningSummary, saveSettings]);
+
+  const handleUseGpt56ForEveryRole = useCallback(() => {
+    setModel(GPT56_LUNA_MODEL);
+    setDefaultModels({});
+    setRoleModelUpdates(Object.fromEntries(
+      THINKING_ROLES.map(({ key }) => [key, ""]),
+    ));
+    setReasoningSummary("auto");
+    setShowRoleModels(false);
+    setDirty(true);
+  }, []);
 
   const handleUseDeploymentDefault = useCallback(async (key: "model" | "proxy_url" | "api_key") => {
     setSaving(true);
@@ -773,6 +801,14 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
           style={{ ...ui.buttonSecondary, ...ui.buttonSm, alignSelf: "flex-start" }}
         >
           {showRoleModels ? "Hide role-specific models" : "Customize role-specific models"}
+        </button>
+        <button
+          type="button"
+          onClick={handleUseGpt56ForEveryRole}
+          disabled={readOnly}
+          style={{ ...ui.buttonSecondary, ...ui.buttonSm, alignSelf: "flex-start", marginLeft: pwc.space.sm }}
+        >
+          Use GPT-5.6 Luna for every role
         </button>
         {showRoleModels && (
           <div id="role-model-defaults">
@@ -1162,6 +1198,39 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
             </select>
           </div>
         })}
+      </div>
+
+      <div style={styles.fieldGroup}>
+        <label style={styles.label} htmlFor="reasoning-summary-visibility">
+          Provider reasoning summaries
+        </label>
+        <p style={styles.helperText}>
+          Requests readable provider summaries without exposing private chain of
+          thought. This setting is separate from thinking level and applies to
+          OpenAI models using the Responses API. Other transports show an
+          unavailable state instead of a blank panel.
+        </p>
+        <select
+          id="reasoning-summary-visibility"
+          aria-label="Provider reasoning summary visibility"
+          value={reasoningSummary}
+          disabled={readOnly}
+          onChange={(e) => {
+            setReasoningSummary(e.target.value);
+            setDirty(true);
+          }}
+          style={{ ...ui.select, width: 260 }}
+        >
+          {reasoningSummaryChoices.map((choice) => (
+            <option key={choice} value={choice}>
+              {choice === "off"
+                ? "Off"
+                : choice === "auto"
+                  ? "Automatic (recommended)"
+                  : choice.charAt(0).toUpperCase() + choice.slice(1)}
+            </option>
+          ))}
+        </select>
       </div>
 
       <SettingsSectionHeading

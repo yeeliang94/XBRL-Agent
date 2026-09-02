@@ -18,7 +18,7 @@ from typing import Any, Optional, Union, List, Tuple, Set, Dict
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.models import Model
 from pydantic_ai.messages import BinaryContent
-from model_settings import build_model_settings
+from model_settings import DEFAULT_MODEL_ID, build_model_settings
 
 
 _THINKING_WARNED: set[str] = set()
@@ -904,7 +904,7 @@ def create_extraction_agent(
     variant: str,
     pdf_path: str,
     template_path: str,
-    model: Union[str, Model] = "openai.gpt-5.4",
+    model: Union[str, Model] = DEFAULT_MODEL_ID,
     output_dir: Optional[str] = None,
     page_hints: Optional[dict] = None,
     scout_context: Optional[dict] = None,

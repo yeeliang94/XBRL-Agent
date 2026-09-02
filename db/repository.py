@@ -20,6 +20,8 @@ from typing import Any, Iterable, Iterator, Optional
 
 from usage_metrics import derive_thinking_tokens
 
+_MAX_AGENT_EVENT_PAYLOAD_BYTES = 16 * 1024
+
 
 def _now() -> str:
     """UTC timestamp in ISO-8601 format. One place so every table agrees."""
@@ -119,6 +121,10 @@ class RunAgent:
     # v15 cache telemetry rollups. Defaulted so pre-v15 rows read 0.
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
+    # v44: provider-reported reasoning subset and whether usage coverage is
+    # complete. Stored explicitly so retries cannot inflate a reconstruction.
+    reasoning_tokens: Optional[int] = None
+    usage_status: str = "unavailable"
     # v17 (item 9): machine-readable failure class. None on success and on
     # legacy rows.
     error_type: Optional[str] = None
@@ -703,6 +709,8 @@ def finish_run_agent(
     tool_call_count: int = 0,
     cache_read_tokens: int = 0,
     cache_write_tokens: int = 0,
+    reasoning_tokens: int | None = None,
+    usage_status: str | None = None,
     error_type: str | None = None,
     error_message: str | None = None,
 ) -> None:
@@ -729,16 +737,27 @@ def finish_run_agent(
     final save-gate refusal). It is nullable and defaults to None so existing
     success and auxiliary-agent call sites remain compatible.
     """
+    explicit_reasoning = (
+        derive_thinking_tokens(total_tokens, prompt_tokens, completion_tokens)
+        if reasoning_tokens is None
+        else max(int(reasoning_tokens or 0), 0)
+    )
+    resolved_usage_status = usage_status or (
+        "complete" if int(total_tokens or 0) > 0 else "unavailable"
+    )
+
     if variant is not None:
         conn.execute(
             "UPDATE run_agents SET status = ?, ended_at = ?, workbook_path = ?, "
             "total_tokens = ?, total_cost = ?, prompt_tokens = ?, "
             "completion_tokens = ?, turn_count = ?, tool_call_count = ?, "
-            "cache_read_tokens = ?, cache_write_tokens = ?, error_type = ?, "
+            "cache_read_tokens = ?, cache_write_tokens = ?, reasoning_tokens = ?, "
+            "usage_status = ?, error_type = ?, "
             "error_message = ?, variant = ? WHERE id = ?",
             (status, _now(), workbook_path, total_tokens, total_cost,
              prompt_tokens, completion_tokens, turn_count, tool_call_count,
-             cache_read_tokens, cache_write_tokens, error_type, error_message,
+             cache_read_tokens, cache_write_tokens, explicit_reasoning,
+             resolved_usage_status, error_type, error_message,
              variant, run_agent_id),
         )
     else:
@@ -746,14 +765,102 @@ def finish_run_agent(
             "UPDATE run_agents SET status = ?, ended_at = ?, workbook_path = ?, "
             "total_tokens = ?, total_cost = ?, prompt_tokens = ?, "
             "completion_tokens = ?, turn_count = ?, tool_call_count = ?, "
-            "cache_read_tokens = ?, cache_write_tokens = ?, error_type = ?, "
+            "cache_read_tokens = ?, cache_write_tokens = ?, reasoning_tokens = ?, "
+            "usage_status = ?, error_type = ?, "
             "error_message = ? "
             "WHERE id = ?",
             (status, _now(), workbook_path, total_tokens, total_cost,
              prompt_tokens, completion_tokens, turn_count, tool_call_count,
-             cache_read_tokens, cache_write_tokens, error_type, error_message,
+             cache_read_tokens, cache_write_tokens, explicit_reasoning,
+             resolved_usage_status, error_type, error_message,
              run_agent_id),
         )
+    _upsert_agent_usage_summary(
+        conn,
+        run_agent_id,
+        status=status,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        reasoning_tokens=explicit_reasoning,
+        total_tokens=total_tokens,
+        cache_read_tokens=cache_read_tokens,
+        cache_write_tokens=cache_write_tokens,
+        total_cost=total_cost,
+        usage_status=resolved_usage_status,
+        error_type=error_type,
+    )
+
+
+def _upsert_agent_usage_summary(
+    conn: sqlite3.Connection,
+    run_agent_id: int,
+    *,
+    status: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    reasoning_tokens: int,
+    total_tokens: int,
+    cache_read_tokens: int,
+    cache_write_tokens: int,
+    total_cost: float,
+    usage_status: str,
+    error_type: str | None,
+) -> None:
+    """Write the fallback ledger row for non-streamed and legacy helpers."""
+    row = conn.execute(
+        "SELECT run_id, statement_type, model, started_at, ended_at "
+        "FROM run_agents WHERE id = ?", (run_agent_id,),
+    ).fetchone()
+    if row is None:
+        return
+    run_id, role, model, started_at, ended_at = row
+    if not model:
+        return
+    from model_settings import classify_provider
+    from pricing import cache_adjustment_from_stored_cost, pricing_is_unconfirmed
+
+    try:
+        adjusted = cache_adjustment_from_stored_cost(
+            float(total_cost or 0.0), str(model),
+            cache_read_tokens=int(cache_read_tokens or 0),
+            cache_write_tokens=int(cache_write_tokens or 0),
+            prompt_tokens=int(prompt_tokens or 0),
+        )
+    except Exception:
+        adjusted = None
+    provider = classify_provider(str(model))
+    conn.execute(
+        "INSERT INTO model_usage_calls("
+        "invocation_id, run_id, run_agent_id, role, worker_id, model, provider, "
+        "transport, started_at, ended_at, status, input_tokens, "
+        "cached_input_tokens, cache_write_tokens, visible_output_tokens, "
+        "reasoning_tokens, total_tokens, estimated_cost_pre_cache, "
+        "estimated_cost_adjusted, pricing_status, usage_status, error_type) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(invocation_id) DO UPDATE SET "
+        "ended_at=excluded.ended_at, status=excluded.status, "
+        "input_tokens=excluded.input_tokens, "
+        "cached_input_tokens=excluded.cached_input_tokens, "
+        "cache_write_tokens=excluded.cache_write_tokens, "
+        "visible_output_tokens=excluded.visible_output_tokens, "
+        "reasoning_tokens=excluded.reasoning_tokens, total_tokens=excluded.total_tokens, "
+        "estimated_cost_pre_cache=excluded.estimated_cost_pre_cache, "
+        "estimated_cost_adjusted=excluded.estimated_cost_adjusted, "
+        "pricing_status=excluded.pricing_status, usage_status=excluded.usage_status, "
+        "error_type=excluded.error_type",
+        (
+            f"run-agent:{run_agent_id}:aggregate", int(run_id), run_agent_id,
+            str(role), str(role), str(model),
+            provider, "automatic_or_unknown",
+            started_at, ended_at, status,
+            int(prompt_tokens or 0), int(cache_read_tokens or 0),
+            int(cache_write_tokens or 0), int(completion_tokens or 0),
+            int(reasoning_tokens or 0), int(total_tokens or 0),
+            float(total_cost or 0.0), adjusted,
+            "unconfirmed" if pricing_is_unconfirmed(model) else "confirmed",
+            usage_status, error_type,
+        ),
+    )
 
 
 def reconcile_unfinished_run_agents(
@@ -795,10 +902,9 @@ def insert_agent_turns(
 ) -> None:
     """Persist per-turn telemetry rows for one agent (v8).
 
-    Each dict mirrors the run_agent_turns columns. ``thinking_tokens`` remains
-    in the in-memory record for salvage/cost rollups but is intentionally not
-    stored separately: reads recover it from total - prompt - completion via
-    ``derive_thinking_tokens``. Other extra keys (for example
+    Each dict mirrors the run_agent_turns columns. v44 stores the provider's
+    reasoning subset explicitly; older callers that omit it fall back to a
+    safe per-turn derivation. Other extra keys (for example
     ``_n_tool_calls``) are ignored. Best-effort by contract — the caller wraps
     this so a telemetry write can never fault a run.
     """
@@ -809,8 +915,8 @@ def insert_agent_turns(
         "INSERT INTO run_agent_turns(run_agent_id, turn_index, node_kind, "
         "tool_names, prompt_tokens, completion_tokens, total_tokens, "
         "cumulative_tokens, cost_estimate, duration_ms, "
-        "cache_read_tokens, cache_write_tokens, ts) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "cache_read_tokens, cache_write_tokens, reasoning_tokens, usage_status, ts) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             (
                 run_agent_id,
@@ -825,11 +931,199 @@ def insert_agent_turns(
                 int(t.get("duration_ms") or 0),
                 int(t.get("cache_read_tokens") or 0),
                 int(t.get("cache_write_tokens") or 0),
+                int(t.get("thinking_tokens") or derive_thinking_tokens(
+                    int(t.get("total_tokens") or 0),
+                    int(t.get("prompt_tokens") or 0),
+                    int(t.get("completion_tokens") or 0),
+                )),
+                str(t.get("usage_status") or (
+                    "complete" if int(t.get("total_tokens") or 0) > 0
+                    else "unavailable" if t.get("node_kind") == "model_request"
+                    else "not_applicable"
+                )),
                 ts,
             )
             for t in turns
         ],
     )
+    _replace_model_usage_calls_from_turns(conn, run_agent_id, turns, ts)
+
+
+def _replace_model_usage_calls_from_turns(
+    conn: sqlite3.Connection,
+    run_agent_id: int,
+    turns: list[dict[str, Any]],
+    ts: str,
+) -> None:
+    """Replace an aggregate ledger row with request-level model usage."""
+    model_turns = [t for t in turns if t.get("node_kind") == "model_request"]
+    if not model_turns:
+        return
+    row = conn.execute(
+        "SELECT run_id, statement_type, model, started_at, ended_at, "
+        "total_tokens, total_cost, usage_status "
+        "FROM run_agents WHERE id = ?", (run_agent_id,),
+    ).fetchone()
+    if row is None:
+        return
+    (
+        run_id, role, stored_model, started_at, ended_at,
+        agent_total, agent_cost, agent_usage_status,
+    ) = row
+    from model_settings import classify_provider
+    from pricing import cache_adjustment_from_stored_cost, pricing_is_unconfirmed
+
+    conn.execute(
+        "DELETE FROM model_usage_calls WHERE run_agent_id = ?", (run_agent_id,),
+    )
+    for request_index, turn in enumerate(model_turns, start=1):
+        model = str(turn.get("model") or stored_model or "")
+        prompt = int(turn.get("prompt_tokens") or 0)
+        completion = int(turn.get("completion_tokens") or 0)
+        reasoning = int(turn.get("thinking_tokens") or derive_thinking_tokens(
+            int(turn.get("total_tokens") or 0), prompt, completion,
+        ))
+        total = int(turn.get("total_tokens") or 0)
+        pre_cache_cost = float(turn.get("cost_estimate") or 0.0)
+        try:
+            adjusted_cost = cache_adjustment_from_stored_cost(
+                pre_cache_cost, model,
+                cache_read_tokens=int(turn.get("cache_read_tokens") or 0),
+                cache_write_tokens=int(turn.get("cache_write_tokens") or 0),
+                prompt_tokens=prompt,
+            )
+        except Exception:
+            adjusted_cost = None
+        conn.execute(
+            "INSERT INTO model_usage_calls("
+            "invocation_id, run_id, run_agent_id, role, worker_id, request_index, "
+            "model, provider, transport, started_at, ended_at, status, "
+            "input_tokens, cached_input_tokens, cache_write_tokens, "
+            "visible_output_tokens, reasoning_tokens, total_tokens, "
+            "estimated_cost_pre_cache, estimated_cost_adjusted, pricing_status, usage_status) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                f"run-agent:{run_agent_id}:request:{request_index}", int(run_id),
+                run_agent_id, str(role), str(role), request_index, model,
+                str(turn.get("provider") or classify_provider(model)),
+                str(turn.get("transport") or "unknown"), started_at,
+                ended_at or ts, str(turn.get("status") or "succeeded"), prompt,
+                int(turn.get("cache_read_tokens") or 0),
+                int(turn.get("cache_write_tokens") or 0), completion,
+                reasoning, total, pre_cache_cost, adjusted_cost,
+                "unconfirmed" if pricing_is_unconfirmed(model) else "confirmed",
+                str(turn.get("usage_status") or (
+                    "complete" if total > 0 else "unavailable"
+                )),
+            ),
+        )
+    recorded_total = sum(int(t.get("total_tokens") or 0) for t in model_turns)
+    recorded_cost = sum(float(t.get("cost_estimate") or 0.0) for t in model_turns)
+    unattributed_tokens = max(int(agent_total or 0) - recorded_total, 0)
+    unattributed_cost = max(float(agent_cost or 0.0) - recorded_cost, 0.0)
+    if unattributed_tokens or unattributed_cost:
+        model = str(stored_model or "")
+        conn.execute(
+            "INSERT INTO model_usage_calls("
+            "invocation_id, run_id, run_agent_id, role, worker_id, request_index, "
+            "model, provider, transport, started_at, ended_at, status, "
+            "total_tokens, estimated_cost_pre_cache, pricing_status, "
+            "usage_status, error_type) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                f"run-agent:{run_agent_id}:unattributed", int(run_id),
+                run_agent_id, str(role), str(role), len(model_turns) + 1, model,
+                classify_provider(model), "unknown", started_at, ended_at or ts,
+                "bookkeeping", unattributed_tokens, unattributed_cost,
+                "unconfirmed" if pricing_is_unconfirmed(model) else "confirmed",
+                "unavailable", "provider_usage_unattributed",
+            ),
+        )
+    elif str(agent_usage_status or "unavailable") != "complete":
+        model = str(stored_model or "")
+        conn.execute(
+            "INSERT INTO model_usage_calls("
+            "invocation_id, run_id, run_agent_id, role, worker_id, request_index, "
+            "model, provider, transport, started_at, ended_at, status, "
+            "pricing_status, usage_status, error_type) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                f"run-agent:{run_agent_id}:unavailable", int(run_id),
+                run_agent_id, str(role), str(role), len(model_turns) + 1, model,
+                classify_provider(model), "unknown", started_at, ended_at or ts,
+                "bookkeeping",
+                "unconfirmed" if pricing_is_unconfirmed(model) else "confirmed",
+                str(agent_usage_status or "unavailable"),
+                "provider_usage_unavailable",
+            ),
+        )
+
+
+def fetch_model_usage_rollup(conn: sqlite3.Connection, run_id: int) -> dict[str, Any]:
+    """One coverage-aware rollup over the v44 provider-call ledger."""
+    row = conn.execute(
+        "SELECT SUM(CASE WHEN status != 'bookkeeping' THEN 1 ELSE 0 END) AS call_count, "
+        "SUM(CASE WHEN status IN ('succeeded', 'completed', 'completed_with_errors') THEN 1 ELSE 0 END) AS successful_calls, "
+        "SUM(CASE WHEN status NOT IN ('succeeded', 'completed', 'completed_with_errors', 'bookkeeping') THEN 1 ELSE 0 END) AS failed_calls, "
+        "SUM(CASE WHEN usage_status != 'complete' THEN 1 ELSE 0 END) AS unavailable_calls, "
+        "SUM(input_tokens) AS input_tokens, "
+        "SUM(cached_input_tokens) AS cached_input_tokens, "
+        "SUM(cache_write_tokens) AS cache_write_tokens, "
+        "SUM(visible_output_tokens) AS visible_output_tokens, "
+        "SUM(reasoning_tokens) AS reasoning_tokens, "
+        "SUM(total_tokens) AS total_tokens, "
+        "SUM(estimated_cost_pre_cache) AS pre_cache_cost, "
+        "SUM(estimated_cost_adjusted) AS adjusted_cost, "
+        "SUM(CASE WHEN pricing_status != 'confirmed' THEN 1 ELSE 0 END) AS unconfirmed_pricing_calls "
+        "FROM model_usage_calls WHERE run_id = ?",
+        (run_id,),
+    ).fetchone()
+    agent_row = conn.execute(
+        "SELECT COUNT(DISTINCT agents.id) AS expected_agents, "
+        "COUNT(DISTINCT calls.run_agent_id) AS recorded_agents "
+        "FROM run_agents AS agents "
+        "LEFT JOIN model_usage_calls AS calls ON calls.run_agent_id = agents.id "
+        "WHERE agents.run_id = ? AND agents.model IS NOT NULL",
+        (run_id,),
+    ).fetchone()
+    call_count = int(row["call_count"] or 0) if isinstance(row, sqlite3.Row) else int(row[0] or 0)
+    if isinstance(agent_row, sqlite3.Row):
+        expected_agents = int(agent_row["expected_agents"] or 0)
+        recorded_agents = int(agent_row["recorded_agents"] or 0)
+    else:
+        expected_agents = int(agent_row[0] or 0)
+        recorded_agents = int(agent_row[1] or 0)
+    missing_agents = max(expected_agents - recorded_agents, 0)
+    if call_count == 0:
+        return {"coverage": "unavailable", "call_count": 0}
+    values = dict(row) if isinstance(row, sqlite3.Row) else {
+        key: row[index] for index, key in enumerate((
+            "call_count", "successful_calls", "failed_calls", "unavailable_calls",
+            "input_tokens", "cached_input_tokens", "cache_write_tokens",
+            "visible_output_tokens", "reasoning_tokens", "total_tokens",
+            "pre_cache_cost", "adjusted_cost", "unconfirmed_pricing_calls",
+        ))
+    }
+    unavailable = int(values.get("unavailable_calls") or 0) + missing_agents
+    return {
+        "coverage": "complete" if unavailable == 0 else "partial",
+        "call_count": call_count,
+        "successful_calls": int(values.get("successful_calls") or 0),
+        "failed_calls": int(values.get("failed_calls") or 0),
+        "calls_with_unavailable_usage": unavailable,
+        "calls_with_unconfirmed_pricing": int(values.get("unconfirmed_pricing_calls") or 0),
+        "prompt_tokens": int(values.get("input_tokens") or 0),
+        "cache_read_tokens": int(values.get("cached_input_tokens") or 0),
+        "cache_write_tokens": int(values.get("cache_write_tokens") or 0),
+        "completion_tokens": int(values.get("visible_output_tokens") or 0),
+        "thinking_tokens": int(values.get("reasoning_tokens") or 0),
+        "total_tokens": int(values.get("total_tokens") or 0),
+        "total_cost": float(values.get("pre_cache_cost") or 0.0),
+        "cache_adjusted_cost": (
+            float(values["adjusted_cost"])
+            if values.get("adjusted_cost") is not None else None
+        ),
+    }
 
 
 def replace_agent_turns(
@@ -859,11 +1153,19 @@ def log_event(
     payload: dict[str, Any] | None = None,
     phase: str | None = None,
 ) -> int:
-    """Append one SSE-equivalent event. Payload is stored as JSON."""
+    """Append one SSE-equivalent event with a bounded JSON payload."""
+    serialized = json.dumps(payload or {})
+    encoded_len = len(serialized.encode("utf-8"))
+    if encoded_len > _MAX_AGENT_EVENT_PAYLOAD_BYTES:
+        serialized = json.dumps({
+            "_truncated": True,
+            "_original_bytes": encoded_len,
+            "event": event_type,
+        })
     cur = conn.execute(
         "INSERT INTO agent_events(run_agent_id, ts, event_type, phase, payload_json) "
         "VALUES (?, ?, ?, ?, ?)",
-        (run_agent_id, _now(), event_type, phase, json.dumps(payload or {})),
+        (run_agent_id, _now(), event_type, phase, serialized),
     )
     return int(cur.lastrowid)
 
@@ -2327,6 +2629,8 @@ def fetch_run_agents(conn: sqlite3.Connection, run_id: int) -> list[RunAgent]:
             # v15 cache rollups — _row_get guard so a pre-v15 row hydrates as 0.
             cache_read_tokens=_row_get(r, "cache_read_tokens", 0),
             cache_write_tokens=_row_get(r, "cache_write_tokens", 0),
+            reasoning_tokens=_row_get(r, "reasoning_tokens", None),
+            usage_status=_row_get(r, "usage_status", "unavailable"),
             # v17 (item 9) — pre-v17 rows hydrate as None.
             error_type=_row_get(r, "error_type", None),
             # v43 — pre-v43 rows hydrate as None.
@@ -2367,7 +2671,8 @@ def fetch_agent_turns(conn: sqlite3.Connection, run_agent_id: int) -> list[dict]
     rows = conn.execute(
         "SELECT turn_index, node_kind, tool_names, prompt_tokens, "
         "completion_tokens, total_tokens, cumulative_tokens, cost_estimate, "
-        "duration_ms, cache_read_tokens, cache_write_tokens, ts "
+        "duration_ms, cache_read_tokens, cache_write_tokens, reasoning_tokens, "
+        "usage_status, ts "
         "FROM run_agent_turns WHERE run_agent_id = ? "
         "ORDER BY turn_index",
         (run_agent_id,),
@@ -2379,15 +2684,13 @@ def fetch_agent_turns(conn: sqlite3.Connection, run_agent_id: int) -> list[dict]
             "tool_names": r["tool_names"],
             "prompt_tokens": r["prompt_tokens"] or 0,
             "completion_tokens": r["completion_tokens"] or 0,
-            # Reasoning is provider-reported output that is intentionally
-            # excluded from completion_tokens by the live usage splitter. It
-            # can therefore be recovered without a schema migration. Legacy
-            # rows stored all output as completion and correctly derive 0.
-            "thinking_tokens": derive_thinking_tokens(
-                r["total_tokens"],
-                r["prompt_tokens"],
-                r["completion_tokens"],
+            "thinking_tokens": _row_get(
+                r, "reasoning_tokens",
+                derive_thinking_tokens(
+                    r["total_tokens"], r["prompt_tokens"], r["completion_tokens"],
+                ),
             ),
+            "usage_status": _row_get(r, "usage_status", "unavailable"),
             "total_tokens": r["total_tokens"] or 0,
             "cumulative_tokens": r["cumulative_tokens"] or 0,
             "cost_estimate": r["cost_estimate"] or 0.0,

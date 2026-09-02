@@ -47,6 +47,34 @@ from pydantic_ai.settings import ModelSettings
 logger = logging.getLogger(__name__)
 _ROLE_LEVEL_WARNED: set[str] = set()
 
+# One product default for every model-backed pipeline role. Saved operator
+# settings still win, but a fresh install (or a cleared role override) now
+# follows the GPT-5.6 Luna migration instead of falling back to GPT-5.4 in
+# whichever call site happened to construct the agent.
+DEFAULT_MODEL_ID = "openai.global.gpt-5.6-luna"
+
+# OpenAI exposes a readable reasoning *summary*, not its private chain of
+# thought. ``auto`` lets the provider choose the supported summary style and
+# is the default for this migration. The setting is ignored on Chat
+# Completions and non-OpenAI transports.
+REASONING_SUMMARY_CHOICES = ("off", "auto", "concise", "detailed")
+DEFAULT_REASONING_SUMMARY = "auto"
+
+
+def normalize_reasoning_summary(value: Any) -> str:
+    """Return a supported summary visibility value; invalid values disable it."""
+    if value is None or str(value).strip() == "":
+        return DEFAULT_REASONING_SUMMARY
+    normalized = str(value).strip().lower()
+    return normalized if normalized in REASONING_SUMMARY_CHOICES else "off"
+
+
+def configured_reasoning_summary() -> str:
+    """Read the shared summary setting fresh so Settings applies immediately."""
+    return normalize_reasoning_summary(
+        os.environ.get("XBRL_REASONING_SUMMARY", DEFAULT_REASONING_SUMMARY)
+    )
+
 
 def configured_role_thinking_level(
     role: str, *, default: str | None = None
@@ -333,6 +361,7 @@ def build_model_settings(
     cache_key: str | None = None,
     temperature: float | None = None,
     thinking_level: str | None = None,
+    reasoning_summary: str | None = None,
 ) -> ModelSettings:
     """Return cache-enabled, provider-correct ``ModelSettings`` for ``model``.
 
@@ -376,7 +405,10 @@ def build_model_settings(
     # Step 2.2 known gap), which is behaviour-neutral vs. before this change.
     if type_name in ("OpenAIChatModel", "OpenAIModel", "OpenAIResponsesModel"):
         if _resolved_provider(model) == "openai":
-            from pydantic_ai.models.openai import OpenAIChatModelSettings
+            from pydantic_ai.models.openai import (
+                OpenAIChatModelSettings,
+                OpenAIResponsesModelSettings,
+            )
 
             effort = _openai_reasoning_effort(model_name, level) if level else None
             # GPT-5.6: "function tools in Chat Completions are compatible only
@@ -406,7 +438,26 @@ def build_model_settings(
                 settings["openai_prompt_cache_key"] = cache_key
             if effort:
                 settings["openai_reasoning_effort"] = effort
-            return OpenAIChatModelSettings(**settings)
+            # A provider-readable summary is a Responses-only output. Never
+            # send it to Chat Completions or another provider, where it is
+            # either unsupported or has different semantics. ``off`` remains
+            # independent from the reasoning-effort choice above.
+            summary_visibility = (
+                configured_reasoning_summary()
+                if reasoning_summary is None
+                else normalize_reasoning_summary(reasoning_summary)
+            )
+            if (
+                type_name == "OpenAIResponsesModel"
+                and summary_visibility != "off"
+            ):
+                settings["openai_reasoning_summary"] = summary_visibility
+            settings_type = (
+                OpenAIResponsesModelSettings
+                if type_name == "OpenAIResponsesModel"
+                else OpenAIChatModelSettings
+            )
+            return settings_type(**settings)
 
         # Proxy-routed Gemini / Claude arrive here as OpenAIChatModel. They
         # cannot take the OpenAI-only cache params (the existing guard above),
@@ -494,6 +545,9 @@ def describe_model_runtime(
             "role": role,
             "configured_reasoning_effort": configured,
             "effective_reasoning_effort": effective,
+            "reasoning_summary_visibility": (
+                settings.get("openai_reasoning_summary", "off")
+            ),
             "cache_settings": cache,
         }
     except Exception:  # noqa: BLE001 — trace metadata must never break a run
@@ -511,5 +565,6 @@ def describe_model_runtime(
             "role": role,
             "configured_reasoning_effort": None,
             "effective_reasoning_effort": "unknown",
+            "reasoning_summary_visibility": "unknown",
             "cache_settings": {},
         }

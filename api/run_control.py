@@ -21,6 +21,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 
 import server
+from model_settings import DEFAULT_MODEL_ID
 from server import RunConfigRequest
 from utils.paths import validate_session_id
 
@@ -63,7 +64,7 @@ async def run_multi_extraction(session_id: str, body: RunConfigRequest, request:
         server._reload_runtime_settings()
         api_key = server._resolve_api_key()
         proxy_url = os.environ.get("LLM_PROXY_URL", "")
-        model_name = os.environ.get("TEST_MODEL", "openai.gpt-5.4")
+        model_name = os.environ.get("TEST_MODEL", DEFAULT_MODEL_ID)
 
         if not api_key:
             raise HTTPException(
@@ -244,7 +245,7 @@ async def start_run_endpoint(run_id: int, request: Request):
         server._reload_runtime_settings()
         api_key = server._resolve_api_key()
         proxy_url = os.environ.get("LLM_PROXY_URL", "")
-        model_name = os.environ.get("TEST_MODEL", "openai.gpt-5.4")
+        model_name = os.environ.get("TEST_MODEL", DEFAULT_MODEL_ID)
 
         if not api_key:
             raise HTTPException(
@@ -530,7 +531,7 @@ async def rerun_notes(run_id: int, request: Request):
     server._reload_runtime_settings()
     api_key = server._resolve_api_key()
     proxy_url = os.environ.get("LLM_PROXY_URL", "")
-    model_name = os.environ.get("TEST_MODEL", "openai.gpt-5.4")
+    model_name = os.environ.get("TEST_MODEL", DEFAULT_MODEL_ID)
 
     if not api_key:
         raise HTTPException(
@@ -605,7 +606,7 @@ async def rerun_agent(session_id: str, body: RunConfigRequest, request: Request)
     server._reload_runtime_settings()
     api_key = server._resolve_api_key()
     proxy_url = os.environ.get("LLM_PROXY_URL", "")
-    model_name = os.environ.get("TEST_MODEL", "openai.gpt-5.4")
+    model_name = os.environ.get("TEST_MODEL", DEFAULT_MODEL_ID)
 
     if not api_key:
         raise HTTPException(status_code=400, detail="API key not set. Check Settings.")

@@ -28,6 +28,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import sqlite3
 import sys
 from dataclasses import dataclass
@@ -36,6 +37,8 @@ from typing import Any, Optional
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+
+from model_settings import DEFAULT_MODEL_ID
 
 
 # --- Pure core (unit-tested; no DB, no live calls) -------------------------
@@ -338,7 +341,7 @@ def resolve_model(model: Optional[str]) -> str:
     from dotenv import load_dotenv
 
     load_dotenv(ROOT / ".env", override=True)
-    return os.environ.get("TEST_MODEL", "openai.gpt-5.4")
+    return os.environ.get("TEST_MODEL", DEFAULT_MODEL_ID)
 
 
 @dataclass

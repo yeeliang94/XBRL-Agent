@@ -1590,16 +1590,29 @@ describe("RunDetailView", () => {
         makeAgent({ id: 4, statement_type: "NOTES_ACC_POLICIES" }),
         makeAgent({ id: 5, statement_type: "NOTES_LIST_OF_NOTES" }),
         makeAgent({ id: 6, statement_type: "CORRECTION" }),
+        makeAgent({ id: 7, statement_type: "SOURCE_PREPARATION" }),
       ],
     });
     render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
-    // Only SOFP + SOPL are statements → 2, not 6. ("Statements" also appears as
+    // Only SOFP + SOPL are statements → 2, not 7. ("Statements" also appears as
     // a config row, so pick the metric tile whose text starts with the count.)
     const metricTile = screen
       .getAllByText("Statements")
       .map((el) => el.parentElement)
       .find((t) => /^\d/.test(t?.textContent ?? ""));
     expect(metricTile?.textContent).toMatch(/^2Statements/);
+  });
+
+  test("Activity gives source preparation a plain-language label", () => {
+    const detail = makeDetail({
+      agents: [makeAgent({ id: 1, statement_type: "SOURCE_PREPARATION" })],
+    });
+    render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
+    clickRunTab(/activity/i);
+
+    const row = screen.getByTestId("run-detail-agent-row");
+    expect(row).toHaveTextContent("Source preparation");
+    expect(row).not.toHaveTextContent("SOURCE_PREPARATION");
   });
 
   // UX-QA #13a: advisory-only run doesn't show an amber "Needs attention".

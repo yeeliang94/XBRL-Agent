@@ -12,7 +12,11 @@ from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 from pydantic_ai.messages import BinaryContent
 from pydantic_ai.models import Model
-from model_settings import build_model_settings, configured_role_thinking_level
+from model_settings import (
+    DEFAULT_MODEL_ID,
+    build_model_settings,
+    configured_role_thinking_level,
+)
 
 from tools.pdf_viewer import render_pages_to_png_bytes
 
@@ -68,7 +72,7 @@ def _vision_entries_to_toc_entries(vision_entries: list[VisionTocEntry]) -> list
 async def extract_toc_via_vision(
     pdf_path: Path | str,
     candidate_pages: list[int],
-    model: str | Model = "openai.gpt-5.4",
+    model: str | Model = DEFAULT_MODEL_ID,
 ) -> VisionTocResult:
     """Render candidate TOC pages as images and ask LLM to extract entries.
 

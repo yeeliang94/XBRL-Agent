@@ -1270,6 +1270,15 @@ export function RunDetailView({
                     value={(rollup.thinking_tokens ?? 0).toLocaleString()}
                   />
                   <MetricTile label="Est. cost" value={formatCost(rollup.total_cost)} />
+                  <MetricTile
+                    label="Usage coverage"
+                    value={rollup.coverage === "complete"
+                      ? "Complete"
+                      : rollup.coverage === "partial"
+                        ? `Partial (${rollup.calls_with_unavailable_usage ?? 0} missing)`
+                        : "Unavailable"}
+                  />
+                  <MetricTile label="Model calls" value={String(rollup.call_count ?? 0)} />
                   <MetricTile label="Turns" value={String(rollup.turn_count)} />
                   <MetricTile label="Tool calls" value={String(rollup.tool_call_count)} />
                   <MetricTile label="Agents" value={String(detail.agents.length)} />

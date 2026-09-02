@@ -19,7 +19,11 @@ from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 from pydantic_ai.messages import BinaryContent
 from pydantic_ai.models import Model
-from model_settings import build_model_settings, configured_role_thinking_level
+from model_settings import (
+    DEFAULT_MODEL_ID,
+    build_model_settings,
+    configured_role_thinking_level,
+)
 
 from statement_types import StatementType
 from scout.toc_parser import TocEntry
@@ -135,7 +139,7 @@ async def calibrate_pages(
     pdf_path: Path,
     toc_entries: list[TocEntry],
     pdf_length: int,
-    model: str | Model = "openai.gpt-5.4",
+    model: str | Model = DEFAULT_MODEL_ID,
 ) -> CalibrationResult:
     """Calibrate each TOC entry to its actual PDF page.
 
