@@ -486,11 +486,11 @@ async def patch_mtool_template(
             _validate_cmap_shape(cmap)
             _validate_cmap_semantics(cmap, doc)
         else:
-            # Only our fingerprint-verified generated templates may bypass a
-            # detector confirmation.  An unverified mTool workbook can expose
-            # some taxonomy identifiers while other writes still take the
-            # legacy label/column path; treating that mixed case as fully
-            # semantic recreates the wrong-column incident this gate prevents.
+            # Unverified period/entity layouts require confirmation. Category
+            # sheets are different: their columns are taxonomy members, so a
+            # CY/PY form cannot describe them. resolve_filing_doc below allows
+            # one exact taxonomy-addressed target and returns blocked coverage
+            # for any category write that would need the legacy label route.
             trusted_generated = (
                 inspection["semantic_source"] == "generated-targets"
             )
@@ -1024,7 +1024,8 @@ def _apply_notes_targets(notes_doc: dict, notes_targets: str | None) -> None:
 # code + pick-one candidates + the refused near-miss suggestion).
 _UNRESOLVED_PASSTHROUGH = (
     "index", "label", "detail", "reason", "candidates",
-    "matched_label", "ratio", "key", "sheet", "cell", "label_cell")
+    "matched_label", "ratio", "key", "sheet", "cell", "label_cell",
+    "source_sheet", "source_row")
 
 
 def _unresolved_entry(u: dict) -> dict:

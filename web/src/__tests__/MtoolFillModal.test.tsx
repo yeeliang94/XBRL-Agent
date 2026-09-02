@@ -13,6 +13,7 @@ const FILL_DOC = {
     sheets_covered: ["SOFP-Sub-CuNonCu"],
     counts: {
       writes: 7,
+      conflict_writes: 2,
       excluded_matrix_socie: 3,
       excluded_not_disclosed: 1,
       excluded_out_of_scope: 0,
@@ -64,10 +65,9 @@ describe("MtoolFillModal", () => {
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
     await waitFor(() => expect(screen.getByText(/values will be written/i)).toBeTruthy());
     expect(screen.getByText(/7/)).toBeTruthy();
-    expect(screen.getByLabelText(/filing progress/i)).toHaveTextContent("1. Check run");
-    expect(screen.getByText(/advanced filing options/i)).toBeTruthy();
-    // Excluded SOCIE count surfaced.
-    expect(screen.getByText(/3 SOCIE\/matrix/i)).toBeTruthy();
+    expect(screen.getByText(/optional settings/i)).toBeTruthy();
+    expect(screen.getByText(/4 values? excluded from this filing/i)).toBeTruthy();
+    expect(screen.getByText(/2 values? still in conflict will be written/i)).toBeTruthy();
   });
 
   test("shows canonical filing-field coverage and reviewed exceptions", async () => {
@@ -104,7 +104,7 @@ describe("MtoolFillModal", () => {
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
 
     const coverage = await screen.findByRole("region", { name: /filing field coverage/i });
-    expect(screen.getByText(/filing fields are fully identified/i)).toBeTruthy();
+    expect(screen.getByText(/field mapping is ready/i)).toBeTruthy();
     expect(coverage).toHaveTextContent(/317.*writable fields/i);
     expect(coverage).toHaveTextContent(/no fields are missing/i);
     expect(screen.getByText(/reviewed template exceptions/i)).toBeTruthy();
@@ -147,8 +147,8 @@ describe("MtoolFillModal", () => {
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
 
     const coverage = await screen.findByRole("region", { name: /filing field coverage/i });
-    expect(coverage).toHaveTextContent(/filing fields need review/i);
-    expect(coverage).toHaveTextContent(/1 value\(s\) need moving or removal/i);
+    expect(coverage).toHaveTextContent(/field mapping is incomplete/i);
+    expect(coverage).toHaveTextContent(/1 stored value\(s\) need review/i);
   });
 
   test("ignores a partial field-semantics payload instead of crashing", async () => {
@@ -380,11 +380,8 @@ describe("MtoolFillModal", () => {
     fireEvent.change(screen.getByLabelText(/mtool template file/i), {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
-    fireEvent.click(screen.getByRole("button", { name: /check notes/i }));
-    await waitFor(() => expect(screen.getByText(/1 will be added/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/1 of 2 notes/i)).toBeTruthy());
     expect(screen.getByText(/Corporate information → Notes-CI!E14/)).toBeTruthy();
-    // The template exposed zero existing slots — the "no popup yet" signal.
-    expect(screen.getByText(/this template has/i).textContent).toMatch(/0.*note spot/i);
   });
 
   test("preview surfaces backend errors even with no unresolved notes", async () => {
@@ -412,12 +409,55 @@ describe("MtoolFillModal", () => {
     fireEvent.change(screen.getByLabelText(/mtool template file/i), {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
-    fireEvent.click(screen.getByRole("button", { name: /check notes/i }));
     // The error is surfaced (not hidden behind a clean-looking plan).
     await waitFor(() =>
       expect(screen.getByText(/would stop the notes from landing/i)).toBeTruthy()
     );
     expect(screen.getByText(/no \+FootnoteTexts sheet/i)).toBeTruthy();
+  });
+
+  test("does not blame sheet scoping when a note is too large for Excel", async () => {
+    mockFetch((url) => {
+      if (url.includes("/notes-preview")) {
+        return new Response(
+          JSON.stringify({
+            notes_in_run: 1,
+            template_fn_slots: 0,
+            create_missing_notes: true,
+            will_fill_existing: [],
+            will_create: [],
+            unresolved: [{
+              index: 0,
+              label: "Inventories",
+              source_sheet: "Notes-Inventories",
+              reason: "oversize",
+              detail: "payload is over Excel's cell limit",
+            }],
+            errors: [],
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("/mtool-notes-fill")) {
+        return new Response(
+          JSON.stringify({ meta: { counts: { notes: 1 } }, footnotes: [] }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("/mtool-fill")) {
+        return new Response(JSON.stringify(FILL_DOC), { status: 200 });
+      }
+      return new Response("{}", { status: 200 });
+    });
+
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText(/written note\(s\) will be filled/i)).toBeTruthy());
+    fireEvent.change(screen.getByLabelText(/mtool template file/i), {
+      target: { files: [new File(["x"], "t.xlsx")] },
+    });
+
+    await waitFor(() => expect(screen.getByText(/over Excel's cell limit/i)).toBeTruthy());
+    expect(screen.queryByText(/Only checked in:/i)).toBeNull();
   });
 
   test("preview surfaces a malformed successful response", async () => {
@@ -443,7 +483,6 @@ describe("MtoolFillModal", () => {
     fireEvent.change(screen.getByLabelText(/mtool template file/i), {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
-    fireEvent.click(screen.getByRole("button", { name: /check notes/i }));
     await waitFor(() =>
       expect(screen.getByText(/notes preview returned an invalid response/i)).toBeTruthy(),
     );
@@ -474,7 +513,6 @@ describe("MtoolFillModal", () => {
     fireEvent.change(screen.getByLabelText(/mtool template file/i), {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
-    fireEvent.click(screen.getByRole("button", { name: /check notes/i }));
     await waitFor(() => expect(screen.getByLabelText(/notes preview/i)).toBeTruthy());
     // Flipping the toggle must clear the now-stale plan.
     fireEvent.click(screen.getByLabelText(/add missing note spots/i));
@@ -496,6 +534,7 @@ describe("MtoolFillModal", () => {
               {
                 index: 1,
                 label: "Disclosure of corporate information",
+                source_sheet: "Notes-CI",
                 reason: "ambiguous",
                 detail: "label matches multiple note cells",
                 candidates: [
@@ -531,12 +570,13 @@ describe("MtoolFillModal", () => {
     fireEvent.change(screen.getByLabelText(/mtool template file/i), {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
-    fireEvent.click(screen.getByRole("button", { name: /check notes/i }));
-
     // The flagged note renders with a plain-language reason + a picker.
-    await waitFor(() => expect(screen.getByText(/need your decision/i)).toBeTruthy());
+    const decisionHeading = await screen.findByText(/needs your decision/i);
+    expect(decisionHeading.closest("details")).toHaveAttribute("open");
     expect(screen.getByText(/more than one place/i)).toBeTruthy();
+    expect(screen.getByText("Only checked in: Notes-CI")).toBeTruthy();
     const picker = screen.getByLabelText(/choose where/i) as HTMLSelectElement;
+    expect(screen.getByRole("option", { name: /Notes-CI E12/ })).toBeTruthy();
     // Pick the second candidate (Notes-CI E12).
     fireEvent.change(picker, {
       target: { value: JSON.stringify({ sheet: "Notes-CI", cell: "E12" }) },
@@ -590,8 +630,6 @@ describe("MtoolFillModal", () => {
     fireEvent.change(screen.getByLabelText(/mtool template file/i), {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
-    fireEvent.click(screen.getByRole("button", { name: /check notes/i }));
-
     // The near-miss surfaces the suggested match in plain language.
     await waitFor(() => expect(screen.getByText(/close \(but not identical\) match/i)).toBeTruthy());
     fireEvent.click(screen.getByLabelText(/use the close match/i));
@@ -635,16 +673,23 @@ describe("MtoolFillModal", () => {
     fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
     await waitFor(() => expect(screen.getByLabelText(/column layout editor/i)).toBeTruthy());
     // Guidance copy, and NOT the red "Fill failed" framing.
-    expect(screen.getByText(/one more step/i)).toBeTruthy();
+    expect(screen.getByText(/check the period columns/i)).toBeTruthy();
     expect(screen.queryByText(/fill failed/i)).toBeNull();
   });
 
-  test("detects columns up front on file choose and shows the layout to confirm", async () => {
+  test("does not ask for columns when the detected layout is already verified", async () => {
+    let detectionFinished = false;
     mockFetch((url) => {
       if (url.includes("/mtool-fill/detect-columns")) {
+        detectionFinished = true;
         return new Response(
           JSON.stringify({
             confidence: "high",
+            requires_confirmation: false,
+            filing_inspection: {
+              semantic_source: "taxonomy-identifiers",
+              mtool_compatibility: "verified-2.2",
+            },
             detected: {
               "SOFP-Sub-CuNonCu": {
                 label_column: "D",
@@ -662,15 +707,11 @@ describe("MtoolFillModal", () => {
     });
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
     await waitFor(() => expect(screen.getByText(/values will be written/i)).toBeTruthy());
-    // Choosing a file alone (no Fill click) surfaces the column layout.
     fireEvent.change(screen.getByLabelText(/mtool template file/i), {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
-    await waitFor(() => expect(screen.getByLabelText(/column layout editor/i)).toBeTruthy());
-    // High confidence → "detected, check" framing, seeded with the guess.
-    expect(screen.getByText(/columns detected/i)).toBeTruthy();
-    expect((screen.getByLabelText(/label column/i) as HTMLInputElement).value).toBe("D");
-    expect((screen.getByLabelText(/current_year column/i) as HTMLInputElement).value).toBe("E");
+    await waitFor(() => expect(detectionFinished).toBe(true));
+    expect(screen.queryByLabelText(/column layout editor/i)).toBeNull();
   });
 
   test("unverified semantic candidates still show column confirmation", async () => {
@@ -685,7 +726,7 @@ describe("MtoolFillModal", () => {
               mtool_compatibility: "candidate-2.2",
             },
             detected: {
-              "Notes-Issuedcapital": {
+              "SOFP-Sub-CuNonCu": {
                 label_column: "D",
                 columns: { current_year: "E", prior_year: "F" },
                 confidence: "high",
@@ -710,8 +751,52 @@ describe("MtoolFillModal", () => {
     });
 
     await waitFor(() => expect(screen.getByLabelText(/column layout editor/i)).toBeTruthy());
-    expect(screen.getByText(/please check the columns/i)).toBeTruthy();
+    expect(screen.getByText(/check the period columns/i)).toBeTruthy();
     expect((screen.getByLabelText(/label column/i) as HTMLInputElement).value).toBe("D");
+  });
+
+  test("does not ask for current and prior year columns on a SOCIE matrix", async () => {
+    mockFetch((url) => {
+      if (url.includes("/mtool-fill/detect-columns")) {
+        return new Response(
+          JSON.stringify({
+            confidence: "high",
+            requires_confirmation: false,
+            filing_inspection: {
+              semantic_source: "taxonomy-identifiers",
+              mtool_compatibility: "verified-2.2",
+            },
+            detected: {
+              SOCIE: {
+                label_column: "D",
+                columns: { current_year: "", prior_year: "" },
+                dimensional: true,
+                basis: "semantic",
+                confidence: "high",
+                requires_confirmation: false,
+                notes: ["columns are equity components, not reporting periods"],
+              },
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("/mtool-fill")) {
+        return new Response(JSON.stringify(FILL_DOC), { status: 200 });
+      }
+      return new Response("{}", { status: 200 });
+    });
+
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText(/values will be written/i)).toBeTruthy());
+    fireEvent.change(screen.getByLabelText(/mtool template file/i), {
+      target: { files: [new File(["x"], "socie.xlsx")] },
+    });
+
+    await waitFor(() => expect(screen.getByText(/SOCIE matrix/i)).toBeTruthy());
+    expect(screen.queryByLabelText(/current_year column/i)).toBeNull();
+    expect(screen.queryByLabelText(/prior_year column/i)).toBeNull();
+    expect(screen.queryByLabelText(/column layout editor/i)).toBeNull();
   });
 
   test("ignores a stale column-detect response after the file changed", async () => {
@@ -729,6 +814,11 @@ describe("MtoolFillModal", () => {
               new Response(
                 JSON.stringify({
                   confidence: "high",
+                  requires_confirmation: true,
+                  filing_inspection: {
+                    semantic_source: "taxonomy-identifiers",
+                    mtool_compatibility: "candidate-2.2",
+                  },
                   detected: {
                     "SOFP-Sub-CuNonCu": {
                       label_column: which === 0 ? "A" : "D",
@@ -1054,7 +1144,8 @@ describe("mTool filing gates", () => {
       return new Response("{}", { status: 200 });
     });
 
-    expect(screen.getByText(/isn't ready to file yet/i)).toBeTruthy();
+    expect(screen.getByLabelText(/not ready to file/i)).toBeTruthy();
+    expect(screen.getByText(/this run isn't ready to file yet/i)).toBeTruthy();
     expect(screen.getByText(/still marked as conflicting/i)).toBeTruthy();
     expect(screen.getByText(/Trade receivables/)).toBeTruthy();
 
@@ -1067,6 +1158,41 @@ describe("mTool filing gates", () => {
       target: { value: "partner approved" },
     });
     expect((screen.getByRole("button", { name: /^fill$/i }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  test("shows a readable category-sheet coverage failure", async () => {
+    await openWith((url) => {
+      if (url.includes("/mtool-fill/patch")) {
+        return new Response(
+          JSON.stringify({
+            detail: {
+              error: "Some filing facts could not be mapped to a unique template cell.",
+              filing_coverage: {
+                status: "blocked",
+                requested: 1,
+                mapped: 0,
+                unmapped: 1,
+                ambiguous: 0,
+                unresolved_writes: [{
+                  sheet: "Notes-Issuedcapital",
+                  label: "Number of shares issued",
+                  detail: "This category-based sheet needs taxonomy identifiers to choose the share-class column safely.",
+                }],
+              },
+            },
+          }),
+          { status: 422 },
+        );
+      }
+      if (url.includes("/mtool-fill")) return new Response(JSON.stringify(FILL_DOC), { status: 200 });
+      return new Response("{}", { status: 200 });
+    });
+
+    chooseTemplate();
+    fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
+
+    await waitFor(() => expect(screen.getByText(/category-based sheet needs taxonomy identifiers/i)).toBeTruthy());
+    expect(screen.queryByText(/column_map is missing physical columns/i)).toBeNull();
   });
 
   test("a clean fill shows the report first, then downloads on a second click", async () => {

@@ -177,18 +177,20 @@ def test_dimensional_sheet_is_refused_not_mapped_by_position():
     """``Notes-Issuedcapital`` lays its columns out as share CLASSES, all for
     the same period. Positional assignment would have written the current year
     into "Ordinary shares" and the prior year into "Redeemable preference
-    shares" — a plausible, wrong filing. It must be refused instead."""
+    shares" — a plausible, wrong filing. It must be refused as a period map
+    and left to semantic dimension resolution instead."""
     doc = {"sheets": {"Notes-Issuedcapital": {
         "label_column": None,
         "columns": {"current_year": None, "prior_year": None}}}}
     sheet = detect_column_map(str(REAL_MTOOL), doc)["Notes-Issuedcapital"]
     assert sheet["dimensional"] is True
-    assert sheet["requires_confirmation"] is True
-    assert sheet["confidence"] == "low"
-    # Every requested role is OFFERED (the confirm dialog renders an input per
-    # key) but BLANK — no guessed period column (peer review, 2026-08-05: the
-    # old empty dict left the operator a confirmation with nothing to fill).
+    assert sheet["requires_confirmation"] is False
+    assert sheet["confidence"] == "high"
+    # No period column is guessed. The semantic resolver uses the taxonomy
+    # member to select the category column, so this layout does not trigger a
+    # CY/PY confirmation form that cannot describe it.
     assert sheet["columns"] == {"current_year": "", "prior_year": ""}
+    assert needs_confirmation({"Notes-Issuedcapital": sheet}) is False
     assert any("categories" in n for n in sheet["notes"])
 
 
@@ -246,7 +248,9 @@ def test_scarce_labels_are_low_confidence(tmp_path):
 
 # ------------------------------------------- peer-review fixes (2026-08-05)
 
-def _marker_workbook(tmp_path, *, dates=("31/12/2024", "31/12/2023")):
+def _marker_workbook(
+    tmp_path, *, dates=("31/12/2024", "31/12/2023"), dimensional=False,
+):
     """A synthetic workbook carrying mTool's own marker rows — semantic path,
     but a fingerprint no registry has ever seen."""
     wb = Workbook()
@@ -258,6 +262,10 @@ def _marker_workbook(tmp_path, *, dates=("31/12/2024", "31/12/2023")):
     ws["A4"] = "#STDTENDTDATE#"
     ws["E4"] = "01/01/2024 - 31/12/2024"
     ws["F4"] = "01/01/2023 - 31/12/2023"
+    if dimensional:
+        ws["A5"] = "#DOM#"
+        ws["E5"] = "OrdinarySharesMember"
+        ws["F5"] = "PreferenceSharesMember"
     for i in range(6, 16):
         ws[f"D{i}"] = f"Line item {i}"
     path = tmp_path / "unknown_semantic.xlsx"
@@ -282,6 +290,33 @@ def test_unknown_semantic_template_needs_confirmation(tmp_path):
     assert sheet["requires_confirmation"] is True
     assert needs_confirmation({"S": sheet}) is True
     assert any("haven't seen" in n for n in sheet["notes"])
+
+
+def test_unknown_dimensional_template_does_not_request_period_columns(tmp_path):
+    """A semantic category matrix is resolved from taxonomy members, even
+    when its fingerprint is new. A CY/PY form cannot describe those columns;
+    exact semantic resolution remains the fail-closed filing gate."""
+    path = _marker_workbook(tmp_path, dimensional=True)
+    doc = {"sheets": {"S": {"label_column": None, "columns": {
+        "current_year": None, "prior_year": None}}}}
+    sheet = detect_column_map(str(path), doc)["S"]
+    assert sheet["dimensional"] is True
+    assert sheet["columns"] == {"current_year": "", "prior_year": ""}
+    assert sheet["requires_confirmation"] is False
+    assert needs_confirmation({"S": sheet}) is False
+
+
+def test_dimensional_sheet_does_not_hide_an_unrelated_confirmation_reason():
+    """Only the category-column condition is exempt from a period form.
+
+    A future safety reason on the same sheet must still reach the confirmation
+    gate instead of being swallowed merely because the layout is dimensional.
+    """
+    assert needs_confirmation({"S": {
+        "dimensional": True,
+        "requires_confirmation": True,
+        "notes": ["a separate safety check needs confirmation"],
+    }}) is True
 
 
 def test_group_semantic_layout_offers_every_role_blank(tmp_path):

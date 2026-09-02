@@ -237,14 +237,15 @@ def _semantic_layout(cells: dict, roles: list[str], *,
     requires_confirmation = False
 
     if dimensional:
-        # Columns are dimension members (share classes, equity components), not
-        # periods. Mapping a period role onto them is the finding-3 disaster.
-        confidence = "low"
-        requires_confirmation = True
+        # Columns are taxonomy dimension members (share classes, equity
+        # components), not periods. The semantic filing resolver selects the
+        # member column from the write's dimensions and fails closed when it
+        # cannot resolve one exact target. A CY/PY confirmation form cannot
+        # make this safer because those roles do not describe these columns.
         notes.append(
             "this sheet's value columns are categories (for example share "
-            "classes or equity components), not years — please say which "
-            "column each figure belongs in")
+            "classes or equity components), not years — they are matched "
+            "from the fact's taxonomy dimensions")
 
     # Distinct period end dates, newest first: newest = current year.
     ordered = sorted({d for d in dates.values()}, reverse=True)
@@ -255,7 +256,7 @@ def _semantic_layout(cells: dict, roles: list[str], *,
 
     wants_group = any(r.startswith("group_") or r.startswith("company_")
                       for r in roles)
-    if wants_group:
+    if wants_group and not dimensional:
         # mTool's Group column shape has never been observed, so there is
         # nothing here to corroborate a Group/Company split against. Never
         # auto-proceed on a four-column shape (Step 10).
@@ -294,7 +295,7 @@ def _semantic_layout(cells: dict, roles: list[str], *,
         requires_confirmation = True
         notes.append("could not find the label column marker")
 
-    if not template_known:
+    if not template_known and not dimensional:
         # An unknown fingerprint always needs a human, marker rows or not —
         # a semantic reading that has never been corroborated can still be a
         # confidently-wrong reading of markers we've never seen arranged this
@@ -481,11 +482,14 @@ def overall_confidence(column_map: dict[str, dict[str, Any]]) -> str:
 
 
 def needs_confirmation(column_map: dict[str, dict[str, Any]]) -> bool:
-    """Whether a human must confirm this map before anything is written.
+    """Whether a human must confirm period/entity columns before writing.
 
     Separate from ``overall_confidence`` on purpose: confidence is about how
     sure the detector is, this is about whether it is ALLOWED to proceed alone
-    (unknown template, group layout, dimensional columns).
+    (unknown template or a Group period/entity layout). A dimensional layout
+    does not itself set ``requires_confirmation`` because a period-column form
+    cannot describe taxonomy members. Any other reason on that same sheet must
+    still reach this gate.
     """
     if not column_map:
         return True

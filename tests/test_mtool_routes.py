@@ -907,6 +907,8 @@ def test_preview_unresolved_entries_are_structured(client):
         assert entry["reason"] in {"no_match", "ambiguous",
                                    "strict_near_miss", "no_slot",
                                    "no_payload_row"}
+        assert entry["source_sheet"] == "Notes-CI"
+        assert entry["source_row"] == 12
 
 
 # ------------------------------------------- peer-review fixes (2026-08-05)
