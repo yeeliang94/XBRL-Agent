@@ -235,25 +235,49 @@ def resolve_filing_doc(
                     item[key] = write[key]
             resolved.append(item)
         elif not primary or inspection["semantic_source"] == "legacy-labels":
-            legacy.append(write)
+            sheet = write.get("sheet")
+            if detected.get(sheet, {}).get("dimensional"):
+                unresolved.append({
+                    "concept_uuid": write.get("concept_uuid"),
+                    "primary_concept": primary,
+                    "sheet": sheet,
+                    "label": write.get("label"),
+                    "detail": (
+                        "This category-based sheet needs an exact taxonomy "
+                        "address to choose the correct category column. The "
+                        "figure was not written; use a template that exposes "
+                        "the figure's taxonomy identifiers."
+                    ),
+                })
+            else:
+                legacy.append(write)
         else:
             unresolved.append({
                 "concept_uuid": write.get("concept_uuid"),
                 "primary_concept": primary,
                 "sheet": write.get("sheet"),
                 "label": write.get("label"),
+                "detail": (
+                    "The figure's taxonomy address did not resolve to one "
+                    "unique template cell."
+                ),
             })
 
+    legacy_ready: dict[str, Any] | None = None
     if legacy:
         legacy_doc = dict(doc)
         legacy_doc["writes"] = legacy
+        legacy_sheets = {write.get("sheet") for write in legacy}
+        legacy_doc["sheets"] = {
+            sheet: cfg for sheet, cfg in doc.get("sheets", {}).items()
+            if sheet in legacy_sheets
+        }
         legacy_ready = apply_column_map(legacy_doc, cmap)
         resolved.extend(legacy_ready["writes"])
 
     out = dict(doc)
     out["writes"] = resolved
-    out["sheets"] = {} if not legacy else apply_column_map(
-        {**doc, "writes": legacy}, cmap)["sheets"]
+    out["sheets"] = legacy_ready["sheets"] if legacy_ready else {}
     out_meta = dict(doc.get("meta", {}))
     out_meta["columns_unresolved"] = False
     out["meta"] = out_meta

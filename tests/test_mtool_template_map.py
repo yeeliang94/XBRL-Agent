@@ -167,6 +167,47 @@ def test_inspection_reports_supported_target_and_semantic_source(tmp_path: Path)
     assert report["mtool_compatibility"] == "verified-generated"
 
 
+def test_category_sheet_legacy_fallback_is_structurally_blocked():
+    """A category matrix cannot fall through to blank CY/PY columns.
+
+    Some mTool workbooks omit the taxonomy address needed to choose a share
+    class or equity-component column. That is an actionable coverage failure,
+    not a malformed column-map exception and not a positional guess.
+    """
+    template = REPO / "data/MBRS_test.xlsx"
+    doc = {
+        "meta": {
+            "filing_standard": "mfrs",
+            "filing_level": "company",
+            "denomination": "thousands",
+        },
+        "sheets": {
+            "Notes-Issuedcapital": {
+                "label_column": None,
+                "columns": {"current_year": None, "prior_year": None},
+            },
+        },
+        "writes": [{
+            "sheet": "Notes-Issuedcapital",
+            "label": "Number of shares issued",
+            "column_role": "current_year",
+            "value": 100,
+        }],
+    }
+
+    ready, coverage = resolve_filing_doc(str(template), doc)
+
+    assert ready["writes"] == []
+    assert coverage["status"] == "blocked"
+    assert coverage["mapped"] == 0
+    assert coverage["unmapped"] == 1
+    assert coverage["legacy_label_writes"] == 0
+    unresolved = coverage["unresolved_writes"][0]
+    assert unresolved["sheet"] == "Notes-Issuedcapital"
+    assert "taxonomy" in unresolved["detail"].lower()
+    assert "category" in unresolved["detail"].lower()
+
+
 def test_generated_statement_family_match_uses_exact_token():
     """SOCI must not pass merely because ``SOCIE`` contains that substring."""
     template = REPO / "XBRL-template-MFRS/Company/09-SOCIE.xlsx"

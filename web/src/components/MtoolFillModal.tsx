@@ -2,8 +2,6 @@ import React, { useEffect, useRef, useState } from "react";
 import { userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
-import { STATUS_SYMBOLS, type StatusSymbol } from "../lib/runStatus";
-import { StatusIcon } from "./StatusIcon";
 import { denominationLabel } from "../lib/vocabulary";
 import { FileDropzone } from "./FileDropzone";
 
@@ -92,6 +90,8 @@ interface UnresolvedNote {
   key?: string;
   sheet?: string;
   cell?: string;
+  source_sheet?: string;
+  source_row?: number;
 }
 
 // Dry-run notes diagnostic (POST /mtool-fill/notes-preview).
@@ -182,7 +182,7 @@ interface DetectedSheet {
   columns: Record<string, string>;
   confidence: string;
   // The real gate: true when a human must confirm before anything is written
-  // (group layout, unrecognised template, category columns — finding 3).
+  // (group layout or an unrecognised period/entity layout — finding 3).
   requires_confirmation?: boolean;
   basis?: string;
   dimensional?: boolean;
@@ -249,20 +249,6 @@ const styles = {
     justifyContent: "flex-end",
     marginTop: pwc.space.xl,
   } as React.CSSProperties,
-  planSummary: {
-    display: "flex",
-    alignItems: "center",
-    gap: pwc.space.md,
-    flexWrap: "wrap" as const,
-    margin: `${pwc.space.sm}px 0`,
-  } as React.CSSProperties,
-  planChip: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 6,
-    fontSize: 12,
-    color: pwc.grey900,
-  } as React.CSSProperties,
   noteCard: {
     borderTop: `1px solid ${pwc.grey200}`,
     padding: `${pwc.space.sm}px 0`,
@@ -270,18 +256,14 @@ const styles = {
   } as React.CSSProperties,
 };
 
-/** One group of the notes plan ("Ready to fill", "Needs your decision", …) —
- * a collapsible section with a status dot + count so the three outcomes never
- * blur into one undifferentiated list. */
+/** One collapsible group of note-placement details. */
 function PlanSection({
-  symbol,
   title,
   count,
   defaultOpen,
   hint,
   children,
 }: {
-  symbol: StatusSymbol;
   title: string;
   count: number;
   defaultOpen?: boolean;
@@ -302,7 +284,6 @@ function PlanSection({
           color: pwc.grey900,
         }}
       >
-        <StatusIcon symbol={symbol} />
         {title}
         <span style={{ color: pwc.grey500, fontWeight: pwc.weight.regular }}>({count})</span>
       </summary>
@@ -419,6 +400,12 @@ function unresolvedReasonText(u: UnresolvedNote): string {
   }
 }
 
+/** Whether destination-sheet scoping contributed to this placement result. */
+function noteReasonUsesSheetScope(reason?: string): boolean {
+  return reason === "ambiguous" || reason === "strict_near_miss" ||
+    reason === "no_match" || reason === "no_slot";
+}
+
 /** The near-miss suggestion as a notes_targets decision, if the entry carries
  * one (existing slot key, or the visible cell a slot would be created at). */
 function suggestionTarget(u: UnresolvedNote): NoteTarget | null {
@@ -429,7 +416,11 @@ function suggestionTarget(u: UnresolvedNote): NoteTarget | null {
 
 /** Human-readable name for a candidate placement in the picker. */
 function candidateOptionLabel(c: NoteCandidate): string {
-  const where = c.key ? `existing note spot ${c.key}` : `${c.sheet} ${c.cell}`;
+  const where = c.key
+    ? c.sheet && c.cell
+      ? `${c.sheet} ${c.cell} (existing note spot ${c.key})`
+      : `existing note spot ${c.key}`
+    : `${c.sheet} ${c.cell}`;
   return c.matched_label ? `${where} — ${c.matched_label}` : where;
 }
 
@@ -441,6 +432,10 @@ function detectedToColumnMap(
 ): ColumnMap {
   const seed: ColumnMap = {};
   for (const [sheet, d] of Object.entries(detected)) {
+    // Category-based sheets (SOCIE equity components, issued-capital share
+    // classes, etc.) are resolved from taxonomy dimensions. Their physical
+    // columns are not period roles and must never be shown as CY/PY inputs.
+    if (d.dimensional) continue;
     seed[sheet] = { label_column: d.label_column ?? "", columns: { ...d.columns } };
   }
   return seed;
@@ -453,7 +448,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
   // Default ON: a template freshly exported from mTool has no note spots
   // provisioned, so leaving this off silently placed zero notes (run 75) and
   // read as a broken fill rather than a missing opt-in. The safe posture is
-  // still served by the preview — "Check notes" shows what would be created
+  // still served by the automatic preview, which shows what would be created
   // before anything is written.
   const [createMissingNotes, setCreateMissingNotes] = useState(true);
   // Note styling mode: "styled" (default, recommended) or "none" — the
@@ -481,6 +476,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
   // column_map on Fill. The submit path still handles a low-confidence 422 as
   // a defensive fallback for the rare case detection wasn't run.
   const [columnMap, setColumnMap] = useState<ColumnMap | null>(null);
+  const [dimensionalSheets, setDimensionalSheets] = useState<string[]>([]);
   const [columnConfidence, setColumnConfidence] = useState<string | null>(null);
   const [detectBusy, setDetectBusy] = useState(false);
   const [detectErr, setDetectErr] = useState<string | null>(null);
@@ -526,6 +522,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
     setReport(null);
     setPatchErr(null);
     setColumnMap(null);
+    setDimensionalSheets([]);
     setColumnConfidence(null);
     setDetectErr(null);
     setColumnPrompt(null);
@@ -593,18 +590,41 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
         // its best guess in detail.detected. Seed the editor so the user can
         // confirm + retry. This is a guided next step, not a failure.
         if (detail && typeof detail === "object" && detail.detected) {
-          setColumnMap(detectedToColumnMap(detail.detected as Record<string, DetectedSheet>));
-          setColumnConfidence("low");
-          setColumnPrompt(
-            "One more step — we couldn't tell for sure which columns hold your labels and figures. " +
-              "Check the columns below (we've pre-filled our best guess), then click Fill again."
+          const detected = detail.detected as Record<string, DetectedSheet>;
+          const editable = detectedToColumnMap(detected);
+          setDimensionalSheets(
+            Object.entries(detected)
+              .filter(([, sheet]) => sheet.dimensional)
+              .map(([sheet]) => sheet),
           );
+          setColumnMap(Object.keys(editable).length > 0 ? editable : null);
+          setColumnConfidence("low");
+          if (Object.keys(editable).length > 0) {
+            setColumnPrompt(
+              "Check the period columns below, then click Fill again."
+            );
+          }
           return;
         }
         // The run isn't ready to file. Show the reasons rather than an error.
         if (detail && typeof detail === "object" && detail.preflight) {
           setPreflight(normalisePreflight(detail.preflight));
           return;
+        }
+        if (detail && typeof detail === "object" && detail.filing_coverage) {
+          const coverage = detail.filing_coverage as {
+            unresolved_writes?: { detail?: string }[];
+          };
+          const reasons = (coverage.unresolved_writes ?? [])
+            .map((item) => item.detail)
+            .filter((item): item is string => Boolean(item));
+          throw new Error(
+            reasons.length > 0
+              ? reasons.join(" ")
+              : typeof detail.error === "string"
+                ? detail.error
+                : "Some filing values could not be mapped safely to this template.",
+          );
         }
         throw new Error(
           typeof detail === "string" ? detail : detail ? JSON.stringify(detail) : `HTTP ${resp.status}`
@@ -725,28 +745,37 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
         throw new Error(typeof detail === "string" ? detail : `HTTP ${resp.status}`);
       }
       const detected = (body as { detected?: Record<string, DetectedSheet> }).detected;
+      setDimensionalSheets(
+        detected
+          ? Object.entries(detected)
+              .filter(([, sheet]) => sheet.dimensional)
+              .map(([sheet]) => sheet)
+          : [],
+      );
       const semanticSource = (
         body as { filing_inspection?: { semantic_source?: string } }
       ).filing_inspection?.semantic_source;
-      // Only a fingerprint-verified generated template can safely omit the
-      // column confirmation. Candidate mTool workbooks may contain some
-      // taxonomy identifiers while other values still use legacy columns.
-      const needsColumnConfirmation = semanticSource !== "generated-targets";
-      if (detected && needsColumnConfirmation) {
-        setColumnMap(detectedToColumnMap(detected));
-      }
+      // Verified period layouts can proceed without a redundant editor.
+      // Candidate mTool workbooks may contain some taxonomy identifiers while
+      // other values still use legacy columns, so those remain confirmable.
       // `requires_confirmation` outranks `confidence`: a group layout or an
       // unrecognised template can look confident while nothing has actually
       // corroborated which column is which (finding 3).
       const mustConfirm = Boolean(
         (body as { requires_confirmation?: boolean }).requires_confirmation,
       );
+      const needsColumnConfirmation =
+        semanticSource !== "generated-targets" && mustConfirm;
+      if (detected && needsColumnConfirmation) {
+        const editable = detectedToColumnMap(detected);
+        setColumnMap(Object.keys(editable).length > 0 ? editable : null);
+      }
       setColumnConfidence(
         mustConfirm ? "low" : ((body as { confidence?: string }).confidence ?? null),
       );
       if (mustConfirm && needsColumnConfirmation) {
         setColumnPrompt(
-          "Please check the columns below before we write anything. " +
+          "Check the period columns below before filling. " +
             (detected
               ? Object.values(detected)
                   .flatMap((d) => d.notes ?? [])
@@ -768,10 +797,16 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
     preflight != null && !preflight.ok && preflightAck.trim().length === 0;
 
   const c = meta?.counts;
+  const excludedParts = c ? [
+    c.excluded_matrix_socie > 0 && `${c.excluded_matrix_socie} category/matrix`,
+    c.excluded_not_disclosed > 0 && `${c.excluded_not_disclosed} not disclosed`,
+    c.excluded_out_of_scope > 0 && `${c.excluded_out_of_scope} out of scope`,
+    c.excluded_no_value > 0 && `${c.excluded_no_value} without a value`,
+  ].filter((item): item is string => Boolean(item)) : [];
   const totalExcluded = c
-    ? c.excluded_matrix_socie + c.excluded_not_disclosed + c.excluded_out_of_scope + c.excluded_no_value
+    ? c.excluded_matrix_socie + c.excluded_not_disclosed +
+      c.excluded_out_of_scope + c.excluded_no_value
     : 0;
-
   return (
     <div
       style={styles.overlay}
@@ -798,25 +833,9 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
           </button>
         </div>
         <p style={styles.sub}>
-          Upload the empty template you exported from mTool. We fill in this run&apos;s
-          figures and written notes and give you back one file, ready to open in mTool
-          for Validate &amp; Generate. Totals stay in mTool&apos;s own formulas, and
-          SOCIE is mapped by taxonomy concept and equity component.
+          Choose the empty Excel template exported from mTool. We&apos;ll place this
+          run&apos;s figures and notes, then return one file for Validate &amp; Generate.
         </p>
-
-        <div style={{ display: "flex", gap: pwc.space.sm, marginBottom: pwc.space.lg, fontSize: 12 }} aria-label="Filing progress">
-          {["1. Check run", "2. Choose template", "3. Review result"].map((label, index) => (
-            <span key={label} style={{
-              flex: 1,
-              padding: "8px 10px",
-              borderRadius: pwc.radius.sm,
-              background: report ? (index <= 2 ? pwc.orange50 : pwc.grey50)
-                : file ? (index <= 1 ? pwc.orange50 : pwc.grey50)
-                  : index === 0 ? pwc.orange50 : pwc.grey50,
-              color: pwc.grey800,
-            }}>{label}</span>
-          ))}
-        </div>
 
         {loadErr && (
           <div style={ui.alertError}>Could not load fill data: {loadErr}</div>
@@ -825,7 +844,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
         {/* Filing-readiness gate. Blocking is the default; overriding means
             writing down why, and that reason goes on the permanent record. */}
         {preflight && !preflight.ok && (
-          <div style={{ ...ui.alertWarning, marginBottom: pwc.space.md }} aria-label="Not ready to file">
+          <section style={{ ...ui.alertWarning, marginBottom: pwc.space.md }} aria-label="Not ready to file">
             <div style={{ fontWeight: pwc.weight.medium }}>
               This run isn&apos;t ready to file yet
             </div>
@@ -844,24 +863,23 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
               ))}
             </ul>
             <label style={{ display: "block", marginTop: pwc.space.sm, fontSize: 12 }}>
-              To go ahead anyway, say why. This is kept with the filing record.
+              To continue, record why these checks do not prevent this filing.
               <input
                 aria-label="Reason for filing anyway"
                 value={preflightAck}
                 onChange={(e) => setPreflightAck(e.target.value)}
-                placeholder="e.g. partner reviewed and approved the disputed figure"
+                placeholder="Reason for continuing"
                 style={{ display: "block", width: "100%", marginTop: 4, fontSize: 12 }}
               />
             </label>
-          </div>
+          </section>
         )}
 
         {preflight && preflight.warnings.length > 0 && (
-          <div style={{ ...styles.statLine, color: pwc.grey700, marginBottom: pwc.space.sm }}>
-            {preflight.warnings.map((w) => (
-              <div key={w.code}>{w.message}</div>
-            ))}
-          </div>
+          <details style={{ marginBottom: pwc.space.sm, fontSize: 12, color: pwc.grey700 }}>
+            <summary style={{ cursor: "pointer" }}>Other run details ({preflight.warnings.length})</summary>
+            {preflight.warnings.map((w) => <div key={w.code}>{w.message}</div>)}
+          </details>
         )}
 
         {preflight?.field_semantics && (
@@ -875,42 +893,35 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
               background: pwc.grey50,
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <StatusIcon
-                symbol={preflight.field_semantics.readiness === "ready"
-                  ? STATUS_SYMBOLS.success
-                  : STATUS_SYMBOLS.attention}
-              />
-              <strong style={{ fontSize: 13, color: pwc.grey900 }}>
-                Filing fields {preflight.field_semantics.readiness === "ready"
-                  ? "are fully identified"
-                  : "need review"}
-              </strong>
-            </div>
-            <div style={{ ...styles.statLine, color: pwc.grey700, marginTop: 6 }}>
-              <strong>{preflight.field_semantics.counts.writable_fields}</strong> writable fields
-              across {preflight.field_semantics.counts.catalog_templates} template variant(s) in this filing family
-              {preflight.field_semantics.counts.unresolved_fields > 0
-                ? ` · ${preflight.field_semantics.counts.unresolved_fields} unmapped`
-                : " · no fields are missing"}
-              {preflight.field_semantics.counts.quarantined_values > 0
-                ? ` · ${preflight.field_semantics.counts.quarantined_values} value(s) need moving or removal`
-                : ""}
-            </div>
-            {preflight.field_semantics.reviewed_exceptions.length > 0 && (
-              <details style={{ marginTop: 6, fontSize: 12 }}>
-                <summary style={{ cursor: "pointer", color: pwc.grey700 }}>
-                  Reviewed template exceptions ({preflight.field_semantics.reviewed_exceptions.length})
-                </summary>
-                <ul style={{ margin: "4px 0 0", paddingLeft: 18, color: pwc.grey700 }}>
-                  {preflight.field_semantics.reviewed_exceptions.map((item) => (
-                    <li key={item.exception_code}>
-                      {reviewedExceptionLabel(item.exception_code)} ({item.count})
-                    </li>
-                  ))}
-                </ul>
-              </details>
-            )}
+            <strong style={{ fontSize: 13, color: pwc.grey900 }}>
+              Field mapping is {preflight.field_semantics.readiness === "ready" ? "ready" : "incomplete"}
+            </strong>
+            <details style={{ marginTop: 6, fontSize: 12 }}>
+              <summary style={{ cursor: "pointer", color: pwc.grey700 }}>Mapping details</summary>
+              <div style={{ ...styles.statLine, color: pwc.grey700, marginTop: 6 }}>
+                <strong>{preflight.field_semantics.counts.writable_fields}</strong> writable fields
+                {preflight.field_semantics.counts.unresolved_fields > 0
+                  ? ` · ${preflight.field_semantics.counts.unresolved_fields} unmapped`
+                  : " · no fields are missing"}
+                {preflight.field_semantics.counts.quarantined_values > 0
+                  ? ` · ${preflight.field_semantics.counts.quarantined_values} stored value(s) need review`
+                  : ""}
+              </div>
+              {preflight.field_semantics.reviewed_exceptions.length > 0 && (
+                <div style={{ marginTop: 6 }}>
+                  <div style={{ color: pwc.grey700 }}>
+                    Reviewed template exceptions ({preflight.field_semantics.reviewed_exceptions.length})
+                  </div>
+                  <ul style={{ margin: "4px 0 0", paddingLeft: 18, color: pwc.grey700 }}>
+                    {preflight.field_semantics.reviewed_exceptions.map((item) => (
+                      <li key={item.exception_code}>
+                        {reviewedExceptionLabel(item.exception_code)} ({item.count})
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </details>
           </section>
         )}
 
@@ -923,14 +934,12 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
             </div>
             {totalExcluded > 0 && (
               <div style={{ ...styles.statLine, color: pwc.grey700 }}>
-                Excluded: {c!.excluded_matrix_socie > 0 ? `${c!.excluded_matrix_socie} SOCIE/matrix could not be semantically mapped, ` : ""}
-                {c!.excluded_not_disclosed} not-disclosed, {c!.excluded_out_of_scope} out-of-scope
+                {`${totalExcluded} ${totalExcluded === 1 ? "value" : "values"} excluded from this filing: ${excludedParts.join(", ")}.`}
               </div>
             )}
             {c!.conflict_writes > 0 && (
               <div style={{ ...styles.statLine, color: pwc.orange700 }}>
-                ⚠ {c!.conflict_writes} value(s) still in conflict will be written — resolve
-                them in Review values first.
+                {`${c!.conflict_writes} ${c!.conflict_writes === 1 ? "value" : "values"} still in conflict will be written — resolve ${c!.conflict_writes === 1 ? "it" : "them"} in Review values first.`}
               </div>
             )}
             {notesCount !== null && (
@@ -943,7 +952,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
 
         <details style={{ marginBottom: pwc.space.md }}>
           <summary style={{ cursor: "pointer", fontSize: 13, color: pwc.grey700 }}>
-            Advanced filing options
+            Optional settings
           </summary>
         {notesCount !== null && notesCount > 0 && (
           <label style={{ ...styles.statLine, display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
@@ -1059,6 +1068,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
               detectSeq.current += 1; // invalidate any in-flight detect for the old file
               setFile(f);
               setColumnMap(null); // a different template has a different layout
+              setDimensionalSheets([]);
               setColumnConfidence(null);
               setDetectErr(null);
               setDetectBusy(false);
@@ -1084,32 +1094,37 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
             Couldn&apos;t read the template&apos;s columns: {detectErr}
           </div>
         )}
+        {dimensionalSheets.length > 0 && !detectBusy && !detectErr && (
+          <div
+            style={{
+              border: `1px solid ${pwc.grey200}`,
+              borderRadius: pwc.radius.md,
+              padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+              marginBottom: pwc.space.md,
+              color: pwc.grey700,
+              fontSize: 12,
+            }}
+          >
+            <strong style={{ color: pwc.grey900 }}>
+              {dimensionalSheets.some((sheet) => sheet.toUpperCase().includes("SOCIE"))
+                ? "SOCIE matrix recognised"
+                : "Category-based sheets recognised"}
+            </strong>
+            <div style={{ marginTop: 2 }}>
+              These columns are matched by taxonomy member, such as equity component
+              or share class. There are no current-year or prior-year columns to choose.
+            </div>
+          </div>
+        )}
 
         {notesCount !== null && notesCount > 0 && fillNotes && (
           <div style={{ marginBottom: pwc.space.md }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-              <button
-                type="button"
-                onClick={() => void runPreview()}
-                disabled={!file || previewBusy}
-                aria-label="Check notes against this template"
-                className={uiClass.btnGhost}
-                style={{ ...ui.buttonGhost, fontSize: 12 }}
-                // Explain why it's inert before a file is chosen, rather than
-                // looking like a silent no-op (E6).
-                title={file ? undefined : "Choose a template file first"}
-              >
-                {previewBusy ? "Checking…" : "Check notes against this template"}
-              </button>
-              <span style={{ color: pwc.grey500, fontSize: 12 }}>
-                {file
-                  ? "Nothing is written — this only shows where each note would go."
-                  : "Choose a template file above to enable this."}
-              </span>
-            </div>
+            {previewBusy && (
+              <div style={{ color: pwc.grey500, fontSize: 12 }}>Checking note placement…</div>
+            )}
             {previewErr && (
               <div style={{ ...ui.alertError, marginTop: pwc.space.sm }}>
-                Check failed: {previewErr}
+                Couldn&apos;t check note placement: {previewErr}
               </div>
             )}
             {preview && (
@@ -1123,26 +1138,17 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                 }}
                 aria-label="Notes preview"
               >
-                <div style={{ color: pwc.grey700 }}>
-                  This template has <strong>{preview.template_fn_slots}</strong> note spot(s)
-                  already set up; this run has <strong>{preview.notes_in_run}</strong> note(s) to place.
+                <div style={{ color: pwc.grey900, fontWeight: pwc.weight.medium }}>
+                  {preview.will_fill_existing.length + preview.will_create.length} of {preview.notes_in_run} notes
+                  will be placed automatically
                 </div>
-
-                {/* One glanceable summary row — the three outcomes at a glance. */}
-                <div style={styles.planSummary}>
-                  <span style={styles.planChip}>
-                    <StatusIcon symbol={STATUS_SYMBOLS.success} />
-                    {preview.will_fill_existing.length} ready to fill
-                  </span>
-                  <span style={styles.planChip}>
-                    <StatusIcon symbol={createMissingNotes ? STATUS_SYMBOLS.derived : STATUS_SYMBOLS.inactive} />
-                    {preview.will_create.length} will be added
-                  </span>
-                  <span style={{ ...styles.planChip, color: preview.unresolved.length ? pwc.warningText : pwc.grey900 }}>
-                    <StatusIcon symbol={preview.unresolved.length ? STATUS_SYMBOLS.attention : STATUS_SYMBOLS.inactive} />
-                    {preview.unresolved.length} need your decision
-                  </span>
-                </div>
+                {preview.unresolved.length > 0 && (
+                  <div style={{ color: pwc.grey700, marginTop: 4 }}>
+                    {preview.unresolved.length} {preview.unresolved.length === 1 ? "note has" : "notes have"} no
+                    certain destination. You can leave {preview.unresolved.length === 1 ? "it" : "them"} for
+                    manual completion in mTool or optionally choose a destination below.
+                  </div>
+                )}
 
                 {preview.errors.length > 0 && (
                   <div style={{ ...ui.alertError, marginTop: pwc.space.sm }}>
@@ -1162,11 +1168,10 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                     reason and, where the tool found options, a picker. This is
                     the notes twin of the numeric column-layout confirm step. */}
                 <PlanSection
-                  symbol={STATUS_SYMBOLS.attention}
                   title="Needs your decision"
                   count={preview.unresolved.length}
                   defaultOpen
-                  hint="The tool never guesses. Place these yourself, or leave them to fill manually in mTool later."
+                  hint="Place these yourself, or leave them for manual completion in mTool."
                 >
                   {preview.unresolved.map((u, i) => {
                     const idx = u.index ?? -1;
@@ -1175,6 +1180,11 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                     return (
                       <div key={i} style={styles.noteCard}>
                         <div style={{ fontWeight: pwc.weight.medium, color: pwc.grey900 }}>{u.label}</div>
+                        {u.source_sheet && noteReasonUsesSheetScope(u.reason) && (
+                          <div style={{ color: pwc.grey500, marginTop: 2 }}>
+                            Only checked in: {u.source_sheet}
+                          </div>
+                        )}
                         <div style={{ color: pwc.grey700, margin: "2px 0 4px" }}>{unresolvedReasonText(u)}</div>
                         {u.reason === "ambiguous" && (u.candidates?.length ?? 0) > 0 && idx >= 0 && (
                           <select
@@ -1244,8 +1254,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                 </PlanSection>
 
                 <PlanSection
-                  symbol={createMissingNotes ? STATUS_SYMBOLS.derived : STATUS_SYMBOLS.inactive}
-                  title="Will be added"
+                  title="New note spots"
                   count={preview.will_create.length}
                   hint="These notes have no spot in the template yet — one is created next to each label."
                 >
@@ -1259,8 +1268,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                 </PlanSection>
 
                 <PlanSection
-                  symbol={STATUS_SYMBOLS.success}
-                  title="Ready to fill"
+                  title="Existing note spots"
                   count={preview.will_fill_existing.length}
                   hint="These match a spot that already exists in the template."
                 >
@@ -1286,7 +1294,18 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
           <div style={ui.alertError}>Fill failed: {patchErr}</div>
         )}
         {columnPrompt && (
-          <div style={{ ...ui.alertWarning, marginTop: pwc.space.sm }}>{columnPrompt}</div>
+          <div
+            style={{
+              border: `1px solid ${pwc.grey200}`,
+              borderRadius: pwc.radius.md,
+              padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+              marginTop: pwc.space.sm,
+              fontSize: 12,
+              color: pwc.grey700,
+            }}
+          >
+            {columnPrompt}
+          </div>
         )}
 
         {columnMap && (
@@ -1302,13 +1321,13 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
           >
             <div style={{ fontWeight: pwc.weight.medium, marginBottom: 2 }}>
               {columnConfidence === "high"
-                ? "Columns detected — check they look right"
-                : "Confirm the columns"}
+                ? "Period columns detected"
+                : "Confirm period columns"}
             </div>
             <div style={{ color: pwc.grey700, marginBottom: pwc.space.sm }}>
               {columnConfidence === "high"
-                ? "We matched which column holds the row labels and which hold the figures. Adjust any that look wrong, then Fill & download."
-                : "Tell us which column holds the row labels, and which hold the figures (letters like D, E, F)."}
+                ? "Only change these if the year labels in your template show a different layout."
+                : "Enter the row-label column and the figure columns shown by their letters in Excel (for example D, E, F)."}
             </div>
             {Object.entries(columnMap).map(([sheet, cfg]) => (
               <div key={sheet} style={{ marginBottom: pwc.space.sm }}>

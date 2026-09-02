@@ -822,14 +822,34 @@ def _footnote_label_core(text: str) -> str:
     return core.strip()
 
 
-def resolve_footnote_by_label(label: str, targets: list) -> dict:
+def _same_sheet(candidate: str | None, source_sheet: str) -> bool:
+    """Compare workbook sheet names without weakening their identity.
+
+    Excel preserves sheet-name case, while callers may not. Case-insensitive
+    equality is therefore safe; fuzzy/containment matching is deliberately not.
+    """
+    return (isinstance(candidate, str)
+            and candidate.casefold() == source_sheet.casefold())
+
+
+def resolve_footnote_by_label(
+        label: str, targets: list, source_sheet: str | None = None) -> dict:
     """Find the fn_* whose visible-row text matches ``label``. Reuses the
     numeric path's fuzzy posture but is containment-aware (mTool labels wrap
     the concept in 'Disclosure of … [text block]'). Returns
-    {status: resolved|ambiguous|unresolved, key?, matched_label?, ratio?}."""
+    {status: resolved|ambiguous|unresolved, key?, matched_label?, ratio?}.
+
+    When ``source_sheet`` is present it is the canonical destination chosen by
+    the notes pipeline. Only slots on that sheet may participate; a missing
+    sheet or label fails closed instead of falling back to a workbook-wide
+    guess.
+    """
     want = _footnote_label_core(label)
     scored = []
-    for t in targets:
+    eligible = (targets if not source_sheet else
+                [t for t in targets
+                 if _same_sheet(t.get("sheet"), source_sheet)])
+    for t in eligible:
         best = 0.0
         best_label = ""
         for txt in t["row_text"].values():
@@ -844,19 +864,23 @@ def resolve_footnote_by_label(label: str, targets: list) -> dict:
                 ratio = difflib.SequenceMatcher(None, want, core).ratio()
             if ratio > best:
                 best, best_label = ratio, txt
-        scored.append((best, t["key"], best_label))
+        scored.append((best, t["key"], best_label,
+                       t.get("sheet"), t.get("cell")))
     scored.sort(key=lambda s: s[0], reverse=True)
     if not scored or scored[0][0] < FUZZY_THRESHOLD:
+        scope = f" on destination sheet {source_sheet!r}" if source_sheet else ""
         return {"status": "unresolved",
-                "detail": f"no fn_* label matched {label!r}"}
+                "detail": f"no fn_* label matched {label!r}{scope}"}
     if len(scored) > 1 and scored[1][0] == scored[0][0]:
-        tied = [k for r, k, _ in scored if r == scored[0][0]]
+        tied = [k for r, k, *_ in scored if r == scored[0][0]]
         # Structured candidates so a UI can offer the tie as a pick-one choice
         # (each entry is an existing fn_* slot the operator may assign).
         return {"status": "ambiguous",
                 "detail": f"label matches multiple fn_*: {tied}",
-                "candidates": [{"key": k, "matched_label": lbl}
-                               for r, k, lbl in scored
+                "candidates": [{"key": k, "matched_label": lbl,
+                                **({"sheet": sheet} if sheet else {}),
+                                **({"cell": cell} if cell else {})}
+                               for r, k, lbl, sheet, cell in scored
                                if r == scored[0][0]]}
     return {"status": "resolved", "key": scored[0][1],
             "matched_label": scored[0][2], "ratio": round(scored[0][0], 3)}
@@ -871,7 +895,8 @@ def resolve_footnote_by_label(label: str, targets: list) -> dict:
 # hand-guided fn_37 creation proven on Windows (2026-07-05): same
 # _create_footnote_slot, but the visible cell is discovered from the label
 # instead of being typed by an operator.
-def resolve_label_to_note_cell(label: str, note_sheets: dict) -> dict:
+def resolve_label_to_note_cell(
+        label: str, note_sheets: dict, source_sheet: str | None = None) -> dict:
     """Find the VISIBLE note (trigger) cell for a label that has no ``fn_*``.
 
     ``note_sheets`` is ``{sheet: {"label_col": str|None, "cells": {row: {col:
@@ -885,13 +910,18 @@ def resolve_label_to_note_cell(label: str, note_sheets: dict) -> dict:
     miss and a create-target hit judge the label identically. Returns
     ``{status, sheet?, cell?, label_cell?, matched_label?, ratio?, detail?}``;
     ``cell`` is the trigger cell to create the slot at. A tie across DISTINCT
-    label rows is ``ambiguous`` (not created).
+    label rows is ``ambiguous`` (not created). ``source_sheet``, when given,
+    confines the search to the canonical destination sheet and never falls
+    back to other sheets.
     """
     want = _footnote_label_core(label)
     if not want:
         return {"status": "unresolved", "detail": "empty label"}
     scored = []
-    for sheet, info in note_sheets.items():
+    eligible = (note_sheets.items() if not source_sheet else
+                ((sheet, info) for sheet, info in note_sheets.items()
+                 if _same_sheet(sheet, source_sheet)))
+    for sheet, info in eligible:
         label_col = info.get("label_col")
         if not label_col:
             continue
@@ -915,8 +945,9 @@ def resolve_label_to_note_cell(label: str, note_sheets: dict) -> dict:
             scored.append((ratio, sheet, label_col, trigger_col, row_num, txt))
     scored.sort(key=lambda s: s[0], reverse=True)
     if not scored or scored[0][0] < FUZZY_THRESHOLD:
+        scope = f" on destination sheet {source_sheet!r}" if source_sheet else ""
         return {"status": "unresolved",
-                "detail": f"no visible note-sheet label matched {label!r}"}
+                "detail": f"no visible note-sheet label matched {label!r}{scope}"}
     # A tie ACROSS DISTINCT LABEL ROWS is ambiguous — creating in the wrong
     # place is worse than not creating.
     top = scored[0][0]
@@ -1335,6 +1366,8 @@ def fill_footnotes(workbook_path: str, doc: dict, output_path: str | None = None
     for i, it in enumerate(doc["footnotes"]):
         base = {"index": i, "sheet": it.get("sheet"), "cell": it.get("cell"),
                 "key": it.get("key"), "label": it.get("label"),
+                "source_sheet": it.get("source_sheet"),
+                "source_row": it.get("source_row"),
                 # Size tier from the exporter (full/lite/flat) so a degraded
                 # note is traceable BY LABEL in the report, not just via the
                 # aggregate meta counts. None for untagged (full/raw) notes.
@@ -1357,7 +1390,8 @@ def fill_footnotes(workbook_path: str, doc: dict, output_path: str | None = None
         if not key and it.get("label"):
             if targets is None:
                 targets = inspect_footnotes(data)["targets"]
-            res = resolve_footnote_by_label(it["label"], targets)
+            res = resolve_footnote_by_label(
+                it["label"], targets, it.get("source_sheet"))
             if res["status"] == "resolved":
                 if strict and res.get("ratio", 1.0) < 1.0:
                     report["unresolved"].append({**base, **res,
@@ -1378,7 +1412,8 @@ def fill_footnotes(workbook_path: str, doc: dict, output_path: str | None = None
                 if note_cells is None:
                     note_cells = _collect_note_sheet_cells(
                         data, sheet_paths, sst, footnote_sheet, defined)
-                cres = resolve_label_to_note_cell(it["label"], note_cells)
+                cres = resolve_label_to_note_cell(
+                    it["label"], note_cells, it.get("source_sheet"))
                 if cres["status"] != "resolved":
                     # Prefer the create-path detail (visible-label miss /
                     # ambiguity) — it's the actionable one here.

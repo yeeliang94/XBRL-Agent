@@ -987,6 +987,28 @@ def test_resolve_footnote_by_label_is_decoration_tolerant():
         == "unresolved"
 
 
+def test_resolve_footnote_by_label_honours_canonical_source_sheet():
+    from mtool.offline_fill import resolve_footnote_by_label
+    targets = [
+        {"key": "fn_1", "sheet": "Notes-Listofnotes", "cell": "E20",
+         "row_text": {
+             "D": "*Disclosure of corporate information [text block]"}},
+        {"key": "fn_2", "sheet": "Notes-CI", "cell": "E14",
+         "row_text": {
+             "D": "*Disclosure of corporate information [text block]"}},
+    ]
+
+    workbook_wide = resolve_footnote_by_label("Corporate information", targets)
+    scoped = resolve_footnote_by_label(
+        "Corporate information", targets, source_sheet="notes-ci")
+
+    assert workbook_wide["status"] == "ambiguous"
+    assert scoped["status"] == "resolved" and scoped["key"] == "fn_2"
+    assert resolve_footnote_by_label(
+        "Corporate information", targets,
+        source_sheet="Notes-Missing")["status"] == "unresolved"
+
+
 def test_fill_notes_by_label_resolves_and_writes(tmp_path, footnote_template):
     """Label targeting: no hand-picked key/cell — fill_footnotes matches the
     visible-row label to the fn_* itself."""
@@ -1240,6 +1262,67 @@ def test_resolve_label_ambiguous_across_two_label_rows():
          "matched_label": "Corporate information"},
         {"sheet": "Notes-CI", "label_cell": "D20", "cell": "E20",
          "matched_label": "Corporate information"}]
+
+
+def test_resolve_label_to_note_cell_honours_canonical_source_sheet():
+    from mtool.offline_fill import resolve_label_to_note_cell
+    note_sheets = {
+        "Notes-Listofnotes": {"label_col": "D", "cells": {
+            30: {"D": ("S", "Corporate information")}}},
+        "Notes-CI": {"label_col": "D", "cells": {
+            14: {"D": ("S", "Corporate information")}}},
+    }
+
+    workbook_wide = resolve_label_to_note_cell(
+        "Corporate information", note_sheets)
+    scoped = resolve_label_to_note_cell(
+        "Corporate information", note_sheets, source_sheet="Notes-CI")
+
+    assert workbook_wide["status"] == "ambiguous"
+    assert scoped["status"] == "resolved"
+    assert scoped["sheet"] == "Notes-CI" and scoped["cell"] == "E14"
+    assert resolve_label_to_note_cell(
+        "Corporate information", note_sheets,
+        source_sheet="Notes-Missing")["status"] == "unresolved"
+
+
+def test_fill_notes_scopes_label_match_to_canonical_source_sheet(
+        tmp_path, footnote_template):
+    """The canonical notes destination is authoritative for mTool matching.
+
+    The same visible label on another notes sheet must not create a false
+    workbook-wide ambiguity when the stored note already says it belongs on
+    Notes-CI.
+    """
+    duplicate = tmp_path / "duplicate_across_sheets.xlsx"
+    with zipfile.ZipFile(footnote_template) as zin, \
+            zipfile.ZipFile(duplicate, "w", zipfile.ZIP_DEFLATED) as zout:
+        for name in zin.namelist():
+            blob = zin.read(name)
+            if name == "xl/worksheets/sheet1.xml":
+                blob = _ws({
+                    132: [("D", 0), ("E", 1)],
+                    140: [("D", 2), ("E", 1)],
+                    150: [("D", 3)],  # duplicate Corporate information
+                }).encode("utf-8")
+            zout.writestr(name, blob)
+
+    out = tmp_path / "filled.xlsx"
+    report = fill_footnotes(
+        str(duplicate),
+        {"footnotes": [{
+            "label": "Corporate information",
+            "html": "<p>Acme</p>",
+            "source_sheet": "Notes-CI",
+            "source_row": 12,
+        }], "strict": True},
+        output_path=str(out),
+        create_missing=True,
+    )
+
+    assert report["status"] == "ok", report
+    assert report["footnotes_created"][0]["visible_cell"] == "Notes-CI!E14"
+    assert report["unresolved"] == []
 
 
 def test_unresolved_entries_carry_reason_codes(tmp_path, footnote_template):

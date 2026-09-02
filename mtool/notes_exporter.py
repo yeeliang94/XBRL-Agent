@@ -61,8 +61,9 @@ def build_notes_fill_doc(
         }
 
     A note with empty HTML or no label is counted and skipped (never emitted as
-    a blank write). ``source_sheet`` / ``source_row`` are provenance only —
-    ``fill_footnotes`` targets by ``label`` and ignores extra keys.
+    a blank write). ``source_sheet`` is the canonical destination selected by
+    the notes pipeline and confines label matching to that workbook sheet;
+    ``source_row`` remains provenance for diagnostics.
     """
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
