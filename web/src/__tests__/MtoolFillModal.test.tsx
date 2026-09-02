@@ -1160,7 +1160,11 @@ describe("mTool filing gates", () => {
     expect((screen.getByRole("button", { name: /^fill$/i }) as HTMLButtonElement).disabled).toBe(false);
   });
 
-  test("shows a readable category-sheet coverage failure", async () => {
+  test("shows structured, deduplicated taxonomy coverage diagnostics", async () => {
+    const missingDimension =
+      "This category-based sheet requires a taxonomy category dimension, but this run figure has none.";
+    const missingIdentifier =
+      "The figure's taxonomy identifier was not found on the expected template sheet.";
     await openWith((url) => {
       if (url.includes("/mtool-fill/patch")) {
         return new Response(
@@ -1169,14 +1173,29 @@ describe("mTool filing gates", () => {
               error: "Some filing facts could not be mapped to a unique template cell.",
               filing_coverage: {
                 status: "blocked",
-                requested: 1,
-                mapped: 0,
-                unmapped: 1,
-                ambiguous: 0,
-                unresolved_writes: [{
-                  sheet: "Notes-Issuedcapital",
-                  label: "Number of shares issued",
-                  detail: "This category-based sheet needs taxonomy identifiers to choose the share-class column safely.",
+                requested: 144,
+                mapped: 114,
+                unmapped: 29,
+                ambiguous: 1,
+                coverage_percent: 79.2,
+                unresolved_writes: Array.from({ length: 29 }, (_, index) => ({
+                  sheet: index < 20 ? "Notes-Issuedcapital" : "Notes-RelatedPartytran",
+                  label: `Figure ${index + 1}`,
+                  primary_concept: `concept_${index + 1}`,
+                  reason_code: index < 20
+                    ? "missing_category_dimensions"
+                    : "taxonomy_identifier_missing",
+                  detail: index === 1
+                    ? "A differently worded detail for the same stable reason code."
+                    : index < 20 ? missingDimension : missingIdentifier,
+                })),
+                ambiguous_writes: [{
+                  sheet: "SOCIE",
+                  label: "Profit or loss",
+                  primary_concept: "ifrs-full_ProfitLoss",
+                  reason_code: "ambiguous_taxonomy_target",
+                  detail: "More than one taxonomy cell matched this figure.",
+                  candidates: ["SOCIE!E27", "SOCIE!E63"],
                 }],
               },
             },
@@ -1191,8 +1210,59 @@ describe("mTool filing gates", () => {
     chooseTemplate();
     fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
 
-    await waitFor(() => expect(screen.getByText(/category-based sheet needs taxonomy identifiers/i)).toBeTruthy());
+    await waitFor(() => expect(
+      screen.getByText(/template taxonomy mapping stopped the fill/i),
+    ).toBeTruthy());
+    expect(screen.getByText(/114 of 144 values mapped/i)).toBeTruthy();
+    expect(screen.getByText(/30 values were not written/i)).toBeTruthy();
+    expect(screen.getByText(/no workbook was created/i)).toBeTruthy();
+
+    const reasons = screen.getByLabelText(/mapping failure reasons/i);
+    const reasonRows = within(reasons).getAllByRole("listitem");
+    expect(reasonRows).toHaveLength(3);
+    expect(reasonRows.filter((row) => row.textContent?.includes(missingDimension))).toHaveLength(1);
+    expect(reasonRows.filter((row) => row.textContent?.includes(missingIdentifier))).toHaveLength(1);
+    expect(within(reasons).getByText(/20 figures/i)).toBeTruthy();
+    expect(within(reasons).getByText(/9 figures/i)).toBeTruthy();
+
+    const affected = screen.getByLabelText(/affected filing values/i);
+    expect(within(affected).getAllByText("Notes-Issuedcapital").length).toBeGreaterThan(1);
+    expect(within(affected).getByText("SOCIE")).toBeTruthy();
+    expect(within(affected).getByText(/more than one taxonomy cell matched/i)).toBeTruthy();
+    expect(within(screen.getByRole("alert")).queryByRole("table")).toBeNull();
+    expect(screen.queryByText(/fill failed:/i)).toBeNull();
     expect(screen.queryByText(/column_map is missing physical columns/i)).toBeNull();
+  });
+
+  test("keeps readable coverage reasons when a coverage payload is incomplete", async () => {
+    await openWith((url) => {
+      if (url.includes("/mtool-fill/patch")) {
+        return new Response(
+          JSON.stringify({
+            detail: {
+              error: "Some filing facts could not be mapped.",
+              filing_coverage: {
+                status: "blocked",
+                unresolved_writes: [{
+                  detail: "This template sheet has no prior-year section.",
+                }],
+              },
+            },
+          }),
+          { status: 422 },
+        );
+      }
+      if (url.includes("/mtool-fill")) return new Response(JSON.stringify(FILL_DOC), { status: 200 });
+      return new Response("{}", { status: 200 });
+    });
+
+    chooseTemplate();
+    fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
+
+    await waitFor(() => expect(
+      screen.getByText(/fill failed: this template sheet has no prior-year section/i),
+    ).toBeTruthy());
+    expect(screen.queryByText(/unresolved_writes/i)).toBeNull();
   });
 
   test("a clean fill shows the report first, then downloads on a second click", async () => {

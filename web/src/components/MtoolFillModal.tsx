@@ -4,6 +4,12 @@ import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { denominationLabel } from "../lib/vocabulary";
 import { FileDropzone } from "./FileDropzone";
+import {
+  FilingCoverageFailurePanel,
+  filingCoverageFallbackMessage,
+  normaliseFilingCoverage,
+  type FilingCoverage,
+} from "./FilingCoverageFailurePanel";
 
 /**
  * mTool fill modal (docs/PLAN-mtool-fill-pipeline.md Phase 4, Steps 9/11/11A).
@@ -136,14 +142,7 @@ interface ReportSummary {
   filename?: string;
   receipt_id?: number | null;
   template_known?: boolean;
-  filing_coverage?: {
-    status: string;
-    requested: number;
-    mapped: number;
-    unmapped: number;
-    ambiguous: number;
-    coverage_percent: number;
-  };
+  filing_coverage?: FilingCoverage;
 }
 
 /** One reason this run isn't ready to become a filing (mtool/preflight.py). */
@@ -470,6 +469,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
   const [busy, setBusy] = useState(false);
   const [report, setReport] = useState<ReportSummary | null>(null);
   const [patchErr, setPatchErr] = useState<string | null>(null);
+  const [filingFailure, setFilingFailure] = useState<FilingCoverage | null>(null);
   // The column layout — detected UP FRONT the moment a template is chosen
   // (POST /mtool-fill/detect-columns) so the operator confirms columns
   // alongside the notes check, not after a failed Fill. Editable; sent as
@@ -521,6 +521,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
     setFile(null);
     setReport(null);
     setPatchErr(null);
+    setFilingFailure(null);
     setColumnMap(null);
     setDimensionalSheets([]);
     setColumnConfidence(null);
@@ -563,6 +564,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
     if (!file) return;
     setBusy(true);
     setPatchErr(null);
+    setFilingFailure(null);
     setColumnPrompt(null);
     setReport(null);
     setDegradedAck(false);
@@ -612,19 +614,17 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
           return;
         }
         if (detail && typeof detail === "object" && detail.filing_coverage) {
-          const coverage = detail.filing_coverage as {
-            unresolved_writes?: { detail?: string }[];
-          };
-          const reasons = (coverage.unresolved_writes ?? [])
-            .map((item) => item.detail)
-            .filter((item): item is string => Boolean(item));
-          throw new Error(
-            reasons.length > 0
-              ? reasons.join(" ")
-              : typeof detail.error === "string"
-                ? detail.error
-                : "Some filing values could not be mapped safely to this template.",
-          );
+          const coverage = normaliseFilingCoverage(detail.filing_coverage);
+          if (coverage) {
+            setFilingFailure(coverage);
+            return;
+          }
+          throw new Error(filingCoverageFallbackMessage(
+            detail.filing_coverage,
+            typeof detail.error === "string"
+              ? detail.error
+              : "Some filing values could not be mapped safely to this template.",
+          ));
         }
         throw new Error(
           typeof detail === "string" ? detail : detail ? JSON.stringify(detail) : `HTTP ${resp.status}`
@@ -1067,6 +1067,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
             onFile={(f) => {
               detectSeq.current += 1; // invalidate any in-flight detect for the old file
               setFile(f);
+              setFilingFailure(null);
               setColumnMap(null); // a different template has a different layout
               setDimensionalSheets([]);
               setColumnConfidence(null);
@@ -1292,6 +1293,9 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
 
         {patchErr && (
           <div style={ui.alertError}>Fill failed: {patchErr}</div>
+        )}
+        {filingFailure && (
+          <FilingCoverageFailurePanel coverage={filingFailure} />
         )}
         {columnPrompt && (
           <div
