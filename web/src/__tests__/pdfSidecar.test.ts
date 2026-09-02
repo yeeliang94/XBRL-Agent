@@ -29,6 +29,17 @@ describe("describePdfSidecar", () => {
     expect(describePdfSidecar({ status: "built", pages: 1 }).message).toMatch(/1 scanned page were/);
   });
 
+  test("partial build explains that only complete notes are available", () => {
+    const n = describePdfSidecar({
+      status: "built", pages: 45, partial: true, failed_pages: [43, 44],
+      notes_available: 27,
+    });
+    expect(n.built).toBe(true);
+    expect(n.message).toMatch(/27 complete notes/i);
+    expect(n.message).toMatch(/failed pages: 43, 44/i);
+    expect(n.message).toMatch(/affected by those failures are read directly/i);
+  });
+
   test.each([
     ["no_notes_inventory", /did not identify which pages/i],
     ["transcription_incomplete", /partial one could be mistaken/i],

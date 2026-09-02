@@ -269,6 +269,26 @@ def test_write_refuses_a_partial_transcription(tmp_path):
     assert not (tmp_path / SOURCE_META_NAME).exists()
 
 
+def test_write_does_not_treat_scout_ranges_as_completeness_proof(tmp_path):
+    """Scout ranges are navigation hints, not proof a note is complete."""
+    pdf = _make_pdf(tmp_path / "uploaded.pdf", pages=5)
+    result = _result({
+        1: "<h3>1. First</h3><p>complete first</p>",
+        2: "<h3>2. Second</h3><p>start only</p>",
+        4: "<h3>3. Third</h3><p>complete third</p>",
+        5: "<p>third continued</p>",
+    }, failed=[3])
+
+    out = write_pdf_sidecar(
+        pdf, result, model_name="m",
+        note_page_ranges={1: [1], 2: [2, 3], 3: [4, 5]},
+    )
+
+    assert out is None
+    assert not (tmp_path / "source.html").exists()
+    assert not (tmp_path / SOURCE_META_NAME).exists()
+
+
 def test_write_normalizes_page_html(tmp_path):
     pdf = _make_pdf(tmp_path / "uploaded.pdf")
     out = write_pdf_sidecar(

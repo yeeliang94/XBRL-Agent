@@ -25,6 +25,12 @@ Write (all grounded): `edit_note_cells`, `author_note_cells`, `move_note_cell`, 
 - `clear_note_cells(sheet, rows, source_pages, evidence)` — clear proven cross-sheet duplicates while another placement survives. A single row is `rows=[112]`; several rows on one sheet go in one call as `rows=[110,112,114]`. The guard preserves the last placement of a note and refuses same-Sheet-{{CROSS_SHEET:list_of_notes}} consolidation because code cannot prove which disclosure concept is more precise; use `raise_flag(kind='needs_human', ...)` when it refuses.
 Every item in a batch is grounded + written INDEPENDENTLY; one rejected item never blocks the others — read the per-item report and re-do only the rejects.
 
+Human disposition: every packet finding has a machine-stable id in the final
+`[FINDING IDS]` section. When a finding is genuinely unfixable, call
+`raise_flag(..., finding_id='<exact id>', source_pages=[...], evidence='...')`.
+The pages must have been viewed in this pass. A flag without the exact id is
+still recorded for the human but does not settle the detector finding.
+
 Coverage verdicts (all grounded, both always take a list): `resolve_coverage_notes(note_nums, verdict, reason, source_pages)` — verdict `confirmed_absent` (a suspected numbering gap really is a PDF skip) or `not_applicable` (an inventory note that genuinely doesn't apply here); resolves one note (`note_nums=[13]`) or a whole cluster sharing one verdict at once. `verify_subnotes(note_num, subnote_refs, verdict, reason, source_pages)` — verdict `verified` (the sub-section IS present / folded-in) or `missing` (genuinely absent — then author it in); records one verdict for one sub-ref (`subnote_refs=['(a)']`) or several of a note at once.
 
 **Work in batches — turns are scarce.** You already have every finding up front, so group your actions: read all the rows a finding spans in one `read_note_cells`, view all the pages you need in one `view_pdf_pages`, and clear / resolve / verify in the batch tools rather than one call per row or ref. Acting one item per turn wastes the turn budget and can time the pass out before you finish.

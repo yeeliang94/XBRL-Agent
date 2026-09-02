@@ -16,16 +16,20 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Iterator, Optional
 
 from fastapi import HTTPException
 from openpyxl.utils import get_column_letter
 from pydantic import ValidationError
 
-from concept_model.facts_api import FactWrite, apply_fact
+from concept_model.facts_api import FactWrite, apply_fact, validate_scalar_fact
 
 logger = logging.getLogger(__name__)
+
+
+CellWriteValidator = Callable[[dict], Optional[str]]
 
 
 def resolve_cell(
@@ -50,7 +54,8 @@ def resolve_cell(
         "FROM concept_targets ct "
         "JOIN concept_nodes n ON n.concept_uuid = ct.concept_uuid "
         "WHERE n.template_id = ? AND ct.target_sheet = ? "
-        "AND ct.target_row = ? AND ct.target_col = ?",
+        "AND ct.target_row = ? AND ct.target_col = ? "
+        "AND n.is_current = 1",
         (template_id, sheet, row, col_letter),
     ).fetchone()
     if row_t is not None:
@@ -62,7 +67,8 @@ def resolve_cell(
     # and the fixed column convention (B=CY, C=PY, Company scope).
     node = conn.execute(
         "SELECT concept_uuid FROM concept_nodes "
-        "WHERE template_id = ? AND render_sheet = ? AND render_row = ?",
+        "WHERE template_id = ? AND render_sheet = ? AND render_row = ? "
+        "AND is_current = 1",
         (template_id, sheet, row),
     ).fetchone()
     if node is None:
@@ -77,7 +83,8 @@ def resolve_cell(
             "SELECT a.concept_uuid FROM concept_render_aliases a "
             "JOIN concept_nodes n ON n.concept_uuid = a.concept_uuid "
             "WHERE n.template_id = ? "
-            "AND a.alias_sheet = ? AND a.alias_row = ?",
+            "AND a.alias_sheet = ? AND a.alias_row = ? "
+            "AND n.is_current = 1",
             (template_id, sheet, row),
         ).fetchone()
         if alias is None:
@@ -111,6 +118,58 @@ class ProjectionResult:
     @property
     def has_gaps(self) -> bool:
         return bool(self.skipped or self.rejected)
+
+
+@contextmanager
+def canonical_cell_write_validator(
+    db_path,
+    template_id: str,
+) -> Iterator[CellWriteValidator]:
+    """Yield canonical validation before a workbook cell is changed.
+
+    Unmapped cells retain the existing advisory behavior (notably row-1 period
+    metadata). A mapped cell must satisfy the exact scalar-fact contract that
+    apply_fact will enforce during projection.
+    """
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.row_factory = sqlite3.Row
+
+    def validate(write: dict) -> Optional[str]:
+        sheet = str(write["sheet"])
+        row = int(write["row"])
+        col = int(write["col"])
+        resolved = resolve_cell(conn, template_id, sheet, row, col)
+        if resolved is None:
+            return None
+
+        concept_uuid, period, entity_scope = resolved
+        try:
+            fact = FactWrite(
+                concept_uuid=concept_uuid,
+                period=period,
+                entity_scope=entity_scope,
+                value=write.get("value"),
+                value_status="observed",
+                source=write.get("evidence") or None,
+                evidence=write.get("evidence") or None,
+                actor="extraction",
+            )
+            validate_scalar_fact(conn, fact)
+        except HTTPException as exc:
+            return str(exc.detail)
+        except ValidationError:
+            raw = repr(write.get("value"))
+            if len(raw) > 80:
+                raw = raw[:77] + "..."
+            return f"non-numeric value {raw}"
+        return None
+
+    try:
+        yield validate
+    finally:
+        conn.close()
 
 
 def project_writes(

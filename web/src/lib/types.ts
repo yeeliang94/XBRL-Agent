@@ -340,6 +340,9 @@ export interface PdfSidecarData {
   pages_requested?: number;
   page_cap?: number;
   failed_pages?: number[];
+  /** True when only notes with fully transcribed page ranges were published. */
+  partial?: boolean;
+  notes_available?: number;
   usage?: {
     in?: number;
     out?: number;

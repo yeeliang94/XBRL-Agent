@@ -221,7 +221,15 @@ from pathlib import Path
 # v44 stores provider reasoning tokens explicitly and adds the universal
 # model-call ledger used for coverage-aware cost rollups. Missing provider
 # usage is represented as unavailable, never as a trustworthy zero.
-CURRENT_SCHEMA_VERSION = 44
+# v45 adds stable finding identity and grounding evidence to notes-reviewer
+# flags. A human disposition can now be audited back to the exact detector
+# finding that it made terminal instead of retaining only free-form prose.
+# v46 adds lifecycle state to canonical concept nodes. Template IDs are stable
+# across server-startup imports, while concept UUIDs change when a row is
+# renamed or moved. Retiring nodes that disappear from the latest import keeps
+# those UUIDs readable for historical run facts without exposing them through
+# current template resolution.
+CURRENT_SCHEMA_VERSION = 46
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -528,7 +536,9 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         render_row       INTEGER NOT NULL,
         render_col       TEXT NOT NULL,
         matrix_col       TEXT,                    -- P5: equity-component column letter on MATRIX_CELL; NULL on linear concepts
-        matrix_col_label TEXT                     -- P9: human SOCIE component header; NULL on linear concepts
+        matrix_col_label TEXT,                    -- P9: human SOCIE component header; NULL on linear concepts
+        is_current       INTEGER NOT NULL DEFAULT 1,
+        retired_at       TEXT
     )
     """,
 
@@ -1227,6 +1237,9 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         reason      TEXT NOT NULL DEFAULT '',
         sheet       TEXT,
         row         INTEGER,
+        finding_id  TEXT,
+        source_pages TEXT,
+        evidence    TEXT,
         status      TEXT NOT NULL DEFAULT 'open',
         answer      TEXT,
         created_at  TEXT NOT NULL DEFAULT '',
@@ -1932,6 +1945,17 @@ _V44_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("run_agents", "usage_status", "TEXT DEFAULT 'unavailable'"),
     ("run_agent_turns", "reasoning_tokens", "INTEGER"),
     ("run_agent_turns", "usage_status", "TEXT DEFAULT 'unavailable'"),
+)
+
+_V45_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("notes_review_flags", "finding_id", "TEXT"),
+    ("notes_review_flags", "source_pages", "TEXT"),
+    ("notes_review_flags", "evidence", "TEXT"),
+)
+
+_V46_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("concept_nodes", "is_current", "INTEGER NOT NULL DEFAULT 1"),
+    ("concept_nodes", "retired_at", "TEXT"),
 )
 
 _V33_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
@@ -3369,6 +3393,75 @@ def init_db(path: str | Path) -> None:
                                     raise
                     conn.execute(
                         "UPDATE schema_version SET version = ?", (44,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        # v44 → v45: persist the exact notes-detector finding and grounding
+        # carried by a human-review disposition. Nullable additive columns keep
+        # legacy free-form flags readable and make repeated startup idempotent.
+        if current_version is not None and current_version < 45:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 45:
+                    for table, col_name, col_ddl in _V45_MIGRATION_COLUMNS:
+                        existing_cols = {
+                            r[1] for r in conn.execute(
+                                f"PRAGMA table_info({table})"
+                            ).fetchall()
+                        }
+                        if col_name not in existing_cols:
+                            try:
+                                conn.execute(
+                                    f"ALTER TABLE {table} ADD COLUMN "
+                                    f"{col_name} {col_ddl}"
+                                )
+                            except sqlite3.OperationalError as exc:
+                                if "duplicate column" not in str(exc).lower():
+                                    raise
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?", (45,),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        # v45 → v46: retain obsolete concept identities for historical
+        # facts while removing them from the current template vocabulary.
+        # Existing concepts are current until the next authoritative import
+        # proves otherwise. Nullable retired_at records when that happened.
+        if current_version is not None and current_version < 46:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT version FROM schema_version LIMIT 1"
+                ).fetchone()
+                latest = int(row[0]) if row else None
+                if latest is not None and latest < 46:
+                    for table, col_name, col_ddl in _V46_MIGRATION_COLUMNS:
+                        existing_cols = {
+                            r[1] for r in conn.execute(
+                                f"PRAGMA table_info({table})"
+                            ).fetchall()
+                        }
+                        if col_name not in existing_cols:
+                            try:
+                                conn.execute(
+                                    f"ALTER TABLE {table} ADD COLUMN "
+                                    f"{col_name} {col_ddl}"
+                                )
+                            except sqlite3.OperationalError as exc:
+                                if "duplicate column" not in str(exc).lower():
+                                    raise
+                    conn.execute(
+                        "UPDATE schema_version SET version = ?", (46,),
                     )
                 conn.commit()
             except Exception:

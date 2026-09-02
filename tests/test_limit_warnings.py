@@ -213,6 +213,24 @@ def test_token_budget_critical(monkeypatch):
     assert "CRITICAL" in warnings[0]
 
 
+def test_token_warning_uses_the_exact_cap_published_by_the_runner(monkeypatch):
+    monkeypatch.delenv("XBRL_MAX_TOKENS_PER_AGENT", raising=False)
+    ctx = _ctx(steps=1, total_tokens=80_000)
+    ctx.deps._token_budget_cap = 100_000
+
+    warning = _warning_texts(limit_warning_processor(ctx, _history()))[0]
+
+    assert "80,000/100,000" in warning
+
+
+def test_explicit_zero_runner_budget_does_not_fall_back_to_environment(monkeypatch):
+    monkeypatch.setenv("XBRL_MAX_TOKENS_PER_AGENT", "100000")
+    ctx = _ctx(steps=1, total_tokens=80_000)
+    ctx.deps._token_budget_cap = 0
+
+    assert _warning_texts(limit_warning_processor(ctx, _history())) == []
+
+
 # ---------------------------------------------------------------------------
 # Safety valves
 # ---------------------------------------------------------------------------

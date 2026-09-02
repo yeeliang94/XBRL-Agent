@@ -183,7 +183,8 @@ def build_catalogue(
         "FROM concept_nodes n "
         "LEFT JOIN concept_semantic_addresses sa USING(concept_uuid) "
         "LEFT JOIN concept_targets t USING(concept_uuid) "
-        f"WHERE n.kind IN ('LEAF','MATRIX_CELL') AND {scope_sql} "
+        f"WHERE n.kind IN ('LEAF','MATRIX_CELL') AND n.is_current = 1 "
+        f"AND {scope_sql} "
         "AND NOT EXISTS (SELECT 1 FROM concept_edges e "
         "                WHERE e.parent_uuid=n.concept_uuid)",
         tuple(params),

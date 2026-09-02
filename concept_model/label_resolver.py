@@ -84,7 +84,8 @@ def resolve_label_candidates(
     rows = conn.execute(
         "SELECT concept_uuid, kind, canonical_label, render_sheet, "
         "       render_row, render_col "
-        "FROM concept_nodes WHERE template_id = ? ORDER BY render_row",
+        "FROM concept_nodes WHERE template_id = ? AND is_current = 1 "
+        "ORDER BY render_row",
         (template_id,),
     ).fetchall()
 
@@ -142,7 +143,8 @@ def resolve_matrix_cell_candidates(
     rows = conn.execute(
         "SELECT concept_uuid, canonical_label, render_sheet, render_row "
         "FROM concept_nodes "
-        "WHERE template_id = ? AND matrix_col = ? ORDER BY render_row",
+        "WHERE template_id = ? AND matrix_col = ? AND is_current = 1 "
+        "ORDER BY render_row",
         (template_id, matrix_col),
     ).fetchall()
     exact: list[tuple] = []

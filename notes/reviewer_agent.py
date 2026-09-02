@@ -22,6 +22,7 @@ write also passes a deterministic no-fabrication guard
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 import threading
@@ -192,6 +193,13 @@ class NotesReviewerDeps:
         # against this so a finding the reviewer INTRODUCED (e.g. over-cleared a
         # note into a coverage gap) is surfaced as a regression, not hidden.
         self.original_finding_keys: set = set()
+        # Packet findings deliberately sent to a human after grounded review.
+        # These stay distinct from detector resolution: verify_findings may
+        # report an unchanged detector finding as terminal only when the flag
+        # names its exact stable identity. Findings introduced by this pass can
+        # never be dispositioned away.
+        self.dispositioned_finding_keys: set = set()
+        self.finding_keys_by_id: dict[str, tuple] = {}
         # Template family prefix ("mfrs-company-") so notes_nodes lookups
         # resolve THIS run's templates (gotcha #21).
         self.template_prefix = f"{filing_standard}-{filing_level}-"
@@ -907,6 +915,11 @@ def finding_keys(context: dict) -> set:
     return keys
 
 
+def finding_id(key: tuple) -> str:
+    """Machine-stable, prompt-safe identity for one detector finding."""
+    return json.dumps(key, ensure_ascii=True, separators=(",", ":"))
+
+
 def _backfill_sidecar_provenance(
     run_id: int, db_path: str, sidecar_paths: List[str],
 ) -> bool:
@@ -980,23 +993,40 @@ def recompute_notes_findings(deps: "NotesReviewerDeps") -> dict:
     )
 
 
-def format_notes_verification(context: dict, original_keys: set) -> str:
-    """Render the verify_findings result with regression marking."""
+def format_notes_verification(
+    context: dict,
+    original_keys: set,
+    dispositioned_keys: Optional[set] = None,
+) -> str:
+    """Render resolved, human-dispositioned, open, and introduced findings."""
     current = finding_keys(context)
     resolved = original_keys - current
-    remaining = original_keys & current
+    # Only original packet findings can be sent to human review. A finding the
+    # reviewer introduced remains a regression even if it tries to flag it.
+    dispositioned = (original_keys & current) & (dispositioned_keys or set())
+    remaining = (original_keys & current) - dispositioned
     introduced = current - original_keys
 
-    if not current:
+    if not remaining and not introduced:
+        if dispositioned:
+            return (
+                f"HANDLED: {len(resolved)} finding(s) resolved; "
+                f"{len(dispositioned)} sent to human review. You introduced "
+                f"none. Human review is still required for the dispositioned "
+                f"finding(s)."
+            )
         return (
-            f"✓ VERIFIED: no structural findings remain "
-            f"({len(resolved)} resolved). You introduced none. "
+            f"✓ VERIFIED: {len(resolved)} finding(s) resolved. You introduced none. "
             f"If every packet finding is handled, you're done."
         )
 
     lines: list[str] = []
     if resolved:
         lines.append(f"✓ {len(resolved)} finding(s) resolved.")
+    if dispositioned:
+        lines.append(
+            f"{len(dispositioned)} finding(s) sent to human review."
+        )
     if remaining:
         lines.append(
             f"{len(remaining)} packet finding(s) STILL open — keep working or "
@@ -1079,6 +1109,9 @@ def create_notes_reviewer_agent(
     deps.source_generation_id = active_source["id"] if active_source else None
     # Baseline for verify_findings regression detection (before any write).
     deps.original_finding_keys = finding_keys(context)
+    deps.finding_keys_by_id = {
+        finding_id(key): key for key in deps.original_finding_keys
+    }
 
     # The reviewer prompt and its packet both used to hardcode the MFRS slot
     # numbers (Sheets 10-14). MPERS puts the same notes at 11-15, so an MPERS
@@ -1113,8 +1146,21 @@ def create_notes_reviewer_agent(
     packet = _apply_cross_sheet_tokens(
         build_notes_reviewer_packet(context), deps.filing_standard,
     )
+    if deps.finding_keys_by_id:
+        packet += (
+            "\n\n[FINDING IDS — use the exact id when raise_flag settles an "
+            "unfixable packet finding]"
+        )
+        for stable_id in sorted(deps.finding_keys_by_id):
+            packet += f"\n- {stable_id}"
     system_prompt = f"{base_prompt}\n\n{packet}"
 
+    # The notes reviewer reads many scanned pages. Keep the newest two image
+    # batches for cross-reference, strip older images before later requests,
+    # and always carry the in-band limit warning used by the face reviewer.
+    from pydantic_ai.capabilities import ProcessHistory
+    from correction.history_processors import strip_stale_reviewer_images
+    from limit_warner import limit_warning_processor
     agent = Agent(
         model,
         deps_type=NotesReviewerDeps,
@@ -1124,6 +1170,10 @@ def create_notes_reviewer_agent(
             thinking_level=_thinking_level_for("notes_reviewer"),
         ),
         end_strategy="early",  # pin V1 semantics across the V2 flip (plan B.3.1)
+        capabilities=[
+            ProcessHistory(strip_stale_reviewer_images),
+            ProcessHistory(limit_warning_processor),
+        ],
     )
 
     # -------------------- read tools --------------------
@@ -1424,16 +1474,59 @@ def create_notes_reviewer_agent(
         ctx: RunContext[NotesReviewerDeps],
         kind: str, reason: str,
         sheet: Optional[str] = None, row: Optional[int] = None,
+        finding_id: Optional[str] = None,
+        source_pages: Optional[List[int]] = None,
+        evidence: str = "",
     ) -> str:
-        """Record a flag for a human: 'stuck' | 'disputes_prior' | 'needs_human'."""
+        """Record a flag and disposition one exact grounded packet finding.
+
+        A flag without ``finding_id`` is retained for the human but does not
+        make a detector finding terminal. A supplied id must be copied from the
+        packet and grounded in pages already viewed during this pass.
+        """
         kind_norm = kind.strip().lower()
         if kind_norm not in ("stuck", "disputes_prior", "needs_human"):
             return ("rejected: kind must be one of stuck / disputes_prior / "
                     "needs_human.")
+        disposition_key = None
+        if finding_id:
+            disposition_key = ctx.deps.finding_keys_by_id.get(finding_id)
+            if disposition_key is None:
+                return "rejected: finding_id is not an exact packet finding id."
+            if not evidence.strip():
+                return (
+                    "rejected: evidence is required to disposition a packet "
+                    "finding to human review."
+                )
+            grounded_pages = {
+                int(p) for p in (source_pages or []) if isinstance(p, int)
+            }
+            if not grounded_pages:
+                return (
+                    "rejected: source_pages is required to disposition a packet "
+                    "finding to human review."
+                )
+            if not grounded_pages.issubset(ctx.deps.viewed_pages):
+                missing = sorted(grounded_pages - ctx.deps.viewed_pages)
+                return (
+                    f"rejected: view PDF page(s) {missing} before flagging this "
+                    "finding."
+                )
         ctx.deps.flags.append({
             "kind": kind_norm, "reason": reason, "sheet": sheet, "row": row,
+            "finding_id": finding_id,
+            "source_pages": sorted({
+                int(p) for p in (source_pages or []) if isinstance(p, int)
+            }),
+            "evidence": evidence,
         })
-        return f"flagged: {kind_norm}"
+        if disposition_key is not None:
+            ctx.deps.dispositioned_finding_keys.add(disposition_key)
+            return f"flagged and sent to human review: {kind_norm}"
+        return (
+            f"flagged: {kind_norm}. No packet finding was dispositioned; pass "
+            "finding_id plus grounded source_pages to settle one."
+        )
 
     @agent.tool
     def verify_findings(ctx: RunContext[NotesReviewerDeps]) -> str:
@@ -1458,7 +1551,11 @@ def create_notes_reviewer_agent(
                 f"Re-read the cells you changed with read_note_cells / "
                 f"list_note_cells to judge whether your fixes hold."
             )
-        return format_notes_verification(context, ctx.deps.original_finding_keys)
+        return format_notes_verification(
+            context,
+            ctx.deps.original_finding_keys,
+            ctx.deps.dispositioned_finding_keys,
+        )
 
     # -------------------- coverage-checklist verdicts --------------------
 

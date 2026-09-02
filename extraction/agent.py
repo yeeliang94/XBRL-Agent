@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+from contextlib import nullcontext
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Optional, Union, List, Tuple, Set, Dict
@@ -151,6 +152,7 @@ class ExtractionDeps:
         self.last_save_error: Optional[str] = None
         self.last_fill_errors: list[str] = []
         self._unresolved_fill_error_state: dict[str, tuple[str, str]] = {}
+        self._unresolved_fill_error_metadata: dict[str, dict[str, object]] = {}
         # Honest-completion path (2026-05-29): the save gate blocks on any
         # imbalance / unfilled-mandatory, but prompts (gotcha #17) tell the
         # agent that some discrepancies are genuinely in the source and it
@@ -500,16 +502,42 @@ def _update_unresolved_fill_errors(deps: "ExtractionDeps", result) -> None:
     if not isinstance(state, dict):
         state = {}
         deps._unresolved_fill_error_state = state
+    metadata = getattr(deps, "_unresolved_fill_error_metadata", None)
+    if not isinstance(metadata, dict):
+        metadata = {}
+        deps._unresolved_fill_error_metadata = metadata
+
+    def drop(key: str) -> None:
+        state.pop(key, None)
+        metadata.pop(key, None)
+
     for item in getattr(result, "successful_request_keys", []):
         key = item["key"]
         base_key = item["base_key"]
-        state.pop(key, None)
+        drop(key)
         same_base = [
             existing_key for existing_key, (existing_base, _message) in state.items()
             if existing_base == base_key
         ]
         if len(same_base) == 1:
-            state.pop(same_base[0], None)
+            drop(same_base[0])
+
+        # A label can be ambiguous on the first attempt and then be corrected
+        # with an explicit row. The locator syntax changed, but a successful row
+        # is the same logical retry when it is one of that label's candidates.
+        resolved_row = item.get("resolved_row")
+        sheet = item.get("sheet")
+        col = item.get("col")
+        if resolved_row is not None and sheet is not None and col is not None:
+            equivalent = [
+                existing_key
+                for existing_key, meta in metadata.items()
+                if meta.get("sheet") == sheet
+                and meta.get("col") == col
+                and int(resolved_row) in (meta.get("candidate_rows") or [])
+            ]
+            for existing_key in equivalent:
+                drop(existing_key)
 
     result_errors = list(dict.fromkeys(
         getattr(result, "errors", []) or []
@@ -519,11 +547,24 @@ def _update_unresolved_fill_errors(deps: "ExtractionDeps", result) -> None:
         or "Unresolved write request was rejected."
     )
     for item in getattr(result, "failed_request_keys", []):
+        # A formula cell is intentionally unwritable. The refusal remains in
+        # the tool response/guard telemetry, but it is not missing output by
+        # itself; verify_totals owns whether the formula's inputs and result are
+        # actually unresolved. Persisting it here inflated green statements.
+        if item.get("kind") == "formula_cell":
+            continue
         # New writer results bind each refusal to the mapping that caused it.
         # Legacy/test-double results do not. Keep their errors as one batch
         # message instead of guessing that two unrelated lists share order.
         message = item.get("message") or fallback_message
         state[item["key"]] = (item["base_key"], message)
+        metadata[item["key"]] = {
+            "sheet": item.get("sheet"),
+            "col": item.get("col"),
+            "candidate_rows": list(item.get("candidate_rows") or []),
+            "resolved_row": item.get("resolved_row"),
+            "kind": item.get("kind"),
+        }
 
     deps.last_fill_errors = list(dict.fromkeys(
         message for _base_key, message in state.values() if message
@@ -1174,13 +1215,27 @@ def create_extraction_agent(
             if ctx.deps.filled_path and Path(ctx.deps.filled_path).exists()
             else ctx.deps.template_path
         )
-        result = _fill_workbook_impl(
-            template_path=source_path,
-            output_path=output_path,
-            facts=facts,
-            filing_level=ctx.deps.filing_level,
-            canonical_template_path=ctx.deps.template_path,
-        )
+        validator_context = nullcontext(None)
+        if (
+            ctx.deps.run_id is not None
+            and ctx.deps.db_path
+            and ctx.deps.template_id
+        ):
+            from concept_model.cell_resolver import canonical_cell_write_validator
+
+            validator_context = canonical_cell_write_validator(
+                ctx.deps.db_path,
+                ctx.deps.template_id,
+            )
+        with validator_context as write_validator:
+            result = _fill_workbook_impl(
+                template_path=source_path,
+                output_path=output_path,
+                facts=facts,
+                filing_level=ctx.deps.filing_level,
+                canonical_template_path=ctx.deps.template_path,
+                write_validator=write_validator,
+            )
         _update_unresolved_fill_errors(ctx.deps, result)
         if result.errors:
             # Even when no cell landed, the attempted extraction is newer than

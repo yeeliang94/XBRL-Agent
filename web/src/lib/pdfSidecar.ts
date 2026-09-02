@@ -75,13 +75,18 @@ function skipDetail(data: PdfSidecarData): string {
 export function describePdfSidecar(data: PdfSidecarData): PdfSidecarNotice {
   if (data.status === "built") {
     const pages = data.pages ?? 0;
+    const partialDetail = data.partial
+      ? ` ${data.notes_available ?? 0} complete notes are available from the transcript; ` +
+        `failed pages: ${(data.failed_pages ?? []).join(", ") || "unknown"}. ` +
+        "Notes affected by those failures are read directly from the PDF."
+      : "";
     return {
       title: "Source transcript built",
       built: true,
       message:
         `${pages} scanned page${pages === 1 ? "" : "s"} were transcribed before the notes agents started, ` +
         "so notes can copy tables and layout from the transcript. Figures in a transcript are model-read — " +
-        "the agents are told to verify every number against the PDF." +
+        "the agents are told to verify every number against the PDF." + partialDetail +
         usageSentence(data.usage),
     };
   }

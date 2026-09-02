@@ -157,7 +157,7 @@ def socie_has_nci(ctx, stmt: StatementType, period: str, entity_scope: str) -> b
     nci_uuids = {
         r[0] for r in ctx.conn.execute(
             "SELECT concept_uuid FROM concept_nodes "
-            "WHERE template_id = ? AND matrix_col = 'W'",
+            "WHERE template_id = ? AND matrix_col = 'W' AND is_current = 1",
             (template_id,),
         )
     }
@@ -200,7 +200,8 @@ def read_socf_net_change(ctx, period: str, entity_scope: str) -> LabelledValue:
         return LabelledValue(None, None, None)
     rows = ctx.conn.execute(
         "SELECT concept_uuid, canonical_label, render_sheet, render_row "
-        "FROM concept_nodes WHERE template_id = ? ORDER BY render_row",
+        "FROM concept_nodes WHERE template_id = ? AND is_current = 1 "
+        "ORDER BY render_row",
         (template_id,),
     ).fetchall()
     matches: list[tuple[str, str, int]] = []
@@ -242,7 +243,8 @@ def read_labelled_value_last(
     target = str(label).strip().lstrip("*").strip().lower()
     rows = ctx.conn.execute(
         "SELECT concept_uuid, canonical_label, render_sheet, render_row "
-        "FROM concept_nodes WHERE template_id = ? ORDER BY render_row",
+        "FROM concept_nodes WHERE template_id = ? AND is_current = 1 "
+        "ORDER BY render_row",
         (template_id,),
     ).fetchall()
     last = None

@@ -119,6 +119,60 @@ def test_reviewer_pass_runs_snapshots_and_persists_flags(db_path: Path, tmp_path
     assert any(e["event"] == "complete" and e["data"].get("success") for e in events)
 
 
+def test_reviewer_flag_persistence_failure_is_not_clean(
+    db_path: Path, tmp_path, monkeypatch,
+):
+    import server
+    import notes.reviewer_agent as ra_mod
+
+    run_id = _seed_reviewer_target(db_path, tmp_path)
+    context = {"duplicates": [{"note_ref": "1", "sheet_11": {}, "sheet_12": {}}]}
+    deps = _FakeReviewerDeps()
+    deps.flags = [{
+        "kind": "needs_human",
+        "reason": "human review required",
+        "finding_id": "finding-1",
+        "source_pages": [1],
+        "evidence": "page 1",
+    }]
+    monkeypatch.setattr(
+        ra_mod,
+        "create_notes_reviewer_agent",
+        lambda *a, **k: (_ImmediateAgent(_ImmediateAgentRun()), deps, context),
+    )
+
+    def _fail_insert(*_args, **_kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(repo, "insert_notes_review_flag", _fail_insert)
+    queue: asyncio.Queue = asyncio.Queue()
+
+    outcome = asyncio.run(server._run_notes_reviewer_pass(
+        run_id=run_id,
+        db_path=str(db_path),
+        pdf_path=str(tmp_path / "x.pdf"),
+        filing_level="company",
+        filing_standard="mfrs",
+        model="openai.gpt-5.4",
+        output_dir=str(tmp_path),
+        merged_workbook_path=None,
+        event_queue=queue,
+        sidecar_paths=[],
+    ))
+
+    assert outcome["error"] == "notes_reviewer_flag_persistence_failed"
+    events = _drain(queue)
+    assert any(
+        event["event"] == "error"
+        and event["data"].get("type") == "notes_reviewer_flag_persistence_failed"
+        for event in events
+    )
+    assert not any(
+        event["event"] == "complete" and event["data"].get("success")
+        for event in events
+    )
+
+
 def test_reviewer_pass_construction_failure_surfaces_error(
     db_path: Path, tmp_path, monkeypatch,
 ):
@@ -318,6 +372,40 @@ def test_reviewer_pass_captures_usage_for_total_run_cost(
     assert "turn_records" in outcome
 
 
+def test_reviewer_pass_enforces_configured_token_budget(
+    db_path: Path, tmp_path, monkeypatch,
+):
+    import agent_runner
+    import server
+    import notes.reviewer_agent as ra_mod
+
+    run_id = _seed_reviewer_target(db_path, tmp_path)
+    context = {"duplicates": [{"note_ref": "1", "sheet_11": {}, "sheet_12": {}}]}
+    agent_run = _ImmediateAgentRun()
+    captured = {}
+
+    async def capture_loop(_run, _deps, spec, _emit, _records):
+        captured["token_budget"] = spec.token_budget
+        return 0
+
+    monkeypatch.setenv("XBRL_MAX_TOKENS_PER_AGENT", "123456")
+    monkeypatch.setattr(agent_runner, "run_agent_loop", capture_loop)
+    monkeypatch.setattr(
+        ra_mod, "create_notes_reviewer_agent",
+        lambda *a, **k: (_ImmediateAgent(agent_run), _FakeReviewerDeps(), context),
+    )
+
+    outcome = asyncio.run(server._run_notes_reviewer_pass(
+        run_id=run_id, db_path=str(db_path), pdf_path=str(tmp_path / "x.pdf"),
+        filing_level="company", filing_standard="mfrs",
+        model="openai.gpt-5.4", output_dir=str(tmp_path),
+        merged_workbook_path=None, event_queue=asyncio.Queue(), sidecar_paths=[],
+    ))
+
+    assert outcome["error"] is None
+    assert captured["token_budget"] == 123456
+
+
 def test_reviewer_defers_final_writes_until_parallel_face_review_finishes(
     db_path: Path, tmp_path, monkeypatch,
 ):
@@ -484,6 +572,54 @@ def test_explicit_user_abort_returns_telemetry_for_run_finalization(
     assert outcome["prompt_tokens"] == 100
     assert outcome["completion_tokens"] == 50
     assert outcome["total_cost"] > 0
+
+
+@pytest.mark.asyncio
+async def test_explicit_user_abort_waits_for_sqlite_finalization_gate(
+    db_path: Path, tmp_path, monkeypatch,
+):
+    """Cancelled notes work must not race the face reviewer's final writes."""
+    import server
+    import task_registry
+    import notes.reviewer_agent as ra_mod
+
+    run_id = _seed_reviewer_target(db_path, tmp_path)
+    context = {"duplicates": [{"note_ref": "1", "sheet_11": {}, "sheet_12": {}}]}
+    deps = _FakeReviewerDeps()
+    deps.flags = [{"kind": "needs_human", "reason": "partial review"}]
+    agent_run = _ImmediateAgentRun(
+        asyncio.CancelledError(task_registry.USER_ABORT_REASON))
+    monkeypatch.setattr(
+        ra_mod, "create_notes_reviewer_agent",
+        lambda *a, **k: (_ImmediateAgent(agent_run), deps, context),
+    )
+    gate = asyncio.Event()
+
+    task = asyncio.create_task(server._run_notes_reviewer_pass(
+        run_id=run_id, db_path=str(db_path), pdf_path=str(tmp_path / "x.pdf"),
+        filing_level="company", filing_standard="mfrs",
+        model="openai.gpt-5.4", output_dir=str(tmp_path),
+        merged_workbook_path=None, event_queue=asyncio.Queue(),
+        sidecar_paths=[], finalize_gate=gate,
+    ))
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(asyncio.shield(task), timeout=0.05)
+
+    with sqlite3.connect(str(db_path)) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM notes_review_flags WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()[0] == 0
+
+    gate.set()
+    outcome = await asyncio.wait_for(task, timeout=1)
+    assert outcome["error"] == "cancelled"
+    with sqlite3.connect(str(db_path)) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM notes_review_flags WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()[0] == 1
 
 
 def test_notes_reviewer_row_finalizer_persists_cost_and_turns(db_path: Path):

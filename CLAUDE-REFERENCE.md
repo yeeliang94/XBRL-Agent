@@ -225,6 +225,13 @@ Two structures in `notes/agent.py` carry this, by different means:
   `asyncio.wrap_future`. That keeps ONE render shared across loops instead of
   merely making it safe.
 
+`task_registry` follows the same ownership rule for cancellation. Each
+registered task is stored with its owning event loop under a thread lock.
+Stop requests arriving from another thread dispatch
+`task.cancel(USER_ABORT_REASON)` through `loop.call_soon_threadsafe`; they
+never invoke cancellation directly on a foreign loop. Pinned by
+`tests/test_task_registry_cross_loop.py`.
+
 This became reachable when the notes formatter gained `zoom_pdf_region`
 (2026-08-02): before that every `_inflight` caller was on the main server
 loop. Reproduced as a hard failure with two threads. Pinned by
@@ -280,13 +287,16 @@ silently skip the inject and need `SSL_CERT_FILE` set manually.
 
 PydanticAI counts tokens internally and exposes only a **cumulative**
 `agent_run.usage` property after each node — there is no true per-turn split.
-`TokenReport.add_turn()` in `token_tracker.py` is **only used in tests**, never
-in the live path. The live coordinator loop derives a per-turn figure by
-**subtracting the previous node's cumulative usage** and persists it to
+The live coordinator loop derives a per-turn figure by **subtracting the
+previous node's cumulative usage** and persists it to
 `run_agent_turns` (schema v8) along with exact timing + tool activity; the
 prompt/completion split is therefore best-effort, while duration and tool
-calls are exact. The Telemetry tab labels this honestly. After completion,
-`server.py` also backfills run-level totals from `result.usage`. Both the
+calls are exact. After a face-agent loop completes, those same records rebuild
+the text cost report that `save_result` initially creates mid-loop; otherwise
+that file would permanently report zero because final usage is not observable
+until the tool node finishes. The Telemetry tab labels the split honestly.
+After completion, `server.py` also backfills run-level totals from
+`result.usage`. Both the
 **face coordinator** (`coordinator.py`) **and the single-agent notes path**
 (`notes/coordinator.py`) capture this; the Sheet-12 fan-out leaves per-turn
 rows empty (its sub-agents merge into one row) — rollups still populate.
@@ -431,6 +441,22 @@ handler never double-faults (gotcha #10 invariant preserved). Users on
 slow runs who hit Stop All now keep their work as a downloadable
 artifact — pinned by `tests/test_stop_all_preserves_partial.py`.
 
+**Restart reconciliation is one lifecycle transaction.** Startup
+reconciliation sets each orphaned parent to `aborted`, closes every
+still-running child, and appends a durable `run_complete` event with
+`phase=restart_reconciliation` before the caller commits. A restarted
+process must never expose a terminal parent with a running child or no
+terminal event. Pinned by `tests/test_stale_run_reaper.py`.
+
+**Artifact currentness participates in success.** A retained scratch or
+merged workbook may remain downloadable after a canonical face export or
+post-review notes refresh fails, but the run must finish
+`completed_with_errors`, never `completed`. A run with no canonical facts
+keeps the established benign scratch fallback. A failed fact-presence probe is
+unknown, not proof of zero facts: the export is attempted so a real failure
+emits degradation and tips status. Pinned by
+`tests/test_silent_exception_surfacing.py::test_canonical_export_degradation_prevents_clean_run_status`.
+
 ### 11. DB schema — version-stepped auto-migration on startup
 
 `db/schema.py::CURRENT_SCHEMA_VERSION` is authoritative; inspect it instead of
@@ -457,7 +483,7 @@ Two things are **retained but inert — do NOT "clean them up":**
   (gotcha #26); the table stays as an inert artifact so the migration chain
   replays intact. No code reads it.
 
-Migration history currently documented here through v44, with each feature
+Migration history currently documented here through v46, with each feature
 detailed in its linked gotcha: v11
 `concept_render_aliases` (#21) · v12–v13 reviewer tables `run_fact_snapshots`
 / `reviewer_flags` / `run_review_tasks` (#21) · v16 gold-eval tables +
@@ -486,7 +512,10 @@ quarantine state, and receipt filing-readiness evidence (#28) · v42
 low-volume coordinator timeline; request/response traces remain on disk) · v43
 `run_agents.error_message` (the exact terminal agent refusal/error alongside
 the stable `error_type` classification) · v44 explicit reasoning-token and
-usage-coverage columns plus the request-level `model_usage_calls` ledger.
+usage-coverage columns plus the request-level `model_usage_calls` ledger · v45
+notes-review flags carry the stable detector finding id and grounded source
+pages/evidence that made the human disposition terminal · v46 current/retired
+membership for canonical concept nodes across startup template re-imports.
 
 ### 12. Filing level — Company vs Group
 
@@ -596,6 +625,11 @@ read as advisory only:
 
 All three additions degrade gracefully: empty `face_line_refs` /
 `subnotes` / context fields fall through to today's bare hint blocks.
+Scanned-PDF sidecar transcription may use inventory ranges to choose which
+pages to inspect, but those ranges never prove note completeness. If any
+requested page fails, no partial sidecar is published; notes agents fall back
+to direct PDF vision. Pinned by `tests/test_pdf_sidecar.py` and
+`tests/test_pdf_sidecar_wiring.py`.
 ### 14. Notes feature — five supplementary templates (parallel with face)
 
 Notes agents fill MBRS templates 10–14 (MFRS) / 11–15 (MPERS) in parallel
@@ -907,8 +941,13 @@ Key invariants:
     table geometry only: `ingest/pdf_sidecar.normalize_transcription` removes
     presentation attributes and unwraps presentation-only inline tags before
     publication. This stops the transcript model from becoming a second
-    styling author and keeps scanned/text PDFs on one formatter path. When
-    the sidecar applies, it is built after the pipeline-owned scout and before
+    styling author and keeps scanned/text PDFs on one formatter path. When an
+    individual page fails, publication is note-range atomic: only notes whose
+    full scout page range transcribed are exposed through `read_source_note`;
+    affected notes return no snippet and use direct PDF vision. A partial note
+    is never stitched across a missing page. Pinned by `tests/test_pdf_sidecar.py`,
+    `tests/test_pdf_sidecar_wiring.py`, and `tests/test_notes_source_snippets.py`.
+    When the sidecar applies, it is built after the pipeline-owned scout and before
     extraction. That paid page transcription can run for up to the sidecar's
     600-second overall deadline, so the server drains SSE concurrently and
     emits `pipeline_stage=transcribing_source` before the first model call.
@@ -1050,6 +1089,11 @@ catch-all "balancing amount" plugs):
 - **Verifier feedback is non-directive**: `tools/verifier.py` SOFP
   imbalance feedback carries the diagnostic ("equity+liabilities side is
   lower than assets") AND an explicit "do NOT plug a catch-all row".
+- **Formula-row and wrong-column refusals are distinct.** A formula on an
+  entirely non-writable row is audit-only because verification owns its inputs
+  and result. A formula in a non-entry total column on an otherwise writable
+  row (for example MFRS SOCIE column M) is an agent locator error and remains
+  unresolved until corrected, so it continues to block a clean save.
 
 Pinned by `tests/test_template_reader.py::test_abstract_rows_marked_in_sopl_analysis`,
 `tests/test_fill_workbook_abstract_guard.py`,
@@ -1107,6 +1151,8 @@ warning past 70% / CRITICAL past 90% of the cap. Pinned by
 For reviewer runs, the warning reports the same tool-turn unit shown in the
 prompt. Graph-node counters remain the fallback for other agent roles. Do not
 show the reviewer a graph-step budget that disagrees with its prompt.
+An explicitly published token budget of `0` disables both the hard cap and its
+warning; it must not fall back to a nonzero environment default.
 
 **Wall-clock cap on correction (2026-04-27):**
 `CORRECTION_WALLCLOCK_TIMEOUT = 300.0` in `server.py` is
@@ -1198,6 +1244,21 @@ there is **no fallback** — if the startup concept-tree bootstrap fails, a run
 fails fast (`_CANONICAL_BOOTSTRAP_OK is False` → `_fail_run`). Fix the bootstrap
 (check logs, restart) rather than looking for an opt-out that no longer exists.
 
+**Template re-import lifecycle (schema v46).** Template IDs remain stable
+across startup imports, but row moves and label changes mint new concept UUIDs.
+`concept_model.importer.import_template` therefore retires the prior
+`concept_nodes` membership and reactivates only UUIDs present in the latest
+parse, atomically in the import transaction. Retired nodes are never deleted:
+existing `run_concept_facts` continue to join to the exact UUID stored by the
+historical run. Current cell/label resolution and current target generation
+must filter `is_current = 1`, as must current cross-check and eval catalogues.
+Historical fact reads remain deliberately unfiltered; the run Concepts API
+includes a retired node only when that exact run still references its UUID.
+Pinned by `tests/test_concept_import_lifecycle.py` (rename, move, removal,
+current-consumer filtering, and historical readability),
+`tests/test_concepts_routes.py`, and `tests/test_db_schema_v46.py`
+(fresh schema plus idempotent v45 migration).
+
 - **Extraction:** `coordinator.py` threads `run_id` + `db_path` into the
   extraction tools so writes project into `run_concept_facts` live.
 - **Export:** `_export_canonical_workbooks` (server.py) re-renders each succeeded
@@ -1279,6 +1340,14 @@ in-scope fact with no precomputed target RAISES (importer-bug signal). Tests tha
 hand-roll a Company DB must call `import_company_targets(db, template_id)` after
 `import_template`. Pinned by `tests/test_canonical_export.py`,
 `tests/test_phase4_group.py`.
+
+**Canonical validation precedes physical mutation.** The extraction writer
+resolves the proposed physical slot, then runs the same scalar-fact validation
+used by `apply_fact` before changing either the scratch cell or its evidence.
+A rejected canonical value therefore cannot survive only in the workbook and
+later pass `save_result`; it remains an unresolved write until corrected.
+Pinned by
+`tests/test_extraction_canonical_projection.py::test_write_facts_rejects_canonical_invalid_value_before_workbook_save`.
 
 ### 22. Agent workbook tools must serialise + atomic-save shared files
 
@@ -1512,6 +1581,17 @@ Load-bearing invariants:
   `server._run_notes_reviewer_pass`): success → `reviewed`; crash/construction
   failure → `not_reviewed` draft; empty inventory → `inventory_unavailable` +
   a structured warning event. Manual re-review re-persists for free (same pass).
+- **A grounded human flag is a terminal disposition, not detector deletion.**
+  Every packet finding carries a stable id. `raise_flag` may settle that exact
+  original finding only when it supplies the id plus PDF pages viewed in the
+  current pass; the unchanged detector result then reads as sent to human
+  review rather than STILL open. A flag without an id remains advisory, and a
+  finding introduced by the reviewer's own edits can never be flag-cleared.
+  The id, source pages, and evidence persist in `notes_review_flags` (schema
+  v45). A persistence failure is a structured reviewer failure and cannot
+  finish clean after the model was told the finding was handled. Pinned by
+  `tests/test_notes_reviewer_self_verify.py`,
+  `tests/test_notes_reviewer_pipeline.py`, and `tests/test_db_schema_v45.py`.
 - **Automatic face and notes review overlap.** Once the initial cross-check
   rows and notes-review inputs are committed, both reviewer tasks launch on
   the same event loop and share the existing SSE queue. They write separate

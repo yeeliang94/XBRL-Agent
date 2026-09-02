@@ -124,7 +124,7 @@ def _sheet_to_template(
     placeholders = ",".join("?" for _ in template_ids)
     for r in conn.execute(
         f"SELECT DISTINCT render_sheet, template_id FROM concept_nodes "
-        f"WHERE template_id IN ({placeholders})",
+        f"WHERE template_id IN ({placeholders}) AND is_current = 1",
         tuple(template_ids),
     ).fetchall():
         mapping[r[0]] = r[1]
@@ -134,7 +134,7 @@ def _sheet_to_template(
         f"SELECT DISTINCT a.alias_sheet, n.template_id "
         f"FROM concept_render_aliases a "
         f"JOIN concept_nodes n ON n.concept_uuid = a.concept_uuid "
-        f"WHERE n.template_id IN ({placeholders})",
+        f"WHERE n.template_id IN ({placeholders}) AND n.is_current = 1",
         tuple(template_ids),
     ).fetchall():
         mapping.setdefault(r[0], r[1])
@@ -153,7 +153,7 @@ def _gradeable_kinds(
         r[0]: r[1]
         for r in conn.execute(
             f"SELECT concept_uuid, kind FROM concept_nodes "
-            f"WHERE template_id IN ({placeholders})",
+            f"WHERE template_id IN ({placeholders}) AND is_current = 1",
             tuple(template_ids),
         ).fetchall()
     }

@@ -8,7 +8,10 @@ Reads a concept-tree JSON (the shape emitted by
 * one edge row into ``concept_edges`` for every parent → child term.
 
 UPSERT semantics mean re-importing the same JSON is a no-op — the
-deterministic UUID5 keys from the parser are the natural identity.
+deterministic UUID5 keys from the parser are the natural identity. Concepts
+that disappear from a later import are retired, not deleted: historical facts
+keep their immutable UUID join, while current template resolution ignores the
+retired membership.
 ``concept_targets`` is precomputed for EVERY linear template (rewrite
 Phase 6.1) so the exporter routes each fact via a single keyed lookup:
 :func:`import_company_targets` fills Company B=CY/C=PY,
@@ -116,6 +119,19 @@ def import_template(db_path: str | Path, json_path: str | Path) -> str:
                 d_rk.get("col", "B"),
             ))
 
+        # The template_id is stable across normal server-startup imports, but
+        # row/label edits mint new deterministic UUIDs. Retire the previous
+        # membership inside this same transaction before reactivating the
+        # concepts present in the new parse. Never delete obsolete nodes:
+        # run_concept_facts pins historical runs to those UUIDs.
+        retired_at = _now()
+        conn.execute(
+            "UPDATE concept_nodes SET is_current = 0, "
+            "retired_at = COALESCE(retired_at, ?) "
+            "WHERE template_id = ? AND is_current = 1",
+            (retired_at, template_id),
+        )
+
         for c in seen.values():
             uid = c["concept_uuid"]
             rk = c.get("render_key") or {}
@@ -124,8 +140,8 @@ def import_template(db_path: str | Path, json_path: str | Path) -> str:
                 INSERT INTO concept_nodes(
                     concept_uuid, template_id, parent_uuid, kind,
                     canonical_label, render_sheet, render_row, render_col,
-                    matrix_col, matrix_col_label
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    matrix_col, matrix_col_label, is_current, retired_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL)
                 ON CONFLICT(concept_uuid) DO UPDATE SET
                     template_id = excluded.template_id,
                     parent_uuid = excluded.parent_uuid,
@@ -135,7 +151,9 @@ def import_template(db_path: str | Path, json_path: str | Path) -> str:
                     render_row = excluded.render_row,
                     render_col = excluded.render_col,
                     matrix_col = excluded.matrix_col,
-                    matrix_col_label = excluded.matrix_col_label
+                    matrix_col_label = excluded.matrix_col_label,
+                    is_current = 1,
+                    retired_at = NULL
                 """,
                 (
                     uid,
@@ -156,7 +174,8 @@ def import_template(db_path: str | Path, json_path: str | Path) -> str:
         # address attached to a concept whose mapping disappeared.
         conn.execute(
             "DELETE FROM concept_semantic_addresses WHERE concept_uuid IN ("
-            "SELECT concept_uuid FROM concept_nodes WHERE template_id = ?"
+            "SELECT concept_uuid FROM concept_nodes "
+            "WHERE template_id = ? AND is_current = 1"
             ")",
             (template_id,),
         )
@@ -195,7 +214,8 @@ def import_template(db_path: str | Path, json_path: str | Path) -> str:
         # cross-pollute.
         conn.execute(
             "DELETE FROM concept_render_aliases WHERE concept_uuid IN ("
-            "SELECT concept_uuid FROM concept_nodes WHERE template_id = ?"
+            "SELECT concept_uuid FROM concept_nodes "
+            "WHERE template_id = ? AND is_current = 1"
             ")",
             (template_id,),
         )
@@ -234,7 +254,8 @@ def import_template(db_path: str | Path, json_path: str | Path) -> str:
 
         conn.execute(
             "DELETE FROM concept_edges WHERE parent_uuid IN ("
-            "SELECT concept_uuid FROM concept_nodes WHERE template_id = ?"
+            "SELECT concept_uuid FROM concept_nodes "
+            "WHERE template_id = ? AND is_current = 1"
             ")",
             (template_id,),
         )
@@ -257,7 +278,8 @@ def import_template(db_path: str | Path, json_path: str | Path) -> str:
                             row = conn.execute(
                                 "SELECT concept_uuid FROM concept_nodes "
                                 "WHERE template_id = ? AND render_sheet = ? "
-                                "AND render_row = ? AND render_col = ?",
+                                "AND render_row = ? AND render_col = ? "
+                                "AND is_current = 1",
                                 (template_id, r_sheet, r_row, r_col),
                             ).fetchone()
                             if row is not None:
@@ -274,7 +296,7 @@ def import_template(db_path: str | Path, json_path: str | Path) -> str:
                             row = conn.execute(
                                 "SELECT concept_uuid FROM concept_nodes "
                                 "WHERE template_id = ? AND render_sheet = ? "
-                                "AND render_row = ?",
+                                "AND render_row = ? AND is_current = 1",
                                 (template_id, r_sheet, r_row),
                             ).fetchone()
                             if row is not None:
@@ -306,7 +328,8 @@ def import_template(db_path: str | Path, json_path: str | Path) -> str:
             # template's import_group_targets rows.
             conn.execute(
                 "DELETE FROM concept_targets WHERE concept_uuid IN ("
-                "SELECT concept_uuid FROM concept_nodes WHERE template_id = ?"
+                "SELECT concept_uuid FROM concept_nodes "
+                "WHERE template_id = ? AND is_current = 1"
                 ")",
                 (template_id,),
             )
@@ -385,9 +408,10 @@ def import_company_targets(db_path: str | Path, template_id: str) -> int:
     concept's cell (e.g. a render_col shift at a stable
     ``(sheet, row, label)`` keeps the same uuid, so OR IGNORE skips the new
     coord) — and bootstrap re-imports on every startup. The delete is scoped
-    to this template's concepts via the ``concept_nodes`` join, so a
-    multi-template DB is unaffected; it also sweeps targets for concepts the
-    edit removed.
+    to this template's current concepts via the ``concept_nodes`` join, so a
+    multi-template DB is unaffected. Targets for retired concepts stay
+    available to exports of historical facts; current resolution joins through
+    ``concept_nodes.is_current`` and cannot select them.
 
     Iterates ``concept_nodes`` only — which holds each concept's PRIMARY
     render coord. A cross-sheet rolled-up concept's face *alias* coord
@@ -412,7 +436,8 @@ def import_company_targets(db_path: str | Path, template_id: str) -> int:
         rows = conn.execute(
             "SELECT concept_uuid, render_sheet, render_row, render_col "
             "FROM concept_nodes "
-            "WHERE template_id = ? AND kind != 'ABSTRACT'",
+            "WHERE template_id = ? AND is_current = 1 "
+            "AND kind != 'ABSTRACT'",
             (template_id,),
         ).fetchall()
         if not rows:
@@ -420,10 +445,12 @@ def import_company_targets(db_path: str | Path, template_id: str) -> int:
 
         # Wholesale replace so a re-import after a template edit never leaves
         # a stale target cell behind (see docstring). Scoped to this
-        # template's concepts.
+        # template's current concepts. Retired targets remain available for
+        # historical runs, but current resolution cannot select them.
         conn.execute(
             "DELETE FROM concept_targets WHERE concept_uuid IN ("
-            "SELECT concept_uuid FROM concept_nodes WHERE template_id = ?)",
+            "SELECT concept_uuid FROM concept_nodes "
+            "WHERE template_id = ? AND is_current = 1)",
             (template_id,),
         )
 
@@ -461,8 +488,9 @@ def import_group_targets(db_path: str | Path, template_id: str) -> int:
     ``INSERT OR IGNORE`` left a stale target when a re-import moved a
     concept's cell at a stable ``(sheet, row, label)`` (same uuid → OR
     IGNORE skips the new coord); bootstrap re-imports on every startup. The
-    delete is scoped to this template's concepts via the ``concept_nodes``
-    join, so a multi-template DB is unaffected.
+    delete is scoped to this template's current concepts via the
+    ``concept_nodes`` join, so a multi-template DB is unaffected. Retired
+    targets remain available only for historical UUID-pinned exports.
 
     Skips ABSTRACT concepts — they're never written to, so they don't
     need per-scope render coordinates.
@@ -478,17 +506,20 @@ def import_group_targets(db_path: str | Path, template_id: str) -> int:
             return 0
         rows = conn.execute(
             "SELECT concept_uuid, render_sheet, render_row FROM concept_nodes "
-            "WHERE template_id = ? AND kind != 'ABSTRACT'",
+            "WHERE template_id = ? AND is_current = 1 "
+            "AND kind != 'ABSTRACT'",
             (template_id,),
         ).fetchall()
         if not rows:
             return 0
 
         # Wholesale replace so a re-import after a template edit never leaves
-        # a stale target cell behind. Scoped to this template's concepts.
+        # a stale target cell behind. Scoped to this template's current
+        # concepts; retired targets remain for historical UUID-pinned exports.
         conn.execute(
             "DELETE FROM concept_targets WHERE concept_uuid IN ("
-            "SELECT concept_uuid FROM concept_nodes WHERE template_id = ?)",
+            "SELECT concept_uuid FROM concept_nodes "
+            "WHERE template_id = ? AND is_current = 1)",
             (template_id,),
         )
 

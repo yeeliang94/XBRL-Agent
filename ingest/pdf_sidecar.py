@@ -19,13 +19,13 @@ the meta file means the legacy Word origin. Source-integrity generations
 (gotcha #31) build from ``uploaded.docx`` only and are structurally
 unreachable from here.
 
-Failure contract (peer review 2026-08-11): best-effort like
+Failure contract (peer review 2026-08-11, refined after run 105): best-effort like
 ``ingest.docx_html.write_source_html`` — one retry per page, per-page and
-overall deadlines — but a PARTIAL transcription is never published. A failed
-middle page would silently join its neighbours into one apparently-complete
-note, and the prompt tells the agent the structure is trustworthy; so any
-failed page means NO sidecar, and the run proceeds exactly as before the
-feature existed.
+overall deadlines — but a PARTIAL NOTE is never published. A failed middle
+page must not silently join its neighbours into one apparently-complete note.
+When scout ranges prove that other notes have every page present, those
+complete note segments remain available and only affected notes fall back to
+direct PDF vision.
 """
 from __future__ import annotations
 
@@ -314,15 +314,15 @@ def write_pdf_sidecar(
     result: TranscribeResult,
     *,
     model_name: str,
+    note_page_ranges: Optional[dict[int, list[int]]] = None,
 ) -> Optional[Path]:
     """Stitch transcribed pages into ``source.html`` + ``source_meta.json``.
 
     Refuses to touch an existing sidecar (a Word run's extraction always
-    wins), writes nothing when no page transcribed, and — the load-bearing
-    rule (peer review 2026-08-11) — REFUSES a partial transcription: a failed
-    middle page would silently join its neighbours into one
-    apparently-complete note, and the agent is told the structure is
-    trustworthy. All requested pages or no sidecar.
+    wins), writes nothing when no page transcribed, and never publishes a
+    partial NOTE. Scout note ranges are advisory navigation hints, not proof of
+    note boundaries, so any failed requested page keeps the conservative
+    all-requested-pages-or-none publication contract.
 
     Write order is meta first, html second: ``has_source_html`` keys on the
     html file, so a crash between the two leaves an inert meta file rather
@@ -335,25 +335,47 @@ def write_pdf_sidecar(
     if not result.pages_html:
         logger.warning("pdf_sidecar: no pages transcribed — writing nothing")
         return None
+    complete_note_pages: dict[int, list[int]] = {}
+    if note_page_ranges:
+        for raw_note_num, raw_range in note_page_ranges.items():
+            try:
+                note_num = int(raw_note_num)
+                values = [int(v) for v in raw_range]
+            except (TypeError, ValueError):
+                continue
+            if not values:
+                continue
+            page_set = sorted(set(values))
+            if page_set and all(page in result.pages_html for page in page_set):
+                complete_note_pages[note_num] = page_set
+
     if result.failed_pages:
         logger.warning(
             "pdf_sidecar: pages %s failed — refusing to publish a partial "
-            "sidecar", result.failed_pages,
+            "transcription", result.failed_pages,
         )
         return None
+
+    publish_pages = sorted(result.pages_html)
 
     meta = {
         "origin": "llm_transcription",
         "formatting": "stripped_for_pdf_formatter",
         "model": model_name,
-        "pages": sorted(result.pages_html),
+        "pages": publish_pages,
+        "partial": False,
+        "failed_pages": [],
+        "note_pages": {
+            str(note_num): pages
+            for note_num, pages in sorted(complete_note_pages.items())
+        },
         "usage": result.usage,
     }
     meta_path = target.parent / SOURCE_META_NAME
     meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
     parts = []
-    for page_no in sorted(result.pages_html):
+    for page_no in publish_pages:
         parts.append(f"<!-- pdf-page: {page_no} -->")
         parts.append(normalize_transcription(result.pages_html[page_no]))
     target.write_text("\n".join(parts), encoding="utf-8")

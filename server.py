@@ -194,6 +194,12 @@ def _export_canonical_workbooks(
     from concept_model.exporter import export_run_to_xlsx
     from concept_model.parser import _derive_template_id
 
+    # Nothing canonical exists to render. The scratch workbook is the only
+    # representation and the established zero-fact fallback is benign; avoid
+    # resolving variants or creating a false stale-artifact incident.
+    if _run_has_facts(db_path, run_id) is False:
+        return []
+
     exported = []
     for ar in agent_results:
         if ar.status != "succeeded":
@@ -258,14 +264,15 @@ def _export_canonical_workbooks(
     return exported
 
 
-def _run_has_facts(db_path, run_id: int) -> bool:
-    """True when the run has any canonical fact rows.
+def _run_has_facts(db_path, run_id: int) -> Optional[bool]:
+    """Return whether the run has canonical facts, or ``None`` if unknown.
 
     The download re-export path keys on this: a run with facts has its
     authoritative values in the DB (including any user edits from the review
     UI). A run with none either predates the canonical store or had its
     projection fail; its on-disk merged workbook is treated as authoritative
-    and left untouched.
+    and left untouched. A failed probe is not evidence of zero facts: callers
+    must attempt the export so any failure surfaces artifact degradation.
     """
     import sqlite3
     try:
@@ -277,10 +284,10 @@ def _run_has_facts(db_path, run_id: int) -> bool:
             ).fetchone() is not None
         finally:
             conn.close()
-    except Exception:  # noqa: BLE001 — a probe failure must not block download
+    except Exception:  # noqa: BLE001 — preserve unknown vs genuine no-facts
         logger.warning("fact-presence probe failed for run %s", run_id,
                        exc_info=True)
-        return False
+        return None
 
 
 def _reexport_and_remerge_from_facts(run_id: int) -> Optional[Path]:
@@ -1281,6 +1288,19 @@ def _agent_row_error_type(
     return None
 
 
+def _agent_row_error_message(
+    error: Optional[str], flag: Optional[str],
+) -> Optional[str]:
+    """Persist the terminal explanation for both failures and attention rows.
+
+    A successfully saved statement may still be promoted to
+    ``completed_with_errors`` because it acknowledged a genuine source gap.
+    Such results have no exception text; the audited flag is their explanation
+    and must survive a History reload.
+    """
+    return error or flag
+
+
 def _error_type_for_outcome(error: Optional[str]) -> Optional[str]:
     """Map a reviewer/validator outcome error code onto the item-9 failure
     taxonomy (coordinator.py ERROR_TYPE_*) for run_agents.error_type.
@@ -1295,6 +1315,7 @@ def _error_type_for_outcome(error: Optional[str]) -> Optional[str]:
         "reviewer_exhausted": "iteration_capped",
         "notes_reviewer_exhausted": "iteration_capped",
         "notes_reviewer_interrupted": "tool_exception",
+        "notes_reviewer_token_budget_exceeded": "token_budget_exceeded",
         "reviewer_wallclock_exceeded": "wallclock",
         "validator_wallclock_exceeded": "wallclock",
     }
@@ -2145,7 +2166,9 @@ async def _run_notes_reviewer_pass(
     from agent_runner import (
         AgentLoopSpec,
         CallToolsCapExceeded,
+        TokenBudgetExceeded,
         WallclockExceeded,
+        resolve_token_budget,
         run_agent_loop,
     )
     from notes.reviewer_agent import create_notes_reviewer_agent
@@ -2324,13 +2347,16 @@ async def _run_notes_reviewer_pass(
         max_iters=max_turns * 2 + 10,
         call_tools_cap=max_turns,
         wallclock_timeout=_wallclock_cap,
+        token_budget=resolve_token_budget(),
         stream_model_nodes=False,
         bound_inner_streams=False,
     )
 
-    def _persist_flags_and_refresh(replace_flags: bool = True) -> None:
+    def _persist_flags_and_refresh(
+        replace_flags: bool = True,
+    ) -> Optional[str]:
         """Persist the reviewer's flags + refresh the durable merged workbook
-        from notes_cells. Best-effort — never fails the pass.
+        from notes_cells. Return a stable error when flags could not persist.
 
         Flag persistence NEVER touches ``answered`` / ``dismissed`` rows — a human
         answer is durable guidance and must survive a re-review (peer-review HIGH).
@@ -2351,10 +2377,15 @@ async def _run_notes_reviewer_pass(
                     _repo.insert_notes_review_flag(
                         conn, run_id=run_id, kind=f.get("kind", "needs_human"),
                         reason=f.get("reason", ""), sheet=f.get("sheet"),
-                        row=f.get("row"),
+                        row=f.get("row"), finding_id=f.get("finding_id"),
+                        source_pages=f.get("source_pages"),
+                        evidence=f.get("evidence", ""),
                     )
         except Exception:  # noqa: BLE001
             logger.warning("Failed to persist notes-review flags", exc_info=True)
+            flag_persistence_error = "notes_reviewer_flag_persistence_failed"
+        else:
+            flag_persistence_error = None
         # Refresh the on-disk merged workbook so non-download consumers see the
         # reviewer's edits (the download overlay already reflects notes_cells).
         if deps.writes_performed and merged_workbook_path:
@@ -2368,6 +2399,7 @@ async def _run_notes_reviewer_pass(
             except Exception:  # noqa: BLE001
                 logger.warning("Failed to refresh merged workbook after notes review",
                                exc_info=True)
+        return flag_persistence_error
 
     agent_run = None
     try:
@@ -2376,7 +2408,7 @@ async def _run_notes_reviewer_pass(
         outcome["writes_performed"] = deps.writes_performed
         outcome["flags_raised"] = len(deps.flags)
         await _await_finalization_slot()
-        _persist_flags_and_refresh()
+        flag_persistence_error = _persist_flags_and_refresh()
         try:
             log_path = Path(output_dir) / "notes_reviewer_log.json"
             log_path.write_text(
@@ -2385,16 +2417,38 @@ async def _run_notes_reviewer_pass(
             )
         except OSError:
             logger.warning("Failed to write notes_reviewer_log.json", exc_info=True)
-        # FINAL checklist — the reviewer's verdicts + authored notes are now
-        # reflected; this post-reviewer state is what the human sees.
-        await _finalize_coverage(reviewed=True)
-        await _emit("complete", {
-            "success": True,
-            "writes_performed": deps.writes_performed,
-            "flags_raised": len(deps.flags),
-        })
+        if flag_persistence_error is not None:
+            outcome["error"] = flag_persistence_error
+            await _finalize_coverage(reviewed=False)
+            await _emit("error", {
+                "type": flag_persistence_error,
+                "message": (
+                    "The notes reviewer could not persist its human-review "
+                    "flags. The run requires attention."
+                ),
+            })
+            await _emit("complete", {
+                "success": False,
+                "error": flag_persistence_error,
+                "writes_performed": deps.writes_performed,
+                "flags_raised": len(deps.flags),
+            })
+        else:
+            # FINAL checklist — the reviewer's verdicts + authored notes are
+            # now reflected; this post-reviewer state is what the human sees.
+            await _finalize_coverage(reviewed=True)
+            await _emit("complete", {
+                "success": True,
+                "writes_performed": deps.writes_performed,
+                "flags_raised": len(deps.flags),
+            })
     except _asyncio.CancelledError as exc:
         # Interrupted — append any raised flags, never delete prior open/answered.
+        # The face reviewer may still own SQLite's writer slot. Cancellation
+        # changes the review outcome, not the serialization contract: wait for
+        # the same gate as every other finalization path before touching flags
+        # or coverage.
+        await _await_finalization_slot()
         _persist_flags_and_refresh(replace_flags=False)
         # Persist whatever coverage the (partial) pass reached under a
         # not_reviewed banner so a Stop-All'd notes run still shows a checklist
@@ -2453,6 +2507,25 @@ async def _run_notes_reviewer_pass(
             "writes_performed": deps.writes_performed,
             "turns_used": turns_used,
             "max_turns": max_turns,
+        })
+    except TokenBudgetExceeded:
+        msg = (
+            "Notes reviewer exceeded the configured per-agent token budget "
+            f"after {deps.writes_performed} write(s)."
+        )
+        logger.warning(msg)
+        outcome["error"] = "notes_reviewer_token_budget_exceeded"
+        outcome["writes_performed"] = deps.writes_performed
+        await _await_finalization_slot()
+        _persist_flags_and_refresh(replace_flags=False)
+        await _finalize_coverage(reviewed=True)
+        await _emit("error", {
+            "type": "notes_reviewer_token_budget_exceeded", "message": msg,
+        })
+        await _emit("complete", {
+            "success": False,
+            "error": "notes_reviewer_token_budget_exceeded",
+            "writes_performed": deps.writes_performed,
         })
     except (WallclockExceeded, _asyncio.TimeoutError):
         msg = (f"Notes reviewer exceeded wall-clock cap of {_wallclock_cap}s "
@@ -3343,6 +3416,7 @@ async def _maybe_build_pdf_sidecar(
     try:
         from ingest.pdf_sidecar import (
             pdf_has_text_layer,
+            read_source_meta,
             transcribe_pages,
             write_pdf_sidecar,
         )
@@ -3357,10 +3431,18 @@ async def _maybe_build_pdf_sidecar(
 
         inventory = getattr(infopack, "notes_inventory", None) or []
         pages: set[int] = set()
+        note_page_ranges: dict[int, list[int]] = {}
         for entry in inventory:
             page_range = getattr(entry, "page_range", None)
             if page_range and len(page_range) == 2:
-                pages.update(range(int(page_range[0]), int(page_range[1]) + 1))
+                entry_pages = list(
+                    range(int(page_range[0]), int(page_range[1]) + 1)
+                )
+                pages.update(entry_pages)
+                note_num = getattr(entry, "note_num", None)
+                if note_num is not None:
+                    note_page_ranges.setdefault(int(note_num), [])
+                    note_page_ranges[int(note_num)].extend(entry_pages)
         if not pages:
             # Never transcribe blind: without an inventory we don't know which
             # pages are notes, and transcribing the whole document is spend
@@ -3393,10 +3475,19 @@ async def _maybe_build_pdf_sidecar(
             {"page": page, **usage}
             for page, usage in sorted(result.page_usage.items())
         ]
-        out = write_pdf_sidecar(pdf_path, result, model_name=model_name)
+        out = write_pdf_sidecar(
+            pdf_path,
+            result,
+            model_name=model_name,
+            note_page_ranges={
+                note_num: sorted(set(note_pages))
+                for note_num, note_pages in note_page_ranges.items()
+            },
+        )
         if out is None:
-            # All-or-nothing publication: any failed page refuses the sidecar
-            # (a partial one reads as complete to the copy-verbatim agent).
+            # Scout note ranges are advisory, so they cannot prove an
+            # apparently unaffected note is complete. Any failed requested
+            # page keeps the whole sidecar unpublished.
             reason = ("transcription_incomplete" if result.failed_pages
                       else "no_pages_transcribed")
             return {"status": "skipped", "reason": reason,
@@ -3404,9 +3495,13 @@ async def _maybe_build_pdf_sidecar(
                     "usage": result.usage,
                     "model_calls": model_calls,
                     "reasoning_summary": reasoning_summary}
+        meta = read_source_meta(pdf_path) or {}
         return {
             "status": "built",
-            "pages": len(result.pages_html),
+            "pages": len(meta.get("pages") or result.pages_html),
+            "partial": bool(meta.get("partial")),
+            "failed_pages": list(meta.get("failed_pages") or []),
+            "notes_available": len(meta.get("note_pages") or {}),
             "usage": result.usage,
             "model_calls": model_calls,
             "reasoning_summary": reasoning_summary,
@@ -5111,6 +5206,7 @@ async def run_multi_agent_stream(
     models: Dict[StatementType, Any] = {}
     config: Optional[RunConfig] = None
     client_connected = True
+    artifact_current = True
 
     try:
         # --- Phase 3 fix: validate & construct INSIDE the outer try so
@@ -5329,6 +5425,13 @@ async def run_multi_agent_stream(
             terminate the run (the run continues to ``run_complete``). The
             field tells the frontend to keep the spinner spinning.
             """
+            nonlocal artifact_current
+            if payload.get("type") in {
+                "canonical_export_degraded",
+                "canonical_reexport_failed",
+                "canonical_notes_refresh_degraded",
+            }:
+                artifact_current = False
             payload.setdefault("bucket", ERROR_BUCKET_RECOVERABLE)
             from observability.incidents import capture_run_incident
 
@@ -6343,6 +6446,13 @@ async def run_multi_agent_stream(
                     "canonical export pass failed for run %s — falling back "
                     "to agent-written workbooks", run_id,
                 )
+                _enqueue_system_error({
+                    "type": "canonical_export_degraded",
+                    "message": (
+                        "The canonical export pass failed. The retained "
+                        "workbook may be stale relative to canonical facts."
+                    ),
+                })
 
         # Same pattern for notes workbooks — pick up prior partial runs + this run's output.
         all_notes_workbook_paths: Dict[NotesTemplateType, str] = {}
@@ -6515,7 +6625,10 @@ async def run_multi_agent_stream(
                         ),
                         # v43: retain the exact final refusal/exception detail,
                         # not only its stable error_type classification.
-                        error_message=agent_result.error,
+                        error_message=_agent_row_error_message(
+                            agent_result.error,
+                            getattr(agent_result, "flag", None),
+                        ),
                     )
                     # v8: persist the per-turn metrics rows. Telemetry is
                     # advisory — a write failure here must never fault the
@@ -7181,6 +7294,11 @@ async def run_multi_agent_stream(
                     # and durable review-task interlock cannot be left running
                     # under an aborted parent.
                     if notes_review_lifecycle_task is not None:
+                        # The face pass is no longer going to perform its
+                        # normal final writes. Release notes finalization before
+                        # cancelling/awaiting it; otherwise the cancelled child
+                        # correctly waiting on the gate would deadlock here.
+                        notes_review_finalize_gate.set()
                         if not notes_review_lifecycle_task.done():
                             notes_review_lifecycle_task.cancel(
                                 task_registry.USER_ABORT_REASON,
@@ -7484,6 +7602,32 @@ async def run_multi_agent_stream(
                         "Failed to refresh merged workbook after parallel notes review",
                         exc_info=True,
                     )
+                    _enqueue_system_error({
+                        "type": "canonical_notes_refresh_degraded",
+                        "phase": "notes_review",
+                        "message": (
+                            "Notes review changed canonical content, but the "
+                            "merged workbook could not be refreshed. The "
+                            "download is not current."
+                        ),
+                    })
+
+            # The lifecycle task has already finished, so its normal queue
+            # drain cannot deliver a refresh error enqueued above. Flush that
+            # tail before terminal status/run_complete.
+            while True:
+                try:
+                    evt = event_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                if evt is None:
+                    continue
+                persist_event(evt)
+                if client_connected:
+                    try:
+                        yield evt
+                    except (asyncio.CancelledError, GeneratorExit):
+                        client_connected = False
 
             if (
                 validator_cancelled_without_outcome
@@ -7895,6 +8039,11 @@ async def run_multi_agent_stream(
             # Facts were corrected but the workbook couldn't be regenerated —
             # the download is stale relative to the Concepts UI. Never report
             # this as a clean success (peer-review finding 4).
+            overall_status = "completed_with_errors"
+        elif not artifact_current:
+            # A retained scratch/merged artifact remains downloadable, but it
+            # is stale relative to canonical facts or notes. Never classify
+            # that artifact as filing-ready.
             overall_status = "completed_with_errors"
         elif (all_agents_ok and merge_result.success and not any_check_failed
               and not cross_check_crashed and open_conflicts == 0

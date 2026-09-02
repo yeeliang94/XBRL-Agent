@@ -18,6 +18,7 @@ from pricing import estimate_cost
 from usage_metrics import split_usage
 
 from agent_tracing import save_agent_trace, save_messages_trace
+from token_tracker import TokenReport
 # MAX_AGENT_ITERATIONS is re-exported here (and used as the AgentLoopSpec
 # default) because the iteration cap is conceptually the face loop's config,
 # and tests/readers reference `coordinator.MAX_AGENT_ITERATIONS`. The loop
@@ -1108,6 +1109,21 @@ async def _run_single_agent_attempt(
         except Exception:  # noqa: BLE001 — telemetry is advisory
             logger.debug("best-effort trace save skipped for %s", agent_role)
 
+    def _refresh_cost_report_best_effort() -> None:
+        """Replace save_result's mid-loop placeholder with final usage."""
+        try:
+            report_path = (
+                Path(output_dir) / f"{statement_type.value}_cost_report.txt"
+            )
+            # Only refresh the artifact save_result actually published. A
+            # failed or incomplete run must not gain a completion artifact.
+            if not report_path.exists():
+                return
+            report = TokenReport.from_turn_metrics(_turn_records, model=model)
+            report_path.write_text(report.format_table(), encoding="utf-8")
+        except Exception:  # noqa: BLE001 — telemetry is advisory
+            logger.debug("cost report refresh skipped for %s", agent_role)
+
     async def _salvage_or_fail(
         deps,
         agent_run,
@@ -1260,6 +1276,7 @@ async def _run_single_agent_attempt(
         # with the verbatim request/response content (v8). Routed through the
         # best-effort helper so the success and failure paths share one writer.
         _save_trace_best_effort(agent_run)
+        _refresh_cost_report_best_effort()
 
         # Capture end-of-run usage so the run_agents row can be backfilled
         # with real token / cost numbers (gotcha #6 — per-turn zeros are

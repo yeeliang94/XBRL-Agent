@@ -81,6 +81,44 @@ def test_format_table():
     assert "Estimated cost" in table
 
 
+def test_from_turn_metrics_rebuilds_live_cost_report():
+    """Completed loop telemetry must replace save_result's zero placeholder."""
+    report = TokenReport.from_turn_metrics(
+        [
+            {
+                "turn_index": 1,
+                "node_kind": "model_request",
+                "tool_names": None,
+                "prompt_tokens": 100,
+                "completion_tokens": 20,
+                "thinking_tokens": 5,
+                "total_tokens": 125,
+                "cumulative_tokens": 125,
+                "duration_ms": 200,
+            },
+            {
+                "turn_index": 2,
+                "node_kind": "call_tools",
+                "tool_names": "write_facts,verify_totals",
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "thinking_tokens": 0,
+                "total_tokens": 0,
+                "cumulative_tokens": 125,
+                "duration_ms": 50,
+            },
+        ],
+        model="openai.global.gpt-5.6-luna",
+    )
+
+    assert report.grand_total == 125
+    assert report.total_prompt_tokens == 100
+    assert report.total_completion_tokens == 20
+    assert report.total_thinking_tokens == 5
+    assert report.turns[1].tool_name == "write_facts,verify_totals"
+    assert "Total" in report.format_table()
+
+
 def test_estimate_cost():
     report = TokenReport(model="vertex_ai.gemini-3-flash-preview")
     report.add_turn(

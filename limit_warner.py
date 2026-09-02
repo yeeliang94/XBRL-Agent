@@ -190,7 +190,14 @@ def _build_warning(ctx) -> Optional[str]:
             critical = True
 
     # --- Token budget (opt-in via XBRL_MAX_TOKENS_PER_AGENT; 0 = off) ---
-    budget = resolve_token_budget()
+    # Prefer the exact cap published by run_agent_loop. A role may resolve its
+    # budget at construction, and the warning must agree with the hard stop.
+    published_budget = getattr(deps, "_token_budget_cap", None)
+    budget = int(
+        resolve_token_budget()
+        if published_budget is None
+        else published_budget
+    )
     if budget > 0:
         total = int(getattr(usage, "total_tokens", 0) or 0)
         frac = total / budget

@@ -388,6 +388,7 @@ async def run_agent_loop(
         deps._wallclock_cap = wallclock_cap  # None = no cap = no warning
         deps._call_tools_seen = 0
         deps._call_tools_cap = spec.call_tools_cap
+        deps._token_budget_cap = spec.token_budget
     except Exception:  # noqa: BLE001 — advisory plumbing only
         pass
 

@@ -1656,13 +1656,21 @@ def insert_notes_review_flag(
     reason: str = "",
     sheet: Optional[str] = None,
     row: Optional[int] = None,
+    finding_id: Optional[str] = None,
+    source_pages: Optional[list[int]] = None,
+    evidence: str = "",
 ) -> int:
     """Record one notes-reviewer flag (status defaults to 'open')."""
     now = _now()
     cur = conn.execute(
         "INSERT INTO notes_review_flags(run_id, kind, reason, sheet, row, "
-        "status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'open', ?, ?)",
-        (run_id, kind, reason, sheet, row, now, now),
+        "finding_id, source_pages, evidence, status, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)",
+        (
+            run_id, kind, reason, sheet, row, finding_id,
+            json.dumps(source_pages) if source_pages else None,
+            evidence or None, now, now,
+        ),
     )
     return int(cur.lastrowid)
 
@@ -1675,18 +1683,27 @@ def fetch_notes_review_flags(
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(
-            "SELECT id, kind, reason, sheet, row, status, answer, created_at "
+            "SELECT id, kind, reason, sheet, row, finding_id, source_pages, "
+            "evidence, status, answer, created_at "
             "FROM notes_review_flags WHERE run_id = ? ORDER BY id DESC",
             (run_id,),
         ).fetchall()
     finally:
         conn.row_factory = prior
-    return [
-        {"id": r["id"], "kind": r["kind"], "reason": r["reason"],
-         "sheet": r["sheet"], "row": r["row"], "status": r["status"],
-         "answer": r["answer"], "created_at": r["created_at"]}
-        for r in rows
-    ]
+    result = []
+    for r in rows:
+        try:
+            source_pages = json.loads(r["source_pages"]) if r["source_pages"] else []
+        except (TypeError, ValueError):
+            source_pages = []
+        result.append({
+            "id": r["id"], "kind": r["kind"], "reason": r["reason"],
+            "sheet": r["sheet"], "row": r["row"],
+            "finding_id": r["finding_id"], "source_pages": source_pages,
+            "evidence": r["evidence"], "status": r["status"],
+            "answer": r["answer"], "created_at": r["created_at"],
+        })
+    return result
 
 
 def answer_notes_review_flag(
@@ -2460,20 +2477,45 @@ def reconcile_stale_runs(conn: sqlite3.Connection, max_age_hours: float = 6.0) -
     across restarts. A row with a blank ``started_at`` (definitionally broken —
     run-start always stamps it) is reaped regardless of age.
 
-    A genuinely fresh `running` row (started within the window) is left alone so
-    a very recent restart during an in-flight run doesn't kill live work.
-    Returns rows reconciled. Called once at startup, before any request served.
+    Each reaped parent is settled with its running child rows and a durable
+    terminal run event in the same caller-owned transaction. A genuinely fresh
+    `running` row (started within the window) is left alone so a very recent
+    restart during an in-flight run doesn't kill live work. Returns rows
+    reconciled. Called once at startup, before any request served.
     """
     now = _now()
     cutoff = (
         datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
     ).isoformat(timespec="seconds").replace("+00:00", "Z")
-    cur = conn.execute(
-        "UPDATE runs SET status = 'aborted', ended_at = ? "
+    rows = conn.execute(
+        "SELECT id FROM runs "
         "WHERE status = 'running' AND (started_at = '' OR started_at < ?)",
-        (now, cutoff),
-    )
-    return int(cur.rowcount)
+        (cutoff,),
+    ).fetchall()
+    reconciled: list[int] = []
+    for row in rows:
+        run_id = int(row[0])
+        cur = conn.execute(
+            "UPDATE runs SET status = 'aborted', ended_at = ? "
+            "WHERE id = ? AND status = 'running'",
+            (now, run_id),
+        )
+        if not cur.rowcount:
+            continue
+        reconciled.append(run_id)
+        reconcile_unfinished_run_agents(conn, run_id)
+        log_run_event(
+            conn,
+            run_id,
+            "run_complete",
+            payload={
+                "success": False,
+                "overall_status": "aborted",
+                "reason": "server_restart",
+            },
+            phase="restart_reconciliation",
+        )
+    return len(reconciled)
 
 
 def reconcile_stale_review_tasks(conn: sqlite3.Connection) -> int:

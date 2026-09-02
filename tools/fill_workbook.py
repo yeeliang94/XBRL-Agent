@@ -4,7 +4,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Annotated, Optional, Sequence, Union
+from typing import Annotated, Callable, Optional, Sequence, TypedDict, Union
 
 import openpyxl
 from pydantic import BaseModel, StringConstraints
@@ -72,6 +72,25 @@ class FieldMapping:
     evidence: str = ""
 
 
+class SuccessfulRequestKey(TypedDict):
+    key: str
+    base_key: str
+    sheet: str
+    col: int
+    resolved_row: int
+
+
+class FailedRequestKey(TypedDict):
+    key: str
+    base_key: str
+    message: str
+    sheet: str
+    col: int
+    kind: str
+    candidate_rows: list[int]
+    resolved_row: Optional[int]
+
+
 @dataclass
 class FillResult:
     success: bool
@@ -94,8 +113,8 @@ class FillResult:
     # Stable request identities let the agent harness retain unresolved
     # partial-write errors across later unrelated calls, while clearing an
     # error when that same logical fact is successfully retried.
-    successful_request_keys: list[dict[str, str]] = field(default_factory=list)
-    failed_request_keys: list[dict[str, str]] = field(default_factory=list)
+    successful_request_keys: list[SuccessfulRequestKey] = field(default_factory=list)
+    failed_request_keys: list[FailedRequestKey] = field(default_factory=list)
 
 
 # Default SOCIE evidence column for the MFRS 24-col equity-component matrix.
@@ -252,6 +271,7 @@ def fill_workbook(
     facts: Sequence[Union["FactWrite", dict]],
     filing_level: str = "company",
     canonical_template_path: str | None = None,
+    write_validator: Optional[Callable[[dict], Optional[str]]] = None,
 ) -> FillResult:
     """Apply typed cell writes to an Excel template.
 
@@ -270,7 +290,9 @@ def fill_workbook(
     that is normally the agent's scratch workbook.  ``canonical_template_path``
     identifies the immutable managed template whose filing-target manifest is
     authoritative for writability; when omitted it defaults to
-    ``template_path`` for existing callers and synthetic workbooks.
+    template_path for existing callers and synthetic workbooks.
+    write_validator may enforce canonical fact validation after label
+    resolution but before either the value or its evidence changes.
     """
     template = Path(template_path)
     if not template.exists():
@@ -319,13 +341,29 @@ def fill_workbook(
 
     wb = openpyxl.load_workbook(template_path)
     errors: list[str] = []
-    failed_mapping_messages: list[tuple[str, str, str]] = []
+    failed_mapping_messages: list[FailedRequestKey] = []
 
-    def reject(mapping: FieldMapping, message: str) -> None:
+    def reject(
+        mapping: FieldMapping,
+        message: str,
+        *,
+        kind: str = "",
+        candidate_rows: Optional[list[int]] = None,
+        resolved_row: Optional[int] = None,
+    ) -> None:
         """Attach one deterministic refusal to its own request identity."""
         errors.append(message)
         key, base_key = _mapping_request_keys(mapping)
-        failed_mapping_messages.append((key, base_key, message))
+        failed_mapping_messages.append({
+            "key": key,
+            "base_key": base_key,
+            "message": message,
+            "sheet": _normalize_label(mapping.sheet),
+            "col": mapping.col,
+            "kind": kind,
+            "candidate_rows": list(candidate_rows or []),
+            "resolved_row": resolved_row,
+        })
 
     guard_rejections: dict[str, int] = {}
     fields_written = 0
@@ -333,7 +371,7 @@ def fill_workbook(
     # booking guard only sees mappings that actually landed (skipped
     # writes shouldn't raise spurious warnings).
     successful_writes: list[FieldMapping] = []
-    successful_mapping_keys: list[tuple[str, str]] = []
+    successful_mapping_keys: list[SuccessfulRequestKey] = []
     resolved_cells: dict[tuple[str, int, int], object] = {}
 
     # Build section-aware label index per sheet
@@ -377,6 +415,8 @@ def fill_workbook(
                         f"'{mapping.sheet}' matches writable rows {rows}. "
                         "Supply the exact period/scope section from "
                         "read_template(); no row was selected.",
+                        kind="ambiguous_label",
+                        candidate_rows=list(resolution.candidate_rows),
                     )
                     guard_rejections["ambiguous_label"] = (
                         guard_rejections.get("ambiguous_label", 0) + 1
@@ -475,6 +515,7 @@ def fill_workbook(
                     f"row. Use a value column shown by read_template() "
                     f"({allowed_text})."
                 )
+                refusal_kind = "non_writable_template_slot"
             else:
                 message = (
                     f"Refusing to write to {mapping.sheet}!{cell.coordinate}: "
@@ -482,11 +523,27 @@ def fill_workbook(
                     "or other non-entry template row. Choose a writable "
                     "canonical field from read_template()."
                 )
+                is_formula_cell = (
+                    cell.value is not None and str(cell.value).startswith("=")
+                )
+                # A formula on an entirely non-writable row is audit-only: the
+                # verifier owns its inputs and result. A formula in a non-entry
+                # column of an otherwise writable row is different—the agent
+                # chose the wrong physical slot, so that locator error must
+                # remain unresolved and block a clean save.
+                refusal_kind = (
+                    "formula_cell"
+                    if is_formula_cell
+                    else "non_writable_template_slot"
+                )
             verdict = GuardResult.retry(
                 message,
-                kind="non_writable_template_slot",
+                kind=refusal_kind,
             )
-            reject(mapping, verdict.message)
+            reject(
+                mapping, verdict.message,
+                kind=verdict.kind, resolved_row=target_row,
+            )
             guard_rejections[verdict.kind] = guard_rejections.get(verdict.kind, 0) + 1
             continue
 
@@ -496,7 +553,10 @@ def fill_workbook(
                 f"Refusing to overwrite formula cell {mapping.sheet}!{cell.coordinate}: {cell.value}",
                 kind="formula_cell",
             )
-            reject(mapping, verdict.message)
+            reject(
+                mapping, verdict.message,
+                kind=verdict.kind, resolved_row=target_row,
+            )
             guard_rejections[verdict.kind] = guard_rejections.get(verdict.kind, 0) + 1
             logger.warning(
                 "fill_workbook guard rejected (%s): %s!%s",
@@ -537,6 +597,38 @@ def fill_workbook(
             )
             continue
 
+        resolved_write = {
+            "sheet": mapping.sheet,
+            "row": target_row,
+            "col": mapping.col,
+            "value": mapping.value,
+            "evidence": mapping.evidence,
+        }
+        if write_validator is not None:
+            validation_error = write_validator(resolved_write)
+            if validation_error:
+                cell_desc = f"{mapping.sheet}!{cell.coordinate}"
+                verdict = GuardResult.retry(
+                    f"Canonical fact validation rejected {cell_desc}; no "
+                    f"workbook cell was written: {validation_error}",
+                    kind="canonical_validation",
+                )
+                reject(
+                    mapping,
+                    verdict.message,
+                    kind=verdict.kind,
+                    resolved_row=target_row,
+                )
+                guard_rejections[verdict.kind] = (
+                    guard_rejections.get(verdict.kind, 0) + 1
+                )
+                logger.warning(
+                    "fill_workbook guard rejected (%s): %s",
+                    verdict.kind,
+                    cell_desc,
+                )
+                continue
+
         target_key = (mapping.sheet, target_row, mapping.col)
         if target_key in resolved_cells:
             prior_value = resolved_cells[target_key]
@@ -555,7 +647,12 @@ def fill_workbook(
             # An identical duplicate is an idempotent no-op, not a second
             # field write or a second canonical projection.
             if prior_value == mapping.value:
-                successful_mapping_keys.append(_mapping_request_keys(mapping))
+                key, base_key = _mapping_request_keys(mapping)
+                successful_mapping_keys.append({
+                    "key": key, "base_key": base_key,
+                    "sheet": _normalize_label(mapping.sheet),
+                    "col": mapping.col, "resolved_row": target_row,
+                })
             continue
 
         cell.value = mapping.value
@@ -572,7 +669,12 @@ def fill_workbook(
             row=target_row,
             evidence=mapping.evidence,
         ))
-        successful_mapping_keys.append(_mapping_request_keys(mapping))
+        key, base_key = _mapping_request_keys(mapping)
+        successful_mapping_keys.append({
+            "key": key, "base_key": base_key,
+            "sheet": _normalize_label(mapping.sheet),
+            "col": mapping.col, "resolved_row": target_row,
+        })
 
         # Write evidence/source to a single column per sheet so notes don't repeat.
         #
@@ -621,14 +723,8 @@ def fill_workbook(
         if w.row is not None
     ]
 
-    successful_request_keys = [
-        {"key": key, "base_key": base_key}
-        for key, base_key in successful_mapping_keys
-    ]
-    failed_request_keys = [
-        {"key": key, "base_key": base_key, "message": message}
-        for key, base_key, message in failed_mapping_messages
-    ]
+    successful_request_keys = successful_mapping_keys
+    failed_request_keys = failed_mapping_messages
 
     if errors and fields_written == 0:
         return FillResult(

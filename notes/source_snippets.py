@@ -13,6 +13,7 @@ scout.notes_discoverer regex approach and is intentionally simple.
 """
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Optional
@@ -64,6 +65,7 @@ _TOC_LINE_RE = re.compile(r"(?:\t[ \t]*|\.{2,}\s*)\d{1,4}\s*$")
 _OPEN_BLOCK_RE = re.compile(r"<(p|h[1-6]|table|ul|ol)\b[^>]*>", re.IGNORECASE)
 
 _TAG_RE = re.compile(r"<[^>]+>")
+_PDF_PAGE_MARKER_RE = re.compile(r"<!--\s*pdf-page:\s*(\d+)\s*-->")
 
 
 def _split_top_level_blocks(html: str) -> list[str]:
@@ -233,6 +235,46 @@ def read_note_snippet_at(
         html = Path(source_html_path).read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return ""
+    # A scanned-PDF sidecar may contain only independently complete note
+    # ranges. Restrict slicing to the exact pages assigned to this note; a note
+    # absent from the manifest was affected by a failed page and must be read
+    # directly from the PDF. Word sidecars have no manifest and retain the
+    # established whole-document path.
+    try:
+        meta = json.loads(
+            (Path(source_html_path).parent / "source_meta.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    except (OSError, UnicodeDecodeError, ValueError):
+        meta = None
+    if (
+        isinstance(meta, dict)
+        and meta.get("origin") == "llm_transcription"
+        and meta.get("partial") is True
+    ):
+        note_pages = meta.get("note_pages")
+        if isinstance(note_pages, dict) and note_pages:
+            allowed = note_pages.get(str(note_num))
+            if not isinstance(allowed, list) or not allowed:
+                return ""
+            sections: dict[int, str] = {}
+            markers = list(_PDF_PAGE_MARKER_RE.finditer(html))
+            for index, marker in enumerate(markers):
+                start = marker.end()
+                end = (
+                    markers[index + 1].start()
+                    if index + 1 < len(markers)
+                    else len(html)
+                )
+                sections[int(marker.group(1))] = html[start:end]
+            try:
+                wanted = [int(page) for page in allowed]
+            except (TypeError, ValueError):
+                return ""
+            if any(page not in sections for page in wanted):
+                return ""
+            html = "".join(sections[page] for page in wanted)
     return extract_note_snippet(html, note_num)
 
 

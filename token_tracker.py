@@ -25,6 +25,37 @@ class TokenReport:
     total_thinking_tokens: int = 0
     model: object = None  # str or PydanticAI model object for pricing lookup
 
+    @classmethod
+    def from_turn_metrics(
+        cls, turns: list[dict], model: object = None,
+    ) -> "TokenReport":
+        """Build the legacy text report from live agent-loop telemetry.
+
+        ``save_result`` runs inside a tool node, before the coordinator has
+        observed that node's final cumulative usage. The agent loop's turn
+        records are therefore the authoritative source for the completed
+        report; rebuilding it after the loop prevents a successful live run
+        from leaving a misleading zero-token cost file.
+        """
+        report = cls(model=model)
+        for metric in turns:
+            report.add_turn(TurnRecord(
+                turn=int(metric.get("turn_index") or 0),
+                tool_name=str(
+                    metric.get("tool_names")
+                    or metric.get("node_kind")
+                    or ""
+                ),
+                prompt_tokens=int(metric.get("prompt_tokens") or 0),
+                completion_tokens=int(metric.get("completion_tokens") or 0),
+                total_tokens=int(metric.get("total_tokens") or 0),
+                thinking_tokens=int(metric.get("thinking_tokens") or 0),
+                cumulative_tokens=int(metric.get("cumulative_tokens") or 0),
+                duration_ms=int(metric.get("duration_ms") or 0),
+                timestamp=0.0,
+            ))
+        return report
+
     @property
     def grand_total(self) -> int:
         # Thinking tokens are part of total spend — excluding them here made
