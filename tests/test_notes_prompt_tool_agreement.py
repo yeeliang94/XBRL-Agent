@@ -174,6 +174,12 @@ def test_reviewer_prompt_routes_same_sheet_consolidation_to_human():
     assert "then `clear_note_cells` the fragment" not in _REVIEWER
 
 
+def test_reviewer_prompt_batches_coverage_verdicts_across_notes():
+    assert "resolve_coverage_notes(resolutions=[{note_num" in _REVIEWER
+    assert "verify_subnotes(verifications=[{note_num" in _REVIEWER
+    assert "rather than one call per row, note, or ref" in _REVIEWER
+
+
 def test_reviewer_packet_matches_same_sheet_clear_guard():
     packet = build_notes_reviewer_packet({
         "topline_splits": [{

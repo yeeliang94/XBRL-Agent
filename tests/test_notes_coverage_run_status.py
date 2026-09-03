@@ -141,8 +141,8 @@ def test_confirmed_absent_resolves_and_does_not_tip(db_path, tmp_path):
     outcome = _run_pass(db_path, run_id, tmp_path, _scripted([
         [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [30]})],
         [ToolCallPart(tool_name="resolve_coverage_notes", args={
-            "note_nums": [13], "verdict": "confirmed_absent",
-            "reason": "PDF skips 13", "source_pages": [30]})],
+            "resolutions": [{"note_num": 13, "verdict": "confirmed_absent",
+            "reason": "PDF skips 13", "source_pages": [30]}]})],
         [TextPart("done")],
     ]), q)
     cov = outcome["coverage"]
