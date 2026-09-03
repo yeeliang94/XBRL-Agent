@@ -13,9 +13,15 @@ assertion below is the regression lock.
 """
 from __future__ import annotations
 
-from notes.agent import NotesDeps, create_notes_agent
+from concept_model.filing_targets import writable_rows
+from notes.agent import (
+    NotesDeps,
+    _render_notes_template_hierarchy,
+    create_notes_agent,
+)
 from notes.writer import _resolve_row, _build_label_index
-from notes_types import NotesTemplateType
+from notes_types import NotesTemplateType, notes_template_path
+from tools.template_reader import read_template
 
 
 def test_mpers_bare_label_resolves_against_seeded_catalog(tmp_path):
@@ -100,3 +106,54 @@ def test_mpers_concepts_absent_from_mpers_stay_unresolved(tmp_path):
             f"{label!r} unexpectedly resolved on MPERS — the suffix "
             f"normaliser is over-matching."
         )
+
+
+def test_issued_capital_catalog_keeps_unit_bearing_section_paths() -> None:
+    """Repeated balance labels must retain the template headers that say
+    whether the row is a monetary amount or a number of shares."""
+    template_path = notes_template_path(
+        NotesTemplateType.ISSUED_CAPITAL,
+        level="company",
+        standard="mfrs",
+    )
+    sheet = "Notes-Issuedcapital"
+    allowed = writable_rows(str(template_path), sheet)
+
+    rendered = _render_notes_template_hierarchy(
+        read_template(str(template_path)),
+        sheet,
+        set(allowed) if allowed is not None else None,
+    )
+
+    assert "Common section path: Notes - Issued capital" in rendered
+    assert (
+        "row  11: Shares issued and fully paid > "
+        "Amount of shares issued and fully paid > Balance at the beginning "
+        "of period"
+    ) in rendered
+    assert (
+        "row  30: Shares outstanding > "
+        "Number of shares outstanding > *Number of shares outstanding at "
+        "end of period"
+    ) in rendered
+
+
+def test_flat_catalog_emits_the_constant_root_once() -> None:
+    template_path = notes_template_path(
+        NotesTemplateType.LIST_OF_NOTES,
+        level="company",
+        standard="mfrs",
+    )
+    sheet = "Notes-Listofnotes"
+    allowed = writable_rows(str(template_path), sheet)
+
+    rendered = _render_notes_template_hierarchy(
+        read_template(str(template_path)),
+        sheet,
+        set(allowed) if allowed is not None else None,
+    )
+
+    root = "Notes - List of notes"
+    assert rendered.count(root) == 1
+    assert f"Common section path: {root}" in rendered
+    assert f"{root} >" not in rendered

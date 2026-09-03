@@ -103,8 +103,10 @@ class FillResult:
     warnings: list[str] = field(default_factory=list)
     # Canonical mode (Phase B): resolved cell coordinates that actually
     # landed, so the caller can project each into run_concept_facts. Each
-    # entry is {sheet, row, col, value, evidence} with `row` already
-    # label-resolved. Empty in legacy mode / on total failure.
+    # entry is {sheet, row, col, value, evidence, field_label, section} with
+    # `row` already label-resolved. The request label is retained so source
+    # coverage receipts can prove that a claimed target actually landed.
+    # Empty in legacy mode / on total failure.
     resolved_writes: list[dict] = field(default_factory=list)
     # Harness Item 2 follow-through: per-kind counts of GuardResult
     # refusals in this call (e.g. {"abstract_row": 2}) — the machine-
@@ -718,6 +720,8 @@ def fill_workbook(
             "col": w.col,
             "value": w.value,
             "evidence": w.evidence,
+            "field_label": w.field_label,
+            "section": w.section,
         }
         for w in successful_writes
         if w.row is not None

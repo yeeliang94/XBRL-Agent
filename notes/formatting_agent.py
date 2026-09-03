@@ -6,6 +6,7 @@ write.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -474,11 +475,25 @@ async def _run_notes_formatter_impl(
     size_signals = collect_size_signals(
         cells, _resolve_notes_table_theme(db_path, run_id),
     )
-    prompt = _build_user_prompt(sheet, cells, page_set, size_signals)
-
     agent, deps = create_notes_formatter_agent(
         run_id=run_id, db_path=db_path, pdf_path=pdf_path, sheet=sheet, model=model,
     )
+    # The old prompt forced a tool-only first model turn before the model could
+    # do any work. That re-billed the full CURRENT CELLS payload (and every
+    # prior part) on the second request. Attach the known source pages to the
+    # initial request so the normal path needs one model request, while keeping
+    # the view/zoom tools available for targeted follow-up inspection.
+    source_content, preloaded_pages = await _preload_source_pages(
+        pdf_path, page_set,
+    )
+    pages_attached = len(preloaded_pages) == len(page_set)
+    prompt = _build_user_prompt(
+        sheet, cells, page_set, size_signals,
+        source_pages_attached=pages_attached,
+    )
+    initial_prompt: Any = [prompt, *source_content] if pages_attached else prompt
+    if deps is not None:
+        deps.viewed_pages.update(preloaded_pages)
     # One shared usage accumulator + request cap across every pass below, so
     # the whole click (initial + output-rejection retry + validation repair +
     # self-check) is bounded — not each
@@ -487,7 +502,7 @@ async def _run_notes_formatter_impl(
     limits = UsageLimits(request_limit=MAX_FORMATTER_REQUESTS)
     trace_messages: list = []
 
-    async def _agent_run(user_prompt: str):
+    async def _agent_run(user_prompt: Any):
         result = await agent.run(
             user_prompt, deps=deps, usage=usage, usage_limits=limits,
         )
@@ -508,7 +523,7 @@ async def _run_notes_formatter_impl(
             )
         return result
 
-    result = await _agent_run(prompt)
+    result = await _agent_run(initial_prompt)
     err, screened, stage = _screen_patch(_output_json(result.output), sheet)
     if err is not None and stage in ("parse", "confidence", "sheet"):
         # Mechanically rejected output (unparseable JSON / wrong sheet /
@@ -535,9 +550,13 @@ async def _run_notes_formatter_impl(
         return err
     patch, confidence, summary = screened.patch, screened.confidence, screened.summary
 
+    original_validation_error: Optional[str] = None
+    original_validation_patch: Optional[dict[str, Any]] = None
     try:
         applied = apply_sheet_patch(rows_for_patch, patch)
     except FormatPatchError as exc:
+        original_validation_error = str(exc)
+        original_validation_patch = patch
         logger.warning(
             "notes formatter validation failed run=%s sheet=%s error=%s",
             run_id, sheet, exc,
@@ -575,6 +594,25 @@ async def _run_notes_formatter_impl(
         patch, confidence, summary = (
             screened.patch, screened.confidence, screened.summary,
         )
+
+    if original_validation_error is not None and applied.changed_rows == 0:
+        # An empty/ineffective repair is a safe content no-op, but it does not
+        # turn the invalid original patch into evidence that formatting was
+        # unnecessary.  Preserve the root classification so the task row, UI,
+        # and token telemetry expose the expensive failed pass honestly.
+        return {
+            "ok": False,
+            "error": original_validation_error,
+            "error_type": "validation_failed",
+            "summary": summary or "No safe formatting changes were applied.",
+            "confidence": confidence,
+            "changed_rows": 0,
+            "skipped_rows": [],
+            "patch": original_validation_patch,
+            "repair_patch": patch,
+            "before_text_hash": applied.before_text_hash,
+            "after_text_hash": applied.after_text_hash,
+        }
 
     # One self-check revision pass: show the agent the sanitized preview HTML
     # that would be saved and let it either return the same patch or a revised
@@ -751,6 +789,8 @@ def _size_signals_block(signals: list[dict[str, Any]]) -> str:
 def _build_user_prompt(
     sheet: str, cells: list[Any], pages: list[int],
     size_signals: Optional[list[dict[str, Any]]] = None,
+    *,
+    source_pages_attached: bool = False,
 ) -> str:
     compact_rows = [
         {
@@ -760,12 +800,64 @@ def _build_user_prompt(
         }
         for c in cells
     ]
+    source_instruction = (
+        f"Source page images {pages} are attached below. Do not call "
+        "view_pdf_pages for those pages again; use zoom_pdf_region only when "
+        "fine border or alignment detail is illegible."
+        if source_pages_attached else
+        f"First call view_pdf_pages for these source pages: {pages}."
+    )
     return (
-        f"Format sheet {sheet!r}. First call view_pdf_pages for these source "
-        f"pages: {pages}. Then return one JSON patch for this sheet only."
+        f"Format sheet {sheet!r}. {source_instruction} Then return one JSON "
+        "patch for this sheet only."
         f"{_size_signals_block(size_signals or [])}\n\n"
         f"CURRENT CELLS:\n{json.dumps(compact_rows, ensure_ascii=False)}"
     )
+
+
+async def _preload_source_pages(
+    pdf_path: str,
+    pages: list[int],
+) -> tuple[list[Union[str, BinaryContent]], set[int]]:
+    """Render the formatter's known source pages before its first request.
+
+    This is intentionally all-or-nothing: if one source page cannot render,
+    the caller falls back to the existing ``view_pdf_pages`` tool path rather
+    than claiming a partial attachment set is complete.
+    """
+    if not pages:
+        return [], set()
+    try:
+        from notes.agent import (
+            _NOTES_RENDER_DPI,
+            _NOTES_RENDER_POLICY,
+            _render_one_page_single_flight,
+        )
+
+        rendered = await asyncio.gather(*(
+            _render_one_page_single_flight(
+                pdf_path,
+                page,
+                _NOTES_RENDER_DPI,
+                policy=_NOTES_RENDER_POLICY,
+            )
+            for page in pages
+        ))
+    except Exception:  # noqa: BLE001 - retain the tool-based fallback path
+        logger.warning(
+            "Could not preload formatter source pages; falling back to the "
+            "view_pdf_pages tool.",
+            exc_info=True,
+        )
+        return [], set()
+
+    content: list[Union[str, BinaryContent]] = []
+    for page, png in zip(pages, rendered):
+        content.extend([
+            f"=== Page {page} ===",
+            BinaryContent(data=png, media_type="image/png"),
+        ])
+    return content, set(pages)
 
 
 def _build_validation_repair_prompt(
@@ -777,18 +869,83 @@ def _build_validation_repair_prompt(
     geometry = {
         row: _table_geometry(html) for row, html in sorted(rows_for_patch.items())
     }
+    failed_rows = {
+        int(item.get("row"))
+        for item in (patch.get("cells") or [])
+        if isinstance(item, dict) and isinstance(item.get("row"), int)
+    }
+    allowed_targets = {
+        row: _allowed_targets_from_geometry(geometry.get(row, []))
+        for row in sorted(failed_rows)
+        if row in geometry
+    }
     return (
         "Your previous formatter patch failed deterministic validation and was "
         "not saved. Return one full corrected JSON patch using only targets "
         "that exist in the current HTML. If you cannot safely map the source "
         "formatting to existing cells, return a no-op patch with cells: [] and "
-        "a low-risk summary. Do not change content.\n\n"
+        "a low-risk summary. That safe fallback will retain the original "
+        "validation_failed classification; it is not ordinary successful "
+        "formatting. Do not change content.\n\n"
         f"SHEET: {sheet}\n"
         f"VALIDATION ERROR: {error}\n"
         f"FAILED PATCH:\n{json.dumps(patch, ensure_ascii=False)}\n\n"
         f"CURRENT TABLE GEOMETRY BY ROW:\n"
-        f"{json.dumps(geometry, ensure_ascii=False)}"
+        f"{json.dumps(geometry, ensure_ascii=False)}\n\n"
+        "ALLOWED TARGETS FOR FAILED ROWS (generated from that geometry):\n"
+        f"{json.dumps(allowed_targets, ensure_ascii=False)}"
     )
+
+
+def _allowed_targets_from_geometry(
+    tables: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return only target shapes that can match the supplied table geometry.
+
+    This is repair guidance, not a second validator.  ``format_patch`` remains
+    authoritative; the generated choices stop the model from guessing table
+    indexes or row/cell coordinates that the current HTML cannot contain.
+    """
+    allowed: list[dict[str, Any]] = []
+    for table in tables:
+        table_idx = table.get("table")
+        rows = table.get("rows") or []
+        if not isinstance(table_idx, int):
+            continue
+        allowed.extend([
+            {"table": table_idx, "range": "all"},
+            {"table": table_idx, "range": "table"},
+        ])
+        if rows:
+            allowed.append({"table": table_idx, "range": "header"})
+            allowed.append({
+                "table": table_idx,
+                "rows": [r.get("r") for r in rows if isinstance(r.get("r"), int)],
+                "valid_cells": [
+                    {"r": r.get("r"), "c": cell.get("c")}
+                    for r in rows
+                    for cell in (r.get("cells") or [])
+                    if isinstance(r.get("r"), int)
+                    and isinstance(cell, dict)
+                    and isinstance(cell.get("c"), int)
+                ],
+            })
+            if any(
+                "total" in str(cell.get("text") or "").lower()
+                for r in rows for cell in (r.get("cells") or [])
+                if isinstance(cell, dict)
+            ):
+                allowed.append({"table": table_idx, "range": "total_rows"})
+            if any(
+                re.fullmatch(
+                    r"\(?-?\d[\d,]*(?:\.\d+)?\)?",
+                    str(cell.get("text") or "").strip(),
+                )
+                for r in rows for cell in (r.get("cells") or [])
+                if isinstance(cell, dict)
+            ):
+                allowed.append({"table": table_idx, "range": "numeric_cells"})
+    return allowed
 
 
 def _build_output_rejected_prompt(

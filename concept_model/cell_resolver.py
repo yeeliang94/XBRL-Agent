@@ -112,6 +112,14 @@ class ProjectionResult:
     descriptors so the caller can surface *which* cells were dropped.
     """
     projected: int = 0
+    # Exact cells whose values committed to ``run_concept_facts``. Callers use
+    # this to reconcile source-coverage claims to canonical persistence rather
+    # than merely to a successful scratch-workbook write.
+    projected_cells: set[tuple[str, int, int]] = field(default_factory=set)
+    # Successful scratch-workbook writes that have no canonical concept. These
+    # remain advisory projection gaps, but coverage receipts must distinguish
+    # them from both persisted facts and source lines that were never written.
+    skipped_cells: set[tuple[str, int, int]] = field(default_factory=set)
     skipped: list[str] = field(default_factory=list)
     rejected: list[str] = field(default_factory=list)
 
@@ -201,6 +209,7 @@ def project_writes(
             resolved = resolve_cell(conn, template_id, sheet, row, col)
             if resolved is None:
                 result.skipped.append(cell_desc)
+                result.skipped_cells.add((sheet, row, col))
                 logger.debug(
                     "project_writes: unresolved cell %s (template %s)",
                     cell_desc, template_id,
@@ -227,6 +236,7 @@ def project_writes(
                     commit=False,
                 )
                 result.projected += 1
+                result.projected_cells.add((sheet, row, col))
             except HTTPException as exc:
                 result.rejected.append(f"{cell_desc} ({exc.detail})")
                 logger.info(

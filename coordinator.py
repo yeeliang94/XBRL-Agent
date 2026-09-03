@@ -1026,9 +1026,22 @@ async def _run_single_agent_attempt(
             refs = getattr(deps, "face_line_refs", None) or []
             if not refs:
                 return []
-            return face_coverage_warnings(
+            warnings = face_coverage_warnings(
                 refs, getattr(deps, "face_coverage_receipt", None)
             )
+            warnings.extend(
+                str(error)
+                for error in (getattr(deps, "face_coverage_errors", None) or [])
+                if str(error) not in warnings
+            )
+            warnings.extend(
+                str(warning)
+                for warning in (
+                    getattr(deps, "face_coverage_warnings", None) or []
+                )
+                if str(warning) not in warnings
+            )
+            return warnings
         except Exception:  # noqa: BLE001 — advisory
             logger.debug("face coverage warnings skipped for %s", agent_role)
             return []

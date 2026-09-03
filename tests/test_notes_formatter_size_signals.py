@@ -84,6 +84,17 @@ class TestPromptRendering:
         prompt = _build_user_prompt("Notes-Listofnotes", [_normal_cell()], [1])
         assert "SIZE SIGNALS" not in prompt
 
+    def test_preloaded_pages_remove_the_forced_tool_only_turn(self):
+        prompt = _build_user_prompt(
+            "Notes-Listofnotes",
+            [_normal_cell()],
+            [1],
+            source_pages_attached=True,
+        )
+        assert "images [1] are attached below" in prompt
+        assert "Do not call view_pdf_pages" in prompt
+        assert "First call view_pdf_pages" not in prompt
+
     def test_flagged_rows_carry_the_right_remedy(self):
         cells = [_oversize_cell(20), _flat_cell(30)]
         signals = collect_size_signals(cells)

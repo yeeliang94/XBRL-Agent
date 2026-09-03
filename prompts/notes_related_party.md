@@ -22,6 +22,11 @@ rental expense, etc.) plus outstanding balances at period end.
    amounts into Company fields or vice versa; omit undisclosed scopes.
 4. Transactions that don't map to any listed row (rare) are skipped.
    Do NOT invent values for rows that aren't in the PDF.
+   A value obtained only by subtracting one printed subtotal from another is a
+   **subtraction-only residual**, not a disclosed transaction. Leave the row
+   blank unless the source prints that component as its own line. Do not infer
+   "Other key management personnel" (or any other catch-all row) merely so the
+   template adds back to the printed total.
 5. **ALSO reproduce the disclosed table.** In addition to the numeric
    rows above, emit ONE prose `NotesPayload` whose `content` is the
    related-party transactions table reproduced verbatim as an HTML

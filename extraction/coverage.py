@@ -11,10 +11,14 @@ This module is a focused, string-keyed sibling of ``notes/coverage.py`` (kept
 separate rather than retrofitting the int-``note_num``-keyed notes machinery —
 that would ripple through the notes tests for no gain). A face agent that
 received non-empty ``face_line_refs`` submits a receipt accounting for each
-scout-observed line as ``written`` or ``skipped`` (with a reason). A line left
-unaccounted becomes an ``AgentResult.warnings`` entry — never a save block
-(gotcha #13: hints are advisory; gotcha #17: an explicit "could not find" skip
-is a valid receipt entry, the agent is never forced to plug).
+scout-observed line as ``written`` or ``skipped`` (with a reason). ``written``
+must name a target label or cell that actually landed through ``write_facts``.
+Canonical facts are clean; workbook-only writes with no concept mapping are
+accepted with an explicit human-review warning.
+Unaccounted or unbacked entries block a clean save; a scout hint remains
+advisory because the agent can explicitly skip it with a reason after checking
+the PDF. This prevents a balanced but source-incomplete statement from being
+reported as complete without forcing a balancing plug.
 """
 from __future__ import annotations
 
@@ -58,6 +62,10 @@ class FaceCoverageEntry:
     ref: str
     action: str  # "written" | "skipped"
     reason: str = ""
+    # Template field label supplied to ``write_facts``. Defaults to ``ref``
+    # for the common one-to-one case; set it when the source line was rolled
+    # into a differently named canonical field.
+    target: str = ""
 
     def __post_init__(self) -> None:
         if self.action not in _VALID_ACTIONS:
@@ -75,20 +83,99 @@ class FaceCoverageEntry:
 class FaceCoverageReceipt:
     entries: list[FaceCoverageEntry] = field(default_factory=list)
 
-    def validate(self, expected_refs: list[dict]) -> list[str]:
+    def validate(
+        self,
+        expected_refs: list[dict],
+        *,
+        written_targets: set[str] | None = None,
+        workbook_only_targets: set[str] | None = None,
+    ) -> list[str]:
         """Structural errors only (empty = clean). An entry whose ref matches
         no scout-observed line is flagged so a typo'd receipt is visible; a
-        missing expected line is NOT an error here — it surfaces as a warning
-        (coverage is advisory, never a block)."""
+        missing expected line is NOT an error here — the caller reports it as
+        unresolved coverage. When ``written_targets`` is supplied, every
+        ``written`` entry must reconcile to a successful write target. A
+        workbook-only target is accepted here because the caller reports that
+        distinct, non-canonical outcome as a warning."""
         errors: list[str] = []
         expected_norm = {_normalize_ref(r.get("label", "")) for r in expected_refs}
+        validate_written_targets = (
+            written_targets is not None or workbook_only_targets is not None
+        )
+        landed_norm = {
+            _normalize_ref(target) for target in (written_targets or set())
+        }
+        workbook_only_norm = {
+            _normalize_ref(target) for target in (workbook_only_targets or set())
+        }
+        available_targets = sorted(
+            {
+                str(target).strip()
+                for target in (
+                    (written_targets or set()) | (workbook_only_targets or set())
+                )
+                if str(target).strip()
+            },
+            key=str.casefold,
+        )
         for e in self.entries:
             if _normalize_ref(e.ref) not in expected_norm:
                 errors.append(
                     f"ref {e.ref!r} is not one of the scout-observed face "
                     f"lines — check the label or drop the entry."
                 )
+                continue
+            if (
+                e.action == "written"
+                and validate_written_targets
+            ):
+                target = e.target.strip() or e.ref
+                target_norm = _normalize_ref(target)
+                if (
+                    target_norm not in landed_norm
+                    and target_norm not in workbook_only_norm
+                ):
+                    choices = (
+                        " Available successful targets: "
+                        + "; ".join(repr(item) for item in available_targets)
+                        + "."
+                        if available_targets
+                        else " No successful write targets were recorded."
+                    )
+                    errors.append(
+                        f"written ref {e.ref!r} targets {target!r}, but no "
+                        "workbook write or canonical fact was recorded for that "
+                        "target in this agent run."
+                        + choices
+                        + " Correct the target or the write; mark the source "
+                        "line skipped only if it was not written."
+                    )
         return errors
+
+    def workbook_only_warnings(
+        self,
+        *,
+        written_targets: set[str],
+        workbook_only_targets: set[str],
+    ) -> list[str]:
+        """Warnings for honest writes that landed only in the scratch workbook."""
+        canonical_norm = {_normalize_ref(target) for target in written_targets}
+        workbook_only_norm = {
+            _normalize_ref(target) for target in workbook_only_targets
+        }
+        warnings: list[str] = []
+        for entry in self.entries:
+            if entry.action != "written":
+                continue
+            target = entry.target.strip() or entry.ref
+            target_norm = _normalize_ref(target)
+            if target_norm in workbook_only_norm and target_norm not in canonical_norm:
+                warnings.append(
+                    f"written ref {entry.ref!r} target {target!r} landed in the "
+                    "workbook but did not map to a canonical concept; it needs "
+                    "human review."
+                )
+        return warnings
 
     def accounted_refs(self) -> set[str]:
         """Normalised refs the agent accounted for (written OR skipped)."""
@@ -124,8 +211,11 @@ def parse_face_coverage_entries(
             reason = item.get("reason", "")
             if not isinstance(reason, str):
                 raise ValueError("reason must be a string")
+            target = item.get("target", "")
+            if not isinstance(target, str):
+                raise ValueError("target must be a string")
             entries.append(FaceCoverageEntry(
-                ref=ref, action=action, reason=reason,
+                ref=ref, action=action, reason=reason, target=target,
             ))
         except (KeyError, TypeError, ValueError) as exc:
             errors.append(f"entry {index}: {exc}")

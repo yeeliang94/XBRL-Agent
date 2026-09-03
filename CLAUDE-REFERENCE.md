@@ -598,6 +598,20 @@ read as advisory only:
   `tests/test_scout_face_line_refs_wiring.py`,
   `tests/test_coordinator_forwards_face_line_refs.py`,
   `tests/test_prompts_render_scout_face_refs.py`.
+  The refs remain advisory about source truth and never restrict page access,
+  but they now create a source-completeness save gate when present: every ref
+  must be recorded as either skipped-with-reason or written to a target label
+  or cell that `write_facts` confirms landed. Canonically persisted targets are
+  clean; a successful workbook write with no concept mapping is a distinct
+  accepted-with-warning outcome, never a false skip. Workbook balance alone
+  cannot satisfy this gate. A broader target is valid when the receipt names it
+  explicitly, and mismatch feedback lists the successful targets the agent can
+  submit. Unresolved coverage blocks a clean save but remains releasable through
+  the existing near-cap force-save and audited `acknowledge_unresolved` paths.
+  Pinned by
+  `tests/test_face_coverage_receipts.py`,
+  `tests/test_extraction_canonical_projection.py`, and
+  `tests/test_save_result_contract.py`.
 - **Sub-note hierarchy** (`NoteInventoryEntry.subnotes`): nested
   `SubNoteInventoryEntry(subnote_ref, title, page_range)` capturing
   2.1, 2.14, (a), (b) sub-headings under each top-level note. Nested
@@ -940,6 +954,12 @@ Key invariants:
     (`claim_*_task_guarded`); bounded by `XBRL_NOTES_FORMATTER_WALLCLOCK_S` (300)
     + `XBRL_NOTES_FORMATTER_MAX_REQUESTS` (16, ≤45 per gotcha #18); `error_type`
     taxonomy (`FORMATTER_ERROR_TYPES`) + token telemetry + a re-written trace;
+    a validation-repair pass receives allowed targets generated from the live
+    table geometry. If that repair is empty or otherwise changes zero rows,
+    the safe no-op preserves `ok=false` and the original `validation_failed`
+    classification; it must not be reported as ordinary successful formatting.
+    This distinguishes `no_change_needed` on the initial valid
+    patch from `invalid_patch_fallback` after a rejected target;
     `notes_formatter` ∈ `_AGENT_ROLES` with `XBRL_NOTES_FORMATTER_MIN_CONFIDENCE`
     (0.70). Numeric sheets (13/14) are excluded (422). Pinned by
     `tests/test_notes_format_patch.py`, `test_notes_formatter_routes.py`,
@@ -1588,7 +1608,10 @@ Load-bearing invariants:
   cover multiple note numbers and mixed verified/missing outcomes, and one
   `resolve_coverage_notes` call can cover mixed not-applicable/confirmed-absent
   outcomes without weakening grounding or failure isolation. Pinned by
-  `tests/test_notes_reviewer_coverage.py`. The pass
+  `tests/test_notes_reviewer_coverage.py`. Grounded `verified` sub-ref verdicts
+  are also applied to the detector-backed `subnote_gaps` family used by
+  `verify_findings`; `missing` verdicts remain open. The checklist and detector
+  may not disagree about whether the same reviewed sub-ref is resolved. The pass
   recomputes + persists on EVERY exit path (`_finalize_coverage` in
   `server._run_notes_reviewer_pass`): success → `reviewed`; crash/construction
   failure → `not_reviewed` draft; empty inventory → `inventory_unavailable` +
