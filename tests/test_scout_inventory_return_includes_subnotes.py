@@ -55,6 +55,22 @@ def test_tool_return_includes_subnotes(monkeypatch):
     assert deps.inventory_source == "text"
 
 
+def test_tool_caches_vision_rotation_corrections(monkeypatch):
+    entry = NoteInventoryEntry(note_num=3, title="PPE", page_range=(43, 44))
+
+    async def _fake_build(**kwargs):
+        kwargs["rotation_corrections_out"].update({43: 90, 44: 90})
+        return [entry], "vision"
+
+    monkeypatch.setattr(
+        "scout.notes_discoverer.build_notes_inventory_with_source_async", _fake_build
+    )
+    deps = _deps()
+    asyncio.run(_discover_notes_inventory_impl(deps, notes_start_page=43))
+
+    assert deps.rotation_corrections == {43: 90, 44: 90}
+
+
 def test_tool_return_empty_subnotes_when_none(monkeypatch):
     entry = NoteInventoryEntry(note_num=3, title="PPE", page_range=(25, 26))
 

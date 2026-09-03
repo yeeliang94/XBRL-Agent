@@ -205,6 +205,9 @@ class ScoutDeps:
     # ran). Set by the inventory-build call sites and surfaced on the Infopack
     # so a run records whether hidden LLM/OCR determinism was involved.
     inventory_source: str = "unknown"
+    # Sparse page-orientation corrections observed by the vision inventory.
+    # No entry means upright or uncertain; values are clockwise degrees.
+    rotation_corrections: dict[int, int] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -611,8 +614,10 @@ async def _populate_inventory_via_vision(
         pdf_length=deps.pdf_length,
         vision_model=deps.vision_model,
         force_vision=True,
+        rotation_corrections_out=deps.rotation_corrections,
     )
     infopack.notes_inventory = inventory
+    infopack.rotation_corrections = dict(deps.rotation_corrections)
     # Source-honesty (Phase 6.3): this post-scout fallback forces the vision
     # path; record it on both deps and the infopack we're enriching.
     deps.inventory_source = source
@@ -638,6 +643,7 @@ async def _discover_notes_inventory_impl(
         pdf_length=deps.pdf_length,
         vision_model=deps.vision_model,
         force_vision=deps.force_vision_inventory,
+        rotation_corrections_out=deps.rotation_corrections,
     )
     # Source-honesty (Phase 6.3): record whether this inventory came from the
     # deterministic regex pass or the vision/OCR fallback.
@@ -1073,6 +1079,7 @@ def _save_infopack_impl(deps: ScoutDeps, infopack_json: str) -> str:
         # Source-honesty (Phase 6.3): carry the inventory-build method recorded
         # by discover_notes_inventory (text regex vs vision/OCR fallback).
         inventory_source=deps.inventory_source,
+        rotation_corrections=dict(deps.rotation_corrections),
     )
 
     # Validate page ranges

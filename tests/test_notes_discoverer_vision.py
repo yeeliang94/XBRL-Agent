@@ -18,14 +18,17 @@ from scout.notes_discoverer import NoteInventoryEntry
 from scout.notes_discoverer_vision import (
     BATCH_SIZE,
     OVERLAP,
+    PageRotationCorrection,
     VisionBatchError,
     _build_vision_agent,
     _chunk,
     _merge_and_stitch,
     _scan_batch,
     _vision_inventory,
+    _vision_inventory_observation,
     _VisionBatch,
     _VisionNote,
+    _VISION_SYSTEM_PROMPT,
 )
 
 
@@ -405,3 +408,75 @@ class TestVisionInventory:
             and "output=20" in r.message
             for r in caplog.records
         ), f"no token log found. records: {[r.message for r in caplog.records]}"
+
+    def test_returns_only_actionable_rotation_corrections(self, monkeypatch):
+        monkeypatch.setattr(
+            "scout.notes_discoverer_vision._build_vision_agent",
+            lambda _m: object(),
+        )
+        canned = iter([
+            _StubResult(_VisionBatch(
+                entries=[_note(1, "Corp", 40, 43)],
+                rotation_corrections=[
+                    PageRotationCorrection(
+                        page=43, clockwise_degrees_to_upright=90,
+                    ),
+                    PageRotationCorrection(
+                        page=47, clockwise_degrees_to_upright=90,
+                    ),
+                ],
+            )),
+            _StubResult(_VisionBatch(
+                entries=[_note(2, "PPE", 44, 48)],
+                rotation_corrections=[
+                    PageRotationCorrection(
+                        page=44, clockwise_degrees_to_upright=90,
+                    ),
+                    PageRotationCorrection(
+                        page=47, clockwise_degrees_to_upright=270,
+                    ),
+                    PageRotationCorrection(
+                        page=48, clockwise_degrees_to_upright=270,
+                    ),
+                ],
+            )),
+        ])
+
+        async def fake_scan(_pdf_path, _agent, _pages):
+            return next(canned)
+
+        monkeypatch.setattr("scout.notes_discoverer_vision._scan_batch", fake_scan)
+
+        out = asyncio.run(_vision_inventory_observation(
+            "/tmp/fake.pdf", start=40, end=50, model=object(),
+        ))
+
+        assert out.rotation_corrections == {43: 90, 48: 270}
+        assert 44 not in out.rotation_corrections  # outside the reporting batch
+        assert 47 not in out.rotation_corrections  # conflicting overlap observations
+
+
+def test_rotation_correction_rejects_zero_degrees():
+    with pytest.raises(ValueError):
+        PageRotationCorrection(page=43, clockwise_degrees_to_upright=0)
+
+
+def test_rotation_schema_has_no_confidence_field_and_prompt_omits_uncertain_pages():
+    assert set(PageRotationCorrection.model_fields) == {
+        "page", "clockwise_degrees_to_upright",
+    }
+    assert "Omit upright pages and omit uncertain pages" in _VISION_SYSTEM_PROMPT
+
+
+def test_invalid_optional_rotation_does_not_reject_inventory_batch():
+    batch = _VisionBatch.model_validate({
+        "entries": [{
+            "note_num": 4, "title": "PPE", "first_page": 43, "last_page": 44,
+        }],
+        "rotation_corrections": [
+            {"page": 43, "clockwise_degrees_to_upright": 0},
+            {"page": 44, "clockwise_degrees_to_upright": 90},
+        ],
+    })
+    assert [item.page for item in batch.rotation_corrections] == [44]
+    assert batch.entries[0].note_num == 4

@@ -641,6 +641,7 @@ async def build_notes_inventory_with_source_async(
     notes_end_page: Optional[int] = None,
     vision_model: Optional[object] = None,
     force_vision: bool = False,
+    rotation_corrections_out: Optional[dict[int, int]] = None,
 ) -> tuple[list[NoteInventoryEntry], str]:
     """Like ``build_notes_inventory_async`` but also reports HOW the inventory
     was built (source-honesty, rewrite Phase 6.3):
@@ -654,7 +655,12 @@ async def build_notes_inventory_with_source_async(
 
     ``build_notes_inventory_async`` delegates here and drops the source, so the
     existing list-only contract (and all its callers/tests) is unchanged.
+    When ``rotation_corrections_out`` is supplied, the vision path fills it
+    with sparse, actionable page rotations from the same paid observation.
     """
+    if rotation_corrections_out is not None:
+        rotation_corrections_out.clear()
+
     vision_range, pages = _resolve_vision_range(
         pdf_path, notes_start_page, pdf_length, notes_end_page,
     )
@@ -675,15 +681,22 @@ async def build_notes_inventory_with_source_async(
             # Regex found nothing and there's no vision path to fall back to.
             return text_inventory, "none"
 
-    from scout.notes_discoverer_vision import _vision_inventory
+    from scout.notes_discoverer_vision import (
+        _vision_inventory,
+        _vision_inventory_observation,
+    )
 
     start, end = vision_range
-    entries = await _vision_inventory(
-        pdf_path=pdf_path,
-        start=start,
-        end=end,
-        model=vision_model,
-    )
+    if rotation_corrections_out is None:
+        entries = await _vision_inventory(
+            pdf_path=pdf_path, start=start, end=end, model=vision_model,
+        )
+    else:
+        observation = await _vision_inventory_observation(
+            pdf_path=pdf_path, start=start, end=end, model=vision_model,
+        )
+        entries = observation.entries
+        rotation_corrections_out.update(observation.rotation_corrections)
     # The vision path ran (forced or as the text-empty fallback). Record it as
     # "vision" even when empty — the method, not the yield, is what we report.
     return entries, "vision"

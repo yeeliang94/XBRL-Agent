@@ -22,6 +22,7 @@ from ingest.pdf_sidecar import (
     source_origin_for,
     transcribe_pages,
     write_pdf_sidecar,
+    _render_page,
 )
 
 
@@ -31,6 +32,13 @@ def _make_pdf(path: Path, *, pages: int = 2, with_text: bool = False) -> Path:
         page = doc.new_page()
         if with_text:
             page.insert_text((72, 72), "Receivables 563,125 3,872,500")
+        else:
+            # Scan stand-in: visible pixels without a searchable text layer.
+            page.draw_rect(
+                fitz.Rect(72, 72, 100, 100),
+                color=(0, 0, 0),
+                fill=(0, 0, 0),
+            )
     doc.save(str(path))
     doc.close()
     return path
@@ -85,6 +93,25 @@ def test_pdf_has_text_layer_false_for_imageless_scan_stand_in(tmp_path):
     # Empty pages carry no text layer — the same signal a pure scan gives.
     pdf = _make_pdf(tmp_path / "scan.pdf", with_text=False)
     assert pdf_has_text_layer(pdf) is False
+
+
+def test_render_page_applies_clockwise_quarter_turn(tmp_path):
+    pdf = tmp_path / "wide.pdf"
+    doc = fitz.open()
+    page = doc.new_page(width=200, height=100)
+    page.draw_rect(
+        fitz.Rect(0, 0, 50, 25), color=(1, 0, 0), fill=(1, 0, 0),
+    )
+    doc.save(str(pdf))
+    doc.close()
+
+    upright = fitz.Pixmap(_render_page(pdf, 1, 0))
+    rotated = fitz.Pixmap(_render_page(pdf, 1, 90))
+
+    assert upright.width > upright.height
+    assert rotated.width < rotated.height
+    assert rotated.pixel(rotated.width - 10, 10) == (255, 0, 0)
+    assert rotated.pixel(10, 10) == (255, 255, 255)
 
 
 # ---------------------------------------------------------------- transcribe
@@ -203,6 +230,64 @@ def test_transcribe_pages_overall_deadline_fails_pending_pages(tmp_path):
     assert result.failed_pages == [1, 2, 3]
 
 
+def test_transcribe_pages_marks_out_of_range_requests_failed(tmp_path, caplog):
+    pdf = _make_pdf(tmp_path / "scan.pdf", pages=1)
+    call, _calls = _fake_caller()
+    result = asyncio.run(
+        transcribe_pages(pdf, [1, 2], model=object(), _caller=call)
+    )
+    assert result.pages_html == {1: "<p>page 1</p>"}
+    assert result.failed_pages == [2]
+    assert "requested pages [2] are outside the document range" in caplog.text
+
+
+def test_blank_render_is_successful_without_a_provider_call(tmp_path):
+    pdf = tmp_path / "blank.pdf"
+    width = height = 128
+    samples = bytearray()
+    for index in range(width * height):
+        value = 246 + (index % 10)
+        samples.extend((value, value, value))
+    # Sparse scanner defects are not document content.
+    samples[0:3] = b"\x00\x00\x00"
+    noisy_blank = fitz.Pixmap(
+        fitz.csRGB, width, height, bytes(samples), False,
+    ).tobytes("png")
+
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_image(page.rect, stream=noisy_blank)
+    doc.save(str(pdf))
+    doc.close()
+
+    async def must_not_run(_page_no, _png):
+        raise AssertionError("a genuinely blank page needs no transcription")
+
+    result = asyncio.run(
+        transcribe_pages(pdf, [1], model=object(), _caller=must_not_run)
+    )
+
+    assert result.pages_html == {1: ""}
+    assert result.failed_pages == []
+    assert result.model_calls == []
+    assert write_pdf_sidecar(pdf, result, model_name="m-test") is not None
+    assert (tmp_path / "source.html").read_text(encoding="utf-8") == (
+        "<!-- pdf-page: 1 -->\n"
+    )
+
+
+def test_inked_render_still_calls_the_provider(tmp_path):
+    pdf = _make_pdf(tmp_path / "scan.pdf", pages=1)
+    call, calls = _fake_caller()
+
+    result = asyncio.run(
+        transcribe_pages(pdf, [1], model=object(), _caller=call)
+    )
+
+    assert result.pages_html == {1: "<p>page 1</p>"}
+    assert calls == {1: 1}
+
+
 def test_transcribe_pages_transient_failure_recovers(tmp_path):
     pdf = _make_pdf(tmp_path / "scan.pdf", pages=2)
     call, calls = _fake_caller(fail_pages={1}, fail_times=1)
@@ -210,6 +295,129 @@ def test_transcribe_pages_transient_failure_recovers(tmp_path):
     assert result.failed_pages == []
     assert set(result.pages_html) == {1, 2}
     assert calls[1] == 2
+
+
+def test_unhinted_transport_failure_retries_same_rotation(tmp_path, monkeypatch):
+    pdf = _make_pdf(tmp_path / "scan.pdf", pages=1)
+    seen_rotations = []
+
+    monkeypatch.setattr(
+        "ingest.pdf_sidecar._render_page_from_doc",
+        lambda _doc, page, rotation: f"{page}:{rotation}".encode(),
+    )
+
+    async def call(_page_no, png):
+        seen_rotations.append(int(png.decode().split(":")[1]))
+        if len(seen_rotations) == 1:
+            raise TimeoutError()
+        return "<p>upright</p>", {"total_tokens": 2}
+
+    result = asyncio.run(transcribe_pages(
+        pdf, [1], model=object(), _caller=call,
+    ))
+
+    assert seen_rotations == [0, 0]
+    assert result.pages_html == {1: "<p>upright</p>"}
+    assert result.page_rotations == {1: 0}
+    assert result.model_calls == [
+        {
+            "page": 1,
+            "attempt": 1,
+            "usage_status": "unavailable",
+            "error_type": "TimeoutError",
+        },
+        {
+            "page": 1,
+            "attempt": 2,
+            "usage_status": "complete",
+            "total_tokens": 2,
+        },
+    ]
+
+
+def test_scout_rotation_hint_transport_failure_retries_same_rotation(
+    tmp_path, monkeypatch,
+):
+    pdf = _make_pdf(tmp_path / "scan.pdf", pages=1)
+    seen_rotations = []
+
+    monkeypatch.setattr(
+        "ingest.pdf_sidecar._render_page_from_doc",
+        lambda _doc, page, rotation: f"{page}:{rotation}".encode(),
+    )
+
+    async def call(_page_no, png):
+        rotation = int(png.decode().split(":")[1])
+        seen_rotations.append(rotation)
+        if len(seen_rotations) == 1:
+            raise TimeoutError()
+        return "<p>upright</p>", {"total_tokens": 2}
+
+    result = asyncio.run(transcribe_pages(
+        pdf, [1], model=object(), _caller=call,
+        rotation_corrections={1: 90},
+    ))
+
+    assert seen_rotations == [90, 90]
+    assert result.pages_html == {1: "<p>upright</p>"}
+    assert result.page_rotations == {1: 90}
+
+
+def test_empty_hinted_transcription_retries_unrotated(tmp_path, monkeypatch):
+    pdf = _make_pdf(tmp_path / "scan.pdf", pages=1)
+    seen_rotations = []
+
+    monkeypatch.setattr(
+        "ingest.pdf_sidecar._render_page_from_doc",
+        lambda _doc, page, rotation: f"{page}:{rotation}".encode(),
+    )
+
+    async def call(_page_no, png):
+        rotation = int(png.decode().split(":")[1])
+        seen_rotations.append(rotation)
+        if rotation == 90:
+            return "   ", {"total_tokens": 2}
+        return "<p>upright</p>", {"total_tokens": 3}
+
+    result = asyncio.run(transcribe_pages(
+        pdf, [1], model=object(), _caller=call,
+        rotation_corrections={1: 90},
+    ))
+
+    assert seen_rotations == [90, 0]
+    assert result.pages_html == {1: "<p>upright</p>"}
+    assert result.page_rotations == {1: 0}
+    assert result.usage == {"total_tokens": 5}
+
+
+def test_empty_normal_transcription_retries_rotated(tmp_path, monkeypatch):
+    pdf = _make_pdf(tmp_path / "scan.pdf", pages=1)
+    seen_rotations = []
+
+    monkeypatch.setattr(
+        "ingest.pdf_sidecar._render_page_from_doc",
+        lambda _doc, page, rotation: f"{page}:{rotation}".encode(),
+    )
+
+    async def call(_page_no, png):
+        rotation = int(png.decode().split(":")[1])
+        seen_rotations.append(rotation)
+        if rotation == 0:
+            return "   ", {"total_tokens": 2}
+        return "<p>upright after retry</p>", {"total_tokens": 3}
+
+    result = asyncio.run(transcribe_pages(
+        pdf, [1], model=object(), _caller=call,
+    ))
+
+    assert seen_rotations == [0, 90]
+    assert result.pages_html == {1: "<p>upright after retry</p>"}
+    assert result.page_rotations == {1: 90}
+    assert result.usage == {"total_tokens": 5}
+    assert [(call["attempt"], call["total_tokens"]) for call in result.model_calls] == [
+        (1, 2),
+        (2, 3),
+    ]
 
 
 # ---------------------------------------------------------------- write
@@ -251,6 +459,16 @@ def test_write_records_provenance_meta(tmp_path):
     assert meta["model"] == "gpt-x"
     assert meta["pages"] == [1, 2]
     assert meta["usage"] == {"in": 1, "out": 1}
+
+
+def test_write_records_nonzero_page_rotation_corrections(tmp_path):
+    pdf = _make_pdf(tmp_path / "uploaded.pdf")
+    result = _result({1: "<p>x</p>", 2: "<p>y</p>"})
+    result.page_rotations = {1: 90, 2: 0}
+    write_pdf_sidecar(pdf, result, model_name="gpt-x")
+
+    meta = json.loads((tmp_path / SOURCE_META_NAME).read_text())
+    assert meta["rotation_corrections"] == {"1": 90}
 
 
 def test_write_refuses_a_partial_transcription(tmp_path):

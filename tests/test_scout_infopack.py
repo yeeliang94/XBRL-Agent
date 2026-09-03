@@ -74,9 +74,11 @@ class TestInfopackSerialisation:
         parsed = json.loads(raw)
         assert parsed["toc_page"] == 5
         assert "SOFP" in parsed["statements"]
+        assert "rotation_corrections" not in parsed
 
     def test_round_trip(self):
         original = self._make_infopack()
+        original.rotation_corrections = {43: 90, 44: 270}
         restored = Infopack.from_json(original.to_json())
         assert restored.toc_page == original.toc_page
         assert restored.page_offset == original.page_offset
@@ -86,6 +88,15 @@ class TestInfopackSerialisation:
             assert restored.statements[st].note_pages == original.statements[st].note_pages
             assert restored.statements[st].variant_suggestion == original.statements[st].variant_suggestion
             assert restored.statements[st].confidence == original.statements[st].confidence
+        assert restored.rotation_corrections == {43: 90, 44: 270}
+
+    def test_invalid_rotation_corrections_are_dropped(self):
+        raw = json.dumps({
+            "toc_page": 1,
+            "page_offset": 0,
+            "rotation_corrections": {"43": 90, "44": 0, "45": 91, "bad": 270},
+        })
+        assert Infopack.from_json(raw).rotation_corrections == {43: 90}
 
 
 class TestVariantSuggestionClamp:

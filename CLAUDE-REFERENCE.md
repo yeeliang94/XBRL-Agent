@@ -628,7 +628,15 @@ All three additions degrade gracefully: empty `face_line_refs` /
 Scanned-PDF sidecar transcription may use inventory ranges to choose which
 pages to inspect, but those ranges never prove note completeness. If any
 requested page fails, no partial sidecar is published; notes agents fall back
-to direct PDF vision. Pinned by `tests/test_pdf_sidecar.py` and
+to direct PDF vision. The same Scout vision inventory emits sparse page
+rotation corrections only when the primary financial content clearly needs a
+90/180/270-degree clockwise turn; upright and uncertain pages are omitted and
+there is no confidence field. The sidecar retries transport/provider failures
+at the same orientation. A genuinely blank render is retained as an empty page
+without a provider call so it cannot invalidate an otherwise complete sidecar.
+Only an empty transcription from an ink-bearing page changes orientation: a
+hinted page falls back to unrotated and an unhinted page tries 90 degrees.
+Pinned by `tests/test_notes_discoverer_vision.py`, `tests/test_pdf_sidecar.py`, and
 `tests/test_pdf_sidecar_wiring.py`.
 ### 14. Notes feature — five supplementary templates (parallel with face)
 
