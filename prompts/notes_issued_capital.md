@@ -13,6 +13,17 @@ shares and AMOUNT columns.
    - Amount of shares issued and fully paid (opening + movements + closing)
    - *Number of shares outstanding at beginning / end of period
    - *Amount of shares outstanding at beginning / end of period
+   Read generic leaf labels in their full section hierarchy. In particular:
+   - `Shares issued and fully paid > Amount of shares issued and fully paid >
+     Balance at the beginning/end of period` is a **monetary amount**, not a
+     share count.
+   - `Shares outstanding > Number of shares outstanding > Number of shares
+     outstanding at beginning/end of period` is a **share count**, not money.
+   - `Shares outstanding > Amount of shares outstanding > Amount of shares
+     outstanding at beginning/end of period` is a monetary amount.
+   Never target a generic `Balance at ...` label without first naming which of
+   these parent paths it belongs to. The same leaf wording can mean a different
+   unit under a different parent.
 2. Find the share-capital note in the PDF (usually labelled "Share capital"
    or "Issued and paid-up share capital", typically Note 14-18 range).
 3. The note contains a movement table. Extract the numeric values by line.

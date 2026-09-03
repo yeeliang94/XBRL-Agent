@@ -37,6 +37,14 @@ def test_issued_capital_prompt_requires_table_reproduction() -> None:
     assert "addition, not a replacement" in body
 
 
+def test_issued_capital_prompt_disambiguates_repeated_balance_labels() -> None:
+    body = _flat("notes_issued_capital.md")
+    assert "shares issued and fully paid > amount of shares issued and fully paid" in body
+    assert "shares outstanding > number of shares outstanding" in body
+    assert "monetary amount" in body
+    assert "share count" in body
+
+
 def test_structured_prompts_carry_no_standard_literal() -> None:
     # Mirrors test_notes_prompts_no_mfrs_leak — the table-reproduction
     # wording must not reintroduce an "MFRS" literal that leaks into an
@@ -52,3 +60,9 @@ def test_related_party_prompt_requires_table_reproduction() -> None:
     # The cross-standard text-block row label.
     assert "disclosure of transactions between related parties" in body
     assert "addition, not a replacement" in body
+
+
+def test_related_party_prompt_forbids_subtraction_only_residuals() -> None:
+    body = _flat("notes_related_party.md")
+    assert "subtraction-only residual" in body
+    assert "leave the row blank" in body

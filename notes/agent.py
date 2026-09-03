@@ -1007,6 +1007,80 @@ def _load_template_label_catalog(template_path: str, sheet_name: str) -> list[st
         wb.close()
 
 
+def _render_notes_template_hierarchy(
+    fields: list[TemplateField],
+    sheet_name: str,
+    allowed_rows: Optional[set[int]],
+) -> str:
+    """Render writable note rows with their enclosing semantic sections.
+
+    Notes templates flatten every label into column A and several numeric
+    schedules reuse generic leaves such as ``Balance at the end of period``.
+    Returning only writable leaves removes the unit-bearing headers that make
+    those labels meaningful. This renderer keeps the live template order and
+    carries the common root -> topic -> Number/Amount axis into each target.
+    It is navigation metadata only; the canonical writable-row guard remains
+    authoritative.
+    """
+    root = ""
+    topic = ""
+    axis = ""
+    row_paths: list[tuple[int, list[str]]] = []
+    for template_field in fields:
+        if (
+            template_field.sheet != sheet_name
+            or template_field.col != 1
+            or not template_field.value
+        ):
+            continue
+        label = str(template_field.value).strip()
+        if template_field.is_abstract:
+            norm = label.lstrip("*").strip().lower()
+            if not root:
+                root = label
+                topic = ""
+                axis = ""
+            elif norm.startswith(("number of ", "amount of ")):
+                axis = label
+            else:
+                topic = label
+                axis = ""
+            continue
+        if allowed_rows is not None and template_field.row not in allowed_rows:
+            continue
+        path: list[str] = []
+        for part in (root, topic, axis, label):
+            if part and (not path or path[-1].casefold() != part.casefold()):
+                path.append(part)
+        row_paths.append((template_field.row, path))
+
+    # Emit sheet-constant semantic ancestors once. Keep at least the writable
+    # leaf on each row so a one-row sheet never loses its actual target label.
+    common_len = min(
+        (max(0, len(path) - 1) for _, path in row_paths),
+        default=0,
+    )
+    if row_paths:
+        for index in range(common_len):
+            expected = row_paths[0][1][index].casefold()
+            if any(
+                path[index].casefold() != expected
+                for _, path in row_paths[1:]
+            ):
+                common_len = index
+                break
+
+    lines: list[str] = []
+    if common_len:
+        lines.append(
+            "  Common section path: "
+            + " > ".join(row_paths[0][1][:common_len])
+        )
+    for row, path in row_paths:
+        lines.append(f"  row {row:>3}: " + " > ".join(path[common_len:]))
+    return "\n".join(lines)
+
+
 def _render_single_page(
     pdf_path: str,
     page_num: int,
@@ -2471,22 +2545,22 @@ def create_notes_agent(
             ctx.deps.template_fields = await asyncio.to_thread(
                 _read_template_impl, ctx.deps.template_path,
             )
-        # Return a compact label list keyed by row — the agent only cares
-        # about the col-A labels it may target.
-        lines = []
+        # Return writable labels with the section path that determines their
+        # unit/meaning. A flat leaf list made repeated labels such as
+        # ``Balance at the end of period`` ambiguous on issued capital.
         from concept_model.filing_targets import writable_rows
         allowed_rows = writable_rows(
             ctx.deps.template_path, ctx.deps.sheet_name
         )
-        for f in ctx.deps.template_fields:
-            if f.sheet != ctx.deps.sheet_name:
-                continue
-            if f.col != 1 or not f.value:
-                continue
-            if allowed_rows is not None and f.row not in allowed_rows:
-                continue
-            lines.append(f"  row {f.row:>3}: {f.value}")
-        return f"Sheet: {ctx.deps.sheet_name}\nLabels (col A):\n" + "\n".join(lines)
+        rows = _render_notes_template_hierarchy(
+            ctx.deps.template_fields,
+            ctx.deps.sheet_name,
+            set(allowed_rows) if allowed_rows is not None else None,
+        )
+        return (
+            f"Sheet: {ctx.deps.sheet_name}\n"
+            "Writable labels with section paths (col A):\n" + rows
+        )
 
     # Word-source formatting channel (PLAN-word-input.md Phase 2). Registered
     # ONLY when a source.html sidecar exists for this run — PDF-only runs never

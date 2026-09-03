@@ -465,9 +465,11 @@ class _FakeAgent:
         self._outputs = list(outputs)
         self._on_call = on_call
         self.calls = 0
+        self.prompts = []
 
     async def run(self, prompt, **_kwargs):
         self.calls += 1
+        self.prompts.append(prompt)
         if self._on_call:
             self._on_call(self.calls)
         return _FakeResult(self._outputs.pop(0))
@@ -534,6 +536,35 @@ async def test_formatter_writes_unedited_rows(monkeypatch, formatter_db):
 
 
 @pytest.mark.asyncio
+async def test_formatter_attaches_known_pages_to_its_first_model_request(
+    monkeypatch, formatter_db,
+):
+    from pydantic_ai.messages import BinaryContent
+
+    import notes.formatting_agent as fa
+
+    async def fake_preload(_pdf_path, pages):
+        assert pages == [3]
+        return [
+            "=== Page 3 ===",
+            BinaryContent(data=b"png", media_type="image/png"),
+        ], {3}
+
+    monkeypatch.setattr(fa, "_preload_source_pages", fake_preload)
+    fake = _FakeAgent([_GOOD_PATCH, _GOOD_PATCH])
+
+    result = await _run_formatter_with_fake_agent(
+        monkeypatch, formatter_db, fake,
+    )
+
+    assert result["ok"] is True
+    first_request = fake.prompts[0]
+    assert isinstance(first_request, list)
+    assert "images [3] are attached below" in first_request[0]
+    assert any(isinstance(part, BinaryContent) for part in first_request[1:])
+
+
+@pytest.mark.asyncio
 async def test_pdf_auto_format_scope_refuses_source_styled_cells(
     monkeypatch, formatter_db,
 ):
@@ -593,6 +624,37 @@ async def test_formatter_reports_original_error_when_retry_also_fails(
     assert result["error_type"] == "validation_failed"
     assert "invalid JSON" in result["error"]
     assert fake.calls == 2  # exactly one retry — no loop
+
+
+@pytest.mark.asyncio
+async def test_formatter_noop_repair_preserves_original_validation_failure(
+    monkeypatch, formatter_db,
+):
+    """An empty repair after an invalid target is a safe content no-op, but
+    it is not evidence that formatting was unnecessary or successful.
+    """
+    invalid = json.loads(_GOOD_PATCH)
+    invalid["cells"][0]["operations"][0]["target"] = {
+        "table": 7, "range": "all",
+    }
+    no_op = {
+        "sheet": _SHEET,
+        "cells": [],
+        "format_summary": "No safe existing target could be selected.",
+        "confidence": 0.9,
+    }
+    fake = _FakeAgent([json.dumps(invalid), json.dumps(no_op)])
+
+    result = await _run_formatter_with_fake_agent(
+        monkeypatch, formatter_db, fake,
+    )
+
+    assert result["ok"] is False
+    assert "degraded" not in result
+    assert result["error_type"] == "validation_failed"
+    assert "table 7 does not exist" in result["error"]
+    assert result["changed_rows"] == 0
+    assert fake.calls == 2
 
 
 def test_output_rejected_prompt_carries_error_and_response():

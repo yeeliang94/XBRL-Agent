@@ -190,12 +190,19 @@ class ExtractionDeps:
         # Item 23 (face coverage receipts): the scout's face_line_refs for this
         # statement (advisory expectation list). Populated from page_hints in
         # the factory. `face_coverage_receipt` holds the agent's submitted
-        # receipt (None until submit_face_coverage runs); the coordinator turns
-        # any unaccounted ref into an AgentResult.warnings line at finalize.
-        # Coverage NEVER blocks the save (gotcha #13/#17).
+        # receipt (None until submit_face_coverage runs). A written receipt
+        # entry is accepted only when its target label actually landed through
+        # write_facts; otherwise balanced arithmetic could hide a source-line
+        # omission. Scout hints remain advisory because the agent can record a
+        # grounded skip instead of inventing a value.
         self.face_line_refs: list[dict] = []
         self.face_coverage_submitted: bool = False
         self.face_coverage_receipt = None
+        self.face_written_targets: set[str] = set()
+        self.face_workbook_only_targets: set[str] = set()
+        self.face_coverage_errors: list[str] = []
+        self.face_coverage_warnings: list[str] = []
+        self.seen_coverage_refusal: bool = False
 
 
 def _render_single_page(pdf_path: str, page_num: int, dpi: int = 200) -> tuple[int, bytes]:
@@ -302,8 +309,36 @@ def _project_facts_if_canonical(deps: "ExtractionDeps", result) -> Optional[str]
             parts.append(f"{len(proj.skipped)} cell(s) unmapped to a concept")
         if proj.rejected:
             parts.append(f"{len(proj.rejected)} rejected by the facts API")
-        return "; ".join(parts) + "."
-    return None
+        warning = "; ".join(parts) + "."
+    else:
+        warning = None
+
+    # Reconcile successful workbook writes into two honest coverage outcomes:
+    # canonical facts and workbook-only cells that had no concept mapping.
+    # Keep both the request label and an exact-cell spelling so label-addressed
+    # and coordinate-addressed statements can use the same contract.
+    if deps.face_line_refs:
+        from openpyxl.utils import get_column_letter
+
+        for write in result.resolved_writes:
+            cell = (
+                str(write.get("sheet") or ""),
+                int(write.get("row")),
+                int(write.get("col")),
+            )
+            if cell in proj.projected_cells:
+                targets = deps.face_written_targets
+            elif cell in proj.skipped_cells:
+                targets = deps.face_workbook_only_targets
+            else:
+                continue
+            label = str(write.get("field_label") or "").strip()
+            if label:
+                targets.add(label)
+            targets.add(
+                f"{cell[0]}!{get_column_letter(cell[2])}{cell[1]}"
+            )
+    return warning
 
 
 def _check_save_gate(
@@ -314,11 +349,11 @@ def _check_save_gate(
     """Return an error string if save_result must be blocked; None if OK.
 
     The gate blocks when (a) verify_totals has never run on the current
-    workbook, or (b) the last run flagged an imbalance or an unfilled
-    mandatory row. When the agent is within `_FORCE_SAVE_ITER_MARGIN`
-    iterations of `MAX_AGENT_ITERATIONS` the gate opens as a last-resort
-    escape hatch — a log line records the forced save so the run's
-    audit trail captures it.
+    workbook, (b) the last run flagged an imbalance or an unfilled mandatory
+    row, or (c) Scout-supplied face lines lack an accepted coverage receipt.
+    When the agent is within `_FORCE_SAVE_ITER_MARGIN` iterations of
+    `MAX_AGENT_ITERATIONS` the gate opens as a last-resort escape hatch — a log
+    line records the forced save so the run's audit trail captures it.
 
     Honest-completion path (2026-05-29): a verify-flagged gap is NOT always
     an extraction error — the source statement may genuinely not reconcile,
@@ -364,20 +399,33 @@ def _check_save_gate(
     # block when False.
     balance_bad = result.is_balanced is False
     mandatory_bad = bool(result.mandatory_unfilled)
-    if not fill_errors and not balance_bad and not mandatory_bad:
+    coverage_bad = bool(deps.face_line_refs and not deps.face_coverage_submitted)
+    coverage_details = list(getattr(deps, "face_coverage_errors", []) or [])
+    if coverage_bad and not coverage_details:
+        coverage_details = [
+            "a valid face coverage receipt has not been submitted for the "
+            "current writes"
+        ]
+    if (
+        not fill_errors
+        and not balance_bad
+        and not mandatory_bad
+        and not coverage_bad
+    ):
         return None
 
-    # A force-save can preserve a source imbalance, but it must never silently
-    # erase deterministic writer rejections. Those require the explicit,
-    # audited acknowledgement path below.
+    # A force-save can preserve a source imbalance or unresolved coverage, but
+    # it must never silently erase deterministic writer rejections. Those
+    # require the explicit, audited acknowledgement path below.
     if forced_allowed and not fill_errors:
         logger.warning(
-            "%s: save_result forced through despite verify gaps "
-            "(iter %d, balanced=%s, unfilled=%s)",
+            "%s: save_result forced through despite verify/coverage gaps "
+            "(iter %d, balanced=%s, unfilled=%s, coverage_unresolved=%s)",
             deps.statement_type.value,
             deps.turn_counter,
             result.is_balanced,
             result.mandatory_unfilled,
+            coverage_bad,
         )
         return None
 
@@ -397,6 +445,7 @@ def _check_save_gate(
         missing_prior_refusal = (
             (bool(fill_errors) and not deps.seen_fill_error_refusal)
             or (verify_gap and not deps.seen_unresolved_refusal)
+            or (coverage_bad and not deps.seen_coverage_refusal)
         )
         if missing_prior_refusal:
             # First contact with the gap — refuse once (which sets the flag
@@ -422,8 +471,14 @@ def _check_save_gate(
                     "unfilled mandatory rows: "
                     + json.dumps(result.mandatory_unfilled)
                 )
+            if coverage_bad:
+                summary_bits.append(
+                    "unresolved source coverage: " + "; ".join(coverage_details)
+                )
             deps.completed_with_flag = True
-            deps.unresolved_summary = "; ".join(summary_bits) or "verify gap"
+            deps.unresolved_summary = (
+                "; ".join(summary_bits) or "verify or source-coverage gap"
+            )
             deps.unresolved_reason = reason
             # The rejection remains durable in unresolved_summary/reason, but
             # it is no longer an active poison flag after an explicit audited
@@ -450,13 +505,15 @@ def _check_save_gate(
         deps.seen_fill_error_refusal = True
     if balance_bad or mandatory_bad:
         deps.seen_unresolved_refusal = True
+    if coverage_bad:
+        deps.seen_coverage_refusal = True
 
     # Compose a targeted error message so the agent knows exactly what to fix.
     # Combined "Action required:" block (peer-review S7) — two separate
     # blocks could leave the agent unsure which issue to address first.
     parts: list[str] = [
-        "save_result refused: unresolved write and/or verify_totals issues "
-        "must be resolved before save."
+        "save_result refused: unresolved write, verify_totals, and/or source-"
+        "coverage issues must be resolved before save."
     ]
     issues: list[str] = []
     if fill_errors:
@@ -468,21 +525,24 @@ def _check_save_gate(
             f"- Unfilled mandatory rows: "
             f"{json.dumps(result.mandatory_unfilled)}"
         )
+    if coverage_bad:
+        issues.append("- Source coverage: " + "; ".join(coverage_details))
     parts.extend(issues)
     parts.append(
-        "Correct any valid target with write_facts, re-run verify_totals, "
-        "then retry save_result. If a rejected request is an ambiguous or "
-        "protected row that should not be written, omit it and use the "
-        "audited acknowledgement path below."
+        "Correct any valid target with write_facts, re-run verify_totals, and "
+        "resubmit face coverage before retrying save_result. If a rejected "
+        "request is an ambiguous or protected row that should not be written, "
+        "omit it and use the audited acknowledgement path below."
     )
     # Tell the agent about the honest-completion escape hatch (gotcha #17):
     # if the gap is genuinely in the source, or the only row that would close
     # it is a protected formula cell, do NOT plug a catch-all — instead
     # re-call save_result with acknowledge_unresolved=true to finalise flagged.
     parts.append(
-        "If you have re-examined the PDF and the discrepancy is genuinely in "
-        "the source (or the only row that would close it is a protected "
-        "formula cell), do NOT plug a catch-all row. Instead call save_result "
+        "If you have re-examined the PDF and the discrepancy or coverage gap "
+        "is genuinely in the source (or the only row that would close it is a "
+        "protected formula cell), do NOT plug a catch-all row. Instead call "
+        "save_result "
         "again with acknowledge_unresolved=true AND unresolved_reason=\"...\" "
         "(explain which note you re-read and why it cannot reconcile) to "
         "finalise with the gap flagged for review."
@@ -585,7 +645,8 @@ def _format_verify_result(result) -> str:
     """
     lines: list[str] = []
     lines.append(f"Balanced: {result.is_balanced}")
-    lines.append(f"Matches PDF: {result.matches_pdf}")
+    pdf_match = "Not assessed" if result.matches_pdf is None else result.matches_pdf
+    lines.append(f"Matches PDF: {pdf_match}")
     # Phase 4 (token-cost): the full computed_totals dump is only useful when
     # the agent has to debug an imbalance. On the balanced path the agent acts
     # on nothing in it, so omit it to stop re-billing the dump every turn.
@@ -645,8 +706,10 @@ def _face_coverage_pre_save_nudge(deps: "ExtractionDeps") -> str:
         return ""
     return (
         "Before save_result, call submit_face_coverage once to record every "
-        "scout-observed face line as written or skipped. This is an advisory "
-        "audit receipt and does not change the verification result."
+        "scout-observed face line as written or skipped. A written entry must "
+        "name a field_label that actually landed; a source line that should "
+        "not be written may be skipped with a grounded reason. This source-"
+        "coverage receipt is independent of arithmetic verification."
     )
 
 
@@ -1263,6 +1326,15 @@ def create_extraction_agent(
                     exc_info=True,
                 )
             ctx.deps.filled_path = output_path
+            if ctx.deps.face_line_refs:
+                # A receipt describes the current fact set. Any later write
+                # requires a fresh reconciliation so an earlier incomplete
+                # receipt cannot remain green by accident.
+                ctx.deps.face_coverage_submitted = False
+                ctx.deps.face_coverage_errors = [
+                    "face coverage must be resubmitted after the latest write"
+                ]
+                ctx.deps.face_coverage_warnings = []
             # Phase 1.3: any write invalidates the previous verification.
             # Forces the agent to call verify_totals again before save.
             ctx.deps.last_verify_result = None
@@ -1352,11 +1424,12 @@ def create_extraction_agent(
         Set ``acknowledge_unresolved=True`` (with a non-empty
         ``unresolved_reason``) ONLY when you have re-examined the PDF and the
         verify gap is genuinely in the source, or when a rejected write request
-        targeted an ambiguous/protected row that must be omitted. This
-        finalises the statement WITH the gap flagged for human review (gotcha
-        #17) instead of plugging a catch-all row. It is honoured only after the
-        gate has already refused the same gap once. Never use it to skip
-        legitimate corrections.
+        targeted an ambiguous/protected row that must be omitted, or when a
+        source-coverage receipt cannot be resolved honestly. This finalises the
+        statement WITH the gap flagged for human review (gotcha #17) instead of
+        plugging a catch-all row or falsifying a coverage receipt. It is
+        honoured only after the gate has already refused the same gap once.
+        Never use it to skip legitimate corrections.
         """
         ctx.deps.save_attempts += 1
         gate_error = _check_save_gate(
@@ -1396,15 +1469,6 @@ def create_extraction_agent(
                 f"for human review. Cost report saved to {report_path}."
             )
         msg = f"Results saved to {json_path}. Cost report saved to {report_path}."
-        # Item 23: coverage is advisory. Deterministic completion now stops the
-        # loop as soon as this save succeeds, so do not issue an impossible
-        # post-save instruction to call another tool. Record the missing
-        # receipt plainly; the coordinator emits the detailed coverage warning.
-        if ctx.deps.face_line_refs and not ctx.deps.face_coverage_submitted:
-            msg += (
-                "\nFace coverage receipt was not submitted; the missing audit "
-                "receipt will be recorded as a coverage warning."
-            )
         return msg
 
     # Item 23: register the coverage tool ONLY when the scout actually gave us
@@ -1425,18 +1489,48 @@ def create_extraction_agent(
 
             Pass one typed entry per scout-flagged line.
             ``ref`` is the line label the scout reported. This is an AUDIT
-            receipt — it never changes your saved values and never forces a
-            write. If a line genuinely isn't on the face statement, mark it
-            'skipped' with a reason; never plug a row to satisfy coverage.
+            receipt — it never changes values. A ``written`` entry must set
+            ``target`` to the field_label used in a successful ``write_facts``
+            write (you may omit target when it is identical to ref). A write
+            that landed only in the workbook because no canonical concept
+            mapped is accepted with a human-review warning. For coordinate-
+            addressed writes, use the exact cell returned by the template,
+            e.g. ``SOCE!B12``. If a line genuinely should not be written, mark
+            it ``skipped`` with a reason; never plug a row to satisfy coverage.
             """
             receipt, parse_errors = parse_face_coverage_entries(entries)
-            errors = parse_errors + receipt.validate(ctx.deps.face_line_refs)
+            errors = parse_errors + receipt.validate(
+                ctx.deps.face_line_refs,
+                written_targets=ctx.deps.face_written_targets,
+                workbook_only_targets=ctx.deps.face_workbook_only_targets,
+            )
+            warnings = receipt.workbook_only_warnings(
+                written_targets=ctx.deps.face_written_targets,
+                workbook_only_targets=ctx.deps.face_workbook_only_targets,
+            )
             ctx.deps.face_coverage_receipt = receipt
-            ctx.deps.face_coverage_submitted = True
             unaccounted = unaccounted_labels(ctx.deps.face_line_refs, receipt)
-            parts = ["Coverage receipt recorded."]
+            coverage_errors = list(errors)
+            coverage_errors.extend(
+                f"source line {label!r} is still unaccounted"
+                for label in unaccounted
+            )
+            ctx.deps.face_coverage_errors = coverage_errors
+            ctx.deps.face_coverage_warnings = warnings
+            ctx.deps.face_coverage_submitted = not coverage_errors
+            parts = [
+                (
+                    "Coverage receipt accepted with warning."
+                    if warnings
+                    else "Coverage receipt accepted."
+                )
+                if ctx.deps.face_coverage_submitted
+                else "Coverage receipt is incomplete and was not accepted."
+            ]
             if errors:
                 parts.append("Issues: " + "; ".join(errors))
+            if warnings:
+                parts.append("Warnings: " + "; ".join(warnings))
             if unaccounted:
                 # Echo the BARE labels — the exact spellings the matcher
                 # accepts. The old reply echoed the display sentence with

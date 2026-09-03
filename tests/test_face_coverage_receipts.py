@@ -1,8 +1,9 @@
 """PLAN-orchestration-hardening item 23 — face-agent coverage receipts.
 
 Pins: the receipt model + warning derivation, conditional tool registration
-(only when scout supplied face_line_refs), and that coverage is advisory —
-a partial receipt yields warnings, never a save block.
+(only when scout supplied face_line_refs), and source-completeness gating.
+Scout hints remain advisory facts because an inspected line can be skipped
+with a reason; a ``written`` claim must reconcile to a successful target.
 """
 from __future__ import annotations
 
@@ -65,6 +66,71 @@ def test_validate_flags_unknown_ref():
     assert errors == []
     errors = receipt.validate(_REFS)
     assert len(errors) == 1 and "not one of the scout-observed" in errors[0]
+
+
+def test_written_receipt_must_point_to_a_successful_fact_target():
+    """A self-reported ``written`` action is not coverage unless the target
+    corresponds to a write that actually landed in the canonical path.
+    """
+    receipt, parse_errors = parse_face_coverage_entries([
+        {
+            "ref": "Payment of lease liabilities",
+            "action": "written",
+            "target": "Payment of lease liabilities",
+        },
+    ])
+    assert parse_errors == []
+
+    errors = receipt.validate(
+        [{"label": "Payment of lease liabilities", "section": "financing"}],
+        written_targets={"Interest paid"},
+    )
+
+    assert any(
+        "no workbook write or canonical fact" in error.lower()
+        for error in errors
+    )
+    assert any("'Interest paid'" in error for error in errors)
+
+
+def test_written_receipt_accepts_a_persisted_fact_target():
+    receipt, parse_errors = parse_face_coverage_entries([{
+        "ref": "Payment of lease liabilities",
+        "action": "written",
+        "target": "Cash used to repay lease liabilities",
+    }])
+    assert parse_errors == []
+
+    errors = receipt.validate(
+        [{"label": "Payment of lease liabilities", "section": "financing"}],
+        written_targets={"Cash used to repay lease liabilities"},
+    )
+
+    assert errors == []
+
+
+def test_written_receipt_accepts_workbook_only_target_with_warning():
+    receipt, parse_errors = parse_face_coverage_entries([{
+        "ref": "Statement date",
+        "action": "written",
+        "target": "SOFP-CuNonCu!D1",
+    }])
+    assert parse_errors == []
+
+    errors = receipt.validate(
+        [{"label": "Statement date", "section": "heading"}],
+        written_targets={"Trade receivables"},
+        workbook_only_targets={"SOFP-CuNonCu!D1", "Statement date"},
+    )
+    warnings = receipt.workbook_only_warnings(
+        written_targets={"Trade receivables"},
+        workbook_only_targets={"SOFP-CuNonCu!D1", "Statement date"},
+    )
+
+    assert errors == []
+    assert len(warnings) == 1
+    assert "landed in the workbook" in warnings[0]
+    assert "did not map to a canonical concept" in warnings[0]
 
 
 def test_validate_label_match_is_normalised():

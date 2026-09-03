@@ -81,9 +81,13 @@ def test_projection_runs_when_canonical_deps_set(canonical_env, tmp_path):
     db_path, run_id, template_id, leaf = canonical_env
     deps = _deps(tmp_path, run_id=run_id, db_path=str(db_path), template_id=template_id)
     result = _fill(tmp_path, leaf, value=4321.0)
+    result.resolved_writes[0]["field_label"] = "Trade receivables"
+    deps.face_line_refs = [{"label": "Trade receivables"}]
 
     warning = _project_facts_if_canonical(deps, result)
     assert warning is None  # clean projection, no gaps
+    assert "Trade receivables" in deps.face_written_targets
+    assert f"SOFP-CuNonCu!B{leaf}" in deps.face_written_targets
 
     conn = sqlite3.connect(str(db_path))
     try:
@@ -217,9 +221,14 @@ def test_unmapped_cell_is_not_fatal(canonical_env, tmp_path):
     db_path, run_id, template_id, _leaf = canonical_env
     deps = _deps(tmp_path, run_id=run_id, db_path=str(db_path), template_id=template_id)
     result = _fill(tmp_path, 1, col=4, value=1.0)
+    result.resolved_writes[0]["field_label"] = "Statement date"
+    deps.face_line_refs = [{"label": "Statement date"}]
     warning = _project_facts_if_canonical(deps, result)
     assert warning is not None
     assert deps.projection_failed is False
+    assert "Statement date" in deps.face_workbook_only_targets
+    assert "SOFP-CuNonCu!D1" in deps.face_workbook_only_targets
+    assert "Statement date" not in deps.face_written_targets
 
 
 def test_projection_call_failure_is_fatal(canonical_env, tmp_path, monkeypatch):

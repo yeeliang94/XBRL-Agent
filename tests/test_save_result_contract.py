@@ -52,6 +52,11 @@ def test_extraction_deps_initialises_save_state_fields():
     assert deps.result_json_path is None
     assert deps.last_save_error is None
     assert deps.last_fill_errors == []
+    assert deps.face_written_targets == set()
+    assert deps.face_workbook_only_targets == set()
+    assert deps.face_coverage_errors == []
+    assert deps.face_coverage_warnings == []
+    assert deps.seen_coverage_refusal is False
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +158,109 @@ def test_save_result_refuses_unresolved_partial_fill_errors():
 
     assert gate_error is not None
     assert "unresolved write" in gate_error.lower()
+
+
+def test_clean_arithmetic_cannot_bypass_unresolved_source_coverage():
+    """A balanced workbook is still incomplete when a source line reported
+    as written has no corresponding persisted fact.
+    """
+    from extraction.agent import ExtractionDeps, _check_save_gate
+    from token_tracker import TokenReport
+    from tools.verifier import VerificationResult
+
+    deps = ExtractionDeps(
+        pdf_path="/tmp/x.pdf",
+        template_path="/tmp/t.xlsx",
+        model="test-model",
+        output_dir="/tmp",
+        token_report=TokenReport(model="test-model"),
+        statement_type=StatementType.SOCF,
+        variant="Indirect",
+    )
+    deps.last_verify_result = VerificationResult(
+        is_balanced=True, matches_pdf=None, mismatches=[], mandatory_unfilled=[],
+    )
+    deps.face_line_refs = [{
+        "label": "Payment of lease liabilities", "section": "financing",
+    }]
+    deps.face_coverage_errors = [
+        "written ref 'Payment of lease liabilities' has no persisted fact target"
+    ]
+
+    gate_error = _check_save_gate(deps)
+
+    assert gate_error is not None
+    assert "source coverage" in gate_error.lower()
+    assert "payment of lease liabilities" in gate_error.lower()
+
+
+def test_unresolved_source_coverage_can_be_acknowledged_after_refusal():
+    from extraction.agent import ExtractionDeps, _check_save_gate
+    from token_tracker import TokenReport
+    from tools.verifier import VerificationResult
+
+    deps = ExtractionDeps(
+        pdf_path="/tmp/x.pdf",
+        template_path="/tmp/t.xlsx",
+        model="test-model",
+        output_dir="/tmp",
+        token_report=TokenReport(model="test-model"),
+        statement_type=StatementType.SOCF,
+        variant="Indirect",
+    )
+    deps.last_verify_result = VerificationResult(
+        is_balanced=True, matches_pdf=None, mismatches=[], mandatory_unfilled=[],
+    )
+    deps.face_line_refs = [{"label": "Payment of lease liabilities"}]
+    deps.face_coverage_errors = [
+        "written ref 'Payment of lease liabilities' has no successful target"
+    ]
+
+    first_refusal = _check_save_gate(deps)
+    assert first_refusal is not None
+    assert deps.seen_coverage_refusal is True
+
+    acknowledged = _check_save_gate(
+        deps,
+        acknowledge_unresolved=True,
+        acknowledge_reason=(
+            "Re-read the cash flow note; the source line has no safe canonical "
+            "target and must remain for human review."
+        ),
+    )
+
+    assert acknowledged is None
+    assert deps.completed_with_flag is True
+    assert "unresolved source coverage" in (deps.unresolved_summary or "")
+
+
+def test_near_iteration_cap_force_save_releases_unresolved_source_coverage():
+    from agent_tracing import MAX_AGENT_ITERATIONS
+    from extraction.agent import (
+        ExtractionDeps,
+        _FORCE_SAVE_ITER_MARGIN,
+        _check_save_gate,
+    )
+    from token_tracker import TokenReport
+    from tools.verifier import VerificationResult
+
+    deps = ExtractionDeps(
+        pdf_path="/tmp/x.pdf",
+        template_path="/tmp/t.xlsx",
+        model="test-model",
+        output_dir="/tmp",
+        token_report=TokenReport(model="test-model"),
+        statement_type=StatementType.SOCF,
+        variant="Indirect",
+    )
+    deps.last_verify_result = VerificationResult(
+        is_balanced=True, matches_pdf=None, mismatches=[], mandatory_unfilled=[],
+    )
+    deps.face_line_refs = [{"label": "Payment of lease liabilities"}]
+    deps.face_coverage_errors = ["coverage receipt could not be reconciled"]
+    deps.turn_counter = MAX_AGENT_ITERATIONS - _FORCE_SAVE_ITER_MARGIN
+
+    assert _check_save_gate(deps) is None
 
 
 def test_unresolved_acknowledgement_requires_verification_first():

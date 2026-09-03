@@ -112,6 +112,22 @@ def test_verify_totals_clean_pass_is_not_an_action():
     assert "Status:" in rendered
 
 
+def test_unassessed_pdf_match_is_not_rendered_as_a_success_value():
+    from extraction.agent import _format_verify_result
+
+    result = VerificationResult(
+        is_balanced=True,
+        matches_pdf=None,
+        mismatches=[],
+        mandatory_unfilled=[],
+    )
+
+    rendered = _format_verify_result(result)
+
+    assert "Matches PDF: Not assessed" in rendered
+    assert "Matches PDF: None" not in rendered
+
+
 # ---------------------------------------------------------------------------
 # Phase 1.3: save_result gating
 # ---------------------------------------------------------------------------

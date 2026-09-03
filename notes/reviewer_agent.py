@@ -890,12 +890,29 @@ def _build_context(
         n for n in inventory_coverage_gaps(inventory_note_nums or [], entries)
         if n not in resolved_notes
     ]
+    # The detector and the positive-form checklist must consume the same
+    # grounded sub-note verdicts.  Previously only the checklist did, so a
+    # reviewer could verify every missing sub-ref while ``verify_findings``
+    # kept the detector-backed ("subnote_gap", note_num) finding open forever.
+    # A ``missing`` verdict deliberately remains open; only ``verified`` can
+    # settle a detector omission without adding new provenance.
+    subnote_gaps = []
+    for gap in detect_subnote_coverage_gaps(inventory_subnotes or {}, entries):
+        unresolved_refs = [
+            ref for ref in gap.get("missing_subnote_refs") or []
+            if str(((subnote_verdicts or {}).get(
+                (int(gap["note_num"]), _subnote_key(ref)),
+                {},
+            ) or {}).get("verdict", "")).strip().lower() != SUBNOTE_VERIFIED
+        ]
+        if unresolved_refs:
+            subnote_gaps.append({**gap, "missing_subnote_refs": unresolved_refs})
     return {
         "duplicates": detect_cross_sheet_duplicates_by_ref(entries),
         "overlap_candidates": detect_cross_sheet_overlap_candidates(entries),
         "coverage_gaps": coverage_gaps,
         "row_collisions": detect_same_sheet_row_collisions(entries),
-        "subnote_gaps": detect_subnote_coverage_gaps(inventory_subnotes or {}, entries),
+        "subnote_gaps": subnote_gaps,
         "topline_splits": detect_topline_splits(entries),
         "title_issues": detect_title_format_issues(cells),
         "coverage_checklist": checklist,

@@ -265,6 +265,36 @@ def test_verify_subnote_verified_and_missing(db_path):
     assert _row(cl, 9).is_unresolved() is True
 
 
+def test_verified_subnotes_close_detector_finding(db_path):
+    """Grounded verdicts must settle the detector-backed finding as well as
+    the positive-form checklist row.
+
+    Otherwise ``verify_findings`` reports the original sub-note gap forever
+    even after every missing reference was inspected and marked verified.
+    """
+    run_id = _seed_run(db_path)
+    _seed_inv(db_path, run_id, 9, "Investment properties", subs=["(a)", "(b)"])
+    _seed_prov(db_path, run_id, 48, ["9", "(a)"])
+    model = _scripted([
+        [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
+        [ToolCallPart(tool_name="verify_subnotes", args={"verifications": [{
+            "note_num": 9,
+            "subnote_refs": ["(b)"],
+            "verdict": "verified",
+            "reason": "folded into the placed disclosure",
+            "source_pages": [19],
+        }]})],
+    ])
+
+    agent, deps, original = _agent(db_path, run_id, model)
+    assert ("subnote_gap", 9) in ra.finding_keys(original)
+
+    agent.run_sync("go", deps=deps)
+    current = ra.recompute_notes_findings(deps)
+
+    assert ("subnote_gap", 9) not in ra.finding_keys(current)
+
+
 def test_author_then_clear_drops_reviewer_added_marker(db_path):
     """Authoring a missing note then clearing the same cell must not leave a
     stale reviewer-added marker on the (now-missing) coverage row (code-review
