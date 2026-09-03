@@ -15,7 +15,29 @@ function finishSentence(value: string): string {
   return `${text}.`;
 }
 
+function plainReasoning(value: string): string {
+  const withoutBold = value.replace(
+    /\*\*([^*\n]+?)\*\*/g,
+    (match, content: string, offset: number) => {
+      const lineStart = value.lastIndexOf("\n", offset - 1) + 1;
+      const startsLine = value.slice(lineStart, offset).trim() === "";
+      const matchEnd = offset + match.length;
+      // Consecutive bold fragments are streamed headings; split them after
+      // removing Markdown so they do not collapse into one sentence.
+      const touchesBoldRun = value.slice(Math.max(0, offset - 2), offset) === "**"
+        || value.startsWith("**", matchEnd);
+      return `${content}${startsLine || touchesBoldRun ? "\n" : ""}`;
+    },
+  );
+
+  return withoutBold
+    .replace(/\*{2,}/g, "")
+    .replace(/(^|[^\w*])\*(\S(?:[^*\n]*?\S)?)\*(?=$|[^\w*])/g, "$1$2")
+    .replace(/(^|\n)\s*\*\s+/g, "$1");
+}
+
 function splitReasoning(value: string): string[] {
+  value = plainReasoning(value);
   const sentences: string[] = [];
   let start = 0;
   let index = 0;

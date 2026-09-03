@@ -156,8 +156,10 @@ export function argsPreview(toolName: string, args: Record<string, unknown>): st
     const queries = args.queries as string[] | undefined;
     if (!Array.isArray(queries) || queries.length === 0) return "";
     const MAX = 48;
-    const joined = queries.join(", ");
-    return joined.length > MAX ? `${joined.slice(0, MAX)}...` : joined;
+    const visible = queries.slice(0, 3).join(", ");
+    const remaining = queries.length - 3;
+    const preview = remaining > 0 ? `${visible}, +${remaining} more` : visible;
+    return preview.length > MAX ? `${preview.slice(0, MAX)}...` : preview;
   }
 
   if (toolName === "read_template") {
