@@ -77,6 +77,55 @@ describe("buildActivitySentences", () => {
     ]);
   });
 
+  test("renders markdown-formatted reasoning as separate plain-text updates", () => {
+    const reasoning: ReasoningBlock[] = [{
+      thinking_id: "thought-1",
+      content: "**Reviewing PPE amounts****Clarifying PPE mapping**",
+      startedAt: 1000,
+      endedAt: 1200,
+      duration_ms: 200,
+      isComplete: true,
+    }];
+
+    const sentences = buildActivitySentences([], [], reasoning);
+
+    expect(sentences.map((item) => item.text)).toEqual([
+      "Clarifying PPE mapping",
+      "Reviewing PPE amounts",
+    ]);
+    expect(sentences.every((item) => !item.text.includes("*"))).toBe(true);
+  });
+
+  test("unwraps inline bold without splitting the surrounding sentence", () => {
+    const reasoning: ReasoningBlock[] = [{
+      thinking_id: "thought-1",
+      content: "Reviewing **PPE amounts** against note 4.",
+      startedAt: 1000,
+      endedAt: 1200,
+      duration_ms: 200,
+      isComplete: true,
+    }];
+
+    expect(buildActivitySentences([], [], reasoning).map((item) => item.text)).toEqual([
+      "Reviewing PPE amounts against note 4.",
+    ]);
+  });
+
+  test("unwraps inline italics without exposing markdown asterisks", () => {
+    const reasoning: ReasoningBlock[] = [{
+      thinking_id: "thought-1",
+      content: "Checking *depreciation* against the policy.",
+      startedAt: 1000,
+      endedAt: 1200,
+      duration_ms: 200,
+      isComplete: true,
+    }];
+
+    expect(buildActivitySentences([], [], reasoning).map((item) => item.text)).toEqual([
+      "Checking depreciation against the policy.",
+    ]);
+  });
+
   test("surfaces terminal failure reasons and completion events", () => {
     const events = [
       {

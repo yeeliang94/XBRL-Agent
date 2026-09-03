@@ -124,6 +124,33 @@ describe("argsPreview", () => {
       .toBe("accruals, deferred income");
   });
 
+  test("shows every lookup_definitions query in a short batch", () => {
+    const queries = [
+      "cash equivalents",
+      "licensed banks",
+    ];
+
+    expect(argsPreview("lookup_definitions", { queries }))
+      .toBe("cash equivalents, licensed banks");
+  });
+
+  test("keeps a character cap within a short lookup_definitions batch", () => {
+    const queries = [
+      "other cash and cash equivalents",
+      "balances with licensed banks",
+    ];
+
+    expect(argsPreview("lookup_definitions", { queries }))
+      .toBe(`${queries.join(", ").slice(0, 48)}...`);
+  });
+
+  test("caps lookup_definitions previews by query count", () => {
+    const queries = ["one", "two", "three", "four", "five"];
+
+    expect(argsPreview("lookup_definitions", { queries }))
+      .toBe("one, two, three, +2 more");
+  });
+
   // read_template — shows just the filename, not the full path.
   test("read_template with a full path → filename only", () => {
     const args = { path: "/x/y/01-SOFP-CuNonCu.xlsx" };

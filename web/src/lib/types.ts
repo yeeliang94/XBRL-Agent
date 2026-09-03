@@ -353,6 +353,9 @@ export interface PdfSidecarData {
   };
   model_calls?: Array<{
     page: number;
+    attempt?: number;
+    usage_status?: "complete" | "unavailable";
+    error_type?: string;
     prompt_tokens?: number;
     completion_tokens?: number;
     thinking_tokens?: number;

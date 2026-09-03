@@ -12,6 +12,28 @@ function status(message: string, timestamp: number): SSEEvent {
 }
 
 describe("ActivityStream", () => {
+  test("labels provider reasoning separately from status and tool updates", () => {
+    render(
+      <ActivityStream
+        events={[]}
+        toolTimeline={[]}
+        reasoningBlocks={[{
+          thinking_id: "thought-1",
+          content: "Reviewing PPE amounts",
+          startedAt: 1000,
+          endedAt: 1200,
+          duration_ms: 200,
+          isComplete: true,
+        }]}
+        isRunning={false}
+        streamKey="sofp"
+      />,
+    );
+
+    expect(screen.getByText("Reviewing PPE amounts")).toBeInTheDocument();
+    expect(screen.getByText("Provider reasoning")).toBeInTheDocument();
+  });
+
   test("marks only the newest status update as active", () => {
     render(
       <ActivityStream
