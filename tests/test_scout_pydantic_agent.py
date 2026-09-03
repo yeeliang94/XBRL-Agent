@@ -612,6 +612,19 @@ class TestSaveInfopackTool:
         assert "saved" in result.lower() or "success" in result.lower()
         assert deps.infopack is not None
 
+    def test_cached_rotation_corrections_survive_save(self, synthetic_pdf: Path):
+        from scout.agent import create_scout_agent, _save_infopack_impl
+
+        _, deps = create_scout_agent(pdf_path=synthetic_pdf, model="test")
+        deps.rotation_corrections = {1: 90}
+
+        result = _save_infopack_impl(
+            deps, json.dumps({"toc_page": 1, "page_offset": 0}),
+        )
+
+        assert "success" in result.lower()
+        assert deps.infopack.rotation_corrections == {1: 90}
+
     def test_invalid_page_raises(self, synthetic_pdf: Path):
         from scout.agent import create_scout_agent, _save_infopack_impl
 

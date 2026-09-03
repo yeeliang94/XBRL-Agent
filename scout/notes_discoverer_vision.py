@@ -20,9 +20,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional
+from dataclasses import dataclass
+from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pydantic_ai import Agent, BinaryContent
 from pydantic_ai.models import Model
 from model_settings import build_model_settings
@@ -114,10 +115,56 @@ class _VisionNote(BaseModel):
     subnotes: list[_VisionSubNote] = Field(default_factory=list)
 
 
+class PageRotationCorrection(BaseModel):
+    """An exceptional page rotation that makes its primary content upright.
+
+    Upright and uncertain pages are omitted entirely. A zero-degree value is
+    therefore invalid rather than a verbose restatement of the default.
+    """
+
+    page: int = Field(ge=1)
+    clockwise_degrees_to_upright: Literal[90, 180, 270]
+
+
 class _VisionBatch(BaseModel):
     """Structured output for one batch of pages."""
 
     entries: list[_VisionNote] = Field(default_factory=list)
+    rotation_corrections: list[PageRotationCorrection] = Field(default_factory=list)
+
+    @field_validator("rotation_corrections", mode="before")
+    @classmethod
+    def _drop_invalid_rotation_corrections(cls, value):
+        """An optional hint must never invalidate an otherwise useful batch."""
+        if not isinstance(value, list):
+            return []
+        valid = []
+        for item in value:
+            if isinstance(item, PageRotationCorrection):
+                valid.append(item)
+                continue
+            if not isinstance(item, dict):
+                continue
+            page = item.get("page")
+            degrees = item.get("clockwise_degrees_to_upright")
+            if (
+                isinstance(page, int)
+                and not isinstance(page, bool)
+                and page >= 1
+                and isinstance(degrees, int)
+                and not isinstance(degrees, bool)
+                and degrees in {90, 180, 270}
+            ):
+                valid.append(item)
+        return valid
+
+
+@dataclass(frozen=True)
+class VisionInventoryObservation:
+    """Inventory plus actionable page properties observed in the same pass."""
+
+    entries: list[NoteInventoryEntry]
+    rotation_corrections: dict[int, int]
 
 
 _VISION_SYSTEM_PROMPT = """\
@@ -145,6 +192,13 @@ Rules:
     "Directors' Statement", "Statement by Directors", "Statutory
     Declaration", or "Independent Auditors' Report".
   - If you see no note headers on these pages, emit an empty entries list.
+
+Page orientation:
+  - Emit a rotation_corrections item ONLY when the page's primary financial
+    content is clearly sideways or upside down.
+  - Omit upright pages and omit uncertain pages. Never emit a zero-degree item.
+  - clockwise_degrees_to_upright is the clockwise correction required to make
+    the primary financial content upright: exactly 90, 180, or 270.
 
 Sub-notes:
   - For each top-level note, also identify sub-numbered headings nested
@@ -377,7 +431,8 @@ async def _scan_batch(
     # Zip back to the actual page numbers so the prompt's "pages X-Y" label
     # stays accurate even if future callers pass a non-contiguous list.
     user_prompt: list = [f"Pages {pages[0]}-{pages[-1]}:"]
-    for _pn, png in zip(pages, png_bytes):
+    for page_no, png in zip(pages, png_bytes):
+        user_prompt.append(f"PDF page {page_no}:")
         user_prompt.append(BinaryContent(data=png, media_type="image/png"))
 
     last_err: Optional[Exception] = None
@@ -406,15 +461,33 @@ async def _scan_batch(
 # ---------------------------------------------------------------------------
 
 
-async def _vision_inventory(
+def _merge_rotation_corrections(
+    batches: list[tuple[_VisionBatch, set[int]]], *, start: int, end: int,
+) -> dict[int, int]:
+    """Merge corrections seen in-batch, dropping conflicting observations."""
+    observed: dict[int, set[int]] = {}
+    for batch, viewed_pages in batches:
+        for correction in batch.rotation_corrections:
+            if correction.page in viewed_pages and start <= correction.page <= end:
+                observed.setdefault(correction.page, set()).add(
+                    correction.clockwise_degrees_to_upright
+                )
+    return {
+        page: next(iter(rotations))
+        for page, rotations in sorted(observed.items())
+        if len(rotations) == 1
+    }
+
+
+async def _vision_inventory_observation(
     pdf_path: str,
     start: int,
     end: int,
     model: Model,
     *,
     max_parallel: int = MAX_PARALLEL,
-) -> list[NoteInventoryEntry]:
-    """Public async entry point used by `build_notes_inventory`.
+) -> VisionInventoryObservation:
+    """Return note inventory and exceptional rotation observations.
 
     Parallelises batches under a semaphore cap and aggregates successful
     batches. A batch that raises `VisionBatchError` is logged and skipped;
@@ -432,7 +505,8 @@ async def _vision_inventory(
     async def _bounded(batch_pages: list[int]):
         async with sem:
             try:
-                return await _scan_batch(pdf_path, agent, batch_pages)
+                result = await _scan_batch(pdf_path, agent, batch_pages)
+                return result, set(batch_pages)
             except VisionBatchError as e:
                 logger.error("Skipping vision batch: %s", e)
                 return None
@@ -445,7 +519,7 @@ async def _vision_inventory(
             "Vision inventory build returned no successful batches for %s (pages %d-%d)",
             pdf_path, start, end,
         )
-        return []
+        return VisionInventoryObservation(entries=[], rotation_corrections={})
 
     # Cost-visibility telemetry (Phase 5 Step 5.1). Sum token usage across
     # successful batches. `result.usage` is the PydanticAI idiom; we
@@ -453,7 +527,7 @@ async def _vision_inventory(
     # the inventory over a log line.
     total_input = 0
     total_output = 0
-    for r in successful:
+    for r, _viewed_pages in successful:
         try:
             u = r.usage
             total_input += getattr(u, "input_tokens", 0) or 0
@@ -465,9 +539,34 @@ async def _vision_inventory(
         total_input, total_output, len(successful), len(results),
     )
 
-    batches_out = [r.output for r in successful]
+    batches_out = [r.output for r, _viewed_pages in successful]
     logger.info(
         "vision inventory: %d entries before stitch",
         sum(len(b.entries) for b in batches_out),
     )
-    return _merge_and_stitch(batches_out, notes_end=end)
+    return VisionInventoryObservation(
+        entries=_merge_and_stitch(batches_out, notes_end=end),
+        rotation_corrections=_merge_rotation_corrections(
+            [
+                (result.output, viewed_pages)
+                for result, viewed_pages in successful
+            ],
+            start=start,
+            end=end,
+        ),
+    )
+
+
+async def _vision_inventory(
+    pdf_path: str,
+    start: int,
+    end: int,
+    model: Model,
+    *,
+    max_parallel: int = MAX_PARALLEL,
+) -> list[NoteInventoryEntry]:
+    """Backward-compatible list-only interface for inventory callers."""
+    observation = await _vision_inventory_observation(
+        pdf_path, start, end, model, max_parallel=max_parallel,
+    )
+    return observation.entries

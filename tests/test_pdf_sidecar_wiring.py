@@ -37,7 +37,8 @@ def _infopack(ranges):
         notes_inventory=[
             SimpleNamespace(page_range=r, note_num=i + 1, title=f"n{i}")
             for i, r in enumerate(ranges)
-        ]
+        ],
+        rotation_corrections={},
     )
 
 
@@ -99,6 +100,12 @@ def test_builds_sidecar_over_inventory_page_union(tmp_path, monkeypatch):
         return TranscribeResult(
             pages_html={p: f"<p>page {p}</p>" for p in pages},
             usage={"in": 100, "out": 50},
+            model_calls=[
+                {"page": 2, "attempt": 1, "usage_status": "unavailable",
+                 "error_type": "TimeoutError"},
+                {"page": 2, "attempt": 2, "usage_status": "complete",
+                 "total_tokens": 15},
+            ],
             reasoning_summaries={2: "Located the first note table."},
         )
 
@@ -106,11 +113,37 @@ def test_builds_sidecar_over_inventory_page_union(tmp_path, monkeypatch):
     assert seen["pages"] == [2, 3, 4, 5]  # union, deduped, sorted
     assert out["status"] == "built" and out["pages"] == 4
     assert out["reasoning_summary"] == "Page 2: Located the first note table."
+    assert out["model_calls"] == [
+        {"page": 2, "attempt": 1, "usage_status": "unavailable",
+         "error_type": "TimeoutError"},
+        {"page": 2, "attempt": 2, "usage_status": "complete",
+         "total_tokens": 15},
+    ]
     html = (tmp_path / "source.html").read_text(encoding="utf-8")
     assert "<p>page 2</p>" in html and "<p>page 5</p>" in html
     meta = json.loads((tmp_path / "source_meta.json").read_text())
     assert meta["origin"] == "llm_transcription"
     assert meta["model"] == "m-test"
+
+
+def test_passes_scout_rotation_corrections_to_transcriber(tmp_path, monkeypatch):
+    monkeypatch.setenv("XBRL_PDF_SIDECAR", "true")
+    pdf = _make_pdf(tmp_path / "uploaded.pdf")
+    infopack = _infopack([(2, 4)])
+    infopack.rotation_corrections = {3: 90}
+    seen = {}
+
+    async def fake(pdf_path, pages, model, **kwargs):
+        from ingest.pdf_sidecar import TranscribeResult
+        seen["rotations"] = kwargs.get("rotation_corrections")
+        return TranscribeResult(
+            pages_html={p: f"<p>page {p}</p>" for p in pages},
+        )
+
+    out = _build(pdf, infopack, monkeypatch, fake=fake)
+
+    assert out["status"] == "built"
+    assert seen["rotations"] == {3: 90}
 
 
 def test_page_cap_skips_degenerate_inventories(tmp_path, monkeypatch):
@@ -325,7 +358,7 @@ def test_builder_announces_applicable_transcription_before_model_calls(
     monkeypatch.setenv("XBRL_PDF_SIDECAR", "true")
     monkeypatch.setattr("ingest.pdf_sidecar.pdf_has_text_layer", lambda _p: False)
 
-    async def fake_transcribe(_pdf, pages, _model):
+    async def fake_transcribe(_pdf, pages, _model, **_kwargs):
         order.append(("transcribe", pages))
         return TranscribeResult(
             pages_html={8: "<p>a</p>", 9: "<p>b</p>"},

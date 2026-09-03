@@ -44,6 +44,25 @@ ConsolidationLevel = Literal["company", "group", "both", "unknown"]
 _VALID_CONSOLIDATION: set[str] = {"company", "group", "both", "unknown"}
 # Source-honesty (rewrite Phase 6.3): how the notes inventory was built.
 _VALID_INVENTORY_SOURCE: set[str] = {"text", "vision", "none", "unknown"}
+_VALID_ROTATIONS = {90, 180, 270}
+
+
+def normalize_rotation_corrections(raw: object) -> dict[int, int]:
+    """Return valid, actionable page rotations from persisted Scout output."""
+    if not isinstance(raw, dict):
+        return {}
+    corrections: dict[int, int] = {}
+    for raw_page, raw_degrees in raw.items():
+        if isinstance(raw_page, bool) or isinstance(raw_degrees, bool):
+            continue
+        try:
+            page = int(raw_page)
+            degrees = int(raw_degrees)
+        except (TypeError, ValueError):
+            continue
+        if page >= 1 and degrees in _VALID_ROTATIONS:
+            corrections[page] = degrees
+    return dict(sorted(corrections.items()))
 
 # Sparse-inventory heuristic (completeness_warnings check 3c). A real notes
 # section averages well under 4 pages per note; anything thinner than that
@@ -186,6 +205,8 @@ class Infopack:
             but the actual PDF page is 48).
         statements: per-statement validated page references. Only contains
             statements the scout was asked to find (or all 5 by default).
+        rotation_corrections: sparse page-to-clockwise-degree hints emitted
+            only when Scout clearly observes non-upright primary content.
     """
     toc_page: int
     page_offset: int
@@ -216,6 +237,9 @@ class Infopack:
     # scanned PDFs — hidden determinism worth surfacing), "none" (nothing
     # found), or "unknown" (no inventory pass ran). Advisory/telemetry only.
     inventory_source: str = "unknown"
+    # Sparse actionable hints only. Upright and uncertain pages are absent;
+    # values are clockwise degrees required to make primary content upright.
+    rotation_corrections: dict[int, int] = field(default_factory=dict)
     # Degradation honesty: True iff the scout pass did NOT complete normally
     # (per-turn timeout / wall-clock cap) and this pack is whatever partial
     # state it had managed to build. The run can still proceed without hints
@@ -231,7 +255,7 @@ class Infopack:
 
     def to_json(self) -> str:
         """Serialize to a JSON string for persistence / SSE transport."""
-        return json.dumps({
+        payload = {
             "toc_page": self.toc_page,
             "page_offset": self.page_offset,
             "detected_standard": self.detected_standard,
@@ -286,7 +310,13 @@ class Infopack:
                 }
                 for e in self.notes_inventory
             ],
-        }, indent=2)
+        }
+        corrections = normalize_rotation_corrections(self.rotation_corrections)
+        if corrections:
+            payload["rotation_corrections"] = {
+                str(page): degrees for page, degrees in corrections.items()
+            }
+        return json.dumps(payload, indent=2)
 
     @classmethod
     def from_json(cls, raw: str) -> Infopack:
@@ -492,6 +522,9 @@ class Infopack:
             scale_unit=scale_unit,
             consolidation_level=consolidation,
             inventory_source=inv_source,
+            rotation_corrections=normalize_rotation_corrections(
+                data.get("rotation_corrections")
+            ),
         )
 
     # -- Notes page hints ------------------------------------------------------
@@ -536,6 +569,11 @@ class Infopack:
                         f"{st.value}: note_page {p} exceeds "
                         f"PDF length {pdf_length}"
                     )
+        for page in self.rotation_corrections:
+            if page > pdf_length:
+                errors.append(
+                    f"rotation_correction page {page} exceeds PDF length {pdf_length}"
+                )
         return errors
 
     # -- Completeness probe ----------------------------------------------------

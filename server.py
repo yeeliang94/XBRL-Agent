@@ -3464,17 +3464,26 @@ async def _maybe_build_pdf_sidecar(
             {"on_progress": on_progress} if on_progress is not None else {}
         )
         result = await transcribe_pages(
-            pdf_path, ordered_pages, model, **progress_kwargs,
+            pdf_path,
+            ordered_pages,
+            model,
+            rotation_corrections=(
+                getattr(infopack, "rotation_corrections", {}) or {}
+            ),
+            **progress_kwargs,
         )
         reasoning_summary = "\n\n".join(
             f"Page {page}: {summary}"
             for page, summary in sorted(result.reasoning_summaries.items())
             if summary
         )[:12_000]
-        model_calls = [
-            {"page": page, **usage}
-            for page, usage in sorted(result.page_usage.items())
-        ]
+        model_calls = sorted(
+            result.model_calls,
+            key=lambda call: (
+                int(call.get("page", 0) or 0),
+                int(call.get("attempt", 0) or 0),
+            ),
+        )
         out = write_pdf_sidecar(
             pdf_path,
             result,
@@ -5934,6 +5943,15 @@ async def run_multi_agent_stream(
                     isinstance(sidecar_event, dict)
                     and sidecar_event.get("status") == "built"
                 )
+                sidecar_model_calls = (
+                    sidecar_event.get("model_calls", [])
+                    if isinstance(sidecar_event, dict) else []
+                )
+                has_unavailable_call = any(
+                    call.get("usage_status") != "complete"
+                    for call in sidecar_model_calls
+                    if isinstance(call, dict)
+                )
                 repo.finish_run_agent(
                     db_conn,
                     source_preparation_run_agent_id,
@@ -5952,7 +5970,9 @@ async def run_multi_agent_stream(
                     completion_tokens=sidecar_completion,
                     reasoning_tokens=sidecar_reasoning,
                     usage_status=(
-                        "complete" if sidecar_built and sidecar_total > 0
+                        "complete"
+                        if sidecar_built and sidecar_total > 0
+                        and not has_unavailable_call
                         else "partial" if sidecar_total > 0
                         else "unavailable"
                     ),
@@ -6010,7 +6030,12 @@ async def run_multi_agent_stream(
                             call_reasoning,
                             _model_id(model),
                         ),
-                        "usage_status": "complete",
+                        "status": (
+                            "failed" if call.get("error_type") else "succeeded"
+                        ),
+                        "usage_status": str(
+                            call.get("usage_status") or "unavailable"
+                        ),
                     })
                 if sidecar_turns:
                     repo.insert_agent_turns(

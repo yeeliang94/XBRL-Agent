@@ -67,6 +67,16 @@ TRANSCRIBE_CONCURRENCY = 4
 _TEXT_LAYER_MIN_CHARS = 40
 _TEXT_LAYER_SAMPLE_PAGES = 10
 
+# A blank scan is rarely pixel-perfect white. Ignore sparse scanner specks and
+# near-white background variation, but fail closed once dark pixels cover more
+# than 0.01% of the page. At 150 DPI, even a small printed page number exceeds
+# this allowance.
+_BLANK_DARK_PIXEL_THRESHOLD = 225
+_BLANK_MAX_DARK_PIXEL_DENOMINATOR = 10_000
+_DARK_PIXEL_MAP = bytes(
+    1 if value < _BLANK_DARK_PIXEL_THRESHOLD else 0 for value in range(256)
+)
+
 # Deadlines (peer review 2026-08-11): a hung provider call must not stall the
 # pre-agent stage indefinitely — the stage runs before the cancellable
 # coordinator task exists, so these bounds are what Stop-All falls back on.
@@ -107,8 +117,19 @@ class TranscribeResult:
     pages_html: dict[int, str]
     failed_pages: list[int] = field(default_factory=list)
     usage: dict[str, int] = field(default_factory=dict)
+    # Aggregated usage per page, including every response received for retries.
     page_usage: dict[int, dict[str, int]] = field(default_factory=dict)
+    # One audit record per actual provider attempt. Failed attempts remain
+    # visible even when the provider returned no usage metrics.
+    model_calls: list[dict[str, Any]] = field(default_factory=list)
     reasoning_summaries: dict[int, str] = field(default_factory=dict)
+    # Actual successful render orientation per page, including zero. Only
+    # non-zero entries are persisted as corrections in source_meta.json.
+    page_rotations: dict[int, int] = field(default_factory=dict)
+
+
+class _EmptyTranscriptionError(ValueError):
+    """The provider responded, but the rendered page yielded no readable text."""
 
 
 def normalize_transcription(html: str) -> str:
@@ -200,16 +221,59 @@ async def _call_model(
     )
 
 
-def _render_pages(pdf_path: str | Path, pages: list[int]) -> dict[int, bytes]:
+def _render_page_from_doc(doc: fitz.Document, page_no: int, rotation: int) -> bytes:
+    """Render one page from an open document with clockwise pixel rotation."""
+    zoom = RENDER_DPI / 72
+    matrix = fitz.Matrix(zoom, zoom).prerotate(rotation)
+    return doc[page_no - 1].get_pixmap(matrix=matrix).tobytes("png")
+
+
+def _render_page(
+    pdf_path: str | Path, page_no: int, rotation: int = 0,
+) -> bytes:
+    """Open and render one 1-indexed page for an orientation retry."""
+    doc = fitz.open(str(pdf_path))
+    try:
+        return _render_page_from_doc(doc, page_no, rotation)
+    finally:
+        doc.close()
+
+
+def _render_is_blank(png_bytes: bytes) -> bool:
+    """Return whether a rendered page has no meaningful ink.
+
+    Blank scans can contain light background variation and isolated scanner
+    specks. Decoding problems fail closed so uncertain pages still go to the
+    model.
+    """
+    try:
+        pixmap = fitz.Pixmap(png_bytes)
+        gray = fitz.Pixmap(fitz.csGRAY, pixmap)
+    except Exception:  # noqa: BLE001 — an uncertain render is not blank
+        return False
+    pixel_count = gray.width * gray.height
+    max_dark_pixels = max(
+        1, pixel_count // _BLANK_MAX_DARK_PIXEL_DENOMINATOR,
+    )
+    dark_pixels = gray.samples.translate(_DARK_PIXEL_MAP).count(b"\x01")
+    return dark_pixels <= max_dark_pixels
+
+
+def _render_pages(
+    pdf_path: str | Path,
+    pages: list[int],
+    rotation_corrections: Optional[dict[int, int]] = None,
+) -> dict[int, bytes]:
     """Render the requested pages to PNG bytes (synchronous; run off-thread —
     rendering 20 pages measured ~5 s, which would starve the event loop and
     the SSE keepalives with it)."""
+    rotations = rotation_corrections or {}
     doc = fitz.open(str(pdf_path))
     try:
         return {
-            p: doc[p - 1].get_pixmap(dpi=RENDER_DPI).tobytes("png")
-            for p in pages
-            if 1 <= p <= len(doc)
+            page: _render_page_from_doc(doc, page, rotations.get(page, 0))
+            for page in pages
+            if 1 <= page <= len(doc)
         }
     finally:
         doc.close()
@@ -225,6 +289,7 @@ async def transcribe_pages(
     overall_timeout_s: float = OVERALL_TIMEOUT_S,
     _caller: Optional[Callable[[int, bytes], Awaitable[tuple]]] = None,
     on_progress: Optional[Callable[[int, int, int, bool], None]] = None,
+    rotation_corrections: Optional[dict[int, int]] = None,
 ) -> TranscribeResult:
     """Render + transcribe ``pages`` (1-based). One retry per page, then skip.
 
@@ -233,11 +298,33 @@ async def transcribe_pages(
     cancelled and counted as failed. ``_caller`` is the test seam:
     ``async (page_no, png_bytes) -> (html, usage)``. ``on_progress`` is a
     best-effort synchronous notification after each page finishes, including
-    pages that exhaust their retry budget.
+    pages that exhaust their retry budget. Transport/provider failures retry the
+    same render. Only an empty transcription changes orientation: a hinted page
+    falls back to unrotated, while an unhinted page tries 90 degrees clockwise.
     """
     caller = _caller or (lambda p, b: _call_model(model, p, b))
 
-    renders = await asyncio.to_thread(_render_pages, pdf_path, list(pages))
+    requested_pages = set(pages)
+    rotations: dict[int, int] = {}
+    for raw_page, raw_degrees in (rotation_corrections or {}).items():
+        if isinstance(raw_page, bool) or isinstance(raw_degrees, bool):
+            continue
+        try:
+            page = int(raw_page)
+            degrees = int(raw_degrees)
+        except (TypeError, ValueError):
+            continue
+        if page in requested_pages and degrees in {90, 180, 270}:
+            rotations[page] = degrees
+    renders = await asyncio.to_thread(
+        _render_pages, pdf_path, list(pages), rotations,
+    )
+    missing_render_pages = sorted(requested_pages - set(renders))
+    if missing_render_pages:
+        logger.warning(
+            "pdf_sidecar: requested pages %s are outside the document range",
+            missing_render_pages,
+        )
 
     sem = asyncio.Semaphore(concurrency)
     result = TranscribeResult(pages_html={})
@@ -249,23 +336,53 @@ async def transcribe_pages(
         nonlocal completed
         async with sem:
             try:
+                initial_rotation = rotations.get(page_no, 0)
+                rotation = initial_rotation
+                if await asyncio.to_thread(_render_is_blank, png):
+                    result.pages_html[page_no] = ""
+                    result.page_rotations[page_no] = initial_rotation
+                    return
                 for attempt in (1, 2):  # max-1-retry, like every notes agent
+                    call_record: Optional[dict[str, Any]] = None
                     try:
+                        attempt_png = png
+                        if rotation != initial_rotation:
+                            attempt_png = await asyncio.to_thread(
+                                _render_page, pdf_path, page_no, rotation,
+                            )
+                        call_record = {
+                            "page": page_no,
+                            "attempt": attempt,
+                            "usage_status": "unavailable",
+                        }
+                        result.model_calls.append(call_record)
                         response = await asyncio.wait_for(
-                            caller(page_no, png), timeout=page_timeout_s,
+                            caller(page_no, attempt_png), timeout=page_timeout_s,
                         )
                         if len(response) == 3:
                             html, usage, reasoning_summary = response
                         else:
                             html, usage = response
                             reasoning_summary = ""
-                        result.pages_html[page_no] = html
-                        result.page_usage[page_no] = {
+                        call_usage = {
                             str(k): int(v or 0)
                             for k, v in (usage or {}).items()
                         }
-                        for k, v in (usage or {}).items():
-                            totals[k] = totals.get(k, 0) + v
+                        call_record.update(call_usage)
+                        call_record["usage_status"] = "complete"
+                        page_totals = result.page_usage.setdefault(page_no, {})
+                        for key, amount in call_usage.items():
+                            page_totals[key] = page_totals.get(key, 0) + amount
+                            totals[key] = totals.get(key, 0) + amount
+                        normalized = normalize_transcription(str(html))
+                        if not BeautifulSoup(
+                            normalized, "html.parser"
+                        ).get_text(" ", strip=True):
+                            raise _EmptyTranscriptionError(
+                                "transcription returned no content"
+                            )
+                        result.pages_html[page_no] = normalized
+                        result.page_rotations[page_no] = rotation
                         if reasoning_summary:
                             result.reasoning_summaries[page_no] = str(
                                 reasoning_summary
@@ -274,10 +391,18 @@ async def transcribe_pages(
                     except asyncio.CancelledError:
                         raise  # overall deadline / caller cancellation — propagate
                     except Exception as exc:
+                        if call_record is not None:
+                            call_record["error_type"] = type(exc).__name__
                         logger.warning(
-                            "pdf_sidecar: page %s attempt %s failed: %s",
-                            page_no, attempt, exc,
+                            "pdf_sidecar: page %s attempt %s rotation %s failed: "
+                            "%s: %s",
+                            page_no, attempt, rotation,
+                            type(exc).__name__, exc,
                         )
+                        if attempt == 1 and isinstance(
+                            exc, _EmptyTranscriptionError
+                        ):
+                            rotation = 0 if initial_rotation else 90
             finally:
                 completed += 1
                 if on_progress is not None:
@@ -304,7 +429,7 @@ async def transcribe_pages(
 
     # Failed = requested but never transcribed, whatever the path there
     # (exhausted retries, per-page timeout, overall-deadline cancellation).
-    result.failed_pages = sorted(set(renders) - set(result.pages_html))
+    result.failed_pages = sorted(requested_pages - set(result.pages_html))
     result.usage = totals
     return result
 
@@ -370,6 +495,11 @@ def write_pdf_sidecar(
             for note_num, pages in sorted(complete_note_pages.items())
         },
         "usage": result.usage,
+        "rotation_corrections": {
+            str(page): rotation
+            for page, rotation in sorted(result.page_rotations.items())
+            if rotation
+        },
     }
     meta_path = target.parent / SOURCE_META_NAME
     meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
