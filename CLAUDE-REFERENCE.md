@@ -1583,7 +1583,11 @@ Load-bearing invariants:
   `notes_reviewer_wallclock_exceeded`). The 2026-07-07 change added the batch
   forms; the singular `resolve_coverage_note` / `verify_subnote` /
   `clear_note_cell` variants were removed 2026-07-07 (agent-tool consolidation)
-  since they had the identical activation scenario. Pinned by
+  since they had the identical activation scenario. Coverage tools now carry
+  per-item verdict, reason, and source pages: one `verify_subnotes` call can
+  cover multiple note numbers and mixed verified/missing outcomes, and one
+  `resolve_coverage_notes` call can cover mixed not-applicable/confirmed-absent
+  outcomes without weakening grounding or failure isolation. Pinned by
   `tests/test_notes_reviewer_coverage.py`. The pass
   recomputes + persists on EVERY exit path (`_finalize_coverage` in
   `server._run_notes_reviewer_pass`): success → `reviewed`; crash/construction

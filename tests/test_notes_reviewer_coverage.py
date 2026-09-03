@@ -115,8 +115,8 @@ def test_resolve_coverage_note_requires_grounding(db_path):
     # No view_pdf_pages → source_pages not grounded.
     model = _scripted([
         [ToolCallPart(tool_name="resolve_coverage_notes", args={
-            "note_nums": [4], "verdict": "not_applicable",
-            "reason": "no such asset", "source_pages": [19]})],
+            "resolutions": [{"note_num": 4, "verdict": "not_applicable",
+            "reason": "no such asset", "source_pages": [19]}]})],
     ])
     agent, deps, _ = _agent(db_path, run_id, model)
     agent.run_sync("go", deps=deps)
@@ -130,8 +130,8 @@ def test_resolve_bad_verdict_rejected(db_path):
     model = _scripted([
         [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
         [ToolCallPart(tool_name="resolve_coverage_notes", args={
-            "note_nums": [4], "verdict": "placed", "reason": "x",
-            "source_pages": [19]})],
+            "resolutions": [{"note_num": 4, "verdict": "placed", "reason": "x",
+            "source_pages": [19]}]})],
     ])
     agent, deps, _ = _agent(db_path, run_id, model)
     agent.run_sync("go", deps=deps)
@@ -148,8 +148,8 @@ def test_confirmed_absent_resolves_suspected_gap(db_path):
     model = _scripted([
         [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
         [ToolCallPart(tool_name="resolve_coverage_notes", args={
-            "note_nums": [13], "verdict": "confirmed_absent",
-            "reason": "PDF numbering skips 13", "source_pages": [19]})],
+            "resolutions": [{"note_num": 13, "verdict": "confirmed_absent",
+            "reason": "PDF numbering skips 13", "source_pages": [19]}]})],
     ])
     agent, deps, _ = _agent(db_path, run_id, model)
     agent.run_sync("go", deps=deps)
@@ -219,8 +219,8 @@ def test_not_applicable_clears_coverage_gap_for_verify(db_path):
     model = _scripted([
         [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
         [ToolCallPart(tool_name="resolve_coverage_notes", args={
-            "note_nums": [4], "verdict": "not_applicable",
-            "reason": "no such asset", "source_pages": [19]})],
+            "resolutions": [{"note_num": 4, "verdict": "not_applicable",
+            "reason": "no such asset", "source_pages": [19]}]})],
     ])
     agent, deps, _ = _agent(db_path, run_id, model)
     agent.run_sync("go", deps=deps)
@@ -249,12 +249,12 @@ def test_verify_subnote_verified_and_missing(db_path):
     _seed_prov(db_path, run_id, 48, ["9"])
     model = _scripted([
         [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
-        [ToolCallPart(tool_name="verify_subnotes", args={
-            "note_num": 9, "subnote_refs": ["(a)"], "verdict": "verified",
-            "reason": "present in cell", "source_pages": [19]})],
-        [ToolCallPart(tool_name="verify_subnotes", args={
-            "note_num": 9, "subnote_refs": ["(b)"], "verdict": "missing",
-            "reason": "absent", "source_pages": [19]})],
+        [ToolCallPart(tool_name="verify_subnotes", args={"verifications": [
+            {"note_num": 9, "subnote_refs": ["(a)"], "verdict": "verified",
+             "reason": "present in cell", "source_pages": [19]},
+            {"note_num": 9, "subnote_refs": ["(b)"], "verdict": "missing",
+             "reason": "absent", "source_pages": [19]},
+        ]})],
     ])
     agent, deps, _ = _agent(db_path, run_id, model)
     agent.run_sync("go", deps=deps)
@@ -340,8 +340,8 @@ def test_verify_subnote_requires_grounding(db_path):
     _seed_prov(db_path, run_id, 48, ["9"])
     model = _scripted([
         [ToolCallPart(tool_name="verify_subnotes", args={
-            "note_num": 9, "subnote_refs": ["(a)"], "verdict": "verified",
-            "reason": "x", "source_pages": [19]})],
+            "verifications": [{"note_num": 9, "subnote_refs": ["(a)"],
+            "verdict": "verified", "reason": "x", "source_pages": [19]}]})],
     ])
     agent, deps, _ = _agent(db_path, run_id, model)
     agent.run_sync("go", deps=deps)
@@ -363,8 +363,9 @@ def test_verify_subnotes_batch_records_all_in_one_call(db_path):
     model = _scripted([
         [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
         [ToolCallPart(tool_name="verify_subnotes", args={
-            "note_num": 9, "subnote_refs": ["(a)", "(b)", "(c)"],
-            "verdict": "verified", "reason": "all present", "source_pages": [19]})],
+            "verifications": [{"note_num": 9,
+            "subnote_refs": ["(a)", "(b)", "(c)"], "verdict": "verified",
+            "reason": "all present", "source_pages": [19]}]})],
     ])
     agent, deps, _ = _agent(db_path, run_id, model)
     agent.run_sync("go", deps=deps)
@@ -378,14 +379,73 @@ def test_verify_subnotes_batch_records_all_in_one_call(db_path):
                       "(c)": SUBNOTE_VERIFIED}
 
 
+def test_verify_subnotes_batches_multiple_notes_with_independent_verdicts(db_path):
+    run_id = _seed_run(db_path)
+    _seed_inv(db_path, run_id, 9, "Investment properties", subs=["(a)", "(b)"])
+    _seed_inv(db_path, run_id, 10, "Receivables", subs=["(a)"])
+    _seed_prov(db_path, run_id, 48, ["9"])
+    _seed_prov(db_path, run_id, 49, ["10"])
+    model = _scripted([
+        [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19, 20]})],
+        [ToolCallPart(tool_name="verify_subnotes", args={"verifications": [
+            {
+                "note_num": 9,
+                "subnote_refs": ["(a)", "(b)"],
+                "verdict": "verified",
+                "reason": "both are present",
+                "source_pages": [19],
+            },
+            {
+                "note_num": 10,
+                "subnote_refs": ["(a)"],
+                "verdict": "missing",
+                "reason": "the subsection is absent",
+                "source_pages": [20],
+            },
+        ]})],
+    ])
+    agent, deps, _ = _agent(db_path, run_id, model)
+    agent.run_sync("go", deps=deps)
+
+    assert deps.coverage_subnote_verdicts[(9, "a")]["verdict"] == SUBNOTE_VERIFIED
+    assert deps.coverage_subnote_verdicts[(9, "b")]["verdict"] == SUBNOTE_VERIFIED
+    assert deps.coverage_subnote_verdicts[(10, "a")]["verdict"] == SUBNOTE_MISSING
+
+
+def test_verify_subnotes_rejects_one_ungrounded_note_without_blocking_siblings(db_path):
+    run_id = _seed_run(db_path)
+    _seed_inv(db_path, run_id, 9, subs=["(a)"])
+    _seed_inv(db_path, run_id, 10, subs=["(a)"])
+    _seed_prov(db_path, run_id, 48, ["9"])
+    _seed_prov(db_path, run_id, 49, ["10"])
+    model = _scripted([
+        [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
+        [ToolCallPart(tool_name="verify_subnotes", args={"verifications": [
+            {"note_num": 9, "subnote_refs": ["(a)"], "verdict": "verified",
+             "reason": "present", "source_pages": [19]},
+            {"note_num": 10, "subnote_refs": ["(a)"], "verdict": "verified",
+             "reason": "claimed present", "source_pages": [20]},
+        ]})],
+    ])
+    agent, deps, _ = _agent(db_path, run_id, model)
+    result = agent.run_sync("go", deps=deps)
+
+    assert (9, "a") in deps.coverage_subnote_verdicts
+    assert (10, "a") not in deps.coverage_subnote_verdicts
+    assert deps.fix_rejections.get("ungrounded") == 1
+    returns = _tool_return_texts(result, "verify_subnotes")
+    assert returns and returns[0].startswith("partial: 1 applied, 1 rejected")
+
+
 def test_verify_subnotes_requires_grounding(db_path):
     run_id = _seed_run(db_path)
     _seed_inv(db_path, run_id, 9, subs=["(a)", "(b)"])
     _seed_prov(db_path, run_id, 48, ["9"])
     model = _scripted([
         [ToolCallPart(tool_name="verify_subnotes", args={
-            "note_num": 9, "subnote_refs": ["(a)", "(b)"], "verdict": "verified",
-            "reason": "x", "source_pages": [19]})],  # never viewed page 19
+            "verifications": [{"note_num": 9, "subnote_refs": ["(a)", "(b)"],
+            "verdict": "verified", "reason": "x", "source_pages": [19]}]})],
+            # never viewed page 19
     ])
     agent, deps, _ = _agent(db_path, run_id, model)
     agent.run_sync("go", deps=deps)
@@ -414,8 +474,9 @@ def test_verify_subnotes_partial_failure_is_honest(db_path):
     model = _scripted([
         [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
         [ToolCallPart(tool_name="verify_subnotes", args={
-            "note_num": 9, "subnote_refs": ["(a)", "   "],  # 2nd ref is blank
-            "verdict": "verified", "reason": "x", "source_pages": [19]})],
+            "verifications": [{"note_num": 9,
+            "subnote_refs": ["(a)", "   "],  # 2nd ref is blank
+            "verdict": "verified", "reason": "x", "source_pages": [19]}]})],
     ])
     agent, deps, _ = _agent(db_path, run_id, model)
     result = agent.run_sync("go", deps=deps)
@@ -434,13 +495,69 @@ def test_resolve_coverage_notes_batch_resolves_all(db_path):
     model = _scripted([
         [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
         [ToolCallPart(tool_name="resolve_coverage_notes", args={
-            "note_nums": [4, 5], "verdict": "not_applicable",
-            "reason": "neither applies", "source_pages": [19]})],
+            "resolutions": [
+                {"note_num": 4, "verdict": "not_applicable",
+                 "reason": "neither applies", "source_pages": [19]},
+                {"note_num": 5, "verdict": "not_applicable",
+                 "reason": "neither applies", "source_pages": [19]},
+            ]})],
     ])
     agent, deps, _ = _agent(db_path, run_id, model)
     agent.run_sync("go", deps=deps)
     assert deps.coverage_note_verdicts[4]["verdict"] == "not_applicable"
     assert deps.coverage_note_verdicts[5]["verdict"] == "not_applicable"
+
+
+def test_resolve_coverage_notes_batches_independent_verdicts_and_pages(db_path):
+    run_id = _seed_run(db_path)
+    _seed_inv(db_path, run_id, 4, "Note four")
+    _seed_inv(db_path, run_id, 5, "Note five")
+    model = _scripted([
+        [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19, 20]})],
+        [ToolCallPart(tool_name="resolve_coverage_notes", args={"resolutions": [
+            {
+                "note_num": 4,
+                "verdict": "not_applicable",
+                "reason": "not applicable to this entity",
+                "source_pages": [19],
+            },
+            {
+                "note_num": 5,
+                "verdict": "confirmed_absent",
+                "reason": "the PDF numbering skips note 5",
+                "source_pages": [20],
+            },
+        ]})],
+    ])
+    agent, deps, _ = _agent(db_path, run_id, model)
+    agent.run_sync("go", deps=deps)
+
+    assert deps.coverage_note_verdicts[4]["verdict"] == "not_applicable"
+    assert deps.coverage_note_verdicts[4]["source_pages"] == [19]
+    assert deps.coverage_note_verdicts[5]["verdict"] == "confirmed_absent"
+    assert deps.coverage_note_verdicts[5]["source_pages"] == [20]
+
+
+def test_resolve_coverage_notes_rejects_bad_item_without_blocking_siblings(db_path):
+    run_id = _seed_run(db_path)
+    _seed_inv(db_path, run_id, 4, "Note four")
+    _seed_inv(db_path, run_id, 5, "Note five")
+    model = _scripted([
+        [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
+        [ToolCallPart(tool_name="resolve_coverage_notes", args={"resolutions": [
+            {"note_num": 4, "verdict": "not_applicable",
+             "reason": "not applicable", "source_pages": [19]},
+            {"note_num": 5, "verdict": "placed",
+             "reason": "invalid verdict", "source_pages": [19]},
+        ]})],
+    ])
+    agent, deps, _ = _agent(db_path, run_id, model)
+    result = agent.run_sync("go", deps=deps)
+
+    assert deps.coverage_note_verdicts[4]["verdict"] == "not_applicable"
+    assert 5 not in deps.coverage_note_verdicts
+    returns = _tool_return_texts(result, "resolve_coverage_notes")
+    assert returns and returns[0].startswith("partial: 1 applied, 1 rejected")
 
 
 def test_clear_note_cells_batch_clears_all_rows(db_path):

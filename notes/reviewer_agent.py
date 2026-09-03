@@ -531,7 +531,7 @@ def _summarize_batch(outcomes: List[str], ok_template: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Batched prose-write items (edit_note_cells / author_note_cells)
+# Batched notes-review items
 # ---------------------------------------------------------------------------
 # The reviewer used to write one prose cell per turn. These list-shaped tools
 # carry several cells in ONE call; each item is grounded + written INDEPENDENTLY
@@ -560,6 +560,27 @@ class NoteAuthorItem(BaseModel):
     note_num: int
     source_pages: List[int]
     evidence: Optional[str] = None
+
+
+# Coverage verdicts use the same outer-list interface, with grounding and
+# outcomes kept per item so different notes can share one model tool call.
+class CoverageResolutionItem(BaseModel):
+    """One grounded top-level coverage verdict in a reviewer batch."""
+
+    note_num: int
+    verdict: str
+    reason: str
+    source_pages: List[int]
+
+
+class SubnoteVerificationItem(BaseModel):
+    """One note's grounded sub-reference verdicts in a reviewer batch."""
+
+    note_num: int
+    subnote_refs: List[str]
+    verdict: str
+    reason: str
+    source_pages: List[int]
 
 
 # ---------------------------------------------------------------------------
@@ -728,8 +749,9 @@ def build_notes_reviewer_packet(context: dict) -> str:
                 "content was written on ANY notes sheet. View each note's "
                 "page(s); if it is a genuine disclosure, author it into an empty "
                 "LEAF row (author_note_cells); if it genuinely does not apply to "
-                "this entity, call resolve_coverage_notes([note_num], "
-                "'not_applicable', reason, source_pages). Do NOT leave a real "
+                "this entity, include {note_num, verdict: 'not_applicable', "
+                "reason, source_pages} in resolve_coverage_notes.resolutions. "
+                "Do NOT leave a real "
                 "disclosure unfilled — an unresolved missing note fails the run."
             )
             for r in missing_rows:
@@ -745,8 +767,9 @@ def build_notes_reviewer_packet(context: dict) -> str:
                 "\n[COVERAGE — SUSPECTED GAP] the inventory's note numbering "
                 "skips these values — scout may have MISSED a note. Hunt the PDF "
                 "around each hole: if a real note exists, author it; if the PDF "
-                "genuinely skips that number, call resolve_coverage_notes("
-                "[note_num], 'confirmed_absent', reason, source_pages) to clear "
+                "genuinely skips that number, include {note_num, verdict: "
+                "'confirmed_absent', reason, source_pages} in "
+                "resolve_coverage_notes.resolutions to clear "
                 "the suspicion. An uninvestigated suspected gap fails the run."
             )
             for r in suspected_rows:
@@ -757,9 +780,10 @@ def build_notes_reviewer_packet(context: dict) -> str:
             out.append(
                 "\n[COVERAGE — UNVERIFIED SUB-REFS] these placed notes were "
                 "cited only coarsely, so it's unproven every sub-section made "
-                "it in. If you have spare turns, view the note and call "
-                "verify_subnotes(note_num, subnote_refs, 'verified'|'missing', "
-                "reason, source_pages) — 'missing' then needs an "
+                "it in. If you have spare turns, view the notes and put every "
+                "note's {note_num, subnote_refs, verdict, reason, source_pages} "
+                "in ONE verify_subnotes.verifications call — 'missing' then "
+                "needs an "
                 "author/edit. Unverified sub-refs warn only; they never fail "
                 "the run, so prioritise MISSING notes and SUSPECTED GAPS first."
             )
@@ -1578,41 +1602,46 @@ def create_notes_reviewer_agent(
     @agent.tool
     def resolve_coverage_notes(
         ctx: RunContext[NotesReviewerDeps],
-        note_nums: List[int], verdict: str, reason: str, source_pages: List[int],
+        resolutions: List[CoverageResolutionItem],
     ) -> str:
-        """Resolve one OR several MISSING / SUSPECTED-GAP coverage rows sharing
-        the SAME verdict in ONE call — always pass a list (a single note is
-        ``note_nums=[13]``). Use this ONLY after viewing the PDF page(s) that
-        prove each note is not a real omission:
+        """Resolve MISSING / SUSPECTED-GAP coverage rows for multiple notes in
+        ONE call. Always pass a ``resolutions`` list; one note is a one-element
+        list. Each item carries its own ``note_num``, ``verdict``, ``reason``
+        and ``source_pages``. Use this ONLY after viewing the PDF page(s) that
+        prove that item is not a real omission:
           * ``confirmed_absent`` — a suspected numbering gap is a PDF numbering
             skip (there is no note with that number in the document);
           * ``not_applicable`` — a note the inventory lists that genuinely does
             not apply to this entity (nothing to disclose).
-        The shared ``reason`` + ``source_pages`` ground the whole batch. A
-        resolved row stops tipping the run to completed_with_errors. If a note
-        actually HAS a real disclosure, author it instead — never resolve it
-        away."""
-        v = verdict.strip().lower()
-        if v not in RESOLVED_VERDICTS:
-            return (f"rejected: verdict must be one of {sorted(RESOLVED_VERDICTS)}. "
-                    "Author any note that has a real disclosure.")
-        if not note_nums:
-            return "rejected: note_nums is required (pass a non-empty list)."
-        verdict = evaluate_notes_fix_guard(
-            action="resolve", source_pages=source_pages,
-            viewed_pages=ctx.deps.viewed_pages,
-        )
-        if not verdict.allowed:
-            _tally(ctx.deps, verdict.kind)
-            return verdict.message
-        outcomes = [
-            _record_coverage_note(
-                ctx, note_num=n, verdict=v, source_pages=source_pages,
-                reason=reason,
+        Items are checked and recorded independently, so one invalid verdict or
+        ungrounded item does not block valid siblings. A resolved row stops
+        tipping the run to completed_with_errors. If a note actually HAS a real
+        disclosure, author it instead — never resolve it away."""
+        if not resolutions:
+            return "rejected: resolutions is required (pass a non-empty list)."
+        outcomes: List[str] = []
+        for item in resolutions:
+            v = item.verdict.strip().lower()
+            if v not in RESOLVED_VERDICTS:
+                outcomes.append(
+                    f"rejected: note {item.note_num} verdict must be one of "
+                    f"{sorted(RESOLVED_VERDICTS)}. Author any note that has a "
+                    "real disclosure."
+                )
+                continue
+            guard = evaluate_notes_fix_guard(
+                action="resolve", source_pages=item.source_pages,
+                viewed_pages=ctx.deps.viewed_pages,
             )
-            for n in note_nums
-        ]
-        return _summarize_batch(outcomes, f"resolved {{ok}} note(s) as {v}")
+            if not guard.allowed:
+                _tally(ctx.deps, guard.kind)
+                outcomes.append(f"{guard.message} [note {item.note_num}]")
+                continue
+            outcomes.append(_record_coverage_note(
+                ctx, note_num=item.note_num, verdict=v,
+                source_pages=item.source_pages, reason=item.reason,
+            ))
+        return _summarize_batch(outcomes, "resolved {ok} coverage note(s)")
 
     def _record_subnote(
         ctx: RunContext[NotesReviewerDeps], *,
@@ -1634,43 +1663,58 @@ def create_notes_reviewer_agent(
     @agent.tool
     def verify_subnotes(
         ctx: RunContext[NotesReviewerDeps],
-        note_num: int, subnote_refs: List[str], verdict: str, reason: str,
-        source_pages: List[int],
+        verifications: List[SubnoteVerificationItem],
     ) -> str:
-        """Record the SAME verdict for one OR several sub-references of ONE note
-        in one call — always pass a list (a single ref is ``subnote_refs=['(a)']``).
+        """Record grounded sub-reference verdicts for MULTIPLE notes in ONE call.
+
+        Always pass a ``verifications`` list. Each item carries one ``note_num``,
+        one or several ``subnote_refs``, its own ``verdict``, ``reason`` and
+        ``source_pages``. A single note is a one-element list.
 
         For a note cited only coarsely (the writer cited the bare note number),
         the checklist can't prove each sub-section landed. After viewing the note's
-        page(s), pass every sub-ref you judged the same way (e.g.
-        ``subnote_refs=['(a)','(b)','(c)']``):
+        page(s), put every sub-ref you judged the same way in that note's item:
           * ``verified`` — the sub-section's content IS present in the placed
             cell (or is legitimately folded-in / not applicable);
           * ``missing`` — the sub-section is genuinely absent. Then author/edit
             it in; once its ref is cited the row flips to placed on recompute.
-        A ``missing`` sub-ref you cannot author back tips the run status; verify
-        ``missing`` ones in a separate call so they stay explicit."""
-        v = verdict.strip().lower()
-        if v not in (SUBNOTE_VERIFIED, SUBNOTE_MISSING):
-            return (f"rejected: verdict must be '{SUBNOTE_VERIFIED}' or "
-                    f"'{SUBNOTE_MISSING}'.")
-        if not subnote_refs:
-            return "rejected: subnote_refs is required (pass a non-empty list)."
-        verdict = evaluate_notes_fix_guard(
-            action="verify", source_pages=source_pages,
-            viewed_pages=ctx.deps.viewed_pages,
-        )
-        if not verdict.allowed:
-            _tally(ctx.deps, verdict.kind)
-            return verdict.message
-        outcomes = [
-            _record_subnote(
-                ctx, note_num=note_num, subnote_ref=ref, verdict=v, reason=reason,
+        Items are checked independently, so one invalid verdict, empty ref list,
+        or ungrounded note does not block valid siblings. A ``missing`` sub-ref
+        you cannot author back tips the run status."""
+        if not verifications:
+            return "rejected: verifications is required (pass a non-empty list)."
+        outcomes: List[str] = []
+        for item in verifications:
+            v = item.verdict.strip().lower()
+            if v not in (SUBNOTE_VERIFIED, SUBNOTE_MISSING):
+                outcomes.append(
+                    f"rejected: note {item.note_num} verdict must be "
+                    f"'{SUBNOTE_VERIFIED}' or '{SUBNOTE_MISSING}'."
+                )
+                continue
+            if not item.subnote_refs:
+                outcomes.append(
+                    f"rejected: note {item.note_num} subnote_refs is required "
+                    "(pass a non-empty list)."
+                )
+                continue
+            guard = evaluate_notes_fix_guard(
+                action="verify", source_pages=item.source_pages,
+                viewed_pages=ctx.deps.viewed_pages,
             )
-            for ref in subnote_refs
-        ]
+            if not guard.allowed:
+                _tally(ctx.deps, guard.kind)
+                outcomes.append(f"{guard.message} [note {item.note_num}]")
+                continue
+            outcomes.extend(
+                _record_subnote(
+                    ctx, note_num=item.note_num, subnote_ref=ref,
+                    verdict=v, reason=item.reason,
+                )
+                for ref in item.subnote_refs
+            )
         return _summarize_batch(
-            outcomes, f"recorded {{ok}} sub-ref verdict(s) for note {note_num} as {v}"
+            outcomes, "recorded {ok} sub-ref verdict(s) across notes"
         )
 
     # -------------------- shared write impls --------------------
