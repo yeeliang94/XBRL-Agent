@@ -159,3 +159,11 @@ describe("Template-oriented review", () => {
     }
   });
 });
+
+
+test("Figures keep routine provenance in Field details without implying verification", () => {
+  for (const reference of [designSystem, prototype]) {
+    expect(reference).toContain("Routine value-origin labels appear only in Field details");
+    expect(reference).toContain("Recorded values never imply verification");
+  }
+});
