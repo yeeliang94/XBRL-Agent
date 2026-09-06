@@ -669,10 +669,10 @@ export function RunDetailView({
       (Object.keys(STATEMENT_LABELS) as string[]).includes(a.statement_type) &&
       !settledAgentStatuses.includes(a.status),
   );
-  // mTool fill needs a completed run (facts must be final) — same gate the
+  // Wait for extraction to finish or stop it first (facts must be final) — same gate the
   // backend enforces (api/mtool.py _FILLABLE_STATUSES).
   const canFillMtool =
-    detail.status === "completed" || detail.status === "completed_with_errors";
+    ["completed", "completed_with_errors", "failed", "aborted"].includes(detail.status);
   // Legacy detection: rows created before the v2 schema never captured a
   // run_config, merged_workbook_path, or per-agent token counts. Rather
   // than leaving several sections mysteriously empty, tag the run so the
@@ -912,7 +912,7 @@ export function RunDetailView({
                 title={
                   canFillMtool
                     ? "Fill an mTool template from this run's figures"
-                    : "mTool fill needs a completed run"
+                    : "Wait for extraction to finish or stop it first"
                 }
               >
                 Fill mTool template
@@ -1086,6 +1086,12 @@ export function RunDetailView({
             type="button"
             onClick={() => selectTab("agents")}
             className={uiClass.btnGhost}
+      {isRunning && (
+        <div style={ui.alertInfo} role="status">
+          Extraction is still running. Figures and notes may change until processing finishes.
+        </div>
+      )}
+
             style={{ ...ui.buttonGhost, ...ui.buttonSm }}
           >
             View activity

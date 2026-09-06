@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { userMessage } from "../lib/errors";
+import { ApiError, userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { denominationLabel } from "../lib/vocabulary";
@@ -11,25 +11,23 @@ import {
   type FilingCoverage,
 } from "./FilingCoverageFailurePanel";
 
-/**
- * mTool fill modal (docs/PLAN-mtool-fill-pipeline.md Phase 4, Steps 9/11/11A).
- *
- * Launched from the run-detail action row (a button, NOT a tab — gotcha #7).
- * There is no exposure flag (2026-08-05 replay decision) — the filing safety
- * is the preflight gate and the report-before-file acknowledgement below.
- *
- * Four steps in one dialog:
- *   1. Is this run ready to file? GET /mtool-fill/preflight. Blocking is the
- *      default; an override needs the operator to write down why.
- *   2. Show the fill coverage the run will produce (GET /mtool-fill).
- *   3. Upload the empty mTool template; POST /mtool-fill/patch returns the
- *      COMPLETE report — no file yet.
- *   4. Only then, download the workbook from the artifact URL.
- *
- * Step 3/4 being separate is the fix for Step 11's unmet criterion: the old
- * flow fired the download first and parsed a capped report afterwards, so the
- * operator held the file before they could see whether it was clean.
+/** Template-first preparation: upload, automatic checks, fill, then download.
+ * Run warnings are advisory. Exact destinations and the original workbook
+ * package are preserved by the shared backend patcher.
  */
+async function responseError(response: Response, body?: unknown): Promise<ApiError> {
+  const error = ApiError.fromResponse(response.status, body ?? await response.json().catch(() => ({})));
+  const reference = response.headers.get("X-Request-ID");
+  return new ApiError(reference ? `${error.message} Support reference: ${reference}.` : error.message,
+    { status: error.status, technical: error.technical });
+}
+
+function fillErrorMessage(error: unknown): string {
+  if (error instanceof TypeError && /fetch|network|load failed/i.test(error.message)) {
+    return "The connection was interrupted. Check your connection and try again.";
+  }
+  return userMessage(error);
+}
 
 interface FillMeta {
   counts: {
@@ -48,8 +46,23 @@ interface FillMeta {
   denomination: string | null;
 }
 
+interface NotesError {
+  label?: string | null;
+  key?: string;
+  error?: string;
+  detail?: string;
+}
+
+function notesErrorMessage(error: NotesError): string {
+  const identity = [error.label, error.key].filter(Boolean).join(" · ");
+  const cause = error.error ?? error.detail ?? "Notes could not be filled. Try again or complete them in mTool.";
+  return identity ? `${identity}: ${cause}` : cause;
+}
+
 interface NotesReport {
   status: string;
+  errors?: NotesError[];
+  mismatches?: { label?: string; key?: string; found?: boolean; detail?: string }[];
   // True when the operator chose the diagnostic "no styling" fill.
   styling_disabled?: boolean;
   counts: {
@@ -108,7 +121,7 @@ interface NotesPreview {
   will_fill_existing: { index?: number; label: string | null; key: string }[];
   will_create: { index?: number; label: string | null; cell: string | null; label_cell: string | null }[];
   unresolved: UnresolvedNote[];
-  errors: { detail?: string }[];
+  errors: NotesError[];
 }
 
 // The operator's placement decision for one flagged note, sent to the server
@@ -118,6 +131,8 @@ type NoteTarget = { key?: string; sheet?: string; cell?: string };
 interface ReportSummary {
   status: string;
   numeric_status?: string;
+  request_id?: string;
+  preflight?: Preflight;
   counts: Record<string, number>;
   unresolved: { sheet: string; label: string | null; detail?: string }[];
   skipped_formula: { sheet: string; cell?: string; label: string | null }[];
@@ -205,8 +220,11 @@ const styles = {
     // Responsive: fill most of the viewport up to a comfortable cap so the
     // notes-preview cell references and column editor stop wrapping (they were
     // cramped at the old fixed 560px).
-    maxWidth: "min(1040px, 92vw)",
-    overflowY: "auto" as const,
+    maxWidth: "min(800px, 92vw)",
+    overflow: "hidden",
+    display: "flex",
+    flexDirection: "column",
+    outline: "none",
   } as React.CSSProperties,
   headerRow: {
     display: "flex",
@@ -246,6 +264,7 @@ const styles = {
     display: "flex",
     gap: pwc.space.sm,
     justifyContent: "flex-end",
+    flexWrap: "wrap",
     marginTop: pwc.space.xl,
   } as React.CSSProperties,
   noteCard: {
@@ -297,8 +316,7 @@ function PlanSection({
 /** Coerce a preflight response into a shape the UI can trust.
  *
  * A malformed or unreachable answer must read as "we don't know", not as
- * "blocked" — the server enforces the gate for real (409 on the patch), so a
- * UI that invented a blocker would only ever block the honest case. */
+ * "ready". The server repeats the assessment when it prepares the workbook. */
 function normalisePreflight(body: unknown): Preflight | null {
   if (!body || typeof body !== "object") return null;
   const raw = body as Partial<Preflight>;
@@ -480,14 +498,11 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
   const [columnConfidence, setColumnConfidence] = useState<string | null>(null);
   const [detectBusy, setDetectBusy] = useState(false);
   const [detectErr, setDetectErr] = useState<string | null>(null);
-  // Filing-readiness gate (Step 8A). `preflightAck` is the operator's written
-  // reason for overriding it — recorded on the fill receipt, so it is a
-  // decision on the record rather than a checkbox nobody can trace.
+  // Readiness reminders never require an override to prepare a workbook.
   const [preflight, setPreflight] = useState<Preflight | null>(null);
-  const [preflightAck, setPreflightAck] = useState("");
+  const [readinessErr, setReadinessErr] = useState<string | null>(null);
   // Step 11A: the workbook waits behind its own request until the operator has
   // seen the report (and, when degraded, said so).
-  const [degradedAck, setDegradedAck] = useState(false);
   const [downloadErr, setDownloadErr] = useState<string | null>(null);
   const [downloaded, setDownloaded] = useState(false);
   // Monotonic token so a slow column-detect for template A can't land its
@@ -495,11 +510,37 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
   // be sent as an explicit override and MIS-TARGET writes). Bumped on every
   // file change; runDetect ignores its own response once superseded.
   const detectSeq = useRef(0);
+  const previewSeq = useRef(0);
+  const sessionSeq = useRef(0);
+  const preflightSeq = useRef(0);
+  const fillButtonRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const [downloading, setDownloading] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialogRef.current?.focus();
+    return () => { previousFocus?.focus(); };
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
+      if (e.key !== "Tab") return;
+      const focusable = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(
+        "button, input, select, summary, a[href], [tabindex='0']",
+      ) ?? []).filter((el) => !el.matches(":disabled") && el.getClientRects().length > 0);
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (!first) { e.preventDefault(); dialogRef.current?.focus(); return; }
+      const focusOutsideControls = !focusable.some((el) => el === document.activeElement);
+      if (e.shiftKey && (document.activeElement === first || focusOutsideControls)) {
+        e.preventDefault(); last.focus();
+      } else if (!e.shiftKey && (document.activeElement === last || focusOutsideControls)) {
+        e.preventDefault(); first.focus();
+      }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
@@ -507,6 +548,13 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
 
   useEffect(() => {
     if (!open) return;
+    const session = ++sessionSeq.current;
+    const current = () => session === sessionSeq.current;
+    setBusy(false);
+    setDownloading(false);
+    setDetectBusy(false);
+    setPreviewBusy(false);
+    setReadinessErr(null);
     setMeta(null);
     setNotesCount(null);
     setNotesStyling("styled");
@@ -531,29 +579,46 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
     setPreviewErr(null);
     setNoteTargets({});
     setPreflight(null);
-    setPreflightAck("");
-    setDegradedAck(false);
     setDownloadErr(null);
     setDownloaded(false);
-    // Is this run's data settled enough to file? Asked up front so a blocked
-    // run says so before the operator hunts for their template.
+    const preflightRequest = ++preflightSeq.current;
     fetch(`/api/runs/${runId}/mtool-fill/preflight`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((body) => setPreflight(normalisePreflight(body)))
-      .catch(() => setPreflight(null));
-    fetch(`/api/runs/${runId}/mtool-fill`)
       .then(async (r) => {
-        if (!r.ok) throw new Error((await r.json()).detail || `HTTP ${r.status}`);
+        if (!r.ok) throw await responseError(r);
         return r.json();
       })
-      .then((doc) => setMeta(doc.meta))
-      .catch((e) => setLoadErr(userMessage(e)));
-    // Notes count is best-effort — a load failure just hides the notes line.
+      .then((body) => { if (current() && preflightRequest === preflightSeq.current) setPreflight(normalisePreflight(body)); })
+      .catch((e) => { if (current() && preflightRequest === preflightSeq.current) setReadinessErr(fillErrorMessage(e)); });
+    fetch(`/api/runs/${runId}/mtool-fill`)
+      .then(async (r) => {
+        if (!r.ok) throw await responseError(r);
+        return r.json();
+      })
+      .then((doc) => { if (current()) setMeta(doc.meta); })
+      .catch((e) => { if (current()) setLoadErr(fillErrorMessage(e)); });
     fetch(`/api/runs/${runId}/mtool-notes-fill`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((doc) => setNotesCount(doc?.meta?.counts?.notes ?? null))
-      .catch(() => setNotesCount(null));
+      .then(async (r) => {
+        if (!r.ok) throw await responseError(r);
+        return r.json();
+      })
+      .then((doc) => { if (current()) setNotesCount(doc?.meta?.counts?.notes ?? null); })
+      .catch((e) => { if (current()) setPreviewErr(`Could not load the notes summary. ${fillErrorMessage(e)} Notes will still be attempted during filling.`); });
+    return () => {
+      sessionSeq.current += 1;
+      detectSeq.current += 1;
+      previewSeq.current += 1;
+    };
   }, [open, runId]);
+
+  useEffect(() => {
+    setReport(null);
+    setDownloaded(false);
+    setDownloadErr(null);
+  }, [file, fillNotes, createMissingNotes, notesStyling, noteTargets, columnMap]);
+
+  useEffect(() => {
+    if (file) fillButtonRef.current?.focus();
+  }, [file]);
 
   if (!open) return null;
 
@@ -561,13 +626,19 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
     Object.keys(noteTargets).length > 0 ? JSON.stringify(noteTargets) : null;
 
   const submit = async () => {
-    if (!file) return;
+    if (!file || busy) return;
+    const session = sessionSeq.current;
+    const current = () => session === sessionSeq.current;
+    detectSeq.current += 1;
+    previewSeq.current += 1;
+    setDetectBusy(false);
+    setPreviewBusy(false);
+    preflightSeq.current += 1;
     setBusy(true);
     setPatchErr(null);
     setFilingFailure(null);
     setColumnPrompt(null);
     setReport(null);
-    setDegradedAck(false);
     setDownloaded(false);
     setDownloadErr(null);
     try {
@@ -580,13 +651,14 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
       if (columnMap) form.append("column_map", JSON.stringify(columnMap));
       const targets = fillNotes ? notesTargetsPayload() : null;
       if (targets) form.append("notes_targets", targets);
-      if (preflightAck.trim()) form.append("acknowledge_preflight", preflightAck.trim());
       const resp = await fetch(`/api/runs/${runId}/mtool-fill/patch`, {
         method: "POST",
         body: form,
       });
+      if (!current()) return;
       if (!resp.ok) {
         const body = await resp.json().catch(() => ({}));
+        if (!current()) return;
         const detail = body?.detail;
         // Low-confidence / unconfirmed auto-detection: the server hands back
         // its best guess in detail.detected. Seed the editor so the user can
@@ -626,43 +698,45 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
               : "Some filing values could not be mapped safely to this template.",
           ));
         }
-        throw new Error(
-          typeof detail === "string" ? detail : detail ? JSON.stringify(detail) : `HTTP ${resp.status}`
-        );
+        throw await responseError(resp, body);
       }
       // The response is the REPORT, not the file. The workbook waits behind
       // its own request until the operator has seen this (Step 11A).
-      setReport((await resp.json()) as ReportSummary);
+      const result = (await resp.json()) as ReportSummary;
+      if (!current()) return;
+      setReport(result);
+      if (result.preflight) { setPreflight(normalisePreflight(result.preflight)); setReadinessErr(null); }
     } catch (e) {
-      setPatchErr(userMessage(e));
+      if (current()) setPatchErr(fillErrorMessage(e));
     } finally {
-      setBusy(false);
+      if (current()) setBusy(false);
     }
   };
 
   // Step two of the split: fetch the workbook the fill produced. A degraded
   // fill only releases it once the operator has acknowledged the report.
   const download = async () => {
-    if (!report?.download_url) return;
-    // Belt to the disabled button's braces — and the server refuses too, so a
-    // degraded workbook can't leave without an acknowledgement on the record.
-    if (report.status !== "ok" && !degradedAck) return;
+    if (!report?.download_url || downloading) return;
+    const session = sessionSeq.current;
+    const current = () => session === sessionSeq.current;
+    setDownloading(true);
+    // Download for review is the explicit acknowledgment of this report.
+    // The server records it before releasing a workbook with review items.
     setDownloadErr(null);
     try {
       const url =
         report.status === "ok"
           ? report.download_url
           : `${report.download_url}?acknowledge_degraded=${encodeURIComponent(
-              "operator confirmed after reading the report",
+              "operator selected Download for review after seeing the report",
             )}`;
       const resp = await fetch(url);
       if (!resp.ok) {
         const body = await resp.json().catch(() => ({}));
-        throw new Error(
-          typeof body?.detail === "string" ? body.detail : `HTTP ${resp.status}`,
-        );
+        throw await responseError(resp, body);
       }
       const blob = await resp.blob();
+      if (!current()) return;
       const objectUrl = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = objectUrl;
@@ -673,16 +747,20 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
       URL.revokeObjectURL(objectUrl);
       setDownloaded(true);
     } catch (e) {
-      setDownloadErr(userMessage(e));
+      if (current()) setDownloadErr(fillErrorMessage(e));
+    } finally {
+      if (current()) setDownloading(false);
     }
   };
 
   // Dry-run diagnostic: what would fill / get created / stay unresolved, and
   // how many fn_* slots the uploaded template exposes. Writes nothing. Sends
   // the operator's placement decisions so a re-check reflects them.
-  const runPreview = async (selectedFile?: File) => {
+  const runPreview = async (selectedFile?: File, resetTargets = false) => {
     const targetFile = selectedFile ?? file;
     if (!targetFile) return;
+    const seq = ++previewSeq.current;
+    const stale = () => seq !== previewSeq.current;
     setPreviewBusy(true);
     setPreviewErr(null);
     setPreview(null);
@@ -691,7 +769,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
       form.append("template", targetFile);
       form.append("create_missing_notes", createMissingNotes ? "true" : "false");
       form.append("notes_styling", notesStyling);
-      const targets = notesTargetsPayload();
+      const targets = resetTargets ? null : notesTargetsPayload();
       if (targets) form.append("notes_targets", targets);
       const resp = await fetch(`/api/runs/${runId}/mtool-fill/notes-preview`, {
         method: "POST",
@@ -699,9 +777,9 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
       });
       const body = await resp.json().catch(() => ({}));
       if (!resp.ok) {
-        const detail = (body as { detail?: unknown })?.detail;
-        throw new Error(typeof detail === "string" ? detail : `HTTP ${resp.status}`);
+        throw await responseError(resp, body);
       }
+      if (stale()) return;
       const candidate = body as Partial<NotesPreview>;
       if (
         Array.isArray(candidate.will_fill_existing) &&
@@ -714,9 +792,9 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
         throw new Error("Notes preview returned an invalid response.");
       }
     } catch (e) {
-      setPreviewErr(userMessage(e));
+      if (!stale()) setPreviewErr(fillErrorMessage(e));
     } finally {
-      setPreviewBusy(false);
+      if (!stale()) setPreviewBusy(false);
     }
   };
 
@@ -741,8 +819,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
       const body = await resp.json().catch(() => ({}));
       if (stale()) return; // a newer file was chosen — drop this response
       if (!resp.ok) {
-        const detail = (body as { detail?: unknown })?.detail;
-        throw new Error(typeof detail === "string" ? detail : `HTTP ${resp.status}`);
+        throw await responseError(resp, body);
       }
       const detected = (body as { detected?: Record<string, DetectedSheet> }).detected;
       setDimensionalSheets(
@@ -786,16 +863,16 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
       }
     } catch (e) {
       if (stale()) return;
-      setDetectErr(userMessage(e));
+      setDetectErr(fillErrorMessage(e));
     } finally {
       if (!stale()) setDetectBusy(false);
     }
   };
 
-  // The run isn't ready to file and nobody has said why they're going ahead.
-  const blockedUnacknowledged =
-    preflight != null && !preflight.ok && preflightAck.trim().length === 0;
-
+  const reviewGroups = [
+    { title: "Filing blockers", items: preflight?.blockers ?? [], urgent: true },
+    { title: "Warnings", items: preflight?.warnings ?? [], urgent: false },
+  ].filter((group) => group.items.length > 0);
   const c = meta?.counts;
   const excludedParts = c ? [
     c.excluded_matrix_socie > 0 && `${c.excluded_matrix_socie} category/matrix`,
@@ -817,7 +894,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
       aria-modal="true"
       aria-label="Fill mTool template"
     >
-      <div style={styles.modal}>
+      <div ref={dialogRef} tabIndex={-1} style={styles.modal}>
         <div style={styles.headerRow}>
           <h2 style={styles.heading}>Fill mTool template</h2>
           {/* Corner close — Esc + scrim-click already close, but a visible ✕
@@ -832,56 +909,94 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
             ✕
           </button>
         </div>
+        <div style={{ overflowY: "auto", minHeight: 0, flex: "1 1 auto" }}>
         <p style={styles.sub}>
           Choose the empty Excel template exported from mTool. We&apos;ll place this
           run&apos;s figures and notes, then return one file for Validate &amp; Generate.
         </p>
 
+        <fieldset disabled={busy || downloading} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+        <ol aria-label="Filling steps" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: pwc.space.md, listStyle: "none", paddingLeft: 0, fontSize: 13, marginBottom: pwc.space.lg }}>
+          <li aria-current={!file ? "step" : undefined}>1. Choose template</li>
+          <li aria-current={file && !report ? "step" : undefined}>2. Check and fill</li>
+          <li aria-current={report ? "step" : undefined}>3. Download</li>
+        </ol>
+        <details open={!file} style={{ marginBottom: pwc.space.md }}>
+          <summary style={{ cursor: "pointer", fontSize: 13, marginBottom: pwc.space.sm }}>{file ? `${file.name} · Change template` : "Your mTool template"}</summary>
+          <FileDropzone
+            accept=".xlsx"
+            disabled={busy || downloading}
+            label={
+              file
+                ? `Selected: ${file.name} — drop another to replace`
+                : "Drop your empty mTool template (.xlsx) here or choose a file"
+            }
+            buttonLabel="Choose template"
+            inputLabel="mTool template file"
+            testId="mtool-template-dropzone"
+            onFile={(f) => {
+              if (!f.name.toLowerCase().endsWith(".xlsx") || f.size === 0 || f.size > 25 * 1024 * 1024) {
+                setPatchErr("Choose a non-empty .xlsx template exported from mTool, up to 25 MB.");
+                return;
+              }
+              previewSeq.current += 1;
+              setPreviewBusy(false);
+              setReport(null);
+              setPatchErr(null);
+              setDownloadErr(null);
+              setDownloaded(false);
+              detectSeq.current += 1; // invalidate any in-flight detect for the old file
+              setFile(f);
+              setFilingFailure(null);
+              setColumnMap(null); // a different template has a different layout
+              setDimensionalSheets([]);
+              setColumnConfidence(null);
+              setDetectErr(null);
+              setDetectBusy(false);
+              setColumnPrompt(null);
+              setPreview(null); // a different template ⇒ a different plan
+              setPreviewErr(null);
+              setNoteTargets({}); // decisions were made against the old template
+              runDetect(f); // confirm the column layout up front
+              if (notesCount !== 0 && fillNotes) {
+                void runPreview(f, true);
+              }
+            }}
+          />
+        </details>
+
+        {patchErr && (
+          <div role="alert" style={ui.alertError}>Fill failed: {patchErr}</div>
+        )}
+        {busy && <div role="status" style={ui.alertInfo}>Filling figures and notes, checking the saved values, and preparing your download…</div>}
+        {readinessErr && <div role="status" style={ui.alertWarning}>Run checks are unavailable: {readinessErr} You can still fill the template; checks are repeated when you fill.</div>}
         {loadErr && (
           <div style={ui.alertError}>Could not load fill data: {loadErr}</div>
         )}
 
-        {/* Filing-readiness gate. Blocking is the default; overriding means
-            writing down why, and that reason goes on the permanent record. */}
-        {preflight && !preflight.ok && (
-          <section style={{ ...ui.alertWarning, marginBottom: pwc.space.md }} aria-label="Not ready to file">
-            <div style={{ fontWeight: pwc.weight.medium }}>
-              This run isn&apos;t ready to file yet
-            </div>
-            <ul style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: 12 }}>
-              {preflight.blockers.map((b) => (
-                <li key={b.code} style={{ marginBottom: 4 }}>
-                  {b.message}
-                  {b.examples.length > 0 && (
-                    <ul style={{ margin: "2px 0 0", paddingLeft: 16, color: pwc.grey700 }}>
-                      {b.examples.map((e, i) => (
-                        <li key={i}>{e}</li>
-                      ))}
-                    </ul>
-                  )}
-                </li>
-              ))}
-            </ul>
-            <label style={{ display: "block", marginTop: pwc.space.sm, fontSize: 12 }}>
-              To continue, record why these checks do not prevent this filing.
-              <input
-                aria-label="Reason for filing anyway"
-                value={preflightAck}
-                onChange={(e) => setPreflightAck(e.target.value)}
-                placeholder="Reason for continuing"
-                style={{ display: "block", width: "100%", marginTop: 4, fontSize: 12 }}
-              />
-            </label>
+        {reviewGroups.length > 0 && (
+          <section style={{ ...ui.alertWarning, display: "block", marginBottom: pwc.space.md }} aria-label="Run review reminders">
+            <strong>You can fill this template. Review these items before filing.</strong>
+            {reviewGroups.map((group) => (
+              <section key={group.title} aria-label={group.title} style={{ marginTop: 6, fontSize: 12 }}>
+                <strong>{group.title}</strong>
+                <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                  {group.items.map((item) => (
+                    <li key={item.code} style={{ marginBottom: 4 }}>
+                      <span style={{ fontWeight: group.urgent ? pwc.weight.medium : pwc.weight.regular }}>{item.message}</span>
+                      {item.examples.length > 0 && <div style={{ color: pwc.grey700 }}>{item.examples.join("; ")}</div>}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ))}
           </section>
         )}
 
-        {preflight && preflight.warnings.length > 0 && (
-          <details style={{ marginBottom: pwc.space.sm, fontSize: 12, color: pwc.grey700 }}>
-            <summary style={{ cursor: "pointer" }}>Other run details ({preflight.warnings.length})</summary>
-            {preflight.warnings.map((w) => <div key={w.code}>{w.message}</div>)}
-          </details>
-        )}
-
+        <div hidden={!!report}>
+        {meta && <p style={styles.statLine}>{meta.filing_standard.toUpperCase()} · {meta.filing_level} · {meta.counts.writes} available figures{notesCount != null ? ` · ${notesCount} notes` : ""}. We detect the destination cells from your template.</p>}
+        <details style={{ marginBottom: pwc.space.md }}>
+          <summary style={{ cursor: "pointer", fontSize: 13 }}>Source data and mapping details</summary>
         {preflight?.field_semantics && (
           <section
             aria-label="Filing field coverage"
@@ -950,6 +1065,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
           </div>
         )}
 
+        </details>
         <details style={{ marginBottom: pwc.space.md }}>
           <summary style={{ cursor: "pointer", fontSize: 13, color: pwc.grey700 }}>
             Optional settings
@@ -961,6 +1077,8 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
               checked={fillNotes}
               onChange={(e) => {
                 setFillNotes(e.target.checked);
+                previewSeq.current += 1;
+                setPreviewBusy(false);
                 setPreview(null); // plan no longer reflects the toggles
                 setPreviewErr(null);
                 setNoteTargets({});
@@ -980,6 +1098,8 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
               checked={createMissingNotes}
               onChange={(e) => {
                 setCreateMissingNotes(e.target.checked);
+                previewSeq.current += 1;
+                setPreviewBusy(false);
                 setPreview(null); // create-toggle changes the plan
                 setPreviewErr(null);
                 setNoteTargets({});
@@ -1017,7 +1137,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                 type="radio"
                 name="notes-styling"
                 checked={notesStyling === "styled"}
-                onChange={() => setNotesStyling("styled")}
+                onChange={() => { previewSeq.current += 1; setPreviewBusy(false); setPreview(null); setNotesStyling("styled"); }}
                 aria-label="Styled notes (recommended)"
                 style={{ marginTop: 2 }}
               />
@@ -1036,7 +1156,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                 type="radio"
                 name="notes-styling"
                 checked={notesStyling === "none"}
-                onChange={() => setNotesStyling("none")}
+                onChange={() => { previewSeq.current += 1; setPreviewBusy(false); setPreview(null); setNotesStyling("none"); }}
                 aria-label="No styling (diagnostic)"
                 style={{ marginTop: 2 }}
               />
@@ -1053,40 +1173,8 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
         )}
         </details>
 
-        <div style={{ marginBottom: pwc.space.md }}>
-          <FileDropzone
-            accept=".xlsx"
-            label={
-              file
-                ? `Selected: ${file.name} — drop another to replace`
-                : "Drop your empty mTool template (.xlsx) here or choose a file"
-            }
-            buttonLabel="Choose template"
-            inputLabel="mTool template file"
-            testId="mtool-template-dropzone"
-            onFile={(f) => {
-              detectSeq.current += 1; // invalidate any in-flight detect for the old file
-              setFile(f);
-              setFilingFailure(null);
-              setColumnMap(null); // a different template has a different layout
-              setDimensionalSheets([]);
-              setColumnConfidence(null);
-              setDetectErr(null);
-              setDetectBusy(false);
-              setColumnPrompt(null);
-              setPreview(null); // a different template ⇒ a different plan
-              setPreviewErr(null);
-              setNoteTargets({}); // decisions were made against the old template
-              runDetect(f); // confirm the column layout up front
-              if (notesCount !== null && notesCount > 0 && fillNotes) {
-                void runPreview(f);
-              }
-            }}
-          />
-        </div>
-
         {detectBusy && (
-          <div style={{ ...styles.statLine, color: pwc.grey700 }}>
+          <div role="status" style={{ ...styles.statLine, color: pwc.grey700 }}>
             Checking the template's column layout…
           </div>
         )}
@@ -1095,6 +1183,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
             Couldn&apos;t read the template&apos;s columns: {detectErr}
           </div>
         )}
+        {file && columnConfidence === "high" && !columnMap && !detectBusy && !detectErr && <p role="status" style={styles.statLine}>Template layout detected automatically. Ready to fill.</p>}
         {dimensionalSheets.length > 0 && !detectBusy && !detectErr && (
           <div
             style={{
@@ -1112,14 +1201,14 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                 : "Category-based sheets recognised"}
             </strong>
             <div style={{ marginTop: 2 }}>
-              These columns are matched by taxonomy member, such as equity component
-              or share class. There are no current-year or prior-year columns to choose.
+              We match equity components and share classes automatically. You do not need to select columns for these sheets.
             </div>
           </div>
         )}
 
-        {notesCount !== null && notesCount > 0 && fillNotes && (
+        {fillNotes && (
           <div style={{ marginBottom: pwc.space.md }}>
+            {file && !previewBusy && <button type="button" onClick={() => void runPreview()} disabled={busy} style={ui.buttonGhost} className={uiClass.btnGhost}>Check notes</button>}
             {previewBusy && (
               <div style={{ color: pwc.grey500, fontSize: 12 }}>Checking note placement…</div>
             )}
@@ -1158,7 +1247,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                     </div>
                     <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
                       {preview.errors.slice(0, 4).map((e, i) => (
-                        <li key={i}>{e.detail ?? "error"}</li>
+                        <li key={i}>{notesErrorMessage(e)}</li>
                       ))}
                       {preview.errors.length > 4 && <li>… and {preview.errors.length - 4} more</li>}
                     </ul>
@@ -1169,7 +1258,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                     reason and, where the tool found options, a picker. This is
                     the notes twin of the numeric column-layout confirm step. */}
                 <PlanSection
-                  title="Needs your decision"
+                  title="Notes to finish in mTool"
                   count={preview.unresolved.length}
                   defaultOpen
                   hint="Place these yourself, or leave them for manual completion in mTool."
@@ -1291,9 +1380,6 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
           </div>
         )}
 
-        {patchErr && (
-          <div style={ui.alertError}>Fill failed: {patchErr}</div>
-        )}
         {filingFailure && (
           <FilingCoverageFailurePanel coverage={filingFailure} />
         )}
@@ -1379,24 +1465,32 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
           </div>
         )}
 
+        </div>
+        </fieldset>
         {report && (
-          <div
+          <div role="status"
             style={{
               ...(report.status === "ok" ? ui.alertSuccess : ui.alertWarning),
+              display: "block",
               marginTop: pwc.space.md,
             }}
           >
             <div style={{ fontWeight: pwc.weight.medium }}>
               {report.status === "ok"
-                ? `Clean — ${report.counts.written} values written. Safe to Validate in mTool.`
-                : `Degraded — review before Validate.`}
+                ? `Template filled — ${report.counts.written} values written.`
+                : `Template filled with items to review — ${report.counts.written} values written.`}
             </div>
+            <p style={{ fontSize: 12 }}>Download the workbook, review any items listed here, then open it in mTool to Validate &amp; Generate.</p>
+            {report.request_id && <div style={{ fontSize: 12 }}>Support reference: {report.request_id}{report.receipt_id ? ` · Fill record ${report.receipt_id}` : ""}</div>}
             {report.filing_coverage && (
               <div style={{ fontSize: 12, marginTop: 4, color: pwc.grey700 }}>
                 Filing coverage: {report.filing_coverage.mapped}/{report.filing_coverage.requested}
                 {" "}values mapped ({report.filing_coverage.coverage_percent}%).
               </div>
             )}
+            {report.notes && <RowDetail title="Notes errors" rows={(report.notes.errors ?? []).map(notesErrorMessage)} />}
+            {report.notes && <RowDetail title="Notes that need checking" rows={(report.notes.mismatches ?? []).map((e) => `${e.label ?? e.key ?? "Note"}: ${e.detail ?? (e.found === false ? "The saved note is missing or empty. Check it in mTool." : "The saved note differs from the source. Check it in mTool.")}`)} />}
+            {report.notes && <RowDetail title="Notes not filled" rows={(report.notes.unresolved ?? []).map((u) => `${u.label ?? "Note"}: ${u.detail ?? "Complete this note in mTool."}`)} />}
             {/* FULL row detail, not counts (Step 11A). The old header-borne
                 report capped these at 20 rows and the UI showed only totals,
                 so "which rows didn't land?" was unanswerable. */}
@@ -1496,27 +1590,6 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
           </div>
         )}
 
-        {/* Step 11A: the workbook is a SECOND action, taken once the report
-            above has been read. A degraded fill needs it said out loud. */}
-        {report && report.status !== "ok" && (
-          <label
-            style={{ ...styles.statLine, display: "flex", alignItems: "flex-start", gap: 6, marginTop: pwc.space.sm }}
-          >
-            <input
-              type="checkbox"
-              checked={degradedAck}
-              onChange={(e) => setDegradedAck(e.target.checked)}
-              aria-label="I have read the problems above"
-              style={{ marginTop: 2 }}
-            />
-            <span>
-              I&apos;ve read the problems above and still want the file
-              <span style={{ display: "block", color: pwc.grey700, fontSize: 12 }}>
-                Kept with the filing record.
-              </span>
-            </span>
-          </label>
-        )}
         {downloadErr && (
           <div style={{ ...ui.alertError, marginTop: pwc.space.sm }}>
             Download failed: {downloadErr}
@@ -1528,38 +1601,35 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
           </div>
         )}
 
-        <div style={styles.actions}>
+        </div>
+        <div style={{ ...styles.actions, flexShrink: 0, paddingTop: pwc.space.md, borderTop: `1px solid ${pwc.grey200}` }}>
           <button type="button" onClick={onClose} className={uiClass.btnGhost} style={ui.buttonGhost}>
             Close
           </button>
           <button
             type="button"
-            onClick={submit}
-            disabled={!file || busy || blockedUnacknowledged}
+            ref={fillButtonRef}
+            onClick={report ? () => setReport(null) : submit}
+            disabled={!file || busy || downloading}
             className={report ? uiClass.btnSecondary : uiClass.btnPrimary}
             style={report ? ui.buttonSecondary : ui.buttonPrimary}
-            title={
-              blockedUnacknowledged
-                ? "Resolve the points above, or say why you're going ahead"
-                : undefined
-            }
           >
-            {busy ? "Filling…" : report ? "Fill again" : "Fill"}
+            {busy ? "Filling…" : report ? "Change options" : "Fill"}
           </button>
           {report && (
             <button
               type="button"
               onClick={download}
-              disabled={report.status !== "ok" && !degradedAck}
+              disabled={downloading || busy}
               className={uiClass.btnPrimary}
               style={ui.buttonPrimary}
               title={
                 report.status === "ok"
                   ? "Download the filled template"
-                  : "Confirm you've read the problems above first"
+                  : "Download with the review items recorded on the fill receipt"
               }
             >
-              Download filled template
+              {downloading ? "Downloading…" : report.status === "ok" ? "Download filled template" : "Download for review"}
             </button>
           )}
         </div>
