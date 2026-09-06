@@ -431,6 +431,7 @@ def patch_mtool_template(
     run_id: int,
     template: UploadFile = File(...),
     column_map: str | None = Form(default=None),
+    filing_targets: str | None = Form(default=None),
     strict: bool = Form(default=True),
     force_recalc: bool = Form(default=False),
     fill_notes: bool = Form(default=True),
@@ -570,8 +571,12 @@ def patch_mtool_template(
             _validate_cmap_semantics(cmap, doc)
 
         try:
+            selected_filing_targets = json.loads(filing_targets) if filing_targets else None
+            if selected_filing_targets is not None and not isinstance(selected_filing_targets, dict):
+                raise ValueError("filing_targets must be a JSON object")
             ready, filing_coverage = resolve_filing_doc(
-                str(src), doc, data=data, column_map=cmap)
+                str(src), doc, data=data, column_map=cmap,
+                filing_targets=selected_filing_targets)
         except (ValueError, AttributeError, TypeError, KeyError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         if filing_coverage["status"] == "blocked":

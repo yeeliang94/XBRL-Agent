@@ -1174,6 +1174,39 @@ describe("mTool filing gates", () => {
 
   });
 
+  test("retries with explicit filing choices and clears them for another workbook", async () => {
+    const submitted: FormData[] = [];
+    await openWith((url, init) => {
+      if (url.includes("/mtool-fill/patch")) {
+        submitted.push(init!.body as FormData);
+        return new Response(JSON.stringify({ detail: { filing_coverage: {
+          status: "blocked", requested: 1, mapped: 0, unmapped: 1, ambiguous: 0,
+          coverage_percent: 0, ambiguous_writes: [], unresolved_writes: [{
+            sheet: "SOCIE", label: "Equity", period: "CY", entity_scope: "Company",
+            resolution_key: "fact-revision", resolution_options: [{
+              cell: "SOCIE!E27", label: "SOCIE!E27 · Opening balance", dimensions: {},
+            }],
+          }],
+        } } }), { status: 422 });
+      }
+      if (url.includes("/mtool-fill")) return new Response(JSON.stringify(FILL_DOC));
+      return new Response("{}");
+    });
+    chooseTemplate();
+    fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
+    const picker = await screen.findByLabelText("Destination for Equity CY Company");
+    expect(picker).toHaveValue("");
+    fireEvent.change(picker, { target: { value: "SOCIE!E27" } });
+    fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
+    await waitFor(() => expect(submitted).toHaveLength(2));
+    expect(JSON.parse(submitted[1].get("filing_targets") as string)).toEqual({ "fact-revision": "SOCIE!E27" });
+    await screen.findByLabelText("Destination for Equity CY Company");
+    chooseTemplate();
+    fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
+    await waitFor(() => expect(submitted).toHaveLength(3));
+    expect(submitted[2].has("filing_targets")).toBe(false);
+  });
+
   test("shows structured, deduplicated taxonomy coverage diagnostics", async () => {
     const missingDimension =
       "This category-based sheet requires a taxonomy category dimension, but this run figure has none.";

@@ -1770,6 +1770,22 @@ Load-bearing invariants:
   Repeated consistent dates and dimensional period blocks remain supported.
   Pinned by the conflicting/repeated period-block tests in
   `tests/test_mtool_column_detect.py` and `tests/test_mtool_routes.py`.
+- **Filing destination confirmation.** Repeated taxonomy candidates may be
+  narrowed by one exact visible row label after sheet, period and dimensions
+  have been resolved. A remaining tie or a missing category stays blocked.
+  The failure report may offer explicit taxonomy-addressed destinations for
+  operator confirmation; never preselect a category or accept arbitrary cells.
+  Recompute candidates server-side on each request, bind selections to the
+  current workbook contents and complete fact, exclude formula destinations,
+  and reject stale choices and two facts targeting the same cell. Preserve
+  period, entity, value and dimensions in diagnostics. Persist confirmed
+  destinations in filing coverage on the report and receipt and require review
+  before download. Choices do not rewrite canonical facts or infer missing
+  source categories. The modal stacks report sections vertically and contains
+  horizontal overflow within the detail table. Pinned by
+  `tests/test_mtool_filing_resolution.py`, the destination retry test in
+  `tests/test_mtool_routes.py`, and the `FilingCoverageFailurePanel` and
+  `MtoolFillModal` web tests.
 - **Current compatibility target is mTool 2.2.** Generated-template adapters
   are verified in automated forward/reverse SOCIE round trips across
   MFRS/MPERS and Company/Group. A genuine mTool 2.2 workbook fingerprint and

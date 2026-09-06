@@ -161,3 +161,19 @@ See [the journey and diagnostics guide](../docs/MTOOL-FILL-JOURNEY.md) for detai
   requires confirmation when the layout is unknown.
 
 Full plan and phase status: `docs/PLAN.md`.
+
+## Resolving filing destinations
+
+If a fill reports missing categories or multiple taxonomy destinations, expand
+the affected figures. Check each figure's value, year and entity against the
+source statement. Choose the matching destination from the offered workbook
+cells, then click **Fill** again. No category is selected automatically.
+
+Only destinations supported by the uploaded workbook's taxonomy markers are
+offered. If none are available, the template or source category information
+must be corrected before that figure can be filed. Do not substitute an
+unrelated category or split a total without supporting source information.
+
+Choices apply to the current figures and workbook. Changing either invalidates
+them. Confirmed destinations appear in the filing report and receipt, and the
+result requires review before download. They do not alter canonical figures.

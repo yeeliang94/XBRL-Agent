@@ -3,6 +3,13 @@ import { pwc } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 
 export interface FilingCoverageIssue {
+  concept_uuid?: string;
+  period?: string;
+  entity_scope?: string;
+  value?: number;
+  dimensions?: Record<string, string>;
+  resolution_key?: string;
+  resolution_options?: { cell: string; label: string; dimensions: Record<string, string> }[];
   sheet?: string;
   label?: string | null;
   primary_concept?: string | null;
@@ -20,6 +27,7 @@ export interface FilingCoverage {
   coverage_percent: number;
   unresolved_writes: FilingCoverageIssue[];
   ambiguous_writes: FilingCoverageIssue[];
+  operator_resolutions?: (FilingCoverageIssue & { cell: string })[];
 }
 
 export function normaliseFilingCoverage(body: unknown): FilingCoverage | null {
@@ -72,7 +80,11 @@ export function filingCoverageFallbackMessage(
   return details.length > 0 ? [...new Set(details)].join(" ") : fallback;
 }
 
-export function FilingCoverageFailurePanel({ coverage }: { coverage: FilingCoverage }) {
+export function FilingCoverageFailurePanel({ coverage, selections = {}, onSelect }: {
+  coverage: FilingCoverage;
+  selections?: Record<string, string>;
+  onSelect?: (key: string, cell: string) => void;
+}) {
   const rows = [
     ...coverage.unresolved_writes.map((issue) => ({ ...issue, kind: "Unresolved" })),
     ...coverage.ambiguous_writes.map((issue) => ({ ...issue, kind: "Ambiguous" })),
@@ -93,7 +105,7 @@ export function FilingCoverageFailurePanel({ coverage }: { coverage: FilingCover
   ];
 
   return (
-    <div style={{ ...ui.alertError, marginTop: pwc.space.md }}>
+    <div data-testid="filing-coverage-failure" style={{ ...ui.alertError, flexDirection: "column", alignItems: "stretch", minWidth: 0, marginTop: pwc.space.md }}>
       <div role="alert">
         <div style={{ fontWeight: pwc.weight.medium, color: pwc.grey900 }}>
           Template taxonomy mapping stopped the fill
@@ -103,6 +115,13 @@ export function FilingCoverageFailurePanel({ coverage }: { coverage: FilingCover
           {blocked} {blocked === 1 ? "value was" : "values were"} not written. No workbook was created.
         </div>
       </div>
+
+      {onSelect && rows.some((issue) => issue.resolution_options?.length) && (
+        <p style={{ margin: 0, fontSize: 14 }}>
+          Check the source statement and choose a destination for each affected figure, then click Fill again.
+          Categories are not inferred. Choices apply only to these figures and this workbook and are recorded in the filing report.
+        </p>
+      )}
       {affectedSheets.length > 0 && (
         <div style={{ fontSize: 12, marginTop: 4, color: pwc.grey700 }}>
           Affected sheets: {affectedSheets.join(", ")}.
@@ -129,17 +148,17 @@ export function FilingCoverageFailurePanel({ coverage }: { coverage: FilingCover
       <details
         role="group"
         aria-label="Affected filing values"
-        open={rows.length <= 12}
+        open={Boolean(onSelect) || rows.length <= 12}
         style={{ marginTop: pwc.space.sm, fontSize: 12 }}
       >
         <summary style={{ cursor: "pointer", fontWeight: pwc.weight.medium }}>
           Affected filing values ({rows.length})
         </summary>
-        <div style={{ overflowX: "auto", marginTop: 6 }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", color: pwc.grey700 }}>
+        <div style={{ overflow: "auto", maxHeight: "55vh", marginTop: 6 }}>
+          <table style={{ width: "100%", minWidth: 900, tableLayout: "fixed", borderCollapse: "collapse", color: pwc.grey700 }}>
             <thead>
               <tr>
-                {["Sheet", "Figure", "Problem", "Taxonomy concept", "Candidates"].map((heading) => (
+                {["Sheet", "Figure and context", "Problem", "Taxonomy concept", "Destination"].map((heading) => (
                   <th
                     key={heading}
                     scope="col"
@@ -160,16 +179,36 @@ export function FilingCoverageFailurePanel({ coverage }: { coverage: FilingCover
                   padding: "4px 6px",
                   verticalAlign: "top",
                   borderBottom: "1px solid " + pwc.grey200,
+                  overflowWrap: "anywhere",
+                  fontSize: 13,
                 };
                 return (
                   <tr key={[issue.kind, issue.sheet, issue.label ?? index, index].join("-")}>
                     <td style={cellStyle}>{issue.sheet ?? "Unknown"}</td>
-                    <td style={cellStyle}>{issue.label ?? "(no label)"}</td>
+                    <td style={cellStyle}>
+                      <strong>{issue.label ?? "(no label)"}</strong>
+                      <div>{[issue.period, issue.entity_scope].filter(Boolean).join(" · ")}</div>
+                      {issue.value != null && <div>Value: {issue.value.toLocaleString()}</div>}
+                      {Object.entries(issue.dimensions ?? {}).map(([axis, member]) => <div key={axis}>{axis}: {member}</div>)}
+                    </td>
                     <td style={cellStyle}>{issue.detail ?? issue.reason_code ?? issue.kind}</td>
                     <td style={cellStyle}>
                       <code>{issue.primary_concept ?? "Not available"}</code>
                     </td>
-                    <td style={cellStyle}>{issue.candidates?.join(", ") ?? "—"}</td>
+                    <td style={cellStyle}>
+                      {onSelect && issue.resolution_key && Boolean(issue.resolution_options?.length) ? (
+                        <>
+                          <select aria-label={`Destination for ${issue.label ?? "figure"} ${issue.period ?? ""} ${issue.entity_scope ?? ""}`}
+                            style={{ ...ui.select, width: "100%", minWidth: 0 }}
+                            value={selections[issue.resolution_key] ?? ""}
+                            onChange={(event) => onSelect(issue.resolution_key!, event.target.value)}>
+                            <option value="">Choose destination…</option>
+                            {issue.resolution_options?.map((option) => <option key={option.cell} value={option.cell}>{option.label}</option>)}
+                          </select>
+                          {issue.resolution_options?.map((option) => <div key={option.cell} style={{ marginTop: 8 }}>{option.label}</div>)}
+                        </>
+                      ) : issue.candidates?.join(", ") ?? "No verified destination available"}
+                    </td>
                   </tr>
                 );
               })}
