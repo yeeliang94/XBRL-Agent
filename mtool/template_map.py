@@ -12,6 +12,8 @@ the only code that writes an mTool file.
 from __future__ import annotations
 
 from collections import defaultdict
+import hashlib
+import json
 import re
 from typing import Any
 
@@ -267,10 +269,87 @@ def _coverage_issue(
         "label": write.get("label"),
         "reason_code": reason_code,
         "detail": detail,
+        "period": write.get("period"),
+        "entity_scope": write.get("entity_scope"),
+        "value": write.get("value"),
+        "dimensions": (write.get("semantic_address") or {}).get("dimensions") or {},
     }
     if candidates is not None:
         issue["candidates"] = candidates
     return issue
+
+
+def _resolution_options(
+    write: dict[str, Any],
+    issue: dict[str, Any],
+    occurrences: dict[str, list[tuple[str, int, str]]],
+    cells_by_sheet: dict[str, dict],
+    period_blocks: dict[str, list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    """Offer only taxonomy-addressed cells; never arbitrary operator coordinates.
+
+    Missing categories are decisions about the source figure, not defaults we
+    can infer from a workbook. Expose the explicit axis/member headers for
+    confirmation, restricted to the fact's sheet and reporting-period block.
+    """
+    from concept_model.taxonomy_semantics import taxonomy_concept
+
+    sheet = write.get("sheet")
+    cells = cells_by_sheet.get(sheet, {})
+    options = {}
+    if issue["reason_code"] == "missing_category_dimensions":
+        primary = (write.get("semantic_address") or {}).get("primary_concept")
+        candidates = [c for c in occurrences.get(primary, []) if c[0] == sheet]
+        blocks = period_blocks.get(sheet, [])
+        candidates, period_issue = _filter_candidates_for_period(candidates, write, blocks)
+        if period_issue:
+            return []
+        for _, row, _ in candidates:
+            block = _block_for_primary_row(blocks, row)
+            if block is None:
+                continue
+            for header_row, header_cells in cells.items():
+                if header_row > block["dom_row"] or (
+                    block["previous_dom_row"] is not None
+                    and header_row <= block["previous_dom_row"]
+                ):
+                    continue
+                for col, (_, raw) in header_cells.items():
+                    ids = _taxonomy_identifiers(raw or "")
+                    axes = [i for i in ids if (c := taxonomy_concept(i))
+                            and (c.substitution_group or "").endswith("dimensionItem")]
+                    members = [i for i in ids if (c := taxonomy_concept(i))
+                               and c.local_name.endswith("Member")]
+                    # Composite headers encode one table::axis::member tuple.
+                    # More complex headers stay blocked rather than pairing by order.
+                    if len(axes) != 1 or len(members) != 1:
+                        continue
+                    if cells.get(row, {}).get(col, (None,))[0] == "F":
+                        continue
+                    cell = f"{sheet}!{col}{row}"
+                    dims = {axes[0]: members[0]}
+                    row_text = " · ".join(
+                        text for kind, text in cells.get(row, {}).values()
+                        if kind == "S" and text
+                    )
+                    options[cell] = {"cell": cell, "dimensions": dims,
+                                     "label": f"{cell} · {members[0]} · {row_text}"}
+    else:
+        for cell in issue.get("candidates", []):
+            candidate_sheet, ref = cell.rsplit("!", 1)
+            match = re.fullmatch(r"([A-Z]+)([0-9]+)", ref)
+            if candidate_sheet != sheet or not match:
+                continue
+            col, row = match.group(1), int(match.group(2))
+            if cells.get(row, {}).get(col, (None,))[0] == "F":
+                continue
+            # Include the actual row text and label-role URI so opening and
+            # closing balances are distinguishable without inventing labels.
+            row_text = " · ".join(raw for kind, raw in cells.get(row, {}).values()
+                                  if kind == "S" and raw)
+            options[cell] = {"cell": cell, "dimensions": issue["dimensions"],
+                             "label": f"{cell} · {row_text}"}
+    return list(options.values())
 
 
 def _filter_candidates_for_period(
@@ -423,6 +502,7 @@ def resolve_filing_doc(
     data: dict | None = None,
     column_map: dict[str, dict[str, Any]] | None = None,
     workbook_index: tuple[dict, dict] | None = None,
+    filing_targets: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Resolve writes and return ``(offline_doc, coverage_report)``.
 
@@ -439,6 +519,17 @@ def resolve_filing_doc(
         template_path, doc, data=data, workbook_index=workbook_index
     )
     occurrences, cells_by_sheet = workbook_index
+    filing_targets = {} if filing_targets is None else filing_targets
+    if not isinstance(filing_targets, dict) or any(
+        not isinstance(k, str) or not isinstance(v, str)
+        for k, v in filing_targets.items()
+    ):
+        raise ValueError("filing_targets must map resolution keys to destinations")
+    workbook_revision = hashlib.sha256(
+        json.dumps(cells_by_sheet, sort_keys=True).encode()
+    ).hexdigest()
+    used_selections = set()
+    operator_resolutions = []
     descriptor = inspection.get("template") or {}
     generated = descriptor.get("source") == "generated"
     if not inspection["filing_family_match"]:
@@ -485,12 +576,53 @@ def resolve_filing_doc(
             target, unresolved_issue, ambiguous_issue = _resolve_taxonomy_target(
                 write, primary, occurrences, detected, cmap, period_blocks,
             )
-            if unresolved_issue:
-                unresolved.append(unresolved_issue)
-                continue
-            if ambiguous_issue:
-                ambiguous.append(ambiguous_issue)
-                continue
+            issue = unresolved_issue or ambiguous_issue
+            if issue:
+                options = _resolution_options(
+                    write, issue, occurrences, cells_by_sheet, period_blocks,
+                )
+                # Taxonomy identity, dimensions and period have already
+                # constrained this set. An exact visible label can distinguish
+                # repeated opening/closing rows; ties still require review.
+                exact = []
+                if ambiguous_issue and write.get("label"):
+                    label_col = detected.get(write.get("sheet"), {}).get("label_column")
+                    expected_label = str(write["label"]).strip().lstrip("*").strip()
+                    for option in options:
+                        sheet, ref = option["cell"].rsplit("!", 1)
+                        row = int(re.search(r"\d+$", ref).group())
+                        raw = cells_by_sheet[sheet].get(row, {}).get(label_col, (None, ""))[1]
+                        if (raw or "").strip().lstrip("*").strip() == expected_label:
+                            exact.append(option)
+                if len(exact) == 1:
+                    sheet, ref = exact[0]["cell"].rsplit("!", 1)
+                    match = re.fullmatch(r"([A-Z]+)([0-9]+)", ref)
+                    target = (sheet, int(match.group(2)), match.group(1))
+                    # Continue through the shared write/duplicate checks below.
+                    issue = None
+                key = hashlib.sha256(json.dumps(
+                    [workbook_revision, write], sort_keys=True,
+                ).encode()).hexdigest()
+                if issue is not None:
+                    issue.update(resolution_key=key, resolution_options=options)
+                selected = filing_targets.get(key)
+                if issue is not None and selected is not None:
+                    option = next((o for o in options if o["cell"] == selected), None)
+                    if option is None:
+                        raise ValueError("Selected filing destination is not a verified candidate")
+                    selected_sheet, ref = selected.rsplit("!", 1)
+                    match = re.fullmatch(r"([A-Z]+)([0-9]+)", ref)
+                    target = (selected_sheet, int(match.group(2)), match.group(1))
+                    used_selections.add(key)
+                    operator_resolutions.append({
+                        **_coverage_issue(write, primary, "operator_confirmed_destination",
+                                          "Operator confirmed the taxonomy destination."),
+                        "cell": option["cell"], "dimensions": option["dimensions"],
+                        "destination_label": option["label"], "resolution_key": key,
+                    })
+                elif issue is not None:
+                    (unresolved if unresolved_issue else ambiguous).append(issue)
+                    continue
 
         if target:
             sheet, row, col = target
@@ -549,6 +681,17 @@ def resolve_filing_doc(
         legacy_ready = apply_column_map(legacy_doc, cmap)
         resolved.extend(legacy_ready["writes"])
 
+    if set(filing_targets) - used_selections:
+        raise ValueError("Filing selections are stale; recheck the current figures and template")
+    occupied = set()
+    for item in resolved:
+        if "cell" not in item:
+            continue
+        destination = (item["sheet"], item["cell"])
+        if destination in occupied:
+            raise ValueError("Two filing figures resolve to the same destination; review their categories")
+        occupied.add(destination)
+
     out = dict(doc)
     out["writes"] = resolved
     out["sheets"] = legacy_ready["sheets"] if legacy_ready else {}
@@ -561,7 +704,7 @@ def resolve_filing_doc(
     status = "ready"
     if unresolved or ambiguous:
         status = "blocked"
-    elif legacy or inspection["mtool_compatibility"] == "candidate-2.2":
+    elif legacy or operator_resolutions or inspection["mtool_compatibility"] == "candidate-2.2":
         status = "attention"
     report = {
         "status": status,
@@ -574,6 +717,7 @@ def resolve_filing_doc(
         "unresolved_writes": unresolved,
         "ambiguous_writes": ambiguous,
         "inspection": inspection,
+        "operator_resolutions": operator_resolutions,
     }
     return out, report
 

@@ -220,7 +220,8 @@ const styles = {
     // Responsive: fill most of the viewport up to a comfortable cap so the
     // notes-preview cell references and column editor stop wrapping (they were
     // cramped at the old fixed 560px).
-    maxWidth: "min(800px, 92vw)",
+    maxWidth: "min(1440px, 96vw)",
+    maxHeight: "92vh",
     overflow: "hidden",
     display: "flex",
     flexDirection: "column",
@@ -479,6 +480,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
   // index in the run's notes doc (the preview's stable id). Sent as
   // notes_targets on both re-check and fill.
   const [noteTargets, setNoteTargets] = useState<Record<number, NoteTarget>>({});
+  const [filingTargets, setFilingTargets] = useState<Record<string, string>>({});
   // Set when the server needs the column layout confirmed — a next step, not
   // a failure, so it renders as guidance rather than a red error.
   const [columnPrompt, setColumnPrompt] = useState<string | null>(null);
@@ -567,6 +569,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
     setCreateMissingNotes(true);
     setLoadErr(null);
     setFile(null);
+    setFilingTargets({});
     setReport(null);
     setPatchErr(null);
     setFilingFailure(null);
@@ -614,7 +617,9 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
     setReport(null);
     setDownloaded(false);
     setDownloadErr(null);
-  }, [file, fillNotes, createMissingNotes, notesStyling, noteTargets, columnMap]);
+  }, [file, fillNotes, createMissingNotes, notesStyling, noteTargets, columnMap, filingTargets]);
+
+  useEffect(() => { setFilingTargets({}); setFilingFailure(null); }, [file]);
 
   useEffect(() => {
     if (file) fillButtonRef.current?.focus();
@@ -649,6 +654,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
       form.append("create_missing_notes", createMissingNotes ? "true" : "false");
       if (fillNotes) form.append("notes_styling", notesStyling);
       if (columnMap) form.append("column_map", JSON.stringify(columnMap));
+      if (Object.keys(filingTargets).length) form.append("filing_targets", JSON.stringify(filingTargets));
       const targets = fillNotes ? notesTargetsPayload() : null;
       if (targets) form.append("notes_targets", targets);
       const resp = await fetch(`/api/runs/${runId}/mtool-fill/patch`, {
@@ -707,7 +713,10 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
       setReport(result);
       if (result.preflight) { setPreflight(normalisePreflight(result.preflight)); setReadinessErr(null); }
     } catch (e) {
-      if (current()) setPatchErr(fillErrorMessage(e));
+      if (current()) {
+        setPatchErr(fillErrorMessage(e));
+        setFilingTargets({});
+      }
     } finally {
       if (current()) setBusy(false);
     }
@@ -1381,7 +1390,13 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
         )}
 
         {filingFailure && (
-          <FilingCoverageFailurePanel coverage={filingFailure} />
+          <FilingCoverageFailurePanel coverage={filingFailure} selections={filingTargets}
+            onSelect={(key, cell) => setFilingTargets((current) => {
+              const next = { ...current };
+              if (cell) next[key] = cell;
+              else delete next[key];
+              return next;
+            })} />
         )}
         {columnPrompt && (
           <div
@@ -1487,6 +1502,19 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                 Filing coverage: {report.filing_coverage.mapped}/{report.filing_coverage.requested}
                 {" "}values mapped ({report.filing_coverage.coverage_percent}%).
               </div>
+            )}
+            {Boolean(report.filing_coverage?.operator_resolutions?.length) && (
+              <details open style={{ marginTop: 12 }}>
+                <summary>Confirmed filing destinations</summary>
+                <ul>
+                  {report.filing_coverage?.operator_resolutions?.map((item, index) => (
+                    <li key={`${item.cell}:${index}`} style={{ overflowWrap: "anywhere" }}>
+                      {item.label} · {item.period} · {item.entity_scope}: {item.cell}
+                      {Object.values(item.dimensions ?? {}).length > 0 && ` · ${Object.values(item.dimensions ?? {}).join(", ")}`}
+                    </li>
+                  ))}
+                </ul>
+              </details>
             )}
             {report.notes && <RowDetail title="Notes errors" rows={(report.notes.errors ?? []).map(notesErrorMessage)} />}
             {report.notes && <RowDetail title="Notes that need checking" rows={(report.notes.mismatches ?? []).map((e) => `${e.label ?? e.key ?? "Note"}: ${e.detail ?? (e.found === false ? "The saved note is missing or empty. Check it in mTool." : "The saved note differs from the source. Check it in mTool.")}`)} />}

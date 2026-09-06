@@ -160,6 +160,39 @@ def _upload_our_template():
                          "spreadsheetml.sheet")}
 
 
+def test_filing_destination_retry_validates_and_records_operator_choice(client, tmp_path, monkeypatch):
+    from test_mtool_template_map import _save_semantic_marker_workbook
+    from test_mtool_filing_resolution import _doc
+    import api.mtool as m
+
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_distinct_leaves(db, run_id)
+    run, doc, standard, level, denomination = m._build_doc(run_id)
+    doc.update(_doc())
+    monkeypatch.setattr(m, "_build_doc", lambda _: (run, doc, standard, level, denomination))
+    path = tmp_path / "category.xlsx"
+    _save_semantic_marker_workbook(path, two_periods=True)
+    files = {"template": ("category.xlsx", path.read_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+    url = f"/api/runs/{run_id}/mtool-fill/patch"
+    blocked = tc.post(url, files=files, data={"fill_notes": "false"})
+    assert blocked.status_code == 422, blocked.text
+    issue = blocked.json()["detail"]["filing_coverage"]["unresolved_writes"][0]
+    key = issue["resolution_key"]
+    invalid = tc.post(url, files=files, data={"fill_notes": "false", "filing_targets": json.dumps({key: "SOCIE!E13"})})
+    assert invalid.status_code == 422
+    selected = tc.post(url, files=files, data={"fill_notes": "false", "filing_targets": json.dumps({key: "SOCIE!E5"})})
+    assert selected.status_code == 200, selected.text
+    body = selected.json()
+    assert body["filing_coverage"]["operator_resolutions"][0]["cell"] == "SOCIE!E5"
+    receipt = tc.get(f"/api/runs/{run_id}/mtool-fill/receipts").json()["receipts"][0]
+    confirmed = receipt["report"]["filing_coverage"]["operator_resolutions"][0]
+    assert confirmed["cell"] == "SOCIE!E5"
+    assert confirmed["label"] == "Profit or loss"
+    assert body["status"] != "ok"
+    assert tc.get(body["download_url"]).status_code == 409
+
+
 def test_patch_with_explicit_column_map(client, tmp_path):
     tc, db, _ = client
     run_id = _make_run(db)
