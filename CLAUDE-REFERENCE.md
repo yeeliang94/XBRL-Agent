@@ -1683,8 +1683,8 @@ runs server-side and in the cloud.
 **History (2026-08-05 replay):** the v2 hardening (commit b04b178, 2026-07-28)
 was reverted wholesale by 7140f59 on 2026-08-01 and re-applied on 2026-08-05 —
 minus its `XBRL_MTOOL_FILL` exposure gate, dropped by product-owner decision.
-There is NO exposure gate: the filing safety is the preflight + the
-report-acknowledgment flow below, not hiding the feature.
+There is NO exposure gate. Workbook preparation is available even with
+readiness warnings; those warnings remain on the result and receipt.
 `tests/test_mtool_preflight.py::test_no_exposure_gate_exists` pins the gate's
 absence (routes live with no flag, no `mtool_fill` key in `/api/config`, no
 `server._mtool_fill_enabled`).
@@ -1717,8 +1717,10 @@ Load-bearing invariants:
 - **Missing mappings fail closed at filing.** Preflight carries the
   `field_semantics` readiness block. A selected template with no manifest, an
   unresolved slot, or historical content quarantined on a presentation-only
-  target blocks unless the operator records the existing audited override.
-  Receipts persist taxonomy and manifest versions, readiness, and coverage.
+  target remains visible in readiness and receipts. Preparation may continue
+  without an override reason; the target resolver still refuses missing or
+  ambiguous destinations. Receipts persist taxonomy and manifest versions,
+  readiness, and coverage.
   The named MFRS Issued Capital and Related Party wrapper omissions are the
   only reviewed semantic-alignment exceptions; do not replace them with a
   positional tolerance or weaken confirmation/degraded-report safeguards.
@@ -1743,37 +1745,50 @@ Load-bearing invariants:
   templates use their verified exact target hints. Declared semantic identities
   that are missing or ambiguous fail closed. On period/entity sheets,
   address-less legacy writes may still use `column_role` (CY/PY ×
-  company/group) plus exact labels, but an unverified template requires column
-  confirmation and the resulting artifact is degraded until the operator
-  acknowledges it. Category sheets never take that fallback: without one
+  company/group) plus exact labels. Unknown positional layouts require column
+  confirmation. Unique period-date markers can identify Company columns
+  automatically even on a new fingerprint; candidate artifacts still require
+  review before download. Category sheets never take that fallback: without one
   exact taxonomy-addressed target they return structured blocked coverage.
 
   `column_detect` reads mTool's own marker rows — `#PRIM#` (label column),
   `#ENDT#` (period end dates; current vs prior year comes from COMPARING
   DATES), `#UNITSCALE#` (declared unit), `#DOM#` (columns are dimension
   members). `needs_confirmation()` is the gate, not a confidence score: Group
-  period/entity layouts and unknown non-dimensional template fingerprints
-  (`mtool/known_templates.json`) need a human. Dimensional sheets do not show
+  period/entity layouts, missing or duplicate dates, and unknown positional
+  layouts need a human. Unique Company period dates plus the label marker
+  permit automatic detection regardless of fingerprint. Dimensional sheets do not show
   CY/PY inputs: their columns are taxonomy members (share classes or equity
   components), and `template_map.resolve_filing_doc` resolves one exact target
   from the semantic address or blocks. This prevents the sample template's
   Notes-Issuedcapital share-class columns from being mislabeled as current and
   prior years. `exporter.apply_column_map` still fails loudly on a missing
   legacy role.
+  Non-dimensional sheets with conflicting dates for the same column across
+  blocks are rejected before filling, including with an explicit column map.
+  One sheet-wide map cannot describe different year columns in each block.
+  Repeated consistent dates and dimensional period blocks remain supported.
+  Pinned by the conflicting/repeated period-block tests in
+  `tests/test_mtool_column_detect.py` and `tests/test_mtool_routes.py`.
 - **Current compatibility target is mTool 2.2.** Generated-template adapters
   are verified in automated forward/reverse SOCIE round trips across
   MFRS/MPERS and Company/Group. A genuine mTool 2.2 workbook fingerprint and
   Windows Validate/Generate evidence are still required before describing an
   unknown uploaded layout as verified; inspection reports it as a candidate.
-- **Preflight is the filing-readiness gate — run status never was one**
-  (`mtool/preflight.py`). Blocks on conflicting figures that would REACH the
-  workbook, open reviewer flags, and unresolved notes coverage; overriding
-  needs a written reason that lands on the receipt. Conflicts on unfileable
-  rows warn instead of blocking; `completed_with_errors` alone does not block.
+- **Readiness is advisory for workbook preparation** (`mtool/preflight.py`).
+  Conflicting figures, open review questions, incomplete extraction, and
+  unresolved notes coverage remain visible and are recorded in the receipt.
+  No override reason is required. The persisted `blockers`/`ok` vocabulary
+  describes filing readiness; it does not block preparation. Any failed
+  readiness check makes the result require review, never clean. Legacy
+  `acknowledge_preflight` text is retained when supplied, never fabricated.
+  `completed_with_errors` alone does not imply a failed readiness check.
 - **Report before file.** `POST /patch` returns the COMPLETE report plus a
   short-lived artifact id; the workbook is a separate GET that a degraded fill
   won't release unacknowledged (enforced server-side — the acknowledgement is
-  stamped on the receipt). The old 20-row / 6 KB `X-mTool-Report` header is
+  stamped on the receipt). In the UI, the explicit “Download for review”
+  action acknowledges the displayed report without a separate checkbox.
+  The old 20-row / 6 KB `X-mTool-Report` header is
   gone.
 - **Machine docs are `strict`** (`build_fill_doc` sets `strict:true`): a non-exact
   label is a bug to surface, not a typo to forgive. Hand-authored operator runs
@@ -1825,8 +1840,22 @@ Load-bearing invariants:
   Operator free text (`preflight_override`, `degraded_ack`)
   is clamped to `receipt.ACK_TEXT_LIMIT` before storage. The patcher itself
   stays stateless; the ROUTE writes the row. Uploaded templates are
-  request-scoped temp files under `OUTPUT_DIR/_mtool_tmp`. Liveness gate is
-  `completed`/`completed_with_errors` (409 otherwise).
+  request-scoped temp files under `OUTPUT_DIR/_mtool_tmp`. Completed, failed,
+  and aborted runs can fill saved facts; draft/running runs must settle first.
+  Failed and aborted runs always carry the `run_incomplete` readiness blocker,
+  produce a degraded report, and require acknowledgement before download.
+  Pinned by `tests/test_mtool_routes.py::test_stopped_run_fills_saved_figures_without_override`.
+  Empty data, unreadable files, and ambiguous destinations still return
+  actionable errors. Workbook processing runs in FastAPI's worker pool.
+- **Shared diagnostics.** HTTP middleware owns request IDs and request timing.
+  mTool uses that same `X-Request-ID` in the result, receipt, and user-facing
+  support reference. Unexpected failures and notes-fill exceptions use the
+  existing redacted `run_incidents` store; incident capture never masks the
+  original error. Preparation failures clean up staged workbooks.
+- **Template-first UI.** Upload precedes review reminders and optional details.
+  The main actions stay visible. Notes are included and missing note slots
+  created by default. Delayed responses must not survive a file change or
+  dialog session change. Changing fill options invalidates an older download.
 - **UI is a button + modal (`MtoolFillModal`), not a tab** — avoids a third
   `role="tab"` (gotcha #7).
 

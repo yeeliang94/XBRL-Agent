@@ -133,6 +133,17 @@ against the white text-block background, so the decorator substitutes white for
 any border the formatter explicitly cleared. The default grey grid on an
 un-formatted table is left alone.
 
+## Web preparation flow
+
+Choose **Fill mTool template** on a completed or stopped run, upload the `.xlsx`,
+and click **Fill**. Dates and note destinations are checked automatically.
+Review findings do not require a reason or prevent preparation. The result
+lists anything needing attention. **Download for review** records acknowledgment
+of those items; open the workbook in mTool to Validate & Generate.
+
+Unknown positional layouts and ambiguous entity columns still need confirmation.
+See [the journey and diagnostics guide](../docs/MTOOL-FILL-JOURNEY.md) for details.
+
 ## Known limits (this phase)
 
 - **SOCIE is semantically mapped in code** — generated MFRS/MPERS,

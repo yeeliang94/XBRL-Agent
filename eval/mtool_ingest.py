@@ -38,6 +38,7 @@ from typing import Any, Optional
 logger = logging.getLogger("server")
 
 from mtool.column_detect import (
+    ConflictingPeriodMarkersError,
     describe_template,
     detect_column_map,
     fingerprint_workbook,
@@ -303,25 +304,30 @@ def ingest_workbook(
     _, cells_by_sheet = workbook_index
 
     descriptor = describe_template(fingerprint_workbook(data)) or {}
-    if column_map_override is not None:
-        column_map = column_map_override
-    elif descriptor.get("source") == "generated":
-        # Exact concept_targets own every destination in generated templates;
-        # keep a best-effort map for any legacy rows mixed into an old import.
-        # Semantic writes ignore it, including Group SOCIE layouts.
-        probe_doc = {
-            "sheets": {
-                sheet: {"columns": {role: None for role in roles}}
-                for sheet in catalogue
+    try:
+        if column_map_override is not None:
+            column_map = column_map_override
+        elif descriptor.get("source") == "generated":
+            # Exact concept_targets own every destination in generated templates;
+            # keep a best-effort map for any legacy rows mixed into an old import.
+            # Semantic writes ignore it, including Group SOCIE layouts.
+            probe_doc = {
+                "sheets": {
+                    sheet: {"columns": {role: None for role in roles}}
+                    for sheet in catalogue
+                }
             }
-        }
-        column_map = detect_column_map(
-            str(path), probe_doc, data=data, cells_by_sheet=cells_by_sheet
-        )
-    else:
-        column_map = _detect(
-            path, catalogue, roles, data, cells_by_sheet=cells_by_sheet
-        )
+            column_map = detect_column_map(
+                str(path), probe_doc, data=data, cells_by_sheet=cells_by_sheet
+            )
+        else:
+            column_map = _detect(
+                path, catalogue, roles, data, cells_by_sheet=cells_by_sheet
+            )
+    except ConflictingPeriodMarkersError as exc:
+        raise ColumnDetectionError([
+            sheet for sheet in catalogue if sheet in cells_by_sheet
+        ]) from exc
 
     target_by_uuid = {
         target.concept_uuid: target

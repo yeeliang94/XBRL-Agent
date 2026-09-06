@@ -169,6 +169,35 @@ def test_low_confidence_detection_is_refused(tmp_path):
         ingest_workbook(path, catalogue, filing_level="company")
 
 
+@pytest.mark.parametrize("generated", [False, True])
+def test_conflicting_period_markers_use_ingest_detection_error(
+    tmp_path, monkeypatch, generated,
+):
+    from openpyxl import load_workbook
+    from mtool.column_detect import ConflictingPeriodMarkersError
+
+    path = _mtool_file(tmp_path, [("Cash and bank balances", 1595, 1420)])
+    wb = load_workbook(path)
+    ws = wb.active
+    ws["A1"] = "#PRIM#"
+    ws["A2"] = "#ENDT#"
+    ws["B2"] = "31/12/2024"
+    ws["C2"] = "31/12/2023"
+    ws["A5"] = "#ENDT#"
+    ws["B5"] = "31/12/2023"
+    wb.save(path)
+    if generated:
+        monkeypatch.setattr(
+            "eval.mtool_ingest.describe_template", lambda _: {"source": "generated"}
+        )
+    with pytest.raises(ColumnDetectionError) as caught:
+        ingest_workbook(
+            path, _catalogue(["Cash and bank balances"]), filing_level="company"
+        )
+    assert caught.value.low_sheets == ["SOFP"]
+    assert isinstance(caught.value.__cause__, ConflictingPeriodMarkersError)
+
+
 def test_explicit_column_map_bypasses_detection(tmp_path):
     path = _mtool_file(tmp_path, [("Cash and bank balances", 1595, 1420)])
     catalogue = _catalogue(["Cash and bank balances"])

@@ -25,7 +25,7 @@ rows, and we read them instead of guessing:
                         equity components), not periods
 
 So current-year vs prior-year is decided by comparing dates, not by which
-column comes first; a dimensional sheet is recognised and refused; and the
+column comes first; category columns are resolved by taxonomy identity; and the
 template's own declared unit is reported so a denomination mismatch is visible.
 
 **When there are no markers** (our own generated templates, and any workbook
@@ -77,6 +77,10 @@ _DATE_RE = re.compile(r"^(\d{2})/(\d{2})/(\d{4})$")
 # Fingerprints of templates we have inspected and vouched for. Anything else is
 # "unknown" and needs a human to confirm the layout (Step 18).
 _KNOWN_TEMPLATES_PATH = Path(__file__).resolve().parent / "known_templates.json"
+
+
+class ConflictingPeriodMarkersError(ValueError):
+    """A sheet-wide column map cannot represent the template's date blocks."""
 
 
 def _idx_to_col(idx: int) -> str:
@@ -197,14 +201,11 @@ def parse_unit_scale(declared: str) -> str | None:
     return "units"
 
 
-def _semantic_layout(cells: dict, roles: list[str], *,
-                     template_known: bool) -> dict[str, Any] | None:
+def _semantic_layout(cells: dict, roles: list[str]) -> dict[str, Any] | None:
     """Read the sheet's own marker rows. ``None`` when it has none.
 
-    ``template_known`` gates unattended use exactly as it does on the
-    positional path: markers make the reading *semantic*, but an unknown
-    workbook's markers have never been corroborated against a real fill, so
-    the proposal still needs a human (Step 18 applies to BOTH bases).
+    Unique, consistent period markers can identify Company columns even on
+    unknown templates. Contradictory date blocks cannot use one column map.
     """
     markers = _marker_rows(cells)
     if MARKER_LABEL not in markers:
@@ -216,13 +217,18 @@ def _semantic_layout(cells: dict, roles: list[str], *,
     unit_rows = markers.get(MARKER_UNIT_SCALE, [])
     dimensional = bool(markers.get(MARKER_DIMENSION))
 
-    # A sheet can carry several layout blocks (an intro block, then the data
-    # block). The one that dates its columns is the data block.
+    # Period sheets need one consistent date per column across layout blocks.
+    # Dimensional sheets resolve their separate period blocks in template_map.
     dates: dict[str, tuple[int, int, int]] = {}
     for row in end_rows:
         for col, text in _row_values(cells, row).items():
             parsed = _parse_date(text)
             if parsed:
+                if not dimensional and col in dates and dates[col] != parsed:
+                    raise ConflictingPeriodMarkersError(
+                        f"This template has conflicting reporting dates in column {col} "
+                        "across its sections. It cannot be filled safely. Use a template "
+                        "with consistent year columns, or complete it in mTool.")
                 dates[col] = parsed
     periods = {}
     for row in period_rows:
@@ -267,7 +273,7 @@ def _semantic_layout(cells: dict, roles: list[str], *,
             "we cannot tell from the template which columns are which — "
             "please confirm them")
 
-    if not dimensional and not wants_group and ordered:
+    if not dimensional and not wants_group:
         for role in roles:
             match = [c for c, p in period_of_col.items() if p == role]
             if len(match) == 1:
@@ -294,16 +300,6 @@ def _semantic_layout(cells: dict, roles: list[str], *,
         confidence = "low"
         requires_confirmation = True
         notes.append("could not find the label column marker")
-
-    if not template_known and not dimensional:
-        # An unknown fingerprint always needs a human, marker rows or not —
-        # a semantic reading that has never been corroborated can still be a
-        # confidently-wrong reading of markers we've never seen arranged this
-        # way (peer review, 2026-08-05).
-        requires_confirmation = True
-        notes.append(
-            "this template's layout is one we haven't seen before — the "
-            "columns were read from its own markers, but please confirm them")
 
     # Every requested role is present in `columns`, blank when nothing could
     # be proposed. The confirm dialog renders an editable input per key, so a
@@ -464,8 +460,7 @@ def detect_column_map(
             else read_sheet_cells(data[entry], sst)
         )
         roles = _order_roles(list(cfg.get("columns", {})))
-        layout = _semantic_layout(cells, roles,
-                                  template_known=template_known)
+        layout = _semantic_layout(cells, roles)
         if layout is None:
             layout = _positional_layout(cells, roles,
                                         template_known=template_known)
@@ -522,4 +517,4 @@ def unit_scale_mismatches(
 
 __all__ = ["detect_column_map", "overall_confidence", "needs_confirmation",
            "fingerprint_workbook", "describe_template", "load_known_templates",
-           "parse_unit_scale", "unit_scale_mismatches"]
+           "parse_unit_scale", "unit_scale_mismatches", "ConflictingPeriodMarkersError"]

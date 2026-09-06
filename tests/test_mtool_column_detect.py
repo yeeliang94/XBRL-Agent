@@ -273,11 +273,8 @@ def _marker_workbook(
     return path
 
 
-def test_unknown_semantic_template_needs_confirmation(tmp_path):
-    """An unknown fingerprint always needs a human — markers make the reading
-    semantic, not corroborated. Before this pin, a marker-bearing workbook
-    nobody had vouched for sailed through unattended (peer review,
-    2026-08-05)."""
+def test_unknown_semantic_template_uses_unique_period_markers(tmp_path):
+    """A new fingerprint does not require a form when dates identify each role."""
     path = _marker_workbook(tmp_path)
     doc = {"sheets": {"S": {"label_column": None, "columns": {
         "current_year": None, "prior_year": None}}}}
@@ -286,10 +283,8 @@ def test_unknown_semantic_template_needs_confirmation(tmp_path):
     # The reading itself is confident AND correct...
     assert sheet["columns"]["current_year"] == "E"
     assert sheet["columns"]["prior_year"] == "F"
-    # ...but permission is a separate question (unknown fingerprint).
-    assert sheet["requires_confirmation"] is True
-    assert needs_confirmation({"S": sheet}) is True
-    assert any("haven't seen" in n for n in sheet["notes"])
+    assert sheet["requires_confirmation"] is False
+    assert needs_confirmation({"S": sheet}) is False
 
 
 def test_unknown_dimensional_template_does_not_request_period_columns(tmp_path):
@@ -333,6 +328,8 @@ def test_group_semantic_layout_offers_every_role_blank(tmp_path):
         "group_current_year", "group_prior_year",
         "company_current_year", "company_prior_year"}
     assert all(v == "" for v in sheet["columns"].values())
+    assert len(sheet["notes"]) == 1
+    assert "group filing" in sheet["notes"][0]
 
 
 def test_positional_no_label_column_still_offers_roles(tmp_path):
@@ -350,3 +347,46 @@ def test_positional_no_label_column_still_offers_roles(tmp_path):
     assert sheet["basis"] == "positional"
     assert sheet["confidence"] == "low"
     assert sheet["columns"] == {"current_year": "", "prior_year": ""}
+
+
+@pytest.mark.parametrize("dates", [("", ""), ("31/12/2024", "31/12/2024")])
+def test_missing_or_duplicate_period_markers_still_need_confirmation(tmp_path, dates):
+    path = _marker_workbook(tmp_path, dates=dates)
+    doc = {"sheets": {"S": {"label_column": None, "columns": {
+        "current_year": None, "prior_year": None}}}}
+    detected = detect_column_map(str(path), doc)
+    assert needs_confirmation(detected)
+    assert detected["S"]["confidence"] == "low"
+    assert len(detected["S"]["notes"]) == 2
+    assert "prior year period" in detected["S"]["notes"][1]
+
+
+def test_conflicting_period_blocks_are_rejected(tmp_path):
+    from openpyxl import load_workbook
+
+    path = _marker_workbook(tmp_path)
+    wb = load_workbook(path)
+    wb.active["A20"] = "#ENDT#"
+    wb.active["E20"] = "31/12/2023"
+    wb.active["F20"] = "31/12/2024"
+    wb.save(path)
+    doc = {"sheets": {"S": {"columns": {"current_year": None, "prior_year": None}}}}
+    with pytest.raises(ValueError, match="conflicting reporting dates"):
+        detect_column_map(str(path), doc)
+
+
+@pytest.mark.parametrize("dimensional", [False, True])
+def test_repeated_period_blocks_preserve_supported_layouts(tmp_path, dimensional):
+    from openpyxl import load_workbook
+
+    path = _marker_workbook(tmp_path, dimensional=dimensional)
+    wb = load_workbook(path)
+    wb.active["A20"] = "#ENDT#"
+    # Category sheets legitimately repeat columns for different periods.
+    wb.active["E20"] = "31/12/2023" if dimensional else "31/12/2024"
+    wb.active["F20"] = "31/12/2022" if dimensional else "31/12/2023"
+    wb.save(path)
+    doc = {"sheets": {"S": {"columns": {"current_year": None, "prior_year": None}}}}
+    detected = detect_column_map(str(path), doc)
+    assert not needs_confirmation(detected)
+    assert detected["S"]["dimensional"] is dimensional

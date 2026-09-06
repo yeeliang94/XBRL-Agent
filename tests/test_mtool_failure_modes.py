@@ -138,7 +138,7 @@ def test_empty_upload_is_422(client):
     _seed(db, run_id)
     r = _patch(tc, run_id, files=_file("t.xlsx", b""))
     assert r.status_code == 422
-    assert "Empty upload" in json.dumps(r.json())
+    assert "file is empty" in json.dumps(r.json())
 
 
 # ------------------------------------------------------- wrong template
@@ -281,3 +281,70 @@ def test_offline_fill_imports_with_no_third_party_deps():
               "from mtool", "import server", "from db ", "import pandas")
     for token in banned:
         assert token not in source, f"offline_fill.py imported {token!r}"
+
+
+def test_unexpected_failure_has_friendly_reference_and_durable_incident(client, monkeypatch):
+    import api.mtool as routes
+    from db import repository as repo
+
+    tc, db, root = client
+    run_id = _make_run(db)
+    _seed(db, run_id)
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("api_key=private-value unexpected patch failure")
+
+    monkeypatch.setattr(routes, "fill_workbook", broken)
+    captured_run_ids = []
+    capture_incident = routes.capture_run_incident
+
+    def capture_with_run_id(conn, incident_run_id, **kwargs):
+        captured_run_ids.append(incident_run_id)
+        return capture_incident(conn, incident_run_id, **kwargs)
+
+    monkeypatch.setattr(routes, "capture_run_incident", capture_with_run_id)
+    result = tc.post(f"/api/runs/{run_id}/mtool-fill/patch",
+                     files=_file("t.xlsx", SOFP.read_bytes()),
+                     headers={"X-Request-ID": "mtool-support-test"})
+    assert result.status_code == 500
+    assert captured_run_ids == [run_id]
+    assert type(captured_run_ids[0]) is int
+    assert result.headers["X-Request-ID"] == "mtool-support-test"
+    assert "Try again" in result.json()["detail"]
+    assert "private-value" not in result.text
+    with sqlite3.connect(db) as conn:
+        incidents = repo.fetch_run_incidents(conn, run_id)
+        assert conn.execute("SELECT COUNT(*) FROM mtool_fill_receipts").fetchone()[0] == 0
+    assert len(incidents) == 1
+    assert incidents[0].correlation_id == "mtool-support-test"
+    assert incidents[0].error_code == "mtool_request_failed"
+    assert "private-value" not in incidents[0].technical_message
+    assert "[REDACTED]" in incidents[0].technical_message
+    assert not list((root / "_mtool_tmp").iterdir())
+
+
+def test_missing_template_stays_validation_error_with_reference(client):
+    tc, db, _ = client
+    run_id = _make_run(db)
+    result = tc.post(f"/api/runs/{run_id}/mtool-fill/patch")
+    assert result.status_code == 422
+    assert result.headers["X-Request-ID"]
+
+
+def test_invalid_run_id_stays_validation_error_with_reference(client):
+    tc, _, _ = client
+    result = tc.get("/api/runs/not-a-number/mtool-fill")
+    assert result.status_code == 422
+    assert result.json()["detail"][0]["loc"] == ["path", "run_id"]
+    assert result.headers["X-Request-ID"]
+
+
+def test_fillable_run_read_initializes_schema_without_startup(tmp_path, monkeypatch):
+    import server
+    from api.mtool import _load_fillable_run
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(server, "AUDIT_DB_PATH", tmp_path / "fresh.db")
+    with pytest.raises(HTTPException) as caught:
+        _load_fillable_run(1)
+    assert caught.value.status_code == 404
