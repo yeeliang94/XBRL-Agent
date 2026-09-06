@@ -1,5 +1,5 @@
 import { describe, test, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { ExtractPage } from "../pages/ExtractPage";
 import { initialState } from "../lib/appReducer";
 import { createAgentState } from "../lib/types";
@@ -106,12 +106,45 @@ describe("ExtractPage — render-gate regression guards", () => {
     });
     render(<ExtractPage {...props} />);
 
-    // One review door (Phase 2): a single "Open run report" button leads into
-    // the tabbed run detail (whose Figures tab replaces the old separate
-    // "Review extracted values" action).
+    // Completion offers one review destination and no competing result tabs.
     expect(
-      screen.getByRole("button", { name: /open run report/i }),
+      screen.getByRole("button", { name: /review run results/i }),
     ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /review run results/i }));
+    expect(props.onOpenRun).toHaveBeenCalledWith(7);
+    expect(screen.queryByRole("button", { name: "Data Preview" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Downloads" })).toBeNull();
+  });
+
+  test.each([
+    ["completed", "Completed"],
+    ["completed_with_errors", "Completed with errors"],
+    ["failed", "Failed"],
+    ["aborted", "Aborted"],
+  ])("completion names the %s outcome and keeps one review action", (overallStatus, label) => {
+    render(<ExtractPage {...makeProps({ state: {
+      sessionId: "s", isComplete: true,
+      complete: { success: overallStatus === "completed", overallStatus,
+        output_path: "", excel_path: "", trace_path: "", total_tokens: 0, cost: 0, runId: 7 },
+    } })} />);
+    expect(screen.getByRole("heading", { name: label })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Review run results" })).toHaveLength(1);
+    expect(screen.queryByText("Extraction finished")).toBeNull();
+  });
+
+  test("starting extraction scrolls the long setup form back to progress", () => {
+    const main = document.createElement("main");
+    main.id = "main-content";
+    main.scrollIntoView = vi.fn();
+    document.body.appendChild(main);
+    try {
+      const props = makeProps();
+      const { rerender } = render(<ExtractPage {...props} />);
+      rerender(<ExtractPage {...props} state={{ ...props.state, isRunning: true }} />);
+      expect(main.scrollIntoView).toHaveBeenCalledOnce();
+      rerender(<ExtractPage {...props} state={{ ...props.state, isRunning: true, pipelineStage: "extracting" }} />);
+      expect(main.scrollIntoView).toHaveBeenCalledOnce();
+    } finally { main.remove(); }
   });
 
   test("activity shell stays hidden before a run is started", () => {
@@ -166,11 +199,24 @@ describe("ExtractPage — render-gate regression guards", () => {
     expect(screen.getByLabelText("Extraction progress")).toBeInTheDocument();
     expect(screen.getByRole("tablist", { name: "Run workstreams" })).toHaveAttribute("aria-orientation", "vertical");
     expect(screen.getByRole("tabpanel", { name: /SOFP activity/i })).toBeInTheDocument();
-    expect(screen.getByText("0 of 2 complete")).toBeInTheDocument();
+    expect(screen.getByText("0 of 2 extraction workstreams complete")).toBeInTheDocument();
     const usage = container.querySelector("details") as HTMLDetailsElement;
     expect(usage.open).toBe(false);
     expect(usage.querySelector("summary")?.textContent).toContain("$0.0123");
     expect(usage.querySelector("summary [aria-hidden='true']")).toBeInTheDocument();
+  });
+
+  test("completed extraction workers do not hide a running automatic reviewer", () => {
+    const extraction = { ...createAgentState("sofp_0", "SOFP", "SOFP"), status: "complete" as const };
+    const reviewer = { ...createAgentState("NOTES_VALIDATOR", "NOTES_VALIDATOR", "Notes review"), status: "running" as const };
+    render(<ExtractPage {...makeProps({ state: {
+      isRunning: true, pipelineStage: "reviewing_notes", statementsInRun: ["SOFP"],
+      agents: { sofp_0: extraction, NOTES_VALIDATOR: reviewer },
+      agentTabOrder: ["sofp_0", "NOTES_VALIDATOR"],
+    } })} />);
+    expect(screen.getByText("1 of 1 extraction workstreams complete")).toBeInTheDocument();
+    expect(screen.getByText("1 active across processing and review")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /checking extracted notes/i })).toBeInTheDocument();
   });
 
   test("keeps the live status region mounted while its message changes", () => {

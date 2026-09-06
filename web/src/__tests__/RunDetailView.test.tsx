@@ -1053,7 +1053,7 @@ describe("RunDetailView", () => {
         />,
       );
       expect(screen.getByTestId("run-detail-values")).toBeInTheDocument();
-      expect(screen.queryByRole("tablist", { name: /run detail sections/i })).toBeNull();
+      expect(screen.getByRole("tablist", { name: /run detail sections/i })).toBeInTheDocument();
       // Run management and output setup stay on Overview. The review surface
       // keeps the workbook download but drops unrelated destructive/tools UI.
       expect(screen.queryByRole("button", { name: /fill mtool template/i })).toBeNull();
@@ -1099,7 +1099,7 @@ describe("RunDetailView", () => {
         />,
       );
       expect(screen.getByTestId("review-notes-panel")).toBeInTheDocument();
-      expect(screen.queryByRole("tablist", { name: /run detail sections/i })).toBeNull();
+      expect(screen.getByRole("tablist", { name: /run detail sections/i })).toBeInTheDocument();
       expect(screen.queryByTestId("sheet-nav-__notes__")).toBeNull();
       expect(screen.queryByTestId("run-detail-values")).toBeNull();
       await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith(
@@ -1390,8 +1390,8 @@ describe("RunDetailView", () => {
     render(<RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />);
     const tablist = screen.getByRole("tablist", { name: /run detail sections/i });
     const overviewTab = within(tablist).getByRole("tab", { name: /^overview$/i });
-    // ArrowRight from Overview selects + focuses Agents.
-    fireEvent.keyDown(overviewTab, { key: "ArrowRight" });
+    // With canonical mode off, ArrowLeft from Overview wraps to Activity.
+    fireEvent.keyDown(overviewTab, { key: "ArrowLeft" });
     const agentsTab = within(tablist).getByRole("tab", { name: /^activity$/i });
     expect(agentsTab.getAttribute("aria-selected")).toBe("true");
     expect(screen.getByTestId("run-detail-agents")).toBeTruthy();
@@ -1486,6 +1486,16 @@ describe("RunDetailView", () => {
     const download = screen.getByRole("button", { name: /download draft/i });
     expect(download.className).toMatch(/secondary/i);
     expect(screen.getByRole("button", { name: /review issues/i }).className).toMatch(/primary/i);
+  });
+
+  test("an extraction issue routes to Activity when no consistency check failed", () => {
+    render(<RunDetailView detail={makeDetail({ status: "completed_with_errors", cross_checks: [], agents: [makeAgent({ status: "completed_with_errors" })] })}
+      onDelete={() => {}} onDownload={() => {}} />);
+    expect(screen.getByRole("alert")).toHaveTextContent("extraction or review issues");
+    expect(screen.queryByText(/consistency check didn.t pass/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: "View cross-checks" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Review issues" }));
+    expect(screen.getByTestId("run-detail-agents")).toBeInTheDocument();
   });
 
   test("header actions follow one rule: everything except Download lives on Overview", () => {

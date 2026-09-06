@@ -6,6 +6,7 @@ import {
   cleanup,
   waitFor,
   within,
+  act,
 } from "@testing-library/react";
 import { ConceptsPage, formatGroupedInput, rowLacksSource, resolveInitialWorkspaceTemplate } from "../pages/ConceptsPage";
 import type { ConceptRow } from "../pages/ConceptsPage";
@@ -1541,6 +1542,51 @@ describe("ConceptsPage", () => {
     expect(screen.queryByTestId("pdf-source-pane")).toBeNull();
     fireEvent.click(screen.getByTestId("col-show-pdf"));
     expect(screen.getByTestId("pdf-source-pane")).toBeTruthy();
+  });
+
+  test("Notes PDF resizing starts at the visible width and follows workspace limits", async () => {
+    mockFetch((url) => {
+      if (url.includes("/concepts")) return sampleConcepts;
+      if (url.includes("/notes_cells")) return { sheets: [] };
+      if (url.includes("/conflicts")) return { conflicts: [] };
+      return {};
+    });
+    let width = 1000;
+    let resizeWorkspace = () => {};
+    const measure = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(() => new DOMRect(0, 0, width, 800));
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(callback: () => void) { resizeWorkspace = callback; }
+      observe() {}
+      disconnect() {}
+    });
+    try {
+      const { container } = render(<ConceptsPage runId={42} initialView="notes" />);
+      await screen.findByTestId("review-notes-panel");
+      const pdf = container.querySelector<HTMLElement>(".review-source-column")!;
+      await waitFor(() => expect(pdf.style.width).toBe("340px"));
+      expect(pdf.style.maxWidth).toBe("34%");
+      const divider = screen.getByTestId("resize-pdf");
+      fireEvent.mouseDown(divider, { clientX: 500 });
+      fireEvent.mouseMove(window, { clientX: 520 });
+      expect(pdf.style.width).toBe("320px");
+      fireEvent.mouseMove(window, { clientX: 400 });
+      expect(pdf.style.width).toBe("340px");
+      fireEvent.mouseMove(window, { clientX: 410 });
+      expect(pdf.style.width).toBe("330px");
+      fireEvent.mouseUp(window);
+      act(() => { width = 800; resizeWorkspace(); });
+      expect(pdf.style.width).toBe("272px");
+      act(() => { width = 1200; resizeWorkspace(); });
+      fireEvent.keyDown(divider, { key: "ArrowLeft" });
+      expect(pdf.style.width).toBe("288px");
+      act(() => { width = 500; resizeWorkspace(); });
+      expect(pdf.style.width).toBe("170px");
+      fireEvent.keyDown(divider, { key: "ArrowLeft" });
+      expect(pdf.style.width).toBe("170px");
+    } finally {
+      measure.mockRestore();
+      vi.unstubAllGlobals();
+    }
   });
 
   test("a clear run omits attention chrome entirely", async () => {

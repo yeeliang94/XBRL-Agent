@@ -23,11 +23,10 @@ export const RUN_TAB_CHANGE_EVENT = "xbrl-run-tab-change";
 
 export function readRunTabFromUrl(): RunTabKey | null {
   if (typeof window === "undefined") return null;
-  if (/^\/concepts\/\d+$/.test(window.location.pathname)) return "values";
   const raw = new URLSearchParams(window.location.search).get("tab");
   return raw && (RUN_TAB_KEYS as readonly string[]).includes(raw)
     ? (raw as RunTabKey)
-    : null;
+    : /^\/concepts\/\d+\/?$/.test(window.location.pathname) ? "values" : null;
 }
 
 export function announceRunTabChange(key: RunTabKey): void {
@@ -39,6 +38,9 @@ export function writeRunTabToUrl(key: RunTabKey): void {
   if (typeof window === "undefined") return;
   const url = new URL(window.location.href);
   url.searchParams.set("tab", key);
-  window.history.replaceState(window.history.state, "", url.toString());
+  // Each visited section is a browser-history entry; repeated clicks are not.
+  if (url.toString() !== window.location.href) {
+    window.history.pushState(window.history.state, "", url.toString());
+  }
   announceRunTabChange(key);
 }

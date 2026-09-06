@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { pwc } from "../lib/theme";
+import { pwc, tokens } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { PdfSourcePane } from "./PdfSourcePane";
 import { parseEvidencePages } from "../lib/evidencePages";
@@ -537,7 +537,7 @@ export function RunDetailView({
   useEffect(() => {
     const onPop = () => {
       const fromUrl = readRunTabFromUrl();
-      if (fromUrl) setTab(fromUrl);
+      setTab(fromUrl ?? initialTab);
     };
     const onTabChange = (event: Event) => {
       const key = (event as CustomEvent<RunTabKey>).detail;
@@ -549,7 +549,7 @@ export function RunDetailView({
       window.removeEventListener("popstate", onPop);
       window.removeEventListener(RUN_TAB_CHANGE_EVENT, onTabChange);
     };
-  }, []);
+  }, [initialTab]);
   // mTool fill modal (button, NOT a tab — gotcha #7).
   const [mtoolOpen, setMtoolOpen] = useState(false);
   // Delete confirmation — the shared ConfirmDialog replaces window.confirm so
@@ -649,6 +649,7 @@ export function RunDetailView({
   const isInvestigationOutcome = isErrorOutcome || isFailed || isAborted;
   const failingChecks = crossChecks
     .filter((c) => c.status === "failed");
+  const issueTab: RunTabKey = failingChecks.length > 0 ? "checks" : "agents";
   const failingCheckSummaries = failingChecks.map((c) => {
     const values = [
       c.expected != null ? `expected ${formatAccounting(c.expected)}` : null,
@@ -698,27 +699,15 @@ export function RunDetailView({
     setConfirmDelete(true);
   };
 
-  // Tab definitions. Values is hidden unless canonical mode is on (the
-  // concept tree doesn't exist for legacy runs). Order encodes the ranked
-  // emphasis: audit (overview) → debug (agents/telemetry) → review (values).
+  // One persistent navigation, ordered by the human review journey.
   const tabs: { key: RunTabKey; label: string }[] = [
     { key: "overview", label: "Overview" },
-    // "Activity" (was "Agents") shows what the AI did, per statement, with a
-    // collapsed "Performance details" section that used to be the Telemetry tab.
-    { key: "agents", label: "Activity" },
+    ...(canonicalEnabled ? [{ key: "values" as RunTabKey, label: "Figures" }] : []),
     { key: "notes", label: "Notes" },
     { key: "checks", label: "Cross-checks" },
-    ...(canonicalEnabled
-      ? [
-          { key: "review" as RunTabKey, label: "AI review" },
-          { key: "values" as RunTabKey, label: "Figures" },
-        ]
-      : []),
-    // Gold-standard eval (v16): the Eval scorecard tab only appears when this
-    // run was graded against a benchmark. A normal run never shows it.
-    ...(detail.benchmark_id != null
-      ? [{ key: "eval" as RunTabKey, label: "Eval" }]
-      : []),
+    { key: "agents", label: "Activity" },
+    ...(canonicalEnabled ? [{ key: "review" as RunTabKey, label: "AI review" }] : []),
+    ...(detail.benchmark_id != null ? [{ key: "eval" as RunTabKey, label: "Eval" }] : []),
   ];
   const availableTabs = isDraft
     ? tabs.filter((item) => item.key === "overview")
@@ -825,28 +814,22 @@ export function RunDetailView({
           <div style={reviewWorkspaceActive ? styles.reviewContextProfile : styles.filingProfile}>
             {filingProfile}
           </div>
-          {!reviewWorkspaceActive && (
-            <>
-              <div style={styles.metaRow}>
-                {statusBadge(runStatusDisplay(detail.status))}
-                {isLegacy && (
-                  <span
-                    style={styles.legacyBadge}
-                    title="Some configuration and performance details were not recorded for this older run."
-                  >
-                    Limited historical details
-                  </span>
-                )}
-                <span style={styles.dim}>
-                  {new Date(detail.created_at).toLocaleString()}
-                </span>
-              </div>
-              {!isDraft && (canDownload || detail.status === "completed" || isErrorOutcome) && (
-                <p style={styles.aiDisclaimer} role="note">
-                  Figures were extracted by AI — verify against the source PDF before filing.
-                </p>
-              )}
-            </>
+          <div style={styles.metaRow}>
+            {statusBadge(runStatusDisplay(detail.status))}
+            {!reviewWorkspaceActive && isLegacy && (
+              <span style={styles.legacyBadge}
+                title="Some configuration and performance details were not recorded for this older run.">
+                Limited historical details
+              </span>
+            )}
+            {!reviewWorkspaceActive && (
+              <span style={styles.dim}>{new Date(detail.created_at).toLocaleString()}</span>
+            )}
+          </div>
+          {!reviewWorkspaceActive && !isDraft && (canDownload || detail.status === "completed" || isErrorOutcome) && (
+            <p style={styles.aiDisclaimer} role="note">
+              Figures were extracted by AI — verify against the source PDF before filing.
+            </p>
           )}
         </div>
         <div style={styles.actions}>
@@ -862,7 +845,7 @@ export function RunDetailView({
           ) : isErrorOutcome && activeTab === "overview" ? (
             <button
               type="button"
-              onClick={() => selectTab("checks")}
+              onClick={() => selectTab(issueTab)}
               className={uiClass.btnPrimary}
               style={ui.buttonPrimary}
             >
@@ -961,7 +944,9 @@ export function RunDetailView({
         <div style={styles.errorBanner} role="alert">
           <div style={styles.errorBannerBody}>
             <strong style={styles.errorBannerTitle}>
-              This run finished, but a consistency check didn’t pass.
+              {failingChecks.length > 0
+                ? "This run finished, but a consistency check didn’t pass."
+                : "This run finished with extraction or review issues."}
             </strong>
             <span style={styles.errorBannerText}>
               {failingCheckSummaries.length > 0 ? (
@@ -969,20 +954,20 @@ export function RunDetailView({
                   {failingCheckSummaries.join("; ")}.
                 </>
               ) : (
-                <>Review the cross-checks before downloading or filing this run.</>
+                <>Review the recorded activity before downloading or filing this run.</>
               )}
             </span>
           </div>
-          <div style={styles.errorBannerActions}>
+          {activeTab !== "overview" && activeTab !== issueTab && <div style={styles.errorBannerActions}>
             <button
               type="button"
-              onClick={() => selectTab("checks")}
+              onClick={() => selectTab(issueTab)}
               className={uiClass.btnSecondary}
               style={ui.buttonSecondary}
             >
-              View cross-checks
+              {issueTab === "checks" ? "View cross-checks" : "View activity"}
             </button>
-          </div>
+          </div>}
         </div>
       )}
 
@@ -1044,15 +1029,17 @@ export function RunDetailView({
       {reviewWorkspaceActive && isErrorOutcome && (
         <div style={styles.reviewWarningStrip} role="alert" data-testid="review-run-warning">
           <span>
-            This run has unresolved consistency checks. Review them before relying on these results.
+            {issueTab === "checks"
+              ? "This run has unresolved consistency checks. Review them before relying on these results."
+              : "This run has extraction or review issues. Check Activity before relying on these results."}
           </span>
           <button
             type="button"
-            onClick={() => selectTab("checks")}
+            onClick={() => selectTab(issueTab)}
             className={uiClass.btnGhost}
             style={{ ...ui.buttonGhost, ...ui.buttonSm }}
           >
-            View cross-checks
+            {issueTab === "checks" ? "View cross-checks" : "View activity"}
           </button>
         </div>
       )}
@@ -1086,12 +1073,6 @@ export function RunDetailView({
             type="button"
             onClick={() => selectTab("agents")}
             className={uiClass.btnGhost}
-      {isRunning && (
-        <div style={ui.alertInfo} role="status">
-          Extraction is still running. Figures and notes may change until processing finishes.
-        </div>
-      )}
-
             style={{ ...ui.buttonGhost, ...ui.buttonSm }}
           >
             View activity
@@ -1102,6 +1083,12 @@ export function RunDetailView({
       {!reviewWorkspaceActive && isDraft && (
         <div style={ui.alertInfo} role="status">
           Setup has not been completed. Resume setup to choose statement formats and start extraction.
+        </div>
+      )}
+
+      {isRunning && (
+        <div style={ui.alertInfo} role="status">
+          Extraction is still running. Figures and notes may change until processing finishes.
         </div>
       )}
 
@@ -1167,11 +1154,7 @@ export function RunDetailView({
         onCancel={() => setConfirmDelete(false)}
       />
 
-      {/* The application sidebar already owns Overview / Figures / Notes.
-          Repeating the run tab strip inside the two review workspaces created
-          a second navigation layer. Keep the full tab strip on audit pages,
-          where it remains the route to Activity, Cross-checks and AI review. */}
-      {!reviewWorkspaceActive && (
+      {/* Keep the same navigation visible on every run section. */}
         <div
           ref={tabBarRef}
           style={styles.tabBar}
@@ -1197,7 +1180,6 @@ export function RunDetailView({
             );
           })}
         </div>
-      )}
 
       {/* One fade wrapper keyed on the active tab: switching tabs remounts it,
           replaying the shared fade-in so the new panel arrives instead of
@@ -1234,8 +1216,10 @@ export function RunDetailView({
             )}
             <MetricTile label="Statements" value={String(outcomes.statements)} />
           </div>
-          <h4 style={styles.sectionHeading}>Run configuration</h4>
-          <ConfigBlock config={detail.config} />
+          <details>
+            <summary style={styles.perfSummary}>Run configuration</summary>
+            <ConfigBlock config={detail.config} />
+          </details>
           {/* docs/PLAN-pdf-source-sidecar.md: the persisted scanned-PDF
               transcript outcome — the same notice the live page showed, so
               the "figures are model-read, verify against the PDF" caveat is
@@ -1580,6 +1564,11 @@ const styles = {
   } as React.CSSProperties,
   // Data-dense surface tabs: compact selected fill, no accent edge line.
   tabBar: {
+    position: "sticky",
+    top: ui.appTopbar.height,
+    zIndex: 15,
+    background: tokens.surface.canvas,
+    paddingBlock: pwc.space.xs,
     display: "flex",
     gap: pwc.space.xs,
     flexWrap: "wrap" as const,

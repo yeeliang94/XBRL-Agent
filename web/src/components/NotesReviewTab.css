@@ -185,3 +185,11 @@
     padding-left: 0 !important;
   }
 }
+
+/* The note editor can be narrow on a wide viewport because the index and
+ * PDF share that viewport. Respond to the actual pane width, not the screen. */
+@container notes-review (max-width: 800px) {
+  .notes-review-row {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}

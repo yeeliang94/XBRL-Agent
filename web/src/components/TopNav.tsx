@@ -4,8 +4,6 @@ import { ui } from "../lib/uiStyles";
 import type { AppView } from "../lib/appReducer";
 import { TERMS } from "../lib/vocabulary";
 
-export type CurrentFilingTab = "overview" | "values" | "notes";
-
 export interface TopNavProps {
   view: AppView;
   onViewChange: (view: AppView) => void;
@@ -13,9 +11,10 @@ export interface TopNavProps {
   isAdmin?: boolean;
   extractMode?: "queue" | "new";
   currentRunId?: number | null;
-  currentFilingTab?: CurrentFilingTab | null;
+  currentRunHref?: string;
+  currentRunActive?: boolean;
   onNewExtraction?: () => void;
-  onOpenCurrentFiling?: (tab: CurrentFilingTab) => void;
+  onOpenCurrentFiling?: () => void;
 }
 
 const TOOLS: {
@@ -38,7 +37,8 @@ export function TopNav({
   isAdmin = false,
   extractMode = "queue",
   currentRunId = null,
-  currentFilingTab = "overview",
+  currentRunHref = `/history/${currentRunId}?tab=overview`,
+  currentRunActive = currentRunId != null && (view === "extract" || view === "history" || view === "concepts"),
   onNewExtraction,
   onOpenCurrentFiling,
 }: TopNavProps) {
@@ -81,14 +81,12 @@ export function TopNav({
     <nav className="app-main-nav" style={styles.nav} aria-label="Main navigation">
       {link({ key: "work-queue", href: "/", label: "Work queue", glyph: "⌂", active: view === "extract" && extractMode === "queue" && currentRunId == null, action: () => onViewChange("extract") })}
       {link({ key: "new-extraction", href: "/#new-extraction", label: "New extraction", glyph: "＋", active: view === "extract" && extractMode === "new" && currentRunId == null, action: () => onNewExtraction?.() })}
-      {link({ key: "runs", href: "/history", label: TERMS.runs, glyph: "▤", active: view === "history" && currentRunId == null, action: () => onViewChange("history") })}
+      {link({ key: "runs", href: "/history", label: TERMS.runs, glyph: "▤", active: view === "history" && !currentRunActive, action: () => onViewChange("history") })}
 
       {currentRunId != null && (
         <div className="app-nav-current" style={{ display: "contents" }}>
           <span className="app-rail-section-label" style={styles.groupLabel}>Current filing</span>
-          {link({ key: "filing-overview", href: `/history/${currentRunId}?tab=overview`, label: "Overview", glyph: "◉", active: currentFilingTab === "overview" && (view === "extract" || view === "history" || view === "concepts"), action: () => onOpenCurrentFiling?.("overview") })}
-          {link({ key: "figures-review", href: `/concepts/${currentRunId}`, label: "Figures review", glyph: "⌗", active: currentFilingTab === "values" && (view === "history" || view === "concepts"), action: () => onOpenCurrentFiling?.("values") })}
-          {link({ key: "notes-review", href: `/history/${currentRunId}?tab=notes`, label: "Notes review", glyph: "¶", active: currentFilingTab === "notes" && (view === "history" || view === "concepts"), action: () => onOpenCurrentFiling?.("notes") })}
+          {link({ key: "current-run", href: currentRunHref, label: "Current run", glyph: "◉", active: currentRunActive, action: () => onOpenCurrentFiling?.() })}
         </div>
       )}
 

@@ -76,7 +76,7 @@ describe("App routing", () => {
     expect(shell).toHaveClass("app-shell--collapsed");
     expect(window.sessionStorage.getItem("xbrl-navigation-collapsed")).toBe("true");
 
-    fireEvent.click(screen.getByRole("link", { name: "Overview" }));
+    fireEvent.click(screen.getByRole("link", { name: "Current run" }));
     expect(shell).toHaveClass("app-shell--collapsed");
 
     fireEvent.click(screen.getByRole("button", { name: "Expand navigation" }));
@@ -142,7 +142,7 @@ describe("App routing", () => {
     expect(window.location.pathname).toBe("/history/42");
   });
 
-  test("current-filing rail links switch the mounted run tab", async () => {
+  test("review sections keep one tab bar and current-run click preserves the selected section", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => ({
       ok: true,
       status: 200,
@@ -155,12 +155,14 @@ describe("App routing", () => {
 
       expect(await screen.findByTestId("run-detail-notes-review")).toBeInTheDocument();
       expect(
-        screen.queryByRole("tablist", { name: /run detail sections/i }),
-      ).not.toBeInTheDocument();
+        screen.getByRole("tablist", { name: /run detail sections/i }),
+      ).toBeInTheDocument();
 
-      fireEvent.click(screen.getByRole("link", { name: "Overview" }));
+      fireEvent.click(screen.getByRole("link", { name: "Current run" }));
 
+      expect(await screen.findByTestId("run-detail-notes-review")).toBeInTheDocument();
       const tablist = await screen.findByRole("tablist", { name: /run detail sections/i });
+      fireEvent.click(within(tablist).getByRole("tab", { name: "Overview" }));
       await waitFor(() => {
         expect(within(tablist).getByRole("tab", { name: "Overview" })).toHaveAttribute(
           "aria-selected",
@@ -170,6 +172,50 @@ describe("App routing", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  test("concepts alias preserves an explicit section in the sidebar destination", async () => {
+    window.history.replaceState({}, "", "/concepts/42?tab=checks");
+    const { default: App } = await import("../App");
+    render(<App />);
+    const tabs = await screen.findByRole("tablist", { name: /run detail sections/i });
+    expect(within(tabs).getByRole("tab", { name: "Cross-checks" })).toHaveAttribute("aria-selected", "true");
+    const currentRun = screen.getByRole("link", { name: "Current run" });
+    expect(currentRun).toHaveAttribute("href", "/history/42?tab=checks");
+    fireEvent.click(currentRun);
+    expect(window.location.search).toBe("?tab=checks");
+    expect(within(screen.getByRole("tablist", { name: /run detail sections/i })).getByRole("tab", { name: "Cross-checks" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  test("browser Back and Forward retrace sections, including the default Overview", async () => {
+    window.history.replaceState({}, "", "/history/42");
+    const { default: App } = await import("../App");
+    render(<App />);
+    const tabs = await screen.findByRole("tablist", { name: /run detail sections/i });
+    fireEvent.click(within(tabs).getByRole("tab", { name: "Cross-checks" }));
+    fireEvent.click(within(tabs).getByRole("tab", { name: "Activity" }));
+    const length = window.history.length;
+    fireEvent.click(within(tabs).getByRole("tab", { name: "Activity" }));
+    expect(window.history.length).toBe(length);
+    act(() => window.history.back());
+    await waitFor(() => expect(within(tabs).getByRole("tab", { name: "Cross-checks" })).toHaveAttribute("aria-selected", "true"));
+    act(() => window.history.back());
+    await waitFor(() => expect(within(tabs).getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true"));
+    act(() => window.history.forward());
+    await waitFor(() => expect(within(tabs).getByRole("tab", { name: "Cross-checks" })).toHaveAttribute("aria-selected", "true"));
+    fireEvent.click(screen.getByRole("button", { name: "All runs" }));
+    expect(window.location.pathname).toBe("/history");
+  });
+
+  test("browser Back restores Work queue after opening New extraction", async () => {
+    const { default: App } = await import("../App");
+    render(<App />);
+    fireEvent.click(screen.getByRole("link", { name: "New extraction" }));
+    expect(screen.getByRole("heading", { name: "New extraction" })).toBeInTheDocument();
+    act(() => window.history.back());
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Work queue" })).toBeInTheDocument());
+    act(() => window.history.forward());
+    await waitFor(() => expect(screen.getByRole("heading", { name: "New extraction" })).toBeInTheDocument());
   });
 
   test("notes review uses the full workspace width", async () => {

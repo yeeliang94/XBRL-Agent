@@ -101,6 +101,15 @@ describe("Direction A shell and responsive composition", () => {
     expect(prototype).not.toContain('["review","notes"].includes(page) ? "review-mode"');
   });
 
+  test("documents one persistent run navigation and explicit completion", () => {
+    expect(designSystem).toContain("One Current run entry in the sidebar");
+    expect(designSystem).toContain("Browser Back and Forward retrace visited sections");
+    expect(designSystem).toContain("Completion does not mean human review is finished");
+    expect(prototype).toContain('aria-label="Run detail sections"');
+    expect(prototype).toContain('page,"Current run","◉"');
+    expect(prototype).not.toContain('page,"Figures review","⌗"');
+  });
+
   test("documents desktop, tablet, mobile, keyboard, and reduced-motion behavior", () => {
     for (const requirement of [
       "Large desktop:",
