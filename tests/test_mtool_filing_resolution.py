@@ -92,8 +92,43 @@ def test_two_facts_cannot_be_placed_in_one_cell(tmp_path):
     doc["writes"].append(other)
     _, report = resolve_filing_doc(str(path), doc)
     selections = {i["resolution_key"]: "SOCIE!E5" for i in report["unresolved_writes"]}
-    with pytest.raises(ValueError, match="same destination"):
-        resolve_filing_doc(str(path), doc, filing_targets=selections)
+    ready, report = resolve_filing_doc(str(path), doc, filing_targets=selections)
+    assert ready["writes"] == []
+    assert report["status"] == "blocked"
+    assert report["unmapped"] == 2
+    for issue in report["unresolved_writes"]:
+        assert issue["reason_code"] == "destination_collision"
+        assert issue["concept_uuid"] in {"fact-1", "fact-2"}
+        assert issue["resolution_options"]
+
+
+def test_category_periods_in_adjacent_columns_do_not_share_a_destination(tmp_path):
+    path = tmp_path / "mtool.xlsx"
+    _save_semantic_marker_workbook(path)
+    wb = load_workbook(path)
+    ws = wb.active
+    ws["F2"] = ws["E2"].value
+    ws["F4"] = "31/12/2023"
+    wb.save(path)
+    doc = _doc()
+    prior = copy.deepcopy(doc["writes"][0])
+    prior.update(period="PY", column_role="prior_year")
+    doc["writes"].append(prior)
+    _, report = resolve_filing_doc(str(path), doc)
+    issues = report["unresolved_writes"]
+    assert [o["cell"] for o in issues[0]["resolution_options"]] == ["SOCIE!E5"]
+    assert [o["cell"] for o in issues[1]["resolution_options"]] == ["SOCIE!F5"]
+    choices = {i["resolution_key"]: i["resolution_options"][0]["cell"] for i in issues}
+    ready, report = resolve_filing_doc(str(path), doc, filing_targets=choices)
+    assert [w["cell"] for w in ready["writes"]] == ["E5", "F5"]
+    assert report["status"] == "attention"
+    for write in doc["writes"]:
+        write["semantic_address"]["dimensions"] = {
+            "ifrs-full_ComponentsOfEquityAxis": "ifrs-full_IssuedCapitalMember",
+        }
+    ready, report = resolve_filing_doc(str(path), doc)
+    assert [w["cell"] for w in ready["writes"]] == ["E5", "F5"]
+    assert report["unmapped"] == report["ambiguous"] == 0
 
 
 def test_repeated_primary_is_resolved_by_exact_row_label_within_taxonomy_candidates(tmp_path):

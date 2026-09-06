@@ -154,11 +154,12 @@ export function FilingCoverageFailurePanel({ coverage, selections = {}, onSelect
         <summary style={{ cursor: "pointer", fontWeight: pwc.weight.medium }}>
           Affected filing values ({rows.length})
         </summary>
-        <div style={{ overflow: "auto", maxHeight: "55vh", marginTop: 6 }}>
-          <table style={{ width: "100%", minWidth: 900, tableLayout: "fixed", borderCollapse: "collapse", color: pwc.grey700 }}>
+        <div style={{ overflowX: "auto", marginTop: 6 }}>
+          <table style={{ width: "100%", minWidth: 760, tableLayout: "fixed", borderCollapse: "collapse", color: pwc.grey700 }}>
+            <colgroup><col style={{ width: "17%" }} /><col style={{ width: "26%" }} /><col style={{ width: "25%" }} /><col style={{ width: "32%" }} /></colgroup>
             <thead>
               <tr>
-                {["Sheet", "Figure and context", "Problem", "Taxonomy concept", "Destination"].map((heading) => (
+                {["Sheet", "Figure and context", "Problem", "Destination"].map((heading) => (
                   <th
                     key={heading}
                     scope="col"
@@ -189,12 +190,12 @@ export function FilingCoverageFailurePanel({ coverage, selections = {}, onSelect
                       <strong>{issue.label ?? "(no label)"}</strong>
                       <div>{[issue.period, issue.entity_scope].filter(Boolean).join(" · ")}</div>
                       {issue.value != null && <div>Value: {issue.value.toLocaleString()}</div>}
-                      {Object.entries(issue.dimensions ?? {}).map(([axis, member]) => <div key={axis}>{axis}: {member}</div>)}
+                      <details style={{ marginTop: 8 }}><summary>Taxonomy details</summary>
+                        <code>{issue.primary_concept ?? "Not available"}</code>
+                        {Object.entries(issue.dimensions ?? {}).map(([axis, member]) => <div key={axis}>{axis}: {member}</div>)}
+                      </details>
                     </td>
                     <td style={cellStyle}>{issue.detail ?? issue.reason_code ?? issue.kind}</td>
-                    <td style={cellStyle}>
-                      <code>{issue.primary_concept ?? "Not available"}</code>
-                    </td>
                     <td style={cellStyle}>
                       {onSelect && issue.resolution_key && Boolean(issue.resolution_options?.length) ? (
                         <>
@@ -205,7 +206,9 @@ export function FilingCoverageFailurePanel({ coverage, selections = {}, onSelect
                             <option value="">Choose destination…</option>
                             {issue.resolution_options?.map((option) => <option key={option.cell} value={option.cell}>{option.label}</option>)}
                           </select>
-                          {issue.resolution_options?.map((option) => <div key={option.cell} style={{ marginTop: 8 }}>{option.label}</div>)}
+                          {selections[issue.resolution_key] && <div style={{ marginTop: 8 }}>
+                            {issue.resolution_options?.find((option) => option.cell === selections[issue.resolution_key!])?.label}
+                          </div>}
                         </>
                       ) : issue.candidates?.join(", ") ?? "No verified destination available"}
                     </td>

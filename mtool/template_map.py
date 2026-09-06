@@ -170,24 +170,32 @@ def _dimensional_period_blocks(cells: dict) -> list[dict[str, Any]]:
             row for row in end_rows
             if row >= dom_row and (next_dom is None or row < next_dom)
         ]
-        dates = {
-            parsed
-            for row in relevant_end_rows
-            for _col, (_kind, raw) in cells.get(row, {}).items()
-            if (parsed := _parse_marker_date(raw)) is not None
-        }
+        column_dates: dict[str, set] = defaultdict(set)
+        for row in relevant_end_rows:
+            for col, (_kind, raw) in cells.get(row, {}).items():
+                if (parsed := _parse_marker_date(raw)) is not None:
+                    column_dates[col].add(parsed)
+        dates = {date for values in column_dates.values() for date in values}
         raw_blocks.append({
             "dom_row": dom_row,
             "previous_dom_row": dom_rows[index - 1] if index else None,
             "next_dom_row": next_dom,
             "end_date": max(dates) if dates else None,
+            "column_dates": dict(column_dates),
         })
 
     ordered_dates = sorted(
-        {block["end_date"] for block in raw_blocks if block["end_date"]},
+        {date for block in raw_blocks for dates in block["column_dates"].values() for date in dates},
         reverse=True,
     )
     for block in raw_blocks:
+        block["column_periods"] = {
+            col: ("current_year" if next(iter(dates)) == ordered_dates[0]
+                  else "prior_year" if len(ordered_dates) > 1 and next(iter(dates)) == ordered_dates[1]
+                  else None)
+            for col, dates in block["column_dates"].items() if len(dates) == 1
+        }
+        block["period_roles"] = set(block["column_periods"].values()) - {None}
         date = block["end_date"]
         block["period_role"] = (
             "current_year" if ordered_dates and date == ordered_dates[0]
@@ -228,6 +236,7 @@ def _dimension_column(
     *,
     sheet: str,
     block: dict[str, Any] | None = None,
+    period: str | None = None,
 ) -> str | None:
     if not dimensions:
         return None
@@ -239,6 +248,8 @@ def _dimension_column(
             if found_sheet != sheet:
                 continue
             if block is not None:
+                if period and block.get("column_periods", {}).get(col) != period:
+                    continue
                 # Dimension-member headers precede their ``#DOM#`` marker.
                 # Assign an occurrence to the next category block, bounded by
                 # the previous marker so a later block cannot leak backward.
@@ -326,14 +337,14 @@ def _resolution_options(
                         continue
                     if cells.get(row, {}).get(col, (None,))[0] == "F":
                         continue
+                    if block.get("column_periods", {}).get(col) != _write_period_role(write):
+                        continue
                     cell = f"{sheet}!{col}{row}"
                     dims = {axes[0]: members[0]}
-                    row_text = " · ".join(
-                        text for kind, text in cells.get(row, {}).values()
-                        if kind == "S" and text
-                    )
+                    member_label = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ",
+                                          members[0].split("_", 1)[-1].removesuffix("Member"))
                     options[cell] = {"cell": cell, "dimensions": dims,
-                                     "label": f"{cell} · {members[0]} · {row_text}"}
+                                     "label": f"{member_label} · {cell}"}
     else:
         for cell in issue.get("candidates", []):
             candidate_sheet, ref = cell.rsplit("!", 1)
@@ -346,7 +357,7 @@ def _resolution_options(
             # Include the actual row text and label-role URI so opening and
             # closing balances are distinguishable without inventing labels.
             row_text = " · ".join(raw for kind, raw in cells.get(row, {}).values()
-                                  if kind == "S" and raw)
+                                  if kind == "S" and raw and not _taxonomy_identifiers(raw))
             options[cell] = {"cell": cell, "dimensions": issue["dimensions"],
                              "label": f"{cell} · {row_text}"}
     return list(options.values())
@@ -364,9 +375,7 @@ def _filter_candidates_for_period(
     period_name = (
         "current-year" if desired_period == "current_year" else "prior-year"
     )
-    available_periods = {
-        block.get("period_role") for block in blocks if block.get("period_role")
-    }
+    available_periods = {period for block in blocks for period in block["period_roles"]}
     if desired_period not in available_periods:
         if available_periods:
             detail = (
@@ -391,7 +400,7 @@ def _filter_candidates_for_period(
         item for item in candidates
         if (
             (block := _block_for_primary_row(blocks, item[1])) is not None
-            and block.get("period_role") == desired_period
+            and desired_period in block["period_roles"]
         )
     ]
     if candidates and not filtered:
@@ -465,6 +474,7 @@ def _resolve_taxonomy_target(
             )
             col = _dimension_column(
                 occurrences, dimensions, sheet=candidate_sheet, block=block,
+                period=_write_period_role(write),
             )
             if col:
                 narrowed.append((candidate_sheet, row, col))
@@ -561,6 +571,8 @@ def resolve_filing_doc(
     }
 
     resolved: list[dict[str, Any]] = []
+    resolved_sources: list[dict[str, Any]] = []
+    resolution_contexts: dict[int, dict[str, Any]] = {}
     unresolved: list[dict[str, Any]] = []
     ambiguous: list[dict[str, Any]] = []
     legacy: list[dict[str, Any]] = []
@@ -605,6 +617,7 @@ def resolve_filing_doc(
                 ).encode()).hexdigest()
                 if issue is not None:
                     issue.update(resolution_key=key, resolution_options=options)
+                    resolution_contexts[id(write)] = dict(issue)
                 selected = filing_targets.get(key)
                 if issue is not None and selected is not None:
                     option = next((o for o in options if o["cell"] == selected), None)
@@ -635,6 +648,7 @@ def resolve_filing_doc(
                 if key in write:
                     item[key] = write[key]
             resolved.append(item)
+            resolved_sources.append(write)
         elif not primary or inspection["semantic_source"] == "legacy-labels":
             sheet = write.get("sheet")
             if detected.get(sheet, {}).get("dimensional"):
@@ -680,17 +694,35 @@ def resolve_filing_doc(
         }
         legacy_ready = apply_column_map(legacy_doc, cmap)
         resolved.extend(legacy_ready["writes"])
+        resolved_sources.extend(legacy)
 
     if set(filing_targets) - used_selections:
         raise ValueError("Filing selections are stale; recheck the current figures and template")
-    occupied = set()
-    for item in resolved:
+    occupied: dict[tuple[str, str], list[int]] = defaultdict(list)
+    for index, item in enumerate(resolved):
         if "cell" not in item:
             continue
         destination = (item["sheet"], item["cell"])
-        if destination in occupied:
-            raise ValueError("Two filing figures resolve to the same destination; review their categories")
-        occupied.add(destination)
+        occupied[destination].append(index)
+    collisions = set()
+    for (sheet, cell), indices in occupied.items():
+        if len(indices) < 2:
+            continue
+        for index in indices:
+            write = resolved_sources[index]
+            issue = _coverage_issue(
+                write, (write.get("semantic_address") or {}).get("primary_concept"),
+                "destination_collision",
+                f"{len(indices)} figures target {sheet}!{cell}. Choose distinct destinations or correct the source figures; none of these figures was written.",
+                candidates=[f"{sheet}!{cell}"],
+            )
+            context = resolution_contexts.get(id(write), {})
+            for key in ("resolution_key", "resolution_options"):
+                if key in context:
+                    issue[key] = context[key]
+            unresolved.append(issue)
+            collisions.add(index)
+    resolved = [item for index, item in enumerate(resolved) if index not in collisions]
 
     out = dict(doc)
     out["writes"] = resolved

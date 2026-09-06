@@ -983,7 +983,7 @@ export function ConceptsPage({
           it came from are adjacent. Sheet selection and attention are compact
           controls here instead of a repeated second sidebar. */}
       {!notesActive && <aside className="review-template-rail" aria-label="Figure template navigator"
-        style={{ flex: "0 0 190px", minWidth: 0, paddingRight: pwc.space.md, display: "flex", flexDirection: "column", gap: pwc.space.md }}>
+        style={{ flex: "0 0 240px", minWidth: 0, paddingRight: pwc.space.md, display: "flex", flexDirection: "column", gap: pwc.space.md }}>
         <strong style={ui.fieldLabel}>mTool worksheets</strong>
             <div style={styles.controlGroup}>
               <label htmlFor="review-sheet-picker" style={ui.fieldLabel}>
@@ -1040,7 +1040,7 @@ export function ConceptsPage({
         <nav aria-label="Figure worksheets" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           {templates.flatMap((templateId) => (sheetsByTemplate[templateId] ?? []).map((sheet) => (
             <button type="button" key={`${templateId}:${sheet}`} aria-current={activeTemplate === templateId && (activeSheet === sheet || activeSheet == null) ? "true" : undefined}
-              style={{ ...ui.buttonGhost, textAlign: "left", whiteSpace: "normal", background: activeTemplate === templateId && (activeSheet === sheet || activeSheet == null) ? pwc.orange50 : undefined }}
+              style={{ ...ui.buttonGhost, justifyContent: "flex-start", textAlign: "left", whiteSpace: "normal", overflowWrap: "anywhere", background: activeTemplate === templateId && (activeSheet === sheet || activeSheet == null) ? pwc.orange50 : undefined }}
               onClick={() => { setSearchQuery(""); setRowFilter("all"); setActiveTemplate(templateId); setActiveSheet(sheet); }}>
               {templateDisplayName(templateId)} · {sheet}
             </button>
@@ -1842,6 +1842,8 @@ function ConceptRowView({
         }
         style={{
           paddingLeft: depth * 14,
+          minWidth: 0,
+          overflowWrap: "anywhere",
           display: "flex",
           flexDirection: "column",
           gap: pwc.space.xs,
@@ -2337,6 +2339,8 @@ const styles = {
   // resize handles stay between them; the Results column flexes to fill.
   shell: {
     display: "flex",
+    minWidth: 0,
+    width: "100%",
     alignItems: "flex-start",
     gap: 0,
     fontFamily: pwc.fontBody,

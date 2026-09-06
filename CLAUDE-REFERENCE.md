@@ -1786,6 +1786,15 @@ Load-bearing invariants:
   `tests/test_mtool_filing_resolution.py`, the destination retry test in
   `tests/test_mtool_routes.py`, and the `FilingCoverageFailurePanel` and
   `MtoolFillModal` web tests.
+  Dimensional year markers are resolved per column as well as per row block;
+  adjacent CY/PY columns must never share a destination. Collisions return
+  structured blocked coverage naming every affected figure and retaining its
+  available choices. Technical taxonomy identifiers stay in expandable details,
+  and the modal uses one vertical scroll area. Review-note previews must not
+  crop rendered content; worksheet labels wrap inside a scrolling rail. The
+  note action grid must not acquire an implicit column at responsive widths.
+  Pinned by `tests/test_mtool_filing_resolution.py`, `NotesReviewTab`,
+  `FilingCoverageFailurePanel`, and `focusedWorkspaceShell` tests.
 - **Current compatibility target is mTool 2.2.** Generated-template adapters
   are verified in automated forward/reverse SOCIE round trips across
   MFRS/MPERS and Company/Group. A genuine mTool 2.2 workbook fingerprint and

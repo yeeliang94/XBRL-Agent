@@ -1112,7 +1112,7 @@ describe("ConceptsPage", () => {
     expect((sourceDivider.firstElementChild as HTMLElement).style.background).toBe("rgb(238, 239, 241)");
     const layout = screen.getByTestId("notes-source-first-workspace").firstElementChild as HTMLElement;
     fireEvent.keyDown(sourceDivider, { key: "ArrowRight" });
-    expect(layout.style.gridTemplateColumns).toContain("216px");
+    expect(layout.style.gridTemplateColumns).toContain("296px");
     expect((screen.getByTestId("resize-pdf").firstElementChild as HTMLElement).style.width).toBe("1px");
     fireEvent.click(policy);
     expect(policy).toHaveAttribute("aria-current", "true");

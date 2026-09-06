@@ -144,6 +144,21 @@ function selectSheet(name: RegExp) {
 }
 
 describe("NotesReviewTab — read-only render (Step 9)", () => {
+  test("keeps full note previews and wraps worksheet navigation inside its rail", async () => {
+    mockFetchOnce(SAMPLE);
+    render(<NotesReviewTab runId={42} />);
+    const previews = await screen.findAllByTestId("notes-readonly-content");
+    for (const preview of previews) {
+      expect(preview.style.maxHeight).toBe("");
+      expect(preview.style.overflow).not.toBe("hidden");
+    }
+    const nav = screen.getByRole("navigation", { name: /notes sheet navigator/i });
+    for (const button of within(nav).getAllByRole("button")) {
+      expect(button).toHaveStyle({ whiteSpace: "normal", textAlign: "left" });
+    }
+    expect(screen.getByRole("complementary", { name: "Notes template navigator" }))
+      .toHaveStyle({ overflowY: "auto" });
+  });
   test("renders one active sheet at a time", async () => {
     mockFetchOnce(SAMPLE);
     render(<NotesReviewTab runId={42} />);

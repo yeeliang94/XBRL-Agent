@@ -284,7 +284,7 @@ export function NotesReviewTab({
   const [sourceNotes, setSourceNotes] = useState<SourceNoteInventoryRow[] | null>(null);
   const [sourceNotesError, setSourceNotesError] = useState(false);
   const [selectedSourceNote, setSelectedSourceNote] = useState<number | null>(null);
-  const [sourceRailWidth, setSourceRailWidth] = useState(200);
+  const [sourceRailWidth, setSourceRailWidth] = useState(280);
   const [saveBlocked, setSaveBlocked] = useState(false);
   const [editing, setEditing] = useState(false);
   const [moveBusy, setMoveBusy] = useState(false);
@@ -1368,7 +1368,7 @@ function WorkspaceReadOnlyCellRow({
           ref={contentRef}
           className="tiptap ProseMirror"
           data-testid="notes-readonly-content"
-          style={{ ...styles.workspaceReadonlySurface, gridColumn: "1 / -1", minHeight: 0, maxHeight: 28, overflow: "hidden", border: "none", padding: 0 }}
+          style={{ ...styles.workspaceReadonlySurface, gridColumn: "1 / -1", minHeight: 0, minWidth: 0, overflowX: "auto", border: "none", padding: 0 }}
           dangerouslySetInnerHTML={{ __html: cell.html }}
         />
       </div>
@@ -2218,6 +2218,7 @@ const styles = {
     top: pwc.space.lg,
     height: "calc(100vh - 148px)",
     minHeight: 420,
+    overflowY: "auto" as const,
     display: "flex",
     flexDirection: "column" as const,
     minWidth: 0,
@@ -2295,17 +2296,15 @@ const styles = {
     gap: 1,
   } as React.CSSProperties,
   noteRailLabel: {
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap" as const,
-    fontSize: 11,
+    whiteSpace: "normal" as const,
+    overflowWrap: "anywhere" as const,
+    fontSize: 13,
     fontWeight: 600,
   } as React.CSSProperties,
   noteRailDestination: {
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap" as const,
-    fontSize: 9.5,
+    whiteSpace: "normal" as const,
+    overflowWrap: "anywhere" as const,
+    fontSize: 12,
     color: pwc.grey500,
   } as React.CSSProperties,
   noteRailAttention: {
@@ -2371,26 +2370,32 @@ const styles = {
   } as React.CSSProperties,
   workspaceSheetButton: {
     minHeight: 34,
-    padding: `0 ${pwc.space.md}px`,
+    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
     border: "none",
     borderRadius: pwc.radius.sm,
     background: "transparent",
     color: pwc.grey700,
     fontSize: 12,
     fontWeight: 600,
-    whiteSpace: "nowrap" as const,
+    whiteSpace: "normal" as const,
+    overflowWrap: "anywhere" as const,
+    textAlign: "left" as const,
+    flexShrink: 0,
     cursor: "pointer",
   } as React.CSSProperties,
   workspaceSheetButtonActive: {
     minHeight: 34,
-    padding: `0 ${pwc.space.md}px`,
+    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
     border: "none",
     borderRadius: pwc.radius.sm,
     background: pwc.grey100,
     color: pwc.grey900,
     fontSize: 12,
     fontWeight: 650,
-    whiteSpace: "nowrap" as const,
+    whiteSpace: "normal" as const,
+    overflowWrap: "anywhere" as const,
+    textAlign: "left" as const,
+    flexShrink: 0,
     cursor: "pointer",
   } as React.CSSProperties,
   actionsMenu: {
@@ -2553,6 +2558,9 @@ const styles = {
     color: pwc.grey900,
   } as React.CSSProperties,
   cellLeft: {
+    minWidth: 0,
+    overflowWrap: "anywhere" as const,
+    alignItems: "flex-start",
     display: "flex",
     flexDirection: "column" as const,
     gap: 4,
