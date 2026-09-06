@@ -1,8 +1,9 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
+import { act, render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
 import { MtoolFillModal } from "../components/MtoolFillModal";
 import { RunDetailView } from "../components/RunDetailView";
 import type { RunDetailJson } from "../lib/types";
+import * as errors from "../lib/errors";
 
 const FILL_DOC = {
   meta: {
@@ -64,7 +65,7 @@ describe("MtoolFillModal", () => {
     });
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
     await waitFor(() => expect(screen.getByText(/values will be written/i)).toBeTruthy());
-    expect(screen.getByText(/7/)).toBeTruthy();
+    expect(screen.getByText(/7 available figures/)).toBeTruthy();
     expect(screen.getByText(/optional settings/i)).toBeTruthy();
     expect(screen.getByText(/4 values? excluded from this filing/i)).toBeTruthy();
     expect(screen.getByText(/2 values? still in conflict will be written/i)).toBeTruthy();
@@ -201,7 +202,7 @@ describe("MtoolFillModal", () => {
     fireEvent.change(input, { target: { files: [file] } });
     fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
 
-    await waitFor(() => expect(screen.getByText(/safe to validate/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/template filled —/i)).toBeTruthy());
   });
 
   test("shows a column-map editor when auto-detection fails, then retries with it", async () => {
@@ -258,7 +259,7 @@ describe("MtoolFillModal", () => {
 
     // Retry -> now includes column_map -> success.
     fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
-    await waitFor(() => expect(screen.getByText(/safe to validate/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/template filled —/i)).toBeTruthy());
     expect(patchCalls).toBe(2);
   });
 
@@ -311,7 +312,16 @@ describe("MtoolFillModal", () => {
       unresolved: [],
       skipped_formula: [],
       mismatches: [],
-      notes: { status: "degraded", counts: { written: 0, created: 0, unresolved: 1, mismatches: 2, errors: 0 } },
+      notes: {
+        status: "degraded",
+        counts: { written: 0, created: 0, unresolved: 1, mismatches: 2, errors: 3 },
+        errors: [
+          { label: "Borrowings", key: "fn_3", error: "duplicate footnote write to fn_3" },
+          { key: "fn_4", error: "payload could not be written" },
+          { detail: "Notes fill failed. Please try again." },
+        ],
+        mismatches: [{ key: "fn_5", found: false }, { key: "fn_6", found: true }],
+      },
     });
     mockFetch((url) => {
       if (url.includes("/mtool-fill/patch"))
@@ -329,10 +339,15 @@ describe("MtoolFillModal", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
     // Banner reflects the notes failure, NOT a false "Clean".
-    await waitFor(() => expect(screen.getByText(/review before validate/i)).toBeTruthy());
-    expect(screen.queryByText(/safe to validate/i)).toBeNull();
+    await waitFor(() => expect(screen.getByText(/template filled with items to review/i)).toBeTruthy());
+    expect(screen.queryByText(/template filled —/i)).toBeNull();
     // Notes failure detail incl. mismatches is surfaced.
     expect(screen.getByText(/1 not placed, 2 failed read-back/)).toBeTruthy();
+    expect(screen.getByText("Borrowings · fn_3: duplicate footnote write to fn_3")).toBeTruthy();
+    expect(screen.getByText("fn_4: payload could not be written")).toBeTruthy();
+    expect(screen.getByText("Notes fill failed. Please try again.")).toBeTruthy();
+    expect(screen.getByText("fn_5: The saved note is missing or empty. Check it in mTool.")).toBeTruthy();
+    expect(screen.getByText("fn_6: The saved note differs from the source. Check it in mTool.")).toBeTruthy();
   });
 
   test("offers a create-missing toggle and previews what would be created", async () => {
@@ -395,7 +410,7 @@ describe("MtoolFillModal", () => {
             will_fill_existing: [],
             will_create: [],
             unresolved: [],
-            errors: [{ detail: "workbook has no +FootnoteTexts sheet / sharedStrings.xml" }],
+            errors: [{ error: "workbook has no +FootnoteTexts sheet / sharedStrings.xml" }],
           }),
           { status: 200 }
         );
@@ -571,7 +586,7 @@ describe("MtoolFillModal", () => {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
     // The flagged note renders with a plain-language reason + a picker.
-    const decisionHeading = await screen.findByText(/needs your decision/i);
+    const decisionHeading = await screen.findByText(/notes to finish in mtool/i);
     expect(decisionHeading.closest("details")).toHaveAttribute("open");
     expect(screen.getByText(/more than one place/i)).toBeTruthy();
     expect(screen.getByText("Only checked in: Notes-CI")).toBeTruthy();
@@ -903,7 +918,7 @@ describe("MtoolFillModal", () => {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
     fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
-    await waitFor(() => expect(screen.getByText(/safe to validate/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/template filled —/i)).toBeTruthy());
     expect(sentStyling).toBe("none");
   });
 
@@ -1081,9 +1096,8 @@ describe("RunDetailView mTool button", () => {
 });
 
 /**
- * Step 11A — the mTool fill is a filing action and the UI treats it as one:
- * blocked unless the run's data is settled, and the workbook withheld until
- * the report has been read. There is deliberately NO exposure gate (the
+ * Preparation proceeds with readiness reminders. The report arrives before
+ * the workbook, and Download for review records its acknowledgment. There is deliberately NO exposure gate (the
  * 2026-08-05 replay decision dropped v2's XBRL_MTOOL_FILL switch), so the
  * action renders without any config flag.
  */
@@ -1121,7 +1135,7 @@ describe("mTool filing gates", () => {
     fireEvent.change(input, { target: { files: [new File(["x"], "t.xlsx")] } });
   }
 
-  test("a run that isn't ready to file explains why and holds the Fill button", async () => {
+  test("run warnings are visible after upload and never require an override", async () => {
     await openWith((url) => {
       if (url.includes("/mtool-fill/preflight")) {
         return new Response(
@@ -1135,7 +1149,7 @@ describe("mTool filing gates", () => {
                 examples: ["Trade receivables (SOFP-Sub-CuNonCu, CY)"],
               },
             ],
-            warnings: [],
+            warnings: [{ code: "notes_pending", message: "Review the note placement.", examples: [] }],
           }),
           { status: 200 },
         );
@@ -1144,20 +1158,20 @@ describe("mTool filing gates", () => {
       return new Response("{}", { status: 200 });
     });
 
-    expect(screen.getByLabelText(/not ready to file/i)).toBeTruthy();
-    expect(screen.getByText(/this run isn't ready to file yet/i)).toBeTruthy();
-    expect(screen.getByText(/still marked as conflicting/i)).toBeTruthy();
+    const reminders = screen.getByLabelText(/run review reminders/i);
+    expect(reminders).toHaveTextContent(/you can fill this template/i);
     expect(screen.getByText(/Trade receivables/)).toBeTruthy();
-
+    const blockers = within(reminders).getByRole("region", { name: "Filing blockers" });
+    const warnings = within(reminders).getByRole("region", { name: "Warnings" });
+    expect(blockers).toHaveTextContent("2 figure(s) are still marked as conflicting");
+    expect(warnings).toHaveTextContent("Review the note placement.");
+    expect(blockers.compareDocumentPosition(warnings) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const upload = screen.getByTestId("mtool-template-dropzone");
+    expect(upload.compareDocumentPosition(reminders) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     chooseTemplate();
-    const fill = screen.getByRole("button", { name: /^fill$/i }) as HTMLButtonElement;
-    expect(fill.disabled).toBe(true);
+    expect(screen.getByRole("button", { name: /^fill$/i })).toBeEnabled();
+    expect(screen.queryByLabelText(/reason for filing anyway/i)).toBeNull();
 
-    // Writing down a reason releases it — and that reason goes on the record.
-    fireEvent.change(screen.getByLabelText(/reason for filing anyway/i), {
-      target: { value: "partner approved" },
-    });
-    expect((screen.getByRole("button", { name: /^fill$/i }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   test("shows structured, deduplicated taxonomy coverage diagnostics", async () => {
@@ -1278,7 +1292,7 @@ describe("mTool filing gates", () => {
 
     chooseTemplate();
     fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
-    await waitFor(() => expect(screen.getByText(/safe to validate/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/template filled —/i)).toBeTruthy());
     // Nothing was downloaded by filling.
     expect(calls.some((u) => u.includes("/artifact/"))).toBe(false);
 
@@ -1286,7 +1300,7 @@ describe("mTool filing gates", () => {
     await waitFor(() => expect(calls.some((u) => u.includes("/artifact/"))).toBe(true));
   });
 
-  test("a degraded fill withholds the download until it is acknowledged", async () => {
+  test("a fill with review items offers an explicit audited download action", async () => {
     vi.stubGlobal("URL", { createObjectURL: () => "blob:x", revokeObjectURL: () => {} });
     await openWith((url) => {
       if (url.includes("/mtool-fill/patch")) {
@@ -1309,14 +1323,14 @@ describe("mTool filing gates", () => {
 
     chooseTemplate();
     fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
-    await waitFor(() => expect(screen.getByText(/degraded/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/template filled with items to review/i)).toBeTruthy());
 
-    const download = () =>
-      screen.getByRole("button", { name: /download filled template/i }) as HTMLButtonElement;
-    expect(download().disabled).toBe(true);
+    const download = screen.getByRole("button", { name: /download for review/i });
+    expect(download).toBeEnabled();
+    expect(screen.queryByLabelText(/i have read the problems above/i)).toBeNull();
+    fireEvent.click(download);
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes("acknowledge_degraded="))).toBe(true));
 
-    fireEvent.click(screen.getByLabelText(/i have read the problems above/i));
-    expect(download().disabled).toBe(false);
   });
 
   test("problem rows are listed individually, not just counted", async () => {
@@ -1361,5 +1375,191 @@ describe("mTool filing gates", () => {
     chooseTemplate();
     fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
     await waitFor(() => expect(screen.getByText(/factor of a thousand/i)).toBeTruthy());
+  });
+});
+
+
+describe("mTool preparation lifecycle", () => {
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+  const cleanReport = { status: "ok", counts: { written: 7 }, unresolved: [], skipped_formula: [], mismatches: [] };
+  const previewFor = (label: string) => ({
+    notes_in_run: 1, template_fn_slots: 0, create_missing_notes: true,
+    will_fill_existing: [], will_create: [], errors: [],
+    unresolved: [{ index: 0, label, reason: "no_match" }],
+  });
+  function defaults(url: string) {
+    if (url.endsWith("/preflight")) return new Response(JSON.stringify({ ok: true, blockers: [], warnings: [] }));
+    if (url.endsWith("/detect-columns")) return new Response(JSON.stringify({ confidence: "high", requires_confirmation: false, detected: {} }));
+    if (url.endsWith("/mtool-notes-fill")) return new Response(JSON.stringify({ meta: { counts: { notes: 1 } } }));
+    return new Response(JSON.stringify(FILL_DOC));
+  }
+  function choose(name: string) {
+    fireEvent.change(screen.getByLabelText(/mtool template file/i), { target: { files: [new File(["xlsx"], name)] } });
+  }
+
+  test("a slow preview for the previous template cannot replace the current preview", async () => {
+    let finishOld!: (value: Response) => void;
+    mockFetch((url, init) => {
+      if (url.endsWith("/notes-preview")) {
+        const name = ((init?.body as FormData).get("template") as File).name;
+        if (name === "old.xlsx") return new Promise<Response>((resolve) => { finishOld = resolve; });
+        return new Response(JSON.stringify(previewFor("New template note")));
+      }
+      return defaults(url);
+    });
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    await screen.findByText(/available figures/i);
+    choose("old.xlsx");
+    choose("new.xlsx");
+    await screen.findByText("New template note");
+    await act(async () => { finishOld(new Response(JSON.stringify(previewFor("Old template note")))); });
+    await waitFor(() => expect(screen.queryByText("Old template note")).toBeNull());
+    expect(screen.getByText("New template note")).toBeTruthy();
+  });
+
+  test("closing and reopening cannot receive a previous session's fill result", async () => {
+    let finish!: (value: Response) => void;
+    mockFetch((url) => {
+      if (url.endsWith("/patch")) return new Promise<Response>((resolve) => { finish = resolve; });
+      if (url.endsWith("/notes-preview")) return new Response(JSON.stringify(previewFor("Review this note")));
+      return defaults(url);
+    });
+    const close = () => {};
+    const { rerender } = render(<MtoolFillModal runId={42} open onClose={close} />);
+    await screen.findByText(/available figures/i);
+    choose("old.xlsx");
+    fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
+    rerender(<MtoolFillModal runId={42} open={false} onClose={close} />);
+    rerender(<MtoolFillModal runId={43} open onClose={close} />);
+    await act(async () => { finish(patchResponse(cleanReport)); });
+    await screen.findByText(/available figures/i);
+    expect(screen.queryByRole("button", { name: /download filled template/i })).toBeNull();
+    expect(screen.getByRole("button", { name: /^fill$/i })).toBeDisabled();
+  });
+
+  test("shows readable validation detail and the shared support reference", async () => {
+    mockFetch((url) => {
+      if (url.endsWith("/patch")) return new Response(JSON.stringify({ detail: { input_errors: ["A figure cannot be written to this cell."] } }), { status: 422, headers: { "X-Request-ID": "support-42" } });
+      if (url.endsWith("/notes-preview")) return new Response(JSON.stringify(previewFor("Review this note")));
+      return defaults(url);
+    });
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    await screen.findByText(/available figures/i);
+    choose("template.xlsx");
+    fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
+    expect(await screen.findByText(/A figure cannot be written.*Support reference: support-42/)).toBeTruthy();
+    expect(screen.queryByText(/input_errors/)).toBeNull();
+  });
+
+  test("support references preserve the API status and technical detail", async () => {
+    const userMessage = vi.spyOn(errors, "userMessage");
+    mockFetch((url) => url.endsWith("/mtool-fill")
+      ? new Response(JSON.stringify({ detail: "HTTP 500" }), {
+        status: 500, headers: { "X-Request-ID": "support-42" },
+      })
+      : defaults(url));
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    await screen.findByText(/server ran into a problem.*Support reference: support-42/);
+    expect(userMessage).toHaveBeenCalledWith(expect.objectContaining({
+      status: 500, technical: "HTTP 500",
+    }));
+  });
+
+  test("changing the template clears the previous download", async () => {
+    mockFetch((url) => {
+      if (url.endsWith("/patch")) return patchResponse(cleanReport);
+      if (url.endsWith("/notes-preview")) return new Response(JSON.stringify(previewFor("Review this note")));
+      return defaults(url);
+    });
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    await screen.findByText(/available figures/i);
+    choose("first.xlsx");
+    fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
+    await screen.findByRole("button", { name: /download filled template/i });
+    choose("second.xlsx");
+    expect(screen.queryByRole("button", { name: /download filled template/i })).toBeNull();
+  });
+
+  test.each(["empty", "oversized", "wrong extension"])("a rejected %s replacement shows its error above the existing report", async (kind) => {
+    mockFetch((url) => {
+      if (url.endsWith("/patch")) return patchResponse(cleanReport);
+      if (url.endsWith("/notes-preview")) return new Response(JSON.stringify(previewFor("Review this note")));
+      return defaults(url);
+    });
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    await screen.findByText(/available figures/i);
+    choose("first.xlsx");
+    fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
+    await screen.findByRole("button", { name: /download filled template/i });
+    const replacement = new File(
+      kind === "empty" ? [] : [kind === "oversized" ? new Uint8Array(25 * 1024 * 1024 + 1) : "x"],
+      kind === "wrong extension" ? "replacement.pdf" : "replacement.xlsx",
+    );
+    fireEvent.change(screen.getByLabelText(/mtool template file/i), { target: { files: [replacement] } });
+    expect(screen.getByText(/Choose a non-empty .xlsx template/)).toBeVisible();
+    expect(screen.getByText("first.xlsx · Change template")).toBeVisible();
+    choose("accepted.xlsx");
+    expect(screen.queryByText(/Choose a non-empty .xlsx template/)).toBeNull();
+  });
+
+  test("parent rerenders preserve focus and Escape uses the latest close callback", async () => {
+    mockFetch((url) => defaults(url));
+    const firstClose = vi.fn();
+    const nextClose = vi.fn();
+    const opener = document.createElement("button");
+    document.body.appendChild(opener);
+    opener.focus();
+    const { rerender, unmount } = render(<MtoolFillModal runId={42} open onClose={firstClose} />);
+    await screen.findByText(/available figures/i);
+    const upload = screen.getByTestId("mtool-template-dropzone");
+    upload.focus();
+    rerender(<MtoolFillModal runId={42} open onClose={nextClose} />);
+    expect(upload).toHaveFocus();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(nextClose).toHaveBeenCalledOnce();
+    expect(firstClose).not.toHaveBeenCalled();
+    unmount();
+    expect(opener).toHaveFocus();
+    opener.remove();
+  });
+
+  test.each([false, true])("Tab recovers focus outside the modal controls (shift=%s)", async (shiftKey) => {
+    mockFetch((url) => defaults(url));
+    const { unmount } = render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    await screen.findByText(/available figures/i);
+    const dialog = screen.getByRole("dialog");
+    const closeButtons = within(dialog).getAllByRole("button", { name: "Close" });
+    const first = closeButtons[0];
+    const last = closeButtons[1];
+    const rect = new DOMRect(0, 0, 100, 30);
+    const rects = Object.assign([rect], { item: () => rect });
+    vi.spyOn(first, "getClientRects").mockReturnValue(rects);
+    vi.spyOn(last, "getClientRects").mockReturnValue(rects);
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    outside.focus();
+    fireEvent.keyDown(outside, { key: "Tab", shiftKey });
+    expect(shiftKey ? last : first).toHaveFocus();
+    const heading = within(dialog).getByRole("heading", { name: "Fill mTool template" });
+    heading.tabIndex = -1;
+    heading.focus();
+    fireEvent.keyDown(heading, { key: "Tab", shiftKey });
+    expect(shiftKey ? last : first).toHaveFocus();
+    unmount();
+    outside.remove();
+  });
+
+  test("failed notes-summary requests stay visible while filling remains available", async () => {
+    mockFetch((url) => url.endsWith("/mtool-notes-fill") ? new Response("{}", { status: 500 }) : defaults(url));
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    await screen.findByText(/Could not load the notes summary/i);
+    choose("template.xlsx");
+    expect(screen.getByRole("button", { name: /^fill$/i })).toBeEnabled();
+  });
+
+  test.each(["failed", "aborted"])("stopped %s runs offer template filling", (status) => {
+    mockFetch(() => new Response(JSON.stringify({ concepts: [] })));
+    render(<RunDetailView detail={makeDetail({ status: status as RunDetailJson["status"] })} onDelete={() => {}} onDownload={() => {}} />);
+    expect(screen.getByRole("button", { name: /fill mtool template/i })).toBeEnabled();
   });
 });
