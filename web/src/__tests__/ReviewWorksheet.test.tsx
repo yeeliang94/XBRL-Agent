@@ -15,7 +15,7 @@ const sheets: NotesSheet[] = [{ sheet: "Notes-CI", rows: [
   { row: 7, label: "Alternative disclosure", node_uuid: "destination", html: "", evidence: null, source_pages: [], updated_at: "" },
 ] }];
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
-afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 function notesFetch() {
   const patches: Record<string, unknown>[] = [];
@@ -56,6 +56,103 @@ test("next unplaced issue keeps its own PDF and all worksheet alternatives", asy
   expect(screen.getByRole("combobox", { name: "Notes field filter" })).toHaveValue("all");
   expect(screen.getAllByTestId("notes-review-row")).toHaveLength(2);
   expect(screen.queryByTestId("notes-review-editor")).toBeNull();
+});
+
+test.each([409, 500])("a failed save (%s) preserves the draft until discard and unlocks navigation", async (status) => {
+  notesFetch();
+  const originalFetch = globalThis.fetch;
+  const patch = vi.fn(async () => json({ detail: "Save refused" }, status));
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) =>
+    init?.method === "PATCH" ? patch() : originalFetch(input, init),
+  ));
+  render(<NotesReviewTab runId={42} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  vi.useFakeTimers();
+  act(() => {
+    screen.getByTestId("notes-review-editor").dispatchEvent(new CustomEvent("notes-review-test-edit", {
+      bubbles: true, detail: { html: "<p>Unsaved draft</p>" },
+    }));
+  });
+  await act(async () => { await vi.advanceTimersByTimeAsync(1600); });
+  expect(screen.getByTestId("notes-review-editor")).toHaveTextContent("Unsaved draft");
+  expect(screen.getByRole("button", { name: "Review Alternative disclosure" })).toBeDisabled();
+  expect(screen.getByRole("combobox", { name: "Notes field filter" })).toBeDisabled();
+
+  fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
+  expect(screen.queryByRole("button", { name: "Discard unsaved changes" })).toBeNull();
+  await act(async () => { await vi.advanceTimersByTimeAsync(1600); });
+  fireEvent.click(screen.getByRole("button", { name: "Discard unsaved changes" }));
+  expect(screen.getByTestId("notes-review-editor")).toHaveTextContent("Original");
+  expect(screen.getByRole("button", { name: "Review Alternative disclosure" })).toBeEnabled();
+  expect(screen.getByRole("combobox", { name: "Notes field filter" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Next issue" })).toBeEnabled();
+
+  fireEvent.click(screen.getByRole("button", { name: "Review Alternative disclosure" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review Corporate information" }));
+  await act(async () => { await vi.advanceTimersByTimeAsync(1600); });
+  expect(screen.getByTestId("notes-review-editor")).toHaveTextContent("Original");
+  expect(patch).toHaveBeenCalledTimes(2);
+});
+
+test("changing runs during a save does not leave the new workspace locked", async () => {
+  notesFetch();
+  const originalFetch = globalThis.fetch;
+  let finishSave!: (response: Response) => void;
+  const pendingSave = new Promise<Response>((resolve) => { finishSave = resolve; });
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) =>
+    init?.method === "PATCH" ? pendingSave : originalFetch(input, init),
+  ));
+  const view = render(<NotesReviewTab runId={42} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  vi.useFakeTimers();
+  act(() => {
+    screen.getByTestId("notes-review-editor").dispatchEvent(new CustomEvent("notes-review-test-edit", {
+      bubbles: true, detail: { html: "<p>Pending edit</p>" },
+    }));
+  });
+  await act(async () => { await vi.advanceTimersByTimeAsync(1600); });
+  expect(screen.getByRole("combobox", { name: "Notes field filter" })).toBeDisabled();
+  view.rerender(<NotesReviewTab runId={43} />);
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  expect(screen.getByRole("combobox", { name: "Notes field filter" })).toBeEnabled();
+  await act(async () => { finishSave(json({ ...sheets[0].rows[0], html: "<p>Pending edit</p>" })); });
+  expect(screen.getByTestId("notes-review-editor")).toHaveTextContent("Original");
+});
+
+test("discard retains an earlier successful save when a newer draft fails", async () => {
+  notesFetch();
+  const originalFetch = globalThis.fetch;
+  let finishFirstSave!: (response: Response) => void;
+  const firstSave = new Promise<Response>((resolve) => { finishFirstSave = resolve; });
+  const patch = vi.fn()
+    .mockImplementationOnce(() => firstSave)
+    .mockImplementation(async () => json({ detail: "Offline" }, 500));
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) =>
+    init?.method === "PATCH" ? patch() : originalFetch(input, init),
+  ));
+  render(<NotesReviewTab runId={42} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  vi.useFakeTimers();
+  const edit = (html: string) => act(() => {
+    screen.getByTestId("notes-review-editor").dispatchEvent(new CustomEvent("notes-review-test-edit", {
+      bubbles: true, detail: { html },
+    }));
+  });
+  edit("<p>Saved draft</p>");
+  await act(async () => { await vi.advanceTimersByTimeAsync(1600); });
+  edit("<p>Newer unsaved draft</p>");
+  await act(async () => {
+    finishFirstSave(json({ ...sheets[0].rows[0], html: "<p>Saved draft</p>", content_revision: 2 }));
+  });
+  expect(screen.getByTestId("notes-review-editor")).toHaveTextContent("Newer unsaved draft");
+  await act(async () => { await vi.advanceTimersByTimeAsync(1600); });
+  fireEvent.click(screen.getByRole("button", { name: "Discard unsaved changes" }));
+  expect(screen.getByTestId("notes-review-editor")).toHaveTextContent("Saved draft");
+  fireEvent.click(screen.getByRole("button", { name: "Review Alternative disclosure" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review Corporate information" }));
+  expect(screen.getByTestId("notes-review-editor")).toHaveTextContent("Saved draft");
+  await act(async () => { await vi.advanceTimersByTimeAsync(1600); });
+  expect(patch).toHaveBeenCalledTimes(2);
 });
 
 test("successful move with a failed refresh reports the move truthfully and cannot be repeated", async () => {

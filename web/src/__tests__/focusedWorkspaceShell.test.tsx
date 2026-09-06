@@ -28,7 +28,8 @@ describe("focused-workspace shell", () => {
     expect(appSource).toContain('href="#main-content"');
     expect(appSource).toContain('id="main-content"');
     expect(appSource).toContain("reviewFocused && state.filename ? state.filename : contextLabel");
-    expect(appSource).toContain("currentFilingTab={currentFilingTab}");
+    expect(appSource).toContain("currentRunId={filingRunId}");
+    expect(appSource).toContain("currentRunHref={currentRunHref}");
   });
 
   test("keeps logout in the top bar so it remains available on narrow screens", () => {

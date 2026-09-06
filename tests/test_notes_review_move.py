@@ -11,6 +11,33 @@ def payload(client, run_id):
                 expected_revision=1, destination_revision=None)
 
 
+@pytest.mark.parametrize("work", ["pending", "running", "review", "format", "integrity"])
+def test_move_refuses_active_work_without_changing_notes(client_and_run, work):
+    import server
+
+    client, run_id = client_and_run
+    body = payload(client, run_id)
+    with repo.db_session(server.AUDIT_DB_PATH) as conn:
+        status = work if work in {"pending", "running"} else "completed"
+        conn.execute("UPDATE runs SET status = ? WHERE id = ?", (status, run_id))
+        if work == "review":
+            assert repo.claim_notes_review_task(conn, run_id, model="test")
+        elif work == "format":
+            assert repo.claim_notes_format_task(conn, run_id, "Notes-CI", model="test")
+    if work == "integrity":
+        with repo.db_session(server.AUDIT_DB_PATH) as conn:
+            assert repo.claim_notes_integrity_task(conn, run_id, "review") is not None
+
+    before = client.get(f"/api/runs/{run_id}/notes_cells").json()
+    response = client.post(f"/api/runs/{run_id}/notes_cells/Notes-CI/5/move", json=body)
+    assert response.status_code == 409, response.text
+    expected = "Wait for extraction" if work in {"pending", "running"} else "Wait for the notes"
+    assert response.json()["detail"].startswith(expected)
+    assert client.get(f"/api/runs/{run_id}/notes_cells").json() == before
+    with repo.db_session(server.AUDIT_DB_PATH) as conn:
+        assert repo.fetch_notes_tombstones(conn, run_id) == []
+
+
 def test_move_preserves_content_and_leaves_export_tombstone(client_and_run):
     client, run_id = client_and_run
     import server

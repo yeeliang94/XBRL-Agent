@@ -20,7 +20,7 @@ import { ApiError } from "./errors";
 // details" disclosure. A 401 anywhere means the session expired mid-use:
 // broadcast it so the app shell can drop back to the login page (the "any
 // 401 ⇒ show login" rule).
-async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
+export async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(url, options);
   if (!res.ok) {
     if (res.status === 401) {
