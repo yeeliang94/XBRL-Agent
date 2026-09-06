@@ -1480,3 +1480,34 @@ async def notes_tables(run_id: int):
         "cells_unstyled": len(unstyled_cells),
     }
     return {"run_id": run_id, "tables": tables, "summary": summary}
+
+
+class _NotesCellMove(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    destination_sheet: str
+    destination_row: int
+    expected_revision: int
+    destination_revision: int | None
+
+
+@router.post("/api/runs/{run_id}/notes_cells/{sheet}/{row}/move")
+def move_notes_cell_endpoint(run_id: int, sheet: str, row: int, body: _NotesCellMove) -> dict:
+    from notes.review_move import MoveConflict, move_reviewed_note
+
+    conn = server._open_audit_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        move_reviewed_note(conn, run_id=run_id, sheet=sheet, row=row, **body.model_dump())
+        conn.commit()
+        return {"sheet": body.destination_sheet, "row": body.destination_row}
+    except LookupError as exc:
+        conn.rollback()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except MoveConflict as exc:
+        conn.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        conn.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        conn.close()

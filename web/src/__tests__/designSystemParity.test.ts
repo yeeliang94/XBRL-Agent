@@ -123,11 +123,11 @@ describe("Direction A shell and responsive composition", () => {
     expect(prototype).not.toContain("box-shadow: inset 0 -3px 0 var(--accent)");
   });
 
-  test("pins the source-first Notes review composition", () => {
-    expect(designSystem).toContain("the scout source-note inventory, the complete scrolling XBRL field list, and the source PDF");
+  test("pins the worksheet-oriented Notes review composition", () => {
+    expect(designSystem).toContain("mTool worksheet navigation, all fields of the selected worksheet, and the source PDF");
     expect(designSystem).toContain("one-pixel visible Grey 100 rule");
-    expect(designSystem).toContain("mount the rich-text editor only for the selected field");
-    expect(designSystem).toContain("Put PDF paging, cited pages and zoom in one compact PDF toolbar");
+    expect(designSystem).toContain("mount one rich-text editor for the selected field");
+    expect(designSystem).toContain("PDF controls remain in one toolbar");
     expect(prototype).toContain(".notes-three-pane { display: grid; grid-template-columns: 240px 9px minmax(410px, 1fr) 9px minmax(330px, 35%)");
     expect(prototype).toContain('aria-label="Notes sheet navigator"');
     expect(prototype).toContain('aria-label="Resize source notes"');
@@ -144,5 +144,18 @@ describe("Direction A shell and responsive composition", () => {
     expect(prototype).toContain("Live activity");
     expect(prototype).toContain("Provider reasoning");
     expect(prototype).not.toContain("1 / 8");
+  });
+});
+
+
+describe("Template-oriented review", () => {
+  test("keeps empty alternatives, contextual actions and safe destination comparison in the design contract", () => {
+    for (const reference of [designSystem, prototype]) {
+      expect(reference).toContain("mTool worksheet");
+      expect(reference).toContain("All fields");
+      expect(reference).toContain("empty alternatives");
+      expect(reference).toContain("Compare destination");
+      expect(reference).toContain("Next issue");
+    }
   });
 });
