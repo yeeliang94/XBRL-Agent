@@ -215,7 +215,7 @@ describe("ConceptsPage", () => {
     ).toBeNull();
     // A real provenance string (leaf-1, "pdf p.1") is still shown.
     const leafRow = screen.getByTestId("concept-row-leaf-1");
-    expect(leafRow.textContent).toMatch(/pdf p\.1/);
+    expect(leafRow).toHaveTextContent("Page 1");
   });
 
   test("manual edits retain their original evidence page in the source label", async () => {
@@ -234,7 +234,8 @@ describe("ConceptsPage", () => {
     });
     render(<ConceptsPage runId={42} />);
     const row = await screen.findByTestId("concept-row-leaf-1");
-    expect(row).toHaveTextContent("Manual edit · original source page 12");
+    expect(row).toHaveTextContent("Page 12");
+    expect(row).not.toHaveTextContent(/manual edit/i);
   });
 
   test("lists all templates in run via the selector", async () => {
@@ -466,7 +467,7 @@ describe("ConceptsPage", () => {
     await waitFor(() => screen.getByTestId("entity-scope-toggle"));
     fireEvent.click(screen.getByTestId("scope-btn-Group"));
     const row = screen.getByTestId("concept-row-leaf-1");
-    expect(within(row).getByRole("button", { name: /open source/i })).toHaveTextContent("Group pages 3-4");
+    expect(within(row).getByRole("button", { name: /open source/i })).toHaveTextContent("Pages 3, 4");
     fireEvent.click(screen.getByTestId("panel-details-toggle"));
     expect(screen.getByText("Group evidence pages 3-4")).toBeInTheDocument();
   });
@@ -1769,4 +1770,52 @@ describe("ConceptsPage", () => {
       Element.prototype.scrollIntoView = original;
     }
   });
+});
+
+
+describe("Figures use plain language without routine badges", () => {
+  test.each([
+    ["observed", "pdf p.1", "Recorded value; not independently verified"],
+    ["explicit_zero", "pdf p.1", "Zero recorded in the source"],
+    ["not_disclosed", null, "Not disclosed in the source"],
+    ["user_override", "manual edit", "Manually edited"],
+    ["observed", "cascade", "Calculated from component figures"],
+  ])("keeps %s metadata out of rows and explains it in Field details", async (status, source, explanation) => {
+    mockFetch((url) => url.includes("/concepts") ? {
+      ...sampleConcepts, concepts: sampleConcepts.concepts.map((row) => row.concept_uuid === "leaf-1"
+        ? { ...row, value_status: status, source } : row),
+    } : { conflicts: [] });
+    render(<ConceptsPage runId={42} />);
+    const row = await screen.findByTestId("concept-row-leaf-1");
+    fireEvent.click(row);
+    expect(row).not.toHaveTextContent(/observed|cascade|explicit.zero|not.disclosed|user.override|calculated|manually edited/i);
+    expect(screen.queryByText(explanation)).toBeNull();
+    fireEvent.click(screen.getByText("Field details"));
+    expect(screen.getByText(explanation)).toBeInTheDocument();
+  });
+
+  test("conflicts remain visible even when a different row is selected", async () => {
+    mockFetch((url) => url.includes("/concepts") ? {
+      ...sampleConcepts, concepts: sampleConcepts.concepts.map((row) => row.concept_uuid === "leaf-1"
+        ? { ...row, value_status: "conflict" } : row),
+    } : { conflicts: [] });
+    render(<ConceptsPage runId={42} />);
+    await screen.findByTestId("concept-row-leaf-1");
+    fireEvent.click(screen.getByTestId("concept-row-comp-1"));
+    expect(within(screen.getByTestId("concept-row-leaf-1")).getByRole("alert")).toHaveTextContent("Conflicting values");
+    expect(screen.getByTestId("concept-row-comp-1")).not.toHaveTextContent(/calculated|cascade|no source/i);
+  });
+});
+
+
+test("save failures stay beside the edited figure after routine badges are hidden", async () => {
+  globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === "PATCH") return new Response(JSON.stringify({ detail: "Save unavailable" }), { status: 500 });
+    return new Response(JSON.stringify(String(input).includes("/concepts") ? sampleConcepts : { conflicts: [] }), { status: 200 });
+  });
+  render(<ConceptsPage runId={42} />);
+  const input = await screen.findByTestId("value-input-leaf-1");
+  fireEvent.change(input, { target: { value: "321" } });
+  fireEvent.blur(input);
+  expect(await within(screen.getByTestId("concept-row-leaf-1")).findByRole("alert")).toHaveTextContent("Save failed");
 });

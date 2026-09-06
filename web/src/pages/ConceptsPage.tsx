@@ -230,28 +230,28 @@ function isBlankValue(value: number | null | undefined): boolean {
   return value == null;
 }
 
-function displayValueStatus(status: string | null): string {
-  if (!status) return "";
-  if (["missing", "pending_input", "not_found"].includes(status)) return "";
-  return status;
-}
-
-// "cascade" is the internal provenance tag the recompute stamps on COMPUTED
-// totals (concept_model/cascade.py). It's redundant with the "Calculated"
-// state badge and means nothing to a reviewer, so it's hidden from display.
-// The stored value is load-bearing (cascade.py branches on source == "cascade"),
-// so it is suppressed only at render time — never removed from the data.
-function displaySource(source: string | null | undefined): string {
-  if (!source) return "";
-  return source.trim().toLowerCase() === "cascade" ? "" : source;
+// Provenance is retained in the data and explained only in Field details.
+// A recorded value is not a verification verdict.
+function describeValueOrigin(row: ConceptRow): string {
+  if (row.source?.trim().toLowerCase() === "cascade") return "Calculated from component figures";
+  if (row.value_status === "user_override" || row.source?.trim().toLowerCase() === "manual edit") return "Manually edited";
+  if (row.kind === "COMPUTED" && row.value != null) return "Calculated from component figures";
+  switch (row.value_status) {
+    case "observed": return "Recorded value; not independently verified";
+    case "explicit_zero": return "Zero recorded in the source";
+    case "not_disclosed": return "Not disclosed in the source";
+    case "conflict": return "Conflicting values — review required";
+    case "missing":
+    case "pending_input":
+    case "not_found": return "No value recorded";
+    default: return "Origin not recorded";
+  }
 }
 
 function displayConceptSource(row: ConceptRow): string {
-  const source = displaySource(row.source);
-  if (source.trim().toLowerCase() !== "manual edit") return source;
-  const pages = parseEvidencePages(row.evidence);
-  if (pages.length === 0) return "Manual edit";
-  return `Manual edit · original source page${pages.length === 1 ? "" : "s"} ${pages.join(", ")}`;
+  const evidencePages = parseEvidencePages(row.evidence);
+  const pages = evidencePages.length ? evidencePages : parseEvidencePages(row.source);
+  return pages.length ? `Page${pages.length === 1 ? "" : "s"} ${pages.join(", ")}` : "";
 }
 
 function treeColumns(showPeriods: boolean): string {
@@ -1760,18 +1760,8 @@ function ConceptRowView({
   const pyIncompleteMandatory = isMandatory && isBlankValue(pyValue);
   const cyStatus = editStatus[valueEditKey(row.concept_uuid, "CY")];
   const pyStatus = editStatus[valueEditKey(row.concept_uuid, "PY")];
-  const statusLabel =
-    cyStatus === "saving" || pyStatus === "saving"
-      ? "Saving"
-      : cyStatus === "saved" || pyStatus === "saved"
-      ? "Saved"
-      : cyStatus === "error" || pyStatus === "error"
-      ? "Save failed"
-      : isComputed
-      ? cyValue != null || (showPeriods && pyValue != null)
-        ? "Calculated"
-        : ""
-      : displayValueStatus(cyScopedRow.value_status);
+  const hasConflict = cyScopedRow.value_status === "conflict" ||
+    (showPeriods && conceptForScope(row, activeScope, "PY").value_status === "conflict");
 
   return (
     <div
@@ -1953,42 +1943,24 @@ function ConceptRowView({
               )}
             </div>
           )}
-          {selected && <div style={{ ...styles.stateCell, gridColumn: "1" }}>
-            {statusLabel ? (
-              <StatusBadge
-                label={statusLabel}
-                tone={
-                  cyStatus === "error" || pyStatus === "error"
-                    ? "error"
-                    : isComputed
-                    ? "neutral"
-                    : cyScopedRow.value_status === "user_override" ||
-                      cyStatus === "saved" ||
-                      pyStatus === "saved"
-                    ? "accent"
-                    : "neutral"
-                }
-              />
-            ) : null}
+          {hasConflict && <div role="alert" style={{ ...styles.stateCell, gridColumn: "1 / -1" }}>
+            <StatusBadge label="Conflicting values" tone="error" />
           </div>}
-          {selected && <div style={{ ...styles.sourceCell, gridColumn: "2 / -1" }}>
-            {rowHasOpenableSource(cyScopedRow) ? (
-              <button
-                type="button"
-                className="concept-source-jump"
-                style={styles.sourceJump}
-                aria-label={`Open source for ${label}`}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onSelectRow(row.concept_uuid);
-                }}
-              >
-                {displayConceptSource(cyScopedRow)}
-              </button>
-            ) : (
-              <span>{displayConceptSource(cyScopedRow) || "No source page recorded"}</span>
-            )}
+          {selected && rowHasOpenableSource(cyScopedRow) && <div style={{ ...styles.sourceCell, gridColumn: "1 / -1" }}>
+            <button
+              type="button"
+              className="concept-source-jump"
+              style={styles.sourceJump}
+              aria-label={`Open source for ${label}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                onSelectRow(row.concept_uuid);
+              }}
+            >
+              {displayConceptSource(cyScopedRow)}
+            </button>
           </div>}
+
         </>
       )}
     </div>
@@ -2105,10 +2077,14 @@ function ConceptEvidenceBody({
               {concept.display_label || concept.canonical_label}
             </div>
           </div>
+          <div>
+            <div style={styles.evidenceLabel}>Value origin</div>
+            <div style={styles.evidenceText}>{describeValueOrigin(concept)}</div>
+          </div>
           <div style={styles.evidenceGrid}>
             <div>
               <div style={styles.evidenceLabel}>Template</div>
-              <div style={styles.evidenceText}>{concept.template_id}</div>
+              <div style={styles.evidenceText}>{templateDisplayName(concept.template_id)}</div>
             </div>
             <div>
               <div style={styles.evidenceLabel}>Cell</div>
@@ -2121,7 +2097,7 @@ function ConceptEvidenceBody({
           <div>
             <div style={styles.evidenceLabel}>Source</div>
             <div style={styles.evidenceText}>
-              {displayConceptSource(concept) || "No source recorded"}
+              {displayConceptSource(concept) || (concept.source?.trim().toLowerCase() === "cascade" ? "See component figures for source pages" : "No source page recorded")}
             </div>
           </div>
           <div>
@@ -2270,6 +2246,7 @@ function EditableValueCell({
       {badge && !compact && (
         <span
           data-testid={statusTestId}
+          role={status === "error" ? "alert" : "status"}
           style={{
             fontSize: 12,
             color: status === "error" ? pwc.error : pwc.grey700,
@@ -2320,6 +2297,7 @@ function EditableValueCell({
       {badge && compact && (
         <span
           data-testid={statusTestId}
+          role={status === "error" ? "alert" : "status"}
           style={{
             fontSize: 11,
             lineHeight: 1,
