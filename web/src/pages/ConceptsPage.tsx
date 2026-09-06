@@ -161,6 +161,7 @@ interface WorkspacePreferences {
   selectedConceptUuid?: string | null;
   pdfWidth?: number;
   pdfCollapsed?: boolean;
+  activeScope?: "Company" | "Group";
 }
 
 function readWorkspacePreferences(runId: number | null): WorkspacePreferences {
@@ -255,8 +256,8 @@ function displayConceptSource(row: ConceptRow): string {
 
 function treeColumns(showPeriods: boolean): string {
   return showPeriods
-    ? "minmax(260px, 1fr) minmax(130px, 160px) minmax(130px, 160px) 120px minmax(120px, 180px)"
-    : "minmax(260px, 1fr) minmax(150px, 190px) 120px minmax(120px, 180px)";
+    ? "minmax(130px, 1fr) minmax(88px, 120px) minmax(88px, 120px)"
+    : "minmax(130px, 1fr) minmax(100px, 150px)";
 }
 
 export function ConceptsPage({
@@ -292,15 +293,13 @@ export function ConceptsPage({
   // index in the page rather than re-querying so multi-statement
   // navigation stays snappy on slow networks.
   const [searchQuery, setSearchQuery] = useState(initialWorkspace.current.searchQuery ?? "");
-  // Exception-led default: reviewers start with values that carry evidence,
-  // edits, mandatory relevance, or an issue instead of hundreds of blank
-  // taxonomy rows. "All" remains one click away for expert inspection.
-  const [rowFilter, setRowFilter] = useState<RowFilter>(initialWorkspace.current.rowFilter ?? "review");
+  // Keep empty alternatives visible for comparison against the mTool worksheet.
+  const [rowFilter, setRowFilter] = useState<RowFilter>(initialWorkspace.current.rowFilter ?? "all");
   // Phase 4 step 4.12 — Group runs toggle between Company / Group
   // value columns.  Defaults to Company; the toggle is rendered only
   // when at least one concept carries facts in both scopes.
   const [activeScope, setActiveScope] = useState<"Company" | "Group">(
-    "Company"
+    initialWorkspace.current.activeScope ?? "Company"
   );
   // Phase 2.1 — per-cell save status for the editable value column.
   // Keyed by concept_uuid so each row shows its own Saving/Saved/Failed
@@ -366,6 +365,7 @@ export function ConceptsPage({
       selectedConceptUuid,
       pdfWidth,
       pdfCollapsed,
+      activeScope,
     };
     try {
       window.sessionStorage.setItem(`xbrl-review:${runId}`, JSON.stringify(prefs));
@@ -373,7 +373,7 @@ export function ConceptsPage({
       // Storage can be unavailable in locked-down browsers; review remains
       // fully usable in-memory, so persistence failure is intentionally quiet.
     }
-  }, [runId, searchQuery, rowFilter, activeTemplate, activeSheet, selectedConceptUuid, pdfWidth, pdfCollapsed]);
+  }, [runId, searchQuery, rowFilter, activeTemplate, activeSheet, selectedConceptUuid, pdfWidth, pdfCollapsed, activeScope]);
   // Initial load.  Peer-review #11: abort the in-flight request on
   // unmount / runId change so a slow response can't land on a stale
   // component or clobber a newer run's data.
@@ -579,7 +579,8 @@ export function ConceptsPage({
       setActiveTemplate(target.template_id);
       // Show the whole template (clear any sub-sheet filter) so the target row
       // is guaranteed visible regardless of which sub-sheet it lives on.
-      setActiveSheet(null);
+      setActiveSheet(target.render_sheet);
+      setRowFilter("all");
       setSearchQuery("");
       // An intentional jump (conflict / cross-check / coverage focus) SHOULD
       // bring the row into view.
@@ -659,6 +660,10 @@ export function ConceptsPage({
       Object.values(c.scope_facts).some((periods) => periods?.PY !== undefined)
   );
 
+  const figureIssueRows = concepts.filter((row) => row.kind !== "ABSTRACT" && (
+    rowLacksSource(conceptForScope(row, activeScope)) || actionableChecks.some((check) => check.target_sheet === row.render_sheet && check.target_row === row.render_row)
+  ));
+
   const { filtered, noSourceCount } = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     const baseRows = q
@@ -676,10 +681,7 @@ export function ConceptsPage({
         : concepts;
 
     const rowHasValue = (row: ConceptRow) => {
-      if (row.value != null) return true;
-      return Object.values(row.scope_facts ?? {}).some(
-        (periods) => periods?.CY != null || periods?.PY != null,
-      );
+      return periodValue(row, activeScope, "CY") != null || periodValue(row, activeScope, "PY") != null;
     };
     const rowWasEdited = (row: ConceptRow) =>
       row.source?.trim().toLowerCase() === "manual edit" ||
@@ -716,9 +718,9 @@ export function ConceptsPage({
     }
     return {
       filtered: baseRows.filter((row) => visibleUuids.has(row.concept_uuid)),
-      noSourceCount: baseRows.filter(rowLacksSource).length,
+      noSourceCount: baseRows.filter((row) => rowLacksSource(conceptForScope(row, activeScope))).length,
     };
-  }, [concepts, searchQuery, activeTemplate, activeSheet, rowFilter, editStatus, actionableChecks]);
+  }, [concepts, searchQuery, activeTemplate, activeSheet, rowFilter, editStatus, actionableChecks, activeScope]);
 
   useEffect(() => {
     if (notesActive) {
@@ -921,7 +923,7 @@ export function ConceptsPage({
   const attentionCount =
     failingChecks.length + totalOpenConflicts;
   const pdfColumn = (
-    <div className="review-source-column" style={{ ...styles.column, flex: `0 0 ${pdfWidth}px`, width: pdfWidth }}>
+    <div className="review-source-column" style={{ ...styles.column, flex: `0 1 ${pdfWidth}px`, width: pdfWidth, maxWidth: "34%" }}>
       <ColumnHeader
         title="Source PDF"
         testId="pdf"
@@ -959,19 +961,9 @@ export function ConceptsPage({
           Sits directly beside the Source PDF so a value and the document page
           it came from are adjacent. Sheet selection and attention are compact
           controls here instead of a repeated second sidebar. */}
-      <section aria-label="Review results" style={styles.resultsCol}>
-        {loadError && (
-          <div style={styles.errorBanner}>
-            Failed to load concepts: {loadError}
-          </div>
-        )}
-
-        {/* Both toolbar controls only apply to figure sheets, so on a
-            notes sheet the whole card is skipped — rendering the shell
-            with its children hidden painted an empty white box between
-            the outcome strip and the notes editor (run-168 QA finding). */}
-        {!notesActive && (
-          <section style={styles.toolbar} aria-label="Review controls">
+      {!notesActive && <aside className="review-template-rail" aria-label="Figure template navigator"
+        style={{ flex: "0 0 190px", minWidth: 0, paddingRight: pwc.space.md, display: "flex", flexDirection: "column", gap: pwc.space.md }}>
+        <strong style={ui.fieldLabel}>mTool worksheets</strong>
             <div style={styles.controlGroup}>
               <label htmlFor="review-sheet-picker" style={ui.fieldLabel}>
                 Statement
@@ -1004,19 +996,6 @@ export function ConceptsPage({
                 })}
               </select>
             </div>
-            {isGroupRun && (
-              <div style={styles.controlGroup}>
-                <span style={ui.fieldLabel}>Entity</span>
-                <SegmentedControl
-                  testId="entity-scope-toggle"
-                  values={["Company", "Group"] as const}
-                  activeValue={activeScope}
-                  onChange={setActiveScope}
-                  buttonTestId={(scope) => `scope-btn-${scope}`}
-                />
-              </div>
-            )}
-
             <div style={styles.searchGroup}>
               <label htmlFor="concept-search" style={ui.fieldLabel}>
                 Search
@@ -1031,6 +1010,48 @@ export function ConceptsPage({
                 style={{ ...ui.input, width: "100%" }}
               />
             </div>
+        {searchQuery.trim() && <nav aria-label="Matching figure fields" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {concepts.filter((row) => `${row.canonical_label} ${row.display_label ?? ""}`.toLowerCase().includes(searchQuery.trim().toLowerCase())).map((row) => (
+            <button type="button" key={`${row.concept_uuid}:${row.render_sheet}:${row.render_row}`} style={{ ...ui.buttonGhost, textAlign: "left", whiteSpace: "normal" }}
+              onClick={() => handleSelectConcept(row.concept_uuid)}>{row.display_label || row.canonical_label} · {row.render_sheet} · row {row.render_row}</button>
+          ))}
+        </nav>}
+        <nav aria-label="Figure worksheets" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {templates.flatMap((templateId) => (sheetsByTemplate[templateId] ?? []).map((sheet) => (
+            <button type="button" key={`${templateId}:${sheet}`} aria-current={activeTemplate === templateId && (activeSheet === sheet || activeSheet == null) ? "true" : undefined}
+              style={{ ...ui.buttonGhost, textAlign: "left", whiteSpace: "normal", background: activeTemplate === templateId && (activeSheet === sheet || activeSheet == null) ? pwc.orange50 : undefined }}
+              onClick={() => { setSearchQuery(""); setRowFilter("all"); setActiveTemplate(templateId); setActiveSheet(sheet); }}>
+              {templateDisplayName(templateId)} · {sheet}
+            </button>
+          )))}
+        </nav>
+      </aside>}
+      <section aria-label="Review results" style={styles.resultsCol}>
+        {loadError && (
+          <div style={styles.errorBanner}>
+            Failed to load concepts: {loadError}
+          </div>
+        )}
+
+        {/* Both toolbar controls only apply to figure sheets, so on a
+            notes sheet the whole card is skipped — rendering the shell
+            with its children hidden painted an empty white box between
+            the outcome strip and the notes editor (run-168 QA finding). */}
+        {!notesActive && (
+          <section style={styles.toolbar} aria-label="Review controls">
+            {isGroupRun && (
+              <div style={styles.controlGroup}>
+                <span style={ui.fieldLabel}>Entity</span>
+                <SegmentedControl
+                  testId="entity-scope-toggle"
+                  values={["Company", "Group"] as const}
+                  activeValue={activeScope}
+                  onChange={setActiveScope}
+                  buttonTestId={(scope) => `scope-btn-${scope}`}
+                />
+              </div>
+            )}
+
             <div style={styles.controlGroup}>
               <label htmlFor="concept-row-filter" style={ui.fieldLabel}>
                 Rows
@@ -1061,6 +1082,12 @@ export function ConceptsPage({
                 re-running extraction overwrites {editedCount === 1 ? "it" : "them"}
               </span>
             )}
+            <button type="button" style={ui.buttonGhost} disabled={figureIssueRows.length === 0}
+              onClick={() => {
+                const current = figureIssueRows.findIndex((row) => row.concept_uuid === selectedConceptUuid);
+                const next = figureIssueRows[(current + 1) % figureIssueRows.length];
+                if (next) handleSelectConcept(next.concept_uuid);
+              }}>Next issue</button>
             {attentionCount > 0 && (
               <button
                 type="button"
@@ -1386,8 +1413,7 @@ function ConceptTree({
         <div style={styles.headerCell}>Line item</div>
         <div style={styles.headerCellNumeric}>{showPeriods ? cyLabel : "Value"}</div>
         {showPeriods && <div style={styles.headerCellNumeric}>{pyLabel}</div>}
-        <div style={styles.headerCell}>State</div>
-        <div style={styles.headerCell}>Source</div>
+
       </div>
       {visibleRows.map((r) => (
         <ConceptRowView
@@ -1756,6 +1782,14 @@ function ConceptRowView({
       // Section headers aren't selectable — they carry no value, so clicking
       // one used to select a row the PDF pane / details panel could do
       // nothing with. Data rows keep the click-to-select behaviour.
+      tabIndex={isAbstract ? undefined : 0}
+      role={isAbstract ? undefined : "treeitem"}
+      aria-selected={isAbstract ? undefined : selected}
+      onKeyDown={(event) => {
+        if (event.target === event.currentTarget && !isAbstract && (event.key === "Enter" || event.key === " ")) {
+          event.preventDefault(); onSelectRow(row.concept_uuid);
+        }
+      }}
       onClick={isAbstract ? undefined : () => onSelectRow(row.concept_uuid)}
       style={{
         display: "grid",
@@ -1763,7 +1797,7 @@ function ConceptRowView({
           ? "minmax(0, 1fr)"
           : treeColumns(showPeriods),
         gap: pwc.space.lg,
-        minWidth: 760,
+        minWidth: 0,
         // Section headers are visually distinct from data rows: tighter,
         // smaller, semibold caption on a grey band — so a run of same-named
         // taxonomy headers ("Statement of cash flows" nested three deep)
@@ -1919,7 +1953,7 @@ function ConceptRowView({
               )}
             </div>
           )}
-          <div style={styles.stateCell}>
+          {selected && <div style={{ ...styles.stateCell, gridColumn: "1" }}>
             {statusLabel ? (
               <StatusBadge
                 label={statusLabel}
@@ -1936,8 +1970,8 @@ function ConceptRowView({
                 }
               />
             ) : null}
-          </div>
-          <div style={styles.sourceCell}>
+          </div>}
+          {selected && <div style={{ ...styles.sourceCell, gridColumn: "2 / -1" }}>
             {rowHasOpenableSource(cyScopedRow) ? (
               <button
                 type="button"
@@ -1952,9 +1986,9 @@ function ConceptRowView({
                 {displayConceptSource(cyScopedRow)}
               </button>
             ) : (
-              <span>{displayConceptSource(cyScopedRow) || "—"}</span>
+              <span>{displayConceptSource(cyScopedRow) || "No source page recorded"}</span>
             )}
-          </div>
+          </div>}
         </>
       )}
     </div>
@@ -2443,8 +2477,8 @@ const styles = {
     gap: pwc.space.xs,
   } as React.CSSProperties,
   searchGroup: {
-    flex: "1 1 280px",
-    minWidth: 260,
+    flex: "0 0 auto",
+    minWidth: 0,
     display: "flex",
     flexDirection: "column" as const,
     gap: pwc.space.xs,
@@ -2563,9 +2597,9 @@ const styles = {
   } as React.CSSProperties,
   treeHeaderRow: {
     display: "grid",
-    gridTemplateColumns: "minmax(260px, 1fr) minmax(150px, 190px) 120px minmax(120px, 180px)",
+    gridTemplateColumns: "minmax(130px, 1fr) minmax(100px, 150px)",
     gap: pwc.space.md,
-    minWidth: 760,
+    minWidth: 0,
     padding: `${pwc.space.lg}px ${pwc.space.xl}px`,
     background: pwc.grey50,
     color: pwc.grey700,

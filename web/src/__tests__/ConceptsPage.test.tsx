@@ -1056,7 +1056,7 @@ describe("ConceptsPage", () => {
     expect(picker.textContent).not.toContain("mfrs-company-sofp");
   });
 
-  test("Notes uses the scout inventory and keeps every XBRL field in the middle", async () => {
+  test("Notes starts in worksheet order and keeps source inventory available", async () => {
     mockFetch((url) => {
       if (url.includes("/pdf/info")) return { pages: 30 };
       if (url.includes("/notes-coverage"))
@@ -1090,15 +1090,16 @@ describe("ConceptsPage", () => {
       return {};
     });
     render(<ConceptsPage runId={42} initialView="notes" />);
-    const corporate = await screen.findByTestId("source-note-1");
+    await screen.findByTestId("source-note-1");
     const policy = screen.getByTestId("source-note-2");
     const missing = screen.getByTestId("source-note-3");
     const shared = screen.getByTestId("source-note-4");
-    expect(corporate).toHaveAttribute("aria-current", "true");
+    expect(screen.getByRole("combobox", { name: "Notes field filter" })).toHaveValue("all");
+    fireEvent.click(screen.getByText("Source note inventory", { exact: true }));
     expect(missing).toHaveAccessibleName(/needs review/i);
     expect(missing).toHaveAttribute("data-tooltip", "Placement needs review");
     expect(screen.getByText("4 found by document scan")).toBeTruthy();
-    expect(screen.getAllByTestId("notes-review-row")).toHaveLength(3);
+    expect(screen.getAllByTestId("notes-review-row")).toHaveLength(2);
     expect(screen.getAllByTestId("notes-review-editor")).toHaveLength(1);
     expect(screen.getByRole("navigation", { name: "Notes sheet navigator" })).toBeTruthy();
     expect(screen.getByRole("button", { name: /Sheet 10 — Corporate Information/i })).toBeTruthy();
@@ -1109,12 +1110,13 @@ describe("ConceptsPage", () => {
     expect((sourceDivider.firstElementChild as HTMLElement).style.background).toBe("rgb(238, 239, 241)");
     const layout = screen.getByTestId("notes-source-first-workspace").firstElementChild as HTMLElement;
     fireEvent.keyDown(sourceDivider, { key: "ArrowRight" });
-    expect(layout.style.gridTemplateColumns).toContain("256px");
+    expect(layout.style.gridTemplateColumns).toContain("216px");
     expect((screen.getByTestId("resize-pdf").firstElementChild as HTMLElement).style.width).toBe("1px");
     fireEvent.click(policy);
     expect(policy).toHaveAttribute("aria-current", "true");
     expect(screen.getAllByTestId("notes-review-editor")).toHaveLength(1);
     await waitFor(() => expect(screen.getByTestId("pdf-page-input")).toHaveValue("8"));
+    fireEvent.click(screen.getByRole("button", { name: /Sheet 10 — Corporate Information/i }));
     const unusedField = screen.getByText("Unused disclosure").closest(
       '[data-testid="notes-review-row"]',
     );
@@ -1291,7 +1293,7 @@ describe("ConceptsPage", () => {
     );
     expect(await screen.findByTestId("review-attention-control")).toHaveTextContent("3");
     expect(screen.queryByTestId("needs-attention")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Next issue" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Next issue" })).toBeEnabled();
     expect(screen.queryByText("3 / 3")).toBeNull();
   });
 

@@ -974,3 +974,25 @@ textarea:focus {
     animation: none !important;
   }
 }
+
+/* Worksheet navigation stays beside the fields on desktop and above on mobile. */
+@media (max-width: 1000px) {
+  .review-workspace > .review-template-rail {
+    flex-basis: auto !important;
+    width: 100%;
+    padding-right: 0 !important;
+  }
+  .review-template-rail > nav { flex-direction: row !important; flex-wrap: wrap; }
+}
+@media (max-width: 780px) {
+  .concept-tree-row, .concept-tree-header { padding: 8px !important; gap: 8px !important; }
+}
+.concept-tree-row[aria-selected="false"] input:not(:focus) {
+  border-color: transparent !important;
+  background: transparent !important;
+}
+@media (max-width: 480px) {
+  .concept-tree-header, .concept-tree-row:not([data-kind="ABSTRACT"]) {
+    grid-template-columns: minmax(85px, 1fr) repeat(2, minmax(70px, 90px)) !important;
+  }
+}
