@@ -25,6 +25,8 @@ import { buildReasoningTimeline } from "../lib/buildReasoningTimeline";
 import { NOTES_12_AGENT_ID, isNotes12AgentId } from "../lib/notes";
 import { isNonAgentTab } from "../lib/agentTabKinds";
 import { describePdfSidecar } from "../lib/pdfSidecar";
+import { runStatusDisplay } from "../lib/runStatus";
+import { StatusIcon } from "../components/StatusIcon";
 import { semanticActivities } from "../lib/semanticActivity";
 
 // Re-export so existing callers / tests that imported NOTES_12_AGENT_ID
@@ -122,6 +124,16 @@ export function ExtractPage({
   onViewAllRuns,
   isAdmin = false,
 }: ExtractPageProps) {
+  // Starting replaces a long setup form. Reset its scroll position once so
+  // the operator sees the new progress heading rather than the old footer.
+  const wasRunning = useRef(state.isRunning);
+  useEffect(() => {
+    if (state.isRunning && !wasRunning.current) {
+      document.getElementById("main-content")?.scrollIntoView?.({ block: "start" });
+    }
+    wasRunning.current = state.isRunning;
+  }, [state.isRunning]);
+
   // PLAN-persistent-draft-uploads.md (Phase C): when the URL is /run/{id}
   // (currentRunId is non-null on mount) and we have not yet loaded that
   // run's details, fetch the row from the audit DB and seed the workspace
@@ -282,7 +294,7 @@ export function ExtractPage({
     return {
       total: requestedRoles.size > 0 ? requestedRoles.size : agents.length,
       complete: monitoredAgents.filter((agent) => agent.status === "complete").length,
-      running: monitoredAgents.filter((agent) => agent.status === "running" || agent.status === "aborting").length,
+      running: agents.filter((agent) => agent.status === "running" || agent.status === "aborting").length,
       // Run-check agents are deliberately outside the requested-workstream
       // denominator, but their failures must still be visible to operators.
       attention: agents.filter((agent) => agent.status === "failed" || agent.flag).length,
@@ -300,6 +312,13 @@ export function ExtractPage({
   // Emitted once before the notes agents launch, only when the Settings
   // toggle is on and the PDF is a scan. Advisory in both outcomes.
   const sidecarNotice = state.pdfSidecar ? describePdfSidecar(state.pdfSidecar) : null;
+  const [expandedActivityRunId, setExpandedActivityRunId] = useState<number | null>(null);
+  const completedRunId = state.complete?.runId ?? state.currentRunId;
+  const showCompletedActivity = completedRunId != null && expandedActivityRunId === completedRunId;
+  const completionStatus = state.complete?.overallStatus ?? (state.complete?.success ? "completed" : "failed");
+  const completionDisplay = runStatusDisplay(completionStatus);
+  const showReviewHandoff = state.isComplete && state.complete != null && completedRunId != null && onOpenRun != null;
+  const showActivity = !showReviewHandoff || showCompletedActivity;
   const idle = state.sessionId == null && !state.isRunning;
   const showQueue = idle && landingMode === "queue";
   const isResumedDraft = state.currentRunId != null && state.sessionId != null
@@ -317,7 +336,9 @@ export function ExtractPage({
             : landingMode === "new"
               ? "New extraction"
               : "Work queue"}
-        description={state.isRunning
+        description={state.isComplete
+          ? "Processing has ended. Review the results before preparing your filing."
+          : state.isRunning
           ? "You can leave this page while processing continues."
           : isResumedDraft
             ? "Confirm the saved filing scope and continue this draft when you are ready."
@@ -342,16 +363,44 @@ export function ExtractPage({
         ) : undefined}
       />
 
+      {showReviewHandoff && (
+        <section aria-labelledby="completion-heading" style={styles.runOverview}>
+          <div role="status" aria-live="polite">
+            <h2 id="completion-heading" style={styles.runOverviewTitle}>
+              <StatusIcon symbol={completionDisplay.symbol} /> {completionDisplay.label}
+            </h2>
+            <p style={styles.runOverviewMessage}>
+              {completionStatus === "completed"
+                ? "Extraction is complete. Next, review figures, notes and cross-checks in the run workspace."
+                : completionStatus === "completed_with_errors" || completionStatus === "correction_exhausted"
+                  ? "Processing has ended with issues. Review the results and unresolved checks before using the workbook."
+                  : "Extraction did not finish successfully. Open the run to inspect issues and any partial results."}
+            </p>
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: pwc.space.md, marginTop: pwc.space.md }}>
+            <button type="button" className={uiClass.btnPrimary} style={ui.buttonPrimary}
+              onClick={() => onOpenRun(completedRunId)}>
+              Review run results
+            </button>
+            <button type="button" className={uiClass.btnGhost} style={ui.buttonGhost}
+              aria-expanded={showCompletedActivity}
+              onClick={() => setExpandedActivityRunId(showCompletedActivity ? null : completedRunId)}>
+              {showCompletedActivity ? "Hide run activity" : "Show run activity"}
+            </button>
+          </div>
+        </section>
+      )}
+
       {/* Direction A keeps Work queue and New extraction as separate
-          destinations. The stable child slot is used only for the new-upload,
-          draft, and live-run states so UploadPanel does not remount mid-flow. */}
+          destinations. UploadPanel stays mounted through upload and draft
+          setup; starting extraction replaces it with run progress. */}
       <HomeHero
         active={showQueue}
         onResumeDraft={onResumeDraft ?? (() => {})}
         onOpenRun={onOpenRun ?? (() => {})}
         onViewAllRuns={onViewAllRuns ?? (() => {})}
       >
-        {(!idle || landingMode === "new") && (
+        {!state.isRunning && !state.isComplete && (!idle || landingMode === "new") && (
           <div id="new-extraction">
             <UploadPanel
               onUpload={handleUpload}
@@ -384,7 +433,7 @@ export function ExtractPage({
       {/* One run-level surface replaces the former stack of progress, stage,
           and token cards. Operators first see what the system is doing and
           whether any workstream needs attention; technical usage is secondary. */}
-      {(state.isRunning || state.currentPhase || state.tokens) && (
+      {showActivity && (state.isRunning || state.currentPhase || state.tokens) && (
         <section aria-labelledby="live-run-heading" style={styles.runOverview}>
           <div className="live-run-header" style={styles.runOverviewHeader}>
             <div style={styles.runOverviewLead}>
@@ -401,7 +450,7 @@ export function ExtractPage({
                   style={styles.runOverviewTitle}
                 >
                   {state.isComplete
-                    ? "Extraction finished"
+                    ? completionDisplay.label
                     : state.isRunning
                       ? state.pipelineActivity?.message ?? liveStageMessage(state.pipelineStage)
                       : "Run stopped"}
@@ -409,7 +458,7 @@ export function ExtractPage({
               </div>
               <p style={styles.runOverviewMessage}>
                 {state.isComplete
-                  ? "The filing draft is ready for review."
+                  ? "Processing has ended. Review results and any unresolved issues before filing."
                   : state.isRunning
                     ? "This can take a few minutes. You can leave this page open while the run continues."
                     : "The run is no longer active. Review any errors below before trying again."}
@@ -434,10 +483,12 @@ export function ExtractPage({
             </div>
             <div className="live-run-summary" style={styles.runSummary} aria-label="Workstream summary">
               <div style={styles.runSummaryPrimary}>
-                {workstreamSummary.complete} of {workstreamSummary.total} complete
+                {workstreamSummary.complete} of {workstreamSummary.total} extraction workstreams complete
               </div>
               <div style={styles.runSummaryMeta}>
-                {workstreamSummary.running} active
+                {state.isRunning && workstreamSummary.running === 0
+                  ? "Processing continues"
+                  : `${workstreamSummary.running} active across processing and review`}
                 {workstreamSummary.attention > 0 ? ` · ${workstreamSummary.attention} need attention` : ""}
               </div>
               {state.runStartTime != null && (
@@ -485,7 +536,7 @@ export function ExtractPage({
           `AgentTimeline` shows its own "Waiting for the agent to start…"
           placeholder when events are still empty, so the empty state is
           graceful. */}
-      {(state.isRunning || state.agentTabOrder.length > 0) && (
+      {showActivity && (state.isRunning || state.agentTabOrder.length > 0) && (
         <div className="multi-agent-workspace" style={styles.activitySection}>
           <AgentTabs
             agents={agentTabsAgents}
@@ -514,7 +565,7 @@ export function ExtractPage({
       )}
 
       {/* Legacy: agent feed without tabs (single-agent mode) */}
-      {state.agentTabOrder.length === 0 && state.events.length > 0 && (
+      {showActivity && state.agentTabOrder.length === 0 && state.events.length > 0 && (
         <AgentTimeline
           events={state.events}
           toolTimeline={state.toolTimeline}
@@ -613,7 +664,7 @@ export function ExtractPage({
       )}
 
       {/* Results */}
-      {state.isComplete && state.complete && (
+      {state.isComplete && state.complete && !showReviewHandoff && (
         <ResultsView
           complete={state.complete}
           sessionId={state.sessionId!}
@@ -639,7 +690,7 @@ export function ExtractPage({
 
       {/* New extraction button after completion */}
       {(state.isComplete || state.hasError) && (
-        <button onClick={handleReset} style={styles.resetLink}>
+        <button onClick={() => { handleReset(); onOpenNewExtraction?.(); }} style={styles.resetLink}>
           Start new extraction
         </button>
       )}

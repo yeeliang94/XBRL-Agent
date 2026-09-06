@@ -340,6 +340,8 @@ export function ConceptsPage({
   // Wider default so the source PDF is actually readable at rest (UX-QA #7f) —
   // still user-resizable/collapsible for reviewers who want more table room.
   const [pdfWidth, setPdfWidth] = useState(initialWorkspace.current.pdfWidth ?? 520);
+  const workspaceRef = useRef<HTMLDivElement>(null);
+  const pdfMaxWidthRef = useRef(720);
   const [pdfCollapsed, setPdfCollapsed] = useState(initialWorkspace.current.pdfCollapsed ?? false);
   // Whether the row carrying the CURRENT selection may scroll itself into
   // view. True only for intentional jumps (row click, reconciliation
@@ -644,6 +646,23 @@ export function ConceptsPage({
   // templates so a user can hop between statements via the result
   // list).  Empty query falls back to the active-template view.
   const notesActive = activeTemplate === NOTES_KEY;
+
+  useEffect(() => {
+    const workspace = workspaceRef.current;
+    if (!workspace) return;
+    const updateLimit = () => {
+      const width = workspace.getBoundingClientRect().width;
+      const maxWidth = width > 0 ? Math.min(720, width * 0.34) : 720;
+      pdfMaxWidthRef.current = maxWidth;
+      // Store the visible width so dragging back from the limit responds
+      // immediately and restoring the workspace preserves the same size.
+      setPdfWidth((w) => clamp(w, Math.min(260, maxWidth), maxWidth));
+    };
+    updateLimit();
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(updateLimit) : null;
+    observer?.observe(workspace);
+    return () => observer?.disconnect();
+  }, [notesActive, runId, isBenchmark]);
 
   // Detect Group runs by the presence of ANY concept with Group-side
   // facts.  Phase-1 Company runs have no Group entry; the toggle stays
@@ -956,7 +975,7 @@ export function ConceptsPage({
   );
 
   return (
-    <div data-testid="concepts-page" className="review-workspace" style={styles.shell}>
+    <div ref={workspaceRef} data-testid="concepts-page" className="review-workspace" style={styles.shell}>
       {/* Results + concept grid (always visible, flexes to fill).
           Sits directly beside the Source PDF so a value and the document page
           it came from are adjacent. Sheet selection and attention are compact
@@ -1208,7 +1227,7 @@ export function ConceptsPage({
           <ResizableDivider
             testId="resize-pdf"
             label="Resize source PDF panel"
-            onDelta={(dx) => setPdfWidth((w) => clamp(w - dx, 260, 720))}
+            onDelta={(dx) => setPdfWidth((w) => clamp(w - dx, Math.min(260, pdfMaxWidthRef.current), pdfMaxWidthRef.current))}
           />
           {pdfColumn}
         </>

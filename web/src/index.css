@@ -674,6 +674,7 @@ textarea:focus {
   }
 
   .review-workspace .review-source-column {
+    max-width: 100% !important;
     display: block !important;
     flex: 1 0 100% !important;
     width: 100% !important;

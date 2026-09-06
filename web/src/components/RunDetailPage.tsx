@@ -11,21 +11,15 @@ import type { RunDetailJson } from "../lib/types";
 // 920px modal. The parent (HistoryPage) decides when to mount it based on
 // the app-level selectedRunId state.
 //
-// The chrome here is intentionally minimal: a top bar with a Back button
-// on the left and the embedded RunDetailView body (which carries the run
-// number in its kicker — it is deliberately not repeated up here). No overlay, no Escape handler — a page dismissal is
-// the Back button (which prefers history.back() so browser Back behaves
-// naturally and the list scroll position is preserved by React + the
-// browser).
+// All runs is a fixed destination, not browser Back. The persistent run
+// navigation lives inside RunDetailView and browser history tracks sections.
 // ---------------------------------------------------------------------------
 
 export interface RunDetailPageProps {
   detail: RunDetailJson | null;
   isLoading: boolean;
   error: string | null;
-  /** Called when the user clicks Back. Parent is responsible for clearing
-   *  selectedRunId (and, on modern browsers, calling history.back() so the
-   *  list view restores its scroll position). */
+  /** Opens the run list, regardless of the browser's previous entry. */
   onBack: () => void;
   onDownload: (runId: number) => void;
   onDelete: (runId: number) => void;
@@ -67,12 +61,12 @@ export function RunDetailPage({
           onClick={onBack}
           className={uiClass.btnGhost}
           style={styles.backButton}
-          aria-label="Back to runs"
+          aria-label="All runs"
         >
           {/* Unicode left arrow — keeps the button self-contained without
               pulling in an SVG icon and matches the inline-style rule in
               CLAUDE.md gotcha #7. */}
-          ← Back to runs
+          ← All runs
         </button>
         {/* The run number is NOT repeated here — the detail view's kicker
             ("RUN {id}") already names the run, and two copies of the same

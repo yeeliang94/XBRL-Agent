@@ -65,8 +65,19 @@ vi.mock("../lib/api", async () => {
 });
 
 vi.mock("../lib/sse", () => ({
+  patchRunConfig: vi.fn(async () => ({})),
   canResumeRunAfterSSEFailure: (kind: SSEFailureKind, runId: number | null) =>
     kind === "transport" && runId != null,
+  createMultiAgentSSEByRunId: (
+    _runId: number,
+    onEvent: (event: SSEEvent) => void,
+    _onDone: () => void,
+    onError: (error: string, kind: SSEFailureKind) => void,
+  ) => {
+    captureOnEvent = onEvent;
+    captureOnTransportError = onError;
+    return new AbortController();
+  },
   createMultiAgentSSE: (
     _sessionId: string,
     _config: RunConfigPayload,
@@ -160,6 +171,45 @@ describe("App — live activity integration", () => {
     expect(screen.queryByTestId("tool-card")).toBeNull();
     // Legacy ChatFeed header must be gone — we stripped the whole component.
     expect(screen.queryByText(/Chat Feed/i)).toBeNull();
+  });
+
+  test("Current run keeps the monitor destination after live completion", async () => {
+    const { uploadPdf } = await import("../lib/api");
+    vi.mocked(uploadPdf).mockResolvedValueOnce({
+      session_id: "sess_1", filename: "FINCO.pdf", run_id: 321,
+    });
+    const { default: App } = await import("../App");
+    render(<App />);
+    fireEvent.click(screen.getByRole("link", { name: /new extraction/i }));
+    const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(fileInput, {
+        target: { files: [new File(["x"], "FINCO.pdf", { type: "application/pdf" })] },
+      });
+    });
+    const start = await screen.findByRole("button", { name: /start extraction/i });
+    await act(async () => fireEvent.click(start));
+    expect(captureOnEvent).toBeTruthy();
+    act(() => captureOnEvent!({
+      event: "status",
+      data: { phase: "starting", message: "Starting", run_id: 321 },
+      timestamp: Date.now() / 1000,
+    }));
+    expect(screen.getByRole("link", { name: "Current run" })).toHaveAttribute("href", "/run/321");
+    act(() => captureOnEvent!({
+      event: "run_complete",
+      data: { success: true, overall_status: "completed", run_id: 321 },
+      timestamp: Date.now() / 1000,
+    }));
+    await screen.findByRole("button", { name: "Review run results" });
+    const currentRun = screen.getByRole("link", { name: "Current run" });
+    expect(currentRun).toHaveAttribute("href", "/run/321");
+    expect(currentRun).toHaveAttribute("aria-current", "page");
+    const historyLength = window.history.length;
+    fireEvent.click(currentRun);
+    expect(window.location.pathname).toBe("/run/321");
+    expect(window.history.length).toBe(historyLength);
+    expect(screen.getByRole("button", { name: "Review run results" })).toBeInTheDocument();
   });
 
   test("figures review uses the full workspace width with navigation expanded", async () => {

@@ -102,16 +102,19 @@ describe("TopNav", () => {
     expect(active.querySelector(".app-main-nav-glyph")?.getAttribute("style")).toContain("rgb(253, 81, 8)");
   });
 
-  test("current filing exposes Overview, Figures review, and Notes review", () => {
-    render(<TopNav view="history" currentRunId={42} onViewChange={() => {}} />);
-    expect(screen.getByRole("link", { name: "Overview" })).toHaveAttribute("href", "/history/42?tab=overview");
-    expect(screen.getByRole("link", { name: "Figures review" })).toHaveAttribute("href", "/concepts/42");
-    expect(screen.getByRole("link", { name: "Notes review" })).toHaveAttribute("href", "/history/42?tab=notes");
+  test("current filing has one entry; review sections live inside the run", () => {
+    const onOpenCurrentFiling = vi.fn();
+    render(<TopNav view="history" currentRunId={42} onViewChange={() => {}} onOpenCurrentFiling={onOpenCurrentFiling} />);
+    fireEvent.click(screen.getByRole("link", { name: "Current run" }));
+    expect(onOpenCurrentFiling).toHaveBeenCalledOnce();
+    expect(screen.getByRole("link", { name: "Current run" })).toHaveAttribute("href", "/history/42?tab=overview");
+    expect(screen.queryByRole("link", { name: "Figures review" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Notes review" })).toBeNull();
   });
 
   test("a live filing selects Overview instead of Work queue", () => {
     render(<TopNav view="extract" extractMode="queue" currentRunId={42} onViewChange={() => {}} />);
     expect(screen.getByRole("link", { name: "Work queue" })).not.toHaveAttribute("aria-current");
-    expect(screen.getByRole("link", { name: "Overview" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Current run" })).toHaveAttribute("aria-current", "page");
   });
 });

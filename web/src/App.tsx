@@ -453,6 +453,7 @@ export default function App() {
       // and popstate agree on how a URL maps to state — including the
       // "any /history/<garbage> still lands on the list" forgiveness path.
       const route = parseRouteFromPath(window.location.pathname);
+      setExtractMode(window.location.hash === "#new-extraction" ? "new" : "queue");
       dispatch({ type: "SET_VIEW", payload: route.view });
       dispatch({ type: "SET_SELECTED_RUN_ID", payload: route.selectedRunId });
       dispatch({ type: "SET_CURRENT_RUN_ID", payload: route.currentRunId });
@@ -703,7 +704,7 @@ export default function App() {
     if (state.selectedRunId == null) {
       setRunTab("overview");
     } else if (state.view === "concepts") {
-      setRunTab("values");
+      setRunTab(readRunTabFromUrl() ?? "values");
     } else if (state.view === "history") {
       setRunTab(readRunTabFromUrl() ?? "overview");
     }
@@ -727,6 +728,7 @@ export default function App() {
       landingMode={extractMode}
       onOpenNewExtraction={() => {
         setExtractMode("new");
+        window.history.pushState({}, "", "/#new-extraction");
         window.requestAnimationFrame(() => {
           document.getElementById("new-extraction")?.scrollIntoView({ block: "start" });
         });
@@ -779,14 +781,16 @@ export default function App() {
             : "Settings";
   const reviewFocused = state.selectedRunId != null &&
     (runTab === "notes" || runTab === "values");
-  const filingRunId = state.selectedRunId ?? state.currentRunId;
-  const currentFilingTab = state.view === "concepts"
-    ? "values"
-    : runTab === "notes"
-      ? "notes"
-      : runTab === "overview"
-        ? "overview"
-        : null;
+  const viewingSavedRun = state.selectedRunId != null &&
+    (state.view === "history" || state.view === "concepts");
+  const filingRunId = viewingSavedRun ? state.selectedRunId : state.currentRunId;
+  const currentRunIsLive = !viewingSavedRun && state.currentRunId != null &&
+    state.sessionId != null && !state.isComplete;
+  const currentRunHref = viewingSavedRun
+    ? `/history/${filingRunId}?tab=${runTab}`
+    : state.view === "extract" || currentRunIsLive
+    ? `/run/${filingRunId}`
+    : `/history/${filingRunId}?tab=overview`;
 
   return (
     <div
@@ -838,7 +842,8 @@ export default function App() {
             view={navigationView}
             extractMode={extractMode}
             currentRunId={filingRunId}
-            currentFilingTab={currentFilingTab}
+            currentRunHref={currentRunHref}
+            currentRunActive={viewingSavedRun || (state.view === "extract" && filingRunId != null)}
             showConcepts={canonicalEnabled}
             isAdmin={Boolean(user?.is_admin)}
             onNewExtraction={() => {
@@ -852,22 +857,23 @@ export default function App() {
               }
               setExtractMode("new");
               handleReset();
-              window.history.replaceState({}, "", "/#new-extraction");
+              window.history.pushState({}, "", "/#new-extraction");
               window.requestAnimationFrame(() => {
                 document.getElementById("new-extraction")?.scrollIntoView?.({ block: "start" });
               });
             }}
-            onOpenCurrentFiling={(tab) => {
+            onOpenCurrentFiling={() => {
               if (filingRunId == null) return;
-              if (tab === "values") {
-                window.history.pushState({}, "", `/concepts/${filingRunId}`);
-                announceRunTabChange("values");
-                dispatch({ type: "SET_VIEW", payload: "concepts" });
-                dispatch({ type: "SET_SELECTED_RUN_ID", payload: filingRunId });
+              // Clicking the current destination must not swap a live stream
+              // for a different overview, or reset a reviewer's selected tab.
+              if (viewingSavedRun || state.view === "extract") return;
+              if (currentRunIsLive) {
+                dispatch({ type: "SET_VIEW", payload: "extract" });
+                dispatch({ type: "SET_SELECTED_RUN_ID", payload: null });
                 return;
               }
-              window.history.pushState({}, "", `/history/${filingRunId}?tab=${tab}`);
-              announceRunTabChange(tab);
+              window.history.pushState({}, "", currentRunHref);
+              announceRunTabChange("overview");
               dispatch({ type: "SET_VIEW", payload: "history" });
               dispatch({ type: "SET_SELECTED_RUN_ID", payload: filingRunId });
             }}
@@ -892,7 +898,7 @@ export default function App() {
               if (v === "extract" && !state.isRunning) {
                 setExtractMode("queue");
                 handleReset();
-                window.history.replaceState({}, "", "/");
+                window.history.pushState({}, "", "/");
                 return;
               }
               dispatch({ type: "SET_VIEW", payload: v });

@@ -2181,6 +2181,8 @@ function SaveStatusBadge({ status }: { status: SaveStatus }) {
 
 const styles = {
   root: {
+    containerType: "inline-size",
+    containerName: "notes-review",
     display: "flex",
     flexDirection: "column" as const,
     gap: 16,

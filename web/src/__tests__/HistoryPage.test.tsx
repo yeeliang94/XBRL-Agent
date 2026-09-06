@@ -535,7 +535,7 @@ describe("HistoryPage", () => {
     // in the list view, so its presence proves the page mounted.
     await waitFor(() => {
       expect(
-        screen.getByRole("button", { name: /back to runs/i }),
+        screen.getByRole("button", { name: /all runs/i }),
       ).toBeInTheDocument();
     });
   });
@@ -692,7 +692,7 @@ describe("HistoryPage", () => {
     render(<HistoryPage selectedId={77} onSelectRun={() => {}} />);
     await waitFor(() => {
       expect(
-        screen.getByRole("button", { name: /back to runs/i }),
+        screen.getByRole("button", { name: /all runs/i }),
       ).toBeInTheDocument();
     });
     // OTHER.pdf is an OTHER row; when the detail page is up, the list
@@ -737,10 +737,10 @@ describe("HistoryPage", () => {
     render(<HistoryPage selectedId={77} onSelectRun={onSelectRun} />);
     await waitFor(() =>
       expect(
-        screen.getByRole("button", { name: /back to runs/i }),
+        screen.getByRole("button", { name: /all runs/i }),
       ).toBeInTheDocument(),
     );
-    fireEvent.click(screen.getByRole("button", { name: /back to runs/i }));
+    fireEvent.click(screen.getByRole("button", { name: /all runs/i }));
     expect(onSelectRun).toHaveBeenCalledWith(null);
     expect(backSpy).not.toHaveBeenCalled();
   });
@@ -771,10 +771,10 @@ describe("HistoryPage", () => {
     render(<HistoryPage selectedId={77} onSelectRun={onSelectRun} />);
     await waitFor(() =>
       expect(
-        screen.getByRole("button", { name: /back to runs/i }),
+        screen.getByRole("button", { name: /all runs/i }),
       ).toBeInTheDocument(),
     );
-    fireEvent.click(screen.getByRole("button", { name: /back to runs/i }));
+    fireEvent.click(screen.getByRole("button", { name: /all runs/i }));
     expect(onSelectRun).toHaveBeenCalledWith(null);
   });
 
