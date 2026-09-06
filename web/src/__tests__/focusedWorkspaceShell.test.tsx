@@ -59,7 +59,7 @@ describe("focused-workspace shell", () => {
     expect(tabletBlock).not.toContain(".review-source-column,\n  .review-workspace .review-resize-handle");
   });
 
-  test("mobile review navigation stays horizontal with sticky identifiers and stacked note rows", () => {
+  test("mobile navigation keeps sticky identifiers without overriding the note action grid", () => {
     const mobileStart = css.indexOf("@media (max-width: 780px)");
     const mobileEnd = css.indexOf("@media (prefers-reduced-motion: reduce)", mobileStart);
     const mobile = css.slice(mobileStart, mobileEnd);
@@ -68,8 +68,7 @@ describe("focused-workspace shell", () => {
     expect(mobile).toContain("overflow-x: auto !important");
     expect(mobile).toContain(".concept-tree-row > .concept-tree-label");
     expect(mobile).toContain("position: sticky !important");
-    expect(mobile).toContain(".notes-review-row");
-    expect(mobile).toContain("grid-template-columns: minmax(0, 1fr) !important");
+    expect(mobile).not.toContain(".notes-review-row {");
     expect(mobile).toContain("clip-path: inset(50%)");
     expect(mobile).not.toContain(".app-main-nav-label {\n    display: none");
     expect(mobile).toContain(".review-workspace .review-menu-column > :first-child");

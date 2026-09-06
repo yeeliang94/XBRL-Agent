@@ -1192,7 +1192,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
             Couldn&apos;t read the template&apos;s columns: {detectErr}
           </div>
         )}
-        {file && columnConfidence === "high" && !columnMap && !detectBusy && !detectErr && <p role="status" style={styles.statLine}>Template layout detected automatically. Ready to fill.</p>}
+        {file && columnConfidence === "high" && !columnMap && !detectBusy && !detectErr && <p role="status" style={styles.statLine}>Template layout detected. Filing destinations are checked when you fill.</p>}
         {dimensionalSheets.length > 0 && !detectBusy && !detectErr && (
           <div
             style={{
@@ -1210,7 +1210,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                 : "Category-based sheets recognised"}
             </strong>
             <div style={{ marginTop: 2 }}>
-              We match equity components and share classes automatically. You do not need to select columns for these sheets.
+              We use the template’s category and year markers. Figures without a category may need a destination choice after checking.
             </div>
           </div>
         )}

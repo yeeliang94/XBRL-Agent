@@ -16,8 +16,9 @@ const coverage: FilingCoverage = {
 test("stacks the failure report and contains the wide detail table", () => {
   render(<FilingCoverageFailurePanel coverage={coverage} />);
   expect(screen.getByTestId("filing-coverage-failure")).toHaveStyle({ flexDirection: "column", alignItems: "stretch", minWidth: 0 });
-  expect(screen.getByRole("table")).toHaveStyle({ tableLayout: "fixed", minWidth: "900px" });
-  expect(screen.getByRole("table").parentElement).toHaveStyle({ overflow: "auto" });
+  expect(screen.getByRole("table")).toHaveStyle({ tableLayout: "fixed", minWidth: "760px" });
+  expect(screen.getByRole("table").parentElement).toHaveStyle({ overflowX: "auto" });
+  expect(screen.getByRole("table").parentElement?.style.maxHeight).toBe("");
   expect(screen.getByText("CY · Company")).toBeTruthy();
   expect(screen.getByText("Value: 35,499")).toBeTruthy();
 });

@@ -947,10 +947,6 @@ textarea:focus {
     background: #F5F7F8 !important;
   }
 
-  .notes-review-row {
-    grid-template-columns: minmax(0, 1fr) !important;
-  }
-
   .review-workspace {
     display: flex !important;
   }
@@ -978,6 +974,7 @@ textarea:focus {
 
 /* Worksheet navigation stays beside the fields on desktop and above on mobile. */
 @media (max-width: 1000px) {
+  .review-workspace { flex-wrap: wrap; }
   .review-workspace > .review-template-rail {
     flex-basis: auto !important;
     width: 100%;
