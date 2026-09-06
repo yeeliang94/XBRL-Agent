@@ -1,10 +1,43 @@
-import { describe, test, expect } from "vitest";
+import { afterEach, describe, test, expect, vi } from "vitest";
 import {
   sortSheetsBySlot,
   parseNumericInput,
   INVALID_NUMBER,
+  moveNotesCell,
   type NotesSheet,
 } from "../lib/notesCells";
+
+afterEach(() => vi.unstubAllGlobals());
+
+describe("moveNotesCell", () => {
+  test("sends both reviewed revisions to the encoded source address", async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ sheet: "Notes-CI", row: 7 })));
+    vi.stubGlobal("fetch", fetch);
+    await moveNotesCell(42, "Notes/A B", 5, "Notes-CI", 7, 3, null);
+    expect(fetch).toHaveBeenCalledWith("/api/runs/42/notes_cells/Notes%2FA%20B/5/move", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ destination_sheet: "Notes-CI", destination_row: 7, expected_revision: 3, destination_revision: null }),
+    });
+  });
+
+  test("an expired session triggers the app's login handling", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ detail: "Not authenticated." }), { status: 401 })));
+    const unauthorized = vi.fn();
+    window.addEventListener("auth:unauthorized", unauthorized);
+    try {
+      await expect(moveNotesCell(42, "Notes-CI", 5, "Notes-CI", 7, 1, null)).rejects.toMatchObject({ status: 401 });
+      expect(unauthorized).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener("auth:unauthorized", unauthorized);
+    }
+  });
+
+  test("a non-JSON server failure still gives an actionable error", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("Bad gateway", { status: 502 })));
+    await expect(moveNotesCell(42, "Notes-CI", 5, "Notes-CI", 7, 1, null)).rejects.toThrow("Please try again");
+  });
+});
 
 // ---------------------------------------------------------------------------
 // sortSheetsBySlot — orders sheets by MBRS slot index (Corp Info → Acc

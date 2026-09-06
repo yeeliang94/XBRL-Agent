@@ -58,6 +58,7 @@ import {
   patchNotesFact,
   parseNumericInput,
   sortSheetsBySlot,
+  isBlankHtml,
   INVALID_NUMBER,
   NUMERIC_VALUE_COLUMNS,
   type NotesCell,
@@ -174,17 +175,7 @@ type SaveStatus = "idle" | "dirty" | "saving" | "saved" | "failed";
  *  next="<p></p>" vs saved="" and would schedule a spurious PATCH, flipping
  *  an UNEDITED empty cell to "Saved" (issue 3, 2026-06-21). Treating both
  *  sides as blank-equivalent suppresses that phantom save. */
-export function isBlankHtml(html: string | null | undefined): boolean {
-  if (!html) return true;
-  return (
-    html
-      .replace(/<p>\s*<\/p>/gi, "")
-      .replace(/<br\s*\/?>/gi, "")
-      .replace(/&nbsp;/gi, "")
-      .replace(/<[^>]+>/g, "")
-      .trim() === ""
-  );
-}
+export { isBlankHtml } from "../lib/notesCells";
 
 /** Sentinel for `pendingCount` when the edited_count endpoint failed or
  *  was unreachable — we can't determine the overwrite count so the modal
@@ -1163,7 +1154,10 @@ function SheetSection({
 
   const canFormat = (sheet.kind ?? "prose") === "prose";
   const hasPendingRowSave = Object.keys(rowSaveStatuses).length > 0;
-  useEffect(() => { onSaveBlocked(hasPendingRowSave); }, [hasPendingRowSave, onSaveBlocked]);
+  useEffect(() => {
+    onSaveBlocked(hasPendingRowSave);
+    return () => onSaveBlocked(false);
+  }, [hasPendingRowSave, onSaveBlocked]);
   const isFormatting = formatStatus?.status === "running";
   const totalTokens =
     (formatStatus?.prompt_tokens ?? 0) + (formatStatus?.completion_tokens ?? 0);
@@ -1287,7 +1281,6 @@ function SheetSection({
               <WorkspaceReadOnlyCellRow
                 key={`${runId}:${sheet.sheet}:${cell.row}`}
                 cell={cell}
-                theme={theme}
                 disabled={hasPendingRowSave || moveBusy}
                 onActiveCellPages={hasPendingRowSave || moveBusy ? undefined : onActiveCellPages}
                 onActivate={() => onCellActivate?.(sheet.sheet, cell.row)}
@@ -1331,7 +1324,6 @@ function WorkspaceReadOnlyCellRow({
 }: {
   cell: NotesCell;
   disabled: boolean;
-  theme: ClipboardFormatOptions;
   onActiveCellPages?: (pages: number[]) => void;
   onActivate: () => void;
 }) {
@@ -1799,8 +1791,10 @@ function CellRow({
         // the backend removed unsupported markup or styling. A subsequent
         // clean save clears it, so this remains a statement about the visible
         // document rather than a sticky historical warning.
+        // Retain every successful save in the workspace, including an older
+        // draft saved while typing. Discard must restore this latest baseline.
+        onCellSaved(sheet, updated);
         if (!isStale) {
-          onCellSaved(sheet, updated);
           setFormatAdjusted((updated.sanitizer_warnings?.length ?? 0) > 0);
         }
         // Only show "Saved" when this response reflects the latest content.
@@ -1830,6 +1824,21 @@ function CellRow({
       }
     }, SAVE_DEBOUNCE_MS);
   }, [runId, sheet, cell.row]);
+
+  const discardUnsavedChanges = () => {
+    if (!editor || saveInFlightRef.current) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = null;
+    savePendingRef.current = false;
+    editor.commands.setContent(savedHtmlRef.current, { emitUpdate: false });
+    tagNumericCells(editor.view.dom);
+    // Use the editor's normalised HTML so teardown cannot re-save the draft.
+    liveHtmlRef.current = editor.getHTML();
+    savedHtmlRef.current = liveHtmlRef.current;
+    editor.commands.blur();
+    setEditable(false);
+    setStatus("idle");
+  };
 
   // Test hook: the jsdom harness cannot easily drive ProseMirror's
   // internal keydown sequence, so the component listens for a
@@ -1955,7 +1964,17 @@ function CellRow({
         <div style={styles.cellToolbar}>
           <div style={styles.cellToolbarSpacer} />
           <SaveStatusBadge status={status} />
-          {status === "failed" && <button type="button" style={styles.smallButton} onClick={scheduleSave}>Retry save</button>}
+          {status === "failed" && (
+            <>
+              <button type="button" style={styles.smallButton} onClick={() => {
+                setStatus("dirty");
+                scheduleSave();
+              }}>Retry save</button>
+              <button type="button" style={styles.smallButton} onClick={discardUnsavedChanges}>
+                Discard unsaved changes
+              </button>
+            </>
+          )}
           {formatAdjusted && (
             <span
               data-testid="format-adjusted-notice"

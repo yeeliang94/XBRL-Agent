@@ -165,6 +165,7 @@ describe("Template-oriented review", () => {
       expect(reference).toContain("empty alternatives");
       expect(reference).toContain("Compare destination");
       expect(reference).toContain("Next issue");
+      expect(reference).toContain("Discard unsaved changes");
     }
   });
 });

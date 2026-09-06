@@ -579,8 +579,7 @@ export function ConceptsPage({
       const target = concepts.find((c) => c.concept_uuid === conceptUuid);
       if (!target) return;
       setActiveTemplate(target.template_id);
-      // Show the whole template (clear any sub-sheet filter) so the target row
-      // is guaranteed visible regardless of which sub-sheet it lives on.
+      // Open the target's worksheet so the selected row is visible.
       setActiveSheet(target.render_sheet);
       setRowFilter("all");
       setSearchQuery("");
@@ -630,12 +629,11 @@ export function ConceptsPage({
   // Cross-check state drives the focused attention queue and row filter. The
   // repeated summary cards and re-run action live on Overview/Cross-checks,
   // not inside the editing surface.
-  const effectiveChecks = initialCrossChecks ?? [];
   const failingChecks = useMemo(
-    () => effectiveChecks.filter(
+    () => (initialCrossChecks ?? []).filter(
       (c) => c.status === "failed" || c.status === "warning",
     ),
-    [effectiveChecks],
+    [initialCrossChecks],
   );
   const actionableChecks = useMemo(
     () => failingChecks.filter((c) => c.target_sheet && c.target_row != null),
@@ -679,9 +677,13 @@ export function ConceptsPage({
       Object.values(c.scope_facts).some((periods) => periods?.PY !== undefined)
   );
 
-  const figureIssueRows = concepts.filter((row) => row.kind !== "ABSTRACT" && (
-    rowLacksSource(conceptForScope(row, activeScope)) || actionableChecks.some((check) => check.target_sheet === row.render_sheet && check.target_row === row.render_row)
-  ));
+  const figureIssueRows = useMemo(() => concepts.filter((row) =>
+    row.kind !== "ABSTRACT" && (
+      rowLacksSource(conceptForScope(row, activeScope)) || actionableChecks.some((check) =>
+        check.target_sheet === row.render_sheet && check.target_row === row.render_row,
+      )
+    ),
+  ), [concepts, activeScope, actionableChecks]);
 
   const { filtered, noSourceCount } = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();

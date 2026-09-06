@@ -3,6 +3,21 @@
 // tests can exercise the URL + body contract directly; the editor tab
 // calls these from `useEffect` / its save handler.
 
+import { apiFetch as authenticatedApiFetch } from "./api";
+
+/** Whether notes HTML has no text, including TipTap's empty paragraphs. */
+export function isBlankHtml(html: string | null | undefined): boolean {
+  if (!html) return true;
+  return (
+    html
+      .replace(/<p>\s*<\/p>/gi, "")
+      .replace(/<br\s*\/?>/gi, "")
+      .replace(/&nbsp;/gi, "")
+      .replace(/<[^>]+>/g, "")
+      .trim() === ""
+  );
+}
+
 /** One row returned by GET /api/runs/{runId}/notes_cells. Mirrors the
  *  wire shape the backend emits — evidence is nullable because writer
  *  prose rows can leave col D/F empty when the agent chose not to
@@ -237,6 +252,31 @@ export async function removeInvalidNotesCell(
   return apiFetch<{ removed: boolean }>(
     `/api/runs/${runId}/notes_cells/${encodeURIComponent(sheet)}/${row}`,
     { method: "DELETE" },
+  );
+}
+
+/** Move exactly the source and destination revisions the reviewer compared. */
+export async function moveNotesCell(
+  runId: number,
+  sheet: string,
+  row: number,
+  destinationSheet: string,
+  destinationRow: number,
+  expectedRevision: number,
+  destinationRevision: number | null,
+): Promise<{ sheet: string; row: number }> {
+  return authenticatedApiFetch<{ sheet: string; row: number }>(
+    `/api/runs/${runId}/notes_cells/${encodeURIComponent(sheet)}/${row}/move`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        destination_sheet: destinationSheet,
+        destination_row: destinationRow,
+        expected_revision: expectedRevision,
+        destination_revision: destinationRevision,
+      }),
+    },
   );
 }
 
