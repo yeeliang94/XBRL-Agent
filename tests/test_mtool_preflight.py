@@ -1,17 +1,8 @@
-"""Filing-readiness preflight for the mTool fill (peer-review finding 4).
+"""Readiness remains visible and auditable without blocking workbook preparation.
 
-Run status alone was never sufficient: ``completed_with_errors`` is fillable,
-and the exporter deliberately writes conflicting figures rather than blanking
-cells the operator can't see. ``mtool/preflight.py`` is the real gate — it
-blocks on unadjudicated data that would REACH the workbook (open conflicts,
-open reviewer flags, unresolved notes coverage) and an override requires a
-written reason that lands on the receipt.
-
-There is deliberately NO exposure gate (2026-08-05 replay decision): the v2
-build hid these routes behind ``XBRL_MTOOL_FILL``; the product owner chose to
-keep the fill exposed, so the preflight and the degraded-artifact
-acknowledgment are the whole safety story. A pin below asserts the gate stays
-gone.
+The assessment retains its historical blockers/ok vocabulary. The patch route
+proceeds without an override, marks unsettled output for review, and records
+the real verdict on the receipt. Active runs and unsafe mappings remain gated.
 """
 from __future__ import annotations
 
@@ -145,7 +136,7 @@ def test_clean_run_passes_preflight(client):
     assert body["blockers"] == []
 
 
-def test_open_conflict_blocks_the_fill_with_a_plain_reason(client):
+def test_open_conflict_allows_fill_and_preserves_review_reminder(client):
     tc, db, _ = client
     run_id = _make_run(db)
     _seed_leaves(db, run_id)
@@ -153,8 +144,9 @@ def test_open_conflict_blocks_the_fill_with_a_plain_reason(client):
 
     resp = tc.post(f"/api/runs/{run_id}/mtool-fill/patch", files=_upload(),
                    data={"strict": "true"})
-    assert resp.status_code == 409, resp.text
-    preflight = resp.json()["detail"]["preflight"]
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "degraded"
+    preflight = resp.json()["preflight"]
     codes = [b["code"] for b in preflight["blockers"]]
     assert "open_conflicts" in codes
     blocker = preflight["blockers"][codes.index("open_conflicts")]
@@ -368,7 +360,10 @@ def test_blank_acknowledgement_is_not_an_override(client):
     _open_conflict(db, run_id)
     resp = tc.post(f"/api/runs/{run_id}/mtool-fill/patch", files=_upload(),
                    data={"strict": "true", "acknowledge_preflight": "   "})
-    assert resp.status_code == 409
+    assert resp.status_code == 200
+    receipts = tc.get(f"/api/runs/{run_id}/mtool-fill/receipts").json()["receipts"]
+    assert receipts[0]["preflight_override"] is None
+    assert receipts[0]["preflight"]["ok"] is False
 
 
 # ------------------------------------------- peer-review fixes (2026-08-05)
@@ -578,7 +573,7 @@ def _add_face_agent(db, run_id, statement_type, status, error_type=None,
         conn.close()
 
 
-def test_capped_face_statement_blocks_the_fill(client):
+def test_capped_face_statement_allows_fill_with_incomplete_warning(client):
     tc, db, _ = client
     run_id = _make_run(db)
     _seed_leaves(db, run_id)
@@ -588,8 +583,9 @@ def test_capped_face_statement_blocks_the_fill(client):
 
     resp = tc.post(f"/api/runs/{run_id}/mtool-fill/patch", files=_upload(),
                    data={"strict": "true"})
-    assert resp.status_code == 409, resp.text
-    preflight = resp.json()["detail"]["preflight"]
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "degraded"
+    preflight = resp.json()["preflight"]
     codes = [b["code"] for b in preflight["blockers"]]
     assert "incomplete_face_statements" in codes
     blocker = preflight["blockers"][codes.index("incomplete_face_statements")]

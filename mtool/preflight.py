@@ -7,13 +7,10 @@ the operator has already judged), and the exporter deliberately writes
 two decisions compound: a run can be "terminal" and still carry values nobody
 has adjudicated.
 
-This module is the explicit gate. It answers one question — *is this run's
-data settled enough to become a filing artifact?* — and returns plain-language
-blockers a product person can act on, never a status code alone.
-
-Blocking is the default. An operator may override, but only by sending an
-explicit acknowledgement, which is recorded on the fill receipt (Step 19) so
-the override is auditable rather than invisible.
+This module assesses filing readiness. Workbook preparation proceeds despite
+these findings; the API preserves them on the report and receipt and labels
+the result as requiring review. ``blockers`` is the stored readiness vocabulary,
+not a prohibition on preparing a workbook. No override reason is required.
 
 Pure reads; no writes, no schema of its own.
 """
@@ -208,6 +205,8 @@ def evaluate_preflight(
     try:
         if conflicts is None:
             conflicts = _conflict_facts(conn, run_id, family_prefix)
+        run_row = conn.execute("SELECT status FROM runs WHERE id = ?", (run_id,)).fetchone()
+        run_status = run_row["status"] if run_row else None
         flags = _open_reviewer_flags(conn, run_id)
         notes_flags = _open_notes_flags(conn, run_id)
         incomplete_faces = _incomplete_face_agents(conn, run_id)
@@ -227,6 +226,12 @@ def evaluate_preflight(
     warnings: list[dict[str, Any]] = []
 
     blockers.extend(semantic_coverage["blockers"])
+    if run_status in {"failed", "aborted"}:
+        blockers.insert(0, {
+            "code": "run_incomplete", "count": 1,
+            "message": "Extraction stopped before finishing. This workbook uses the figures saved so far; some may be missing.",
+            "examples": [],
+        })
 
     def _describe(r: sqlite3.Row) -> str:
         return f"{r['canonical_label']} ({r['render_sheet']}, {r['period']})"
@@ -245,11 +250,8 @@ def evaluate_preflight(
             "code": "open_conflicts",
             "count": len(filed_conflicts),
             "message": (
-                f"{len(filed_conflicts)} figure(s) are still marked as "
-                "conflicting — two sources disagree and nobody has picked a "
-                "winner. Resolve them on the Review values tab first; filing "
-                "an unadjudicated figure is exactly the mistake this gate "
-                "exists to prevent."),
+                f"{len(filed_conflicts)} figure(s) have conflicting sources. "
+                "The saved figures will be used. Check them in Review values before filing."),
             "examples": [_describe(r) for r in filed_conflicts[:_EXAMPLE_CAP]],
         })
     if other_conflicts:
@@ -279,9 +281,8 @@ def evaluate_preflight(
             "message": (
                 f"{len(incomplete_faces)} statement(s) did not finish "
                 "extracting, but the figures they got as far as writing are "
-                "still in this run. Filing now would submit a partly-read "
-                "statement as if it were complete. Re-run the statement(s) "
-                "below, or remove them from the filing."),
+                "still in this run. We will fill the saved figures. Re-run the "
+                "statements or complete missing figures in mTool before filing."),
             "examples": [
                 f"{r['statement_type']}"
                 + (f" ({r['variant']})" if r["variant"] else "")
@@ -373,8 +374,7 @@ def evaluate_preflight(
                     "The source-completeness check found material that is "
                     "not accounted for (or could not finish assessing the "
                     "document). Resolve it on the Notes tab before filing — "
-                    "filing over an unfinished completeness check is exactly "
-                    "the false green this mode exists to prevent."),
+                    "the workbook may contain incomplete notes."),
                 "examples": [
                     f"verdict: {integrity_verdict['status']}, "
                     f"{integrity_verdict['blocks_unresolved']} block(s) and "

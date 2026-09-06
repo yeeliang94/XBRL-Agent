@@ -2,7 +2,7 @@
 
 Endpoints:
   ``GET  /api/runs/{run_id}/mtool-fill``            — the semantic fill doc
-  ``GET  /api/runs/{run_id}/mtool-fill/preflight``  — filing-readiness gate
+  ``GET  /api/runs/{run_id}/mtool-fill/preflight``  — filing-readiness reminders
   ``POST /api/runs/{run_id}/mtool-fill/patch``      — upload an empty mTool
         template, patch it server-side from the run's facts, return the FULL
         run report plus a short-lived artifact id
@@ -17,25 +17,31 @@ local and on the cloud. Auth middleware guards ``/api/*`` automatically
 **No exposure gate (2026-08-05 replay decision).** The v2 build shipped these
 routes behind ``XBRL_MTOOL_FILL`` (default off). On the replay the product
 owner chose to keep the fill exposed — the filing safety lives in the
-preflight (finding 4) and the server-enforced report-acknowledgment before a
+readiness reminders and the server-enforced report-acknowledgment before a
 degraded artifact is released (finding 5), not in hiding the feature.
 """
 from __future__ import annotations
 
 import json
+from contextlib import closing
 import logging
 import re
 import tempfile
 import threading
+import uuid
 import xml.etree.ElementTree as _ET
 from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.routing import APIRoute
+from fastapi.exceptions import RequestValidationError
+from starlette.concurrency import run_in_threadpool
+from observability.incidents import capture_run_incident
 
 import server
 from mtool.column_detect import (
-    detect_column_map, describe_template, fingerprint_workbook,
+    ConflictingPeriodMarkersError, detect_column_map, describe_template, fingerprint_workbook,
     needs_confirmation, overall_confidence, unit_scale_mismatches)
 from mtool.exporter import build_fill_doc
 from mtool.template_map import inspect_template, resolve_filing_doc
@@ -51,13 +57,68 @@ from concept_model.filing_targets import semantic_coverage_for_run
 
 logger = logging.getLogger("server")
 
-router = APIRouter()
+def _record_mtool_incident(run_id: int | None, stage: str, code: str,
+                           message: str, exc: BaseException) -> None:
+    """Use the existing run incident store without masking a fill failure."""
+    try:
+        with closing(server._open_audit_conn()) as conn, conn:
+            capture_run_incident(
+                conn, run_id, source="mtool", stage=stage, severity="error",
+                error_code=code, user_message=message, exception=exc)
+    except Exception:
+        logger.warning("Could not record mTool incident", exc_info=True,
+                       extra={"run_id": run_id, "error_code": code})
 
-# Runs whose facts are complete enough to fill from. Mirrors the eval
-# from-run gate (gotcha #23): draft/running/failed/aborted are refused.
-# NOTE: this is a *liveness* gate, not a filing-readiness gate — see
-# mtool/preflight.py for the latter (finding 4).
-_FILLABLE_STATUSES = {"completed", "completed_with_errors"}
+
+class MtoolRoute(APIRoute):
+    """Friendly failures linked to the shared HTTP trace and incident store."""
+
+    def get_route_handler(self):
+        handler = super().get_route_handler()
+
+        async def observed(request: Request):
+            # Shared middleware validates this ID, times requests, and logs
+            # completion. Worker-pool calls inherit its correlation context.
+            request_id = getattr(request.state, "correlation_id", None) or uuid.uuid4().hex
+            request.state.mtool_request_id = request_id
+            raw_run_id = request.path_params.get("run_id")
+            try:
+                run_id = int(raw_run_id) if raw_run_id is not None else None
+            except (TypeError, ValueError):
+                run_id = None  # Let FastAPI return its normal validation error.
+            try:
+                return await handler(request)
+            except RequestValidationError:
+                raise  # Preserve FastAPI's normal 422 response.
+            except HTTPException as exc:
+                logger.warning("mTool request rejected",
+                               exc_info=exc.__cause__ is not None,
+                               extra={"run_id": run_id, "request_id": request_id,
+                                      "http_status": exc.status_code,
+                                      "error_code": "mtool_request_rejected"})
+                if exc.status_code >= 500:
+                    await run_in_threadpool(
+                        _record_mtool_incident, run_id, self.name,
+                        "mtool_request_failed", str(exc.detail), exc.__cause__ or exc)
+                raise
+            except Exception as exc:
+                message = "We couldn't finish this mTool request. Try again. If it happens again, share the support reference."
+                logger.exception("mTool request failed",
+                                 extra={"run_id": run_id, "request_id": request_id,
+                                        "error_code": "mtool_request_failed"})
+                await run_in_threadpool(
+                    _record_mtool_incident, run_id, self.name,
+                    "mtool_request_failed", message, exc)
+                raise HTTPException(status_code=500, detail=message) from exc
+
+        return observed
+
+
+router = APIRouter(route_class=MtoolRoute)
+
+# A stopped run can export saved facts. Active runs must settle first so
+# preparation does not race ongoing extraction. Readiness remains advisory.
+_FILLABLE_STATUSES = {"completed", "completed_with_errors", "failed", "aborted"}
 
 
 _MAX_TEMPLATE_BYTES = 25 * 1024 * 1024  # 25 MB — an mTool template is ~100s KB
@@ -71,7 +132,7 @@ _MAX_ZIP_MEMBERS = 5000
 _UPLOAD_CHUNK = 1024 * 1024  # 1 MB
 
 
-async def _read_capped(upload: UploadFile, cap: int) -> bytes:
+def _read_capped(upload: UploadFile, cap: int) -> bytes:
     """Read an UploadFile in chunks, aborting with 413 once it exceeds ``cap``.
 
     Never materialises more than ``cap`` (+ one chunk) in memory — the guard
@@ -80,12 +141,12 @@ async def _read_capped(upload: UploadFile, cap: int) -> bytes:
     chunks: list[bytes] = []
     total = 0
     while True:
-        chunk = await upload.read(_UPLOAD_CHUNK)
+        chunk = upload.file.read(_UPLOAD_CHUNK)
         if not chunk:
             break
         total += len(chunk)
         if total > cap:
-            raise HTTPException(status_code=413, detail="Template too large.")
+            raise HTTPException(status_code=413, detail="This template exceeds the 25 MB limit. Export a smaller .xlsx template from mTool.")
         chunks.append(chunk)
     return b"".join(chunks)
 
@@ -104,7 +165,7 @@ def _assert_zip_within_budget(path: str) -> None:
     except zipfile.BadZipFile as exc:
         raise HTTPException(
             status_code=422,
-            detail=f"Upload is not a readable .xlsx workbook: {exc}") from exc
+            detail="Upload is not a readable .xlsx workbook. Export it from mTool again and choose the new file.") from exc
     if len(infos) > _MAX_ZIP_MEMBERS:
         raise HTTPException(
             status_code=413,
@@ -131,10 +192,13 @@ def _parse_template_or_422(what: str, fn, *args, **kwargs):
         return fn(*args, **kwargs)
     except HTTPException:
         raise
+    except ConflictingPeriodMarkersError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
+        logger.warning("mtool_template_parse_failed stage=%s", what, exc_info=True)
         raise HTTPException(
             status_code=422,
-            detail=f"Template could not be read ({what}): {exc}") from exc
+            detail="Template could not be read. Export a fresh .xlsx template from mTool and try again.") from exc
 
 
 def _load_fillable_run(run_id: int):
@@ -153,8 +217,7 @@ def _load_fillable_run(run_id: int):
     if run.status not in _FILLABLE_STATUSES:
         raise HTTPException(
             status_code=409,
-            detail=(f"Run is '{run.status}'; mTool fill needs a completed run "
-                    "(facts must be final)."),
+            detail="Wait for extraction to finish, or stop it before filling a template.",
         )
     config = run.config or {}
     return (
@@ -216,7 +279,7 @@ def _build_doc(run_id: int):
 
 @router.get("/api/runs/{run_id}/mtool-fill")
 def get_mtool_fill_doc(run_id: int):
-    """Return the semantic fill document for a completed run.
+    """Return the semantic fill document for a completed or stopped run.
 
     Columns are unresolved (the operator's template layout isn't known here);
     the download is the seam the CLI or the patch endpoint resolves against a
@@ -268,7 +331,7 @@ def get_mtool_fill_receipts(run_id: int):
 
 @router.get("/api/runs/{run_id}/mtool-notes-fill")
 def get_mtool_notes_fill_doc(run_id: int):
-    """Return the prose-notes footnote fill document for a completed run.
+    """Return the prose-notes footnote fill document for a completed or stopped run.
 
     The notes twin of ``/mtool-fill`` — one ``footnotes`` item per note
     (``label`` + ``html``), resolved to the template's ``fn_*`` at patch time.
@@ -292,8 +355,7 @@ _MAX_LIVE_ARTIFACTS = 32  # oldest evicted past this; bounds temp-dir growth
 # artifact_id -> {"run_id", "dir": Path, "path": Path, "filename",
 #                 "created": monotonic, "status", "receipt_id"}
 #
-# Touched from two kinds of caller: the async patch handler (event loop) and
-# the sync download handler (anyio worker thread). Without the lock, a sweep
+# Touched by concurrent patch and download handlers in the worker pool. Without the lock, a sweep
 # iterating this dict while a concurrent request registers an artifact raises
 # `RuntimeError: dictionary changed size during iteration` and 500s a fill
 # that had already succeeded. The lock covers only the map — file removal
@@ -364,7 +426,7 @@ def _register_artifact(run_id: int, tmp: Path, path: Path, *, status: str,
 
 
 @router.post("/api/runs/{run_id}/mtool-fill/patch")
-async def patch_mtool_template(
+def patch_mtool_template(
     request: Request,
     run_id: int,
     template: UploadFile = File(...),
@@ -372,17 +434,20 @@ async def patch_mtool_template(
     strict: bool = Form(default=True),
     force_recalc: bool = Form(default=False),
     fill_notes: bool = Form(default=True),
-    create_missing_notes: bool = Form(default=False),
+    create_missing_notes: bool = Form(default=True),
     notes_targets: str | None = Form(default=None),
     notes_styling: str = Form(default="styled"),
     acknowledge_preflight: str | None = Form(default=None),
 ):
     """Patch an uploaded empty mTool template from the run's facts.
 
+    Runs in FastAPI's worker pool: workbook parsing and writes must not block
+    the server event loop.
+
     ``column_map`` (optional JSON string) supplies the physical layout of the
     operator's template. When omitted we auto-detect it; if detection is
     low-confidence — or semantically unconfirmed (Group layouts, unknown
-    templates) — we refuse (422) and ask for an explicit map rather than risk
+    positional layouts) — we refuse (422) and ask for an explicit map rather than risk
     mis-targeting.
 
     Returns the **complete** run report (no caps) plus an ``artifact_id``; the
@@ -390,9 +455,9 @@ async def patch_mtool_template(
     That split is deliberate: the operator must be able to see whether the fill
     is clean *before* they hold the file (Step 11A).
 
-    ``acknowledge_preflight`` is the operator's explicit override of a blocking
-    preflight result. Without it a blocked run 409s; with it the acknowledgement
-    text is recorded on the fill receipt.
+    Readiness warnings do not block preparation. They are retained in the
+    report and receipt, and make the result require review. Legacy callers
+    may still supply ``acknowledge_preflight`` for their audit record.
 
     The uploaded template lands in a request-scoped temp dir under a shared
     ``OUTPUT_DIR/_mtool_tmp`` staging area. On every failure path the dir is
@@ -408,8 +473,7 @@ async def patch_mtool_template(
     # here so a typo fails loudly, before any upload is read.
     notes_decorate = _resolve_notes_decorate(notes_styling)
 
-    # Filing-readiness gate (finding 4). Blocking is the default; an override
-    # must be an explicit acknowledgement, which lands on the receipt.
+    # Assess readiness without blocking workbook preparation.
     # Conflicts come from the DOC's own fact snapshot, not a second DB read —
     # so the verdict, the writes and the receipt all describe one revision
     # even if a reviewer edits a fact mid-request (peer review, 2026-08-05).
@@ -418,21 +482,14 @@ async def patch_mtool_template(
         filing_standard=standard, filing_level=level,
         written_keys=written_keys_from_doc(doc),
         conflicts=doc["meta"].get("conflicts"))
-    acknowledged = bool((acknowledge_preflight or "").strip())
-    if not preflight["ok"] and not acknowledged:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "error": "This run isn't ready to file yet.",
-                "preflight": preflight,
-            })
-
+    # Readiness is advisory when preparing a workbook. Preserve the verdict
+    # on the report and receipt; never manufacture an operator override.
     # Read in bounded chunks and abort the moment we exceed the cap, so an
     # oversized upload never fully materialises in memory (Content-Length can
     # be absent or lie — the chunk loop is the real guard).
-    raw = await _read_capped(template, _MAX_TEMPLATE_BYTES)
+    raw = _read_capped(template, _MAX_TEMPLATE_BYTES)
     if not raw:
-        raise HTTPException(status_code=422, detail="Empty upload.")
+        raise HTTPException(status_code=422, detail="This file is empty. Export the template from mTool again and choose the new .xlsx file.")
 
     # Request-scoped temp dir under a shared staging area (unique mkdtemp
     # subdir per request). EVERYTHING after this point is wrapped so any raise
@@ -462,7 +519,7 @@ async def patch_mtool_template(
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(
                 status_code=422,
-                detail=f"Upload is not a readable .xlsx workbook: {exc}"
+                detail="Upload is not a readable .xlsx workbook. Export it from mTool again and choose the new file."
             ) from exc
 
         # Resolve the column map: explicit wins; else auto-detect.
@@ -507,13 +564,9 @@ async def patch_mtool_template(
             cmap = {s: {"label_column": v["label_column"],
                         "columns": v["columns"]}
                     for s, v in detected.items()}
-            # The detector cannot currently propose a colliding or
-            # label-overwriting map (`_positional_layout` assigns strictly
-            # increasing columns, and the unattended path only runs on a known
-            # fingerprint). Check anyway: an operator-supplied map is validated
-            # and this one is the DEFAULT, so leaving the invariant resting on
-            # the detector's internals means a future detector change breaks a
-            # filing rather than a request.
+            # Validate detected maps just like operator-supplied maps. Unique
+            # Company period markers can permit an unknown fingerprint, but
+            # every map must still reject colliding or label-overwriting columns.
             _validate_cmap_semantics(cmap, doc)
 
         try:
@@ -544,18 +597,15 @@ async def patch_mtool_template(
             # zip — a property of the upload, not a server fault.
             raise HTTPException(
                 status_code=422,
-                detail=f"Template could not be read (worksheet XML): {exc}",
+                detail="Template could not be read. Export a fresh .xlsx template from mTool and try again.",
             ) from exc
 
         # Chain the prose-notes fill onto the numeric-filled workbook. Notes
         # touch disjoint zip parts (sharedStrings + +FootnoteTexts), so the
         # numeric edits are preserved. Same offline patcher, no fork.
-        # Notes fill targets EXISTING popup slots by default; with
-        # ``create_missing_notes`` on, a note whose concept has no fn_* yet is
-        # created at the trigger cell discovered from its visible label
-        # (col-D label -> col-E trigger; fill_footnotes.create_missing). That
-        # path is fragile (mTool only renders a native-shaped slot), so it's
-        # opt-in. Notes-doc-level strict is honored.
+        # By default, fill existing popup slots and create missing ones at
+        # exact label matches. The shared patcher preserves native slot shape
+        # and honors notes-doc-level strictness.
         # Notes fill is best-effort (mirrors the CLI + notes-validator
         # fail-soft, gotcha #22). A validation failure or an unexpected raise
         # must NOT discard the already-good numeric fill: keep `final = out`
@@ -650,8 +700,10 @@ async def patch_mtool_template(
                 logger.warning(
                     "mTool patch run %s: notes fill raised, returning "
                     "numeric-only workbook", run_id, exc_info=True)
+                message = "The notes could not be filled. The figures are available; retry the fill or complete the notes in mTool."
+                _record_mtool_incident(run_id, "fill_notes", "mtool_notes_fill_failed", message, exc)
                 notes_report = {"status": "degraded",
-                                "errors": [{"detail": str(exc)}]}
+                                "errors": [{"code": "notes_fill_failed", "detail": message}]}
                 final = out
 
         logger.info(
@@ -670,11 +722,15 @@ async def patch_mtool_template(
         # note didn't fill: no slot / strict mismatch). Logged as well as
         # returned so a support conversation doesn't depend on the browser.
         for u in (notes_report or {}).get("unresolved", []):
-            logger.info("mTool notes unresolved run %s: label=%r detail=%r",
-                        run_id, u.get("label"), u.get("detail"))
+            logger.info("mtool_note_unresolved run_id=%s request_id=%s reason=%s",
+                        run_id, request.state.mtool_request_id, u.get("reason", "unresolved"))
 
         summary = _full_report(report, notes_report)
         summary["filing_coverage"] = filing_coverage
+        summary["preflight"] = preflight
+        summary["request_id"] = request.state.mtool_request_id
+        if not preflight["ok"]:
+            summary["status"] = "degraded"
         # Candidate/legacy resolution is intentionally usable, but it is not a
         # clean filing result.  Mark it degraded so report-before-file requires
         # the existing acknowledgement and the receipt records that decision.
@@ -785,7 +841,7 @@ def download_mtool_artifact(run_id: int, artifact_id: str,
 
 
 @router.post("/api/runs/{run_id}/mtool-fill/detect-columns")
-async def detect_mtool_columns(
+def detect_mtool_columns(
     run_id: int,
     template: UploadFile = File(...),
 ):
@@ -802,9 +858,9 @@ async def detect_mtool_columns(
     """
     run, doc = _build_doc(run_id)[:2]
 
-    raw = await _read_capped(template, _MAX_TEMPLATE_BYTES)
+    raw = _read_capped(template, _MAX_TEMPLATE_BYTES)
     if not raw:
-        raise HTTPException(status_code=422, detail="Empty upload.")
+        raise HTTPException(status_code=422, detail="This file is empty. Export the template from mTool again and choose the new .xlsx file.")
 
     work_root = Path(server.OUTPUT_DIR) / "_mtool_tmp"
     work_root.mkdir(parents=True, exist_ok=True)
@@ -821,7 +877,7 @@ async def detect_mtool_columns(
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(
                 status_code=422,
-                detail=f"Upload is not a readable .xlsx workbook: {exc}"
+                detail="Upload is not a readable .xlsx workbook. Export it from mTool again and choose the new file."
             ) from exc
 
         inspection = _parse_template_or_422(
@@ -847,10 +903,10 @@ async def detect_mtool_columns(
 
 
 @router.post("/api/runs/{run_id}/mtool-fill/notes-preview")
-async def preview_mtool_notes(
+def preview_mtool_notes(
     run_id: int,
     template: UploadFile = File(...),
-    create_missing_notes: bool = Form(default=False),
+    create_missing_notes: bool = Form(default=True),
     notes_targets: str | None = Form(default=None),
     notes_styling: str = Form(default="styled"),
 ):
@@ -878,9 +934,9 @@ async def preview_mtool_notes(
     # decisions are made (same seam the patch endpoint applies).
     _apply_notes_targets(notes_doc, notes_targets)
 
-    raw = await _read_capped(template, _MAX_TEMPLATE_BYTES)
+    raw = _read_capped(template, _MAX_TEMPLATE_BYTES)
     if not raw:
-        raise HTTPException(status_code=422, detail="Empty upload.")
+        raise HTTPException(status_code=422, detail="This file is empty. Export the template from mTool again and choose the new .xlsx file.")
 
     work_root = Path(server.OUTPUT_DIR) / "_mtool_tmp"
     work_root.mkdir(parents=True, exist_ok=True)
@@ -898,7 +954,7 @@ async def preview_mtool_notes(
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(
                 status_code=422,
-                detail=f"Upload is not a readable .xlsx workbook: {exc}"
+                detail="Upload is not a readable .xlsx workbook. Export it from mTool again and choose the new file."
             ) from exc
 
         existing_slots = len(_parse_template_or_422(
@@ -921,7 +977,7 @@ async def preview_mtool_notes(
         except _ET.ParseError as exc:
             raise HTTPException(
                 status_code=422,
-                detail=f"Template could not be read (worksheet XML): {exc}",
+                detail="Template could not be read. Export a fresh .xlsx template from mTool and try again.",
             ) from exc
         created_keys = {c.get("key") for c in report["footnotes_created"]}
         return JSONResponse({
@@ -1141,6 +1197,8 @@ def _notes_report_block(notes_report: dict | None) -> dict | None:
         # True on the diagnostic "no styling" fill — the modal labels the
         # result so a deliberately-plain fill can't be misread as a bug.
         "styling_disabled": notes_report.get("styling_disabled", False),
+        "errors": notes_report.get("errors", []),
+        "mismatches": notes_report.get("footnote_mismatches", []),
         "counts": {
             "written": len(notes_report.get("footnotes_written", [])),
             "created": len(notes_report.get("footnotes_created", [])),

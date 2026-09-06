@@ -698,6 +698,12 @@ def test_patch_notes_exception_preserves_numeric_fill(client, monkeypatch):
     assert report["notes"]["status"] == "degraded"
     assert report["status"] == "degraded"
     assert report["numeric_status"] == "ok"
+    from db import repository as repo
+    with sqlite3.connect(db) as conn:
+        incident = repo.fetch_run_incidents(conn, run_id)[0]
+    assert incident.error_code == "mtool_notes_fill_failed"
+    assert incident.correlation_id == resp.headers["X-Request-ID"]
+    assert "notes patcher exploded" not in resp.text
     import openpyxl
     openpyxl.load_workbook(io.BytesIO(_download(tc, run_id, resp)))  # still a valid workbook
 
@@ -1078,3 +1084,96 @@ def test_unit_scale_mismatch_degrades_the_fill(client, monkeypatch):
     acked = tc.get(body["download_url"],
                    params={"acknowledge_degraded": "checked the units"})
     assert acked.status_code == 200
+
+
+@pytest.mark.parametrize("status", ["failed", "aborted"])
+def test_stopped_run_fills_saved_figures_without_override(client, status):
+    tc, db, _ = client
+    run_id = _make_run(db, status=status)
+    count = _seed_distinct_leaves(db, run_id)
+    result = tc.post(f"/api/runs/{run_id}/mtool-fill/patch", files=_upload_our_template())
+    assert result.status_code == 200, result.text
+    body = result.json()
+    assert body["counts"]["written"] == count
+    assert body["status"] == "degraded"
+    assert body["preflight"]["blockers"][0]["code"] == "run_incomplete"
+    receipts = tc.get(f"/api/runs/{run_id}/mtool-fill/receipts").json()["receipts"]
+    assert receipts[0]["preflight_override"] is None
+    assert receipts[0]["report"]["request_id"] == result.headers["X-Request-ID"]
+    assert tc.get(body["download_url"]).status_code == 409
+    assert tc.get(body["download_url"], params={
+        "acknowledge_degraded": "reviewed incomplete extraction",
+    }).status_code == 200
+
+
+def test_unknown_marker_template_fills_correct_cells_without_column_form(client):
+    from openpyxl import Workbook, load_workbook
+
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_distinct_leaves(db, run_id)
+    doc = tc.get(f"/api/runs/{run_id}/mtool-fill").json()
+    wb = Workbook()
+    ws = wb.active
+    ws.title = doc["writes"][0]["sheet"]
+    ws["D2"] = "#PRIM#"
+    ws["A3"] = "#ENDT#"
+    # Reversed physical order must still select the newest period.
+    ws["E3"] = "31/12/2023"
+    ws["F3"] = "31/12/2024"
+    for row, write in enumerate(doc["writes"], 6):
+        ws.cell(row, 2, write["semantic_address"]["primary_concept"])
+        ws.cell(row, 4, write["label"])
+        ws.cell(row, 5, 0)
+        ws.cell(row, 6, 0)
+    uploaded = io.BytesIO()
+    wb.save(uploaded)
+    result = tc.post(f"/api/runs/{run_id}/mtool-fill/patch",
+                     files={"template": ("new.xlsx", uploaded.getvalue())})
+    assert result.status_code == 200, result.text
+    body = result.json()
+    assert body["template_known"] is False
+    assert body["filing_coverage"]["legacy_label_writes"] == 0
+    artifact = tc.get(body["download_url"], params={"acknowledge_degraded": "reviewed"})
+    filled = load_workbook(io.BytesIO(artifact.content))
+    for row, write in enumerate(doc["writes"], 6):
+        assert filled.active.cell(row, 6).value == write["value"]
+        assert filled.active.cell(row, 5).value == 0
+
+
+@pytest.mark.parametrize("endpoint,explicit_map", [
+    ("detect-columns", False), ("patch", False), ("patch", True),
+])
+def test_conflicting_period_blocks_never_produce_an_artifact(client, endpoint, explicit_map):
+    from openpyxl import Workbook
+
+    tc, db, srv = client
+    run_id = _make_run(db)
+    _seed_distinct_leaves(db, run_id)
+    doc = tc.get(f"/api/runs/{run_id}/mtool-fill").json()
+    wb = Workbook()
+    ws = wb.active
+    ws.title = doc["writes"][0]["sheet"]
+    for marker_row, current, prior in [(3, "E", "F"), (15, "F", "E")]:
+        ws[f"D{marker_row - 1}"] = "#PRIM#"
+        ws[f"A{marker_row}"] = "#ENDT#"
+        ws[f"{current}{marker_row}"] = "31/12/2024"
+        ws[f"{prior}{marker_row}"] = "31/12/2023"
+    for index, write in enumerate(doc["writes"]):
+        row = 6 + index if index < 2 else 18 + index
+        ws.cell(row, 2, write["semantic_address"]["primary_concept"])
+        ws.cell(row, 4, write["label"])
+        ws.cell(row, 5, 0)
+        ws.cell(row, 6, 0)
+    uploaded = io.BytesIO()
+    wb.save(uploaded)
+    data = {"column_map": json.dumps({ws.title: {
+        "label_column": "D", "columns": {"current_year": "F"},
+    }})} if explicit_map else {}
+    result = tc.post(f"/api/runs/{run_id}/mtool-fill/{endpoint}",
+                     files={"template": ("blocks.xlsx", uploaded.getvalue())}, data=data)
+    assert result.status_code == 422, result.text
+    assert "conflicting reporting dates" in result.json()["detail"]
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM mtool_fill_receipts").fetchone()[0] == 0
+    assert not list((Path(srv.OUTPUT_DIR) / "_mtool_tmp").iterdir())
