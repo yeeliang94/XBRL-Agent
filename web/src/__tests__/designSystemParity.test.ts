@@ -21,6 +21,12 @@ describe("XBRL design system is the production authority", () => {
     expect(prototype).toContain("Direction A — focused workspace");
   });
 
+  test("keeps notes field hierarchy and coverage in the source inventory", () => {
+    expect(designSystem).toContain("grey disclosure field header above white note content");
+    expect(designSystem).toContain("do not repeat the checklist below the editor");
+    expect(designSystem).toContain("Source inventory remains visible in the worksheet rail");
+  });
+
   test.each([
     ["orange700", "--orange-700"],
     ["orange500", "--orange-500"],

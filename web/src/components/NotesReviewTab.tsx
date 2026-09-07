@@ -21,6 +21,7 @@ import {
   useCallback,
   useMemo,
 } from "react";
+import { coverageStatusLabel, subNoteStateLabel } from "../lib/vocabulary";
 import { userMessage } from "../lib/errors";
 import { useEditor, EditorContent } from "@tiptap/react";
 import { StarterKit } from "@tiptap/starter-kit";
@@ -126,8 +127,17 @@ interface SourceNoteInventoryRow {
   status: "placed" | "missing" | "skipped" | "suspected_gap";
   placements: SourceNotePlacement[];
   reviewer_added?: boolean;
+  reviewer_verdict?: string | null;
+  reason?: string;
+  subnotes?: { subnote_ref: string; state: string; reason?: string }[];
   page_lo: number | null;
   page_hi: number | null;
+}
+
+function sourceNoteNeedsReview(note: SourceNoteInventoryRow): boolean {
+  return note.reviewer_verdict !== "not_applicable"
+    && note.reviewer_verdict !== "confirmed_absent"
+    && (note.status === "missing" || note.status === "suspected_gap");
 }
 
 function sourceNotePages(note: SourceNoteInventoryRow): number[] {
@@ -282,6 +292,7 @@ export function NotesReviewTab({
   const [sheets, setSheets] = useState<NotesSheet[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [sourceNotes, setSourceNotes] = useState<SourceNoteInventoryRow[] | null>(null);
+  const [coverageBanner, setCoverageBanner] = useState<string | null>(null);
   const [sourceNotesError, setSourceNotesError] = useState(false);
   const [selectedSourceNote, setSelectedSourceNote] = useState<number | null>(null);
   const [sourceRailWidth, setSourceRailWidth] = useState(280);
@@ -373,6 +384,7 @@ export function NotesReviewTab({
     setNoteSearch("");
     setSelectedSourceNote(null);
     setSourceNotes(null);
+    setCoverageBanner(null);
     setSourceNotesError(false);
   }, [runId]);
 
@@ -415,7 +427,9 @@ export function NotesReviewTab({
         const rows = Array.isArray(payload?.rows)
           ? payload.rows.filter((row: SourceNoteInventoryRow) => row.note_num > 0)
           : [];
+        if (controller.signal.aborted) return;
         setSourceNotes(rows);
+        setCoverageBanner(payload?.banner ?? null);
         setSourceNotesError(false);
       })
       .catch((error) => {
@@ -733,15 +747,18 @@ export function NotesReviewTab({
                 </button>
               ))}
             </nav>}
-            <details style={{ marginTop: 16 }}><summary style={{ padding: 12, cursor: "pointer" }}>Source note inventory</summary>
+            <section aria-label="Source note inventory" style={{ marginTop: 24, borderTop: `1px solid ${pwc.grey200}`, paddingTop: 12 }}>
+            <strong style={{ ...styles.noteRailTitle, padding: 12 }}>Source note inventory</strong>
             <div style={styles.noteRailHeader}>
               <div>
-                <strong style={styles.noteRailTitle}>Source notes</strong>
+                <strong style={styles.noteRailTitle}>Coverage</strong>
                 <p style={styles.noteRailCount}>
-                  {sourceNotes == null ? "Loading inventory…" : `${sourceNotes.length} found by document scan`}
+                  {sourceNotes == null ? "Loading inventory…" : `${sourceNotes.filter((note) => note.status === "placed").length} of ${sourceNotes.length} notes placed`}
                 </p>
               </div>
             </div>
+            {coverageBanner === "not_reviewed" && <p data-testid="coverage-banner-not_reviewed" role="status" style={styles.noteRailEmpty}>Not yet reviewed — the reviewer did not finish. Placement is provisional.</p>}
+            {coverageBanner === "inventory_unavailable" && <p data-testid="coverage-banner-inventory_unavailable" role="alert" style={styles.noteRailEmpty}>Notes inventory unavailable — coverage could not be checked.</p>}
             <input
               type="search"
               aria-label="Search source notes"
@@ -777,7 +794,8 @@ export function NotesReviewTab({
                   : note.placements.length === 1
                     ? notesSheetDisplayName(note.placements[0].sheet)
                     : `${note.placements.length} destinations`;
-                const needsReview = note.status === "missing" || note.status === "suspected_gap";
+                const resolved = note.reviewer_verdict === "not_applicable" || note.reviewer_verdict === "confirmed_absent";
+                const needsReview = sourceNoteNeedsReview(note);
                 return (
                   <div key={note.note_num} style={styles.noteRailItemGroup}>
                     <button
@@ -799,11 +817,23 @@ export function NotesReviewTab({
                         <span style={styles.noteRailDestination}>
                           {pageLabel} · {destinationLabel}
                         </span>
+                        <span style={styles.noteRailDestination}>
+                          {resolved ? (note.reviewer_verdict === "not_applicable" ? "Not applicable" : "Confirmed absent") : coverageStatusLabel(note.status)}
+                          {note.reviewer_added ? " · Added by reviewer" : ""}
+                        </span>
                       </span>
                       {needsReview && (
                         <span style={styles.noteRailAttention} aria-label="Needs review">!</span>
                       )}
                     </button>
+                    {note.reason && <p style={{ ...styles.noteRailEmpty, margin: "4px 12px" }}>{note.reason}</p>}
+                    {!!note.subnotes?.length && <details style={{ padding: "4px 12px", fontSize: 12 }}>
+                      <summary style={{ cursor: "pointer" }}>Sub-notes · {note.subnotes.filter((sub) => sub.state === "missing" || sub.state === "not_verified").length} need review</summary>
+                      {note.subnotes.map((sub) => <p key={sub.subnote_ref} style={{ margin: "8px 0" }}>
+                        <strong>{sub.subnote_ref} · {subNoteStateLabel(sub.state)}</strong>
+                        {sub.reason && <span style={{ display: "block", color: pwc.grey700 }}>{sub.reason}</span>}
+                      </p>)}
+                    </details>}
                     {selected && note.placements.length > 1 && (
                       <div
                         style={styles.noteRailPlacements}
@@ -826,7 +856,7 @@ export function NotesReviewTab({
                 );
               })}
             </nav>
-            </details>
+            </section>
           </aside>
 
           <ResizableDivider
@@ -843,9 +873,9 @@ export function NotesReviewTab({
                   <option value="all">All fields</option><option value="attention">Needs attention</option>
                 </select></label>
                 <span style={styles.noteRailCount}>{activeSheet?.rows.length ?? 0} fields · worksheet order</span>
-                <button type="button" style={styles.smallButton} disabled={saveBlocked || !sourceNotes?.some((note) => note.status === "missing" || note.status === "suspected_gap")}
+                <button type="button" style={styles.smallButton} disabled={saveBlocked || !sourceNotes?.some(sourceNoteNeedsReview)}
                   onClick={() => {
-                    const issues = (sourceNotes ?? []).filter((note) => note.status === "missing" || note.status === "suspected_gap");
+                    const issues = (sourceNotes ?? []).filter(sourceNoteNeedsReview);
                     const next = issues[(issues.findIndex((note) => note.note_num === selectedSourceNote) + 1) % issues.length];
                     setNeedsAttention(false); if (next) selectSourceNote(next);
                   }}>Next issue</button>
@@ -947,7 +977,7 @@ export function NotesReviewTab({
                   onSaveBlocked={setSaveBlocked}
                   onEditingChange={setEditing}
                   moveBusy={moveBusy}
-                  attentionRows={needsAttention ? (sourceNotes ?? []).filter((note) => note.status === "missing" || note.status === "suspected_gap").flatMap((note) => note.placements.filter((placement) => placement.sheet === activeSheet.sheet).map((placement) => placement.row)) : null}
+                  attentionRows={needsAttention ? (sourceNotes ?? []).filter(sourceNoteNeedsReview).flatMap((note) => note.placements.filter((placement) => placement.sheet === activeSheet.sheet).map((placement) => placement.row)) : null}
                   onActiveCellPages={onActiveCellPages}
                   selectedCellKey={activeCellKey}
                   onCellActivate={handleWorkspaceCellActivate}
@@ -1092,7 +1122,7 @@ function SheetSection({
           setFormatStatus(state);
           if (state.status === "done") {
             clearInterval(timer);
-            if (!state.error) await onFormatted();
+            if (!state.error || (state.changed_rows ?? 0) > 0) await onFormatted();
           }
         })
         .catch((err: Error) => {
@@ -1213,6 +1243,7 @@ function SheetSection({
                 ? notesFormatErrorMessage(
                     formatStatus.error_type,
                     formatStatus.error,
+                    formatStatus,
                   )
                 : (
                   `${formatStatus?.summary || "Formatting complete."} ` +
@@ -1347,21 +1378,25 @@ function WorkspaceReadOnlyCellRow({
       data-testid="notes-review-row"
       data-cell-row={cell.row}
       className="notes-review-row"
-      style={{ ...styles.workspaceCellRow, gridTemplateColumns: "minmax(0, 1fr) auto", gap: 4, padding: "10px 4px" }}
+      style={styles.workspaceCellRow}
       onMouseDown={(event) => {
         if (!(event.target as HTMLElement).closest("button")) activate();
       }}
     >
-      <aside style={styles.cellLeft}>
-        <div style={styles.cellLabel}>{cell.label}</div>
-        <StyleSourceChip source={cell.style_source} />
-      </aside>
-      <div style={{ display: "contents" }}>
-        <div style={{ ...styles.cellToolbar, gridColumn: 2, gridRow: 1, margin: 0 }}>
+      <div style={styles.disclosureHeader}>
+        <aside style={styles.cellLeft}>
+          <span style={styles.noteRailCount}>Disclosure field · Row {cell.row}</span>
+          <div style={styles.cellLabel}>{cell.label}</div>
+          <StyleSourceChip source={cell.style_source} />
+        </aside>
+        <div style={styles.cellToolbar}>
           <div style={styles.cellToolbarSpacer} />
-          <span style={styles.noteRailCount}>Row {cell.row}{isBlankHtml(cell.html) ? " · Empty" : ""}</span>
+          <span style={styles.noteRailCount}>{isBlankHtml(cell.html) ? "Empty" : "Populated"}</span>
           <button type="button" disabled={disabled} style={styles.smallButton} onClick={activate} aria-label={`Review ${cell.label}`}>Review</button>
         </div>
+      </div>
+      {!isBlankHtml(cell.html) && <div style={{ padding: "0 12px 16px" }}>
+        <div style={{ ...styles.noteRailCount, marginBottom: 8 }}>Note content</div>
         {/* notes_cells HTML is sanitised before persistence by every write path;
             this read-only projection avoids constructing a TipTap instance. */}
         <div
@@ -1371,7 +1406,7 @@ function WorkspaceReadOnlyCellRow({
           style={{ ...styles.workspaceReadonlySurface, gridColumn: "1 / -1", minHeight: 0, minWidth: 0, overflowX: "auto", border: "none", padding: 0 }}
           dangerouslySetInnerHTML={{ __html: cell.html }}
         />
-      </div>
+      </div>}
     </div>
   );
 }
@@ -1896,10 +1931,7 @@ function CellRow({
       data-testid="notes-review-row"
       data-cell-row={cell.row}
       className="notes-review-row"
-      style={{
-        ...styles.workspaceCellRow,
-        ...styles.workspaceCellRowSelected,
-      }}
+      style={styles.workspaceCellRow}
       // Focusing (click or keyboard-tab) any part of this row tells the
       // workspace which PDF pages the note came from, so the Source PDF pane
       // follows the note the way it follows a face figure. Capture phase means
@@ -1913,7 +1945,8 @@ function CellRow({
         reportCellPages(cell.source_pages, onActiveCellPages);
       }}
     >
-      <aside style={styles.cellLeft}>
+      <aside style={{ ...styles.cellLeft, ...styles.disclosureHeader, alignItems: "flex-start" }}>
+        <span style={styles.noteRailCount}>Disclosure field · Row {cell.row}</span>
         <div style={styles.cellLabel}>{cell.label}</div>
         {cell.invalid_target && (
           <div
@@ -1960,7 +1993,8 @@ function CellRow({
         )}
       </aside>
 
-      <div style={styles.cellRight} ref={wrapperRef}>
+      <div style={{ ...styles.cellRight, padding: "0 12px 16px" }} ref={wrapperRef}>
+        <span style={styles.noteRailCount}>Note content</span>
         <div style={styles.cellToolbar}>
           <div style={styles.cellToolbarSpacer} />
           <SaveStatusBadge status={status} />
@@ -2106,7 +2140,7 @@ function NumericCellRow({
       className="notes-review-row"
       style={{
         ...styles.workspaceCellRow,
-        ...(selected ? styles.workspaceCellRowSelected : {}),
+        ...(selected ? styles.workspaceNumericRowSelected : {}),
       }}
       onFocusCapture={() => {
         onActivate?.();
@@ -2531,8 +2565,8 @@ const styles = {
   rowStack: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: 0,
-    padding: "0 14px",
+    gap: 20,
+    padding: "12px 14px",
     borderTop: `1px solid ${pwc.grey200}`,
   } as React.CSSProperties,
   // Flat list rows separated by hairlines — not bordered cards. With the
@@ -2542,13 +2576,23 @@ const styles = {
     display: "grid",
     gridTemplateColumns: "minmax(0, 1fr)",
     gap: pwc.space.lg,
-    padding: `${pwc.space.lg}px ${pwc.space.xs}px`,
+    padding: 0,
     borderBottom: `1px solid ${pwc.grey100}`,
     background: pwc.white,
     scrollMarginTop: 64,
   } as React.CSSProperties,
-  workspaceCellRowSelected: {
+  workspaceNumericRowSelected: {
     background: pwc.grey100,
+  } as React.CSSProperties,
+  disclosureHeader: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    flexWrap: "wrap",
+    gap: 12,
+    padding: "12px",
+    background: pwc.grey100,
+    borderBottom: `1px solid ${pwc.grey200}`,
   } as React.CSSProperties,
   workspaceReadonlySurface: {
     minHeight: 56,

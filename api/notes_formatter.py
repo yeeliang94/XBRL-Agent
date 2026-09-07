@@ -242,6 +242,7 @@ async def notes_formatter_status(run_id: int, sheet: str):
     skipped = (state.get("result") or {}).get("skipped_rows") or []
     return {
         "status": "done", "sheet": sheet, "skipped_rows": skipped,
+        "failed_rows": (state.get("result") or {}).get("failed_rows") or [],
         "can_revert": has_snapshot, **state,
     }
 

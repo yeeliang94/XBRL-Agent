@@ -1181,6 +1181,8 @@ describe("RunDetailView", () => {
       expect(
         await screen.findByTestId("coverage-banner-inventory_unavailable"),
       ).toBeInTheDocument();
+      expect(screen.getByRole("region", { name: "Source note inventory" })).toContainElement(screen.getByTestId("coverage-banner-inventory_unavailable"));
+      expect(screen.queryByTestId("notes-coverage-panel")).not.toBeInTheDocument();
       expect(screen.getByText("Notes audit details").closest("details")).not.toHaveAttribute("open");
     } finally {
       globalThis.fetch = originalFetch;

@@ -7752,8 +7752,9 @@ async def run_multi_agent_stream(
                     _format_outcome = await _format_task
                     logger.info(
                         "automatic PDF notes formatting completed run=%s "
-                        "formatted=%s failed=%s skipped=%s",
+                        "formatted=%s partial=%s failed=%s skipped=%s",
                         run_id, _format_outcome.get("formatted"),
+                        _format_outcome.get("partial"),
                         _format_outcome.get("failed"),
                         _format_outcome.get("skipped"),
                     )

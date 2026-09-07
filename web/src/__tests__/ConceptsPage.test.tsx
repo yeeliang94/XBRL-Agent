@@ -1,3 +1,4 @@
+import { pwc } from "../lib/theme";
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   render,
@@ -1097,10 +1098,9 @@ describe("ConceptsPage", () => {
     const missing = screen.getByTestId("source-note-3");
     const shared = screen.getByTestId("source-note-4");
     expect(screen.getByRole("combobox", { name: "Notes field filter" })).toHaveValue("all");
-    fireEvent.click(screen.getByText("Source note inventory", { exact: true }));
     expect(missing).toHaveAccessibleName(/needs review/i);
     expect(missing).toHaveAttribute("data-tooltip", "Placement needs review");
-    expect(screen.getByText("4 found by document scan")).toBeTruthy();
+    expect(screen.getByText("3 of 4 notes placed")).toBeTruthy();
     expect(screen.getAllByTestId("notes-review-row")).toHaveLength(2);
     expect(screen.getAllByTestId("notes-review-editor")).toHaveLength(1);
     expect(screen.getByRole("navigation", { name: "Notes sheet navigator" })).toBeTruthy();
@@ -1127,7 +1127,8 @@ describe("ConceptsPage", () => {
     expect(screen.getAllByTestId("notes-review-editor")).toHaveLength(1);
     expect(
       screen.getByText("Unused disclosure").closest('[data-testid="notes-review-row"]'),
-    ).toHaveStyle({ background: "rgb(238, 239, 241)" });
+    ).toHaveStyle({ background: pwc.white });
+    expect(screen.getByText("Unused disclosure").closest("aside")).toHaveStyle({ background: pwc.grey100 });
     expect(screen.queryAllByTestId(/^source-note-/).some(
       (note) => note.getAttribute("aria-current") === "true",
     )).toBe(false);

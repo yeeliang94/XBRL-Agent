@@ -23,7 +23,6 @@ import { TabPanelFade } from "./TabPanelFade";
 import { NotesReviewerPanel } from "./NotesReviewerPanel";
 import { NotesTablesPanel } from "./NotesTablesPanel";
 import { NotesIntegrityPanel } from "./NotesIntegrityPanel";
-import { NotesCoveragePanel } from "./NotesCoveragePanel";
 import { ConsistencyPanel } from "./ConsistencyPanel";
 import {
   buildToolTimeline,
@@ -1289,7 +1288,6 @@ export function RunDetailView({
             initialCrossChecks={crossChecksForValidator(crossChecks)}
             onRegenerateNotes={onRegenerateNotes}
           />
-          <NotesCoveragePanel runId={detail.id} />
           <details
             style={styles.perfDetails}
             data-testid="run-detail-notes-audit"
