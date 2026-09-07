@@ -415,3 +415,27 @@ def test_notes_formatter_revert_refused_while_notes_reviewer_running(formatter_c
     )
     assert r.status_code == 409
     assert "reviewer" in r.json()["detail"]
+
+
+def test_notes_formatter_partial_status_exposes_failed_rows(formatter_client, monkeypatch):
+    client, run_id, _ = formatter_client
+    summary = "Formatting saved for 1 row(s); 1 row(s) remain unresolved: 113."
+
+    async def fake_run_notes_formatter(**_kwargs):
+        return {
+            "ok": False, "summary": summary, "confidence": 0.9,
+            "changed_rows": 1, "failed_rows": [113],
+            "error_type": "validation_failed", "error": "row 113: invalid target",
+        }
+
+    monkeypatch.setattr(
+        "notes.formatting_agent.run_notes_formatter", fake_run_notes_formatter,
+    )
+    response = client.post(
+        f"/api/runs/{run_id}/notes-format", json={"sheet": "Notes-Listofnotes"},
+    )
+    assert response.status_code == 200
+    done = _poll_done(client, run_id, "Notes-Listofnotes")
+    assert done["failed_rows"] == [113]
+    assert done["changed_rows"] == 1
+    assert done["summary"] == summary

@@ -102,6 +102,8 @@ export interface NotesFormatStatus {
   changed_rows?: number;
   /** Rows the CAS write skipped because they were edited during the pass. */
   skipped_rows?: number[];
+  /** Rows whose formatting failed validation. */
+  failed_rows?: number[];
   /** True when a pre-format snapshot exists — enables "Revert formatting". */
   can_revert?: boolean;
   error?: string | null;

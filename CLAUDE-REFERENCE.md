@@ -964,6 +964,26 @@ Key invariants:
     (0.70). Numeric sheets (13/14) are excluded (422). Pinned by
     `tests/test_notes_format_patch.py`, `test_notes_formatter_routes.py`,
     `test_db_schema_v26.py`/`_v27.py`.
+    Validation is isolated per notes cell: all operations for one row pass or
+    fail together, including duplicate row entries, validated after merging
+    their operations. A rejected row does not discard valid formatting for
+    other rows. Repair receives only rejected rows; if malformed row identities
+    prevent grouping, the whole patch receives one repair attempt. An empty
+    repair preserves the original validation failure and its metadata.
+    Invalid self-check revisions leave the affected rows unresolved rather than
+    saving their earlier styling; existing row errors retain their root cause.
+    Partial saves retain
+    `ok=false`, `validation_failed`, `failed_rows`, and per-row errors, alongside
+    the actual `changed_rows`. Snapshots include only saved rows. The review
+    panel reloads partial saves and names unresolved rows from the summary;
+    the status API also exposes `failed_rows`. Automatic formatting counts
+    partial saves separately from wholly failed sheets. Pinned by
+    `test_formatter_malformed_row_gets_one_repair`,
+    `test_formatter_self_check_bad_target_keeps_other_note`,
+    `test_partition_validates_merged_operations`,
+    `test_formatter_preserves_valid_note_when_other_note_repair_is_empty` in
+    `tests/test_notes_format_patch.py` and the partial-save case in
+    `web/src/__tests__/NotesReviewTab.test.tsx`.
   - **PDF structure-first formatting (2026-08-25).** Text PDFs already land
     style-free. Scanned-PDF `source.html` transcripts now preserve content and
     table geometry only: `ingest/pdf_sidecar.normalize_transcription` removes
@@ -1650,9 +1670,12 @@ Load-bearing invariants:
   top-level row per note + per-sub-ref child rows + a `note_num = -1` banner
   sentinel (distinguishes `inventory_unavailable` from `pre_feature`).
   `GET /api/runs/{id}/notes-coverage` nests children under parents + derives the
-  summary. `web/src/components/NotesCoveragePanel.tsx` is a Notes-tab SECTION
-  (not a `role="tab"` — gotcha #7), placement chips dispatch a
-  `notes-coverage-focus` window event.
+  summary. The source note inventory in `NotesReviewTab.tsx` is the single
+  coverage surface in the Notes tab. Keep placement counts, incomplete-review
+  and unavailable-inventory warnings, reasons, and expandable sub-note states
+  there; do not append a second checklist below the editor. Inventory selection
+  uses the existing source-page and destination navigation. Pinned by
+  `NotesReviewTab` and `RunDetailView` web tests.
 - **Reviewer clears preserve routing precision.** `clear_note_cells` refuses to
   remove the last provenance placement of a note. It also refuses to clear one
   List-of-Notes row while that note remains in a different row on the same
@@ -1670,7 +1693,9 @@ Pinned by `tests/test_coverage_checklist.py`,
 `tests/test_notes_reviewer_coverage.py`,
 `tests/test_notes_coverage_run_status.py`, `tests/test_notes_coverage_api.py`,
 `tests/test_notes_detectors_splits.py`, `tests/test_db_schema_v28.py`, and the
-`NotesCoveragePanel` web tests.
+`NotesReviewTab` and `RunDetailView` web tests. Resolved notes
+(`not_applicable` / `confirmed_absent`) are excluded consistently from the
+inventory warning, Next issue navigation, and Needs attention filter.
 
 ### 28. mTool fill pipeline — semantic addressing, one patcher, receipts
 

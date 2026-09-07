@@ -427,6 +427,11 @@ async def run_notes_formatter(
         style_sources=style_sources,
     )
     outcome.update(_usage_fields(usage))
+    if outcome.get("error_type") == "validation_failed":
+        logger.warning(
+            "notes formatter validation failed run=%s sheet=%s error=%s",
+            run_id, sheet, outcome.get("error"),
+        )
     return outcome
 
 
@@ -550,66 +555,75 @@ async def _run_notes_formatter_impl(
         return err
     patch, confidence, summary = screened.patch, screened.confidence, screened.summary
 
-    original_validation_error: Optional[str] = None
-    original_validation_patch: Optional[dict[str, Any]] = None
+    # Validate each notes cell independently, retaining all operations for a
+    # row as one unit. A bad target must not discard unrelated valid notes.
+    repair_attempted = False
     try:
-        applied = apply_sheet_patch(rows_for_patch, patch)
+        patch, rejected_patch, row_errors = _partition_valid_patch(rows_for_patch, patch)
     except FormatPatchError as exc:
-        original_validation_error = str(exc)
-        original_validation_patch = patch
-        logger.warning(
-            "notes formatter validation failed run=%s sheet=%s error=%s",
-            run_id, sheet, exc,
-        )
-        repair_prompt = _build_validation_repair_prompt(
+        # No trustworthy row identity: repair the whole patch once, without
+        # coercing model-authored row numbers into writable targets.
+        failure = {
+            "ok": False, "error": str(exc), "error_type": "validation_failed",
+            "summary": summary or "No safe formatting changes were applied.",
+            "confidence": confidence, "patch": patch, "changed_rows": 0,
+        }
+        repair_attempted = True
+        repair_result = await _agent_run(_build_validation_repair_prompt(
             sheet, patch, str(exc), rows_for_patch,
-        )
-        repair_result = await _agent_run(repair_prompt)
-        err, screened, stage = _screen_patch(
+        ))
+        err, screened, _stage = _screen_patch(
             _output_json(repair_result.output), sheet, revised=True,
         )
-        if stage == "parse":
-            # The repair didn't even parse — report the ORIGINAL validation
-            # error; it is more actionable than "invalid JSON" from the retry.
-            return {
-                "ok": False, "error": str(exc),
-                "error_type": "validation_failed", "summary": summary,
-                "confidence": confidence, "patch": patch,
-            }
         if err is not None:
-            return err
+            return failure
         try:
-            applied = apply_sheet_patch(rows_for_patch, screened.patch)
-        except FormatPatchError as revised_exc:
-            logger.warning(
-                "notes formatter repaired patch validation failed run=%s sheet=%s error=%s",
-                run_id, sheet, revised_exc,
+            patch, rejected_patch, row_errors = _partition_valid_patch(
+                rows_for_patch, screened.patch,
             )
-            return {
-                "ok": False, "error": str(revised_exc),
-                "error_type": "validation_failed",
-                "summary": screened.summary,
-                "confidence": screened.confidence, "patch": screened.patch,
-            }
-        patch, confidence, summary = (
-            screened.patch, screened.confidence, screened.summary,
+        except FormatPatchError:
+            return failure
+        if not apply_sheet_patch(rows_for_patch, patch).changed_rows:
+            return failure
+        confidence, summary = screened.confidence, screened.summary
+    if row_errors and not repair_attempted:
+        original_error = "; ".join(row_errors.values())
+        repair_result = await _agent_run(_build_validation_repair_prompt(
+            sheet, rejected_patch, original_error,
+            {row: html for row, html in rows_for_patch.items() if row in row_errors},
+        ))
+        err, screened, _stage = _screen_patch(
+            _output_json(repair_result.output), sheet, revised=True,
         )
+        if err is None:
+            # The repair owns only rejected rows. It cannot replace previously
+            # accepted decisions, nor silently style a different note.
+            try:
+                repaired, _, repair_errors = _partition_valid_patch(
+                    {row: html for row, html in rows_for_patch.items() if row in row_errors},
+                    screened.patch,
+                )
+            except FormatPatchError:
+                repaired, repair_errors = {"cells": []}, {}
+            for cell in repaired["cells"]:
+                row = cell["row"]
+                check = apply_sheet_patch(rows_for_patch, {"cells": [cell]})
+                if check.changed_rows:
+                    patch["cells"].append(cell)
+                    row_errors.pop(row, None)
+            row_errors.update({
+                row: error for row, error in repair_errors.items() if row in row_errors
+            })
 
-    if original_validation_error is not None and applied.changed_rows == 0:
-        # An empty/ineffective repair is a safe content no-op, but it does not
-        # turn the invalid original patch into evidence that formatting was
-        # unnecessary.  Preserve the root classification so the task row, UI,
-        # and token telemetry expose the expensive failed pass honestly.
+    applied = apply_sheet_patch(rows_for_patch, patch)
+    if row_errors and applied.changed_rows == 0:
         return {
-            "ok": False,
-            "error": original_validation_error,
+            "ok": False, "error": "; ".join(row_errors.values()),
             "error_type": "validation_failed",
-            "summary": summary or "No safe formatting changes were applied.",
-            "confidence": confidence,
-            "changed_rows": 0,
-            "skipped_rows": [],
-            "patch": original_validation_patch,
-            "repair_patch": patch,
+            "summary": "No safe formatting changes were applied.",
+            "confidence": confidence, "changed_rows": 0, "skipped_rows": [],
+            "failed_rows": sorted(row_errors), "row_errors": row_errors,
+            "patch": rejected_patch, "repair_patch": patch,
             "before_text_hash": applied.before_text_hash,
             "after_text_hash": applied.after_text_hash,
         }
@@ -631,26 +645,38 @@ async def _run_notes_formatter_impl(
         elif err is not None:
             return err
         elif screened.patch != patch:
+            review_rows = {
+                cell["row"]: rows_for_patch[cell["row"]] for cell in patch["cells"]
+            }
             try:
-                applied = apply_sheet_patch(rows_for_patch, screened.patch)
-            except FormatPatchError as exc:
-                logger.warning(
-                    "notes formatter revised patch validation failed run=%s sheet=%s error=%s",
-                    run_id, sheet, exc,
+                revised_patch, _, revised_errors = _partition_valid_patch(
+                    review_rows, screened.patch,
                 )
+            except FormatPatchError as exc:
                 return {
-                    "ok": False, "error": str(exc),
-                    "error_type": "validation_failed",
-                    "summary": screened.summary,
-                    "confidence": screened.confidence, "patch": screened.patch,
+                    "ok": False, "error": str(exc), "error_type": "validation_failed",
+                    "summary": screened.summary, "confidence": screened.confidence,
+                    "patch": screened.patch, "changed_rows": 0,
                 }
+            # Self-check validation has the same note-level isolation. Failed
+            # rows stay unresolved even if the model omits them in its answer.
+            for row, error in revised_errors.items():
+                if row in review_rows:
+                    row_errors.setdefault(row, error)
             patch, confidence, summary = (
-                screened.patch, screened.confidence, screened.summary,
+                revised_patch, screened.confidence, screened.summary,
             )
+            applied = apply_sheet_patch(rows_for_patch, patch)
 
     if applied.changed_rows == 0:
         return {
-            "ok": True, "summary": summary or "No formatting changes needed.",
+            "ok": not row_errors,
+            "summary": ("No safe formatting changes were applied." if row_errors
+                        else summary or "No formatting changes needed."),
+            **({"error_type": "validation_failed",
+                "error": "; ".join(row_errors.values()),
+                "failed_rows": sorted(row_errors), "row_errors": row_errors}
+               if row_errors else {}),
             "confidence": confidence, "changed_rows": 0, "skipped_rows": [],
             "patch": patch,
             "before_text_hash": applied.before_text_hash,
@@ -693,18 +719,58 @@ async def _run_notes_formatter_impl(
             )
         written = len(written_rows)
 
-    summary_out = summary or "Formatting applied."
-    if skipped_rows:
-        summary_out += (
-            f" {len(skipped_rows)} row(s) skipped — edited during formatting."
+    if row_errors:
+        summary_out = (
+            f"Formatting saved for {written} row(s); "
+            f"{len(row_errors)} row(s) remain unresolved: "
+            + ", ".join(str(row) for row in sorted(row_errors)) + "."
         )
+    else:
+        summary_out = summary or "Formatting applied."
+    if skipped_rows:
+        summary_out += f" {len(skipped_rows)} row(s) skipped — edited during formatting."
     return {
-        "ok": True, "summary": summary_out,
+        "ok": not row_errors, "summary": summary_out,
+        **({"error_type": "validation_failed",
+            "error": "; ".join(row_errors.values()),
+            "failed_rows": sorted(row_errors), "row_errors": row_errors}
+           if row_errors else {}),
         "confidence": confidence, "changed_rows": written,
         "skipped_rows": skipped_rows,
         "patch": patch, "before_text_hash": applied.before_text_hash,
         "after_text_hash": applied.after_text_hash,
     }
+
+
+def _partition_valid_patch(
+    current_rows: dict[int, str], patch: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], dict[int, str]]:
+    """Isolate notes rows; never salvage individual operations within a row."""
+    cells = patch.get("cells")
+    if not isinstance(cells, list):
+        raise FormatPatchError("patch.cells must be a list")
+    grouped: dict[int, list[dict[str, Any]]] = {}
+    for cell in cells:
+        if not isinstance(cell, dict):
+            raise FormatPatchError("cell patch must be an object")
+        if type(cell.get("row")) is not int:
+            raise FormatPatchError("cell patch row must be an integer")
+        grouped.setdefault(cell["row"], []).append(cell)
+    accepted, rejected, errors = [], [], {}
+    for row, entries in grouped.items():
+        try:
+            if any(not isinstance(entry.get("operations"), list) for entry in entries):
+                raise FormatPatchError(f"row {row} operations must be a list")
+            merged = {"row": row, "operations": [
+                op for entry in entries for op in entry["operations"]
+            ]}
+            apply_sheet_patch(current_rows, {"cells": [merged]})
+        except FormatPatchError as exc:
+            rejected.extend(entries)
+            errors[row] = f"row {row}: {exc}"
+        else:
+            accepted.append(merged)
+    return ({**patch, "cells": accepted}, {**patch, "cells": rejected}, errors)
 
 
 def collect_size_signals(

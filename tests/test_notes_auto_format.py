@@ -200,3 +200,27 @@ async def test_auto_format_does_not_clobber_an_existing_formatter_claim(
         task = repo.fetch_notes_format_task(conn, run_id, "Notes-CI")
     assert task["status"] == "running"
     assert task["model"] == "first-model"
+
+
+@pytest.mark.asyncio
+async def test_auto_format_counts_partial_save_separately(auto_format_db):
+    db_path, run_id, tmp_path = auto_format_db
+
+    async def fake_formatter(**_kwargs):
+        return {
+            "ok": False, "changed_rows": 1, "failed_rows": [11],
+            "error_type": "validation_failed", "error": "row 11: invalid target",
+        }
+
+    result = await run_pdf_auto_format(
+        run_id=run_id, db_path=db_path, pdf_path=str(tmp_path / "uploaded.pdf"),
+        sheets=["Notes-CI"], model_name="model-a", model_factory=object,
+        output_dir=str(tmp_path), timeout_s=30, formatter=fake_formatter,
+    )
+    assert result["partial"] == 1
+    assert result["formatted"] == result["failed"] == result["skipped"] == 0
+    with repo.db_session(db_path) as conn:
+        task = repo.fetch_notes_format_task(conn, run_id, "Notes-CI")
+    assert task["changed_rows"] == 1
+    assert task["result"]["failed_rows"] == [11]
+    assert task["error_type"] == "validation_failed"

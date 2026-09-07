@@ -78,7 +78,7 @@ async def run_pdf_auto_format(
     """
     selected = candidate_sheets(db_path, run_id, sheets)
     if not selected:
-        return {"sheets": {}, "formatted": 0, "failed": 0, "skipped": 0}
+        return {"sheets": {}, "formatted": 0, "partial": 0, "failed": 0, "skipped": 0}
     if on_progress is not None:
         try:
             on_progress(0, len(selected), None)
@@ -191,9 +191,15 @@ async def run_pdf_auto_format(
     return {
         "sheets": outcomes,
         "formatted": sum(1 for result in outcomes.values() if result.get("ok")),
+        "partial": sum(
+            1 for result in outcomes.values()
+            if not result.get("ok") and not result.get("skipped")
+            and (result.get("changed_rows") or 0) > 0
+        ),
         "failed": sum(
             1 for result in outcomes.values()
             if not result.get("ok") and not result.get("skipped")
+            and not (result.get("changed_rows") or 0)
         ),
         "skipped": sum(
             1 for result in outcomes.values() if result.get("skipped")

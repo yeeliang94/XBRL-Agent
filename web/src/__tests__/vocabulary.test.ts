@@ -130,3 +130,13 @@ describe("notesFormatErrorMessage", () => {
     );
   });
 });
+
+
+test("partial formatting names failed rows when no summary is available", () => {
+  const message = notesFormatErrorMessage("validation_failed", "invalid target", {
+    changed_rows: 2, failed_rows: [112, 113],
+  });
+  expect(message).toContain("Formatting saved for 2 row(s).");
+  expect(message).toContain("Unresolved rows: 112, 113.");
+  expect(message).not.toContain("nothing was saved");
+});

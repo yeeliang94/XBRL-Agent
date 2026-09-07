@@ -211,7 +211,17 @@ const NOTES_FORMAT_ERROR_LABELS: Record<string, string> = {
 export function notesFormatErrorMessage(
   errorType: string | null | undefined,
   rawError: string | null | undefined,
+  outcome?: { changed_rows?: number; summary?: string | null; failed_rows?: number[] },
 ): string {
+  if ((outcome?.changed_rows ?? 0) > 0) {
+    const details = outcome?.summary || (
+      `Formatting saved for ${outcome?.changed_rows} row(s). ` +
+      (outcome?.failed_rows?.length
+        ? `Unresolved rows: ${outcome.failed_rows.join(", ")}.`
+        : "Some notes remain unresolved.")
+    );
+    return `${details} Review the unresolved notes and try formatting again.`;
+  }
   if (errorType && NOTES_FORMAT_ERROR_LABELS[errorType]) {
     return NOTES_FORMAT_ERROR_LABELS[errorType];
   }

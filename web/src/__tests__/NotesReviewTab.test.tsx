@@ -19,6 +19,7 @@ import { Color } from "@tiptap/extension-color";
 import { Highlight } from "@tiptap/extension-highlight";
 import { TextAlign } from "@tiptap/extension-text-align";
 import type { NotesCellsResponse } from "../lib/notesCells";
+import { pwc } from "../lib/theme";
 
 // Issue 3 (2026-06-21): empty notes cells were flipping to "Saved" without
 // the user typing — TipTap normalises an empty cell ("") to "<p></p>" on
@@ -353,6 +354,83 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
       const numericCell = document.querySelector('table[data-source-styled="true"] tr:last-child td:last-child');
       expect(numericCell).toHaveClass("is-numeric");
     });
+  });
+
+  test("separates disclosure metadata from populated content and keeps empty fields compact", async () => {
+    mockFetchOnce({ sheets: [{ sheet: "Notes-CI", rows: [
+      ...SAMPLE.sheets[0].rows,
+      { ...SAMPLE.sheets[0].rows[1], row: 13, label: "Empty disclosure", html: "" },
+    ] }] });
+    render(<NotesReviewTab runId={42} />);
+    const review = await screen.findByRole("button", { name: "Review Registered office" });
+    const row = review.closest('[data-testid="notes-review-row"]') as HTMLElement;
+    expect(within(row).getByText("Disclosure field · Row 12")).toBeInTheDocument();
+    expect(within(row).getByText("Note content")).toBeInTheDocument();
+    const content = within(row).getByTestId("notes-readonly-content");
+    expect(content).toHaveTextContent("Kuala Lumpur");
+    expect(content).not.toHaveTextContent("Registered office");
+    const empty = screen.getByRole("button", { name: "Review Empty disclosure" }).closest('[data-testid="notes-review-row"]') as HTMLElement;
+    expect(within(empty).getByText("Empty")).toBeInTheDocument();
+    expect(within(empty).queryByTestId("notes-readonly-content")).not.toBeInTheDocument();
+    fireEvent.click(review);
+    expect(await screen.findByRole("button", { name: /^Edit$/ })).toBeInTheDocument();
+  });
+
+  test.each(["not_reviewed", "inventory_unavailable"])("keeps %s coverage visible in the source inventory", async (banner) => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
+      String(input).endsWith("/notes_cells") ? SAMPLE : String(input).endsWith("/notes-coverage") ? {
+        banner,
+        rows: [{ note_num: 1, title: "Basis of preparation", status: "missing", placements: [],
+          page_lo: 3, page_hi: 3, reason: "No destination recorded", reviewer_verdict: null,
+          subnotes: [{ subnote_ref: "1(a)", state: "not_verified", reason: "Review incomplete" }] }],
+      } : {},
+    ), { status: 200 })) as typeof fetch;
+    render(<NotesReviewTab runId={42} />);
+    const inventory = screen.getByRole("region", { name: "Source note inventory" });
+    expect(await within(inventory).findByText("0 of 1 notes placed")).toBeInTheDocument();
+    expect(within(inventory).getByText("No destination recorded")).toBeInTheDocument();
+    expect(within(inventory).getByText("Missing")).toBeInTheDocument();
+    expect(within(inventory).getByText(banner === "not_reviewed" ? /Not yet reviewed/ : /coverage could not be checked/)).toBeInTheDocument();
+    fireEvent.click(within(inventory).getByText("Sub-notes · 1 need review"));
+    expect(within(inventory).getByText("1(a) · Not checked")).toBeVisible();
+    fireEvent.click(within(inventory).getByTestId("source-note-1"));
+    expect(within(inventory).getByTestId("source-note-1")).toHaveAttribute("aria-current", "true");
+  });
+
+  test.each(["not_applicable", "confirmed_absent"])("excludes %s notes from warnings, issue navigation, and attention filtering", async (verdict) => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
+      String(input).endsWith("/notes_cells") ? SAMPLE : String(input).endsWith("/notes-coverage") ? {
+        rows: [
+          { note_num: 1, title: "Resolved note", status: "missing", reviewer_verdict: verdict,
+            placements: [{ sheet: "Notes-CI", row: 4 }], page_lo: 3, page_hi: 3 },
+          { note_num: 2, title: "Unresolved note", status: "suspected_gap",
+            placements: [{ sheet: "Notes-CI", row: 12 }], page_lo: 3, page_hi: 3 },
+        ],
+      } : {},
+    ), { status: 200 })) as typeof fetch;
+    render(<NotesReviewTab runId={42} />);
+    const resolved = await screen.findByTestId("source-note-1");
+    const unresolved = screen.getByTestId("source-note-2");
+    expect(within(resolved).queryByLabelText("Needs review")).not.toBeInTheDocument();
+    expect(within(unresolved).getByLabelText("Needs review")).toBeInTheDocument();
+    fireEvent.click(unresolved);
+    fireEvent.click(screen.getByRole("button", { name: "Next issue" }));
+    expect(unresolved).toHaveAttribute("aria-current", "true");
+    fireEvent.change(screen.getByRole("combobox", { name: "Notes field filter" }), { target: { value: "attention" } });
+    expect(screen.queryByText("Corporate info", { exact: true })).not.toBeInTheDocument();
+    expect(screen.getByText("Registered office", { exact: true })).toBeInTheDocument();
+  });
+
+  test("disables Next issue when every coverage gap is resolved", async () => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
+      String(input).endsWith("/notes_cells") ? SAMPLE : String(input).endsWith("/notes-coverage") ? {
+        rows: [{ note_num: 1, title: "Resolved note", status: "missing", reviewer_verdict: "not_applicable",
+          placements: [], page_lo: 3, page_hi: 3 }],
+      } : {},
+    ), { status: 200 })) as typeof fetch;
+    render(<NotesReviewTab runId={42} />);
+    await screen.findByTestId("source-note-1");
+    expect(screen.getByRole("button", { name: "Next issue" })).toBeDisabled();
   });
 
   test("selects the first legacy field when empty coverage resolves after notes", async () => {
@@ -1653,6 +1731,22 @@ const FULL_TEMPLATE: NotesCellsResponse = {
 };
 
 describe("NotesReviewTab — full-template projection (Phase 5)", () => {
+  test("visibly moves numeric row selection on click and keyboard focus", async () => {
+    const numericSheet = FULL_TEMPLATE.sheets[1];
+    mockFetchOnce({ sheets: [{ ...numericSheet, rows: [
+      numericSheet.rows[0],
+      { ...numericSheet.rows[0], row: 7, concept_uuid: "uuid-cap-7", label: "Other capital" },
+    ] }] });
+    render(<NotesReviewTab runId={7} />);
+    const [first, second] = await screen.findAllByTestId("notes-numeric-row");
+    fireEvent.mouseDown(first);
+    expect(first).toHaveStyle({ background: pwc.grey100 });
+    expect(second).toHaveStyle({ background: pwc.white });
+    fireEvent.focus(within(second).getByTestId("numeric-input-7-cy"));
+    expect(second).toHaveStyle({ background: pwc.grey100 });
+    expect(first).toHaveStyle({ background: pwc.white });
+  });
+
   test("renders blank prose rows as editable cells", async () => {
     mockFetchOnce(FULL_TEMPLATE);
     render(<NotesReviewTab runId={7} />);
@@ -2489,6 +2583,38 @@ describe("NotesReviewTab — AI formatter", () => {
     expect(summary).toHaveTextContent("tokens.");
     // A finished pass refetches the cells so the styled HTML renders.
     expect(notesCellsCalls(fetchMock)).toBeGreaterThan(before);
+    vi.useRealTimers();
+  });
+
+  test("a partial save refetches notes and reports unresolved formatting", async () => {
+    vi.useFakeTimers();
+    let launched = false;
+    const fetchMock = routedFetch({
+      status: (url) => url.includes("Notes-CI") && launched
+        ? { status: "done", sheet: "Notes-CI", changed_rows: 1,
+            error: "row 113: target matched no elements",
+            summary: "Formatting saved for 1 row(s); 1 row(s) remain unresolved: 113.",
+            failed_rows: [113],
+            error_type: "validation_failed", can_revert: true }
+        : { status: "idle", sheet: "other" },
+      launch: () => {
+        launched = true;
+        return { ok: true, status: "running", sheet: "Notes-CI" };
+      },
+    });
+    render(<NotesReviewTab runId={42} />);
+    await vi.runAllTimersAsync();
+    fireEvent.click(screen.getAllByTestId("notes-format-button")[0]);
+    await vi.advanceTimersByTimeAsync(0);
+    const before = notesCellsCalls(fetchMock);
+    await vi.advanceTimersByTimeAsync(2100);
+    const summary = screen.getByTestId("notes-format-summary");
+    expect(summary).toHaveAttribute("role", "alert");
+    expect(summary).toHaveTextContent("Formatting saved for 1 row(s);");
+    expect(summary).toHaveTextContent("1 row(s) remain unresolved: 113.");
+    expect(summary).not.toHaveTextContent("Nothing was saved");
+    expect(notesCellsCalls(fetchMock)).toBeGreaterThan(before);
+    expect(screen.getByTestId("notes-format-revert")).toBeInTheDocument();
     vi.useRealTimers();
   });
 

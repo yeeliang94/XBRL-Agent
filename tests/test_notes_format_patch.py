@@ -668,6 +668,153 @@ def test_output_rejected_prompt_carries_error_and_response():
     assert "not-json" in prompt
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("repair", [
+    "empty", "invalid", "malformed", "low_confidence", "outside_failed_rows", "self_check_revisits_failed", "success",
+])
+async def test_formatter_preserves_valid_note_when_other_note_repair_is_empty(
+    monkeypatch, formatter_db, repair,
+):
+    """A bad numeric target in another note must not discard cash-note styling."""
+    from db import repository as repo
+
+    db_path, _, run_id = formatter_db
+    other_html = "<table><tr><td>Licensed banks</td><td>Days</td></tr></table>"
+    with repo.db_session(db_path) as conn:
+        repo.upsert_notes_cell(
+            conn, run_id=run_id, sheet=_SHEET, row=113,
+            label="Another note", html=other_html,
+            evidence="Page 3", source_pages=[3], style_source="unstyled",
+        )
+    mixed = json.loads(_GOOD_PATCH)
+    mixed["cells"].append({
+        "row": 113, "operations": [{
+            "target": {"table": 0, "range": "numeric_cells"},
+            "style": {"text_align": "right"},
+        }],
+    })
+    fixed = {**mixed, "cells": [{
+        "row": 113, "operations": [{
+            "target": {"table": 0, "range": "all"},
+            "style": {"text_align": "right"},
+        }],
+    }]}
+    repair_output = {
+        "empty": json.dumps({**mixed, "cells": []}),
+        "invalid": json.dumps({**mixed, "cells": mixed["cells"][1:]}),
+        "malformed": "not json",
+        "low_confidence": json.dumps({**fixed, "confidence": 0.1}),
+        "outside_failed_rows": _GOOD_PATCH,
+        "self_check_revisits_failed": json.dumps({**mixed, "cells": []}),
+        "success": json.dumps(fixed),
+    }[repair]
+    final_patch = mixed if repair == "self_check_revisits_failed" else json.loads(_GOOD_PATCH)
+    if repair == "success":
+        final_patch["cells"].extend(fixed["cells"])
+    fake = _FakeAgent([json.dumps(mixed), repair_output, json.dumps(final_patch)])
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
+
+    assert result["changed_rows"] == (2 if repair == "success" else 1)
+    assert result["ok"] is (repair == "success")
+    if repair != "success":
+        assert result["error_type"] == "validation_failed"
+        assert result["failed_rows"] == [113]
+        assert "not a filled notes cell" not in result["row_errors"][113]
+    # The repair prompt contains only the failed note, not accepted decisions.
+    assert '"row": 112' not in fake.prompts[1]
+    with repo.db_session(db_path) as conn:
+        rows = {c.row: c for c in repo.list_notes_cells_for_run(conn, run_id)}
+        snapshots = repo.fetch_notes_format_snapshots(conn, run_id, _SHEET)
+    assert "text-align: right" in rows[112].html
+    assert rows[112].style_source == "formatter"
+    assert snapshots[112] == _TABLE_HTML
+    if repair == "success":
+        assert "text-align: right" in rows[113].html
+        assert snapshots[113] == other_html
+    else:
+        assert rows[113].html == other_html
+        assert rows[113].style_source == "unstyled"
+        assert 113 not in snapshots
+
+
+def test_partition_rejects_entire_note_including_duplicate_entries():
+    from notes.formatting_agent import _partition_valid_patch
+
+    good = json.loads(_GOOD_PATCH)["cells"][0]
+    bad = {"row": 112, "operations": [{
+        "target": {"table": 7, "range": "all"},
+        "style": {"text_align": "right"},
+    }]}
+    accepted, rejected, errors = _partition_valid_patch(
+        {112: _TABLE_HTML, 113: _TABLE_HTML},
+        {"cells": [good, {**good, "row": 113}, bad]},
+    )
+    assert [cell["row"] for cell in accepted["cells"]] == [113]
+    assert rejected["cells"] == [good, bad]
+    assert list(errors) == [112]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("extra_row", [113, 999])
+async def test_formatter_self_check_ignores_unrequested_rows(
+    monkeypatch, formatter_db, extra_row,
+):
+    from db import repository as repo
+
+    db_path, _, run_id = formatter_db
+    with repo.db_session(db_path) as conn:
+        repo.upsert_notes_cell(
+            conn, run_id=run_id, sheet=_SHEET, row=113,
+            label="Another note", html=_TABLE_HTML,
+            evidence="Page 3", source_pages=[3],
+        )
+    revised = json.loads(_GOOD_PATCH)
+    revised["cells"].append({**revised["cells"][0], "row": extra_row})
+    fake = _FakeAgent([_GOOD_PATCH, json.dumps(revised)])
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
+
+    assert result["ok"] is True
+    assert result["changed_rows"] == 1
+    assert not result.get("failed_rows")
+    assert not result.get("error")
+    with repo.db_session(db_path) as conn:
+        rows = {c.row: c for c in repo.list_notes_cells_for_run(conn, run_id)}
+        snapshots = repo.fetch_notes_format_snapshots(conn, run_id, _SHEET)
+    assert "text-align: right" in rows[112].html
+    assert rows[113].html == _TABLE_HTML
+    assert snapshots == {112: _TABLE_HTML}
+
+
+@pytest.mark.asyncio
+async def test_formatter_self_check_bad_target_keeps_other_note(
+    monkeypatch, formatter_db,
+):
+    from db import repository as repo
+
+    db_path, _, run_id = formatter_db
+    with repo.db_session(db_path) as conn:
+        repo.upsert_notes_cell(
+            conn, run_id=run_id, sheet=_SHEET, row=113,
+            label="Another note", html=_TABLE_HTML,
+            evidence="Page 3", source_pages=[3],
+        )
+    initial = json.loads(_GOOD_PATCH)
+    initial["cells"].append({**initial["cells"][0], "row": 113})
+    revised = json.loads(json.dumps(initial))
+    revised["cells"][1]["operations"][0]["target"]["table"] = 7
+    fake = _FakeAgent([json.dumps(initial), json.dumps(revised)])
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
+    assert result["changed_rows"] == 1
+    assert result["failed_rows"] == [113]
+    assert result["ok"] is False
+    with repo.db_session(db_path) as conn:
+        rows = {c.row: c for c in repo.list_notes_cells_for_run(conn, run_id)}
+        snapshots = repo.fetch_notes_format_snapshots(conn, run_id, _SHEET)
+    assert "text-align: right" in rows[112].html
+    assert rows[113].html == _TABLE_HTML
+    assert snapshots == {112: _TABLE_HTML}
+
+
 def test_resolve_notes_table_theme_precedence(monkeypatch, formatter_db):
     """Run override (schema v22 snapshot) wins over the firm default env; env
     wins over nothing; unset or malformed env degrades to the HOUSE style.
@@ -926,3 +1073,37 @@ def test_formatter_agent_and_server_resolve_the_same_firm_theme(monkeypatch):
     monkeypatch.delenv("XBRL_NOTES_TABLE_STYLE", raising=False)
     assert (formatting_agent._resolve_notes_table_theme(":memory:", 1)
             == server._notes_table_style())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("repair_ok", [True, False])
+async def test_formatter_malformed_row_gets_one_repair(monkeypatch, formatter_db, repair_ok):
+    invalid = json.loads(_GOOD_PATCH)
+    invalid["cells"][0]["row"] = "112"
+    fake = _FakeAgent([
+        json.dumps(invalid),
+        _GOOD_PATCH if repair_ok else json.dumps({**invalid, "cells": []}),
+        _GOOD_PATCH,
+    ])
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
+    assert result["ok"] is repair_ok
+    assert result["changed_rows"] == (1 if repair_ok else 0)
+    assert fake.calls == (3 if repair_ok else 2)
+    if not repair_ok:
+        assert result["error_type"] == "validation_failed"
+        assert result["confidence"] == invalid["confidence"]
+        assert result["patch"] == invalid
+        assert result["summary"]
+
+
+def test_partition_validates_merged_operations():
+    from notes.formatting_agent import _partition_valid_patch
+
+    good = json.loads(_GOOD_PATCH)["cells"][0]
+    accepted, rejected, errors = _partition_valid_patch(
+        {112: _TABLE_HTML}, {"cells": [good, good]},
+    )
+    assert not errors
+    assert not rejected["cells"]
+    assert accepted["cells"] == [{**good, "operations": good["operations"] * 2}]
+    assert apply_sheet_patch({112: _TABLE_HTML}, accepted).changed_rows == 1
