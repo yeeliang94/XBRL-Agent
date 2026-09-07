@@ -1795,6 +1795,23 @@ Load-bearing invariants:
   note action grid must not acquire an implicit column at responsive widths.
   Pinned by `tests/test_mtool_filing_resolution.py`, `NotesReviewTab`,
   `FilingCoverageFailurePanel`, and `focusedWorkspaceShell` tests.
+- **Operator-selected sheets apply to figures and prose notes.** The modal
+  defaults to all run sheets. Optional `selected_sheets` JSON on detection,
+  notes-preview and patch is a non-empty list validated against the run's
+  numeric and prose destinations. Filter before destination checks; retain
+  aligned note revision entries and reject explicit destinations outside the
+  selection. Never remove excluded sheets or change canonical data. Record
+  selected/excluded sheets and omitted counts in the report and receipt;
+  partial workbooks require review and do not clear run-wide readiness issues.
+  Selection changes invalidate previews, placements and downloadable results.
+  Selection validation reads note sheet names without rendering prose; notes
+  build failures retain the figures and a degraded notes report. Omitted note
+  counts are unknown until prose is built, and zero when notes are disabled.
+  Notes-only detection reports `not_applicable`, never a successful layout check.
+  Sheet selection and destination validation use exact canonical sheet names.
+  Pinned by `tests/test_mtool_sheet_selection.py`, the sheet-selection tests in
+  `tests/test_mtool_routes.py`, and `MtoolFillModal` frontend tests. Structural
+  category repair context is in `docs/HANDOFF-mtool-category-filing.md`.
 - **Current compatibility target is mTool 2.2.** Generated-template adapters
   are verified in automated forward/reverse SOCIE round trips across
   MFRS/MPERS and Company/Group. A genuine mTool 2.2 workbook fingerprint and

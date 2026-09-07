@@ -58,17 +58,73 @@ describe("MtoolFillModal", () => {
     vi.unstubAllGlobals();
   });
 
+  test("selects sheets for detection, notes preview and fill, and clears stale results", async () => {
+    const posts: { url: string; form: FormData }[] = [];
+    mockFetch((url, init) => {
+      if (init?.method === "POST") {
+        const form = init.body as FormData;
+        posts.push({ url, form });
+        if (url.endsWith("/detect-columns")) return Response.json({ detected: {}, confidence: "high", requires_confirmation: false });
+        if (url.endsWith("/notes-preview")) return Response.json({ notes_in_run: 0, will_fill_existing: [], will_create: [], unresolved: [], errors: [] });
+        return patchResponse({ status: "degraded", counts: { written: 7 }, unresolved: [], mismatches: [], skipped_formula: [],
+          sheet_selection: { selected_sheets: ["SOFP-Sub-CuNonCu"], excluded_sheets: ["Notes-RelatedPartytran"], excluded_figures: 12, excluded_notes: 1 } });
+      }
+      if (url.endsWith("/preflight")) return Response.json({ ok: true, blockers: [], warnings: [] });
+      if (url.endsWith("/mtool-notes-fill")) return Response.json({ meta: { counts: { notes: 1 } }, footnotes: [{ source_sheet: "Notes-RelatedPartytran" }] });
+      return Response.json({ ...FILL_DOC, meta: { ...FILL_DOC.meta, sheets_covered: ["SOFP-Sub-CuNonCu", "Notes-RelatedPartytran"] } });
+    });
+    const { rerender } = render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    const related = await screen.findByRole("checkbox", { name: /Related Party Transactions/ });
+    expect(related).toBeChecked();
+    fireEvent.change(screen.getByLabelText("mTool template file"), { target: { files: [new File(["xlsx"], "template.xlsx")] } });
+    await waitFor(() => expect(posts.filter((p) => p.url.endsWith("/notes-preview"))).toHaveLength(1));
+    fireEvent.click(related);
+    await waitFor(() => expect(posts.filter((p) => p.url.endsWith("/notes-preview"))).toHaveLength(2));
+    fireEvent.click(screen.getByRole("button", { name: "Fill" }));
+    await screen.findByText(/Partial workbook — excluded:/);
+    for (const endpoint of ["detect-columns", "notes-preview", "patch"]) {
+      const request = posts.filter((p) => p.url.endsWith(`/${endpoint}`)).slice(-1)[0];
+      expect(JSON.parse(request.form.get("selected_sheets") as string)).toEqual(["SOFP-Sub-CuNonCu"]);
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Clear sheet selection" }));
+    expect(screen.getByRole("button", { name: "Fill" })).toBeDisabled();
+    expect(screen.queryByText(/Partial workbook — excluded:/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Download for review/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Select all sheets" }));
+    expect(related).toBeChecked();
+    rerender(<MtoolFillModal runId={42} open={false} onClose={() => {}} />);
+    rerender(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    expect(await screen.findByRole("checkbox", { name: /Related Party Transactions/ })).toBeChecked();
+  });
+
+  test("notes-only detection explains that no layout check was needed", async () => {
+    mockFetch((url) => {
+      if (url.endsWith("/detect-columns")) return Response.json({ detected: {}, confidence: "not_applicable", requires_confirmation: false });
+      if (url.endsWith("/notes-preview")) return Response.json({ notes_in_run: 1, will_fill_existing: [], will_create: [], unresolved: [], errors: [] });
+      if (url.endsWith("/preflight")) return Response.json({ ok: true, blockers: [], warnings: [] });
+      if (url.endsWith("/mtool-notes-fill")) return Response.json({ meta: { counts: { notes: 1 } }, footnotes: [{ source_sheet: "Notes-CI" }] });
+      return Response.json({ ...FILL_DOC, meta: { ...FILL_DOC.meta, sheets_covered: [], counts: { ...FILL_DOC.meta.counts, writes: 0 } } });
+    });
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    await screen.findByRole("checkbox", { name: "Notes-CI" });
+    fireEvent.change(screen.getByLabelText("mTool template file"), { target: { files: [new File(["xlsx"], "notes.xlsx")] } });
+    await screen.findByText("No figures selected — layout check not needed.");
+    expect(screen.queryByText(/Template layout detected/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/column layout editor/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Fill" })).toBeEnabled();
+  });
+
   test("loads and shows the fill coverage summary", async () => {
     mockFetch((url) => {
       if (url.includes("/mtool-fill")) return new Response(JSON.stringify(FILL_DOC), { status: 200 });
       return new Response("{}", { status: 200 });
     });
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
-    await waitFor(() => expect(screen.getByText(/values will be written/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/values available in this run/i)).toBeTruthy());
     expect(screen.getByText(/7 available figures/)).toBeTruthy();
     expect(screen.getByText(/optional settings/i)).toBeTruthy();
     expect(screen.getByText(/4 values? excluded from this filing/i)).toBeTruthy();
-    expect(screen.getByText(/2 values? still in conflict will be written/i)).toBeTruthy();
+    expect(screen.getByText(/2 values? still in conflict in this run/i)).toBeTruthy();
   });
 
   test("shows canonical filing-field coverage and reviewed exceptions", async () => {
@@ -170,7 +226,7 @@ describe("MtoolFillModal", () => {
 
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
 
-    await waitFor(() => expect(screen.getByText(/values will be written/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/values available in this run/i)).toBeTruthy());
     expect(screen.queryByRole("region", { name: /filing field coverage/i })).toBeNull();
   });
 
@@ -193,7 +249,7 @@ describe("MtoolFillModal", () => {
     vi.stubGlobal("URL", { createObjectURL: () => "blob:x", revokeObjectURL: () => {} });
 
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
-    await waitFor(() => expect(screen.getByText(/values will be written/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/values available in this run/i)).toBeTruthy());
 
     const input = screen.getByLabelText(/mtool template file/i) as HTMLInputElement;
     const file = new File(["x"], "template.xlsx", {
@@ -246,7 +302,7 @@ describe("MtoolFillModal", () => {
     vi.stubGlobal("URL", { createObjectURL: () => "blob:x", revokeObjectURL: () => {} });
 
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
-    await waitFor(() => expect(screen.getByText(/values will be written/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/values available in this run/i)).toBeTruthy());
     const input = screen.getByLabelText(/mtool template file/i);
     fireEvent.change(input, { target: { files: [new File(["x"], "t.xlsx")] } });
     fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
@@ -271,7 +327,7 @@ describe("MtoolFillModal", () => {
       return new Response("{}", { status: 200 });
     });
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
-    await waitFor(() => expect(screen.getByText(/written note\(s\) will be filled/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/written note\(s\) available in this run/i)).toBeTruthy());
     const toggle = screen.getByLabelText(/also fill notes/i) as HTMLInputElement;
     expect(toggle.checked).toBe(true);
   });
@@ -295,7 +351,7 @@ describe("MtoolFillModal", () => {
     });
     vi.stubGlobal("URL", { createObjectURL: () => "blob:x", revokeObjectURL: () => {} });
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
-    await waitFor(() => expect(screen.getByText(/values will be written/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/values available in this run/i)).toBeTruthy());
     fireEvent.change(screen.getByLabelText(/mtool template file/i), {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
@@ -333,7 +389,7 @@ describe("MtoolFillModal", () => {
     });
     vi.stubGlobal("URL", { createObjectURL: () => "blob:x", revokeObjectURL: () => {} });
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
-    await waitFor(() => expect(screen.getByText(/values will be written/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/values available in this run/i)).toBeTruthy());
     fireEvent.change(screen.getByLabelText(/mtool template file/i), {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
@@ -378,7 +434,7 @@ describe("MtoolFillModal", () => {
       return new Response("{}", { status: 200 });
     });
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
-    await waitFor(() => expect(screen.getByText(/written note\(s\) will be filled/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/written note\(s\) available in this run/i)).toBeTruthy());
 
     // Toggle present and ON by default: a template exported straight from mTool
     // has no note spots provisioned, so leaving this off placed zero notes and
@@ -420,7 +476,7 @@ describe("MtoolFillModal", () => {
       return new Response("{}", { status: 200 });
     });
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
-    await waitFor(() => expect(screen.getByText(/written note\(s\) will be filled/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/written note\(s\) available in this run/i)).toBeTruthy());
     fireEvent.change(screen.getByLabelText(/mtool template file/i), {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
@@ -466,7 +522,7 @@ describe("MtoolFillModal", () => {
     });
 
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
-    await waitFor(() => expect(screen.getByText(/written note\(s\) will be filled/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/written note\(s\) available in this run/i)).toBeTruthy());
     fireEvent.change(screen.getByLabelText(/mtool template file/i), {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
@@ -493,7 +549,7 @@ describe("MtoolFillModal", () => {
     });
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
     await waitFor(() =>
-      expect(screen.getByText(/written note\(s\) will be filled/i)).toBeTruthy(),
+      expect(screen.getByText(/written note\(s\) available in this run/i)).toBeTruthy(),
     );
     fireEvent.change(screen.getByLabelText(/mtool template file/i), {
       target: { files: [new File(["x"], "t.xlsx")] },
@@ -524,7 +580,7 @@ describe("MtoolFillModal", () => {
       return new Response("{}", { status: 200 });
     });
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
-    await waitFor(() => expect(screen.getByText(/written note\(s\) will be filled/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/written note\(s\) available in this run/i)).toBeTruthy());
     fireEvent.change(screen.getByLabelText(/mtool template file/i), {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
@@ -580,7 +636,7 @@ describe("MtoolFillModal", () => {
     });
     vi.stubGlobal("URL", { createObjectURL: () => "blob:x", revokeObjectURL: () => {} });
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
-    await waitFor(() => expect(screen.getByText(/written note\(s\) will be filled/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/written note\(s\) available in this run/i)).toBeTruthy());
     fireEvent.click(screen.getByLabelText(/add missing note spots/i));
     fireEvent.change(screen.getByLabelText(/mtool template file/i), {
       target: { files: [new File(["x"], "t.xlsx")] },
@@ -641,7 +697,7 @@ describe("MtoolFillModal", () => {
       return new Response("{}", { status: 200 });
     });
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
-    await waitFor(() => expect(screen.getByText(/written note\(s\) will be filled/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/written note\(s\) available in this run/i)).toBeTruthy());
     fireEvent.change(screen.getByLabelText(/mtool template file/i), {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
@@ -681,7 +737,7 @@ describe("MtoolFillModal", () => {
       return new Response("{}", { status: 200 });
     });
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
-    await waitFor(() => expect(screen.getByText(/values will be written/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/values available in this run/i)).toBeTruthy());
     fireEvent.change(screen.getByLabelText(/mtool template file/i), {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
@@ -721,7 +777,7 @@ describe("MtoolFillModal", () => {
       return new Response("{}", { status: 200 });
     });
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
-    await waitFor(() => expect(screen.getByText(/values will be written/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/values available in this run/i)).toBeTruthy());
     fireEvent.change(screen.getByLabelText(/mtool template file/i), {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
@@ -760,7 +816,7 @@ describe("MtoolFillModal", () => {
     });
 
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
-    await waitFor(() => expect(screen.getByText(/values will be written/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/values available in this run/i)).toBeTruthy());
     fireEvent.change(screen.getByLabelText(/mtool template file/i), {
       target: { files: [new File(["x"], "candidate.xlsx")] },
     });
@@ -803,7 +859,7 @@ describe("MtoolFillModal", () => {
     });
 
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
-    await waitFor(() => expect(screen.getByText(/values will be written/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/values available in this run/i)).toBeTruthy());
     fireEvent.change(screen.getByLabelText(/mtool template file/i), {
       target: { files: [new File(["x"], "socie.xlsx")] },
     });
@@ -852,7 +908,7 @@ describe("MtoolFillModal", () => {
       return new Response("{}", { status: 200 });
     });
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
-    await waitFor(() => expect(screen.getByText(/values will be written/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/values available in this run/i)).toBeTruthy());
     const input = screen.getByLabelText(/mtool template file/i);
     fireEvent.change(input, { target: { files: [new File(["a"], "a.xlsx")] } });
     fireEvent.change(input, { target: { files: [new File(["b"], "b.xlsx")] } });
@@ -877,7 +933,7 @@ describe("MtoolFillModal", () => {
       return new Response("{}", { status: 200 });
     });
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
-    await waitFor(() => expect(screen.getByText(/values will be written/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/values available in this run/i)).toBeTruthy());
     const input = screen.getByLabelText(/mtool template file/i);
     fireEvent.change(input, { target: { files: [new File(["x"], "t.xlsx")] } });
     fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
@@ -945,7 +1001,7 @@ describe("MtoolFillModal", () => {
     });
     vi.stubGlobal("URL", { createObjectURL: () => "blob:x", revokeObjectURL: () => {} });
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
-    await waitFor(() => expect(screen.getByText(/values will be written/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/values available in this run/i)).toBeTruthy());
     fireEvent.change(screen.getByLabelText(/mtool template file/i), {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
@@ -988,7 +1044,7 @@ describe("MtoolFillModal", () => {
     });
     vi.stubGlobal("URL", { createObjectURL: () => "blob:x", revokeObjectURL: () => {} });
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
-    await waitFor(() => expect(screen.getByText(/values will be written/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/values available in this run/i)).toBeTruthy());
     fireEvent.change(screen.getByLabelText(/mtool template file/i), {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
@@ -1056,7 +1112,7 @@ describe("RunDetailView mTool button", () => {
       <MtoolFillModal runId={42} open onClose={() => {}} />,
     );
     await waitFor(() =>
-      expect(screen.getByText(/written note\(s\) will be filled/i)).toBeTruthy(),
+      expect(screen.getByText(/written note\(s\) available in this run/i)).toBeTruthy(),
     );
 
     const create = () =>
@@ -1069,7 +1125,7 @@ describe("RunDetailView mTool button", () => {
     rerender(<MtoolFillModal runId={42} open={false} onClose={() => {}} />);
     rerender(<MtoolFillModal runId={42} open onClose={() => {}} />);
     await waitFor(() =>
-      expect(screen.getByText(/written note\(s\) will be filled/i)).toBeTruthy(),
+      expect(screen.getByText(/written note\(s\) available in this run/i)).toBeTruthy(),
     );
     expect(create().checked).toBe(true);
   });
@@ -1082,7 +1138,7 @@ describe("RunDetailView mTool button", () => {
     render(<RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />);
     fireEvent.click(screen.getByRole("button", { name: /fill mtool template/i }));
     const dialog = await screen.findByRole("dialog", { name: /fill mtool template/i });
-    await waitFor(() => expect(within(dialog).getByText(/values will be written/i)).toBeTruthy());
+    await waitFor(() => expect(within(dialog).getByText(/values available in this run/i)).toBeTruthy());
   });
 
   test("button is disabled on a running run", () => {
@@ -1127,7 +1183,7 @@ describe("mTool filing gates", () => {
   async function openWith(handler: (url: string, init?: RequestInit) => Response) {
     mockFetch(handler);
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
-    await waitFor(() => expect(screen.getByText(/values will be written/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/values available in this run/i)).toBeTruthy());
   }
 
   function chooseTemplate() {

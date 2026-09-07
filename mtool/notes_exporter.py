@@ -42,6 +42,17 @@ from mtool.notes_decorate import (
 from mtool.offline_fill import EXCEL_CELL_CHAR_LIMIT, wrap_footnote_html
 
 
+def notes_source_sheets(db_path: str | Path, run_id: int) -> set[str]:
+    """Read selection names without rendering or decorating note content."""
+    conn = sqlite3.connect(str(db_path))
+    try:
+        return {row[0] for row in conn.execute(
+            "SELECT DISTINCT sheet FROM notes_cells WHERE run_id = ?", (run_id,)
+        ) if row[0]}
+    finally:
+        conn.close()
+
+
 def build_notes_fill_doc(
     db_path: str | Path,
     run_id: int,

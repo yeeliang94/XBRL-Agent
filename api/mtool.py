@@ -46,12 +46,13 @@ from mtool.column_detect import (
 from mtool.exporter import build_fill_doc
 from mtool.template_map import inspect_template, resolve_filing_doc
 from mtool.notes_decorate import NotesTableStyle
-from mtool.notes_exporter import build_notes_fill_doc, build_notes_snapshot
+from mtool.notes_exporter import build_notes_fill_doc, build_notes_snapshot, notes_source_sheets
 from mtool.offline_fill import (
     fill_footnotes, fill_workbook, validate_input, validate_notes_input)
 from mtool.preflight import evaluate_preflight, written_keys_from_doc
 from mtool.receipt import (
     fetch_receipts, record_receipt_download, write_fill_receipt)
+from mtool.sheet_selection import select_sheets, scope_notes, validate_note_destinations
 from mtool.translation import UnknownUnitClass
 from concept_model.filing_targets import semantic_coverage_for_run
 
@@ -425,6 +426,23 @@ def _register_artifact(run_id: int, tmp: Path, path: Path, *, status: str,
     return artifact_id
 
 
+def _select_sheets_or_422(raw, doc, note_sheets):
+    try:
+        return select_sheets(raw, doc, note_sheets)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _validate_selected_note_targets(notes_doc, selection, data):
+    if selection is None:
+        return
+    from mtool.offline_fill import get_defined_names
+    try:
+        validate_note_destinations(notes_doc, selection, get_defined_names(data, "fn_"))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.post("/api/runs/{run_id}/mtool-fill/patch")
 def patch_mtool_template(
     request: Request,
@@ -432,6 +450,7 @@ def patch_mtool_template(
     template: UploadFile = File(...),
     column_map: str | None = Form(default=None),
     filing_targets: str | None = Form(default=None),
+    selected_sheets: str | None = Form(default=None),
     strict: bool = Form(default=True),
     force_recalc: bool = Form(default=False),
     fill_notes: bool = Form(default=True),
@@ -465,14 +484,21 @@ def patch_mtool_template(
     removed; on success it survives only until the artifact expires.
     """
     run, doc, standard, level, denomination = _build_doc(run_id)
-    if not doc["writes"]:
-        raise HTTPException(
-            status_code=422,
-            detail="Run has no fillable facts (nothing to write).")
 
     # Notes styling mode: "styled" (default) or "none" (diagnostic). Validated
     # here so a typo fails loudly, before any upload is read.
     notes_decorate = _resolve_notes_decorate(notes_styling)
+    selection = None
+    note_sheets = set()
+    if selected_sheets is not None or not doc["writes"]:
+        note_sheets = notes_source_sheets(server.AUDIT_DB_PATH, run_id)
+        doc, selection = _select_sheets_or_422(selected_sheets, doc, note_sheets)
+        if selection is not None:
+            note_sheets &= set(selection["selected_sheets"])
+    if not doc["writes"] and not (fill_notes and note_sheets):
+        raise HTTPException(status_code=422, detail="Run has no fillable facts or enabled notes in the selected sheets.")
+    if selection is not None and not fill_notes:
+        selection["excluded_notes"] = 0
 
     # Assess readiness without blocking workbook preparation.
     # Conflicts come from the DOC's own fact snapshot, not a second DB read —
@@ -552,7 +578,7 @@ def patch_mtool_template(
             trusted_generated = (
                 inspection["semantic_source"] == "generated-targets"
             )
-            if (overall_confidence(detected) != "high"
+            if doc["writes"] and (overall_confidence(detected) != "high"
                     or needs_confirmation(detected)) and not trusted_generated:
                 raise HTTPException(
                     status_code=422,
@@ -588,7 +614,14 @@ def patch_mtool_template(
                 },
             )
 
-        errors = validate_input(ready)
+        if selection is not None:
+            for write in ready["writes"]:
+                if write["sheet"] not in selection["selected_sheets"]:
+                    raise HTTPException(status_code=422, detail=(
+                        f"Figure {write.get('label') or write.get('concept_uuid')!r} resolved "
+                        f"to sheet {write['sheet']!r} outside the selected sheets. "
+                        "Recheck the sheet selection and filing destination."))
+        errors = validate_input(ready) if ready["writes"] else []
         if errors:
             raise HTTPException(status_code=422,
                                 detail={"input_errors": errors})
@@ -631,11 +664,15 @@ def patch_mtool_template(
                     server.AUDIT_DB_PATH, run_id,
                     style=_resolve_notes_style(run),
                     decorate=notes_decorate)
+                notes_doc = scope_notes(notes_doc, selection)
+                if not doc["writes"] and not notes_doc["footnotes"]:
+                    raise HTTPException(status_code=422, detail="Run has no fillable facts or enabled notes in the selected sheets.")
                 # Operator-chosen placements for ambiguous/near-miss notes
                 # (the preview's decision UI). 422s on a malformed payload —
                 # a bad explicit target must fail loudly, not fall back to
                 # the label guess the operator just overrode.
                 _apply_notes_targets(notes_doc, notes_targets)
+                _validate_selected_note_targets(notes_doc, selection, data)
                 if notes_doc["footnotes"]:
                     notes_errors = validate_notes_input(notes_doc)
                     if notes_errors:
@@ -733,6 +770,10 @@ def patch_mtool_template(
         summary = _full_report(report, notes_report)
         summary["filing_coverage"] = filing_coverage
         summary["preflight"] = preflight
+        if selection is not None:
+            summary["sheet_selection"] = selection
+            if selection["excluded_sheets"]:
+                summary["status"] = "degraded"
         summary["request_id"] = request.state.mtool_request_id
         if not preflight["ok"]:
             summary["status"] = "degraded"
@@ -849,6 +890,7 @@ def download_mtool_artifact(run_id: int, artifact_id: str,
 def detect_mtool_columns(
     run_id: int,
     template: UploadFile = File(...),
+    selected_sheets: str | None = Form(default=None),
 ):
     """Detect the uploaded template's column layout WITHOUT writing anything.
 
@@ -862,6 +904,9 @@ def detect_mtool_columns(
     fallback for callers that skip this step.
     """
     run, doc = _build_doc(run_id)[:2]
+    if selected_sheets is not None:
+        note_sheets = notes_source_sheets(server.AUDIT_DB_PATH, run_id)
+        doc, _ = _select_sheets_or_422(selected_sheets, doc, note_sheets)
 
     raw = _read_capped(template, _MAX_TEMPLATE_BYTES)
     if not raw:
@@ -893,9 +938,9 @@ def detect_mtool_columns(
         known = describe_template(fingerprint)
         return JSONResponse({
             "detected": detected,
-            "confidence": overall_confidence(detected),
+            "confidence": overall_confidence(detected) if doc["writes"] else "not_applicable",
             # The real gate — see mtool/column_detect.needs_confirmation.
-            "requires_confirmation": needs_confirmation(detected),
+            "requires_confirmation": bool(doc["writes"]) and needs_confirmation(detected),
             "template_fingerprint": fingerprint,
             "template_known": known is not None,
             "template_description": (known or {}).get("name"),
@@ -911,6 +956,7 @@ def detect_mtool_columns(
 def preview_mtool_notes(
     run_id: int,
     template: UploadFile = File(...),
+    selected_sheets: str | None = Form(default=None),
     create_missing_notes: bool = Form(default=True),
     notes_targets: str | None = Form(default=None),
     notes_styling: str = Form(default="styled"),
@@ -935,6 +981,12 @@ def preview_mtool_notes(
     notes_doc = build_notes_fill_doc(
         server.AUDIT_DB_PATH, run_id, style=_resolve_notes_style(run),
         decorate=_resolve_notes_decorate(notes_styling))
+    selection = None
+    if selected_sheets is not None:
+        _, selection = _select_sheets_or_422(
+            selected_sheets, _build_doc(run_id)[1],
+            notes_source_sheets(server.AUDIT_DB_PATH, run_id))
+        notes_doc = scope_notes(notes_doc, selection)
     # Re-preview honours the operator's placements so the plan updates as
     # decisions are made (same seam the patch endpoint applies).
     _apply_notes_targets(notes_doc, notes_targets)
@@ -962,6 +1014,7 @@ def preview_mtool_notes(
                 detail="Upload is not a readable .xlsx workbook. Export it from mTool again and choose the new file."
             ) from exc
 
+        _validate_selected_note_targets(notes_doc, selection, data)
         existing_slots = len(_parse_template_or_422(
             "footnote inspection", inspect_footnotes, data)["targets"])
         base = {
