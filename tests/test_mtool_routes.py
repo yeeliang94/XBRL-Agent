@@ -1210,3 +1210,160 @@ def test_conflicting_period_blocks_never_produce_an_artifact(client, endpoint, e
     with sqlite3.connect(db) as conn:
         assert conn.execute("SELECT COUNT(*) FROM mtool_fill_receipts").fetchone()[0] == 0
     assert not list((Path(srv.OUTPUT_DIR) / "_mtool_tmp").iterdir())
+
+
+def test_sheet_selection_excludes_unmappable_figures_and_notes_and_records_receipt(client, monkeypatch):
+    import copy
+    import api.mtool as m
+    tc, db, _ = client
+    run_id = _make_run(db)
+    n = _seed_distinct_leaves(db, run_id)
+    _add_note(db, run_id, "Notes-RelatedPartytran", 12, "Related party transactions", "<p>Excluded</p>")
+    run, doc, standard, level, denomination = m._build_doc(run_id)
+    included = doc["writes"][0]["sheet"]
+    excluded = "Notes-RelatedPartytran"
+    extra = copy.deepcopy(doc["writes"][0])
+    extra.update(sheet=excluded, concept_uuid="missing-category")
+    doc["writes"].append(extra)
+    doc["sheets"][excluded] = {"label_column": None, "columns": {"current_year": None}}
+    monkeypatch.setattr(m, "_build_doc", lambda _: (run, doc, standard, level, denomination))
+    data = {"selected_sheets": json.dumps([included])}
+    detection = tc.post(f"/api/runs/{run_id}/mtool-fill/detect-columns", files=_upload_our_template(), data=data)
+    assert excluded not in detection.json()["detected"]
+    preview = tc.post(f"/api/runs/{run_id}/mtool-fill/notes-preview", files=_upload_our_template(), data=data)
+    assert preview.json()["notes_in_run"] == 0
+    result = tc.post(f"/api/runs/{run_id}/mtool-fill/patch", files=_upload_our_template(), data=data)
+    assert result.status_code == 200, result.text
+    body = result.json()
+    assert body["counts"]["written"] == n
+    assert body["sheet_selection"]["excluded_sheets"] == [excluded]
+    assert body["sheet_selection"]["excluded_notes"] == 1
+    assert body["status"] == "degraded"
+    receipt = tc.get(f"/api/runs/{run_id}/mtool-fill/receipts").json()["receipts"][0]
+    assert receipt["report"]["sheet_selection"] == body["sheet_selection"]
+
+
+@pytest.mark.parametrize("selection", ['[]', '["Unknown"]', '{}'])
+def test_patch_rejects_invalid_sheet_selection(client, selection):
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_distinct_leaves(db, run_id)
+    result = tc.post(f"/api/runs/{run_id}/mtool-fill/patch", files=_upload_our_template(), data={"selected_sheets": selection})
+    assert result.status_code == 422
+
+
+# Reuse the stdlib zip/XML mTool text-block fixture, including existing payloads.
+from test_mtool_offline_fill import footnote_template  # noqa: E402, F401
+
+
+def test_sheet_selection_can_fill_only_notes_and_preserves_excluded_sheet(client, footnote_template):
+    import zipfile
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _add_note(db, run_id, "Notes-CI", 14, "Corporate information", "<p>Included corporate narrative</p>")
+    _add_note(db, run_id, "Notes-Listofnotes", 132, "Property, plant and equipment", "<p>Excluded narrative</p>")
+    files = {"template": ("notes.xlsx", Path(footnote_template).read_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+    data = {"selected_sheets": '["Notes-CI"]'}
+    preview = tc.post(f"/api/runs/{run_id}/mtool-fill/notes-preview", files=files, data=data)
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["notes_in_run"] == 1
+    assert len(preview.json()["will_create"]) == 1
+    result = tc.post(f"/api/runs/{run_id}/mtool-fill/patch", files=files, data=data)
+    assert result.status_code == 200, result.text
+    assert result.json()["counts"]["written"] == 0
+    assert result.json()["notes"]["counts"]["written"] == 1
+    output = _download(tc, run_id, result)
+    with zipfile.ZipFile(footnote_template) as before, zipfile.ZipFile(io.BytesIO(output)) as after:
+        assert before.read("xl/worksheets/sheet1.xml") == after.read("xl/worksheets/sheet1.xml")
+        assert b"Included corporate narrative" in after.read("xl/sharedStrings.xml")
+        assert b"Excluded narrative" not in after.read("xl/sharedStrings.xml")
+    receipts = tc.get(f"/api/runs/{run_id}/mtool-fill/receipts").json()["receipts"]
+    assert receipts[0]["notes_snapshot"]["notes_count"] == 1
+
+
+@pytest.mark.parametrize("target", [{"sheet": "Notes-Listofnotes", "cell": "E132"}, {"key": "fn_14"}])
+@pytest.mark.parametrize("endpoint", ["notes-preview", "patch"])
+def test_selected_notes_cannot_be_redirected_to_excluded_sheet(client, footnote_template, target, endpoint):
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _add_note(db, run_id, "Notes-CI", 14, "Corporate information", "<p>Included</p>")
+    files = {"template": ("notes.xlsx", Path(footnote_template).read_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+    result = tc.post(f"/api/runs/{run_id}/mtool-fill/{endpoint}", files=files,
+                     data={"selected_sheets": '["Notes-CI"]', "notes_targets": json.dumps({"0": target})})
+    assert result.status_code == 422, result.text
+    assert "selected sheets" in result.json()["detail"]
+
+
+@pytest.mark.parametrize("endpoint", ["patch", "detect-columns"])
+@pytest.mark.parametrize("fill_notes", [True, False])
+def test_selected_figures_survive_notes_build_failure(client, monkeypatch, endpoint, fill_notes):
+    import api.mtool as m
+    tc, db, _ = client
+    run_id = _make_run(db)
+    n = _seed_distinct_leaves(db, run_id)
+    sheet = m._build_doc(run_id)[1]["writes"][0]["sheet"]
+
+    def fail_notes(*args, **kwargs):
+        raise RuntimeError("notes decoration failed")
+
+    monkeypatch.setattr(m, "build_notes_fill_doc", fail_notes)
+    result = tc.post(f"/api/runs/{run_id}/mtool-fill/{endpoint}",
+                     files=_upload_our_template(),
+                     data={"selected_sheets": json.dumps([sheet]), "fill_notes": str(fill_notes).lower()})
+    assert result.status_code == 200, result.text
+    if endpoint == "patch":
+        assert result.json()["counts"]["written"] == n
+        if fill_notes:
+            assert result.json()["notes"]["status"] == "degraded"
+            assert result.json()["notes"]["errors"][0]["code"] == "notes_fill_failed"
+            assert result.json()["sheet_selection"]["excluded_notes"] is None
+        else:
+            assert result.json()["sheet_selection"]["excluded_notes"] == 0
+        assert _download(tc, run_id, result)
+
+
+def test_notes_only_detection_is_not_applicable(client, footnote_template):
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _add_note(db, run_id, "Notes-CI", 14, "Corporate information", "<p>Included</p>")
+    result = tc.post(f"/api/runs/{run_id}/mtool-fill/detect-columns",
+                     files={"template": ("notes.xlsx", Path(footnote_template).read_bytes())},
+                     data={"selected_sheets": '["Notes-CI"]'})
+    assert result.status_code == 200, result.text
+    assert result.json()["confidence"] == "not_applicable"
+    assert result.json()["requires_confirmation"] is False
+
+
+def test_selected_figure_destination_guard_names_figure_and_sheet(client, monkeypatch):
+    import api.mtool as m
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_distinct_leaves(db, run_id)
+    doc = m._build_doc(run_id)[1]
+    resolve = m.resolve_filing_doc
+
+    def resolve_outside(*args, **kwargs):
+        ready, coverage = resolve(*args, **kwargs)
+        ready["writes"][0].update(sheet="Unexpected-Sheet", label="Cash and cash equivalents")
+        return ready, coverage
+
+    monkeypatch.setattr(m, "resolve_filing_doc", resolve_outside)
+    result = tc.post(f"/api/runs/{run_id}/mtool-fill/patch", files=_upload_our_template(),
+                     data={"selected_sheets": json.dumps([doc["writes"][0]["sheet"]])})
+    assert result.status_code == 422, result.text
+    assert "Cash and cash equivalents" in result.json()["detail"]
+    assert "Unexpected-Sheet" in result.json()["detail"]
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM mtool_fill_receipts").fetchone()[0] == 0
+
+
+def test_notes_source_sheets_are_distinct_and_run_scoped(client):
+    from mtool.notes_exporter import notes_source_sheets
+    _, db, _ = client
+    run_id = _make_run(db)
+    other_id = _make_run(db)
+    _add_note(db, run_id, "Notes-CI", 14, "Corporate information", "<p>One</p>")
+    _add_note(db, run_id, "Notes-CI", 15, "Address", "<p>Two</p>")
+    _add_note(db, other_id, "Notes-Listofnotes", 132, "PPE", "<p>Other</p>")
+    assert notes_source_sheets(db, run_id) == {"Notes-CI"}
+    assert notes_source_sheets(db, other_id + 1) == set()

@@ -3,6 +3,7 @@ import { ApiError, userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { denominationLabel } from "../lib/vocabulary";
+import { MtoolSheetSelection } from "./MtoolSheetSelection";
 import { FileDropzone } from "./FileDropzone";
 import {
   FilingCoverageFailurePanel,
@@ -129,6 +130,7 @@ interface NotesPreview {
 type NoteTarget = { key?: string; sheet?: string; cell?: string };
 
 interface ReportSummary {
+  sheet_selection?: { selected_sheets: string[]; excluded_sheets: string[]; excluded_figures: number; excluded_notes: number | null };
   status: string;
   numeric_status?: string;
   request_id?: string;
@@ -486,6 +488,9 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
   const [columnPrompt, setColumnPrompt] = useState<string | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
+  const [notesSheets, setNotesSheets] = useState<string[]>([]);
+  const [selectedSheets, setSelectedSheets] = useState<string[] | null>(null);
+  const availableSheets = Array.from(new Set([...(meta?.sheets_covered ?? []), ...notesSheets])).sort();
   const [busy, setBusy] = useState(false);
   const [report, setReport] = useState<ReportSummary | null>(null);
   const [patchErr, setPatchErr] = useState<string | null>(null);
@@ -559,6 +564,8 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
     setReadinessErr(null);
     setMeta(null);
     setNotesCount(null);
+    setNotesSheets([]);
+    setSelectedSheets(null);
     setNotesStyling("styled");
     // This modal stays MOUNTED between sessions, so any choice not reset here
     // silently persists into the next fill. Both of these advertise a default
@@ -604,7 +611,12 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
         if (!r.ok) throw await responseError(r);
         return r.json();
       })
-      .then((doc) => { if (current()) setNotesCount(doc?.meta?.counts?.notes ?? null); })
+      .then((doc) => { if (current()) {
+        setNotesCount(doc?.meta?.counts?.notes ?? null);
+        setNotesSheets(Array.from(new Set<string>((doc?.footnotes ?? [])
+          .map((note: { source_sheet?: string }) => note.source_sheet)
+          .filter((sheet: unknown): sheet is string => typeof sheet === "string"))));
+      } })
       .catch((e) => { if (current()) setPreviewErr(`Could not load the notes summary. ${fillErrorMessage(e)} Notes will still be attempted during filling.`); });
     return () => {
       sessionSeq.current += 1;
@@ -617,7 +629,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
     setReport(null);
     setDownloaded(false);
     setDownloadErr(null);
-  }, [file, fillNotes, createMissingNotes, notesStyling, noteTargets, columnMap, filingTargets]);
+  }, [file, fillNotes, createMissingNotes, notesStyling, noteTargets, columnMap, filingTargets, selectedSheets]);
 
   useEffect(() => { setFilingTargets({}); setFilingFailure(null); }, [file]);
 
@@ -631,7 +643,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
     Object.keys(noteTargets).length > 0 ? JSON.stringify(noteTargets) : null;
 
   const submit = async () => {
-    if (!file || busy) return;
+    if (!file || busy || selectedSheets?.length === 0) return;
     const session = sessionSeq.current;
     const current = () => session === sessionSeq.current;
     detectSeq.current += 1;
@@ -649,6 +661,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
     try {
       const form = new FormData();
       form.append("template", file);
+      if (selectedSheets !== null) form.append("selected_sheets", JSON.stringify(selectedSheets));
       form.append("strict", "true");
       form.append("fill_notes", fillNotes ? "true" : "false");
       form.append("create_missing_notes", createMissingNotes ? "true" : "false");
@@ -765,7 +778,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
   // Dry-run diagnostic: what would fill / get created / stay unresolved, and
   // how many fn_* slots the uploaded template exposes. Writes nothing. Sends
   // the operator's placement decisions so a re-check reflects them.
-  const runPreview = async (selectedFile?: File, resetTargets = false) => {
+  const runPreview = async (selectedFile?: File, resetTargets = false, sheets = selectedSheets) => {
     const targetFile = selectedFile ?? file;
     if (!targetFile) return;
     const seq = ++previewSeq.current;
@@ -776,6 +789,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
     try {
       const form = new FormData();
       form.append("template", targetFile);
+      if (sheets !== null) form.append("selected_sheets", JSON.stringify(sheets));
       form.append("create_missing_notes", createMissingNotes ? "true" : "false");
       form.append("notes_styling", notesStyling);
       const targets = resetTargets ? null : notesTargetsPayload();
@@ -810,7 +824,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
   // Up-front column pre-flight: detect the template's layout the moment a file
   // is chosen so the operator confirms columns alongside the notes check,
   // instead of hitting a post-submit 422. Writes nothing.
-  const runDetect = async (f: File) => {
+  const runDetect = async (f: File, sheets = selectedSheets) => {
     const seq = ++detectSeq.current;
     const stale = () => seq !== detectSeq.current;
     setDetectBusy(true);
@@ -821,6 +835,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
     try {
       const form = new FormData();
       form.append("template", f);
+      if (sheets !== null) form.append("selected_sheets", JSON.stringify(sheets));
       const resp = await fetch(`/api/runs/${runId}/mtool-fill/detect-columns`, {
         method: "POST",
         body: form,
@@ -893,6 +908,30 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
     ? c.excluded_matrix_socie + c.excluded_not_disclosed +
       c.excluded_out_of_scope + c.excluded_no_value
     : 0;
+  const changeSheets = (sheets: string[] | null) => {
+    setSelectedSheets(sheets);
+    previewSeq.current += 1;
+    detectSeq.current += 1;
+    setPreviewBusy(false);
+    setDetectBusy(false);
+    setPreview(null);
+    setPreviewErr(null);
+    setNoteTargets({});
+    setFilingTargets({});
+    setFilingFailure(null);
+    setPatchErr(null);
+    setReport(null);
+    setColumnMap(null);
+    setColumnConfidence(null);
+    setColumnPrompt(null);
+    setDimensionalSheets([]);
+    setDetectErr(null);
+    if (file && sheets?.length !== 0) {
+      void runDetect(file, sheets);
+      if (fillNotes && notesCount !== 0) void runPreview(file, true, sheets);
+    }
+  };
+
   return (
     <div
       style={styles.overlay}
@@ -966,13 +1005,17 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
               setPreview(null); // a different template ⇒ a different plan
               setPreviewErr(null);
               setNoteTargets({}); // decisions were made against the old template
-              runDetect(f); // confirm the column layout up front
-              if (notesCount !== 0 && fillNotes) {
+              if (selectedSheets?.length !== 0) void runDetect(f);
+              if (selectedSheets?.length !== 0 && notesCount !== 0 && fillNotes) {
                 void runPreview(f, true);
               }
             }}
           />
         </details>
+
+        {availableSheets.length > 0 && (
+          <MtoolSheetSelection sheets={availableSheets} selected={selectedSheets} onChange={changeSheets} />
+        )}
 
         {patchErr && (
           <div role="alert" style={ui.alertError}>Fill failed: {patchErr}</div>
@@ -1052,7 +1095,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
         {meta && (
           <div style={{ marginBottom: pwc.space.lg }}>
             <div style={styles.statLine}>
-              <strong>{c!.writes}</strong> values will be written across{" "}
+              <strong>{c!.writes}</strong> values available in this run across{" "}
               {meta.sheets_covered.length} sheet(s) &middot; {meta.filing_standard.toUpperCase()}{" "}
               {meta.filing_level} &middot; denomination: {meta.denomination ? denominationLabel(meta.denomination) : "unknown"}
             </div>
@@ -1063,12 +1106,12 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
             )}
             {c!.conflict_writes > 0 && (
               <div style={{ ...styles.statLine, color: pwc.orange700 }}>
-                {`${c!.conflict_writes} ${c!.conflict_writes === 1 ? "value" : "values"} still in conflict will be written — resolve ${c!.conflict_writes === 1 ? "it" : "them"} in Review values first.`}
+                {`${c!.conflict_writes} ${c!.conflict_writes === 1 ? "value" : "values"} still in conflict in this run — resolve ${c!.conflict_writes === 1 ? "it" : "them"} in Review values first.`}
               </div>
             )}
             {notesCount !== null && (
               <div style={styles.statLine}>
-                <strong>{notesCount}</strong> written note(s) will be filled in
+                <strong>{notesCount}</strong> written note(s) available in this run
               </div>
             )}
           </div>
@@ -1192,6 +1235,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
             Couldn&apos;t read the template&apos;s columns: {detectErr}
           </div>
         )}
+        {file && columnConfidence === "not_applicable" && !detectBusy && !detectErr && <p role="status" style={styles.statLine}>No figures selected — layout check not needed.</p>}
         {file && columnConfidence === "high" && !columnMap && !detectBusy && !detectErr && <p role="status" style={styles.statLine}>Template layout detected. Filing destinations are checked when you fill.</p>}
         {dimensionalSheets.length > 0 && !detectBusy && !detectErr && (
           <div
@@ -1217,7 +1261,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
 
         {fillNotes && (
           <div style={{ marginBottom: pwc.space.md }}>
-            {file && !previewBusy && <button type="button" onClick={() => void runPreview()} disabled={busy} style={ui.buttonGhost} className={uiClass.btnGhost}>Check notes</button>}
+            {file && selectedSheets?.length !== 0 && !previewBusy && <button type="button" onClick={() => void runPreview()} disabled={busy} style={ui.buttonGhost} className={uiClass.btnGhost}>Check notes</button>}
             {previewBusy && (
               <div style={{ color: pwc.grey500, fontSize: 12 }}>Checking note placement…</div>
             )}
@@ -1495,6 +1539,9 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                 ? `Template filled — ${report.counts.written} values written.`
                 : `Template filled with items to review — ${report.counts.written} values written.`}
             </div>
+            {Boolean(report.sheet_selection?.excluded_sheets.length) && <p style={{ overflowWrap: "anywhere" }}>
+              Partial workbook — excluded: {report.sheet_selection?.excluded_sheets.join(", ")}. {report.sheet_selection?.excluded_figures} figures and {report.sheet_selection?.excluded_notes ?? "an unknown number of"} notes were left out.
+            </p>}
             <p style={{ fontSize: 12 }}>Download the workbook, review any items listed here, then open it in mTool to Validate &amp; Generate.</p>
             {report.request_id && <div style={{ fontSize: 12 }}>Support reference: {report.request_id}{report.receipt_id ? ` · Fill record ${report.receipt_id}` : ""}</div>}
             {report.filing_coverage && (
@@ -1638,7 +1685,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
             type="button"
             ref={fillButtonRef}
             onClick={report ? () => setReport(null) : submit}
-            disabled={!file || busy || downloading}
+            disabled={!file || busy || downloading || selectedSheets?.length === 0}
             className={report ? uiClass.btnSecondary : uiClass.btnPrimary}
             style={report ? ui.buttonSecondary : ui.buttonPrimary}
           >
