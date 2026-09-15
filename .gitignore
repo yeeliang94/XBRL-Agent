@@ -43,3 +43,12 @@ XBRL-Agent/
 
 # Phase 4.2 A/B harness scratch (live-run DBs, rendered xlsx, copied PDFs)
 ab_work/
+
+# AI working plans, handoffs, and investigation reports (local only)
+/docs/local/
+# Catch working plans accidentally written in the old location
+/docs/PLAN*.md
+/docs/PLAN*.html
+/docs/PRD*.md
+/docs/HANDOFF*.md
+/docs/AGENT-BRIEF*.md

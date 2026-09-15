@@ -10,13 +10,16 @@ extraction.
 
 ## Architecture
 
-```
-PDF + scout (optional) → coordinator → N extraction agents (parallel) ─┐
-                                    → M notes agents (parallel)       ─┤→ workbook_merger → filled.xlsx
-                                                                       └→ cross_checks
+```text
+PDF / Word upload → PDF source → scout and extraction agents
+                              → canonical concept facts and notes
+                              → review and cross-checks → Excel export
 ```
 
-Full module map in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Canonical concepts are the required extraction, review, and export path.
+Word uploads retain the original document and convert to PDF for extraction.
+See the [documentation index](docs/README.md) for maintained references and
+module locations.
 
 ## Quick Start
 
@@ -136,17 +139,21 @@ See `.env.example` for all options. Key settings:
 - `SCOUT_MODEL` — legacy scout-model fallback; a role override saved under
   Settings takes precedence
 
+## Local application data
+
+`output/` is ignored by Git and stores application data: the run database,
+saved settings, uploaded source documents, filled workbooks, and agent traces.
+CLI runs use `run_001`-style folders; web sessions use UUID folders. Do not
+remove this directory as build-cache cleanup. The server supports an
+`XBRL_OUTPUT_DIR` override; `XBRL_SETTINGS_FILE` can override the settings path.
+
 ## Documentation
 
-- **[CLAUDE.md](CLAUDE.md)** — AI-agent context pack: invariants, commands,
-  and "how to work here" guidance
-- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — module map + data flow
-- **[docs/NOTES-PIPELINE.md](docs/NOTES-PIPELINE.md)** — notes subsystem
-  deep-dive
-- **[docs/MPERS.md](docs/MPERS.md)** — MPERS filing-standard deep-dive
-- **[docs/SYNC-MATRIX.md](docs/SYNC-MATRIX.md)** — cross-file impact for a
-  given change
-- **[docs/PORTING-WINDOWS.md](docs/PORTING-WINDOWS.md)** — Mac → Windows
-  porting checklist
-- `docs/workflows/*.md` — per-statement fill-workflow notes
-- `docs/xbrl-field-descriptions.md` — XBRL taxonomy field reference
+- [Documentation index](docs/README.md) — maintained references and repository map.
+- [AGENTS.md](AGENTS.md) — repository working agreements.
+- [CLAUDE.md](CLAUDE.md) — task router and invariant index.
+- [CLAUDE-REFERENCE.md](CLAUDE-REFERENCE.md) — detailed subsystem invariants.
+
+AI working plans, handoffs, and investigation reports belong in `docs/local/`
+and are not tracked. Maintained documentation and existing archive history
+remain tracked. See the documentation index for the retention policy.

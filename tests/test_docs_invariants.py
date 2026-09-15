@@ -101,3 +101,44 @@ def test_adr_001_records_db_canonical_decision() -> None:
     assert "DB as canonical" in content
     assert "xlsx" in content.lower()
     assert "Consequences" in content
+
+
+def test_working_documents_are_ignored_but_contracts_remain_trackable(tmp_path) -> None:
+    """New plans stay local without hiding maintained docs or archive history."""
+    import subprocess
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / ".gitignore").write_text(
+        (REPO_ROOT / ".gitignore").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    local_paths = [
+        "docs/local/plans/PLAN-example.md",
+        "docs/local/handoffs/session.md",
+        "docs/local/reviews/report.html",
+        "docs/PLAN-example.md",
+        "docs/PLAN-example.html",
+        "docs/PRD-example.md",
+        "docs/HANDOFF-example.md",
+        "docs/AGENT-BRIEF-example.md",
+    ]
+    maintained_paths = [
+        "docs/README.md",
+        "docs/MPERS.md",
+        "docs/xbrl-design-system.html",
+        "docs/agent-prompt-audit.html",
+        "docs/workflows/SOCIE-Fill-Workflow.md",
+        "docs/Archive/PLAN-scanned-pdf-to-doc.md",
+        "prompts/reviewer.md",
+    ]
+    result = subprocess.run(
+        ["git", "check-ignore", "--no-index", "--stdin"],
+        cwd=tmp_path,
+        input="\n".join(local_paths + maintained_paths) + "\n",
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert set(result.stdout.splitlines()) == set(local_paths)
+    agents = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    assert "docs/local/" in agents
+    assert "Do not stage or force-add them" in agents
