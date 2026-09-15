@@ -76,7 +76,14 @@ Key areas:
   short declarative sentences and define unavoidable technical terms.
 - Use no metaphors, flowery language, or editorial praise in chat, plans,
   documents, reviews, or commit messages.
-- Treat `docs/PLAN-*.md` as historical rationale, not a current contract.
+- Write AI working plans, PRDs, handoffs, session reports, and investigation
+  reviews under `docs/local/` (gitignored). Do not stage or force-add them.
+  Use topic-specific filenames; never reuse `PLAN.md` for unrelated work.
+- Keep maintained product documentation, contracts, workflows, and generated
+  prompt audits tracked. Working documents are optional local context, never
+  required inputs for builds, tests, or agent instructions.
+- Treat old plan references in source comments as historical rationale, not a
+  current contract. See `docs/README.md` for document locations.
   Treat `docs/Archive/` as read-only audit history.
 
 ## Definition of Done

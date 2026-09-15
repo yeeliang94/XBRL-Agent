@@ -2,7 +2,7 @@
 
 Fills a run's extracted figures into an SSM **mTool** MBRS template so the
 operator can Validate & Generate the XBRL inside mTool — without hand-copying
-numbers. Proven end-to-end (mTool accepts the patched workbook; docs/PLAN.md
+numbers. Proven end-to-end (mTool accepts the patched workbook; docs/local/plans/PLAN-mtool-fill-pipeline.md
 Phase 0). Everything here is **Excel-free** (offline zip surgery), so it runs
 identically on a laptop and in the cloud.
 
@@ -160,7 +160,7 @@ See [the journey and diagnostics guide](../docs/MTOOL-FILL-JOURNEY.md) for detai
   positional mapping remains a reported fallback for legacy workbooks and
   requires confirmation when the layout is unknown.
 
-Full plan and phase status: `docs/PLAN.md`.
+Full plan and phase status: `docs/local/plans/PLAN-mtool-fill-pipeline.md`.
 
 ## Resolving filing destinations
 
@@ -177,3 +177,6 @@ unrelated category or split a total without supporting source information.
 Choices apply to the current figures and workbook. Changing either invalidates
 them. Confirmed destinations appear in the filing report and receipt, and the
 result requires review before download. They do not alter canonical figures.
+
+The referenced working plan is optional local context and is not tracked.
+See `docs/README.md` for maintained documentation.
