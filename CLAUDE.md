@@ -35,6 +35,10 @@ the task.
 Use the narrowest applicable set. If a change crosses subsystems, read the
 union of those sections.
 
+For authoring formatted notes for mTool injection, read
+[the agent guide](docs/MTOOL-NOTES-AUTHORING.md) for the production workflow,
+accepted native formatting limits, and deferred Word/PDF output verification.
+
 ## Invariant Index
 
 The numbering is stable because plans, tests, and historical reports refer to

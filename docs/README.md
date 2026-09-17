@@ -9,6 +9,7 @@
 | [Field descriptions](xbrl-field-descriptions.md) | Taxonomy field reference |
 | [Statement workflows](workflows/) | Statement-specific extraction guidance |
 | [mTool operator guide](../mtool/README.md) | Offline filling and validation |
+| [mTool notes authoring guide](MTOOL-NOTES-AUTHORING.md) | Agent workflow, formatting limits and verification boundaries |
 | [mTool filling journey](MTOOL-FILL-JOURNEY.md) | Workbook preparation behavior |
 | [Windows mTool retest guide](GUIDE-mtool-broken-file-windows-retest.md) | Broken-workbook diagnosis procedure |
 | [Navigation journey](NAVIGATION-JOURNEY.md) | Navigation contract and prior audit context |

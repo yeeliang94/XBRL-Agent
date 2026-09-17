@@ -478,6 +478,39 @@ def _whiteout_hidden_borders(el: Tag) -> None:
     el["style"] = "; ".join(out)
 
 
+def _solid_double_borders(el: Tag) -> None:
+    """Translate double table edges to solid strokes of at least 3px.
+
+    Transport only; canonical HTML retains double. Twin: _solidDoubleBorders.
+    """
+    existing = el.get("style") or ""
+    parsed = _parse_decls(existing)
+    if not any(prop in _BORDER_LINE_PROPS and
+               "double" in [t.lower() for t in _split_css_tokens(value)]
+               for prop, value in parsed.items()):
+        return
+    out = [d for d in _decls(existing) if _prop_of(d) not in _BORDER_LINE_PROPS]
+    for side, value in _resolve_cell_borders(parsed).items():
+        if not value:
+            continue
+        tokens = _split_css_tokens(value)
+        if any(t.lower() == "double" for t in tokens):
+            width, kept = "3px", []
+            for token in tokens:
+                match = re.fullmatch(r"(\d+(?:\.\d+)?)(px|pt)", token, re.I)
+                if match:
+                    pixels = float(match[1]) * (4 / 3 if match[2].lower() == "pt" else 1)
+                    if pixels > 3:
+                        width = token
+                elif token.lower() == "thick":
+                    width = "thick"
+                elif token.lower() not in {"double", "thin", "medium"}:
+                    kept.append(token)
+            value = " ".join([width, "solid", *kept])
+        out.append(f"border-{side}: {value}")
+    el["style"] = "; ".join(out)
+
+
 def _fit_table_width(table: Tag) -> None:
     """Make the table fill the page in mTool's TX editor.
 
@@ -819,6 +852,9 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
             for el in own_cells:
                 _fill_undeclared_borders_white(el, skip.get(id(el), frozenset()))
         _whiteout_hidden_borders(table)
+
+    for el in soup.find_all(["table", "thead", "tbody", "tfoot", "tr", "td", "th", "colgroup", "col"]):
+        _solid_double_borders(el)
 
     para_style = _paragraph_style(style)
     heading_style = _heading_style(style)

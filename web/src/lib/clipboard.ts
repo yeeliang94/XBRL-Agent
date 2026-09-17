@@ -55,7 +55,7 @@
 // Arial 10pt face (configurable) keeps the DB / sanitiser style-free while
 // landing the paste in the expected font.
 import { isNumericCellText, shouldRightAlignCell } from "./tableAlign";
-import { resolveCellBorders } from "./cellFormatting";
+import { resolveCellBorders, splitCssTokens } from "./cellFormatting";
 import {
   DEFAULT_FORMAT_OPTIONS,
   type ClipboardFormatOptions,
@@ -482,6 +482,10 @@ export function decorateHtmlForClipboard(
     _whiteoutHiddenBorders(table);
   }
 
+  for (const el of Array.from(tmp.querySelectorAll("table, thead, tbody, tfoot, tr, td, th, colgroup, col"))) {
+    _solidDoubleBorders(el);
+  }
+
   // Prose: Arial + a bottom margin so non-table cells paste with a
   // consistent face and visible gaps between paragraphs.
   const paragraphStyle = _paragraphStyle(opts);
@@ -563,6 +567,40 @@ function _parseDecls(style: string): Record<string, string> {
     parsed[d.slice(0, idx).trim().toLowerCase()] = d.slice(idx + 1).trim();
   }
   return parsed;
+}
+
+/** mTool transport fallback. Canonical HTML keeps double; backend twin:
+ *  notes_decorate.py::_solid_double_borders. */
+function _solidDoubleBorders(el: Element): void {
+  const existing = el.getAttribute("style") ?? "";
+  const parsed = _parseDecls(existing);
+  if (!Object.entries(parsed).some(([prop, value]) =>
+    _BORDER_LINE_PROPS.has(prop) && /\bdouble\b/i.test(value))) return;
+  const resolved = resolveCellBorders(parsed);
+  const out = existing.split(";").map(d => d.trim()).filter(d =>
+    d && !_BORDER_LINE_PROPS.has(d.split(":", 1)[0].trim().toLowerCase()));
+  for (const side of ["Top", "Right", "Bottom", "Left"] as const) {
+    let value = resolved[`border${side}`];
+    if (!value) continue;
+    if (/\bdouble\b/i.test(value)) {
+      let width = "3px";
+      const kept: string[] = [];
+      for (const token of splitCssTokens(value)) {
+        const match = token.match(/^(\d+(?:\.\d+)?)(px|pt)$/i);
+        if (match) {
+          const pixels = Number(match[1]) * (match[2].toLowerCase() === "pt" ? 4 / 3 : 1);
+          if (pixels > 3) width = token;
+        } else if (token.toLowerCase() === "thick") {
+          width = "thick";
+        } else if (!["double", "thin", "medium"].includes(token.toLowerCase())) {
+          kept.push(token);
+        }
+      }
+      value = [width, "solid", ...kept].join(" ");
+    }
+    out.push(`border-${side.toLowerCase()}: ${value}`);
+  }
+  el.setAttribute("style", out.join("; "));
 }
 
 function _whiteoutHiddenBorders(el: Element): void {
