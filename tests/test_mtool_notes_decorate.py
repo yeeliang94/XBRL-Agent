@@ -3,10 +3,34 @@ proven) clipboard decorator. Mirrors web/src/__tests__/clipboard.test.ts so the
 Python fill path and the TS copy path stay in lock-step (gotcha #16 sibling).
 """
 import re
+import pytest
+from bs4 import BeautifulSoup
 
 from mtool.notes_decorate import (
     NotesTableStyle, decorate_notes_html, is_numeric_cell_text,
     should_right_align_cell)
+
+
+# --- mTool double-border fallback (parity with clipboard.ts) ---------------
+@pytest.mark.parametrize("mode", [{}, {"compact": True}, {"lite": True}, {"fill_white_grid": False}])
+def test_double_border_fallback_preserves_content_and_other_edges(mode):
+    html = ('<p><u>Text underline</u></p><table data-source-styled="true" '
+            'style="border:1pt double #123456"><tr><td colspan="2" '
+            'style="border-width:1px 2px 4pt 1px; border-style:double hidden double solid; '
+            'border-color:rgb(12, 34, 56)">Total 3190</td></tr></table>')
+    out = decorate_notes_html(html, **mode)
+    soup = BeautifulSoup(out, "html.parser")
+    cell = soup.td
+    assert cell.get_text() == "Total 3190"
+    assert cell["colspan"] == "2"
+    assert soup.u.get_text() == "Text underline"
+    assert "border-top: 3px solid rgb(12, 34, 56)" in cell["style"]
+    assert "border-bottom: 4pt solid rgb(12, 34, 56)" in cell["style"]
+    assert "border-right: 1px solid #ffffff" in cell["style"]
+    assert "border-left: 1px solid rgb(12, 34, 56)" in cell["style"]
+    assert "border-top: 3px solid #123456" in soup.table["style"]
+    assert "double" in html
+    assert "double" not in out
 
 
 # --- numeric detection (parity with tableAlign.ts) --------------------------
@@ -127,7 +151,7 @@ def test_real_border_is_preserved_not_whited_out():
         '<table><tbody><tr>'
         '<td style="border-bottom: 3px double #000000">x</td>'
         '</tr></tbody></table>')
-    assert "3px double #000000" in out
+    assert "3px solid #000000" in out
     assert "1px solid #ffffff" not in out.lower()
 
 
@@ -188,7 +212,7 @@ def test_themed_border_colour_and_double_rule():
     out = decorate_notes_html(
         "<table><tbody><tr><td>x</td></tr></tbody></table>",
         NotesTableStyle(border_style="double", border_color="#1F3864"))
-    assert "3px double #1f3864" in out.lower()
+    assert "3px solid #1f3864" in out.lower()
 
 
 def test_lite_tier_keeps_formatting_drops_cosmetics():
@@ -289,7 +313,7 @@ def test_from_theme_drives_decorated_output():
         "<table><tbody><tr><td>x</td></tr></tbody></table>",
         NotesTableStyle.from_theme({"borderStyle": "double",
                                     "borderColor": "#1F3864"}))
-    assert "3px double #1f3864" in out.lower()
+    assert "3px solid #1f3864" in out.lower()
 
 
 # --- prose theme fields (house style item 1) --------------------------------
@@ -301,7 +325,7 @@ def test_default_theme_emits_no_prose_theme_css():
         "<h3>5 Revenue</h3><ul><li>x</li></ul>"
         "<table><tbody><tr><td>Total</td><td>1,125</td></tr></tbody></table>")
     assert "list-style-type" not in out
-    assert "3px double" not in out
+    assert "3px solid" not in out
     assert re.search(r'<h3[^>]*style="[^"]*font-size: 10pt[^"]*font-weight: 600', out)
 
 
@@ -336,14 +360,14 @@ def test_totals_double_underline_targets_amount_cells_only():
         "<tr><td>Revenue</td><td>10,000</td></tr>"
         "<tr><td>Total</td><td>19,500</td></tr>"
         "</tbody></table>", style)
-    # The total row's amount cell carries the double rule…
+    # The total row's amount cell carries the thick solid replacement…
     assert re.search(
-        r'<td[^>]*style="[^"]*border-bottom: 3px double #000000[^"]*"[^>]*>19,500<', out)
+        r'<td[^>]*style="[^"]*border-bottom: 3px solid #000000[^"]*"[^>]*>19,500<', out)
     # …but its label cell and the non-total row do not.
     assert not re.search(
-        r'<td[^>]*style="[^"]*3px double[^"]*"[^>]*>Total<', out)
+        r'<td[^>]*style="[^"]*3px solid[^"]*"[^>]*>Total<', out)
     assert not re.search(
-        r'<td[^>]*style="[^"]*3px double[^"]*"[^>]*>10,000<', out)
+        r'<td[^>]*style="[^"]*3px solid[^"]*"[^>]*>10,000<', out)
 
 
 def test_totals_rule_respects_persisted_cell_border():
@@ -355,7 +379,7 @@ def test_totals_rule_respects_persisted_cell_border():
         '<td>Total</td>'
         '<td style="border-bottom: 1px solid #185fa5">19,500</td>'
         '</tr></tbody></table>', style)
-    assert "3px double" not in out
+    assert "3px solid" not in out
     assert "border-bottom: 1px solid #185fa5" in out
 
 
@@ -438,9 +462,9 @@ def test_compact_totals_rule_still_lands_on_amount_cells():
         "</tbody></table>",
         NotesTableStyle(totals_double_underline=True), compact=True)
     assert re.search(
-        r'<td[^>]*style="[^"]*border-bottom: 3px double #000000[^"]*"[^>]*>19,500<',
+        r'<td[^>]*style="[^"]*border-bottom: 3px solid #000000[^"]*"[^>]*>19,500<',
         out)
-    assert not re.search(r'<td[^>]*style="[^"]*3px double[^"]*"[^>]*>10,000<', out)
+    assert not re.search(r'<td[^>]*style="[^"]*3px solid[^"]*"[^>]*>10,000<', out)
 
 
 def test_compact_skips_table_with_user_owned_cell_border():

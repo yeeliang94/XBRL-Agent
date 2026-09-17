@@ -1115,6 +1115,20 @@ Key invariants:
   `tests/test_settings_api.py`, `test_run_notes_table_style.py`,
   `test_mtool_notes_exporter.py` (ladder + no-regression pin), and the
   `clipboardFormat`/`clipboard`/`cellFormatting`/`NotesReviewTab` web tests.
+
+  **Double table-border fallback (2026-09-17):** at mTool export and clipboard
+  decoration only, double edges become solid strokes at least 3px (2.25pt)
+  thick, retaining colour and larger declared widths. This is the requested
+  compatibility substitution, not a claim of native double-border support.
+  It covers source, manual, theme and totals borders; canonical HTML and the
+  review editor retain double intent. Text underline is separate and unchanged.
+  The decorators remain twins. Native thick-border persistence was verified
+  in MPERS/MFRS injection and clipboard save/reopen cases on 2026-09-17;
+  generated Review Copy Word/PDF fidelity remains deferred. Exact widths are
+  not preserved. See [the agent guide](docs/MTOOL-NOTES-AUTHORING.md) for the
+  tested scope and accepted limits. Pinned by
+  `tests/test_mtool_notes_decorate.py` and `web/src/__tests__/clipboard.test.ts`.
+
 - **Numeric notes rows (sheets 13/14, `NumericCellRow`)** show grouped `1,595` at
   rest, raw while focused (`formatGroupedInput` in `web/src/lib/numberFormat.ts`);
   display-only, stored values stay raw.

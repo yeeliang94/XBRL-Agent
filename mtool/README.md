@@ -110,6 +110,11 @@ other bucket is something to look at first:
 
 ## Notes formatting → mTool fidelity
 
+For agent authoring rules, the production injection workflow and accepted native
+limits, use the [notes authoring guide](../docs/MTOOL-NOTES-AUTHORING.md).
+Transported formatting is not a guarantee of identical native rendering or
+generated Review Copy Word/PDF output; that output verification is deferred.
+
 Prose notes are filled into mTool text-blocks with the styling you see in the
 app's Notes review panel, decorated on the way out by
 `mtool/notes_decorate.py` (the backend twin of the clipboard decorator). What
@@ -118,13 +123,13 @@ survives into the mTool text-block:
 | Formatting | Ports into mTool? |
 |---|---|
 | Indentation (`margin-left`) | ✅ Yes |
-| Borders — including ones the AI formatter removed | ✅ Yes (removed borders are painted **white**, see below) |
+| Borders — including ones the AI formatter removed | Double table borders become thick solid strokes; removed borders are painted **white**. Exact shared-edge appearance is not guaranteed. |
 | Cell alignment you set explicitly (e.g. an "RM" caption) | ✅ Yes |
 | Fills / shading | ✅ Yes |
 | Bold / italic / underline | ✅ Yes |
 | Paragraph spacing | ⚠️ Follows the notes-table **theme**, not a per-note custom gap |
-| Column widths | ⚠️ Table-level explicit width kept; otherwise evenly distributed |
-| **Page breaks** | ❌ Not possible — a note is a single text-block (one cell); there is nothing to paginate inside it |
+| Column widths | ⚠️ Native import/save can change explicit table and column widths; clipboard paste can initially overflow. Inspect after save and full reopen. |
+| **Page breaks** | ⚠️ Exact pagination through HTML/CSS page-break controls is not established; inspect native output for long notes. |
 
 **Why removed borders become white, not "hidden":** mTool's TX Text Control
 renderer does not honour CSS `border-style: hidden`/`none` — a removed border

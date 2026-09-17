@@ -6,6 +6,24 @@ import {
 } from "../lib/clipboard";
 import { DEFAULT_FORMAT_OPTIONS } from "../lib/clipboardFormat";
 
+test("double border fallback preserves content, spans, colour and other edges", () => {
+  const html = '<p><u>Text underline</u></p><table data-source-styled="true" style="border:1pt double #123456"><tr><td colspan="2" style="border-width:1px 2px 4pt 1px; border-style:double hidden double solid; border-color:rgb(12, 34, 56)">Total 3190</td></tr></table>';
+  const out = decorateHtmlForClipboard(html, DEFAULT_FORMAT_OPTIONS);
+  const doc = new DOMParser().parseFromString(out, "text/html");
+  const cell = doc.querySelector("td")!;
+  const css = cell.getAttribute("style")!;
+  expect(cell.textContent).toBe("Total 3190");
+  expect(cell.getAttribute("colspan")).toBe("2");
+  expect(doc.querySelector("u")!.textContent).toBe("Text underline");
+  expect(css).toContain("border-top: 3px solid rgb(12, 34, 56)");
+  expect(css).toContain("border-bottom: 4pt solid rgb(12, 34, 56)");
+  expect(css).toContain("border-right: 1px solid #ffffff");
+  expect(css).toContain("border-left: 1px solid rgb(12, 34, 56)");
+  expect(doc.querySelector("table")!.getAttribute("style")).toContain("border-top: 3px solid #123456");
+  expect(html).toContain("double");
+  expect(out).not.toContain("double");
+});
+
 describe("copyHtmlAsRichText", () => {
   beforeEach(() => {
     // Every test starts from a clean navigator.clipboard slate so an
@@ -426,27 +444,27 @@ describe("decorateHtmlForClipboard — configurable format options", () => {
     expect(out).not.toMatch(/<th[^>]*style="[^"]*font-weight: 600/);
   });
 
-  test("borderStyle 'double' renders a double grid", () => {
+  test("borderStyle 'double' translates to a thick solid grid", () => {
     const out = decorateHtmlForClipboard(TABLE, {
       ...DEFAULT_FORMAT_OPTIONS,
       borderStyle: "double",
     });
-    expect(out).toMatch(/<td[^>]*style="[^"]*border: 3px double #999/);
+    expect(out).toMatch(/<td[^>]*style="[^"]*border-top: 3px solid #999/);
   });
 
-  test("a persisted double underline survives into the clipboard", () => {
+  test("a persisted double border becomes thick solid in the clipboard", () => {
     const html =
       '<table><tbody><tr><td>x</td></tr>' +
       '<tr><td style="border-bottom: 3px double #000000">Total</td></tr>' +
       "</tbody></table>";
     const out = decorateHtmlForClipboard(html, DEFAULT_FORMAT_OPTIONS);
-    // The Total cell carries the document-owned double underline…
+    // The Total cell carries the document-owned border as a thick solid rule…
     expect(out).toMatch(
-      /<td[^>]*style="[^"]*border-bottom: 3px double #000000[^"]*">Total</,
+      /<td[^>]*style="[^"]*border-bottom: 3px solid #000000[^"]*">Total</,
     );
     // …while an ordinary cell does not.
     expect(out).not.toMatch(
-      /<td[^>]*style="[^"]*border-bottom: 3px double #000000[^"]*">x</,
+      /<td[^>]*style="[^"]*border-bottom: 3px solid #000000[^"]*">x</,
     );
   });
 
@@ -632,7 +650,7 @@ describe("decorateHtmlForClipboard — prose theme fields (house style item 1)",
         "<table><tbody><tr><td>Total</td><td>1,125</td></tr></tbody></table>",
     );
     expect(out).not.toContain("list-style-type");
-    expect(out).not.toContain("3px double #000000");
+    expect(out).not.toContain("3px solid #000000");
     expect(out).toMatch(/<h3[^>]*style="[^"]*font-size: 10pt[^"]*font-weight: 600/);
   });
 
@@ -666,10 +684,10 @@ describe("decorateHtmlForClipboard — prose theme fields (house style item 1)",
       { ...DEFAULT_FORMAT_OPTIONS, totalsDoubleUnderline: true },
     );
     expect(out).toMatch(
-      /<td[^>]*style="[^"]*border-bottom: 3px double #000000[^"]*">19,500</,
+      /<td[^>]*style="[^"]*border-bottom: 3px solid #000000[^"]*">19,500</,
     );
-    expect(out).not.toMatch(/<td[^>]*style="[^"]*3px double[^"]*">Total</);
-    expect(out).not.toMatch(/<td[^>]*style="[^"]*3px double[^"]*">10,000</);
+    expect(out).not.toMatch(/<td[^>]*style="[^"]*3px solid[^"]*">Total</);
+    expect(out).not.toMatch(/<td[^>]*style="[^"]*3px solid[^"]*">10,000</);
   });
 
   test("totals rule defers to a persisted per-cell border", () => {
@@ -680,7 +698,7 @@ describe("decorateHtmlForClipboard — prose theme fields (house style item 1)",
         "</tr></tbody></table>",
       { ...DEFAULT_FORMAT_OPTIONS, totalsDoubleUnderline: true },
     );
-    expect(out).not.toContain("3px double");
+    expect(out).not.toContain("3px solid");
     expect(out).toContain("border-bottom: 1px solid #185fa5");
   });
 });
