@@ -136,6 +136,11 @@ Windows defaults to `charmap` codec which crashes on Unicode text from PDFs.
 `set PYTHONUTF8=1 && venv\Scripts\python.exe server.py`.
 `write_text(..., encoding="utf-8")` is used as a safety net throughout.
 
+Server startup reconfigures existing Windows output streams in place. Do not
+wrap their shared buffers again: module reload can close the previous wrapper
+and invalidate both logging and pytest capture. Pinned by
+`tests/test_server_windows_streams.py`.
+
 ### 2. pydantic-ai on the V2 line (floor `>=1.107.1`, pinned by `constraints.txt`)
 
 Upgraded 2026-07-12 (docs/PLAN-pydantic-ai-v2.md; V1→V2 flip verified by
@@ -400,8 +405,9 @@ terminal status (`completed`, `completed_with_errors`, `failed`, `aborted`)
 and never `running`.
 
 `mark_run_merged` is called immediately after a successful merge, **before**
-the final status update, so `GET /api/runs/{id}/download/filled` has a durable
-pointer to `filled.xlsx` even if later persistence crashes.
+the final status update, so the audit row retains a durable pointer to the
+internal `filled.xlsx` diagnostic even if later persistence crashes. User
+workbooks are prepared through the mTool template workflow (invariant 28).
 
 `_safe_mark_finished` in `server.py` swallows audit-write exceptions so error
 handlers never double-fault. **Don't** "fix" this by removing the try/except.
@@ -802,6 +808,12 @@ Key invariants:
 Full walkthrough: [docs/MPERS.md](docs/MPERS.md).
 
 ### 16. Notes cells are HTML; Excel download regenerates from the DB
+
+User draft downloads now use the mTool preparation path described in invariant
+28. Notes overlays below remain internal canonical-workbook/diagnostic helpers;
+the public draft is a filled copy of the selected mTool template, with native
+note injection and its report/receipt. The old template-free download endpoint
+returns `mtool_template_required` rather than a different workbook.
 
 Notes agents emit **HTML** (not plaintext) into cells on sheets 10–14 (MFRS) /
 11–15 (MPERS). Flow:
@@ -1312,7 +1324,9 @@ current-consumer filtering, and historical readability),
 - **Export:** `_export_canonical_workbooks` (server.py) re-renders each succeeded
   statement from `run_concept_facts` via
   `concept_model/exporter.py::export_run_to_xlsx`, then merges — the download
-  reflects DB facts, not the scratch xlsx. Falls back to the agent workbook
+  provides internal canonical diagnostics, not the user filing draft. User
+  draft/filing preparation both use the selected mTool template and invariant
+  28's shared patcher. Internal export falls back to the agent workbook
   per-statement when an export applies zero facts.
 - **Review — the REVIEWER pass** (`server.py::_run_reviewer_pass`): investigates
   the root cause of failing cross-checks + open conflicts down the face→sub→PDF
@@ -1725,12 +1739,60 @@ Load-bearing invariants:
 - **One patcher, no fork.** The server endpoint imports `offline_fill.fill_workbook`
   — the SAME function the CLI runs. Never reimplement patching in `api/`.
 - **Exporter emits data-entry LEAF and MATRIX_CELL facts**
-  (`exporter.build_fill_doc`): ABSTRACT headers, COMPUTED totals and SOCIE cells
-  with formula dependency edges are excluded because mTool owns totals. Each
+  (`exporter.build_fill_doc`): ABSTRACT headers and linear COMPUTED totals are
+  excluded. Horizontal matrix totals whose same-row components include inputs
+  also travel as system-calculated filing values: real mTool SOCIE templates
+  have unlocked horizontal totals feeding locked vertical formulas. This does
+  not make canonical calculated cells agent-writable. Each
   write carries the taxonomy primary concept, sorted dimensions, period, scope,
   and the canonical target hint. Scoped to the run's `{standard}-{level}-`
   family, deduped by `(concept_uuid, period, scope)`, reads
   `run_concept_facts` only.
+- **One user workbook path.** Draft and filing actions open the same template
+  preparation workflow and use the same patch endpoint, report, receipt and
+  artifact. No template-free draft is rebuilt from repository templates.
+  The old GET download route returns 409 with `mtool_template_required` (404
+  for an unknown run). Pipeline workbooks remain internal diagnostics.
+  Upload a fresh template before preparation; edits in a downloaded workbook
+  do not update canonical data. Pinned by the download/history tests,
+  `tests/test_edit_to_download_e2e.py`, and RunDetailView/ResultsView UI tests.
+- **Protection belongs to the uploaded template.** Preserve formulas and
+  worksheet protection. Numeric injection refuses locked destinations on a
+  protected sheet, including blank cells and inherited row/column styles.
+  Row styles apply only when `customFormat` is enabled; explicit cell styles
+  retain precedence. Pinned by `tests/test_mtool_protected_inputs.py`.
+  A blocked destination appears in unresolved coverage; it never silently
+  becomes writable. The mTool 2.2 SOCIE explicit zero/Total domain encoding
+  maps to EquityMember only alongside the matching table/axis metadata.
+  Pinned by `tests/test_mtool_protected_inputs.py` and
+  `tests/test_mtool_socie_input_totals.py`.
+- **MPERS native destinations retain canonical identity.** The standalone
+  patcher's `resolve_sheet_name` is shared by numeric detection/resolution and
+  prose filling. Only observed sheet-name equivalents backed by the MPERS
+  taxonomy markers may resolve; ambiguous names and wrong-standard templates
+  remain blocked. Selection checks both canonical and resolved physical sheets.
+  Resolve an exact opening/closing occurrence before testing writability.
+  Formula-owned values are reconciled after input writes using supported
+  arithmetic, never cached formula values or formula overwrites. Unsupported,
+  incomplete or mismatched calculations require review. The evaluator treats
+  blank cells on existing sheets as arithmetic zero, while missing sheets
+  and unresolved formulas remain unverified. Pinned by
+  `tests/test_mtool_formula_reconciliation.py`. Exact-label ties for LEAF and
+  MATRIX_CELL facts prefer a unique matching input over a formula occurrence;
+  multiple matching inputs remain ambiguous. Pinned by
+  `tests/test_mtool_filing_resolution.py`. Reports and receipts
+  distinguish `reconciled_formula` from `written` and `skipped_formula`.
+  Text-block slots accept notes, not scalar numeric facts; historical numeric
+  values on those slots are quarantined on manifest refresh. Native prose
+  destinations use the registered taxonomy identity and exclude abstract
+  headings; explicit selections cannot override that identity. Rejected note
+  selections explain that the chosen field could not be verified and retain
+  matching destinations for a manual retry (`identity_mismatch`); the modal
+  displays the explanation and offers those destinations without preselection.
+  A missing
+  category-period section is reported before requesting a category selection.
+  Pinned by `tests/test_mtool_mpers_repair.py` and the calculation-result
+  display test in `MtoolFillModal.test.tsx`.
 - **One field-semantics contract.** `concept_model/filing_targets.py` is shared
   by extraction, review, persistence, and filing. Taxonomy capability
   (`taxonomy_concepts`) and physical workbook slot role (`template_slots`) are
@@ -1795,6 +1857,13 @@ Load-bearing invariants:
   Repeated consistent dates and dimensional period blocks remain supported.
   Pinned by the conflicting/repeated period-block tests in
   `tests/test_mtool_column_detect.py` and `tests/test_mtool_routes.py`.
+  An `abc::abc` placeholder `#DOM#` row with only empty/`Restated` display
+  values is restatement metadata, not a category axis or a new SOCIE period
+  block. Column detection and semantic resolution share this classification;
+  unknown domain rows still require category resolution. Pinned by the
+  placeholder-domain tests in `tests/test_mtool_column_detect.py` and
+  `test_restated_marker_does_not_split_prior_year_category_block` in
+  `tests/test_mtool_filing_resolution.py`.
 - **Filing destination confirmation.** Repeated taxonomy candidates may be
   narrowed by one exact visible row label after sheet, period and dimensions
   have been resolved. A remaining tie or a missing category stays blocked.

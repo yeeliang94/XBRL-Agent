@@ -7,7 +7,7 @@ import { HistoryFilters } from "../components/HistoryFilters";
 import { HistoryList } from "../components/HistoryList";
 import { RunDetailPage } from "../components/RunDetailPage";
 import type { RunTabKey } from "../components/RunDetailView";
-import { fetchRuns, fetchRunDetail, deleteRun, forceAbortRun, downloadFilledUrl } from "../lib/api";
+import { fetchRuns, fetchRunDetail, deleteRun, forceAbortRun } from "../lib/api";
 import type { RunDetailJson, RunSummaryJson, RunsFilterParams } from "../lib/types";
 import { TERMS } from "../lib/vocabulary";
 
@@ -259,13 +259,6 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
     }
   }, [setSelectedId]);
 
-  // Download: navigate the top-level window to the streaming endpoint. The
-  // browser treats this as an xlsx attachment (via Content-Disposition on the
-  // FileResponse) so no <a> dance is needed.
-  const handleDownload = useCallback((runId: number) => {
-    window.location.href = downloadFilledUrl(runId);
-  }, []);
-
   // Force-abort a wedged `running` run opened from History (UX-QA #2). The
   // backend flips a dead row to `aborted`; we then reload both the list and the
   // open detail so Delete/Download become usable without a page refresh.
@@ -437,7 +430,6 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
             // still works as expected.
             setSelectedId(null);
           }}
-          onDownload={handleDownload}
           onDelete={handleDelete}
           onResumeDraft={onResumeDraft}
           onForceAbort={handleForceAbort}

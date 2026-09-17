@@ -1,7 +1,7 @@
 """Phase 0 validation — the edit→recompute→download loop end to end.
 
 Exercises the real HTTP surface: PATCH a leaf value via the facts endpoint,
-then GET /api/runs/{id}/download/filled and confirm the streamed workbook
+then prepare the selected mTool template and confirm the streamed workbook
 carries the edited value. This is the integration proof that Phases 1-3 hang
 together (a live-PDF run is still owed, but the wiring is exercised here).
 """
@@ -90,8 +90,13 @@ def test_edit_then_download_reflects_value(client: TestClient):
     assert r.status_code == 200, r.text
     assert r.json()["value_status"] == "user_override"
 
-    # 2. Download the merged workbook — it must rebuild from the DB fact.
-    dl = client.get(f"/api/runs/{client.run_id}/download/filled")
+    # Draft and filing both prepare the selected template with the same endpoint.
+    prepared = client.post(f"/api/runs/{client.run_id}/mtool-fill/patch",
+        files={"template": ("template.xlsx", CO_SOFP.read_bytes(),
+                             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        data={"fill_notes": "false"})
+    assert prepared.status_code == 200, prepared.text
+    dl = client.get(prepared.json()["download_url"] + "?acknowledge_degraded=true")
     assert dl.status_code == 200, dl.text
     wb = openpyxl.load_workbook(io.BytesIO(dl.content), data_only=False)
     # The face sheet (sheet name == render_sheet) carries the edited value in B.

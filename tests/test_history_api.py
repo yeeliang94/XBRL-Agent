@@ -640,62 +640,19 @@ def test_delete_run_rejects_session_in_active_runs(api_env, monkeypatch):
 # GET /api/runs/{id}/download/filled
 # ---------------------------------------------------------------------------
 
-def test_download_filled_uses_runs_merged_workbook_path(api_env, tmp_path):
-    """Endpoint reads runs.merged_workbook_path — never derived from session_id."""
-    client, db_path, out = api_env
-    session_dir = out / "download-ok"
-    session_dir.mkdir()
-    wb_path = session_dir / "filled.xlsx"
-    wb_path.write_bytes(b"fake xlsx bytes")
-
-    run_id = _seed_run(
-        db_path, session_id="download-ok", pdf_filename="f.pdf",
-        output_dir=str(session_dir),
-        merged_workbook_path=str(wb_path),
-    )
-    r = client.get(f"/api/runs/{run_id}/download/filled")
-    assert r.status_code == 200
-    assert r.content == b"fake xlsx bytes"
-    # FastAPI's FileResponse sets content-disposition with the filename.
-    cd = r.headers.get("content-disposition", "")
-    assert f"run_{run_id}_filled.xlsx" in cd
-
-
-def test_download_filled_404_when_merged_workbook_path_null(api_env):
-    """A failed run has merged_workbook_path=NULL. Endpoint returns 404 with
-    a clear message, NOT a 500 or a guessed path."""
+@pytest.mark.parametrize("stored_path", [None, "/missing/filled.xlsx"])
+def test_draft_requires_template_regardless_of_old_merged_file(api_env, stored_path):
     client, db_path, _ = api_env
-    run_id = _seed_run(
-        db_path, session_id="failed-run", pdf_filename="f.pdf",
-        output_dir="/tmp/failed-run",
-        merged_workbook_path=None,
-        status="failed",
-    )
-    r = client.get(f"/api/runs/{run_id}/download/filled")
-    assert r.status_code == 404
-    body = r.json()
-    assert "merged workbook" in body.get("detail", "").lower()
+    run_id = _seed_run(db_path, session_id="draft", pdf_filename="f.pdf",
+                       output_dir="/tmp/draft", merged_workbook_path=stored_path)
+    response = client.get(f"/api/runs/{run_id}/download/filled")
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "mtool_template_required"
 
 
 def test_download_filled_404_if_run_missing(api_env):
     client, _, _ = api_env
-    r = client.get("/api/runs/99999/download/filled")
-    assert r.status_code == 404
-
-
-def test_download_filled_404_if_path_stored_but_file_deleted(api_env, tmp_path):
-    """merged_workbook_path is set but the file was deleted from disk."""
-    client, db_path, _ = api_env
-    phantom_path = tmp_path / "ghost.xlsx"  # never created
-    run_id = _seed_run(
-        db_path, session_id="ghost", pdf_filename="f.pdf",
-        output_dir=str(tmp_path),
-        merged_workbook_path=str(phantom_path),
-    )
-    r = client.get(f"/api/runs/{run_id}/download/filled")
-    assert r.status_code == 404
-    body = r.json()
-    assert "no longer exists" in body.get("detail", "").lower()
+    assert client.get("/api/runs/99999/download/filled").status_code == 404
 
 
 # ---------------------------------------------------------------------------

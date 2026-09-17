@@ -287,6 +287,39 @@ def test_unknown_semantic_template_uses_unique_period_markers(tmp_path):
     assert needs_confirmation({"S": sheet}) is False
 
 
+@pytest.mark.parametrize("restated", ["", "Restated"])
+def test_placeholder_domain_does_not_turn_year_columns_into_categories(tmp_path, restated):
+    """FINCO uses an abc::abc domain for restatement, not equity members."""
+    from openpyxl import load_workbook
+
+    path = _marker_workbook(tmp_path)
+    wb = load_workbook(path)
+    wb.active["B5"] = "abc::abc"
+    wb.active["C5"] = "#DOM#"
+    wb.active["F5"] = restated
+    wb.save(path)
+    wb.close()
+    doc = {"sheets": {"S": {"columns": {
+        "current_year": None, "prior_year": None}}}}
+    sheet = detect_column_map(str(path), doc)["S"]
+    assert sheet["dimensional"] is False
+    assert sheet["columns"] == {"current_year": "E", "prior_year": "F"}
+    assert sheet["requires_confirmation"] is False
+
+
+def test_unknown_domain_with_placeholder_is_still_a_category(tmp_path):
+    """Only the observed empty/restatement placeholder is exempted."""
+    from openpyxl import load_workbook
+
+    path = _marker_workbook(tmp_path, dimensional=True)
+    wb = load_workbook(path)
+    wb.active["B5"] = "abc::abc"
+    wb.save(path)
+    wb.close()
+    doc = {"sheets": {"S": {"columns": {"current_year": None}}}}
+    assert detect_column_map(str(path), doc)["S"]["dimensional"] is True
+
+
 def test_unknown_dimensional_template_does_not_request_period_columns(tmp_path):
     """A semantic category matrix is resolved from taxonomy members, even
     when its fingerprint is new. A CY/PY form cannot describe those columns;

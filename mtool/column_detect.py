@@ -52,6 +52,7 @@ from mtool.offline_fill import (
     get_sheet_paths,
     load_workbook_entries,
     read_sheet_cells,
+    resolve_sheet_name,
 )
 
 # Canonical left-to-right order of value roles across a template row. Used only
@@ -174,6 +175,23 @@ def _label_column_from_marker(cells: dict, rows: list[int]) -> str | None:
     return None
 
 
+def category_domain_rows(cells: dict) -> list[int]:
+    """Return category markers, excluding mTool's restatement placeholder.
+
+    FINCO 2.2 emits ``abc::abc`` beside a #DOM# whose displayed values are
+    empty or ``Restated``. It is period metadata, not a category axis. Keep
+    every other domain marker conservative, including unknown categories.
+    The same rows must drive column detection and dimensional period blocks.
+    """
+    rows = []
+    for row in _marker_rows(cells).get(MARKER_DIMENSION, []):
+        values = {(text or "").strip() for _kind, text in cells[row].values()}
+        if "abc::abc" in values and values <= {"", "#DOM#", "abc::abc", "Restated"}:
+            continue
+        rows.append(row)
+    return rows
+
+
 def _row_values(cells: dict, row: int) -> dict[str, str]:
     """Non-empty cells on a marker row, minus the marker itself."""
     out = {}
@@ -215,7 +233,7 @@ def _semantic_layout(cells: dict, roles: list[str]) -> dict[str, Any] | None:
     end_rows = markers.get(MARKER_END_DATE, [])
     period_rows = markers.get(MARKER_PERIOD, [])
     unit_rows = markers.get(MARKER_UNIT_SCALE, [])
-    dimensional = bool(markers.get(MARKER_DIMENSION))
+    dimensional = bool(category_domain_rows(cells))
 
     # Period sheets need one consistent date per column across layout blocks.
     # Dimensional sheets resolve their separate period blocks in template_map.
@@ -443,9 +461,14 @@ def detect_column_map(
     sst = get_shared_strings(data)
     template_known = describe_template(fingerprint_workbook(data)) is not None
 
+    if cells_by_sheet is None:
+        cells_by_sheet = {name: read_sheet_cells(data[path], sst)
+                          for name, path in sheet_paths.items()}
+
     out: dict[str, dict[str, Any]] = {}
     for sheet, cfg in doc.get("sheets", {}).items():
-        entry = sheet_paths.get(sheet)
+        physical_sheet = resolve_sheet_name(sheet, cells_by_sheet)
+        entry = sheet_paths.get(physical_sheet)
         if entry is None:
             out[sheet] = {
                 "label_column": None, "columns": {}, "confidence": "low",
@@ -455,8 +478,8 @@ def detect_column_map(
                 "notes": [f"sheet {sheet!r} not in template"]}
             continue
         cells = (
-            cells_by_sheet[sheet]
-            if cells_by_sheet is not None and sheet in cells_by_sheet
+            cells_by_sheet[physical_sheet]
+            if physical_sheet in cells_by_sheet
             else read_sheet_cells(data[entry], sst)
         )
         roles = _order_roles(list(cfg.get("columns", {})))
@@ -465,6 +488,7 @@ def detect_column_map(
             layout = _positional_layout(cells, roles,
                                         template_known=template_known)
         out[sheet] = layout
+        out[sheet]['physical_sheet'] = physical_sheet
     return out
 
 

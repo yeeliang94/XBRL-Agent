@@ -94,6 +94,11 @@ def build_notes_fill_doc(
             """
             SELECT sheet, row, label, html, updated_at, invalid_target,
                    invalid_target_reason,
+                   (SELECT ts.taxonomy_element_id FROM template_slots ts
+                    WHERE ts.canonical_target_id = c.concept_uuid
+                      AND ts.template_id LIKE ?
+                      AND ts.sheet = c.sheet AND ts.row = c.row
+                    LIMIT 1) AS primary_concept,
                    EXISTS(
                      SELECT 1 FROM notes_nodes nn
                      WHERE nn.template_id LIKE ?
@@ -113,7 +118,7 @@ def build_notes_fill_doc(
             WHERE c.run_id = ?
             ORDER BY sheet, row
             """,
-            (family_prefix + "%", family_prefix + "%", run_id),
+            (family_prefix + "%", family_prefix + "%", family_prefix + "%", run_id),
         ).fetchall()
     finally:
         conn.close()
@@ -171,6 +176,8 @@ def build_notes_fill_doc(
             "source_sheet": r["sheet"],
             "source_row": r["row"],
         }
+        if r['primary_concept']:
+            entry['primary_concept'] = r['primary_concept']
         # Record only the size-forced tiers (full/raw notes stay unannotated so
         # the common case is unchanged); back-compat: `formatting_dropped` bool
         # still marks the flat tier.

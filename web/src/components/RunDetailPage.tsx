@@ -21,7 +21,7 @@ export interface RunDetailPageProps {
   error: string | null;
   /** Opens the run list, regardless of the browser's previous entry. */
   onBack: () => void;
-  onDownload: (runId: number) => void;
+  onDownload?: (runId: number) => void;
   onDelete: (runId: number) => void;
   /** Return an unstarted run to its editable extraction setup. */
   onResumeDraft?: (runId: number) => void;

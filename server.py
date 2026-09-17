@@ -10,9 +10,11 @@ cross-checks, and persists results to SQLite audit DB.
 # Force UTF-8 on Windows (avoids charmap codec errors with Unicode text from PDFs)
 import sys
 if sys.platform == "win32":
-    import io
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+    # Reconfigure in place: replacing a wrapper closes its shared buffer when
+    # the old wrapper is collected (including on reload and under pytest).
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8", errors="replace")
 
 # Trust the OS certificate store for SSL verification. Required on Windows
 # behind corporate MITM proxies (e.g. genai-sharedservice-emea.pwc.com) whose
@@ -8695,7 +8697,7 @@ def _save_review_task(
 #   GET    /api/runs                     — list with filters + pagination
 #   GET    /api/runs/{id}                — hydrated detail (agents + checks)
 #   DELETE /api/runs/{id}                — DB-only delete (leaves disk alone)
-#   GET    /api/runs/{id}/download/filled — stream the merged workbook
+#   GET    /api/runs/{id}/download/filled — 409: mTool template required
 #
 # All reads go through `db.repository`; this module never speaks raw SQL.
 # ---------------------------------------------------------------------------

@@ -133,12 +133,11 @@ def test_working_documents_are_ignored_but_contracts_remain_trackable(tmp_path) 
     result = subprocess.run(
         ["git", "check-ignore", "--no-index", "--stdin"],
         cwd=tmp_path,
-        input="\n".join(local_paths + maintained_paths) + "\n",
-        text=True,
+        input=("\n".join(local_paths + maintained_paths) + "\n").encode("utf-8"),
         capture_output=True,
         check=True,
     )
-    assert set(result.stdout.splitlines()) == set(local_paths)
+    assert set(result.stdout.decode("utf-8").splitlines()) == set(local_paths)
     agents = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
     assert "docs/local/" in agents
     assert "Do not stage or force-add them" in agents

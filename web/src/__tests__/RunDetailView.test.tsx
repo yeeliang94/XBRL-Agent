@@ -445,10 +445,11 @@ describe("RunDetailView", () => {
       <RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={onDownload} />,
     );
     fireEvent.click(screen.getByRole("button", { name: /download/i }));
-    expect(onDownload).toHaveBeenCalledWith(42);
+    expect(onDownload).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "Fill mTool template" })).toBeTruthy();
   });
 
-  test("Download button is disabled when no merged workbook", () => {
+  test("Draft preparation does not require the old merged workbook", () => {
     render(
       <RunDetailView
         detail={makeDetail({ merged_workbook_path: null })}
@@ -457,7 +458,7 @@ describe("RunDetailView", () => {
       />,
     );
     const btn = screen.getByRole("button", { name: /download/i }) as HTMLButtonElement;
-    expect(btn.disabled).toBe(true);
+    expect(btn.disabled).toBe(false);
   });
 
   test("Delete button opens the confirm dialog and fires onDelete on confirm", () => {
@@ -1058,7 +1059,7 @@ describe("RunDetailView", () => {
       // keeps the workbook download but drops unrelated destructive/tools UI.
       expect(screen.queryByRole("button", { name: /fill mtool template/i })).toBeNull();
       expect(screen.queryByRole("button", { name: /delete run/i })).toBeNull();
-      expect(screen.getByRole("button", { name: /download filled excel/i })).toBeTruthy();
+      expect(screen.getByRole("button", { name: /download draft/i })).toBeTruthy();
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -1510,7 +1511,8 @@ describe("RunDetailView", () => {
     );
     // On Overview (the landing tab) the full action set renders.
     expect(screen.getByRole("button", { name: /review issues/i })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /fill mtool template/i })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /fill mtool template/i })).toBeNull();
+    expect(screen.getAllByRole("button", { name: /download draft/i })).toHaveLength(1);
     // On a work surface only Download remains — "Review issues" follows the
     // same Overview-only rule as run management, not a rule of its own.
     fireEvent.click(screen.getByRole("tab", { name: /cross-checks/i }));
@@ -1518,6 +1520,17 @@ describe("RunDetailView", () => {
     expect(screen.queryByRole("button", { name: /fill mtool template/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /delete run/i })).toBeNull();
     expect(screen.getByRole("button", { name: /download draft/i })).toBeTruthy();
+  });
+
+  test.each(["failed", "aborted"] as const)("%s run explains template preparation before opening the picker", (status) => {
+    render(<RunDetailView detail={makeDetail({ status })} onDelete={() => {}} />);
+    expect(screen.queryByText(/partial workbook was preserved/i)).toBeNull();
+    expect(screen.getByText(/Saved figures may be incomplete/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Prepare investigation draft" }));
+    const confirmation = screen.getByRole("dialog");
+    expect(confirmation).toHaveTextContent("choose an mTool template to fill with the saved figures");
+    fireEvent.click(within(confirmation).getByRole("button", { name: "Choose mTool template" }));
+    expect(screen.getByRole("dialog", { name: "Fill mTool template" })).toBeInTheDocument();
   });
 
   test("flagged run confirms before downloading an investigation draft", () => {
@@ -1532,8 +1545,9 @@ describe("RunDetailView", () => {
     fireEvent.click(screen.getByRole("button", { name: /download draft/i }));
     expect(screen.getByRole("dialog").textContent).toMatch(/not ready to file/i);
     expect(onDownload).not.toHaveBeenCalled();
-    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /^download draft$/i }));
-    expect(onDownload).toHaveBeenCalled();
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /^choose mtool template$/i }));
+    expect(onDownload).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "Fill mTool template" })).toBeTruthy();
   });
 
   test("clean completed run shows no warning banner and a primary Download", () => {
@@ -1547,7 +1561,7 @@ describe("RunDetailView", () => {
       />,
     );
     expect(screen.queryByRole("alert")).toBeNull();
-    const download = screen.getByRole("button", { name: /download filled excel/i });
+    const download = screen.getByRole("button", { name: /download draft/i });
     expect(download.className).toMatch(/primary/i);
   });
 

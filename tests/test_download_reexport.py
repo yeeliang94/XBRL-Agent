@@ -275,50 +275,10 @@ def _add_agent(db_path, run_id, statement_type, status, variant="Indirect"):
         conn.close()
 
 
-def _download(server, run_id):
+def test_old_draft_download_requires_mtool_template(seeded_run):
     from fastapi.testclient import TestClient
-    return TestClient(server.app).get(f"/api/runs/{run_id}/download/filled")
-
-
-def test_download_is_marked_when_a_statement_did_not_finish(seeded_run):
-    server, db_path, run_id, _sheet, _row = seeded_run
-    _add_agent(db_path, run_id, "SOCF", "failed")
-
-    resp = _download(server, run_id)
-
-    assert resp.status_code == 200, "the download must stay available"
-    assert "INCOMPLETE" in resp.headers["content-disposition"], \
-        resp.headers["content-disposition"]
-    assert resp.headers["X-Incomplete-Statements"] == "SOCF"
-
-
-def test_clean_download_is_not_marked(seeded_run):
-    server, _db_path, run_id, _sheet, _row = seeded_run
-
-    resp = _download(server, run_id)
-
-    assert resp.status_code == 200
-    assert "INCOMPLETE" not in resp.headers["content-disposition"]
-    assert "X-Incomplete-Statements" not in resp.headers
-
-
-def test_skipped_statement_does_not_mark_the_download(seeded_run):
-    """`skipped` is a NotPrepared variant — no template to fill, nothing
-    half-read."""
-    server, db_path, run_id, _sheet, _row = seeded_run
-    _add_agent(db_path, run_id, "SOCI", "skipped", variant="NotPrepared")
-
-    resp = _download(server, run_id)
-
-    assert "INCOMPLETE" not in resp.headers["content-disposition"]
-
-
-def test_failed_notes_template_does_not_mark_the_download(seeded_run):
-    """Notes have their own coverage gate. A failed notes template must not be
-    reported as an unfinished FACE statement."""
-    server, db_path, run_id, _sheet, _row = seeded_run
-    _add_agent(db_path, run_id, "NOTES_LIST_OF_NOTES", "failed", variant=None)
-
-    resp = _download(server, run_id)
-
-    assert "INCOMPLETE" not in resp.headers["content-disposition"]
+    server, _db, run_id, _sheet, _row = seeded_run
+    response = TestClient(server.app).get(f"/api/runs/{run_id}/download/filled")
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "mtool_template_required"
+    assert response.json()["detail"]["prepare_url"] == f"/api/runs/{run_id}/mtool-fill/patch"

@@ -279,14 +279,16 @@ def test_coordinator_projects_numeric_cells_to_facts(tmp_path):
             "'2026-06-17T00:00:00Z')"
         )
         run_id = int(cur.lastrowid)
-        # A real LEAF row of the numeric template, with its Company/CY target
-        # cell (column letter) — that's the cell the writer manifest targets.
+        # A genuine numeric LEAF row, with its Company/CY target. Numeric
+        # notes templates also contain explanatory text-disclosure leaves.
         tgt = conn.execute(
             "SELECT n.render_row AS row, t.target_col AS col "
             "FROM concept_nodes n JOIN concept_targets t "
             "ON t.concept_uuid = n.concept_uuid "
             "WHERE n.template_id = ? AND n.kind = 'LEAF' "
             "AND t.entity_scope = 'Company' AND t.period = 'CY' "
+            "AND EXISTS (SELECT 1 FROM template_slots ts "
+            "WHERE ts.canonical_target_id=n.concept_uuid AND ts.value_kind='numeric') "
             "ORDER BY n.render_row LIMIT 1",
             (_ISSUED_CAPITAL_TID,),
         ).fetchone()

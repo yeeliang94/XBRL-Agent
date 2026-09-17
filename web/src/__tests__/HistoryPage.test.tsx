@@ -276,7 +276,8 @@ describe("HistoryPage", () => {
         expect(screen.getByRole("button", { name: /download/i })).toBeTruthy(),
       );
       fireEvent.click(screen.getByRole("button", { name: /download/i }));
-      expect(setHref).toHaveBeenCalledWith("/api/runs/9/download/filled");
+      expect(setHref).not.toHaveBeenCalled();
+      expect(screen.getByRole("dialog", { name: "Fill mTool template" })).toBeTruthy();
     } finally {
       Object.defineProperty(window, "location", {
         writable: true,
