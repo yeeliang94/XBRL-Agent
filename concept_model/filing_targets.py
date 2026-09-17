@@ -22,7 +22,7 @@ from concept_model.parser import ConceptNode, _derive_template_id, parse_templat
 from concept_model.taxonomy_semantics import taxonomy_concept
 
 
-MANIFEST_VERSION = "2022-v1-slot-semantics-2"
+MANIFEST_VERSION = "2022-v1-slot-semantics-3"
 WRITABLE_SLOT_ROLES = frozenset({"INPUT", "MATRIX_INPUT"})
 SLOT_ROLES = frozenset({
     "PRESENTATION_ONLY",
@@ -197,7 +197,9 @@ def _numeric_targets(path: Path) -> tuple[str, list[FilingTarget]]:
                     canonical_target_id=node.concept_uuid,
                     label=node.canonical_label,
                     slot_role=slot_role,
-                    value_kind="numeric",
+                    value_kind=("html" if concept and
+                                (concept.data_type or '').lower().endswith('textblockitemtype')
+                                else "numeric"),
                     taxonomy_element_id=element_id,
                     namespace_uri=concept.namespace_uri if concept else None,
                     local_name=concept.local_name if concept else None,
@@ -584,13 +586,13 @@ def persist_template_manifest(db_path: str | Path, path_value: str | Path) -> in
             SET invalid_target = CASE WHEN concept_uuid IN (
                     SELECT canonical_target_id FROM template_slots
                     WHERE template_id = ?
-                      AND slot_role IN ('PRESENTATION_ONLY', 'UNMAPPED')
+                      AND (slot_role IN ('PRESENTATION_ONLY', 'UNMAPPED') OR value_kind = 'html')
                 ) THEN 1 ELSE 0 END,
                 invalid_target_reason = CASE WHEN concept_uuid IN (
                     SELECT canonical_target_id FROM template_slots
                     WHERE template_id = ?
-                      AND slot_role IN ('PRESENTATION_ONLY', 'UNMAPPED')
-                ) THEN 'The stored value targets a presentation-only template row.'
+                      AND (slot_role IN ('PRESENTATION_ONLY', 'UNMAPPED') OR value_kind = 'html')
+                ) THEN 'The stored numeric value targets a heading or text disclosure.'
                   ELSE NULL END
             WHERE concept_uuid IN (
                 SELECT concept_uuid FROM concept_nodes WHERE template_id = ?
@@ -715,6 +717,7 @@ def semantic_coverage_for_run(
                     AND ts.slot_role IN (
                       'INPUT', 'MATRIX_INPUT', 'FORMULA', 'MATRIX_FORMULA'
                     )
+                    AND ts.value_kind = 'numeric'
                 )
               )
             )

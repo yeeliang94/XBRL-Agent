@@ -1,0 +1,8 @@
+{
+  "pdfplumber": {"environment": "pdfplumber", "options": {}},
+  "liteparse-native": {"environment": "liteparse", "options": {"ocr_enabled": false, "output_format": "json"}},
+  "liteparse-tesseract": {"environment": "liteparse", "model_init": true, "options": {"ocr_enabled": true, "ocr_language": "eng", "output_format": "json"}},
+  "liteparse-rapidocr": {"environment": "liteparse", "model_init": true, "requires_local_ocr_server": true, "options": {"ocr_enabled": true, "ocr_server_url": "http://127.0.0.1:8000/ocr", "output_format": "json"}},
+  "docling": {"environment": "docling", "model_init": true, "options": {}},
+  "paddle-structure": {"environment": "paddle", "model_init": true, "options": {"device": "cpu", "use_doc_orientation_classify": false, "use_doc_unwarping": false, "use_textline_orientation": false, "use_formula_recognition": false}}
+}

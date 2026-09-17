@@ -57,7 +57,7 @@ export type { RunTabKey } from "../lib/runTabs";
 
 export interface RunDetailViewProps {
   detail: RunDetailJson;
-  onDownload: (runId: number) => void;
+  onDownload?: (runId: number) => void;
   onDelete: (runId: number) => void;
   /** Resume configuration for an unstarted draft. */
   onResumeDraft?: (runId: number) => void;
@@ -515,7 +515,7 @@ function HistoricalAgentWorkspace({ agents }: { agents: RunAgentJson[] }) {
 // Tab identity for the run-detail surface. Review + Values are gated on
 // canonical mode (the reviewer diff + concept tree only exist there).
 export function RunDetailView({
-  detail, onDownload, onDelete, onResumeDraft, onForceAbort, onRegenerateNotes,
+  detail, onDelete, onResumeDraft, onForceAbort, onRegenerateNotes,
   canonicalEnabled = false, initialTab = "overview",
 }: RunDetailViewProps) {
   // Which tab is showing. Lazy content (Notes editor, Concepts workspace,
@@ -853,25 +853,19 @@ export function RunDetailView({
           ) : null}
           {!isDraft && <button
             type="button"
-            onClick={() => isInvestigationOutcome ? setConfirmDraftDownload(true) : onDownload(detail.id)}
-            disabled={!canDownload}
+            onClick={() => isInvestigationOutcome ? setConfirmDraftDownload(true) : setMtoolOpen(true)}
+            disabled={!canFillMtool}
             className={isInvestigationOutcome ? uiClass.btnSecondary : uiClass.btnPrimary}
             style={isInvestigationOutcome ? ui.buttonSecondary : ui.buttonPrimary}
             title={
-              canDownload
+              canFillMtool
                 ? isInvestigationOutcome
-                  ? "Download an investigation draft with unresolved checks"
-                  : "Download the completed Excel file"
-                : "The Excel file isn't ready (the run stopped before it was assembled)"
+                  ? "Prepare an investigation draft using your mTool template"
+                  : "Prepare a draft using your mTool template"
+                : "Wait for extraction to finish or stop it first"
             }
           >
-            {isFailed
-              ? "Download partial workbook"
-              : isAborted
-                ? "Download investigation draft"
-                : isErrorOutcome
-                  ? "Download draft"
-                : "Download filled Excel"}
+            {isFailed || isAborted ? "Prepare investigation draft" : "Download draft"}
           </button>}
           {/* The "Figures" tab is the single door to reviewing values — the
               old duplicate "Review values" button was removed (Phase 2). */}
@@ -885,20 +879,6 @@ export function RunDetailView({
               actions. */}
           {activeTab === "overview" && (
             <>
-              <button
-                type="button"
-                onClick={() => setMtoolOpen(true)}
-                disabled={!canFillMtool}
-                className={uiClass.btnSecondary}
-                style={ui.buttonSecondary}
-                title={
-                  canFillMtool
-                    ? "Fill an mTool template from this run's figures"
-                    : "Wait for extraction to finish or stop it first"
-                }
-              >
-                Fill mTool template
-              </button>
               <span aria-hidden="true" style={styles.actionsDivider} />
               {isRunning && onForceAbort ? (
                 // A run wedged in `running` can never be deleted (Delete is disabled
@@ -986,8 +966,8 @@ export function RunDetailView({
                 .map((a) => STATEMENT_LABELS[a.statement_type as keyof typeof STATEMENT_LABELS] ?? a.statement_type)
                 .join(", ")}
               . The figures each one got as far as writing are still in this run
-              and in the Excel download, which is named “INCOMPLETE” for that
-              reason. Re-run the statement before relying on it. This run cannot
+              and will be identified as incomplete in the template preparation report.
+              Re-run the statement before relying on it. This run cannot
               be filed until it is resolved.
             </span>
           </div>
@@ -1009,9 +989,8 @@ export function RunDetailView({
               {isFailed ? "This extraction did not finish." : "This extraction was stopped."}
             </strong>
             <span style={styles.errorBannerText}>
-              {canDownload
-                ? "A partial workbook was preserved for investigation. Review Activity before relying on any figures."
-                : "No workbook was assembled. Open Activity for details, then start a new extraction when the issue is resolved."}
+              Saved figures may be incomplete. Review Activity before using them to prepare
+              an investigation draft with your mTool template.
             </span>
           </div>
           <button
@@ -1095,24 +1074,20 @@ export function RunDetailView({
 
       <ConfirmDialog
         isOpen={confirmDraftDownload}
-        title={isFailed ? "Download partial workbook?" : "Download investigation draft?"}
+        title="Prepare investigation draft?"
         message={
           <>
             {isFailed || isAborted ? (
-              <>This workbook was produced by a run that did not finish normally. Download it only for investigation; it is not ready to file.</>
+              <>This run did not finish normally. Next, choose an mTool template to fill with the saved figures. The resulting draft is for investigation only; it is not ready to file.</>
             ) : (
-              <>This workbook has <strong>{failingChecks.length} unresolved check{failingChecks.length === 1 ? "" : "s"}</strong>. Download it only to investigate or continue review; it is not ready to file.</>
+              <>This run has <strong>{failingChecks.length} unresolved check{failingChecks.length === 1 ? "" : "s"}</strong>. Next, choose an mTool template to prepare a draft for investigation or review; it is not ready to file.</>
             )}
           </>
         }
-        confirmLabel={isFailed
-          ? "Download partial workbook"
-          : isErrorOutcome
-            ? "Download draft"
-            : "Download investigation draft"}
+        confirmLabel="Choose mTool template"
         onConfirm={() => {
           setConfirmDraftDownload(false);
-          onDownload(detail.id);
+          setMtoolOpen(true);
         }}
         onCancel={() => setConfirmDraftDownload(false)}
       />

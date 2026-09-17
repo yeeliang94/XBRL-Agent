@@ -5,6 +5,7 @@ import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { formatElapsedMs } from "../lib/time";
 import { runStatusDisplay } from "../lib/runStatus";
+import { MtoolFillModal } from "./MtoolFillModal";
 import { StatusIcon } from "./StatusIcon";
 
 interface Props {
@@ -343,7 +344,7 @@ export function ResultsView({ complete, sessionId, runStartTime, getResultJson, 
           />
         )}
         {activeTab === "downloads" && (
-          <DownloadsTab sessionId={sessionId} statementsCompleted={complete.statementsCompleted} />
+          <DownloadsTab runId={runId} sessionId={sessionId} statementsCompleted={complete.statementsCompleted} />
         )}
       </div>
     </div>
@@ -491,7 +492,8 @@ function DataPreviewTab({
 
 // --- Downloads Tab ---
 
-function DownloadsTab({ sessionId, statementsCompleted }: { sessionId: string; statementsCompleted?: string[] }) {
+function DownloadsTab({ runId, sessionId, statementsCompleted }: { runId?: number | null; sessionId: string; statementsCompleted?: string[] }) {
+  const [prepareOpen, setPrepareOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleDownload = async (filename: string) => {
@@ -533,29 +535,20 @@ function DownloadsTab({ sessionId, statementsCompleted }: { sessionId: string; s
       )}
 
       {/* Primary action — the one file the user files. One consistent name
-          ("Download filled Excel"), no emoji (Phase 4). */}
+          ("Download draft"), no emoji (Phase 4). */}
       <div style={styles.downloadSection}>
         <button
           className={uiClass.btnPrimary}
-          onClick={() => handleDownload("filled.xlsx")}
+          onClick={() => setPrepareOpen(true)}
+          disabled={runId == null}
           style={styles.downloadPrimary}
         >
-          Download filled Excel
+          Download draft
         </button>
       </div>
 
-      {/* Per-statement Excel files (the other artifacts a user might file). */}
-      {hasMulti &&
-        statementsCompleted.map((stmt) => (
-          <div key={stmt} style={styles.downloadSection}>
-            <div style={styles.downloadSectionLabel}>{stmt}</div>
-            <div style={styles.downloadRow}>
-              <button onClick={() => handleDownload(`${stmt}_filled.xlsx`)} className={uiClass.btnSecondary} style={styles.downloadButton}>
-                Excel
-              </button>
-            </div>
-          </div>
-        ))}
+      {runId != null && <MtoolFillModal runId={runId} open={prepareOpen} onClose={() => setPrepareOpen(false)} />}
+      {runId == null && <p>Open this run from History to prepare a draft with your mTool template.</p>}
 
       {/* Diagnostics — the developer artifacts (raw JSON + the AI conversation
           log), tucked into a collapsed disclosure so they don't sit next to

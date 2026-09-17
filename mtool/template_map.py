@@ -18,6 +18,7 @@ import re
 from typing import Any
 
 from mtool.column_detect import (
+    category_domain_rows,
     describe_template,
     detect_column_map,
     fingerprint_workbook,
@@ -28,6 +29,7 @@ from mtool.offline_fill import (
     get_sheet_paths,
     load_workbook_entries,
     read_sheet_cells,
+    resolve_sheet_name,
 )
 
 
@@ -67,6 +69,21 @@ def index_workbook(data: dict) -> tuple[dict, dict]:
                     for identifier in _taxonomy_identifiers(text):
                         occurrences[identifier].append(
                             (sheet, int(row), col))
+        # mTool 2.2 encodes the SOCIE all-components column as numeric 0
+        # beside the table::axis::member headers, with the display label Total.
+        # It is the EquityMember total, not a missing source category. Require
+        # the exact axis/table header and total marker together; never infer a
+        # default from a blank column or position.
+        for row, row_cells in cells.items():
+            if not any(
+                {"ifrs-full_StatementOfChangesInEquityTable", "ifrs-full_ComponentsOfEquityAxis"}
+                <= set(_taxonomy_identifiers(raw or ""))
+                for _, raw in row_cells.values()
+            ):
+                continue
+            for col, (kind, raw) in row_cells.items():
+                if kind == "N" and raw == "0" and cells.get(row + 2, {}).get(col, (None, ""))[1] == "Total":
+                    occurrences["ifrs-full_EquityMember"].append((sheet, int(row), col))
     return occurrences, by_sheet
 
 
@@ -101,6 +118,14 @@ def inspect_template(
         (not expected_standard or expected_standard in descriptor.get("filing_standards", []))
         and (not expected_level or expected_level in descriptor.get("filing_levels", []))
     )
+    native_standards = set()
+    for identifier in occurrences:
+        if identifier.startswith(('ifrs-smes_', 'ssmt-mpers_')):
+            native_standards.add('mpers')
+        elif identifier.startswith(('ifrs-full_', 'ssmt-mfrs_')):
+            native_standards.add('mfrs')
+    if expected_standard and native_standards and expected_standard not in native_standards:
+        family_match = False
     if descriptor and descriptor.get("source") == "generated":
         expected_statements = {
             str(write.get("template_id") or "").split("-")[2].upper()
@@ -161,7 +186,7 @@ def _dimensional_period_blocks(cells: dict) -> list[dict[str, Any]]:
     ``#ENDT#`` row declares that block's reporting date.  Comparing those
     dates is the same evidence-backed rule used by column detection.
     """
-    dom_rows = _marker_rows(cells, "#DOM#")
+    dom_rows = category_domain_rows(cells)
     end_rows = _marker_rows(cells, "#ENDT#")
     raw_blocks: list[dict[str, Any]] = []
     for index, dom_row in enumerate(dom_rows):
@@ -296,6 +321,7 @@ def _resolution_options(
     occurrences: dict[str, list[tuple[str, int, str]]],
     cells_by_sheet: dict[str, dict],
     period_blocks: dict[str, list[dict[str, Any]]],
+    *, include_formulas: bool = False,
 ) -> list[dict[str, Any]]:
     """Offer only taxonomy-addressed cells; never arbitrary operator coordinates.
 
@@ -352,7 +378,7 @@ def _resolution_options(
             if candidate_sheet != sheet or not match:
                 continue
             col, row = match.group(1), int(match.group(2))
-            if cells.get(row, {}).get(col, (None,))[0] == "F":
+            if not include_formulas and cells.get(row, {}).get(col, (None,))[0] == "F":
                 continue
             # Include the actual row text and label-role URI so opening and
             # closing balances are distinguishable without inventing labels.
@@ -432,6 +458,12 @@ def _resolve_taxonomy_target(
     expected_sheet = write.get("sheet")
     dimensions = (write.get("semantic_address") or {}).get("dimensions") or {}
     dimensional = bool(detected.get(expected_sheet, {}).get("dimensional"))
+    if dimensional:
+        _, period_issue = _filter_candidates_for_period(
+            [item for item in all_candidates if item[0] == expected_sheet],
+            write, period_blocks.get(expected_sheet, []))
+        if period_issue:
+            return None, period_issue, None
     if dimensional and not dimensions:
         return None, _coverage_issue(
             write,
@@ -525,6 +557,16 @@ def resolve_filing_doc(
     if data is None:
         _, data, _ = load_workbook_entries(template_path)
     workbook_index = workbook_index or index_workbook(data)
+    # Keep canonical identity for selection/receipts while resolving only
+    # physical names against the uploaded workbook. Do not mutate the caller.
+    sheet_map = {s: resolve_sheet_name(s, workbook_index[1]) or s
+                 for s in doc.get('sheets', {})}
+    doc = {**doc, 'sheets': {sheet_map[s]: cfg for s, cfg in doc.get('sheets', {}).items()},
+           'writes': [{**w, 'sheet': sheet_map.get(w.get('sheet'), w.get('sheet')),
+                       'canonical_sheet': w.get('canonical_sheet', w.get('sheet'))}
+                      for w in doc.get('writes', [])]}
+    if column_map is not None:
+        column_map = {sheet_map.get(s, s): cfg for s, cfg in column_map.items()}
     inspection = inspect_template(
         template_path, doc, data=data, workbook_index=workbook_index
     )
@@ -581,6 +623,11 @@ def resolve_filing_doc(
         address = write.get("semantic_address") or {}
         primary = address.get("primary_concept")
         target: tuple[str, int, str] | None = None
+        if (write.get('sheet') in cells_by_sheet
+                and detected.get(write.get('sheet'), {}).get('basis') == 'missing'):
+            unresolved.append(_coverage_issue(write, primary or '', 'ambiguous_sheet_identity',
+                'More than one worksheet matches this canonical sheet; no destination was selected.'))
+            continue
 
         if generated and hint.get("sheet") and hint.get("row") and hint.get("col"):
             target = (hint["sheet"], int(hint["row"]), hint["col"])
@@ -600,12 +647,29 @@ def resolve_filing_doc(
                 if ambiguous_issue and write.get("label"):
                     label_col = detected.get(write.get("sheet"), {}).get("label_column")
                     expected_label = str(write["label"]).strip().lstrip("*").strip()
-                    for option in options:
+                    # Match occurrences before excluding formula destinations:
+                    # a closing balance can belong to a locked calculation.
+                    occurrence_options = _resolution_options(
+                        write, issue, occurrences, cells_by_sheet, period_blocks,
+                        include_formulas=True)
+                    for option in occurrence_options:
                         sheet, ref = option["cell"].rsplit("!", 1)
                         row = int(re.search(r"\d+$", ref).group())
                         raw = cells_by_sheet[sheet].get(row, {}).get(label_col, (None, ""))[1]
                         if (raw or "").strip().lstrip("*").strip() == expected_label:
                             exact.append(option)
+                    if len(exact) > 1 and write.get('kind') in {'LEAF', 'MATRIX_CELL'}:
+                        # Cash end balances can also appear as a reconciliation
+                        # formula with the identical label. A canonical input
+                        # belongs to the unique matching input occurrence.
+                        inputs = []
+                        for option in exact:
+                            s, ref = option['cell'].rsplit('!', 1)
+                            match = re.fullmatch(r'([A-Z]+)([0-9]+)', ref)
+                            if cells_by_sheet[s].get(int(match.group(2)), {}).get(match.group(1), (None,))[0] != 'F':
+                                inputs.append(option)
+                        if len(inputs) == 1:
+                            exact = inputs
                 if len(exact) == 1:
                     sheet, ref = exact[0]["cell"].rsplit("!", 1)
                     match = re.fullmatch(r"([A-Z]+)([0-9]+)", ref)
@@ -640,13 +704,15 @@ def resolve_filing_doc(
         if target:
             sheet, row, col = target
             item = {"sheet": sheet, "cell": f"{col}{row}",
-                    "value": write["value"]}
+                    "value": write["value"], "source_label": write.get('label')}
             # Reverse ingest uses these non-patcher metadata fields to join a
             # resolved cell back to its canonical fact slot.  offline_fill
             # intentionally ignores unknown keys.
-            for key in ("concept_uuid", "period", "entity_scope", "template_id"):
+            for key in ("concept_uuid", "period", "entity_scope", "template_id", "value_origin", "canonical_sheet"):
                 if key in write:
                     item[key] = write[key]
+            if cells_by_sheet.get(sheet, {}).get(row, {}).get(col, (None,))[0] == 'F':
+                item['reconcile_formula'] = True
             resolved.append(item)
             resolved_sources.append(write)
         elif not primary or inspection["semantic_source"] == "legacy-labels":

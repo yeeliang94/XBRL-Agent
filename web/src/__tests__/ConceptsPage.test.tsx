@@ -1320,7 +1320,7 @@ describe("ConceptsPage", () => {
   });
 
   test("does NOT render its own Download button (the run header owns the single CTA)", async () => {
-    // Two identical primary "Download filled Excel" buttons on one screen
+    // Two identical primary "Download draft" buttons on one screen
     // (run header + workspace header) made users ask whether they differ —
     // the workspace copy was removed (run-168 design critique).
     mockFetch((url) => {

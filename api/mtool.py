@@ -436,9 +436,16 @@ def _select_sheets_or_422(raw, doc, note_sheets):
 def _validate_selected_note_targets(notes_doc, selection, data):
     if selection is None:
         return
-    from mtool.offline_fill import get_defined_names
+    from mtool.offline_fill import get_defined_names, get_sheet_paths, get_shared_strings, read_sheet_cells, resolve_sheet_name
     try:
-        validate_note_destinations(notes_doc, selection, get_defined_names(data, "fn_"))
+        shared = get_shared_strings(data)
+        cells = {s: read_sheet_cells(data[p], shared) for s, p in get_sheet_paths(data).items()}
+        physical_selection = {**selection, 'selected_sheets': [
+            resolve_sheet_name(s, cells) or s for s in selection['selected_sheets']]}
+        physical_doc = {**notes_doc, 'footnotes': [{**n, 'source_sheet':
+            resolve_sheet_name(n.get('source_sheet', ''), cells) or n.get('source_sheet')}
+            for n in notes_doc['footnotes']]}
+        validate_note_destinations(physical_doc, physical_selection, get_defined_names(data, "fn_"))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -615,8 +622,13 @@ def patch_mtool_template(
             )
 
         if selection is not None:
+            physical_selected = {
+                detected.get(sheet, {}).get('physical_sheet') or sheet
+                for sheet in selection['selected_sheets']
+            }
             for write in ready["writes"]:
-                if write["sheet"] not in selection["selected_sheets"]:
+                if (write.get('canonical_sheet', write['sheet']) not in selection["selected_sheets"]
+                        or write['sheet'] not in physical_selected):
                     raise HTTPException(status_code=422, detail=(
                         f"Figure {write.get('label') or write.get('concept_uuid')!r} resolved "
                         f"to sheet {write['sheet']!r} outside the selected sheets. "
@@ -1294,7 +1306,7 @@ def _notes_report_block(notes_report: dict | None) -> dict | None:
 # be hundreds of rows the operator never reads, and the receipt keeps the
 # complete record anyway.
 _DETAIL_KEYS = ("unresolved", "skipped_formula", "mismatches", "ambiguous",
-                "fuzzy_matched", "errors")
+                "fuzzy_matched", "errors", "reconciled_formula")
 
 
 def _full_report(report: dict, notes_report: dict | None = None) -> dict:
@@ -1302,6 +1314,7 @@ def _full_report(report: dict, notes_report: dict | None = None) -> dict:
     counts = {k: len(report[k]) for k in (
         "written", "fuzzy_matched", "skipped_formula", "type_changed",
         "unresolved", "ambiguous", "mismatches", "errors")}
+    counts['reconciled_formula'] = len(report.get('reconciled_formula', []))
     notes_block = _notes_report_block(notes_report)
     # Top-level status is COMBINED: a degraded notes fill must not hide behind a
     # green numeric status (the modal keys its "Clean / safe to Validate" banner

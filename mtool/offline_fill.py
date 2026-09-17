@@ -30,6 +30,7 @@ Input file shape (docs/PLAN-mtool-offline-patch-spike.md for the contract):
 from __future__ import annotations
 
 import argparse
+import ast
 import difflib
 import json
 import re
@@ -43,6 +44,35 @@ _TEXT_CELL_TYPES = {"s", "str", "inlineStr", "b", "e"}
 
 
 # ---------------------------------------------------------------- utilities
+
+# Native MPERS names differ from canonical names. Only accept these observed
+# equivalents when the destination carries its MPERS role marker. This helper
+# is also used by server detection/resolution, keeping the standalone patcher
+# and the server on one sheet-identity contract.
+_MPERS_SHEET_NAMES = {
+    'sore': ('StatementofRetainedEarnings', 'ssmt-mpers_DisclosureOfRetainedEarningsAbstract'),
+    'notes-issuedcapital': ('Notes-IssuedCap', 'ifrs-smes_ClassesOfShareCapitalAxis'),
+    'notes-relatedpartytran': ('Notes-RelatedParty', 'ifrs-smes_CategoriesOfRelatedPartiesAxis'),
+    'notes-summaryofaccpol': ('Notes-SummaryOfAcc', 'ssmt-mpers_DisclosureOnSummaryOfSignificantAccountingPoliciesAbstract'),
+}
+_TAXONOMY_ID = re.compile(r'[A-Za-z0-9_.-]+\.xsd#([A-Za-z_][A-Za-z0-9_.-]*)')
+
+
+def resolve_sheet_name(source_sheet: str, cells_by_sheet: dict) -> str | None:
+    """Resolve a sheet by exact identity or a taxonomy-verified native name."""
+    exact = [s for s in cells_by_sheet if s.casefold() == source_sheet.casefold()]
+    spec = _MPERS_SHEET_NAMES.get(source_sheet.casefold())
+    candidates = list(exact)
+    if spec:
+        name, marker = spec
+        for sheet, cells in cells_by_sheet.items():
+            if sheet.casefold() != name.casefold() or sheet in candidates:
+                continue
+            ids = {i for row in cells.values() for _, raw in row.values()
+                   for i in _TAXONOMY_ID.findall(raw or '')}
+            if marker in ids:
+                candidates.append(sheet)
+    return candidates[0] if len(candidates) == 1 else None
 
 def normalize_label(text: str) -> str:
     text = re.sub(r"\s+", " ", text).strip()
@@ -927,6 +957,9 @@ def resolve_label_to_note_cell(
             continue
         trigger_col = idx_to_col(col_to_idx(label_col) + 1)
         for row_num, cols in info["cells"].items():
+            ids = {i for _, raw in cols.values() for i in _TAXONOMY_ID.findall(raw or '')}
+            if ids and all(i.endswith(('Abstract', 'Table', 'Axis', 'Member', 'LineItems')) for i in ids):
+                continue
             cell = cols.get(label_col)
             if cell is None:
                 continue
@@ -1363,6 +1396,7 @@ def fill_footnotes(workbook_path: str, doc: dict, output_path: str | None = None
 
     resolved_html = {}
     seen_keys = set()
+    all_cells = None
     for i, it in enumerate(doc["footnotes"]):
         base = {"index": i, "sheet": it.get("sheet"), "cell": it.get("cell"),
                 "key": it.get("key"), "label": it.get("label"),
@@ -1372,6 +1406,55 @@ def fill_footnotes(workbook_path: str, doc: dict, output_path: str | None = None
                 # note is traceable BY LABEL in the report, not just via the
                 # aggregate meta counts. None for untagged (full/raw) notes.
                 "format_tier": it.get("format_tier")}
+        it = dict(it)
+        if it.get('source_sheet'):
+            if all_cells is None:
+                all_cells = {sheet: read_sheet_cells(data[path], sst)
+                             for sheet, path in sheet_paths.items()}
+            physical = resolve_sheet_name(it['source_sheet'], all_cells)
+            if physical is None:
+                report['unresolved'].append({**base, 'reason': 'no_match',
+                    'detail': 'The requested note sheet is missing or has ambiguous native equivalents.'})
+                continue
+            it['source_sheet'] = physical
+        if it.get('primary_concept'):
+            if note_cells is None:
+                note_cells = _collect_note_sheet_cells(data, sheet_paths, sst, footnote_sheet, defined)
+            candidates = []
+            for sheet, info in note_cells.items():
+                if not _same_sheet(sheet, it.get('source_sheet', '')):
+                    continue
+                label_col = info.get('label_col')
+                if not label_col:
+                    continue
+                for row, cols in info['cells'].items():
+                    ids = {x for _, raw in cols.values() for x in _TAXONOMY_ID.findall(raw or '')}
+                    if it['primary_concept'] in ids:
+                        candidates.append({'sheet': sheet,
+                            'cell': f'{idx_to_col(col_to_idx(label_col) + 1)}{row}',
+                            'label_cell': f'{label_col}{row}'})
+            explicit = (defined.get(it['key'], {}) if it.get('key') else it if it.get('cell') else None)
+            if explicit is not None:
+                selected = [c for c in candidates if
+                    c['sheet'] == explicit.get('sheet') and c['cell'] == explicit.get('cell')]
+                if not selected:
+                    destination = it.get('key') or f"{it['sheet']}!{it['cell']}"
+                    guidance = ('Choose one of the matching destinations below.' if candidates else
+                                'This template has no verified destination for this note on the requested sheet. Check the template in mTool.')
+                    report['unresolved'].append({**base, 'reason': 'identity_mismatch',
+                        'detail': f'The selected destination ({destination}) could not be verified as the filing field for this note. Nothing was written. {guidance}',
+                        'candidates': candidates})
+                    continue
+                candidates = selected
+            if len(candidates) != 1:
+                report['unresolved'].append({**base, 'reason': 'ambiguous' if candidates else 'no_match',
+                    'detail': 'Text-block taxonomy identity did not resolve to one destination on the requested sheet.',
+                    'candidates': candidates})
+                continue
+            it.update(candidates[0])
+            it.pop('label', None)
+            base.update(candidates[0], resolved_via='taxonomy',
+                        visible_cell=f"{it['sheet']}!{it['cell']}")
         wrapped = wrap_footnote_html(it["html"])
         # Hard safety net (applies to EVERY caller — server, CLI, hand-authored
         # docs): never emit a payload over Excel's cell-string ceiling, or the
@@ -1657,6 +1740,155 @@ def run_fill(args) -> int:
     return 1 if degraded else 0
 
 
+def protected_input_cells(data: dict, sheet_paths: dict) -> dict:
+    """Describe effective protection without changing the workbook package.
+
+    Excel defaults cells to locked. A cell/row/column style can unlock them;
+    locking is enforced only when sheet protection is enabled. Formula
+    protection is handled independently by patch_cell_in_sheet.
+    """
+    ns = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    styles = ET.fromstring(data.get("xl/styles.xml", b"<styleSheet/>"))
+    bases = styles.find("m:cellStyleXfs", ns)
+    xfs = styles.find("m:cellXfs", ns)
+    locked = []
+    for xf in ([] if xfs is None else xfs):
+        protection = xf.find("m:protection", ns)
+        if protection is None and bases is not None:
+            base = int(xf.get("xfId", "0"))
+            if base < len(bases):
+                protection = bases[base].find("m:protection", ns)
+        locked.append(protection is None or protection.get("locked", "1") not in {"0", "false"})
+    result = {}
+    for sheet, path in sheet_paths.items():
+        root = ET.fromstring(data[path])
+        protection = root.find("m:sheetProtection", ns)
+        if protection is None or protection.get("sheet", "0") not in {"1", "true"}:
+            continue
+        cells = {c.get("r"): int(c.get("s")) for c in root.findall(".//m:sheetData/m:row/m:c", ns) if c.get("s") is not None}
+        rows = {int(r.get("r")): int(r.get("s")) for r in root.findall("m:sheetData/m:row", ns)
+                if r.get("s") is not None and r.get("customFormat", "0") in {"1", "true"}}
+        cols = [(int(c.get("min")), int(c.get("max")), int(c.get("style", "0"))) for c in root.findall("m:cols/m:col", ns)]
+        result[sheet] = (cells, rows, cols, locked)
+    return result
+
+
+def is_locked_input(protection: dict, sheet: str, addr: str) -> bool:
+    if sheet not in protection:
+        return False
+    cells, rows, cols, locked = protection[sheet]
+    match = re.fullmatch(r"([A-Z]+)([0-9]+)", addr)
+    if match is None:
+        return True
+    col, row = col_to_idx(match.group(1)), int(match.group(2))
+    style = cells.get(addr, rows.get(row))
+    if style is None:
+        style = next((s for lo, hi, s in cols if lo <= col <= hi), 0)
+    return locked[style] if 0 <= style < len(locked) else True
+
+
+def _translate_shared_formula(expression: str, origin: str, target: str) -> str:
+    """Translate only arithmetic/A1 tokens supported by reconciliation.
+
+    An unsupported token leaves the follower unresolved, never verified from
+    its cached value. Absolute row and column anchors move independently.
+    """
+    origin_col, origin_row = split_ref(origin)
+    target_col, target_row = split_ref(target)
+    delta_col = col_to_idx(target_col) - col_to_idx(origin_col)
+    delta_row = target_row - origin_row
+    token = re.compile(
+        r"(?P<ref>(?P<sheet>(?:'(?:[^']|'')+'|[A-Za-z_][A-Za-z0-9_.-]*)!)?"
+        r"(?P<col_abs>\$?)(?P<col>[A-Z]{1,3})(?P<row_abs>\$?)(?P<row>[1-9][0-9]*))"
+        r"|(?P<number>(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)"
+        r"|(?P<operator>[+*/()=\s-])")
+    parts = []
+    position = 0
+    while position < len(expression):
+        match = token.match(expression, position)
+        if match is None:
+            return ''
+        if match.group('ref'):
+            col = col_to_idx(match.group('col')) + (0 if match.group('col_abs') else delta_col)
+            row = int(match.group('row')) + (0 if match.group('row_abs') else delta_row)
+            if not (1 <= col <= 16384 and 1 <= row <= 1048576):
+                return ''
+            parts.append((match.group('sheet') or '') + match.group('col_abs')
+                         + idx_to_col(col) + match.group('row_abs') + str(row))
+        else:
+            parts.append(match.group())
+        position = match.end()
+    return ''.join(parts)
+
+
+def _calculated_value(cells_by_sheet: dict, sheet: str, addr: str,
+                      visiting: set | None = None, cache: dict | None = None) -> Decimal:
+    """Evaluate the native arithmetic subset; never use cached formula values.
+
+    Blank cells are zero in arithmetic. Missing sheets, unsupported functions,
+    cycles and non-numeric cells
+    remain unresolved. This deliberately does not claim to replace Excel.
+    """
+    visiting = set() if visiting is None else visiting
+    cache = {} if cache is None else cache
+    key = (sheet, addr)
+    if key in cache:
+        return cache[key]
+    if key in visiting or len(visiting) >= 100:
+        raise ValueError('Circular or excessively deep formula dependency')
+    col, row = split_ref(addr)
+    if sheet not in cells_by_sheet:
+        raise ValueError(f'Missing formula worksheet: {sheet}')
+    kind, raw = cells_by_sheet[sheet].get(row, {}).get(col, (None, None))
+    if kind is None or kind == 'E':
+        return Decimal(0)
+    if kind == 'N':
+        value = Decimal(raw)
+        if not value.is_finite():
+            raise ValueError('Non-finite formula operand')
+        return value
+    if kind != 'F' or not raw:
+        raise ValueError(f'Missing numeric formula input at {sheet}!{addr}')
+    visiting.add(key)
+    try:
+        values = {}
+        pattern = r"(?:(?:'((?:[^']|'')+)'|([A-Za-z_][A-Za-z0-9_.-]*))!)?(\$?[A-Z]{1,3}\$?[1-9][0-9]*)(?![A-Za-z0-9_(])"
+        def reference(match):
+            ref_sheet = (match.group(1) or match.group(2) or sheet).replace("''", "'")
+            name = f'v{len(values)}'
+            values[name] = _calculated_value(cells_by_sheet, ref_sheet,
+                match.group(3).replace('$',''), visiting, cache)
+            return name
+        expression = re.sub(pattern, reference, raw.lstrip('='))
+        if len(expression) > 16000:
+            raise ValueError('Formula exceeds supported evaluation size')
+        tree = ast.parse(expression, mode='eval')
+        def arithmetic(node):
+            if isinstance(node, ast.Expression):
+                return arithmetic(node.body)
+            if isinstance(node, ast.Name) and node.id in values:
+                return values[node.id]
+            if isinstance(node, ast.Constant) and type(node.value) in (int,float):
+                return Decimal(str(node.value))
+            if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd,ast.USub)):
+                value = arithmetic(node.operand)
+                return -value if isinstance(node.op,ast.USub) else value
+            if isinstance(node,ast.BinOp):
+                a,b = arithmetic(node.left),arithmetic(node.right)
+                if isinstance(node.op,ast.Add): return a+b
+                if isinstance(node.op,ast.Sub): return a-b
+                if isinstance(node.op,ast.Mult): return a*b
+                if isinstance(node.op,ast.Div): return a/b
+            raise ValueError('Unsupported formula expression; native recalculation required')
+        value = arithmetic(tree)
+        if not value.is_finite():
+            raise ValueError('Non-finite formula result')
+        cache[key] = value
+        return value
+    finally:
+        visiting.remove(key)
+
+
 def fill_workbook(
     workbook_path: str,
     doc: dict,
@@ -1678,12 +1910,14 @@ def fill_workbook(
     sheet_paths = get_sheet_paths(data)
     sst = get_shared_strings(data)
     sheets_cfg = doc.get("sheets", {})
+    protection = protected_input_cells(data, sheet_paths)
 
     report = {
         "workbook": workbook_path,
         "output": None if dry_run else output_path,
         "dry_run": bool(dry_run),
         "written": [], "fuzzy_matched": [], "skipped_formula": [],
+        "reconciled_formula": [],
         "type_changed": [],
         "unresolved": [], "ambiguous": [], "mismatches": [], "errors": [],
         "force_recalc": None,
@@ -1700,12 +1934,15 @@ def fill_workbook(
     patched_xml = {}
     verify_targets = []
     resolved_targets = set()
+    formula_checks = []
 
     for i, w in enumerate(doc["writes"]):
         sheet = w["sheet"]
         entry_path = sheet_paths.get(sheet)
-        base = {"index": i, "sheet": sheet, "label": w.get("label"),
+        base = {"index": i, "sheet": sheet, "label": w.get("label") or w.get('source_label'),
                 "column_role": w.get("column_role"), "value": w["value"]}
+        if w.get("value_origin"):
+            base["value_origin"] = w["value_origin"]
         if entry_path is None:
             report["errors"].append({**base, "error":
                 f"sheet {sheet!r} not found; workbook has "
@@ -1748,13 +1985,21 @@ def fill_workbook(
         xml = patched_xml.get(entry_path) or data[entry_path].decode("utf-8")
         try:
             value_str = format_value(w["value"])
-            xml, action = patch_cell_in_sheet(xml, addr, value_str)
+            candidate_xml, action = patch_cell_in_sheet(xml, addr, value_str)
+            if action != "formula_skipped" and is_locked_input(protection, sheet, addr):
+                report["unresolved"].append({**base, "reason": "protected_cell",
+                    "detail": "The destination is locked on a protected worksheet; nothing was written."})
+                continue
+            xml = candidate_xml
         except (PrefixedSheetError, ValueError) as exc:
             report["errors"].append({**base, "error": str(exc)})
             continue
         base["action"] = action
         if action == "formula_skipped":
-            report["skipped_formula"].append(base)
+            if w.get('reconcile_formula'):
+                formula_checks.append(base)
+            else:
+                report["skipped_formula"].append(base)
             continue
         patched_xml[entry_path] = xml
         if action == "type_changed":
@@ -1763,6 +2008,47 @@ def fill_workbook(
             report["fuzzy_matched"].append(base)
         report["written"].append(base)
         verify_targets.append((entry_path, addr, value_str))
+
+    if formula_checks:
+        current_cells = {s: read_sheet_cells(
+            patched_xml[p].encode('utf-8') if p in patched_xml else data[p], sst)
+            for s,p in sheet_paths.items()}
+        # read_sheet_cells intentionally exposes cached values to its other
+        # consumers. Reconciliation alone needs the actual formula expressions.
+        for sheet, path in sheet_paths.items():
+            root = ET.fromstring(patched_xml.get(path) or data[path])
+            formulas = []
+            shared_masters = {}
+            for cell in root.iter():
+                if _local(cell.tag) != 'c' or not cell.get('r'):
+                    continue
+                formula = next((child for child in cell if _local(child.tag) == 'f'), None)
+                if formula is not None:
+                    addr = cell.get('r')
+                    formulas.append((addr, formula))
+                    if formula.get('t') == 'shared' and formula.get('si') is not None and formula.text:
+                        shared_masters[formula.get('si')] = (addr, formula.text)
+            # Masters need not precede followers in the worksheet XML.
+            for addr, formula in formulas:
+                expression = formula.text or ''
+                if formula.get('t') == 'shared' and not expression:
+                    master = shared_masters.get(formula.get('si'))
+                    if master is not None:
+                        expression = _translate_shared_formula(master[1], master[0], addr)
+                col, row = split_ref(addr)
+                current_cells[sheet].setdefault(row, {})[col] = ('F', expression)
+        for check in formula_checks:
+            try:
+                found = _calculated_value(current_cells, check['sheet'], check['cell'])
+                expected = Decimal(str(check['value']))
+                if abs(found - expected) > Decimal('0.01'):
+                    report['mismatches'].append({**check, 'expected': str(expected),
+                        'found': str(found), 'detail': 'The protected calculation differs from the canonical figure.'})
+                else:
+                    report['reconciled_formula'].append({**check, 'found': str(found),
+                        'action': 'formula_reconciled'})
+            except (ValueError, SyntaxError, ArithmeticError, RecursionError) as exc:
+                report['unresolved'].append({**check, 'reason': 'formula_not_verified', 'detail': str(exc)})
 
     if force_recalc:
         wb_xml, found = set_full_calc_on_load(
@@ -1778,7 +2064,7 @@ def fill_workbook(
     if not dry_run:
         replacements = {p: x.encode("utf-8") for p, x in patched_xml.items()}
         write_patched_zip(workbook_path, output_path, replacements)
-        report["mismatches"] = verify_values(output_path, verify_targets)
+        report["mismatches"].extend(verify_values(output_path, verify_targets))
 
     degraded = any(report[k] for k in
                    ("skipped_formula", "type_changed", "unresolved",

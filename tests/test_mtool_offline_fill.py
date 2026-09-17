@@ -655,6 +655,25 @@ def footnote_template(tmp_path):
     return str(path)
 
 
+def test_key_only_footnote_does_not_parse_unrelated_sheets(footnote_template, monkeypatch):
+    import mtool.offline_fill as patcher
+    original = patcher.read_sheet_cells
+    parsed = []
+
+    def track(xml, sst):
+        parsed.append(xml)
+        return original(xml, sst)
+
+    monkeypatch.setattr(patcher, "read_sheet_cells", track)
+    report = patcher.fill_footnotes(footnote_template, {"footnotes": [
+        {"key": "fn_99", "html": "<p>Legacy orphan payload</p>"}
+    ]}, dry_run=True)
+    assert report["status"] == "ok", report
+    _, data, _ = patcher.load_workbook_entries(footnote_template)
+    assert data["xl/worksheets/sheet1.xml"] not in parsed
+    assert data["xl/worksheets/sheet2.xml"] not in parsed
+
+
 def test_parse_defined_ref():
     assert _parse_defined_ref("'Notes-Listofnotes'!$E$132") == \
         ("Notes-Listofnotes", "E132")

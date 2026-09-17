@@ -230,10 +230,10 @@ describe("MtoolFillModal", () => {
     expect(screen.queryByRole("region", { name: /filing field coverage/i })).toBeNull();
   });
 
-  test("uploads a template and shows a clean report", async () => {
+  test("uploads a template and distinguishes written values from verified calculations", async () => {
     const reportHeader = JSON.stringify({
       status: "ok",
-      counts: { written: 7, unresolved: 0, skipped_formula: 0, mismatches: 0, errors: 0 },
+      counts: { written: 7, reconciled_formula: 2, unresolved: 0, skipped_formula: 0, mismatches: 0, errors: 0 },
       unresolved: [],
       skipped_formula: [],
       mismatches: [],
@@ -259,6 +259,7 @@ describe("MtoolFillModal", () => {
     fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
 
     await waitFor(() => expect(screen.getByText(/template filled —/i)).toBeTruthy());
+    expect(screen.getByText(/2 calculated values agree with the reviewed figures/)).toBeTruthy();
   });
 
   test("shows a column-map editor when auto-detection fails, then retries with it", async () => {
@@ -590,7 +591,7 @@ describe("MtoolFillModal", () => {
     expect(screen.queryByLabelText(/notes preview/i)).toBeNull();
   });
 
-  test("ambiguous note offers a placement picker and sends notes_targets on fill", async () => {
+  test.each(["ambiguous", "identity_mismatch"])("%s note offers a placement picker and sends notes_targets on fill", async (reason) => {
     let patchBody: FormData | null = null;
     mockFetch((url, init) => {
       if (url.includes("/notes-preview")) {
@@ -606,8 +607,10 @@ describe("MtoolFillModal", () => {
                 index: 1,
                 label: "Disclosure of corporate information",
                 source_sheet: "Notes-CI",
-                reason: "ambiguous",
-                detail: "label matches multiple note cells",
+                reason,
+                detail: reason === "identity_mismatch"
+                  ? "The selected destination could not be verified as the filing field for this note. Nothing was written. Choose a matching destination."
+                  : "label matches multiple note cells",
                 candidates: [
                   { sheet: "Notes-CI", cell: "E11", label_cell: "D11", matched_label: "Corporate information" },
                   { sheet: "Notes-CI", cell: "E12", label_cell: "D12", matched_label: "Corporate information" },
@@ -644,7 +647,7 @@ describe("MtoolFillModal", () => {
     // The flagged note renders with a plain-language reason + a picker.
     const decisionHeading = await screen.findByText(/notes to finish in mtool/i);
     expect(decisionHeading.closest("details")).toHaveAttribute("open");
-    expect(screen.getByText(/more than one place/i)).toBeTruthy();
+    expect(screen.getByText(reason === "ambiguous" ? /more than one place/i : /Nothing was written/)).toBeTruthy();
     expect(screen.getByText("Only checked in: Notes-CI")).toBeTruthy();
     const picker = screen.getByLabelText(/choose where/i) as HTMLSelectElement;
     expect(screen.getByRole("option", { name: /Notes-CI E12/ })).toBeTruthy();
@@ -1136,7 +1139,7 @@ describe("RunDetailView mTool button", () => {
       return new Response(JSON.stringify({ concepts: [] }), { status: 200 });
     });
     render(<RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />);
-    fireEvent.click(screen.getByRole("button", { name: /fill mtool template/i }));
+    fireEvent.click(screen.getByRole("button", { name: /download draft|prepare investigation draft/i }));
     const dialog = await screen.findByRole("dialog", { name: /fill mtool template/i });
     await waitFor(() => expect(within(dialog).getByText(/values available in this run/i)).toBeTruthy());
   });
@@ -1146,7 +1149,7 @@ describe("RunDetailView mTool button", () => {
     render(
       <RunDetailView detail={makeDetail({ status: "running" })} onDelete={() => {}} onDownload={() => {}} />
     );
-    const btn = screen.getByRole("button", { name: /fill mtool template/i }) as HTMLButtonElement;
+    const btn = screen.getByRole("button", { name: /download draft|prepare investigation draft/i }) as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
   });
 });
@@ -1176,7 +1179,7 @@ describe("mTool filing gates", () => {
     mockFetch(() => new Response(JSON.stringify({ concepts: [] }), { status: 200 }));
     render(<RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />);
     expect(
-      screen.getByRole("button", { name: /fill mtool template/i }),
+      screen.getByRole("button", { name: /download draft|prepare investigation draft/i }),
     ).toBeTruthy();
   });
 
@@ -1235,6 +1238,7 @@ describe("mTool filing gates", () => {
     await openWith((url, init) => {
       if (url.includes("/mtool-fill/patch")) {
         submitted.push(init!.body as FormData);
+        expect(submitted[submitted.length - 1].has("force_recalc")).toBe(false);
         return new Response(JSON.stringify({ detail: { filing_coverage: {
           status: "blocked", requested: 1, mapped: 0, unmapped: 1, ambiguous: 0,
           coverage_percent: 0, ambiguous_writes: [], unresolved_writes: [{
@@ -1649,6 +1653,6 @@ describe("mTool preparation lifecycle", () => {
   test.each(["failed", "aborted"])("stopped %s runs offer template filling", (status) => {
     mockFetch(() => new Response(JSON.stringify({ concepts: [] })));
     render(<RunDetailView detail={makeDetail({ status: status as RunDetailJson["status"] })} onDelete={() => {}} onDownload={() => {}} />);
-    expect(screen.getByRole("button", { name: /fill mtool template/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /download draft|prepare investigation draft/i })).toBeEnabled();
   });
 });

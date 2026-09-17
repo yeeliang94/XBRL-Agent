@@ -103,7 +103,7 @@ interface UnresolvedNote {
   index?: number;
   label: string | null;
   detail?: string;
-  reason?: string; // ambiguous | strict_near_miss | no_match | no_slot | no_payload_row
+  reason?: string; // ambiguous | identity_mismatch | strict_near_miss | no_match | no_slot | no_payload_row
   candidates?: NoteCandidate[];
   matched_label?: string;
   ratio?: number;
@@ -422,7 +422,7 @@ function unresolvedReasonText(u: UnresolvedNote): string {
 
 /** Whether destination-sheet scoping contributed to this placement result. */
 function noteReasonUsesSheetScope(reason?: string): boolean {
-  return reason === "ambiguous" || reason === "strict_near_miss" ||
+  return reason === "ambiguous" || reason === "identity_mismatch" || reason === "strict_near_miss" ||
     reason === "no_match" || reason === "no_slot";
 }
 
@@ -959,8 +959,10 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
         </div>
         <div style={{ overflowY: "auto", minHeight: 0, flex: "1 1 auto" }}>
         <p style={styles.sub}>
-          Choose the empty Excel template exported from mTool. We&apos;ll place this
-          run&apos;s figures and notes, then return one file for Validate &amp; Generate.
+          Choose the empty Excel template exported from mTool. Your draft and filing
+          workbook use this same template, preserving its formulas and protected fields.
+          Review the filled copy, then open it in mTool to Validate &amp; Generate.
+          Changes made only in Excel do not update the saved figures in this app.
         </p>
 
         <fieldset disabled={busy || downloading} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
@@ -1329,7 +1331,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                           </div>
                         )}
                         <div style={{ color: pwc.grey700, margin: "2px 0 4px" }}>{unresolvedReasonText(u)}</div>
-                        {u.reason === "ambiguous" && (u.candidates?.length ?? 0) > 0 && idx >= 0 && (
+                        {(u.reason === "ambiguous" || u.reason === "identity_mismatch") && (u.candidates?.length ?? 0) > 0 && idx >= 0 && (
                           <select
                             aria-label={`Choose where “${u.label}” goes`}
                             value={chosen ? JSON.stringify(chosen) : ""}
@@ -1539,6 +1541,9 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                 ? `Template filled — ${report.counts.written} values written.`
                 : `Template filled with items to review — ${report.counts.written} values written.`}
             </div>
+            {(report.counts.reconciled_formula ?? 0) > 0 && <p>
+              {report.counts.reconciled_formula} calculated values agree with the reviewed figures. The template formulas were preserved.
+            </p>}
             {Boolean(report.sheet_selection?.excluded_sheets.length) && <p style={{ overflowWrap: "anywhere" }}>
               Partial workbook — excluded: {report.sheet_selection?.excluded_sheets.join(", ")}. {report.sheet_selection?.excluded_figures} figures and {report.sheet_selection?.excluded_notes ?? "an unknown number of"} notes were left out.
             </p>}
@@ -1582,7 +1587,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
               )}
             />
             <RowDetail
-              title="Written but read back differently"
+              title="Values that differ from the reviewed figures"
               rows={report.mismatches.map(
                 (m) => `${m.cell}: expected ${m.expected}, found ${m.found ?? "(empty)"}`,
               )}

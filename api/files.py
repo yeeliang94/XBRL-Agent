@@ -3,11 +3,11 @@
 Endpoints:
   ``GET /api/runs/{run_id}/pdf/info``              — source PDF page count
   ``GET /api/runs/{run_id}/pdf/page/{page}.png``   — render one page to PNG
-  ``GET /api/runs/{run_id}/download/filled``       — stream the merged workbook
+  ``GET /api/runs/{run_id}/download/filled``       — require mTool preparation
   ``GET /api/result/{session_id}/{filename}``      — whitelisted per-run downloads
 
 The route-local helpers/constants (``_resolve_run_pdf_path``, the DPI clamp,
-``_remove_overlay_tempfiles``, the download whitelist) live here since nothing
+the download whitelist) live here since nothing
 else uses them. Shared run/fact helpers are read through ``server.X``.
 """
 import asyncio
@@ -17,7 +17,6 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, Response
-from starlette.background import BackgroundTask
 
 import server
 
@@ -152,172 +151,24 @@ async def pdf_page_endpoint(run_id: int, page: int, dpi: int = _PDF_DEFAULT_DPI)
 
 @router.get("/api/runs/{run_id}/download/filled")
 async def download_filled_endpoint(run_id: int):
-    """Stream the merged workbook for a past run.
+    """A draft now requires the actual mTool template and the shared patcher.
 
-    Single source of truth for the file path is `runs.merged_workbook_path`.
-    We explicitly do NOT derive the path from session_id or probe the
-    filesystem — if the stored path no longer exists on disk we return a
-    clear 404 instead of a 500.
-
-    Step 7 of the notes rich-editor plan: when `notes_cells` has rows
-    for this run, the canonical notes content lives in the DB (edited
-    via the post-run editor). We overlay those cells onto a temp copy
-    of the on-disk workbook at stream time so the download always
-    reflects the latest HTML → flattened-plaintext rendering.
+    Keep a clear response for old bookmarks/clients rather than serving a
+    differently structured canonical workbook as if it were the filing draft.
     """
     from db import repository as repo
-    from statement_types import incomplete_face_statements
     conn = server._open_audit_conn()
     try:
         run = repo.fetch_run(conn, run_id)
-        agents = repo.fetch_run_agents(conn, run_id) if run is not None else []
     finally:
         conn.close()
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
-    if not run.merged_workbook_path:
-        raise HTTPException(
-            status_code=404,
-            detail="This run has no merged workbook (likely failed before merge).",
-        )
-    # Run-84 finding (2026-08-05): a statement that stopped early still reaches
-    # this download. Extraction projects facts live and the merge picks the
-    # agent's scratch workbook up off disk regardless of status, so the file
-    # carries a partly-read statement while looking like a finished extraction.
-    # The filing gate refuses such a run outright (mtool/preflight); the
-    # download stays OPEN — it is how an operator inspects a bad run — but must
-    # not be mistakable for a complete one. The marker rides the FILENAME so it
-    # shows in the download bar, the folder listing and Excel's title bar,
-    # rather than in a workbook property nobody opens.
-    incomplete = incomplete_face_statements(agents)
-    wb_path = Path(run.merged_workbook_path)
-    if not wb_path.exists():
-        raise HTTPException(
-            status_code=404,
-            detail=f"Merged workbook file no longer exists on disk: {wb_path}",
-        )
-
-    # Phase 1.3: when the run has canonical facts, the DB is authoritative
-    # (it carries cascaded totals + any review-UI edits). Rebuild the merged
-    # workbook from those facts into a temp file so the download reflects the
-    # latest edits without a manual "regenerate" step. Falls back to the
-    # on-disk workbook when re-export isn't applicable or fails. Temp files
-    # are tracked for cleanup after streaming; the on-disk file is never
-    # deleted.
-    temp_paths: list[Path] = []
-    base_path = wb_path
-    if server._run_has_facts(server.AUDIT_DB_PATH, run_id):
-        reexported = await asyncio.to_thread(
-            server._reexport_and_remerge_from_facts, run_id
-        )
-        if reexported is not None:
-            base_path = reexported
-            temp_paths.append(reexported)
-        elif run.ended_at:
-            # Re-export failed. The on-disk workbook reflects facts AS OF the
-            # pipeline run but NOT post-run manual edits — serving it silently
-            # would hand the user a file missing their edits. Fail closed when
-            # such edits exist (peer-review): a clear error beats a stale file.
-            conn2 = server._open_audit_conn()
-            try:
-                edited = conn2.execute(
-                    "SELECT COUNT(*) FROM run_concept_facts WHERE run_id = ? "
-                    "AND source = 'manual edit' AND updated_at > ?",
-                    (run_id, run.ended_at),
-                ).fetchone()[0]
-            finally:
-                conn2.close()
-            if edited:
-                raise HTTPException(
-                    status_code=503,
-                    detail=(
-                        "Could not regenerate the workbook from your edited "
-                        "values. To avoid downloading a file that omits those "
-                        "edits, the download was blocked. Please retry; if it "
-                        "persists, check the server logs."
-                    ),
-                )
-
-    # Overlay runs synchronously (openpyxl is blocking); push it off
-    # the event loop so concurrent downloads don't serialise. Returns
-    # the base path unchanged when notes_cells is empty, so the
-    # pre-rich-editor behaviour is preserved on older runs.
-    try:
-        from notes.persistence import overlay_notes_cells_into_workbook
-        served_path = await asyncio.to_thread(
-            overlay_notes_cells_into_workbook,
-            xlsx_path=base_path,
-            run_id=run_id,
-            db_path=str(server.AUDIT_DB_PATH),
-            filing_level=(run.config or {}).get("filing_level", "company"),
-        )
-    except Exception:  # noqa: BLE001 — fall back to the base file
-        logger.exception(
-            "notes_cells overlay failed for run_id=%s; serving stale xlsx",
-            run_id,
-        )
-        served_path = base_path
-    # The overlay helper either returns the base path unchanged (nothing new
-    # to clean up) or a fresh temp file. Track every temp file we created
-    # (the re-export and/or the notes overlay) for deletion after streaming;
-    # never delete the authoritative `merged_workbook_path` on disk.
-    if served_path != base_path:
-        temp_paths.append(Path(served_path))
-
-    # Numeric notes (sheets 13/14) live in run_concept_facts, not notes_cells,
-    # so the HTML overlay above doesn't carry their post-run edits. Overlay the
-    # numeric facts onto whatever workbook we're about to serve so a PATCH
-    # /facts edit on a numeric note reaches the download (peer-review HIGH).
-    try:
-        from notes.persistence import overlay_numeric_facts_into_workbook
-        numeric_path = await asyncio.to_thread(
-            overlay_numeric_facts_into_workbook,
-            xlsx_path=served_path,
-            run_id=run_id,
-            db_path=str(server.AUDIT_DB_PATH),
-        )
-    except Exception:  # noqa: BLE001 — fall back to the pre-numeric workbook
-        logger.exception(
-            "numeric notes overlay failed for run_id=%s; serving without it",
-            run_id,
-        )
-        numeric_path = served_path
-    if numeric_path != served_path:
-        temp_paths.append(Path(numeric_path))
-        served_path = numeric_path
-    cleanup: Optional[BackgroundTask] = None
-    if temp_paths:
-        cleanup = BackgroundTask(_remove_overlay_tempfiles,
-                                 [str(p) for p in temp_paths])
-    suffix = ""
-    headers: dict[str, str] = {}
-    if incomplete:
-        names = ",".join(sorted(a.statement_type for a in incomplete))
-        suffix = "_INCOMPLETE"
-        # Machine-readable twin of the filename, for the UI banner and for any
-        # caller that saves the stream under its own name.
-        headers["X-Incomplete-Statements"] = names
-    return FileResponse(
-        str(served_path),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        filename=f"run_{run_id}_filled{suffix}.xlsx",
-        background=cleanup,
-        headers=headers or None,
-    )
-
-
-def _remove_overlay_tempfiles(paths: list[str]) -> None:
-    """Best-effort cleanup of download temp files (re-export + notes overlay)
-    after the FileResponse has finished streaming. Run as a Starlette
-    BackgroundTask; errors are logged but never raised — the response has
-    already been sent.
-    """
-    for path in paths:
-        try:
-            Path(path).unlink(missing_ok=True)
-        except OSError:
-            logger.debug("Failed to remove download temp file %s", path,
-                         exc_info=True)
+    raise HTTPException(status_code=409, detail={
+        "code": "mtool_template_required",
+        "message": "Choose the mTool template to prepare your draft. Draft and filing now use the same workbook and value injection.",
+        "prepare_url": f"/api/runs/{run_id}/mtool-fill/patch",
+    })
 
 
 # --- Download endpoints ---

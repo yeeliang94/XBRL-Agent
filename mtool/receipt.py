@@ -98,7 +98,20 @@ def snapshot_facts(
                    EXISTS(
                      SELECT 1 FROM concept_edges e
                      WHERE e.parent_uuid = n.concept_uuid
-                   ) AS has_formula_edges
+                   ) AS has_formula_edges,
+                   EXISTS(
+                     SELECT 1 FROM concept_edges e
+                     JOIN concept_nodes child ON child.concept_uuid = e.child_uuid
+                     WHERE e.parent_uuid = n.concept_uuid
+                       AND child.render_row = n.render_row
+                       AND NOT EXISTS (SELECT 1 FROM concept_edges ce
+                                       WHERE ce.parent_uuid = child.concept_uuid)
+                   ) AND NOT EXISTS(
+                     SELECT 1 FROM concept_edges e
+                     JOIN concept_nodes child ON child.concept_uuid = e.child_uuid
+                     WHERE e.parent_uuid = n.concept_uuid
+                       AND (child.render_row != n.render_row OR child.render_sheet != n.render_sheet)
+                   ) AS horizontal_input_total
             FROM run_concept_facts f
             JOIN concept_nodes n ON n.concept_uuid = f.concept_uuid
             JOIN concept_templates tpl ON tpl.template_id = n.template_id

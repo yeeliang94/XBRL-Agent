@@ -13,8 +13,10 @@ What this module owns (mirrors the plan's Key Decisions):
   never the scratch xlsx (gotcha #21). Read through
   ``mtool.receipt.snapshot_facts``, so one fill corresponds to ONE revision of
   the data even though a completed run stays editable.
-* **Data-entry concepts only** — ABSTRACT section headers and COMPUTED totals
-  are excluded; LEAF and MATRIX_CELL facts are both emitted. SOCIE cells carry
+* **Data-entry concepts and horizontal matrix input totals** — ABSTRACT
+  section headers and linear COMPUTED totals are excluded. System-calculated
+  horizontal matrix totals are candidates for unlocked mTool inputs; actual
+  destination formulas and protection remain authoritative. SOCIE cells carry
   their taxonomy concept, equity-component dimension and exact canonical
   target hint so they can be resolved without ambiguous visible labels.
 * **Semantic, not physical** — writes carry taxonomy identity, dimensions and
@@ -186,15 +188,22 @@ def build_fill_doc(
     seen: set[tuple[str, str, str]] = set()
 
     for r in rows:
+        if (r['data_type'] or '').lower().endswith('textblockitemtype'):
+            excluded_invalid_target += 1
+            continue
+        # Canonical horizontal matrix totals can be editable inputs in mTool.
+        # Their destination must still pass formula and protection checks.
+        derived_input = (r["kind"] == "MATRIX_CELL" and r["has_formula_edges"]
+                         and r["horizontal_input_total"] and r["primary_concept"])
         if r["invalid_target"]:
             excluded_invalid_target += 1
             continue
-        if r["has_template_manifest"] and not r["has_writable_slot"]:
+        if r["has_template_manifest"] and not r["has_writable_slot"] and not derived_input:
             excluded_non_writable_slot += 1
             continue
         if r["kind"] not in {"LEAF", "MATRIX_CELL"}:
             continue  # ABSTRACT header or COMPUTED total — not fillable
-        if r["kind"] == "MATRIX_CELL" and r["has_formula_edges"]:
+        if r["kind"] == "MATRIX_CELL" and r["has_formula_edges"] and not derived_input:
             # SOCIE formulas remain owned by the workbook.  Only matrix cells
             # without dependency edges are data-entry facts.
             continue
@@ -260,6 +269,8 @@ def build_fill_doc(
             "template_id": r["template_id"],
             "semantic_address": semantic,
         }
+        if derived_input:
+            write["value_origin"] = "canonical_calculation"
         if r["target_sheet"] and r["target_row"] and r["target_col"]:
             write["target_hint"] = {
                 "sheet": r["target_sheet"],

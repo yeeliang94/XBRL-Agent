@@ -131,6 +131,28 @@ def test_category_periods_in_adjacent_columns_do_not_share_a_destination(tmp_pat
     assert report["unmapped"] == report["ambiguous"] == 0
 
 
+def test_restated_marker_does_not_split_prior_year_category_block(tmp_path):
+    """FINCO's PY block has a second #DOM# for restatement after its members."""
+    path = tmp_path / "restated-socie.xlsx"
+    _save_semantic_marker_workbook(path, two_periods=True)
+    wb = load_workbook(path)
+    ws = wb.active
+    ws.insert_rows(12)
+    ws["B12"] = "abc::abc"
+    ws["C12"] = "#DOM#"
+    ws["E12"] = "Restated"
+    wb.save(path)
+    wb.close()
+    doc = _doc()
+    doc["writes"][0].update(period="PY", column_role="prior_year")
+    doc["writes"][0]["semantic_address"]["dimensions"] = {
+        "ifrs-full_ComponentsOfEquityAxis": "ifrs-full_IssuedCapitalMember",
+    }
+    ready, report = resolve_filing_doc(str(path), doc)
+    assert report["unmapped"] == report["ambiguous"] == 0
+    assert ready["writes"][0]["cell"] == "E14"
+
+
 def test_repeated_primary_is_resolved_by_exact_row_label_within_taxonomy_candidates(tmp_path):
     path = tmp_path / "mtool.xlsx"
     _save_semantic_marker_workbook(path)
@@ -169,3 +191,24 @@ def test_duplicate_labels_still_require_operator_resolution(tmp_path):
         filing_targets={issue["resolution_key"]: "SOCIE!E6"})
     assert ready["writes"][0]["cell"] == "E6"
     assert report["operator_resolutions"]
+
+
+def test_matrix_exact_label_prefers_unique_input_over_formula(tmp_path):
+    path = tmp_path / "mtool.xlsx"
+    _save_semantic_marker_workbook(path)
+    wb = load_workbook(path)
+    ws = wb.active
+    ws["A6"] = ws["A5"].value
+    ws["D5"] = ws["D6"] = "Profit or loss"
+    ws["E6"] = "=E5"
+    wb.save(path)
+    wb.close()
+    doc = _doc()
+    doc["writes"][0]["kind"] = "MATRIX_CELL"
+    doc["writes"][0]["semantic_address"]["dimensions"] = {
+        "ifrs-full_ComponentsOfEquityAxis": "ifrs-full_IssuedCapitalMember",
+    }
+    ready, report = resolve_filing_doc(str(path), doc)
+    assert report["ambiguous"] == 0, report
+    assert ready["writes"][0]["cell"] == "E5"
+    assert not ready["writes"][0].get("reconcile_formula")

@@ -253,6 +253,16 @@ def validate_scalar_fact(
         )
 
     is_formula = _concept_owns_formula(conn, body.concept_uuid, concept)
+    text_slot = conn.execute(
+        "SELECT 1 FROM template_slots ts LEFT JOIN taxonomy_concepts tc "
+        "ON tc.source_element_id = ts.taxonomy_element_id "
+        "WHERE ts.canonical_target_id = ? AND (ts.value_kind = 'html' "
+        "OR LOWER(COALESCE(tc.data_type, '')) LIKE '%textblockitemtype') LIMIT 1",
+        (body.concept_uuid,),
+    ).fetchone()
+    if text_slot:
+        raise HTTPException(status_code=400, detail=(
+            'This concept is a text disclosure. Save its content as a note, not a numeric fact.'))
     _validate(body, concept, is_formula)
     return concept, is_formula
 

@@ -1,0 +1,10 @@
+.venvs/
+models/
+documents/**
+!documents/.gitkeep
+runs/
+manifests/local*
+gold/local*
+configs/local*
+__pycache__/
+.pytest_cache/
