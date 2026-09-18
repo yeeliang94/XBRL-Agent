@@ -25,7 +25,7 @@ import openpyxl
 
 
 TAXONOMY_VERSION = "SSMxT_2022v1.0"
-ADDRESS_VERSION = "2022-v1"
+ADDRESS_VERSION = "2022-v2"
 
 # The presentation roles are the source used by the template generators.
 _ROLES_BY_FILE: dict[str, tuple[str, ...]] = {
@@ -164,7 +164,7 @@ _MFRS_SOCIE_COMPONENTS: tuple[str, ...] = (
     "ssmt-mfrs_WarrantyReserveMember",
     "ssmt-mfrs_OtherDistributableReserveMember",
     "ssmt_DistributableReservesMember",
-    "ssmt_ReservesMember",
+    "ifrs-full_OtherReservesMember",
     "ifrs-full_EquityAttributableToOwnersOfParentMember",
     "ssmt-mfrs_OtherComponentsOfEquityMember",
     "ifrs-full_NoncontrollingInterestsMember",

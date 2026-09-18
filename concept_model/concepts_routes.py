@@ -148,7 +148,7 @@ def register_concept_routes(app, audit_db_getter) -> None:
                   ON f.concept_uuid = n.concept_uuid
                   AND f.run_id = ?
                   AND f.period = 'CY'
-                  AND f.entity_scope = 'Company'
+                  AND f.entity_scope = 'Company' AND f.dimension_key = ''
                 WHERE n.template_id IN ({placeholders})
                   AND (
                     n.is_current = 1
@@ -169,14 +169,18 @@ def register_concept_routes(app, audit_db_getter) -> None:
             all_facts = conn.execute(
                 """
                 SELECT concept_uuid, period, entity_scope, value,
-                       value_status, children_status, source, evidence
+                       value_status, children_status, source, evidence, dimension_key
                 FROM run_concept_facts WHERE run_id = ?
                 """,
                 (run_id,),
             ).fetchall()
             scope_facts_by_uuid: dict[str, dict] = {}
             scope_fact_details_by_uuid: dict[str, dict] = {}
+            category_facts_by_uuid = {}
             for f in all_facts:
+                if f["dimension_key"]:
+                    category_facts_by_uuid.setdefault(f["concept_uuid"], []).append(dict(f))
+                    continue
                 bucket = scope_facts_by_uuid.setdefault(
                     f["concept_uuid"], {}
                 )
@@ -260,6 +264,7 @@ def register_concept_routes(app, audit_db_getter) -> None:
                         and (r["edge_count"] or 0) == 0
                     ),
                     "is_alias": alias is not None,
+                    "category_facts": category_facts_by_uuid.get(r["concept_uuid"], []),
                     "scope_facts": scope_facts_by_uuid.get(
                         r["concept_uuid"], {}
                     ),
@@ -367,7 +372,7 @@ def register_concept_routes(app, audit_db_getter) -> None:
         try:
             rows = conn.execute(
                 """
-                SELECT c.id, c.concept_uuid, c.period, c.entity_scope,
+                SELECT c.id, c.concept_uuid, c.period, c.entity_scope, c.dimension_key,
                        c.kind, c.residual, c.detail, c.status,
                        c.created_at, c.resolved_at,
                        n.canonical_label, n.render_sheet, n.render_row

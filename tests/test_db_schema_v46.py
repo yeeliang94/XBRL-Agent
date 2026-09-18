@@ -41,7 +41,7 @@ def test_v45_upgrade_is_idempotent_and_preserves_existing_concepts(tmp_path) -> 
     init_db(db)
 
     with sqlite3.connect(db) as conn:
-        assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 46
+        assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == CURRENT_SCHEMA_VERSION
         assert conn.execute(
             "SELECT is_current, retired_at FROM concept_nodes "
             "WHERE concept_uuid = 'legacy-concept'"

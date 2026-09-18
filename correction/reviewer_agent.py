@@ -40,7 +40,7 @@ from typing import Any, List, Literal, Optional, Sequence
 
 # Module-scope so pydantic-ai can resolve the RunContext annotation on the
 # tool wrappers (lazy eval looks in module globals).
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext
 
 from tools.calculator import calculator_batch_json as _calculator_impl
@@ -142,7 +142,7 @@ def load_open_conflicts(
     try:
         rows = conn.execute(
             """
-            SELECT c.id, c.concept_uuid, c.period, c.entity_scope,
+            SELECT c.id, c.concept_uuid, c.period, c.entity_scope, c.dimension_key,
                    c.kind, c.residual, c.detail,
                    n.canonical_label, n.render_sheet, n.render_row
             FROM run_concept_conflicts c
@@ -251,6 +251,7 @@ def trace_cascade_source(
     period: str = "CY",
     entity_scope: str = "Company",
     template_prefix: Optional[str] = None,
+    dimensions: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Walk down from a face cell to the sub-sheet total + children feeding it.
 
@@ -272,6 +273,8 @@ def trace_cascade_source(
                     "children_sum": None, "parent_value": None}
 
         cu = concept["concept_uuid"]
+        from concept_model.dimensions import instance_key
+        dims = instance_key(conn, cu, dimensions or {})
         # Where else does this concept physically render? (face alias coords)
         aliases = [
             {"sheet": a["alias_sheet"], "row": a["alias_row"],
@@ -299,8 +302,8 @@ def trace_cascade_source(
             fact = conn.execute(
                 "SELECT value, value_status, source, evidence "
                 "FROM run_concept_facts WHERE run_id = ? AND concept_uuid = ? "
-                "AND period = ? AND entity_scope = ?",
-                (run_id, e["child_uuid"], period, entity_scope),
+                "AND period = ? AND entity_scope = ? AND dimension_key = ?",
+                (run_id, e["child_uuid"], period, entity_scope, dims),
             ).fetchone()
             val = fact["value"] if fact else None
             if val is not None:
@@ -322,8 +325,8 @@ def trace_cascade_source(
         parent_fact = conn.execute(
             "SELECT value, value_status FROM run_concept_facts "
             "WHERE run_id = ? AND concept_uuid = ? AND period = ? "
-            "AND entity_scope = ?",
-            (run_id, cu, period, entity_scope),
+            "AND entity_scope = ? AND dimension_key = ?",
+            (run_id, cu, period, entity_scope, dims),
         ).fetchone()
 
         return {
@@ -405,7 +408,7 @@ def list_run_facts(
         sql = (
             "SELECT n.render_sheet, n.render_row, n.canonical_label, n.kind, "
             "f.concept_uuid, f.period, f.entity_scope, f.value, "
-            "f.value_status, f.source, f.evidence "
+            "f.value_status, f.source, f.evidence, f.dimension_key "
             "FROM run_concept_facts f "
             "JOIN concept_nodes n ON n.concept_uuid = f.concept_uuid "
             "WHERE f.run_id = ?"
@@ -461,7 +464,7 @@ def find_candidate_rows(
     try:
         sql = (
             "SELECT n.render_sheet, n.render_row, n.canonical_label, n.kind, "
-            "f.concept_uuid, f.period, f.entity_scope, f.value, f.value_status "
+            "f.concept_uuid, f.period, f.entity_scope, f.value, f.value_status, f.dimension_key "
             "FROM run_concept_facts f "
             "JOIN concept_nodes n ON n.concept_uuid = f.concept_uuid "
             "WHERE f.run_id = ?"
@@ -627,7 +630,7 @@ def read_concept_facts_text(
             return f"Unknown concept_uuid {concept_uuid!r}."
         facts = conn.execute(
             "SELECT period, entity_scope, value, value_status, "
-            "children_status, source, evidence FROM run_concept_facts "
+            "children_status, source, evidence, dimension_key FROM run_concept_facts "
             "WHERE run_id = ? AND concept_uuid = ?",
             (run_id, concept_uuid),
         ).fetchall()
@@ -641,7 +644,7 @@ def read_concept_facts_text(
         lines.append("  (no fact written yet)")
     for f in facts:
         lines.append(
-            f"  - {f['period']}/{f['entity_scope']}: value={f['value']} "
+            f"  - {f['period']}/{f['entity_scope']} {f['dimension_key']}: value={f['value']} "
             f"status={f['value_status']} children={f['children_status']} "
             f"source={f['source']!r} evidence={f['evidence']!r}"
         )
@@ -1006,6 +1009,7 @@ def apply_reviewer_fix(
     """
     from fastapi import HTTPException
     from concept_model.facts_api import apply_fact
+    from concept_model.dimensions import instance_key
 
     conn = _open_conn(db_path)
     try:
@@ -1047,8 +1051,9 @@ def apply_reviewer_fix(
             conn.execute(
                 "UPDATE run_concept_conflicts SET status = 'resolved', "
                 "resolved_at = ? WHERE run_id = ? AND concept_uuid = ? "
-                "AND status = 'open'",
-                (_now(), run_id, fact.concept_uuid),
+                "AND status = 'open' AND period = ? AND entity_scope = ? AND dimension_key = ?",
+                (_now(), run_id, fact.concept_uuid, fact.period, fact.entity_scope,
+                 instance_key(conn, fact.concept_uuid, fact.dimensions)),
             )
             conn.commit()
         return (
@@ -1208,6 +1213,7 @@ class ReviewerFixItem(BaseModel):
     evidence: str
     period: Literal["CY", "PY"] = "CY"
     entity_scope: Literal["Company", "Group"] = "Company"
+    dimensions: dict[str, str] = Field(default_factory=dict)
     children_status: str = ""
 
 
@@ -1222,6 +1228,7 @@ class ReviewerClearItem(BaseModel):
     evidence: str
     period: Literal["CY", "PY"] = "CY"
     entity_scope: Literal["Company", "Group"] = "Company"
+    dimensions: dict[str, str] = Field(default_factory=dict)
 
 
 def _summarize_batch(outcomes: List[str], ok_template: str) -> str:
@@ -1540,6 +1547,7 @@ def _format_review_packet(
             lines.append(_prompt_data(
                 f"- concept_uuid: {c.get('concept_uuid')} "
                 f"({c.get('canonical_label') or 'unknown'}) "
+                f"{c.get('period')}/{c.get('entity_scope')} dimensions={c.get('dimension_key') or '{}'} "
                 f"kind={c.get('kind')} residual={c.get('residual')} — "
                 f"{c.get('detail')}"
             ))
@@ -2032,6 +2040,7 @@ def create_reviewer_agent(
         row: int = 0,
         period: str = "CY",
         entity_scope: str = "Company",
+        dimensions: dict[str, str] | None = None,
     ) -> str:
         """Walk DOWN from a failing face cell to the total + children feeding it.
 
@@ -2047,6 +2056,7 @@ def create_reviewer_agent(
             sheet=sheet or None,
             row=row or None,
             period=period, entity_scope=entity_scope,
+            dimensions=dimensions,
             template_prefix=_family_prefix(
                 ctx.deps.filing_standard, ctx.deps.filing_level),
         )
@@ -2157,7 +2167,7 @@ def create_reviewer_agent(
                 ctx.deps.db_path, ctx.deps.run_id,
                 FactWrite(
                     concept_uuid=f.concept_uuid, period=f.period,
-                    entity_scope=f.entity_scope, value=f.value,
+                    entity_scope=f.entity_scope, value=f.value, dimensions=f.dimensions,
                     value_status="observed",
                     children_status=f.children_status or None,
                     source=f.reason, evidence=f.evidence or None,
@@ -2200,7 +2210,7 @@ def create_reviewer_agent(
                 ctx.deps.db_path, ctx.deps.run_id,
                 FactWrite(
                     concept_uuid=c.concept_uuid, period=c.period,
-                    entity_scope=c.entity_scope, value=None,
+                    entity_scope=c.entity_scope, value=None, dimensions=c.dimensions,
                     value_status="not_disclosed",
                     source=c.reason, evidence=c.evidence or None,
                     actor="reviewer",

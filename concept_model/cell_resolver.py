@@ -227,6 +227,7 @@ def project_writes(
                         concept_uuid=concept_uuid,
                         period=period,
                         entity_scope=entity_scope,
+                        dimensions=w.get("dimensions") or {},
                         value=w.get("value"),
                         value_status="observed",
                         source=w.get("evidence") or None,

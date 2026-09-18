@@ -2,7 +2,40 @@
 
 Sheet: `Notes-RelatedPartytran`. This is a structured numeric table of
 related-party transactions by type (dividend income, management fees,
-rental expense, etc.) plus outstanding balances at period end.
+rental expense, etc.) plus outstanding balances at period end. Each numeric
+figure also needs the related-party category that selects its native column.
+
+=== REQUIRED CATEGORY FOR EVERY NUMERIC FIGURE ===
+
+Every payload containing `numeric_values` must also contain non-empty
+`dimensions={axis: member}` using the exact identifiers in NUMERIC CATEGORY
+IDENTITIES for this filing standard. The transaction type selects the row;
+the relationship to the reporting entity selects the category column. A
+correct amount with an omitted or empty category is an incomplete extraction.
+This applies to transactions AND outstanding balances, including zero values.
+
+Determine the relationship from the table heading, counterparty description,
+corporate-information note and any referenced balance note. Read those pages
+before submitting the figure when the transaction line alone is unclear.
+Do not stop at the words "related company" or "related corporation" without
+checking that context. Use the catalog category supported by the relationship:
+parent, entities with joint control or significant influence, subsidiaries,
+associates, joint ventures, key management personnel, or other related parties.
+For example, a fee paid to a disclosed parent uses the Parent category; a fee
+with a disclosed fellow subsidiary under common control uses Other related
+parties, not Subsidiaries of the reporting entity. Disclosed directors'
+compensation uses Key management personnel. These are relationship examples,
+not keyword defaults: cite the source relationship in `evidence`.
+
+Emit separate payloads when the same transaction row has amounts for different
+categories. Keep each category's disclosed periods and entity scopes together;
+do not merge different relationships merely because their row labels match.
+Do not use Other related parties or Total simply to fill a missing category,
+invent a relationship, or split an aggregate without supporting disclosure.
+If the source genuinely cannot establish a category after those checks,
+preserve the disclosed figures in the reproduced note and explicitly report
+the unresolved relationship with its pages and amounts in the final response.
+Do not submit an unclassified numeric payload or describe it as completed.
 
 === STRATEGY ===
 
@@ -16,7 +49,8 @@ rental expense, etc.) plus outstanding balances at period end.
    transactions with subsidiaries, associates, directors, and
    significant shareholders.
 3. For each transaction type that the PDF discloses, emit a payload
-   with `numeric_values` set. For company filings use `company_cy` /
+   with both `numeric_values` and its source-supported `dimensions` set.
+   For company filings use `company_cy` /
    `company_py`. For group filings provide only the disclosed keys among
    `group_cy`, `group_py`, `company_cy`, `company_py`. Never copy Group
    amounts into Company fields or vice versa; omit undisclosed scopes.
@@ -40,7 +74,11 @@ rental expense, etc.) plus outstanding balances at period end.
    shows a table; if the note is plain prose with no schedule, skip the
    reproduction. The numeric grid above still fills exactly as before —
    this is an addition, not a replacement.
-6. Call `write_notes` with the batch, then `save_result`.
+6. Before calling `write_notes`, check that every numeric payload has its
+   category and source evidence. Resolve missing categories now; do not leave
+   them for the exporter or a later reviewer. Before `save_result`, check that
+   all disclosed numeric items were either submitted with a category or
+   explicitly reported as unresolved with their source figures preserved.
 
 === NOTES ===
 

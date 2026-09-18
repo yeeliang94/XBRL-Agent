@@ -184,7 +184,7 @@ def _gradeable_facts(
     placeholders = ",".join("?" for _ in template_ids)
     sql = (
         f"SELECT f.concept_uuid, f.period, f.entity_scope, f.value, "
-        f"       f.value_status "
+        f"       f.value_status, f.dimension_key "
         f"FROM {table} f "
         f"JOIN concept_nodes n ON n.concept_uuid = f.concept_uuid "
         f"WHERE f.{id_col} = ? "
@@ -193,7 +193,7 @@ def _gradeable_facts(
     )
     out: dict[tuple[str, str, str], tuple] = {}
     for r in conn.execute(sql, (id_value, *template_ids)).fetchall():
-        key = (r[0], r[1], r[2])
+        key = (r[0], r[1], r[2]) + ((r[5],) if r[5] else ())
         out[key] = (r[3], r[4])
     return out
 
@@ -264,7 +264,8 @@ def classify_failures(
 
     tax = empty_taxonomy()
     for key, g in gold_present.items():
-        uuid, period, scope = key
+        uuid, period, scope = key[:3]
+        category = key[3:]
         run_fact = run.get(key)
         r = _present_number(run_fact[0], run_fact[1]) if run_fact else None
 
@@ -284,9 +285,9 @@ def classify_failures(
         # --- mismatch bucket (priority order) ---
         other_period = "PY" if period == "CY" else "CY"
         other_scope = "Group" if scope == "Company" else "Company"
-        if _is_axis_swap(key, (uuid, other_period, scope), gold_present, run_present):
+        if _is_axis_swap(key, (uuid, other_period, scope) + category, gold_present, run_present):
             tax["period_swap"] += 1
-        elif _is_axis_swap(key, (uuid, period, other_scope), gold_present, run_present):
+        elif _is_axis_swap(key, (uuid, period, other_scope) + category, gold_present, run_present):
             tax["scope_swap"] += 1
         elif is_sign_flip(r, g):
             tax["sign_flip"] += 1

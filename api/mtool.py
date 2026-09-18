@@ -459,7 +459,7 @@ def patch_mtool_template(
     filing_targets: str | None = Form(default=None),
     selected_sheets: str | None = Form(default=None),
     strict: bool = Form(default=True),
-    force_recalc: bool = Form(default=False),
+    force_recalc: bool = Form(default=True),
     fill_notes: bool = Form(default=True),
     create_missing_notes: bool = Form(default=True),
     notes_targets: str | None = Form(default=None),
@@ -759,6 +759,20 @@ def patch_mtool_template(
                 notes_report = {"status": "degraded",
                                 "errors": [{"code": "notes_fill_failed", "detail": message}]}
                 final = out
+
+        from mtool.offline_fill import verify_numeric_snapshot
+        report["snapshot_verification"] = verify_numeric_snapshot(str(final), ready)
+        if report["snapshot_verification"]["status"] != "ok":
+            report["status"] = "degraded"
+            # Keep final-write failures visible in the existing problem lists,
+            # not only in the detailed snapshot receipt.
+            for source, target in (("mismatches", "mismatches"), ("unverified", "unresolved")):
+                known = {(item.get("sheet"), item.get("cell")) for item in report[target]}
+                for item in report["snapshot_verification"][source]:
+                    if (item.get("sheet"), item.get("cell")) not in known:
+                        report[target].append({**item,
+                            "label": item.get("label") or item.get("source_label"),
+                            "detail": item.get("detail") or "Final workbook value differs from the canonical snapshot."})
 
         logger.info(
             "mTool patch run %s: numeric status=%s written=%d unresolved=%d; "
@@ -1325,6 +1339,7 @@ def _full_report(report: dict, notes_report: dict | None = None) -> dict:
     return {
         "status": overall,
         "numeric_status": report["status"],
+        "snapshot_verification": report.get("snapshot_verification"),
         "counts": counts,
         **({"notes": notes_block} if notes_block else {}),
         **{k: report.get(k, []) for k in _DETAIL_KEYS},

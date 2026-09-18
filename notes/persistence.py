@@ -461,7 +461,8 @@ def overlay_numeric_facts_into_workbook(
         facts = conn.execute(
             f"""
             SELECT t.target_sheet AS sheet, t.target_row AS row,
-                   t.target_col AS col, f.value AS value
+                   t.target_col AS col, f.value AS value,
+                   f.concept_uuid, f.period, f.entity_scope, f.dimension_key, f.evidence
             FROM run_concept_facts f
             JOIN concept_nodes n ON n.concept_uuid = f.concept_uuid
             JOIN concept_targets t
@@ -475,6 +476,8 @@ def overlay_numeric_facts_into_workbook(
             (run_id, *notes_ids),
         ).fetchall()
 
+    from concept_model.dimensions import diagnostic_rows
+    facts = diagnostic_rows(facts)
     if not facts:
         return xlsx_path
 

@@ -489,13 +489,8 @@ async def test_exhausted_reviewer_still_cascades(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_exhausted_spot_check_is_tagged_not_a_hard_failure(tmp_path, monkeypatch):
-    """Peer-review HIGH (2026-06-21): a spot-check that merely runs out of its
-    tight turn budget carries `exhausted=True` AND the `spot_check` tag, while
-    its error stays the soft `reviewer_exhausted`. The run-status logic relies
-    on exactly this shape to NOT flag a clean run as `correction_exhausted`
-    (spot_check excluded) and to NOT treat reviewer_exhausted as a hard
-    `reviewer_failed`."""
+async def test_exhausted_spot_check_remains_incomplete_after_bounded_continuation(tmp_path, monkeypatch):
+    """Clean arithmetic does not make unfinished source verification complete."""
     import correction.reviewer_agent as ra
     from server import _run_reviewer_pass
 
@@ -510,7 +505,39 @@ async def test_exhausted_spot_check_is_tagged_not_a_hard_failure(tmp_path, monke
 
     assert outcome["exhausted"] is True
     assert outcome["error"] == "reviewer_exhausted"  # soft, not a hard failure
-    assert outcome["spot_check"] == "light"           # excluded from correction_exhausted
+    assert outcome["spot_check"] == "light"
+    assert outcome["continuation_turns"] == 4
+    assert outcome["max_turns"] == 5
+
+
+@pytest.mark.asyncio
+async def test_reviewer_continuation_keeps_fixes_and_original_snapshot(tmp_path, monkeypatch):
+    import correction.reviewer_agent as ra
+    from server import _run_reviewer_pass
+
+    db, run_id = _seed(tmp_path)
+    monkeypatch.setattr(ra, "compute_reviewer_turn_cap", lambda **k: 1)
+
+    def finish_remaining(messages, info):
+        if any("Resume only remaining verification" in str(getattr(p, "content", ""))
+               for m in messages for p in getattr(m, "parts", [])):
+            return ModelResponse(parts=[TextPart("Remaining verification complete")])
+        return _always_fix(messages, info)
+
+    outcome = await _run_reviewer_pass(
+        failed_checks=[CrossCheckResult(name="sofp_assets_balance", status="failed",
+            expected=170.0, actual=150.0, diff=20.0, message="off",
+            target_sheet="SOFP", target_row=10)],
+        conflicts=[], model=FunctionModel(finish_remaining),
+        filing_level="company", event_queue=asyncio.Queue(), db_path=db, run_id=run_id)
+    assert outcome["continuation_turns"] == 4
+    assert not outcome["exhausted"]
+    assert outcome["writes_performed"] == 1
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT value FROM run_fact_snapshots WHERE run_id=? AND concept_uuid=?",
+                            (run_id, LEAF1)).fetchone()[0] == 100
+        assert conn.execute("SELECT value FROM run_concept_facts WHERE run_id=? AND concept_uuid=?",
+                            (run_id, LEAF1)).fetchone()[0] == 120
 
 
 @pytest.mark.asyncio

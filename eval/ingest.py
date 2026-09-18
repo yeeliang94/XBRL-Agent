@@ -246,7 +246,7 @@ def ingest_workbook(
                         "value_status, source, updated_at) "
                         "VALUES (?, ?, ?, ?, ?, 'observed', ?, ?) "
                         "ON CONFLICT(benchmark_id, concept_uuid, period, "
-                        "entity_scope) DO UPDATE SET value = excluded.value, "
+                        "entity_scope, dimension_key) DO UPDATE SET value = excluded.value, "
                         "value_status = excluded.value_status, "
                         "source = excluded.source, "
                         "updated_at = excluded.updated_at",

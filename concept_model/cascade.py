@@ -82,13 +82,13 @@ def recompute_after_turn(db_path: str | Path, run_id: int) -> None:
         # for this run — we recompute per tuple independently so a
         # Group filing's Company-side cascade doesn't leak into Group.
         scope_pairs = conn.execute(
-            "SELECT DISTINCT period, entity_scope FROM run_concept_facts "
+            "SELECT DISTINCT period, entity_scope, dimension_key FROM run_concept_facts "
             "WHERE run_id = ?",
             (run_id,),
         ).fetchall()
 
-        for period, entity_scope in scope_pairs:
-            _recompute_scope(conn, run_id, period, entity_scope)
+        for period, entity_scope, dims in scope_pairs:
+            _recompute_scope(conn, run_id, period, entity_scope, dims)
         conn.commit()
     finally:
         conn.close()
@@ -99,6 +99,7 @@ def _recompute_scope(
     run_id: int,
     period: str,
     entity_scope: str,
+    dims: str = "",
 ) -> None:
     # Recomputable concept rows, keyed by uuid. A concept is recomputable
     # when it owns a formula — i.e. has outgoing edges. For linear
@@ -143,8 +144,8 @@ def _recompute_scope(
         for r in conn.execute(
             "SELECT concept_uuid, value, value_status, children_status, source "
             "FROM run_concept_facts WHERE run_id = ? AND period = ? "
-            "AND entity_scope = ?",
-            (run_id, period, entity_scope),
+            "AND entity_scope = ? AND dimension_key = ?",
+            (run_id, period, entity_scope, dims),
         ).fetchall()
     }
 
@@ -214,28 +215,28 @@ def _recompute_scope(
                     "UPDATE run_concept_facts SET value = NULL, "
                     "value_status = 'not_disclosed', updated_at = ? "
                     "WHERE run_id = ? AND concept_uuid = ? AND period = ? "
-                    "AND entity_scope = ?",
-                    (now, run_id, parent_uuid, period, entity_scope),
+                    "AND entity_scope = ? AND dimension_key = ?",
+                    (now, run_id, parent_uuid, period, entity_scope, dims),
                 )
                 conn.execute(
                     """
                     INSERT INTO concept_fact_events(
                         run_id, concept_uuid, period, entity_scope,
-                        actor, turn, ts, before_json, after_json
-                    ) VALUES (?, ?, ?, ?, 'cascade', NULL, ?, ?, ?)
+                        actor, turn, ts, before_json, after_json, dimension_key
+                    ) VALUES (?, ?, ?, ?, 'cascade', NULL, ?, ?, ?, ?)
                     """,
                     (
                         run_id, parent_uuid, period, entity_scope, now,
                         _value_json(existing_value),
-                        _value_json(None),
+                        _value_json(None), dims,
                     ),
                 )
                 conn.execute(
                     "UPDATE run_concept_conflicts SET status = 'resolved', "
                     "resolved_at = ? WHERE run_id = ? AND concept_uuid = ? "
-                    "AND period = ? AND entity_scope = ? "
+                    "AND period = ? AND entity_scope = ? AND dimension_key = ? "
                     "AND kind = 'partial_state' AND status = 'open'",
-                    (now, run_id, parent_uuid, period, entity_scope),
+                    (now, run_id, parent_uuid, period, entity_scope, dims),
                 )
                 # Keep the in-memory snapshot in lock-step with the DB write
                 # so a later pass / parent sees the blanked value.
@@ -258,9 +259,9 @@ def _recompute_scope(
                 # of inserting a fresh row.
                 existing = conn.execute(
                     "SELECT id FROM run_concept_conflicts WHERE run_id = ? "
-                    "AND concept_uuid = ? AND period = ? AND entity_scope = ? "
+                    "AND concept_uuid = ? AND period = ? AND entity_scope = ? AND dimension_key = ? "
                     "AND kind = 'partial_state' AND status = 'open'",
-                    (run_id, parent_uuid, period, entity_scope),
+                    (run_id, parent_uuid, period, entity_scope, dims),
                 ).fetchone()
                 detail = (
                     f"observed parent={parent_fact['value']} but children "
@@ -277,12 +278,12 @@ def _recompute_scope(
                         """
                         INSERT INTO run_concept_conflicts(
                             run_id, concept_uuid, period, entity_scope,
-                            kind, residual, detail, status, created_at
-                        ) VALUES (?, ?, ?, ?, 'partial_state', ?, ?, 'open', ?)
+                            kind, residual, detail, status, created_at, dimension_key
+                        ) VALUES (?, ?, ?, ?, 'partial_state', ?, ?, 'open', ?, ?)
                         """,
                         (
                             run_id, parent_uuid, period, entity_scope,
-                            residual, detail, _now(),
+                            residual, detail, _now(), dims,
                         ),
                     )
                 # We do NOT overwrite the observed parent — the user
@@ -302,9 +303,9 @@ def _recompute_scope(
             conn.execute(
                 "UPDATE run_concept_conflicts SET status = 'resolved', "
                 "resolved_at = ? WHERE run_id = ? AND concept_uuid = ? "
-                "AND period = ? AND entity_scope = ? "
+                "AND period = ? AND entity_scope = ? AND dimension_key = ? "
                 "AND kind = 'partial_state' AND status = 'open'",
-                (_now(), run_id, parent_uuid, period, entity_scope),
+                (_now(), run_id, parent_uuid, period, entity_scope, dims),
             )
 
             # Write the recomputed value back.  If we wrote a row that
@@ -317,16 +318,16 @@ def _recompute_scope(
                     """
                     INSERT INTO run_concept_facts(
                         run_id, concept_uuid, period, entity_scope, value,
-                        value_status, children_status, source, updated_at
+                        value_status, children_status, source, updated_at, dimension_key
                     ) VALUES (?, ?, ?, ?, ?, 'observed', 'itemised',
-                              'cascade', ?)
-                    ON CONFLICT(run_id, concept_uuid, period, entity_scope)
+                              'cascade', ?, ?)
+                    ON CONFLICT(run_id, concept_uuid, period, entity_scope, dimension_key)
                     DO UPDATE SET value = excluded.value,
                                   updated_at = excluded.updated_at
                     """,
                     (
                         run_id, parent_uuid, period, entity_scope,
-                        total, now,
+                        total, now, dims,
                     ),
                 )
                 # Audit-log invariant (peer-review #8): every fact change
@@ -337,14 +338,14 @@ def _recompute_scope(
                     """
                     INSERT INTO concept_fact_events(
                         run_id, concept_uuid, period, entity_scope,
-                        actor, turn, ts, before_json, after_json
-                    ) VALUES (?, ?, ?, ?, 'cascade', NULL, ?, ?, ?)
+                        actor, turn, ts, before_json, after_json, dimension_key
+                    ) VALUES (?, ?, ?, ?, 'cascade', NULL, ?, ?, ?, ?)
                     """,
                     (
                         run_id, parent_uuid, period, entity_scope, now,
                         None if existing_value is None
                         else _value_json(existing_value),
-                        _value_json(total),
+                        _value_json(total), dims,
                     ),
                 )
                 # Keep the in-memory snapshot in lock-step with the DB write.

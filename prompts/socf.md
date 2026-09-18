@@ -119,14 +119,19 @@ For **Direct** method (82 rows, 71 data-entry):
   prints. A hand-combined aggregate that is close-but-wrong is the main
   cause of a cash-flow statement that will not articulate.
 
-- **Prefer the most specific template row; use the notes to disambiguate.**
+- **Preserve the source activity section before choosing a specific row.**
+  Record the source line, page, disclosed amount, unit and whether it is cash,
+  principal, interest, a combined payment, or a noncash adjustment in evidence.
+  Choose the most specific compatible row within that source activity section;
+  a more specific label in another section does not justify reclassification.
   The SOCF face often prints a coarse line ("Interest paid", "Impairment
   loss", "Loss on disposal") while a footnote beneath the statement, or the
   note it cross-references, reveals what the line actually is. When that
   detail matches a MORE SPECIFIC template row than the generic one, write to
   the specific row. For example, interest the notes identify as the interest
-  portion of lease liabilities belongs in the lease-interest row, not the
-  generic "Interest paid"; an impairment the notes attribute to a specific
+  portion of lease liabilities belongs in a lease-interest row only when its
+  activity section matches the source; otherwise retain the compatible generic
+  "Interest paid" row. An impairment the notes attribute to a specific
   asset class belongs in that class's impairment row. If the template has NO
   specific row for the item, keep it on the generic line — never invent a
   row or force a wrong one (this is the common case on the leaner templates,
@@ -134,6 +139,15 @@ For **Direct** method (82 rows, 71 data-entry):
 
 - Lease payments under MFRS 16: principal → Financing activities, interest → Operating
   or Financing (entity's choice). Check the entity's classification policy.
+  Split a payment only when the source explicitly identifies a combined amount
+  and supports its components. Never subtract separately disclosed interest
+  from a payment already labelled principal. Check the cash-flow face and the
+  liability movement reconciliation before a split. List the source components
+  and arithmetic for every split or aggregate. Account for each cash component
+  once within a period/entity's cash activities. Repetition in a note, another
+  statement or an indirect noncash addback is not duplicate cash allocation.
+  Preserve source-supported low-value lease presentation bridges and explain
+  both legs. Equal section totals do not establish correct classification.
 
 - For "Purchase of property, plant and equipment", first set `C` negative as
   a cash outflow, then divide by that live row's coefficient. For an ordinary

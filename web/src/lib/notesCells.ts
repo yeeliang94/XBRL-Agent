@@ -63,6 +63,14 @@ export interface NotesCell {
   // company_py (Group filings); a null value means the cell is unfilled.
   concept_uuid?: string | null;
   values?: Record<string, number | null>;
+  dimensions?: Record<string, string>;
+  categories?: Array<{
+    dimension_key: string;
+    dimensions: Record<string, string>;
+    label: string;
+    values: Record<string, number | null>;
+    evidence: string | null;
+  }>;
 }
 
 /** One sheet section — what the editor renders as a heading + stack of
@@ -324,10 +332,11 @@ export async function patchNotesFact(
   value: number | null,
   period: "CY" | "PY",
   entityScope: "Company" | "Group",
+  dimensions?: Record<string, string>,
 ): Promise<unknown> {
   return apiFetch<unknown>(`/api/runs/${runId}/facts/${conceptUuid}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ value, period, entity_scope: entityScope }),
+    body: JSON.stringify({ value, period, entity_scope: entityScope, dimensions }),
   });
 }
