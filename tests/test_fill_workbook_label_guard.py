@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import openpyxl
 
 from tools.fill_workbook import fill_workbook, _build_label_index
@@ -410,3 +411,24 @@ def test_incremental_write_keeps_managed_template_writability_contract(tmp_path)
     assert wb["SOCF-Indirect"]["B132"].value == 200
     assert str(wb["SOCF-Indirect"]["B137"].value).startswith("=")
     wb.close()
+
+
+@pytest.mark.parametrize("column", [2, 3])
+def test_duplicate_protected_profit_totals_do_not_create_unresolved_writes(tmp_path, column):
+    """Run 272: duplicate formula labels were advertised as writable inputs."""
+    from types import SimpleNamespace
+    from extraction.agent import _update_unresolved_fill_errors
+
+    template = Path(__file__).resolve().parent.parent / "XBRL-template-MFRS/Company/04-SOPL-Nature.xlsx"
+    result = fill_workbook(str(template), str(tmp_path / "filled.xlsx"), [{
+        "sheet": "SOPL-Nature", "field_label": "Profit (loss)",
+        "section": "Statement of Profit or Loss", "col": column,
+        "value": -1963112,
+    }])
+    assert result.fields_written == 0
+    assert result.failed_request_keys[0]["kind"] == "formula_cell"
+    assert "matches writable rows" not in result.errors[0]
+    assert "formula" in result.errors[0].lower()
+    deps = SimpleNamespace(_unresolved_fill_error_state={}, last_fill_errors=[])
+    _update_unresolved_fill_errors(deps, result)
+    assert deps.last_fill_errors == []

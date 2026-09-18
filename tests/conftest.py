@@ -62,17 +62,18 @@ def _notes_auto_review_off_by_default():
 
 
 @pytest.fixture(autouse=True)
-def _pdf_notes_auto_format_off_by_default():
-    """Keep paid PDF formatter passes opt-in in pipeline tests."""
-    prior = os.environ.get("XBRL_PDF_NOTES_AUTO_FORMAT")
-    os.environ["XBRL_PDF_NOTES_AUTO_FORMAT"] = "false"
-    try:
-        yield
-    finally:
-        if prior is None:
-            os.environ.pop("XBRL_PDF_NOTES_AUTO_FORMAT", None)
-        else:
-            os.environ["XBRL_PDF_NOTES_AUTO_FORMAT"] = prior
+def _isolate_paid_pdf_formatter(monkeypatch):
+    """Unrelated mocked pipeline tests must not invoke a paid formatter.
+
+    Formatter unit tests import the real entry point at collection time.
+    Orchestration tests can replace this boundary with their own fake.
+    """
+    import notes.auto_format
+
+    async def no_paid_format(**kwargs):
+        return {"sheets": {}, "formatted": 0, "partial": 0, "failed": 0, "skipped": 0}
+
+    monkeypatch.setattr(notes.auto_format, "run_pdf_auto_format", no_paid_format)
 
 
 @pytest.fixture(autouse=True)

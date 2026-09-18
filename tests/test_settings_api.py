@@ -114,17 +114,12 @@ def test_auto_review_toggle_round_trips(tmp_path, monkeypatch):
     assert server._auto_review_enabled() is False
 
 
-def test_pdf_notes_auto_format_toggle_round_trips(tmp_path, monkeypatch):
-    env_file = tmp_path / ".env"
-    monkeypatch.setattr(server, "ENV_FILE", env_file)
-    monkeypatch.delenv("XBRL_PDF_NOTES_AUTO_FORMAT", raising=False)
-
-    assert client.get("/api/settings").json()["pdf_notes_auto_format"] is False
-    assert client.get("/api/config").json()["pdf_notes_auto_format"] is False
-
-    resp = client.post("/api/settings", json={"pdf_notes_auto_format": True})
-    assert resp.status_code == 200
-    assert "XBRL_PDF_NOTES_AUTO_FORMAT" in server.SETTINGS_FILE.read_text()
+def test_pdf_notes_formatting_cannot_be_disabled_by_legacy_settings(monkeypatch):
+    monkeypatch.setenv("XBRL_PDF_NOTES_AUTO_FORMAT", "false")
+    assert client.get("/api/settings").json()["pdf_notes_auto_format"] is True
+    assert client.get("/api/config").json()["pdf_notes_auto_format"] is True
+    response = client.post("/api/settings", json={"pdf_notes_auto_format": False})
+    assert response.status_code == 200
     assert server._pdf_notes_auto_format_enabled() is True
 
 
@@ -631,3 +626,18 @@ def test_the_new_proxy_models_are_offered(tmp_path, monkeypatch):
     ids = {m["id"] for m in server._load_available_models()}
     assert "openai.global.gpt-5.6" in ids
     assert "vertex_ai.gemini-3.6-flash" in ids
+
+
+@pytest.mark.parametrize("sidecar", [True, False])
+@pytest.mark.parametrize("auto_format", [True, False])
+def test_legacy_pdf_settings_do_not_reject_other_settings(tmp_path, monkeypatch, sidecar, auto_format):
+    _env(tmp_path, monkeypatch)
+    response = client.post("/api/settings", json={
+        "pdf_sidecar": sidecar, "pdf_notes_auto_format": auto_format,
+        "auto_review": False,
+    })
+    assert response.status_code == 200
+    settings = client.get("/api/settings").json()
+    assert settings["auto_review"] is False
+    assert settings["pdf_sidecar"] is False
+    assert settings["pdf_notes_auto_format"] is True

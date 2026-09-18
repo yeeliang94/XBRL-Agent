@@ -1731,6 +1731,60 @@ const FULL_TEMPLATE: NotesCellsResponse = {
 };
 
 describe("NotesReviewTab — full-template projection (Phase 5)", () => {
+  test("numeric drafts and failed saves block preparation until every column is saved", async () => {
+    const blocked = vi.fn();
+    let fail = true;
+    globalThis.fetch = vi.fn(async (_url: any, init?: RequestInit) =>
+      new Response(JSON.stringify(init?.method === "PATCH" ? {} : FULL_TEMPLATE), {
+        status: init?.method === "PATCH" && fail ? 500 : 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    ) as typeof fetch;
+    const { rerender } = render(<NotesReviewTab runId={7} onPreparationBlocked={blocked} />);
+    await screen.findAllByTestId("sheet-title");
+    selectSheet(/issued capital/i);
+    const py = screen.getByTestId("numeric-input-6-py");
+    const cy = screen.getByTestId("numeric-input-6-cy");
+    fireEvent.change(py, { target: { value: "1000" } });
+    expect(blocked).toHaveBeenLastCalledWith(true);
+    rerender(<NotesReviewTab runId={7} onPreparationBlocked={blocked}
+      focusSheet="Notes-CI" focusCell={{ sheet: "Notes-CI", row: 5, key: 1 }} />);
+    expect(screen.getByTestId("numeric-input-6-py")).toBe(py);
+    expect(blocked).toHaveBeenLastCalledWith(true);
+    fireEvent.blur(py);
+    await screen.findByText("Save failed");
+    expect(blocked).toHaveBeenLastCalledWith(true);
+    fail = false;
+    fireEvent.change(cy, { target: { value: "5000" } });
+    fireEvent.blur(py);
+    await waitFor(() => expect(py).not.toBeDisabled());
+    expect(blocked).toHaveBeenLastCalledWith(true);
+    fireEvent.blur(cy);
+    await waitFor(() => expect(blocked).toHaveBeenLastCalledWith(false));
+  });
+
+  test("failed numeric edits can be discarded without exporting unsaved values", async () => {
+    const blocked = vi.fn();
+    globalThis.fetch = vi.fn(async (_url: unknown, init?: RequestInit) =>
+      new Response(JSON.stringify(init?.method === "PATCH" ? {} : FULL_TEMPLATE), {
+        status: init?.method === "PATCH" ? 500 : 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    ) as typeof fetch;
+    render(<NotesReviewTab runId={7} onPreparationBlocked={blocked} />);
+    await screen.findAllByTestId("sheet-title");
+    selectSheet(/issued capital/i);
+    const py = screen.getByTestId("numeric-input-6-py");
+    const original = (py as HTMLInputElement).value;
+    fireEvent.change(py, { target: { value: "1000" } });
+    fireEvent.blur(py);
+    await screen.findByText("Save failed");
+    expect(blocked).toHaveBeenLastCalledWith(true);
+    fireEvent.click(screen.getByRole("button", { name: "Discard unsaved changes" }));
+    expect(py).toHaveValue(original);
+    await waitFor(() => expect(blocked).toHaveBeenLastCalledWith(false));
+  });
+
   test("visibly moves numeric row selection on click and keyboard focus", async () => {
     const numericSheet = FULL_TEMPLATE.sheets[1];
     mockFetchOnce({ sheets: [{ ...numericSheet, rows: [
@@ -2468,13 +2522,14 @@ describe("NotesReviewTab — per-run table style picker", () => {
 
     // Panel hidden until toggled.
     expect(screen.queryByTestId("notes-table-style-panel")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: /^table style$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^default appearance \(advanced\)$/i }));
     expect(screen.getByTestId("notes-table-style-panel")).toBeInTheDocument();
 
     // Change the border style → PATCH /api/runs/42/notes_table_style.
     fireEvent.change(screen.getByLabelText("Table border style"), {
       target: { value: "double" },
     });
+    expect(screen.getByLabelText("Font size in points")).not.toBeDisabled();
     await waitFor(() => {
       const patch = calls.find(
         (c) =>
@@ -2580,7 +2635,7 @@ describe("NotesReviewTab — AI formatter", () => {
     expect(summary).toHaveTextContent("Cleared borders.");
     expect(summary).toHaveTextContent("Changed 2 row(s).");
     expect(summary).toHaveTextContent("Confidence 90%.");
-    expect(summary).toHaveTextContent("tokens.");
+    expect(summary).toHaveTextContent("~1,500 tokens.");
     // A finished pass refetches the cells so the styled HTML renders.
     expect(notesCellsCalls(fetchMock)).toBeGreaterThan(before);
     vi.useRealTimers();
@@ -2731,13 +2786,14 @@ describe("NotesReviewTab — AI formatter", () => {
         screen.getByTestId("notes-format-summary"),
       ).toHaveTextContent("Applied source style.");
     });
+    expect(screen.queryByTestId("notes-format-button")).toBeNull();
   });
 
   test("pending row save disables Format", async () => {
     vi.useFakeTimers();
     routedFetch({});
-
-    render(<NotesReviewTab runId={42} />);
+    const onPreparationBlocked = vi.fn();
+    render(<NotesReviewTab runId={42} onPreparationBlocked={onPreparationBlocked} />);
     await vi.runAllTimersAsync();
     selectFirstField();
 
@@ -2755,6 +2811,7 @@ describe("NotesReviewTab — AI formatter", () => {
     await vi.runOnlyPendingTimersAsync();
 
     const button = screen.getAllByTestId("notes-format-button")[0];
+    expect(onPreparationBlocked).toHaveBeenLastCalledWith(true);
     expect(button).toHaveTextContent("Save pending");
     expect(button).toBeDisabled();
 

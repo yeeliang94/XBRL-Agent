@@ -320,6 +320,9 @@ async def update_settings(body: dict, request: Request):
         if denied is not None:
             return denied
 
+    # Accept legacy workflow fields without changing the fixed PDF workflow.
+    # Older clients may round-trip either polarity from saved preferences.
+
     # Validate model-dependent fields before writing ANY key. Previously the
     # legacy model/proxy fields were written first, then an invalid thinking
     # level raised 400, leaving a partially-applied settings request.
@@ -462,10 +465,6 @@ async def update_settings(body: dict, request: Request):
         updates["XBRL_NOTES_AUTO_REVIEW"] = (
             "true" if body["notes_auto_review"] else "false"
         )
-    if "pdf_notes_auto_format" in body:
-        updates["XBRL_PDF_NOTES_AUTO_FORMAT"] = (
-            "true" if body["pdf_notes_auto_format"] else "false"
-        )
     # Clean-run spot-check (issue 1): enable toggle + depth (light/full).
     if "spot_check" in body:
         updates["XBRL_SPOT_CHECK"] = "true" if body["spot_check"] else "false"
@@ -482,10 +481,6 @@ async def update_settings(body: dict, request: Request):
         updates["XBRL_NOTES_COVERAGE"] = (
             "true" if body["notes_coverage"] else "false"
         )
-    # Scanned-PDF transcribed source sidecar (docs/PLAN-pdf-source-sidecar.md).
-    # Default off; firm-wide + cost-changing, so admin-only (set below).
-    if "pdf_sidecar" in body:
-        updates["XBRL_PDF_SIDECAR"] = "true" if body["pdf_sidecar"] else "false"
     if "scout_wallclock_seconds" in body:
         if isinstance(body["scout_wallclock_seconds"], bool):
             raise HTTPException(

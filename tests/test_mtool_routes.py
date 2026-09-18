@@ -546,7 +546,7 @@ def test_notes_fill_doc_honours_per_run_theme(client):
         conn.close()
     doc = tc.get(f"/api/runs/{run_id}/mtool-notes-fill").json()
     html = doc["footnotes"][0]["html"].lower()
-    assert "3px double #1f3864" in html          # themed, not the #999 default
+    assert "3px solid #1f3864" in html  # native double-border substitute
     assert "1px solid #999" not in html
 
 

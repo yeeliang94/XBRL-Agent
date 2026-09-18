@@ -52,6 +52,7 @@ ASSEMBLED_REPLACEMENT = (
 )
 
 COPY_REPLACEMENTS = (
+    ("manual, per prose sheet", "automatic for PDF notes; per-sheet retry"),
     (
         '<a href="#ex-face">★ Full example: Face</a>\n'
         '<a href="#ex-notes">★ Full example: Notes</a>\n',

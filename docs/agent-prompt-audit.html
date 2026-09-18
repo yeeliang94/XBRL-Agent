@@ -82,7 +82,7 @@ So <code>socie_sore.md</code> (variant) beats <code>socie_mpers.md</code> (stand
 <tr><td><span class="tag t-rev">REVIEWER</span>Reviewer</td><td>0–1 (failures) </td><td>—</td><td><code>reviewer.md</code> + dynamic review packet</td><td><code>xbrl-reviewer</code></td><td>grounded fixes + flags</td></tr>
 <tr><td><span class="tag t-rev">REVIEWER</span>Spot-check</td><td>0–1 (clean run)</td><td>—</td><td><code>spot_check.md</code> (light) / <code>reviewer.md</code> (full)</td><td><code>xbrl-reviewer</code></td><td>sanity fixes / none</td></tr>
 <tr><td><span class="tag t-rev">REVIEWER</span>Notes reviewer</td><td>0–1 (post notes)</td><td>—</td><td><code>notes_reviewer.md</code> + dynamic notes review packet</td><td><code>xbrl-notes-reviewer</code></td><td>grounded prose fixes + coverage verdicts</td></tr>
-<tr><td><span class="tag t-rev">REVIEWER</span>Notes formatter</td><td>manual, per prose sheet</td><td>—</td><td><code>notes_formatter.md</code> + CURRENT CELLS payload</td><td><code>xbrl-notes-formatter</code></td><td>style patches only (content unchanged)</td></tr>
+<tr><td><span class="tag t-rev">REVIEWER</span>Notes formatter</td><td>automatic for PDF notes; per-sheet retry</td><td>—</td><td><code>notes_formatter.md</code> + CURRENT CELLS payload</td><td><code>xbrl-notes-formatter</code></td><td>style patches only (content unchanged)</td></tr>
 <tr style="opacity:.6"><td><span class="tag t-val">REMOVED</span>Notes validator</td><td>0–1 (post notes)</td><td>—</td><td><i>notes_validator.md</i> (deleted)</td><td>—</td><td>dedup rewrites</td></tr>
 <tr><td><span class="tag t-scout">SCOUT</span>Scout</td><td>0–1 (on demand)</td><td>—</td><td><code>scout/agent.py _SYSTEM_PROMPT</code></td><td>—</td><td>Infopack (page hints)</td></tr>
 <tr><td><span class="tag t-scout">HELPER</span>Scout TOC vision</td><td>0–1 per scout</td><td>—</td><td><code>scout/vision.py _VISION_SYSTEM_PROMPT</code></td><td><code>xbrl-scout-vision</code></td><td>ordered TOC entries</td></tr>
@@ -257,7 +257,7 @@ specific row as a likely sign error, re-read THAT row first.</pre></details><p c
 <tr><td><b>12 List of Notes</b> (fan-out)</td><td>Disclosure notes only; one of ≤5 sub-agents each seeing a <b>batch</b>; pick from the seeded catalog verbatim; unmatched → catch-all sink (never silently dropped); skip only what belongs on another sheet; <b>mandatory coverage receipt</b> accounting for every batch note.</td></tr>
 <tr><td><b>13 Issued Capital</b></td><td>Structured numeric movement table (shares # + amount); <code>numeric_values</code> per row; <b>also</b> reproduce the disclosed table as one HTML <code>&lt;table&gt;</code> payload.</td></tr>
 <tr><td><b>14 Related Party</b></td><td>Structured numeric by transaction type + outstanding balances; income & expense both positive; reproduce the table as an HTML payload too.</td></tr>
-</table><details><summary><span>Shared notes persona — <code>prompts/_notes_base.md</code> (verbatim)</span><span class="meta">414 lines · in EVERY notes prompt</span></summary><pre class="tall">You are a senior Malaysian chartered accountant filling the SSM MBRS XBRL
+</table><details><summary><span>Shared notes persona — <code>prompts/_notes_base.md</code> (verbatim)</span><span class="meta">416 lines · in EVERY notes prompt</span></summary><pre class="tall">You are a senior Malaysian chartered accountant filling the SSM MBRS XBRL
 notes workbook templates from an audited financial-statement PDF. You read
 the disclosure notes in the PDF and copy their content — verbatim where
 possible, lightly cleaned for formatting — into the matching template row.
@@ -514,8 +514,10 @@ candidate and decide on substance. Pass all the terms to compare in one call.
 **Output is HTML.** The post-run editor renders your content as rich
 text in a WYSIWYG view, and a one-click "copy as rich text" hands it
 to M-Tool with formatting preserved. Do NOT emit Markdown (`**bold**`,
-`- bullet`, `|` tables) — Markdown will not be interpreted. The Excel
-download flattens the HTML back to plain text automatically.
+`- bullet`, `|` tables) — Markdown will not be interpreted. The saved HTML
+is reviewed and formatted before the exporter injects it into the selected
+mTool template. Internal diagnostic workbooks may contain flattened text;
+they are not the source for the user's formatted notes.
 
 - **Paragraphs:** wrap every paragraph in `&lt;p&gt;…&lt;/p&gt;`. Do not use bare
   `\n\n` for paragraph breaks — the editor won't render them as

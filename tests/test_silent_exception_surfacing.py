@@ -769,3 +769,71 @@ async def test_notes_advisory_bounded_runs_off_the_event_loop():
     assert name.startswith("cross-check"), (
         f"expected the dedicated cross-check pool, got thread {name!r}"
     )
+
+
+@pytest.mark.parametrize("outcome", ["complete", "partial", "failed", "skipped", "exception"])
+def test_automatic_notes_formatting_is_visible_and_controls_completion(
+    session_env, monkeypatch, outcome,
+):
+    """A saved extraction cannot be reported clean when preparation failed."""
+    from openpyxl import Workbook
+    import notes.auto_format
+
+    client, session_id, out = session_env
+    folder = out / session_id
+    face_path = folder / "SOFP_filled.xlsx"
+    notes_path = folder / "NOTES_CORP_INFO_filled.xlsx"
+    merged_path = folder / "filled.xlsx"
+    for path in (face_path, notes_path, merged_path):
+        book = Workbook()
+        book.save(path)
+        book.close()
+    agent_results = [AgentResult(
+        statement_type=StatementType.SOFP, variant="CuNonCu",
+        status="succeeded", workbook_path=str(face_path),
+    )]
+    calls = []
+
+    async def notes_run(*_args, **_kwargs):
+        return NotesCoordinatorResult(agent_results=[NotesAgentResult(
+            template_type=NotesTemplateType.CORP_INFO, status="succeeded",
+            workbook_path=str(notes_path),
+        )])
+
+    async def format_notes(**kwargs):
+        calls.append(kwargs)
+        if outcome == "exception":
+            raise RuntimeError("formatter unavailable")
+        result = {"formatted": 0, "partial": 0, "failed": 0, "skipped": 0}
+        result["formatted" if outcome == "complete" else outcome] = 1
+        return result
+
+    monkeypatch.setattr(notes.auto_format, "run_pdf_auto_format", format_notes)
+    monkeypatch.setenv("XBRL_PDF_NOTES_AUTO_FORMAT", "false")
+    with patch("server._create_proxy_model", return_value="fake-model"), \
+         patch("coordinator.run_extraction", side_effect=_happy_coordinator(agent_results)), \
+         patch("notes.coordinator.run_notes_extraction", side_effect=notes_run), \
+         patch("workbook_merger.merge", return_value=MergeResult(
+             success=True, output_path=str(merged_path), sheets_copied=2)), \
+         patch("cross_checks.framework.run_all", return_value=[]), \
+         patch("cross_checks.framework.run_all_facts", return_value=[]), \
+         patch("cross_checks.notes_consistency.check_notes_consistency", return_value=[]):
+        response = client.post(f"/api/run/{session_id}", json={
+            "statements": ["SOFP"], "variants": {"SOFP": "CuNonCu"},
+            "notes_to_run": ["CORP_INFO"], "use_scout": False,
+        })
+    assert response.status_code == 200
+    assert len(calls) == 1
+    assert calls[0]["sheets"] == ["Notes-CI"]
+    assert '"stage": "formatting_notes"' in response.text
+    with sqlite3.connect(out / "xbrl_agent.db") as conn:
+        status, retained_path = conn.execute(
+            "SELECT status, merged_workbook_path FROM runs ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    assert retained_path == str(merged_path)
+    if outcome == "complete":
+        assert "notes_formatting_incomplete" not in response.text
+        assert status == "completed"
+    else:
+        assert status == "completed_with_errors"
+        assert response.text.index("notes_formatting_incomplete") < response.text.index("event: run_complete")

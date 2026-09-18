@@ -996,39 +996,33 @@ Key invariants:
     `test_formatter_preserves_valid_note_when_other_note_repair_is_empty` in
     `tests/test_notes_format_patch.py` and the partial-save case in
     `web/src/__tests__/NotesReviewTab.test.tsx`.
-  - **PDF structure-first formatting (2026-08-25).** Text PDFs already land
-    style-free. Scanned-PDF `source.html` transcripts now preserve content and
-    table geometry only: `ingest/pdf_sidecar.normalize_transcription` removes
-    presentation attributes and unwraps presentation-only inline tags before
-    publication. This stops the transcript model from becoming a second
-    styling author and keeps scanned/text PDFs on one formatter path. When an
-    individual page fails, publication is note-range atomic: only notes whose
-    full scout page range transcribed are exposed through `read_source_note`;
-    affected notes return no snippet and use direct PDF vision. A partial note
-    is never stitched across a missing page. Pinned by `tests/test_pdf_sidecar.py`,
-    `tests/test_pdf_sidecar_wiring.py`, and `tests/test_notes_source_snippets.py`.
-    When the sidecar applies, it is built after the pipeline-owned scout and before
-    extraction. That paid page transcription can run for up to the sidecar's
-    600-second overall deadline, so the server drains SSE concurrently and
-    emits `pipeline_stage=transcribing_source` before the first model call.
-    The automatic formatter is unrelated to this pre-extraction interval: it
-    runs later, after notes review. When
-    `XBRL_PDF_NOTES_AUTO_FORMAT=true`, the run formats unstyled/floor prose
-    cells after the notes reviewer, in parallel by sheet, through the same
-    content/number/geometry verifier, CAS writes, snapshots, task rows, limits,
-    and mTool-safe closed vocabulary as the manual pass. Every sheet uses the
-    shared guarded claim, so a manual reviewer that starts first makes the
-    automatic formatter record a skipped outcome; once any formatter sheet is
-    claimed, the reviewer cannot start over it. The setting is
-    admin-only and defaults OFF because it adds a paid pass per filled prose
-    sheet. Stop All cancels the group. `uploaded.docx` is an explicit exclusion:
-    Word's source-styled behavior above is unchanged. Pinned by
-    `tests/test_pdf_sidecar.py`, `test_pdf_sidecar_prompts.py`,
-    `test_notes_auto_format.py`, `test_pdf_notes_auto_format_wiring.py`,
-    `test_notes_format_patch.py`, `test_settings_api.py`, and the Settings /
-    reducer web tests.
-  Styling reaches the Review panel + clipboard paste ONLY — the xlsx download
-  stays a text overlay (native xlsx styling still deferred).
+  - **Simplified PDF notes preparation (2026-09-17).** Text PDFs use text
+    navigation plus page inspection; scanned pages use existing vision fallback.
+    Both author semantic HTML and table geometry, then run the dedicated formatter
+    automatically after notes review. There is no normal transcription or
+    formatting toggle. Old `XBRL_PDF_SIDECAR` enable values and
+    `XBRL_PDF_NOTES_AUTO_FORMAT` disable values are inert; settings APIs accept and ignore
+    legacy workflow values from older clients. Historical transcript artifacts and helper
+    tests remain readable; Word source HTML is unchanged.
+    Every eligible unstyled/floor prose sheet uses the existing guarded claim,
+    content/number/geometry verifier, CAS writes, snapshots and bounded formatter.
+    Stop All cancels the group. `uploaded.docx` excludes Word from automatic PDF
+    formatting. Partial, failed or skipped formatting stays visible through task
+    results and a persisted/SSE issue, and cannot yield clean run completion.
+    The Notes view offers retry for incomplete/older notes, not a routine second
+    Format step after success. Human edits autosave; pending/failed note saves,
+    active formatting and pending appearance saves block workbook preparation
+    and run-tab switches. Preparation uses saved HTML without rerunning AI.
+    Shared/per-run appearance is optional advanced customization; explicit saved
+    note styles override defaults. Native transport conversions occur only on
+    copy/export, so the review is not a pixel-exact native mTool preview.
+    Pinned by `tests/test_pdf_notes_auto_format_wiring.py`,
+    `test_notes_auto_format.py`, `test_pdf_sidecar_wiring.py`,
+    `test_notes_format_patch.py`, `test_settings_api.py`,
+    `test_silent_exception_surfacing.py` and the Settings, PreRunPanel,
+    NotesReviewTab and notesPreparationGuard web tests.
+    Styling reaches review, clipboard and native notes in the prepared mTool
+    workbook. Internal diagnostic workbooks may still flatten notes to text.
 - **Evidence column is read-only in the editor** (audit trail); the PATCH
   endpoint ignores any `evidence` key.
 - **Heading-injection scope:** the writer auto-injects `<h3>` from the
@@ -1167,7 +1161,11 @@ catch-all "balancing amount" plugs):
   entirely non-writable row is audit-only because verification owns its inputs
   and result. A formula in a non-entry total column on an otherwise writable
   row (for example MFRS SOCIE column M) is an agent locator error and remains
-  unresolved until corrected, so it continues to block a clean save.
+  unresolved until corrected, so it continues to block a clean save. Duplicate
+  labels that match only protected formula rows receive the same audit-only
+  refusal as an explicit formula coordinate; they are never advertised as
+  ambiguous writable inputs. Pinned by
+  `tests/test_fill_workbook_label_guard.py::test_duplicate_protected_profit_totals_do_not_create_unresolved_writes`.
 
 Pinned by `tests/test_template_reader.py::test_abstract_rows_marked_in_sopl_analysis`,
 `tests/test_fill_workbook_abstract_guard.py`,

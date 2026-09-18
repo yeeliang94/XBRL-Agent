@@ -327,11 +327,6 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
   const [levelChoicesByModel, setLevelChoicesByModel] =
     useState<Record<string, string[]>>({});
   const [entityMemory, setEntityMemory] = useState(true);
-  // Scanned-PDF source transcript (docs/PLAN-pdf-source-sidecar.md). Default
-  // OFF: it adds one paid vision call per notes page, so an admin turns it
-  // on deliberately rather than every scanned upload paying for it.
-  const [pdfSidecar, setPdfSidecar] = useState(false);
-  const [pdfNotesAutoFormat, setPdfNotesAutoFormat] = useState(false);
   // Notes source-integrity rollout mode (gotcha #31). Default off — `shadow`
   // computes the verdict and changes nothing, `enforce` makes the block-id
   // path live and lets an unresolved block tip the run status.
@@ -413,8 +408,6 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         setEntityMemory(s.entity_memory !== false);
         // Default to OFF when the field is absent (older backend) — the
         // opposite of the other toggles, because this one costs money.
-        setPdfSidecar(s.pdf_sidecar === true);
-        setPdfNotesAutoFormat(s.pdf_notes_auto_format === true);
         // The server's own list decides what is valid — this build's knowledge
         // of the modes does not. Keep whatever mode it reports as long as it is
         // in that list; only an absent or genuinely out-of-list value falls
@@ -497,8 +490,6 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         spot_check: spotCheck,
         spot_check_mode: spotCheckMode,
         entity_memory: entityMemory,
-        pdf_sidecar: pdfSidecar,
-        pdf_notes_auto_format: pdfNotesAutoFormat,
         notes_source_integrity: sourceIntegrity,
         // Send EVERY role, with "" for the ones set back to the provider
         // default. The server clears only the keys it is given, so omitting a
@@ -526,7 +517,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
     } finally {
       setSaving(false);
     }
-  }, [dirty, model, proxyUrl, apiKey, roleModelUpdates, autoReview, notesAutoReview, notesCoverage, toleranceRm, scoutWallclockSeconds, scoutMaxTurns, spotCheck, spotCheckMode, entityMemory, pdfSidecar, pdfNotesAutoFormat, sourceIntegrity, thinkingLevels, reasoningSummary, saveSettings]);
+  }, [dirty, model, proxyUrl, apiKey, roleModelUpdates, autoReview, notesAutoReview, notesCoverage, toleranceRm, scoutWallclockSeconds, scoutMaxTurns, spotCheck, spotCheckMode, entityMemory, sourceIntegrity, thinkingLevels, reasoningSummary, saveSettings]);
 
   const handleUseGpt56ForEveryRole = useCallback(() => {
     setModel(GPT56_LUNA_MODEL);
@@ -1067,64 +1058,9 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
       </div>
 
       <SettingsSectionHeading
-        title="Scanned PDF handling"
-        description="Controls whether scanned (image-only) PDFs get a transcript for the notes agents to copy from."
+        title="PDF notes preparation"
+        description="Text and scanned PDFs are read, checked and formatted automatically before review. You can edit the prepared notes before filling your mTool template."
       />
-      {/* Scanned-PDF source transcript toggle (docs/PLAN-pdf-source-sidecar.md).
-          A checkbox, not a mode picker: the pass either runs or it doesn't.
-          Admin-only server-side (it changes cost for everyone). */}
-      <div style={styles.fieldGroup}>
-        <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, cursor: "pointer" }}>
-          <input
-            type="checkbox"
-            checked={pdfSidecar}
-            onChange={(e) => { setPdfSidecar(e.target.checked); setDirty(true); }}
-            disabled={readOnly}
-            aria-label="Transcribe scanned PDF notes pages before extraction"
-          />
-          <span style={styles.label}>Transcribe scanned PDF notes pages before extraction</span>
-        </label>
-        <p style={styles.helperText}>
-          When a filing is uploaded as a scanned PDF (no selectable text), the
-          notes pages are first read by the AI into a text transcript with the
-          tables and rules kept. Notes agents then copy tables and layout from
-          that transcript the way they do from a Word source, instead of
-          re-describing what they see. Figures in the transcript are treated
-          as unverified — agents are told to check every number against the
-          PDF. Adds one image-reading call per notes page (roughly a quarter
-          of a US dollar for a 20-page notes section). If the transcript
-          cannot be built the run continues as before, and the run page says
-          why.
-        </p>
-        <p style={styles.helperText}>
-          Scanned PDFs only. PDFs with selectable text and Word uploads are
-          unaffected by this setting.
-        </p>
-      </div>
-      <div style={styles.fieldGroup}>
-        <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, cursor: "pointer" }}>
-          <input
-            type="checkbox"
-            checked={pdfNotesAutoFormat}
-            onChange={(e) => { setPdfNotesAutoFormat(e.target.checked); setDirty(true); }}
-            disabled={readOnly}
-            aria-label="Automatically format PDF notes for mTool"
-          />
-          <span style={styles.label}>Automatically format PDF notes for mTool</span>
-        </label>
-        <p style={styles.helperText}>
-          After extraction and notes review, the AI formatter compares each
-          prose table with its PDF pages and applies the standard mTool-safe
-          profile: source-aware borders and totals rules, restrained fills,
-          and consistent numeric alignment. Scanned and selectable-text PDFs
-          use the same path. Word uploads are not changed.
-        </p>
-        <p style={styles.helperText}>
-          Adds one paid formatting pass per filled prose sheet. Content, figures,
-          table rows and columns are locked by the format-only verifier.
-        </p>
-      </div>
-
       <SettingsSectionHeading
         title="Prior-year assistance"
         description="Controls whether future runs receive advisory context from the same entity's earlier filings."
@@ -1235,13 +1171,16 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
 
       <SettingsSectionHeading
         title="Notes appearance"
-        description="This section saves independently and updates the shared default immediately."
+        description="Optional shared defaults for font, spacing and unspecified table styles. Saved formatting on a note takes precedence."
       />
       {/* Notes table style — the firm-wide default theme for notes tables
           (docs/PLAN-notes-table-theme.md). Server-side (shared by everyone),
           persisted via /api/settings; it auto-saves on change, independent of
           the form's main Save button below. */}
-      <NotesPasteFormatSection getSettings={getSettings} saveSettings={saveSettings} />
+      <details>
+        <summary style={styles.label}>Default notes appearance (advanced)</summary>
+        <NotesPasteFormatSection getSettings={getSettings} saveSettings={saveSettings} />
+      </details>
 
       {/* Test-connection result — shown above the action row (which holds the
           Test Connection button itself, admin-only). */}
@@ -1445,11 +1384,11 @@ function NotesPasteFormatSection({
         </span>
       </div>
       <p style={styles.helperText}>
-        The firm default look for notes tables — grid colour, header fill, font,
-        spacing. It styles BOTH the on-screen Notes review preview AND what you
-        paste into M-Tool, so they match. Shared by everyone; changes save
-        automatically — no Save button needed for this section. You can still
-        override it per run, and format individual cells.
+        Shared defaults for the review display, copying and mTool preparation.
+        Saved formatting on individual notes takes precedence. A run with its own
+        defaults keeps them. Changes here save automatically and affect runs
+        that use the shared defaults. mTool compatibility conversions still apply
+        when preparing the workbook; native widths and borders may look different.
       </p>
       {saveError && (
         <p style={{ ...styles.helperText, color: pwc.error ?? "#b00020" }} role="alert">
