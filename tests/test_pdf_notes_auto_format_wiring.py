@@ -5,11 +5,12 @@ import inspect
 import server
 
 
-def test_pdf_auto_format_gate_defaults_off(tmp_path, monkeypatch):
-    monkeypatch.delenv("XBRL_PDF_NOTES_AUTO_FORMAT", raising=False)
+def test_pdf_auto_format_is_standard_even_with_legacy_disabled_setting(tmp_path, monkeypatch):
+    monkeypatch.setenv("XBRL_PDF_NOTES_AUTO_FORMAT", "false")
+    (tmp_path / "uploaded.pdf").write_bytes(b"%PDF")
     assert server._should_auto_format_pdf_notes(
         tmp_path, merge_succeeded=True, has_notes_result=True,
-    ) is False
+    ) is True
 
 
 def test_pdf_auto_format_gate_accepts_scanned_and_text_pdfs(tmp_path, monkeypatch):

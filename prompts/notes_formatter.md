@@ -59,6 +59,18 @@ STANDARDISED MTOOL PROFILE:
 - Use the existing theme for font, normal cell padding, and paste-time mTool
   compatibility. Add explicit operations only for source-visible differences.
 
+MTOOL EXPORT BOUNDARIES (docs/MTOOL-NOTES-AUTHORING.md):
+- Keep double-border intent in your patch. Export/copy code substitutes a solid
+  stroke at least 3px wide; do not pre-convert or promise native double rules.
+- Widths are preferences: native mTool may resize tables on save/reopen.
+  Do not invent compensating offsets or promise exact pagination/shared edges.
+- Blank edges use export-time white borders on a white page. Do not add these
+  transport workarounds to canonical notes yourself.
+- Use only the supported style keys and validated units below. Native or browser
+  appearance alone does not certify generated Review Copy Word/PDF output.
+- Never shorten accounting content to fit. Code owns compatibility conversion
+  and size checks; the operator receives a report of any formatting reduction.
+
 Size signals (mTool / Excel cell limit):
 The user prompt may include a SIZE SIGNALS block — deterministic verdicts
 computed by code against Excel's 32,767-character cell limit. Sizes are

@@ -1106,11 +1106,11 @@ describe("ConceptsPage", () => {
     expect(screen.getByRole("navigation", { name: "Notes sheet navigator" })).toBeTruthy();
     expect(screen.getByRole("button", { name: /Sheet 10 — Corporate Information/i })).toBeTruthy();
     expect(screen.getByTestId("notes-review-evidence")).toHaveTextContent("PDF page 4");
-    expect(screen.getByTestId("notes-style-source-chip")).toHaveTextContent("Unstyled");
+    expect(screen.getByTestId("notes-style-source-chip")).toHaveTextContent("Default appearance");
     const sourceDivider = screen.getByTestId("resize-source-notes");
     expect((sourceDivider.firstElementChild as HTMLElement).style.width).toBe("1px");
     expect((sourceDivider.firstElementChild as HTMLElement).style.background).toBe("rgb(238, 239, 241)");
-    const layout = screen.getByTestId("notes-source-first-workspace").firstElementChild as HTMLElement;
+    const layout = screen.getByTestId("notes-source-first-workspace").querySelector(".notes-source-first-layout") as HTMLElement;
     fireEvent.keyDown(sourceDivider, { key: "ArrowRight" });
     expect(layout.style.gridTemplateColumns).toContain("296px");
     expect((screen.getByTestId("resize-pdf").firstElementChild as HTMLElement).style.width).toBe("1px");
@@ -1229,7 +1229,7 @@ describe("ConceptsPage", () => {
     expect(actionsSummary).toHaveAttribute("data-tooltip", "Notes actions");
     const actionsMenu = actionsSummary.closest("details") as HTMLDetailsElement;
     fireEvent.click(actionsSummary);
-    fireEvent.click(screen.getByRole("button", { name: /^table style$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^default appearance \(advanced\)$/i }));
     expect(screen.getByTestId("notes-table-style-panel")).toBeInTheDocument();
     expect(actionsMenu.open).toBe(false);
     fireEvent.click(actionsSummary);

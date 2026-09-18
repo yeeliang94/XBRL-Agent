@@ -62,19 +62,19 @@ def test_flag_off_is_inert(tmp_path, monkeypatch):
 
 
 def test_no_notes_selected_is_inert(tmp_path, monkeypatch):
-    monkeypatch.setenv("XBRL_PDF_SIDECAR", "true")
+    monkeypatch.setattr(server, "_pdf_sidecar_enabled", lambda: True)
     pdf = _make_pdf(tmp_path / "uploaded.pdf")
     assert _build(pdf, _infopack([(2, 3)]), monkeypatch, notes=set()) is None
 
 
 def test_text_layer_pdf_is_inert(tmp_path, monkeypatch):
-    monkeypatch.setenv("XBRL_PDF_SIDECAR", "true")
+    monkeypatch.setattr(server, "_pdf_sidecar_enabled", lambda: True)
     pdf = _make_pdf(tmp_path / "uploaded.pdf", with_text=True)
     assert _build(pdf, _infopack([(2, 3)]), monkeypatch) is None
 
 
 def test_existing_word_sidecar_wins(tmp_path, monkeypatch):
-    monkeypatch.setenv("XBRL_PDF_SIDECAR", "true")
+    monkeypatch.setattr(server, "_pdf_sidecar_enabled", lambda: True)
     pdf = _make_pdf(tmp_path / "uploaded.pdf")
     (tmp_path / "source.html").write_text("<p>word</p>", encoding="utf-8")
     assert _build(pdf, _infopack([(2, 3)]), monkeypatch) is None
@@ -82,7 +82,7 @@ def test_existing_word_sidecar_wins(tmp_path, monkeypatch):
 
 
 def test_empty_inventory_never_transcribes_blind(tmp_path, monkeypatch):
-    monkeypatch.setenv("XBRL_PDF_SIDECAR", "true")
+    monkeypatch.setattr(server, "_pdf_sidecar_enabled", lambda: True)
     pdf = _make_pdf(tmp_path / "uploaded.pdf")
     out = _build(pdf, _infopack([]), monkeypatch)
     assert out == {"status": "skipped", "reason": "no_notes_inventory"}
@@ -90,7 +90,7 @@ def test_empty_inventory_never_transcribes_blind(tmp_path, monkeypatch):
 
 
 def test_builds_sidecar_over_inventory_page_union(tmp_path, monkeypatch):
-    monkeypatch.setenv("XBRL_PDF_SIDECAR", "true")
+    monkeypatch.setattr(server, "_pdf_sidecar_enabled", lambda: True)
     pdf = _make_pdf(tmp_path / "uploaded.pdf")
     seen = {}
 
@@ -127,7 +127,7 @@ def test_builds_sidecar_over_inventory_page_union(tmp_path, monkeypatch):
 
 
 def test_passes_scout_rotation_corrections_to_transcriber(tmp_path, monkeypatch):
-    monkeypatch.setenv("XBRL_PDF_SIDECAR", "true")
+    monkeypatch.setattr(server, "_pdf_sidecar_enabled", lambda: True)
     pdf = _make_pdf(tmp_path / "uploaded.pdf")
     infopack = _infopack([(2, 4)])
     infopack.rotation_corrections = {3: 90}
@@ -149,7 +149,7 @@ def test_passes_scout_rotation_corrections_to_transcriber(tmp_path, monkeypatch)
 def test_page_cap_skips_degenerate_inventories(tmp_path, monkeypatch):
     """Cost guard: a page_range spanning the whole document must not fan out
     into hundreds of paid vision calls — skip loudly, never truncate."""
-    monkeypatch.setenv("XBRL_PDF_SIDECAR", "true")
+    monkeypatch.setattr(server, "_pdf_sidecar_enabled", lambda: True)
     monkeypatch.setenv("XBRL_PDF_SIDECAR_PAGE_CAP", "10")
     pdf = _make_pdf(tmp_path / "uploaded.pdf")
 
@@ -163,7 +163,7 @@ def test_page_cap_skips_degenerate_inventories(tmp_path, monkeypatch):
 
 
 def test_transcriber_exception_is_a_skip_not_a_raise(tmp_path, monkeypatch):
-    monkeypatch.setenv("XBRL_PDF_SIDECAR", "true")
+    monkeypatch.setattr(server, "_pdf_sidecar_enabled", lambda: True)
     pdf = _make_pdf(tmp_path / "uploaded.pdf")
 
     async def boom(*a, **kw):
@@ -179,7 +179,7 @@ def test_transcriber_exception_is_a_skip_not_a_raise(tmp_path, monkeypatch):
 def test_partial_transcription_is_a_structured_skip(tmp_path, monkeypatch):
     """Any failed page refuses the sidecar (all-or-nothing publication) and
     the skip event names the failed pages."""
-    monkeypatch.setenv("XBRL_PDF_SIDECAR", "true")
+    monkeypatch.setattr(server, "_pdf_sidecar_enabled", lambda: True)
     pdf = _make_pdf(tmp_path / "uploaded.pdf")
 
     async def partial(pdf_path, pages, model, **kw):
@@ -198,7 +198,7 @@ def test_partial_transcription_is_a_structured_skip(tmp_path, monkeypatch):
 def test_partial_transcription_does_not_trust_scout_note_segments(
     tmp_path, monkeypatch,
 ):
-    monkeypatch.setenv("XBRL_PDF_SIDECAR", "true")
+    monkeypatch.setattr(server, "_pdf_sidecar_enabled", lambda: True)
     pdf = _make_pdf(tmp_path / "uploaded.pdf")
 
     async def partial(pdf_path, pages, model, **kw):
@@ -237,27 +237,13 @@ def test_repeat_staging_copies_the_sidecar_bundle(tmp_path):
     assert source_origin_for(sub / "uploaded.pdf") == "llm_transcription"
 
 
-def test_settings_round_trip(tmp_path, monkeypatch):
-    """Default OFF; POST persists XBRL_PDF_SIDECAR; GET settings + config
-    reflect it. Admin-only membership is asserted directly."""
-    from api.config_routes import _ADMIN_ONLY_SETTINGS_KEYS
-
-    env_file = tmp_path / ".env"
-    settings_file = tmp_path / "settings.json"
-    monkeypatch.setattr(server, "ENV_FILE", env_file)
-    monkeypatch.setattr(server, "SETTINGS_FILE", settings_file)
-    monkeypatch.delenv("XBRL_PDF_SIDECAR", raising=False)
-
+def test_legacy_transcription_setting_cannot_enable_paid_work(monkeypatch):
+    monkeypatch.setenv("XBRL_PDF_SIDECAR", "true")
     assert client.get("/api/settings").json()["pdf_sidecar"] is False
     assert client.get("/api/config").json()["pdf_sidecar"] is False
-
-    resp = client.post("/api/settings", json={"pdf_sidecar": True})
-    assert resp.status_code == 200
-    assert "XBRL_PDF_SIDECAR" in settings_file.read_text()
-    assert client.get("/api/settings").json()["pdf_sidecar"] is True
-    assert server._pdf_sidecar_enabled() is True
-
-    assert "pdf_sidecar" in _ADMIN_ONLY_SETTINGS_KEYS
+    response = client.post("/api/settings", json={"pdf_sidecar": True})
+    assert response.status_code == 200
+    assert server._pdf_sidecar_enabled() is False
 
 
 # ---------------------------------------------------------------------------
@@ -355,7 +341,7 @@ def test_builder_announces_applicable_transcription_before_model_calls(
     ])
     order = []
 
-    monkeypatch.setenv("XBRL_PDF_SIDECAR", "true")
+    monkeypatch.setattr(server, "_pdf_sidecar_enabled", lambda: True)
     monkeypatch.setattr("ingest.pdf_sidecar.pdf_has_text_layer", lambda _p: False)
 
     async def fake_transcribe(_pdf, pages, _model, **_kwargs):

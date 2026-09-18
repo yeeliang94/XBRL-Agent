@@ -287,10 +287,6 @@ export type NotesInventoryEntry = {
 
 type NotesInventoryOverrides = NonNullable<RunConfigPayload["notes_inventory_overrides"]>;
 
-function _seedScannedPdf(cfg: Record<string, unknown> | null | undefined): boolean {
-  return cfg?.scanned_pdf === true;
-}
-
 function _seedNotesInventoryOverrides(
   cfg: Record<string, unknown> | null | undefined,
 ): NotesInventoryOverrides {
@@ -525,7 +521,7 @@ function NotesInventoryEditor({
 
 export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onConfigChange, isAdmin = false }: Props) {
   // Advanced disclosure (Phase 3): keeps the default view to the accounting
-  // choices; AI-model pickers, scanned-PDF handling, and benchmark grading
+  // choices; AI-model pickers and benchmark grading
   // live behind this toggle.
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -533,11 +529,6 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
   const [scoutError, setScoutError] = useState<string | null>(null);
   const [scoutProgress, setScoutProgress] = useState<string | null>(null);
   const [scoutStartTime, setScoutStartTime] = useState<number | null>(null);
-  // Operator override for scanned (image-only) PDFs. When ticked, the scout
-  // endpoint is told to skip the PyMuPDF-regex notes-inventory path and go
-  // straight to the vision fallback. Default off — the LLM scout still
-  // handles text PDFs fine and vision-only is more expensive.
-  const [scannedPdf, setScannedPdf] = useState(() => _seedScannedPdf(initialConfig));
   // Persisted scout model lives in XBRL_DEFAULT_MODELS.scout server-side
   // (see server.py `_load_extended_settings`). We hydrate this from the
   // /api/settings call so the dropdown shows the last-selected model; on
@@ -887,16 +878,12 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
     setScoutEvents([]);
     setScoutLogOpen(true);
     try {
-      // Call the scout endpoint via SSE. When the user flagged the upload
-      // as scanned, pass scanned_pdf so the server forces the vision path
-      // for notes inventory (skipping the PyMuPDF regex that returns [] on
-      // image-only PDFs). Body is only sent when the flag is set so the
-      // default request shape is unchanged for text PDFs.
+      // Scout chooses text navigation or vision fallback automatically.
       const response = await fetch(`/api/scout/${sessionId}`, {
         method: "POST",
         signal: abortController.signal,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ scanned_pdf: scannedPdf }),
+        body: JSON.stringify({}),
       });
       if (!response.ok) {
         let detail = `Scout failed (${response.status})`;
@@ -1095,7 +1082,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
     // latest value via userEnabledOverridesRef so recreating the callback
     // every time the user toggles a statement isn't necessary (and would
     // leak the stale-closure bug back in).
-  }, [sessionId, scannedPdf]);
+  }, [sessionId]);
 
   const handleStopScout = useCallback(() => {
     scoutAbortRef.current?.abort();
@@ -1190,7 +1177,6 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       // above may help the operator inspect suggestions, but it is never a
       // prerequisite and never disables the pipeline-owned pass.
       use_scout: true,
-      scanned_pdf: scannedPdf,
       notes_inventory_overrides: notesInventoryOverrides,
       filing_level: filingLevel,
       filing_standard: filingStandard,
@@ -1207,7 +1193,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       ...(repeats > 1 ? { repeats } : {}),
     };
   }, [
-    statementsEnabled, variantSelections, modelOverrides, infopack, scannedPdf,
+    statementsEnabled, variantSelections, modelOverrides, infopack,
     notesInventoryOverrides,
     filingLevel, filingStandard, denomination, notesEnabled,
     notesModelOverrides, evalEnabled, evalBenchmarkId, isAdmin, repeats,
@@ -1296,7 +1282,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           onClick={() => setShowAdvanced((v) => !v)}
           aria-expanded={showAdvanced}
           data-testid="advanced-toggle"
-          title="AI models, accuracy grading, scanned PDFs"
+          title="AI models and accuracy grading"
           style={{
             display: "inline-flex",
             alignItems: "center",
@@ -1597,26 +1583,10 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
             </select>
           )}
         </div>
-        <label
-            style={{
-              display: "flex", alignItems: "center", gap: pwc.space.sm,
-              fontFamily: pwc.fontBody, fontSize: 13, color: pwc.grey800,
-              cursor: "pointer",
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={scannedPdf}
-              onChange={(e) => setScannedPdf(e.target.checked)}
-              disabled={isDetecting}
-            />
-            <span>
-              My document is a scanned image
-              <span style={{ color: pwc.grey500, marginLeft: 6, fontSize: 12 }}>
-                (no selectable text — the AI reads it visually instead)
-              </span>
-            </span>
-          </label>
+        <p style={{ color: pwc.grey500, fontSize: 13 }}>
+          Text and scanned pages are read automatically. Notes are checked and
+          formatted before you review them.
+        </p>
         {scoutModelSaveError && (
           <p
             role="status"
@@ -1780,9 +1750,8 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
               <span>Found {count} note{count === 1 ? "" : "s"} in the document.</span>
               {hintVisible && (
                 <span>
-                  No notes were found in this document. If it's a scanned image,
-                  open Advanced settings, tick "My document is a scanned image",
-                  and preview the scan again.
+                  No notes were found in this document. Check that the pages are
+                  readable and include the notes, then try the preview again.
                 </span>
               )}
               {gaps.length > 0 && (

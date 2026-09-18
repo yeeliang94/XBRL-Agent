@@ -135,6 +135,7 @@ export interface ConceptsPageProps {
   // this path once the Notes-tab link-out was removed). Optional — absent in
   // the standalone template view, where the button falls back to inert.
   onRegenerateNotes?: (runId: number) => void;
+  onPreparationBlocked?: (blocked: boolean) => void;
   /** Open the unified review workspace directly on its persistent Notes
    *  index/editor/source composition. Used by the run-detail Notes route. */
   initialView?: "figures" | "notes";
@@ -266,6 +267,7 @@ export function ConceptsPage({
   benchmarkId = null,
   initialCrossChecks,
   onRegenerateNotes,
+  onPreparationBlocked,
   initialView = "figures",
 }: ConceptsPageProps) {
   const initialWorkspace = useRef<WorkspacePreferences>(readWorkspacePreferences(runId));
@@ -1178,6 +1180,7 @@ export function ConceptsPage({
               focusCell={notesFocusCell}
               onActiveCellPages={handleNotesCellPages}
               onRegenerate={onRegenerateNotes}
+              onPreparationBlocked={onPreparationBlocked}
             />
           </div>
         ) : filtered.length > 0 && filtered.every((r) => r.shape === "matrix") ? (

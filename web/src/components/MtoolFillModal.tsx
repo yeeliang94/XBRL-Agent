@@ -471,10 +471,6 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
   // still served by the automatic preview, which shows what would be created
   // before anything is written.
   const [createMissingNotes, setCreateMissingNotes] = useState(true);
-  // Note styling mode: "styled" (default, recommended) or "none" — the
-  // diagnostic fill that writes words + table structure with no formatting,
-  // so an operator can isolate whether a fill problem is styling-related.
-  const [notesStyling, setNotesStyling] = useState<"styled" | "none">("styled");
   const [preview, setPreview] = useState<NotesPreview | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
   const [previewErr, setPreviewErr] = useState<string | null>(null);
@@ -566,7 +562,6 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
     setNotesCount(null);
     setNotesSheets([]);
     setSelectedSheets(null);
-    setNotesStyling("styled");
     // This modal stays MOUNTED between sessions, so any choice not reset here
     // silently persists into the next fill. Both of these advertise a default
     // in their own label ("On by default"), which would be a lie on the second
@@ -629,7 +624,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
     setReport(null);
     setDownloaded(false);
     setDownloadErr(null);
-  }, [file, fillNotes, createMissingNotes, notesStyling, noteTargets, columnMap, filingTargets, selectedSheets]);
+  }, [file, fillNotes, createMissingNotes, noteTargets, columnMap, filingTargets, selectedSheets]);
 
   useEffect(() => { setFilingTargets({}); setFilingFailure(null); }, [file]);
 
@@ -665,7 +660,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
       form.append("strict", "true");
       form.append("fill_notes", fillNotes ? "true" : "false");
       form.append("create_missing_notes", createMissingNotes ? "true" : "false");
-      if (fillNotes) form.append("notes_styling", notesStyling);
+      if (fillNotes) form.append("notes_styling", "styled");
       if (columnMap) form.append("column_map", JSON.stringify(columnMap));
       if (Object.keys(filingTargets).length) form.append("filing_targets", JSON.stringify(filingTargets));
       const targets = fillNotes ? notesTargetsPayload() : null;
@@ -791,7 +786,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
       form.append("template", targetFile);
       if (sheets !== null) form.append("selected_sheets", JSON.stringify(sheets));
       form.append("create_missing_notes", createMissingNotes ? "true" : "false");
-      form.append("notes_styling", notesStyling);
+      form.append("notes_styling", "styled");
       const targets = resetTargets ? null : notesTargetsPayload();
       if (targets) form.append("notes_targets", targets);
       const resp = await fetch(`/api/runs/${runId}/mtool-fill/notes-preview`, {
@@ -966,6 +961,11 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
         </p>
 
         <fieldset disabled={busy || downloading} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+        <p style={styles.statLine}>
+          Uses your saved figures and notes, including your formatting edits.
+          mTool compatibility is applied automatically. The report identifies any
+          notes that need simpler formatting or could not be inserted.
+        </p>
         <ol aria-label="Filling steps" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: pwc.space.md, listStyle: "none", paddingLeft: 0, fontSize: 13, marginBottom: pwc.space.lg }}>
           <li aria-current={!file ? "step" : undefined}>1. Choose template</li>
           <li aria-current={file && !report ? "step" : undefined}>2. Check and fill</li>
@@ -1173,58 +1173,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
           </label>
         )}
 
-        {notesCount !== null && notesCount > 0 && fillNotes && (
-          <fieldset
-            style={{
-              border: `1px solid ${pwc.grey200}`,
-              borderRadius: pwc.radius.md,
-              padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-              margin: `0 0 ${pwc.space.md}px`,
-            }}
-            data-testid="notes-styling-options"
-          >
-            <legend style={{ fontSize: 12, color: pwc.grey700, padding: `0 4px` }}>
-              Note styling
-            </legend>
-            <label style={{ ...styles.statLine, display: "flex", alignItems: "flex-start", gap: 6 }}>
-              <input
-                type="radio"
-                name="notes-styling"
-                checked={notesStyling === "styled"}
-                onChange={() => { previewSeq.current += 1; setPreviewBusy(false); setPreview(null); setNotesStyling("styled"); }}
-                aria-label="Styled notes (recommended)"
-                style={{ marginTop: 2 }}
-              />
-              <span>
-                Styled <span style={{ color: pwc.grey700 }}>(recommended)</span>
-                <span style={{ display: "block", color: pwc.grey700, fontSize: 12 }}>
-                  Notes look like they do here — table borders, header shading, aligned
-                  numbers. A very large table automatically steps down to simpler styling
-                  so it still fits mTool&apos;s size limit; the result below tells you if
-                  that happened.
-                </span>
-              </span>
-            </label>
-            <label style={{ ...styles.statLine, display: "flex", alignItems: "flex-start", gap: 6 }}>
-              <input
-                type="radio"
-                name="notes-styling"
-                checked={notesStyling === "none"}
-                onChange={() => { previewSeq.current += 1; setPreviewBusy(false); setPreview(null); setNotesStyling("none"); }}
-                aria-label="No styling (diagnostic)"
-                style={{ marginTop: 2 }}
-              />
-              <span>
-                No styling <span style={{ color: pwc.grey700 }}>(diagnostic)</span>
-                <span style={{ display: "block", color: pwc.grey700, fontSize: 12 }}>
-                  Fills the words and table layout with no formatting at all. Use this to
-                  test whether a problem with the filled file is caused by styling — not
-                  for real filings.
-                </span>
-              </span>
-            </label>
-          </fieldset>
-        )}
+
         </details>
 
         {detectBusy && (

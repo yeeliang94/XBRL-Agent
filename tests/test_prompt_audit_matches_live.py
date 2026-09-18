@@ -143,3 +143,9 @@ def test_audit_does_not_claim_copied_runtime_prompts_are_exact():
     assert 'id="runtime-prompts"' in _AUDIT
     assert "byte-exact example" not in _AUDIT
     assert "Exact output of <code>render_notes_prompt" not in _AUDIT
+
+
+def test_formatter_matrix_describes_automatic_pdf_stage_and_retry():
+    row = re.search(r"<tr>.*?Notes formatter</td>(.*?)</tr>", _AUDIT)
+    assert row is not None
+    assert "automatic for PDF notes; per-sheet retry" in row.group(1)

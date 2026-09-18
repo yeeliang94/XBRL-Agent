@@ -4,6 +4,30 @@ Use this guide to prepare canonical notes for injection into an SSM MBRS mTool
 workbook. It describes the existing pipeline and its accepted formatting limits.
 It does not certify filing correctness or generated Word/PDF output.
 
+## User workflow
+
+Upload a PDF and start the run. Text-based pages use text navigation and page
+inspection; scanned pages are read visually. Both paths extract paragraphs and
+actual HTML tables, review content, then automatically format prose notes before
+user review. No transcription or formatting setting is required. Existing Word
+source-table formatting is preserved instead of automatically reformatted.
+
+In **Notes**, compare the prepared notes with the source PDF and edit content or
+formatting as needed. Edits save automatically. Wait for saves to finish before
+preparing the mTool workbook. Incomplete formatting is reported and offers a
+retry; successful runs do not require a separate Format action.
+
+Shared **Default notes appearance (advanced)** settings supply font, spacing and
+unspecified table styles; a saved run override takes precedence over shared
+settings, and explicit note formatting takes precedence over defaults. These are
+fallback appearance settings, not another AI stage. Changing shared settings can
+change the appearance of runs that inherit them.
+
+**Fill mTool / prepare draft** reads current saved notes and performs the
+code-based compatibility conversions below. It does not rerun the AI formatter
+or rewrite the user's saved note HTML. Review display is editable canonical
+content, not a guarantee of pixel-exact native widths, borders or pagination.
+
 ## 1. Author canonical content
 
 - Keep the filing standard (MFRS/MPERS), filing level (Company/Group), entity,

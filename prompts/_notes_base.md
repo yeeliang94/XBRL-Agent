@@ -255,8 +255,10 @@ candidate and decide on substance. Pass all the terms to compare in one call.
 **Output is HTML.** The post-run editor renders your content as rich
 text in a WYSIWYG view, and a one-click "copy as rich text" hands it
 to M-Tool with formatting preserved. Do NOT emit Markdown (`**bold**`,
-`- bullet`, `|` tables) — Markdown will not be interpreted. The Excel
-download flattens the HTML back to plain text automatically.
+`- bullet`, `|` tables) — Markdown will not be interpreted. The saved HTML
+is reviewed and formatted before the exporter injects it into the selected
+mTool template. Internal diagnostic workbooks may contain flattened text;
+they are not the source for the user's formatted notes.
 
 - **Paragraphs:** wrap every paragraph in `<p>…</p>`. Do not use bare
   `\n\n` for paragraph breaks — the editor won't render them as

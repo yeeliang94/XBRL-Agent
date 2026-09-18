@@ -411,6 +411,28 @@ def fill_workbook(
             if target_row is None:
                 if resolution.error_kind == "ambiguous_label":
                     rows = ", ".join(str(row) for row in resolution.candidate_rows)
+                    # Label lookup retains protected exact matches for useful
+                    # refusals. Duplicate computed totals are not ambiguous
+                    # inputs: treat them like an explicit formula-row request.
+                    protected_formulas = bool(writable_targets) and all(
+                        row not in writable_rows_by_sheet.get(mapping.sheet, ())
+                        and ws.cell(row=row, column=mapping.col).data_type == "f"
+                        for row in resolution.candidate_rows
+                    )
+                    if protected_formulas:
+                        reject(
+                            mapping,
+                            f"Refusing to write '{mapping.field_label}' in sheet "
+                            f"'{mapping.sheet}': matching rows {rows} are protected "
+                            "formula totals. Write their writable inputs from "
+                            "read_template() and check the results with verify_totals().",
+                            kind="formula_cell",
+                            candidate_rows=list(resolution.candidate_rows),
+                        )
+                        guard_rejections["formula_cell"] = (
+                            guard_rejections.get("formula_cell", 0) + 1
+                        )
+                        continue
                     reject(
                         mapping,
                         f"Ambiguous label '{mapping.field_label}' in sheet "

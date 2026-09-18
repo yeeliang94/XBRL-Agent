@@ -472,9 +472,8 @@ describe("PreRunPanel", () => {
 
     // Statements all start enabled (makeAllEnabled).
     const checkboxesBefore = screen.getAllByRole("checkbox") as HTMLInputElement[];
-    // Layout (scanned behind Advanced): [scout, SOFP, SOPL, SOCI, SOCF, SOCIE, notes×5]
-    // → statement checkboxes are indices 1..5.
-    for (let i = 1; i <= 5; i++) expect(checkboxesBefore[i].checked).toBe(true);
+    // The first five checkboxes are the primary statements.
+    for (let i = 0; i < 5; i++) expect(checkboxesBefore[i].checked).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: /auto-detect/i }));
 
@@ -484,7 +483,7 @@ describe("PreRunPanel", () => {
       expect(screen.getByText(/didn't detect any statements/i)).toBeInTheDocument();
     });
     const checkboxesAfter = screen.getAllByRole("checkbox") as HTMLInputElement[];
-    for (let i = 1; i <= 5; i++) expect(checkboxesAfter[i].checked).toBe(true);
+    for (let i = 0; i < 5; i++) expect(checkboxesAfter[i].checked).toBe(true);
 
     fetchSpy.mockRestore();
   });
@@ -934,17 +933,17 @@ describe("PreRunPanel", () => {
     fetchSpy.mockRestore();
   });
 
-  test("Scanned PDF checkbox exists and is unchecked by default", async () => {
+  test("PDF reading needs no scanned-document checkbox", async () => {
     const getSettings = vi.fn().mockResolvedValue(mockSettings);
     render(
       <PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={vi.fn()} />,
     );
     await openAdvanced();
-    const cb = screen.getByRole("checkbox", { name: /scanned image/i }) as HTMLInputElement;
-    expect(cb.checked).toBe(false);
+    expect(screen.queryByRole("checkbox", { name: /scanned image/i })).toBeNull();
+    expect(screen.getByText(/Text and scanned pages are read automatically/)).toBeInTheDocument();
   });
 
-  test("enabling Scanned PDF sends scanned_pdf:true in scout POST body", async () => {
+  test("scout selects its reading method without a manual scan override", async () => {
     const sseText = `event: scout_complete\ndata: ${JSON.stringify({
       success: true,
       infopack: {
@@ -970,7 +969,6 @@ describe("PreRunPanel", () => {
       <PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={vi.fn()} />,
     );
     await openAdvanced();
-    fireEvent.click(screen.getByRole("checkbox", { name: /scanned image/i }));
     fireEvent.click(screen.getByRole("button", { name: /auto-detect/i }));
 
     await waitFor(() => {
@@ -978,7 +976,7 @@ describe("PreRunPanel", () => {
         "/api/scout/abc-123",
         expect.objectContaining({
           method: "POST",
-          body: JSON.stringify({ scanned_pdf: true }),
+          body: JSON.stringify({}),
         }),
       );
     });
@@ -1035,7 +1033,7 @@ describe("PreRunPanel", () => {
     await waitFor(() => {
       expect(screen.getByText(/found\s*0\s*notes/i)).toBeInTheDocument();
     });
-    expect(screen.getByText(/no notes were found.*scanned image/i)).toBeInTheDocument();
+    expect(screen.getByText(/no notes were found.*check that the pages/i)).toBeInTheDocument();
 
     fetchSpy.mockRestore();
   });
@@ -1081,7 +1079,7 @@ describe("PreRunPanel", () => {
     await waitFor(() => {
       expect(screen.getByText(/found\s*2\s*notes/i)).toBeInTheDocument();
     });
-    expect(screen.queryByText(/no notes were found.*scanned image/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/no notes were found.*check that the pages/i)).not.toBeInTheDocument();
 
     fetchSpy.mockRestore();
   });
@@ -1380,7 +1378,7 @@ describe("PreRunPanel", () => {
     // Legacy drafts may have disabled the preview scout, but every new run
     // now owns a fresh scan regardless of that stale preference.
     expect(cfg.use_scout).toBe(true);
-    expect(cfg.scanned_pdf).toBe(true);
+    expect(cfg.scanned_pdf).toBeUndefined();
     expect(cfg.notes_inventory_overrides).toEqual({
       added: [{ note_num: 7, title: "Operator note", page_range: [0, 0] }],
       removed_note_nums: [6],

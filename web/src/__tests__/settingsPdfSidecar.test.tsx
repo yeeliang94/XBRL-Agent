@@ -47,72 +47,20 @@ function renderForm(overrides: Record<string, unknown> = {}, isAdmin = true) {
 
 afterEach(() => cleanup());
 
-const toggle = () =>
-  screen.findByLabelText(/Transcribe scanned PDF notes pages before extraction/i);
-const formatToggle = () =>
-  screen.findByLabelText(/Automatically format PDF notes for mTool/i);
-
-async function save() {
-  fireEvent.click(await screen.findByRole("button", { name: /save/i }));
-  await waitFor(() => expect(saveSpy).toHaveBeenCalled());
-  return saveSpy.mock.calls[0][0] as Record<string, unknown>;
-}
-
-describe("Scanned PDF transcript toggle in Settings", () => {
-  test("defaults to OFF when the backend omits the field", async () => {
-    renderForm();
-    expect(((await toggle()) as HTMLInputElement).checked).toBe(false);
+describe("Simplified PDF preparation", () => {
+  test("explains the automatic workflow without legacy toggles", async () => {
+    renderForm({ pdf_sidecar: true, pdf_notes_auto_format: false });
+    expect(await screen.findByText("PDF notes preparation")).toBeTruthy();
+    expect(screen.queryByLabelText(/Transcribe scanned PDF/i)).toBeNull();
+    expect(screen.queryByLabelText(/Automatically format PDF/i)).toBeNull();
+    expect(screen.getByText(/Text and scanned PDFs are read, checked and formatted automatically/i)).toBeTruthy();
   });
-
-  test("reflects an enabled backend value", async () => {
-    renderForm({ pdf_sidecar: true });
-    expect(((await toggle()) as HTMLInputElement).checked).toBe(true);
-  });
-
-  test("turning it on is actually submitted", async () => {
-    renderForm();
-    fireEvent.click(await toggle());
-    expect(await save()).toMatchObject({ pdf_sidecar: true });
-  });
-
-  test("turning it off is actually submitted", async () => {
-    renderForm({ pdf_sidecar: true });
-    fireEvent.click(await toggle());
-    expect(await save()).toMatchObject({ pdf_sidecar: false });
-  });
-
-  test("explains the cost and the scanned-only scope", async () => {
-    renderForm();
-    await toggle();
-    expect(screen.getByText(/one image-reading call per notes page/i)).toBeTruthy();
-    expect(screen.getByText(/Scanned PDFs only/i)).toBeTruthy();
-  });
-
-  test("is read-only for non-admins", async () => {
-    renderForm({}, false);
-    expect(((await toggle()) as HTMLInputElement).disabled).toBe(true);
-  });
-});
-
-describe("PDF notes automatic formatter toggle in Settings", () => {
-  test("defaults to OFF and submits an enabled value", async () => {
-    renderForm();
-    const input = (await formatToggle()) as HTMLInputElement;
-    expect(input.checked).toBe(false);
-    fireEvent.click(input);
-    expect(await save()).toMatchObject({ pdf_notes_auto_format: true });
-  });
-
-  test("explains shared scanned/text scope, safety, and paid passes", async () => {
-    renderForm({ pdf_notes_auto_format: true });
-    expect(((await formatToggle()) as HTMLInputElement).checked).toBe(true);
-    expect(screen.getByText(/Scanned and selectable-text PDFs/i)).toBeTruthy();
-    expect(screen.getByText(/table rows and columns are locked/i)).toBeTruthy();
-    expect(screen.getByText(/one paid formatting pass per filled prose sheet/i)).toBeTruthy();
-  });
-
-  test("is read-only for non-admins", async () => {
-    renderForm({}, false);
-    expect(((await formatToggle()) as HTMLInputElement).disabled).toBe(true);
+  test("saving another setting does not submit retired workflow flags", async () => {
+    renderForm({ pdf_sidecar: true, pdf_notes_auto_format: false });
+    fireEvent.click(await screen.findByLabelText(/Automatically run the reviewer after extraction/i));
+    fireEvent.click(screen.getByRole("button", { name: /^save shared settings$/i }));
+    await waitFor(() => expect(saveSpy).toHaveBeenCalled());
+    expect(saveSpy.mock.calls[0][0]).not.toHaveProperty("pdf_sidecar");
+    expect(saveSpy.mock.calls[0][0]).not.toHaveProperty("pdf_notes_auto_format");
   });
 });

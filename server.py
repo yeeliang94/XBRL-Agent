@@ -3322,20 +3322,18 @@ def _notes_auto_review_enabled() -> bool:
 
 
 def _pdf_notes_auto_format_enabled() -> bool:
-    """Whether PDF prose notes are standardised automatically after review.
+    """PDF note formatting is a standard stage, including for older settings.
 
-    Default OFF because each selected prose sheet adds a paid formatter pass.
-    Word uploads are excluded at the orchestration call site.
+    Retain the capability getter for older clients. The former environment
+    toggle cannot bypass preparation of PDF notes for review.
     """
-    return os.environ.get(
-        "XBRL_PDF_NOTES_AUTO_FORMAT", "false"
-    ).lower() == "true"
+    return True
 
 
 def _should_auto_format_pdf_notes(
     session_dir: Path, *, merge_succeeded: bool, has_notes_result: bool,
 ) -> bool:
-    """Pure gate for the PDF-only automatic formatter.
+    """Source-type gate for the standard PDF notes formatter.
 
     Word uploads also carry ``uploaded.pdf`` after conversion, so the absence
     of ``uploaded.docx`` is the source-type boundary.
@@ -3379,13 +3377,11 @@ def _notes_coverage_enabled() -> bool:
 
 
 def _pdf_sidecar_enabled() -> bool:
-    """Whether scanned-PDF runs get an LLM-transcribed source sidecar
-    (docs/PLAN-pdf-source-sidecar.md).
+    """Legacy capability: scans now use direct page reading, without a transcript.
 
-    Default OFF — the feature ships dark until its live validation gate
-    passes. Read fresh each call so a Settings toggle takes effect without a
-    restart."""
-    return os.environ.get("XBRL_PDF_SIDECAR", "false").lower() == "true"
+    Keep historical artifacts readable, but ignore old saved enable flags.
+    """
+    return False
 
 
 def _pdf_sidecar_page_cap() -> int:
@@ -7687,9 +7683,10 @@ async def run_multi_agent_stream(
                 return
 
         # PDF notes use one styling author. Extraction stores content/table
-        # geometry, then this optional pass reads the PDF and applies the
+        # geometry, then this standard pass reads the PDF and applies the
         # standardised mTool-safe profile. Word uploads keep their verbatim
         # source-styling path and never enter this block.
+        notes_formatting_incomplete = False
         if _should_auto_format_pdf_notes(
             session_dir,
             merge_succeeded=merge_result.success,
@@ -7752,6 +7749,20 @@ async def run_multi_agent_stream(
                             except (asyncio.CancelledError, GeneratorExit):
                                 client_connected = False
                     _format_outcome = await _format_task
+                    notes_formatting_incomplete = any(
+                        _format_outcome.get(key, 0)
+                        for key in ("partial", "failed", "skipped")
+                    )
+                    if notes_formatting_incomplete:
+                        _enqueue_system_error({
+                            "type": "notes_formatting_incomplete",
+                            "phase": "formatting_notes",
+                            "message": (
+                                "Some notes could not be fully formatted. Extracted "
+                                "content is saved. Review the Notes tab and retry "
+                                "formatting for the affected sheets."
+                            ),
+                        })
                     logger.info(
                         "automatic PDF notes formatting completed run=%s "
                         "formatted=%s partial=%s failed=%s skipped=%s",
@@ -7773,7 +7784,13 @@ async def run_multi_agent_stream(
                             "bucket": ERROR_BUCKET_FATAL,
                         }}
                     return
-                except Exception:  # noqa: BLE001 — formatting is advisory
+                except Exception:  # noqa: BLE001 — preserve extracted content
+                    notes_formatting_incomplete = True
+                    _enqueue_system_error({
+                        "type": "notes_formatting_incomplete",
+                        "phase": "formatting_notes",
+                        "message": "Notes formatting did not finish. Saved content is available in Notes for review and retry.",
+                    })
                     logger.exception(
                         "Automatic PDF notes formatting failed for run %s; "
                         "continuing with the extracted notes",
@@ -7783,6 +7800,22 @@ async def run_multi_agent_stream(
                     task_registry.unregister(
                         session_id, NOTES_FORMATTER_AGENT_ID,
                     )
+
+        # Formatting finishes after the extraction drain. Deliver any final
+        # stage/error events before the terminal event, including failures.
+        while True:
+            try:
+                event = event_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if event is None:
+                continue
+            persist_event(event)
+            if client_connected:
+                try:
+                    yield event
+                except (asyncio.CancelledError, GeneratorExit):
+                    client_connected = False
 
         # RUN-REVIEW peer-review #1 (HIGH): recalc happens HERE — after
         # correction (if any) has had its chance to edit the merged
@@ -8116,6 +8149,8 @@ async def run_multi_agent_stream(
             overall_status = "completed_with_errors"
         else:
             overall_status = "failed"
+        if notes_formatting_incomplete and overall_status == "completed":
+            overall_status = "completed_with_errors"
         if _safe_mark_finished(db_conn, run_id, overall_status):
             terminal_status = overall_status
 

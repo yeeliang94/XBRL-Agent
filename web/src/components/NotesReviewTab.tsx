@@ -112,6 +112,7 @@ export interface NotesReviewTabProps {
    *  way a face figure already does. Optional — the standalone Notes tab
    *  renders identically without it. */
   onActiveCellPages?: (pages: number[]) => void;
+  onPreparationBlocked?: (blocked: boolean) => void;
 }
 
 interface SourceNotePlacement {
@@ -285,6 +286,7 @@ export function NotesReviewTab({
   focusSheet,
   focusCell,
   onActiveCellPages,
+  onPreparationBlocked,
 }: NotesReviewTabProps) {
   // sheets / loading / error are the basic fetch lifecycle. We keep them
   // at the tab level (not in the individual cell editor) so one network
@@ -358,7 +360,7 @@ export function NotesReviewTab({
   }, [runId]);
   // Keep in sync if the parent changes focusSheet after mount.
   useEffect(() => {
-    if (focusSheet) {
+    if (focusSheet && !saveBlocked && !moveBusy) {
       setFocusRow(null);
       setActive((a) => ({ sheet: focusSheet, key: a.key + 1 }));
     }
@@ -371,7 +373,7 @@ export function NotesReviewTab({
   const [selectedCellKey, setSelectedCellKey] = useState<string | null>(null);
   const [noteSearch, setNoteSearch] = useState("");
   useEffect(() => {
-    if (!focusCell) return;
+    if (!focusCell || saveBlocked || moveBusy) return;
     setActive((a) => ({ sheet: focusCell.sheet, key: a.key + 1 }));
     setFocusRow(focusCell.row);
     setSelectedCellKey(`${focusCell.sheet}:${focusCell.row}`);
@@ -517,6 +519,9 @@ export function NotesReviewTab({
   // the firm default. Declared last so it never consumes the notes-cells fetch.
   useEffect(() => {
     let cancelled = false;
+    styleRunId.current = runId;
+    styleSaveVersion.current += 1;
+    setStyleSaving(false);
     setRunTheme(null); // reset on run switch before the fetch resolves
     lastSavedRunThemeRef.current = null;
     fetch(`/api/runs/${runId}`)
@@ -580,7 +585,7 @@ export function NotesReviewTab({
   }, [activeSheet, selectedCellKey, selectedSourceNote, onActiveCellPages]);
 
   useEffect(() => {
-    if (!focusCell || sourceNotes == null) return;
+    if (!focusCell || sourceNotes == null || saveBlocked || moveBusy) return;
     const cellKey = `${focusCell.sheet}:${focusCell.row}`;
     setSelectedSourceNote((current) =>
       sourceNoteForCell(sourceNotes, cellKey, current),
@@ -628,29 +633,46 @@ export function NotesReviewTab({
   // Per-run "Table style" panel state + handlers (docs/PLAN-notes-table-theme.md).
   const [styleOpen, setStyleOpen] = useState(false);
   const [styleError, setStyleError] = useState<string | null>(null);
+  const [styleSaving, setStyleSaving] = useState(false);
+  const styleSaveVersion = useRef(0);
+  const styleWrites = useRef(Promise.resolve());
+  const styleRunId = useRef(runId);
+  useEffect(() => {
+    onPreparationBlocked?.(saveBlocked || styleSaving || moveBusy);
+  }, [onPreparationBlocked, saveBlocked, styleSaving, moveBusy]);
+  useEffect(() => () => onPreparationBlocked?.(false), [onPreparationBlocked]);
 
   // Persist this run's override (or clear it) and re-paint instantly. The PATCH
   // works on any run status — review happens after extraction.
   const persistRunTheme = useCallback(
     (next: ClipboardFormatOptions | null) => {
       setRunTheme(next); // optimistic: tables re-theme immediately
+      setStyleSaving(true);
+      const version = ++styleSaveVersion.current;
       // Clamp/validate before sending; clearing (null) is always valid.
       const payload = next === null ? null : parseThemeOptions(next);
-      const send = () =>
+      const send = () => {
+        styleWrites.current = styleWrites.current.then(() =>
         fetch(`/api/runs/${runId}/notes_table_style`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ notes_table_style: payload }),
-        })
+        }))
           .then((r) => {
             if (!r.ok) throw new Error(String(r.status));
+            if (styleRunId.current !== runId) return;
             lastSavedRunThemeRef.current = payload;
-            setStyleError(null);
+            if (version === styleSaveVersion.current) setStyleError(null);
           })
           .catch(() => {
+            if (version !== styleSaveVersion.current) return;
             setStyleError("Couldn't save this run's table style — check your connection.");
             setRunTheme(lastSavedRunThemeRef.current); // revert to last confirmed
+          })
+          .finally(() => {
+            if (version === styleSaveVersion.current) setStyleSaving(false);
           });
+      };
       if (runSaveTimer.current) clearTimeout(runSaveTimer.current);
       // "Use firm default" (null) saves immediately; knob edits debounce.
       if (next === null) send();
@@ -700,6 +722,11 @@ export function NotesReviewTab({
         data-testid="notes-source-first-workspace"
         style={{ ...styles.root, ...themeVars }}
       >
+        <p style={{ margin: "0 0 12px", color: pwc.grey500, fontSize: 13 }}>
+          Review the notes against the source PDF. Your edits save automatically.
+          Preparing mTool uses your saved notes and applies compatibility conversions;
+          it does not run AI formatting again. Native widths and borders may differ.
+        </p>
         <div
           className="notes-source-first-layout"
           style={{
@@ -898,7 +925,7 @@ export function NotesReviewTab({
                         if (actionsMenuRef.current) actionsMenuRef.current.open = false;
                       }}
                     >
-                      Table style
+                      Default appearance (advanced)
                     </button>
                     <button
                       type="button"
@@ -920,7 +947,8 @@ export function NotesReviewTab({
             {styleOpen && (
               <div style={styles.stylePanel} data-testid="notes-table-style-panel">
                 <p style={styles.stylePanelHint}>
-                  Applies to every table in this run and to copied content.
+                  Defaults for this run's review display, copying and mTool preparation.
+                  Saved note formatting takes precedence.
                   {runTheme ? " This run has its own style." : " Using the firm default."}
                 </p>
                 {styleError && (
@@ -928,6 +956,7 @@ export function NotesReviewTab({
                     {styleError}
                   </p>
                 )}
+                {styleSaving && <p role="status" style={styles.stylePanelHint}>Saving appearance…</p>}
                 <ClipboardFormatControls
                   value={theme}
                   onChange={(next) => persistRunTheme(next)}
@@ -937,7 +966,7 @@ export function NotesReviewTab({
                   type="button"
                   className={uiClass.btnGhost}
                   style={styles.regenerateButton}
-                  disabled={!runTheme}
+                  disabled={!runTheme || styleSaving}
                   onClick={() => persistRunTheme(null)}
                 >
                   Use firm default
@@ -1064,6 +1093,7 @@ function SheetSection({
 }) {
   const [formatStatus, setFormatStatus] = useState<NotesFormatStatus | null>(null);
   const [formatError, setFormatError] = useState<string | null>(null);
+  const [formatRequestPending, setFormatRequestPending] = useState(false);
   const [rowSaveStatuses, setRowSaveStatuses] = useState<Record<number, SaveStatus>>({});
   // Which model the AI formatter runs on. Seeds from the configured
   // notes_formatter default; empty falls through to the server's fallback
@@ -1101,11 +1131,11 @@ function SheetSection({
     let cancelled = false;
     fetchNotesFormatStatus(runId, sheet.sheet)
       .then((state) => {
-        if (cancelled || state.status === "idle") return;
+        if (cancelled) return;
         setFormatStatus(state);
       })
       .catch(() => {
-        /* Non-fatal: the Format button still works from a clean state. */
+        if (!cancelled) setFormatError("Could not load formatting status. Refresh to check whether preparation finished.");
       });
     return () => {
       cancelled = true;
@@ -1140,6 +1170,7 @@ function SheetSection({
   }, [formatStatus?.status, onFormatted, runId, sheet.sheet]);
 
   const handleFormat = useCallback(async () => {
+    setFormatRequestPending(true);
     setFormatError(null);
     try {
       const state = await launchNotesFormatter(
@@ -1148,10 +1179,13 @@ function SheetSection({
       setFormatStatus(state);
     } catch (err) {
       setFormatError(userMessage(err));
+    } finally {
+      setFormatRequestPending(false);
     }
   }, [formatterDefaultModel, runId, sheet.sheet]);
 
   const handleRevert = useCallback(async () => {
+    setFormatRequestPending(true);
     setFormatError(null);
     try {
       await revertNotesFormatter(runId, sheet.sheet);
@@ -1162,6 +1196,8 @@ function SheetSection({
       setFormatError(
         userMessage(err),
       );
+    } finally {
+      setFormatRequestPending(false);
     }
   }, [onFormatted, runId, sheet.sheet]);
 
@@ -1185,17 +1221,16 @@ function SheetSection({
   const canFormat = (sheet.kind ?? "prose") === "prose";
   const hasPendingRowSave = Object.keys(rowSaveStatuses).length > 0;
   useEffect(() => {
-    onSaveBlocked(hasPendingRowSave);
+    onSaveBlocked(hasPendingRowSave || formatRequestPending || formatStatus?.status === "running");
     return () => onSaveBlocked(false);
-  }, [hasPendingRowSave, onSaveBlocked]);
-  const isFormatting = formatStatus?.status === "running";
-  const totalTokens =
-    (formatStatus?.prompt_tokens ?? 0) + (formatStatus?.completion_tokens ?? 0);
+  }, [hasPendingRowSave, formatRequestPending, formatStatus?.status, onSaveBlocked]);
+  const isFormatting = formatRequestPending || formatStatus?.status === "running";
+  const totalTokens = (formatStatus?.prompt_tokens ?? 0) + (formatStatus?.completion_tokens ?? 0);
   const formatButtonLabel = hasPendingRowSave
     ? "Save pending"
     : isFormatting
       ? "Formatting..."
-      : "Format";
+      : "Retry formatting";
 
   return (
     <section ref={sectionRef} style={styles.workspaceSheetSection}>
@@ -1209,14 +1244,14 @@ function SheetSection({
             {notesSheetDisplayName(sheet.sheet)}
           </span>
         </h4>
-        {canFormat && (
+        {canFormat && (formatStatus?.status === "idle" || formatStatus?.status === "running" || formatStatus?.error || formatError) && (
           <button
             type="button"
             className={uiClass.btnGhost}
             style={styles.sheetFormatButton}
             disabled={isFormatting || hasPendingRowSave}
             onClick={handleFormat}
-            aria-label={`AI format ${notesSheetDisplayName(sheet.sheet)}`}
+            aria-label={`Retry formatting ${notesSheetDisplayName(sheet.sheet)}`}
             title={
               hasPendingRowSave
                 ? "Resolve notes save status before formatting."
@@ -1249,11 +1284,8 @@ function SheetSection({
                   `${formatStatus?.summary || "Formatting complete."} ` +
                   `Changed ${formatStatus?.changed_rows ?? 0} row(s).` +
                   (typeof formatStatus?.confidence === "number"
-                    ? ` Confidence ${(formatStatus.confidence * 100).toFixed(0)}%.`
-                    : "") +
-                  (totalTokens > 0
-                    ? ` ~${totalTokens.toLocaleString()} tokens.`
-                    : "")
+                    ? ` Confidence ${(formatStatus.confidence * 100).toFixed(0)}%.` : "") +
+                  (totalTokens > 0 ? ` ~${totalTokens.toLocaleString()} tokens.` : "")
                 ))}
           </span>
           {formatStatus?.can_revert
@@ -1289,8 +1321,8 @@ function SheetSection({
           data-testid="notes-format-running-banner"
         >
           Formatting in progress — edits you make now are preserved and
-          skipped by the formatter. Styling applies to the preview and
-          paste, not the Excel download.
+          skipped by the formatter. Saved formatting is used for review,
+          copying and mTool preparation.
         </div>
       )}
       <div style={styles.rowStack}>
@@ -1304,6 +1336,7 @@ function SheetSection({
                 key={`${runId}:${sheet.sheet}:${cell.row}`}
                 runId={runId}
                 cell={cell}
+                onSaveStatusChange={handleRowSaveStatus}
                 onActiveCellPages={onActiveCellPages}
                 selected={selectedCellKey === `${sheet.sheet}:${cell.row}`}
                 onActivate={() => onCellActivate?.(sheet.sheet, cell.row)}
@@ -1425,11 +1458,11 @@ function StyleSourceChip({
   source?: "ops" | "source" | "floor" | "unstyled" | "formatter" | null;
 }) {
   if (source !== "unstyled" && source !== "floor") return null;
-  const label = source === "unstyled" ? "Unstyled" : "House style";
+  const label = "Default appearance";
   const title =
     source === "unstyled"
-      ? "This cell rendered plain — the agent recorded no table formatting. Run the notes formatter to style it."
-      : "Styled by the deterministic house style, not a PDF observation. Review or run the notes formatter if it doesn't match the source.";
+      ? "No explicit formatting is saved for this note; shared defaults apply. Check it against the PDF."
+      : "This older note uses default formatting. Check it against the PDF.";
   return (
     <span
       data-testid="notes-style-source-chip"
@@ -2062,12 +2095,14 @@ function NumericCellRow({
   runId,
   cell,
   onActiveCellPages,
+  onSaveStatusChange,
   selected = false,
   onActivate,
 }: {
   runId: number;
   cell: NotesCell;
   onActiveCellPages?: (pages: number[]) => void;
+  onSaveStatusChange: (row: number, status: SaveStatus) => void;
   selected?: boolean;
   onActivate?: () => void;
 }) {
@@ -2088,7 +2123,16 @@ function NumericCellRow({
     }
     return init;
   });
-  const [status, setStatus] = useState<SaveStatus>("idle");
+  const [columnStatuses, setColumnStatuses] = useState<Record<string, SaveStatus>>({});
+  const status: SaveStatus = (["failed", "saving", "dirty", "saved"] as const)
+    .find((value) => Object.values(columnStatuses).includes(value)) ?? "idle";
+  const setColumnStatus = useCallback((key: string, value: SaveStatus) => {
+    setColumnStatuses((previous) => ({ ...previous, [key]: value }));
+  }, []);
+  useEffect(() => {
+    onSaveStatusChange(cell.row, status);
+    return () => onSaveStatusChange(cell.row, "idle");
+  }, [cell.row, status, onSaveStatusChange]);
   // Which column input currently has focus. Drives the "grouped at rest, raw
   // while focused" display below — the face-statement value inputs already do
   // this (ConceptsPage, issue 4) and the numeric notes rows were missing it,
@@ -2102,13 +2146,16 @@ function NumericCellRow({
       // Accountant-aware parse: "1,234" / "(95)" resolve instead of failing.
       const parsed = parseNumericInput(drafts[key] ?? "");
       if (parsed === INVALID_NUMBER) {
-        setStatus("failed");
+        setColumnStatus(key, "failed");
         return;
       }
       // Skip the network round-trip when the value is unchanged.
-      if ((original ?? null) === (parsed ?? null)) return;
+      if ((original ?? null) === (parsed ?? null)) {
+        setColumnStatus(key, "saved");
+        return;
+      }
       const { period, entity_scope } = NUMERIC_VALUE_COLUMNS[key];
-      setStatus("saving");
+      setColumnStatus(key, "saving");
       try {
         await patchNotesFact(
           runId,
@@ -2125,12 +2172,12 @@ function NumericCellRow({
           ...d,
           [key]: parsed === null ? "" : String(parsed),
         }));
-        setStatus("saved");
+        setColumnStatus(key, "saved");
       } catch {
-        setStatus("failed");
+        setColumnStatus(key, "failed");
       }
     },
-    [cell.concept_uuid, drafts, runId, values],
+    [cell.concept_uuid, drafts, runId, values, setColumnStatus],
   );
 
   return (
@@ -2178,21 +2225,33 @@ function NumericCellRow({
                     ? drafts[key] ?? ""
                     : formatGroupedInput(drafts[key] ?? "")
                 }
-                onChange={(e) =>
+                disabled={!cell.concept_uuid || columnStatuses[key] === "saving"}
+                onChange={(e) => {
                   // Keep the raw, comma-free form in the draft; the at-rest
                   // display re-adds separators on blur. parseNumericInput also
                   // accepts commas, so a stray separator wouldn't break a save.
                   setDrafts((d) => ({
                     ...d,
                     [key]: e.target.value.replace(/,/g, ""),
-                  }))
-                }
+                  }));
+                  setColumnStatus(key, "dirty");
+                }}
                 onFocus={() => setFocusedKey(key)}
                 onBlur={() => {
                   setFocusedKey(null);
                   saveColumn(key);
                 }}
               />
+              {columnStatuses[key] === "failed" && (
+                <span role="alert">
+                  Could not save this value. Check the number and retry.
+                  <button type="button" onClick={() => saveColumn(key)}>Retry save</button>
+                  <button type="button" onClick={() => {
+                    setDrafts((previous) => ({ ...previous, [key]: values[key] == null ? "" : String(values[key]) }));
+                    setColumnStatus(key, "idle");
+                  }}>Discard unsaved changes</button>
+                </span>
+              )}
             </label>
           ))}
         </div>

@@ -943,7 +943,7 @@ describe("MtoolFillModal", () => {
     await waitFor(() => expect(screen.getByText(/no fillable facts/i)).toBeTruthy());
   });
 
-  test("offers a note-styling choice, defaults to Styled, sends notes_styling", async () => {
+  test("always prepares saved notes with compatibility styling", async () => {
     let sentStyling: FormDataEntryValue | null = null;
     mockFetch((url, init) => {
       if (url.includes("/mtool-fill/patch")) {
@@ -964,21 +964,16 @@ describe("MtoolFillModal", () => {
     });
     vi.stubGlobal("URL", { createObjectURL: () => "blob:x", revokeObjectURL: () => {} });
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
-    await waitFor(() => expect(screen.getByTestId("notes-styling-options")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/Uses your saved figures and notes/)).toBeTruthy());
+    expect(screen.queryByTestId("notes-styling-options")).toBeNull();
 
-    const styled = screen.getByLabelText(/styled notes \(recommended\)/i) as HTMLInputElement;
-    const none = screen.getByLabelText(/no styling \(diagnostic\)/i) as HTMLInputElement;
-    expect(styled.checked).toBe(true); // safe default
-    expect(none.checked).toBe(false);
-
-    // Switch to the diagnostic mode and fill — the form carries "none".
-    fireEvent.click(none);
+    expect(screen.queryByLabelText(/no styling \(diagnostic\)/i)).toBeNull();
     fireEvent.change(screen.getByLabelText(/mtool template file/i), {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
     fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
     await waitFor(() => expect(screen.getByText(/template filled —/i)).toBeTruthy());
-    expect(sentStyling).toBe("none");
+    expect(sentStyling).toBe("styled");
   });
 
   test("labels a diagnostic no-styling fill in the report so it isn't mistaken for a bug", async () => {

@@ -528,27 +528,42 @@ export function RunDetailView({
   );
   // Switching tabs mirrors the choice into `?tab=` so reload / share / back
   // land on the same tab (R3). Kept separate from the App-level pathname sync.
+  const [notesPreparationBlocked, setNotesPreparationBlocked] = useState(false);
   const selectTab = useCallback((key: RunTabKey) => {
+    if (notesPreparationBlocked) return;
     setTab(key);
     writeRunTabToUrl(key);
-  }, []);
+  }, [notesPreparationBlocked]);
   // Back/forward across tabs: re-read the query so the visible tab follows.
   useEffect(() => {
+    const restoreVisibleTab = () => {
+      const url = new URL(window.location.href);
+      url.searchParams.set("tab", tab);
+      window.history.replaceState(window.history.state, "", url);
+    };
     const onPop = () => {
+      if (notesPreparationBlocked) {
+        restoreVisibleTab();
+        return;
+      }
       const fromUrl = readRunTabFromUrl();
       setTab(fromUrl ?? initialTab);
     };
     const onTabChange = (event: Event) => {
       const key = (event as CustomEvent<RunTabKey>).detail;
-      if (key) setTab(key);
+      if (notesPreparationBlocked && key !== tab) {
+        event.stopImmediatePropagation();
+        restoreVisibleTab();
+        writeRunTabToUrl(tab);
+      } else if (key) setTab(key);
     };
-    window.addEventListener("popstate", onPop);
-    window.addEventListener(RUN_TAB_CHANGE_EVENT, onTabChange);
+    window.addEventListener("popstate", onPop, true);
+    window.addEventListener(RUN_TAB_CHANGE_EVENT, onTabChange, true);
     return () => {
-      window.removeEventListener("popstate", onPop);
-      window.removeEventListener(RUN_TAB_CHANGE_EVENT, onTabChange);
+      window.removeEventListener("popstate", onPop, true);
+      window.removeEventListener(RUN_TAB_CHANGE_EVENT, onTabChange, true);
     };
-  }, [initialTab]);
+  }, [initialTab, notesPreparationBlocked, tab]);
   // mTool fill modal (button, NOT a tab — gotcha #7).
   const [mtoolOpen, setMtoolOpen] = useState(false);
   // Delete confirmation — the shared ConfirmDialog replaces window.confirm so
@@ -854,11 +869,13 @@ export function RunDetailView({
           {!isDraft && <button
             type="button"
             onClick={() => isInvestigationOutcome ? setConfirmDraftDownload(true) : setMtoolOpen(true)}
-            disabled={!canFillMtool}
+            disabled={!canFillMtool || notesPreparationBlocked}
             className={isInvestigationOutcome ? uiClass.btnSecondary : uiClass.btnPrimary}
             style={isInvestigationOutcome ? ui.buttonSecondary : ui.buttonPrimary}
             title={
-              canFillMtool
+              notesPreparationBlocked
+                ? "Wait for notes to finish saving or formatting before preparing mTool"
+                : canFillMtool
                 ? isInvestigationOutcome
                   ? "Prepare an investigation draft using your mTool template"
                   : "Prepare a draft using your mTool template"
@@ -867,6 +884,7 @@ export function RunDetailView({
           >
             {isFailed || isAborted ? "Prepare investigation draft" : "Download draft"}
           </button>}
+          {notesPreparationBlocked && <span role="status" style={styles.dim}>Notes have unsaved changes or active formatting. Resolve any save errors in Notes before preparing.</span>}
           {/* The "Figures" tab is the single door to reviewing values — the
               old duplicate "Review values" button was removed (Phase 2). */}
           {/* ONE rule for the header: every run-level action except Download
@@ -1145,6 +1163,7 @@ export function RunDetailView({
                 aria-selected={active}
                 tabIndex={active ? 0 : -1}
                 className="pwc-tab"
+                disabled={notesPreparationBlocked && !active}
                 onClick={() => selectTab(t.key)}
                 onKeyDown={(e) => onTabKeyDown(e, i)}
                 style={active ? styles.tabActive : styles.tab}
@@ -1262,6 +1281,7 @@ export function RunDetailView({
             initialView="notes"
             initialCrossChecks={crossChecksForValidator(crossChecks)}
             onRegenerateNotes={onRegenerateNotes}
+            onPreparationBlocked={setNotesPreparationBlocked}
           />
           <details
             style={styles.perfDetails}
@@ -1336,6 +1356,7 @@ export function RunDetailView({
             initialView="figures"
             initialCrossChecks={crossChecksForValidator(crossChecks)}
             onRegenerateNotes={onRegenerateNotes}
+            onPreparationBlocked={setNotesPreparationBlocked}
           />
         </section>
       )}
