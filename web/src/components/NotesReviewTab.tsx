@@ -1094,7 +1094,7 @@ function SheetSection({
   const [formatStatus, setFormatStatus] = useState<NotesFormatStatus | null>(null);
   const [formatError, setFormatError] = useState<string | null>(null);
   const [formatRequestPending, setFormatRequestPending] = useState(false);
-  const [rowSaveStatuses, setRowSaveStatuses] = useState<Record<number, SaveStatus>>({});
+  const [rowSaveStatuses, setRowSaveStatuses] = useState<Record<string, SaveStatus>>({});
   // Which model the AI formatter runs on. Seeds from the configured
   // notes_formatter default; empty falls through to the server's fallback
   // (the run's extraction model — api/notes_formatter.py).
@@ -1201,7 +1201,8 @@ function SheetSection({
     }
   }, [onFormatted, runId, sheet.sheet]);
 
-  const handleRowSaveStatus = useCallback((row: number, status: SaveStatus) => {
+  const handleRowSaveStatus = useCallback((row: number, status: SaveStatus, category?: string) => {
+    const key = category ? `${row}:${category}` : String(row);
     // Only pending states are tracked; anything else PRUNES the row's entry.
     // A CellRow withdraws itself on unmount (reports "idle") so switching the
     // selected field mid-edit can't wedge Format at "Save pending".
@@ -1209,12 +1210,12 @@ function SheetSection({
       const pending =
         status === "dirty" || status === "saving" || status === "failed";
       if (!pending) {
-        if (!(row in prev)) return prev;
+        if (!(key in prev)) return prev;
         const next = { ...prev };
-        delete next[row];
+        delete next[key];
         return next;
       }
-      return prev[row] === status ? prev : { ...prev, [row]: status };
+      return prev[key] === status ? prev : { ...prev, [key]: status };
     });
   }, []);
 
@@ -2091,7 +2092,25 @@ function CellRow({
 // (PLAN-notes-template-registry Track B) rather than the prose notes_cells.
 // ---------------------------------------------------------------------------
 
-function NumericCellRow({
+function NumericCellRow(props: {
+  onSaveStatusChange: (row: number, status: SaveStatus, category?: string) => void;
+  runId: number;
+  cell: NotesCell;
+  onActiveCellPages?: (pages: number[]) => void;
+  selected?: boolean;
+  onActivate?: () => void;
+}) {
+  const { cell } = props;
+  if (!cell.categories?.length) return <NumericCategoryRow {...props} />;
+  return <>{cell.categories.map((category) => (
+    <NumericCategoryRow {...props} key={category.dimension_key} cell={{
+      ...cell, dimensions: category.dimensions, values: category.values,
+      label: `${cell.label} — ${category.label}`, evidence: category.evidence,
+    }} />
+  ))}</>;
+}
+
+function NumericCategoryRow({
   runId,
   cell,
   onActiveCellPages,
@@ -2102,7 +2121,7 @@ function NumericCellRow({
   runId: number;
   cell: NotesCell;
   onActiveCellPages?: (pages: number[]) => void;
-  onSaveStatusChange: (row: number, status: SaveStatus) => void;
+  onSaveStatusChange: (row: number, status: SaveStatus, category?: string) => void;
   selected?: boolean;
   onActivate?: () => void;
 }) {
@@ -2129,10 +2148,11 @@ function NumericCellRow({
   const setColumnStatus = useCallback((key: string, value: SaveStatus) => {
     setColumnStatuses((previous) => ({ ...previous, [key]: value }));
   }, []);
+  const categoryKey = cell.dimensions ? JSON.stringify(cell.dimensions) : undefined;
   useEffect(() => {
-    onSaveStatusChange(cell.row, status);
-    return () => onSaveStatusChange(cell.row, "idle");
-  }, [cell.row, status, onSaveStatusChange]);
+    onSaveStatusChange(cell.row, status, categoryKey);
+    return () => onSaveStatusChange(cell.row, "idle", categoryKey);
+  }, [cell.row, categoryKey, status, onSaveStatusChange]);
   // Which column input currently has focus. Drives the "grouped at rest, raw
   // while focused" display below — the face-statement value inputs already do
   // this (ConceptsPage, issue 4) and the numeric notes rows were missing it,
@@ -2163,6 +2183,7 @@ function NumericCellRow({
           parsed,
           period,
           entity_scope,
+          cell.dimensions,
         );
         // Reflect the saved value locally so a re-blur doesn't re-send, and
         // normalise the draft to the canonical form ("(95)" → "-95") so the
@@ -2177,7 +2198,7 @@ function NumericCellRow({
         setColumnStatus(key, "failed");
       }
     },
-    [cell.concept_uuid, drafts, runId, values, setColumnStatus],
+    [cell.concept_uuid, cell.dimensions, drafts, runId, values, setColumnStatus],
   );
 
   return (

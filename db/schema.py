@@ -229,7 +229,7 @@ from pathlib import Path
 # renamed or moved. Retiring nodes that disappear from the latest import keeps
 # those UUIDs readable for historical run facts without exposing them through
 # current template resolution.
-CURRENT_SCHEMA_VERSION = 46
+CURRENT_SCHEMA_VERSION = 47
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -675,6 +675,7 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         concept_uuid     TEXT NOT NULL REFERENCES concept_nodes(concept_uuid) ON DELETE CASCADE,
         period           TEXT NOT NULL,
         entity_scope     TEXT NOT NULL,
+        dimension_key    TEXT NOT NULL DEFAULT '',
         value            REAL,
         value_status     TEXT NOT NULL,
         children_status  TEXT,
@@ -683,7 +684,7 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         updated_at       TEXT NOT NULL DEFAULT '',
         invalid_target   INTEGER NOT NULL DEFAULT 0,
         invalid_target_reason TEXT,
-        UNIQUE(run_id, concept_uuid, period, entity_scope)
+        UNIQUE(run_id, concept_uuid, period, entity_scope, dimension_key)
     )
     """,
 
@@ -695,6 +696,7 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         id               INTEGER PRIMARY KEY AUTOINCREMENT,
         run_id           INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
         concept_uuid     TEXT NOT NULL,
+        dimension_key    TEXT NOT NULL DEFAULT '',
         period           TEXT NOT NULL,
         entity_scope     TEXT NOT NULL,
         actor            TEXT,                    -- agent name | 'user' | 'cascade'
@@ -712,6 +714,7 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         id               INTEGER PRIMARY KEY AUTOINCREMENT,
         run_id           INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
         concept_uuid     TEXT NOT NULL,
+        dimension_key    TEXT NOT NULL DEFAULT '',
         period           TEXT NOT NULL,
         entity_scope     TEXT NOT NULL,
         kind             TEXT NOT NULL,           -- 'parent_child_disagree' | 'partial_state' | 'cross_check_failure'
@@ -816,13 +819,14 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         concept_uuid     TEXT NOT NULL,
         period           TEXT NOT NULL,
         entity_scope     TEXT NOT NULL,
+        dimension_key    TEXT NOT NULL DEFAULT '',
         value            REAL,
         value_status     TEXT NOT NULL,
         children_status  TEXT,
         source           TEXT,
         evidence         TEXT,
         snapshot_at      TEXT NOT NULL DEFAULT '',
-        UNIQUE(run_id, concept_uuid, period, entity_scope)
+        UNIQUE(run_id, concept_uuid, period, entity_scope, dimension_key)
     )
     """,
 
@@ -936,11 +940,12 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         concept_uuid     TEXT NOT NULL REFERENCES concept_nodes(concept_uuid) ON DELETE CASCADE,
         period           TEXT NOT NULL,             -- 'CY' | 'PY'
         entity_scope     TEXT NOT NULL,             -- 'Company' | 'Group'
+        dimension_key    TEXT NOT NULL DEFAULT '',
         value            REAL,
         value_status     TEXT NOT NULL DEFAULT 'observed',
         source           TEXT,
         updated_at       TEXT NOT NULL DEFAULT '',
-        UNIQUE(benchmark_id, concept_uuid, period, entity_scope)
+        UNIQUE(benchmark_id, concept_uuid, period, entity_scope, dimension_key)
     )
     """,
 
@@ -3463,6 +3468,35 @@ def init_db(path: str | Path) -> None:
                     conn.execute(
                         "UPDATE schema_version SET version = ?", (46,),
                     )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        # v46 -> v47: categories are part of fact identity. Rebuild only
+        # the three unique-key tables, copying every existing column and ID.
+        # These tables have no incoming foreign keys. All DDL and data move
+        # in one transaction; concurrent startup rechecks the version.
+        if current_version is not None and current_version < 47:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                latest = conn.execute("SELECT version FROM schema_version").fetchone()[0]
+                if latest < 47:
+                    for table in ("run_concept_facts", "run_fact_snapshots", "gold_concept_facts"):
+                        columns = [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
+                        if "dimension_key" not in columns:
+                            ddl = next(sql for sql in _CREATE_STATEMENTS
+                                       if f"CREATE TABLE IF NOT EXISTS {table} (" in sql)
+                            conn.execute(ddl.replace(f"{table} (", f"{table}_v47 (", 1))
+                            names = ", ".join(columns)
+                            conn.execute(f"INSERT INTO {table}_v47 ({names}) SELECT {names} FROM {table}")
+                            conn.execute(f"DROP TABLE {table}")
+                            conn.execute(f"ALTER TABLE {table}_v47 RENAME TO {table}")
+                    for table in ("concept_fact_events", "run_concept_conflicts"):
+                        columns = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+                        if "dimension_key" not in columns:
+                            conn.execute(f"ALTER TABLE {table} ADD COLUMN dimension_key TEXT NOT NULL DEFAULT ''")
+                    conn.execute("UPDATE schema_version SET version = 47")
                 conn.commit()
             except Exception:
                 conn.rollback()

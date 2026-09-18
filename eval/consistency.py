@@ -143,16 +143,16 @@ def load_repeat_facts(
     for run_id in run_ids:
         rows = conn.execute(
             "SELECT f.concept_uuid, f.period, f.entity_scope, f.value, "
-            "f.value_status FROM run_concept_facts f "
+            "f.value_status, f.dimension_key FROM run_concept_facts f "
             "JOIN concept_nodes n ON n.concept_uuid = f.concept_uuid "
             "WHERE f.run_id = ? AND n.kind IN ('LEAF','MATRIX_CELL')",
             (run_id,),
         ).fetchall()
         facts: dict[Key, float] = {}
-        for uuid, period, scope, value, status in rows:
+        for uuid, period, scope, value, status, dims in rows:
             num = _present_number(value, status)
             if num is not None:
-                facts[(uuid, period, scope)] = num
+                facts[(uuid, period, scope) + ((dims,) if dims else ())] = num
         out.append(facts)
     return out
 
@@ -163,16 +163,16 @@ def load_gold_facts(
     """Gold present-numbers keyed by slot, for the consistency×gold cross."""
     rows = conn.execute(
         "SELECT g.concept_uuid, g.period, g.entity_scope, g.value, "
-        "g.value_status FROM gold_concept_facts g "
+        "g.value_status, g.dimension_key FROM gold_concept_facts g "
         "JOIN concept_nodes n ON n.concept_uuid = g.concept_uuid "
         "WHERE g.benchmark_id = ? AND n.kind IN ('LEAF','MATRIX_CELL')",
         (benchmark_id,),
     ).fetchall()
     out: dict[Key, float] = {}
-    for uuid, period, scope, value, status in rows:
+    for uuid, period, scope, value, status, dims in rows:
         num = _present_number(value, status)
         if num is not None:
-            out[(uuid, period, scope)] = num
+            out[(uuid, period, scope) + ((dims,) if dims else ())] = num
     return out
 
 

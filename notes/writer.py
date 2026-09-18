@@ -254,18 +254,21 @@ def write_notes_workbook(
                 # coordinator can project them into run_concept_facts (Step 9).
                 # Same column mapping as the xlsx write, and the same
                 # skip-empty rule, so the facts and the workbook agree.
-                for col, val in _numeric_write_cols(
-                    combined.numeric_values, filing_level
-                ):
-                    if val is None or val == "":
+                from concept_model.dimensions import dimension_key
+                instances = {}
+                numeric_payloads = row_payloads if any(p.dimensions for p in row_payloads) else [combined]
+                for payload in numeric_payloads:
+                    if not payload.numeric_values:
                         continue
-                    numeric_cells.append({
-                        "sheet": sheet_name,
-                        "row": row,
-                        "col": col,
-                        "value": val,
-                        "evidence": combined.evidence or None,
-                    })
+                    for col, val in _numeric_write_cols(payload.numeric_values, filing_level):
+                        if val is None or val == "":
+                            continue
+                        instances[(dimension_key(payload.dimensions), col)] = {
+                            "sheet": sheet_name, "row": row, "col": col,
+                            "value": val, "dimensions": dict(payload.dimensions),
+                            "evidence": payload.evidence or None,
+                        }
+                numeric_cells.extend(instances.values())
             # Phase 4.3: collect per-cell provenance for the post-validator.
             # One entry per written row — combining all note-refs from the
             # contributing payloads so row-112 catch-alls retain the full
@@ -485,6 +488,7 @@ def _inject_headings(payload: NotesPayload) -> NotesPayload:
         source_pages=list(payload.source_pages),
         sub_agent_id=payload.sub_agent_id,
         numeric_values=payload.numeric_values,
+        dimensions=dict(payload.dimensions),
         note_num=payload.note_num,
         source_note_refs=list(payload.source_note_refs),
         parent_note=payload.parent_note,
@@ -564,6 +568,7 @@ def _sanitize_payload(
         source_pages=list(payload.source_pages),
         sub_agent_id=payload.sub_agent_id,
         numeric_values=payload.numeric_values,
+        dimensions=dict(payload.dimensions),
         note_num=payload.note_num,
         source_note_refs=list(payload.source_note_refs),
         # Heading hierarchy must survive the sanitise clone — without
@@ -778,8 +783,9 @@ def _combine_payloads(payloads: list[NotesPayload]) -> NotesPayload:
 
     Prose: concatenate content with blank line separators, ordered by the
     earliest PDF page each payload cited. Evidence is a semicolon-joined
-    list in the same page order. Numeric: last-write-wins (multiple numeric
-    payloads for one row is a bug upstream — a warning is logged).
+    list in the same page order. Numeric categories preserve submission order
+    for same-category replacement; legacy uncategorized payloads keep the
+    first page-ordered value and log a warning on duplicates.
 
     Ordering by ``min(source_pages)`` keeps row-112's concatenation
     stable across re-runs — without it, input order is
@@ -806,6 +812,7 @@ def _combine_payloads(payloads: list[NotesPayload]) -> NotesPayload:
         if p.evidence is None or ";" not in (p.evidence or ""):
             return p
 
+    submitted_numeric = [p for p in payloads if p.numeric_values]
     # Sort by the earliest PDF page each payload cited. Payloads with no
     # source_pages sort to the front (key = 0) so they remain deterministic
     # rather than getting a ``min([])`` crash.
@@ -817,9 +824,20 @@ def _combine_payloads(payloads: list[NotesPayload]) -> NotesPayload:
     # Numeric: warn and take first set of values.
     numeric_values = None
     numeric_payloads = [p for p in payloads if p.numeric_values]
+    if any(p.dimensions for p in submitted_numeric):
+        numeric_payloads = submitted_numeric
     if numeric_payloads:
         numeric_values = numeric_payloads[0].numeric_values
-        if len(numeric_payloads) > 1:
+        if any(p.dimensions for p in numeric_payloads):
+            from concept_model.dimensions import diagnostic_value, dimension_key
+            numeric_values = {}
+            roles = {key for p in numeric_payloads for key in p.numeric_values}
+            for role in roles:
+                numeric_values[role] = diagnostic_value([
+                    (dimension_key(p.dimensions), p.numeric_values[role])
+                    for p in numeric_payloads if role in p.numeric_values
+                ])
+        elif len(numeric_payloads) > 1:
             logger.warning(
                 "Multiple numeric payloads for row '%s' -- using first",
                 payloads[0].chosen_row_label,

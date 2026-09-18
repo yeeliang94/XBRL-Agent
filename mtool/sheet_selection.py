@@ -17,6 +17,7 @@ def select_sheets(raw: str | None, doc: dict, note_sheets: set[str]) -> tuple[di
     selected = sorted(set(selected))
     scoped = deepcopy(doc)
     scoped["writes"] = [w for w in doc.get("writes", []) if w["sheet"] in selected]
+    scoped["checks"] = [w for w in doc.get("checks", []) if w["sheet"] in selected]
     scoped["sheets"] = {s: cfg for s, cfg in doc.get("sheets", {}).items() if s in selected}
     meta = scoped.setdefault("meta", {})
     meta["sheets_covered"] = sorted(scoped["sheets"])

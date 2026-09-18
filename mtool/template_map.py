@@ -82,7 +82,10 @@ def index_workbook(data: dict) -> tuple[dict, dict]:
             ):
                 continue
             for col, (kind, raw) in row_cells.items():
-                if kind == "N" and raw == "0" and cells.get(row + 2, {}).get(col, (None, ""))[1] == "Total":
+                total_marker = (kind == "N" and raw == "0") or (
+                    kind == "S" and raw == "0:::abc::abc::abc"
+                )
+                if total_marker and cells.get(row + 2, {}).get(col, (None, ""))[1] == "Total":
                     occurrences["ifrs-full_EquityMember"].append((sheet, int(row), col))
     return occurrences, by_sheet
 
@@ -449,6 +452,7 @@ def _resolve_taxonomy_target(
     detected: dict[str, dict[str, Any]],
     cmap: dict[str, dict[str, Any]],
     period_blocks: dict[str, list[dict[str, Any]]],
+    cells_by_sheet: dict[str, dict],
 ) -> tuple[
     tuple[str, int, str] | None,
     dict[str, Any] | None,
@@ -480,6 +484,30 @@ def _resolve_taxonomy_target(
         [item for item in all_candidates if item[0] == expected_sheet]
         if expected_sheet else all_candidates
     )
+    # Opening and closing equity share a primary item. A sole occurrence is
+    # not sufficient when it declares the opposite balance role.
+    balance_roles = {
+        "Equity at beginning of period": "periodStartLabel",
+        "Equity at end of period": "periodEndLabel",
+    }
+    label = str(write.get("label") or "").strip().lstrip("*").strip()
+    balance_role = balance_roles.get(label)
+    if balance_role and primary.endswith("_Equity"):
+        role_candidates = []
+        for candidate in candidates:
+            sheet, row, col = candidate
+            row_cells = cells_by_sheet.get(sheet, {}).get(row, {})
+            raw = row_cells.get(col, (None, ""))[1] or ""
+            declared = re.search(r"/role/(periodStartLabel|periodEndLabel)", raw)
+            if (declared and declared.group(1) == balance_role) or (
+                not declared and any((text or "").strip().lstrip("*").strip() == label
+                                     for _, text in row_cells.values())
+            ):
+                role_candidates.append(candidate)
+        if not role_candidates:
+            return None, _coverage_issue(write, primary, "balance_role_missing",
+                "The exact opening/closing balance role is missing from this period."), None
+        candidates = role_candidates
     if expected_sheet and all_candidates and not candidates:
         return None, _coverage_issue(
             write,
@@ -557,6 +585,21 @@ def resolve_filing_doc(
     if data is None:
         _, data, _ = load_workbook_entries(template_path)
     workbook_index = workbook_index or index_workbook(data)
+    if doc.get("checks"):
+        base = {k: v for k, v in doc.items() if k != "checks"}
+        ready, coverage = resolve_filing_doc(
+            template_path, base, data=data, column_map=column_map,
+            workbook_index=workbook_index, filing_targets=filing_targets)
+        checked, check_coverage = resolve_filing_doc(
+            template_path, {**base, "writes": doc["checks"]}, data=data,
+            column_map=column_map, workbook_index=workbook_index)
+        ready["checks"] = checked["writes"]
+        coverage["calculation_coverage"] = check_coverage
+        # A missing required calculation is unresolved verification, even if
+        # every writable input mapped. Keep the existing failure vocabulary.
+        if check_coverage["unmapped"] or check_coverage["ambiguous"]:
+            coverage["status"] = "blocked"
+        return ready, coverage
     # Keep canonical identity for selection/receipts while resolving only
     # physical names against the uploaded workbook. Do not mutate the caller.
     sheet_map = {s: resolve_sheet_name(s, workbook_index[1]) or s
@@ -633,7 +676,7 @@ def resolve_filing_doc(
             target = (hint["sheet"], int(hint["row"]), hint["col"])
         elif primary:
             target, unresolved_issue, ambiguous_issue = _resolve_taxonomy_target(
-                write, primary, occurrences, detected, cmap, period_blocks,
+                write, primary, occurrences, detected, cmap, period_blocks, cells_by_sheet,
             )
             issue = unresolved_issue or ambiguous_issue
             if issue:
@@ -658,7 +701,7 @@ def resolve_filing_doc(
                         raw = cells_by_sheet[sheet].get(row, {}).get(label_col, (None, ""))[1]
                         if (raw or "").strip().lstrip("*").strip() == expected_label:
                             exact.append(option)
-                    if len(exact) > 1 and write.get('kind') in {'LEAF', 'MATRIX_CELL'}:
+                    if len(exact) > 1 and not write.get('verification_only') and write.get('kind') in {'LEAF', 'MATRIX_CELL'}:
                         # Cash end balances can also appear as a reconciliation
                         # formula with the identical label. A canonical input
                         # belongs to the unique matching input occurrence.
@@ -670,6 +713,15 @@ def resolve_filing_doc(
                                 inputs.append(option)
                         if len(inputs) == 1:
                             exact = inputs
+                if write.get("verification_only") and len(exact) > 1:
+                    # Read every repeated total of the same taxonomy item,
+                    # dimension, period and exact label. This is verification
+                    # only: no ambiguous destination is ever made writable.
+                    for option in exact:
+                        sheet, ref = option["cell"].rsplit("!", 1)
+                        resolved.append({**write, "sheet": sheet, "cell": ref})
+                        resolved_sources.append(write)
+                    continue
                 if len(exact) == 1:
                     sheet, ref = exact[0]["cell"].rsplit("!", 1)
                     match = re.fullmatch(r"([A-Z]+)([0-9]+)", ref)
@@ -708,7 +760,7 @@ def resolve_filing_doc(
             # Reverse ingest uses these non-patcher metadata fields to join a
             # resolved cell back to its canonical fact slot.  offline_fill
             # intentionally ignores unknown keys.
-            for key in ("concept_uuid", "period", "entity_scope", "template_id", "value_origin", "canonical_sheet"):
+            for key in ("concept_uuid", "period", "entity_scope", "template_id", "dimension_key", "value_origin", "canonical_sheet", "verification_only"):
                 if key in write:
                     item[key] = write[key]
             if cells_by_sheet.get(sheet, {}).get(row, {}).get(col, (None,))[0] == 'F':
@@ -737,17 +789,9 @@ def resolve_filing_doc(
             else:
                 legacy.append(write)
         else:
-            unresolved.append({
-                "concept_uuid": write.get("concept_uuid"),
-                "primary_concept": primary,
-                "sheet": write.get("sheet"),
-                "label": write.get("label"),
-                "reason_code": "taxonomy_target_unresolved",
-                "detail": (
-                    "The figure's taxonomy address did not resolve to one "
-                    "unique template cell."
-                ),
-            })
+            unresolved.append(_coverage_issue(write, primary,
+                "taxonomy_target_unresolved",
+                "The figure's taxonomy address did not resolve to one unique template cell."))
 
     legacy_ready: dict[str, Any] | None = None
     if legacy:
@@ -766,7 +810,7 @@ def resolve_filing_doc(
         raise ValueError("Filing selections are stale; recheck the current figures and template")
     occupied: dict[tuple[str, str], list[int]] = defaultdict(list)
     for index, item in enumerate(resolved):
-        if "cell" not in item:
+        if "cell" not in item or item.get("verification_only"):
             continue
         destination = (item["sheet"], item["cell"])
         occupied[destination].append(index)
@@ -798,7 +842,7 @@ def resolve_filing_doc(
     out["meta"] = out_meta
 
     requested = len(doc.get("writes", []))
-    mapped = len(resolved)
+    mapped = requested - len(unresolved) - len(ambiguous)
     status = "ready"
     if unresolved or ambiguous:
         status = "blocked"
@@ -808,6 +852,7 @@ def resolve_filing_doc(
         "status": status,
         "requested": requested,
         "mapped": mapped,
+        "resolved_destinations": len(resolved),
         "unmapped": len(unresolved),
         "ambiguous": len(ambiguous),
         "legacy_label_writes": len(legacy),

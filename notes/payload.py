@@ -82,6 +82,10 @@ class NotesPayloadInput(BaseModel):
         default=None,
         description="Numeric-sheet values only; include only disclosed entity keys.",
     )
+    dimensions: dict[str, str] = Field(
+        default_factory=dict,
+        description="Numeric category: exact taxonomy axis/member from the category catalog. One payload per category; never guess an undisclosed class.",
+    )
     note_num: Optional[Annotated[int, Field(gt=0)]] = Field(
         default=None,
         description="Assigned top-level inventory note number in Sheet-12 batches.",
@@ -107,6 +111,7 @@ class NotesPayloadInput(BaseModel):
             evidence=self.evidence or "",
             source_pages=list(self.source_pages),
             numeric_values=self.numeric_values,
+            dimensions=dict(self.dimensions),
             sub_agent_id=sub_agent_id,
             note_num=self.note_num,
             source_note_refs=[str(ref) for ref in self.source_note_refs],
@@ -178,6 +183,7 @@ class NotesPayload:
     # Sheets 13/14 carry structured numeric values keyed by column role
     # (group_cy / group_py / company_cy / company_py). None for prose rows.
     numeric_values: Optional[dict[str, float]] = None
+    dimensions: dict[str, str] = field(default_factory=dict)
     # Sheet-12 sub-agent mode only: the batch note number this payload
     # came from. Powers the per-note provenance check in
     # CoverageReceipt.validate (peer-review MEDIUM #1) — without it the
@@ -222,6 +228,8 @@ class NotesPayload:
     source_built: bool = False
 
     def __post_init__(self) -> None:
+        from concept_model.dimensions import dimension_key
+        dimension_key(self.dimensions)
         if not self.chosen_row_label or not self.chosen_row_label.strip():
             raise ValueError("chosen_row_label must be non-empty")
         # Mandatory evidence contract (PLAN Section 2 #11). An empty content

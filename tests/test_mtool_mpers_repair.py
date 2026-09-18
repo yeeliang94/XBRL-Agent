@@ -442,7 +442,16 @@ def test_supplied_mpers_api_category_retry_notes_receipt_and_download(client):
     assert response.status_code==200,response.text
     body=response.json()
     assert body['counts']['written']==5
-    assert body['counts']['reconciled_formula']==2
+    # Verify the intermediate profit/movement totals as well as opening/closing
+    # retained earnings; each native formula must agree with the snapshot.
+    reconciled=body['reconciled_formula']
+    assert body['counts']['reconciled_formula']==len(reconciled)==4
+    assert {(r['sheet'],r['cell'],r['value'],r['found']) for r in reconciled}=={
+        ('StatementofRetainedEarnings','E41',1020,'1020'),
+        ('StatementofRetainedEarnings','E44',250,'250'),
+        ('StatementofRetainedEarnings','E47',200,'200'),
+        ('StatementofRetainedEarnings','E48',1220,'1220'),
+    }
     assert body['notes']['counts']['written']==3
     assert not body['notes']['unresolved']
     with sqlite3.connect(db) as c:

@@ -156,12 +156,14 @@ def build_fill_doc(
             "kind": r["kind"],
             "period": r["period"],
             "entity_scope": r["entity_scope"],
+            "dimension_key": r["dimension_key"],
         }
         for r in rows
         if r["value_status"] == "conflict"
     ]
 
     writes: list[dict[str, Any]] = []
+    checks: list[dict[str, Any]] = []
     sheets: dict[str, dict[str, Any]] = {}
     excluded_matrix = 0  # compatibility counter; semantic SOCIE makes this 0
     semantic_mapped = 0
@@ -185,7 +187,7 @@ def build_fill_doc(
     # De-dup: a concept surfacing on multiple physical coords (cross-sheet
     # alias) shares one uuid; keyed on (uuid, period, scope) so each fact is
     # emitted once.
-    seen: set[tuple[str, str, str]] = set()
+    seen: set[tuple[str, str, str, str]] = set()
 
     for r in rows:
         if (r['data_type'] or '').lower().endswith('textblockitemtype'):
@@ -195,15 +197,16 @@ def build_fill_doc(
         # Their destination must still pass formula and protection checks.
         derived_input = (r["kind"] == "MATRIX_CELL" and r["has_formula_edges"]
                          and r["horizontal_input_total"] and r["primary_concept"])
+        check_only = bool(r["has_formula_edges"] and not derived_input)
         if r["invalid_target"]:
             excluded_invalid_target += 1
             continue
-        if r["has_template_manifest"] and not r["has_writable_slot"] and not derived_input:
+        if r["has_template_manifest"] and not r["has_writable_slot"] and not derived_input and not check_only:
             excluded_non_writable_slot += 1
             continue
-        if r["kind"] not in {"LEAF", "MATRIX_CELL"}:
+        if r["kind"] not in {"LEAF", "MATRIX_CELL"} and not check_only:
             continue  # ABSTRACT header or COMPUTED total — not fillable
-        if r["kind"] == "MATRIX_CELL" and r["has_formula_edges"] and not derived_input:
+        if r["kind"] == "MATRIX_CELL" and r["has_formula_edges"] and not derived_input and not check_only:
             # SOCIE formulas remain owned by the workbook.  Only matrix cells
             # without dependency edges are data-entry facts.
             continue
@@ -217,7 +220,7 @@ def build_fill_doc(
         if r["value_status"] not in _WRITABLE_STATUSES or r["value"] is None:
             excluded_no_value += 1
             continue
-        key = (r["concept_uuid"], r["period"], r["entity_scope"])
+        key = (r["concept_uuid"], r["period"], r["entity_scope"], r["dimension_key"])
         if key in seen:
             continue
         seen.add(key)
@@ -242,6 +245,7 @@ def build_fill_doc(
                 dimensions = json.loads(r["dimensions_json"] or "{}")
             except (TypeError, json.JSONDecodeError):
                 dimensions = {}
+            dimensions.update(json.loads(r["dimension_key"] or "{}"))
             semantic = {
                 "primary_concept": r["primary_concept"],
                 "dimensions": dimensions,
@@ -265,6 +269,7 @@ def build_fill_doc(
             "concept_uuid": r["concept_uuid"],
             "period": r["period"],
             "entity_scope": r["entity_scope"],
+            "dimension_key": r["dimension_key"],
             "kind": r["kind"],
             "template_id": r["template_id"],
             "semantic_address": semantic,
@@ -277,7 +282,11 @@ def build_fill_doc(
                 "row": r["target_row"],
                 "col": r["target_col"],
             }
-        writes.append(write)
+        if check_only:
+            write["verification_only"] = True
+            checks.append(write)
+        else:
+            writes.append(write)
         sheet_cfg = sheets.setdefault(sheet, {"label_column": None,
                                               "columns": {}})
         sheet_cfg["columns"].setdefault(role, None)
@@ -317,7 +326,7 @@ def build_fill_doc(
         "unit_class_unknown": unknown_units,
         "columns_unresolved": True,
     }
-    return {"meta": meta, "sheets": sheets, "writes": writes, "strict": strict}
+    return {"meta": meta, "sheets": sheets, "writes": writes, "checks": checks, "strict": strict}
 
 
 def _whole(value):

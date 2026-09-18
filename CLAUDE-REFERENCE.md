@@ -700,6 +700,14 @@ Key invariants:
   readiness and requires human review; it is excluded from the face-facts
   reviewer because that pass cannot re-check or safely repair note values. It
   is never silently auto-scaled.
+- **Related-party numeric extraction requires a category.** The rendered prompt
+  requires a source-supported taxonomy category on every transaction/balance
+  payload, including zero values, with relationship evidence and a pre-save
+  completeness check. Agents inspect relationship context instead of accepting
+  an empty category or guessing Other/Total. Genuinely unresolved relationships
+  remain explicit, with source amounts preserved in the disclosure. This is an
+  extraction instruction, not a new schema constraint on historical facts.
+  Pinned by `tests/test_notes_agent_factory.py` across both standards and scopes.
 - **Numeric notes also carry one HTML disclosure field.** Sheets 13/14 keep
   their numeric grid in `run_concept_facts`, but the taxonomy text-block row
   (currently row 4) is reproduced as rich HTML in `notes_cells` so it appears
@@ -1367,9 +1375,12 @@ current-consumer filtering, and historical readability),
     `XBRL_AUTO_REVIEW`): a run with no failing checks / open conflicts still gets
     a grounded sanity pass, reusing `_run_reviewer_pass` via a `spot_check` arg.
     `XBRL_SPOT_CHECK_MODE` picks depth — `light` (default, `prompts/spot_check.md`
-    + a 6/8-turn cap) or `full` (holistic `reviewer.md`). A spot-check that merely
-    exhausts its cap is advisory (doesn't flag a clean run), but one that FAILS to
-    run (`reviewer_failed`) tips the run to `completed_with_errors`. Suite default
+    + a 6/8-turn cap) or `full` (holistic `reviewer.md`). Any figures pass reaching
+    its tool-turn cap gets one four-turn continuation within the original
+    wall-clock budget. Its original snapshot and accumulated writes survive.
+    Exhaustion after continuation leaves verification incomplete, including for
+    a spot-check whose arithmetic is clean. Failure to run (`reviewer_failed`)
+    also tips the run to `completed_with_errors`. Suite default
     OFF (`tests/conftest.py`). Pinned by `tests/test_reviewer_pipeline.py`,
     `test_e2e.py`, `test_reviewer_agent.py`, `test_settings_api.py`.
   - **Reviewer model** is user-selectable: `XBRL_DEFAULT_MODELS["reviewer"]`
@@ -1788,7 +1799,10 @@ Load-bearing invariants:
   arithmetic, never cached formula values or formula overwrites. Unsupported,
   incomplete or mismatched calculations require review. The evaluator treats
   blank cells on existing sheets as arithmetic zero, while missing sheets
-  and unresolved formulas remain unverified. Pinned by
+  and unresolved formulas remain unverified. Formula references treat a hyphen
+  as subtraction outside quoted sheet names, including when translating shared
+  formulas; similarly named sheets must not capture the preceding operand.
+  Quoted hyphens and unquoted dotted sheet names remain supported. Pinned by
   `tests/test_mtool_formula_reconciliation.py`. Exact-label ties for LEAF and
   MATRIX_CELL facts prefer a unique matching input over a formula occurrence;
   multiple matching inputs remain ambiguous. Pinned by
@@ -1836,11 +1850,33 @@ Load-bearing invariants:
   Non-identity conversion stays **Windows-blocked** on recon Addendum A.
   `denomination` is surfaced in the doc meta.
 - **Semantic, not physical — taxonomy identity before labels:**
+  Schema v47 adds normalized `dimension_key` to fact, snapshot and gold identity,
+  and to audit events and conflicts. Empty dimensions preserve historical facts
+  without guessing categories. Fixed SOCIE dimensions remain on the concept;
+  agreeing instance dimensions are removed and conflicts rejected. Numeric-note
+  members come from the exact filing standard's definition linkbase. Review,
+  cascade, corrections, snapshots and evaluation keep category instances separate.
+  The internal total-only grid is a diagnostic projection; native filing uses
+  the preserved instances. Pinned by `tests/test_numeric_dimensions.py` and
+  `tests/test_db_schema_v47.py`.
+
+  The native export snapshot also carries computed facts as verification-only
+  targets. Missing or ambiguous required targets block coverage. Final readback
+  runs after notes insertion, evaluates actual arithmetic and bounded SUM ranges,
+  and never treats cached formula results as fresh. Unsupported expressions stay
+  unverified. Recalculation flags request native recalculation but do not prove it
+  occurred. Pinned by `tests/test_mtool_formula_reconciliation.py`.
+
   `concept_semantic_addresses` (schema v40) stores the primary taxonomy concept
   and dimensions derived from the same presentation roles that generate the
   canonical templates. `mtool/template_map.py` is the one forward/reverse
   adapter. It resolves semantic addresses to explicit cells in the uploaded
-  workbook; SOCIE uses `ComponentsOfEquityAxis` members. Repository-generated
+  workbook; SOCIE uses `ComponentsOfEquityAxis` members.
+  MFRS Reserves uses `ifrs-full_OtherReservesMember`, as declared in role 610000,
+  rather than the unrelated generic `ssmt_ReservesMember` (address version
+  `2022-v2`). Normal startup bootstrap refreshes these addresses without changing
+  fact identity. Pinned by the reserves-address test in
+  `tests/test_mtool_template_map.py`. Repository-generated
   templates use their verified exact target hints. Declared semantic identities
   that are missing or ambiguous fail closed. On period/entity sheets,
   address-less legacy writes may still use `column_role` (CY/PY ×

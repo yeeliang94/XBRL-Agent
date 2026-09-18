@@ -28,7 +28,7 @@ def build_preview_fields(
             SELECT n.template_id,
                    COALESCE(n.display_label, n.canonical_label) AS label,
                    f.period, f.entity_scope, f.value, f.value_status,
-                   f.evidence,
+                   f.evidence, f.dimension_key,
                    COALESCE(t.target_sheet, n.render_sheet) AS sheet,
                    COALESCE(t.target_row, n.render_row) AS row_num,
                    COALESCE(t.target_col, n.render_col) AS col
@@ -61,6 +61,7 @@ def build_preview_fields(
             "col": row["col"],
             "col_index": column_index_from_string(row["col"]),
             "evidence": row["evidence"],
+            "dimensions": json.loads(row["dimension_key"] or "{}"),
         }
         for row in rows
     ]

@@ -38,3 +38,24 @@ Write: `apply_fixes([{concept_uuid, value, reason, evidence, …}, …])` — al
 === WHEN YOU'RE DONE ===
 
 If everything you sampled ties to the PDF, that's a successful spot-check — make no writes and raise no flags. If you found and grounded a fix, apply it — **and then call `verify_fixes()` once to confirm your edit didn't break a check that was passing.** This run started all-green; do not leave it worse than you found it. If you found something suspicious you couldn't resolve, flag it. Do not churn or invent work to look busy.
+
+
+=== SOURCE CLASSIFICATION AND CATEGORY VERIFICATION ===
+
+Check cash-flow activity classification independently of arithmetic. For each
+split or aggregate, inspect the cited source face and relevant movement note:
+identify the source lines, amount, unit and meaning. A disclosed principal
+payment must not have separately disclosed interest subtracted again. A split
+requires evidence that the original is combined. Preserve the entity's operating
+or financing interest policy; a specific label in another activity section is
+not a reason to move the payment. Check each cash component is allocated once
+within its period/entity's cash activities. Repetition in notes, another
+statement, indirect finance-cost addbacks or a supported low-value lease
+presentation bridge is legitimate. Equal totals can conceal wrong components.
+
+Facts with a dimension_key are distinct category instances. Pass the matching
+dimensions when tracing, fixing or clearing one; never collapse ordinary and
+preference shares or different related-party relationships. Preserve counts
+versus money and source scale. Missing category evidence remains unresolved;
+do not invent a category. Workbook arithmetic parity and source classification
+are separate checks: passing one does not prove the other.

@@ -81,3 +81,24 @@ Before you flag, ask: did I check the WHAT WAS FILLED summary for a duplicate? D
 - Respect the filing level / standard: facts carry a `period` (`CY` | `PY`) and `entity_scope` (`Company` | `Group`). On a GROUP filing both scopes exist. The tools default to `entity_scope="Company"`, so for any failure tagged `[group]` (see the REVIEW PACKET) you MUST pass `entity_scope="Group"` to `trace_cascade_source` and `apply_fixes` — otherwise you read and fix the wrong column.
 - Inspect deliberately — a couple of `view_pdf_pages` calls per failure is plenty.
 - Leaving an honest, flagged imbalance is correct when no grounded fix exists; plugging it is not. But do not flag a problem you could have fixed with a PDF read.
+
+
+=== SOURCE CLASSIFICATION AND CATEGORY VERIFICATION ===
+
+Check cash-flow activity classification independently of arithmetic. For each
+split or aggregate, inspect the cited source face and relevant movement note:
+identify the source lines, amount, unit and meaning. A disclosed principal
+payment must not have separately disclosed interest subtracted again. A split
+requires evidence that the original is combined. Preserve the entity's operating
+or financing interest policy; a specific label in another activity section is
+not a reason to move the payment. Check each cash component is allocated once
+within its period/entity's cash activities. Repetition in notes, another
+statement, indirect finance-cost addbacks or a supported low-value lease
+presentation bridge is legitimate. Equal totals can conceal wrong components.
+
+Facts with a dimension_key are distinct category instances. Pass the matching
+dimensions when tracing, fixing or clearing one; never collapse ordinary and
+preference shares or different related-party relationships. Preserve counts
+versus money and source scale. Missing category evidence remains unresolved;
+do not invent a category. Workbook arithmetic parity and source classification
+are separate checks: passing one does not prove the other.

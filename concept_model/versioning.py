@@ -68,10 +68,10 @@ def snapshot_facts(db_path: str | Path, run_id: int) -> int:
         conn.execute(
             """
             INSERT INTO run_fact_snapshots(
-                run_id, concept_uuid, period, entity_scope, value,
+                run_id, concept_uuid, period, entity_scope, dimension_key, value,
                 value_status, children_status, source, evidence, snapshot_at
             )
-            SELECT run_id, concept_uuid, period, entity_scope, value,
+            SELECT run_id, concept_uuid, period, entity_scope, dimension_key, value,
                    value_status, children_status, source, evidence, ?
             FROM run_concept_facts WHERE run_id = ?
             """,
@@ -127,10 +127,10 @@ def ensure_snapshot(db_path: str | Path, run_id: int) -> bool:
         conn.execute(
             """
             INSERT INTO run_fact_snapshots(
-                run_id, concept_uuid, period, entity_scope, value,
+                run_id, concept_uuid, period, entity_scope, dimension_key, value,
                 value_status, children_status, source, evidence, snapshot_at
             )
-            SELECT run_id, concept_uuid, period, entity_scope, value,
+            SELECT run_id, concept_uuid, period, entity_scope, dimension_key, value,
                    value_status, children_status, source, evidence, ?
             FROM run_concept_facts WHERE run_id = ?
             """,
@@ -215,10 +215,10 @@ def revert_to_original(db_path: str | Path, run_id: int) -> dict[str, Any]:
         conn.execute(
             """
             INSERT INTO run_concept_facts(
-                run_id, concept_uuid, period, entity_scope, value,
+                run_id, concept_uuid, period, entity_scope, dimension_key, value,
                 value_status, children_status, source, evidence, updated_at
             )
-            SELECT run_id, concept_uuid, period, entity_scope, value,
+            SELECT run_id, concept_uuid, period, entity_scope, dimension_key, value,
                    value_status, children_status, source, evidence, ?
             FROM run_fact_snapshots WHERE run_id = ?
             """,
@@ -287,24 +287,24 @@ def compute_review_diff(db_path: str | Path, run_id: int) -> list[dict[str, Any]
     conn = _open_conn(db_path)
     try:
         snap_rows = conn.execute(
-            "SELECT concept_uuid, period, entity_scope, value "
+            "SELECT concept_uuid, period, entity_scope, dimension_key, value "
             "FROM run_fact_snapshots WHERE run_id = ?",
             (run_id,),
         ).fetchall()
         if not snap_rows:
             return []
         snapshot = {
-            (r["concept_uuid"], r["period"], r["entity_scope"]): r["value"]
+            (r["concept_uuid"], r["period"], r["entity_scope"], r["dimension_key"]): r["value"]
             for r in snap_rows
         }
 
         live_rows = conn.execute(
-            "SELECT concept_uuid, period, entity_scope, value, source, evidence "
+            "SELECT concept_uuid, period, entity_scope, dimension_key, value, source, evidence "
             "FROM run_concept_facts WHERE run_id = ?",
             (run_id,),
         ).fetchall()
         live = {
-            (r["concept_uuid"], r["period"], r["entity_scope"]): r
+            (r["concept_uuid"], r["period"], r["entity_scope"], r["dimension_key"]): r
             for r in live_rows
         }
 
@@ -347,19 +347,19 @@ def compute_review_diff(db_path: str | Path, run_id: int) -> list[dict[str, Any]
         # reviewer-touched. Keyed by the same tuple the diff iterates.
         actor_by_key: dict[tuple[str, str, str], str] = {}
         for r in conn.execute(
-            "SELECT concept_uuid, period, entity_scope, actor "
+            "SELECT concept_uuid, period, entity_scope, dimension_key, actor "
             "FROM concept_fact_events WHERE run_id = ? AND id IN ("
             "  SELECT MAX(id) FROM concept_fact_events WHERE run_id = ? "
-            "  GROUP BY concept_uuid, period, entity_scope)",
+            "  GROUP BY concept_uuid, period, entity_scope, dimension_key)",
             (run_id, run_id),
         ).fetchall():
             actor_by_key[
-                (r["concept_uuid"], r["period"], r["entity_scope"])
+                (r["concept_uuid"], r["period"], r["entity_scope"], r["dimension_key"])
             ] = r["actor"]
 
         diff: list[dict[str, Any]] = []
         for key in sorted(set(snapshot) | set(live)):
-            uuid, period, scope = key
+            uuid, period, scope, dimensions = key
             original = snapshot.get(key)
             live_row = live.get(key)
             current = live_row["value"] if live_row is not None else None
@@ -371,6 +371,7 @@ def compute_review_diff(db_path: str | Path, run_id: int) -> list[dict[str, Any]
                 "concept_uuid": uuid,
                 "period": period,
                 "entity_scope": scope,
+                "dimension_key": dimensions,
                 # Target coord (Group/SOCIE) wins; render_* is the fallback.
                 "sheet": (
                     tgt["target_sheet"] if tgt

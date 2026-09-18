@@ -16,6 +16,8 @@ from concept_model.taxonomy_semantics import (
 from db.schema import init_db
 from eval.mtool_ingest import build_catalogue, ingest_workbook
 from mtool.exporter import build_fill_doc
+
+
 from mtool.offline_fill import (
     fill_workbook,
     load_workbook_entries,
@@ -31,6 +33,16 @@ from statement_types import VARIANTS, template_path
 
 
 REPO = Path(__file__).resolve().parent.parent
+
+
+@pytest.mark.parametrize("level", ["Company", "Group"])
+def test_socie_reserves_address_uses_reporting_role_member(level):
+    addresses = semantic_addresses_for(str(REPO / "XBRL-template-MFRS" / level / "09-SOCIE.xlsx"))
+    # Role 610000 uses OtherReservesMember for the subtotal of distributable
+    # and non-distributable reserves, as does the native reporting table.
+    assert addresses[("SOCIE", 6, "T")]["dimensions"] == {
+        "ifrs-full_ComponentsOfEquityAxis": "ifrs-full_OtherReservesMember"}
+    assert all("ssmt_ReservesMember" not in a["dimensions"].values() for a in addresses.values())
 
 
 def _semantic_template_cases():

@@ -109,7 +109,10 @@ def test_sopl_md_stays_coarse_after_injection():
 
 def test_socf_prefers_specific_row_generalised():
     flat = _flat("socf.md")
-    assert "most specific template row" in flat
+    assert "most specific compatible row within that source activity section" in flat
+    assert "does not justify reclassification" in flat
+    assert "never subtract separately disclosed interest" in flat
+    assert "once within a period/entity's cash activities" in flat
     assert "footnote" in flat
     assert "lease-interest row" in flat
     # The MPERS-safe fallback half must be present.

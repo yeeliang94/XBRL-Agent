@@ -527,6 +527,29 @@ def test_get_notes_fill_doc_running_run_is_409(client):
     assert tc.get(f"/api/runs/{run_id}/mtool-notes-fill").status_code == 409
 
 
+def test_final_snapshot_failure_is_visible_in_existing_report(client, monkeypatch):
+    from mtool import offline_fill
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_distinct_leaves(db, run_id)
+
+    def changed_after_fill(path, doc):
+        write = doc['writes'][0]
+        return {'status': 'degraded', 'verified': [], 'unverified': [],
+                'native_recalculation_verified': False,
+                'mismatches': [{**write, 'found': '999999'}]}
+
+    monkeypatch.setattr(offline_fill, 'verify_numeric_snapshot', changed_after_fill)
+    response = tc.post(f'/api/runs/{run_id}/mtool-fill/patch',
+                       files=_upload_our_template(), data={'fill_notes': 'false'})
+    assert response.status_code == 200, response.text
+    report = response.json()
+    assert report['status'] == report['numeric_status'] == 'degraded'
+    assert report['counts']['mismatches'] == 1
+    assert report['mismatches'][0]['found'] == '999999'
+    assert 'canonical snapshot' in report['mismatches'][0]['detail']
+
+
 def test_notes_fill_doc_honours_per_run_theme(client):
     """A per-run notes_table_style override reaches the mTool fill decoration,
     so the payload matches the in-app editor / manual paste (not DEFAULT)."""

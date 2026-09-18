@@ -1797,8 +1797,9 @@ def _translate_shared_formula(expression: str, origin: str, target: str) -> str:
     target_col, target_row = split_ref(target)
     delta_col = col_to_idx(target_col) - col_to_idx(origin_col)
     delta_row = target_row - origin_row
+    # A hyphen is subtraction unless it is inside a quoted worksheet name.
     token = re.compile(
-        r"(?P<ref>(?P<sheet>(?:'(?:[^']|'')+'|[A-Za-z_][A-Za-z0-9_.-]*)!)?"
+        r"(?P<ref>(?P<sheet>(?:'(?:[^']|'')+'|[A-Za-z_][A-Za-z0-9_.]*)!)?"
         r"(?P<col_abs>\$?)(?P<col>[A-Z]{1,3})(?P<row_abs>\$?)(?P<row>[1-9][0-9]*))"
         r"|(?P<number>(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)"
         r"|(?P<operator>[+*/()=\s-])")
@@ -1852,14 +1853,41 @@ def _calculated_value(cells_by_sheet: dict, sheet: str, addr: str,
     visiting.add(key)
     try:
         values = {}
-        pattern = r"(?:(?:'((?:[^']|'')+)'|([A-Za-z_][A-Za-z0-9_.-]*))!)?(\$?[A-Z]{1,3}\$?[1-9][0-9]*)(?![A-Za-z0-9_(])"
+        # SUM is arithmetic too. Expand only closed, bounded rectangular
+        # ranges inside SUM; other functions and array expressions stay
+        # unsupported and must be checked after native recalculation.
+        expression = raw.lstrip('=')
+        range_pattern = r"(?:(?:'((?:[^']|'')+)'|([A-Za-z_][A-Za-z0-9_.]*))!)?(\$?[A-Z]{1,3}\$?[1-9][0-9]*):(\$?[A-Z]{1,3}\$?[1-9][0-9]*)"
+        def expand_sum(match):
+            args = match.group(1).split(',')
+            terms = []
+            for arg in args:
+                area = re.fullmatch(range_pattern, arg.strip())
+                if area:
+                    ref_sheet = (area.group(1) or area.group(2) or sheet).replace("''", "'")
+                    c1, r1 = split_ref(area.group(3).replace('$', ''))
+                    c2, r2 = split_ref(area.group(4).replace('$', ''))
+                    left, right = sorted((col_to_idx(c1), col_to_idx(c2)))
+                    top, bottom = sorted((r1, r2))
+                    if (right - left + 1) * (bottom - top + 1) > 10000:
+                        raise ValueError('Formula range exceeds supported evaluation size')
+                    name = f'range_value_{len(values)}'
+                    values[name] = sum((_calculated_value(cells_by_sheet, ref_sheet,
+                        f'{idx_to_col(c)}{r}', visiting, cache)
+                        for c in range(left, right + 1) for r in range(top, bottom + 1)), Decimal(0))
+                    terms.append(name)
+                else:
+                    terms.append(arg)
+            return '(' + '+'.join(terms) + ')'
+        expression = re.sub(r'\bSUM\(([^()]*)\)', expand_sum, expression, flags=re.IGNORECASE)
+        pattern = r"(?:(?:'((?:[^']|'')+)'|([A-Za-z_][A-Za-z0-9_.]*))!)?(\$?[A-Z]{1,3}\$?[1-9][0-9]*)(?![A-Za-z0-9_(])"
         def reference(match):
             ref_sheet = (match.group(1) or match.group(2) or sheet).replace("''", "'")
             name = f'v{len(values)}'
             values[name] = _calculated_value(cells_by_sheet, ref_sheet,
                 match.group(3).replace('$',''), visiting, cache)
             return name
-        expression = re.sub(pattern, reference, raw.lstrip('='))
+        expression = re.sub(pattern, reference, expression)
         if len(expression) > 16000:
             raise ValueError('Formula exceeds supported evaluation size')
         tree = ast.parse(expression, mode='eval')
@@ -1887,6 +1915,84 @@ def _calculated_value(cells_by_sheet: dict, sheet: str, addr: str,
         return value
     finally:
         visiting.remove(key)
+
+
+def calculation_cells(data: dict) -> dict:
+    """Read actual formula expressions, including shared-formula followers."""
+    sheet_paths = get_sheet_paths(data)
+    sst = get_shared_strings(data)
+    patched_xml = {}
+    current_cells = {s: read_sheet_cells(
+        patched_xml[p].encode('utf-8') if p in patched_xml else data[p], sst)
+        for s,p in sheet_paths.items()}
+    # read_sheet_cells intentionally exposes cached values to its other
+    # consumers. Reconciliation alone needs the actual formula expressions.
+    for sheet, path in sheet_paths.items():
+        root = ET.fromstring(patched_xml.get(path) or data[path])
+        formulas = []
+        shared_masters = {}
+        for cell in root.iter():
+            if _local(cell.tag) != 'c' or not cell.get('r'):
+                continue
+            formula = next((child for child in cell if _local(child.tag) == 'f'), None)
+            if formula is not None:
+                addr = cell.get('r')
+                formulas.append((addr, formula))
+                if formula.get('t') == 'shared' and formula.get('si') is not None and formula.text:
+                    shared_masters[formula.get('si')] = (addr, formula.text)
+        # Masters need not precede followers in the worksheet XML.
+        for addr, formula in formulas:
+            expression = formula.text or ''
+            if formula.get('t') == 'shared' and not expression:
+                master = shared_masters.get(formula.get('si'))
+                if master is not None:
+                    expression = _translate_shared_formula(master[1], master[0], addr)
+            col, row = split_ref(addr)
+            current_cells[sheet].setdefault(row, {})[col] = ('F', expression)
+    return current_cells
+
+
+def _verification_address(cells: dict, doc: dict, write: dict) -> str:
+    if write.get('cell'):
+        return write['cell']
+    cfg = doc.get('sheets', {}).get(write['sheet'], {})
+    column = cfg.get('columns', {}).get(write.get('column_role'))
+    if not column or not cfg.get('label_column') or not write.get('label'):
+        raise ValueError('Explicit address or exact period-column mapping required')
+    match = resolve_row(write['label'], build_label_map(
+        cells.get(write['sheet'], {}), cfg['label_column']))
+    if match['status'] != 'resolved' or match['ratio'] != 1:
+        raise ValueError('Required calculation has no unique exact labelled destination')
+    return f"{column}{match['row']}"
+
+
+def verify_numeric_snapshot(workbook_path: str, doc: dict) -> dict:
+    """Read back an exact resolved snapshot after all workbook mutations.
+
+    Formula caches are never evidence. This verifies only the supported
+    arithmetic expressions, and explicitly leaves other totals unresolved.
+    """
+    _, data, _ = load_workbook_entries(workbook_path)
+    cells = calculation_cells(data)
+    result = {"verified": [], "mismatches": [], "unverified": [],
+              "native_recalculation_verified": False}
+    cache = {}
+    for write in [*doc.get("writes", []), *doc.get("checks", [])]:
+        try:
+            write = {**write, 'cell': _verification_address(cells, doc, write)}
+            col, row = split_ref(write["cell"])
+            if cells.get(write["sheet"], {}).get(row, {}).get(col, (None,))[0] not in {"N", "F"}:
+                raise ValueError("Required numeric destination is blank or non-numeric")
+            found = _calculated_value(cells, write["sheet"], write["cell"], cache=cache)
+            expected = Decimal(str(write["value"]))
+            if abs(found - expected) > Decimal("0.01"):
+                result["mismatches"].append({**write, "found": str(found)})
+            else:
+                result["verified"].append({**write, "found": str(found)})
+        except (ValueError, SyntaxError, ArithmeticError) as exc:
+            result["unverified"].append({**write, "reason": "native_recalculation_required", "detail": str(exc)})
+    result["status"] = "degraded" if result["mismatches"] or result["unverified"] else "ok"
+    return result
 
 
 def fill_workbook(
@@ -1934,7 +2040,7 @@ def fill_workbook(
     patched_xml = {}
     verify_targets = []
     resolved_targets = set()
-    formula_checks = []
+    formula_checks = list(doc.get("checks", []))
 
     for i, w in enumerate(doc["writes"]):
         sheet = w["sheet"]
@@ -2010,35 +2116,11 @@ def fill_workbook(
         verify_targets.append((entry_path, addr, value_str))
 
     if formula_checks:
-        current_cells = {s: read_sheet_cells(
-            patched_xml[p].encode('utf-8') if p in patched_xml else data[p], sst)
-            for s,p in sheet_paths.items()}
-        # read_sheet_cells intentionally exposes cached values to its other
-        # consumers. Reconciliation alone needs the actual formula expressions.
-        for sheet, path in sheet_paths.items():
-            root = ET.fromstring(patched_xml.get(path) or data[path])
-            formulas = []
-            shared_masters = {}
-            for cell in root.iter():
-                if _local(cell.tag) != 'c' or not cell.get('r'):
-                    continue
-                formula = next((child for child in cell if _local(child.tag) == 'f'), None)
-                if formula is not None:
-                    addr = cell.get('r')
-                    formulas.append((addr, formula))
-                    if formula.get('t') == 'shared' and formula.get('si') is not None and formula.text:
-                        shared_masters[formula.get('si')] = (addr, formula.text)
-            # Masters need not precede followers in the worksheet XML.
-            for addr, formula in formulas:
-                expression = formula.text or ''
-                if formula.get('t') == 'shared' and not expression:
-                    master = shared_masters.get(formula.get('si'))
-                    if master is not None:
-                        expression = _translate_shared_formula(master[1], master[0], addr)
-                col, row = split_ref(addr)
-                current_cells[sheet].setdefault(row, {})[col] = ('F', expression)
+        formula_data = {**data, **{p: x.encode("utf-8") for p, x in patched_xml.items()}}
+        current_cells = calculation_cells(formula_data)
         for check in formula_checks:
             try:
+                check = {**check, 'cell': _verification_address(current_cells, doc, check)}
                 found = _calculated_value(current_cells, check['sheet'], check['cell'])
                 expected = Decimal(str(check['value']))
                 if abs(found - expected) > Decimal('0.01'):

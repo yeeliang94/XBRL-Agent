@@ -1775,6 +1775,8 @@ async def _run_reviewer_pass(
         })
 
     turn_count = 0
+    continuation_prior_usage = None
+    continuation_prior_messages = []
     _wallclock_cap = float(getattr(
         _server_self, "CORRECTION_WALLCLOCK_TIMEOUT", CORRECTION_WALLCLOCK_TIMEOUT,
     ))
@@ -1822,10 +1824,44 @@ async def _run_reviewer_pass(
     )
 
     try:
-        async with agent.iter(prompt, deps=deps) as agent_run:
-            await run_agent_loop(
-                agent_run, deps, loop_spec, _loop_emit, _turn_records,
-            )
+        try:
+            async with agent.iter(prompt, deps=deps) as agent_run:
+                await run_agent_loop(
+                    agent_run, deps, loop_spec, _loop_emit, _turn_records,
+                )
+        except CallToolsCapExceeded:
+            # One bounded continuation for remaining verification. Facts and
+            # the original snapshot stay live; no repeat of extraction, no
+            # global cap increase, and the original wall-clock budget remains.
+            from dataclasses import replace
+            remaining = max(0, _wallclock_cap - (_wc_time.monotonic() - _pass_start))
+            if _wallclock_cap > 0 and remaining <= 0:
+                raise WallclockExceeded()
+            continuation_prior_usage = agent_run.usage
+            continuation_prior_messages = list(agent_run.ctx.state.message_history)
+            await _emit("status", {"phase": "continuing",
+                "message": "AI review is completing its remaining verification."})
+            continuation = replace(loop_spec, call_tools_cap=4,
+                                   max_iters=18, wallclock_timeout=remaining)
+            outcome["continuation_turns"] = 4
+            outcome["max_turns"] = max_turns + 4
+            continuation_records = []
+            async with agent.iter(
+                prompt + "\n\nThe prior pass reached its tool-turn cap. Its fixes are already "
+                "saved. Resume only remaining verification: inspect current facts "
+                "and grounded fixes, verify changed totals, and check source cash "
+                "activity classification independently of arithmetic. Do not repeat "
+                "completed investigation or extraction. Use verify_fixes to identify "
+                "remaining failures; apply only grounded targeted repairs. Flag any "
+                "unresolved work. Finish within four tool turns. Never plug.",
+                deps=deps,
+            ) as agent_run:
+                try:
+                    await run_agent_loop(agent_run, deps, continuation, _loop_emit, continuation_records)
+                finally:
+                    offset = max((r["turn_index"] for r in _turn_records), default=0)
+                    _turn_records.extend({**r, "turn_index": r["turn_index"] + offset}
+                                         for r in continuation_records)
         turn_count = _call_tools_turns()
         outcome["writes_performed"] = deps.writes_performed
         outcome["flags_raised"] = deps.flags_raised
@@ -1930,7 +1966,12 @@ async def _run_reviewer_pass(
                 # EXISTING /api/runs/{id}/agents/{stmt}/trace route — no new
                 # endpoint needed (that route whitelists by run_agents row).
                 _res = getattr(agent_run, "result", None)
-                if _res is not None:
+                if continuation_prior_messages:
+                    save_messages_trace(
+                        continuation_prior_messages + list(agent_run.ctx.state.message_history),
+                        _review_out_dir, agent_id, runtime_metadata=_runtime,
+                    )
+                elif _res is not None:
                     save_agent_trace(
                         _res, _review_out_dir, agent_id,
                         runtime_metadata=_runtime,
@@ -1991,6 +2032,13 @@ async def _run_reviewer_pass(
         from pricing import estimate_cost as _ec
         from usage_metrics import split_usage
         metrics = split_usage(agent_run.usage)
+        if continuation_prior_usage is not None:
+            from usage_metrics import UsageMetrics
+            prior_metrics = split_usage(continuation_prior_usage)
+            metrics = UsageMetrics(**{
+                key: getattr(metrics, key) + getattr(prior_metrics, key)
+                for key in ("prompt_tokens", "completion_tokens", "thinking_tokens", "total_tokens")
+            })
         outcome["total_tokens"] = metrics.total_tokens
         outcome["prompt_tokens"] = metrics.prompt_tokens
         outcome["completion_tokens"] = metrics.completion_tokens
@@ -7996,14 +8044,10 @@ async def run_multi_agent_stream(
         # — a corrector that landed enough writes before its budget
         # ran out to coincidentally clear all checks would silently
         # report "completed" with no human-review signal.
-        # A SPOT-CHECK (clean-run sanity pass) that merely runs out of its
-        # tight turn budget is NOT a convergence failure — there were no
-        # failing checks to converge on. Exclude it from `correction_exhausted`
-        # so a thorough light spot-check hitting its 6-turn cap doesn't falsely
-        # flag an otherwise-clean run as "needs review" (peer-review HIGH).
+        # A clean arithmetic result does not prove source classification.
+        # An exhausted spot-check also leaves required verification unfinished.
         correction_exhausted = bool(
             correction_outcome and correction_outcome.get("exhausted")
-            and not correction_outcome.get("spot_check")
         )
         # Phase E (folds peer-review finding 4): in canonical mode the DB is
         # the authoritative store, so unresolved reconciliation conflicts mean

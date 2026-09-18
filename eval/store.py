@@ -12,6 +12,7 @@ frontend ``ConceptsPage`` can render gold facts with zero new grid code (just a
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -275,14 +276,14 @@ def create_benchmark_from_run(
     source = f"seeded from run {run_id}"
     cur2 = conn.execute(
         f"INSERT INTO gold_concept_facts(benchmark_id, concept_uuid, period, "
-        f"entity_scope, value, value_status, source, updated_at) "
+        f"entity_scope, value, value_status, source, updated_at, dimension_key) "
         f"SELECT ?, f.concept_uuid, f.period, f.entity_scope, f.value, "
-        f"       f.value_status, ?, ? "
+        f"       f.value_status, ?, ?, f.dimension_key "
         f"FROM run_concept_facts f "
         f"JOIN concept_nodes n ON n.concept_uuid = f.concept_uuid "
         f"WHERE f.run_id = ? AND n.kind IN ('LEAF','MATRIX_CELL') "
         f"  AND n.template_id IN ({placeholders}) "
-        f"ON CONFLICT(benchmark_id, concept_uuid, period, entity_scope) "
+        f"ON CONFLICT(benchmark_id, concept_uuid, period, entity_scope, dimension_key) "
         f"DO UPDATE SET value = excluded.value, "
         f"  value_status = excluded.value_status, source = excluded.source, "
         f"  updated_at = excluded.updated_at",
@@ -417,13 +418,13 @@ def create_benchmark_from_mtool(
     for fact in report.facts:
         conn.execute(
             "INSERT INTO gold_concept_facts(benchmark_id, concept_uuid, period, "
-            "entity_scope, value, value_status, source, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, 'observed', ?, ?) "
-            "ON CONFLICT(benchmark_id, concept_uuid, period, entity_scope) "
+            "entity_scope, value, value_status, source, updated_at, dimension_key) "
+            "VALUES (?, ?, ?, ?, ?, 'observed', ?, ?, ?) "
+            "ON CONFLICT(benchmark_id, concept_uuid, period, entity_scope, dimension_key) "
             "DO UPDATE SET value = excluded.value, source = excluded.source, "
             "updated_at = excluded.updated_at",
             (benchmark_id, fact.concept_uuid, fact.period, fact.entity_scope,
-             fact.value, source, now),
+             fact.value, source, now, fact.dimension_key),
         )
 
     # Capture prose footnotes as gold (graded only in a later phase).
@@ -623,16 +624,16 @@ def gold_fingerprint(conn: sqlite3.Connection, benchmark_id: int) -> str:
     import hashlib
 
     rows = conn.execute(
-        "SELECT concept_uuid, period, entity_scope, value, value_status "
+        "SELECT concept_uuid, period, entity_scope, value, value_status, dimension_key "
         "FROM gold_concept_facts WHERE benchmark_id = ? "
-        "ORDER BY concept_uuid, period, entity_scope",
+        "ORDER BY concept_uuid, period, entity_scope, dimension_key",
         (benchmark_id,),
     ).fetchall()
     h = hashlib.sha256()
     h.update(f"benchmark:{benchmark_id}\n".encode())
-    for uuid, period, scope, value, status in rows:
+    for uuid, period, scope, value, status, dims in rows:
         v = repr(float(value)) if value is not None else ""
-        h.update(f"{uuid}|{period}|{scope}|{v}|{status}\n".encode())
+        h.update(f"{uuid}|{period}|{scope}|{dims}|{v}|{status}\n".encode())
     return h.hexdigest()
 
 
@@ -707,34 +708,34 @@ def gold_display_totals(
     facts: dict[tuple[str, str, str], Optional[float]] = {}
     gold_keys: set[tuple[str, str, str]] = set()
     scope_pairs: set[tuple[str, str]] = set()
-    for uuid, period, scope, value, status in conn.execute(
-        "SELECT concept_uuid, period, entity_scope, value, value_status "
+    for uuid, period, scope, value, status, dims in conn.execute(
+        "SELECT concept_uuid, period, entity_scope, value, value_status, dimension_key "
         "FROM gold_concept_facts WHERE benchmark_id = ?",
         (benchmark_id,),
     ).fetchall():
         num = _gold_number(value, status)
-        facts[(uuid, period, scope)] = num
+        facts[(uuid, period, scope) + ((dims,) if dims else ())] = num
         if num is not None:
-            gold_keys.add((uuid, period, scope))
-        scope_pairs.add((period, scope))
+            gold_keys.add((uuid, period, scope) + ((dims,) if dims else ()))
+        scope_pairs.add((period, scope, dims))
 
     # Fixed-point sum per (period, scope) — a later pass sees an earlier pass's
     # recomputed parent, so nested totals (parent-of-parent) converge.
     computed: dict[tuple[str, str, str], float] = {}
-    for period, scope in scope_pairs:
+    for period, scope, dims in scope_pairs:
         changed = True
         passes = 50
         while changed and passes > 0:
             changed = False
             passes -= 1
             for parent_uuid, edges in edges_by_parent.items():
-                key = (parent_uuid, period, scope)
+                key = (parent_uuid, period, scope) + ((dims,) if dims else ())
                 if key in gold_keys:
                     continue  # human gold wins; don't re-derive over it
                 total = 0.0
                 has_numeric_child = False
                 for child_uuid, coef in edges:
-                    v = facts.get((child_uuid, period, scope))
+                    v = facts.get((child_uuid, period, scope) + ((dims,) if dims else ()))
                     if v is None:
                         continue
                     has_numeric_child = True
@@ -784,7 +785,7 @@ def benchmark_concepts(conn: sqlite3.Connection, benchmark_id: int) -> list[dict
               ON g.concept_uuid = n.concept_uuid
               AND g.benchmark_id = ?
               AND g.period = 'CY'
-              AND g.entity_scope = 'Company'
+              AND g.entity_scope = 'Company' AND g.dimension_key = ''
             WHERE n.template_id IN ({placeholders})
             ORDER BY n.template_id, n.render_sheet, n.render_row, n.render_col
             """,
@@ -792,12 +793,16 @@ def benchmark_concepts(conn: sqlite3.Connection, benchmark_id: int) -> list[dict
         ).fetchall()
 
         all_facts = conn.execute(
-            "SELECT concept_uuid, period, entity_scope, value "
+            "SELECT concept_uuid, period, entity_scope, value, dimension_key "
             "FROM gold_concept_facts WHERE benchmark_id = ?",
             (benchmark_id,),
         ).fetchall()
         scope_facts: dict[str, dict] = {}
+        category_facts = {}
         for f in all_facts:
+            if f["dimension_key"]:
+                category_facts.setdefault(f["concept_uuid"], []).append(dict(f))
+                continue
             bucket = scope_facts.setdefault(f["concept_uuid"], {})
             bucket.setdefault(f["entity_scope"], {})[f["period"]] = f["value"]
 
@@ -805,7 +810,12 @@ def benchmark_concepts(conn: sqlite3.Connection, benchmark_id: int) -> list[dict
         # and merge them into both the scope_facts map (so every scope/period
         # column shows its total) and the CY/Company primary `value` below.
         display_totals = gold_display_totals(conn, benchmark_id, template_ids)
-        for (uuid, period, scope), val in display_totals.items():
+        for key, val in display_totals.items():
+            uuid, period, scope = key[:3]
+            if len(key) > 3:
+                category_facts.setdefault(uuid, []).append({"concept_uuid": uuid,
+                    "period": period, "entity_scope": scope, "dimension_key": key[3], "value": val})
+                continue
             scope_facts.setdefault(uuid, {}).setdefault(scope, {})[period] = val
 
         out: list[dict] = []
@@ -837,6 +847,7 @@ def benchmark_concepts(conn: sqlite3.Connection, benchmark_id: int) -> list[dict
                     and (r["edge_count"] or 0) == 0
                 ),
                 "is_alias": False,
+                "category_facts": category_facts.get(r["concept_uuid"], []),
                 "scope_facts": scope_facts.get(r["concept_uuid"], {}),
             })
         return out
@@ -852,6 +863,7 @@ def patch_gold_fact(
     period: str,
     entity_scope: str,
     value: Optional[float],
+    dimensions: dict[str, str] | None = None,
 ) -> dict:
     """Upsert a single gold value (the spot-edit path after import).
 
@@ -876,26 +888,30 @@ def patch_gold_fact(
         raise ValueError("Concept is not part of this benchmark's templates")
     if node[1] not in ("LEAF", "MATRIX_CELL"):
         raise ValueError("Only LEAF / MATRIX_CELL gold cells are editable")
+    from concept_model.dimensions import instance_key
+    dims = instance_key(conn, concept_uuid, dimensions or {})
 
     # An empty value clears the gold cell entirely (the human marks it blank).
     if value is None:
         conn.execute(
             "DELETE FROM gold_concept_facts WHERE benchmark_id = ? "
-            "AND concept_uuid = ? AND period = ? AND entity_scope = ?",
-            (benchmark_id, concept_uuid, period, entity_scope),
+            "AND concept_uuid = ? AND period = ? AND entity_scope = ? AND dimension_key = ?",
+            (benchmark_id, concept_uuid, period, entity_scope, dims),
         )
         return {"benchmark_id": benchmark_id, "concept_uuid": concept_uuid,
-                "period": period, "entity_scope": entity_scope, "value": None}
+                "period": period, "entity_scope": entity_scope, "value": None,
+                "dimension_key": dims, "dimensions": json.loads(dims or "{}")}
 
     conn.execute(
         "INSERT INTO gold_concept_facts(benchmark_id, concept_uuid, period, "
-        "entity_scope, value, value_status, source, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, 'observed', 'user_edit', ?) "
-        "ON CONFLICT(benchmark_id, concept_uuid, period, entity_scope) "
+        "entity_scope, value, value_status, source, updated_at, dimension_key) "
+        "VALUES (?, ?, ?, ?, ?, 'observed', 'user_edit', ?, ?) "
+        "ON CONFLICT(benchmark_id, concept_uuid, period, entity_scope, dimension_key) "
         "DO UPDATE SET value = excluded.value, "
         "value_status = excluded.value_status, "
         "source = excluded.source, updated_at = excluded.updated_at",
-        (benchmark_id, concept_uuid, period, entity_scope, float(value), _now()),
+        (benchmark_id, concept_uuid, period, entity_scope, float(value), _now(), dims),
     )
     return {"benchmark_id": benchmark_id, "concept_uuid": concept_uuid,
-            "period": period, "entity_scope": entity_scope, "value": float(value)}
+            "period": period, "entity_scope": entity_scope, "value": float(value),
+            "dimension_key": dims, "dimensions": json.loads(dims or "{}")}

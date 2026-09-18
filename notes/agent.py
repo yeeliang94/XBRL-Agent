@@ -814,6 +814,21 @@ def render_notes_prompt(
     # tail of the prompt). Agents don't need to see the labels right
     # before their write; they need them before they reason about
     # which row a note maps to.
+    if template_type in {NotesTemplateType.ISSUED_CAPITAL, NotesTemplateType.RELATED_PARTY}:
+        from concept_model.dimensions import numeric_category_catalog
+        parts.append(
+            "=== NUMERIC CATEGORY IDENTITIES ===\n"
+            "Use dimensions={axis: member} from this taxonomy catalog, one payload per source-supported category. "
+            "Preserve both periods and entity scopes. Do not assume ordinary shares or a generic related-party category. "
+            + ("Every related-party numeric payload must include a source-supported category in dimensions; "
+               "an amount and transaction row alone are incomplete. Resolve the relationship from the source "
+               "before write_notes and check every numeric payload before save_result. "
+               if template_type == NotesTemplateType.RELATED_PARTY else
+               "If the source category is unresolved, retain its label and evidence with empty dimensions. ")
+            + "Share counts are counts; monetary values retain the source presentation scale. "
+            "Keep opening, movement and closing amounts and transaction/balance concepts distinct.\n"
+            + json.dumps(numeric_category_catalog(filing_standard), sort_keys=True)
+        )
     catalog_block = _render_label_catalog(label_catalog or [])
     if catalog_block is not None:
         parts.append(catalog_block)

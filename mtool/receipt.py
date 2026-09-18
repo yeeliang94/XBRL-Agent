@@ -70,7 +70,7 @@ def snapshot_facts(
         conn.execute("BEGIN")
         rows = conn.execute(
             """
-            SELECT f.concept_uuid, f.period, f.entity_scope, f.value,
+            SELECT f.concept_uuid, f.period, f.entity_scope, f.value, f.dimension_key,
                    f.value_status, f.updated_at, f.invalid_target,
                    f.invalid_target_reason,
                    n.canonical_label, n.kind, n.render_sheet, n.render_row,
@@ -104,8 +104,6 @@ def snapshot_facts(
                      JOIN concept_nodes child ON child.concept_uuid = e.child_uuid
                      WHERE e.parent_uuid = n.concept_uuid
                        AND child.render_row = n.render_row
-                       AND NOT EXISTS (SELECT 1 FROM concept_edges ce
-                                       WHERE ce.parent_uuid = child.concept_uuid)
                    ) AND NOT EXISTS(
                      SELECT 1 FROM concept_edges e
                      JOIN concept_nodes child ON child.concept_uuid = e.child_uuid
@@ -124,7 +122,7 @@ def snapshot_facts(
             LEFT JOIN taxonomy_concepts tc
               ON tc.source_element_id = sa.primary_concept
             WHERE f.run_id = ? AND n.template_id LIKE ?
-            ORDER BY n.render_sheet, n.render_row, f.entity_scope, f.period
+            ORDER BY n.render_sheet, n.render_row, f.entity_scope, f.period, f.dimension_key
             """,
             (run_id, family_prefix + "%"),
         ).fetchall()
@@ -137,7 +135,7 @@ def snapshot_facts(
     for r in rows:
         h.update(
             f"{r['concept_uuid']}|{r['period']}|{r['entity_scope']}|"
-            f"{r['value']}|{r['value_status']}\n".encode("utf-8"))
+            f"{r['dimension_key']}|{r['value']}|{r['value_status']}\n".encode("utf-8"))
         if (r["updated_at"] or "") > max_updated:
             max_updated = r["updated_at"] or ""
     identity = {

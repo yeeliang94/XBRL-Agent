@@ -12,7 +12,9 @@ HTML payloads per cell via GET (grouped by sheet) and saves edits via PATCH. The
 wire contract is asserted in tests/test_server_notes_cells_api.py — every endpoint
 goes through ``server._open_audit_conn`` so the same DB/WAL pragmas apply.
 """
+import json
 import logging
+import re
 import sqlite3
 from typing import Optional
 
@@ -161,13 +163,15 @@ def _numeric_sheet_rows(
 
     facts: dict[str, dict] = {}
     for f in conn.execute(
-        "SELECT concept_uuid, period, entity_scope, value "
+        "SELECT concept_uuid, period, entity_scope, value, dimension_key, evidence "
         "FROM run_concept_facts WHERE run_id = ?",
         (run_id,),
     ).fetchall():
-        facts.setdefault(f["concept_uuid"], {}).setdefault(
-            f["entity_scope"], {}
-        )[f["period"]] = f["value"]
+        category = facts.setdefault(f["concept_uuid"], {}).setdefault(
+            f["dimension_key"], {"scopes": {}, "evidence": []})
+        category["scopes"].setdefault(f["entity_scope"], {})[f["period"]] = f["value"]
+        if f["evidence"] and f["evidence"] not in category["evidence"]:
+            category["evidence"].append(f["evidence"])
 
     from concept_model.filing_targets import resolve_writable_html_target
     from db.repository import decode_source_pages
@@ -238,25 +242,35 @@ def _numeric_sheet_rows(
             })
             continue
 
-        scope = facts.get(n["concept_uuid"], {})
-        if level == "group":
-            values = {
-                "group_cy": scope.get("Group", {}).get("CY"),
-                "group_py": scope.get("Group", {}).get("PY"),
-                "company_cy": scope.get("Company", {}).get("CY"),
-                "company_py": scope.get("Company", {}).get("PY"),
-            }
-        else:
-            values = {
+        def scope_values(scope):
+            if level == "group":
+                return {
+                    "group_cy": scope.get("Group", {}).get("CY"),
+                    "group_py": scope.get("Group", {}).get("PY"),
+                    "company_cy": scope.get("Company", {}).get("CY"),
+                    "company_py": scope.get("Company", {}).get("PY"),
+                }
+            return {
                 "cy": scope.get("Company", {}).get("CY"),
                 "py": scope.get("Company", {}).get("PY"),
             }
+        instances = facts.get(n["concept_uuid"], {})
+        categories = []
+        for key, instance in sorted(instances.items()):
+            dimensions = json.loads(key or "{}")
+            label = ", ".join(re.sub(r"(?<=[a-z])(?=[A-Z])", " ",
+                member.split("_", 1)[-1].removesuffix("Member"))
+                for member in dimensions.values()) if key else "Category not specified"
+            categories.append({"dimension_key": key, "dimensions": dimensions,
+                               "label": label, "values": scope_values(instance["scopes"]),
+                               "evidence": "; ".join(instance["evidence"]) or None})
         rows.append({
             "row": n["row"],
             "label": n["display_label"] or n["canonical_label"],
             "kind": "numeric",
             "concept_uuid": n["concept_uuid"],
-            "values": values,
+            "values": scope_values(instances.get("", {}).get("scopes", {})),
+            "categories": categories if any(instances) else [],
             "updated_at": "",
         })
     return rows

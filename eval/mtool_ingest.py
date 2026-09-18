@@ -38,6 +38,7 @@ from typing import Any, Optional
 logger = logging.getLogger("server")
 
 from mtool.column_detect import (
+    category_domain_rows,
     ConflictingPeriodMarkersError,
     describe_template,
     detect_column_map,
@@ -108,6 +109,7 @@ class GoldFact:
     period: str
     entity_scope: str
     value: float
+    dimension_key: str = ""
 
 
 @dataclass
@@ -363,7 +365,22 @@ def ingest_workbook(
                 if hint:
                     write["target_hint"] = {
                         "sheet": hint[0], "row": hint[1], "col": hint[2]}
-                semantic_writes.append(write)
+                sheet = write["sheet"]
+                if (sheet in {"Notes-Issuedcapital", "Notes-RelatedPartytran"}
+                        and not target.dimensions
+                        and category_domain_rows(cells_by_sheet.get(sheet, {}))):
+                    from concept_model.dimensions import numeric_category_catalog, dimension_key
+                    suffix = "ClassesOfShareCapitalAxis" if sheet == "Notes-Issuedcapital" else "CategoriesOfRelatedPartiesAxis"
+                    standard = target.template_id.split("-")[0]
+                    for axis, members in numeric_category_catalog(standard).items():
+                        if not axis.endswith(suffix):
+                            continue
+                        for member in members:
+                            dims = {axis: member}
+                            semantic_writes.append({**write, "dimension_key": dimension_key(dims),
+                                "semantic_address": {**write["semantic_address"], "dimensions": dims}})
+                else:
+                    semantic_writes.append(write)
 
     if semantic_writes:
         # A benchmark may intentionally contain only one statement sheet.
@@ -407,7 +424,7 @@ def ingest_workbook(
             semantic_uuids.add(write["concept_uuid"])
             report.facts.append(GoldFact(
                 write["concept_uuid"], write["period"],
-                write["entity_scope"], value * unit_scale))
+                write["entity_scope"], value * unit_scale, write.get("dimension_key", "")))
             target = target_by_uuid[write["concept_uuid"]]
             report.template_ids.add(target.template_id)
             report.matched_by_statement[target.statement_type] = (

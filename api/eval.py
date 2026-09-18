@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import server
 
@@ -43,6 +43,7 @@ class GoldFactPatch(BaseModel):
     period: str = "CY"
     entity_scope: str = "Company"
     value: Optional[float] = None
+    dimensions: dict[str, str] = Field(default_factory=dict)
 
 
 class BenchmarkFromRun(BaseModel):
@@ -541,6 +542,7 @@ async def patch_gold_fact_endpoint(benchmark_id: int, body: GoldFactPatch):
                 conn, benchmark_id, body.concept_uuid,
                 period=body.period, entity_scope=body.entity_scope,
                 value=body.value,
+                dimensions=body.dimensions,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))

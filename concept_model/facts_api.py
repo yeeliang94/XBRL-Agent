@@ -12,8 +12,8 @@ DB echoes the writer-side guarantees that gotcha #17 enforces today:
 * ``children_status`` is meaningless on a LEAF and refused there.
 
 Composite key on ``run_concept_facts`` is
-``(run_id, concept_uuid, period, entity_scope)``, so a Group filing's
-CY+Company and CY+Group rows live as distinct facts.
+``(run_id, concept_uuid, period, entity_scope, dimension_key)``, so periods,
+entity scopes and source-supported note categories remain distinct facts.
 
 Every successful write appends an audit row to ``concept_fact_events``
 so the reconciliation queue (step 1.10) and any future "show me what
@@ -28,6 +28,7 @@ from typing import Literal, Optional, Sequence
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
+from concept_model.dimensions import instance_key
 
 
 router = APIRouter()
@@ -69,6 +70,7 @@ class FactWrite(BaseModel):
     # #4); Literal makes a bad value a 422 at the API boundary.
     period: Literal["CY", "PY"] = "CY"
     entity_scope: Literal["Company", "Group"] = "Company"
+    dimensions: dict[str, str] = Field(default_factory=dict)
     value: Optional[float] = None
     value_status: str = Field(default="observed")
     children_status: Optional[str] = None
@@ -308,6 +310,10 @@ def apply_fact(
     # be POSTed an observed literal without aggregate_only the way a
     # COMPUTED row can't.
     concept, is_formula = validate_scalar_fact(conn, body)
+    try:
+        dims = instance_key(conn, body.concept_uuid, body.dimensions)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     # The "parent and child both written" detection lives here
     # so neither the extraction nor the correction agent has to
@@ -334,8 +340,8 @@ def apply_fact(
     before = conn.execute(
         "SELECT value, value_status, children_status, source, "
         "evidence FROM run_concept_facts WHERE run_id = ? "
-        "AND concept_uuid = ? AND period = ? AND entity_scope = ?",
-        (run_id, body.concept_uuid, body.period, body.entity_scope),
+        "AND concept_uuid = ? AND period = ? AND entity_scope = ? AND dimension_key = ?",
+        (run_id, body.concept_uuid, body.period, body.entity_scope, dims),
     ).fetchone()
 
     # Aggregate_only marker — the COMPUTED concept now carries
@@ -351,9 +357,9 @@ def apply_fact(
         INSERT INTO run_concept_facts(
             run_id, concept_uuid, period, entity_scope, value,
             value_status, children_status, source, evidence,
-            updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(run_id, concept_uuid, period, entity_scope)
+            updated_at, dimension_key
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(run_id, concept_uuid, period, entity_scope, dimension_key)
         DO UPDATE SET
             value = excluded.value,
             value_status = excluded.value_status,
@@ -365,7 +371,7 @@ def apply_fact(
         (
             run_id, body.concept_uuid, body.period,
             body.entity_scope, body.value, effective_value_status,
-            body.children_status, body.source, body.evidence, now,
+            body.children_status, body.source, body.evidence, now, dims,
         ),
     )
 
@@ -373,8 +379,8 @@ def apply_fact(
         """
         INSERT INTO concept_fact_events(
             run_id, concept_uuid, period, entity_scope,
-            actor, turn, ts, before_json, after_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            actor, turn, ts, before_json, after_json, dimension_key
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             run_id, body.concept_uuid, body.period,
@@ -385,7 +391,7 @@ def apply_fact(
                 "value": body.value,
                 "value_status": effective_value_status,
                 "children_status": body.children_status,
-            }),
+            }), dims,
         ),
     )
     if commit:
@@ -394,6 +400,7 @@ def apply_fact(
     return {
         "ok": True,
         "concept_uuid": body.concept_uuid,
+        "dimensions": json.loads(dims or "{}"),
         "kind": concept["kind"],
         "period": body.period,
         "entity_scope": body.entity_scope,
@@ -477,7 +484,7 @@ def read_run_facts(
     placeholders = ",".join("?" for _ in template_ids)
     sql = (
         "SELECT f.concept_uuid, f.period, f.entity_scope, f.value, "
-        "       f.value_status, f.children_status, f.source "
+        "       f.value_status, f.children_status, f.source, f.dimension_key "
         "FROM run_concept_facts f "
         "JOIN concept_nodes n ON n.concept_uuid = f.concept_uuid "
         "WHERE f.run_id = ? AND n.template_id IN (" + placeholders + ")"
@@ -489,11 +496,12 @@ def read_run_facts(
         params.extend(kinds)
     out: dict[tuple[str, str, str], dict] = {}
     for r in conn.execute(sql, params).fetchall():
-        out[(r[0], r[1], r[2])] = {
+        out[(r[0], r[1], r[2]) + ((r[7],) if r[7] else ())] = {
             "value": r[3],
             "value_status": r[4],
             "children_status": r[5],
             "source": r[6],
+            "dimensions": json.loads(r[7] or "{}"),
         }
     return out
 
@@ -530,6 +538,7 @@ class FactValuePatch(BaseModel):
     observation or a cascade recompute.
     """
 
+    dimensions: dict[str, str] = Field(default_factory=dict)
     value: Optional[float] = None
     period: Literal["CY", "PY"] = "CY"
     entity_scope: Literal["Company", "Group"] = "Company"
@@ -541,6 +550,7 @@ def _ancestor_facts(
     concept_uuid: str,
     period: str,
     entity_scope: str,
+    dims: str = "",
 ) -> list[dict]:
     """Return the current facts of every formula ancestor of a concept.
 
@@ -570,8 +580,8 @@ def _ancestor_facts(
             fact = conn.execute(
                 "SELECT value, value_status FROM run_concept_facts "
                 "WHERE run_id = ? AND concept_uuid = ? AND period = ? "
-                "AND entity_scope = ?",
-                (run_id, parent_uuid, period, entity_scope),
+                "AND entity_scope = ? AND dimension_key = ?",
+                (run_id, parent_uuid, period, entity_scope, dims),
             ).fetchone()
             if fact is not None:
                 out.append(
@@ -656,6 +666,7 @@ def patch_fact_value(
             concept_uuid=concept_uuid,
             period=body.period,
             entity_scope=body.entity_scope,
+            dimensions=body.dimensions,
             value=body.value,
             value_status=value_status,
             source="manual edit",
@@ -675,7 +686,8 @@ def patch_fact_value(
     conn = _open_conn(str(db_path))
     try:
         recomputed = _ancestor_facts(
-            conn, run_id, concept_uuid, body.period, body.entity_scope
+            conn, run_id, concept_uuid, body.period, body.entity_scope,
+            instance_key(conn, concept_uuid, body.dimensions)
         )
     finally:
         conn.close()
@@ -896,9 +908,9 @@ def _detect_parent_child_conflicts(
     placeholders = ",".join("?" for _ in descendants)
     observed = conn.execute(
         f"SELECT COUNT(*) FROM run_concept_facts WHERE run_id = ? "
-        f"AND period = ? AND entity_scope = ? AND value_status = 'observed' "
+        f"AND period = ? AND entity_scope = ? AND dimension_key = ? AND value_status = 'observed' "
         f"AND concept_uuid IN ({placeholders})",
-        (run_id, body.period, body.entity_scope, *descendants),
+        (run_id, body.period, body.entity_scope, instance_key(conn, body.concept_uuid, body.dimensions), *descendants),
     ).fetchone()[0]
     if not observed:
         return
@@ -907,13 +919,13 @@ def _detect_parent_child_conflicts(
         """
         INSERT INTO run_concept_conflicts(
             run_id, concept_uuid, period, entity_scope, kind, residual,
-            detail, status, created_at
-        ) VALUES (?, ?, ?, ?, 'parent_child_disagree', NULL, ?, 'open', ?)
+            detail, status, created_at, dimension_key
+        ) VALUES (?, ?, ?, ?, 'parent_child_disagree', NULL, ?, 'open', ?, ?)
         """,
         (
             run_id, body.concept_uuid, body.period, body.entity_scope,
             f"aggregate_only parent has {observed} observed descendant(s)",
-            now,
+            now, instance_key(conn, body.concept_uuid, body.dimensions),
         ),
     )
 
@@ -954,33 +966,33 @@ def _detect_aggregate_only_ancestor(
             seen.add(parent_uuid)
             agg = conn.execute(
                 "SELECT 1 FROM run_concept_facts WHERE run_id = ? "
-                "AND concept_uuid = ? AND period = ? AND entity_scope = ? "
+                "AND concept_uuid = ? AND period = ? AND entity_scope = ? AND dimension_key = ? "
                 "AND children_status = 'aggregate_only'",
-                (run_id, parent_uuid, body.period, body.entity_scope),
+                (run_id, parent_uuid, body.period, body.entity_scope, instance_key(conn, body.concept_uuid, body.dimensions)),
             ).fetchone()
             if agg is not None:
                 # Avoid duplicate open conflicts for the same ancestor.
                 existing = conn.execute(
                     "SELECT 1 FROM run_concept_conflicts WHERE run_id = ? "
-                    "AND concept_uuid = ? AND period = ? AND entity_scope = ? "
+                    "AND concept_uuid = ? AND period = ? AND entity_scope = ? AND dimension_key = ? "
                     "AND kind = 'parent_child_disagree' AND status = 'open'",
-                    (run_id, parent_uuid, body.period, body.entity_scope),
+                    (run_id, parent_uuid, body.period, body.entity_scope, instance_key(conn, body.concept_uuid, body.dimensions)),
                 ).fetchone()
                 if existing is None:
                     conn.execute(
                         """
                         INSERT INTO run_concept_conflicts(
                             run_id, concept_uuid, period, entity_scope,
-                            kind, residual, detail, status, created_at
+                            kind, residual, detail, status, created_at, dimension_key
                         ) VALUES (?, ?, ?, ?, 'parent_child_disagree',
-                                  NULL, ?, 'open', ?)
+                                  NULL, ?, 'open', ?, ?)
                         """,
                         (
                             run_id, parent_uuid, body.period,
                             body.entity_scope,
                             "aggregate_only ancestor has a newly-written "
                             "observed descendant",
-                            _now(),
+                            _now(), instance_key(conn, body.concept_uuid, body.dimensions),
                         ),
                     )
             frontier.append(parent_uuid)

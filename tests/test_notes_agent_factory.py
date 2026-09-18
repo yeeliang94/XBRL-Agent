@@ -57,6 +57,35 @@ def test_render_prompt_company_level_uses_col_d_for_evidence():
     assert "col d" in prompt_lower or "column d" in prompt_lower
 
 
+@pytest.mark.parametrize("standard", ["mfrs", "mpers"])
+@pytest.mark.parametrize("level", ["company", "group"])
+def test_related_party_prompt_requires_categories_without_empty_fallback(standard, level):
+    """Guard the live failure: valid amounts submitted without a column category."""
+    prompt = render_notes_prompt(
+        template_type=NotesTemplateType.RELATED_PARTY,
+        filing_level=level, filing_standard=standard, inventory=[],
+    )
+    flat = " ".join(prompt.split())
+    assert "Every payload containing `numeric_values` must also contain non-empty" in flat
+    assert "transactions AND outstanding balances, including zero values" in flat
+    assert "corporate-information note and any referenced balance note" in flat
+    assert "fellow subsidiary under common control uses Other related parties" in flat
+    assert "Emit separate payloads" in flat
+    assert "Do not use Other related parties or Total simply to fill a missing category" in flat
+    assert "Do not submit an unclassified numeric payload" in flat
+    assert "before write_notes and check every numeric payload before save_result" in flat
+    assert "retain its label and evidence with empty dimensions" not in flat
+
+
+def test_related_party_category_requirement_does_not_change_capital_fallback():
+    prompt = render_notes_prompt(
+        template_type=NotesTemplateType.ISSUED_CAPITAL,
+        filing_level="company", inventory=[],
+    )
+    assert "retain its label and evidence with empty dimensions" in prompt
+    assert "Every related-party numeric payload" not in prompt
+
+
 def _agent_tool_names(agent) -> set[str]:
     """Collect tool names from a PydanticAI agent without touching private
     attributes. Looks at a handful of known-stable locations and falls

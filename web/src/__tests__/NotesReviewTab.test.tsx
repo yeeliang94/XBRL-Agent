@@ -1785,6 +1785,45 @@ describe("NotesReviewTab — full-template projection (Phase 5)", () => {
     await waitFor(() => expect(blocked).toHaveBeenLastCalledWith(false));
   });
 
+  test("edits one numeric category without changing its neighbour", async () => {
+    const blocked = vi.fn();
+    const sheet = FULL_TEMPLATE.sheets[1];
+    const categories = ["Ordinary", "Preference"].map((label, index) => ({
+      label, dimension_key: label, dimensions: { ClassAxis: label },
+      values: { cy: index === 0 ? 100 : 20, py: null }, evidence: "Page 4",
+    }));
+    const projection = { sheets: [{ ...sheet, rows: [{ ...sheet.rows[0], categories }] }] };
+    const calls: RequestInit[] = [];
+    globalThis.fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      if (init) calls.push(init);
+      return new Response(JSON.stringify(init?.method === "PATCH" ? { recomputed: [] } : projection),
+        { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch;
+    render(<NotesReviewTab runId={7} onPreparationBlocked={blocked} />);
+    const rows = await screen.findAllByTestId("notes-numeric-row");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent("Ordinary");
+    expect(rows[1]).toHaveTextContent("Preference");
+    const input = within(rows[1]).getByTestId("numeric-input-6-cy");
+    fireEvent.change(input, { target: { value: "25" } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(calls.some(c => c.method === "PATCH")).toBe(true));
+    expect(JSON.parse(String(calls.find(c => c.method === "PATCH")?.body))).toMatchObject({
+      value: 25, period: "CY", entity_scope: "Company", dimensions: { ClassAxis: "Preference" },
+    });
+    expect(within(rows[0]).getByTestId("numeric-input-6-cy")).toHaveValue("100");
+    await waitFor(() => expect(blocked).toHaveBeenLastCalledWith(false));
+    const ordinary = within(rows[0]).getByTestId("numeric-input-6-cy");
+    fireEvent.change(ordinary, { target: { value: "110" } });
+    fireEvent.change(input, { target: { value: "30" } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(calls.filter(c => c.method === "PATCH")).toHaveLength(2));
+    await within(rows[1]).findByText("Saved");
+    expect(blocked).toHaveBeenLastCalledWith(true);
+    fireEvent.blur(ordinary);
+    await waitFor(() => expect(blocked).toHaveBeenLastCalledWith(false));
+  });
+
   test("visibly moves numeric row selection on click and keyboard focus", async () => {
     const numericSheet = FULL_TEMPLATE.sheets[1];
     mockFetchOnce({ sheets: [{ ...numericSheet, rows: [

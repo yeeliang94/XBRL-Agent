@@ -162,7 +162,7 @@ def export_run_to_xlsx(
         # row is an importer bug and raises.
         rows = conn.execute(
             """
-            SELECT f.concept_uuid, f.period, f.entity_scope,
+            SELECT f.concept_uuid, f.period, f.entity_scope, f.dimension_key,
                    f.value, f.value_status, f.children_status,
                    f.source, f.evidence,
                    n.canonical_label, n.kind, n.render_sheet,
@@ -196,7 +196,8 @@ def export_run_to_xlsx(
     )
     routed: list[dict[str, Any]] = []
     unmapped: list[tuple] = []
-    for r in rows:
+    from concept_model.dimensions import diagnostic_rows
+    for r in diagnostic_rows(rows):
         is_matrix = r["shape"] == "matrix"
         if not is_matrix and r["entity_scope"] not in applicable:
             # Out-of-scope fact for this filing level — no cell to land in.
