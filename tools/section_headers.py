@@ -99,7 +99,15 @@ def discover_section_headers(
         if is_total_fill or norm.startswith("total "):
             continue
 
-        if is_header_fill or norm in extra:
+        # A legacy keyword can also name a real subtotal (for example
+        # "Inventories" in OrderOfLiquidity). Its formula is stronger
+        # evidence than the label fallback. Keep explicit header styling
+        # authoritative, including any accidental formulas on true headers.
+        has_formula = any(
+            isinstance(value_cell.value, str) and value_cell.value.startswith("=")
+            for value_cell in ws[row][1:]
+        )
+        if is_header_fill or (norm in extra and not has_formula):
             headers.append(SectionHeader(row=row, label=label_raw, normalized=norm))
 
     return headers
