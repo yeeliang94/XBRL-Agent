@@ -1441,6 +1441,11 @@ later pass `save_result`; it remains an unresolved write until corrected.
 Pinned by
 `tests/test_extraction_canonical_projection.py::test_write_facts_rejects_canonical_invalid_value_before_workbook_save`.
 
+SOCF articulation checks both CY and presented PY, retains period-specific
+comparands, and passes those periods into reviewer traces. Blank comparative
+formula templates do not establish a presented period. Pinned by
+`tests/test_socf_articulation.py` and cross-check shadow-parity tests.
+
 ### 22. Agent workbook tools must serialise + atomic-save shared files
 
 pydantic-ai (1.77+, default `parallel_execution_mode`) runs batched

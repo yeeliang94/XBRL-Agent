@@ -54,6 +54,7 @@ class Comparand:
     role: str = "leaf"          # "lhs" | "rhs" | "leaf"
     statement: str = ""         # the StatementType value the sheet belongs to
     row: Optional[int] = None
+    period: str = "CY"
 
 
 @dataclass

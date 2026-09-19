@@ -1383,23 +1383,24 @@ def _trace_for_check(
     comparand coords) down to the children feeding the total, honouring the
     Group/Company scope tag in the check name. Returns rendered trace text, or
     "" when nothing decomposes (a bare leaf adds nothing the comparand line
-    didn't already say). CY only — the common failing dimension; the reviewer
-    can still trace PY explicitly via the tool.
+    didn't already say). Comparand periods retain comparative-year failures.
     """
     scope = _scope_from_check_name(check.get("name") or check.get("check_name")) or "Company"
-    coords: list[tuple[str, int]] = []
+    coords: list[tuple[str, int, str]] = []
     ts, tr = check.get("target_sheet"), check.get("target_row")
     if ts and tr:
-        coords.append((ts, int(tr)))
+        coords.append((ts, int(tr), "CY"))
     for cm in (check.get("comparands") or []):
         g = cm if isinstance(cm, dict) else dataclasses.asdict(cm)
         if g.get("sheet") and g.get("row"):
-            coords.append((g["sheet"], int(g["row"])))
+            coords.append((g["sheet"], int(g["row"]), g.get("period") or "CY"))
 
-    seen: set[tuple[str, int]] = set()
+    seen: set[tuple[str, int, str]] = set()
     blocks: list[str] = []
-    for sheet, row in coords:
-        key = (sheet, row)
+    # Comparative failures must not be crowded out by the four-cell packet cap.
+    coords.sort(key=lambda item: item[2] != "PY")
+    for sheet, row, period in coords:
+        key = (sheet, row, period)
         if key in seen:
             continue
         seen.add(key)
@@ -1408,7 +1409,7 @@ def _trace_for_check(
         try:
             trace = trace_cascade_source(
                 db_path, run_id, sheet=sheet, row=row,
-                entity_scope=scope, template_prefix=template_prefix,
+                entity_scope=scope, template_prefix=template_prefix, period=period,
             )
         except Exception:  # noqa: BLE001 — advisory
             continue
@@ -1524,7 +1525,7 @@ def _format_review_packet(
                     where += f" row {g.get('row')}"
                 lines.append(_prompt_data(
                     f"    · [{g.get('role')}] {g.get('label')} "
-                    f"({g.get('statement') or where}) = {g.get('value')} "
+                    f"({g.get('statement') or where}, {g.get('period') or 'CY'}) = {g.get('value')} "
                     f"@ {where}"
                 ))
             # Phase 4: inline the pre-computed cascade trace for this check's

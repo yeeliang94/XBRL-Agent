@@ -24,6 +24,7 @@ the fact path is default-on (``XBRL_FACT_BASED_CHECKS``).
 from __future__ import annotations
 
 from typing import Dict, Optional
+from dataclasses import replace
 
 from statement_types import StatementType
 from cross_checks.framework import CrossCheckResult, Comparand
@@ -114,8 +115,8 @@ class SOCFArticulationCheck:
             f"net change ({fmt_amount(net_change)}) = {fmt_amount(expected)}, diff={fmt_diff(diff)}"
         )
 
-    def run(self, workbook_paths: Dict[StatementType, str], tolerance: float,
-            filing_level: str = "company", filing_standard: str = "mfrs") -> CrossCheckResult:
+    def _run_period(self, workbook_paths: Dict[StatementType, str], tolerance: float,
+            filing_level: str = "company", filing_standard: str = "mfrs", period: str = "CY") -> CrossCheckResult:
         wb = open_workbook(workbook_paths[StatementType.SOCF])
         ws = find_sheet(wb, "SOCF-Indirect", "SOCF-Direct")
         if ws is None:
@@ -127,6 +128,12 @@ class SOCFArticulationCheck:
         sheet = ws.title
 
         def _read(col: int):
+            if period == "PY" and not any(
+                isinstance(ws.cell(row, col).value, (int, float))
+                and not isinstance(ws.cell(row, col).value, bool)
+                for row in range(2, ws.max_row + 1)
+            ):
+                return None, None, None, None
             beginning = find_value_by_label(
                 ws, "cash and cash equivalents at beginning of period",
                 col=col, wb=wb)
@@ -137,7 +144,7 @@ class SOCFArticulationCheck:
             return beginning, net_change, ending, nc_row
 
         primary_label = filing_level_prefix(filing_level, with_period=False)
-        beginning, net_change, ending, nc_row = _read(2)
+        beginning, net_change, ending, nc_row = _read(2 if period == "CY" else 3)
         passed, part = self._evaluate(
             beginning, net_change, ending, tolerance, primary_label)
         parts = [part]
@@ -145,7 +152,7 @@ class SOCFArticulationCheck:
         co_passed = True
         co_vals = (None, None, None)
         if filing_level == "group":
-            co_beginning, co_net_change, co_ending, _ = _read(4)
+            co_beginning, co_net_change, co_ending, _ = _read(4 if period == "CY" else 5)
             co_vals = (co_beginning, co_net_change, co_ending)
             co_passed, co_part = self._evaluate(
                 co_beginning, co_net_change, co_ending, tolerance, "Company")
@@ -193,7 +200,7 @@ class SOCFArticulationCheck:
             comparands=comparands,
         )
 
-    def run_facts(self, ctx, tolerance: float) -> CrossCheckResult:
+    def _run_facts_period(self, ctx, tolerance: float, period: str = "CY") -> CrossCheckResult:
         """Fact-based twin of :meth:`run` (item 32). Reads the opening/closing
         cash leaves and the COMPUTED net-change subtotal from
         ``run_concept_facts`` by uuid (the cascade persists COMPUTED parents,
@@ -208,12 +215,12 @@ class SOCFArticulationCheck:
             beginning = read_labelled_value(
                 ctx, StatementType.SOCF,
                 "cash and cash equivalents at beginning of period",
-                "CY", entity_scope)
+                period, entity_scope)
             ending = read_labelled_value(
                 ctx, StatementType.SOCF,
                 "cash and cash equivalents at end of period",
-                "CY", entity_scope)
-            net_change = read_socf_net_change(ctx, "CY", entity_scope)
+                period, entity_scope)
+            net_change = read_socf_net_change(ctx, period, entity_scope)
             return beginning, ending, net_change
 
         primary_label = filing_level_prefix(ctx.filing_level, with_period=False)
@@ -269,3 +276,30 @@ class SOCFArticulationCheck:
             target_row=net_change.row,
             comparands=comparands,
         )
+
+
+    def _combine_periods(self, current: CrossCheckResult, previous: CrossCheckResult) -> CrossCheckResult:
+        # Blank comparative templates may compute zero subtotals. Require PY
+        # when cash leaves or a nonzero movement show it was presented.
+        presented = any(c.value is not None and (
+            "Net increase" not in c.label or c.value != 0
+        ) for c in previous.comparands)
+        if not presented:
+            return current
+        selected = current if current.status != "passed" else previous
+        return replace(selected,
+            message=f"CY: {current.message}; PY: {previous.message}",
+            comparands=[replace(c, period=period)
+                        for period, result in (("CY", current), ("PY", previous))
+                        for c in result.comparands])
+
+    def run(self, workbook_paths: Dict[StatementType, str], tolerance: float,
+            filing_level: str = "company", filing_standard: str = "mfrs") -> CrossCheckResult:
+        return self._combine_periods(
+            self._run_period(workbook_paths, tolerance, filing_level, filing_standard, "CY"),
+            self._run_period(workbook_paths, tolerance, filing_level, filing_standard, "PY"))
+
+    def run_facts(self, ctx, tolerance: float) -> CrossCheckResult:
+        return self._combine_periods(
+            self._run_facts_period(ctx, tolerance, "CY"),
+            self._run_facts_period(ctx, tolerance, "PY"))
