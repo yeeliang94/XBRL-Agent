@@ -177,12 +177,12 @@ def _descendant_leaf(conn, uuid):
     return None
 
 
-def _seed(conn, run_id, uuid, value):
+def _seed(conn, run_id, uuid, value, period="CY"):
     conn.execute(
         "INSERT OR REPLACE INTO run_concept_facts(run_id, concept_uuid, period, "
         "entity_scope, value, value_status, source, updated_at) "
-        "VALUES (?, ?, 'CY', 'Company', ?, 'observed', 'pdf', '2026-06-21Z')",
-        (run_id, uuid, value),
+        "VALUES (?, ?, ?, 'Company', ?, 'observed', 'pdf', '2026-06-21Z')",
+        (run_id, uuid, period, value),
     )
 
 
@@ -197,7 +197,8 @@ def _fact_value(conn, run_id, uuid):
 
 @pytest.mark.parametrize("standard", ["mfrs", "mpers"])
 @pytest.mark.parametrize("articulates", [True, False])
-def test_socf_articulation_crosscheck_e2e(tmp_path, standard, articulates):
+@pytest.mark.parametrize("comparative_error", [False, True])
+def test_socf_articulation_crosscheck_e2e(tmp_path, standard, articulates, comparative_error):
     """On the REAL template (both standards): a non-articulating SOCF FAILS the
     new cross-check and an articulating one PASSES — and the xlsx + fact paths
     agree (parity). This is the deterministic catch that fires the reviewer."""
@@ -239,6 +240,12 @@ def test_socf_articulation_crosscheck_e2e(tmp_path, standard, articulates):
     closing = 1000.0 + nc + (0.0 if articulates else 50.0)
     _seed(conn, run_id, ending, closing)
     conn.commit()
+    if comparative_error:
+        _seed(conn, run_id, beginning, 672208, period="PY")
+        _seed(conn, run_id, op_leaf, 2372650, period="PY")
+        _seed(conn, run_id, ending, 461245, period="PY")
+        conn.commit()
+        recompute_after_turn(str(db), run_id)
 
     ctx = FactsContext(
         conn=conn, run_id=run_id,
@@ -255,10 +262,13 @@ def test_socf_articulation_crosscheck_e2e(tmp_path, standard, articulates):
         filing_level="company", filing_standard=standard)
     conn.close()
 
-    expected = "passed" if articulates else "failed"
+    expected = "passed" if articulates and not comparative_error else "failed"
     assert facts.status == expected, facts.message
     assert xlsx.status == expected, xlsx.message
     assert_cross_check_parity(xlsx, facts)
+    if comparative_error:
+        assert "PY:" in facts.message
+        assert any(c.period == "PY" for c in facts.comparands)
 
 
 def test_socf_articulation_registered_in_default_checks():
