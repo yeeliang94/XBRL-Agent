@@ -755,6 +755,9 @@ def test_upload_endpoint_writes_original_filename_sidecar(tmp_path, monkeypatch)
     out = tmp_path / "output"
     out.mkdir()
     monkeypatch.setattr(server, "OUTPUT_DIR", out)
+    monkeypatch.setattr(server, "AUDIT_DB_PATH", out / "xbrl_agent.db")
+    from db.schema import init_db
+    init_db(server.AUDIT_DB_PATH)
     client = TestClient(server.app)
 
     pdf_bytes = b"%PDF-1.4\n%fake content\n"
