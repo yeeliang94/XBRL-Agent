@@ -1107,3 +1107,60 @@ def test_partition_validates_merged_operations():
     assert not rejected["cells"]
     assert accepted["cells"] == [{**good, "operations": good["operations"] * 2}]
     assert apply_sheet_patch({112: _TABLE_HTML}, accepted).changed_rows == 1
+
+
+def test_spacing_patch_preserves_and_styles_nested_source_heading_levels():
+    from bs4 import BeautifulSoup
+    html = "<h2>2. Policies</h2><h4>2.1 <em>Revenue</em></h4><p>Body</p>"
+    patch = {"cells": [{"row": 1, "operations": [
+        {"target": {"blocks": "all"}, "style": {"space_after": "8px"}},
+    ]}]}
+    out = apply_sheet_patch({1: html}, patch).rows[1]
+    soup = BeautifulSoup(out, "html.parser")
+    assert soup.h2.get_text() == "2. Policies"
+    assert soup.h4.em.get_text() == "Revenue"
+    assert all("margin-bottom: 8px" in el["style"] for el in [soup.h2, soup.h4, soup.p])
+
+
+def test_format_verification_rejects_heading_and_paragraph_flattening():
+    from notes.format_verify import verify_format_only
+    assert not verify_format_only("<h2>Policy</h2><p>Text</p>", "<p>Policy</p><p>Text</p>").ok
+    assert not verify_format_only("<p>First</p><p>second</p>", "<p>First second</p>").ok
+    assert not verify_format_only("<p><strong>Important</strong></p>", "<p>Important</p>").ok
+
+
+@pytest.mark.parametrize("separator", ["\u00a0", "\u202f", "\u2009"])
+def test_format_verification_preserves_meaningful_numeric_spacing(separator):
+    from notes.format_verify import verify_format_only
+    source = f"<p>Amount: 1{separator}000</p>"
+    assert not verify_format_only(source, "<p>Amount: 1 000</p>").ok
+    assert not verify_format_only(source, "<p>Amount: 1000</p>").ok
+    assert verify_format_only(source, f'<p style="margin-top: 6px">Amount: 1{separator}000</p>').ok
+
+
+def test_format_verification_accepts_equivalent_nbsp_entity_representation():
+    from notes.format_verify import verify_format_only
+    assert verify_format_only("<p>1&nbsp;000</p>", "<p>1\u00a0000</p>").ok
+    assert not verify_format_only("<p>1 000</p>", "<p>1000</p>").ok
+
+
+@pytest.mark.parametrize(("before", "after"), [
+    ("<p>First. Second.</p><p>Third.</p>", "<p>First.</p><p>Second. Third.</p>"),
+    ("<h3>Revenue recognition</h3><p>Policy details.</p>",
+     "<h3>Revenue</h3><p>recognition Policy details.</p>"),
+    ("<p>First<br>Second</p>", "<p>First Second</p>"),
+    ("<p>First<br>Second Third</p>", "<p>First Second<br>Third</p>"),
+    ("<table><tr><td>A | B</td><td>C</td></tr></table>",
+     "<table><tr><td>A</td><td>B | C</td></tr></table>"),
+])
+def test_format_verification_binds_text_to_source_structure(before, after):
+    from notes.format_verify import verify_format_only
+    assert not verify_format_only(before, after).ok
+
+
+def test_format_verification_allows_wrappers_and_added_emphasis():
+    from notes.format_verify import verify_format_only
+    before = "<h3>Revenue</h3><p>Recognise <em>earned</em> revenue.</p>"
+    after = ('<div><h3 style="margin-top: 8px">Revenue</h3>\n'
+             '<p><strong>Recognise <span><em>earned</em></span> revenue.</strong></p></div>')
+    assert verify_format_only(before, after).ok

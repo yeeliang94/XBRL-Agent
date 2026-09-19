@@ -817,6 +817,14 @@ Full walkthrough: [docs/MPERS.md](docs/MPERS.md).
 
 ### 16. Notes cells are HTML; Excel download regenerates from the DB
 
+Source-backed disclosures retain semantic h1–h6 headings, list hierarchy and
+meaningful emphasis through sanitization, rendering, review, clipboard and mTool
+decoration. Formatting must preserve text and table geometry. Native notes
+insertion verifies the complete expected XHTML payload, not a substring. Pinned
+by `tests/test_notes_format_patch.py`, `tests/test_notes_source_render.py`,
+`tests/test_mtool_notes_exporter.py`, `tests/test_mtool_offline_fill.py`,
+`tests/test_mtool_notes_decorate.py` and the clipboard/editor frontend tests.
+
 User draft downloads now use the mTool preparation path described in invariant
 28. Notes overlays below remain internal canonical-workbook/diagnostic helpers;
 the public draft is a filled copy of the selected mTool template, with native

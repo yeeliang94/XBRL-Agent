@@ -499,7 +499,7 @@ export function decorateHtmlForClipboard(
         ` margin-top: 0; margin-right: 0; margin-bottom: ${opts.paragraphSpacingPx}px;`,
     );
   }
-  for (const h of Array.from(tmp.querySelectorAll("h3"))) {
+  for (const h of Array.from(tmp.querySelectorAll("h1, h2, h3, h4, h5, h6"))) {
     _mergeBlockStyle(
       h,
       headingStyle,

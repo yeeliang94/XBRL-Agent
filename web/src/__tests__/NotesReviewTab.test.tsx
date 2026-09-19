@@ -2910,3 +2910,21 @@ describe("NotesReviewTab — AI formatter", () => {
     });
   });
 });
+
+test("policy heading hierarchy and nested emphasis survive mounting the real editor", async () => {
+  mockFetchOnce({ sheets: [{ sheet: "Notes-CI", rows: [{
+    ...SAMPLE.sheets[0].rows[0],
+    html: "<h2>Material policies</h2><h4>Revenue</h4><ul><li>Services<ul><li><em>Earned</em> and <u>complete</u></li></ul></li></ul>",
+  }] }] });
+  const { container } = render(<NotesReviewTab runId={42} />);
+  await screen.findByText("Material policies");
+  selectFirstField();
+  fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+  await waitFor(() => {
+    const editor = container.querySelector("[contenteditable='true']")!;
+    expect(editor.querySelector("h2")?.textContent).toBe("Material policies");
+    expect(editor.querySelector("h4")?.textContent).toBe("Revenue");
+    expect(editor.querySelector("ul li ul li em")?.textContent).toBe("Earned");
+    expect(editor.querySelector("ul li ul li u")?.textContent).toBe("complete");
+  });
+});

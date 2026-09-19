@@ -152,3 +152,7 @@ agent inputs. This guide is self-contained without the gitignored evidence folde
 - [Extraction HTML instructions](../prompts/_notes_base.md) and [sanitizer](../notes/html_sanitize.py)
 - [Notes exporter](../mtool/notes_exporter.py), [backend decorator](../mtool/notes_decorate.py) and [sole patcher](../mtool/offline_fill.py)
 - [Backend border tests](../tests/test_mtool_notes_decorate.py), [exporter tests](../tests/test_mtool_notes_exporter.py) and [clipboard tests](../web/src/__tests__/clipboard.test.ts)
+
+Source-backed disclosures retain original semantic heading levels (h1–h6), list
+hierarchy and meaningful emphasis. MBRS formatting changes presentation only.
+Native notes insertion verifies the complete expected XHTML payload after writing.

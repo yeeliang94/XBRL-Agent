@@ -200,3 +200,21 @@ def test_the_render_hash_is_a_plain_content_digest(monkeypatch):
     first = sr.render_sha256("<p>x</p>")
     monkeypatch.setattr(sr, "RENDER_VERSION", "src-render-99")
     assert sr.render_sha256("<p>x</p>") == first
+
+
+def test_nested_policy_heading_levels_and_emphasis_survive_source_render():
+    blocks = [
+        _b(0, "<h2>2. Material accounting policies</h2>", kind="heading"),
+        _b(1, "<h4>2.1 Revenue</h4>", kind="heading"),
+        _b(2, "<p>Recognise <strong>only</strong> when <em>earned</em>.</p>"),
+        _b(3, "<ul><li>Service<ul><li><u>Completion</u></li></ul></li></ul>", kind="list"),
+    ]
+    result = sr.render_blocks(blocks, [block.block_id for block in blocks])
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(result.html, "html.parser")
+    assert soup.h2.get_text() == "2. Material accounting policies"
+    assert soup.h4.get_text() == "2.1 Revenue"
+    assert soup.strong.get_text() == "only"
+    assert soup.em.get_text() == "earned"
+    assert soup.select_one("ul li ul li u").get_text() == "Completion"
+    assert not any("disallowed" in warning for warning in result.warnings)

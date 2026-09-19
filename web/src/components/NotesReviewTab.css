@@ -56,7 +56,7 @@
   margin: 2px 0;
 }
 
-.notes-review-tab .tiptap h3 {
+.notes-review-tab .tiptap :is(h1, h2, h3, h4, h5, h6) {
   /* Heading size/weight are theme-driven (--nt-heading-*) so the editor
      preview matches the clipboard paste + mTool fill; the fallbacks are the
      editor's historic values. */

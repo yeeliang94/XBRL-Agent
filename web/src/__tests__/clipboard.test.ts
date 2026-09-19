@@ -967,3 +967,13 @@ describe("white fill neighbour suppression", () => {
     expect(innerTd).not.toContain("#ffffff");
   });
 });
+
+test.each([1, 2, 3, 4, 5, 6])("source h%i retains its level and emphasis when copied", (level) => {
+  const out = decorateHtmlForClipboard(`<h${level}>Policy <em>detail</em></h${level}>`, {
+    ...DEFAULT_FORMAT_OPTIONS, headingSizePt: 14, headingWeight: 700,
+  });
+  const heading = new DOMParser().parseFromString(out, "text/html").querySelector(`h${level}`)!;
+  expect(heading.querySelector("em")?.textContent).toBe("detail");
+  expect(heading.getAttribute("style")).toContain("font-size: 14pt");
+  expect(heading.getAttribute("style")).toContain("font-weight: 700");
+});

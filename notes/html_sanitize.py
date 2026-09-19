@@ -62,7 +62,7 @@ from bs4 import BeautifulSoup, Tag
 ALLOWED_TAGS: frozenset[str] = frozenset({
     "p", "br", "strong", "em", "ul", "ol", "li",
     "table", "thead", "tbody", "tr", "th", "td",
-    "h3",
+    "h1", "h2", "h3", "h4", "h5", "h6",
     # v2 inline marks (human-applied via the editor toolbar):
     "u", "s", "sup", "sub", "mark", "span",
     # v2 column widths: TipTap's resizable table emits a standard
@@ -313,7 +313,7 @@ _STYLE_PROPS_BY_TAG: dict[str, frozenset[str]] = {
     "span": frozenset({"color"}),
     "mark": frozenset({"background-color", "color"}),
     "p": _BLOCK_STYLE_PROPS,
-    "h3": _BLOCK_STYLE_PROPS,
+    **{tag: _BLOCK_STYLE_PROPS for tag in ("h1", "h2", "h3", "h4", "h5", "h6")},
     "li": _BLOCK_STYLE_PROPS,
 }
 
@@ -366,7 +366,7 @@ _DECOMPOSE_TAGS: frozenset[str] = frozenset({
 # Any block-level allowed tag — if the payload already contains one,
 # it does not need to be wrapped in `<p>`.
 _BLOCK_ALLOWED: frozenset[str] = frozenset({
-    "p", "ul", "ol", "table", "h3",
+    "p", "ul", "ol", "table", "h1", "h2", "h3", "h4", "h5", "h6",
 })
 
 

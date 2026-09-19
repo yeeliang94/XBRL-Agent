@@ -16,7 +16,9 @@ from notes.html_to_text import html_to_excel_text
 
 
 _NUM_RE = re.compile(r"(?<![A-Za-z])[-(]?\d[\d,]*(?:\.\d+)?\)?")
-_WS_RE = re.compile(r"\s+")
+# Collapse only HTML-collapsible ASCII whitespace. Unicode no-break and
+# thin spaces are source characters, including numeric group separators.
+_WS_RE = re.compile(r"[ \t\r\n\f]+")
 
 
 @dataclass(frozen=True)
@@ -72,6 +74,32 @@ def _table_signature(html: str) -> list[list[list[tuple[int, int]]]]:
     return out
 
 
+def _format_structure(html: str) -> tuple:
+    """Bind text to semantic nodes while allowing presentation wrappers.
+
+    Unwrap before comparing so adding emphasis cannot split one text node
+    into several. Source emphasis preservation is checked separately.
+    """
+    soup = BeautifulSoup(html or "", "html.parser")
+    for node in soup.find_all(["div", "span", "strong", "b", "em", "i", "u"]):
+        node.unwrap()
+    soup.smooth()
+
+    def normalize(items):
+        out = []
+        for item in items:
+            if item[0] == "text":
+                text = _WS_RE.sub(" ", item[1]).strip(" \t\r\n\f")
+                if text:
+                    out.append(("text", text))
+            else:
+                name, attrs, children = item
+                out.append((name, attrs, normalize(children)))
+        return tuple(out)
+
+    return normalize(content_structure(str(soup)))
+
+
 def verify_format_only(before_html: str, after_html: str) -> VerificationResult:
     before_text = _normal_text(before_html)
     after_text = _normal_text(after_html)
@@ -92,4 +120,32 @@ def verify_format_only(before_html: str, after_html: str) -> VerificationResult:
         return VerificationResult(
             False, "table structure changed", before_hash, after_hash,
         )
+    if _format_structure(before_html) != _format_structure(after_html):
+        return VerificationResult(False, "heading, paragraph, list or emphasis structure changed", before_hash, after_hash)
+    from collections import Counter
+    def emphasis(html):
+        soup = BeautifulSoup(html or "", "html.parser")
+        return Counter(({"b": "strong", "i": "em"}.get(node.name, node.name), node.get_text())
+                       for node in soup.find_all(["strong", "b", "em", "i", "u"]))
+    if emphasis(before_html) - emphasis(after_html):
+        return VerificationResult(False, "source emphasis was removed", before_hash, after_hash)
     return VerificationResult(True, "", before_hash, after_hash)
+
+def content_structure(html: str) -> tuple:
+    """Semantic content signature; ignores destination style and wrapper divs."""
+    from bs4 import BeautifulSoup, NavigableString, Comment
+
+    def walk(node):
+        if isinstance(node, Comment):
+            return ()
+        if isinstance(node, NavigableString):
+            return (("text", str(node)),)
+        children = tuple(item for child in node.children for item in walk(child))
+        if node.name in ("[document]", "div", "span"):
+            return children
+        attrs = tuple((key, str(node.get(key, ""))) for key in
+                      ("rowspan", "colspan", "start", "value") if node.has_attr(key))
+        name = {"b": "strong", "i": "em"}.get(node.name, node.name)
+        return ((name, attrs, children),)
+
+    return walk(BeautifulSoup(html, "html.parser"))
