@@ -1,4 +1,24 @@
+export interface PreparationSnapshot {
+  attempt_id: string;
+  status: "not_started" | "queued" | "working" | "retrying" | "succeeded" | "failed" | "cancelled";
+  stage: string;
+  message: string;
+  completed?: number;
+  total?: number;
+  captured?: number;
+  /** Independent assessments completed, including best-effort source readings. */
+  checked?: number;
+  verified?: number;
+  started_at?: number;
+  updated_at?: number;
+  prepared?: boolean;
+  infopack?: Record<string, unknown>;
+  run_id?: number | null;
+  error?: string | null;
+}
+
 export interface UploadResponse {
+  preparation?: PreparationSnapshot;
   session_id: string;
   filename: string;
   // PLAN-persistent-draft-uploads.md (Phase A): the upload endpoint
@@ -274,6 +294,11 @@ export type PipelineStage =
   | "done";
 
 export interface PipelineStageData {
+  status?: PreparationSnapshot["status"];
+  captured?: number;
+  /** Independent assessments completed, including best-effort source readings. */
+  checked?: number;
+  verified?: number;
   stage: PipelineStage;
   /** Server-side timestamp (epoch seconds). */
   started_at: number;
@@ -375,6 +400,7 @@ export interface CompleteData {
   total_tokens: number;
   cost: number;
   statementsCompleted?: string[];
+  statementsSkipped?: StatementSkipped[];
   // Actionable failure reason carried over from RunCompleteData.message
   // when the backend rejects a run before any agent starts (unknown
   // statement, invalid infopack, model setup failure, …). Null on success.
@@ -448,6 +474,7 @@ export interface RunCompleteData {
   cross_checks_partial?: boolean;
   statements_completed?: string[];
   statements_failed?: string[];
+  statements_skipped?: StatementSkipped[];
   // Honest-completion flag (peer-review F1): statements that finalised with an
   // acknowledged, audited gap. They are ALSO in statements_completed (the data
   // is saved); this array tells the UI to badge them "needs review".
@@ -465,6 +492,14 @@ export interface RunCompleteData {
   open_conflicts?: number;
   // Audit run id emitted on the aggregate completion event.
   run_id?: number;
+}
+
+/** A requested face statement that legitimately had no template to fill. */
+export interface StatementSkipped {
+  statement: string;
+  variant: string;
+  reason_code: string;
+  message: string;
 }
 
 export interface ToolTimelineEntry {
@@ -709,7 +744,7 @@ export interface RunConfigPayload {
 
 // --- Phase 10: Per-agent state for tab-based UI ---
 
-export type AgentTabStatus = "pending" | "running" | "complete" | "failed" | "cancelled" | "aborting";
+export type AgentTabStatus = "pending" | "running" | "complete" | "failed" | "cancelled" | "aborting" | "skipped";
 
 /**
  * Per-agent streaming state — one per agent in a multi-agent run.
@@ -733,6 +768,7 @@ export interface AgentState {
   // finalised with an acknowledged, audited gap. status stays "complete"
   // (the data is saved) but the UI badges it "needs review".
   flag?: string | null;
+  skip?: StatementSkipped;
   // Phase 5.2 / peer-review [M1]: when the backend emits a Sheet-12
   // sub-agent `started` event it carries structured batch metadata.
   // We aggregate the ranges across all sub-agents so the Notes-12 tab

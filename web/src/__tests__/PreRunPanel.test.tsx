@@ -1649,3 +1649,78 @@ describe("notes inventory editor", () => {
     }
   });
 });
+
+describe("Upload-owned preparation", () => {
+  test("automatic inventory preserves a saved variant when a draft is restored", async () => {
+    const onRun = vi.fn();
+    const onConfigChange = vi.fn();
+    render(<PreRunPanel sessionId="abc" getSettings={vi.fn().mockResolvedValue(mockSettings)} onRun={onRun}
+      onConfigChange={onConfigChange} initialConfig={{ variants: { SOFP: "CuNonCu" } }}
+      preparation={{ attempt_id: "a1", status: "succeeded", stage: "ready", message: "Ready", infopack: {
+        statements: { SOPL: { variant_suggestion: "Function", confidence: "HIGH" } }, notes_inventory: [],
+      } }} />);
+    await waitFor(() => expect(onConfigChange).toHaveBeenCalled());
+    expect(onConfigChange.mock.lastCall?.[0].variants.SOFP).toBe("CuNonCu");
+    startExtraction();
+    expect(onRun.mock.calls[0][0].variants).toMatchObject({ SOFP: "CuNonCu", SOPL: "Function" });
+  });
+
+  test.each(["CuNonCu", ""])("automatic inventory preserves a manually selected format '%s'", async (variant) => {
+    const onRun = vi.fn();
+    const props = { sessionId: "abc", getSettings: vi.fn().mockResolvedValue(mockSettings), onRun };
+    const { rerender } = render(<PreRunPanel {...props}
+      preparation={{ attempt_id: "a1", status: "working", stage: "capture", message: "Reading" }} />);
+    await openAdvanced();
+    const select = screen.getAllByRole<HTMLSelectElement>("combobox")
+      .find((element) => element.querySelector("option[value='CuNonCu']"))!;
+    fireEvent.change(select, { target: { value: "CuNonCu" } });
+    fireEvent.change(select, { target: { value: variant } });
+    rerender(<PreRunPanel {...props}
+      preparation={{ attempt_id: "a1", status: "succeeded", stage: "ready", message: "Ready", infopack: {
+        statements: { SOFP: { variant_suggestion: "OrderOfLiquidity", confidence: "HIGH" } }, notes_inventory: [],
+      } }} />);
+    startExtraction();
+    expect(onRun.mock.calls[0][0].variants.SOFP).toBe(variant || undefined);
+    expect(onRun.mock.calls[0][0].infopack).not.toBeNull();
+  });
+
+  test("historical uploads can still preview their document scan", async () => {
+    const payload = { success: true, infopack: { statements: { SOFP: { variant_suggestion: "CuNonCu", confidence: "HIGH" } } } };
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response(
+      `event: scout_complete\ndata: ${JSON.stringify(payload)}\n\n`,
+      { headers: { "Content-Type": "text/event-stream" } },
+    ));
+    try {
+      const onRun = vi.fn();
+      render(<PreRunPanel sessionId="abc" getSettings={vi.fn().mockResolvedValue(mockSettings)} onRun={onRun}
+        preparation={{ attempt_id: "", status: "not_started", stage: "pending", message: "Not started" }} />);
+      await openAdvanced();
+      fireEvent.click(screen.getByRole("button", { name: /preview scan/i }));
+      await waitFor(() => expect(screen.getAllByRole<HTMLSelectElement>("combobox")
+        .find((element) => element.querySelector("option[value='CuNonCu']"))).toHaveValue("CuNonCu"));
+      startExtraction();
+      expect(onRun.mock.calls[0][0].variants.SOFP).toBe("CuNonCu");
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  test.each(["failed", "cancelled"] as const)("%s preparation blocks extraction without duplicate error notices", async (status) => {
+    render(<PreRunPanel sessionId="abc" getSettings={vi.fn().mockResolvedValue(mockSettings)} onRun={vi.fn()}
+      preparation={{ attempt_id: "a1", status, stage: "capture", message: "Preparation stopped" }} />);
+    expect(await screen.findByRole("button", { name: "Start extraction" })).toBeDisabled();
+    expect(screen.queryByText("Preparation stopped")).toBeNull();
+  });
+  test("uses the automatic inventory and removes manual preview controls", async () => {
+    const onRun = vi.fn();
+    render(<PreRunPanel sessionId="abc" getSettings={vi.fn().mockResolvedValue(mockSettings)} onRun={onRun}
+      preparation={{ attempt_id: "a1", status: "succeeded", stage: "ready", message: "Ready", infopack: {
+        detected_standard: "mpers", statements: { SOFP: { variant_suggestion: "Default", confidence: "HIGH" } }, notes_inventory: [],
+      } }} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "MPERS" })).toHaveAttribute("aria-pressed", "true"));
+    await openAdvanced();
+    expect(screen.queryByRole("button", { name: /preview scan/i })).toBeNull();
+    startExtraction();
+    expect(onRun.mock.calls[0][0].infopack.detected_standard).toBe("mpers");
+  });
+});

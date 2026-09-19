@@ -277,3 +277,84 @@ def test_previews_in_the_manifest_are_short(tmp_path):
 ])
 def test_every_tool_degrades_without_a_generation(impl, args):
     assert "No frozen source reading" in impl(None, None, *args)
+
+
+def test_prepared_source_rejects_prose_fallback_even_without_numbered_notes(tmp_path, seeded):
+    import asyncio
+    from types import SimpleNamespace
+    from pydantic_ai.models.test import TestModel
+
+    db, run_id, gen = seeded
+    with repo.db_session(db) as conn:
+        conn.execute("UPDATE notes_source_generations SET input_kind='prepared_document' WHERE id=?", (gen,))
+        conn.execute("UPDATE notes_source_notes SET top_note_num='' WHERE generation_id=?", (gen,))
+        conn.commit()
+    agent, deps = notes_agent.create_notes_agent(
+        template_type=NotesTemplateType.CORP_INFO, pdf_path="/tmp/no.pdf",
+        inventory=[], filing_level="company", model=TestModel(), output_dir=str(tmp_path),
+        run_id=run_id, db_path=db, source_generation_id=gen)
+    assert deps.prepared_source_required
+    assert "write_note_from_source" in _tool_names(agent)
+    assert "write_notes" not in _tool_names(agent)
+    assert "report_source_gap" in _tool_names(agent)
+    prompt = notes_agent.render_notes_prompt(NotesTemplateType.CORP_INFO, "company", [],
+        source_blocks_available=True, prepared_source_required=True)
+    assert "All writes go through" not in prompt
+    assert "copy its markup by hand" not in prompt
+    assert "report_source_gap" in prompt
+
+
+def test_manifest_accepts_stable_identity_for_unnumbered_note(seeded):
+    db, _, gen = seeded
+    with repo.db_session(db) as conn:
+        conn.execute("UPDATE notes_source_notes SET top_note_num='' WHERE generation_id=? AND source_note_id='n5'", (gen,))
+        conn.commit()
+    assert "b1" in notes_agent._read_source_manifest_impl(db, gen, "n5")
+    assert "b2" in notes_agent._read_source_manifest_impl(db, gen, "n5")
+
+
+@pytest.mark.asyncio
+async def test_prepared_capture_gap_is_persisted_without_false_coverage(tmp_path, seeded, monkeypatch):
+    from types import SimpleNamespace
+    from pydantic_ai.models.test import TestModel
+    db, run_id, gen = seeded
+    with repo.db_session(db) as conn:
+        conn.execute("UPDATE notes_source_generations SET input_kind='prepared_document' WHERE id=?", (gen,))
+    monkeypatch.setattr("tools.pdf_viewer.count_pdf_pages", lambda path: 2)
+    agent, deps = notes_agent.create_notes_agent(
+        template_type=NotesTemplateType.LIST_OF_NOTES, pdf_path="synthetic.pdf",
+        inventory=[], filing_level="company", model=TestModel(), output_dir=str(tmp_path),
+        run_id=run_id, db_path=db, source_generation_id=gen, batch_note_nums=[5])
+    deps.payload_sink = []
+    report = next(ts.tools["report_source_gap"].function for ts in agent.toolsets
+                  if "report_source_gap" in getattr(ts, "tools", {}))
+    result = report(SimpleNamespace(deps=deps), [1], "Table heading was not captured", 5)
+    assert "human review" in result
+    assert "accepted" in notes_agent._submit_coverage_entries_impl(deps, [])
+    assert deps.coverage_receipt.entries == []  # It did not become covered.
+    with repo.db_session(db) as conn:
+        flags = repo.fetch_notes_review_flags(conn, run_id)
+    assert len(flags) == 1
+    assert flags[0]["reason"] == "Table heading was not captured"
+    assert flags[0]["source_pages"] == [1]
+    # Saving the report does not claim that missing source content was written.
+    deps.payload_sink = None
+    save = next(ts.tools["save_result"].function for ts in agent.toolsets
+                if "save_result" in getattr(ts, "tools", {}))
+    await save(SimpleNamespace(deps=deps))
+    assert deps.source_gap_reported
+    assert not deps.wrote_once
+    assert deps.cells_written == []
+    assert deps.write_skip_errors
+
+
+def test_source_tools_identify_reconstructed_content_without_requiring_repair(seeded):
+    db, _, gen = seeded
+    with repo.db_session(db) as conn:
+        conn.execute("UPDATE notes_source_blocks SET locator_json=? WHERE generation_id=? AND block_id='b2'",
+                     ('{"capture_uncertain":true,"capture_method":"reconstructed"}', gen))
+        conn.commit()
+    result = notes_agent._view_source_blocks_impl(db, gen, ["b2"])
+    assert "best-effort reconstruction" in result
+    assert "use captured content" in result
+    assert "Stated at cost." in result

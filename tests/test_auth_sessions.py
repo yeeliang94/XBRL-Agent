@@ -160,6 +160,10 @@ def test_status_poll_is_not_activity():
     # Background polls don't bump the sliding window; ordinary calls do.
     assert middleware.counts_as_activity("/api/runs/5/re-review/status") is False
     assert middleware.counts_as_activity("/api/config") is True
+    assert middleware.counts_as_activity("/api/preparation/session", "GET") is False
+    assert middleware.counts_as_activity("/api/preparation/session", "HEAD") is False
+    assert middleware.counts_as_activity("/api/preparation/session", "POST") is True
+    assert middleware.counts_as_activity("/api/preparation/session/cancel", "POST") is True
 
 
 def test_activity_bump_is_throttled():

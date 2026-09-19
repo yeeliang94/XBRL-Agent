@@ -68,6 +68,14 @@ def test_the_rule_version_is_stamped_on_every_result():
     assert ig.run_checks(_clean()).rule_version == ig.RULE_VERSION
 
 
+@pytest.mark.parametrize("selection_matches", [None, False])
+def test_prepared_digest_equality_cannot_replace_live_selection_check(selection_matches):
+    inp = _clean()
+    inp.verified_inventory = True
+    inp.cells[0].selection_matches_content = selection_matches
+    assert ig.check_render_matches_selection(inp)
+
+
 # --------------------------------------------------------------------------
 # one failing and one passing fixture per check
 # --------------------------------------------------------------------------
@@ -294,10 +302,12 @@ def test_scout_agreement_is_quiet_when_the_comparison_ran():
 # unverified — the whole point of a registry is that the SET is reviewable.
 EXPECTED_CHECKS = {
     "check_page_receipts",
+    "check_capture_uncertainty",
     "check_block_ownership",
     "check_dispositions",
     "check_prose_note_coverage",
     "check_table_groups",
+    "check_source_relationships",
     "check_note_continuity",
     "check_boundaries",
     "check_render_matches_selection",
@@ -425,3 +435,14 @@ def test_a_placement_finding_is_repairable_by_a_retry():
         ig.Finding("placement", ig.UNRESOLVED, "", ["b2"]),
     ])
     assert ig.missing_block_ids(result) == ["b2"]
+
+
+def test_continuation_must_share_placement_and_heading_context():
+    blocks = [SourceBlock("head", "heading", 0, "<h3>Policy</h3>"),
+              SourceBlock("a", "paragraph", 1, "<p>Start </p>",
+                          locator={"heading_ancestor_ids": ["head"]}),
+              SourceBlock("b", "paragraph", 2, "<p>end.</p>", continues_block_id="a")]
+    incomplete = ig.IntegrityInput(blocks=blocks, cells=[ig.CellRecord("Policies", 4, ["b"])])
+    assert ig.check_source_relationships(incomplete)
+    complete = ig.IntegrityInput(blocks=blocks, cells=[ig.CellRecord("Policies", 4, ["head", "a", "b"])])
+    assert ig.check_source_relationships(complete) == []

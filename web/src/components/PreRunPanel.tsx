@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { userMessage } from "../lib/errors";
 import type {
+  PreparationSnapshot,
   StatementType,
   VariantSelection,
   ExtendedSettingsResponse,
@@ -35,6 +36,7 @@ import { buildToolTimeline, isScoutTimelineEvent } from "../lib/buildToolTimelin
 import { buildReasoningTimeline } from "../lib/buildReasoningTimeline";
 
 interface Props {
+  preparation?: PreparationSnapshot;
   sessionId: string;
   getSettings: () => Promise<ExtendedSettingsResponse>;
   onRun: (config: RunConfigPayload) => void;
@@ -519,7 +521,7 @@ function NotesInventoryEditor({
   );
 }
 
-export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onConfigChange, isAdmin = false }: Props) {
+export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onConfigChange, isAdmin = false, preparation }: Props) {
   // Advanced disclosure (Phase 3): keeps the default view to the accounting
   // choices; AI-model pickers and benchmark grading
   // live behind this toggle.
@@ -659,6 +661,10 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
   const [variantSelections, setVariantSelections] = useState(
     () => _seedVariantSelections(initialConfig),
   );
+  // Automatic inventory hydration must preserve saved and newly edited formats.
+  const variantOverridesRef = useRef(new Set<StatementType>(
+    STATEMENT_TYPES.filter((stmt) => Boolean(variantSelections[stmt].variant)),
+  ));
   const [statementsEnabled, setStatementsEnabled] = useState(
     () => _seedStatementsEnabled(initialConfig),
   );
@@ -779,6 +785,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
 
   const handleVariantChange = useCallback(
     (stmt: StatementType, sel: VariantSelection) => {
+      variantOverridesRef.current.add(stmt);
       setVariantSelections((prev) => ({ ...prev, [stmt]: sel }));
     },
     [],
@@ -849,6 +856,125 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
     return () => { scoutAbortRef.current?.abort(); };
   }, []);
 
+  const handleInfopack = useCallback((data: Record<string, unknown>, source: "preview" | "automatic" = "preview") => {
+    const infopackValue = data.infopack as Record<string, unknown> | undefined;
+    if (!infopackValue) return;
+    setInfopack(infopackValue);
+    setScoutProgress("Notes inventory ready");
+
+    // Preselect the filing-standard toggle from scout's deterministic
+    // guess, but only if the operator hasn't already flipped it. User
+    // intent always wins (the toggle is the source of truth for the
+    // subsequent run).
+    const detected = infopackValue.detected_standard as
+      | DetectedStandard
+      | undefined;
+    if (
+      !filingStandardTouchedRef.current
+      && (detected === "mfrs" || detected === "mpers")
+    ) {
+      setFilingStandard(detected);
+    }
+
+    const statements = (infopackValue.statements ?? {}) as Record<string, unknown>;
+    const scoutDetectedAnything = Object.keys(statements).length > 0;
+
+    // Respect explicit user enables (#18): if the user manually turned on
+    // a statement that scout didn't detect, leave it on and surface a
+    // one-line notice so they know scout disagreed. Read from the ref
+    // (not the closure-captured state) so a mid-run user toggle is
+    // honoured (peer-review finding #4).
+    //
+    // Guard the "scout detected nothing" case (empty statements dict).
+    // Without this, handleInfopack silently unchecks every row and the
+    // Variants panel collapses — leaving the operator with no affordance
+    // to proceed. Treat it as a soft-failure: keep enabled rows enabled,
+    // surface a single notice explaining scout came up empty.
+    const protectedStmts: StatementType[] = [];
+    const latestOverrides = userEnabledOverridesRef.current;
+    if (scoutDetectedAnything) {
+      setStatementsEnabled((prev) => {
+        const next = { ...prev };
+        for (const stmt of STATEMENT_TYPES) {
+          if (!(stmt in statements)) {
+            if (latestOverrides.has(stmt) && prev[stmt]) {
+              protectedStmts.push(stmt);
+            } else {
+              next[stmt] = false;
+            }
+          }
+        }
+        return next;
+      });
+    }
+    setScoutOverrideNote(
+      !scoutDetectedAnything
+        ? "Scout didn't detect any statements in this PDF — keeping your current selection. Pick variants manually or try a different model."
+        : protectedStmts.length > 0
+          ? `Scout didn't detect ${protectedStmts.join(", ")} — kept enabled based on your selection.`
+          : null,
+    );
+
+    // Detected statements get their variant + confidence; missing ones
+    // get a "not_detected" marker.
+    //
+    // Peer-review finding #2: when scout comes up completely empty
+    // (zero statements detected), we must NOT overwrite any variant
+    // the operator picked manually — the notice above promised to
+    // "keep your current selection". Skip the reset loop entirely on
+    // the empty path so manual variants + confidences survive.
+    if (scoutDetectedAnything) {
+      // Peer-review HIGH: validate each scout suggestion against the
+      // filing standard the toggle will hold AFTER this event settles.
+      // Scout can return SoRE with detected_standard="unknown" (the LLM
+      // isn't forced to respect the gate), and the preselect above only
+      // fires for mfrs/mpers — so an unknown-detection path could leave
+      // the toggle on MFRS while variantSelections carries SoRE, which
+      // the server then rejects at run time.
+      const effectiveStandard: FilingStandard =
+        !filingStandardTouchedRef.current
+          && (detected === "mfrs" || detected === "mpers")
+          ? detected
+          : filingStandardRef.current;
+
+      setVariantSelections((prev) => {
+        const next = { ...prev };
+        for (const stmt of STATEMENT_TYPES) {
+          if (source === "automatic" && variantOverridesRef.current.has(stmt)) continue;
+          const info = statements[stmt] as Record<string, unknown> | undefined;
+          if (info) {
+            const suggested = info.variant_suggestion as string | undefined;
+            const allowed = variantsFor(stmt, effectiveStandard);
+            const variantValid = !!suggested && allowed.includes(suggested);
+            if (variantValid) {
+              const rawConf = String(info.confidence || "MEDIUM").toLowerCase();
+              const confidence = (["high", "medium", "low"].includes(rawConf)
+                ? rawConf
+                : "medium") as "high" | "medium" | "low";
+              next[stmt] = { variant: suggested!, confidence };
+            } else {
+              // Suggestion missing, unknown, or not valid on this
+              // standard (e.g. SoRE when the toggle is settling on
+              // MFRS) — blank it and mark low confidence so the
+              // operator sees scout didn't land a usable variant.
+              next[stmt] = { variant: "", confidence: "low" };
+            }
+          } else {
+            next[stmt] = { variant: "", confidence: "low" };
+          }
+        }
+        return next;
+      });
+    }
+  }, []);
+
+  const appliedAttempt = useRef<string | null>(null);
+  useEffect(() => {
+    if (loading || preparation?.status !== "succeeded" || !preparation.infopack || appliedAttempt.current === preparation.attempt_id) return;
+    appliedAttempt.current = preparation.attempt_id;
+    handleInfopack({ infopack: preparation.infopack }, "automatic");
+  }, [preparation, handleInfopack, loading]);
+
   const handleAutoDetect = useCallback(async () => {
     // Peer-review [HIGH] race guard: await any pending scout-model persist
     // so the scout endpoint reads the up-to-date runtime settings. updateSettings's
@@ -908,116 +1034,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
 
       // One dispatch function per scout event type. Keeping each handler
       // small and local makes the loop body below just a switch statement.
-      const handleInfopack = (data: Record<string, unknown>) => {
-        const infopackValue = data.infopack as Record<string, unknown> | undefined;
-        if (!infopackValue) return;
-        setInfopack(infopackValue);
-        setScoutProgress("Preview scan complete");
 
-        // Preselect the filing-standard toggle from scout's deterministic
-        // guess, but only if the operator hasn't already flipped it. User
-        // intent always wins (the toggle is the source of truth for the
-        // subsequent run).
-        const detected = infopackValue.detected_standard as
-          | DetectedStandard
-          | undefined;
-        if (
-          !filingStandardTouchedRef.current
-          && (detected === "mfrs" || detected === "mpers")
-        ) {
-          setFilingStandard(detected);
-        }
-
-        const statements = (infopackValue.statements ?? {}) as Record<string, unknown>;
-        const scoutDetectedAnything = Object.keys(statements).length > 0;
-
-        // Respect explicit user enables (#18): if the user manually turned on
-        // a statement that scout didn't detect, leave it on and surface a
-        // one-line notice so they know scout disagreed. Read from the ref
-        // (not the closure-captured state) so a mid-run user toggle is
-        // honoured (peer-review finding #4).
-        //
-        // Guard the "scout detected nothing" case (empty statements dict).
-        // Without this, handleInfopack silently unchecks every row and the
-        // Variants panel collapses — leaving the operator with no affordance
-        // to proceed. Treat it as a soft-failure: keep enabled rows enabled,
-        // surface a single notice explaining scout came up empty.
-        const protectedStmts: StatementType[] = [];
-        const latestOverrides = userEnabledOverridesRef.current;
-        if (scoutDetectedAnything) {
-          setStatementsEnabled((prev) => {
-            const next = { ...prev };
-            for (const stmt of STATEMENT_TYPES) {
-              if (!(stmt in statements)) {
-                if (latestOverrides.has(stmt) && prev[stmt]) {
-                  protectedStmts.push(stmt);
-                } else {
-                  next[stmt] = false;
-                }
-              }
-            }
-            return next;
-          });
-        }
-        setScoutOverrideNote(
-          !scoutDetectedAnything
-            ? "Scout didn't detect any statements in this PDF — keeping your current selection. Pick variants manually or try a different model."
-            : protectedStmts.length > 0
-              ? `Scout didn't detect ${protectedStmts.join(", ")} — kept enabled based on your selection.`
-              : null,
-        );
-
-        // Detected statements get their variant + confidence; missing ones
-        // get a "not_detected" marker.
-        //
-        // Peer-review finding #2: when scout comes up completely empty
-        // (zero statements detected), we must NOT overwrite any variant
-        // the operator picked manually — the notice above promised to
-        // "keep your current selection". Skip the reset loop entirely on
-        // the empty path so manual variants + confidences survive.
-        if (scoutDetectedAnything) {
-          // Peer-review HIGH: validate each scout suggestion against the
-          // filing standard the toggle will hold AFTER this event settles.
-          // Scout can return SoRE with detected_standard="unknown" (the LLM
-          // isn't forced to respect the gate), and the preselect above only
-          // fires for mfrs/mpers — so an unknown-detection path could leave
-          // the toggle on MFRS while variantSelections carries SoRE, which
-          // the server then rejects at run time.
-          const effectiveStandard: FilingStandard =
-            !filingStandardTouchedRef.current
-              && (detected === "mfrs" || detected === "mpers")
-              ? detected
-              : filingStandardRef.current;
-
-          setVariantSelections((prev) => {
-            const next = { ...prev };
-            for (const stmt of STATEMENT_TYPES) {
-              const info = statements[stmt] as Record<string, unknown> | undefined;
-              if (info) {
-                const suggested = info.variant_suggestion as string | undefined;
-                const allowed = variantsFor(stmt, effectiveStandard);
-                const variantValid = !!suggested && allowed.includes(suggested);
-                if (variantValid) {
-                  const rawConf = String(info.confidence || "MEDIUM").toLowerCase();
-                  const confidence = (["high", "medium", "low"].includes(rawConf)
-                    ? rawConf
-                    : "medium") as "high" | "medium" | "low";
-                  next[stmt] = { variant: suggested!, confidence };
-                } else {
-                  // Suggestion missing, unknown, or not valid on this
-                  // standard (e.g. SoRE when the toggle is settling on
-                  // MFRS) — blank it and mark low confidence so the
-                  // operator sees scout didn't land a usable variant.
-                  next[stmt] = { variant: "", confidence: "low" };
-                }
-              } else {
-                next[stmt] = { variant: "", confidence: "low" };
-              }
-            }
-            return next;
-          });
-        }
-      };
 
       for await (const evt of parseSSEStream(reader)) {
         if (cancelled) break;
@@ -1082,7 +1099,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
     // latest value via userEnabledOverridesRef so recreating the callback
     // every time the user toggles a statement isn't necessary (and would
     // leak the stale-closure bug back in).
-  }, [sessionId]);
+  }, [sessionId, handleInfopack]);
 
   const handleStopScout = useCallback(() => {
     scoutAbortRef.current?.abort();
@@ -1255,7 +1272,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
   // toggle so a run never starts that the user expects to be graded but isn't.
   const canRun =
     (enabledStmts.length > 0 || enabledNotes.length > 0) &&
-    !evalSelectionMissing;
+    !evalSelectionMissing && preparation?.status !== "failed" && preparation?.status !== "cancelled";
 
   return (
     <div style={styles.container}>
@@ -1274,7 +1291,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           <h2 style={styles.heading}>Review and start</h2>
           <p style={{ ...ui.supportingText, margin: `${pwc.space.xs}px 0 0` }}>
             Confirm the filing details and choose what to extract. Document
-            scanning and page preparation run automatically after you start.
+            preparation and the notes inventory start automatically after upload.
           </p>
         </div>
         <button
@@ -1318,7 +1335,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           Included automatically in every run
         </div>
         <div style={{ fontFamily: pwc.fontBody, fontSize: 13, color: pwc.grey700, marginTop: pwc.space.xs }}>
-          Document scan → statement extraction → cross-checks → AI review → final workbook
+          Source structure and emphasis capture → document scan → statement extraction → cross-checks → AI review → MBRS formatting → final workbook
         </div>
       </div>
 
@@ -1547,7 +1564,8 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       )}
 
       {showAdvanced && (<>
-      {/* Optional preview of the pipeline-owned document scan. */}
+      {(!preparation || preparation.status === "not_started") && <>
+      {/* Optional preview for historical uploads only. */}
       <hr style={styles.divider} />
       {/* Document pre-scan (formerly "Scout"): reads the PDF first to suggest
           statements, formats and note locations. Results are suggestions to
@@ -1555,8 +1573,8 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       <div style={styles.section}>
         <span style={styles.sectionLabel}>Preview document scan</span>
         <span style={{ fontFamily: pwc.fontBody, fontSize: 12, color: pwc.grey500, marginTop: -4 }}>
-          Optional. Preview the scout's suggestions before starting. A fresh
-          scan still runs automatically as the first pipeline stage.
+          Preparation builds the inventory automatically. Preview refreshes the
+          document scan using the current model.
         </span>
         <div style={{ display: "flex", alignItems: "center", gap: pwc.space.sm }}>
           <button
@@ -1687,6 +1705,8 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       </div>
 
       <hr style={styles.divider} />
+
+      </>}
 
       {/* Statement formats are optional overrides. The automatic scout picks
           a supported format when a row is left blank. */}

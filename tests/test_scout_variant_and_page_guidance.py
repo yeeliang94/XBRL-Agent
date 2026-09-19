@@ -17,11 +17,11 @@ the rest of the system:
 """
 from __future__ import annotations
 
-from scout.agent import _SYSTEM_PROMPT
+from scout.agent import _build_system_prompt
 
 # The template carries one placeholder; these assertions are about the static
 # guidance around it, so a bare fill is enough.
-SCOUT_SYSTEM_PROMPT = _SYSTEM_PROMPT.format(statements_section="")
+SCOUT_SYSTEM_PROMPT = _build_system_prompt()
 
 
 def test_scout_does_not_claim_socie_is_always_default():

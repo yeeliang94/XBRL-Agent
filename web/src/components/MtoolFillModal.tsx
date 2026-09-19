@@ -592,7 +592,12 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
         if (!r.ok) throw await responseError(r);
         return r.json();
       })
-      .then((body) => { if (current() && preflightRequest === preflightSeq.current) setPreflight(normalisePreflight(body)); })
+      .then((body) => {
+        if (!current() || preflightRequest !== preflightSeq.current) return;
+        const result = normalisePreflight(body);
+        setPreflight(result);
+        setReadinessErr(result ? null : "The check returned an unreadable result.");
+      })
       .catch((e) => { if (current() && preflightRequest === preflightSeq.current) setReadinessErr(fillErrorMessage(e)); });
     fetch(`/api/runs/${runId}/mtool-fill`)
       .then(async (r) => {
@@ -890,7 +895,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
 
   const reviewGroups = [
     { title: "Filing blockers", items: preflight?.blockers ?? [], urgent: true },
-    { title: "Warnings", items: preflight?.warnings ?? [], urgent: false },
+    { title: "Source completeness needs review", items: (preflight?.warnings ?? []).filter((item) => item.code === "notes_integrity_shadow_needs_review"), urgent: true },
   ].filter((group) => group.items.length > 0);
   const c = meta?.counts;
   const excludedParts = c ? [
@@ -1023,7 +1028,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
           <div role="alert" style={ui.alertError}>Fill failed: {patchErr}</div>
         )}
         {busy && <div role="status" style={ui.alertInfo}>Filling figures and notes, checking the saved values, and preparing your download…</div>}
-        {readinessErr && <div role="status" style={ui.alertWarning}>Run checks are unavailable: {readinessErr} You can still fill the template; checks are repeated when you fill.</div>}
+        {readinessErr && <p role="status" style={styles.statLine}>Run checks are unavailable: {readinessErr} You can still fill the template; checks are repeated when you fill.</p>}
         {loadErr && (
           <div style={ui.alertError}>Could not load fill data: {loadErr}</div>
         )}
@@ -1051,6 +1056,11 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
         {meta && <p style={styles.statLine}>{meta.filing_standard.toUpperCase()} · {meta.filing_level} · {meta.counts.writes} available figures{notesCount != null ? ` · ${notesCount} notes` : ""}. We detect the destination cells from your template.</p>}
         <details style={{ marginBottom: pwc.space.md }}>
           <summary style={{ cursor: "pointer", fontSize: 13 }}>Source data and mapping details</summary>
+          {(preflight?.warnings ?? []).filter((item) => item.code !== "notes_integrity_shadow_needs_review").map((item) => (
+            <p key={item.code} style={{ fontSize: 13, color: pwc.grey700 }}>
+              {item.message}{item.examples.length > 0 && ` ${item.examples.join("; ")}`}
+            </p>
+          ))}
         {preflight?.field_semantics && (
           <section
             aria-label="Filing field coverage"
@@ -1505,7 +1515,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
               </div>
             )}
             {Boolean(report.filing_coverage?.operator_resolutions?.length) && (
-              <details open style={{ marginTop: 12 }}>
+              <details style={{ marginTop: 12 }}>
                 <summary>Confirmed filing destinations</summary>
                 <ul>
                   {report.filing_coverage?.operator_resolutions?.map((item, index) => (

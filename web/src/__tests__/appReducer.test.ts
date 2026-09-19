@@ -1941,6 +1941,39 @@ describe("agentReducer", () => {
     expect(state.agents["socf"].status).toBe("failed");
     expect(state.agentTabOrder).toContain("socf");
   });
+
+  test("run_complete materializes NotPrepared statement as skipped", () => {
+    let state = runningState();
+    state = appReducer(state, {
+      type: "EVENT",
+      payload: {
+        event: "run_complete",
+        data: {
+          success: true,
+          merged_workbook: "/out/filled.xlsx",
+          merge_errors: [],
+          cross_checks: [],
+          statements_completed: ["SOPL"],
+          statements_failed: [],
+          statements_skipped: [{
+            statement: "SOCI",
+            variant: "NotPrepared",
+            reason_code: "no_standalone_statement",
+            message: "Source does not present this as a standalone statement",
+          }],
+          notes_completed: [],
+          notes_failed: [],
+        },
+        timestamp: 1,
+      } as SSEEvent,
+    });
+
+    expect(state.agents["soci"].status).toBe("skipped");
+    expect(state.agents["soci"].skip?.variant).toBe("NotPrepared");
+    expect(state.complete?.statementsSkipped?.[0].reason_code).toBe(
+      "no_standalone_statement",
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------

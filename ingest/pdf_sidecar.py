@@ -67,12 +67,9 @@ TRANSCRIBE_CONCURRENCY = 4
 _TEXT_LAYER_MIN_CHARS = 40
 _TEXT_LAYER_SAMPLE_PAGES = 10
 
-# A blank scan is rarely pixel-perfect white. Ignore sparse scanner specks and
-# near-white background variation, but fail closed once dark pixels cover more
-# than 0.01% of the page. At 150 DPI, even a small printed page number exceeds
-# this allowance.
+# A blank scan is rarely pixel-perfect white. Ignore near-white background
+# variation, but send every dark mark for inspection, including short text.
 _BLANK_DARK_PIXEL_THRESHOLD = 225
-_BLANK_MAX_DARK_PIXEL_DENOMINATOR = 10_000
 _DARK_PIXEL_MAP = bytes(
     1 if value < _BLANK_DARK_PIXEL_THRESHOLD else 0 for value in range(256)
 )
@@ -128,27 +125,44 @@ class TranscribeResult:
     page_rotations: dict[int, int] = field(default_factory=dict)
 
 
+class TranscriptionRetryExhausted(RuntimeError):
+    """The supplied caller already used its request retry allowance."""
+
+
 class _EmptyTranscriptionError(ValueError):
     """The provider responded, but the rendered page yielded no readable text."""
 
 
-def normalize_transcription(html: str) -> str:
+def normalize_transcription(html: str, *, preserve_meaningful_formatting: bool = False) -> str:
     """Return structure-only transcript HTML.
 
     Table rows/cells plus rowspan/colspan survive. Presentation attributes and
     purely-presentational inline tags are removed deterministically.
     """
     out = _FENCE_RE.sub("", html.strip()).strip()
-    out = _ODD_WHITESPACE_RE.sub(" ", out)
+    if not preserve_meaningful_formatting:
+        out = _ODD_WHITESPACE_RE.sub(" ", out)
     soup = BeautifulSoup(out, "html.parser")
+    if preserve_meaningful_formatting and soup.find(
+        ["script", "style", "iframe", "object", "embed", "img", "svg", "math"]
+    ):
+        raise ValueError("Prepared source must contain semantic HTML only")
     for node in soup.find_all(True):
         if not isinstance(node, Tag):
             continue
         allowed_attrs = _GEOMETRY_ATTRS_BY_TAG.get(node.name, frozenset())
+        if preserve_meaningful_formatting:
+            allowed_attrs = allowed_attrs | {
+                "ol": frozenset({"start", "type", "reversed"}),
+                "li": frozenset({"value"}),
+            }.get(node.name, frozenset())
         for attr in list(node.attrs):
             if attr not in allowed_attrs:
                 del node.attrs[attr]
-    for node in list(soup.find_all(_PRESENTATION_TAGS)):
+    presentation_tags = _PRESENTATION_TAGS
+    if preserve_meaningful_formatting:
+        presentation_tags = presentation_tags - {"b", "strong", "i", "em", "u"}
+    for node in list(soup.find_all(presentation_tags)):
         node.unwrap()
     return str(soup)
 
@@ -242,8 +256,8 @@ def _render_page(
 def _render_is_blank(png_bytes: bytes) -> bool:
     """Return whether a rendered page has no meaningful ink.
 
-    Blank scans can contain light background variation and isolated scanner
-    specks. Decoding problems fail closed so uncertain pages still go to the
+    Blank scans can contain light background variation. Dark scanner specks
+    and decoding problems fail closed so uncertain pages still go to the
     model.
     """
     try:
@@ -251,12 +265,10 @@ def _render_is_blank(png_bytes: bytes) -> bool:
         gray = fitz.Pixmap(fitz.csGRAY, pixmap)
     except Exception:  # noqa: BLE001 — an uncertain render is not blank
         return False
-    pixel_count = gray.width * gray.height
-    max_dark_pixels = max(
-        1, pixel_count // _BLANK_MAX_DARK_PIXEL_DENOMINATOR,
-    )
     dark_pixels = gray.samples.translate(_DARK_PIXEL_MAP).count(b"\x01")
-    return dark_pixels <= max_dark_pixels
+    # A small amount of ink can be an entire disclosure (for example, Nil.).
+    # Leave dark specks to the capture model rather than discarding text by area.
+    return dark_pixels == 0
 
 
 def _render_pages(
@@ -285,11 +297,14 @@ async def transcribe_pages(
     model: Any,
     *,
     concurrency: int = TRANSCRIBE_CONCURRENCY,
-    page_timeout_s: float = PAGE_TIMEOUT_S,
-    overall_timeout_s: float = OVERALL_TIMEOUT_S,
+    page_timeout_s: float | None = PAGE_TIMEOUT_S,
+    overall_timeout_s: float | None = OVERALL_TIMEOUT_S,
     _caller: Optional[Callable[[int, bytes], Awaitable[tuple]]] = None,
     on_progress: Optional[Callable[[int, int, int, bool], None]] = None,
     rotation_corrections: Optional[dict[int, int]] = None,
+    preserve_meaningful_formatting: bool = False,
+    allow_empty_pages: bool = False,
+    rendered_pages: Optional[dict[int, bytes]] = None,
 ) -> TranscribeResult:
     """Render + transcribe ``pages`` (1-based). One retry per page, then skip.
 
@@ -316,9 +331,9 @@ async def transcribe_pages(
             continue
         if page in requested_pages and degrees in {90, 180, 270}:
             rotations[page] = degrees
-    renders = await asyncio.to_thread(
-        _render_pages, pdf_path, list(pages), rotations,
-    )
+    renders = ({page: rendered_pages[page] for page in pages if page in rendered_pages}
+               if rendered_pages is not None else await asyncio.to_thread(
+                   _render_pages, pdf_path, list(pages), rotations))
     missing_render_pages = sorted(requested_pages - set(renders))
     if missing_render_pages:
         logger.warning(
@@ -374,8 +389,10 @@ async def transcribe_pages(
                         for key, amount in call_usage.items():
                             page_totals[key] = page_totals.get(key, 0) + amount
                             totals[key] = totals.get(key, 0) + amount
-                        normalized = normalize_transcription(str(html))
-                        if not BeautifulSoup(
+                        normalized = normalize_transcription(
+                            str(html), preserve_meaningful_formatting=preserve_meaningful_formatting,
+                        )
+                        if not allow_empty_pages and not BeautifulSoup(
                             normalized, "html.parser"
                         ).get_text(" ", strip=True):
                             raise _EmptyTranscriptionError(
@@ -399,6 +416,8 @@ async def transcribe_pages(
                             page_no, attempt, rotation,
                             type(exc).__name__, exc,
                         )
+                        if isinstance(exc, TranscriptionRetryExhausted):
+                            break
                         if attempt == 1 and isinstance(
                             exc, _EmptyTranscriptionError
                         ):

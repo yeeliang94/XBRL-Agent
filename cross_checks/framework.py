@@ -29,6 +29,52 @@ DEFAULT_TOLERANCE_RM = 1.0
 DEFAULT_APPLIES_TO_STANDARD: frozenset[str] = frozenset({"mfrs", "mpers"})
 
 
+def _required_skip_result(check: Any, run_config: dict) -> CrossCheckResult | None:
+    """Return the explicit N/A result for a legitimate no-template outcome.
+
+    ``statements_to_run`` answers what the operator requested. It cannot also
+    describe what the coordinator resolved. The optional ``statement_outcomes``
+    map carries that second truth so a registered ``NotPrepared`` outcome is
+    not mistaken for an agent that failed to produce a workbook.
+
+    Older callers omit the map and retain the existing pending/failed behavior.
+    """
+    outcomes = run_config.get("statement_outcomes") or {}
+    skipped: list[tuple[StatementType, str]] = []
+    for statement in check.required_statements:
+        outcome = outcomes.get(statement, outcomes.get(statement.value))
+        if outcome is None:
+            continue
+        if isinstance(outcome, dict):
+            status = outcome.get("status")
+            variant = outcome.get("variant") or outcome.get("resolved_variant")
+            reason = outcome.get("reason_code") or ""
+        else:
+            status = getattr(outcome, "status", None)
+            variant = (
+                getattr(outcome, "variant", None)
+                or getattr(outcome, "resolved_variant", None)
+            )
+            reason = getattr(outcome, "reason_code", "") or ""
+        if status == "skipped" and (
+            variant == "NotPrepared" or reason == "no_standalone_statement"
+        ):
+            skipped.append((statement, str(variant or "NotPrepared")))
+    if not skipped:
+        return None
+    names = ", ".join(statement.value for statement, _ in sorted(
+        skipped, key=lambda item: item[0].value,
+    ))
+    return CrossCheckResult(
+        name=check.name,
+        status="not_applicable",
+        message=(
+            f"{check.name} does not apply because {names} has no standalone "
+            "statement in the source (resolved variant NotPrepared)"
+        ),
+    )
+
+
 @dataclass
 class Comparand:
     """One value a cross-check looked at, with where it came from.
@@ -289,6 +335,11 @@ def run_all_facts(
 
     for idx, check in enumerate(checks):
         try:
+            skipped_result = _required_skip_result(check, run_config)
+            if skipped_result is not None:
+                results.append(skipped_result)
+                continue
+
             missing = check.required_statements - statements_run
             if missing:
                 missing_names = sorted(s.value for s in missing)
@@ -406,6 +457,11 @@ def run_all(
 
     for idx, check in enumerate(checks):
         try:
+            skipped_result = _required_skip_result(check, run_config)
+            if skipped_result is not None:
+                results.append(skipped_result)
+                continue
+
             # 1. Are all required statements present in this run?
             missing = check.required_statements - statements_run
             if missing:

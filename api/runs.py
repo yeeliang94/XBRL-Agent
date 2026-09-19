@@ -588,8 +588,9 @@ async def delete_draft_runs_endpoint():
     from db import repository as repo
     conn = server._open_audit_conn()
     try:
+        from api.preparation import active_session_ids
         removed = repo.delete_draft_runs(
-            conn, protected_session_ids=set(server.active_runs)
+            conn, protected_session_ids=set(server.active_runs) | active_session_ids()
         )
         conn.commit()
     finally:
@@ -634,8 +635,9 @@ async def delete_run_endpoint(run_id: int):
                 detail="Cannot delete a run that is still running. "
                        "Wait for it to finish (or abort it) before deleting.",
             )
-        # Second-layer guard: session still actively streaming.
-        if run.session_id and run.session_id in server.active_runs:
+        # Upload preparation also writes audit rows while the parent is a draft.
+        from api.preparation import active_session_ids
+        if run.session_id and run.session_id in (set(server.active_runs) | active_session_ids()):
             raise HTTPException(
                 status_code=409,
                 detail="An active extraction is running against this "

@@ -198,6 +198,42 @@ class TestCrossCheckSelection:
         assert results[0].status == "failed"
         assert "Workbook missing" in results[0].message
 
+    def test_notprepared_required_statement_is_not_applicable(self):
+        """A valid combined statement is a resolved no-template outcome, not
+        an extraction failure merely because no standalone workbook exists.
+        """
+        class SociCheck:
+            name = "sopl_to_soci"
+            required_statements = {StatementType.SOPL, StatementType.SOCI}
+            def applies_to(self, rc): return True
+            def run(self, wp, tol, filing_level="company"):  # pragma: no cover
+                raise AssertionError("NotPrepared checks must be gated before execution")
+
+        run_config = {
+            "statements_to_run": {StatementType.SOPL, StatementType.SOCI},
+            "variants": {
+                StatementType.SOPL: "Function",
+                StatementType.SOCI: "NotPrepared",
+            },
+            "statement_outcomes": {
+                StatementType.SOPL: {"status": "succeeded", "variant": "Function"},
+                StatementType.SOCI: {
+                    "status": "skipped",
+                    "variant": "NotPrepared",
+                    "reason_code": "no_standalone_statement",
+                },
+            },
+        }
+
+        [result] = run_all(
+            [SociCheck()],
+            workbook_paths={StatementType.SOPL: "/tmp/sopl.xlsx"},
+            run_config=run_config,
+        )
+
+        assert result.status == "not_applicable"
+        assert "no standalone statement" in result.message
+
     def test_check_exception_caught_gracefully(self):
         """If a check's .run() raises, it returns failed instead of crashing."""
         class BrokenCheck:

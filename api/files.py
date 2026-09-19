@@ -53,6 +53,15 @@ def _resolve_run_pdf_path(run: "Any") -> Optional[Path]:
         except (ValueError, OSError):
             continue
         if resolved.exists():
+            from ingest.document_preparation import read_prepared_document
+            prepared = read_prepared_document(resolved)
+            if prepared is not None:
+                candidate = prepared.prepared_pdf_path.resolve()
+                try:
+                    candidate.relative_to(output_root)
+                except ValueError:
+                    continue
+                return candidate
             return resolved
     return None
 
@@ -72,7 +81,7 @@ async def pdf_info_endpoint(run_id: int):
         conn.close()
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
-    pdf_path = _resolve_run_pdf_path(run)
+    pdf_path = await asyncio.to_thread(_resolve_run_pdf_path, run)
     if pdf_path is None:
         raise HTTPException(status_code=404, detail="No source PDF stored for this run.")
     from tools.pdf_viewer import count_pdf_pages
@@ -109,7 +118,7 @@ async def pdf_page_endpoint(run_id: int, page: int, dpi: int = _PDF_DEFAULT_DPI)
         conn.close()
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
-    pdf_path = _resolve_run_pdf_path(run)
+    pdf_path = await asyncio.to_thread(_resolve_run_pdf_path, run)
     if pdf_path is None:
         raise HTTPException(status_code=404, detail="No source PDF stored for this run.")
     from tools.pdf_viewer import count_pdf_pages, render_pages_to_png_bytes

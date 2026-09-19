@@ -149,3 +149,24 @@ def test_formatter_matrix_describes_automatic_pdf_stage_and_retry():
     row = re.search(r"<tr>.*?Notes formatter</td>(.*?)</tr>", _AUDIT)
     assert row is not None
     assert "automatic for PDF notes; per-sheet retry" in row.group(1)
+
+
+def test_prepared_document_map_prompt_is_quoted_verbatim():
+    from scout.prepared_map import SYSTEM_PROMPT
+    match = re.search(r'<section id="prepared-document-map">.*?<pre>(.*?)</pre>', _AUDIT, re.S)
+    assert match is not None
+    assert html.unescape(match.group(1)).strip() == SYSTEM_PROMPT.strip()
+
+
+def test_prepared_notes_prompt_is_quoted_verbatim():
+    match = re.search(r'<section id="prepared-notes">.*?<pre>(.*?)</pre>', _AUDIT, re.S)
+    assert match is not None
+    assert html.unescape(match.group(1)).strip() == (_PROMPTS / "_notes_prepared.md").read_text().strip()
+
+
+def test_document_preparation_prompts_are_quoted_verbatim():
+    from ingest.document_preparation import _COMMON, _PROMPTS as preparation_prompts
+    expected = _COMMON.rstrip() + '\n\n' + '\n\n'.join(f'{stage}:\n{prompt}' for stage, prompt in preparation_prompts.items())
+    match = re.search(r'<section id="document-preparation">.*?<pre>(.*?)</pre>', _AUDIT, re.S)
+    assert match is not None
+    assert html.unescape(match.group(1)) == expected

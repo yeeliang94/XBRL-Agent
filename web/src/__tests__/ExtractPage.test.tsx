@@ -46,6 +46,31 @@ function makeProps(overrides?: { state?: Partial<AppState>; handleAbortAll?: () 
 // ---------------------------------------------------------------------------
 
 describe("ExtractPage — render-gate regression guards", () => {
+  test("pre-scan advisories do not interrupt the extraction workspace", () => {
+    render(<ExtractPage {...makeProps({ state: {
+      isRunning: true, sessionId: "test-session", filename: "test.pdf",
+      scoutWarnings: ["Document page hints are incomplete."],
+    } })} />);
+    expect(screen.queryByTestId("scout-warnings-banner")).toBeNull();
+    expect(screen.getByText("Document page hints are incomplete.").closest("details")).not.toHaveAttribute("open");
+    expect(screen.getByRole("button", { name: /stop all/i })).toBeEnabled();
+  });
+
+  test("scale conflicts stay visible while routine document checks are collapsed", () => {
+    const message = "Thousands and millions disagree; scale reset to unknown.";
+    render(<ExtractPage {...makeProps({ state: {
+      isRunning: true, sessionId: "test-session", filename: "test.pdf",
+      scoutWarnings: [message, "Page hints are incomplete."],
+      events: [{ event: "scale_conflict", timestamp: 1, data: {
+        severity: "coerced", scout_scale_unit: "thousands", resolved_scale_unit: "unknown", message,
+      } }],
+    } })} />);
+    const conflict = screen.getByText(/Thousands and millions disagree/);
+    expect(conflict).toBeVisible();
+    expect(conflict.closest("details")).toBeNull();
+    expect(screen.getByText("Page hints are incomplete.").closest("details")).not.toHaveAttribute("open");
+  });
+
   test("idle work queue exposes a local New extraction action", () => {
     render(<ExtractPage {...makeProps()} />);
     expect(screen.getByRole("heading", { name: "Work queue" })).toBeInTheDocument();

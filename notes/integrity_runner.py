@@ -20,9 +20,9 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Optional
 
-from notes import integrity
+from notes import integrity, lineage
 from notes import source_repository as srepo
-from notes.source_models import IntegrityMode, SourceBlock, SourceNote
+from notes.source_models import INPUT_KIND_PREPARED, IntegrityMode, SourceBlock, SourceNote
 from notes.writer import CELL_CHAR_LIMIT
 
 
@@ -46,6 +46,7 @@ def build_input(
             block_id=b["block_id"], block_kind=b["block_kind"],
             reading_order=b["reading_order"],
             canonical_html=b["canonical_html"] or "",
+            locator=json.loads(b["locator_json"] or "{}"),
             source_note_id=b["source_note_id"],
             owner_kind=_owner(b["owner_kind"]),
             table_group_id=b["table_group_id"],
@@ -93,25 +94,49 @@ def build_input(
         if not ids:
             continue
         from notes.html_to_text import rendered_length
+        from notes.source_render import render_blocks, BlockSelectionError
+        from notes.format_verify import verify_format_only
+        try:
+            selected_html = render_blocks(blocks, ids).html
+            selection_matches = verify_format_only(selected_html, r["html"] or "").ok
+        except BlockSelectionError:
+            selection_matches = False
 
         cells.append(integrity.CellRecord(
             sheet=r["sheet"], row=r["row"], block_ids=ids,
             rendered_sha256=r["source_rendered_sha256"],
-            current_sha256=r["current_html_sha256"],
+            current_sha256=lineage.content_sha256(r["html"]),
             content_origin=r["content_origin"],
             rendered_chars=rendered_length(r["html"]),
             cap=CELL_CHAR_LIMIT,
+            selection_matches_content=selection_matches,
         ))
 
+    # The numeric-sheet narrative deliberately repeats the corresponding
+    # complete List-of-Notes prose. Permit only that exact two-destination
+    # shape, backed by the source writer's explicit purpose receipt.
+    approved = set(approved_duplicate_block_ids)
+    numeric_prose_sheets = {"Notes-Issuedcapital", "Notes-RelatedPartytran"}
+    for event in conn.execute(
+        "SELECT DISTINCT block_id FROM notes_disposition_events WHERE run_id=? "
+        "AND generation_id=? AND reason_code='APPROVED_DUPLICATE_ROUTE'",
+        (run_id, generation_id),
+    ).fetchall():
+        bid = event["block_id"]
+        coords = [coord for coord in placements.get(bid, []) if coord in live_cells]
+        sheets = {coord[0] for coord in coords}
+        if len(coords) == 2 and "Notes-Listofnotes" in sheets and sheets & numeric_prose_sheets:
+            approved.add(bid)
     return integrity.IntegrityInput(
         blocks=blocks, notes=notes, usages=usages, cells=cells,
+        verified_inventory=bool(gen and gen["input_kind"] == INPUT_KIND_PREPARED),
         boundary_disagreements=list(boundary_disagreements),
         scout_available=scout_available,
         placements=placements,
         live_cells=live_cells,
         pages_expected=int(gen["pages_expected"] or 0) if gen else 0,
         pages_processed=int(gen["pages_processed"] or 0) if gen else 0,
-        approved_duplicate_block_ids=approved_duplicate_block_ids,
+        approved_duplicate_block_ids=frozenset(approved),
     )
 
 

@@ -176,3 +176,22 @@ def _pdf_sidecar_off_by_default():
             os.environ.pop("XBRL_PDF_SIDECAR", None)
         else:
             os.environ["XBRL_PDF_SIDECAR"] = prior
+
+
+@pytest.fixture(autouse=True)
+def _isolate_paid_upload_preparation(monkeypatch):
+    """Unrelated tests never launch upload-owned provider requests.
+
+    Preparation tests replace the dispatcher explicitly or call the real worker
+    with fake capture/Scout dependencies. This is a test seam, not a product flag.
+    """
+    import api.preparation
+
+    def no_paid_start(directory, run_id, **kwargs):
+        return {"status": "not_started", "stage": "pending", "run_id": run_id}
+
+    async def no_paid_ensure(directory, run_id):
+        return None
+
+    monkeypatch.setattr(api.preparation, "start_preparation", no_paid_start)
+    monkeypatch.setattr(api.preparation, "ensure_prepared", no_paid_ensure)

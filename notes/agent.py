@@ -172,7 +172,7 @@ def _render_sheet_map(filing_standard: str) -> str:
         "",
         (
             "Each notes sheet maps to a distinct MBRS XBRL concept, and "
-            "contents must NOT overlap across sheets. Know which sheet is "
+            "contents must not overlap except for the required capital and related-party dual placement. Know which sheet is "
             "yours before you copy any content."
         ),
         "",
@@ -682,6 +682,7 @@ def render_notes_prompt(
     source_blocks_available: bool = False,
     source_html_origin: str = "docx",
     denomination: Optional[str] = None,
+    prepared_source_required: bool = False,
 ) -> str:
     """Compose the system prompt for a notes agent.
 
@@ -720,12 +721,13 @@ def render_notes_prompt(
             f"must be one of {_VALID_FILING_STANDARDS}"
         )
     try:
-        base = _load_prompt("_notes_base.md")
+        base = _load_prompt("_notes_prepared.md" if prepared_source_required else "_notes_base.md")
     except FileNotFoundError:
         logger.error("prompts/_notes_base.md missing -- using fallback")
         base = _BASE_PROMPT_FALLBACK
     try:
-        specific = _load_prompt(_TEMPLATE_PROMPT_FILES[template_type])
+        specific = (f"=== TASK: {template_type.value} ===" if prepared_source_required
+                    else _load_prompt(_TEMPLATE_PROMPT_FILES[template_type]))
     except FileNotFoundError:
         specific = f"=== TASK: {template_type.value} ===\nNo per-template prompt defined yet."
 
@@ -781,7 +783,8 @@ def render_notes_prompt(
         base,
         _render_sheet_map(filing_standard),
         sheet_line,
-        _render_column_rules(filing_level),
+        (f"Prose is placed from source in column B. Numeric scope: {filing_level}."
+         if prepared_source_required else _render_column_rules(filing_level)),
         specific,
     ]
     if denomination_block_str:
@@ -800,11 +803,12 @@ def render_notes_prompt(
         parts.append(overlay_block)
     # Source-sidecar channel. Word keeps its verbatim table styling; scanned
     # PDF transcripts expose structure only.
-    source_block = (
-        _render_source_blocks_block()
-        if source_blocks_available
-        else _render_source_html_block(source_html_available, source_html_origin)
-    )
+    source_block = None
+    if not prepared_source_required:
+        source_block = (
+            _render_source_blocks_block() if source_blocks_available
+            else _render_source_html_block(source_html_available, source_html_origin)
+        )
     if source_block is not None:
         parts.append(source_block)
     # Phase 3: seed the template's row labels inline so agents aren't
@@ -889,6 +893,9 @@ class NotesDeps:
     run_id: Optional[int] = None
     db_path: Optional[str] = None
     source_generation_id: Optional[int] = None
+    prepared_source_required: bool = False
+    source_gap_notes: set[int] = field(default_factory=set)
+    source_gap_reported: bool = False
     # Note numbers the agent actually called read_source_note for. Feeds
     # format_unconsulted_source_nudge — run 74's Accounting Policies agent
     # never consulted the source at all, so its tables were rebuilt from the
@@ -1793,7 +1800,7 @@ def _submit_coverage_receipt_impl(
         sink_labels = flat
 
     errors = receipt.validate(
-        batch_note_nums=deps.batch_note_nums,
+        batch_note_nums=[n for n in deps.batch_note_nums if n not in deps.source_gap_notes],
         written_row_labels=sink_labels,
     )
     if errors:
@@ -2132,7 +2139,7 @@ def _source_block_note_nums(
 
         with repo.db_session(db_path) as conn:
             rows = srepo.fetch_notes(conn, generation_id)
-        return {int(r["top_note_num"]) for r in rows}
+        return {int(r["top_note_num"]) for r in rows if str(r["top_note_num"]).isdigit()}
     except Exception:  # noqa: BLE001 — advisory; degrade, never crash a run
         logger.warning(
             "could not load source note coverage for generation %s",
@@ -2158,7 +2165,7 @@ def _list_source_notes_impl(db_path: Optional[str], generation_id: Optional[int]
         return "The source reading found no notes."
     lines = [
         f"  note {r['top_note_num']:>3}: {per_note.get(r['source_note_id'], 0):>3} "
-        f"part(s)  {r['title'][:70]}"
+        f"part(s)  {r['title'][:70]} [source id: {r['source_note_id']}]"
         for r in notes_rows
     ]
     return _cap(
@@ -2167,7 +2174,7 @@ def _list_source_notes_impl(db_path: Optional[str], generation_id: Optional[int]
 
 
 def _read_source_manifest_impl(
-    db_path: Optional[str], generation_id: Optional[int], note_num: int
+    db_path: Optional[str], generation_id: Optional[int], note_num: int | str
 ) -> str:
     from db import repository as repo
     from notes import source_repository as srepo
@@ -2176,9 +2183,11 @@ def _read_source_manifest_impl(
     if not db_path or generation_id is None:
         return "No frozen source reading is available for this run."
     with repo.db_session(db_path) as conn:
+        note_ids = {n["source_note_id"] for n in srepo.fetch_notes(conn, generation_id)
+                    if n["source_note_id"] == str(note_num) or str(n["top_note_num"]) == str(note_num)}
         blocks = [
             b for b in srepo.fetch_blocks(conn, generation_id)
-            if b["source_note_id"] == f"n{note_num}"
+            if b["source_note_id"] in note_ids
         ]
     if not blocks:
         return (
@@ -2209,11 +2218,17 @@ def _view_source_blocks_impl(
             b["block_id"]: b for b in srepo.fetch_blocks(conn, generation_id)
         }
     unknown = [b for b in wanted if b not in by_id]
-    parts = [
-        f"--- {bid} ({by_id[bid]['block_kind']}) ---\n"
-        f"{by_id[bid]['canonical_html'] or ''}"
-        for bid in wanted if bid in by_id
-    ]
+    parts = []
+    for bid in wanted:
+        if bid not in by_id:
+            continue
+        block = by_id[bid]
+        locator = json.loads(block["locator_json"] or "{}")
+        uncertain = locator.get("capture_uncertain") or locator.get("capture_method") == "reconstructed"
+        provenance = (" [best-effort reconstruction; original wording is uncertain; use captured content]"
+                      if uncertain else "")
+        parts.append(f"--- {bid} ({block['block_kind']}){provenance} ---\n"
+                     f"{block['canonical_html'] or ''}")
     if not parts:
         return (
             "None of those part ids exist in this run's source reading. Call "
@@ -2460,6 +2475,16 @@ def create_notes_agent(
             db_path, source_generation_id,
         )
 
+    if source_generation_id is not None and db_path:
+        from db import repository as _source_repo
+        from notes.source_repository import fetch_generation
+        from notes.source_models import INPUT_KIND_PREPARED
+        with _source_repo.db_session(db_path) as conn:
+            generation = fetch_generation(conn, source_generation_id)
+            deps.prepared_source_required = bool(generation and generation["input_kind"] == INPUT_KIND_PREPARED)
+        if deps.prepared_source_required:
+            deps.source_block_notes = _source_block_note_nums(db_path, source_generation_id)
+
     system_prompt = render_notes_prompt(
         template_type=template_type,
         filing_level=filing_level,
@@ -2470,9 +2495,10 @@ def create_notes_agent(
         label_catalog=label_catalog,
         scout_context=scout_context,
         source_html_available=source_html_available,
-        source_blocks_available=bool(deps.source_block_notes),
+        source_blocks_available=bool(deps.source_block_notes) or deps.prepared_source_required,
         source_html_origin=source_html_origin,
         denomination=deps.denomination,
+        prepared_source_required=deps.prepared_source_required,
     )
     # Fix B (2026-06-20): notes agents expose the same search_pdf_text tool, so
     # on a fully-scanned PDF they'd waste a turn on a guaranteed-empty search —
@@ -2583,7 +2609,7 @@ def create_notes_agent(
     # HIDDEN on block-path runs (peer review 2026-08-06): its description
     # teaches copy-into-content, the exact workflow the block prompt replaces —
     # exposing both hands the agent two incompatible instructions again.
-    if source_html_available and not deps.source_block_notes:
+    if source_html_available and not (deps.source_block_notes or deps.prepared_source_required):
         async def read_source_note(ctx: RunContext[NotesDeps], note_num: int) -> str:
             """Fetch the ORIGINAL Word-source HTML for note ``note_num``.
 
@@ -2678,9 +2704,10 @@ def create_notes_agent(
 
         @agent.tool
         async def read_source_manifest(
-            ctx: RunContext[NotesDeps], note_num: int
+            ctx: RunContext[NotesDeps], note_num: int | str
         ) -> str:
-            """List the numbered parts of one source note — id, kind and a
+            """Accept the note number or stable source id (including unnumbered notes).
+            List the numbered parts of one source note — id, kind and a
             short preview of each. Name these ids in `write_note_from_source`.
             Previews are short on purpose; use `view_source_blocks` to read a
             part in full."""
@@ -2700,14 +2727,10 @@ def create_notes_agent(
                 ctx.deps.source_generation_id, block_ids,
             )
 
-    # The WRITE tool is scoped tighter than the read-only three (peer review
-    # 2026-08-06): it resolves prose notes_nodes only, so a numeric-template
-    # agent (Issued Capital / Related Party — `entry.is_numeric`) offering it
-    # would be taught a write that always rejects. Keyed on
-    # `deps.source_block_notes`, which the factory populates ONLY for prose
-    # templates with a non-empty reading — the same switch as the prompt and
-    # the nudges, so the taught workflow and the registered tools agree.
-    if deps.source_block_notes:
+    # Prepared numeric templates expose the same source writer for their
+    # taxonomy text-block slot. Numeric amount/share rows remain a separate
+    # numeric_values path; the shared resolver refuses HTML at those targets.
+    if deps.source_block_notes or deps.prepared_source_required:
 
         @agent.tool
         async def write_note_from_source(
@@ -2813,7 +2836,6 @@ def create_notes_agent(
             BinaryContent(data=png, media_type="image/png"),
         ]
 
-    @agent.tool
     async def write_notes(
         ctx: RunContext[NotesDeps], payloads: Any = None,
     ) -> str:
@@ -2826,6 +2848,12 @@ def create_notes_agent(
         built_payloads, errors = _build_notes_payloads(
             payloads, sub_agent_id=ctx.deps.sub_agent_id,
         )
+        if ctx.deps.prepared_source_required:
+            numeric_template = NOTES_REGISTRY[ctx.deps.template_type].is_numeric
+            if not numeric_template or any(p.content.strip() or not p.numeric_values for p in built_payloads):
+                return ("rejected: prepared source content must be placed with write_note_from_source. "
+                        "Select complete source blocks. If capture is missing, complete supported notes and leave the gap for human review. "
+                        "Numeric templates may write numeric_values separately with empty content.")
 
         # Sub-agent mode: hand payloads to the sub-coordinator and skip the
         # workbook write. The sub-coordinator aggregates across sub-agents
@@ -2943,6 +2971,45 @@ def create_notes_agent(
             )
         return msg
 
+    if not deps.prepared_source_required or NOTES_REGISTRY[template_type].is_numeric:
+        agent.tool(write_notes)
+
+    if deps.prepared_source_required:
+        @agent.tool
+        def report_source_gap(
+            ctx: RunContext[NotesDeps], source_pages: list[int], reason: str,
+            note_num: int | None = None,
+        ) -> str:
+            """Retain an unrepairable capture issue for human review and continue.
+
+            Cite original PDF pages and explain the missing or conflicting
+            content. A reported note stays unresolved; omit it from the batch
+            coverage receipt rather than claiming it was written or skipped.
+            """
+            from db import repository as gap_repo
+            from tools.pdf_viewer import count_pdf_pages
+            if not reason.strip() or not source_pages or any(
+                page < 1 or page > count_pdf_pages(ctx.deps.pdf_path) for page in source_pages
+            ):
+                return "Provide a reason and valid source PDF pages."
+            if note_num is not None and ctx.deps.batch_note_nums is not None and note_num not in ctx.deps.batch_note_nums:
+                return "Report only a note in your assigned batch."
+            finding_id = f"source-capture:{ctx.deps.sheet_name}:{note_num}:{sorted(set(source_pages))}"
+            with gap_repo.db_session(ctx.deps.db_path) as conn:
+                existing = conn.execute(
+                    "SELECT id FROM notes_review_flags WHERE run_id=? AND finding_id=? AND status='open'",
+                    (ctx.deps.run_id, finding_id),
+                ).fetchone()
+                if existing is None:
+                    gap_repo.insert_notes_review_flag(conn, run_id=ctx.deps.run_id, kind="needs_human",
+                        reason=reason, sheet=ctx.deps.sheet_name, finding_id=finding_id,
+                        source_pages=source_pages, evidence=f"Source capture issue, note {note_num}")
+            if note_num is not None:
+                ctx.deps.source_gap_notes.add(note_num)
+            ctx.deps.source_gap_reported = True
+            ctx.deps.write_skip_errors.append(f"Source capture requires human review: {reason}")
+            return "Recorded for human review. Complete the other notes; this note remains unresolved."
+
     @agent.tool
     async def save_result(ctx: RunContext[NotesDeps]) -> str:
         """Persist the final payload list + token report to the output dir.
@@ -2994,7 +3061,8 @@ def create_notes_agent(
                 Sheet-12 row is NEVER skipped — it goes to the catch-all row.
                 "No row fits" means catch-all.
 
-            Every note in your batch must appear exactly once. The tool
+            Notes reported with report_source_gap stay unresolved and are omitted.
+            Every other note in your batch must appear exactly once. The tool
             validates against the batch and your written payloads — if
             it returns an error message, fix the listed issues and
             resubmit the whole receipt.

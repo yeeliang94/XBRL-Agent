@@ -33,7 +33,7 @@ from notes.source_models import (
 # Bump when a check is added, removed, or changes what it counts as a problem.
 # Stored on every result so an old verdict is never silently re-interpreted
 # under new rules.
-RULE_VERSION = "integrity-1"
+RULE_VERSION = "integrity-5"
 
 UNRESOLVED = "unresolved"
 WARNING = "warning"
@@ -65,6 +65,7 @@ class CellRecord:
     rendered_chars: int = 0
     cap: int = 0
     note_num: Optional[str] = None
+    selection_matches_content: Optional[bool] = None
 
 
 @dataclass
@@ -87,6 +88,7 @@ class IntegrityInput:
     # Coordinates that currently hold a cell. A placement pointing outside
     # this set is pointing at nothing.
     live_cells: frozenset = frozenset()
+    verified_inventory: bool = False
 
 
 @dataclass
@@ -120,6 +122,19 @@ def _disposition_of(usages: dict, block_id: str) -> tuple[Optional[Disposition],
 # --------------------------------------------------------------------------
 # the checks
 # --------------------------------------------------------------------------
+
+def check_capture_uncertainty(inp: IntegrityInput) -> list[Finding]:
+    """Authorized reconstruction is nonblocking, but never source-exact."""
+    uncertain = [b.block_id for b in inp.blocks if b.owner_kind is OwnerKind.NOTE
+                 and ((b.locator or {}).get("capture_uncertain") or
+                      (b.locator or {}).get("capture_method") == "reconstructed")]
+    if not uncertain:
+        return []
+    return [Finding("source_uncertainty", WARNING,
+        "Some source text was reconstructed from unclear document content. "
+        "Its placement is checked against the captured version, not certified as exact transcription.",
+        uncertain)]
+
 
 def check_page_receipts(inp: IntegrityInput) -> list[Finding]:
     """Every page of the source was read."""
@@ -185,6 +200,12 @@ def check_dispositions(inp: IntegrityInput) -> list[Finding]:
                 f"block {b.block_id} is still unresolved",
                 [b.block_id], b.source_note_id,
             ))
+        elif (inp.verified_inventory and b.owner_kind is OwnerKind.NOTE
+              and disposition is Disposition.EXCLUDED
+              and reason not in {"EXPLICIT_POLICY_ROUTE", "APPROVED_DUPLICATE_ROUTE"}):
+            out.append(Finding("disposition", UNRESOLVED,
+                f"note content {b.block_id} cannot be settled as page furniture or metadata",
+                [b.block_id], b.source_note_id))
         elif not is_resolved(disposition, reason):
             out.append(Finding(
                 "disposition", UNRESOLVED,
@@ -192,11 +213,12 @@ def check_dispositions(inp: IntegrityInput) -> list[Finding]:
                 "which describes a problem rather than settling it",
                 [b.block_id], b.source_note_id,
             ))
-        elif disposition is Disposition.INCLUDED and not _live_placements(inp, b.block_id):
+        elif (disposition in (Disposition.INCLUDED, Disposition.ROUTED, Disposition.STRUCTURED_CONSUMED)
+              or (disposition is Disposition.EXCLUDED and reason in {"EXPLICIT_POLICY_ROUTE", "APPROVED_DUPLICATE_ROUTE"})) and not _live_placements(inp, b.block_id):
             out.append(Finding(
                 "placement", UNRESOLVED,
                 f"block {b.block_id} is recorded as used in a note, but it is "
-                "not in any cell that exists — it was moved out or the cell "
+                "not in any cell that exists (no destination placement) — it was moved out or the cell "
                 "was cleared",
                 [b.block_id], b.source_note_id,
             ))
@@ -222,7 +244,11 @@ def _block_settled(inp: IntegrityInput, bid: str) -> bool:
     disposition, reason = _disposition_of(inp.usages, bid)
     if disposition is None or not is_resolved(disposition, reason):
         return False
-    if disposition is Disposition.INCLUDED:
+    if inp.verified_inventory and disposition is Disposition.EXCLUDED and reason not in {"EXPLICIT_POLICY_ROUTE", "APPROVED_DUPLICATE_ROUTE"}:
+        block = next((b for b in inp.blocks if b.block_id == bid), None)
+        if block and block.owner_kind is OwnerKind.NOTE:
+            return False
+    if disposition in (Disposition.INCLUDED, Disposition.ROUTED, Disposition.STRUCTURED_CONSUMED) or reason in {"EXPLICIT_POLICY_ROUTE", "APPROVED_DUPLICATE_ROUTE"}:
         return bool(_live_placements(inp, bid))
     return True
 
@@ -256,7 +282,9 @@ def check_table_groups(inp: IntegrityInput) -> list[Finding]:
         outcomes = {
             _disposition_of(inp.usages, b.block_id)[0] for b in members
         }
-        if len(outcomes) > 1:
+        coords = [set(_live_placements(inp, b.block_id)) for b in members]
+        split_placement = any(coords) and not set.intersection(*coords)
+        if len(outcomes) > 1 or split_placement:
             out.append(Finding(
                 "table_group", UNRESOLVED,
                 f"the segments of one table ({group}) were handled "
@@ -268,8 +296,30 @@ def check_table_groups(inp: IntegrityInput) -> list[Finding]:
     return out
 
 
+def check_source_relationships(inp: IntegrityInput) -> list[Finding]:
+    """A placed fragment carries its continuation and verified context."""
+    from notes.source_write import expand_table_groups
+    by_id = {b.block_id: b for b in inp.blocks}
+    out = []
+    for cell in inp.cells:
+        required = set(expand_table_groups(inp.blocks, cell.block_ids))
+        missing = required - set(cell.block_ids)
+        if missing:
+            out.append(Finding("source_relationship", UNRESOLVED,
+                f"{cell.sheet} row {cell.row} is missing continuation or heading context",
+                sorted(missing | set(cell.block_ids))))
+    for block in inp.blocks:
+        if block.continues_block_id and block.continues_block_id not in by_id:
+            out.append(Finding("source_relationship", UNRESOLVED,
+                f"source part {block.block_id} references a missing continuation",
+                [block.block_id]))
+    return out
+
+
 def check_note_continuity(inp: IntegrityInput) -> list[Finding]:
     """Numbered notes run without a hole, or the hole is explained."""
+    if inp.verified_inventory:
+        return []
     nums = sorted(
         int(n.top_note_num) for n in inp.notes if str(n.top_note_num).isdigit()
     )
@@ -317,10 +367,12 @@ def check_render_matches_selection(inp: IntegrityInput) -> list[Finding]:
                 list(c.block_ids), c.note_num,
             ))
             continue
-        if (
-            c.rendered_sha256 and c.current_sha256
-            and c.rendered_sha256 != c.current_sha256
-        ):
+        # Prepared cells may receive validated style-only formatter patches.
+        # Compare their live content with the selected source blocks; replacing
+        # the source digest after formatting would lose the original receipt.
+        matches = (c.selection_matches_content is True if inp.verified_inventory else
+                   c.selection_matches_content is not False and c.rendered_sha256 == c.current_sha256)
+        if not c.rendered_sha256 or not c.current_sha256 or not matches:
             out.append(Finding(
                 "render_match", UNRESOLVED,
                 f"{c.sheet} row {c.row} no longer matches the source parts it "
@@ -358,6 +410,7 @@ def check_approved_duplicates(inp: IntegrityInput) -> list[Finding]:
     one coordinate and this check was structurally unable to fire. Its
     "failing" fixture hand-built a shape the real builder cannot produce.
     """
+    context_ids = {bid for b in inp.blocks for bid in (b.locator or {}).get("heading_ancestor_ids", [])}
     seen: dict[str, list[str]] = {}
     for bid, coords in inp.placements.items():
         for sheet, row in coords:
@@ -365,7 +418,7 @@ def check_approved_duplicates(inp: IntegrityInput) -> list[Finding]:
                 seen.setdefault(bid, []).append(f"{sheet}:{row}")
     out: list[Finding] = []
     for bid, places in seen.items():
-        if len(places) > 1 and bid not in inp.approved_duplicate_block_ids:
+        if len(places) > 1 and bid not in inp.approved_duplicate_block_ids and bid not in context_ids:
             out.append(Finding(
                 "approved_duplicate", UNRESOLVED,
                 f"source part {bid} was used in {len(places)} places "
@@ -389,10 +442,12 @@ def check_scout_agreement(inp: IntegrityInput) -> list[Finding]:
 
 CHECKS: tuple[Callable[[IntegrityInput], list[Finding]], ...] = (
     check_page_receipts,
+    check_capture_uncertainty,
     check_block_ownership,
     check_dispositions,
     check_prose_note_coverage,
     check_table_groups,
+    check_source_relationships,
     check_note_continuity,
     check_boundaries,
     check_render_matches_selection,
@@ -416,7 +471,8 @@ def missing_block_ids(result: IntegrityResult) -> list[str]:
     note because its page count is short would burn a turn on something it
     cannot change.
     """
-    repairable = {"disposition", "note_coverage", "table_group", "placement"}
+    repairable = {"disposition", "note_coverage", "table_group", "placement",
+                  "render_match", "source_relationship"}
     out: list[str] = []
     for f in result.findings:
         if f.blocking and f.check in repairable:

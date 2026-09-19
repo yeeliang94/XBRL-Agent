@@ -203,6 +203,7 @@ class ExtractionDeps:
         self.face_coverage_errors: list[str] = []
         self.face_coverage_warnings: list[str] = []
         self.seen_coverage_refusal: bool = False
+        self.source_fidelity_errors: list[str] = []
 
 
 def _render_single_page(pdf_path: str, page_num: int, dpi: int = 200) -> tuple[int, bytes]:
@@ -283,6 +284,7 @@ def _project_facts_if_canonical(deps: "ExtractionDeps", result) -> Optional[str]
             deps.template_id,
             result.resolved_writes,
             filing_level=deps.filing_level,
+            source_pdf_path=deps.pdf_path,
         )
     except Exception as e:
         logger.exception(
@@ -312,6 +314,23 @@ def _project_facts_if_canonical(deps: "ExtractionDeps", result) -> Optional[str]
         warning = "; ".join(parts) + "."
     else:
         warning = None
+
+    deps.source_fidelity_errors = [
+        f"source term {issue['source_term_id']} — {issue['reason']}"
+        for issue in proj.source_fidelity_issues
+    ]
+    if deps.source_fidelity_errors:
+        fidelity_warning = (
+            f"Source fidelity: {len(deps.source_fidelity_errors)} unsupported "
+            "source-term reuse issue(s): " + "; ".join(deps.source_fidelity_errors)
+        )
+        warning = f"{warning}\n{fidelity_warning}" if warning else fidelity_warning
+    if proj.source_evidence_unresolved:
+        evidence_warning = (
+            f"Source fidelity: {len(proj.source_evidence_unresolved)} fact(s) "
+            "need post-extraction evidence review."
+        )
+        warning = f"{warning}\n{evidence_warning}" if warning else evidence_warning
 
     # Reconcile successful workbook writes into two honest coverage outcomes:
     # canonical facts and workbook-only cells that had no concept mapping.

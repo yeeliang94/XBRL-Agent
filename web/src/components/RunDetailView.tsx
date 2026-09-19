@@ -742,7 +742,6 @@ export function RunDetailView({
     const checks = crossChecks as { status: string }[];
     const passed = checks.filter((c) => c.status === "passed").length;
     const failed = checks.filter((c) => c.status === "failed").length;
-    const advisories = checks.filter((c) => c.status === "warning").length;
     // A run's "statements" = the FACE statements the user chose (UX-QA #13b).
     // The old filter only dropped NOTES_LIST_OF_NOTES + the named pseudo-agents,
     // so it silently counted SCOUT and every per-template notes agent
@@ -758,11 +757,7 @@ export function RunDetailView({
     return {
       passed,
       graded: passed + failed,
-      advisories,
-      // "Needs attention" counts only BLOCKING failures (UX-QA #13a). Advisory
-      // warnings are non-blocking and get their own calmer "Advisory notes"
-      // tile — folding them in here made a clean-but-advisory run show an amber
-      // "Needs attention" next to "8/8 passing", which read as a contradiction.
+      // Only failed checks require attention; advisory detail stays in Cross-checks.
       needsAttention: failed,
       statements,
     };
@@ -933,11 +928,9 @@ export function RunDetailView({
         </div>
       </header>
 
-      {/* Finished-but-flagged warning (UX-QA #1): a completed_with_errors /
-          needs-review run must not look like a clean run. Name the failing
-          check(s), link straight to the Cross-checks tab, and keep Download
-          demoted until acknowledged. */}
-      {!reviewWorkspaceActive && isErrorOutcome && (
+      {/* Overview summarizes the outcome. The header retains run status and
+          Review issues navigation; other tabs show their specific findings. */}
+      {activeTab === "overview" && isErrorOutcome && (
         <div style={styles.errorBanner} role="alert">
           <div style={styles.errorBannerBody}>
             <strong style={styles.errorBannerTitle}>
@@ -955,16 +948,6 @@ export function RunDetailView({
               )}
             </span>
           </div>
-          {activeTab !== "overview" && activeTab !== issueTab && <div style={styles.errorBannerActions}>
-            <button
-              type="button"
-              onClick={() => selectTab(issueTab)}
-              className={uiClass.btnSecondary}
-              style={ui.buttonSecondary}
-            >
-              {issueTab === "checks" ? "View cross-checks" : "View activity"}
-            </button>
-          </div>}
         </div>
       )}
 
@@ -1018,24 +1001,6 @@ export function RunDetailView({
             style={ui.buttonSecondary}
           >
             View activity
-          </button>
-        </div>
-      )}
-
-      {reviewWorkspaceActive && isErrorOutcome && (
-        <div style={styles.reviewWarningStrip} role="alert" data-testid="review-run-warning">
-          <span>
-            {issueTab === "checks"
-              ? "This run has unresolved consistency checks. Review them before relying on these results."
-              : "This run has extraction or review issues. Check Activity before relying on these results."}
-          </span>
-          <button
-            type="button"
-            onClick={() => selectTab(issueTab)}
-            className={uiClass.btnGhost}
-            style={{ ...ui.buttonGhost, ...ui.buttonSm }}
-          >
-            {issueTab === "checks" ? "View cross-checks" : "View activity"}
           </button>
         </div>
       )}
@@ -1204,9 +1169,6 @@ export function RunDetailView({
               value={String(outcomes.needsAttention)}
               tone={outcomes.needsAttention > 0 ? "warning" : "success"}
             />
-            {outcomes.advisories > 0 && (
-              <MetricTile label="Advisory notes" value={String(outcomes.advisories)} />
-            )}
             <MetricTile label="Statements" value={String(outcomes.statements)} />
           </div>
           <details>
@@ -1531,11 +1493,6 @@ const styles = {
     fontFamily: pwc.fontBody,
     fontSize: 13,
     color: pwc.grey700,
-  } as React.CSSProperties,
-  errorBannerActions: {
-    display: "flex",
-    alignItems: "center",
-    gap: pwc.space.sm,
   } as React.CSSProperties,
   reviewWarningStrip: {
     display: "flex",

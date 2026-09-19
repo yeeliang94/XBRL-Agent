@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { RunConfigPayload } from "../lib/types";
+import type { PreparationSnapshot, RunConfigPayload } from "../lib/types";
 import { userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
@@ -7,6 +7,7 @@ import type { AppState, AppAction } from "../lib/appReducer";
 import { notesTabLabel, agentSubAgentSummary } from "../lib/appReducer";
 import { fetchRunDetail, getResultJson, getExtendedSettings } from "../lib/api";
 import { PageHeader } from "../components/PageHeader";
+import { DocumentPreparation } from "../components/DocumentPreparation";
 import { UploadPanel } from "../components/UploadPanel";
 import { HomeHero } from "../components/HomeHero";
 import { PreRunPanel } from "../components/PreRunPanel";
@@ -56,7 +57,7 @@ function liveStageMessage(stage: AppState["pipelineStage"]): string {
     case "reviewing": return "Tracing flagged figures back to the source document.";
     case "re_checking": return "Re-running cross-checks after the review.";
     case "reviewing_notes": return "Checking extracted notes against the source document.";
-    case "formatting_notes": return "Standardising note formatting for mTool.";
+    case "formatting_notes": return "Applying MBRS formatting while preserving source content.";
     case "validating_notes": return "Validating the completed notes templates.";
     case "done": return "All run stages have finished.";
     default: return "Agents are working in parallel across the selected statements and notes.";
@@ -124,6 +125,11 @@ export function ExtractPage({
   onViewAllRuns,
   isAdmin = false,
 }: ExtractPageProps) {
+  const [preparationState, setPreparationState] = useState<{ sessionId: string; snapshot: PreparationSnapshot } | null>(null);
+  const preparation = preparationState?.sessionId === state.sessionId ? preparationState.snapshot : undefined;
+  const acceptPreparation = useCallback((snapshot: PreparationSnapshot) => {
+    if (state.sessionId) setPreparationState({ sessionId: state.sessionId, snapshot });
+  }, [state.sessionId]);
   // Starting replaces a long setup form. Reset its scroll position once so
   // the operator sees the new progress heading rather than the old footer.
   const wasRunning = useRef(state.isRunning);
@@ -250,7 +256,7 @@ export function ExtractPage({
           agentId: "source-preparation",
           label: "Source preparation",
           role: "SOURCE_PREPARATION",
-          status: state.pipelineStage === "transcribing_source" ? "running" : "complete",
+          status: state.pipelineStage === "transcribing_source" ? "running" : state.pdfSidecar?.status === "built" ? "complete" : "pending",
           task: state.pipelineActivity?.message ?? "Preparing scanned source pages",
           taskDetail: state.pipelineActivity?.total
             ? `${state.pipelineActivity.completed ?? 0} of ${state.pipelineActivity.total}`
@@ -267,7 +273,7 @@ export function ExtractPage({
     if (!("source-preparation" in agentTabsAgents)) return state.agentTabOrder;
     const without = state.agentTabOrder.filter((id) => id !== "source-preparation");
     const scoutIndex = without.indexOf("scout");
-    const insertAt = scoutIndex >= 0 ? scoutIndex + 1 : 0;
+    const insertAt = scoutIndex >= 0 ? scoutIndex : 0;
     return [...without.slice(0, insertAt), "source-preparation", ...without.slice(insertAt)];
   }, [agentTabsAgents, state.agentTabOrder]);
   const agentTabsSkeletons = useMemo(
@@ -293,7 +299,9 @@ export function ExtractPage({
     const monitoredAgents = requestedRoles.size > 0 ? requestedAgents : agents;
     return {
       total: requestedRoles.size > 0 ? requestedRoles.size : agents.length,
-      complete: monitoredAgents.filter((agent) => agent.status === "complete").length,
+      complete: monitoredAgents.filter((agent) =>
+        agent.status === "complete" || agent.status === "skipped"
+      ).length,
       running: agents.filter((agent) => agent.status === "running" || agent.status === "aborting").length,
       // Run-check agents are deliberately outside the requested-workstream
       // denominator, but their failures must still be visible to operators.
@@ -312,6 +320,10 @@ export function ExtractPage({
   // Emitted once before the notes agents launch, only when the Settings
   // toggle is on and the PDF is a scan. Advisory in both outcomes.
   const sidecarNotice = state.pdfSidecar ? describePdfSidecar(state.pdfSidecar) : null;
+  const scaleConflicts = [...new Set(state.events.flatMap((event) =>
+    event.event === "scale_conflict" && event.data.message ? [event.data.message] : [],
+  ))];
+  const documentChecks = state.scoutWarnings.filter((message) => !scaleConflicts.includes(message));
   const [expandedActivityRunId, setExpandedActivityRunId] = useState<number | null>(null);
   const completedRunId = state.complete?.runId ?? state.currentRunId;
   const showCompletedActivity = completedRunId != null && expandedActivityRunId === completedRunId;
@@ -412,6 +424,10 @@ export function ExtractPage({
         )}
       </HomeHero>
 
+      {state.sessionId && !state.isComplete && (
+        <DocumentPreparation key={state.sessionId} sessionId={state.sessionId} hideCompleted={state.isRunning} onSnapshot={acceptPreparation} />
+      )}
+
       {/* Pre-run configuration panel — shown after upload, hidden once running.
           A `key` tied to currentRunId forces a remount when the page navigates
           to a different /run/{id}, so PreRunPanel re-runs its useState
@@ -422,6 +438,7 @@ export function ExtractPage({
         <PreRunPanel
           key={state.currentRunId ?? "fresh"}
           sessionId={state.sessionId}
+          preparation={preparation}
           getSettings={getExtendedSettings}
           onRun={handleMultiRun}
           initialConfig={draftConfig}
@@ -574,28 +591,20 @@ export function ExtractPage({
         />
       )}
 
-      {/* Scout-quality warnings banner. Surfaces the pre-flight completeness
-          probe (scout_warnings) and scale-unit reconciliation (scale_conflict)
-          findings so a degraded scout pack is visible to the operator before /
-          during extraction. Advisory only — the run proceeds (gotcha #13).
-          Reuses the warning palette; these are run-level (no agent tab). */}
-      {state.scoutWarnings.length > 0 && (
-        <div role="status" data-testid="scout-warnings-banner" style={styles.partialMergeBox}>
-          <h3 style={styles.partialMergeTitle}>Document pre-scan warnings</h3>
-          <p style={styles.partialMergeMessage}>
-            The document scout flagged the following before extraction. These are
-            advisory — verify against the PDF; the run still proceeds.
-          </p>
-          <ul style={{ margin: `${pwc.space.xs}px 0 0`, paddingLeft: pwc.space.lg }}>
-            {state.scoutWarnings.map((w, i) => (
-              <li key={i} style={styles.partialMergeMessage}>{w}</li>
-            ))}
-          </ul>
-        </div>
+      {scaleConflicts.map((message) => (
+        <p key={message} role="status" style={styles.partialMergeMessage}>
+          <strong>Check figure units: </strong>{message}
+        </p>
+      ))}
+      {documentChecks.length > 0 && (
+        <details style={{ marginTop: pwc.space.sm }}>
+          <summary>Document check details</summary>
+          <ul>{documentChecks.map((message) => <li key={message}>{message}</li>)}</ul>
+        </details>
       )}
 
       {/* Same run-level palette as the scout banner; no agent tab (no agent_id). */}
-      {sidecarNotice && (
+      {sidecarNotice && !preparation && (
         <div role="status" data-testid="pdf-sidecar-notice" style={styles.partialMergeBox}>
           <h3 style={styles.partialMergeTitle}>{sidecarNotice.title}</h3>
           <p style={styles.partialMergeMessage}>{sidecarNotice.message}</p>
@@ -784,7 +793,7 @@ export function ActiveTabPanel({
       ? state.pipelineActivity?.message ?? "Preparing scanned source pages."
       : state.pdfSidecar
         ? describePdfSidecar(state.pdfSidecar).message
-        : "Scanned source preparation has finished.";
+        : "Awaiting a confirmed source preparation outcome.";
     return (
       <div role="tabpanel" aria-label="Source preparation activity" style={styles.activityCardAttached}>
         <div style={styles.activityHeader}>
@@ -793,7 +802,7 @@ export function ActiveTabPanel({
               <div style={styles.activityEyebrow}>Selected workstream</div>
               <div style={styles.activityTitle}>Source preparation</div>
             </div>
-            <span style={styles.activeAgentStatus}>{active ? "Working" : "Complete"}</span>
+            <span style={styles.activeAgentStatus}>{active ? "Working" : state.pdfSidecar?.status === "built" ? "Complete" : "Unconfirmed"}</span>
           </div>
           <div style={styles.activityHeaderRight}>
             {showStopAll && (
@@ -827,13 +836,7 @@ export function ActiveTabPanel({
               isRunning={active}
               streamKey="source-preparation"
             />
-          ) : (
-            <p style={{ margin: `${pwc.space.lg}px 0 0`, color: pwc.grey500, fontSize: 13 }}>
-              {active
-                ? "Waiting for a provider reasoning summary…"
-                : "The provider did not return a readable reasoning summary for this step."}
-            </p>
-          )}
+          ) : null}
         </div>
       </div>
     );

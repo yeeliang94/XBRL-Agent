@@ -118,7 +118,7 @@ def test_naming_half_a_split_table_pulls_in_the_rest(conn_gen):
         block_ids=["b3"],
     )
     assert out.block_ids == ["b3", "b4"]
-    assert any("rest of a table" in w for w in out.warnings)
+    assert any("verified continuation" in w for w in out.warnings)
 
 
 def test_the_agent_is_told_what_was_added(conn_gen):
@@ -218,3 +218,75 @@ def test_expand_table_groups_is_a_no_op_without_a_group():
 
 def test_expand_table_groups_returns_reading_order():
     assert source_write.expand_table_groups(BLOCKS, ["b4"]) == ["b3", "b4"]
+
+
+def test_continuation_selection_preserves_all_pages_and_heading_context(conn_gen):
+    conn, run_id, gen = conn_gen
+    blocks = [
+        SourceBlock("h", "heading", 10, "<h3>Policies</h3>"),
+        SourceBlock("p1", "paragraph", 11, "<p>First part</p>",
+                    locator={"heading_ancestor_ids": ["h"]}),
+        SourceBlock("p2", "paragraph", 12, "<p>second part</p>", continues_block_id="p1"),
+        SourceBlock("p3", "paragraph", 13, "<p>last part</p>", continues_block_id="p2"),
+    ]
+    srepo.write_blocks(conn, gen, blocks)
+    result = source_write.write_cell_from_blocks(conn, run_id=run_id, generation_id=gen,
+        sheet="Notes", row=10, block_ids=["p2"])
+    assert result.block_ids == ["h", "p1", "p2", "p3"]
+
+
+def test_missing_verified_continuation_is_refused(conn_gen):
+    conn, run_id, gen = conn_gen
+    srepo.write_blocks(conn, gen, [SourceBlock("tail", "paragraph", 9,
+        "<p>tail</p>", continues_block_id="missing")])
+    with pytest.raises(source_write.SourceWriteError, match="unknown block"):
+        source_write.write_cell_from_blocks(conn, run_id=run_id, generation_id=gen,
+            sheet="Notes", row=10, block_ids=["tail"])
+
+
+@pytest.mark.parametrize("selected", ["list", "next_item"])
+def test_cross_kind_page_relationship_keeps_new_item_outside_previous_list_item(conn_gen, selected):
+    from bs4 import BeautifulSoup
+
+    conn, run_id, gen = conn_gen
+    blocks = [
+        SourceBlock("list", "list", 10,
+                    "<ol><li>At the beginning:<ol><li>First finding</li>"
+                    "<li>Second finding</li></ol></li></ol>",
+                    locator={"required_related_block_ids": ["next_item"]}),
+        SourceBlock("next_item", "paragraph", 11,
+                    "<p>(b) At date of this report <strong>directors</strong> confirm.</p>",
+                    locator={"required_related_block_ids": ["list"]}),
+    ]
+    srepo.write_blocks(conn, gen, blocks)
+    result = source_write.write_cell_from_blocks(conn, run_id=run_id, generation_id=gen,
+        sheet="Notes", row=10, block_ids=[selected])
+    assert result.block_ids == ["list", "next_item"]
+    row = conn.execute("SELECT html FROM notes_cells WHERE run_id = ? AND row = 10", (run_id,)).fetchone()
+    soup = BeautifulSoup(row["html"], "html.parser")
+    assert len(soup.find_all("li")) == 3
+    paragraph = soup.find("p")
+    assert paragraph.get_text() == "(b) At date of this report directors confirm."
+    assert paragraph.find_parent("li") is None
+    assert paragraph.strong.get_text() == "directors"
+
+
+def test_automatic_relink_does_not_overwrite_human_edit(conn_gen):
+    conn, run_id, gen = conn_gen
+    source_write.write_cell_from_blocks(conn, run_id=run_id, generation_id=gen,
+        sheet="Notes", row=10, block_ids=["b2"])
+    lineage.mark_human_edit(conn, run_id, "Notes", 10, "<p>Human correction</p>")
+    with pytest.raises(source_write.SourceWriteError, match="human edit"):
+        source_write.write_cell_from_blocks(conn, run_id=run_id, generation_id=gen,
+            sheet="Notes", row=10, block_ids=["b1", "b2"])
+
+
+def test_manual_source_attachment_can_replace_the_users_edit(conn_gen):
+    conn, run_id, gen = conn_gen
+    source_write.write_cell_from_blocks(conn, run_id=run_id, generation_id=gen,
+        sheet="Notes", row=10, block_ids=["b2"])
+    lineage.mark_human_edit(conn, run_id, "Notes", 10, "<p>Human correction</p>")
+    outcome = source_write.write_cell_from_blocks(conn, run_id=run_id, generation_id=gen,
+        sheet="Notes", row=10, block_ids=["b1", "b2"], actor="human")
+    assert outcome.block_ids == ["b1", "b2"]
+    assert lineage.read_lineage(conn, run_id, "Notes", 10).diverged is False

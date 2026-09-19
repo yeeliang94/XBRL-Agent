@@ -23,6 +23,7 @@ source-exact and is not.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass, field
 from typing import Iterable, Optional, Sequence
@@ -67,6 +68,7 @@ def load_blocks(conn: sqlite3.Connection, generation_id: int) -> list[SourceBloc
             canonical_html=r["canonical_html"] or "",
             content_sha256=r["content_sha256"],
             page=r["page"],
+            locator=json.loads(r["locator_json"] or "{}"),
             source_note_id=r["source_note_id"],
             table_group_id=r["table_group_id"],
             continues_block_id=r["continues_block_id"],
@@ -85,18 +87,27 @@ def expand_table_groups(
     agent to notice the split itself just moves the failure upstream.
     """
     by_id = {b.block_id: b for b in available}
-    wanted = list(dict.fromkeys(block_ids))
-    groups = {
-        by_id[bid].table_group_id for bid in wanted
-        if bid in by_id and by_id[bid].table_group_id
-    }
-    if not groups:
-        return wanted
-    for b in available:
-        if b.table_group_id in groups and b.block_id not in wanted:
-            wanted.append(b.block_id)
+    wanted = set(block_ids)
+    # Expand to a fixed point: a continuation may itself reference another
+    # page, a table caption or heading ancestry. These are verified source
+    # relationships, never inferred from labels or matching column counts.
+    while True:
+        previous = set(wanted)
+        groups = {by_id[bid].table_group_id for bid in wanted
+                  if bid in by_id and by_id[bid].table_group_id}
+        for block in available:
+            if block.table_group_id in groups or block.continues_block_id in wanted:
+                wanted.add(block.block_id)
+            if block.block_id in wanted:
+                if block.continues_block_id:
+                    wanted.add(block.continues_block_id)
+                locator = block.locator or {}
+                for key in ("heading_ancestor_ids", "required_related_block_ids"):
+                    wanted.update(locator.get(key, []))
+        if previous == wanted:
+            break
     order = {b.block_id: b.reading_order for b in available}
-    return sorted(wanted, key=lambda bid: order.get(bid, 0))
+    return sorted(wanted, key=lambda bid: (order.get(bid, -1), bid))
 
 
 def resolve_target(
@@ -125,6 +136,16 @@ def resolve_target(
     node = repo.fetch_notes_node(
         conn, sheet=sheet, row=row, template_prefix=template_prefix,
     )
+    if node is None and sheet in {"Notes-Issuedcapital", "Notes-RelatedPartytran"}:
+        # These mixed templates live in the canonical concept registry. Only
+        # taxonomy text-block slots are prose destinations; numeric amount and
+        # share-count rows must never receive source HTML.
+        from concept_model.filing_targets import resolve_writable_html_target
+        found = resolve_writable_html_target(conn, family_prefix=template_prefix, sheet=sheet, row=row)
+        if found:
+            node = {"node_uuid": found["concept_uuid"], "template_id": found["template_id"],
+                    "row": row, "label": found["label"], "kind": "LEAF", "slot_role": "INPUT",
+                    "numeric_note_prose": True}
     if node is None:
         raise SourceWriteError(
             f"{sheet} row {row} is not a row of this filing's notes "
@@ -154,6 +175,7 @@ def write_cell_from_blocks(
     disposition: Disposition = Disposition.INCLUDED,
     template_prefix: Optional[str] = None,
     allowed_sheets: Optional[Sequence[str]] = None,
+    expected_revision: Optional[int] = None,
 ) -> WriteOutcome:
     """Build and store one cell from the named source blocks.
 
@@ -166,6 +188,7 @@ def write_cell_from_blocks(
     live caller passes it.
     """
     concept_uuid = None
+    numeric_note_prose = False
     if template_prefix:
         target = resolve_target(
             conn, sheet, row,
@@ -173,6 +196,7 @@ def write_cell_from_blocks(
         )
         label = target.get("label") or label
         concept_uuid = target.get("node_uuid")
+        numeric_note_prose = bool(target.get("numeric_note_prose"))
 
     if not block_ids:
         raise SourceWriteError(
@@ -180,9 +204,16 @@ def write_cell_from_blocks(
             "so name the parts it should contain."
         )
 
+    generation = srepo.fetch_generation(conn, generation_id)
+    if generation is None or generation["run_id"] != run_id or generation["status"] != "active":
+        raise SourceWriteError("the source generation is stale or belongs to another run; reload the active source.")
     available = load_blocks(conn, generation_id)
     try:
         wanted = expand_table_groups(available, block_ids)
+        selected = [b for b in available if b.block_id in wanted]
+        owners = {b.source_note_id for b in selected if b.source_note_id}
+        if sheet == "Notes-Listofnotes" and len(owners) > 1:
+            raise SourceWriteError("one List-of-Notes field may contain only one top-level disclosure.")
         rendered = source_render.render_blocks(
             available, wanted, format_ops=format_ops,
             row_label=f"{sheet} row {row}",
@@ -230,6 +261,17 @@ def write_cell_from_blocks(
     if owns_txn:
         conn.execute("BEGIN IMMEDIATE")
     try:
+        active = srepo.fetch_generation(conn, generation_id)
+        if active is None or active["status"] != "active":
+            raise SourceWriteError("the source generation changed during rendering; reload the active source.")
+        existing = conn.execute(
+            "SELECT content_origin, content_revision FROM notes_cells WHERE run_id=? AND sheet=? AND row=?",
+            (run_id, sheet, row),
+        ).fetchone()
+        if existing and existing["content_origin"] == "human_modified" and actor != "human":
+            raise SourceWriteError("this cell contains a human edit; automatic source placement cannot overwrite it.")
+        if expected_revision is not None and (existing is None or existing["content_revision"] != expected_revision):
+            raise SourceWriteError("this cell changed after it was read; reload it before repairing.")
         repo.upsert_notes_cell(
             conn, run_id=run_id, sheet=sheet, row=row, label=label,
             html=rendered.html, evidence=evidence,
@@ -247,6 +289,8 @@ def write_cell_from_blocks(
             srepo.record_disposition_in_txn(
                 conn, run_id, generation_id, bid, disposition,
                 actor=actor, sheet=sheet, row=row, target_kind="prose_cell",
+                reason_code="APPROVED_DUPLICATE_ROUTE" if numeric_note_prose else None,
+                route_type="numeric_note_prose" if numeric_note_prose else None,
             )
         # The PLACEMENT ledger (v37) is what makes a relink honest: blocks
         # dropped from this cell are deactivated here, so they stop counting
@@ -266,7 +310,7 @@ def write_cell_from_blocks(
     if added:
         warnings.append(
             f"note: {', '.join(added)} were added because they are the rest "
-            "of a table your selection started."
+            "of the verified continuation, table or heading context."
         )
     return WriteOutcome(
         sheet=sheet, row=row, block_ids=list(rendered.block_ids),

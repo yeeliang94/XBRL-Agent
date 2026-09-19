@@ -42,7 +42,7 @@ from notes.writer import (
 
 # Bump when the render changes shape, so a stored `source_rendered_sha256`
 # from an older build is recognisably stale rather than silently compared.
-RENDER_VERSION = "src-render-1"
+RENDER_VERSION = "src-render-2"
 
 _TABLE_OPEN_RE = re.compile(r"<table\b[^>]*>", re.IGNORECASE)
 
@@ -123,6 +123,32 @@ def _merge_table_group(parts: list[str]) -> str:
 
 def _assemble(blocks: Sequence[SourceBlock]) -> str:
     """Concatenate blocks, rejoining any table group into a single table."""
+    # A continued paragraph retains one logical paragraph. Fragment text
+    # includes its verified boundary whitespace; do not invent or normalize it.
+    from dataclasses import replace
+    assembled = []
+    positions = {}
+    for block in blocks:
+        prior_index = positions.get(block.continues_block_id)
+        if prior_index is not None and block.block_kind == "paragraph":
+            prior = assembled[prior_index]
+            left = BeautifulSoup(prior.canonical_html, "html.parser")
+            right = BeautifulSoup(block.canonical_html, "html.parser")
+            lp, rp = left.find("p"), right.find("p")
+            if lp is not None and rp is not None and len(left.find_all("p")) == len(right.find_all("p")) == 1:
+                separator = (block.locator or {}).get("continuation_separator", "")
+                if separator not in ("", " "):
+                    raise BlockSelectionError("invalid verified continuation separator")
+                if separator:
+                    lp.append(separator)
+                for child in list(rp.contents):
+                    lp.append(child.extract())
+                assembled[prior_index] = replace(prior, canonical_html=str(left))
+                positions[block.block_id] = prior_index
+                continue
+        positions[block.block_id] = len(assembled)
+        assembled.append(block)
+    blocks = assembled
     out: list[str] = []
     pending_group: Optional[str] = None
     pending_parts: list[str] = []
@@ -188,7 +214,10 @@ def render_blocks(
         rendered_chars=length,
         block_ids=[b.block_id for b in chosen],
         style_source=style_source,
-        content_origin=ContentOrigin.SOURCE_EXACT,
+        content_origin=(ContentOrigin.VISION_TRANSCRIBED
+                        if any((b.locator or {}).get("capture_uncertain") or
+                               (b.locator or {}).get("capture_method") == "reconstructed" for b in chosen)
+                        else ContentOrigin.SOURCE_EXACT),
         source_rendered_sha256=render_sha256(styled),
         oversized=oversized,
         warnings=warnings,

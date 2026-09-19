@@ -251,13 +251,18 @@ class _FakeAgent:
 
 
 @pytest.mark.asyncio
-async def test_single_notes_agent_without_writes_reports_failed(tmp_path: Path):
+@pytest.mark.parametrize("reported_gap,assigned,gaps,succeeds", [
+    (False, [1], [], False), (True, [], [], False),
+    (True, [1, 2], [1], False), (True, [1, 2], [1, 2], True),
+])
+async def test_single_notes_agent_without_writes_reports_failed(tmp_path: Path, reported_gap, assigned, gaps, succeeds):
     """Agent completes its reasoning loop but never calls write_notes —
     deps.wrote_once stays False, deps.filled_path stays empty. The coordinator
     must detect the no-op and return status='failed' so a downstream merger
     doesn't try to ingest a non-existent workbook."""
     from notes import coordinator as coord_mod
     from notes.agent import NotesDeps, TokenReport
+    from scout.notes_discoverer import NoteInventoryEntry
 
     def fake_create_notes_agent(**kwargs):
         deps = NotesDeps(
@@ -272,6 +277,10 @@ async def test_single_notes_agent_without_writes_reports_failed(tmp_path: Path):
             inventory=kwargs.get("inventory") or [],
             filled_filename=f"NOTES_{kwargs['template_type'].value}_filled.xlsx",
         )
+        if reported_gap:
+            deps.source_gap_reported = True
+            deps.source_gap_notes.update(gaps)
+            deps.write_skip_errors.append("Source capture requires human review: missing table")
         return _FakeAgent(), deps
 
     with patch.object(coord_mod, "create_notes_agent", side_effect=fake_create_notes_agent), \
@@ -279,12 +288,18 @@ async def test_single_notes_agent_without_writes_reports_failed(tmp_path: Path):
         result = await coord_mod._run_single_notes_agent(
             template_type=NotesTemplateType.CORP_INFO,
             pdf_path=str(tmp_path / "x.pdf"),
-            inventory=[],
+            inventory=[NoteInventoryEntry(n, f"Note {n}", (1, 1)) for n in assigned],
             filing_level="company",
             model="test",
             output_dir=str(tmp_path),
         )
 
-    assert result.status == "failed"
-    assert result.workbook_path is None
-    assert "without writing" in (result.error or "")
+    if succeeds:
+        assert result.status == "succeeded"
+        assert result.workbook_path == "/tmp/fake-template.xlsx"
+        assert any("missing table" in warning for warning in result.warnings)
+        assert result.cells_written == []
+    else:
+        assert result.status == "failed"
+        assert result.workbook_path is None
+        assert "without writing" in (result.error or "")

@@ -106,7 +106,7 @@ const styles = {
     marginTop: 0,
     padding: `${pwc.space.md}px ${pwc.space.lg}px`,
     borderRadius: 0,
-    background: pwc.orange50,
+    background: pwc.white,
     border: "none",
     borderTop: `1px solid ${pwc.grey200}`,
     fontFamily: pwc.fontBody,
@@ -258,18 +258,18 @@ function TerminalRow({ event }: { event: TerminalEvent }) {
             </div>
             <span style={{ ...ui.status, flexShrink: 0 }}>
               <StatusIcon symbol={hasWarnings ? STATUS_SYMBOLS.attention : STATUS_SYMBOLS.success} />
-              {hasWarnings ? `Completed · ${warnings!.length} warning${warnings!.length === 1 ? "" : "s"}` : "Completed"}
+              {hasWarnings ? "Completed with issues" : "Completed"}
             </span>
           </div>
           {hasWarnings && (
-            <div role="note" aria-label="Run warnings" style={styles.warningsBlock}>
-              <div style={styles.warningsTitle}>Warnings</div>
+            <details style={styles.warningsBlock}>
+              <summary style={{ ...styles.warningsTitle, cursor: "pointer" }}>Completion details</summary>
               <ul style={styles.warningsList}>
                 {warnings!.map((w, i) => (
                   <li key={i}>{w}</li>
                 ))}
               </ul>
-            </div>
+            </details>
           )}
         </div>
       );

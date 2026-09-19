@@ -126,7 +126,7 @@ describe("ValidatorTab", () => {
     ];
     const { container } = render(<ValidatorTab crossChecks={checks} />);
 
-    expect(screen.getByText(/Advisory Warnings/i)).toBeTruthy();
+    expect(screen.getByText(/Additional check details/i)).toBeTruthy();
     expect(screen.getByText(/income tax policy/)).toBeTruthy();
     expect(screen.getByText(/No overlap/)).toBeTruthy();
 
@@ -161,7 +161,7 @@ describe("ValidatorTab", () => {
     ];
     const { container } = render(<ValidatorTab crossChecks={checks} />);
 
-    expect(screen.getByText(/Advisory Warnings/i)).toBeTruthy();
+    expect(screen.getByText(/Additional check details/i)).toBeTruthy();
     // Numeric table not rendered.
     expect(container.querySelector("table")).toBeNull();
   });
@@ -181,8 +181,8 @@ describe("ValidatorTab", () => {
     ];
     const { container } = render(<ValidatorTab crossChecks={checks} />);
 
-    expect(screen.getByText("2 advisory warnings")).toBeInTheDocument();
-    expect(screen.getByText(/non-blocking checks worth reviewing/i)).toBeInTheDocument();
+    expect(screen.queryByText("2 advisory warnings")).toBeNull();
+    expect(screen.getByText("Additional check details").closest("details")).not.toHaveAttribute("open");
     expect(screen.queryByText(/can reflect printed folio numbers/i)).toBeNull();
     expect(screen.getByText(/Notes consistency:/i)).toBeInTheDocument();
     expect(screen.getByText(/Notes and face tie-out: Revenue/i)).toBeInTheDocument();
