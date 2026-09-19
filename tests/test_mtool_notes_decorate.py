@@ -889,3 +889,17 @@ def test_strip_inline_styles_also_drops_the_source_styled_marker():
     # And with the marker gone, re-decoration applies the theme grid again.
     redecorated = decorate_notes_html(out, NotesTableStyle())
     assert "#ffffff" not in redecorated
+
+
+@pytest.mark.parametrize("level", range(1, 7))
+def test_all_source_heading_levels_retain_semantics_and_receive_mbrs_style(level):
+    out = decorate_notes_html(
+        f"<h{level}>Policy <em>detail</em></h{level}>",
+        NotesTableStyle(heading_size_pt=14, heading_weight=700),
+    )
+    soup = BeautifulSoup(out, "html.parser")
+    heading = soup.find(f"h{level}")
+    assert heading is not None
+    assert heading.em.get_text() == "detail"
+    assert "font-size: 14pt" in heading["style"]
+    assert "font-weight: 700" in heading["style"]

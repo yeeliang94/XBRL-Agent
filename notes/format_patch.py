@@ -456,7 +456,7 @@ def _resolve_target(soup: BeautifulSoup, target: dict[str, Any]) -> Iterable[Tag
             # Top-level prose blocks only — a paragraph INSIDE a table cell is
             # the cell's content, styled via cell targets; block-level
             # indent/align must not fight the cell-level text_align.
-            for el in soup.find_all(["p", "h3", "li"]):
+            for el in soup.find_all(["p", "h1", "h2", "h3", "h4", "h5", "h6", "li"]):
                 if el.find_parent("table") is None:
                     yield el
             return

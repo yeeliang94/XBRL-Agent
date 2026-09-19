@@ -482,3 +482,22 @@ def test_destyled_note_is_reported_in_the_fill_doc(notes_db):
     assert big.get("source_styling_dropped") is True
     small = next(f for f in doc["footnotes"] if f["label"] == "Small verbatim")
     assert "source_styling_dropped" not in small
+
+
+def test_export_refuses_content_loss_in_destination_decoration(notes_db, monkeypatch):
+    db, run = notes_db
+    _add_note(db, run, "Notes-CI", 12, "Corporate information", "<h3>Heading</h3><p>Full text.</p>")
+    monkeypatch.setattr("mtool.notes_exporter._resolve_note_html",
+                        lambda *args: ("<h3>Heading</h3>", "full", False, False))
+    with pytest.raises(ValueError, match="content or structure"):
+        build_notes_fill_doc(db, run)
+
+
+def test_export_refuses_changed_merged_table_geometry(notes_db, monkeypatch):
+    db, run = notes_db
+    _add_note(db, run, "Notes-CI", 12, "Corporate information",
+              '<table><tr><td colspan="2">Full text.</td></tr></table>')
+    monkeypatch.setattr("mtool.notes_exporter._resolve_note_html",
+                        lambda *args: ('<table><tr><td>Full text.</td></tr></table>', "full", False, False))
+    with pytest.raises(ValueError, match="content or structure"):
+        build_notes_fill_doc(db, run)

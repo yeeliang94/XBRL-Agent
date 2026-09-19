@@ -1993,3 +1993,18 @@ def test_windows_excel_probe_keeps_source_read_only_and_alerts_visible():
     assert "$excel.Workbooks.Open($source, 0, $true)" in script
     assert "$bookForCopy.SaveCopyAs($destination)" in script
     assert "Refusing to save over the source workbook" in script
+
+
+def test_final_payload_verification_rejects_duplicate_prose(footnote_template, tmp_path):
+    from mtool.offline_fill import fill_footnotes, _verify_footnotes
+
+    output = str(tmp_path / "duplicated.xlsx")
+    fragment = "<p>Original complete note.</p>"
+    report = fill_footnotes(footnote_template,
+        {"footnotes": [{"key": "fn_14", "html": fragment + fragment}]},
+        output_path=output)
+    assert report["footnotes_written"]
+    assert _verify_footnotes(output, "+FootnoteTexts", report["footnotes_written"],
+                             {"fn_14": fragment})
+    assert _verify_footnotes(output, "+FootnoteTexts", report["footnotes_written"],
+                             {"fn_14": fragment + fragment}) == []

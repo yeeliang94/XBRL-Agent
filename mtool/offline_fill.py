@@ -1695,8 +1695,8 @@ def _detect_duplicate_fn_keys(path: str, footnote_sheet: str) -> list:
 
 def _verify_footnotes(path: str, footnote_sheet: str, written: list,
                       html_by_key: dict) -> list:
-    """Read back each written payload; a fragment that isn't present is a
-    mismatch. get_shared_strings unescapes, so the stored HTML round-trips."""
+    """Read back each complete written payload and compare it to the source.
+    get_shared_strings unescapes, so the stored HTML round-trips."""
     _, data, _ = load_workbook_entries(path)
     sheet_paths = get_sheet_paths(data)
     fn_rows = read_footnote_rows(data, sheet_paths,
@@ -1705,8 +1705,13 @@ def _verify_footnotes(path: str, footnote_sheet: str, written: list,
     for w in written:
         fn = fn_rows.get(w["key"])
         payload = fn["payload_text"] if fn else None
-        want = _norm_ws(html_by_key.get(w["key"]))
-        if not payload or (want and want not in _norm_ws(payload)):
+        fragment = html_by_key.get(w["key"])
+        want = wrap_footnote_html(fragment) if fragment is not None else None
+        # Compare the complete payload: substring matching accepted duplicate
+        # or extra prose around an otherwise correct note. XML normalizes
+        # literal line endings, so account only for that representational step.
+        normalize = lambda value: value.replace("\r\n", "\n").replace("\r", "\n")
+        if not payload or want is None or normalize(payload) != normalize(want):
             mismatches.append({"key": w["key"], "found": bool(payload)})
     return mismatches
 

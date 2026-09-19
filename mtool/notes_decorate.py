@@ -865,7 +865,7 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
                          f"margin-bottom: {style.paragraph_spacing_px}px;")
         else:
             _merge_style(p, para_style)
-    for h in soup.find_all("h3"):
+    for h in soup.find_all(("h1", "h2", "h3", "h4", "h5", "h6")):
         if _has_persisted_indent(h):
             _merge_style(h, font_css + " margin-top: 12px; margin-right: 0; "
                          "margin-bottom: 6px; font-weight: 600;")

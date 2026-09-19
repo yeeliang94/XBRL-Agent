@@ -40,6 +40,7 @@ from mtool.notes_decorate import (
     DEFAULT_STYLE, NotesTableStyle, decorate_notes_html, strip_inline_styles,
 )
 from mtool.offline_fill import EXCEL_CELL_CHAR_LIMIT, wrap_footnote_html
+from notes.format_verify import content_structure
 
 
 def notes_source_sheets(db_path: str | Path, run_id: int) -> set[str]:
@@ -164,6 +165,8 @@ def build_notes_fill_doc(
         # toggle on the fill endpoint, plus tests / debug).
         out_html, tier, destyled, grid_dropped = _resolve_note_html(
             r["html"], style, decorate)
+        if content_structure(r["html"] or "") != content_structure(out_html):
+            raise ValueError(f"MBRS formatting changed source content or structure at {r['sheet']} row {r['row']}.")
         if tier == "compact":
             formatting_compacted += 1
         elif tier == "lite":
