@@ -98,20 +98,6 @@ const THINKING_ROLES: { key: string; label: string; hint: string }[] = [
 const GPT56_LUNA_MODEL = "openai.global.gpt-5.6-luna";
 const SUMMARY_VISIBILITY_FALLBACK = ["off", "auto", "concise", "detailed"];
 
-// Plain-language labels for the Word-source modes. The SERVER owns the list of
-// modes (`notes_source_integrity_choices`); this map only supplies wording for
-// the ones we have words for, so an unrecognised mode still renders — as its
-// raw value — instead of vanishing from the picker and being written back as
-// `off` on the next save (peer review 2026-08-04).
-const SOURCE_INTEGRITY_LABELS: Record<string, string> = {
-  off: "Off — agents write notes from their own reading (default)",
-  shadow: "Measure only — source-built notes; the verdict never affects run status",
-  enforce: "On — source-built notes; unused content flags the run",
-};
-
-// Used only when a backend predates `notes_source_integrity_choices`.
-const SOURCE_INTEGRITY_FALLBACK = ["off", "shadow", "enforce"];
-
 const styles = {
   fieldGroup: {
     marginBottom: pwc.space.lg,
@@ -327,17 +313,6 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
   const [levelChoicesByModel, setLevelChoicesByModel] =
     useState<Record<string, string[]>>({});
   const [entityMemory, setEntityMemory] = useState(true);
-  // Notes source-integrity rollout mode (gotcha #31). Default off — `shadow`
-  // computes the verdict and changes nothing, `enforce` makes the block-id
-  // path live and lets an unresolved block tip the run status.
-  const [sourceIntegrity, setSourceIntegrity] =
-    useState<SourceIntegrityMode>("off");
-  // Server-published vocabulary. Never hardcoded into the picker: a mode this
-  // build doesn't know about must still be selectable and, above all, must
-  // survive a save untouched.
-  const [integrityChoices, setIntegrityChoices] =
-    useState<string[]>(SOURCE_INTEGRITY_FALLBACK);
-
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -406,23 +381,6 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         setLevelChoices(s.thinking_level_choices || []);
         setLevelChoicesByModel(s.thinking_level_choices_by_model || {});
         setEntityMemory(s.entity_memory !== false);
-        // Default to OFF when the field is absent (older backend) — the
-        // opposite of the other toggles, because this one costs money.
-        // The server's own list decides what is valid — this build's knowledge
-        // of the modes does not. Keep whatever mode it reports as long as it is
-        // in that list; only an absent or genuinely out-of-list value falls
-        // back to `off`, which is also the shipped default.
-        const choices =
-          Array.isArray(s.notes_source_integrity_choices) &&
-          s.notes_source_integrity_choices.length > 0
-            ? s.notes_source_integrity_choices
-            : SOURCE_INTEGRITY_FALLBACK;
-        setIntegrityChoices(choices);
-        setSourceIntegrity(
-          s.notes_source_integrity && choices.includes(s.notes_source_integrity)
-            ? s.notes_source_integrity
-            : "off",
-        );
         if (Array.isArray(s.available_models)) setAvailableModels(s.available_models);
         setDirty(false);
       })
@@ -490,7 +448,6 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         spot_check: spotCheck,
         spot_check_mode: spotCheckMode,
         entity_memory: entityMemory,
-        notes_source_integrity: sourceIntegrity,
         // Send EVERY role, with "" for the ones set back to the provider
         // default. The server clears only the keys it is given, so omitting a
         // cleared role would leave its old level active — and omitting the
@@ -517,7 +474,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
     } finally {
       setSaving(false);
     }
-  }, [dirty, model, proxyUrl, apiKey, roleModelUpdates, autoReview, notesAutoReview, notesCoverage, toleranceRm, scoutWallclockSeconds, scoutMaxTurns, spotCheck, spotCheckMode, entityMemory, sourceIntegrity, thinkingLevels, reasoningSummary, saveSettings]);
+  }, [dirty, model, proxyUrl, apiKey, roleModelUpdates, autoReview, notesAutoReview, notesCoverage, toleranceRm, scoutWallclockSeconds, scoutMaxTurns, spotCheck, spotCheckMode, entityMemory, thinkingLevels, reasoningSummary, saveSettings]);
 
   const handleUseGpt56ForEveryRole = useCallback(() => {
     setModel(GPT56_LUNA_MODEL);
@@ -601,19 +558,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
     <div onKeyDown={handleKeyDown}>
       {loadError && <p style={styles.loadError}>{loadError}</p>}
 
-      {/* Admin banner — the AI settings are shared, so make the audience of a
-          change explicit; non-admins are told they're read-only. */}
-      {readOnly ? (
-        <div style={ui.alertInfo} role="note">
-          <span aria-hidden="true" style={ui.alertIcon(pwc.info)}>ⓘ</span>
-          <span>These settings are managed by your administrator.</span>
-        </div>
-      ) : (
-        <div style={{ ...ui.alertInfo, marginBottom: pwc.space.lg }} role="note">
-          <span aria-hidden="true" style={ui.alertIcon(pwc.info)}>ⓘ</span>
-          <span>These settings apply to everyone using this tool.</span>
-        </div>
-      )}
+      {readOnly && <p role="note" style={ui.bodyText}>These settings are managed by your administrator.</p>}
 
       <SettingsSectionHeading
         title="Service connection"
@@ -1005,61 +950,8 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
       </div>
 
       <SettingsSectionHeading
-        title="Word source handling"
-        description="Controls how notes content is built when a filing is uploaded as a Word document."
-      />
-      {/* Notes source-integrity rollout mode (gotcha #31). Three values, not a
-          checkbox: `shadow` exists precisely so the verdict can be computed and
-          compared before anything changes. */}
-      <div style={styles.fieldGroup}>
-        <label style={styles.label} htmlFor="notes-source-integrity">
-          Build notes from the Word source
-        </label>
-        <select
-          id="notes-source-integrity"
-          value={sourceIntegrity}
-          onChange={(e) => {
-            setSourceIntegrity(e.target.value as SourceIntegrityMode);
-            setDirty(true);
-          }}
-          disabled={readOnly}
-          style={{ ...ui.input, width: "100%", maxWidth: 420 }}
-          aria-label="Word source handling mode"
-        >
-          {integrityChoices.map((mode) => (
-            <option key={mode} value={mode}>
-              {SOURCE_INTEGRITY_LABELS[mode] ?? mode}
-            </option>
-          ))}
-        </select>
-        <p style={styles.helperText}>
-          Off leaves each agent to write every note in its own output, which is
-          where formatting and fidelity are lost. Measure only and On both
-          change how notes are extracted: agents are instructed to assemble
-          each note directly from the Word document&apos;s own text. The
-          difference is what the coverage verdict does — under Measure only it
-          is recorded but never affects the run&apos;s status; under On, unused
-          source content marks the run as needing review. Notes the document
-          doesn&apos;t cover, and the two figure sheets (Issued Capital,
-          Related Party), are still written the ordinary way in every mode.
-          Agents are instructed, not forced — the run&apos;s source-coverage
-          report shows what they actually did.
-        </p>
-        {sourceIntegrity === "enforce" && (
-          <p style={{ ...styles.helperText, color: pwc.grey700, fontWeight: 500 }}>
-            This can affect a run&apos;s status. The source-built workflow has
-            not yet been validated on a live filing — run &quot;Measure
-            only&quot; on the same document first.
-          </p>
-        )}
-        <p style={styles.helperText}>
-          Word uploads only. PDF filings are unaffected by this setting.
-        </p>
-      </div>
-
-      <SettingsSectionHeading
         title="PDF notes preparation"
-        description="Text and scanned PDFs are read, checked and formatted automatically before review. You can edit the prepared notes before filling your mTool template."
+        description="PDF and Word documents are prepared automatically after upload, including orientation, source structure and emphasis capture, and content checks. MBRS formatting follows extraction and review."
       />
       <SettingsSectionHeading
         title="Prior-year assistance"

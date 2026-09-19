@@ -81,6 +81,47 @@ def test_a_complete_write_verifies_clean(run):
     assert _verdict(conn, run_id, gen).findings == []
 
 
+def test_prepared_source_remains_clean_after_formatter_patch(run):
+    from notes.format_patch import apply_sheet_patch
+
+    conn, run_id, gen, _ = run
+    conn.execute("UPDATE notes_source_generations SET input_kind='prepared_document' WHERE id=?", (gen,))
+    _write(conn, run_id, gen, ["b1", "b2"])
+    before = conn.execute("SELECT html FROM notes_cells WHERE run_id=?", (run_id,)).fetchone()[0]
+    formatted = apply_sheet_patch({10: before}, {"cells": [{"row": 10, "operations": [
+        {"target": {"blocks": "all"}, "style": {"bold": True}},
+    ]}]}).rows[10]
+    assert formatted != before
+    assert repo.cas_update_notes_cell_html(conn, run_id=run_id, sheet="Notes", row=10,
+        expected_html=before, new_html=formatted, style_source="formatter")
+    assert _verdict(conn, run_id, gen).findings == []
+
+    # A stale cached digest must still never conceal actual content loss.
+    conn.execute("UPDATE notes_cells SET html='<p>one</p>' WHERE run_id=?", (run_id,))
+    assert any(f.check == "render_match" for f in _verdict(conn, run_id, gen).findings)
+
+
+@pytest.mark.parametrize(("source", "changed"), [
+    ("<p>First. Second.</p><p>Third.</p>", "<p>First.</p><p>Second. Third.</p>"),
+    ("<h3>Revenue recognition</h3><p>Policy details.</p>",
+     "<h3>Revenue</h3><p>recognition Policy details.</p>"),
+    ("<p>First<br>Second</p>", "<p>First Second</p>"),
+    ("<table><tr><td>A | B</td><td>C</td></tr></table>",
+     "<table><tr><td>A</td><td>B | C</td></tr></table>"),
+])
+def test_prepared_source_structure_changes_cannot_verify_clean(run, source, changed):
+    conn, run_id, gen, _ = run
+    conn.execute("UPDATE notes_source_generations SET input_kind='prepared_document' WHERE id=?", (gen,))
+    conn.execute("UPDATE notes_source_blocks SET canonical_html=? WHERE generation_id=? AND block_id='b1'",
+                 (source, gen))
+    _write(conn, run_id, gen, ["b1", "b2"])
+    assert _verdict(conn, run_id, gen).findings == []
+    conn.execute("UPDATE notes_cells SET html=? WHERE run_id=?", (changed + "<p>two</p>", run_id))
+    result = _verdict(conn, run_id, gen)
+    assert result.requires_review
+    assert any(f.check == "render_match" for f in result.findings)
+
+
 # 1 --------------------------------------------------------------------------
 
 def test_a_clobbered_sheet_does_not_verify_clean(run):
@@ -173,13 +214,15 @@ def test_a_routed_block_with_no_destination_does_not_settle(run):
     assert any("no destination" in f.message for f in result.findings)
 
 
-def test_a_routed_block_with_a_destination_settles(run):
+def test_a_routed_block_with_a_live_destination_settles(run):
     conn, run_id, gen, _db = run
     _write(conn, run_id, gen, ["b1"])
     srepo.record_disposition(
         conn, run_id, gen, "b2", Disposition.ROUTED,
         sheet="Policies", row=4,
     )
+    source_write.write_cell_from_blocks(conn, run_id=run_id, generation_id=gen,
+        sheet="Policies", row=4, block_ids=["b2"], disposition=Disposition.ROUTED)
     assert _verdict(conn, run_id, gen).findings == []
 
 
@@ -258,3 +301,38 @@ def test_the_render_version_is_recorded_separately(run):
     from notes.source_render import RENDER_VERSION
 
     assert stored == RENDER_VERSION
+
+
+def test_routed_receipt_cannot_replace_actual_policy_content(run):
+    conn, run_id, gen, _ = run
+    _write(conn, run_id, gen, ["b1"])
+    srepo.record_disposition(conn, run_id, gen, "b2", Disposition.ROUTED,
+                             sheet="Policies", row=4)
+    assert _verdict(conn, run_id, gen).requires_review
+
+
+def test_direct_html_overwrite_cannot_hide_behind_stored_digest(run):
+    conn, run_id, gen, _ = run
+    _write(conn, run_id, gen, ["b1", "b2"])
+    conn.execute("UPDATE notes_cells SET html = '<p>shortened</p>' WHERE run_id = ?", (run_id,))
+    assert any(f.check == "render_match" for f in _verdict(conn, run_id, gen).findings)
+
+
+def test_forged_placement_without_rendered_content_cannot_settle_block(run):
+    conn, run_id, gen, _ = run
+    _write(conn, run_id, gen, ["b1"])
+    srepo.record_disposition(conn, run_id, gen, "b2", Disposition.INCLUDED, sheet="Notes", row=10)
+    srepo.set_cell_placements(conn, run_id, gen, "Notes", 10, ["b1", "b2"])
+    conn.commit()
+    assert any(f.check == "render_match" for f in _verdict(conn, run_id, gen).findings)
+
+
+def test_prepared_note_prose_cannot_be_dismissed_as_page_furniture(run):
+    conn, run_id, gen, _ = run
+    conn.execute("UPDATE notes_source_generations SET input_kind='prepared_document' WHERE id=?", (gen,))
+    conn.commit()
+    _write(conn, run_id, gen, ["b1"])
+    srepo.record_disposition(conn, run_id, gen, "b2", Disposition.EXCLUDED, reason_code="PAGE_FOOTER")
+    result = _verdict(conn, run_id, gen)
+    assert result.requires_review
+    assert any("cannot be settled" in f.message for f in result.findings)

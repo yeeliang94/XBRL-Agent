@@ -24,6 +24,8 @@ describe("XBRL design system is the production authority", () => {
   test("keeps notes field hierarchy and coverage in the source inventory", () => {
     expect(designSystem).toContain("grey disclosure field header above white note content");
     expect(designSystem).toContain("do not repeat the checklist below the editor");
+    expect(designSystem).toContain("without warning counts or repeated review banners");
+    expect(designSystem).toContain("Keep incomplete output, failed saves, and actionable filing issues visible");
     expect(designSystem).toContain("Source inventory remains visible in the worksheet rail");
   });
 

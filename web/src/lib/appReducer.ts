@@ -662,6 +662,7 @@ function handleRunComplete(
       total_tokens: currentTokens?.cumulative ?? 0,
       cost: currentTokens?.cost_estimate ?? 0,
       statementsCompleted: rc.statements_completed,
+      statementsSkipped: rc.statements_skipped,
       // Preserve the backend's failure reason (validation/model-setup paths
       // in server.py emit `{success: false, message}`). Without this the
       // diagnostic falls off the floor and the UI shows a bare "Failed".
@@ -704,7 +705,7 @@ function handleRunComplete(
   // overwrite a tab that already reached a terminal state via its own
   // per-agent `complete` event (the live-event reducer is authoritative
   // when it fired; this is only a backstop for silent drops).
-  const TERMINAL: AgentTabStatus[] = ["complete", "failed", "cancelled"];
+  const TERMINAL: AgentTabStatus[] = ["complete", "failed", "cancelled", "skipped"];
   const reconcileNotes = (templateValue: string, nextStatus: AgentTabStatus) => {
     const agentId = `notes:${templateValue}`;
     const ensured = ensureAgent(agents, tabOrder, agentId, templateValue);
@@ -742,6 +743,21 @@ function handleRunComplete(
   };
   for (const s of rc.statements_completed ?? []) reconcileStatement(s, "complete");
   for (const s of rc.statements_failed ?? []) reconcileStatement(s, "failed");
+  for (const skipped of rc.statements_skipped ?? []) {
+    const role = skipped.statement;
+    const agentId = role.toLowerCase();
+    const ensured = ensureAgent(agents, tabOrder, agentId, role);
+    agents = ensured.agents;
+    tabOrder = ensured.tabOrder;
+    const existing = agents[agentId];
+    if (!TERMINAL.includes(existing.status)) {
+      agents = {
+        ...agents,
+        [agentId]: { ...existing, status: "skipped", skip: skipped },
+      };
+      mutated = true;
+    }
+  }
 
   if (rc.cross_checks && rc.cross_checks.length > 0) {
     const ensured = ensureAgent(agents, tabOrder, "validator", "validator");

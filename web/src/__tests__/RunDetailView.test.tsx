@@ -1205,7 +1205,7 @@ describe("RunDetailView", () => {
   });
 
   test.each(["values", "notes"] as const)(
-    "%s review keeps a run-wide warning visible",
+    "%s review omits the repeated run-wide warning",
     async (initialTab) => {
       const originalFetch = globalThis.fetch;
       globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
@@ -1252,9 +1252,7 @@ describe("RunDetailView", () => {
             initialTab={initialTab}
           />,
         );
-        expect(await screen.findByTestId("review-run-warning")).toHaveTextContent(
-          /unresolved consistency checks/i,
-        );
+        expect(screen.queryByTestId("review-run-warning")).toBeNull();
       } finally {
         globalThis.fetch = originalFetch;
       }
@@ -1652,12 +1650,10 @@ describe("RunDetailView", () => {
       ],
     });
     render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
-    // Needs attention tile reads 0 (only blocking failures count); the advisory
-    // shows in its own tile. The tile is value-div + label-div, so go up one
-    // level from the label to read both.
+    // Advisory checks do not add attention counts or a second summary tile.
     const tile = screen.getByText("Needs attention").parentElement;
     expect(tile?.textContent).toMatch(/^0Needs attention/);
-    expect(screen.getByText("Advisory notes")).toBeInTheDocument();
+    expect(screen.queryByText("Advisory notes")).toBeNull();
   });
 
   test("running run without onForceAbort falls back to the disabled Delete", () => {

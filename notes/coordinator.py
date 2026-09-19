@@ -1005,7 +1005,13 @@ async def _invoke_single_notes_agent_once(
 
     # Guard against silent no-op success — retryable per PLAN §4 E.1.
     if not deps.wrote_once or not deps.filled_path:
-        raise _NoWriteError("Notes agent finished without writing any payloads")
+        assigned_notes = {entry.note_num for entry in deps.inventory}
+        if assigned_notes and assigned_notes <= deps.source_gap_notes:
+            # The template is blank, and persisted source-gap flags and write
+            # warnings explicitly retain the unresolved work for review.
+            deps.filled_path = deps.template_path
+        else:
+            raise _NoWriteError("Notes agent finished without writing any payloads")
 
     return _SingleAgentOutcome(
         filled_path=deps.filled_path,
@@ -1346,12 +1352,12 @@ async def _run_list_of_notes_fanout(
         # any sub-agent missing a receipt, for any uncovered notes,
         # or for a hard sub-agent failure.
         if not sub_result.aggregated_payloads:
-            def _fully_accounts_for_skips(sub_results: list) -> bool:
-                """True iff every succeeded sub-agent has a receipt
-                covering its full batch with ONLY skipped entries.
-                Sub-agents with status='failed' are not receipt-
-                carrying and break the carve-out — partial coverage
-                is still a failure."""
+            def _fully_accounts_for_blank_draft(sub_results: list) -> bool:
+                """Every note must have a validated skip or persisted source gap.
+
+                Gaps remain uncovered and visible in warnings and review flags.
+                A failed sub-agent or missing receipt still fails the sheet.
+                """
                 if not sub_results:
                     return False
                 for r in sub_results:
@@ -1361,7 +1367,8 @@ async def _run_list_of_notes_fanout(
                         return False
                     batch_nums = {e.note_num for e in r.batch}
                     receipt_nums = {e.note_num for e in r.coverage.entries}
-                    if receipt_nums != batch_nums:
+                    gap_nums = set(getattr(r, "source_gap_notes", ()) or ())
+                    if receipt_nums | gap_nums != batch_nums:
                         return False
                     if not all(
                         e.action == "skipped" for e in r.coverage.entries
@@ -1379,7 +1386,7 @@ async def _run_list_of_notes_fanout(
                         return False
                 return True
 
-            if _fully_accounts_for_skips(sub_result.sub_agent_results):
+            if _fully_accounts_for_blank_draft(sub_result.sub_agent_results):
                 # Deliberately blank sheet — every sub-agent submitted a
                 # receipt saying "this note belongs elsewhere". The writer
                 # treats `rows_written == 0` as failure, so we don't call
@@ -1405,7 +1412,7 @@ async def _run_list_of_notes_fanout(
                     _EmptyWriteResult(), sub_result,
                 )
                 logger.info(
-                    "Notes-12: empty aggregate covered by skip receipts "
+                    "Notes-12: empty aggregate accounted for by skips or source gaps "
                     "— treating as success with %d warning(s)",
                     len(warnings_only),
                 )
@@ -1631,6 +1638,8 @@ def _build_write_warnings(write_result: Any, sub_result: Any) -> List[str]:
     # summary because the user needs to know WHICH notes to manually
     # re-check.
     for sub in sub_result.sub_agent_results:
+        for note_num in sorted(getattr(sub, "source_gap_notes", ()) or ()):
+            warnings.append(f"Note {note_num}: source capture requires human review; content remains unresolved.")
         if sub.coverage is None:
             # No receipt — every batch note is uncovered. Only emit a
             # warning for sub-agents that actually succeeded at writing

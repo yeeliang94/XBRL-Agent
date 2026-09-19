@@ -487,3 +487,53 @@ def test_author_note_cells_isolates_unexpected_error_per_item(db_path, monkeypat
     assert 50 in cells and "good prose" in cells[50]  # sibling still landed
     assert 60 not in cells                            # failing item didn't write
     assert deps.writes_performed == 1
+
+
+def test_prepared_missing_unnumbered_source_triggers_review_and_can_be_relinked(db_path):
+    from types import SimpleNamespace
+    from notes import source_repository as srepo
+    from notes.source_models import OwnerKind, SourceBlock, SourceNote
+
+    run_id = _seed_run(db_path)
+    _seed_node(db_path, 50, "LEAF", "Disclosure of X")
+    with repo.db_session(db_path) as conn:
+        gen = srepo.begin_generation(conn, run_id, input_kind="prepared_document")
+        srepo.write_blocks(conn, gen, [SourceBlock("u1", "paragraph", 1,
+            "<p>Unnumbered disclosure.</p>", source_note_id="unumbered-disclosure", owner_kind=OwnerKind.NOTE)])
+        srepo.write_notes(conn, gen, [SourceNote("unumbered-disclosure", "", "Disclosure", ["u1"])])
+        srepo.activate_generation(conn, gen)
+    agent, deps, context = _agent(db_path, run_id, _scripted([]))
+    assert context["source_integrity_findings"]
+    assert ra.count_open_items(context) > 0
+    assert "SOURCE COMPLETENESS" in ra.build_notes_reviewer_packet(context)
+    funcs = {name: tool.function for ts in agent.toolsets for name, tool in getattr(ts, "tools", {}).items()}
+    assert {"list_source_notes", "read_source_manifest", "view_source_blocks", "list_source_destinations"} <= funcs.keys()
+    ctx = SimpleNamespace(deps=deps)
+    assert "unumbered-disclosure" in funcs["list_source_notes"](ctx)
+    assert "u1" in funcs["read_source_manifest"](ctx, "unumbered-disclosure")
+    assert "Unnumbered disclosure" in funcs["view_source_blocks"](ctx, ["u1"])
+    result = funcs["relink_note_cell"](ctx, sheet=_S12, row=50, block_ids=["u1"])
+    assert result.startswith("ok:")
+    refreshed = ra.recompute_notes_findings(deps)
+    assert refreshed["source_integrity_findings"] == []
+    assert ra.finding_keys(context) - ra.finding_keys(refreshed)
+
+
+def test_source_destinations_returns_complete_json_for_long_labels(db_path):
+    import json
+    from types import SimpleNamespace
+    from notes import source_repository as srepo
+    from notes.source_models import SourceBlock, OwnerKind
+
+    run_id = _seed_run(db_path)
+    with repo.db_session(db_path) as conn:
+        gen = srepo.begin_generation(conn, run_id, input_kind="prepared_document")
+        srepo.write_blocks(conn, gen, [SourceBlock("b1", "paragraph", 0,
+            "<p>Source disclosure.</p>", source_note_id="n1", owner_kind=OwnerKind.NOTE)])
+        srepo.activate_generation(conn, gen)
+    for row in range(1, 91):
+        _seed_node(db_path, row, "LEAF", f"Disclosure {row}: " + "Long label " * 50)
+    agent, deps, _ = _agent(db_path, run_id, _scripted([]))
+    funcs = {name: tool.function for ts in agent.toolsets for name, tool in getattr(ts, "tools", {}).items()}
+    output = funcs["list_source_destinations"](SimpleNamespace(deps=deps), _S12)
+    assert len(json.loads(output)) == 90

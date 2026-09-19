@@ -297,3 +297,62 @@ def test_non_numeric_value_rejects_one_cell_without_aborting_batch(db):
     finally:
         conn.close()
     assert [r[0] for r in rows] == [9_078_749.0]
+
+
+def test_prepared_source_evidence_is_enriched_after_write(db, tmp_path):
+    """The agent keeps the ordinary write_facts shape; projection enriches a
+    clear page/value/label match behind the canonical seam.
+    """
+    db_path, run_id, template_id, _gr = db
+    from concept_model.cell_resolver import project_writes
+
+    with sqlite3.connect(db_path) as conn:
+        label, row = conn.execute(
+            "SELECT canonical_label,render_row FROM concept_nodes "
+            "WHERE template_id=? AND render_sheet='SOFP-CuNonCu' AND kind='LEAF' "
+            "ORDER BY render_row LIMIT 1",
+            (template_id,),
+        ).fetchone()
+
+    source_pdf = tmp_path / "prepared-test.pdf"
+    source_pdf.write_bytes(b"%PDF synthetic")
+    (tmp_path / "preparation.json").write_text(json.dumps({
+        "status": "succeeded",
+        "assessment_complete": True,
+        "pdf_file": source_pdf.name,
+        "pages": [{"page": 3, "capture_status": "verified"}],
+        "blocks": [{
+            "block_id": "p3-table",
+            "page": 3,
+            "block_kind": "table",
+            "canonical_html": (
+                f"<table><thead><tr><th></th><th>{label}</th></tr></thead>"
+                "<tbody><tr><th>At year end</th><td>555</td></tr></tbody></table>"
+            ),
+            "locator": {},
+        }],
+    }), encoding="utf-8")
+
+    projection = project_writes(
+        db_path, run_id, template_id,
+        [{
+            "sheet": "SOFP-CuNonCu", "row": int(row), "col": 2,
+            "value": 555, "evidence": f"Page 3, {label} 555",
+        }],
+        filing_level="company",
+        source_pdf_path=str(source_pdf),
+    )
+
+    assert projection.projected == 1
+    assert projection.source_evidence_unresolved == []
+    with sqlite3.connect(db_path) as conn:
+        receipt = conn.execute(
+            "SELECT transform,arithmetic_status,semantic_status "
+            "FROM fact_source_receipts WHERE run_id=?",
+            (run_id,),
+        ).fetchone()
+        term = conn.execute(
+            "SELECT source_page,raw_value FROM fact_source_terms",
+        ).fetchone()
+    assert receipt == ("direct", "verified", "unassessed")
+    assert term == (3, "555")

@@ -16,6 +16,7 @@ so this script is the fix, not a nicety.
 """
 from __future__ import annotations
 
+import ast
 import html
 import re
 import sys
@@ -95,6 +96,55 @@ COPY_REPLACEMENTS = (
 
 def refresh(text: str) -> tuple[str, list[str]]:
     changed: list[str] = []
+    preparation = ast.parse((ROOT / "ingest/document_preparation.py").read_text(encoding="utf-8"))
+    capture_prompts = {
+        target.id: ast.literal_eval(node.value)
+        for node in preparation.body if isinstance(node, ast.Assign)
+        for target in node.targets if isinstance(target, ast.Name) and target.id in {"_COMMON", "_PROMPTS"}
+    }
+    preparation_body = capture_prompts["_COMMON"].rstrip() + "\n\n" + "\n\n".join(
+        f"{stage}:\n{prompt}" for stage, prompt in capture_prompts["_PROMPTS"].items()
+    )
+    preparation_section = ('<section id="document-preparation"><h2>Document preparation</h2>'
+                           '<p>Source: <code>ingest/document_preparation.py</code> common and stage prompts (verbatim).</p><pre>'
+                           + html.escape(preparation_body, quote=False) + '</pre></section>')
+    preparation_pattern = re.compile(r'<section id="document-preparation">.*?</section>', re.S)
+    existing_preparation = preparation_pattern.search(text)
+    if existing_preparation is None:
+        text = text.replace('</body>', preparation_section + '\n</body>')
+        changed.append("document preparation")
+    elif existing_preparation.group() != preparation_section:
+        text = preparation_pattern.sub(lambda _: preparation_section, text)
+        changed.append("document preparation")
+    prepared_notes = (PROMPTS / "_notes_prepared.md").read_text(encoding="utf-8").strip()
+    notes_section = ('<section id="prepared-notes"><h2>Prepared notes workflow</h2>'
+                     '<p>Replaces authored-prose instructions for prepared documents. '
+                     'Source: <code>prompts/_notes_prepared.md</code> (verbatim).</p><pre>'
+                     + html.escape(prepared_notes, quote=False) + '</pre></section>')
+    notes_pattern = re.compile(r'<section id="prepared-notes">.*?</section>', re.S)
+    old_notes = notes_pattern.search(text)
+    if old_notes is None:
+        text = text.replace('</body>', notes_section + '\n</body>')
+        changed.append("prepared notes")
+    elif old_notes.group() != notes_section:
+        text = notes_pattern.sub(lambda _: notes_section, text)
+        changed.append("prepared notes")
+    module = ast.parse((ROOT / "scout/prepared_map.py").read_text(encoding="utf-8"))
+    prompt = next(ast.literal_eval(node.value) for node in module.body
+                  if isinstance(node, ast.Assign)
+                  and any(isinstance(target, ast.Name) and target.id == "SYSTEM_PROMPT" for target in node.targets))
+    section = ('<section id="prepared-document-map"><h2>Prepared document map (Scout)</h2>'
+               '<p>One interpretation supplies filing metadata, notes inventory and exact block ownership. '
+               'Source: <code>scout/prepared_map.py::SYSTEM_PROMPT</code> (verbatim).</p><pre>'
+               + html.escape(prompt.strip(), quote=False) + '</pre></section>')
+    pattern = re.compile(r'<section id="prepared-document-map">.*?</section>', re.S)
+    existing = pattern.search(text)
+    if existing is None:
+        text = text.replace('</body>', section + '\n</body>')
+        changed.append("prepared document map")
+    elif existing.group() != section:
+        text = pattern.sub(lambda _: section, text)
+        changed.append("prepared document map")
 
     for old, new in COPY_REPLACEMENTS:
         if old in text:

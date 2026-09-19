@@ -2197,6 +2197,7 @@ async def _run_notes_reviewer_pass(
     inventory_subnotes: Optional[dict] = None,
     agent_id: str = NOTES_VALIDATOR_AGENT_ID,
     finalize_gate=None,
+    require_coverage: bool = False,
 ) -> dict:
     """Notes reviewer pass (docs/PLAN.md Step 9) — the acting successor to the
     notes validator. Inspects the five prose-notes check families and FIXES
@@ -2268,7 +2269,7 @@ async def _run_notes_reviewer_pass(
     async def _finalize_coverage(reviewed: bool) -> None:
         """Recompute + persist the coverage checklist and emit notes_coverage.
         Gated on XBRL_NOTES_COVERAGE; best-effort (never fails the pass)."""
-        if not _notes_coverage_enabled():
+        if not require_coverage and not _notes_coverage_enabled():
             return
         try:
             from notes.coverage_checklist import load_notes12_skips
@@ -2421,7 +2422,7 @@ async def _run_notes_reviewer_pass(
                 if replace_flags:
                     conn.execute(
                         "DELETE FROM notes_review_flags WHERE run_id = ? "
-                        "AND status = 'open'", (run_id,)
+                        "AND status = 'open' AND COALESCE(finding_id,'') NOT LIKE 'source-capture:%'", (run_id,)
                     )
                 for f in deps.flags:
                     _repo.insert_notes_review_flag(
@@ -3656,10 +3657,8 @@ def _retry_missing_source_blocks(
 ) -> Optional[dict]:
     """Step 7.2 — ONE targeted retry over the exact blocks that are missing.
 
-    The retry is deterministic, not another agent turn: every unplaced block
-    already belongs to a note, and the source render is code. So it re-renders
-    each affected cell from the blocks its note owns and re-checks. If that
-    does not close the gap, the run goes to review — there is no second retry.
+    Restore only destinations proved by placement history, preserving policy
+    carve-outs. Never-routed blocks require semantic reviewer judgment.
 
     `missing_block_ids` used to be computed and returned and then never read
     by anything (peer review, 2026-08-01), which made Step 7.2 an input with
@@ -3675,45 +3674,11 @@ def _retry_missing_source_blocks(
 
     conn = _open_audit_conn()
     try:
-        placements = {
-            p["block_id"]: (p["sheet"], p["row"])
-            for p in srepo.active_placements(conn, generation_id)
-        }
-        # Group the missing blocks by the cell their note already occupies.
-        by_cell: dict[tuple, list[str]] = {}
-        blocks = {b["block_id"]: b for b in srepo.fetch_blocks(conn, generation_id)}
-        for bid in missing:
-            note_id = (blocks.get(bid) or {})["source_note_id"] if bid in blocks else None
-            if not note_id:
-                continue
-            siblings = [
-                b["block_id"] for b in blocks.values()
-                if b["source_note_id"] == note_id
-            ]
-            coord = next(
-                (placements[s] for s in siblings if s in placements), None
-            )
-            if coord is None:
-                continue     # the note was never placed; a retry cannot guess
-            by_cell.setdefault(coord, [])
-            for s in siblings:
-                if s not in by_cell[coord]:
-                    by_cell[coord].append(s)
-
-        repaired = 0
-        for (sheet, row), block_ids in by_cell.items():
-            try:
-                source_write.write_cell_from_blocks(
-                    conn, run_id=run_id, generation_id=generation_id,
-                    sheet=sheet, row=row, block_ids=block_ids,
-                    actor="integrity_retry",
-                )
-                repaired += 1
-            except source_write.SourceWriteError as exc:
-                logger.info(
-                    "integrity retry could not repair %s row %s: %s",
-                    sheet, row, exc,
-                )
+        from notes.source_repair import repair_recorded_placements
+        repaired = repair_recorded_placements(
+            conn, run_id=run_id, generation_id=generation_id,
+            missing_block_ids=missing,
+        )
         if not repaired:
             return outcome
 
@@ -5045,6 +5010,7 @@ async def run_multi_agent_stream(
     *,
     existing_run_id: Optional[int] = None,
     suite_run_id: Optional[int] = None,
+    require_preparation: bool = False,
 ) -> AsyncIterator[dict]:
     """Orchestrates multi-agent extraction with SSE event multiplexing.
 
@@ -5269,6 +5235,18 @@ async def run_multi_agent_stream(
         # runs row as failed. Previously these exits happened before the
         # row existed. ---
 
+        prepared_snapshot = None
+        # Preparation supplies run-local settings. Repeat callers reuse the
+        # request, including its original Scout choice and inventory overrides.
+        run_config = run_config.model_copy(deep=True)
+        if require_preparation or run_config.use_scout or (session_dir / "preparation_status.json").exists():
+            from api.preparation import ensure_prepared
+            prepared_snapshot = await ensure_prepared(session_dir, run_id)
+            if prepared_snapshot is not None:
+                run_config.infopack = prepared_snapshot["infopack"]
+                # The upload-owned pass is complete for this source revision.
+                run_config.use_scout = False
+
         # === PHASE: Validate ===
         # Parse + validate the request, build models/infopack, and construct
         # the coordinator RunConfig. Returns ONE structured result; on any
@@ -5331,6 +5309,15 @@ async def run_multi_agent_stream(
         infopack = validated.infopack
         model = validated.model
         config = validated.config
+        if prepared_snapshot is not None:
+            from ingest.document_preparation import read_prepared_document
+            prepared_document = read_prepared_document(
+                session_dir / "uploaded.pdf", model_name=prepared_snapshot.get("model_name"),
+                configuration_key=prepared_snapshot.get("configuration_key", ""),
+            )
+            if prepared_document is None:
+                raise RuntimeError("Prepared source is no longer valid. Retry document preparation.")
+            config.pdf_path = str(prepared_document.prepared_pdf_path)
 
         if client_connected:
             try:
@@ -6172,6 +6159,9 @@ async def run_multi_agent_stream(
                            exc_info=True)
 
         notes_integrity_mode = _notes_integrity_mode()
+        if prepared_snapshot is not None:
+            from notes.source_models import IntegrityMode
+            notes_integrity_mode = IntegrityMode.ENFORCE
         notes_source_generation_id: Optional[int] = None
         notes_boundary_report = None
         notes_integrity_outcome: Optional[dict] = None
@@ -6183,7 +6173,26 @@ async def run_multi_agent_stream(
                 )
             finally:
                 _mode_conn.close()
-            if notes_integrity_mode.computes:
+            if prepared_snapshot is not None and notes_to_run:
+                current_infopack = json.loads(infopack.to_json())
+                original_inventory = prepared_snapshot["infopack"].get("notes_inventory") or []
+                current_inventory = current_infopack.get("notes_inventory") or []
+                from api.preparation import inventory_requires_remap, remap_prepared_inventory
+                if inventory_requires_remap(original_inventory, current_inventory):
+                    prepared_document = await remap_prepared_inventory(
+                        prepared_document, current_infopack, run_id=run_id,
+                        session_id=session_id,
+                        on_progress=lambda event: _emit_stage(
+                            "scouting", message=event.get("message", "Updating document map")
+                        ),
+                    )
+                from notes.source_manifest import build_prepared_manifest, freeze_manifest
+                manifest, notes_boundary_report = build_prepared_manifest(
+                    prepared_document.metadata_path,
+                    scout_note_nums=[e.note_num for e in getattr(infopack, "notes_inventory", []) or []],
+                )
+                notes_source_generation_id = freeze_manifest(db_conn, run_id, manifest)
+            elif notes_integrity_mode.computes:
                 _emit_stage("reading_source")
                 notes_source_generation_id, notes_boundary_report = (
                     await asyncio.to_thread(
@@ -6194,7 +6203,9 @@ async def run_multi_agent_stream(
                          or []],
                     )
                 )
-        except Exception:  # noqa: BLE001 — reading is additive; never fatal
+        except Exception:  # noqa: BLE001 — legacy readings remain additive
+            if prepared_snapshot is not None:
+                raise
             logger.warning(
                 "Source manifest could not be built; the run continues on the "
                 "current path with no integrity verdict",
@@ -6255,7 +6266,7 @@ async def run_multi_agent_stream(
                 )
 
         notes_config = NotesRunConfig(
-            pdf_path=str(session_dir / "uploaded.pdf"),
+            pdf_path=config.pdf_path,
             output_dir=output_dir,
             model=model,
             notes_to_run=notes_to_run,
@@ -6808,9 +6819,28 @@ async def run_multi_agent_stream(
         # at module scope for the canonical registry the MPERS wiring tests
         # pin against.
         all_checks = _build_default_cross_checks()
+        statement_outcomes = {
+            result.statement_type: {
+                "status": result.status,
+                "variant": result.variant,
+                "reason_code": (
+                    "no_standalone_statement"
+                    if result.status == "skipped" and result.variant == "NotPrepared"
+                    else None
+                ),
+            }
+            for result in coordinator_result.agent_results
+        }
         check_config = {
             "statements_to_run": statements_to_run,
-            "variants": {stmt: v for stmt, v in variants.items()},
+            # Resolved coordinator variants are authoritative here. In
+            # particular, a Scout-selected SOCI/NotPrepared may not exist in
+            # the request's explicit variants map.
+            "variants": {
+                result.statement_type: result.variant
+                for result in coordinator_result.agent_results
+            },
+            "statement_outcomes": statement_outcomes,
             "filing_level": run_config.filing_level,
             "filing_standard": run_config.filing_standard,
         }
@@ -7014,7 +7044,6 @@ async def run_multi_agent_stream(
         # completed_with_errors and surface an SSE error rather than
         # silently shipping a stale download (peer-review finding 4).
         canonical_reexport_failed = False
-        validator_run_agent_id: Optional[int] = None
         # Per-run, per-event-loop gate. The model passes overlap, but SQLite
         # has one writer: the notes pass waits here before replacing its final
         # flags/checklist so it cannot collide with the face reviewer's
@@ -7029,7 +7058,7 @@ async def run_multi_agent_stream(
             start together without two consumers racing to remove each other's
             events from that queue.
             """
-            nonlocal validator_run_agent_id
+            validator_run_agent_id: Optional[int] = None
 
             if db_conn is not None and run_id is not None:
                 try:
@@ -7119,12 +7148,12 @@ async def run_multi_agent_stream(
                     exc_info=True,
                 )
 
-            validator_outcome = None
+            validator_outcome = {"error": "notes_reviewer_exception"}
             validator_cancelled_without_outcome = False
             validator_task = asyncio.create_task(_run_notes_reviewer_pass(
                 run_id=run_id,
                 db_path=str(AUDIT_DB_PATH),
-                pdf_path=str(session_dir / "uploaded.pdf"),
+                pdf_path=config.pdf_path,
                 filing_level=run_config.filing_level,
                 filing_standard=run_config.filing_standard,
                 model=model,
@@ -7138,6 +7167,7 @@ async def run_multi_agent_stream(
                 inventory_note_nums=_inv_nums,
                 inventory_subnotes=_inv_subnotes,
                 finalize_gate=notes_review_finalize_gate,
+                require_coverage=prepared_snapshot is not None,
             ))
             import task_registry
             lifecycle_task = asyncio.current_task()
@@ -7162,10 +7192,27 @@ async def run_multi_agent_stream(
                     if isinstance(settled, dict):
                         validator_outcome = settled
                 except asyncio.CancelledError:
-                    pass
+                    validator_outcome = {"error": "cancelled"}
                 validator_cancelled_without_outcome = True
             finally:
                 task_registry.unregister(session_id, NOTES_VALIDATOR_AGENT_ID)
+                # Each pass owns its audit row, including the bounded source
+                # repair pass that runs after ordinary review finalization.
+                if validator_run_agent_id is not None:
+                    try:
+                        with repo.db_session(AUDIT_DB_PATH) as audit_conn:
+                            _finish_reviewer_agent_row(
+                                audit_conn, validator_run_agent_id, validator_outcome,
+                                status="cancelled" if (
+                                    validator_cancelled_without_outcome
+                                    or validator_outcome.get("error") == "cancelled"
+                                ) else None,
+                            )
+                    except Exception:  # noqa: BLE001
+                        logger.warning(
+                            "Failed to finalize NOTES_VALIDATOR run_agent row",
+                            exc_info=True,
+                        )
                 try:
                     _ntc = _open_audit_conn()
                     try:
@@ -7192,6 +7239,7 @@ async def run_multi_agent_stream(
             return validator_outcome, validator_cancelled_without_outcome
 
         notes_review_lifecycle_task: Optional[asyncio.Task] = None
+        notes_outputs = {}
         if merge_result.success and notes_result is not None:
             notes_outputs = {
                 r.template_type: r.workbook_path
@@ -7204,7 +7252,7 @@ async def run_multi_agent_stream(
                 if not getattr(e, "is_numeric", False)
             }
             have_prose_sheet = any(t in notes_outputs for t in _prose_types)
-            if have_prose_sheet and _notes_auto_review_enabled():
+            if have_prose_sheet and (_notes_auto_review_enabled() or prepared_snapshot is not None):
                 notes_review_lifecycle_task = asyncio.create_task(
                     _run_auto_notes_review(notes_outputs),
                 )
@@ -7327,7 +7375,7 @@ async def run_multi_agent_stream(
                         db_path=AUDIT_DB_PATH,
                         run_id=run_id,
                         spot_check=spot_check_mode,
-                        pdf_path=str(session_dir / "uploaded.pdf"),
+                        pdf_path=config.pdf_path,
                         verify_scope=reviewer_verify_scope,
                     ))
                 # Register the reviewer task so Stop-All (POST /api/abort →
@@ -7380,24 +7428,6 @@ async def run_multi_agent_stream(
                             )
                         except asyncio.CancelledError:
                             validator_outcome = {"error": "cancelled"}
-                        if (
-                            validator_run_agent_id is not None
-                            and db_conn is not None
-                        ):
-                            try:
-                                _finish_reviewer_agent_row(
-                                    db_conn,
-                                    validator_run_agent_id,
-                                    validator_outcome,
-                                    status="cancelled",
-                                )
-                                db_conn.commit()
-                            except Exception:  # noqa: BLE001
-                                logger.warning(
-                                    "Failed to finalize concurrent "
-                                    "NOTES_VALIDATOR row on reviewer cancel",
-                                    exc_info=True,
-                                )
                     # Finalize the CORRECTION pseudo-agent audit row too — this
                     # early return skips the normal finish_run_agent block, so
                     # without this the row stays 'running' under an 'aborted'
@@ -7707,20 +7737,6 @@ async def run_multi_agent_stream(
                     and validator_outcome.get("error") == "cancelled"
                 )
             ):
-                if validator_run_agent_id is not None and db_conn is not None:
-                    try:
-                        _finish_reviewer_agent_row(
-                            db_conn,
-                            validator_run_agent_id,
-                            validator_outcome,
-                            status="cancelled",
-                        )
-                        db_conn.commit()
-                    except Exception:  # noqa: BLE001
-                        logger.warning(
-                            "Failed to finalize NOTES_VALIDATOR row on cancel",
-                            exc_info=True,
-                        )
                 if _safe_mark_finished(db_conn, run_id, "aborted"):
                     terminal_status = "aborted"
                 if client_connected:
@@ -7761,7 +7777,7 @@ async def run_multi_agent_stream(
                     return await run_pdf_auto_format(
                         run_id=run_id,
                         db_path=str(AUDIT_DB_PATH),
-                        pdf_path=str(session_dir / "uploaded.pdf"),
+                        pdf_path=config.pdf_path,
                         sheets=_format_sheets,
                         model_name=_format_model_name,
                         model_factory=lambda: _create_proxy_model(
@@ -7894,12 +7910,9 @@ async def run_multi_agent_stream(
                     exc_info=True,
                 )
 
-        # Persist pseudo-agent rows + cross-check results. The face and
-        # notes agent rows were already finalized right after the merge
-        # (run-83 hardening Phase 1 — `_persist_face_and_notes_agent_rows`
-        # above), so this block only closes the reviewer / notes-reviewer
-        # pseudo-agents (whose outcomes exist only now) and writes the
-        # cross-check table.
+        # Persist the face reviewer and cross-check results. Extraction rows
+        # were finalized after merging; each notes-review lifecycle finalizes
+        # its own row, including later source-repair attempts.
         if db_conn is not None and run_id is not None:
             try:
                 # Peer-review C1: finalise pseudo-agent rows so History
@@ -7951,8 +7964,8 @@ async def run_multi_agent_stream(
                         # node_kind breakdown to measure. Same advisory
                         # contract as the extraction/notes sites: inside this
                         # try so a telemetry write can never fault the run.
-                        # NOTES_VALIDATOR now follows this same persistence
-                        # contract below. The formatter remains non-agent work.
+                        # NOTES_VALIDATOR follows the same persistence contract
+                        # inside its lifecycle. The formatter remains non-agent work.
                         repo.insert_agent_turns(
                             db_conn, correction_run_agent_id,
                             _co.get("turn_records") or [],
@@ -7960,18 +7973,6 @@ async def run_multi_agent_stream(
                     except Exception:
                         logger.warning(
                             "Failed to finalize CORRECTION run_agent row",
-                            exc_info=True,
-                        )
-                if validator_run_agent_id is not None:
-                    try:
-                        _finish_reviewer_agent_row(
-                            db_conn,
-                            validator_run_agent_id,
-                            validator_outcome,
-                        )
-                    except Exception:
-                        logger.warning(
-                            "Failed to finalize NOTES_VALIDATOR run_agent row",
                             exc_info=True,
                         )
 
@@ -8120,6 +8121,15 @@ async def run_multi_agent_stream(
                 run_id, notes_source_generation_id, notes_integrity_mode,
                 notes_integrity_outcome, notes_boundary_report,
             )
+            if (notes_integrity_outcome or {}).get("retry_repaired_cells"):
+                await asyncio.to_thread(
+                    _refresh_merged_notes_workbook, run_id=run_id,
+                    db_path=str(AUDIT_DB_PATH), merged_workbook_path=merged_path,
+                    filing_level=run_config.filing_level,
+                )
+            # Remaining gaps belong to the draft's review list. The first notes
+            # review already saw source findings; do not repeat a full paid pass.
+
         except Exception:  # noqa: BLE001
             logger.warning(
                 "Notes integrity check failed; the run keeps its other "
@@ -8128,7 +8138,8 @@ async def run_multi_agent_stream(
             )
             notes_integrity_outcome = None
         notes_coverage_unresolved = (
-            _notes_coverage_enabled() and _notes_coverage_tips_status(_coverage)
+            (_notes_coverage_enabled() or prepared_snapshot is not None)
+            and _notes_coverage_tips_status(_coverage)
         )
         # Notes source integrity (PLAN-notes-source-integrity-build Phase 7,
         # Step 7.3). Folded into THIS block rather than writing a status of its
@@ -8137,7 +8148,7 @@ async def run_multi_agent_stream(
         # leaves the status alone.
         notes_integrity_unresolved = _notes_integrity_tips_status(
             notes_integrity_outcome
-        )
+        ) or bool(prepared_snapshot is not None and notes_to_run and notes_integrity_outcome is None)
         if all_agents_ok and merge_result.success and correction_exhausted:
             overall_status = "correction_exhausted"
         elif canonical_reexport_failed:
@@ -8287,6 +8298,24 @@ async def run_multi_agent_stream(
                                           if r.status == "succeeded"],
                 "statements_failed": [r.statement_type.value for r in coordinator_result.agent_results
                                        if r.status == "failed"],
+                "statements_skipped": [
+                    {
+                        "statement": r.statement_type.value,
+                        "variant": r.variant,
+                        "reason_code": (
+                            "no_standalone_statement"
+                            if r.variant == "NotPrepared"
+                            else "not_applicable"
+                        ),
+                        "message": (
+                            "Source does not present this as a standalone statement"
+                            if r.variant == "NotPrepared"
+                            else (r.error or "Statement was not applicable")
+                        ),
+                    }
+                    for r in coordinator_result.agent_results
+                    if r.status == "skipped"
+                ],
                 # Honest-completion flag (peer-review F1): statements that
                 # finalised with an acknowledged, audited gap. They are also
                 # in statements_completed (the data is saved) — this array
@@ -8313,6 +8342,10 @@ async def run_multi_agent_stream(
         # already recorded a terminal state, mark the run failed so History
         # never shows a dangling 'running' row. BaseException catches
         # CancelledError + KeyboardInterrupt too.
+        import task_registry
+        if terminal_status is None and isinstance(exc, asyncio.CancelledError) and task_registry.is_user_abort(exc):
+            _safe_mark_finished(db_conn, run_id, "aborted")
+            terminal_status = "aborted"
         if terminal_status is None:
             from observability.incidents import capture_run_incident
 
@@ -8409,6 +8442,15 @@ def _seed_repeat_session_dir(base_dir: Path, index: int) -> Path:
                     "Failed to copy %s into repeat dir %s", name, sub,
                     exc_info=True,
                 )
+    # Prepared inputs include revision-owned PDF/HTML, map cache and the
+    # checkpoint needed by inventory overrides. Keep the readiness marker last.
+    # Copy failures must stop the group rather than compare different pipelines.
+    preparation_files = sorted({*base_dir.glob("prepared-*"),
+                                *base_dir.glob("preparation-checkpoint-*.json")})
+    preparation_files += [base_dir / "preparation.json", base_dir / "preparation_status.json"]
+    for src in preparation_files:
+        if src.is_file():
+            shutil.copy2(src, sub / src.name)
     return sub
 
 
@@ -8930,7 +8972,7 @@ async def _auth_guard(request: Request, call_next):
         # stored timestamp is actually stale (auth_sessions.should_bump_activity)
         # — skipping the write on back-to-back requests avoids one UPDATE per
         # API call on the busy run page.
-        if auth_mw.counts_as_activity(path) and auth_sessions.should_bump_activity(session):
+        if auth_mw.counts_as_activity(path, request.method) and auth_sessions.should_bump_activity(session):
             repo.touch_auth_session(conn, session.session_id)
         conn.commit()
     finally:
@@ -9081,6 +9123,7 @@ sys.modules.setdefault("server", sys.modules[__name__])
 
 from api.config_routes import router as _config_router
 from api.uploads import router as _uploads_router
+from api.preparation import router as _preparation_router
 from api.run_control import router as _run_control_router
 from api.reviewer import router as _reviewer_router
 from api.notes_reviewer import router as _notes_reviewer_router
@@ -9096,6 +9139,7 @@ from auth.routes import router as _auth_router
 
 app.include_router(_config_router)
 app.include_router(_uploads_router)
+app.include_router(_preparation_router)
 app.include_router(_run_control_router)
 app.include_router(_reviewer_router)
 app.include_router(_notes_reviewer_router)

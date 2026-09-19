@@ -375,6 +375,17 @@ def apply_fact(
         ),
     )
 
+    # A receipt describes the exact current value. Any rewrite invalidates the
+    # prior receipt first; the prepared-source projection immediately replaces
+    # it in the same transaction. Reviewer/user writes without fresh source
+    # evidence therefore become honestly unassessed instead of inheriting
+    # stale provenance from the value they replaced.
+    conn.execute(
+        "DELETE FROM fact_source_receipts WHERE run_id=? AND concept_uuid=? "
+        "AND period=? AND entity_scope=? AND dimension_key=?",
+        (run_id, body.concept_uuid, body.period, body.entity_scope, dims),
+    )
+
     conn.execute(
         """
         INSERT INTO concept_fact_events(

@@ -183,12 +183,12 @@ function AgentTabsImpl({
     const status = agents[id]?.status;
     if (value === "all") return true;
     if (value === "working") return status === "running" || status === "aborting" || status === "pending";
-    return status === "complete" || status === "failed" || status === "cancelled";
+    return status === "complete" || status === "failed" || status === "cancelled" || status === "skipped";
   };
   const matchesFilter = (id: string) => matchesFilterFor(id, filter);
   const visibleStatementActive = statementActive.filter(matchesFilter);
   const visibleNotesActive = notesActive.filter(matchesFilter);
-  const visiblePreparation = [scoutActive, sourcePreparationActive]
+  const visiblePreparation = [sourcePreparationActive, scoutActive]
     .filter((id): id is string => id != null && matchesFilter(id));
   const visibleChecks = [notesValidatorActive, correctionActive, validatorActive]
     .filter((id): id is string => id != null && matchesFilter(id));
@@ -282,7 +282,9 @@ function AgentTabsImpl({
     );
   };
 
-  const completedCount = gatedOrder.filter((id) => agents[id]?.status === "complete").length;
+  const completedCount = gatedOrder.filter((id) =>
+    agents[id]?.status === "complete" || agents[id]?.status === "skipped"
+  ).length;
 
   return (
     <div className="workstream-nav" style={styles.tabBar}>
@@ -722,5 +724,6 @@ const STATUS_BADGES: Record<
   aborting:  { wrapper: badgeStyles.aborting,  dot: badgeStyles.abortingDot,  label: "Aborting" },
   failed:    { wrapper: badgeStyles.failed,    dot: badgeStyles.failedDot,    label: "Failed" },
   cancelled: { wrapper: badgeStyles.cancelled, dot: badgeStyles.cancelledDot, label: "Cancelled" },
+  skipped:   { wrapper: badgeStyles.pending,   dot: badgeStyles.pendingDot,   label: "Skipped" },
   pending:   { wrapper: badgeStyles.pending,   dot: badgeStyles.pendingDot,   label: "Pending" },
 };

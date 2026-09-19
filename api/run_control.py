@@ -100,6 +100,7 @@ async def run_multi_extraction(session_id: str, body: RunConfigRequest, request:
                     )
                 else:
                     agen = server.run_multi_agent_stream(
+                        require_preparation=True,
                         session_id=session_id,
                         session_dir=session_dir,
                         run_config=body,
@@ -283,6 +284,7 @@ async def start_run_endpoint(run_id: int, request: Request):
                     )
                 else:
                     agen = server.run_multi_agent_stream(
+                        require_preparation=True,
                         session_id=session_id,
                         session_dir=session_dir,
                         run_config=run_config,

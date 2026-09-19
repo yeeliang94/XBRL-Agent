@@ -202,6 +202,21 @@ def test_the_render_hash_is_a_plain_content_digest(monkeypatch):
     assert sr.render_sha256("<p>x</p>") == first
 
 
+def test_verified_paragraph_fragments_join_without_changing_emphasis_or_spacing():
+    blocks = [SourceBlock("a", "paragraph", 1, "<p>The <strong>policy</strong> </p>"),
+              SourceBlock("b", "paragraph", 2, "<p>continues.</p>", continues_block_id="a")]
+    rendered = sr.render_blocks(blocks, ["a", "b"])
+    assert rendered.html.count("<p>") == 1
+    assert "<strong>policy</strong> continues." in rendered.html
+
+
+def test_continuation_uses_only_explicit_verified_boundary_separator():
+    blocks = [SourceBlock("a", "paragraph", 1, "<p>policy</p>"),
+              SourceBlock("b", "paragraph", 2, "<p>continues</p>",
+                          continues_block_id="a", locator={"continuation_separator": " "})]
+    assert "policy continues" in sr.render_blocks(blocks, ["a", "b"]).html
+
+
 def test_nested_policy_heading_levels_and_emphasis_survive_source_render():
     blocks = [
         _b(0, "<h2>2. Material accounting policies</h2>", kind="heading"),

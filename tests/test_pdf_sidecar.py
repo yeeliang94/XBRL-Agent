@@ -248,8 +248,7 @@ def test_blank_render_is_successful_without_a_provider_call(tmp_path):
     for index in range(width * height):
         value = 246 + (index % 10)
         samples.extend((value, value, value))
-    # Sparse scanner defects are not document content.
-    samples[0:3] = b"\x00\x00\x00"
+    # Light scan background alone is blank; dark marks require inspection.
     noisy_blank = fitz.Pixmap(
         fitz.csRGB, width, height, bytes(samples), False,
     ).tobytes("png")

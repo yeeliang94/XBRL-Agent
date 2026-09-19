@@ -125,14 +125,14 @@ describe("AgentTimeline", () => {
     expect(screen.getByText(/Completed/i)).toBeInTheDocument();
   });
 
-  test("successful complete event with warnings surfaces them below the row", () => {
+  test("successful completion keeps diagnostics collapsed without a warning count", () => {
     // Peer-review finding #3: notes agents emit non-fatal diagnostics on
     // success ("borderline fuzzy match", "writer: unresolvable label X",
     // "3 of 5 sub-agent(s) failed — partial coverage only"). Previously
     // these were dropped on the floor — the terminal row rendered a
     // clean "Completed" badge so partial-success runs looked green.
     const warnings = [
-      "writer: unresolvable label 'Foo'",
+      "3 of 5 sub-agents failed — partial coverage only",
       "borderline fuzzy match: 'Bar' -> 'Baz' (score 0.80)",
     ];
     const events = [
@@ -147,11 +147,9 @@ describe("AgentTimeline", () => {
     const row = container.querySelector("[data-terminal='done-with-warnings']");
     expect(row).toBeTruthy();
 
-    // Badge reflects the warning count so the signal is visible at a glance
-    // even before the operator expands the bullet list.
-    expect(screen.getByText(/Completed · 2 warnings/i)).toBeInTheDocument();
-    // Each warning renders as its own bullet in the warnings block.
-    expect(screen.getByRole("note", { name: /run warnings/i })).toBeInTheDocument();
+    expect(screen.getByText("Completed with issues")).toBeInTheDocument();
+    expect(screen.queryByText(/Completed · 2 warnings/i)).toBeNull();
+    expect(screen.getByText("Completion details").closest("details")).not.toHaveAttribute("open");
     for (const w of warnings) {
       expect(screen.getByText(w)).toBeInTheDocument();
     }

@@ -229,7 +229,11 @@ from pathlib import Path
 # renamed or moved. Retiring nodes that disappear from the latest import keeps
 # those UUIDs readable for historical run facts without exposing them through
 # current template resolution.
-CURRENT_SCHEMA_VERSION = 47
+# v47 adds fact categories to canonical fact identity.
+# v48 adds structured source receipts and their exact prepared-table terms.
+# Reconciliation and source fidelity remain separate: an arithmetically exact
+# receipt can still open a semantic-review conflict.
+CURRENT_SCHEMA_VERSION = 48
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -704,6 +708,46 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         ts               TEXT NOT NULL,
         before_json      TEXT,
         after_json       TEXT
+    )
+    """,
+
+    # v48: structured source-to-canonical evidence. One receipt describes the
+    # current evidence for one canonical fact; its source terms identify exact
+    # prepared-table cells and their arithmetic contribution. Rewriting a fact
+    # replaces its receipt/terms transactionally through the UNIQUE key.
+    """
+    CREATE TABLE IF NOT EXISTS fact_source_receipts (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id           INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        concept_uuid     TEXT NOT NULL REFERENCES concept_nodes(concept_uuid) ON DELETE CASCADE,
+        period           TEXT NOT NULL,
+        entity_scope     TEXT NOT NULL,
+        dimension_key    TEXT NOT NULL DEFAULT '',
+        transform        TEXT NOT NULL,
+        allocation_id    TEXT,
+        rationale        TEXT,
+        arithmetic_status TEXT NOT NULL,
+        semantic_status  TEXT NOT NULL DEFAULT 'unassessed',
+        created_at       TEXT NOT NULL,
+        UNIQUE(run_id, concept_uuid, period, entity_scope, dimension_key)
+    )
+    """,
+
+    """
+    CREATE TABLE IF NOT EXISTS fact_source_terms (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        receipt_id       INTEGER NOT NULL REFERENCES fact_source_receipts(id) ON DELETE CASCADE,
+        source_term_id   TEXT NOT NULL,
+        source_page      INTEGER NOT NULL,
+        source_block_id  TEXT NOT NULL,
+        row_label        TEXT,
+        column_label     TEXT,
+        raw_value        TEXT NOT NULL,
+        numeric_value    REAL NOT NULL,
+        coefficient      REAL NOT NULL DEFAULT 1,
+        capture_status   TEXT,
+        uncertainty_json TEXT,
+        UNIQUE(receipt_id, source_term_id)
     )
     """,
 
@@ -1666,6 +1710,9 @@ _CREATE_INDEXES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS ix_run_concept_facts_concept_uuid "
     "ON run_concept_facts(concept_uuid)",
     "CREATE INDEX IF NOT EXISTS ix_concept_fact_events_run_id ON concept_fact_events(run_id)",
+    "CREATE INDEX IF NOT EXISTS ix_fact_source_receipts_run_id ON fact_source_receipts(run_id)",
+    "CREATE INDEX IF NOT EXISTS ix_fact_source_terms_receipt_id ON fact_source_terms(receipt_id)",
+    "CREATE INDEX IF NOT EXISTS ix_fact_source_terms_source_term_id ON fact_source_terms(source_term_id)",
     "CREATE INDEX IF NOT EXISTS ix_run_concept_conflicts_run_id ON run_concept_conflicts(run_id)",
     # v8: per-turn metrics are always queried by their owning agent.
     "CREATE INDEX IF NOT EXISTS ix_run_agent_turns_run_agent_id ON run_agent_turns(run_agent_id)",
@@ -3497,6 +3544,22 @@ def init_db(path: str | Path) -> None:
                         if "dimension_key" not in columns:
                             conn.execute(f"ALTER TABLE {table} ADD COLUMN dimension_key TEXT NOT NULL DEFAULT ''")
                     conn.execute("UPDATE schema_version SET version = 47")
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        # v47 -> v48: structured source-evidence receipts. Both tables and
+        # their indexes are created by the guarded statement lists above; this
+        # step advances exactly one version and remains idempotent.
+        if current_version is not None and current_version < 48:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                latest = conn.execute(
+                    "SELECT version FROM schema_version"
+                ).fetchone()[0]
+                if latest < 48:
+                    conn.execute("UPDATE schema_version SET version = 48")
                 conn.commit()
             except Exception:
                 conn.rollback()

@@ -306,6 +306,11 @@ After completion, `server.py` also backfills run-level totals from
 (`notes/coordinator.py`) capture this; the Sheet-12 fan-out leaves per-turn
 rows empty (its sub-agents merge into one row) — rollups still populate.
 
+Document-preparation requests retain a `RunUsage` accumulator through output
+retries, timeouts and cancellation. Their checkpoint records usage from completed
+responses even when the request fails. Pinned by
+`tests/test_document_preparation.py`.
+
 **Verbatim content lives on disk, not the DB.** `save_agent_trace`
 (`agent_tracing.py`) writes the full request/response transcript to
 `{output_dir}/{stmt}_conversation_trace.json` — text kept verbatim (single
@@ -422,6 +427,12 @@ terminal run is closed as `cancelled`. The backstop never promotes a row to
 only from in-memory results. (Run 83: a Stop-All during the notes reviewer
 left all five extraction rows + CORRECTION at `running` forever under an
 `aborted` run.) Pinned by `tests/test_abort_reconciles_agent_rows.py`.
+
+The automatic notes review owns one audit row and finalizes its outcome, usage
+and turns inside the shared lifecycle. Remaining source gaps stay visible for
+human review; they do not launch another full review after formatting. The
+durable review task is released on success, failure or cancellation. Pinned by
+`tests/test_preparation_integration.py`.
 
 **Persistent-draft addition (2026-04-26):** `POST /api/upload` now also
 inserts a draft `runs` row at upload time with `status='draft'` and an
@@ -568,11 +579,48 @@ MPERS (private-entity) run inherited. Pinned by
 
 ### 13. Scout page hints are soft guidance only
 
-Normal web and CLI runs execute a fresh scout pass inside
-`run_multi_agent_stream` before extraction. The pre-run page offers an optional
-preview, but a preview is never required and never replaces the run-owned pass.
-Specialized internal rerun paths may explicitly set `use_scout=False` when they
-are reprocessing persisted material rather than starting a normal extraction.
+New web uploads start durable document preparation automatically, then a unified
+Scout document map. Capture combines orientation and transcription, keeps independent
+page checks, and uses ten concurrent requests under the shared process-wide limit
+of ten. Eligible page connections are checked as their pages become available.
+For PDF-only uploads, capture excludes printed page numbers and routine running
+headers/footers from source HTML and blocks, recording their original regions as
+`page_number`, `page_header`, or `page_footer` in the preparation receipt. PDF page
+indexes remain unchanged and need not match printed folios. Verification accepts
+these exclusions. Preserve cover identity, statement titles, dates, units, note
+headings, captions and substantive footnotes even at page edges. Word-native body
+text remains protected; only conversion-added furniture may be excluded there.
+Pinned by `tests/test_document_preparation.py` and the generated prompt audit.
+A timed-out preparation request retries once without repeating successful
+requests. Exhausted request timeouts identify their page and stage. After bounded
+boundary repair, invalid joins are discarded and both source blocks remain
+separate with uncertainty; no invented join is published. Scout may correct a
+mistaken note identity from a rejected output; tentative discoveries are not
+immutable. Invalid range feedback names the exact field and identifier.
+Ownership reason codes are enumerated in the output schema; owner-specific repair
+feedback identifies the range and allowed values. Retained note titles, including
+continuation titles, belong to their note rather than page furniture.
+The map produces the notes inventory and exact block ownership together; applying
+it requires complete assignments and makes no further model calls. Scout can use
+broad note/metadata ranges with explicit nested furniture exceptions. Expansion
+gives furniture precedence independent of range order, deduplicates identical
+assignments, and still rejects conflicting note owners or uncovered blocks.
+Capture has
+no separate orientation or ownership-model stage. Concurrent checkpoint saves
+coalesce already-persisted revisions while preserving all receipts and cancellation
+durability. Scout's legacy/prepared inventory instructions use explicit prompt
+fields. Variant guidance specifies that visible current/non-current sections or totals select CuNonCu,
+not OrderOfLiquidity. The prepared-map path retains this guidance even though it
+has a shorter prompt (`tests/test_prepared_document_map.py`).
+Pinned by `tests/test_document_preparation.py` and
+`tests/test_scout_prepared_prompt.py`. Extraction waits for the same assessed source
+revision and reuses its completed inventory instead of paying for a duplicate pass. Changed source/model/capture
+configuration invalidates reuse. Legacy sessions without preparation retain the
+run-owned Scout path until prepared. Specialized internal reruns may reuse
+persisted material. Upload-owned preparation and Scout have explicit terminal
+outcomes even while the parent run remains a draft. Pinned by
+`tests/test_document_preparation_lifecycle.py` and
+`web/src/__tests__/DocumentPreparation.test.tsx`.
 
 The Settings page exposes the Scout's whole-run deadline and model-turn cap as
 `XBRL_SCOUT_WALLCLOCK_S` (default 300 seconds; 0 disables) and
@@ -817,13 +865,13 @@ Full walkthrough: [docs/MPERS.md](docs/MPERS.md).
 
 ### 16. Notes cells are HTML; Excel download regenerates from the DB
 
-Source-backed disclosures retain semantic h1–h6 headings, list hierarchy and
-meaningful emphasis through sanitization, rendering, review, clipboard and mTool
-decoration. Formatting must preserve text and table geometry. Native notes
-insertion verifies the complete expected XHTML payload, not a substring. Pinned
-by `tests/test_notes_format_patch.py`, `tests/test_notes_source_render.py`,
-`tests/test_mtool_notes_exporter.py`, `tests/test_mtool_offline_fill.py`,
-`tests/test_mtool_notes_decorate.py` and the clipboard/editor frontend tests.
+Verified source headings retain semantic h1–h6 levels through sanitization,
+source rendering, the editor, review display, clipboard and mTool decoration.
+New author-written section headings still use the established h3 convention.
+Source preparation captures hierarchy/emphasis; destination formatting may not
+flatten that hierarchy, remove source emphasis, or change text/table geometry.
+Pinned by source-render, sanitizer, format-patch, clipboard and notes-decoration
+heading preservation tests.
 
 User draft downloads now use the mTool preparation path described in invariant
 28. Notes overlays below remain internal canonical-workbook/diagnostic helpers;
@@ -1262,6 +1310,18 @@ replaced it (gotcha #22).
 
 ### 19. Pipeline-stage + cross-check progress events
 
+Upload preparation exposes durable progress through `/api/preparation/{session_id}`
+and records `preparation_progress` events. Queued/working/retrying/succeeded/failed/
+cancelled are explicit outcomes; inactivity and missing reasoning summaries never
+imply success. Source capture, completed assessment and exact verification have
+separate counts; the UI shows pages checked, including accepted best readings.
+The document-map stage starts after source preparation and preserves the page
+counters while reporting its own status. Polling does not extend authentication idle sessions.
+The existing preparation panel owns ordinary progress and a single actionable
+failure, without feature-enable switches or duplicate banners. Pinned by
+`tests/test_document_preparation_lifecycle.py`, `tests/test_auth_sessions.py`, and
+`web/src/__tests__/DocumentPreparation.test.tsx`.
+
 Two new SSE event families surface the post-extraction silent dead
 zones (added 2026-04-27, Phases 5 & 6 of the same plan):
 
@@ -1448,6 +1508,20 @@ A rejected canonical value therefore cannot survive only in the workbook and
 later pass `save_result`; it remains an unresolved write until corrected.
 Pinned by
 `tests/test_extraction_canonical_projection.py::test_write_facts_rejects_canonical_invalid_value_before_workbook_save`.
+
+**Numeric source evidence is separate from reconciliation (schema v48).**
+Canonical projection keeps the existing agent write interface. Prepared-table
+matching enriches facts with candidate source cells and verified arithmetic;
+classification remains AI judgment and is stored as `unassessed`, never certified
+by word overlap. Unmatched evidence is retained as an unassessed receipt, not an
+automatic run conflict. Zero targets never use subset aggregation. Explicit
+allocations must conserve their source coefficients; implicit duplicate detection
+is restricted to nonzero scalar leaves sharing a positive arithmetic parent in
+`concept_edges`, within the same period, entity scope and dimensions. Repeated
+presentation across statements is not an allocation. Agent-supplied invalid
+receipts and objective arithmetic conflicts remain visible. No invented split or
+balancing residual is allowed. Pinned by `tests/test_source_fidelity.py`,
+`tests/test_cell_resolver.py`, and `tests/test_db_schema_v48.py`.
 
 SOCF articulation checks both CY and presented PY, retains period-specific
 comparands, and passes those periods into reviewer traces. Blank comparative
@@ -1755,6 +1829,13 @@ Pinned by `tests/test_coverage_checklist.py`,
 inventory warning, Next issue navigation, and Needs attention filter.
 
 ### 28. mTool fill pipeline — semantic addressing, one patcher, receipts
+
+**Prose preservation at export (Plan A).** The notes exporter compares canonical
+content, heading/list structure, emphasis and merged-cell geometry before and
+after destination decoration. A lossy decoration is refused. The standard-library
+patcher reads back the complete expected XHTML payload, not merely a matching
+substring; duplicated or extra prose therefore cannot pass. Pinned by
+`tests/test_mtool_notes_exporter.py` and `tests/test_mtool_offline_fill.py`.
 
 The `mtool/` package fills a run's figures into an SSM **mTool** MBRS template so
 the operator can Validate/Generate the XBRL inside mTool without hand-copying
@@ -2154,6 +2235,10 @@ Load-bearing invariants:
   Stop-All / disconnect reaches the live repeat) but isolated output subdirs;
   consistency is finalized on the generator's `finally` (abort mid-group →
   `partial`). Do NOT reintroduce a separate cancel channel.
+  Preparation uses a deep copy of each run request. Repeat folders retain the
+  prepared PDF/HTML, metadata, document map and checkpoint so every repeat uses
+  the same prepared source and inventory overrides. Pinned by
+  `tests/test_preparation_integration.py` and `tests/test_document_preparation.py`.
 - **Suite batch runner** (`api/suite_runner.py`, Step E3) is a background loop
   (reviewer-pass thread pattern), concurrency **fixed at 3** (decision #2),
   Resume re-launches only documents whose DISTINCT finished repeats are below
@@ -2208,6 +2293,83 @@ Pinned by `tests/test_db_schema_v30.py`/`_v31.py`, `test_eval_taxonomy.py`,
 `SuitesPage`/`EvalTab` web tests.
 
 ### 31. Notes source integrity — a COUNT, not a claim; ships OFF
+
+**Prepared-document contract (Plan A, September 2026).** Generations whose
+`input_kind` is `prepared_document` use full-document preparation with independent
+page checks, followed by one model-authored Scout inventory and ownership map.
+Exact block coverage and source relationships are validated before activation. Their prose agents use the single `prompts/_notes_prepared.md` workflow and
+source-block tools; authored-prose tools are hidden. Missing or conflicting capture
+is recorded through `report_source_gap` with pages and a reason in the existing
+human-review flags. These flags survive automatic reviewer replacement. Reported
+batch notes remain uncovered but do not force repeated coverage submissions.
+Standalone and batch coordinators retain a blank draft with warnings when the
+remaining assigned work consists entirely of reported capture gaps (or validated
+cross-sheet skips). A silent no-write result still fails. This distinction is
+pinned by `tests/test_notes_source_tools.py`, `tests/test_notes_coordinator.py`, and
+`tests/test_notes12_token_rollup.py`.
+Numeric tools remain available only for numeric templates. Missing captured prose
+is never silently replaced with invented text.
+Standalone blank drafts require a nonempty assigned inventory whose every note
+has a reported source gap; one gap cannot account for other unwritten notes.
+Reviewers enforce source relinking even when a legacy rollout setting is off.
+The user-authorized best-effort policy permits reconstruction of unreadable
+wording and exclusion of administrative stamps. Readability uncertainty alone
+must not block preparation, extraction or export. Such pages retain
+`assessment_complete`, `capture_status=best_effort` and uncertainty evidence;
+blocks retain `capture_uncertain`, observed/reconstructed text and source location.
+Cells rendered from those blocks use `vision_transcribed`, including after an
+edit is restored to the captured version. Integrity records nonblocking
+`source_uncertainty`; it never certifies the original wording as exact or retries
+merely because capture was uncertain. Missing requests, omitted blocks, broken
+placement and operational failures remain enforced. Administrative stamps are
+accounted as document metadata with location evidence. No extra UI warning is
+required. Pinned by `tests/test_prepared_source_manifest.py`.
+
+Legacy generations retain their existing rollout modes below.
+Prepared Issued Capital and Related Party agents also expose source writes for
+canonical taxonomy text-block slots only. Structured numeric values still use
+the numeric path with empty prose. Their complete narrative may also appear in
+List-of-Notes under the explicit `numeric_note_prose` purpose; a third destination
+is not approved by that purpose. Reviewer packets recompute source integrity and
+expose bounded list/manifest/content tools, including stable unnumbered note IDs,
+so source-only gaps trigger review and verification can confirm the repair.
+Pinned by `tests/test_prepared_numeric_prose.py` and
+`tests/test_notes_reviewer_tools.py`.
+
+The shared source writer expands verified paragraph continuations, linked table
+parts, required related blocks and heading ancestry from locator metadata. It
+refuses stale generations, multiple top-level disclosures in one List-of-Notes
+field, and automatic replacement of human edits. Reviewer relinks carry the
+observed content revision. Heading context may repeat across policy destinations;
+substantive duplicate content still requires explicit approval. Routed and
+structured-consumed prose requires live placement, including policy-route
+exclusions; a destination name or receipt alone never proves preservation.
+Integrity hashes the actual persisted HTML rather than trusting its cached digest,
+and reconstructs the selected block content to validate the placement ledger.
+Prepared generations use that live style-tolerant comparison for render matching;
+validated formatting may change HTML bytes, but lost text, source emphasis,
+heading hierarchy or table geometry remains unresolved. Text must remain bound
+to its paragraphs, headings, list items, line breaks and table cells; matching
+flattened text and a separate tag skeleton is insufficient. Original source
+digests remain intact. Legacy generations retain exact digest matching.
+Automatic deterministic repairs restore only historically established placements;
+they do not copy an entire note into the first policy destination.
+Prepared manifests reject unresolved ownership, broken links, unassessed pages
+and disagreement with Scout. Nonconsecutive note numbers are valid after that
+validated reconciliation. Source structure and emphasis capture precedes
+extraction; later MBRS formatting remains style-only.
+Prepared page receipts must cover the original PDF page count, not just their
+own list length. Incomplete assessments remain failures even when text is
+unreadable. Any dark ink, including short disclosures, goes through capture.
+Scout furniture exclusions require recurring header/footer text on another
+page or a folio-only page-number block; one-off prose stays in the source.
+Explicit human source attachment may replace a human edit; automatic source
+placement still may not. Preparation request deadlines begin after acquiring
+the AI slot; the document deadline includes queueing.
+
+Pinned by `tests/test_prepared_source_manifest.py`,
+`tests/test_notes_integrity_false_greens.py`, `tests/test_notes_source_write.py`,
+`tests/test_notes_source_render.py`, and `tests/test_notes_integrity_checks.py`.
 
 The `XBRL_NOTES_SOURCE_INTEGRITY` mode (`off` | `shadow` | `enforce`, **default
 off**) makes notes extraction prove that every part of the source document was

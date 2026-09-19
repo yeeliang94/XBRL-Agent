@@ -84,6 +84,8 @@ class ManifestResult:
     body_chars: int
     warnings: list[str] = field(default_factory=list)
     unaccounted_chars: int = 0
+    pages_expected: int | None = None
+    pages_processed: int | None = None
 
     @property
     def coverage_ratio(self) -> float:
@@ -451,11 +453,12 @@ def freeze_manifest(
         input_kind=manifest.input_kind,
         source_sha256=manifest.source_sha256,
         extractor_version=manifest.extractor_version,
+        pages_expected=manifest.pages_expected,
     )
     try:
         srepo.write_blocks(conn, gen_id, manifest.blocks)
         srepo.write_notes(conn, gen_id, manifest.notes)
-        srepo.activate_generation(conn, gen_id)
+        srepo.activate_generation(conn, gen_id, pages_processed=manifest.pages_processed)
     except Exception as exc:  # noqa: BLE001
         srepo.fail_generation(conn, gen_id, failure_code=type(exc).__name__)
         raise
@@ -472,3 +475,108 @@ def freeze_manifest(
             note=f"{b.owner_kind.value} block, settled at freeze",
         )
     return gen_id
+
+
+def build_prepared_manifest(metadata_path, *, scout_note_nums=()):
+    """Read independently verified preparation; refuse unresolved ownership.
+
+    Note ownership comes from Scout's exact document map over assessed capture,
+    never from matching labels or expanding advisory page hints. This checks
+    internal inventory agreement, not an independent semantic assessment.
+    """
+    import json
+    from notes.source_models import INPUT_KIND_PREPARED, EXCLUSION_REASONS, UNRESOLVED_REASONS
+
+    data = json.loads(Path(metadata_path).read_text(encoding="utf-8"))
+    if data.get("status") != "succeeded":
+        raise ManifestError("Document preparation has not completed verification.")
+    if not data.get("inventory_reconciled"):
+        raise ManifestError("Source ownership has not been reconciled with Scout.")
+    pages = data.get("pages", [])
+    source_path = Path(metadata_path).parent / data.get("source_file", "uploaded.pdf")
+    expected_pages = data.get("page_count")
+    if source_path.is_file():
+        import fitz
+        with fitz.open(source_path) as source:
+            expected_pages = len(source)
+    if expected_pages is None:
+        raise ManifestError("Prepared source has no original page count.")
+    def assessed_page(page):
+        return page.get("verified") is True or (
+            page.get("assessment_complete") is True
+            and page.get("capture_status") == "best_effort"
+            and bool(page.get("uncertainties")))
+    if not pages or any(not assessed_page(page) for page in pages):
+        raise ManifestError("Every source page must be independently verified or carry an explicit best-effort assessment.")
+    if [page.get("page") for page in pages] != list(range(1, expected_pages + 1)):
+        raise ManifestError("Prepared source page receipts do not cover every original page.")
+    pages_by_number = {page.get("page"): page for page in pages}
+    raw_blocks = data.get("blocks") or [b for p in pages for b in p.get("blocks", [])]
+    blocks, notes_by_id = [], {}
+    for raw in raw_blocks:
+        locator = raw.get("locator") or {}
+        page_receipt = pages_by_number.get(raw.get("page"), {})
+        if page_receipt.get("capture_status") == "best_effort":
+            uncertainties = page_receipt.get("uncertainties") or []
+            locator = {**locator, "capture_uncertain": True, "capture_method": "reconstructed",
+                       "uncertainties": uncertainties,
+                       "uncertainty_reason": "; ".join(str(item.get("reason", "")) if isinstance(item, dict)
+                                                        else str(item) for item in uncertainties)}
+        try:
+            owner = OwnerKind(raw.get("owner_kind", locator.get("owner_kind", "unresolved")))
+        except ValueError as exc:
+            raise ManifestError("Source ownership is unresolved.") from exc
+        note_id = raw.get("source_note_id") or locator.get("source_note_id")
+        if owner in (OwnerKind.FURNITURE, OwnerKind.METADATA):
+            reason = locator.get("reason", locator.get("reason_code"))
+            if reason not in EXCLUSION_REASONS - UNRESOLVED_REASONS:
+                raise ManifestError(f"Source exclusion needs verified evidence for {raw.get('block_id')}.")
+            locator = {**locator, "reason": reason}
+        if owner is OwnerKind.UNRESOLVED or (owner is OwnerKind.NOTE and not note_id):
+            raise ManifestError(f"Source ownership is unresolved for {raw.get('block_id')}.")
+        block = SourceBlock(
+            block_id=raw["block_id"], block_kind=raw["block_kind"],
+            reading_order=raw["reading_order"], canonical_html=raw["canonical_html"],
+            content_sha256=_sha256_text(raw["canonical_html"]), page=raw.get("page"),
+            locator=locator, owner_kind=owner, source_note_id=note_id,
+            continues_block_id=raw.get("continues_block_id"), table_group_id=raw.get("table_group_id"),
+        )
+        blocks.append(block)
+        if owner is OwnerKind.NOTE:
+            num = str(raw.get("source_note_num", locator.get("source_note_num", "")) or "")
+            note = notes_by_id.setdefault(note_id, SourceNote(
+                source_note_id=note_id, top_note_num=num,
+                title=raw.get("source_note_title", locator.get("source_note_title", "")) or ""))
+            if note.top_note_num != num:
+                raise ManifestError(f"Conflicting note ownership for {note_id}.")
+            note.block_ids.append(block.block_id)
+    if not blocks or len({b.block_id for b in blocks}) != len(blocks):
+        raise ManifestError("Prepared source is empty or has duplicate block identities.")
+    by_id = {b.block_id: b for b in blocks}
+    for block in blocks:
+        refs = [block.continues_block_id] if block.continues_block_id else []
+        refs += (block.locator or {}).get("heading_ancestor_ids", [])
+        refs += (block.locator or {}).get("required_related_block_ids", [])
+        if any(ref not in by_id for ref in refs):
+            raise ManifestError(f"Missing source relationship for {block.block_id}.")
+        if any(by_id[ref].block_kind != "heading" for ref in (block.locator or {}).get("heading_ancestor_ids", [])):
+            raise ManifestError(f"Invalid heading ancestry for {block.block_id}.")
+        if any(by_id[ref].source_note_id != block.source_note_id for ref in refs):
+            raise ManifestError(f"Conflicting note boundary for {block.block_id}.")
+    manifest = ManifestResult(
+        blocks=blocks, notes=list(notes_by_id.values()),
+        source_sha256=data["source_sha256"], extractor_version=str(data.get("revision", "prepared-1")),
+        input_kind=INPUT_KIND_PREPARED,
+        body_chars=sum(len(_block_text(b.canonical_html)) for b in blocks),
+        pages_expected=expected_pages, pages_processed=len(pages))
+    # Nonconsecutive numbering is allowed when the Scout inventory agrees.
+    # A numbering gap alone is not an invented missing note.
+    mine = {n.top_note_num for n in manifest.notes if n.top_note_num}
+    theirs = {str(n) for n in scout_note_nums}
+    disagreements = [BoundaryDisagreement("inventory_disagreement",
+        f"Prepared source and Scout disagree about note {num}.", num)
+        for num in sorted(mine ^ theirs)]
+    report = BoundaryReport(disagreements, True, sorted(mine), sorted(theirs))
+    if disagreements:
+        raise ManifestError("Prepared source and Scout inventory disagree; source repair is required.")
+    return manifest, report

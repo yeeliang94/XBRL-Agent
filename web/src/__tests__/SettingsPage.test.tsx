@@ -118,10 +118,9 @@ describe("SettingsPage", () => {
     expect(account).not.toHaveAttribute("data-pointer-focus");
   });
 
-  test("long General-settings selects can shrink to the mobile content width", async () => {
+  test("source preservation needs no settings selector", async () => {
     render(<SettingsPage isAdmin={true} />);
-    const sourceMode = await screen.findByLabelText("Word source handling mode");
-    expect((sourceMode as HTMLElement).style.width).toBe("100%");
-    expect((sourceMode as HTMLElement).style.maxWidth).toBe("420px");
+    expect(await screen.findByText(/PDF and Word documents are prepared automatically/)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Word source handling mode")).toBeNull();
   });
 });

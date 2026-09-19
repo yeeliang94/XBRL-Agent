@@ -182,19 +182,8 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
 
       {warningChecks.length > 0 && (
         <div style={styles.warningsSection}>
-          <h4 style={styles.subheading}>Advisory warnings</h4>
           <details>
-            <summary style={styles.warningSummary}>
-              <span aria-hidden="true" style={styles.warningSummaryIcon}>
-                <StatusIcon symbol={STATUS_DISPLAY.warning.symbol} />
-              </span>
-              <span>
-                <strong>{warningChecks.length} advisory warning{warningChecks.length === 1 ? "" : "s"}</strong>
-                <span style={styles.warningSummaryText}>
-                  Non-blocking checks worth reviewing before filing. Expand to see each warning and its evidence.
-                </span>
-              </span>
-            </summary>
+            <summary style={styles.warningSummary}>Additional check details</summary>
             <ul style={styles.warningList}>
               {warningChecks.map((w) => (
                 <li key={w.name} style={styles.warningItem}>
@@ -283,37 +272,14 @@ const styles = {
   } as React.CSSProperties,
   warningsSection: {
     marginTop: pwc.space.lg,
-    padding: pwc.space.md,
-    background: pwc.orange50,
     border: "none",
     borderRadius: pwc.radius.md,
   } as React.CSSProperties,
-  subheading: {
-    fontFamily: pwc.fontHeading,
-    fontSize: 14,
-    fontWeight: 600,
-    color: pwc.warningText,
-    margin: `0 0 ${pwc.space.xs}px 0`,
-  } as React.CSSProperties,
   warningSummary: {
-    display: "grid",
-    gridTemplateColumns: "auto 1fr",
-    gap: pwc.space.sm,
     cursor: "pointer",
     fontFamily: pwc.fontBody,
     fontSize: 13,
     color: pwc.grey900,
-  } as React.CSSProperties,
-  warningSummaryIcon: {
-    display: "inline-flex",
-    paddingTop: 1,
-  } as React.CSSProperties,
-  warningSummaryText: {
-    display: "block",
-    marginTop: 2,
-    color: pwc.grey700,
-    fontWeight: 400,
-    lineHeight: 1.4,
   } as React.CSSProperties,
   warningList: {
     listStyle: "none",

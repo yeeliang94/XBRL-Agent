@@ -122,6 +122,8 @@ class ProjectionResult:
     skipped_cells: set[tuple[str, int, int]] = field(default_factory=set)
     skipped: list[str] = field(default_factory=list)
     rejected: list[str] = field(default_factory=list)
+    source_fidelity_issues: list[dict] = field(default_factory=list)
+    source_evidence_unresolved: list[str] = field(default_factory=list)
 
     @property
     def has_gaps(self) -> bool:
@@ -187,6 +189,7 @@ def project_writes(
     writes,
     *,
     filing_level: str = "company",
+    source_pdf_path: str | None = None,
 ) -> ProjectionResult:
     """Project resolved cell writes into ``run_concept_facts``.
 
@@ -200,6 +203,10 @@ def project_writes(
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.row_factory = sqlite3.Row
     result = ProjectionResult()
+    source_catalog = None
+    if source_pdf_path:
+        from concept_model.source_fidelity import PreparedSourceCatalog
+        source_catalog = PreparedSourceCatalog.load(source_pdf_path)
     try:
         for w in writes:
             sheet = w["sheet"]
@@ -217,6 +224,34 @@ def project_writes(
                 continue
             concept_uuid, period, entity_scope = resolved
             try:
+                source_receipt = w.get("source_receipt")
+                source_evidence_error = w.get("source_evidence_error")
+                if not source_receipt and not source_evidence_error and source_catalog is not None and isinstance(
+                    w.get("value"), (int, float),
+                ) and not isinstance(w.get("value"), bool):
+                    concept_label = conn.execute(
+                        "SELECT canonical_label FROM concept_nodes "
+                        "WHERE concept_uuid=?",
+                        (concept_uuid,),
+                    ).fetchone()[0]
+                    inferred, inference_error = source_catalog.infer_receipt(
+                        target_label=str(concept_label),
+                        target_value=w["value"],
+                        evidence=str(w.get("evidence") or ""),
+                    )
+                    if inferred is not None:
+                        source_receipt = inferred.to_dict()
+                        source_evidence_error = None
+                    else:
+                        # Failure of a heuristic match does not disprove the
+                        # agent's mapping. Retain the limitation as evidence,
+                        # without making every ambiguous zero a run conflict.
+                        source_receipt = {
+                            "transform": "direct", "terms": [],
+                            "arithmetic_status": "unassessed",
+                            "semantic_status": "unassessed",
+                            "rationale": inference_error,
+                        }
                 # Defer the commit — the whole batch lands in one transaction
                 # so a mid-batch crash rolls back cleanly (no half-projected
                 # run) instead of leaving committed-up-to-cell-N state.
@@ -236,6 +271,31 @@ def project_writes(
                     ),
                     commit=False,
                 )
+                if source_receipt:
+                    from concept_model.source_fidelity import persist_receipt
+                    persist_receipt(
+                        conn,
+                        run_id=run_id,
+                        concept_uuid=concept_uuid,
+                        period=period,
+                        entity_scope=entity_scope,
+                        dimension_key="",
+                        receipt=source_receipt,
+                    )
+                elif source_evidence_error:
+                    from concept_model.source_fidelity import (
+                        persist_unresolved_source_evidence,
+                    )
+                    persist_unresolved_source_evidence(
+                        conn,
+                        run_id=run_id,
+                        concept_uuid=concept_uuid,
+                        period=period,
+                        entity_scope=entity_scope,
+                        dimension_key="",
+                        detail=str(source_evidence_error),
+                    )
+                    result.source_evidence_unresolved.append(cell_desc)
                 result.projected += 1
                 result.projected_cells.add((sheet, row, col))
             except HTTPException as exc:
@@ -265,6 +325,16 @@ def project_writes(
                     "project_writes: non-numeric/invalid value for %s — %s",
                     cell_desc, exc,
                 )
+        from concept_model.source_fidelity import (
+            persist_source_term_reuse_issues,
+            source_term_reuse_issues,
+        )
+        result.source_fidelity_issues = source_term_reuse_issues(conn, run_id)
+        persist_source_term_reuse_issues(
+            conn,
+            run_id=run_id,
+            issues=result.source_fidelity_issues,
+        )
         conn.commit()
     except Exception:
         conn.rollback()

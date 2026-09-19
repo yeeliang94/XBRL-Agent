@@ -210,7 +210,12 @@ async def upload_pdf(file: UploadFile = File(...)):
             "Failed to insert draft runs row for session %s", session_id,
         )
 
-    return {"session_id": session_id, "filename": file.filename, "run_id": run_id}
+    from api.preparation import start_preparation
+    if run_id is None:
+        raise HTTPException(503, "The upload could not be saved for preparation. Retry the upload.")
+    preparation = start_preparation(session_dir, run_id)
+    return {"session_id": session_id, "filename": file.filename,
+            "run_id": run_id, "preparation": preparation}
 
 
 # --- Scout endpoint (Phase 7.1) ---
@@ -236,6 +241,25 @@ async def scout_pdf(session_id: str, request: Request):
 
     if not pdf_path.exists():
         raise HTTPException(status_code=404, detail="PDF not found. Upload first.")
+
+    # New uploads already own preparation and Scout. Legacy clients may still
+    # request a preview; join that work rather than launch a duplicate paid pass.
+    if (session_dir / "preparation_status.json").exists():
+        from api.preparation import ensure_prepared, snapshot
+        state = snapshot(session_dir)
+
+        async def prepared_preview():
+            try:
+                ready = await ensure_prepared(session_dir, state.get("run_id"))
+                payload = {"success": True, "infopack": ready["infopack"]}
+                yield f"event: scout_complete\ndata: {json.dumps(payload)}\n\n"
+            except asyncio.CancelledError:
+                yield 'event: scout_cancelled\ndata: {"message":"Document preparation cancelled"}\n\n'
+            except Exception:
+                payload = {"success": False, "message": "Document preparation could not finish. Check the preparation panel."}
+                yield f"event: scout_complete\ndata: {json.dumps(payload)}\n\n"
+
+        return StreamingResponse(prepared_preview(), media_type="text/event-stream")
 
     # Body is optional — absent/empty/non-JSON all mean "default behaviour".
     # We don't fail the request on malformed JSON because the old callers

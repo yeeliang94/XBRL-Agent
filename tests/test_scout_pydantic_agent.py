@@ -338,9 +338,9 @@ class TestPopulateInventoryFallback:
         call it — otherwise scanned-PDF runs silently skip the tool and
         Sheet-12 fan-out fails with an empty inventory. Guard the prompt
         contract so prompt edits can't regress this."""
-        from scout.agent import _SYSTEM_PROMPT
+        from scout.agent import _build_system_prompt
 
-        assert "discover_notes_inventory" in _SYSTEM_PROMPT, (
+        assert "discover_notes_inventory" in _build_system_prompt(), (
             "system prompt must mention discover_notes_inventory so the LLM "
             "knows to call it; otherwise Sheet-12 runs with an empty inventory "
             "on scanned PDFs"

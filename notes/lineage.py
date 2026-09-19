@@ -20,6 +20,7 @@ already receives from every read.
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -162,6 +163,18 @@ def mark_human_edit(
         if before.source_rendered_sha256 and digest == before.source_rendered_sha256
         else ContentOrigin.HUMAN_MODIFIED.value
     )
+    if origin == ContentOrigin.SOURCE_EXACT.value and before.source_generation_id is not None:
+        rows = conn.execute(
+            "SELECT b.locator_json FROM notes_source_blocks b JOIN notes_block_placements p "
+            "ON p.generation_id=b.generation_id AND p.block_id=b.block_id "
+            "WHERE p.run_id=? AND p.generation_id=? AND p.sheet=? AND p.row=? AND p.active=1",
+            (run_id, before.source_generation_id, sheet, row),
+        ).fetchall()
+        for block in rows:
+            locator = json.loads(block["locator_json"] or "{}")
+            if locator.get("capture_uncertain") or locator.get("capture_method") == "reconstructed":
+                origin = ContentOrigin.VISION_TRANSCRIBED.value
+                break
     conn.execute(
         "UPDATE notes_cells SET current_html_sha256 = ?, content_origin = ?, "
         "source_diverged_at = ? WHERE run_id = ? AND sheet = ? AND row = ?",

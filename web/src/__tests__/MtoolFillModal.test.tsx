@@ -1189,7 +1189,37 @@ describe("mTool filing gates", () => {
     fireEvent.change(input, { target: { files: [new File(["x"], "t.xlsx")] } });
   }
 
-  test("run warnings are visible after upload and never require an override", async () => {
+  test("source completeness remains visible without restoring routine fill advisories", async () => {
+    await openWith((url) => {
+      if (url.endsWith("/preflight")) return Response.json({ ok: true, blockers: [], warnings: [
+        { code: "notes_integrity_shadow_needs_review", message: "Source completeness needs review before filing.", examples: [] },
+        { code: "conflicts_outside_fill", message: "Conflicts outside this fill.", examples: [] },
+      ] });
+      return Response.json(FILL_DOC);
+    });
+    const message = await screen.findByText("Source completeness needs review before filing.");
+    expect(message).toBeVisible();
+    expect(message.closest("details")).toBeNull();
+    expect(screen.getByText("Conflicts outside this fill.").closest("details")).not.toHaveAttribute("open");
+    chooseTemplate();
+    expect(screen.getByRole("button", { name: /^fill$/i })).toBeEnabled();
+  });
+
+  test.each(["failed", "malformed"])("%s readiness check stays visibly unresolved but allows preparation", async (kind) => {
+    await openWith((url) => {
+      if (url.endsWith("/preflight")) return kind === "failed"
+        ? Response.json({ detail: "Service unavailable" }, { status: 503 })
+        : Response.json({ unexpected: true });
+      return Response.json(FILL_DOC);
+    });
+    const message = await screen.findByText(/Run checks are unavailable:/);
+    expect(message).toBeVisible();
+    expect(message.closest("details")).toBeNull();
+    chooseTemplate();
+    expect(screen.getByRole("button", { name: /^fill$/i })).toBeEnabled();
+  });
+
+  test("filing issues remain visible while routine advisories do not clutter preparation", async () => {
     await openWith((url) => {
       if (url.includes("/mtool-fill/preflight")) {
         return new Response(
@@ -1216,10 +1246,9 @@ describe("mTool filing gates", () => {
     expect(reminders).toHaveTextContent(/you can fill this template/i);
     expect(screen.getByText(/Trade receivables/)).toBeTruthy();
     const blockers = within(reminders).getByRole("region", { name: "Filing blockers" });
-    const warnings = within(reminders).getByRole("region", { name: "Warnings" });
+    expect(within(reminders).queryByRole("region", { name: "Warnings" })).toBeNull();
     expect(blockers).toHaveTextContent("2 figure(s) are still marked as conflicting");
-    expect(warnings).toHaveTextContent("Review the note placement.");
-    expect(blockers.compareDocumentPosition(warnings) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText("Review the note placement.").closest("details")).not.toHaveAttribute("open");
     const upload = screen.getByTestId("mtool-template-dropzone");
     expect(upload.compareDocumentPosition(reminders) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     chooseTemplate();

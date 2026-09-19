@@ -137,7 +137,8 @@ async def test_success_path_rolls_up_sub_agent_tokens(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_all_skipped_carve_out_still_reports_tokens(tmp_path: Path):
+@pytest.mark.parametrize("source_gaps", [False, True])
+async def test_all_skipped_carve_out_still_reports_tokens(tmp_path: Path, source_gaps):
     inv = _inventory()
     receipts = [
         CoverageReceipt(entries=[
@@ -156,6 +157,10 @@ async def test_all_skipped_carve_out_still_reports_tokens(tmp_path: Path):
         aggregated_payloads=[],
     )
 
+    if source_gaps:
+        for sub in sub_result.sub_agent_results:
+            sub.source_gap_notes = {entry.note_num for entry in sub.batch}
+            sub.coverage = CoverageReceipt(entries=[])
     result = await _run_fanout_with(sub_result, tmp_path)
 
     # Deliberately blank sheet is a success — and the sub-agents still
@@ -164,6 +169,9 @@ async def test_all_skipped_carve_out_still_reports_tokens(tmp_path: Path):
     assert result.total_tokens == 1750
     assert result.prompt_tokens == 1500
     assert result.completion_tokens == 250
+    if source_gaps:
+        assert any("source capture requires human review" in warning for warning in result.warnings)
+        assert all(not sub.coverage.entries for sub in sub_result.sub_agent_results)
 
 
 @pytest.mark.asyncio

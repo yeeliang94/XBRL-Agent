@@ -20,6 +20,7 @@ from enum import Enum
 from typing import Mapping, Optional
 
 ENV_VAR = "XBRL_NOTES_SOURCE_INTEGRITY"
+INPUT_KIND_PREPARED = "prepared_document"
 
 
 class IntegrityMode(str, Enum):
