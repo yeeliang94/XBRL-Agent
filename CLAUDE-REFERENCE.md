@@ -1155,6 +1155,13 @@ catch-all "balancing amount" plugs):
   "Other fee and commission income" case on SOPL-Analysis), the writer
   picks the leaf. Header detection is **row-based** — the legacy
   label-set form falsely marked any leaf with the same text as a header.
+- **A formula subtotal outranks legacy header keywords.** Labels such as
+  `Inventories` and `Biological assets` can name real computed subtotals.
+  The keyword fallback must not turn their formulas into ABSTRACT nodes or
+  discard their calculation edges. Explicit header styling remains protected.
+  `tests/test_formula_header_cascade.py` pins Company/Group CY/PY propagation,
+  the all-template dependency audit, and startup reimport repairing the graph
+  while preserving historical facts.
 - **No-residual-plug rule in `prompts/_base.md`, `prompts/sopl.md`, and
   `prompts/reviewer.md`**: catch-all rows ("Other …",
   "Miscellaneous …", "Administrative expenses") are for genuinely coarse
