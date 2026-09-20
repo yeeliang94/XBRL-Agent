@@ -468,13 +468,24 @@ def _whiteout_hidden_borders(el: Tag) -> None:
     sides = _resolve_cell_borders(parsed)
     out: list[str] = [d for d in decls
                       if _prop_of(d) not in _BORDER_LINE_PROPS]
+    resolved_values: dict[str, str] = {}
     for side in _SIDE_ORDER:
         value = sides.get(side)
         if not value:
             continue
         if _has_invisible_border_token(value):
             value = _WHITE_BORDER
-        out.append(f"border-{side}: {value}")
+        resolved_values[side] = value
+    # Four identical edges are semantically one CSS border. Keeping the
+    # shorthand avoids multiplying the same transport workaround across every
+    # table cell and is material for Excel's 32,767-character cell limit.
+    if (len(resolved_values) == len(_SIDE_ORDER)
+            and len(set(resolved_values.values())) == 1):
+        out.append(f"border: {next(iter(resolved_values.values()))}")
+    else:
+        for side in _SIDE_ORDER:
+            if side in resolved_values:
+                out.append(f"border-{side}: {resolved_values[side]}")
     el["style"] = "; ".join(out)
 
 

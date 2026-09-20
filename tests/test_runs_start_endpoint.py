@@ -60,6 +60,7 @@ def draft_with_config(tmp_path, monkeypatch):
         json={
             "statements": ["SOFP"],
             "variants": {"SOFP": "CuNonCu"},
+            "denomination": "thousands",
         },
     )
     return client, run_id, session_id, output_dir, db_path

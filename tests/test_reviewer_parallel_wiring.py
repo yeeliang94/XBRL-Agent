@@ -173,6 +173,7 @@ def test_live_pipeline_reviewers_are_in_flight_together(tmp_path, monkeypatch):
             "statements": ["SOFP"],
             "variants": {"SOFP": "CuNonCu"},
             "notes_to_run": ["CORP_INFO"],
+            "denomination": "thousands",
             "use_scout": False,
         })
 

@@ -89,6 +89,7 @@ def test_run_emits_pipeline_stage_at_each_boundary(session_env):
         "variants": {"SOFP": "CuNonCu"},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
     }
 
@@ -216,6 +217,7 @@ def test_normal_run_scouts_before_extraction_and_persists_fresh_infopack(session
         "variants": {},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": True,
         "scanned_pdf": True,
         "notes_inventory_overrides": {
@@ -315,6 +317,7 @@ def test_integrated_scout_failure_continues_and_closes_audit_row(session_env):
         response = client.post(f"/api/run/{session_id}", json={
             "statements": ["SOFP"],
             "variants": {"SOFP": "CuNonCu"},
+            "denomination": "thousands",
             "use_scout": True,
         })
 
@@ -345,6 +348,7 @@ def test_integrated_scout_cancel_aborts_run_and_closes_audit_row(session_env):
         response = client.post(f"/api/run/{session_id}", json={
             "statements": ["SOFP"],
             "variants": {"SOFP": "CuNonCu"},
+            "denomination": "thousands",
             "use_scout": True,
         })
 

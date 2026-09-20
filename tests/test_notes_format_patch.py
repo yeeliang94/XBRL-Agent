@@ -83,7 +83,10 @@ def test_removes_all_borders_using_hidden():
         }],
     }
     out = apply_sheet_patch({1: html}, patch)
-    assert out.rows[1].count("hidden") == 8
+    # A full four-edge clear is one shorthand per cell, not four repeated
+    # longhands. This preserves the same collapsed-border result and keeps
+    # large formatter-authored tables below Excel's cell-size ceiling.
+    assert out.rows[1].count("hidden") == 2
 
 
 def test_total_rows_can_get_single_and_double_rules():
@@ -181,6 +184,26 @@ def test_clear_border_on_one_interior_edge_is_not_resurrected():
     # interior edge truly disappears in the collapsed-border table.
     assert "border-bottom: 1px hidden #000000" in cells[0]  # A (cleared side)
     assert "border-top: 1px hidden #000000" in cells[1]     # B (shared side)
+
+
+def test_mirrored_clear_removes_later_longhand_over_matching_shorthand():
+    """A matching border shorthand does not make a later side declaration
+    redundant: the longhand wins until the mirror removes it."""
+    html = "<table><tr><td>A</td></tr><tr><td>B</td></tr></table>"
+    patch = {"cells": [{"row": 1, "operations": [
+        {"target": {"table": 0, "range": "all"},
+         "style": {"clear_border": ["top", "right", "bottom", "left"]}},
+        {"target": {"table": 0, "cell": {"r": 2, "c": 1}},
+         "style": {"border_top": {
+             "width": "1px", "style": "solid", "color": "#000000"}}},
+        {"target": {"table": 0, "cell": {"r": 1, "c": 1}},
+         "style": {"clear_border": ["bottom"]}},
+    ]}]}
+
+    out = apply_sheet_patch({1: html}, patch).rows[1]
+    cells = re.findall(r"<td[^>]*>[^<]*</td>", out)
+    assert "border: 1px hidden #000000" in cells[1]
+    assert "border-top:" not in cells[1]
 
 
 def test_later_clear_overrides_earlier_paint_on_shared_edge():

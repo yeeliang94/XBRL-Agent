@@ -96,7 +96,7 @@ def test_cli_run_agent_drives_canonical_pipeline(cli_env):
          patch("cross_checks.framework.run_all", return_value=fake_checks), patch("cross_checks.framework.run_all_facts", return_value=fake_checks):
         result = run.run_agent(
             pdf_path=pdf, model="test-model", output_dir=str(out),
-            statements=stmts,
+            statements=stmts, denomination="thousands",
         )
 
     assert result.success is True

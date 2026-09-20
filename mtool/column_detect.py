@@ -43,6 +43,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -65,6 +66,145 @@ _ROLE_ORDER = [
     "prior_year",
     "company_prior_year",
 ]
+
+_MONTHS = {
+    name: number for number, name in enumerate((
+        "january", "february", "march", "april", "may", "june",
+        "july", "august", "september", "october", "november", "december",
+    ), start=1)
+}
+_MONTHS.update({name[:3]: number for name, number in list(_MONTHS.items())})
+
+
+def _period_dates(value: Any) -> tuple[date, ...]:
+    """Extract ordered calendar dates from one source/template period label.
+
+    Source periods commonly read ``year ended 30 June 2025`` while mTool
+    markers use ``01/01/2025 - 31/12/2025``.  Comparing parsed dates rather
+    than strings accepts harmless wording differences without reducing a
+    non-calendar year-end to the year number alone.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return ()
+    found: list[date] = []
+    spans: list[tuple[int, int]] = []
+    for match in re.finditer(r"(?<!\d)(\d{1,2})[/-](\d{1,2})[/-](\d{4})(?!\d)", text):
+        try:
+            found.append(date(int(match.group(3)), int(match.group(2)), int(match.group(1))))
+            spans.append(match.span())
+        except ValueError:
+            continue
+    for match in re.finditer(
+        r"(?<!\d)(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})(?!\d)", text,
+    ):
+        month = _MONTHS.get(match.group(2).lower())
+        if month is None:
+            continue
+        try:
+            found.append(date(int(match.group(3)), month, int(match.group(1))))
+        except ValueError:
+            continue
+    # ISO dates occur in API/imported metadata even though the observed mTool
+    # marker uses day/month/year.
+    for match in re.finditer(r"(?<!\d)(\d{4})-(\d{1,2})-(\d{1,2})(?!\d)", text):
+        if any(lo <= match.start() < hi for lo, hi in spans):
+            continue
+        try:
+            found.append(date(int(match.group(1)), int(match.group(2)), int(match.group(3))))
+        except ValueError:
+            continue
+    return tuple(dict.fromkeys(found))
+
+
+def _period_matches(source: Any, template: Any) -> bool | None:
+    """True/False for comparable periods, None when either side is unclear."""
+    expected = _period_dates(source)
+    actual = _period_dates(template)
+    if not expected or not actual:
+        return None
+    # A source range must match both boundaries.  A "year ended" label names
+    # only its end date, so compare it with the template range's end.
+    if len(expected) >= 2 and len(actual) >= 2:
+        return expected[0] == actual[0] and expected[-1] == actual[-1]
+    return expected[-1] == actual[-1]
+
+
+def period_compatibility_issues(
+    column_map: dict[str, dict[str, Any]],
+    doc: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Return source/template reporting-period mismatches and unknowns.
+
+    The source periods come from Scout and travel in ``doc.meta``.  No source
+    period means an older run cannot be assessed and is left unchanged.  Once
+    a source period is available, every requested ordinary period must have a
+    parseable physical marker and must match it.  Dimensional layouts expose
+    category columns rather than period roles; their one physical period is
+    compared with CY, while missing comparative sections remain the mapper's
+    separate ``template_period_section_missing`` diagnostic.
+    """
+    meta = doc.get("meta") or {}
+    expected = {
+        "CY": meta.get("reporting_period_cy"),
+        "PY": meta.get("reporting_period_py"),
+    }
+    if not any(expected.values()):
+        return []
+
+    requested: dict[str, set[str]] = {}
+    for write in doc.get("writes") or []:
+        period = str(write.get("period") or "").upper()
+        if period in expected and expected[period]:
+            requested.setdefault(str(write.get("sheet") or ""), set()).add(period)
+
+    issues: list[dict[str, Any]] = []
+    for sheet, periods in sorted(requested.items()):
+        layout = column_map.get(sheet) or {}
+        physical_periods = layout.get("period_columns") or {}
+        role_columns = layout.get("columns") or {}
+        by_period: dict[str, list[Any]] = {"CY": [], "PY": []}
+        for role, column in role_columns.items():
+            role_l = str(role).lower()
+            target = "PY" if "prior" in role_l else (
+                "CY" if "current" in role_l else None)
+            if target and column in physical_periods:
+                by_period[target].append(physical_periods[column])
+
+        if layout.get("dimensional") and physical_periods and not by_period["CY"]:
+            distinct = list(dict.fromkeys(physical_periods.values()))
+            if len(distinct) == 1:
+                by_period["CY"] = distinct
+
+        for period in sorted(periods):
+            markers = list(dict.fromkeys(by_period[period]))
+            if not markers:
+                issues.append({
+                    "code": "template_period_markers_unresolved",
+                    "sheet": sheet,
+                    "period": period,
+                    "source_period": expected[period],
+                    "template_periods": sorted(set(physical_periods.values())),
+                })
+                continue
+            verdicts = [_period_matches(expected[period], marker) for marker in markers]
+            if any(v is None for v in verdicts):
+                issues.append({
+                    "code": "template_period_markers_unresolved",
+                    "sheet": sheet,
+                    "period": period,
+                    "source_period": expected[period],
+                    "template_periods": markers,
+                })
+            elif not all(verdicts):
+                issues.append({
+                    "code": "template_period_mismatch",
+                    "sheet": sheet,
+                    "period": period,
+                    "source_period": expected[period],
+                    "template_periods": markers,
+                })
+    return issues
 
 # mTool's own structural markers, found in the marker column (observed: C).
 MARKER_LABEL = "#PRIM#"

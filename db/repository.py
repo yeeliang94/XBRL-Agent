@@ -214,6 +214,11 @@ class NotesCell:
     # (deterministic house style), 'unstyled' (plain), or None (legacy /
     # reviewer-authored). Read-only signal for the operator.
     style_source: Optional[str] = None
+    # v37: non-null when the cell was deterministically rendered from the
+    # frozen source-block ledger. Review detectors use this to preserve the
+    # source document's real h1-h6 hierarchy instead of demanding an invented
+    # authoring-path h3.
+    source_generation_id: Optional[int] = None
 
 
 @dataclass
@@ -1343,6 +1348,7 @@ def list_notes_cells_for_run(
             source_pages=decode_source_pages(r["source_pages"]),
             updated_at=r["updated_at"] or "",
             style_source=r["style_source"],
+            source_generation_id=r["source_generation_id"],
         ))
     return cells
 

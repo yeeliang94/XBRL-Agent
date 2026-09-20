@@ -2336,9 +2336,35 @@ async def _run_notes_reviewer_pass(
 
     # Nothing flagged — skip the model entirely (latency + tokens). Emit a
     # status + success so the tab flips terminal instead of stranding. The
-    # draft checklist IS the final state here (nothing to resolve).
+    # draft checklist IS the final state here (nothing to resolve). A prior
+    # pass may still have open detector flags for cells that were subsequently
+    # cleared or repaired; a clean recompute supersedes those flags just as a
+    # completed model-backed pass does. Source-capture flags are independent
+    # preparation findings and deliberately survive.
     if n_items == 0:
         await _await_finalization_slot()
+        try:
+            from db import repository as _repo
+            with _repo.db_session(db_path) as conn:
+                conn.execute(
+                    "DELETE FROM notes_review_flags WHERE run_id = ? "
+                    "AND status = 'open' "
+                    "AND COALESCE(finding_id,'') NOT LIKE 'source-capture:%'",
+                    (run_id,),
+                )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "Failed to close stale notes-review flags for run %s", run_id,
+            )
+            outcome["error"] = "notes_reviewer_flag_persistence_failed"
+            await _finalize_coverage(reviewed=False)
+            await _emit("error", {
+                "type": "notes_reviewer_flag_persistence_failed",
+                "message": "The clean notes review could not replace stale flags.",
+            })
+            await _emit("complete", {"success": False, "error": outcome["error"]})
+            _stamp_elapsed()
+            return outcome
         await _finalize_coverage(reviewed=True)
         await _emit("status", {"phase": "complete",
                                "message": "No notes findings to review — skipped."})
@@ -3096,10 +3122,12 @@ class RunConfigRequest(BaseModel):
     # "RM mil", or actual RM); the agent transcribes figures verbatim and uses
     # this to know the unit authoritatively instead of guessing it from the
     # PDF header (a wrong unit silently 1000×'s every value). Vocabulary mirrors
-    # scout's `scale_unit`. Default "thousands" (RM '000) is the common
-    # Malaysian case; the scout still detects the scale and the run flags a
-    # warning if it disagrees with this declaration.
-    denomination: Literal["units", "thousands", "millions"] = "thousands"
+    # scout's `scale_unit`. None means the caller did not declare a scale; the
+    # pipeline may then use a confident Scout inference, but must stop before
+    # extraction if Scout also returns unknown. This keeps an unattended API
+    # call from silently becoming RM '000 merely because that was the legacy
+    # UI default. The UI sends its selected value explicitly.
+    denomination: Optional[Literal["units", "thousands", "millions"]] = None
     # Notes templates to fill, as NotesTemplateType.value strings (e.g.
     # ["CORP_INFO", "ISSUED_CAPITAL"]). Empty = face-only run.
     notes_to_run: List[str] = []
@@ -5881,6 +5909,55 @@ async def run_multi_agent_stream(
         _apply_notes_inventory_overrides(
             infopack, run_config.notes_inventory_overrides,
         )
+
+        # Denomination is required before any extraction prompt is built. A
+        # caller-supplied value is authoritative; otherwise a confident Scout
+        # inference may fill it. If both are absent/unknown, fail here instead
+        # of letting the legacy internal "thousands" default silently decide
+        # the scale for an unattended run.
+        from scout.scale_reconcile import (
+            DenominationRequiredError,
+            resolve_run_denomination,
+        )
+        try:
+            resolved_denomination = resolve_run_denomination(
+                run_config.denomination,
+                getattr(infopack, "scale_unit", None),
+            )
+        except DenominationRequiredError as exc:
+            fail_events, fail_status = _fail_run(
+                db_conn,
+                run_id,
+                str(exc),
+                error_code="denomination_required",
+            )
+            for event in fail_events:
+                if client_connected:
+                    try:
+                        yield event
+                    except (asyncio.CancelledError, GeneratorExit):
+                        client_connected = False
+            terminal_status = fail_status or terminal_status
+            return
+
+        run_config.denomination = resolved_denomination
+        config.denomination = resolved_denomination
+        if db_conn is not None and run_id is not None:
+            try:
+                stored_config = run_config.model_dump()
+                if infopack is not None:
+                    stored_config["infopack"] = json.loads(infopack.to_json())
+                db_conn.execute(
+                    "UPDATE runs SET run_config_json = ? WHERE id = ?",
+                    (json.dumps(stored_config), run_id),
+                )
+                db_conn.commit()
+            except Exception:
+                logger.warning(
+                    "Could not persist resolved denomination for run %s",
+                    run_id,
+                    exc_info=True,
+                )
 
         # PLAN-pdf-source-sidecar Phase 2: scanned-PDF runs with notes get an
         # LLM-transcribed source.html BEFORE extraction agents launch. This

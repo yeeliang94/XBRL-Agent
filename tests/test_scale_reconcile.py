@@ -8,7 +8,26 @@ never manufacture a conflict.
 
 import pytest
 
-from scout.scale_reconcile import reconcile_scale_unit
+from scout.scale_reconcile import (
+    DenominationRequiredError,
+    reconcile_scale_unit,
+    resolve_run_denomination,
+)
+
+
+@pytest.mark.parametrize("declared", ["units", "thousands", "millions"])
+def test_explicit_denomination_always_wins(declared):
+    assert resolve_run_denomination(declared, "unknown") == declared
+
+
+def test_confident_scout_fills_an_omitted_denomination():
+    assert resolve_run_denomination(None, "millions") == "millions"
+
+
+@pytest.mark.parametrize("scout", [None, "", "unknown", "lakhs"])
+def test_unknown_scout_cannot_inherit_an_implicit_default(scout):
+    with pytest.raises(DenominationRequiredError, match="Choose units"):
+        resolve_run_denomination(None, scout)
 
 
 def test_agreement_is_clean():

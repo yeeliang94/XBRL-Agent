@@ -8,8 +8,10 @@ lives on the Accounting Policies sheet (or Corporate Info / the numeric
 sheets).
 
 gotcha-#14-safe by construction: reconciliation keys on integer note
-numbers and sub-reference STRINGS from the writer's ``source_note_refs``
-provenance — never on matching a note's content to a row. Content-level
+numbers and sub-reference STRINGS from the effective detector entries. Those
+entries use writer ``source_note_refs`` for authored cells and frozen source
+note identity from live ``notes_block_placements`` for prepared-source cells —
+never on matching a note's content to a row. Content-level
 judgement (is sub-section (b) really inside the placed cell?) belongs to
 the notes reviewer agent, which consumes this draft checklist and upgrades
 ``not_verified`` sub-refs to verified/missing verdicts (Phase 5).
@@ -17,7 +19,7 @@ the notes reviewer agent, which consumes this draft checklist and upgrades
 Inputs mirror the durable stores:
 - ``inventory_rows`` — ``db.repository.fetch_notes_inventory`` shape:
   ``{"note_num", "title", "subnote_refs", "page_lo", "page_hi"}``.
-- ``provenance_entries`` — the detector ``entries`` shape
+- ``provenance_entries`` — the effective detector ``entries`` shape
   (``notes.detectors.load_provenance_entries``):
   ``{"sheet", "row", "row_label", "source_note_refs", ...}``.
 - ``skip_receipts`` — Sheet-12 coverage-receipt skip claims:

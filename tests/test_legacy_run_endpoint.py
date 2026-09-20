@@ -69,6 +69,7 @@ def test_legacy_post_run_session_creates_and_starts(legacy_session):
         "variants": {"SOFP": "CuNonCu"},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
     }
 

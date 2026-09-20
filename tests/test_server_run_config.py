@@ -43,6 +43,7 @@ class TestRunConfigSchema:
             "variants": {"SOFP": "CuNonCu", "SOPL": "Function"},
             "models": {},
             "infopack": None,
+            "denomination": "thousands",
             "use_scout": False,
         }
 
@@ -65,6 +66,7 @@ class TestRunConfigSchema:
             "variants": {"SOPL": "Function"},
             # Missing SOFP variant and no infopack — coordinator falls back to first registered variant
             "infopack": None,
+            "denomination": "thousands",
             "use_scout": False,
         }
 

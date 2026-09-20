@@ -1159,8 +1159,12 @@ Key invariants:
   neighbouring cell declares is NOT painted white (`_neighbor_declared_sides`;
   a same-width white tie wins by position under border-collapse and would
   erase a source underline / the header rule; spans disable the suppression).
-  The white grid costs ~27 chars/cell against Excel's 32,767-char cell cap and
-  lands on exactly the tables whose `compact` tier is inoperative, so the
+  Four identical invisible edges serialize as one `border` shorthand in both
+  decorators (and formatter-authored four-edge clears use the same canonical
+  shorthand); expanding one cleared cell into four white longhands recreated
+  the Doc 2 size failure. Partial/mixed edges remain per-side. The white grid
+  costs bytes against Excel's 32,767-char cell cap and lands on exactly the
+  tables whose `compact` tier is inoperative, so the
   exporter ladder (gotcha #28's `_resolve_note_html`) retries full/compact/
   lite with `fill_white_grid=False` (the exact pre-run-76 payload) BEFORE
   falling to `flat`, and reports the drop (`white_grid_dropped` per-entry +
@@ -1555,6 +1559,16 @@ shapes). Pinned by `tests/test_workbook_io_atomic.py`. If you add a NEW
 tool that writes a workbook another tool reads, use the shared helper —
 never a bare in-place `wb.save(path)`.
 
+Atomic replacement does not make concurrent read-modify-replace operations
+serial. Notes agents therefore also hold their per-agent `io_lock` across
+source-path selection, workbook loading, atomic replacement, and updates to
+`filled_path` / `wrote_once` / the cell manifests. A source-built write stages
+the expensive workbook load/save outside a SQLite write transaction, then
+revalidates and promotes the staged artifact inside a short final transaction;
+projection failure leaves the cell, lineage and placement ledger unchanged
+instead of leaving a canonical row with no workbook artifact. Pinned by
+`tests/test_notes_write_serialization.py`.
+
 ### 23. Gold-standard eval — gold is facts, scoped by template SET
 
 The `eval/` subsystem (schema v16) scores a run's extraction against a
@@ -1704,6 +1718,15 @@ until Phase 4 (xlsx retirement) lands — it is NOT removed yet. Export still
 keeps live formulas (downloads recompute in Excel); item 32 is verification-only,
 no static-value export. Plan: docs/PLAN-orchestration-hardening (item 32).
 
+Core statement checks evaluate a period-by-scope matrix, not CY alone:
+Company CY/PY for Company filings and Group CY/PY plus Company CY/PY for Group
+filings. A comparative period is skipped explicitly only when both comparands
+are absent; a value on one side and absence on the other is a failure. The
+xlsx and fact paths must remain shadow-equal, including each comparand's
+``period``. Pinned by `tests/test_cross_checks_impl.py`,
+`tests/test_cross_checks_shadow.py`, `tests/test_attribution_footing.py`, and
+`tests/test_cross_checks_mpers_socie.py`.
+
 ### 26. Scanned-PDF → readable-document — REMOVED
 
 The `docconvert/` package + "Readable Doc" page (an offline Docling-based
@@ -1726,9 +1749,16 @@ Load-bearing invariants:
 
 - **Pure builder, gotcha-#14-safe.** `notes/coverage_checklist.py::
   build_draft_checklist(inventory_rows, provenance_entries, …)` keys ONLY on
-  integer note numbers + sub-ref STRINGS from `source_note_refs` provenance —
-  never content matching. Content judgement (is sub-section (b) really in the
-  cell?) is the reviewer's job. Statuses: `placed` / `missing` / `skipped` /
+  integer note numbers + sub-ref STRINGS from effective provenance — writer
+  `source_note_refs` for authored cells and the frozen source-note identity of
+  live `notes_block_placements` for prepared-source cells — never content
+  matching. At a source-ledger coordinate, that identity is authoritative. A
+  later reviewer-authored ownership replacement retires stale placements in
+  the same transaction, so its fresh writer provenance becomes effective; a
+  placement whose
+  `notes_cells` target is gone does not count. Content
+  judgement (is sub-section (b) really in the cell?) is the reviewer's job.
+  Statuses: `placed` / `missing` / `skipped` /
   `suspected_gap` (INTERNAL numbering holes only — before-first / after-last is
   the documented blind spot). `skipped` remains in the persisted/API vocabulary
   for older runs. Current Sheet-12 skip receipts are routing CLAIMS stored in
@@ -2006,6 +2036,19 @@ Load-bearing invariants:
   Repeated consistent dates and dimensional period blocks remain supported.
   Pinned by the conflicting/repeated period-block tests in
   `tests/test_mtool_column_detect.py` and `tests/test_mtool_routes.py`.
+  When Scout supplied authoritative CY/PY periods, the fill document carries
+  them into template inspection. `period_compatibility_issues` compares parsed
+  boundaries (including non-calendar year ends and harmless wording changes)
+  with every requested physical period marker. A definitive mismatch blocks
+  the patch before any workbook write. An unresolved marker requires column
+  confirmation; an operator-supplied map is applied before period validation
+  and may proceed when the template has no comparable marker. The detect
+  endpoint returns the same structured issues and requires confirmation.
+  Dimensional sheets compare
+  their single physical block with CY; missing PY sections remain the separate
+  `template_period_section_missing` mapping diagnostic. Pinned by the period
+  compatibility tests in `tests/test_mtool_column_detect.py` and the route-level
+  mismatch test in `tests/test_mtool_routes.py`.
   An `abc::abc` placeholder `#DOM#` row with only empty/`Restated` display
   values is restatement metadata, not a category axis or a new SOCIE period
   block. Column detection and semantic resolution share this classification;
@@ -2460,6 +2503,14 @@ the one failure this feature has no defence against, so each is pinned.
   `routed`/`structured_consumed` need a destination. `UNIQUE(generation_id,
   block_id)` on usages also made one block in two cells unrepresentable, so
   the duplicate check was structurally dead — it now reads the ledger.
+- **Prepared-source placement also drives ordinary notes coverage.** Coverage
+  and reviewer routing derive top-level note identity from each live placement's
+  frozen source note rather than requiring prepared writes to fabricate legacy
+  `source_note_refs`. The join requires the canonical cell to exist; dangling
+  placement rows remain unresolved. Source-rendered cells retain a leading
+  source h1-h6 hierarchy, while authored cells still require the injected h3.
+  A clean reviewer recompute replaces stale open detector flags, including a
+  heading flag for a cell that has since been cleared.
 - **A source write satisfies the ordinary coordinator contract.** It routes
   its rendered payload through the same writer an authored write uses, so
   `wrote_once` / `filled_path` / `cells_written` / the Sheet-12 sink are all

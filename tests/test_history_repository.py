@@ -294,6 +294,7 @@ def test_list_runs_models_used_sourced_from_run_agents_not_config(db_path: Path)
             "variants": {},
             # Only SOFP is overridden here.
             "models": {"SOFP": "claude-sonnet-4-6"},
+            "denomination": "thousands",
             "use_scout": False,
             "infopack": None,
         }
@@ -326,7 +327,7 @@ def test_list_runs_models_used_sourced_from_run_agents_not_config(db_path: Path)
 def test_get_run_detail_full_hydration(db_path: Path) -> None:
     """Detail view returns Run + list[RunAgent] + list[CrossCheck] in one shot."""
     with repo.db_session(db_path) as conn:
-        config = {"statements": ["SOFP", "SOPL", "SOCI"], "variants": {}, "models": {}, "use_scout": False, "infopack": None}
+        config = {"statements": ["SOFP", "SOPL", "SOCI"], "variants": {}, "models": {}, "denomination": "thousands", "use_scout": False, "infopack": None}
         run_id = repo.create_run(
             conn,
             pdf_filename="detail.pdf",

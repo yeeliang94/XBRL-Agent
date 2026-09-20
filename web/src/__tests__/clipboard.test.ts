@@ -227,7 +227,8 @@ describe("copyHtmlAsRichText", () => {
       `<table><tr><td style="${cleared}">x</td></tr></table>`,
     );
     expect(out).not.toContain("hidden");
-    expect((out.toLowerCase().match(/1px solid #ffffff/g) || []).length).toBe(4);
+    expect((out.toLowerCase().match(/1px solid #ffffff/g) || []).length).toBe(1);
+    expect(out.toLowerCase()).toContain("border: 1px solid #ffffff");
   });
 
   test("decorateHtmlForClipboard_leaves_default_grey_grid_untouched", () => {
@@ -246,7 +247,8 @@ describe("copyHtmlAsRichText", () => {
       '<table><tr><td style="border-width: 1px; border-style: hidden; border-color: #000000">x</td></tr></table>',
     );
     expect(out).not.toContain("hidden");
-    expect((out.toLowerCase().match(/1px solid #ffffff/g) || []).length).toBe(4);
+    expect((out.toLowerCase().match(/1px solid #ffffff/g) || []).length).toBe(1);
+    expect(out.toLowerCase()).toContain("border: 1px solid #ffffff");
   });
 
   test("decorateHtmlForClipboard_grouped_border_whites_only_hidden_sides", () => {

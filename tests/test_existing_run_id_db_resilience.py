@@ -73,6 +73,7 @@ def draft_run_setup(tmp_path, monkeypatch):
             "models": {"SOFP": "test-model"},
             "filing_level": "company",
             "filing_standard": "mfrs",
+            "denomination": "thousands",
             "use_scout": False,
             "notes_to_run": [],
             "infopack": None,

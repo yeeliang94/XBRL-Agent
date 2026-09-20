@@ -1,20 +1,46 @@
-"""P0 Check 3: SOCI total comprehensive income = SOCIE TCI row.
-
-The total comprehensive income reported on SOCI must appear identically
-in the SOCIE matrix on the TCI row.
-"""
+"""P0 Check 3: SOCI total comprehensive income = SOCIE across dimensions."""
 from __future__ import annotations
 
 from typing import Dict
 
 from statement_types import StatementType
 from cross_checks.framework import CrossCheckResult, Comparand
+from cross_checks.periods import PeriodEvaluation, combine_period_evaluations, period_scopes
 from cross_checks.util import (
-    open_workbook, find_sheet, find_value_by_label,
-    find_value_in_block, SOCIE_GROUP_BLOCKS, is_sore_run,
-    socie_total_column, filing_level_prefix,
+    open_workbook, find_sheet, find_value_by_label, find_value_in_block,
+    socie_period_block, socie_period_column, socie_total_column, is_sore_run,
 )
 from cross_checks._format import fmt_amount, fmt_diff
+
+
+def _message(spec, soci, socie):
+    if soci is None and socie is None and spec.period == "PY":
+        return f"{spec.label}: not checked (both TCI values absent)"
+    if soci is None or socie is None:
+        return f"{spec.label}: missing TCI values (SOCI={soci}, SOCIE={socie})"
+    return (f"{spec.label}: SOCI ({fmt_amount(soci)}) vs SOCIE ({fmt_amount(socie)}), "
+            f"diff={fmt_diff(abs(soci - socie))}")
+
+
+def _evaluation(spec, soci, socie, soci_sheet, socie_sheet, filing_level):
+    suffix = " [company]" if filing_level == "group" and spec.entity_scope == "Company" else ""
+    return PeriodEvaluation(
+        spec=spec, lhs=soci.value, rhs=socie.value,
+        message=_message(spec, soci.value, socie.value),
+        comparands=[
+            Comparand(label=f"Total comprehensive income{suffix}", sheet=soci_sheet,
+                      value=soci.value, role="lhs", statement=StatementType.SOCI.value,
+                      period=spec.period),
+            Comparand(label=f"Total comprehensive income{suffix}", sheet=socie_sheet,
+                      value=socie.value, role="rhs", statement=StatementType.SOCIE.value,
+                      period=spec.period),
+        ],
+    )
+
+
+class _Value:
+    def __init__(self, value, sheet):
+        self.value, self.sheet, self.row = value, sheet, None
 
 
 class SOCIToSOCIETCICheck:
@@ -22,177 +48,63 @@ class SOCIToSOCIETCICheck:
     required_statements = {StatementType.SOCI, StatementType.SOCIE}
 
     def applies_to(self, run_config: dict) -> bool:
-        # Same reasoning as sopl_to_socie_profit — SoRE has no TCI row.
         return not is_sore_run(run_config)
 
-    def run(self, workbook_paths: Dict[StatementType, str], tolerance: float, filing_level: str = "company", filing_standard: str = "mfrs") -> CrossCheckResult:
+    def run(self, workbook_paths: Dict[StatementType, str], tolerance: float,
+            filing_level: str = "company", filing_standard: str = "mfrs") -> CrossCheckResult:
         soci_wb = open_workbook(workbook_paths[StatementType.SOCI])
         soci_ws = find_sheet(soci_wb, "SOCI-BeforeOfTax", "SOCI-BeforeTax", "SOCI-NetOfTax")
-        soci_sheet = soci_ws.title if soci_ws is not None else "SOCI"
-        soci_tci = None
-        co_soci_tci = None
-        if soci_ws is not None:
-            soci_tci = find_value_by_label(soci_ws, "total comprehensive income", col=2, wb=soci_wb)
-            if filing_level == "group":
-                co_soci_tci = find_value_by_label(soci_ws, "total comprehensive income", col=4, wb=soci_wb)
-        soci_wb.close()
-
         socie_wb = open_workbook(workbook_paths[StatementType.SOCIE])
         socie_ws = find_sheet(socie_wb, "SOCIE")
-        socie_sheet = socie_ws.title if socie_ws is not None else "SOCIE"
-        socie_tci = None
-        co_socie_tci = None
-        if socie_ws is not None:
-            # Phase 5: TCI is a total across dimensional axes — MFRS
-            # always reads col X (24), MPERS always reads col B (2).
-            # `socie_total_column` encapsulates the branch. (Unlike the
-            # profit check, TCI doesn't have a retained-earnings-only
-            # degenerate case, so no NCI detection is needed.)
-            col = socie_total_column(filing_standard)
-            if filing_level == "group":
-                blk = SOCIE_GROUP_BLOCKS["group_cy"]
-                socie_tci = find_value_in_block(
-                    socie_ws, "total comprehensive income", col=col,
-                    start_row=blk[0], end_row=blk[1], wb=socie_wb,
-                )
-                co_blk = SOCIE_GROUP_BLOCKS["company_cy"]
-                co_socie_tci = find_value_in_block(
-                    socie_ws, "total comprehensive income", col=col,
-                    start_row=co_blk[0], end_row=co_blk[1], wb=socie_wb,
-                )
-            else:
-                socie_tci = find_value_by_label(
+        if soci_ws is None or socie_ws is None:
+            soci_wb.close(); socie_wb.close()
+            return CrossCheckResult(name=self.name, status="failed",
+                                    message="Could not find SOCI or SOCIE main sheet")
+        evaluations = []
+        for spec in period_scopes(filing_level):
+            soci = _Value(find_value_by_label(
+                soci_ws, "total comprehensive income", col=spec.column, wb=soci_wb,
+                blank_formula_as_none=spec.period == "PY"),
+                soci_ws.title)
+            block = socie_period_block(
+                filing_standard, filing_level, spec.entity_scope, spec.period)
+            col = socie_period_column(
+                filing_standard, filing_level, spec.period,
+                socie_total_column(filing_standard))
+            if block is None:
+                value = find_value_by_label(
                     socie_ws, "total comprehensive income", col=col, wb=socie_wb,
-                )
-        socie_wb.close()
-
-        if soci_tci is None or socie_tci is None:
-            return CrossCheckResult(
-                name=self.name, status="failed",
-                message=f"Could not find TCI values: SOCI={soci_tci}, SOCIE={socie_tci}",
-            )
-
-        diff = abs(soci_tci - socie_tci)
-        group_passed = diff <= tolerance
-        # Reconciliation check — see cross_checks.util.filing_level_prefix.
-        primary_label = filing_level_prefix(filing_level, with_period=False)
-        parts = [f"{primary_label}: SOCI ({fmt_amount(soci_tci)}) vs SOCIE ({fmt_amount(socie_tci)}), diff={fmt_diff(diff)}"]
-
-        # Group filings must carry Company totals — see sofp_balance.py for
-        # the peer-review background on the old silent-pass default.
-        co_passed = True
-        if filing_level == "group":
-            if co_soci_tci is None or co_socie_tci is None:
-                co_passed = False
-                parts.append(
-                    f"Company: missing TCI values (SOCI={co_soci_tci}, SOCIE={co_socie_tci})"
-                )
+                    blank_formula_as_none=spec.period == "PY")
             else:
-                co_diff = abs(co_soci_tci - co_socie_tci)
-                co_passed = co_diff <= tolerance
-                parts.append(
-                    f"Company: SOCI ({fmt_amount(co_soci_tci)}) vs SOCIE ({fmt_amount(co_socie_tci)}), diff={fmt_diff(co_diff)}"
-                )
-
-        comparands = [
-            Comparand(label="Total comprehensive income", sheet=soci_sheet,
-                      value=soci_tci, role="lhs",
-                      statement=StatementType.SOCI.value),
-            Comparand(label="Total comprehensive income", sheet=socie_sheet,
-                      value=socie_tci, role="rhs",
-                      statement=StatementType.SOCIE.value),
-        ]
-        if filing_level == "group":
-            comparands += [
-                Comparand(label="Total comprehensive income [company]",
-                          sheet=soci_sheet, value=co_soci_tci, role="lhs",
-                          statement=StatementType.SOCI.value),
-                Comparand(label="Total comprehensive income [company]",
-                          sheet=socie_sheet, value=co_socie_tci, role="rhs",
-                          statement=StatementType.SOCIE.value),
-            ]
-
-        return CrossCheckResult(
-            name=self.name,
-            status="passed" if group_passed and co_passed else "failed",
-            expected=soci_tci, actual=socie_tci, diff=diff, tolerance=tolerance,
-            message="; ".join(parts),
-            comparands=comparands,
-        )
+                value = find_value_in_block(
+                    socie_ws, "total comprehensive income", col,
+                    block[0], block[1], wb=socie_wb,
+                    blank_formula_as_none=spec.period == "PY")
+                if value is None and filing_level == "company" and spec.period == "CY":
+                    value = find_value_by_label(
+                        socie_ws, "total comprehensive income", col=col, wb=socie_wb)
+            socie = _Value(value, socie_ws.title)
+            evaluations.append(_evaluation(
+                spec, soci, socie, soci_ws.title, socie_ws.title, filing_level))
+        soci_wb.close(); socie_wb.close()
+        return combine_period_evaluations(self.name, evaluations, tolerance)
 
     def run_facts(self, ctx, tolerance: float) -> CrossCheckResult:
-        """Fact-based twin of :meth:`run` (item 32). SOCI TCI is linear; SOCIE
-        TCI is the matrix Total column (MFRS X / MPERS B)."""
         from cross_checks.facts_util import (
-            primary_scope, read_labelled_value, read_matrix_value, socie_total_col,
+            read_labelled_value, read_matrix_value, socie_period_col, socie_total_col,
         )
-        from cross_checks.util import filing_level_prefix
-
-        scope = primary_scope(ctx.filing_level)
-        col = socie_total_col(ctx.filing_standard)
-        soci = read_labelled_value(
-            ctx, StatementType.SOCI, "total comprehensive income", "CY", scope)
-        socie = read_matrix_value(
-            ctx, StatementType.SOCIE, "total comprehensive income", col, "CY", scope)
-        soci_tci, socie_tci = soci.value, socie.value
-        soci_sheet = soci.sheet or "SOCI"
-        socie_sheet = socie.sheet or "SOCIE"
-
-        if soci_tci is None or socie_tci is None:
-            return CrossCheckResult(
-                name=self.name, status="failed",
-                message=f"Could not find TCI values: SOCI={soci_tci}, SOCIE={socie_tci}",
-            )
-
-        diff = abs(soci_tci - socie_tci)
-        group_passed = diff <= tolerance
-        primary_label = filing_level_prefix(ctx.filing_level, with_period=False)
-        parts = [f"{primary_label}: SOCI ({fmt_amount(soci_tci)}) vs SOCIE ({fmt_amount(socie_tci)}), diff={fmt_diff(diff)}"]
-
-        co_soci_tci = None
-        co_socie_tci = None
-        co_passed = True
-        if ctx.filing_level == "group":
-            co_soci_tci = read_labelled_value(
+        evaluations = []
+        for spec in period_scopes(ctx.filing_level):
+            soci = read_labelled_value(
                 ctx, StatementType.SOCI, "total comprehensive income",
-                "CY", "Company").value
-            co_socie_tci = read_matrix_value(
+                spec.period, spec.entity_scope)
+            col = socie_period_col(
+                ctx.filing_standard, ctx.filing_level, spec.period,
+                socie_total_col(ctx.filing_standard))
+            socie = read_matrix_value(
                 ctx, StatementType.SOCIE, "total comprehensive income", col,
-                "CY", "Company").value
-            if co_soci_tci is None or co_socie_tci is None:
-                co_passed = False
-                parts.append(
-                    f"Company: missing TCI values (SOCI={co_soci_tci}, SOCIE={co_socie_tci})"
-                )
-            else:
-                co_diff = abs(co_soci_tci - co_socie_tci)
-                co_passed = co_diff <= tolerance
-                parts.append(
-                    f"Company: SOCI ({fmt_amount(co_soci_tci)}) vs SOCIE ({fmt_amount(co_socie_tci)}), diff={fmt_diff(co_diff)}"
-                )
-
-        comparands = [
-            Comparand(label="Total comprehensive income", sheet=soci_sheet,
-                      value=soci_tci, role="lhs",
-                      statement=StatementType.SOCI.value),
-            Comparand(label="Total comprehensive income", sheet=socie_sheet,
-                      value=socie_tci, role="rhs",
-                      statement=StatementType.SOCIE.value),
-        ]
-        if ctx.filing_level == "group":
-            comparands += [
-                Comparand(label="Total comprehensive income [company]",
-                          sheet=soci_sheet, value=co_soci_tci, role="lhs",
-                          statement=StatementType.SOCI.value),
-                Comparand(label="Total comprehensive income [company]",
-                          sheet=socie_sheet, value=co_socie_tci, role="rhs",
-                          statement=StatementType.SOCIE.value),
-            ]
-
-        return CrossCheckResult(
-            name=self.name,
-            status="passed" if group_passed and co_passed else "failed",
-            expected=soci_tci, actual=socie_tci, diff=diff, tolerance=tolerance,
-            message="; ".join(parts),
-            comparands=comparands,
-        )
+                spec.period, spec.entity_scope)
+            evaluations.append(_evaluation(
+                spec, soci, socie, soci.sheet or "SOCI", socie.sheet or "SOCIE",
+                ctx.filing_level))
+        return combine_period_evaluations(self.name, evaluations, tolerance)

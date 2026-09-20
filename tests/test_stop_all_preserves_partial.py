@@ -124,6 +124,7 @@ def test_stop_all_after_partial_completion_preserves_merged_workbook(session_env
         "variants": {"SOFP": "CuNonCu", "SOPL": "Function", "SOCI": "NetOfTax"},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
     }
 
@@ -202,6 +203,7 @@ def test_stop_all_emits_partial_merge_sse_event(session_env):
         "variants": {"SOFP": "CuNonCu", "SOPL": "Function", "SOCI": "NetOfTax"},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
     }
 
@@ -254,6 +256,7 @@ def test_stop_all_with_no_partial_files_does_not_emit_partial_merge(session_env)
         "variants": {"SOFP": "CuNonCu"},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
     }
 

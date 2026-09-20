@@ -103,6 +103,143 @@ def test_detectors_identical_from_db_vs_sidecars(db_path: Path) -> None:
     assert "(a)" in db_subgaps[0]["missing_subnote_refs"]
 
 
+def test_prepared_placement_ledger_supplies_coverage_without_legacy_refs(
+    db_path: Path,
+) -> None:
+    """Prepared writes use block placements, not source_note_refs.
+
+    Only a live placement into an existing canonical cell may cover the note;
+    a dangling placement after the cell disappears must fail closed.
+    """
+    from notes import source_repository as srepo
+    from notes.coverage_checklist import build_draft_checklist
+    from notes.detectors import load_provenance_entries
+    from notes.source_models import OwnerKind, SourceBlock, SourceNote
+
+    run_id = _seed_run(db_path)
+    with repo.db_session(db_path) as conn:
+        gen = srepo.begin_generation(conn, run_id, input_kind="prepared_document")
+        srepo.write_notes(conn, gen, [SourceNote("note-5", top_note_num="5")])
+        srepo.write_blocks(conn, gen, [SourceBlock(
+            block_id="b5", block_kind="heading", reading_order=0,
+            canonical_html="<h2>5 Revenue</h2>", source_note_id="note-5",
+            owner_kind=OwnerKind.NOTE,
+        )])
+        srepo.activate_generation(conn, gen)
+        repo.upsert_notes_cell(
+            conn, run_id=run_id, sheet="Notes-Listofnotes", row=8,
+            label="Revenue", html="<h2>5 Revenue</h2><p>Source text.</p>",
+        )
+        # A stale legacy identity at the same coordinate must not override the
+        # canonical source ledger.
+        repo.upsert_notes_provenance(
+            conn, run_id=run_id, sheet="Notes-Listofnotes", row=8,
+            row_label="Revenue", source_note_refs=["5", "99"],
+        )
+        srepo.set_cell_placements(
+            conn, run_id, gen, "Notes-Listofnotes", 8, ["b5"],
+        )
+
+    entries = load_provenance_entries(run_id, str(db_path))
+    assert entries[0]["source_note_refs"] == ["5"]
+    checklist = build_draft_checklist(
+        [{"note_num": 5, "title": "Revenue", "subnote_refs": []}], entries,
+    )
+    assert checklist.rows[0].status == "placed"
+
+    with repo.db_session(db_path) as conn:
+        conn.execute(
+            "DELETE FROM notes_cells WHERE run_id=? AND sheet=? AND row=?",
+            (run_id, "Notes-Listofnotes", 8),
+        )
+    entries = load_provenance_entries(run_id, str(db_path))
+    # The dangling ledger coordinate remains authoritative over the old legacy
+    # refs, but cannot falsely cover Note 5 without a live canonical cell.
+    checklist = build_draft_checklist(
+        [{"note_num": 5, "title": "Revenue", "subnote_refs": []}], entries,
+    )
+    assert checklist.rows[0].status == "missing"
+
+
+def test_reviewer_authored_provenance_overrides_stale_active_placement(
+    db_path: Path,
+) -> None:
+    from notes import lineage, source_repository as srepo
+    from notes.detectors import load_provenance_entries
+    from notes.source_models import OwnerKind, SourceBlock, SourceNote
+
+    run_id = _seed_run(db_path)
+    with repo.db_session(db_path) as conn:
+        gen = srepo.begin_generation(conn, run_id, input_kind="prepared_document")
+        srepo.write_notes(conn, gen, [SourceNote("note-5", top_note_num="5")])
+        srepo.write_blocks(conn, gen, [SourceBlock(
+            block_id="b5", block_kind="paragraph", reading_order=0,
+            canonical_html="<p>Old source text.</p>", source_note_id="note-5",
+            owner_kind=OwnerKind.NOTE,
+        )])
+        srepo.activate_generation(conn, gen)
+        repo.upsert_notes_cell(
+            conn, run_id=run_id, sheet="Notes-Listofnotes", row=8,
+            label="Revenue", html="<p>Reviewer-authored note 7.</p>",
+        )
+        srepo.set_cell_placements(
+            conn, run_id, gen, "Notes-Listofnotes", 8, ["b5"],
+        )
+        repo.upsert_notes_provenance(
+            conn, run_id=run_id, sheet="Notes-Listofnotes", row=8,
+            row_label="Revenue", source_note_refs=["7"],
+        )
+        lineage.mark_human_edit(
+            conn, run_id, "Notes-Listofnotes", 8,
+            "<p>Reviewer-authored note 7.</p>", actor="notes_reviewer",
+        )
+        # The live reviewer author path retires these in the same transaction
+        # as the fresh ownership provenance.
+        srepo.set_cell_placements(
+            conn, run_id, gen, "Notes-Listofnotes", 8, [],
+        )
+
+    entries = load_provenance_entries(run_id, str(db_path))
+    assert entries[0]["source_note_refs"] == ["7"]
+
+
+def test_wording_edit_does_not_revive_stale_ordinary_provenance(
+    db_path: Path,
+) -> None:
+    from notes import lineage, source_repository as srepo
+    from notes.detectors import load_provenance_entries
+    from notes.source_models import OwnerKind, SourceBlock, SourceNote
+
+    run_id = _seed_run(db_path)
+    with repo.db_session(db_path) as conn:
+        gen = srepo.begin_generation(conn, run_id, input_kind="prepared_document")
+        srepo.write_notes(conn, gen, [SourceNote("note-5", top_note_num="5")])
+        srepo.write_blocks(conn, gen, [SourceBlock(
+            block_id="b5", block_kind="paragraph", reading_order=0,
+            canonical_html="<p>Source text.</p>", source_note_id="note-5",
+            owner_kind=OwnerKind.NOTE,
+        )])
+        srepo.activate_generation(conn, gen)
+        repo.upsert_notes_cell(
+            conn, run_id=run_id, sheet="Notes-Listofnotes", row=8,
+            label="Revenue", html="<p>Edited wording.</p>",
+        )
+        repo.upsert_notes_provenance(
+            conn, run_id=run_id, sheet="Notes-Listofnotes", row=8,
+            row_label="Revenue", source_note_refs=["5", "99"],
+        )
+        srepo.set_cell_placements(
+            conn, run_id, gen, "Notes-Listofnotes", 8, ["b5"],
+        )
+        lineage.mark_human_edit(
+            conn, run_id, "Notes-Listofnotes", 8,
+            "<p>Edited wording.</p>", actor="notes_reviewer",
+        )
+
+    entries = load_provenance_entries(run_id, str(db_path))
+    assert entries[0]["source_note_refs"] == ["5"]
+
+
 def test_reviewer_factory_falls_back_to_sidecars_when_no_db_provenance(
     db_path: Path, tmp_path: Path,
 ) -> None:

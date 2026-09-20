@@ -7,7 +7,9 @@ reader; adds a typed notes write tool that lands rows through
 from __future__ import annotations
 
 import asyncio
+import os
 import threading
+import uuid
 from concurrent import futures
 import json
 import logging
@@ -56,6 +58,7 @@ from notes.writer import (
     _carries_table_styling,
     _resolve_row,
     evidence_col_letter,
+    payload_sidecar_path,
     resolve_payload_labels,
     write_notes_workbook,
 )
@@ -917,6 +920,12 @@ class NotesDeps:
     # logic so a stale `filled.xlsx` from an earlier run in the same
     # output_dir doesn't get layered on top of.
     wrote_once: bool = False
+    # pydantic-ai may execute sibling sync tool calls in parallel worker
+    # threads.  One notes agent owns one output workbook, so the complete
+    # read-modify-replace sequence (including the state that selects the next
+    # source workbook) must be serialised per agent/run.  RLock also covers a
+    # staged source projection and its short DB/artifact commit boundary.
+    io_lock: Any = field(default_factory=threading.RLock, repr=False)
     # Sheet-12 sub-agent mode: when set, write_notes appends to this list
     # instead of writing a workbook, and save_result is a no-op. The
     # sub-coordinator owns the final aggregation + workbook write.
@@ -2255,33 +2264,47 @@ def _write_from_source_impl(
     if not deps.db_path or deps.source_generation_id is None:
         return "rejected: this run has no frozen source reading to build from."
     try:
-        prefix = f"{deps.filing_standard}-{deps.filing_level}-"
         with repo.db_session(deps.db_path) as conn:
-            outcome = source_write.write_cell_from_blocks(
-                conn, run_id=deps.run_id,
-                generation_id=deps.source_generation_id,
-                sheet=sheet, row=row, block_ids=block_ids,
-                evidence=evidence,
-                source_pages=source_pages,
-                format_ops=format_ops,
-                actor="notes_agent",
-                template_prefix=prefix,
-                # An extraction agent writes only its OWN sheet. It used to be
-                # able to name any sheet at all, and a `Ghost` row succeeded.
-                allowed_sheets=[deps.sheet_name],
-            )
-            back = conn.execute(
-                "SELECT label, html FROM notes_cells "
-                "WHERE run_id = ? AND sheet = ? AND row = ?",
-                (deps.run_id, sheet, row),
-            ).fetchone()
-            label = (back["label"] if back else "") or ""
-            rendered_html = (back["html"] if back else "") or ""
-            note_num_val = _note_num_for_blocks(
-                conn, deps.source_generation_id, block_ids,
+            return _write_from_source_in_connection(
+                conn, deps, sheet, row, block_ids, source_pages, evidence,
+                format_ops,
             )
     except source_write.SourceWriteError as exc:
         return f"rejected: {exc}"
+
+
+def _write_from_source_in_connection(
+    conn, deps: "NotesDeps", sheet: str, row: int, block_ids: List[str],
+    source_pages: List[int], evidence: Optional[str],
+    format_ops: Optional[List[dict]],
+):
+    """Build and stage one source payload on the caller-owned transaction."""
+    from notes import source_write
+
+    prefix = f"{deps.filing_standard}-{deps.filing_level}-"
+    outcome = source_write.write_cell_from_blocks(
+        conn, run_id=deps.run_id,
+        generation_id=deps.source_generation_id,
+        sheet=sheet, row=row, block_ids=block_ids,
+        evidence=evidence,
+        source_pages=source_pages,
+        format_ops=format_ops,
+        actor="notes_agent",
+        template_prefix=prefix,
+        # An extraction agent writes only its OWN sheet. It used to be able
+        # to name any sheet at all, and a `Ghost` row succeeded.
+        allowed_sheets=[deps.sheet_name],
+    )
+    back = conn.execute(
+        "SELECT label, html FROM notes_cells "
+        "WHERE run_id = ? AND sheet = ? AND row = ?",
+        (deps.run_id, sheet, row),
+    ).fetchone()
+    label = (back["label"] if back else "") or ""
+    rendered_html = (back["html"] if back else "") or ""
+    note_num_val = _note_num_for_blocks(
+        conn, deps.source_generation_id, block_ids,
+    )
 
     # `source_built=True` is load-bearing (peer-review CRITICAL, 2026-08-06):
     # a plain NotesPayload raised "parent_note is required" here — AFTER the
@@ -2301,6 +2324,136 @@ def _write_from_source_impl(
     return outcome.as_message(), payload
 
 
+def _write_source_and_project_impl(
+    deps: "NotesDeps", sheet: str, row: int, block_ids: List[str],
+    source_pages: List[int], evidence: Optional[str],
+    format_ops: Optional[List[dict]],
+):
+    """Commit source lineage only when its workbook projection succeeds.
+
+    The expensive openpyxl load/save is staged with no SQLite write
+    transaction open.  The source mutation is replayed and the staged files
+    are promoted only inside the short final commit boundary.
+    """
+    from db import repository as repo
+    from notes import source_write
+
+    if not deps.db_path or deps.source_generation_id is None:
+        return "rejected: this run has no frozen source reading to build from."
+    staged_path: Path | None = None
+    staged_sidecar: Path | None = None
+    output_backup: Path | None = None
+    sidecar_backup: Path | None = None
+    try:
+        with deps.io_lock:
+            # Build the exact payload using the canonical writer, but roll this
+            # planning transaction back.  This validates the request and keeps
+            # a projection failure from leaving cell/lineage rows behind.
+            with repo.db_session(deps.db_path) as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                message, payload = _write_from_source_in_connection(
+                    conn, deps, sheet, row, block_ids, source_pages, evidence,
+                    format_ops,
+                )
+                conn.rollback()
+
+            output_path = Path(deps.output_dir) / deps.filled_filename
+            source_path = (
+                Path(deps.filled_path)
+                if deps.wrote_once and deps.filled_path
+                and Path(deps.filled_path).exists()
+                else Path(deps.template_path)
+            )
+            promotion_id = uuid.uuid4().hex
+            staged_path = output_path.with_name(
+                f".{output_path.stem}.{promotion_id}.stage.xlsx")
+            result = write_notes_workbook(
+                template_path=str(source_path), payloads=[payload],
+                output_path=str(staged_path), filing_level=deps.filing_level,
+                sheet_name=deps.sheet_name,
+            )
+            staged_sidecar = payload_sidecar_path(str(staged_path))
+            if not result.success or result.errors:
+                detail = "; ".join(result.errors) or "no row was written"
+                raise source_write.SourceWriteError(
+                    f"workbook projection failed ({detail}); retry the write."
+                )
+
+            final_sidecar = payload_sidecar_path(str(output_path))
+            output_promoted = False
+            sidecar_promoted = False
+            try:
+                with repo.db_session(deps.db_path) as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    committed_message, committed_payload = _write_from_source_in_connection(
+                        conn, deps, sheet, row, block_ids, source_pages, evidence,
+                        format_ops,
+                    )
+                    if committed_payload != payload:
+                        raise source_write.SourceWriteError(
+                            "the source or destination changed during workbook "
+                            "projection; retry the write."
+                        )
+
+                    # Keep recoverable old artifacts until SQLite commits.  A
+                    # failed sidecar/workbook promotion or commit must restore
+                    # the same DB/file pair the caller had before this write.
+                    if output_path.exists():
+                        output_backup = output_path.with_name(
+                            f".{output_path.name}.{promotion_id}.backup")
+                        os.replace(output_path, output_backup)
+                    if staged_sidecar.exists() and final_sidecar.exists():
+                        sidecar_backup = final_sidecar.with_name(
+                            f".{final_sidecar.name}.{promotion_id}.backup")
+                        os.replace(final_sidecar, sidecar_backup)
+                    if staged_sidecar.exists():
+                        os.replace(staged_sidecar, final_sidecar)
+                        staged_sidecar = None
+                        sidecar_promoted = True
+                    os.replace(staged_path, output_path)
+                    staged_path = None
+                    output_promoted = True
+            except Exception:
+                if output_backup is not None and output_backup.exists():
+                    os.replace(output_backup, output_path)
+                    output_backup = None
+                elif output_promoted:
+                    output_path.unlink(missing_ok=True)
+                if sidecar_backup is not None and sidecar_backup.exists():
+                    os.replace(sidecar_backup, final_sidecar)
+                    sidecar_backup = None
+                elif sidecar_promoted:
+                    final_sidecar.unlink(missing_ok=True)
+                raise
+
+            for backup in (output_backup, sidecar_backup):
+                if backup is not None:
+                    backup.unlink(missing_ok=True)
+            output_backup = None
+            sidecar_backup = None
+
+            deps.filled_path = str(output_path)
+            deps.wrote_once = True
+            result.output_path = str(output_path)
+            _merge_writer_result(deps, result)
+            return committed_message, result
+    except source_write.SourceWriteError as exc:
+        return f"rejected: {exc}"
+    except Exception as exc:  # noqa: BLE001 - preserve a retryable tool result
+        logger.warning("Source notes workbook projection failed", exc_info=True)
+        return f"rejected: workbook projection failed ({exc}); retry the write."
+    finally:
+        for staged in (
+            staged_path, staged_sidecar, output_backup, sidecar_backup,
+        ):
+            if staged is not None:
+                try:
+                    staged.unlink(missing_ok=True)
+                except OSError:
+                    logger.warning("Could not remove staged notes artifact %s", staged,
+                                   exc_info=True)
+
+
 async def _emit_payload_through_writer(ctx, payloads: list) -> str:
     """Put source-built payloads through the ordinary write path.
 
@@ -2312,32 +2465,59 @@ async def _emit_payload_through_writer(ctx, payloads: list) -> str:
     if deps.payload_sink is not None:
         return _sub_agent_sink_write(deps, payloads, parse_errors=[])
 
-    output_path = str(Path(deps.output_dir) / deps.filled_filename)
-    source_path = (
-        deps.filled_path
-        if deps.wrote_once and deps.filled_path and Path(deps.filled_path).exists()
-        else deps.template_path
-    )
     result = await asyncio.to_thread(
-        write_notes_workbook,
-        template_path=source_path,
-        payloads=payloads,
-        output_path=output_path,
-        filing_level=deps.filing_level,
-        sheet_name=deps.sheet_name,
+        _write_payloads_through_writer_impl, deps, payloads,
     )
-    if result.success:
-        deps.filled_path = output_path
-        deps.wrote_once = True
+    if result.errors:
+        return "warning: " + "; ".join(result.errors)
+    return ""
+
+
+def _merge_writer_result(deps: NotesDeps, result) -> None:
+    """Merge one writer result into the per-agent canonical projection state."""
+    if result.errors:
+        deps.write_skip_errors.extend(result.errors)
+    if result.fuzzy_matches:
+        deps.write_fuzzy_matches.extend(result.fuzzy_matches)
+    if result.sanitizer_warnings:
+        deps.write_sanitizer_warnings.extend(result.sanitizer_warnings)
     if result.cells_written:
         by_key = {(c["sheet"], c["row"]): c for c in deps.cells_written}
         for cell in result.cells_written:
             by_key[(cell["sheet"], cell["row"])] = cell
         deps.cells_written = list(by_key.values())
-    if result.errors:
-        deps.write_skip_errors.extend(result.errors)
-        return "warning: " + "; ".join(result.errors)
-    return ""
+    if result.numeric_cells:
+        by_cell = {
+            (c["sheet"], c["row"], c["col"]): c
+            for c in deps.numeric_cells
+        }
+        for cell in result.numeric_cells:
+            by_cell[(cell["sheet"], cell["row"], cell["col"])] = cell
+        deps.numeric_cells = list(by_cell.values())
+
+
+def _write_payloads_through_writer_impl(deps: NotesDeps, payloads: list):
+    """Serialised read-modify-replace for one agent-owned notes workbook."""
+    with deps.io_lock:
+        output_path = str(Path(deps.output_dir) / deps.filled_filename)
+        source_path = (
+            deps.filled_path
+            if deps.wrote_once and deps.filled_path
+            and Path(deps.filled_path).exists()
+            else deps.template_path
+        )
+        result = write_notes_workbook(
+            template_path=source_path,
+            payloads=payloads,
+            output_path=output_path,
+            filing_level=deps.filing_level,
+            sheet_name=deps.sheet_name,
+        )
+        if result.success:
+            deps.filled_path = output_path
+            deps.wrote_once = True
+        _merge_writer_result(deps, result)
+        return result
 
 
 def create_notes_agent(
@@ -2747,6 +2927,17 @@ def create_notes_agent(
             of the note that belongs in the template; a part you leave out is
             recorded as unaccounted for and goes to the review queue, so leave
             one out only when it genuinely belongs nowhere on your sheet."""
+            if ctx.deps.payload_sink is None:
+                projected = await asyncio.to_thread(
+                    _write_source_and_project_impl,
+                    ctx.deps, sheet, row, block_ids,
+                    source_pages or [], evidence, None,
+                )
+                if isinstance(projected, str):
+                    return projected
+                message, _result = projected
+                return message
+
             built = await asyncio.to_thread(
                 _write_from_source_impl, ctx.deps, sheet, row, block_ids,
                 source_pages or [], evidence, None,
@@ -2872,62 +3063,9 @@ def create_notes_agent(
                 ctx.deps, built_payloads, parse_errors=errors,
             )
 
-        output_path = str(Path(ctx.deps.output_dir) / ctx.deps.filled_filename)
-        # Use already-filled workbook if we've written once in THIS run;
-        # otherwise start from the pristine template. The `wrote_once` flag
-        # gates the reuse so a stale `filled.xlsx` left in output_dir by a
-        # previous run is overwritten on the first write of this run
-        # instead of silently layered on top.
-        source_path = (
-            ctx.deps.filled_path
-            if ctx.deps.wrote_once and ctx.deps.filled_path
-               and Path(ctx.deps.filled_path).exists()
-            else ctx.deps.template_path
-        )
         result = await asyncio.to_thread(
-            write_notes_workbook,
-            template_path=source_path,
-            payloads=built_payloads,
-            output_path=output_path,
-            filing_level=ctx.deps.filing_level,
-            sheet_name=ctx.deps.sheet_name,
+            _write_payloads_through_writer_impl, ctx.deps, built_payloads,
         )
-        if result.success:
-            ctx.deps.filled_path = output_path
-            ctx.deps.wrote_once = True
-
-        # Accumulate structured diagnostics so the coordinator can lift
-        # them into NotesAgentResult.warnings for history/UI. The tool-
-        # result string below covers the model-facing view; this is the
-        # machine-readable mirror (peer-review [HIGH]).
-        if result.errors:
-            ctx.deps.write_skip_errors.extend(result.errors)
-        if result.fuzzy_matches:
-            ctx.deps.write_fuzzy_matches.extend(result.fuzzy_matches)
-        if result.sanitizer_warnings:
-            ctx.deps.write_sanitizer_warnings.extend(result.sanitizer_warnings)
-        if result.cells_written:
-            # A sheet may be written to multiple times inside the same
-            # run (agents sometimes call write_notes twice after a
-            # self-correction). Later writes supersede earlier ones for
-            # the same row — the writer re-opens `filled.xlsx` each
-            # time. Mirror that here so the DB and the xlsx agree.
-            by_key = {
-                (c["sheet"], c["row"]): c for c in ctx.deps.cells_written
-            }
-            for cell in result.cells_written:
-                by_key[(cell["sheet"], cell["row"])] = cell
-            ctx.deps.cells_written = list(by_key.values())
-        if result.numeric_cells:
-            # Same supersede-on-rewrite semantics as cells_written, but keyed
-            # by (sheet, row, col) — a numeric row has up to four value cells.
-            by_cell = {
-                (c["sheet"], c["row"], c["col"]): c
-                for c in ctx.deps.numeric_cells
-            }
-            for cell in result.numeric_cells:
-                by_cell[(cell["sheet"], cell["row"], cell["col"])] = cell
-            ctx.deps.numeric_cells = list(by_cell.values())
 
         msg = (
             f"Wrote {result.rows_written} row(s) to "

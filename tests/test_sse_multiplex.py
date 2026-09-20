@@ -64,6 +64,7 @@ class TestEventsTaggedByAgent:
             "variants": {"SOFP": "CuNonCu", "SOPL": "Function"},
             "models": {},
             "infopack": None,
+            "denomination": "thousands",
             "use_scout": False,
         }
 
@@ -125,6 +126,7 @@ class TestEventsTaggedByAgent:
             "variants": {"SOFP": "CuNonCu"},
             "models": {},
             "infopack": None,
+            "denomination": "thousands",
             "use_scout": False,
         }
 

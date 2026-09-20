@@ -43,6 +43,7 @@ def test_second_request_gets_409_while_first_is_reserved(tmp_path, monkeypatch):
         "variants": {"SOFP": "CuNonCu"},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
     })
     assert resp.status_code == 409
@@ -69,6 +70,7 @@ def test_reservation_released_when_api_key_missing(tmp_path, monkeypatch):
         "variants": {"SOFP": "CuNonCu"},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
     })
     assert resp.status_code == 400

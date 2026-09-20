@@ -165,14 +165,18 @@ class TestSOPLToSOCIEProfitGroup:
             ],
         }, sopl_path)
 
-        # SOCIE: block 1 (Group CY) starts row 3, block 3 (Company CY) starts row 51
+        # SOCIE carries one block for every entity/period scope.
         socie_rows = [[None] * 24 for _ in range(97)]
         # Row 1: header (col B = "Issued capital", col C = "Retained earnings")
         socie_rows[0] = [None, "Issued capital", "Retained earnings"] + [None] * 21
         # Block 1 (Group CY) — profit row
         socie_rows[10] = ["*Profit (loss)", None, 250000.0] + [None] * 21
+        # Block 2 (Group PY)
+        socie_rows[34] = ["*Profit (loss)", None, 200000.0] + [None] * 21
         # Block 3 (Company CY) — profit row at row 59 (block 3 starts at row 51)
         socie_rows[58] = ["*Profit (loss)", None, 100000.0] + [None] * 21
+        # Block 4 (Company PY)
+        socie_rows[82] = ["*Profit (loss)", None, 80000.0] + [None] * 21
 
         _make_workbook({"SOCIE": socie_rows}, socie_path)
 
@@ -188,7 +192,7 @@ class TestSOPLToSOCIEProfitGroup:
 
         _make_workbook({
             "SOPL-Function": [
-                ["*Profit (loss)", 250000.0, 200000.0],
+                ["*Profit (loss)", 250000.0, None],
             ],
         }, sopl_path)
         _make_workbook({
@@ -217,8 +221,12 @@ class TestSOCIEToSOFPEquityGroup:
         socie_rows[0] = [None, "Issued capital", "Retained earnings"] + [None] * 21
         # Block 1: row 25 (index 24) — col X (24) = Total
         socie_rows[24] = ["*Equity at end of period"] + [None] * 22 + [5000000.0]
+        # Block 2: Group PY
+        socie_rows[48] = ["*Equity at end of period"] + [None] * 22 + [4000000.0]
         # Block 3: row 73 (index 72) — col X (24) = Total
         socie_rows[72] = ["*Equity at end of period"] + [None] * 22 + [3000000.0]
+        # Block 4: Company PY
+        socie_rows[96] = ["*Equity at end of period"] + [None] * 22 + [2500000.0]
 
         _make_workbook({"SOCIE": socie_rows}, socie_path)
 
@@ -246,7 +254,7 @@ class TestSOCIEToSOFPEquityGroup:
         _make_workbook({"SOCIE": socie_rows}, socie_path)
         _make_workbook({
             "SOFP-CuNonCu": [
-                ["*Total equity", 5000000.0, 4000000.0],
+                ["*Total equity", 5000000.0, None],
             ],
         }, sofp_path)
 

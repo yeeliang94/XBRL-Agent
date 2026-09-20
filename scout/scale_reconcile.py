@@ -33,6 +33,34 @@ from typing import Optional
 _COMPARABLE_UNITS = frozenset({"units", "thousands", "millions"})
 
 
+class DenominationRequiredError(ValueError):
+    """Neither the operator nor Scout supplied a usable presentation scale."""
+
+
+def resolve_run_denomination(
+    declared_denomination: Optional[str], scout_unit: Optional[str],
+) -> str:
+    """Return an explicit declaration or a confident Scout inference.
+
+    Public run entry points deliberately leave denomination unset when their
+    caller omitted it.  This resolver is the pre-extraction gate that prevents
+    Scout's ``unknown`` from silently inheriting the historical ``thousands``
+    default.  Explicit UI/API/CLI values always win.
+    """
+    declared = (declared_denomination or "").strip().lower()
+    if declared in _COMPARABLE_UNITS:
+        return declared
+
+    scout = (scout_unit or "unknown").strip().lower()
+    if scout in _COMPARABLE_UNITS:
+        return scout
+
+    raise DenominationRequiredError(
+        "The document's presentation denomination could not be determined. "
+        "Choose units, thousands, or millions and retry the run."
+    )
+
+
 @dataclass(frozen=True)
 class ScaleReconcileResult:
     """Outcome of reconciling scout's scale_unit against other sources.

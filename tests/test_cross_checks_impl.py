@@ -112,6 +112,27 @@ class TestSOFPBalance:
         )
         assert result.status == "passed"
 
+    def test_current_year_balances_but_prior_year_off_by_one(self, tmp_dir):
+        """A comparative-only error must fail the combined period matrix."""
+        path = os.path.join(tmp_dir, "sofp.xlsx")
+        _make_workbook({
+            "SOFP-CuNonCu": [
+                ["*Total assets", 1000.0, 801.0],
+                ["*Total equity and liabilities", 1000.0, 800.0],
+            ],
+        }, path)
+
+        result = SOFPBalanceCheck().run(
+            {StatementType.SOFP: path}, tolerance=0.5,
+        )
+
+        assert result.status == "failed"
+        assert result.diff == 1.0
+        assert result.expected == 801.0
+        assert result.actual == 800.0
+        assert "Company PY:" in result.message
+        assert {c.period for c in result.comparands} == {"CY", "PY"}
+
 
 # ---------------------------------------------------------------------------
 # Check 2: SOPL profit = SOCIE profit row
@@ -125,7 +146,7 @@ class TestSOPLToSOCIEProfit:
         _make_workbook({
             "SOPL-Function": [
                 # Real template label is "*Profit (loss)" — check uses substring match
-                ["*Profit (loss)", 250000.0, 200000.0],
+                ["*Profit (loss)", 250000.0, None],
             ],
         }, sopl_path)
 
@@ -180,7 +201,7 @@ class TestSOCIToSOCIETCI:
         _make_workbook({
             # Real sheet name is "SOCI-BeforeOfTax" (note the "Of")
             "SOCI-BeforeOfTax": [
-                ["*Total comprehensive income for the period", 260000.0, 210000.0],
+                ["*Total comprehensive income for the period", 260000.0, None],
             ],
         }, soci_path)
 
@@ -242,7 +263,7 @@ class TestSOCIEToSOFPEquity:
 
         _make_workbook({
             "SOFP-CuNonCu": [
-                ["*Total equity", 750000.0, 600000.0],
+                ["*Total equity", 750000.0, None],
             ],
         }, sofp_path)
 
@@ -290,7 +311,7 @@ class TestSOCIEToSOFPEquity:
         row[2] = 200_000.0     # col C
         _make_workbook({"SOCIE": [row]}, socie_path)
         _make_workbook({
-            "SOFP-CuNonCu": [["*Total equity", 1_200_000.0, 1_000_000.0]],
+            "SOFP-CuNonCu": [["*Total equity", 1_200_000.0, None]],
         }, sofp_path)
 
         result = SOCIEToSOFPEquityCheck().run(
@@ -313,7 +334,7 @@ class TestSOCIEToSOFPEquity:
         good_row[2] = 300_000.0    # col C  → sum 1,200,000
         _make_workbook({"SOCIE": [blank_row, good_row]}, socie_path)
         _make_workbook({
-            "SOFP-CuNonCu": [["*Total equity", 1_200_000.0, 1_000_000.0]],
+            "SOFP-CuNonCu": [["*Total equity", 1_200_000.0, None]],
         }, sofp_path)
 
         result = SOCIEToSOFPEquityCheck().run(
@@ -804,7 +825,7 @@ class TestComparands:
         the SOPL value and the SOCIE value with their statements."""
         sopl_path = os.path.join(tmp_dir, "sopl.xlsx")
         socie_path = os.path.join(tmp_dir, "socie.xlsx")
-        _make_workbook({"SOPL-Function": [["*Profit (loss)", 250000.0, 200000.0]]},
+        _make_workbook({"SOPL-Function": [["*Profit (loss)", 250000.0, None]]},
                        sopl_path)
         _make_workbook({"SOCIE": [
             [None, "Issued capital", "Retained earnings"],

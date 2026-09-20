@@ -94,6 +94,7 @@ def test_prepared_run_reuses_inventory_and_derived_pages_without_second_scout(do
     client, join, scout, received = pipeline
     response = client.post(f"/api/run/{directory.name}", json={
         "statements": ["SOFP"], "variants": {"SOFP": "CuNonCu"}, "use_scout": True,
+        "denomination": "thousands",
     })
     assert response.status_code == 200
     assert "run_complete" in response.text, response.text[-1500:]
@@ -108,7 +109,7 @@ async def test_prepared_repeats_preserve_request_and_use_preparation_each_time(d
     directory, db, _ = document
     _, join, scout, _ = pipeline
     config = server.RunConfigRequest(statements=["SOFP"], variants={"SOFP": "CuNonCu"},
-                                    use_scout=True, repeats=2)
+                                    use_scout=True, repeats=2, denomination="thousands")
     original = config.model_dump()
     events = [event async for event in server.run_repeat_group_stream(
         session_id=directory.name, session_dir=directory, run_config=config,
@@ -131,6 +132,7 @@ def test_prepared_notes_cannot_finish_clean_when_integrity_assessment_raises(doc
     monkeypatch.setattr(server, "_run_notes_integrity_check", assess)
     response = client.post(f"/api/run/{directory.name}", json={
         "statements": ["SOFP"], "variants": {"SOFP": "CuNonCu"}, "use_scout": True,
+        "denomination": "thousands",
         "notes_to_run": ["CORP_INFO"],
     })
     assert response.status_code == 200
@@ -221,6 +223,7 @@ def test_empty_ui_inventory_overrides_do_not_repeat_document_mapping(document, p
     }))
     response = client.post(f"/api/run/{directory.name}", json={
         "statements": ["SOFP"], "variants": {"SOFP": "CuNonCu"}, "use_scout": True,
+        "denomination": "thousands",
         "notes_to_run": ["CORP_INFO"],
         "notes_inventory_overrides": {"added": [], "removed_note_nums": []},
     })
@@ -245,6 +248,7 @@ async def test_inventory_remap_cancellation_distinguishes_stop_from_failure(docu
     monkeypatch.setattr(observability.incidents, "capture_run_incident", incident)
     config = server.RunConfigRequest(
         statements=["SOFP"], variants={"SOFP": "CuNonCu"}, use_scout=True,
+        denomination="thousands",
         notes_to_run=["CORP_INFO"],
         notes_inventory_overrides={"added": [{"note_num": 1, "title": "Corporate information", "page_range": [1, 1]}]},
     )
@@ -331,7 +335,8 @@ async def test_unresolved_source_does_not_repeat_full_review(
     events = server.run_multi_agent_stream(
         directory.name, directory,
         server.RunConfigRequest(statements=["SOFP"], variants={"SOFP": "CuNonCu"},
-                                notes_to_run=["CORP_INFO"], use_scout=True),
+                                notes_to_run=["CORP_INFO"], use_scout=True,
+                                denomination="thousands"),
         "synthetic-key", "", "scripted-model", require_preparation=True,
     )
     async for _ in events:

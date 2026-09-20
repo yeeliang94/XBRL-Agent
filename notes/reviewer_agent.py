@@ -401,22 +401,16 @@ def _read_cells(
 def _read_provenance_refs(
     db_path: str, run_id: int, sheet: str, row: int,
 ) -> list[str]:
-    """The ``source_note_refs`` recorded for a (sheet,row) provenance entry, or
-    ``[]``. Used to undo an author's coverage marker when its cell is cleared."""
-    import json as _json
-    with repo.db_session(db_path) as conn:
-        r = conn.execute(
-            "SELECT source_note_refs FROM notes_cell_provenance "
-            "WHERE run_id = ? AND sheet = ? AND row = ?",
-            (run_id, sheet, row),
-        ).fetchone()
-    if not r or not r[0]:
-        return []
-    try:
-        refs = _json.loads(r[0])
-        return [str(x) for x in refs] if isinstance(refs, list) else []
-    except (TypeError, ValueError):
-        return []
+    """Effective source refs for a coordinate.
+
+    This deliberately shares the coverage detector loader so prepared-source
+    placement identity and ordinary provenance cannot disagree in the clear
+    guard.
+    """
+    for entry in load_provenance_entries(run_id, db_path):
+        if entry.get("sheet") == sheet and int(entry.get("row") or 0) == row:
+            return [str(x) for x in entry.get("source_note_refs") or []]
+    return []
 
 
 def _clear_routing_rejection(
@@ -443,8 +437,7 @@ def _clear_routing_rejection(
     if not note_nums or note_nums.issubset(ctx.deps.authored_note_nums):
         return None
 
-    with repo.db_session(ctx.deps.db_path) as conn:
-        entries = repo.fetch_notes_provenance(conn, ctx.deps.run_id)
+    entries = load_provenance_entries(ctx.deps.run_id, ctx.deps.db_path)
 
     coords_by_note: dict[int, set[tuple[str, int]]] = {
         n: set() for n in note_nums
@@ -876,7 +869,8 @@ def _build_context(
     # notes_cells for the title/format detector (needs the stored HTML).
     with repo.db_session(db_path) as conn:
         cells = [
-            {"sheet": c.sheet, "row": c.row, "label": c.label, "html": c.html}
+            {"sheet": c.sheet, "row": c.row, "label": c.label, "html": c.html,
+             "source_built": c.source_generation_id is not None}
             for c in repo.list_notes_cells_for_run(conn, run_id)
             if c.sheet in PROSE_SHEETS
         ]
@@ -1943,6 +1937,17 @@ def create_notes_reviewer_agent(
                         row_label=label,
                         source_note_refs=[str(int(note_num))],
                     )
+                    # Authoring establishes new ownership at this coordinate.
+                    # Retire any prepared-source placements from the prior
+                    # draft in the same transaction so they cannot override
+                    # the fresh authored provenance during coverage review.
+                    if ctx.deps.source_generation_id is not None:
+                        from notes import source_repository as _source_repo
+
+                        _source_repo.set_cell_placements(
+                            conn, ctx.deps.run_id,
+                            ctx.deps.source_generation_id, sheet, row, [],
+                        )
                     # Audit marker: this note was authored back into place by
                     # the reviewer (shown on the final coverage checklist).
                     ctx.deps.authored_note_nums.add(int(note_num))
@@ -2090,6 +2095,17 @@ def create_notes_reviewer_agent(
             for n in _top_note_nums(cleared_prov):
                 ctx.deps.authored_note_nums.discard(n)
             with repo.db_session(ctx.deps.db_path) as conn:
+                from notes import source_repository as _source_repo
+                generations = conn.execute(
+                    "SELECT DISTINCT generation_id FROM notes_block_placements "
+                    "WHERE run_id = ? AND sheet = ? AND row = ? AND active = 1",
+                    (ctx.deps.run_id, sheet, row),
+                ).fetchall()
+                for generation in generations:
+                    _source_repo.set_cell_placements(
+                        conn, ctx.deps.run_id, generation["generation_id"],
+                        sheet, row, [],
+                    )
                 conn.execute(
                     "DELETE FROM notes_cells WHERE run_id = ? AND sheet = ? AND row = ?",
                     (ctx.deps.run_id, sheet, row),

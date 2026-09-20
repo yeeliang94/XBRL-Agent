@@ -105,6 +105,7 @@ async def test_notes_to_run_is_accepted_and_passed_to_coordinator(tmp_path: Path
             "variants": {},
             "models": {},
             "filing_level": "company",
+            "denomination": "thousands",
             "notes_to_run": ["CORP_INFO"],
         })
 
@@ -189,6 +190,7 @@ async def test_notes_models_resolved_per_template(tmp_path: Path, monkeypatch):
          patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]):
         resp = client.post(f"/api/run/{session_id}", json={
             "statements": [],
+            "denomination": "thousands",
             "notes_to_run": ["CORP_INFO", "ACC_POLICIES"],
             "notes_models": {
                 "ACC_POLICIES": "claude-opus-4-6",
@@ -246,6 +248,7 @@ async def test_notes_models_unknown_key_ignored(tmp_path: Path, monkeypatch):
          patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]):
         resp = client.post(f"/api/run/{session_id}", json={
             "statements": [],
+            "denomination": "thousands",
             "notes_to_run": ["CORP_INFO"],
             "notes_models": {"MADE_UP": "ghost-model"},
         })

@@ -101,7 +101,7 @@ class _AttributionFootingBase:
         return True
 
     def _eval_scope(self, income, attribution, inc_row, attr_row, sheet,
-                    tolerance, label, *, is_company: bool) -> dict:
+                    tolerance, label, period, *, is_company: bool) -> dict:
         """Evaluate ONE entity scope. Returns a dict carrying the verdict
         (passed / failed / not_applicable), a message part, comparands, and the
         numeric anchor fields. ``not_applicable`` when this scope's attribution
@@ -131,10 +131,11 @@ class _AttributionFootingBase:
             ),
             "comparands": [
                 Comparand(label=self._income_label + suffix, sheet=sheet,
-                          value=income, role="lhs", statement=stmt_val, row=inc_row),
+                          value=income, role="lhs", statement=stmt_val, row=inc_row,
+                          period=period),
                 Comparand(label=self._attribution_label + suffix, sheet=sheet,
                           value=attribution, role="rhs", statement=stmt_val,
-                          row=attr_row),
+                          row=attr_row, period=period),
             ],
             "expected": income, "actual": attribution, "diff": diff,
             "sheet": sheet, "row": attr_row,
@@ -169,14 +170,17 @@ class _AttributionFootingBase:
         return res
 
     def _scopes(self, filing_level):
-        """The (entity_scope-or-column, label, is_company) passes for this
+        """The period-by-entity passes for this
         filing. Group filings dual-pass Group + Company, mirroring every other
         group-aware check — otherwise a wrong Company-column attribution split
         would pass silently."""
-        primary = filing_level_prefix(filing_level, with_period=False)
-        if filing_level == "group":
-            return [("Group", 2, primary, False), ("Company", 4, "Company", True)]
-        return [("Company", 2, primary, False)]
+        from cross_checks.periods import period_scopes
+        return [
+            (spec.entity_scope, spec.column, spec.label,
+             filing_level == "group" and spec.entity_scope == "Company",
+             spec.period)
+            for spec in period_scopes(filing_level)
+        ]
 
     # --- xlsx path ---------------------------------------------------------
     def run(self, workbook_paths: Dict[StatementType, str], tolerance: float,
@@ -190,8 +194,11 @@ class _AttributionFootingBase:
                 message=f"No {self._stmt.value} sheet found in workbook")
         sheet = ws.title
         evals = []
-        for _scope, col, label, is_company in self._scopes(filing_level):
-            income = find_value_by_label(ws, self._income_label, col=col, wb=wb)
+        for _scope, col, label, is_company, period in self._scopes(filing_level):
+            income = find_value_by_label(
+                ws, self._income_label, col=col, wb=wb,
+                blank_formula_as_none=period == "PY",
+            )
             inc_row = find_label_row(ws, self._income_label)
             attribution, attr_row = self._read_attribution_xlsx(ws, col, wb)
             # Gate: if no attribution leaf cell carries a value, the split isn't
@@ -202,7 +209,7 @@ class _AttributionFootingBase:
                 attribution = None
             evals.append(self._eval_scope(
                 income, attribution, inc_row, attr_row, sheet, tolerance,
-                label, is_company=is_company))
+                label, period, is_company=is_company))
         wb.close()
         return self._combine(evals, tolerance)
 
@@ -243,13 +250,14 @@ class _AttributionFootingBase:
     def run_facts(self, ctx, tolerance: float) -> CrossCheckResult:
         from cross_checks.facts_util import read_labelled_value
         evals = []
-        for entity_scope, _col, label, is_company in self._scopes(ctx.filing_level):
-            income = read_labelled_value(ctx, self._stmt, self._income_label, "CY", entity_scope)
-            attribution = self._read_attribution_facts(ctx, "CY", entity_scope)
+        for entity_scope, _col, label, is_company, period in self._scopes(ctx.filing_level):
+            income = read_labelled_value(
+                ctx, self._stmt, self._income_label, period, entity_scope)
+            attribution = self._read_attribution_facts(ctx, period, entity_scope)
             sheet = attribution.sheet or income.sheet or self._stmt.value
             evals.append(self._eval_scope(
                 income.value, attribution.value, income.row, attribution.row,
-                sheet, tolerance, label, is_company=is_company))
+                sheet, tolerance, label, period, is_company=is_company))
         return self._combine(evals, tolerance)
 
     def _read_attribution_facts(self, ctx, period, scope):

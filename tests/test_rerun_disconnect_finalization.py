@@ -64,6 +64,36 @@ def _open_db(db_path: Path) -> sqlite3.Connection:
 
 
 @pytest.mark.asyncio
+async def test_unattended_run_requires_denomination_when_scout_has_no_scale(
+    session_env,
+):
+    """An omitted API value cannot silently become the legacy RM '000 default."""
+    from server import RunConfigRequest, run_multi_agent_stream
+
+    session_id, out = session_env
+    session_dir = out / session_id
+    body = RunConfigRequest(
+        statements=["SOFP"],
+        variants={"SOFP": "CuNonCu"},
+        use_scout=False,
+    )
+    with patch("server._create_proxy_model", return_value="fake-model"):
+        events = [event async for event in run_multi_agent_stream(
+            session_id=session_id,
+            session_dir=session_dir,
+            run_config=body,
+            api_key="test-key",
+            proxy_url="",
+            model_name="test-model",
+        )]
+
+    errors = [event for event in events if event.get("event") == "error"]
+    assert errors
+    assert errors[-1]["data"]["error_code"] == "denomination_required"
+    assert "Choose units, thousands, or millions" in errors[-1]["data"]["message"]
+
+
+@pytest.mark.asyncio
 async def test_disconnect_after_agent_complete_still_finalizes_run(session_env):
     """Option B contract: disconnect after the agent finished its work does
     NOT drop merge / cross-checks / DB finalization.
@@ -131,6 +161,7 @@ async def test_disconnect_after_agent_complete_still_finalizes_run(session_env):
         models={},
         infopack=None,
         use_scout=False,
+        denomination="thousands",
     )
 
     with patch("server._create_proxy_model", return_value="fake-model"), \
@@ -223,6 +254,7 @@ async def test_disconnect_during_integrated_scout_still_finishes_run(session_env
         statements=["SOFP"],
         variants={"SOFP": "CuNonCu"},
         use_scout=True,
+        denomination="thousands",
     )
     with patch("server._create_proxy_model", return_value="fake-model"), \
          patch("scout.runner.run_scout_streaming", side_effect=scout), \

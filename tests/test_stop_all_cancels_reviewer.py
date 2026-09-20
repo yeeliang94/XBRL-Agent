@@ -119,6 +119,7 @@ def test_stop_all_cancels_running_reviewer(session_env):
         "variants": {"SOFP": "CuNonCu"},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
     }
 
@@ -202,7 +203,7 @@ def test_reviewer_task_unregistered_after_normal_completion(session_env):
 
     run_config = {
         "statements": ["SOFP"], "variants": {"SOFP": "CuNonCu"},
-        "models": {}, "infopack": None, "use_scout": False,
+        "models": {}, "infopack": None, "denomination": "thousands", "use_scout": False,
     }
 
     with patch("server._create_proxy_model", return_value="fake-model"), \
