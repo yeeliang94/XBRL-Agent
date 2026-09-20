@@ -221,6 +221,38 @@ def test_skip_receipt_with_destination_placement_does_not_tip(db_path, tmp_path)
     assert row and row[0]["status"] == "placed"
 
 
+def test_clean_recompute_closes_stale_open_detector_flags(db_path, tmp_path):
+    """A flag for a cell cleared before re-review must not block filing after
+    the recomputed detector set is clean, even when the model is skipped."""
+    with repo.db_session(db_path) as conn:
+        run_id = repo.create_run(
+            conn, "x.pdf", session_id="s", output_dir=str(tmp_path),
+        )
+        repo.insert_notes_review_flag(
+            conn, run_id=run_id, kind="needs_human",
+            reason="missing heading", sheet="Notes-SummaryofAccPol", row=49,
+            finding_id='["title","Notes-SummaryofAccPol",49]',
+        )
+    _seed_inv(db_path, run_id, 4)
+    _seed_placed(db_path, run_id, 8, ["4"])
+    # The live replacement cell satisfies the authored heading contract. Row
+    # 49 no longer exists, so the old flag describes an earlier snapshot.
+    with repo.db_session(db_path) as conn:
+        repo.upsert_notes_cell(
+            conn, run_id=run_id, sheet=_S12, row=8, label="Row 8",
+            html="<h3>4 Revenue</h3><p>x</p>",
+        )
+
+    outcome = _run_pass(
+        db_path, run_id, tmp_path, _scripted([[TextPart("unused")]]),
+        asyncio.Queue(),
+    )
+    assert outcome["invoked"] is False
+    assert outcome["coverage"]["unresolved"] == 0
+    with repo.db_session(db_path) as conn:
+        assert repo.fetch_notes_review_flags(conn, run_id) == []
+
+
 def test_coverage_gate_off_persists_nothing(db_path, tmp_path, monkeypatch):
     monkeypatch.setenv("XBRL_NOTES_COVERAGE", "false")
     with repo.db_session(db_path) as conn:

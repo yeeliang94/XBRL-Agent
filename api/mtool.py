@@ -42,7 +42,8 @@ from observability.incidents import capture_run_incident
 import server
 from mtool.column_detect import (
     ConflictingPeriodMarkersError, detect_column_map, describe_template, fingerprint_workbook,
-    needs_confirmation, overall_confidence, unit_scale_mismatches)
+    needs_confirmation, overall_confidence, period_compatibility_issues,
+    unit_scale_mismatches)
 from mtool.exporter import build_fill_doc
 from mtool.template_map import inspect_template, resolve_filing_doc
 from mtool.notes_decorate import NotesTableStyle
@@ -275,6 +276,9 @@ def _build_doc(run_id: int):
         # Only reachable under a non-identity manifest — but if it ever fires,
         # it must read as a refusal to guess, not a crash.
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    infopack = ((run.config or {}).get("infopack") or {})
+    doc["meta"]["reporting_period_cy"] = infopack.get("reporting_period_cy")
+    doc["meta"]["reporting_period_py"] = infopack.get("reporting_period_py")
     return run, doc, standard, level, denom
 
 
@@ -576,7 +580,35 @@ def patch_mtool_template(
                     detail=f"column_map is not valid JSON: {exc}") from exc
             _validate_cmap_shape(cmap)
             _validate_cmap_semantics(cmap, doc)
+            # Keep the detector's physical period markers, but apply the
+            # operator-confirmed role -> column mapping before judging them.
+            # Otherwise a bad automatic role assignment can never be corrected
+            # by the very confirmation map the endpoint asks for.
+            compatibility_map = {}
+            for sheet, cfg in detected.items():
+                compatibility_map[sheet] = {
+                    **cfg,
+                    "columns": (cmap.get(sheet) or {}).get(
+                        "columns", cfg.get("columns") or {}),
+                }
         else:
+            compatibility_map = detected
+
+        period_issues = period_compatibility_issues(compatibility_map, doc)
+        period_mismatches = [
+            issue for issue in period_issues
+            if issue.get("code") == "template_period_mismatch"
+        ]
+        if period_mismatches:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "The uploaded template's reporting periods do not match the source filing periods.",
+                    "period_compatibility": period_mismatches,
+                },
+            )
+
+        if not column_map:
             # Unverified period/entity layouts require confirmation. Category
             # sheets are different: their columns are taxonomy members, so a
             # CY/PY form cannot describe them. resolve_filing_doc below allows
@@ -586,7 +618,8 @@ def patch_mtool_template(
                 inspection["semantic_source"] == "generated-targets"
             )
             if doc["writes"] and (overall_confidence(detected) != "high"
-                    or needs_confirmation(detected)) and not trusted_generated:
+                    or needs_confirmation(detected) or bool(period_issues)
+                    ) and not trusted_generated:
                 raise HTTPException(
                     status_code=422,
                     detail={
@@ -959,6 +992,7 @@ def detect_mtool_columns(
         inspection = _parse_template_or_422(
             "template inspection", inspect_template, str(src), doc, data=data)
         detected = inspection["column_map"]
+        period_issues = period_compatibility_issues(detected, doc)
         fingerprint = _parse_template_or_422(
             "fingerprint", fingerprint_workbook, data)
         known = describe_template(fingerprint)
@@ -966,7 +1000,9 @@ def detect_mtool_columns(
             "detected": detected,
             "confidence": overall_confidence(detected) if doc["writes"] else "not_applicable",
             # The real gate — see mtool/column_detect.needs_confirmation.
-            "requires_confirmation": bool(doc["writes"]) and needs_confirmation(detected),
+            "requires_confirmation": bool(doc["writes"]) and (
+                needs_confirmation(detected) or bool(period_issues)),
+            "period_compatibility": period_issues,
             "template_fingerprint": fingerprint,
             "template_known": known is not None,
             "template_description": (known or {}).get("name"),

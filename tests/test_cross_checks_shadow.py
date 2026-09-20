@@ -134,6 +134,10 @@ def test_sofp_balance_group_shadow(tmp_path):
     _fact(conn, run_id, "c_eqliab", 2000.0, scope="Group")
     _fact(conn, run_id, "c_assets", 1200.0, scope="Company")
     _fact(conn, run_id, "c_eqliab", 1200.0, scope="Company")
+    _fact(conn, run_id, "c_assets", 1900.0, period="PY", scope="Group")
+    _fact(conn, run_id, "c_eqliab", 1900.0, period="PY", scope="Group")
+    _fact(conn, run_id, "c_assets", 1100.0, period="PY", scope="Company")
+    _fact(conn, run_id, "c_eqliab", 1100.0, period="PY", scope="Company")
     conn.commit()
     ctx = FactsContext(
         conn=conn, run_id=run_id,
@@ -145,6 +149,39 @@ def test_sofp_balance_group_shadow(tmp_path):
 
     assert xlsx_result.status == "passed"
     assert "Group CY:" in xlsx_result.message and "Company CY:" in xlsx_result.message
+    assert_cross_check_parity(xlsx_result, fact_result)
+
+
+def test_sofp_balance_prior_year_failure_shadow(tmp_path):
+    """Workbook and fact paths both anchor a comparative-only failure."""
+    template_id = "mfrs-company-sofp-cunoncu-v1"
+    wb_path = tmp_path / "sofp.xlsx"
+    _make_workbook(wb_path, {
+        _ASSETS_ROW: ["*Total assets", 1000.0, 801.0],
+        _EQLIAB_ROW: ["*Total equity and liabilities", 1000.0, 800.0],
+    })
+    xlsx_result = SOFPBalanceCheck().run(
+        {StatementType.SOFP: str(wb_path)}, tolerance=0.5,
+        filing_level="company")
+
+    conn, run_id = _seed_db(tmp_path, template_id)
+    for uuid, cy, py in (
+        ("c_assets", 1000.0, 801.0),
+        ("c_eqliab", 1000.0, 800.0),
+    ):
+        _fact(conn, run_id, uuid, cy)
+        _fact(conn, run_id, uuid, py, period="PY")
+    conn.commit()
+    ctx = FactsContext(
+        conn=conn, run_id=run_id,
+        template_ids={StatementType.SOFP: template_id},
+        filing_level="company", filing_standard="mfrs",
+    )
+    fact_result = SOFPBalanceCheck().run_facts(ctx, tolerance=0.5)
+    conn.close()
+
+    assert xlsx_result.status == fact_result.status == "failed"
+    assert xlsx_result.diff == fact_result.diff == 1.0
     assert_cross_check_parity(xlsx_result, fact_result)
 
 

@@ -125,7 +125,8 @@ def test_formatter_cleared_border_becomes_white_not_hidden():
     out = decorate_notes_html(
         f'<table><tbody><tr><td style="{cleared}">x</td></tr></tbody></table>')
     assert "hidden" not in out
-    assert out.lower().count("1px solid #ffffff") == 4
+    assert out.lower().count("1px solid #ffffff") == 1
+    assert "border: 1px solid #ffffff" in out.lower()
 
 
 def test_border_none_becomes_white():
@@ -164,7 +165,8 @@ def test_grouped_border_style_hidden_becomes_white():
         '<td style="border-width: 1px; border-style: hidden; border-color: #000000">x</td>'
         '</tr></tbody></table>')
     assert "hidden" not in out
-    assert out.lower().count("1px solid #ffffff") == 4
+    assert out.lower().count("1px solid #ffffff") == 1
+    assert "border: 1px solid #ffffff" in out.lower()
 
 
 def test_mixed_grouped_border_style_whites_only_hidden_sides():

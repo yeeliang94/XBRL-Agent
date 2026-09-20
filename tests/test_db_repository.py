@@ -189,6 +189,7 @@ def test_create_run_requires_session_and_output_dir(db_path: Path) -> None:
         "statements": ["SOFP", "SOPL"],
         "variants": {"SOFP": "CuNonCu"},
         "models": {"SOFP": "gemini-3-flash"},
+        "denomination": "thousands",
         "use_scout": True,
     }
     with repo.db_session(db_path) as conn:
@@ -296,7 +297,7 @@ def test_mark_run_finished_accepts_aborted_status(db_path: Path) -> None:
 
 def test_fetch_run_returns_new_fields(db_path: Path) -> None:
     """The Run dataclass now exposes the v2 lifecycle fields."""
-    config = {"statements": ["SOFP"], "variants": {}, "models": {}, "use_scout": False}
+    config = {"statements": ["SOFP"], "variants": {}, "models": {}, "denomination": "thousands", "use_scout": False}
     with repo.db_session(db_path) as conn:
         run_id = repo.create_run(
             conn,

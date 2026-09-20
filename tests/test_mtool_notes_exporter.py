@@ -501,3 +501,36 @@ def test_export_refuses_changed_merged_table_geometry(notes_db, monkeypatch):
                         lambda *args: ('<table><tr><td>Full text.</td></tr></table>', "full", False, False))
     with pytest.raises(ValueError, match="content or structure"):
         build_notes_fill_doc(db, run)
+
+
+def test_formatter_cleared_large_table_keeps_styling_with_compact_white_border():
+    """A four-edge clear must not expand into four white declarations per cell.
+
+    The Doc 2 financial-instruments disclosure has 105 cells.  Repeating four
+    white longhands pushed its decorated payload above Excel's 32,767-character
+    limit and forced the misleading ``flat`` tier even though the content fit.
+    """
+    from mtool.notes_decorate import NotesTableStyle
+    from mtool.notes_exporter import _resolve_note_html
+    from mtool.offline_fill import EXCEL_CELL_CHAR_LIMIT, wrap_footnote_html
+
+    cleared = (
+        "border-top: 1px hidden #000000; "
+        "border-right: 1px hidden #000000; "
+        "border-bottom: 1px hidden #000000; "
+        "border-left: 1px hidden #000000; text-align: right"
+    )
+    rows = "".join(
+        "<tr>" + "".join(
+            f'<td style="{cleared}">{row * 5 + col:,}</td>'
+            for col in range(5)
+        ) + "</tr>"
+        for row in range(21)
+    )
+    html, tier, _destyled, _grid = _resolve_note_html(
+        f"<table>{rows}</table>", NotesTableStyle(), True)
+
+    assert tier == "full"
+    assert len(wrap_footnote_html(html)) <= EXCEL_CELL_CHAR_LIMIT
+    assert "hidden" not in html
+    assert html.count("border: 1px solid #ffffff") == 105

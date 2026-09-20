@@ -400,7 +400,7 @@ def test_run_cli_parses_standard_flag() -> None:
 
 def test_run_cli_parses_denomination_flag() -> None:
     """Peer-review MEDIUM: run.py exposes --denomination so the CLI can set the
-    user-authoritative scale; default stays "thousands"."""
+    user-authoritative scale; omission is resolved by Scout, never defaulted."""
     from run import build_parser
 
     parser = build_parser()
@@ -409,7 +409,7 @@ def test_run_cli_parses_denomination_flag() -> None:
     )
     assert args.denomination == "millions"
     default_args = parser.parse_args(["data/foo.pdf", "--statements", "SOFP"])
-    assert default_args.denomination == "thousands"
+    assert default_args.denomination is None
 
 
 # ---------------------------------------------------------------------------
@@ -426,6 +426,7 @@ def test_run_config_request_accepts_mpers_filing_standard() -> None:
     # Default is still mfrs so existing callers keep working.
     req2 = RunConfigRequest(statements=["SOFP"])
     assert req2.filing_standard == "mfrs"
+    assert req2.denomination is None
 
 
 @pytest.mark.mpers_wiring_server
@@ -455,6 +456,7 @@ def test_api_rejects_sore_on_mfrs_filing(tmp_path, monkeypatch) -> None:
         "variants": {"SOCIE": "SoRE"},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
         "filing_standard": "mfrs",
     }

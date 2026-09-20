@@ -16,7 +16,7 @@ from openpyxl import Workbook
 from mtool.column_detect import (
     describe_template, detect_column_map, fingerprint_workbook,
     needs_confirmation, overall_confidence, parse_unit_scale,
-    unit_scale_mismatches)
+    period_compatibility_issues, unit_scale_mismatches)
 from mtool.offline_fill import load_workbook_entries
 
 REPO = Path(__file__).resolve().parent.parent
@@ -28,6 +28,91 @@ REAL_MTOOL = REPO / "data" / "MBRS_test.xlsx"
 
 _real_mtool = pytest.mark.skipif(
     not REAL_MTOOL.exists(), reason="real mTool fixture not present")
+
+
+def _period_doc(cy="year ended 30 June 2025", py="year ended 30 June 2024"):
+    return {
+        "meta": {"reporting_period_cy": cy, "reporting_period_py": py},
+        "writes": [
+            {"sheet": "S", "period": "CY"},
+            {"sheet": "S", "period": "PY"},
+        ],
+    }
+
+
+def _period_map(cy="01/07/2024 - 30/06/2025", py="01/07/2023 - 30/06/2024"):
+    return {"S": {
+        "columns": {"current_year": "E", "prior_year": "F"},
+        "period_columns": {"E": cy, "F": py},
+        "dimensional": False,
+    }}
+
+
+def test_period_compatibility_accepts_wording_and_non_calendar_years():
+    assert period_compatibility_issues(_period_map(), _period_doc()) == []
+
+
+def test_period_compatibility_blocks_year_end_mismatch():
+    issues = period_compatibility_issues(
+        _period_map(cy="01/01/2021 - 31/12/2021"), _period_doc())
+    assert issues == [{
+        "code": "template_period_mismatch",
+        "sheet": "S",
+        "period": "CY",
+        "source_period": "year ended 30 June 2025",
+        "template_periods": ["01/01/2021 - 31/12/2021"],
+    }]
+
+
+@pytest.mark.parametrize("period_columns", [
+    {},
+    {"E": "not a date", "F": "also unclear"},
+])
+def test_period_compatibility_reports_missing_or_ambiguous_markers(period_columns):
+    cmap = _period_map()
+    cmap["S"]["period_columns"] = period_columns
+    issues = period_compatibility_issues(cmap, _period_doc())
+    assert {item["code"] for item in issues} == {
+        "template_period_markers_unresolved"}
+    assert {item["period"] for item in issues} == {"CY", "PY"}
+
+
+def test_period_compatibility_keeps_group_marker_mismatch_blocking():
+    cmap = {"S": {
+        "columns": {
+            "group_current_year": "B", "company_current_year": "D",
+        },
+        "period_columns": {
+            "B": "01/01/2025 - 31/12/2025",
+            "D": "01/01/2024 - 31/12/2024",
+        },
+        "dimensional": False,
+    }}
+    doc = {
+        "meta": {"reporting_period_cy": "year ended 31 December 2025"},
+        "writes": [{"sheet": "S", "period": "CY"}],
+    }
+
+    issues = period_compatibility_issues(cmap, doc)
+
+    assert [issue["code"] for issue in issues] == ["template_period_mismatch"]
+
+
+def test_period_compatibility_checks_dimensional_sheet_current_period():
+    cmap = {"S": {
+        "columns": {"ordinary_shares": "E", "total": "H"},
+        "period_columns": {
+            "E": "01/01/2021 - 31/12/2021",
+            "H": "01/01/2021 - 31/12/2021",
+        },
+        "dimensional": True,
+    }}
+    doc = {
+        "meta": {"reporting_period_cy": "year ended 30 June 2025"},
+        "writes": [{"sheet": "S", "period": "CY"}],
+    }
+    assert period_compatibility_issues(cmap, doc)[0]["code"] == (
+        "template_period_mismatch")
 
 
 def test_detects_our_template_layout():

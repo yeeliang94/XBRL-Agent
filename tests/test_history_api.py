@@ -189,7 +189,7 @@ def test_get_run_detail_returns_full_payload(api_env):
     run_id = _seed_run(
         db_path, session_id="detail", pdf_filename="finco.pdf",
         output_dir="/tmp/detail",
-        config={"statements": ["SOFP", "SOPL"], "variants": {}, "models": {}, "use_scout": False, "infopack": None},
+        config={"statements": ["SOFP", "SOPL"], "variants": {}, "models": {}, "denomination": "thousands", "use_scout": False, "infopack": None},
         agent_models=[("SOFP", "gemini-3-flash"), ("SOPL", "gpt-5.4")],
     )
     body = client.get(f"/api/runs/{run_id}").json()

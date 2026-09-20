@@ -124,6 +124,7 @@ def test_full_extraction_mocked(full_pipeline_env):
         "variants": {s.value: v for s, v in variants.items()},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
     }
 
@@ -293,6 +294,7 @@ def test_group_filing_e2e_mocked(full_pipeline_env):
         "variants": {"SOFP": "CuNonCu"},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
         "filing_level": "group",
     }
@@ -373,7 +375,7 @@ def test_clean_run_fires_spot_check_when_enabled(full_pipeline_env, monkeypatch)
     run_config = {
         "statements": [s.value for s in all_statements],
         "variants": {s.value: v for s, v in variants.items()},
-        "models": {}, "infopack": None, "use_scout": False,
+        "models": {}, "infopack": None, "denomination": "thousands", "use_scout": False,
     }
 
     async def mock_coordinator_run(config, infopack=None, event_queue=None, session_id=None, **_kwargs):

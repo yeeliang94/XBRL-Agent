@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 REPO = Path(__file__).resolve().parent.parent
 SOFP = REPO / "XBRL-template-MFRS" / "Company" / "01-SOFP-CuNonCu.xlsx"
+DATED_MTOOL = REPO / "Data" / "FS-MFRS-Test_Sdn_Bhd_net of tax-12345678910-31122021.xlsx"
 
 
 def _import_company_sofp(db_path) -> str:
@@ -330,6 +331,118 @@ def test_detect_columns_returns_map_and_confidence(client):
     sheet = next(iter(body["detected"]))
     assert "label_column" in body["detected"][sheet]
     assert "columns" in body["detected"][sheet]
+
+
+def test_source_template_period_mismatch_is_detected_and_blocks_patch(client):
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_distinct_leaves(db, run_id)
+    conn = sqlite3.connect(str(db))
+    try:
+        config = {
+            "filing_standard": "mfrs",
+            "filing_level": "company",
+            "denomination": "units",
+            "infopack": {
+                "reporting_period_cy": "year ended 30 June 2025",
+                "reporting_period_py": "year ended 30 June 2024",
+            },
+        }
+        conn.execute("UPDATE runs SET run_config_json=? WHERE id=?",
+                     (json.dumps(config), run_id))
+        conn.commit()
+    finally:
+        conn.close()
+    upload = {"template": (
+        DATED_MTOOL.name, DATED_MTOOL.read_bytes(),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )}
+
+    detected = tc.post(
+        f"/api/runs/{run_id}/mtool-fill/detect-columns", files=upload)
+    assert detected.status_code == 200, detected.text
+    assert detected.json()["requires_confirmation"] is True
+    assert {item["code"] for item in detected.json()["period_compatibility"]} == {
+        "template_period_mismatch"}
+
+    blocked = tc.post(
+        f"/api/runs/{run_id}/mtool-fill/patch", files=upload)
+    assert blocked.status_code == 422, blocked.text
+    assert blocked.json()["detail"]["period_compatibility"]
+
+
+def test_confirmed_map_allows_markerless_template_with_source_periods(client):
+    """No physical marker is not a proved mismatch once the operator confirms
+    the positional columns."""
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_distinct_leaves(db, run_id)
+    with sqlite3.connect(str(db)) as conn:
+        config = {
+            "filing_standard": "mfrs", "filing_level": "company",
+            "denomination": "thousands", "infopack": {
+                "reporting_period_cy": "year ended 30 June 2025",
+            },
+        }
+        conn.execute("UPDATE runs SET run_config_json=? WHERE id=?",
+                     (json.dumps(config), run_id))
+    doc = tc.get(f"/api/runs/{run_id}/mtool-fill").json()
+    sheet = doc["meta"]["sheets_covered"][0]
+    cmap = {sheet: {
+        "label_column": "A", "columns": {"current_year": "B"},
+    }}
+
+    response = tc.post(
+        f"/api/runs/{run_id}/mtool-fill/patch",
+        files=_upload_our_template(),
+        data={"column_map": json.dumps(cmap), "strict": "true"},
+    )
+
+    assert response.status_code == 200, response.text
+
+
+def test_confirmed_map_is_used_for_period_validation(client, monkeypatch):
+    """A corrected operator map can clear a detector's wrong period role."""
+    import api.mtool as mtool_api
+
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_distinct_leaves(db, run_id)
+    with sqlite3.connect(str(db)) as conn:
+        config = {
+            "filing_standard": "mfrs", "filing_level": "company",
+            "denomination": "thousands", "infopack": {
+                "reporting_period_cy": "year ended 30 June 2025",
+            },
+        }
+        conn.execute("UPDATE runs SET run_config_json=? WHERE id=?",
+                     (json.dumps(config), run_id))
+
+    real_detect = mtool_api.detect_column_map
+
+    def wrong_role(*args, **kwargs):
+        detected = real_detect(*args, **kwargs)
+        for layout in detected.values():
+            layout["columns"]["current_year"] = "B"
+            layout["period_columns"] = {
+                "B": "01/07/2023 - 30/06/2024",
+                "C": "01/07/2024 - 30/06/2025",
+            }
+        return detected
+
+    monkeypatch.setattr(mtool_api, "detect_column_map", wrong_role)
+    doc = tc.get(f"/api/runs/{run_id}/mtool-fill").json()
+    sheet = doc["meta"]["sheets_covered"][0]
+    cmap = {sheet: {
+        "label_column": "A", "columns": {"current_year": "C"},
+    }}
+    response = tc.post(
+        f"/api/runs/{run_id}/mtool-fill/patch",
+        files=_upload_our_template(),
+        data={"column_map": json.dumps(cmap), "strict": "true"},
+    )
+
+    assert response.status_code == 200, response.text
 
 
 def test_detect_columns_non_xlsx_is_422(client):

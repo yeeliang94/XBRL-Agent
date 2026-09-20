@@ -292,6 +292,18 @@ def test_title_detector_flags_missing_heading():
     assert [i["row"] for i in issues] == [49]
 
 
+def test_title_detector_preserves_source_heading_hierarchy_only_for_source_cells():
+    issues = ra.detect_title_format_issues([
+        {"sheet": _S12, "row": 49, "label": "source h2",
+         "html": "<h2>5 Revenue</h2><p>ok</p>", "source_built": True},
+        {"sheet": _S12, "row": 50, "label": "authored h2",
+         "html": "<h2>5 Revenue</h2><p>wrong contract</p>"},
+        {"sheet": _S12, "row": 51, "label": "source missing heading",
+         "html": "<p>still malformed</p>", "source_built": True},
+    ])
+    assert [i["row"] for i in issues] == [50, 51]
+
+
 def test_packet_renders_present_families_only():
     packet = ra.build_notes_reviewer_packet({
         "row_collisions": [{"row": 49, "row_label": "FV", "note_nums": [4, 20],

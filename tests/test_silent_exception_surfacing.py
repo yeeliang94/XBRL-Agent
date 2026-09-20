@@ -110,6 +110,7 @@ def test_merge_failure_emits_sse_error(session_env):
         "variants": {"SOFP": "CuNonCu"},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
     }
 
@@ -171,6 +172,7 @@ def test_canonical_export_degradation_prevents_clean_run_status(session_env):
         "variants": {"SOFP": "CuNonCu"},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
     }
 
@@ -278,6 +280,7 @@ def test_notes_refresh_degradation_prevents_clean_run_status(
             "statements": ["SOFP"],
             "variants": {"SOFP": "CuNonCu"},
             "notes_to_run": ["CORP_INFO"],
+            "denomination": "thousands",
             "use_scout": False,
         })
 
@@ -305,6 +308,7 @@ def test_cross_check_exception_emits_sse_error_and_finalizes(session_env):
         "variants": {"SOFP": "CuNonCu"},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
     }
 
@@ -398,6 +402,7 @@ def test_post_correction_cross_check_exception_finalizes_with_errors(session_env
         "variants": {"SOFP": "CuNonCu"},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
     }
 
@@ -506,6 +511,7 @@ def test_hanging_cross_check_times_out_and_finalizes(session_env, monkeypatch):
         "variants": {"SOFP": "CuNonCu"},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
     }
 
@@ -656,6 +662,7 @@ def test_validation_failure_error_carries_fatal_bucket(session_env):
         "variants": {},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
     }
 
@@ -820,7 +827,7 @@ def test_automatic_notes_formatting_is_visible_and_controls_completion(
          patch("cross_checks.notes_consistency.check_notes_consistency", return_value=[]):
         response = client.post(f"/api/run/{session_id}", json={
             "statements": ["SOFP"], "variants": {"SOFP": "CuNonCu"},
-            "notes_to_run": ["CORP_INFO"], "use_scout": False,
+            "notes_to_run": ["CORP_INFO"], "denomination": "thousands", "use_scout": False,
         })
     assert response.status_code == 200
     assert len(calls) == 1

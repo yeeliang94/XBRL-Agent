@@ -95,6 +95,7 @@ async def test_api_rejects_unknown_notes_key_with_clear_error(tmp_path: Path, mo
          patch("notes.coordinator.run_notes_extraction", return_value=NotesCoordinatorResult()):
         resp = client.post(f"/api/run/{session_id}", json={
             "statements": [],
+            "denomination": "thousands",
             "notes_to_run": ["NOT_A_REAL_TEMPLATE"],
         })
 
@@ -169,6 +170,7 @@ async def test_notes_agents_persisted_to_run_agents_and_events(
          patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]):
         resp = client.post(f"/api/run/{session_id}", json={
             "statements": [],
+            "denomination": "thousands",
             "notes_to_run": ["CORP_INFO"],
         })
 
@@ -229,6 +231,7 @@ async def test_notes_coordinator_exception_fails_overall_run(
          patch("cross_checks.framework.run_all", return_value=[]), patch("cross_checks.framework.run_all_facts", return_value=[]):
         resp = client.post(f"/api/run/{session_id}", json={
             "statements": [],
+            "denomination": "thousands",
             "notes_to_run": ["CORP_INFO"],
         })
 

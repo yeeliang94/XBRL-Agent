@@ -66,7 +66,8 @@ def _build_mpers_company_socie(path: Path, equity_cy: float, equity_py: float,
     wb.save(path)
 
 
-def _build_mpers_company_sofp(path: Path, total_equity: float):
+def _build_mpers_company_sofp(path: Path, total_equity: float,
+                              prior_equity: float | None = None):
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "SOFP-OrdOfLiq"
@@ -74,6 +75,7 @@ def _build_mpers_company_sofp(path: Path, total_equity: float):
     ws.cell(1, 2).value = "CY"
     ws.cell(5, 1).value = "Total equity"
     ws.cell(5, 2).value = total_equity
+    ws.cell(5, 3).value = prior_equity
     wb.save(path)
 
 
@@ -132,7 +134,7 @@ def mpers_workbooks(tmp_path):
     _build_mpers_company_socie(
         paths[StatementType.SOCIE], equity_cy, equity_py, profit, tci,
     )
-    _build_mpers_company_sofp(paths[StatementType.SOFP], equity_cy)
+    _build_mpers_company_sofp(paths[StatementType.SOFP], equity_cy, equity_py)
     _build_mpers_company_sopl(paths[StatementType.SOPL], profit)
     _build_mpers_company_soci(paths[StatementType.SOCI], tci)
     return {k: str(v) for k, v in paths.items()}

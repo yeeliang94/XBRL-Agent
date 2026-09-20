@@ -92,6 +92,7 @@ class TestMultiAgentIntegration:
             "variants": {"SOFP": "CuNonCu", "SOPL": "Function"},
             "models": {},
             "infopack": None,
+            "denomination": "thousands",
             "use_scout": False,
         }
 
@@ -190,6 +191,7 @@ class TestMultiAgentIntegration:
             "variants": {"SOFP": "CuNonCu"},
             "models": {},
             "infopack": None,
+            "denomination": "thousands",
             "use_scout": False,
         }
 
@@ -263,6 +265,7 @@ class TestMultiAgentIntegration:
             "variants": {"SOFP": "CuNonCu", "SOPL": "Function"},
             "models": {},
             "infopack": None,
+            "denomination": "thousands",
             "use_scout": False,
         }
 

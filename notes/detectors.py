@@ -54,18 +54,69 @@ def load_sidecar_entries(sidecar_paths: List[str]) -> list[dict]:
 
 
 def load_provenance_entries(run_id: int, db_path: str) -> list[dict]:
-    """Load detector inputs from the DB (``notes_cell_provenance``).
+    """Load the effective detector inputs from the durable DB ledgers.
 
     Returns the SAME ``entries`` shape the detectors consume from sidecars —
     ``[{"sheet","row","row_label","source_note_refs","content_preview"}]`` — so
     a manual re-review recomputes findings from the durable database instead of
-    the run-dir ``*_payloads.json`` files (docs/PLAN.md Step 2). Returns ``[]``
-    on any DB error so the factory can fall back to the sidecars.
+    the run-dir ``*_payloads.json`` files (docs/PLAN.md Step 2).
+
+    Prepared-source writes deliberately do not invent the legacy
+    ``source_note_refs`` field. Their canonical identity is the active
+    ``notes_block_placements`` ledger joined through each block's frozen source
+    note. At a coordinate with live source placements that identity replaces
+    legacy refs (which may describe an older draft); other coordinates retain
+    ordinary writer provenance. A placement only counts when its target
+    ``notes_cells`` row still exists, so a dangling ledger row cannot make
+    coverage green.
+
+    Returns ``[]`` on any DB error so the factory can fall back to sidecars.
     """
     try:
         from db import repository as repo
         with repo.db_session(db_path) as conn:
-            return repo.fetch_notes_provenance(conn, run_id)
+            ordinary = repo.fetch_notes_provenance(conn, run_id)
+            placed = conn.execute(
+                "SELECT p.sheet, p.row, c.id AS cell_id, c.label, c.html, "
+                " n.top_note_num "
+                "FROM notes_source_generations g "
+                "JOIN notes_block_placements p ON p.generation_id = g.id "
+                "LEFT JOIN notes_cells c ON c.run_id = p.run_id "
+                " AND c.sheet = p.sheet AND c.row = p.row "
+                "JOIN notes_source_blocks b ON b.generation_id = p.generation_id "
+                " AND b.block_id = p.block_id "
+                "LEFT JOIN notes_source_notes n ON n.generation_id = b.generation_id "
+                " AND n.source_note_id = b.source_note_id "
+                "WHERE g.run_id = ? AND g.status = 'active' AND p.active = 1 "
+                "ORDER BY p.sheet, p.row, p.block_id",
+                (run_id,),
+            ).fetchall()
+
+            by_coord = {
+                (str(e.get("sheet") or ""), int(e.get("row") or 0)): dict(e)
+                for e in ordinary
+                if e.get("sheet") and e.get("row") is not None
+            }
+            ledger_coords: dict[tuple[str, int], dict] = {}
+            for row in placed:
+                coord = (str(row["sheet"]), int(row["row"]))
+                entry = ledger_coords.setdefault(coord, {
+                    "sheet": coord[0],
+                    "row": coord[1],
+                    "row_label": row["label"] or "",
+                    "source_note_refs": [],
+                    "content_preview": (row["html"] or "")[:240],
+                })
+                ref = str(row["top_note_num"] or "").strip()
+                if (row["cell_id"] is not None and ref
+                        and ref not in entry["source_note_refs"]):
+                    entry["source_note_refs"].append(ref)
+
+            # The placement ledger is authoritative for every coordinate it
+            # covers, including the fail-closed case where no block has a
+            # usable source-note number (refs remains empty).
+            by_coord.update(ledger_coords)
+            return list(by_coord.values())
     except Exception:  # noqa: BLE001 — caller falls back to sidecars
         logger.warning(
             "load_provenance_entries failed for run %s; falling back to sidecars",
@@ -334,27 +385,36 @@ def detect_subnote_coverage_gaps(
 
 
 def detect_title_format_issues(cells: list[dict]) -> list[dict]:
-    """Advisory: prose cells missing their leading ``<h3>`` heading.
+    """Advisory: prose cells missing their required leading heading.
 
-    The writer owns heading injection — every prose cell should open with an
-    ``<h3>`` note/sub-note heading (``notes.writer._inject_headings``). A cell
-    whose stored HTML does NOT start with one signals a malformed or
-    agent-overwritten cell where the heading was dropped. This is **advisory
-    only** (peer-review #6): the reviewer flags it for a human; it never
-    auto-rewrites headings, because the structured ``parent_note``/``sub_note``
-    needed to regenerate them isn't persisted.
+    The writer owns heading injection for authored cells, which must open with
+    an ``<h3>`` note/sub-note heading (``notes.writer._inject_headings``).
+    Source-built cells instead preserve the uploaded document's verified
+    h1-h6 hierarchy and satisfy the contract with any leading semantic heading.
+    Missing headings remain **advisory only** (peer-review #6): the reviewer
+    flags them for a human; it never auto-rewrites headings.
 
     ``cells`` are ``notes_cells`` rows as dicts (need ``sheet``, ``row``,
     ``label``, ``html``). Numeric/empty cells are skipped — only prose carries a
     heading. Detection looks at the first ~80 chars so leading whitespace or a
     stray wrapper doesn't mask a genuinely-present heading.
     """
+    import re
+
     issues: list[dict] = []
     for c in cells:
         html = (c.get("html") or "").strip()
         if not html:
             continue
-        if "<h3" not in html[:80].lower():
+        prefix = html[:80].lower()
+        # Frozen-source rendering preserves the document's real h1-h6
+        # hierarchy. It must not be rewritten to an invented h3 merely to
+        # satisfy the author-written convention. Still require a leading
+        # semantic heading so a malformed source selection remains visible.
+        source_heading = bool(
+            c.get("source_built") and re.search(r"<h[1-6](?:\s|>)", prefix)
+        )
+        if "<h3" not in prefix and not source_heading:
             issues.append({
                 "sheet": c.get("sheet"),
                 "row": c.get("row"),

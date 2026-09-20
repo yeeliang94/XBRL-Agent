@@ -96,7 +96,7 @@ def run_agent(
     filing_level: str = "company",
     notes: Optional[Set[NotesTemplateType]] = None,
     filing_standard: str = "mfrs",
-    denomination: str = "thousands",
+    denomination: Optional[str] = None,
     variants: Optional[Dict[str, str]] = None,
     use_scout: bool = True,
 ) -> AgentResult:
@@ -316,7 +316,7 @@ def run_resume(
         notes_to_run=[],
         filing_level=plan.filing_level,
         filing_standard=plan.filing_standard,
-        denomination=plan.parent_config.get("denomination", "thousands"),
+        denomination=plan.parent_config.get("denomination"),
         variants={d.statement: d.variant
                   for d in plan.rerun if d.variant},
     )
@@ -502,12 +502,12 @@ def build_parser():
                         help="Filing standard: mfrs (default, routes to "
                              "XBRL-template-MFRS/) or mpers (routes to "
                              "XBRL-template-MPERS/ and enables SoRE).")
-    parser.add_argument("--denomination", default="thousands",
+    parser.add_argument("--denomination", default=None,
                         choices=["units", "thousands", "millions"],
                         help="Presentation scale the filer declares for the "
-                             "source figures: thousands (default, RM '000), "
-                             "units (RM), or millions (RM mil). Treated as "
-                             "authoritative by the agents (no guessing).")
+                             "source figures: thousands (RM '000), units "
+                             "(RM), or millions (RM mil). If omitted, Scout "
+                             "must determine the scale before extraction.")
     parser.add_argument("--no-scout", dest="use_scout", action="store_false",
                         default=True,
                         help="Skip the scout pass (on by default). Scout tells "
@@ -553,7 +553,8 @@ if __name__ == "__main__":
     model = args.model or os.environ.get("TEST_MODEL", DEFAULT_MODEL_ID)
 
     print(f"Model: {model}")
-    print(f"Standard: {args.standard}   Level: {args.level}   Denomination: {args.denomination}")
+    denomination_label = args.denomination or "auto (Scout must resolve)"
+    print(f"Standard: {args.standard}   Level: {args.level}   Denomination: {denomination_label}")
     print(f"Statements: {', '.join(s.value for s in stmts)}")
     print(f"Scout: {'on' if args.use_scout else 'off'}")
     if notes_set:

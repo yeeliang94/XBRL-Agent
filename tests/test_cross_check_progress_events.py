@@ -121,6 +121,7 @@ def test_initial_cross_check_run_emits_progress_events(session_env):
         "variants": {"SOFP": "CuNonCu", "SOPL": "Function"},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
     }
 
@@ -229,6 +230,7 @@ def test_cross_check_progress_is_actually_live(session_env):
         "variants": {"SOFP": "CuNonCu"},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
     }
 
@@ -286,6 +288,7 @@ def test_cross_check_progress_carries_phase_label(session_env):
         "variants": {"SOFP": "CuNonCu"},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
     }
 

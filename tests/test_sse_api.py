@@ -40,6 +40,7 @@ def test_sse_streams_events(tmp_path, monkeypatch):
         "variants": {"SOFP": "CuNonCu"},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
     }
 
@@ -95,6 +96,7 @@ def test_sse_rejects_missing_pdf(tmp_path, monkeypatch):
         "variants": {"SOFP": "CuNonCu"},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
     }
     resp = client.post("/api/run/nonexistent-session", json=run_config)
@@ -123,6 +125,7 @@ def test_sse_rejects_concurrent_run(tmp_path, monkeypatch):
         "variants": {"SOFP": "CuNonCu"},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
     }
     resp = client.post("/api/run/dup-session", json=run_config)

@@ -11,7 +11,7 @@ import openpyxl
 
 # Reuse the formula evaluator from the verifier — it handles cross-sheet
 # references and weighted sums found in MBRS templates.
-from tools.verifier import _resolve_cell_value
+from tools.verifier import _expand_range, _parse_range_operand, _resolve_cell_value
 
 # SOCIE column constants (pre-MBRS layout)
 _SOCIE_NCI_COL = 23       # W — Non-controlling interests
@@ -50,6 +50,39 @@ SOCIE_GROUP_BLOCKS = {
     "company_cy": (51, 73),
     "company_py": (75, 97),
 }
+
+
+def socie_period_block(
+    filing_standard: str,
+    filing_level: str,
+    entity_scope: str,
+    period: str,
+) -> Optional[tuple[int, int]]:
+    """Return the SOCIE row block for one entity/period, if block-shaped.
+
+    MFRS Company uses the first two blocks of the same layout as Group.
+    MPERS Company is the exception: CY/PY are columns B/C on the same rows.
+    """
+    if filing_standard == "mpers" and filing_level == "company":
+        return None
+    prefix = "group" if entity_scope == "Group" else "company"
+    if filing_level == "company":
+        prefix = "group"  # rows 3-25 / 27-49 are Company in this shape
+    return SOCIE_GROUP_BLOCKS[f"{prefix}_{period.lower()}"]
+
+
+def socie_period_column(
+    filing_standard: str,
+    filing_level: str,
+    period: str,
+    mfrs_column: int,
+) -> int:
+    """Map a semantic SOCIE period to its physical value column."""
+    if filing_standard != "mpers":
+        return mfrs_column
+    if filing_level == "company" and period == "PY":
+        return _MPERS_SOCIE_PY_COL
+    return _MPERS_SOCIE_CY_COL
 
 
 def filing_level_prefix(filing_level: str, *, with_period: bool) -> str:
@@ -190,6 +223,7 @@ def find_value_in_block(
     start_row: int,
     end_row: int,
     wb: openpyxl.Workbook = None,
+    blank_formula_as_none: bool = False,
 ) -> Optional[float]:
     """Like find_value_by_label but restricted to a row range (for Group SOCIE blocks)."""
     candidates: list[str]
@@ -213,6 +247,10 @@ def find_value_in_block(
                 if isinstance(raw, str) and raw.startswith("="):
                     if wb is None:
                         continue
+                    if blank_formula_as_none and not _formula_has_numeric_source(
+                        wb, ws.title, raw,
+                    ):
+                        continue
                     from openpyxl.utils import get_column_letter
                     cell_ref = f"{get_column_letter(col)}{r}"
                     resolved = _resolve_cell_value(wb, ws.title, cell_ref)
@@ -233,6 +271,7 @@ def find_row_sum_in_block(
     start_row: int,
     end_row: int,
     wb: openpyxl.Workbook = None,
+    blank_formula_as_none: bool = False,
 ) -> Optional[float]:
     """Sum a matched row's values across several columns (formula cells
     evaluated via ``wb``).
@@ -270,6 +309,10 @@ def find_row_sum_in_block(
                     continue
                 if isinstance(raw, str) and raw.startswith("="):
                     if wb is None:
+                        continue
+                    if blank_formula_as_none and not _formula_has_numeric_source(
+                        wb, ws.title, raw,
+                    ):
                         continue
                     resolved = _resolve_cell_value(
                         wb, ws.title, f"{get_column_letter(col)}{r}")
@@ -344,6 +387,7 @@ def find_value_by_label(
     label_substr: Union[str, Sequence[str]],
     col: int = 2,
     wb: openpyxl.Workbook = None,
+    blank_formula_as_none: bool = False,
 ) -> Optional[float]:
     """Scan column A for a row whose label contains `label_substr` (case-insensitive),
     then return the numeric value from the specified column on that row.
@@ -401,6 +445,14 @@ def find_value_by_label(
             if isinstance(raw, str) and raw.startswith("="):
                 if wb is None:
                     continue
+                if blank_formula_as_none and not _formula_has_numeric_source(
+                    wb, ws.title, raw,
+                ):
+                    # Empty MBRS formula scaffolding evaluates to numeric zero,
+                    # but it is not a disclosed comparative period.  Preserve
+                    # that distinction so the workbook and canonical-fact
+                    # cross-check paths make the same skip decision.
+                    continue
                 from openpyxl.utils import get_column_letter
                 cell_ref = f"{get_column_letter(col)}{match_row}"
                 resolved = _resolve_cell_value(wb, ws.title, cell_ref)
@@ -414,3 +466,57 @@ def find_value_by_label(
                 continue
 
     return None
+
+
+def _formula_has_numeric_source(
+    wb: openpyxl.Workbook,
+    sheet_name: str,
+    formula: str,
+    visited: Optional[set[str]] = None,
+) -> bool:
+    """Whether a formula ultimately depends on any populated numeric cell.
+
+    This is deliberately presence-only; formula evaluation remains owned by
+    ``tools.verifier``.  Literal zero is populated, while a chain of formulas
+    whose leaves are all blank is not.
+    """
+    from openpyxl.formula import Tokenizer
+
+    if visited is None:
+        visited = set()
+    try:
+        tokens = Tokenizer(formula).items
+    except Exception:
+        # Unsupported formulas are already handled conservatively by the
+        # evaluator. Do not reinterpret them as absent here.
+        return True
+
+    for token in tokens:
+        if token.type != "OPERAND":
+            continue
+        # Coefficients such as ``1*B12`` are formula scaffolding, not a
+        # disclosed amount. Presence is established only by referenced cells.
+        if token.subtype != "RANGE":
+            continue
+        source_sheet, cell_part = _parse_range_operand(token.value)
+        resolved_sheet = source_sheet or sheet_name
+        refs = _expand_range(cell_part) if ":" in cell_part else [cell_part]
+        for ref in refs:
+            key = f"{resolved_sheet}!{ref}"
+            if key in visited:
+                continue
+            visited.add(key)
+            try:
+                raw = wb[resolved_sheet][ref].value
+            except KeyError:
+                continue
+            if isinstance(raw, bool):
+                return True
+            if isinstance(raw, (int, float)):
+                return True
+            if isinstance(raw, str) and raw.startswith("="):
+                if _formula_has_numeric_source(
+                    wb, resolved_sheet, raw, visited,
+                ):
+                    return True
+    return False

@@ -143,6 +143,22 @@ def socie_retained_col(filing_standard: str) -> str:
     return "B" if filing_standard == "mpers" else "C"
 
 
+def socie_period_col(
+    filing_standard: str,
+    filing_level: str,
+    period: str,
+    mfrs_col: str,
+) -> str:
+    """Fact-space twin of ``util.socie_period_column``.
+
+    MPERS Company renders PY through a target alias in column C, but the
+    canonical matrix concept remains column B; the period dimension selects
+    the comparative fact. Block-shaped Group SOCIE likewise keeps column B.
+    MFRS periods retain their matrix component column.
+    """
+    return "B" if filing_standard == "mpers" else mfrs_col
+
+
 def socie_has_nci(ctx, stmt: StatementType, period: str, entity_scope: str) -> bool:
     """True when the SOCIE NCI column carries any non-zero numeric fact.
 

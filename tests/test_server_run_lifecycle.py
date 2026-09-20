@@ -115,6 +115,7 @@ def test_run_row_created_before_coordinator_runs(session_env):
         "variants": {"SOFP": "CuNonCu"},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
     }
 
@@ -158,6 +159,7 @@ def test_run_row_marked_failed_when_coordinator_raises(session_env):
         "variants": {"SOFP": "CuNonCu"},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
     }
 
@@ -197,6 +199,7 @@ def test_run_row_marked_aborted_on_cancel(session_env):
         "variants": {"SOFP": "CuNonCu"},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
     }
 
@@ -247,6 +250,7 @@ def test_client_disconnect_still_finalizes_row(session_env):
         "variants": {"SOFP": "CuNonCu"},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
     }
 
@@ -300,6 +304,7 @@ def test_notes_consistency_warnings_flow_through_sse_and_db(session_env):
         "variants": {"SOFP": "CuNonCu"},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
     }
 
@@ -379,6 +384,7 @@ def test_merged_workbook_path_persisted_on_success_path(session_env):
         "variants": {"SOFP": "CuNonCu"},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
     }
 
@@ -428,6 +434,7 @@ def test_effective_model_stored_per_agent_not_only_overrides(session_env):
         # Only SOFP has an override. SOPL must inherit the env default.
         "models": {"SOFP": "claude-sonnet-4-6"},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
     }
 
@@ -504,6 +511,7 @@ def test_persisted_model_uses_model_name_attr_not_class_repr(session_env):
         # extract `model_name` correctly.
         "models": {"SOFP": "claude-sonnet-4-6"},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
     }
 
@@ -553,6 +561,7 @@ def test_invalid_statement_type_still_creates_failed_row(session_env):
         "variants": {},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
     }
 
@@ -587,6 +596,7 @@ def test_invalid_infopack_still_creates_failed_row(session_env):
         "models": {},
         # Cause from_json to blow up: pass a non-dict / malformed shape.
         "infopack": {"malformed": True, "page_refs": "not-a-list"},
+        "denomination": "thousands",
         "use_scout": False,
     }
 
@@ -616,6 +626,7 @@ def test_model_construction_failure_still_creates_failed_row(session_env):
         "variants": {"SOFP": "CuNonCu"},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
     }
 
@@ -646,6 +657,7 @@ def test_run_config_json_round_trips_request_body(session_env):
         "variants": {"SOFP": "CuNonCu", "SOPL": "Function"},
         "models": {"SOFP": "gpt-5.4"},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": True,
     }
 
@@ -727,6 +739,7 @@ def test_original_pdf_filename_persisted_to_runs_row(tmp_path, monkeypatch):
         "variants": {"SOFP": "CuNonCu"},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
     }
 
@@ -804,6 +817,7 @@ def test_notes_coordinator_crash_synthesizes_failed_result(session_env):
         "variants": {"SOFP": "CuNonCu"},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
         "notes_to_run": ["CORP_INFO", "ACC_POLICIES"],
     }
@@ -879,6 +893,7 @@ def test_face_rerun_preserves_prior_successful_notes(session_env):
         "variants": {"SOFP": "CuNonCu"},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
         "notes_to_run": [],
     }

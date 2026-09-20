@@ -79,6 +79,7 @@ def test_rerun_notes_run_without_notes_config_returns_400(session_env):
         "variants": {"SOFP": "CuNonCu"},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
         "filing_level": "company",
         "filing_standard": "mfrs",
@@ -109,6 +110,7 @@ def test_rerun_notes_delegates_to_stream_with_notes_only_config(session_env):
         "variants": {"SOFP": "CuNonCu"},
         "models": {},
         "infopack": {"statements": []},
+        "denomination": "thousands",
         "use_scout": True,
         "filing_level": "company",
         "filing_standard": "mpers",
@@ -155,6 +157,7 @@ def test_rerun_notes_routes_through_keepalive_wrapper(session_env):
     session_id, out = session_env
     run_id = _seed_completed_run(out, session_id, {
         "statements": [], "variants": {}, "models": {}, "infopack": None,
+        "denomination": "thousands",
         "use_scout": False, "filing_level": "company", "filing_standard": "mfrs",
         "notes_to_run": ["CORP_INFO"], "notes_models": {},
     })
@@ -217,6 +220,7 @@ def test_rerun_notes_rejects_when_session_already_running(session_env):
         "variants": {},
         "models": {},
         "infopack": None,
+        "denomination": "thousands",
         "use_scout": False,
         "filing_level": "company",
         "filing_standard": "mfrs",

@@ -246,6 +246,21 @@ def _set_cell_side(cell: Tag, side: str, value: str) -> None:
     """Write `border-<side>: value` on a cell, re-serialising in the same
     canonical sorted form as `_apply_style` so the save round-trip is a no-op."""
     current = _parse_style(cell.get("style") or "")
+    # A four-side clear is stored as one border shorthand. Mirroring that same
+    # hidden value onto an adjacent cell must not expand it back into four
+    # longhands; a later visible rule still receives its explicit side and
+    # therefore wins over the shorthand in normal CSS cascade order.
+    if current.get("border") == value:
+        # A later longhand overrides the shorthand.  Remove that winning
+        # declaration when mirroring the shorthand value; returning early here
+        # left the visible rule in force.
+        longhand = f"border-{side}"
+        if longhand not in current:
+            return
+        current.pop(longhand)
+        cell["style"] = "; ".join(
+            f"{k}: {v}" for k, v in sorted(current.items()))
+        return
     current[f"border-{side}"] = value
     cell["style"] = "; ".join(f"{k}: {v}" for k, v in sorted(current.items()))
 
@@ -563,8 +578,13 @@ def _apply_style(el: Tag, style: dict[str, Any]) -> None:
             sides = value if isinstance(value, list) else SIDES
             if not all(s in SIDES for s in sides):
                 raise FormatPatchError("clear_border sides are invalid")
-            for side in sides:
-                current[f"border-{side}"] = "1px hidden #000000"
+            if set(sides) == set(SIDES):
+                current["border"] = "1px hidden #000000"
+                for side in SIDES:
+                    current.pop(f"border-{side}", None)
+            else:
+                for side in sides:
+                    current[f"border-{side}"] = "1px hidden #000000"
         elif key == "fill":
             current["background-color"] = _colour(value)
         elif key == "text_align":

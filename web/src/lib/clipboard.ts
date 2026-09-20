@@ -628,11 +628,21 @@ function _whiteoutHiddenBorders(el: Element): void {
     const prop = (idx === -1 ? d : d.slice(0, idx)).trim().toLowerCase();
     return !_BORDER_LINE_PROPS.has(prop);
   });
+  const resolvedValues: Partial<Record<"top" | "right" | "bottom" | "left", string>> = {};
   for (const side of ["top", "right", "bottom", "left"] as const) {
     let value = sides[side];
     if (!value) continue;
     if (_INVISIBLE_BORDER_RE.test(value)) value = _WHITE_BORDER;
-    out.push(`border-${side}: ${value}`);
+    resolvedValues[side] = value;
+  }
+  const values = Object.values(resolvedValues);
+  if (values.length === 4 && new Set(values).size === 1) {
+    out.push(`border: ${values[0]}`);
+  } else {
+    for (const side of ["top", "right", "bottom", "left"] as const) {
+      const value = resolvedValues[side];
+      if (value) out.push(`border-${side}: ${value}`);
+    }
   }
   el.setAttribute("style", out.join("; "));
 }
