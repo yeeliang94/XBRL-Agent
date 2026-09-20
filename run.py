@@ -525,9 +525,18 @@ def build_parser():
     return parser
 
 
-if __name__ == "__main__":
+def parse_cli_args(argv: list[str] | None = None):
+    """Parse CLI arguments and reject combinations that cannot run."""
     parser = build_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    if (args.resume_from is None and not args.use_scout
+            and args.denomination is None):
+        parser.error("--denomination is required with --no-scout")
+    return args
+
+
+if __name__ == "__main__":
+    args = parse_cli_args()
 
     if args.resume_from is not None:
         _reload_cli_settings()
