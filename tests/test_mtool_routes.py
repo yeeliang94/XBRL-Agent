@@ -16,7 +16,6 @@ from fastapi.testclient import TestClient
 
 REPO = Path(__file__).resolve().parent.parent
 SOFP = REPO / "XBRL-template-MFRS" / "Company" / "01-SOFP-CuNonCu.xlsx"
-DATED_MTOOL = REPO / "Data" / "FS-MFRS-Test_Sdn_Bhd_net of tax-12345678910-31122021.xlsx"
 
 
 def _import_company_sofp(db_path) -> str:
@@ -159,6 +158,36 @@ def _upload_our_template():
     return {"template": ("01-SOFP-CuNonCu.xlsx", SOFP.read_bytes(),
                          "application/vnd.openxmlformats-officedocument."
                          "spreadsheetml.sheet")}
+
+
+def _upload_period_marker_template(doc, *, current="31/12/2021", prior="31/12/2020"):
+    """Build the smallest mTool-shaped workbook needed by period route tests."""
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    wb.remove(wb.active)
+    writes_by_sheet = {}
+    for write in doc["writes"]:
+        writes_by_sheet.setdefault(write["sheet"], []).append(write)
+    for sheet, writes in writes_by_sheet.items():
+        ws = wb.create_sheet(sheet)
+        ws["D2"] = "#PRIM#"
+        ws["A3"] = "#ENDT#"
+        ws["E3"], ws["F3"] = current, prior
+        ws["A4"] = "#STDTENDTDATE#"
+        ws["E4"] = f"01/01/{current[-4:]} - {current}"
+        ws["F4"] = f"01/01/{prior[-4:]} - {prior}"
+        for row, write in enumerate(writes, 6):
+            ws.cell(row, 2, write["semantic_address"]["primary_concept"])
+            ws.cell(row, 4, write["label"])
+            ws.cell(row, 5, 0)
+            ws.cell(row, 6, 0)
+    uploaded = io.BytesIO()
+    wb.save(uploaded)
+    return {"template": (
+        "period-markers.xlsx", uploaded.getvalue(),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )}
 
 
 def test_filing_destination_retry_validates_and_records_operator_choice(client, tmp_path, monkeypatch):
@@ -353,10 +382,8 @@ def test_source_template_period_mismatch_is_detected_and_blocks_patch(client):
         conn.commit()
     finally:
         conn.close()
-    upload = {"template": (
-        DATED_MTOOL.name, DATED_MTOOL.read_bytes(),
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )}
+    doc = tc.get(f"/api/runs/{run_id}/mtool-fill").json()
+    upload = _upload_period_marker_template(doc)
 
     detected = tc.post(
         f"/api/runs/{run_id}/mtool-fill/detect-columns", files=upload)

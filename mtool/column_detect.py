@@ -114,7 +114,7 @@ def _period_dates(value: Any) -> tuple[date, ...]:
             found.append(date(int(match.group(1)), int(match.group(2)), int(match.group(3))))
         except ValueError:
             continue
-    return tuple(dict.fromkeys(found))
+    return tuple(sorted(set(found)))
 
 
 def _period_matches(source: Any, template: Any) -> bool | None:

@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
 import run
 from statement_types import StatementType
 
@@ -14,6 +16,14 @@ def test_parser_defaults_scout_on_with_explicit_off_switch():
     parser = run.build_parser()
     assert parser.parse_args([]).use_scout is True
     assert parser.parse_args(["--no-scout"]).use_scout is False
+
+
+def test_cli_rejects_no_scout_without_denomination(capsys):
+    with pytest.raises(SystemExit) as exc:
+        run.parse_cli_args(["--no-scout"])
+
+    assert exc.value.code == 2
+    assert "--denomination is required with --no-scout" in capsys.readouterr().err
 
 
 def test_run_agent_delegates_scout_to_canonical_pipeline(tmp_path, monkeypatch):

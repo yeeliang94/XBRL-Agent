@@ -52,6 +52,13 @@ def test_period_compatibility_accepts_wording_and_non_calendar_years():
     assert period_compatibility_issues(_period_map(), _period_doc()) == []
 
 
+def test_period_compatibility_orders_mixed_date_formats_by_calendar_date():
+    cmap = _period_map(cy="30/06/2025 (from 1 July 2024)")
+    doc = _period_doc(cy="1 July 2024 to 30 June 2025")
+
+    assert period_compatibility_issues(cmap, doc) == []
+
+
 def test_period_compatibility_blocks_year_end_mismatch():
     issues = period_compatibility_issues(
         _period_map(cy="01/01/2021 - 31/12/2021"), _period_doc())
