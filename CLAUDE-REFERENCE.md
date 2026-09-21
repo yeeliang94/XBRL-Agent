@@ -732,10 +732,13 @@ Key invariants:
   `notes12_failures.json` / `notes12_unmatched.json` side-logs.
 - **Sheet-12 stall bounds:** every outer/model/tool stream step has a 180-second
   no-progress timeout (`XBRL_NOTES12_TURN_TIMEOUT_S`), which enters the normal
-  retry lane. The parent fan-out has a 420-second hard deadline
-  (`XBRL_NOTES12_FANOUT_TIMEOUT_S`); remaining workers are cancelled, emit a
-  terminal audit event, and land as explicit failed batches so one worker can
-  never hold the pipeline indefinitely.
+  retry lane. The parent fan-out allows one 420-second window
+  (`XBRL_NOTES12_FANOUT_TIMEOUT_S`) per configured generic attempt, so the
+  default one retry receives a fresh window instead of inheriting the first
+  attempt's remaining time. At the resulting hard deadline, remaining workers
+  are cancelled, emit a terminal audit event, and land as explicit failed
+  batches so one worker can never hold the pipeline indefinitely. Pinned by
+  `tests/test_notes12_subcoordinator.py`.
 - **Cell cap:** 30,000 chars (`notes.writer.CELL_CHAR_LIMIT`). Longer content
   truncated with `[truncated -- see PDF pages N, M]` footer.
 - **Column rules:** prose rows write col B only; numeric rows (13, 14) fill

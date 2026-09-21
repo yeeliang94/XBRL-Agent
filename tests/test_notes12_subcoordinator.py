@@ -802,6 +802,47 @@ class TestTaskRegistryCleanup:
         )
 
     @pytest.mark.asyncio
+    async def test_retry_receives_a_full_additional_fanout_window(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        """A late retry must not inherit an almost-expired parent deadline."""
+        import asyncio as _asyncio
+        from notes.listofnotes_subcoordinator import run_listofnotes_subcoordinator
+
+        monkeypatch.setattr(
+            "notes.listofnotes_subcoordinator.NOTES12_FANOUT_TIMEOUT_SECS",
+            0.40,
+        )
+        pdf_path = tmp_path / "dummy.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n")
+        attempts: list[int] = []
+
+        async def slow_first_attempt(*, attempt, **_):
+            attempts.append(attempt)
+            await _asyncio.sleep(0.25)
+            if attempt == 0:
+                raise _asyncio.TimeoutError("synthetic no-progress timeout")
+            return [_make_payload("Disclosure of revenue")], 0, 0, None
+
+        with patch(
+            "notes.listofnotes_subcoordinator._invoke_sub_agent_once",
+            side_effect=slow_first_attempt,
+        ):
+            result = await run_listofnotes_subcoordinator(
+                pdf_path=str(pdf_path),
+                inventory=_make_inventory(1),
+                filing_level="company",
+                model="test",
+                output_dir=str(tmp_path),
+                parallel=1,
+                max_retries=1,
+            )
+
+        assert attempts == [0, 1]
+        assert result.all_succeeded
+        assert result.sub_agent_results[0].retry_count == 1
+
+    @pytest.mark.asyncio
     async def test_task_registry_cleared_on_cancellation(self, tmp_path: Path):
         """PR A.5: cancellation mid-run must still unregister sub-agent refs
         (the finally block covers success, failure, AND CancelledError)."""

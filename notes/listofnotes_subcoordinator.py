@@ -110,9 +110,11 @@ def _positive_timeout(name: str, default: float) -> float:
 
 
 # A worker that produces no next node/event is retried through the existing
-# generic retry lane. The fan-out deadline is a final backstop across retries,
-# rate-limit waits, and provider/tool teardown: one worker can never hold the
-# parent Sheet-12 task forever.
+# generic retry lane. The configured fan-out timeout is one attempt window;
+# the parent multiplies it by the number of allowed attempts so a retry does
+# not inherit an almost-expired first-attempt deadline. The resulting deadline
+# remains the final backstop across retries, rate-limit waits, and
+# provider/tool teardown.
 NOTES12_TURN_TIMEOUT_SECS = _positive_timeout(
     "XBRL_NOTES12_TURN_TIMEOUT_S", 180.0,
 )
@@ -361,11 +363,19 @@ async def run_listofnotes_subcoordinator(
     sub_results: list[SubAgentRunResult] = []
     if task_metadata:
         tasks = [t for t, _, _ in task_metadata]
+        # Give the initial attempt and each configured generic retry one full
+        # deadline window. Previously all attempts shared a single window, so
+        # a retry that began late was cancelled before it had a fair chance to
+        # complete. Keep one parent timer rather than adding another timeout
+        # layer inside the agent loop.
+        fanout_deadline_secs = (
+            NOTES12_FANOUT_TIMEOUT_SECS * (max_retries + 1)
+        )
         deadline_tasks: set[asyncio.Task] = set()
         try:
             _, pending = await asyncio.wait(
                 tasks,
-                timeout=NOTES12_FANOUT_TIMEOUT_SECS,
+                timeout=fanout_deadline_secs,
                 return_when=asyncio.ALL_COMPLETED,
             )
             deadline_tasks = set(pending)
@@ -384,7 +394,7 @@ async def run_listofnotes_subcoordinator(
             if t in deadline_tasks:
                 message = (
                     f"Sheet-12 fan-out deadline exceeded after "
-                    f"{NOTES12_FANOUT_TIMEOUT_SECS:g}s"
+                    f"{fanout_deadline_secs:g}s"
                 )
                 emit, _ = make_emitter(
                     event_queue,
