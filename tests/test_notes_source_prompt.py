@@ -203,7 +203,9 @@ def _make_word_sink_agent(tmp_path: Path, *, with_source: bool):
         filing_level="company",
         model="test",
         output_dir=str(tmp_path),
-        batch_note_nums=[1],
+        # This shared fixture exercises same-row behavior across these notes;
+        # list every identity it submits so assignment validation stays real.
+        batch_note_nums=[1, 2, 9, 22],
     )
     deps.payload_sink = []
     return agent, deps

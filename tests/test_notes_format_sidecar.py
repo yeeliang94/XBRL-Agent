@@ -368,7 +368,10 @@ def _make_sink_agent(tmp_path: Path):
         filing_level="company",
         model="test",
         output_dir=str(tmp_path),
-        batch_note_nums=[1],
+        # Keep this a multi-note sink: these tests deliberately omit
+        # note_num so they exercise content-based resend behavior, not the
+        # unambiguous single-note identity recovery path.
+        batch_note_nums=[1, 2],
     )
     deps.payload_sink = []  # sub-agent mode: capture instead of writing
     return agent, deps

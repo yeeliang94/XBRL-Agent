@@ -732,9 +732,12 @@ Key invariants:
   assigned `note_num`, and may fill both fields only when that worker has one
   assigned note. A matching explicit heading is retained verbatim; a
   mismatched heading is repaired and logged. Exact printed punctuation may be
-  retained from a matching top-level `source_note_refs` value. Unassigned note
-  numbers and ambiguous multi-note omissions remain rejected; there is no
-  prose or label matching. Pinned by
+  retained from a matching top-level `source_note_refs` value. Assignment
+  cardinality comes from the full batch assignment, so blank-titled or missing
+  inventory entries remain owners but cannot supply a missing heading.
+  Unassigned note numbers and ambiguous
+  multi-note omissions remain rejected; there is no prose or label matching.
+  Pinned by
   `tests/test_notes12_surrendered_skips.py`.
 - **Retry budget:** every notes agent and Sheet-12 sub-agent retried at most
   once. Exhaustion writes `notes_<TEMPLATE>_failures.json` /

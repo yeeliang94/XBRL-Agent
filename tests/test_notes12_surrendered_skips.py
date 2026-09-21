@@ -412,6 +412,53 @@ def test_write_notes_boundary_recovers_identity_for_single_note_batch():
     }
 
 
+def test_write_notes_boundary_does_not_treat_titled_subset_as_single_note():
+    """A blank-titled sibling still makes an identity-less batch ambiguous."""
+    from notes.agent import _build_notes_payloads
+    from scout.notes_discoverer import NoteInventoryEntry
+
+    built, errors = _build_notes_payloads(
+        [{
+            "chosen_row_label": "Disclosure of revenue",
+            "content": "<p>Content belonging to note 19.</p>",
+            "evidence": "Page 33",
+            "source_pages": [33],
+        }],
+        sub_agent_id="notes:LIST_OF_NOTES:sub4",
+        inventory=[
+            NoteInventoryEntry(19, "", (33, 38)),
+            NoteInventoryEntry(20, "Revenue", (39, 39)),
+        ],
+    )
+
+    assert built == []
+    assert len(errors) == 1
+    assert "parent_note is required" in errors[0]
+
+
+def test_write_notes_boundary_cannot_repair_from_blank_assigned_title():
+    """A blank inventory title causes rejection rather than a false heading."""
+    from notes.agent import _build_notes_payloads
+    from scout.notes_discoverer import NoteInventoryEntry
+
+    built, errors = _build_notes_payloads(
+        [{
+            "chosen_row_label": "Disclosure of financial instruments",
+            "content": "<p>Complete disclosure.</p>",
+            "evidence": "Page 33, Note 19",
+            "source_pages": [33],
+            "note_num": 19,
+            "parent_note": {"number": "20", "title": "Revenue"},
+        }],
+        sub_agent_id="notes:LIST_OF_NOTES:sub4",
+        inventory=[NoteInventoryEntry(19, "", (33, 38))],
+    )
+
+    assert built == []
+    assert len(errors) == 1
+    assert "inventory title is unavailable" in errors[0]
+
+
 def test_write_notes_boundary_refuses_missing_identity_for_multi_note_batch():
     """A multi-note worker cannot safely guess which note owns the payload."""
     from notes.agent import _build_notes_payloads
@@ -475,6 +522,30 @@ def test_write_notes_boundary_rejects_explicit_unassigned_note():
             "source_pages": [39],
             "note_num": 20,
             "parent_note": {"number": "20", "title": "Revenue"},
+        }],
+        sub_agent_id="notes:LIST_OF_NOTES:sub4",
+        inventory=[NoteInventoryEntry(
+            note_num=19,
+            title="Financial instruments",
+            page_range=(33, 38),
+        )],
+    )
+
+    assert built == []
+    assert len(errors) == 1
+    assert "not assigned to this Sheet-12 worker" in errors[0]
+
+
+def test_write_notes_boundary_rejects_empty_unassigned_payload():
+    """Assignment validation applies even when the payload has no body."""
+    from notes.agent import _build_notes_payloads
+    from scout.notes_discoverer import NoteInventoryEntry
+
+    built, errors = _build_notes_payloads(
+        [{
+            "chosen_row_label": "Disclosure of revenue",
+            "note_num": 77,
+            "parent_note": {"number": "77", "title": "Other note"},
         }],
         sub_agent_id="notes:LIST_OF_NOTES:sub4",
         inventory=[NoteInventoryEntry(
