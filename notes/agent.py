@@ -53,7 +53,7 @@ def _thinking_level_for(role: str):
 from notes.coverage import CoverageReceipt, parse_coverage_entries
 from notes.html_sanitize import sanitize_notes_html
 from notes.html_to_text import html_to_excel_text
-from notes.payload import NotesPayload, NotesPayloadInput
+from notes.payload import NoteHeadingInput, NotesPayload, NotesPayloadInput
 from notes.writer import (
     _build_label_index,
     _carries_table_styling,
@@ -1454,14 +1454,46 @@ def _content_supersede_key(content: str) -> str:
     return re.sub(r"\s+", " ", html_to_excel_text(content or "")).strip()
 
 
+_TOP_LEVEL_NOTE_NUMBER_RE = re.compile(
+    r"^\s*(?:notes?\s+)?(\d{1,3})(?:\D|$)", re.IGNORECASE,
+)
+_EXACT_NOTE_REFERENCE_RE = re.compile(
+    r"^\s*(?:notes?\s+)?(\d{1,3})(?:[.:)])?\s*$", re.IGNORECASE,
+)
+
+
+def _top_level_note_number(number: str) -> Optional[int]:
+    """Return the top-level numeric identity from a rendered note number."""
+    match = _TOP_LEVEL_NOTE_NUMBER_RE.match(number)
+    return int(match.group(1)) if match else None
+
+
+def _recovered_heading_number(
+    payload: NotesPayloadInput, assigned_note_num: int,
+) -> str:
+    """Keep an exact printed top-level reference when the model supplied one."""
+    candidates: list[str] = []
+    for raw_ref in payload.source_note_refs:
+        ref = raw_ref.strip()
+        match = _EXACT_NOTE_REFERENCE_RE.fullmatch(ref)
+        if match and int(match.group(1)) == assigned_note_num:
+            candidates.append(ref)
+    distinct = list(dict.fromkeys(candidates))
+    return distinct[0] if len(distinct) == 1 else str(assigned_note_num)
+
+
 def _build_notes_payloads(
     raw_payloads: Any, *, sub_agent_id: Optional[str],
+    inventory: Optional[list[NoteInventoryEntry]] = None,
 ) -> tuple[list[NotesPayload], list[str]]:
     """Build durable payloads while retaining every model-boundary error.
 
     The live tool accepts a shallow argument so malformed nested values reach
     this code instead of being rejected by PydanticAI before Sheet-12 failure
-    accounting can observe them.
+    accounting can observe them. In Sheet-12 mode, an otherwise-valid payload
+    that omits ``parent_note`` may recover it from the exact assigned
+    ``note_num``. This is structured identity already owned by the harness,
+    not prose matching or a guessed taxonomy route.
     """
     if not isinstance(raw_payloads, list):
         return [], [
@@ -1470,12 +1502,63 @@ def _build_notes_payloads(
         ]
     built_payloads: list[NotesPayload] = []
     errors: list[str] = []
+    inventory_by_note = {
+        entry.note_num: entry
+        for entry in (inventory or [])
+        if isinstance(entry.title, str) and entry.title.strip()
+    }
     for index, item in enumerate(raw_payloads):
         try:
             typed = (
                 item if isinstance(item, NotesPayloadInput)
                 else NotesPayloadInput.model_validate(item)
             )
+            has_content = bool(typed.content.strip() or typed.numeric_values)
+            if has_content and inventory_by_note:
+                if typed.note_num is None and len(inventory_by_note) == 1:
+                    sole_note_num = next(iter(inventory_by_note))
+                    typed = typed.model_copy(update={"note_num": sole_note_num})
+                    logger.warning(
+                        "Sheet-12 %s recovered missing note_num for sole "
+                        "assigned note %s",
+                        sub_agent_id, sole_note_num,
+                    )
+
+                assigned = inventory_by_note.get(typed.note_num)
+                if typed.note_num is not None and assigned is None:
+                    raise ValueError(
+                        f"note_num {typed.note_num} is not assigned to this "
+                        "Sheet-12 worker"
+                    )
+
+                if assigned is not None:
+                    recovered_heading = NoteHeadingInput(
+                        number=_recovered_heading_number(
+                            typed, assigned.note_num,
+                        ),
+                        title=assigned.title.strip(),
+                    )
+                    if typed.parent_note is None:
+                        typed = typed.model_copy(update={
+                            "parent_note": recovered_heading,
+                        })
+                        logger.warning(
+                            "Sheet-12 %s recovered missing parent_note for "
+                            "assigned note %s",
+                            sub_agent_id, assigned.note_num,
+                        )
+                    elif (
+                        _top_level_note_number(typed.parent_note.number)
+                        != assigned.note_num
+                    ):
+                        typed = typed.model_copy(update={
+                            "parent_note": recovered_heading,
+                        })
+                        logger.warning(
+                            "Sheet-12 %s repaired mismatched parent_note for "
+                            "assigned note %s",
+                            sub_agent_id, assigned.note_num,
+                        )
             built_payloads.append(
                 typed.to_payload(sub_agent_id=sub_agent_id)
             )
@@ -3039,6 +3122,11 @@ def create_notes_agent(
         """
         built_payloads, errors = _build_notes_payloads(
             payloads, sub_agent_id=ctx.deps.sub_agent_id,
+            inventory=(
+                ctx.deps.inventory
+                if ctx.deps.payload_sink is not None
+                else None
+            ),
         )
         if ctx.deps.prepared_source_required:
             numeric_template = NOTES_REGISTRY[ctx.deps.template_type].is_numeric

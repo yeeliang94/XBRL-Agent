@@ -727,6 +727,15 @@ Key invariants:
   concatenated after its incomplete first version. Pinned by
   `tests/test_notes_agent_label_prevalidation.py` and
   `tests/test_notes_source_prompt.py`.
+- **Sheet-12 heading identity is reconciled only against the worker's assigned
+  inventory.** The write boundary fills a missing `parent_note` from the exact
+  assigned `note_num`, and may fill both fields only when that worker has one
+  assigned note. A matching explicit heading is retained verbatim; a
+  mismatched heading is repaired and logged. Exact printed punctuation may be
+  retained from a matching top-level `source_note_refs` value. Unassigned note
+  numbers and ambiguous multi-note omissions remain rejected; there is no
+  prose or label matching. Pinned by
+  `tests/test_notes12_surrendered_skips.py`.
 - **Retry budget:** every notes agent and Sheet-12 sub-agent retried at most
   once. Exhaustion writes `notes_<TEMPLATE>_failures.json` /
   `notes12_failures.json` / `notes12_unmatched.json` side-logs.
