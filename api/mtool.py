@@ -571,6 +571,10 @@ def patch_mtool_template(
             "column detection", detect_column_map, str(src), doc, data=data)
         inspection = _parse_template_or_422(
             "template inspection", inspect_template, str(src), doc, data=data)
+        if not inspection["filing_family_match"]:
+            raise HTTPException(status_code=422, detail=(
+                "This template does not match the run's filing standard, "
+                "company/group level, or statement. Choose a matching mTool template."))
         if column_map:
             try:
                 cmap = json.loads(column_map)
@@ -599,26 +603,23 @@ def patch_mtool_template(
             issue for issue in period_issues
             if issue.get("code") == "template_period_mismatch"
         ]
-        if period_mismatches:
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "error": "The uploaded template's reporting periods do not match the source filing periods.",
-                    "period_compatibility": period_mismatches,
-                },
-            )
+        period_confirmation_issues = [
+            issue for issue in period_issues
+            if issue.get("code") != "template_period_mismatch"
+        ]
 
         if not column_map:
             # Unverified period/entity layouts require confirmation. Category
             # sheets are different: their columns are taxonomy members, so a
-            # CY/PY form cannot describe them. resolve_filing_doc below allows
-            # one exact taxonomy-addressed target and returns blocked coverage
-            # for any category write that would need the legacy label route.
+            # CY/PY form cannot describe them. resolve_filing_doc below writes
+            # exact taxonomy-addressed targets and reports unmatched category
+            # values as skipped coverage.
             trusted_generated = (
                 inspection["semantic_source"] == "generated-targets"
             )
             if doc["writes"] and (overall_confidence(detected) != "high"
-                    or needs_confirmation(detected) or bool(period_issues)
+                    or needs_confirmation(detected)
+                    or bool(period_confirmation_issues)
                     ) and not trusted_generated:
                 raise HTTPException(
                     status_code=422,
@@ -646,14 +647,9 @@ def patch_mtool_template(
         except (ValueError, AttributeError, TypeError, KeyError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         if filing_coverage["status"] == "blocked":
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "error": "Some filing facts could not be mapped to a unique template cell.",
-                    "filing_coverage": filing_coverage,
-                },
-            )
-
+            raise HTTPException(status_code=422, detail=(
+                "This template does not match the run's filing standard, "
+                "company/group level, or statement. Choose a matching mTool template."))
         if selection is not None:
             physical_selected = {
                 detected.get(sheet, {}).get('physical_sheet') or sheet
@@ -839,7 +835,7 @@ def patch_mtool_template(
         # Candidate/legacy resolution is intentionally usable, but it is not a
         # clean filing result.  Mark it degraded so report-before-file requires
         # the existing acknowledgement and the receipt records that decision.
-        if (filing_coverage.get("status") == "attention"
+        if (filing_coverage.get("status") != "ready"
                 and summary["status"] == "ok"):
             summary["status"] = "degraded"
         # The template's own declared unit vs the run's denomination. Only the
@@ -852,6 +848,14 @@ def patch_mtool_template(
         summary["unit_class_unknown"] = doc["meta"].get(
             "unit_class_unknown", [])
         if summary["unit_scale_warnings"] and summary["status"] == "ok":
+            summary["status"] = "degraded"
+        # A period mismatch is important filing context, but the uploaded
+        # workbook is the filing destination and its detected CY/PY roles are
+        # still safe to populate. Preserve the mismatch in the report and
+        # receipt, mark the result for review, and let the operator inspect the
+        # filled workbook instead of withholding every otherwise-safe value.
+        summary["period_compatibility"] = period_mismatches
+        if period_mismatches and summary["status"] == "ok":
             summary["status"] = "degraded"
 
         fingerprint = _parse_template_or_422(
@@ -1001,7 +1005,10 @@ def detect_mtool_columns(
             "confidence": overall_confidence(detected) if doc["writes"] else "not_applicable",
             # The real gate — see mtool/column_detect.needs_confirmation.
             "requires_confirmation": bool(doc["writes"]) and (
-                needs_confirmation(detected) or bool(period_issues)),
+                needs_confirmation(detected) or any(
+                    issue.get("code") != "template_period_mismatch"
+                    for issue in period_issues
+                )),
             "period_compatibility": period_issues,
             "template_fingerprint": fingerprint,
             "template_known": known is not None,

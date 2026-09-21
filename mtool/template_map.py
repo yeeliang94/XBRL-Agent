@@ -594,11 +594,18 @@ def resolve_filing_doc(
             template_path, {**base, "writes": doc["checks"]}, data=data,
             column_map=column_map, workbook_index=workbook_index)
         ready["checks"] = checked["writes"]
+        ready["unresolved_checks"] = [
+            *check_coverage["unresolved_writes"],
+            *check_coverage["ambiguous_writes"],
+        ]
         coverage["calculation_coverage"] = check_coverage
         # A missing required calculation is unresolved verification, even if
-        # every writable input mapped. Keep the existing failure vocabulary.
-        if check_coverage["unmapped"] or check_coverage["ambiguous"]:
+        # every writable input mapped. It degrades the result but does not
+        # suppress independently resolved inputs.
+        if "blocked" in (coverage["status"], check_coverage["status"]):
             coverage["status"] = "blocked"
+        elif check_coverage["unmapped"] or check_coverage["ambiguous"]:
+            coverage["status"] = "partial"
         return ready, coverage
     # Keep canonical identity for selection/receipts while resolving only
     # physical names against the uploaded workbook. Do not mutate the caller.
@@ -845,7 +852,7 @@ def resolve_filing_doc(
     mapped = requested - len(unresolved) - len(ambiguous)
     status = "ready"
     if unresolved or ambiguous:
-        status = "blocked"
+        status = "partial"
     elif legacy or operator_resolutions or inspection["mtool_compatibility"] == "candidate-2.2":
         status = "attention"
     report = {

@@ -189,6 +189,17 @@ describe("Simplified template-oriented review", () => {
       expect(designSystem).toContain(requirement);
     }
   });
+
+  test("pins the concise mTool preparation workflow", () => {
+    for (const requirement of [
+      "upload template, fill safe matches, download",
+      "Put sheet and note options in one closed Customize disclosure",
+      "meaningful statement names rather than technical worksheet keys",
+      "Missing destinations are skipped, not guessed",
+    ]) {
+      expect(designSystem).toContain(requirement);
+    }
+  });
 });
 
 

@@ -257,7 +257,7 @@ specific row as a likely sign error, re-read THAT row first.</pre></details><p c
 <tr><td><b>12 List of Notes</b> (fan-out)</td><td>Disclosure notes only; one of ≤5 sub-agents each seeing a <b>batch</b>; pick from the seeded catalog verbatim; unmatched → catch-all sink (never silently dropped); skip only what belongs on another sheet; <b>mandatory coverage receipt</b> accounting for every batch note.</td></tr>
 <tr><td><b>13 Issued Capital</b></td><td>Structured numeric movement table (shares # + amount); <code>numeric_values</code> per row; <b>also</b> reproduce the disclosed table as one HTML <code>&lt;table&gt;</code> payload.</td></tr>
 <tr><td><b>14 Related Party</b></td><td>Structured numeric by transaction type + outstanding balances; income & expense both positive; reproduce the table as an HTML payload too.</td></tr>
-</table><details><summary><span>Shared notes persona — <code>prompts/_notes_base.md</code> (verbatim)</span><span class="meta">416 lines · in EVERY notes prompt</span></summary><pre class="tall">You are a senior Malaysian chartered accountant filling the SSM MBRS XBRL
+</table><details><summary><span>Shared notes persona — <code>prompts/_notes_base.md</code> (verbatim)</span><span class="meta">421 lines · in EVERY notes prompt</span></summary><pre class="tall">You are a senior Malaysian chartered accountant filling the SSM MBRS XBRL
 notes workbook templates from an audited financial-statement PDF. You read
 the disclosure notes in the PDF and copy their content — verbatim where
 possible, lightly cleaned for formatting — into the matching template row.
@@ -407,8 +407,9 @@ Worked example — Note 9 "Investment Properties" containing:
 
 === OUTPUT CONTRACT ===
 
-All writes go through the `write_notes` tool. Pass its `payloads` as a list of
-objects directly; do not JSON-encode the list. Each payload has these fields:
+Model-authored content and numeric writes go through the `write_notes` tool.
+Pass its `payloads` as a list of objects directly; do not JSON-encode the list.
+Each `write_notes` payload has these fields:
 
 - `chosen_row_label` (str, required): copy the target row's col-A label
   exactly from the TEMPLATE ROW LABELS block or `read_template` output.
@@ -434,7 +435,11 @@ objects directly; do not JSON-encode the list. Each payload has these fields:
   paragraphs with no section letter). This field lets later integrity checks
   and reviewers detect cross-sheet duplicates — populate it whenever
   numbering is visible.
-- `parent_note` (object, REQUIRED on every non-empty payload): the
+- `note_num` (int, REQUIRED for every Sheet-12 List-of-Notes payload): copy the
+  assigned top-level inventory note number. This is harness identity used for
+  coverage, revision replacement, and safe heading recovery. Omit it on the
+  other notes sheets.
+- `parent_note` (object, REQUIRED on every non-empty `write_notes` payload): the
   parent note's number and title as printed in the PDF. Shape:
   `{"number": "5", "title": "Material Accounting Policies"}`. The
   writer uses this to prepend a `&lt;h3&gt;{number} {title}&lt;/h3&gt;` line to
@@ -487,8 +492,8 @@ is wrong: the parent number "3" already labels the cell via the
 NOT "3a. Property". This applies to in-prose `&lt;p&gt;&lt;strong&gt;…&lt;/strong&gt;&lt;/p&gt;`
 labels AND to the `sub_note.number` field.
 
-Every non-empty payload MUST cite at least one source page AND include
-`parent_note`. Both are mandatory provenance — the number/title pair
+Every non-empty `write_notes` payload MUST cite at least one source page AND
+include `parent_note`. Both are mandatory provenance — the number/title pair
 is what labels the cell; evidence is what proves it came from the PDF.
 
 === SCHEDULES VS PROSE ===

@@ -24,7 +24,7 @@ from __future__ import annotations
 import pytest
 
 from notes.payload import NotesPayload
-from notes.writer import _combine_payloads, _inject_headings
+from notes.writer import _combine_payloads, _inject_headings, _sanitize_payload
 
 
 def _source_built(
@@ -110,6 +110,23 @@ def test_inject_headings_carries_source_built():
 
     assert injected.source_built is True
     assert injected.content.startswith("<h3>7 Deferred tax</h3>")
+
+
+def test_sanitize_clone_carries_source_built():
+    """Sanitising changed HTML must not re-arm model-authoring contracts."""
+    payload = _source_built(
+        content=(
+            '<h2>5. Revenue</h2>'
+            '<p style="text-align: right">Copied from the source.</p>'
+        ),
+        evidence="Page 12",
+    )
+
+    cleaned = _sanitize_payload(payload, [])
+
+    assert cleaned.source_built is True
+    assert cleaned.parent_note is None
+    assert "style=" not in cleaned.content
 
 
 def test_deliberate_empty_payload_does_not_strip_a_real_heading():

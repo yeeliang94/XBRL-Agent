@@ -91,7 +91,7 @@ export function FilingCoverageFailurePanel({ coverage, selections = {}, onSelect
   ];
   const reasonCounts = new Map<string, { count: number; detail: string }>();
   for (const issue of rows) {
-    const detail = issue.detail || "The taxonomy target could not be resolved safely.";
+    const detail = issue.detail || "No matching place was found in this template.";
     const key = issue.reason_code || detail;
     const existing = reasonCounts.get(key);
     reasonCounts.set(key, {
@@ -108,18 +108,18 @@ export function FilingCoverageFailurePanel({ coverage, selections = {}, onSelect
     <div data-testid="filing-coverage-failure" style={{ ...ui.alertError, flexDirection: "column", alignItems: "stretch", minWidth: 0, marginTop: pwc.space.md }}>
       <div role="alert">
         <div style={{ fontWeight: pwc.weight.medium, color: pwc.grey900 }}>
-          Template taxonomy mapping stopped the fill
+          We couldn&apos;t create a filled workbook
         </div>
         <div style={{ fontSize: 12, marginTop: 4, color: pwc.grey700 }}>
-          {coverage.mapped} of {coverage.requested} values mapped ({coverage.coverage_percent}%).{" "}
-          {blocked} {blocked === 1 ? "value was" : "values were"} not written. No workbook was created.
+          {coverage.mapped} of {coverage.requested} figures had a matching place. {blocked}{" "}
+          {blocked === 1 ? "figure did" : "figures did"} not, so nothing was downloaded.
         </div>
       </div>
 
       {onSelect && rows.some((issue) => issue.resolution_options?.length) && (
         <p style={{ margin: 0, fontSize: 14 }}>
           Check the source statement and choose a destination for each affected figure, then click Fill again.
-          Categories are not inferred. Choices apply only to these figures and this workbook and are recorded in the filing report.
+          Choices apply only to these figures and this workbook and are recorded with the fill.
         </p>
       )}
       {affectedSheets.length > 0 && (
@@ -130,11 +130,11 @@ export function FilingCoverageFailurePanel({ coverage, selections = {}, onSelect
 
       <div
         role="group"
-        aria-label="Mapping failure reasons"
+        aria-label="Reasons figures were skipped"
         style={{ marginTop: pwc.space.sm }}
       >
         <div style={{ fontSize: 12, fontWeight: pwc.weight.medium, color: pwc.grey900 }}>
-          Why values were blocked
+          Why figures were skipped
         </div>
         <ul style={{ margin: "4px 0 0", paddingLeft: 18, color: pwc.grey700, fontSize: 12 }}>
           {[...reasonCounts.entries()].map(([reasonCode, { count, detail }]) => (
@@ -147,12 +147,12 @@ export function FilingCoverageFailurePanel({ coverage, selections = {}, onSelect
 
       <details
         role="group"
-        aria-label="Affected filing values"
+        aria-label="Skipped figures"
         open={Boolean(onSelect) || rows.length <= 12}
         style={{ marginTop: pwc.space.sm, fontSize: 12 }}
       >
         <summary style={{ cursor: "pointer", fontWeight: pwc.weight.medium }}>
-          Affected filing values ({rows.length})
+          Skipped figures ({rows.length})
         </summary>
         <div style={{ overflowX: "auto", marginTop: 6 }}>
           <table style={{ width: "100%", minWidth: 760, tableLayout: "fixed", borderCollapse: "collapse", color: pwc.grey700 }}>
@@ -190,7 +190,7 @@ export function FilingCoverageFailurePanel({ coverage, selections = {}, onSelect
                       <strong>{issue.label ?? "(no label)"}</strong>
                       <div>{[issue.period, issue.entity_scope].filter(Boolean).join(" · ")}</div>
                       {issue.value != null && <div>Value: {issue.value.toLocaleString()}</div>}
-                      <details style={{ marginTop: 8 }}><summary>Taxonomy details</summary>
+                      <details style={{ marginTop: 8 }}><summary>Technical details</summary>
                         <code>{issue.primary_concept ?? "Not available"}</code>
                         {Object.entries(issue.dimensions ?? {}).map(([axis, member]) => <div key={axis}>{axis}: {member}</div>)}
                       </details>

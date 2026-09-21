@@ -25,7 +25,7 @@ import json
 import copy
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Optional
@@ -481,29 +481,11 @@ def _inject_headings(payload: NotesPayload) -> NotesPayload:
     # prepend <h3> manually" rule), the cell will carry both. The
     # prompt-contract test in Phase 3 guards the prompt side; at the
     # writer we keep the contract simple (always prepend, no dedup).
-    return NotesPayload(
-        chosen_row_label=payload.chosen_row_label,
-        content=headings_html + payload.content,
-        evidence=payload.evidence,
-        source_pages=list(payload.source_pages),
-        sub_agent_id=payload.sub_agent_id,
-        numeric_values=payload.numeric_values,
-        dimensions=dict(payload.dimensions),
-        note_num=payload.note_num,
-        source_note_refs=list(payload.source_note_refs),
-        parent_note=payload.parent_note,
-        sub_note=payload.sub_note,
-        # <h3> headings add no <table>s, so the ops' table indices stay
-        # valid across the prepend — safe to carry through unchanged.
-        format_ops=payload.format_ops,
-        # Carried for the same reason `_combine_payloads` carries it: this is a
-        # rebuild, and a rebuild that drops the flag re-imposes the authoring
-        # contracts on content the document itself supplied. Reachable since a
-        # combined cell can now be both source-built and heading-bearing (a
-        # source-built payload merged with a deliberate-empty one that carries
-        # a heading has no evidence to satisfy the constructor).
-        source_built=payload.source_built,
-    )
+    # `replace` is intentional: this transformation changes content only.
+    # Re-listing fields here previously dropped newly-added provenance flags
+    # such as `source_built`, re-imposing authoring contracts on document-built
+    # content. It also makes future metadata fields survive automatically.
+    return replace(payload, content=headings_html + payload.content)
 
 
 def _strip_non_table_styles(html: str) -> str:
@@ -558,28 +540,11 @@ def _sanitize_payload(
             warnings.append(f"{payload.chosen_row_label}: {w}")
     if cleaned == payload.content:
         return payload
-    # Construct a replacement dataclass. Re-creating the NotesPayload
-    # rather than mutating keeps the input list unaffected for any
-    # caller that retained a reference (e.g. the sub-coordinator).
-    return NotesPayload(
-        chosen_row_label=payload.chosen_row_label,
-        content=cleaned,
-        evidence=payload.evidence,
-        source_pages=list(payload.source_pages),
-        sub_agent_id=payload.sub_agent_id,
-        numeric_values=payload.numeric_values,
-        dimensions=dict(payload.dimensions),
-        note_num=payload.note_num,
-        source_note_refs=list(payload.source_note_refs),
-        # Heading hierarchy must survive the sanitise clone — without
-        # this a caller that inspects parent_note on the returned object
-        # would see None.
-        parent_note=payload.parent_note,
-        sub_note=payload.sub_note,
-        # The sanitiser never adds/removes <table>s (it strips attrs and
-        # disallowed tags), so the sidecar ops stay index-valid here too.
-        format_ops=payload.format_ops,
-    )
+    # Sanitisation changes content only. Preserve every current and future
+    # metadata field automatically; in particular `source_built` is a
+    # load-bearing waiver for content whose heading/evidence came from the
+    # source renderer rather than the model-facing authoring contract.
+    return replace(payload, content=cleaned)
 
 
 def payload_sidecar_path(xlsx_output_path: str) -> Path:

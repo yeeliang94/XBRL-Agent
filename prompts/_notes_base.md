@@ -148,8 +148,9 @@ Worked example — Note 9 "Investment Properties" containing:
 
 === OUTPUT CONTRACT ===
 
-All writes go through the `write_notes` tool. Pass its `payloads` as a list of
-objects directly; do not JSON-encode the list. Each payload has these fields:
+Model-authored content and numeric writes go through the `write_notes` tool.
+Pass its `payloads` as a list of objects directly; do not JSON-encode the list.
+Each `write_notes` payload has these fields:
 
 - `chosen_row_label` (str, required): copy the target row's col-A label
   exactly from the TEMPLATE ROW LABELS block or `read_template` output.
@@ -175,7 +176,11 @@ objects directly; do not JSON-encode the list. Each payload has these fields:
   paragraphs with no section letter). This field lets later integrity checks
   and reviewers detect cross-sheet duplicates — populate it whenever
   numbering is visible.
-- `parent_note` (object, REQUIRED on every non-empty payload): the
+- `note_num` (int, REQUIRED for every Sheet-12 List-of-Notes payload): copy the
+  assigned top-level inventory note number. This is harness identity used for
+  coverage, revision replacement, and safe heading recovery. Omit it on the
+  other notes sheets.
+- `parent_note` (object, REQUIRED on every non-empty `write_notes` payload): the
   parent note's number and title as printed in the PDF. Shape:
   `{"number": "5", "title": "Material Accounting Policies"}`. The
   writer uses this to prepend a `<h3>{number} {title}</h3>` line to
@@ -228,8 +233,8 @@ is wrong: the parent number "3" already labels the cell via the
 NOT "3a. Property". This applies to in-prose `<p><strong>…</strong></p>`
 labels AND to the `sub_note.number` field.
 
-Every non-empty payload MUST cite at least one source page AND include
-`parent_note`. Both are mandatory provenance — the number/title pair
+Every non-empty `write_notes` payload MUST cite at least one source page AND
+include `parent_note`. Both are mandatory provenance — the number/title pair
 is what labels the cell; evidence is what proves it came from the PDF.
 
 === SCHEDULES VS PROSE ===

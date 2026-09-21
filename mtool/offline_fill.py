@@ -1980,6 +1980,7 @@ def verify_numeric_snapshot(workbook_path: str, doc: dict) -> dict:
     _, data, _ = load_workbook_entries(workbook_path)
     cells = calculation_cells(data)
     result = {"verified": [], "mismatches": [], "unverified": [],
+              "unresolved_checks": list(doc.get("unresolved_checks", [])),
               "native_recalculation_verified": False}
     cache = {}
     for write in [*doc.get("writes", []), *doc.get("checks", [])]:
@@ -1996,7 +1997,9 @@ def verify_numeric_snapshot(workbook_path: str, doc: dict) -> dict:
                 result["verified"].append({**write, "found": str(found)})
         except (ValueError, SyntaxError, ArithmeticError) as exc:
             result["unverified"].append({**write, "reason": "native_recalculation_required", "detail": str(exc)})
-    result["status"] = "degraded" if result["mismatches"] or result["unverified"] else "ok"
+    result["status"] = "degraded" if (
+        result["mismatches"] or result["unverified"] or result["unresolved_checks"]
+    ) else "ok"
     return result
 
 

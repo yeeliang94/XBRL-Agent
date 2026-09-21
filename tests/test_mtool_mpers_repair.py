@@ -144,9 +144,12 @@ def test_repeated_exact_label_prefers_unique_input_for_leaf_fact(tmp_path):
     assert not any(w.get('reconcile_formula') for w in ready['writes'])
 
 
-def test_duplicate_sheet_identities_and_wrong_standard_do_not_resolve(tmp_path):
+@pytest.mark.parametrize("with_checks", [False, True])
+def test_duplicate_sheet_identities_and_wrong_standard_do_not_resolve(tmp_path, with_checks):
     source=tmp_path/'ambiguous.xlsx';sore_template(source)
     wrong=sore_doc();wrong['meta']['filing_standard']='mfrs'
+    if with_checks:
+        wrong['checks'] = list(wrong['writes'])
     ready,coverage=resolve_filing_doc(str(source),wrong)
     assert coverage['status']=='blocked'
     assert not ready['writes']
@@ -433,8 +436,12 @@ def test_supplied_mpers_api_category_retry_notes_receipt_and_download(client):
     files={'template':('mpers.xlsx',raw,'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')}
     data={'selected_sheets':json.dumps(sheets)}
     response=tc.post(f'/api/runs/{rid}/mtool-fill/patch',files=files,data=data)
-    assert response.status_code==422,response.text
-    issue=response.json()['detail']['filing_coverage']['unresolved_writes'][0]
+    assert response.status_code==200,response.text
+    partial=response.json()
+    assert partial['status']=='degraded'
+    assert partial['counts']['written']==4
+    assert partial['notes']['counts']['written']==3
+    issue=partial['filing_coverage']['unresolved_writes'][0]
     option=next(o for o in issue['resolution_options'] if o['dimensions']=={
         'ifrs-smes_ClassesOfShareCapitalAxis':'ssmt-mpers_OrdinarySharesMember'})
     data['filing_targets']=json.dumps({issue['resolution_key']:option['cell']})

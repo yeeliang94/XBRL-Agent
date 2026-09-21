@@ -79,7 +79,7 @@ def test_formula_destination_is_never_offered(tmp_path):
     wb.active["E5"] = "=SUM(E6:E10)"
     wb.save(path)
     _, report = resolve_filing_doc(str(path), _doc())
-    assert report["status"] == "blocked"
+    assert report["status"] == "partial"
     assert report["unresolved_writes"][0]["resolution_options"] == []
 
 
@@ -94,7 +94,7 @@ def test_two_facts_cannot_be_placed_in_one_cell(tmp_path):
     selections = {i["resolution_key"]: "SOCIE!E5" for i in report["unresolved_writes"]}
     ready, report = resolve_filing_doc(str(path), doc, filing_targets=selections)
     assert ready["writes"] == []
-    assert report["status"] == "blocked"
+    assert report["status"] == "partial"
     assert report["unmapped"] == 2
     for issue in report["unresolved_writes"]:
         assert issue["reason_code"] == "destination_collision"

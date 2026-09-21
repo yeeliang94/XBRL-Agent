@@ -568,6 +568,9 @@ def _render_source_blocks_block() -> str:
         "block_ids)`, naming every part that belongs in that row. The cell "
         "text is assembled from the document itself, so content and "
         "formatting are exact by construction — nothing to retype.\n"
+        "Follow that tool's smaller schema exactly: do not pass\n"
+        "`content`, `chosen_row_label`, `parent_note`, or `sub_note` to it. "
+        "The source blocks already carry their heading ancestry.\n"
         "4. Verify the figures against the PDF pages as usual. If the PDF "
         "genuinely disagrees with the source, author that note with "
         "`write_notes` instead and say why in the evidence.\n"
@@ -1482,6 +1485,110 @@ def _recovered_heading_number(
     return distinct[0] if len(distinct) == 1 else str(assigned_note_num)
 
 
+def _sheet12_identity_from_raw(
+    item: Any,
+    assigned_note_nums: set[int],
+    inventory_by_note: dict[int, NoteInventoryEntry],
+    *,
+    sub_agent_id: Optional[str],
+) -> Any:
+    """Repair only identity fields that the harness can prove from raw input.
+
+    Nested ``parent_note`` validation normally runs before Sheet-12
+    reconciliation. That made harmless model-shape drift (a heading string,
+    ``note_number`` key, or integer number) fail before the harness could use
+    the already-assigned note identity. Work on a shallow copy and recover only
+    from structured signals: an assigned ``note_num``, one exact assigned
+    top-level ``source_note_refs`` value, or a genuinely single-note batch.
+    Labels and prose are never used for routing.
+    """
+    if not isinstance(item, dict):
+        return item
+    repaired = dict(item)
+    has_content = bool(str(repaired.get("content") or "").strip()) or bool(
+        repaired.get("numeric_values")
+    )
+    if not has_content:
+        return repaired
+
+    note_num: Optional[int] = None
+    raw_note_num = repaired.get("note_num")
+    if isinstance(raw_note_num, int) and not isinstance(raw_note_num, bool):
+        note_num = raw_note_num
+    elif isinstance(raw_note_num, str) and raw_note_num.strip().isdigit():
+        note_num = int(raw_note_num.strip())
+
+    if note_num is None:
+        candidates: set[int] = set()
+        refs = repaired.get("source_note_refs")
+        if isinstance(refs, list):
+            for raw_ref in refs:
+                if not isinstance(raw_ref, str):
+                    continue
+                match = _EXACT_NOTE_REFERENCE_RE.fullmatch(raw_ref.strip())
+                if match:
+                    candidate = int(match.group(1))
+                    if candidate in assigned_note_nums:
+                        candidates.add(candidate)
+        if len(candidates) == 1:
+            note_num = next(iter(candidates))
+        elif not candidates and len(assigned_note_nums) == 1:
+            note_num = next(iter(assigned_note_nums))
+        if note_num is not None:
+            parent = repaired.get("parent_note")
+            parent_number = (
+                _top_level_note_number(str(parent.get("number", "")))
+                if isinstance(parent, dict) else None
+            )
+            if parent_number is not None and parent_number != note_num:
+                raise ValueError(
+                    f"Inferred note_num {note_num} conflicts with parent_note "
+                    f"{parent_number}; provide an explicit assigned note_num"
+                )
+            repaired["note_num"] = note_num
+
+    if note_num not in assigned_note_nums:
+        return repaired
+    assigned = inventory_by_note.get(note_num)
+    title = assigned.title.strip() if assigned is not None else ""
+    if not title:
+        return repaired
+
+    parent = repaired.get("parent_note")
+    parent_is_valid_shape = (
+        isinstance(parent, dict)
+        and isinstance(parent.get("number"), str)
+        and bool(parent["number"].strip())
+        and isinstance(parent.get("title"), str)
+        and bool(parent["title"].strip())
+    )
+    if not parent_is_valid_shape:
+        parent_was_missing = parent is None
+        refs = repaired.get("source_note_refs")
+        number = str(note_num)
+        if isinstance(refs, list):
+            exact = []
+            for raw_ref in refs:
+                if not isinstance(raw_ref, str):
+                    continue
+                ref = raw_ref.strip()
+                match = _EXACT_NOTE_REFERENCE_RE.fullmatch(ref)
+                if match and int(match.group(1)) == note_num:
+                    exact.append(ref)
+            distinct = list(dict.fromkeys(exact))
+            if len(distinct) == 1:
+                number = distinct[0]
+        repaired["parent_note"] = {"number": number, "title": title}
+        logger.warning(
+            "Sheet-12 %s %s for assigned note %s",
+            sub_agent_id,
+            ("recovered missing parent_note" if parent_was_missing
+             else "repaired malformed parent_note"),
+            note_num,
+        )
+    return repaired
+
+
 def _reconcile_sheet12_identity(
     payload: NotesPayloadInput,
     assigned_note_nums: set[int],
@@ -1497,6 +1604,15 @@ def _reconcile_sheet12_identity(
         and len(assigned_note_nums) == 1
     ):
         sole_note_num = next(iter(assigned_note_nums))
+        parent_number = (
+            _top_level_note_number(payload.parent_note.number)
+            if payload.parent_note is not None else None
+        )
+        if parent_number is not None and parent_number != sole_note_num:
+            raise ValueError(
+                f"Inferred note_num {sole_note_num} conflicts with parent_note "
+                f"{parent_number}; provide an explicit assigned note_num"
+            )
         payload = payload.model_copy(update={"note_num": sole_note_num})
         logger.warning(
             "Sheet-12 %s recovered missing note_num for sole assigned note %s",
@@ -1579,6 +1695,11 @@ def _build_notes_payloads(
     sheet12_mode = assigned_note_nums is not None or inventory is not None
     for index, item in enumerate(raw_payloads):
         try:
+            if sheet12_mode:
+                item = _sheet12_identity_from_raw(
+                    item, assigned_notes, inventory_by_note,
+                    sub_agent_id=sub_agent_id,
+                )
             typed = (
                 item if isinstance(item, NotesPayloadInput)
                 else NotesPayloadInput.model_validate(item)
