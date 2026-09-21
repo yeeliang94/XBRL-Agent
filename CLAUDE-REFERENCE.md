@@ -764,17 +764,32 @@ Key invariants:
   `tests/test_notes_agent_label_prevalidation.py` and
   `tests/test_notes_source_prompt.py`.
 - **Sheet-12 heading identity is reconciled only against the worker's assigned
-  inventory.** The write boundary fills a missing `parent_note` from the exact
-  assigned `note_num`, and may fill both fields only when that worker has one
-  assigned note. A matching explicit heading is retained verbatim; a
-  mismatched heading is repaired and logged. Exact printed punctuation may be
-  retained from a matching top-level `source_note_refs` value. Assignment
+  inventory.** The write boundary reconciles raw identity before nested heading
+  validation, then fills a missing or malformed `parent_note` from the exact
+  assigned `note_num`. When `note_num` is absent, one exact assigned top-level
+  `source_note_refs` value may supply it; both fields may also be filled when
+  that worker has one assigned note. An inferred identity that contradicts an
+  explicit parent number is rejected for correction rather than silently
+  changing the heading. An explicit assigned `note_num` retains its existing
+  authority to repair a mismatched heading. A matching explicit heading is retained
+  verbatim; a mismatched heading is repaired and logged. Exact printed
+  punctuation may be retained from a matching top-level `source_note_refs`
+  value. Assignment
   cardinality comes from the full batch assignment, so blank-titled or missing
   inventory entries remain owners but cannot supply a missing heading.
   Unassigned note numbers and ambiguous
   multi-note omissions remain rejected; there is no prose or label matching.
   Pinned by
   `tests/test_notes12_surrendered_skips.py`.
+- **Source-built notes keep their provenance exemption through every writer
+  transform.** `write_note_from_source` content already contains source heading
+  ancestry and does not accept model-authored `content` / `parent_note` fields.
+  Content-only writer transforms use dataclass replacement so `source_built`
+  and future provenance fields cannot be dropped by a clone; row aggregation
+  preserves the flag when any contributor is source-built. The prompt scopes
+  the `parent_note` contract to `write_notes` and names the source tool's
+  smaller schema explicitly. Pinned by `tests/test_notes_writer_source_built.py`
+  and `tests/test_notes_source_prompt.py`.
 - **Retry budget:** every notes agent and Sheet-12 sub-agent retried at most
   once. Exhaustion writes `notes_<TEMPLATE>_failures.json` /
   `notes12_failures.json` / `notes12_unmatched.json` side-logs.
@@ -1988,7 +2003,9 @@ Load-bearing invariants:
   patcher's `resolve_sheet_name` is shared by numeric detection/resolution and
   prose filling. Only observed sheet-name equivalents backed by the MPERS
   taxonomy markers may resolve; ambiguous names and wrong-standard templates
-  remain blocked. Selection checks both canonical and resolved physical sheets.
+  remain blocked. Known filing-standard, Company/Group, or statement-family
+  mismatches return a named 422 before numeric or notes writes; they are not
+  partial-fill cases. Selection checks both canonical and resolved physical sheets.
   Resolve an exact opening/closing occurrence before testing writability.
   Formula-owned values are reconciled after input writes using supported
   arithmetic, never cached formula values or formula overwrites. Unsupported,
@@ -2022,13 +2039,14 @@ Load-bearing invariants:
   scaffolding, and formula-owned slots are never offered as writable fields.
   `scripts/audit_template_field_semantics.py --check` pins complete MFRS/MPERS,
   Company/Group, and statement-variant coverage against the committed snapshot.
-- **Missing mappings fail closed at filing.** Preflight carries the
+- **Missing mappings never guess at filing.** Preflight carries the
   `field_semantics` readiness block. A selected template with no manifest, an
   unresolved slot, or historical content quarantined on a presentation-only
   target remains visible in readiness and receipts. Preparation may continue
-  without an override reason; the target resolver still refuses missing or
-  ambiguous destinations. Receipts persist taxonomy and manifest versions,
-  readiness, and coverage.
+  without an override reason; the target resolver skips missing or ambiguous
+  destinations and writes every independently resolved value. A partial result
+  is degraded and requires the existing report acknowledgement before download.
+  Receipts persist taxonomy and manifest versions, readiness, and coverage.
   The named MFRS Issued Capital and Related Party wrapper omissions are the
   only reviewed semantic-alignment exceptions; do not replace them with a
   positional tolerance or weaken confirmation/degraded-report safeguards.
@@ -2056,11 +2074,17 @@ Load-bearing invariants:
   `tests/test_db_schema_v47.py`.
 
   The native export snapshot also carries computed facts as verification-only
-  targets. Missing or ambiguous required targets block coverage. Final readback
+  targets. Missing or ambiguous required targets degrade coverage and are
+  skipped without suppressing independently resolved writes. Verification
+  retains these unresolved checks in the saved verification report and receipt
+  and cannot report `ok` when any are missing. The preparation UI keeps its
+  concise review status; calculation diagnostics do not become skipped figures.
+  Final readback
   runs after notes insertion, evaluates actual arithmetic and bounded SUM ranges,
   and never treats cached formula results as fresh. Unsupported expressions stay
   unverified. Recalculation flags request native recalculation but do not prove it
-  occurred. Pinned by `tests/test_mtool_formula_reconciliation.py`.
+  occurred. Pinned by `tests/test_mtool_formula_reconciliation.py` and the
+  missing-calculation receipt test in `tests/test_mtool_routes.py`.
 
   `concept_semantic_addresses` (schema v40) stores the primary taxonomy concept
   and dimensions derived from the same presentation roles that generate the
@@ -2073,13 +2097,13 @@ Load-bearing invariants:
   fact identity. Pinned by the reserves-address test in
   `tests/test_mtool_template_map.py`. Repository-generated
   templates use their verified exact target hints. Declared semantic identities
-  that are missing or ambiguous fail closed. On period/entity sheets,
+  that are missing or ambiguous are skipped and reported. On period/entity sheets,
   address-less legacy writes may still use `column_role` (CY/PY ×
   company/group) plus exact labels. Unknown positional layouts require column
   confirmation. Unique period-date markers can identify Company columns
   automatically even on a new fingerprint; candidate artifacts still require
   review before download. Category sheets never take that fallback: without one
-  exact taxonomy-addressed target they return structured blocked coverage.
+  exact taxonomy-addressed target they return structured partial coverage.
 
   `column_detect` reads mTool's own marker rows — `#PRIM#` (label column),
   `#ENDT#` (period end dates; current vs prior year comes from COMPARING
@@ -2103,11 +2127,14 @@ Load-bearing invariants:
   When Scout supplied authoritative CY/PY periods, the fill document carries
   them into template inspection. `period_compatibility_issues` compares parsed
   boundaries (including non-calendar year ends and harmless wording changes)
-  with every requested physical period marker. A definitive mismatch blocks
-  the patch before any workbook write. An unresolved marker requires column
-  confirmation; an operator-supplied map is applied before period validation
-  and may proceed when the template has no comparable marker. The detect
-  endpoint returns the same structured issues and requires confirmation.
+  with every requested physical period marker. A definitive mismatch is
+  preserved as a review warning in the report and receipt and degrades the
+  result, but does not withhold otherwise-safe writes: the uploaded template's
+  detected current/prior-year destinations remain authoritative. An unresolved
+  marker requires column confirmation; an operator-supplied map is applied
+  before period validation and may proceed when the template has no comparable
+  marker. The detect endpoint returns the same structured issues; a mismatch
+  alone does not require redundant column confirmation.
   Dimensional sheets compare
   their single physical block with CY; missing PY sections remain the separate
   `template_period_section_missing` mapping diagnostic. Pinned by the period
@@ -2122,9 +2149,12 @@ Load-bearing invariants:
   `tests/test_mtool_filing_resolution.py`.
 - **Filing destination confirmation.** Repeated taxonomy candidates may be
   narrowed by one exact visible row label after sheet, period and dimensions
-  have been resolved. A remaining tie or a missing category stays blocked.
-  The failure report may offer explicit taxonomy-addressed destinations for
-  operator confirmation; never preselect a category or accept arbitrary cells.
+  have been resolved. A remaining tie or a missing category stays unwritten
+  while other resolved values continue.
+  The API report may offer explicit taxonomy-addressed destinations for
+  API clients to confirm; the streamlined modal deliberately skips ambiguous
+  figures and does not expose destination-mapping controls. Never preselect a
+  category or accept arbitrary cells.
   Recompute candidates server-side on each request, bind selections to the
   current workbook contents and complete fact, exclude formula destinations,
   and reject stale choices and two facts targeting the same cell. Preserve
@@ -2134,11 +2164,12 @@ Load-bearing invariants:
   source categories. The modal stacks report sections vertically and contains
   horizontal overflow within the detail table. Pinned by
   `tests/test_mtool_filing_resolution.py`, the destination retry test in
-  `tests/test_mtool_routes.py`, and the `FilingCoverageFailurePanel` and
-  `MtoolFillModal` web tests.
+  `tests/test_mtool_routes.py`. The `MtoolFillModal` web tests pin the simplified
+  skip-and-report flow; `FilingCoverageFailurePanel` tests cover that standalone
+  component, not a destination picker in the modal.
   Dimensional year markers are resolved per column as well as per row block;
   adjacent CY/PY columns must never share a destination. Collisions return
-  structured blocked coverage naming every affected figure and retaining its
+  structured partial coverage naming every affected figure and retaining its
   available choices. Technical taxonomy identifiers stay in expandable details,
   and the modal uses one vertical scroll area. Review-note previews must not
   crop rendered content; worksheet labels wrap inside a scrolling rail. The
@@ -2154,6 +2185,8 @@ Load-bearing invariants:
   selected/excluded sheets and omitted counts in the report and receipt;
   partial workbooks require review and do not clear run-wide readiness issues.
   Selection changes invalidate previews, placements and downloadable results.
+  Re-enabling notes or changing missing-note-slot options automatically refreshes
+  placement with the new settings and clears previous placement choices.
   Selection validation reads note sheet names without rendering prose; notes
   build failures retain the figures and a degraded notes report. Omitted note
   counts are unknown until prose is built, and zero when notes are disabled.

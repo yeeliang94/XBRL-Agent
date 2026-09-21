@@ -527,6 +527,8 @@ def test_prompt_teaches_block_workflow_when_generation_exists():
     with_blocks = render_notes_prompt(**kwargs, source_blocks_available=True)
     assert "write_note_from_source" in with_blocks
     assert "list_source_notes" in with_blocks
+    assert "All writes go through the `write_notes` tool" not in with_blocks
+    assert "do not pass\n`content`, `chosen_row_label`, `parent_note`, or `sub_note`" in with_blocks
     # The copy-verbatim workflow must NOT render alongside it — two channels
     # teaching incompatible workflows is the run-79 defect shape.
     assert "COPY THE SOURCE MARKUP VERBATIM" not in with_blocks

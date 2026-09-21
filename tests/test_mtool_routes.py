@@ -190,6 +190,66 @@ def _upload_period_marker_template(doc, *, current="31/12/2021", prior="31/12/20
     )}
 
 
+@pytest.mark.parametrize("standard,level", [("mpers", "company"), ("mfrs", "group")])
+def test_incompatible_template_family_is_rejected_before_filling(client, monkeypatch, standard, level):
+    import api.mtool as m
+    import mtool.template_map as mapping
+
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_distinct_leaves(db, run_id)
+    # Model a known uploaded template with a different family descriptor.
+    monkeypatch.setattr(mapping, "describe_template", lambda _: {
+        "source": "generated", "name": "01-SOFP-CuNonCu",
+        "filing_standards": [standard], "filing_levels": [level],
+    })
+    def must_not_fill(*args, **kwargs):
+        pytest.fail("Incompatible templates must be rejected before workbook writes")
+    monkeypatch.setattr(m, "fill_workbook", must_not_fill)
+    response = tc.post(f"/api/runs/{run_id}/mtool-fill/patch", files=_upload_our_template())
+    assert response.status_code == 422, response.text
+    assert "does not match" in response.json()["detail"]
+    assert tc.get(f"/api/runs/{run_id}/mtool-fill/receipts").json()["receipts"] == []
+
+
+def test_missing_calculation_stays_unverified_in_report_and_receipt(client, tmp_path, monkeypatch):
+    from test_mtool_template_map import _save_semantic_marker_workbook
+    from test_mtool_filing_resolution import _doc
+    import api.mtool as m
+
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_distinct_leaves(db, run_id)
+    run, doc, standard, level, denomination = m._build_doc(run_id)
+    doc.update(_doc())
+    doc["writes"][0]["semantic_address"]["dimensions"] = {
+        "ifrs-full_ComponentsOfEquityAxis": "ifrs-full_IssuedCapitalMember",
+    }
+    doc["checks"] = [{
+        **doc["writes"][0], "concept_uuid": "missing-total", "label": "Required total",
+        "semantic_address": {"primary_concept": "ifrs-full_MissingTotal", "dimensions": {}},
+    }]
+    monkeypatch.setattr(m, "_build_doc", lambda _: (run, doc, standard, level, denomination))
+    path = tmp_path / "category.xlsx"
+    _save_semantic_marker_workbook(path, two_periods=True)
+    response = tc.post(f"/api/runs/{run_id}/mtool-fill/patch",
+        files={"template": ("category.xlsx", path.read_bytes())},
+        data={"fill_notes": "false"})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["counts"]["written"] == 1
+    assert body["status"] == "degraded"
+    verification = body["snapshot_verification"]
+    assert verification["status"] == "degraded"
+    assert len(verification["verified"]) == 1
+    assert verification["unresolved_checks"][0]["concept_uuid"] == "missing-total"
+    # A missing check belongs in verification detail, not the skipped-figures UI.
+    assert body["unresolved"] == []
+    assert tc.get(body["download_url"]).status_code == 409
+    receipt = tc.get(f"/api/runs/{run_id}/mtool-fill/receipts").json()["receipts"][0]
+    assert receipt["report"]["snapshot_verification"] == verification
+
+
 def test_filing_destination_retry_validates_and_records_operator_choice(client, tmp_path, monkeypatch):
     from test_mtool_template_map import _save_semantic_marker_workbook
     from test_mtool_filing_resolution import _doc
@@ -205,9 +265,14 @@ def test_filing_destination_retry_validates_and_records_operator_choice(client, 
     _save_semantic_marker_workbook(path, two_periods=True)
     files = {"template": ("category.xlsx", path.read_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
     url = f"/api/runs/{run_id}/mtool-fill/patch"
-    blocked = tc.post(url, files=files, data={"fill_notes": "false"})
-    assert blocked.status_code == 422, blocked.text
-    issue = blocked.json()["detail"]["filing_coverage"]["unresolved_writes"][0]
+    partial = tc.post(url, files=files, data={"fill_notes": "false"})
+    assert partial.status_code == 200, partial.text
+    partial_body = partial.json()
+    assert partial_body["status"] == "degraded"
+    assert partial_body["counts"]["written"] == 0
+    assert partial_body["filing_coverage"]["status"] == "partial"
+    assert tc.get(partial_body["download_url"]).status_code == 409
+    issue = partial_body["filing_coverage"]["unresolved_writes"][0]
     key = issue["resolution_key"]
     invalid = tc.post(url, files=files, data={"fill_notes": "false", "filing_targets": json.dumps({key: "SOCIE!E13"})})
     assert invalid.status_code == 422
@@ -362,7 +427,7 @@ def test_detect_columns_returns_map_and_confidence(client):
     assert "columns" in body["detected"][sheet]
 
 
-def test_source_template_period_mismatch_is_detected_and_blocks_patch(client):
+def test_source_template_period_mismatch_is_detected_and_degrades_patch(client):
     tc, db, _ = client
     run_id = _make_run(db)
     _seed_distinct_leaves(db, run_id)
@@ -388,14 +453,19 @@ def test_source_template_period_mismatch_is_detected_and_blocks_patch(client):
     detected = tc.post(
         f"/api/runs/{run_id}/mtool-fill/detect-columns", files=upload)
     assert detected.status_code == 200, detected.text
-    assert detected.json()["requires_confirmation"] is True
+    assert detected.json()["requires_confirmation"] is False
     assert {item["code"] for item in detected.json()["period_compatibility"]} == {
         "template_period_mismatch"}
 
-    blocked = tc.post(
+    filled = tc.post(
         f"/api/runs/{run_id}/mtool-fill/patch", files=upload)
-    assert blocked.status_code == 422, blocked.text
-    assert blocked.json()["detail"]["period_compatibility"]
+    assert filled.status_code == 200, filled.text
+    assert filled.json()["status"] == "degraded"
+    assert filled.json()["period_compatibility"]
+
+    receipts = tc.get(
+        f"/api/runs/{run_id}/mtool-fill/receipts").json()["receipts"]
+    assert receipts[0]["report"]["period_compatibility"]
 
 
 def test_confirmed_map_allows_markerless_template_with_source_periods(client):

@@ -30,6 +30,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from notes.coordinator import _unverified_skip_reason, _write_notes12_skips
 
 
@@ -352,6 +354,97 @@ def test_write_notes_boundary_repairs_mismatched_parent_identity(caplog):
     assert "repaired mismatched parent_note" in caplog.text
 
 
+@pytest.mark.parametrize("malformed_parent", [
+    "19. Financial instruments",
+    {"number": 19, "title": "Financial instruments"},
+    {"note_number": "19", "title": "Financial instruments"},
+])
+def test_write_notes_boundary_repairs_malformed_parent_before_validation(
+    malformed_parent,
+):
+    """Assigned identity outranks recoverable nested-schema shape drift."""
+    from notes.agent import _build_notes_payloads
+    from scout.notes_discoverer import NoteInventoryEntry
+
+    inventory = [
+        NoteInventoryEntry(19, "Financial instruments", (33, 38)),
+        NoteInventoryEntry(20, "Revenue", (39, 39)),
+    ]
+    built, errors = _build_notes_payloads(
+        [{
+            "chosen_row_label": "Disclosure of financial instruments",
+            "content": "<p>Complete disclosure.</p>",
+            "evidence": "Page 33, Note 19",
+            "source_pages": [33],
+            "source_note_refs": ["19."],
+            "note_num": 19,
+            "parent_note": malformed_parent,
+        }],
+        sub_agent_id="notes:LIST_OF_NOTES:sub4",
+        inventory=inventory,
+        assigned_note_nums=[19, 20],
+    )
+
+    assert errors == []
+    assert built[0].parent_note == {
+        "number": "19.",
+        "title": "Financial instruments",
+    }
+
+
+@pytest.mark.parametrize("assigned,refs", [([19, 20], ["20"]), ([20], [])])
+def test_inferred_note_identity_cannot_override_explicit_parent(assigned, refs):
+    from notes.agent import _build_notes_payloads
+    from scout.notes_discoverer import NoteInventoryEntry
+
+    built, errors = _build_notes_payloads(
+        [{
+            "chosen_row_label": "Disclosure of financial instruments",
+            "content": "<p>Content from note 19.</p>",
+            "evidence": "Page 33, Note 19", "source_pages": [33],
+            "source_note_refs": refs,
+            "parent_note": {"number": "19", "title": "Financial instruments"},
+        }],
+        sub_agent_id="notes:LIST_OF_NOTES:sub4",
+        inventory=[NoteInventoryEntry(19, "Financial instruments", (33, 38)),
+                   NoteInventoryEntry(20, "Revenue", (39, 39))],
+        assigned_note_nums=assigned,
+    )
+    assert built == []
+    assert len(errors) == 1
+    assert "conflicts with parent_note" in errors[0]
+
+
+def test_write_notes_boundary_recovers_multi_note_identity_from_exact_ref():
+    """An exact structured ref can identify one owner without prose guessing."""
+    from notes.agent import _build_notes_payloads
+    from scout.notes_discoverer import NoteInventoryEntry
+
+    inventory = [
+        NoteInventoryEntry(19, "Financial instruments", (33, 38)),
+        NoteInventoryEntry(20, "Revenue", (39, 39)),
+    ]
+    built, errors = _build_notes_payloads(
+        [{
+            "chosen_row_label": "Disclosure of financial instruments",
+            "content": "<p>Complete disclosure.</p>",
+            "evidence": "Page 33, Note 19",
+            "source_pages": [33],
+            "source_note_refs": ["19."],
+        }],
+        sub_agent_id="notes:LIST_OF_NOTES:sub4",
+        inventory=inventory,
+        assigned_note_nums=[19, 20],
+    )
+
+    assert errors == []
+    assert built[0].note_num == 19
+    assert built[0].parent_note == {
+        "number": "19.",
+        "title": "Financial instruments",
+    }
+
+
 def test_write_notes_boundary_preserves_matching_printed_heading():
     """A valid explicit heading keeps its source punctuation and title."""
     from notes.agent import _build_notes_payloads
@@ -595,6 +688,61 @@ def test_registered_write_notes_tool_wires_inventory_recovery(tmp_path: Path):
         "evidence": "Pages 33-38, Note 19",
         "source_pages": [33, 34, 35, 36, 37, 38],
         "note_num": 19,
+    }]))
+
+    assert message.startswith("Collected 1 payload")
+    assert deps.payload_sink[0].parent_note == {
+        "number": "19",
+        "title": "Financial instruments",
+    }
+
+
+def test_registered_write_notes_tool_repairs_malformed_parent_in_multi_note_batch(
+    tmp_path: Path,
+):
+    """The live tool repairs nested model-shape drift before Pydantic rejects it."""
+    import asyncio
+
+    from notes.agent import _ensure_label_index, create_notes_agent
+    from notes_types import NotesTemplateType
+    from scout.notes_discoverer import NoteInventoryEntry
+
+    pdf_path = tmp_path / "uploaded.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    inventory = [
+        NoteInventoryEntry(
+            note_num=18,
+            title="Related party transactions",
+            page_range=(30, 32),
+        ),
+        NoteInventoryEntry(
+            note_num=19,
+            title="Financial instruments",
+            page_range=(33, 38),
+        ),
+    ]
+    agent, deps = create_notes_agent(
+        template_type=NotesTemplateType.LIST_OF_NOTES,
+        pdf_path=str(pdf_path),
+        inventory=inventory,
+        filing_level="company",
+        model="test",
+        output_dir=str(tmp_path),
+        batch_note_nums=[18, 19],
+    )
+    deps.payload_sink = []
+    deps.sub_agent_id = "notes:LIST_OF_NOTES:sub4"
+    label = _ensure_label_index(deps)[0].original
+    tool = agent._function_toolset.tools["write_notes"].function
+
+    message = asyncio.run(tool(SimpleNamespace(deps=deps), [{
+        "chosen_row_label": label,
+        "content": "<p>Complete disclosure.</p>",
+        "evidence": "Pages 33-38, Note 19",
+        "source_pages": [33, 34, 35, 36, 37, 38],
+        "source_note_refs": ["19"],
+        "note_num": 19,
+        "parent_note": "19. Financial instruments",
     }]))
 
     assert message.startswith("Collected 1 payload")

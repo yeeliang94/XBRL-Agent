@@ -323,7 +323,7 @@ def test_dimensional_sheet_reports_missing_prior_year_section(
     ready, coverage = resolve_filing_doc(str(template), doc)
 
     assert ready["writes"] == []
-    assert coverage["status"] == "blocked"
+    assert coverage["status"] == "partial"
     unresolved = coverage["unresolved_writes"][0]
     assert unresolved["reason_code"] == "template_period_section_missing"
     assert "no prior-year section" in unresolved["detail"].lower()
@@ -356,13 +356,13 @@ def test_taxonomy_identifier_on_another_sheet_is_not_a_valid_target(
     ready, coverage = resolve_filing_doc(str(template), doc)
 
     assert ready["writes"] == []
-    assert coverage["status"] == "blocked"
+    assert coverage["status"] == "partial"
     unresolved = coverage["unresolved_writes"][0]
     assert unresolved["reason_code"] == "taxonomy_identifier_missing_on_sheet"
     assert "expected template sheet" in unresolved["detail"].lower()
 
 
-def test_dimensional_sheet_without_fact_dimension_is_actionably_blocked(
+def test_dimensional_sheet_without_fact_dimension_is_actionably_skipped(
     tmp_path: Path,
 ):
     template = tmp_path / "category-without-fact-dimension.xlsx"
@@ -387,13 +387,13 @@ def test_dimensional_sheet_without_fact_dimension_is_actionably_blocked(
     ready, coverage = resolve_filing_doc(str(template), doc)
 
     assert ready["writes"] == []
-    assert coverage["status"] == "blocked"
+    assert coverage["status"] == "partial"
     unresolved = coverage["unresolved_writes"][0]
     assert unresolved["reason_code"] == "missing_category_dimensions"
     assert "category dimension" in unresolved["detail"].lower()
 
 
-def test_category_sheet_legacy_fallback_is_structurally_blocked(
+def test_category_sheet_legacy_fallback_is_structurally_skipped(
     tmp_path: Path,
 ):
     """A category matrix cannot fall through to blank CY/PY columns.
@@ -430,7 +430,7 @@ def test_category_sheet_legacy_fallback_is_structurally_blocked(
     ready, coverage = resolve_filing_doc(str(template), doc)
 
     assert ready["writes"] == []
-    assert coverage["status"] == "blocked"
+    assert coverage["status"] == "partial"
     assert coverage["mapped"] == 0
     assert coverage["unmapped"] == 1
     assert coverage["legacy_label_writes"] == 0
