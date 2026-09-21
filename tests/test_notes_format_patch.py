@@ -10,16 +10,22 @@ from notes.format_patch import FormatPatchError, apply_sheet_patch
 from notes.html_sanitize import sanitize_notes_html
 
 
-def test_prompt_instructs_currency_caption_alignment():
-    # The formatter must align a bare "RM"/"RM'000" caption cell to match its
-    # right-aligned figures rather than leaving it orphaned left. Pinned so the
-    # instruction can't be silently dropped from prompts/notes_formatter.md.
+def test_prompt_instructs_amount_column_header_and_figure_alignment():
+    # Amount headers and figures must share right alignment even when the source
+    # differs, without applying that rule to the description column.
     from pathlib import Path
     prompt = (Path(__file__).resolve().parents[1]
               / "prompts" / "notes_formatter.md").read_text(encoding="utf-8")
     assert "currency-caption cell" in prompt
     assert "RM'000" in prompt
     assert "text_align" in prompt
+    assert 'Right-align all amount-column headers and figures with `text_align: "right"`' in prompt
+    assert "column names, year/period headers" in prompt
+    assert "even when" in prompt
+    assert "source PDF shows those headers centred or left-aligned" in prompt
+    assert "row targets restricted to the amount columns" in prompt
+    assert "Keep description and row-label columns left-aligned" in prompt
+    assert "takes precedence over source alignment" in prompt
 
 
 def test_prompt_pins_the_standardized_mtool_profile():

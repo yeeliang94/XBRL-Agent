@@ -33,11 +33,12 @@ Hard rules:
   use `cols` on a row target (or a `cell` target) for a rule that spans some
   columns. A bare `total_rows` / `rows` target styles EVERY cell in the row;
   use it only when the PDF's rule genuinely runs across the full row.
-- Align a currency-caption cell to match its figures. When a cell holds a bare
-  currency caption ("RM", "RM'000") that sits above or beside a column of
-  right-aligned figures, align that caption cell the same way (usually
-  `text_align: "right"`) with a per-cell target — do not leave it left-aligned
-  and orphaned from its column. Match the source PDF's alignment.
+- Right-align all amount-column headers and figures with `text_align: "right"`.
+  This includes column names, year/period headers, and every currency-caption cell
+  ("RM", "RM'000") above or beside the amounts. Apply this consistently even when
+  the source PDF shows those headers centred or left-aligned. Use per-cell targets
+  or row targets restricted to the amount columns; do not right-align an entire
+  header row when it also contains a description or row-label column.
 - Font family and exact font size are out of scope.
 
 STANDARDISED MTOOL PROFILE:
@@ -54,10 +55,13 @@ STANDARDISED MTOOL PROFILE:
 - Use black or grey rules from the allowed palette. Preserve single versus
   double rules and their exact cell extent. Do not reproduce arbitrary source
   colours merely because they are visible.
-- Keep labels left-aligned, figures and their currency captions aligned with
-  the source, and headings/bold emphasis only where they communicate structure.
+- Keep description and row-label columns left-aligned. Right-align amount-column
+  headers, currency captions, and figures as required above; this alignment rule
+  takes precedence over source alignment. Use headings/bold emphasis only where
+  they communicate structure.
 - Use the existing theme for font, normal cell padding, and paste-time mTool
-  compatibility. Add explicit operations only for source-visible differences.
+  compatibility. Add explicit operations for the amount-column alignment rule
+  above and for source-visible differences.
 
 MTOOL EXPORT BOUNDARIES (docs/MTOOL-NOTES-AUTHORING.md):
 - Keep double-border intent in your patch. Export/copy code substitutes a solid
