@@ -55,20 +55,19 @@ class TestSharedHelper:
 
 
 class TestLiveSaversUseAtomicReplace:
-    """Monkeypatch-spy: each live-path saver must persist via os.replace
-    (the atomic step), never a bare in-place wb.save(target)."""
+    """Every live saver must use the resilient atomic-replace helper."""
 
     def _spy_replace(self, monkeypatch):
         import utils.workbook_io as wio
 
         calls: list = []
-        real_replace = wio.os.replace
+        real_replace = wio.replace_with_retry
 
         def spy(src, dst):
             calls.append(str(dst))
             return real_replace(src, dst)
 
-        monkeypatch.setattr(wio.os, "replace", spy)
+        monkeypatch.setattr(wio, "replace_with_retry", spy)
         return calls
 
     def test_fill_workbook_saves_atomically(self, tmp_path, monkeypatch):
@@ -83,7 +82,7 @@ class TestLiveSaversUseAtomicReplace:
               "col": 2}],
         )
         assert result.success
-        assert output in calls, "fill_workbook must save via os.replace"
+        assert output in calls, "fill_workbook must save via resilient atomic replace"
 
     def test_workbook_merger_saves_atomically(self, tmp_path, monkeypatch):
         calls = self._spy_replace(monkeypatch)
@@ -94,7 +93,7 @@ class TestLiveSaversUseAtomicReplace:
         output = str(tmp_path / "merged.xlsx")
         result = merge({StatementType.SOFP: src}, output, skip_recalc=True)
         assert result.success
-        assert output in calls, "workbook_merger must save via os.replace"
+        assert output in calls, "workbook_merger must save via resilient atomic replace"
 
     def test_notes_writer_saves_atomically(self, tmp_path, monkeypatch):
         calls = self._spy_replace(monkeypatch)
@@ -115,7 +114,7 @@ class TestLiveSaversUseAtomicReplace:
             sheet_name="SOFP",
         )
         assert result.success, result.errors
-        assert output in calls, "notes writer must save via os.replace"
+        assert output in calls, "notes writer must save via resilient atomic replace"
 
     def test_canonical_exporter_saves_atomically(self, tmp_path, monkeypatch):
         """The exporter's write path routes through the shared helper. We

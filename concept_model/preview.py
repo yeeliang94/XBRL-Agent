@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 from pathlib import Path
 from typing import Mapping
 
 from openpyxl.utils.cell import column_index_from_string
+from utils.atomic_io import replace_with_retry
 
 
 def build_preview_fields(
@@ -76,4 +76,4 @@ def write_preview_result(path: str | Path, fields: list[dict]) -> None:
         json.dumps({"fields": fields}, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
-    os.replace(temporary, target)
+    replace_with_retry(temporary, target)

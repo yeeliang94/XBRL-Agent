@@ -14,6 +14,8 @@ from pathlib import Path
 from threading import RLock
 from typing import Mapping, Optional
 
+from utils.atomic_io import replace_with_retry
+
 
 _LOCK = RLock()
 _FALLBACKS: dict[str, Optional[str]] = {}
@@ -76,7 +78,7 @@ def update_settings(
                 handle.write("\n")
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(temp_name, path)
+            replace_with_retry(temp_name, path)
         except BaseException:
             try:
                 os.unlink(temp_name)

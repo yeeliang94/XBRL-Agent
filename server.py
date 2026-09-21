@@ -55,6 +55,7 @@ from fastapi.responses import StreamingResponse, FileResponse, JSONResponse, Res
 from starlette.background import BackgroundTask
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from utils.atomic_io import replace_with_retry
 
 # Suppress LiteLLM SSL warnings (enterprise firewall blocks GitHub pricing fetch)
 try:
@@ -2169,7 +2170,7 @@ def _refresh_merged_notes_workbook(
     os.close(fd)
     try:
         shutil.copyfile(nxt, staged)
-        os.replace(staged, destination)
+        replace_with_retry(staged, destination)
     finally:
         try:
             Path(staged).unlink(missing_ok=True)

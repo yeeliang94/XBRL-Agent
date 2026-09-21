@@ -30,6 +30,21 @@ def test_update_is_atomic_owner_only_and_round_trips(tmp_path, monkeypatch):
     assert not list(tmp_path.glob(".settings.json.*.tmp"))
 
 
+def test_update_uses_resilient_atomic_replace(tmp_path, monkeypatch):
+    _reset_runtime_state()
+    path = tmp_path / "settings.json"
+    calls = []
+
+    def replace(source, destination):
+        calls.append(destination)
+        os.replace(source, destination)
+
+    monkeypatch.setattr(runtime_settings, "replace_with_retry", replace)
+    runtime_settings.update_settings(path, {"XBRL_TEST_SETTING": "local"})
+
+    assert calls == [path]
+
+
 def test_removing_override_restores_deployment_fallback(tmp_path, monkeypatch):
     _reset_runtime_state()
     path = tmp_path / "settings.json"

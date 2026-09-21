@@ -41,6 +41,47 @@ def test_interrupted_attempt_is_never_reported_complete(upload):
     assert json.loads((directory / "preparation_status.json").read_text())["status"] == "failed"
 
 
+def test_status_write_uses_resilient_atomic_replace(upload, monkeypatch):
+    directory, _, _ = upload
+    calls = []
+
+    def replace(source, destination):
+        calls.append((Path(source), Path(destination)))
+        Path(source).replace(destination)
+
+    monkeypatch.setattr(prep, "replace_with_retry", replace)
+
+    prep._write(directory, {"attempt_id": "a", "status": "working"})
+
+    assert calls and calls[0][1] == directory / "preparation_status.json"
+    assert prep._read(directory)["status"] == "working"
+
+
+def test_snapshot_reports_interruption_when_terminal_status_cannot_persist(upload, monkeypatch):
+    directory, _, _ = upload
+    prep._write(directory, {"attempt_id": "a", "status": "working"})
+    monkeypatch.setattr(prep, "_write", lambda *_: (_ for _ in ()).throw(PermissionError("locked")))
+
+    state = prep.snapshot(directory)
+
+    assert state["status"] == "failed"
+    assert state["error"] == "preparation_interrupted"
+
+
+def test_worker_contains_secondary_status_write_failure(upload, monkeypatch, caplog):
+    directory, db, run_id = upload
+
+    async def failed_prepare(*_args):
+        raise RuntimeError("primary failure")
+
+    monkeypatch.setattr(prep, "_prepare", failed_prepare)
+    monkeypatch.setattr(prep, "_update", lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionError("locked")))
+
+    prep._worker(directory, db, run_id, "attempt")
+
+    assert "Could not persist worker failure status" in caplog.text
+
+
 def test_retry_after_restart_closes_previous_running_audit_without_status_poll(upload, monkeypatch):
     directory, db, run_id = upload
     with repo.db_session(db) as conn:
