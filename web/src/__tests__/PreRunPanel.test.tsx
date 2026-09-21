@@ -82,6 +82,50 @@ describe("PreRunPanel", () => {
     expect(screen.getByTestId("automatic-pipeline-summary")).toHaveTextContent(
       /document scan.*statement extraction.*cross-checks/i,
     );
+    expect(screen.getByRole("heading", { name: /filing details/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /advanced extraction/i })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+  });
+
+  test("collapsed setup disclosures retain their controlled region and use the reveal transition", async () => {
+    render(<PreRunPanel sessionId="abc-123" getSettings={vi.fn().mockResolvedValue(mockSettings)} onRun={vi.fn()} />);
+    await screen.findByRole("button", { name: /statements to extract/i });
+
+    fireEvent.click(screen.getByRole("button", { name: /statements to extract/i }));
+    const region = document.getElementById("statement-selection");
+    expect(region).toBeInTheDocument();
+    expect(region).toHaveAttribute("hidden");
+    expect(region).toHaveClass("pwc-reveal");
+  });
+
+  test("statement and note selections use collapsible summaries", async () => {
+    render(
+      <PreRunPanel
+        sessionId="abc-123"
+        getSettings={vi.fn().mockResolvedValue(mockSettings)}
+        onRun={vi.fn()}
+      />,
+    );
+
+    const statementToggle = await screen.findByRole("button", {
+      name: /statements to extract 5 of 5 selected/i,
+    });
+    const notesToggle = screen.getByRole("button", {
+      name: /notes to include none selected/i,
+    });
+
+    expect(statementToggle).toHaveAttribute("aria-expanded", "true");
+    expect(notesToggle).toHaveAttribute("aria-expanded", "true");
+
+    fireEvent.click(statementToggle);
+    expect(statementToggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("region", { name: /statements to extract/i })).not.toBeInTheDocument();
+
+    fireEvent.click(notesToggle);
+    expect(notesToggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("region", { name: /notes to include/i })).not.toBeInTheDocument();
   });
 
   test("Run button is present and enabled without manual format selection", async () => {
@@ -1186,6 +1230,7 @@ describe("PreRunPanel", () => {
     await waitFor(() => {
       // Toggle state is reflected through the payload to keep the test
       // independent of style-based active-button detection.
+      expect(screen.getByText("Detected")).toBeInTheDocument();
       startExtraction();
       expect(onRun).toHaveBeenCalledWith(
         expect.objectContaining({ filing_standard: "mpers" }),

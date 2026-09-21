@@ -12,7 +12,7 @@ function status(message: string, timestamp: number): SSEEvent {
 }
 
 describe("ActivityStream", () => {
-  test("labels provider reasoning separately from status and tool updates", () => {
+  test("keeps provider reasoning out of the operator activity feed", () => {
     render(
       <ActivityStream
         events={[]}
@@ -30,8 +30,35 @@ describe("ActivityStream", () => {
       />,
     );
 
-    expect(screen.getByText("Reviewing PPE amounts")).toBeInTheDocument();
-    expect(screen.getByText("Provider reasoning")).toBeInTheDocument();
+    expect(screen.queryByText("Reviewing PPE amounts")).toBeNull();
+    expect(screen.queryByText("Provider reasoning")).toBeNull();
+    expect(screen.getByTestId("activity-empty")).toHaveTextContent("Waiting for the next update");
+  });
+
+  test("shows semantic page activity without raw tool details", () => {
+    render(
+      <ActivityStream
+        events={[]}
+        toolTimeline={[{
+          tool_call_id: "pages-1",
+          tool_name: "view_pdf_pages",
+          args: { pages: [7, 8] },
+          result_summary: "internal provider payload",
+          duration_ms: 20,
+          startTime: 1000,
+          endTime: 1020,
+          phase: "viewing_pdf",
+        }]}
+        reasoningBlocks={[]}
+        isRunning={false}
+        streamKey="sofp"
+      />,
+    );
+
+    expect(within(screen.getByRole("list", { name: "Activity updates" }))
+      .getByText("Reviewing source pages 7 and 8.")).toBeInTheDocument();
+    expect(screen.queryByText(/internal provider payload/i)).toBeNull();
+    expect(screen.queryByText(/view_pdf_pages/i)).toBeNull();
   });
 
   test("marks only the newest status update as active", () => {
@@ -54,6 +81,31 @@ describe("ActivityStream", () => {
 
     expect(olderUpdate?.querySelector(".activity-sentence-pulse")).toBeNull();
     expect(newestUpdate?.querySelector(".activity-sentence-pulse")).not.toBeNull();
+  });
+
+  test("keeps completed milestones in chronological order and announces the latest", () => {
+    render(
+      <ActivityStream
+        events={[
+          status("Reading page 1", 1),
+          status("Reading page 2", 2),
+          { event: "complete", data: { success: true }, timestamp: 3 } as SSEEvent,
+        ]}
+        toolTimeline={[]}
+        reasoningBlocks={[]}
+        isRunning={false}
+        streamKey="scout"
+      />,
+    );
+
+    const feed = screen.getByRole("list", { name: "Activity updates" });
+    expect(within(feed).getAllByTestId("activity-sentence").map((item) => item.textContent)).toEqual([
+      "Reading page 1.",
+      "Reading page 2.",
+      "Workstream completed.",
+    ]);
+    expect(screen.getByRole("status", { name: "Current agent activity" }))
+      .toHaveTextContent("Workstream completed.");
   });
 
   test("follows appended updates at the bottom but preserves an operator's scrolled position", () => {

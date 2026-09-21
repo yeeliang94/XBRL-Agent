@@ -99,6 +99,64 @@ const styles = {
     textTransform: "uppercase" as const,
     letterSpacing: 0.5,
   } as React.CSSProperties,
+  setupGroup: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: pwc.space.lg,
+    padding: `${pwc.space.lg}px 0`,
+    borderTop: `1px solid ${pwc.grey200}`,
+    borderBottom: `1px solid ${pwc.grey200}`,
+  } as React.CSSProperties,
+  setupGrid: {
+    display: "flex",
+    flexWrap: "wrap" as const,
+    gap: `${pwc.space.lg}px ${pwc.space.xl}px`,
+    alignItems: "flex-start",
+  } as React.CSSProperties,
+  disclosure: {
+    display: "flex",
+    flexDirection: "column" as const,
+    borderBottom: `1px solid ${pwc.grey200}`,
+  } as React.CSSProperties,
+  disclosureButton: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: pwc.space.md,
+    width: "100%",
+    padding: `${pwc.space.md}px 0`,
+    background: "transparent",
+    border: "none",
+    cursor: "pointer",
+    textAlign: "left" as const,
+  } as React.CSSProperties,
+  disclosureTitle: {
+    fontFamily: pwc.fontHeading,
+    fontWeight: pwc.weight.medium,
+    fontSize: 14,
+    color: pwc.grey900,
+  } as React.CSSProperties,
+  disclosureSummary: {
+    fontFamily: pwc.fontBody,
+    fontSize: 12,
+    color: pwc.grey500,
+  } as React.CSSProperties,
+  disclosureContent: {
+    padding: `0 0 ${pwc.space.lg}px`,
+  } as React.CSSProperties,
+  detectedBadge: {
+    display: "inline-flex",
+    alignItems: "center",
+    padding: `2px ${pwc.space.xs}px`,
+    borderRadius: pwc.radius.sm,
+    background: pwc.grey50,
+    color: pwc.grey700,
+    fontFamily: pwc.fontBody,
+    fontSize: 11,
+    fontWeight: pwc.weight.medium,
+    letterSpacing: 0,
+    textTransform: "none" as const,
+  } as React.CSSProperties,
   // Post-scan "found notes" nudge (UX-QA #24).
   notesNudge: {
     fontFamily: pwc.fontBody,
@@ -163,6 +221,56 @@ const styles = {
     gap: pwc.space.sm,
   } as React.CSSProperties,
 };
+
+function DisclosureSection({
+  id,
+  title,
+  summary,
+  open,
+  onToggle,
+  children,
+}: {
+  id: string;
+  title: string;
+  summary: string;
+  open: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <section style={styles.disclosure}>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        aria-controls={id}
+        style={styles.disclosureButton}
+      >
+        <span style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+          <span style={styles.disclosureTitle}>{title}</span>
+          <span style={styles.disclosureSummary}>{summary}</span>
+        </span>
+        <span
+          aria-hidden="true"
+          className={`pwc-disclosure-chevron${open ? " is-open" : ""}`}
+          style={{ color: pwc.grey500, fontSize: 14 }}
+        >
+          ›
+        </span>
+      </button>
+      <div
+        id={id}
+        role="region"
+        aria-label={title}
+        className="pwc-reveal"
+        style={styles.disclosureContent}
+        hidden={!open}
+      >
+        {children}
+      </div>
+    </section>
+  );
+}
 
 const makeEmptySelections = (): Record<StatementType, VariantSelection> =>
   mapStatements(() => ({ variant: "", confidence: null }));
@@ -522,10 +630,12 @@ function NotesInventoryEditor({
 }
 
 export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onConfigChange, isAdmin = false, preparation }: Props) {
-  // Advanced disclosure (Phase 3): keeps the default view to the accounting
-  // choices; AI-model pickers and benchmark grading
-  // live behind this toggle.
+  // Keep the default view focused on filing scope. Operators can collapse the
+  // two selection lists once they have checked them, while model overrides and
+  // benchmark tooling remain behind the advanced disclosure.
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showStatements, setShowStatements] = useState(true);
+  const [showNotes, setShowNotes] = useState(true);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [scoutError, setScoutError] = useState<string | null>(null);
@@ -1273,6 +1383,8 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
   const canRun =
     (enabledStmts.length > 0 || enabledNotes.length > 0) &&
     !evalSelectionMissing && preparation?.status !== "failed" && preparation?.status !== "cancelled";
+  const standardWasDetected =
+    !filingStandardTouchedRef.current && infopack?.detected_standard === filingStandard;
 
   return (
     <div style={styles.container}>
@@ -1288,10 +1400,9 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
         }}
       >
         <div>
-          <h2 style={styles.heading}>Review and start</h2>
+          <h2 style={styles.heading}>Filing setup</h2>
           <p style={{ ...ui.supportingText, margin: `${pwc.space.xs}px 0 0` }}>
-            Confirm the filing details and choose what to extract. Document
-            preparation and the notes inventory start automatically after upload.
+            Confirm the filing details and extraction scope.
           </p>
         </div>
         <button
@@ -1299,7 +1410,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           onClick={() => setShowAdvanced((v) => !v)}
           aria-expanded={showAdvanced}
           data-testid="advanced-toggle"
-          title="AI models and accuracy grading"
+          title="Models, scan preview, and accuracy grading"
           style={{
             display: "inline-flex",
             alignItems: "center",
@@ -1318,31 +1429,28 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           }}
         >
           <span aria-hidden="true">{showAdvanced ? "▾" : "▸"}</span>
-          Advanced settings
+          Advanced extraction
         </button>
       </div>
 
-      <div
-        data-testid="automatic-pipeline-summary"
-        style={{
-          padding: pwc.space.lg,
-          background: pwc.grey50,
-          border: "none",
-          borderRadius: pwc.radius.md,
-        }}
-      >
-        <div style={{ fontFamily: pwc.fontHeading, fontWeight: 600, fontSize: 14, color: pwc.grey900 }}>
-          Included automatically in every run
+      <section style={styles.setupGroup} aria-labelledby="filing-details-heading">
+        <div>
+          <h3 id="filing-details-heading" style={{ ...styles.heading, fontSize: 14 }}>
+            Filing details
+          </h3>
+          <p style={{ ...ui.supportingText, margin: `${pwc.space.xs}px 0 0` }}>
+            These choices determine the workbook template and figure scale.
+          </p>
         </div>
-        <div style={{ fontFamily: pwc.fontBody, fontSize: 13, color: pwc.grey700, marginTop: pwc.space.xs }}>
-          Source structure and emphasis capture → document scan → statement extraction → cross-checks → AI review → MBRS formatting → final workbook
-        </div>
-      </div>
+        <div style={styles.setupGrid}>
 
       {/* Filing standard: MFRS (default) or MPERS. Mirrors the Filing Level
           styling below so the two toggles read as a pair. */}
       <div style={styles.section}>
-        <span style={styles.sectionLabel}>Filing standard</span>
+        <span style={{ ...styles.sectionLabel, display: "inline-flex", alignItems: "center", gap: pwc.space.sm }}>
+          Filing standard
+          {standardWasDetected && <span style={styles.detectedBadge}>Detected</span>}
+        </span>
         <div className="segmented-control-group" style={{ display: "inline-flex", alignSelf: "flex-start", border: `1px solid ${pwc.grey200}`, borderRadius: pwc.radius.md, overflow: "hidden" }}>
           {(["mfrs", "mpers"] as const).map((standard) => {
             const active = filingStandard === standard;
@@ -1438,6 +1546,25 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
               </button>
             );
           })}
+        </div>
+      </div>
+        </div>
+      </section>
+
+      <div
+        data-testid="automatic-pipeline-summary"
+        style={{
+          padding: pwc.space.md,
+          background: pwc.grey50,
+          border: "none",
+          borderRadius: pwc.radius.md,
+        }}
+      >
+        <div style={{ fontFamily: pwc.fontHeading, fontWeight: 600, fontSize: 13, color: pwc.grey900 }}>
+          Automatic workflow
+        </div>
+        <div style={{ fontFamily: pwc.fontBody, fontSize: 12, color: pwc.grey700, marginTop: pwc.space.xs }}>
+          Document scan → statement extraction → cross-checks → final workbook
         </div>
       </div>
 
@@ -1725,28 +1852,37 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
 
       </>)}
 
-      <hr style={styles.divider} />
-
       {/* Which statements to extract. The per-statement AI-model picker only
           shows inside Advanced (Phase 3). */}
-      <div style={styles.section}>
-        <span style={styles.sectionLabel}>Statements to extract</span>
-        <StatementRunConfig
-          enabled={statementsEnabled}
-          modelOverrides={modelOverrides}
-          availableModels={availableModels}
-          onToggleStatement={handleToggleStatement}
-          onModelChange={handleModelChange}
-          showModels={showAdvanced}
-        />
-      </div>
-
-      <hr style={styles.divider} />
+      <DisclosureSection
+        id="statement-selection"
+        title="Statements to extract"
+        summary={`${enabledStmts.length} of ${STATEMENT_TYPES.length} selected`}
+        open={showStatements}
+        onToggle={() => setShowStatements((value) => !value)}
+      >
+        <div style={styles.section}>
+          <StatementRunConfig
+            enabled={statementsEnabled}
+            modelOverrides={modelOverrides}
+            availableModels={availableModels}
+            onToggleStatement={handleToggleStatement}
+            onModelChange={handleModelChange}
+            showModels={showAdvanced}
+          />
+        </div>
+      </DisclosureSection>
 
       {/* Notes templates — independent of face statements. Default OFF.
           The per-note model picker also lives behind Advanced. */}
-      <div style={styles.section}>
-        <span style={styles.sectionLabel}>Notes to include</span>
+      <DisclosureSection
+        id="notes-selection"
+        title="Notes to include"
+        summary={enabledNotes.length === 0 ? "None selected" : `${enabledNotes.length} of ${NOTES_TEMPLATE_TYPES.length} selected`}
+        open={showNotes}
+        onToggle={() => setShowNotes((value) => !value)}
+      >
+        <div style={styles.section}>
         {/* A saved preview may already contain a note inventory. Keep its
             review controls beside the notes selection even when Advanced is
             collapsed: the preview machinery is technical, but correcting a
@@ -1818,9 +1954,8 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           onModelChange={handleNotesModelChange}
           showModels={showAdvanced}
         />
-      </div>
-
-      <hr style={styles.divider} />
+        </div>
+      </DisclosureSection>
 
       {/* Run button — enabled when at least one face or notes template is
           selected. When grading is on but no benchmark is picked, Run is

@@ -3,10 +3,10 @@ import { render, screen } from "@testing-library/react";
 import { PipelineStages } from "../components/PipelineStages";
 
 const PHASE_LABELS = [
-  "Prepare document",
-  "Extract data",
-  "Combine & check",
-  "Review issues",
+  "Prepare",
+  "Extract",
+  "Check",
+  "Review",
   "Ready",
 ];
 
@@ -77,13 +77,14 @@ describe("PipelineStages", () => {
       <PipelineStages currentPhase="viewing_pdf" pipelineStage="cross_checking" isRunning={true} isComplete={false} />,
     );
     expect(container.querySelectorAll("[data-testid='step-complete']")).toHaveLength(2);
-    expect(screen.getByText("Combine & check")).toHaveStyle({ fontWeight: "600" });
+    expect(screen.getByText("Check")).toHaveStyle({ fontWeight: "600" });
+    expect(screen.getByText("Check")).toHaveAttribute("aria-current", "step");
 
     rerender(
       <PipelineStages currentPhase="reading_template" pipelineStage="reviewing_notes" isRunning={true} isComplete={false} />,
     );
     expect(container.querySelectorAll("[data-testid='step-complete']")).toHaveLength(3);
-    expect(screen.getByText("Review issues")).toHaveStyle({ fontWeight: "600" });
+    expect(screen.getByText("Review")).toHaveStyle({ fontWeight: "600" });
   });
 
   test("keeps scanned-note transcription visible in Prepare document", () => {
@@ -95,7 +96,7 @@ describe("PipelineStages", () => {
         isComplete={false}
       />,
     );
-    expect(screen.getByText("Prepare document")).toHaveStyle({ fontWeight: "600" });
+    expect(screen.getByText("Prepare")).toHaveStyle({ fontWeight: "600" });
   });
 
   test("applies PwC theme colors (orange500 active, success completed, grey300 pending)", () => {

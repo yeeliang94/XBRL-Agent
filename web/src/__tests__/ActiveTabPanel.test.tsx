@@ -44,7 +44,7 @@ function subToolCall(subId: string, tcId: string, name: string): SSEEvent {
 }
 
 describe("ActiveTabPanel — unified vertical activity stream", () => {
-  test("keeps every scout reasoning sentence visible in chronological order", () => {
+  test("keeps provider reasoning out of the operator activity stream", () => {
     const scout = createAgentState("scout", "scout", "Document scan");
     scout.status = "running";
     scout.events = [
@@ -65,13 +65,13 @@ describe("ActiveTabPanel — unified vertical activity stream", () => {
 
     const stream = screen.getByRole("region", { name: /live activity/i });
     expect(within(stream).getByText("Live activity")).toBeInTheDocument();
-    expect(within(stream).getByText("Provider reasoning")).toBeInTheDocument();
-    expect(within(stream).getByText("The contents page is page 3.")).toBeInTheDocument();
-    expect(within(stream).getByText("I will inspect it first.")).toBeInTheDocument();
+    expect(within(stream).queryByText("Provider reasoning")).toBeNull();
+    expect(within(stream).queryByText("The contents page is page 3.")).toBeNull();
+    expect(within(stream).queryByText("I will inspect it first.")).toBeNull();
+    expect(within(stream).getByTestId("activity-empty")).toHaveTextContent("Waiting for the next update");
     expect(within(stream).queryByRole("button", { name: /activity/i })).toBeNull();
     expect(screen.queryByText("Current activity")).not.toBeInTheDocument();
     expect(screen.queryByText("Reasoning and actions")).not.toBeInTheDocument();
-    expect(screen.queryByText("Technical details")).not.toBeInTheDocument();
     expect(screen.queryByTestId("reasoning-block")).not.toBeInTheDocument();
   });
 
@@ -172,8 +172,8 @@ describe("ActiveTabPanel — Sheet-12 sub-tabs", () => {
     render(<ActiveTabPanel state={state} />);
 
     // The All view shows both tool sentences together in the vertical stream.
-    expect(screen.getAllByText(/locating table of contents/i).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/checking pdf pages/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/locating the contents page/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/reviewing source pages/i).length).toBeGreaterThan(0);
 
     const feed = screen.getByRole("list", { name: "Activity updates" });
     Object.defineProperty(feed, "scrollHeight", { configurable: true, value: 400 });
@@ -186,8 +186,8 @@ describe("ActiveTabPanel — Sheet-12 sub-tabs", () => {
     fireEvent.click(subChips[1]);
 
     // Now only sub0's tool row is visible.
-    expect(screen.getAllByText(/locating table of contents/i).length).toBeGreaterThan(0);
-    expect(screen.queryAllByText(/checking pdf pages/i)).toHaveLength(0);
+    expect(screen.getAllByText(/locating the contents page/i).length).toBeGreaterThan(0);
+    expect(screen.queryAllByText(/reviewing source pages/i)).toHaveLength(0);
     expect(feed.scrollTop).toBe(400);
   });
 

@@ -183,6 +183,13 @@ function formatDurationMs(ms: number): string {
   return `${m}m ${String(s).padStart(2, "0")}s`;
 }
 
+function formatRunDuration(startedAt: string | null, endedAt: string | null): string {
+  if (!startedAt || !endedAt) return "—";
+  const elapsed = new Date(endedAt).getTime() - new Date(startedAt).getTime();
+  if (!Number.isFinite(elapsed) || elapsed < 0) return "—";
+  return formatDurationMs(elapsed);
+}
+
 /** Per-agent duration for the Activity tab.
  *
  * The stored `started_at`/`ended_at` on a face or notes agent are batch
@@ -647,7 +654,6 @@ export function RunDetailView({
     setSelectedTarget({ sheet, row });
   };
 
-  const canDownload = !!detail.merged_workbook_path;
   const isRunning = detail.status === "running";
   const isDraft = detail.status === "draft";
   const isFailed = detail.status === "failed";
@@ -672,6 +678,11 @@ export function RunDetailView({
     ].filter(Boolean);
     return `${crossCheckFailureLabel(c.name)}${values.length ? ` — ${values.join(", ")}` : ""}`;
   });
+  const advisoryCheckSummaries = crossChecks
+    .filter((check) => String(check.status) === "warning")
+    .map((check) =>
+      `${crossCheckFailureLabel(check.name)}${check.message ? ` — ${check.message}` : ""}`,
+    );
   // Run-84 finding (2026-08-05): a single statement can stop early — the step
   // cap, a timeout, a cancel — while the RUN still reports `completed`. Its
   // partial figures reach the merged workbook anyway (extraction saves facts as
@@ -735,33 +746,29 @@ export function RunDetailView({
   const reviewWorkspaceActive = activeTab === "values" || activeTab === "notes";
   const rollup = detail.telemetry_rollup;
   const sidecarNotice = detail.pdf_sidecar ? describePdfSidecar(detail.pdf_sidecar) : null;
-
-  // Outcome summary for the Overview strip (E1). Cross-check status can carry
-  // an advisory "warning" beyond the typed enum, so compare as strings.
-  const outcomes = (() => {
-    const checks = crossChecks as { status: string }[];
-    const passed = checks.filter((c) => c.status === "passed").length;
-    const failed = checks.filter((c) => c.status === "failed").length;
-    // A run's "statements" = the FACE statements the user chose (UX-QA #13b).
-    // The old filter only dropped NOTES_LIST_OF_NOTES + the named pseudo-agents,
-    // so it silently counted SCOUT and every per-template notes agent
-    // (NOTES_ACC_POLICIES, …) as statements — a 5-statement run with notes +
-    // scout reported "8-10 statements". Exclude scout and ALL notes agents so
-    // the count matches what the user selected.
-    const statements = detail.agents.filter(
-      (a) => a.statement_type !== "SCOUT" &&
-        !a.statement_type.startsWith("NOTES_") &&
-        !isNotes12StatementType(a.statement_type) &&
-        pseudoAgentLabel(a.statement_type) === null,
-    ).length;
-    return {
-      passed,
-      graded: passed + failed,
-      // Only failed checks require attention; advisory detail stays in Cross-checks.
-      needsAttention: failed,
-      statements,
-    };
-  })();
+  const runDuration = formatRunDuration(detail.started_at, detail.ended_at);
+  const nonBlockingItems = [
+    ...advisoryCheckSummaries,
+    ...(isErrorOutcome && failingCheckSummaries.length === 0
+      ? ["Extraction or review finished with issues. Open Activity for the recorded details."]
+      : []),
+    ...(detail.incidents ?? [])
+      .filter((incident) => incident.severity !== "fatal")
+      .map((incident) => incident.user_message),
+  ];
+  const preparationState = isDraft
+    ? "Setup not complete"
+    : isRunning
+      ? "Extraction in progress"
+      : isFailed || isAborted
+        ? detail.merged_workbook_path
+          ? "Partial results available"
+          : "Not ready"
+        : incompleteStatements.length > 0
+          ? "Partial results available"
+          : failingChecks.length > 0
+            ? "Checks need attention"
+          : "Ready to prepare";
 
   // Roving keyboard navigation for the tab bar (WAI-ARIA tabs pattern):
   // Arrow keys move between tabs, Home/End jump to ends, and focus follows
@@ -835,7 +842,7 @@ export function RunDetailView({
               <span style={styles.dim}>{new Date(detail.created_at).toLocaleString()}</span>
             )}
           </div>
-          {!reviewWorkspaceActive && !isDraft && (canDownload || detail.status === "completed" || isErrorOutcome) && (
+          {!reviewWorkspaceActive && !isDraft && (
             <p style={styles.aiDisclaimer} role="note">
               Figures were extracted by AI — verify against the source PDF before filing.
             </p>
@@ -850,15 +857,6 @@ export function RunDetailView({
               style={ui.buttonPrimary}
             >
               Resume setup
-            </button>
-          ) : isErrorOutcome && activeTab === "overview" ? (
-            <button
-              type="button"
-              onClick={() => selectTab(issueTab)}
-              className={uiClass.btnPrimary}
-              style={ui.buttonPrimary}
-            >
-              Review issues
             </button>
           ) : null}
           {!isDraft && <button
@@ -928,29 +926,6 @@ export function RunDetailView({
         </div>
       </header>
 
-      {/* Overview summarizes the outcome. The header retains run status and
-          Review issues navigation; other tabs show their specific findings. */}
-      {activeTab === "overview" && isErrorOutcome && (
-        <div style={styles.errorBanner} role="alert">
-          <div style={styles.errorBannerBody}>
-            <strong style={styles.errorBannerTitle}>
-              {failingChecks.length > 0
-                ? "This run finished, but a consistency check didn’t pass."
-                : "This run finished with extraction or review issues."}
-            </strong>
-            <span style={styles.errorBannerText}>
-              {failingCheckSummaries.length > 0 ? (
-                <>
-                  {failingCheckSummaries.join("; ")}.
-                </>
-              ) : (
-                <>Review the recorded activity before downloading or filing this run.</>
-              )}
-            </span>
-          </div>
-        </div>
-      )}
-
       {/* Run-84: fires on its own condition, NOT on run status — the case it
           exists for is a run that reports `completed` with one statement
           unfinished, which every banner around it misses. */}
@@ -979,6 +954,27 @@ export function RunDetailView({
             style={ui.buttonSecondary}
           >
             View activity
+          </button>
+        </div>
+      )}
+
+      {!reviewWorkspaceActive && !isRunning && failingChecks.length > 0 && (
+        <div style={styles.errorBanner} role="alert" data-testid="failed-check-warning">
+          <div style={styles.errorBannerBody}>
+            <strong style={styles.errorBannerTitle}>
+              This run finished, but a consistency check didn’t pass.
+            </strong>
+            <span style={styles.errorBannerText}>
+              {failingCheckSummaries.join("; ")}. Resolve the failed check before filing.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => selectTab("checks")}
+            className={uiClass.btnSecondary}
+            style={ui.buttonSecondary}
+          >
+            Review checks
           </button>
         </div>
       )}
@@ -1111,7 +1107,8 @@ export function RunDetailView({
         onCancel={() => setConfirmDelete(false)}
       />
 
-      {/* Keep the same navigation visible on every run section. */}
+      {/* Keep the same navigation visible on every run section. Overview is
+          the primary landing surface; the remaining tabs are review tools. */}
         <div
           ref={tabBarRef}
           style={styles.tabBar}
@@ -1121,20 +1118,22 @@ export function RunDetailView({
           {availableTabs.map((t, i) => {
             const active = t.key === activeTab;
             return (
-              <button
-                key={t.key}
-                type="button"
-                role="tab"
-                aria-selected={active}
-                tabIndex={active ? 0 : -1}
-                className="pwc-tab"
-                disabled={notesPreparationBlocked && !active}
-                onClick={() => selectTab(t.key)}
-                onKeyDown={(e) => onTabKeyDown(e, i)}
-                style={active ? styles.tabActive : styles.tab}
-              >
-                {t.label}
-              </button>
+              <span key={t.key} role="presentation" style={styles.tabGroup}>
+                {i === 1 && <span aria-hidden="true" style={styles.tabGroupLabel}>Review tools</span>}
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  tabIndex={active ? 0 : -1}
+                  className="pwc-tab"
+                  disabled={notesPreparationBlocked && !active}
+                  onClick={() => selectTab(t.key)}
+                  onKeyDown={(e) => onTabKeyDown(e, i)}
+                  style={active ? styles.tabActive : styles.tab}
+                >
+                  {t.label}
+                </button>
+              </span>
             );
           })}
         </div>
@@ -1145,49 +1144,61 @@ export function RunDetailView({
       <TabPanelFade tabKey={activeTab}>
       {activeTab === "overview" && (
         <section style={styles.section} role="tabpanel">
-          {/* Lead with OUTCOMES — the first question is "did it extract
-              correctly / anything to fix", not how many tokens it used (E1).
-              Cost/tokens are demoted below the configuration. */}
+          {/* Lead with the operator's two immediate questions: can the filing
+              workbook be prepared, and how long did extraction take? */}
           <div style={styles.metricStrip}>
             <MetricTile
-              label="Checks passing"
-              value={
-                outcomes.graded > 0
-                  ? `${outcomes.passed}/${outcomes.graded}`
-                  : "—"
-              }
+              label="Workbook"
+              value={preparationState}
               tone={
-                outcomes.graded === 0
-                  ? "neutral"
-                  : outcomes.passed === outcomes.graded
+                !isRunning &&
+                !isDraft &&
+                !isInvestigationOutcome &&
+                failingChecks.length === 0 &&
+                incompleteStatements.length === 0
                   ? "success"
-                  : "warning"
+                  : failingChecks.length > 0
+                    ? "warning"
+                    : "neutral"
               }
             />
             <MetricTile
-              label="Needs attention"
-              value={String(outcomes.needsAttention)}
-              tone={outcomes.needsAttention > 0 ? "warning" : "success"}
+              label="Elapsed time"
+              value={runDuration}
             />
-            <MetricTile label="Statements" value={String(outcomes.statements)} />
           </div>
+          {(nonBlockingItems.length > 0 || sidecarNotice) && (
+            <details style={styles.itemsToCheck} data-testid="items-to-check">
+              <summary style={styles.perfSummary}>
+                Items to check ({nonBlockingItems.length + (sidecarNotice ? 1 : 0)})
+              </summary>
+              <div className="pwc-disclosure-content" style={styles.itemsToCheckBody}>
+                {nonBlockingItems.map((item, index) => (
+                  <p key={`${item}:${index}`} style={styles.itemToCheck}>{item}</p>
+                ))}
+                {sidecarNotice && (
+                  <div data-testid="pdf-sidecar-notice" style={styles.itemToCheck}>
+                    <strong>{sidecarNotice.title}</strong>
+                    <span>{sidecarNotice.message}</span>
+                  </div>
+                )}
+                {isErrorOutcome && (
+                  <button
+                    type="button"
+                    onClick={() => selectTab(issueTab)}
+                    className={uiClass.btnSecondary}
+                    style={{ ...ui.buttonSecondary, ...ui.buttonSm }}
+                  >
+                    Open relevant review tool
+                  </button>
+                )}
+              </div>
+            </details>
+          )}
           <details>
             <summary style={styles.perfSummary}>Run configuration</summary>
             <ConfigBlock config={detail.config} />
           </details>
-          {/* docs/PLAN-pdf-source-sidecar.md: the persisted scanned-PDF
-              transcript outcome — the same notice the live page showed, so
-              the "figures are model-read, verify against the PDF" caveat is
-              still visible when someone reviews the workbook after a reload.
-              Absent when the pass did not apply. */}
-          {sidecarNotice && (
-            <div role="status" data-testid="pdf-sidecar-notice" style={styles.errorBanner}>
-              <div style={styles.errorBannerBody}>
-                <span style={styles.errorBannerTitle}>{sidecarNotice.title}</span>
-                <span style={styles.errorBannerText}>{sidecarNotice.message}</span>
-              </div>
-            </div>
-          )}
           {detail.repeat_group_id != null && (
             <ConsistencyPanel groupId={detail.repeat_group_id} />
           )}
@@ -1524,6 +1535,16 @@ const styles = {
     gap: pwc.space.xs,
     flexWrap: "wrap" as const,
   } as React.CSSProperties,
+  tabGroup: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: pwc.space.sm,
+  } as React.CSSProperties,
+  tabGroupLabel: {
+    ...ui.microLabel,
+    marginLeft: pwc.space.md,
+    textTransform: "uppercase" as const,
+  } as React.CSSProperties,
   tab: {
     ...ui.tab,
     fontSize: 14,
@@ -1724,6 +1745,25 @@ const styles = {
     marginTop: pwc.space.lg,
     borderTop: `1px solid ${pwc.grey200}`,
     paddingTop: pwc.space.md,
+  } as React.CSSProperties,
+  itemsToCheck: {
+    borderTop: `1px solid ${pwc.grey200}`,
+    borderBottom: `1px solid ${pwc.grey200}`,
+    padding: `${pwc.space.md}px 0`,
+  } as React.CSSProperties,
+  itemsToCheckBody: {
+    display: "grid",
+    gap: pwc.space.sm,
+    marginTop: pwc.space.md,
+  } as React.CSSProperties,
+  itemToCheck: {
+    display: "grid",
+    gap: 2,
+    margin: 0,
+    color: pwc.grey700,
+    fontFamily: pwc.fontBody,
+    fontSize: 13,
+    lineHeight: 1.5,
   } as React.CSSProperties,
   perfSummary: {
     cursor: "pointer",

@@ -29,6 +29,7 @@ import { describePdfSidecar } from "../lib/pdfSidecar";
 import { runStatusDisplay } from "../lib/runStatus";
 import { StatusIcon } from "../components/StatusIcon";
 import { semanticActivities } from "../lib/semanticActivity";
+import { isCompletedWorkstream, workstreamStatusLabel } from "../lib/workstreamStatus";
 
 // Re-export so existing callers / tests that imported NOTES_12_AGENT_ID
 // from ExtractPage keep working. The single source of truth lives in
@@ -126,6 +127,7 @@ export function ExtractPage({
   isAdmin = false,
 }: ExtractPageProps) {
   const [preparationState, setPreparationState] = useState<{ sessionId: string; snapshot: PreparationSnapshot } | null>(null);
+  const [confirmStopRun, setConfirmStopRun] = useState(false);
   const preparation = preparationState?.sessionId === state.sessionId ? preparationState.snapshot : undefined;
   const acceptPreparation = useCallback((snapshot: PreparationSnapshot) => {
     if (state.sessionId) setPreparationState({ sessionId: state.sessionId, snapshot });
@@ -299,9 +301,7 @@ export function ExtractPage({
     const monitoredAgents = requestedRoles.size > 0 ? requestedAgents : agents;
     return {
       total: requestedRoles.size > 0 ? requestedRoles.size : agents.length,
-      complete: monitoredAgents.filter((agent) =>
-        agent.status === "complete" || agent.status === "skipped"
-      ).length,
+      complete: monitoredAgents.filter((agent) => isCompletedWorkstream(agent.status)).length,
       running: agents.filter((agent) => agent.status === "running" || agent.status === "aborting").length,
       // Run-check agents are deliberately outside the requested-workstream
       // denominator, but their failures must still be visible to operators.
@@ -331,6 +331,20 @@ export function ExtractPage({
   const completionDisplay = runStatusDisplay(completionStatus);
   const showReviewHandoff = state.isComplete && state.complete != null && completedRunId != null && onOpenRun != null;
   const showActivity = !showReviewHandoff || showCompletedActivity;
+  const openedCompletionRunRef = useRef<number | null>(null);
+  const [completionInteractionRunId, setCompletionInteractionRunId] = useState<number | null>(null);
+  useEffect(() => {
+    if (
+      !showReviewHandoff ||
+      completedRunId == null ||
+      completionInteractionRunId === completedRunId ||
+      openedCompletionRunRef.current === completedRunId
+    ) return;
+    openedCompletionRunRef.current = completedRunId;
+    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    const timer = window.setTimeout(() => onOpenRun?.(completedRunId), reduceMotion ? 0 : 600);
+    return () => window.clearTimeout(timer);
+  }, [completedRunId, completionInteractionRunId, onOpenRun, showReviewHandoff]);
   const idle = state.sessionId == null && !state.isRunning;
   const showQueue = idle && landingMode === "queue";
   const isResumedDraft = state.currentRunId != null && state.sessionId != null
@@ -349,7 +363,9 @@ export function ExtractPage({
               ? "New extraction"
               : "Work queue"}
         description={state.isComplete
-          ? "Processing has ended. Review the results before preparing your filing."
+          ? completionStatus === "completed"
+            ? "Your workbook is ready. Opening the run overview."
+            : "Processing has ended. Opening the run overview with the next action."
           : state.isRunning
           ? "You can leave this page while processing continues."
           : isResumedDraft
@@ -376,27 +392,33 @@ export function ExtractPage({
       />
 
       {showReviewHandoff && (
-        <section aria-labelledby="completion-heading" style={styles.runOverview}>
+        <section aria-labelledby="completion-heading" className="pwc-view-enter" style={styles.runOverview}>
           <div role="status" aria-live="polite">
             <h2 id="completion-heading" style={styles.runOverviewTitle}>
               <StatusIcon symbol={completionDisplay.symbol} /> {completionDisplay.label}
             </h2>
             <p style={styles.runOverviewMessage}>
               {completionStatus === "completed"
-                ? "Extraction is complete. Next, review figures, notes and cross-checks in the run workspace."
+                ? "Extraction is complete. Opening Overview now."
                 : completionStatus === "completed_with_errors" || completionStatus === "correction_exhausted"
-                  ? "Processing has ended with issues. Review the results and unresolved checks before using the workbook."
-                  : "Extraction did not finish successfully. Open the run to inspect issues and any partial results."}
+                  ? "Processing has ended. Opening Overview with items to check."
+                  : "Extraction did not finish successfully. Opening Overview with a recovery action."}
             </p>
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: pwc.space.md, marginTop: pwc.space.md }}>
             <button type="button" className={uiClass.btnPrimary} style={ui.buttonPrimary}
-              onClick={() => onOpenRun(completedRunId)}>
-              Review run results
+              onClick={() => {
+                setCompletionInteractionRunId(completedRunId);
+                onOpenRun(completedRunId);
+              }}>
+              Open overview
             </button>
             <button type="button" className={uiClass.btnGhost} style={ui.buttonGhost}
               aria-expanded={showCompletedActivity}
-              onClick={() => setExpandedActivityRunId(showCompletedActivity ? null : completedRunId)}>
+              onClick={() => {
+                setCompletionInteractionRunId(completedRunId);
+                setExpandedActivityRunId(showCompletedActivity ? null : completedRunId);
+              }}>
               {showCompletedActivity ? "Hide run activity" : "Show run activity"}
             </button>
           </div>
@@ -451,14 +473,11 @@ export function ExtractPage({
           and token cards. Operators first see what the system is doing and
           whether any workstream needs attention; technical usage is secondary. */}
       {showActivity && (state.isRunning || state.currentPhase || state.tokens) && (
-        <section aria-labelledby="live-run-heading" style={styles.runOverview}>
+        <section aria-labelledby="live-run-heading" className="pwc-view-enter" style={styles.runOverview}>
           <div className="live-run-header" style={styles.runOverviewHeader}>
             <div style={styles.runOverviewLead}>
               <div style={styles.runEyebrow}>{state.isRunning ? "Live run" : "Run progress"}</div>
               <div style={styles.runTitleRow}>
-                {state.isRunning && (
-                  <span className="pwc-spinner" aria-hidden="true" style={styles.runArc} />
-                )}
                 <h2
                   id="live-run-heading"
                   data-testid="pipeline-stage-label"
@@ -475,10 +494,10 @@ export function ExtractPage({
               </div>
               <p style={styles.runOverviewMessage}>
                 {state.isComplete
-                  ? "Processing has ended. Review results and any unresolved issues before filing."
+                  ? "Processing has ended."
                   : state.isRunning
-                    ? "This can take a few minutes. You can leave this page open while the run continues."
-                    : "The run is no longer active. Review any errors below before trying again."}
+                    ? "Work continues in the background if you leave this page."
+                    : "The run is no longer active."}
               </p>
               {state.isRunning && state.pipelineActivity?.total != null && state.pipelineActivity.total > 0 && (
                 <div
@@ -511,6 +530,16 @@ export function ExtractPage({
               {state.runStartTime != null && (
                 <ElapsedTime startTime={state.runStartTime} running={state.isRunning} />
               )}
+              {state.isRunning && (
+                <button
+                  type="button"
+                  className={uiClass.btnSecondary}
+                  style={{ ...ui.buttonSecondary, ...ui.buttonSm, marginTop: pwc.space.md }}
+                  onClick={() => setConfirmStopRun(true)}
+                >
+                  Stop run
+                </button>
+              )}
             </div>
           </div>
 
@@ -523,22 +552,20 @@ export function ExtractPage({
             />
           )}
 
-          {(state.isRunning || state.tokens) && (
-            <details style={styles.usageDisclosure}>
-              <summary style={styles.usageSummary}>
-                Usage and estimated cost
-                <span style={styles.usageSummaryEnd}>
-                  <span style={styles.usageSummaryValue}>
-                    {state.tokens ? `$${state.tokens.cost_estimate.toFixed(4)}` : "Waiting for usage data"}
-                  </span>
-                  <span aria-hidden="true" style={styles.usageChevron} />
-                </span>
-              </summary>
-              <TokenDashboard tokens={state.tokens} isRunning={state.isRunning} embedded />
-            </details>
-          )}
         </section>
       )}
+
+      <ConfirmDialog
+        isOpen={confirmStopRun}
+        title="Stop this extraction run?"
+        message="Work that has not finished will stop. Completed work remains attached to the run when it can be preserved safely."
+        confirmLabel="Stop run"
+        onConfirm={() => {
+          setConfirmStopRun(false);
+          void handleAbortAll();
+        }}
+        onCancel={() => setConfirmStopRun(false)}
+      />
 
       {/* Agent tabs + monitor. The activity shell renders whenever a run
           is in flight (`isRunning`) OR any agent tab has already been
@@ -574,7 +601,6 @@ export function ExtractPage({
 
           <ActiveTabPanel
             state={state}
-            onAbortAll={handleAbortAll}
             onAbortAgent={handleAbortAgent}
             onRerunAgent={handleRerunAgent}
           />
@@ -591,12 +617,27 @@ export function ExtractPage({
         />
       )}
 
-      {scaleConflicts.map((message) => (
+      {showActivity && (state.isRunning || state.tokens) && (
+        <details style={styles.usageDisclosure}>
+          <summary style={styles.usageSummary}>
+            Technical usage details
+            <span style={styles.usageSummaryEnd}>
+              <span style={styles.usageSummaryValue}>
+                {state.tokens ? `$${state.tokens.cost_estimate.toFixed(4)}` : "Not available yet"}
+              </span>
+              <span aria-hidden="true" style={styles.usageChevron} />
+            </span>
+          </summary>
+          <TokenDashboard tokens={state.tokens} isRunning={state.isRunning} embedded />
+        </details>
+      )}
+
+      {!state.isRunning && scaleConflicts.map((message) => (
         <p key={message} role="status" style={styles.partialMergeMessage}>
           <strong>Check figure units: </strong>{message}
         </p>
       ))}
-      {documentChecks.length > 0 && (
+      {!state.isRunning && documentChecks.length > 0 && (
         <details style={{ marginTop: pwc.space.sm }}>
           <summary>Document check details</summary>
           <ul>{documentChecks.map((message) => <li key={message}>{message}</li>)}</ul>
@@ -604,7 +645,7 @@ export function ExtractPage({
       )}
 
       {/* Same run-level palette as the scout banner; no agent tab (no agent_id). */}
-      {sidecarNotice && !preparation && (
+      {sidecarNotice && !preparation && !state.isRunning && (
         <div role="status" data-testid="pdf-sidecar-notice" style={styles.partialMergeBox}>
           <h3 style={styles.partialMergeTitle}>{sidecarNotice.title}</h3>
           <p style={styles.partialMergeMessage}>{sidecarNotice.message}</p>
@@ -802,7 +843,7 @@ export function ActiveTabPanel({
               <div style={styles.activityEyebrow}>Selected workstream</div>
               <div style={styles.activityTitle}>Source preparation</div>
             </div>
-            <span style={styles.activeAgentStatus}>{active ? "Working" : state.pdfSidecar?.status === "built" ? "Complete" : "Unconfirmed"}</span>
+            <span style={styles.activeAgentStatus}>{active ? "Working" : state.pdfSidecar?.status === "built" ? "Complete" : "Waiting"}</span>
           </div>
           <div style={styles.activityHeaderRight}>
             {showStopAll && (
@@ -926,7 +967,7 @@ export function ActiveTabPanel({
           </div>
           {activeAgent && (
             <span style={styles.activeAgentStatus}>
-              {activeAgent.status === "complete" ? "Complete" : activeAgent.status.charAt(0).toUpperCase() + activeAgent.status.slice(1)}
+              {workstreamStatusLabel(activeAgent.status)}
             </span>
           )}
           {showStop && (

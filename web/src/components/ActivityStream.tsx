@@ -1,7 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import type { ReasoningBlock, SSEEvent, ToolTimelineEntry } from "../lib/types";
 import { buildActivitySentences } from "../lib/buildActivitySentences";
-import { useFrameBatchedText } from "../lib/useFrameBatchedText";
 import { pwc } from "../lib/theme";
 
 interface Props {
@@ -15,27 +14,18 @@ interface Props {
 interface UpdateProps {
   id: string;
   text: string;
-  source: "reasoning" | "status" | "tool";
   active: boolean;
   isRunning: boolean;
   isLatest: boolean;
-  showProviderLabel: boolean;
 }
 
 const ActivityUpdate = memo(function ActivityUpdate({
   id,
   text,
-  source,
   active,
   isRunning,
   isLatest,
-  showProviderLabel,
 }: UpdateProps) {
-  const displayedText = useFrameBatchedText(
-    text,
-    Boolean(active && source === "reasoning" && isRunning),
-  );
-
   return (
     <li
       className="activity-sentence-enter"
@@ -51,20 +41,11 @@ const ActivityUpdate = memo(function ActivityUpdate({
         />
       </span>
       <div style={styles.copy}>
-        {showProviderLabel ? (
-          <span style={styles.source}>Provider reasoning</span>
-        ) : null}
-        <p style={styles.sentence}>{displayedText}</p>
+        <p style={styles.sentence}>{text}</p>
       </div>
     </li>
   );
 });
-
-function reasoningGroupId(id: string): string | null {
-  if (!id.startsWith("reasoning:")) return null;
-  const sentenceSeparator = id.lastIndexOf(":");
-  return sentenceSeparator > 0 ? id.slice(0, sentenceSeparator) : id;
-}
 
 export function ActivityStream({
   events,
@@ -74,7 +55,7 @@ export function ActivityStream({
   streamKey,
 }: Props) {
   const items = useMemo(
-    () => buildActivitySentences(events, toolTimeline, reasoningBlocks).reverse(),
+    () => buildActivitySentences(events, toolTimeline).reverse(),
     [events, toolTimeline, reasoningBlocks],
   );
   const scrollRef = useRef<HTMLOListElement>(null);
@@ -83,13 +64,7 @@ export function ActivityStream({
   const latest = items[items.length - 1] ?? null;
   const followKey = `${latest?.id ?? "empty"}:${latest?.text.length ?? 0}`;
 
-  let announcement = "";
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    if (items[index].source !== "reasoning") {
-      announcement = items[index].text;
-      break;
-    }
-  }
+  const announcement = latest?.text ?? "";
 
   useEffect(() => {
     if (previousStreamKeyRef.current !== streamKey) {
@@ -130,23 +105,16 @@ export function ActivityStream({
       >
         {items.length === 0 ? (
           <li data-testid="activity-empty" style={styles.empty}>Waiting for the next update…</li>
-        ) : items.map((item, index) => {
-          const previous = items[index - 1];
-          const group = reasoningGroupId(item.id);
-          const previousGroup = previous ? reasoningGroupId(previous.id) : null;
-          return (
+        ) : items.map((item, index) => (
             <ActivityUpdate
               key={item.id}
               id={item.id}
               text={item.text}
-              source={item.source}
               active={item.active}
               isRunning={isRunning}
               isLatest={index === items.length - 1}
-              showProviderLabel={group !== null && group !== previousGroup}
             />
-          );
-        })}
+        ))}
       </ol>
     </section>
   );
@@ -208,13 +176,6 @@ const styles = {
   } as const,
   copy: {
     minWidth: 0,
-  } as const,
-  source: {
-    display: "block",
-    marginBottom: 2,
-    fontFamily: pwc.fontBody,
-    fontSize: 10,
-    color: pwc.grey500,
   } as const,
   sentence: {
     margin: 0,

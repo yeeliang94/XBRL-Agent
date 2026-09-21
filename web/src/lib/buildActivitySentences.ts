@@ -1,5 +1,5 @@
-import type { ReasoningBlock, SSEEvent, ToolTimelineEntry } from "./types";
-import { argsPreview, humanToolName, resultSummary } from "./toolLabels";
+import type { SSEEvent, ToolTimelineEntry } from "./types";
+import { argsPreview, humanToolName, TOOL_LABELS } from "./toolLabels";
 
 export interface ActivitySentence {
   id: string;
@@ -15,89 +15,57 @@ function finishSentence(value: string): string {
   return `${text}.`;
 }
 
-function plainReasoning(value: string): string {
-  const withoutBold = value.replace(
-    /\*\*([^*\n]+?)\*\*/g,
-    (match, content: string, offset: number) => {
-      const lineStart = value.lastIndexOf("\n", offset - 1) + 1;
-      const startsLine = value.slice(lineStart, offset).trim() === "";
-      const matchEnd = offset + match.length;
-      // Consecutive bold fragments are streamed headings; split them after
-      // removing Markdown so they do not collapse into one sentence.
-      const touchesBoldRun = value.slice(Math.max(0, offset - 2), offset) === "**"
-        || value.startsWith("**", matchEnd);
-      return `${content}${startsLine || touchesBoldRun ? "\n" : ""}`;
-    },
-  );
-
-  return withoutBold
-    .replace(/\*{2,}/g, "")
-    .replace(/(^|[^\w*])\*(\S(?:[^*\n]*?\S)?)\*(?=$|[^\w*])/g, "$1$2")
-    .replace(/(^|\n)\s*\*\s+/g, "$1");
-}
-
-function splitReasoning(value: string): string[] {
-  value = plainReasoning(value);
-  const sentences: string[] = [];
-  let start = 0;
-  let index = 0;
-
-  const push = (end: number) => {
-    const sentence = value.slice(start, end).trim();
-    if (sentence) sentences.push(sentence);
-    start = end;
-  };
-
-  while (index < value.length) {
-    const char = value[index];
-    if (char === "\n") {
-      push(index);
-      start = index + 1;
-      index += 1;
-      continue;
-    }
-    if (char !== "." && char !== "!" && char !== "?") {
-      index += 1;
-      continue;
-    }
-
-    // Financial note references and decimal values use periods inside a
-    // number (for example 2.14 and 12.5). Those periods are not sentence
-    // boundaries and must keep the streamed item id stable as digits arrive.
-    const isNumericPeriod =
-      char === "."
-      && /\d/.test(value[index - 1] ?? "")
-      && /\d/.test(value[index + 1] ?? "");
-    if (isNumericPeriod) {
-      index += 1;
-      continue;
-    }
-
-    let end = index + 1;
-    while (end < value.length && /[.!?]/.test(value[end])) end += 1;
-    push(end);
-    index = end;
-  }
-
-  push(value.length);
-  return sentences.length > 0 ? sentences : [value];
-}
-
 function statusSentence(message: string): string | null {
   // A matching tool_call event carries a clearer sentence and result state.
   if (/^Calling\s+[a-z0-9_]+(?:\.{3}|…)?$/i.test(message.trim())) return null;
+  // Agent-loop phase echoes (for example "SOFP: viewing pdf") mirror the
+  // underlying tool call. The semantic tool milestone below is clearer and
+  // includes useful page context without exposing the operation name.
+  if (/^[^:]+:\s*(reading template|viewing pdf|writing notes|filling workbook|verifying)$/i.test(message.trim())) {
+    return null;
+  }
+  const retry = message.match(/^([^:]+):\s*retrying\b/i);
+  if (retry) return finishSentence(`Retrying ${retry[1].trim()}`);
   return finishSentence(message.replace(/_/g, " ").replace(/\.{3}$/, "…"));
 }
 
+function semanticToolSentence(entry: ToolTimelineEntry): string | null {
+  switch (entry.tool_name) {
+    case "view_pdf_pages":
+    case "view_pages": {
+      const pages = argsPreview(entry.tool_name, entry.args);
+      return finishSentence(pages ? `Reviewing source ${pages}` : "Reviewing source pages");
+    }
+    case "write_facts":
+    case "fill_workbook":
+      return "Adding extracted figures.";
+    case "write_notes":
+      return "Adding extracted notes.";
+    case "verify_totals":
+      return "Checking statement totals.";
+    case "find_toc":
+      return "Locating the contents page.";
+    case "parse_toc_text":
+      return "Reading the contents page.";
+    case "check_variant_signals":
+      return "Confirming statement formats.";
+    case "discover_notes":
+      return "Identifying financial statement notes.";
+    default:
+      return entry.tool_name in TOOL_LABELS
+        ? finishSentence(humanToolName(entry.tool_name))
+        : null;
+  }
+}
+
 /**
- * Flatten the visible run stream into newest-first sentences for the live
- * activity stream. Reasoning remains complete and ordered, while tool/status events
- * use the same plain-language vocabulary as the rest of the workspace.
+ * Flatten the visible run stream into newest-first operator milestones.
+ * Provider reasoning and raw tool operations remain available to diagnostics,
+ * but do not appear in the normal activity feed.
  */
 export function buildActivitySentences(
   events: SSEEvent[],
   timeline: ToolTimelineEntry[],
-  reasoningBlocks: ReasoningBlock[],
 ): ActivitySentence[] {
   const sentences: ActivitySentence[] = [];
 
@@ -130,30 +98,14 @@ export function buildActivitySentences(
   }
 
   for (const entry of timeline) {
-    const preview = argsPreview(entry.tool_name, entry.args);
-    const outcome = entry.result_summary
-      ? resultSummary(entry.tool_name, entry.result_summary)?.text
-      : null;
-    const detail = [preview, outcome].filter(Boolean).join(" · ");
+    const text = semanticToolSentence(entry);
+    if (!text) continue;
     sentences.push({
       id: `tool:${entry.tool_call_id}`,
-      text: finishSentence(`${humanToolName(entry.tool_name)}${detail ? `. ${detail}` : ""}`),
+      text,
       timestamp: entry.startTime,
       source: "tool",
       active: entry.result_summary === null,
-    });
-  }
-
-  for (const block of reasoningBlocks) {
-    const parts = splitReasoning(block.content);
-    parts.forEach((text, index) => {
-      sentences.push({
-        id: `reasoning:${block.thinking_id}:${index}`,
-        text,
-        timestamp: block.startedAt + index,
-        source: "reasoning",
-        active: !block.isComplete && index === parts.length - 1,
-      });
     });
   }
 

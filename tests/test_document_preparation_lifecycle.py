@@ -143,6 +143,46 @@ async def test_worker_prepares_before_scout_and_reconciles_before_ready(upload, 
 
 
 @pytest.mark.asyncio
+async def test_invalid_scout_map_keeps_actionable_failure_in_preparation_status(upload, monkeypatch):
+    directory, db, run_id = upload
+    import ingest.document_preparation as capture
+    import scout.prepared_map
+    from scout.prepared_map import DocumentMapPreparationError
+
+    prepared = SimpleNamespace(
+        metadata_path=directory / "preparation.json",
+        prepared_pdf_path=directory / "prepared.pdf",
+        revision="r1",
+    )
+
+    async def fake_prepare(*args, **kwargs):
+        return prepared
+
+    async def invalid_map(*args, **kwargs):
+        raise DocumentMapPreparationError(
+            "The AI service returned an invalid document map after 3 attempts. "
+            "Retry document preparation."
+        )
+
+    monkeypatch.setattr(capture, "prepare_document", fake_prepare)
+    monkeypatch.setattr(scout.prepared_map, "build_prepared_document_map", invalid_map)
+    monkeypatch.setattr(prep.server, "_reload_runtime_settings", lambda: None)
+    monkeypatch.setattr(prep.server, "_resolve_api_key", lambda: "test-key")
+    monkeypatch.setattr(prep.server, "_create_proxy_model", lambda *a: object())
+    monkeypatch.setattr(prep.server, "_configured_default_models", lambda: {})
+    prep._write(directory, {"attempt_id": "a", "status": "queued", "run_id": run_id})
+
+    await prep._prepare(directory, db, run_id, "a")
+
+    state = prep._read(directory)
+    assert state["status"] == state["scout_status"] == "failed"
+    assert state["error"] == "DocumentMapPreparationError"
+    assert state["message"].startswith(
+        "The AI service returned an invalid document map after 3 attempts."
+    )
+
+
+@pytest.mark.asyncio
 async def test_missing_credentials_has_one_actionable_failure_and_terminal_audit(upload, monkeypatch):
     directory, db, run_id = upload
     monkeypatch.setattr(prep.server, "_reload_runtime_settings", lambda: None)

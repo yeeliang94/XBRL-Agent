@@ -1,5 +1,5 @@
 import { describe, test, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { act, render, screen, fireEvent } from "@testing-library/react";
 import { ExtractPage } from "../pages/ExtractPage";
 import { initialState } from "../lib/appReducer";
 import { createAgentState } from "../lib/types";
@@ -52,11 +52,11 @@ describe("ExtractPage — render-gate regression guards", () => {
       scoutWarnings: ["Document page hints are incomplete."],
     } })} />);
     expect(screen.queryByTestId("scout-warnings-banner")).toBeNull();
-    expect(screen.getByText("Document page hints are incomplete.").closest("details")).not.toHaveAttribute("open");
-    expect(screen.getByRole("button", { name: /stop all/i })).toBeEnabled();
+    expect(screen.queryByText("Document page hints are incomplete.")).toBeNull();
+    expect(screen.getByRole("button", { name: /stop run/i })).toBeEnabled();
   });
 
-  test("scale conflicts stay visible while routine document checks are collapsed", () => {
+  test("non-blocking document concerns stay out of the live extraction surface", () => {
     const message = "Thousands and millions disagree; scale reset to unknown.";
     render(<ExtractPage {...makeProps({ state: {
       isRunning: true, sessionId: "test-session", filename: "test.pdf",
@@ -65,10 +65,8 @@ describe("ExtractPage — render-gate regression guards", () => {
         severity: "coerced", scout_scale_unit: "thousands", resolved_scale_unit: "unknown", message,
       } }],
     } })} />);
-    const conflict = screen.getByText(/Thousands and millions disagree/);
-    expect(conflict).toBeVisible();
-    expect(conflict.closest("details")).toBeNull();
-    expect(screen.getByText("Page hints are incomplete.").closest("details")).not.toHaveAttribute("open");
+    expect(screen.queryByText(/Thousands and millions disagree/)).toBeNull();
+    expect(screen.queryByText("Page hints are incomplete.")).toBeNull();
   });
 
   test("idle work queue exposes a local New extraction action", () => {
@@ -100,7 +98,22 @@ describe("ExtractPage — render-gate regression guards", () => {
     });
     render(<ExtractPage {...props} />);
 
-    expect(screen.getByRole("button", { name: /stop all/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /stop run/i })).toBeInTheDocument();
+  });
+
+  test("the always-visible Stop run action confirms before aborting", () => {
+    const props = makeProps({ state: {
+      sessionId: "test-session",
+      filename: "test.pdf",
+      isRunning: true,
+    } });
+    render(<ExtractPage {...props} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop run" }));
+    expect(props.handleAbortAll).not.toHaveBeenCalled();
+    const dialog = screen.getByRole("dialog", { name: "Stop this extraction run?" });
+    fireEvent.click(dialog.querySelector<HTMLButtonElement>(".pwc-btn-danger")!);
+    expect(props.handleAbortAll).toHaveBeenCalledOnce();
   });
 
   // De-gating regression guard (review-access bug, 2026-06-21). After a run
@@ -133,12 +146,67 @@ describe("ExtractPage — render-gate regression guards", () => {
 
     // Completion offers one review destination and no competing result tabs.
     expect(
-      screen.getByRole("button", { name: /review run results/i }),
+      screen.getByRole("button", { name: /open overview/i }),
     ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /review run results/i }));
+    fireEvent.click(screen.getByRole("button", { name: /open overview/i }));
     expect(props.onOpenRun).toHaveBeenCalledWith(7);
     expect(screen.queryByRole("button", { name: "Data Preview" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Downloads" })).toBeNull();
+  });
+
+  test("completion transitions automatically to the run overview", () => {
+    vi.useFakeTimers();
+    try {
+      const props = makeProps({ state: {
+        sessionId: "test-session",
+        filename: "test.pdf",
+        isComplete: true,
+        complete: {
+          success: true,
+          output_path: "",
+          excel_path: "/output/x/filled.xlsx",
+          trace_path: "",
+          total_tokens: 0,
+          cost: 0,
+          runId: 7,
+        },
+      } });
+      render(<ExtractPage {...props} />);
+      expect(props.onOpenRun).not.toHaveBeenCalled();
+      act(() => vi.advanceTimersByTime(600));
+      expect(props.onOpenRun).toHaveBeenCalledWith(7);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("opening completed activity cancels the automatic overview transition", () => {
+    vi.useFakeTimers();
+    try {
+      const props = makeProps({ state: {
+        sessionId: "test-session",
+        filename: "test.pdf",
+        isComplete: true,
+        currentPhase: "complete",
+        events: [{ event: "status", data: { message: "SOFP: Complete" }, timestamp: 1 } as never],
+        complete: {
+          success: true,
+          output_path: "",
+          excel_path: "/output/x/filled.xlsx",
+          trace_path: "",
+          total_tokens: 0,
+          cost: 0,
+          runId: 7,
+        },
+      } });
+      render(<ExtractPage {...props} />);
+      fireEvent.click(screen.getByRole("button", { name: /show run activity/i }));
+      act(() => vi.advanceTimersByTime(600));
+      expect(props.onOpenRun).not.toHaveBeenCalled();
+      expect(screen.getByRole("button", { name: /hide run activity/i })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test.each([
@@ -153,7 +221,7 @@ describe("ExtractPage — render-gate regression guards", () => {
         output_path: "", excel_path: "", trace_path: "", total_tokens: 0, cost: 0, runId: 7 },
     } })} />);
     expect(screen.getByRole("heading", { name: label })).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: "Review run results" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Open overview" })).toHaveLength(1);
     expect(screen.queryByText("Extraction finished")).toBeNull();
   });
 
@@ -189,7 +257,7 @@ describe("ExtractPage — render-gate regression guards", () => {
     });
     render(<ExtractPage {...props} />);
 
-    expect(screen.queryByRole("button", { name: /stop all/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /stop run/i })).not.toBeInTheDocument();
   });
 
   test("live run uses one progress surface and a grouped workstream workspace", () => {
@@ -227,6 +295,7 @@ describe("ExtractPage — render-gate regression guards", () => {
     expect(screen.getByText("0 of 2 extraction workstreams complete")).toBeInTheDocument();
     const usage = container.querySelector("details") as HTMLDetailsElement;
     expect(usage.open).toBe(false);
+    expect(usage.querySelector("summary")?.textContent).toContain("Technical usage details");
     expect(usage.querySelector("summary")?.textContent).toContain("$0.0123");
     expect(usage.querySelector("summary [aria-hidden='true']")).toBeInTheDocument();
   });
@@ -303,7 +372,7 @@ describe("ExtractPage — render-gate regression guards", () => {
     expect(screen.queryByText(/30ms/i)).toBeNull();
   });
 
-  test("shows source preparation as a worker with its provider summary", () => {
+  test("shows source preparation as a worker without exposing provider reasoning", () => {
     const preparation = createAgentState(
       "source-preparation", "SOURCE_PREPARATION", "Source preparation",
     );
@@ -337,8 +406,8 @@ describe("ExtractPage — render-gate regression guards", () => {
 
     expect(screen.getByRole("tab", { name: /source preparation/i })).toBeInTheDocument();
     expect(screen.getByRole("tabpanel", { name: /source preparation activity/i })).toBeInTheDocument();
-    expect(screen.getByText(/located the scanned notes table/i)).toBeInTheDocument();
-    expect(screen.getByText("Provider reasoning")).toBeInTheDocument();
+    expect(screen.queryByText(/located the scanned notes table/i)).toBeNull();
+    expect(screen.queryByText("Provider reasoning")).toBeNull();
   });
 
   test("a stopped run is not described as still running", () => {

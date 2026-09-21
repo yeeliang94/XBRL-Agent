@@ -206,14 +206,14 @@ describe("HistoryList", () => {
   test("each row shows a visible action that activates once", () => {
     const onRunSelected = vi.fn();
     render(<HistoryList runs={makeRuns()} onRunSelected={onRunSelected} />);
-    const open = screen.getAllByRole("link", { name: "Open" })[0];
+    const open = screen.getByRole("link", { name: "Open review" });
     fireEvent.click(open);
     // stopPropagation keeps the row's own click handler from double-firing.
     expect(onRunSelected).toHaveBeenCalledTimes(1);
     expect(onRunSelected).toHaveBeenCalledWith(1);
   });
 
-  test("draft rows offer 'Continue setup'; flagged runs offer 'Review'", () => {
+  test("draft rows offer 'Continue setup'; flagged runs offer 'Open review'", () => {
     const runs = makeRuns();
     runs[0] = { ...runs[0], status: "draft" };
     runs[1] = { ...runs[1], status: "completed_with_errors" };
@@ -223,7 +223,7 @@ describe("HistoryList", () => {
     );
     fireEvent.click(screen.getByRole("link", { name: "Continue setup" }));
     expect(onResumeDraft).toHaveBeenCalledWith(1);
-    expect(screen.getByRole("link", { name: "Review" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open review" })).toBeInTheDocument();
   });
 
   test("Score column renders only when loaded rows carry scores", () => {

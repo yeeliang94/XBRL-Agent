@@ -127,6 +127,27 @@ def test_drain_drives_generator_to_completion():
     assert finalized["done"] is True, "generator finalizer must run under drain"
 
 
+def test_failed_run_becomes_structured_sse_error_without_background_redrain():
+    """A completed pull that raised is a finished run, not a disconnect.
+
+    Re-awaiting that failed task in the drain rewrites its traceback to point at
+    the drain helper, while letting it escape faults Starlette's response task.
+    """
+    server._DRAIN_TASKS.clear()
+
+    async def agen():
+        raise RuntimeError("Document preparation could not finish. Retry.")
+        yield  # pragma: no cover — makes this an async generator
+
+    frames = _collect(agen, auth_session_id=None)
+
+    assert frames == [
+        'event: error\ndata: {"message": "The run stopped unexpectedly. Check Activity for details, then retry.", '
+        '"type": "run_stream_failed", "bucket": "fatal"}\n\n'
+    ]
+    assert server._DRAIN_TASKS == set()
+
+
 def test_disconnect_spawns_pinned_drain_that_finishes_the_run():
     """When the wrapper's consumer goes away mid-stream (client disconnect), the
     finally hands the still-running generator to a background drain that finishes

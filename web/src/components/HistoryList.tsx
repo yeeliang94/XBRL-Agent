@@ -170,9 +170,11 @@ export function HistoryList({
             const date = formatDate(run.created_at);
             const actionLabel = isDraft
               ? "Continue setup"
-              : run.status === "completed_with_errors" || run.status === "correction_exhausted"
-              ? "Review"
-              : "Open";
+              : run.status === "completed" ||
+                  run.status === "completed_with_errors" ||
+                  run.status === "correction_exhausted"
+                ? "Open review"
+                : "Open";
             // The filename is the semantic navigation link. The row click is
             // only a pointer convenience; keeping native row semantics avoids
             // corrupting the table header/column structure for screen readers.

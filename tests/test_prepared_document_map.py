@@ -16,6 +16,14 @@ def test_prepared_scout_retains_variant_selection_guidance():
     assert "Indirect" in SYSTEM_PROMPT and "profit with adjustments" in SYSTEM_PROMPT
 
 
+def test_prepared_scout_states_exact_top_level_output_shape():
+    from scout.prepared_map import SYSTEM_PROMPT
+
+    prompt = " ".join(SYSTEM_PROMPT.split())
+    assert "top-level output MUST contain `infopack` and `ownership_ranges`" in prompt
+    assert "Put `notes_inventory` inside `infopack`, never at the top level" in prompt
+
+
 @pytest.fixture
 def prepared(tmp_path):
     metadata = tmp_path / 'preparation.json'
@@ -322,6 +330,35 @@ def test_retry_can_correct_a_mistaken_note_identity(prepared, monkeypatch):
     assert len(attempts) == 2
     assert info.notes_inventory[0].note_num == 1
     assert all(a['owner_kind'] == 'note' for a in assignments)
+
+
+def test_repeated_malformed_map_has_actionable_preparation_error(prepared, monkeypatch):
+    from pydantic_ai.models.function import FunctionModel
+    from pydantic_ai.messages import ModelResponse, ToolCallPart
+    from ingest.document_preparation import PreparationError
+    import scout.agent
+
+    monkeypatch.setattr(scout.agent, '_thinking_level_for', lambda role: None)
+    attempts = []
+
+    def respond(messages, info):
+        attempts.append(messages)
+        malformed = {
+            'toc_page': 1,
+            'page_offset': 0,
+            'statements': {},
+            'notes_inventory': [],
+        }
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, malformed)])
+
+    with pytest.raises(
+        PreparationError,
+        match='AI service returned an invalid document map after 3 attempts',
+    ):
+        asyncio.run(build_prepared_document_map(prepared, FunctionModel(respond)))
+
+    assert len(attempts) == 3
+    assert (prepared.metadata_path.parent / 'SCOUT_conversation_trace.json').exists()
 
 
 def test_unknown_range_names_the_field_and_bad_identifier(prepared):
