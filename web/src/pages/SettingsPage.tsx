@@ -54,10 +54,7 @@ export function SettingsPage({ isAdmin, currentEmail }: Props) {
 
   return (
     <div className="responsive-page settings-page" style={styles.container}>
-      <PageHeader
-        title="Settings"
-        description="Model and proxy configuration, run defaults, your account, and user management."
-      />
+      <PageHeader title="Settings" />
 
       <div
         ref={tabBarRef}

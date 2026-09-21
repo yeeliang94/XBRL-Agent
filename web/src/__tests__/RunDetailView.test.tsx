@@ -264,11 +264,9 @@ describe("RunDetailView", () => {
         onDownload={() => {}}
       />,
     );
-    const notice = screen.getByTestId("pdf-sidecar-notice");
-    expect(notice.textContent).toMatch(/Source transcript built/);
-    expect(notice.textContent).toMatch(/20 scanned pages/);
-    expect(notice.textContent).toMatch(/verify every number/i);
-    expect(notice.textContent).toMatch(/56,760 in \/ 13,976 out tokens/);
+    const items = screen.getByTestId("items-to-check");
+    expect(items).toHaveTextContent("1 item needs review");
+    expect(items).not.toHaveTextContent(/scanned pages|tokens|verify every number/i);
   });
 
   test("no transcript notice when the pass did not apply", () => {
@@ -1041,7 +1039,7 @@ describe("RunDetailView", () => {
     const warning = screen.getByRole("alert");
     expect(warning).toHaveTextContent(/cash-flow movements/i);
     expect(screen.queryByTestId("items-to-check")).toBeNull();
-    expect(screen.getByRole("note")).toHaveTextContent(/verify against the source PDF/i);
+    expect(screen.queryByRole("note")).toBeNull();
     expect(container.textContent).not.toContain("Total tokens");
     fireEvent.click(screen.getByRole("tab", { name: /activity/i }));
     expect(screen.getByText(/performance details/i)).toBeTruthy();
@@ -1504,10 +1502,10 @@ describe("RunDetailView", () => {
     render(<RunDetailView detail={makeDetail({ status: "completed_with_errors", cross_checks: [], agents: [makeAgent({ status: "completed_with_errors" })] })}
       onDelete={() => {}} onDownload={() => {}} />);
     const items = screen.getByTestId("items-to-check");
-    expect(items).toHaveTextContent("Extraction or review finished with issues");
+    expect(items).toHaveTextContent("1 item needs review");
     expect(screen.queryByText(/consistency check didn.t pass/i)).toBeNull();
     expect(screen.queryByRole("button", { name: "View cross-checks" })).toBeNull();
-    fireEvent.click(within(items).getByRole("button", { name: "Open relevant review tool" }));
+    fireEvent.click(within(items).getByRole("button", { name: "Review" }));
     expect(screen.getByTestId("run-detail-agents")).toBeInTheDocument();
   });
 
@@ -1566,7 +1564,7 @@ describe("RunDetailView", () => {
       />,
     );
     expect(screen.queryByRole("alert")).toBeNull();
-    expect(screen.getByRole("note")).toHaveTextContent(/verify against the source PDF/i);
+    expect(screen.queryByRole("note")).toBeNull();
     const download = screen.getByRole("button", { name: /download draft/i });
     expect(download.className).toMatch(/primary/i);
   });
@@ -1647,7 +1645,7 @@ describe("RunDetailView", () => {
     expect(row).not.toHaveTextContent("SOURCE_PREPARATION");
   });
 
-  test("advisory checks stay quiet inside the collapsed Items-to-check disclosure", () => {
+  test("advisory checks render as one compact review action", () => {
     const detail = makeDetail({
       // "warning" is a runtime advisory status the outcomes logic compares as a
       // string; the typed union doesn't list it, so cast the fixture.
@@ -1658,8 +1656,10 @@ describe("RunDetailView", () => {
     });
     render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
     const items = screen.getByTestId("items-to-check");
-    expect(items).not.toHaveAttribute("open");
-    expect(items).toHaveTextContent("advisory");
+    expect(items).toHaveTextContent("1 item needs review");
+    expect(items).not.toHaveTextContent("advisory");
+    fireEvent.click(within(items).getByRole("button", { name: "Review" }));
+    expect(screen.getByRole("tab", { name: "Cross-checks" })).toHaveAttribute("aria-selected", "true");
   });
 
   test("running run without onForceAbort falls back to the disabled Delete", () => {

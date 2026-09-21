@@ -90,10 +90,7 @@ function SuiteList({ onOpen }: { onOpen: (id: number) => void }) {
 
   return (
     <div className="responsive-page" style={styles.page}>
-      <PageHeader
-        title={TERMS.evaluationSuites}
-        description="Group documents into a suite, run the whole set as one batch, and track accuracy, consistency, and health over time."
-      />
+      <PageHeader title={TERMS.evaluationSuites} />
       <div style={styles.createGroup}>
         <div style={styles.cardTitle}>Create a suite</div>
         <label htmlFor="suite-name" style={ui.fieldLabel}>Suite name</label>

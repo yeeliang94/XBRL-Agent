@@ -84,10 +84,7 @@ export function BenchmarksPage({ selectedId, onSelectBenchmark, isAdmin = false 
   const hasBenchmarks = benchmarks.length > 0;
   return (
     <div data-testid="benchmarks-page" className="responsive-page" style={styles.page}>
-      <PageHeader
-        title="Benchmarks"
-        description="A library of financial statements with human-verified reference answers. Attach one to a run to score extraction accuracy automatically."
-      />
+      <PageHeader title="Benchmarks" />
 
       {/* Setup group: open and primary in the empty state; collapsed once a
           library exists so the list leads. Uncontrolled <details> keeps the

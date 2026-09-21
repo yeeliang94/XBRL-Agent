@@ -91,11 +91,9 @@ describe("PreRunPanel", () => {
       // automatic pipeline stage, not a user-facing on/off control.
       expect(screen.getAllByRole("checkbox")).toHaveLength(10);
     });
-    expect(screen.getByTestId("automatic-pipeline-summary")).toHaveTextContent(
-      /document scan.*statement extraction.*cross-checks/i,
-    );
+    expect(screen.queryByTestId("automatic-pipeline-summary")).toBeNull();
     expect(screen.getByRole("heading", { name: /filing details/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /advanced extraction/i })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: /^advanced$/i })).toHaveAttribute(
       "aria-expanded",
       "false",
     );

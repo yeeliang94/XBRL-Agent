@@ -67,6 +67,7 @@ const NOTES_TAB_PREFIX = "notes:";
 const WORKSTREAM_LABELS: Record<string, string> = {
   scout: "Document preparation",
   "source-preparation": "Source preparation",
+  "notes-formatting": "Notes formatting",
   SOFP: "Statement of financial position",
   SOPL: "Profit or loss",
   SOCI: "Comprehensive income",
@@ -134,6 +135,7 @@ function AgentTabsImpl({
     const notesIds: string[] = [];
     let scoutId: string | null = null;
     let sourcePreparationId: string | null = null;
+    let notesFormattingId: string | null = null;
     let validatorId: string | null = null;
     let notesValidatorId: string | null = null;
     let correctionId: string | null = null;
@@ -150,6 +152,7 @@ function AgentTabsImpl({
         // very disappearance we're fixing).
         if (id === "scout") scoutId = id;
         else if (id === "source-preparation") sourcePreparationId = id;
+        else if (id === "notes-formatting") notesFormattingId = id;
         else if (id === "validator") validatorId = id;
         else if (id === "NOTES_VALIDATOR") notesValidatorId = id;
         else if (id === "CORRECTION") correctionId = id;
@@ -177,6 +180,7 @@ function AgentTabsImpl({
       // after the cross-check pass, so this mirrors the run timeline.
       ...(correctionId ? [correctionId] : []),
       ...(validatorId ? [validatorId] : []),
+      ...(notesFormattingId ? [notesFormattingId] : []),
     ];
   })();
 
@@ -186,12 +190,14 @@ function AgentTabsImpl({
   const notesActive: string[] = [];
   let scoutActive: string | null = null;
   let sourcePreparationActive: string | null = null;
+  let notesFormattingActive: string | null = null;
   let validatorActive: string | null = null;
   let notesValidatorActive: string | null = null;
   let correctionActive: string | null = null;
   for (const id of gatedOrder) {
     if (id === "scout") scoutActive = id;
     else if (id === "source-preparation") sourcePreparationActive = id;
+    else if (id === "notes-formatting") notesFormattingActive = id;
     else if (id === "validator") validatorActive = id;
     else if (id === "NOTES_VALIDATOR") notesValidatorActive = id;
     else if (id === "CORRECTION") correctionActive = id;
@@ -202,7 +208,7 @@ function AgentTabsImpl({
   const visibleNotesActive = notesActive;
   const visiblePreparation = [sourcePreparationActive, scoutActive]
     .filter((id): id is string => id != null);
-  const visibleChecks = [notesValidatorActive, correctionActive, validatorActive]
+  const visibleChecks = [notesValidatorActive, correctionActive, validatorActive, notesFormattingActive]
     .filter((id): id is string => id != null);
   const navigationOrder = [
     ...visiblePreparation,
@@ -303,7 +309,7 @@ function AgentTabsImpl({
   return (
     <div className="workstream-nav" style={styles.tabBar}>
       <div style={styles.navigatorHeader}>
-        <div style={styles.navigatorTitle}>AI workstreams</div>
+        <div style={styles.navigatorTitle}>Run activity</div>
         <span style={styles.navigatorCount}>{completedCount} of {totalWorkstreamCount} complete</span>
       </div>
 
@@ -341,6 +347,7 @@ function AgentTabsImpl({
             {notesValidatorActive && renderTab(notesValidatorActive)}
             {correctionActive && renderTab(correctionActive)}
             {validatorActive && renderTab(validatorActive)}
+            {notesFormattingActive && renderTab(notesFormattingActive)}
           </div>
         )}
       </div>

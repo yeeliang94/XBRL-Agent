@@ -1433,12 +1433,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           gap: pwc.space.md,
         }}
       >
-        <div>
-          <h2 style={styles.heading}>Filing setup</h2>
-          <p style={{ ...ui.supportingText, margin: `${pwc.space.xs}px 0 0` }}>
-            Confirm the filing details and extraction scope.
-          </p>
-        </div>
+        <h2 style={styles.heading}>Filing setup</h2>
         <button
           type="button"
           onClick={() => setShowAdvanced((v) => !v)}
@@ -1451,10 +1446,9 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
             flexShrink: 0,
             whiteSpace: "nowrap",
             gap: 6,
-            padding: "6px 12px",
-            background: showAdvanced ? pwc.grey50 : "none",
-            border: `1px solid ${pwc.grey200}`,
-            borderRadius: pwc.radius.md,
+            padding: "4px 0",
+            background: "none",
+            border: "none",
             cursor: "pointer",
             fontFamily: pwc.fontHeading,
             fontSize: 13,
@@ -1463,19 +1457,14 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           }}
         >
           <span aria-hidden="true">{showAdvanced ? "▾" : "▸"}</span>
-          Advanced extraction
+          Advanced
         </button>
       </div>
 
       <section style={styles.setupGroup} aria-labelledby="filing-details-heading">
-        <div>
-          <h3 id="filing-details-heading" style={{ ...styles.heading, fontSize: 14 }}>
-            Filing details
-          </h3>
-          <p style={{ ...ui.supportingText, margin: `${pwc.space.xs}px 0 0` }}>
-            These choices determine the workbook template and figure scale.
-          </p>
-        </div>
+        <h3 id="filing-details-heading" style={{ ...styles.heading, fontSize: 14 }}>
+          Filing details
+        </h3>
         <div style={styles.setupGrid}>
 
       {/* Filing standard: MFRS (default) or MPERS. Mirrors the Filing Level
@@ -1597,23 +1586,6 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       </div>
         </div>
       </section>
-
-      <div
-        data-testid="automatic-pipeline-summary"
-        style={{
-          padding: pwc.space.md,
-          background: pwc.grey50,
-          border: "none",
-          borderRadius: pwc.radius.md,
-        }}
-      >
-        <div style={{ fontFamily: pwc.fontHeading, fontWeight: 600, fontSize: 13, color: pwc.grey900 }}>
-          Automatic workflow
-        </div>
-        <div style={{ fontFamily: pwc.fontBody, fontSize: 12, color: pwc.grey700, marginTop: pwc.space.xs }}>
-          Document scan → statement extraction → cross-checks → final workbook
-        </div>
-      </div>
 
       {/* Evals workspace (Step D1): repeats-for-consistency. Open to all users
           (no gold needed), inside Advanced. 1 = a normal run; 2–5 launches that

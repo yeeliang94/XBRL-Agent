@@ -72,6 +72,44 @@
   width: 100%;
 }
 
+/* Keep large tables inside the review column. Browse mode is deliberately a
+ * compact preview; selecting Edit restores horizontal scrolling and the full
+ * cell contents. */
+.notes-review-tab [data-testid="notes-readonly-content"] table,
+.notes-review-tab [data-testid="notes-review-editor"][data-editable="false"] table {
+  table-layout: fixed;
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
+.notes-review-tab [data-testid="notes-readonly-content"] :is(th, td),
+.notes-review-tab [data-testid="notes-review-editor"][data-editable="false"] :is(th, td) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Descriptions carry the meaning of a note table, so the first column gets
+ * priority over numeric columns and wraps instead of being ellipsized. */
+.notes-review-tab [data-testid="notes-readonly-content"] :is(th, td):first-child,
+.notes-review-tab [data-testid="notes-review-editor"][data-editable="false"] :is(th, td):first-child {
+  width: 38% !important;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+}
+
+.notes-review-tab [data-testid="notes-review-editor"][data-editable="false"] {
+  max-height: 440px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.notes-review-tab [data-testid="notes-review-editor"][data-editable="true"] {
+  overflow-x: auto;
+}
+
 .notes-review-tab .tiptap th,
 .notes-review-tab .tiptap td {
   /* Driven by the notes-table style theme (docs/PLAN-notes-table-theme.md): the

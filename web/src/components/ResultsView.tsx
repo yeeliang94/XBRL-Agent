@@ -268,11 +268,6 @@ export function ResultsView({ complete, sessionId, runStartTime, getResultJson, 
 
   return (
     <div style={styles.container}>
-      {/* AI disclaimer — one persistent line on the results surface (Phase 6). */}
-      <p style={styles.aiDisclaimer} role="note">
-        Figures were extracted by AI — verify against the source PDF before filing.
-      </p>
-
       {/* Tab bar */}
       <div style={styles.tabBar}>
         {tabs.map((tab) => (

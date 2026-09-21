@@ -272,11 +272,12 @@
         <svg class="mark" viewBox="0 0 100 100" fill="none" aria-hidden="true"><path d="M12 78 L40 22 L52 50 L66 30 L88 78" stroke="currentColor" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <span>XBRL Agent</span>
       </div>
-      <div class="doc-state"><strong>Focused Workspace · v1</strong>Canonical production reference<br>28 August 2026</div>
+      <div class="doc-state"><strong>Focused Workspace · v1.1</strong>Canonical production reference<br>21 September 2026</div>
       <nav aria-label="Design system sections">
         <div class="nav-label">Direction</div>
         <a href="#overview">Overview</a>
         <a href="#principles">Principles</a>
+        <a href="#clarity">Clarity and simplification</a>
         <div class="nav-label">Foundations</div>
         <a href="#colour">Colour</a>
         <a href="#type">Typography</a>
@@ -314,7 +315,39 @@
           <div class="principle"><span>06</span><div><strong>Reserve orange for meaning.</strong><p>Use orange for identity, active work, source emphasis and compact attention icons. Selected controls use quiet surfaces, readable text and weight instead of accent lines.</p></div></div>
           <div class="principle"><span>07</span><div><strong>Make parallel work legible without inference.</strong><p>Show each agent's authoritative role, status, task, timestamp and page activity. Show hierarchy, handoffs or waiting dependencies only when the event contract supplies those relationships.</p></div></div>
           <div class="principle"><span>08</span><div><strong>Make editing direct.</strong><p>Reviewers should edit the canonical value or note in place and understand where that change will land in mTool.</p></div></div>
+          <div class="principle"><span>09</span><div><strong>Show outcomes, not implementation details.</strong><p>Translate internal agents, row identifiers, evidence strings and technical workflow names into concise user-facing states. Keep diagnostics available outside the normal workflow.</p></div></div>
+          <div class="principle"><span>10</span><div><strong>Reserve indicators for exceptions.</strong><p>Do not label every field Review or every row Working. Mark only items that need attention, were materially changed by automation or cannot be verified.</p></div></div>
         </div>
+      </section>
+
+      <section id="clarity">
+        <div class="section-head"><h2>Clarity and simplification</h2><p>The interface is a professional review workspace, not a diagnostic dashboard. Every default element must help the operator understand location, attention or next action.</p></div>
+        <h3>Content hierarchy</h3>
+        <table class="token-table">
+          <thead><tr><th>Keep visible</th><th>Shorten, relocate or remove</th></tr></thead>
+          <tbody>
+            <tr><td>Page or document title, current outcome, primary navigation, work surface and next action.</td><td>Introductory paragraphs, repeated background-processing assurances and text that restates visible controls.</td></tr>
+            <tr><td>Actionable validation, save failures, missing required values and unresolved source problems.</td><td>Raw evidence prose, confidence and token metadata, internal row IDs, technical sheet keys, tool names and provider diagnostics.</td></tr>
+            <tr><td>One authoritative overall status and item-level exceptions beside the affected item.</td><td>Duplicate status in the heading, subtitle, summary card, progress bar, row and sidebar.</td></tr>
+            <tr><td>Clearly named actions placed beside the content they affect.</td><td>Unexplained three-dot menus, unclickable tab-like labels, empty sections and controls repeated on every item.</td></tr>
+          </tbody>
+        </table>
+        <div class="do-dont" style="margin-top:24px">
+          <div class="do"><h4>Default to the task</h4><p>Show what the operator must inspect or decide now. Keep secondary audit and configuration information behind a clearly named disclosure or in Settings.</p></div>
+          <div class="dont"><h4>Do not expose the pipeline</h4><p>Do not make users interpret agent architecture, database identity, provenance syntax or workbook coordinates to complete an ordinary review.</p></div>
+        </div>
+        <h3>Layout, overflow and navigation</h3>
+        <div class="checklist">
+          <div class="check"><span>01</span><div><strong>Align the page:</strong> title, tabs, content and footer share a deliberate left edge and spacing rhythm.</div></div>
+          <div class="check"><span>02</span><div><strong>Protect the work surface:</strong> navigation, editable content and source panes scroll independently where needed and never overlap.</div></div>
+          <div class="check"><span>03</span><div><strong>Prioritise table meaning:</strong> description columns receive more width and may wrap; numeric columns remain compact and aligned. Browse mode stays within its pane; edit mode may scroll horizontally.</div></div>
+          <div class="check"><span>04</span><div><strong>Make long content reachable:</strong> long notes use an obvious internal vertical scroll and never hide the next field or its Edit and Copy controls.</div></div>
+          <div class="check"><span>05</span><div><strong>Keep navigation available:</strong> page controls, tabs and current context remain visible while scrolling without covering content.</div></div>
+          <div class="check"><span>06</span><div><strong>Preserve source context:</strong> selecting a field or source-note subheading immediately opens its cited PDF page. Reselecting the same item returns to that page even after manual paging.</div></div>
+        </div>
+        <h3>Language and states</h3>
+        <p>Use short, stable states: Waiting, Working, Complete, Needs review, Failed and Stopped. Use one term for one state. Empty states are quiet and actionable. Errors summarise the outcome first and keep technical detail in Activity or a closed disclosure.</p>
+        <div class="handoff" style="margin-top:20px"><strong>Five-second test</strong>A new operator should be able to identify where they are, what needs attention and the next available action within five seconds. If a sentence, badge, border, menu or panel does not materially help one of those decisions, remove it from the default view.</div>
       </section>
 
       <section id="colour">
@@ -382,7 +415,7 @@
             <tr><td>Floating UI</td><td>Shadow</td><td>Reserved for dropdowns, tooltips and modals that overlap content.</td></tr>
           </tbody>
         </table>
-        <div class="handoff" style="margin-top:20px"><strong>Figures wording</strong>Figures rows show field names, values and source-page links. Routine value-origin labels appear only in Field details, in plain language. Save failures, missing required values and conflicting values remain visible. Recorded values never imply verification.</div><div class="handoff" style="margin-top:20px"><strong>Notes review composition</strong>Use three persistent panes: mTool worksheet navigation, all fields of the selected worksheet, and the source PDF. All fields is the default, including empty alternatives in template order. Search across worksheets and open the matching field in its full worksheet context. Show Needs attention only as an optional filter; Next issue navigates without hiding alternatives. Compact inactive fields; mount one rich-text editor for the selected field. Keep Edit and Copy with that field, and table style and re-extraction in Notes actions. Source inventory remains visible in the worksheet rail. Empty fields say Empty and never inherit another field's source claim. Compare destination shows the alternative's contents and permits a version-checked move only into an empty writable field. Keep source evidence, lineage, unresolved review status and export tombstones together. Pending or failed saves prevent switching fields. Failed saves offer Retry save and Discard unsaved changes; discarding restores the last saved content and releases navigation without another write. Resize targets retain a one-pixel visible Grey 100 rule and a wider transparent drag area. PDF controls remain in one toolbar; panels stack on narrow screens.</div>
+        <div class="handoff" style="margin-top:20px"><strong>Figures wording</strong>Figures rows show field names, values and source-page links. Routine value-origin labels appear only in Field details, in plain language. Save failures, missing required values and conflicting values remain visible. Recorded values never imply verification.</div><div class="handoff" style="margin-top:20px"><strong>Notes review composition</strong>Use three persistent panes: mTool worksheet navigation with the source note inventory, the selected worksheet's fields, and the source PDF. Search opens a matching field in its full worksheet context. Compact inactive fields and mount one rich-text editor for the selected field. Keep Edit and Copy with that field. Show Review only on populated fields produced or materially changed by automation; do not repeat it on empty or ordinary fields. Do not show evidence prose, appearance provenance, internal row numbers, a global field filter, Next issue, Compare destination or a current-sheet subheading in the default work surface. Place Re-extract notes directly in the worksheet rail; appearance defaults belong in Settings rather than a mixed three-dot menu. Source inventory remains visible in the worksheet rail and expands into meaningful destination subheadings, never technical sheet names. Selecting a destination opens that field and immediately returns the PDF to the source note's cited page. Empty fields remain compact and never inherit another field's source claim. Pending or failed saves prevent switching fields. Failed saves offer Retry save and Discard unsaved changes; discarding restores the last saved content and releases navigation without another write. Read-only note tables stay within the centre pane: description columns receive priority and wrap, while secondary cells truncate; editing restores complete content with horizontal scrolling. Long selected notes scroll vertically inside a bounded preview. Resize targets retain a one-pixel visible Grey 100 rule and a wider transparent drag area. PDF controls remain in one sticky toolbar; panels stack on narrow screens.</div>
       </section>
 
       <section id="actions">
@@ -464,7 +497,7 @@
         </div>
         <div class="do-dont" style="margin-top:24px">
           <div class="do"><h4>Figures</h4><p>Match mTool row order and period columns. Let the reviewer edit canonical values in place. Selecting a row immediately updates the PDF evidence.</p></div>
-          <div class="do"><h4>Notes</h4><p>Keep the full note index persistently visible and searchable. Use one click to switch notes and jump the PDF. Show editing tools only when the editor has focus.</p></div>
+          <div class="do"><h4>Notes</h4><p>Keep the note inventory visible and searchable. Expand a note into meaningful destination subheadings, not sheet names. A destination click switches fields and jumps the PDF in one action. Show editing tools only for the selected field.</p></div>
         </div>
       </section>
 
@@ -498,6 +531,7 @@
             <tr><td>Resolved → complete</td><td>Active work collapses into finished counts. Download and mTool actions become available.</td><td>The interface confirms readiness without retaining the live-run clutter.</td></tr>
           </tbody>
         </table>
+        <div class="handoff" style="margin-top:20px"><strong>No silent waiting</strong>Every material stage that keeps the operator waiting appears in the stage heading or Live activity stream, including document preparation, extraction, checks, AI review, notes review, notes formatting, result saving and final workbook preparation. A completed workstream count must not imply the whole run is ready while downstream work continues. Keep the summary compact: one current-stage label, an optional plain-language count, secondary elapsed time and one Stop action.</div>
       </section>
 
       <section id="responsive">
@@ -525,6 +559,17 @@
       <section id="implementation">
         <div class="section-head"><h2>Implementation contract</h2><p>This document is the production design authority. Direction A in the prototype defines the exact product composition and screen states.</p></div>
         <div class="handoff"><strong>Current status</strong>The canonical production contract is <code>docs/xbrl-design-system.html</code>. <code>docs/pwc-design-system.html</code> is retained only for historical bookmarks and audit context; production code and pinning tests do not treat it as authority.</div>
+        <h3>UI change review gate</h3>
+        <div class="checklist">
+          <div class="check"><span>✓</span><div>A new operator can identify location, attention and next action within five seconds.</div></div>
+          <div class="check"><span>✓</span><div>No sentence merely repeats a visible status, control or layout relationship.</div></div>
+          <div class="check"><span>✓</span><div>Every visible control works, has a clear label and sits beside the object it affects.</div></div>
+          <div class="check"><span>✓</span><div>Only exceptional items carry warning, review or attention indicators.</div></div>
+          <div class="check"><span>✓</span><div>Long notes, lists and tables remain readable and every pane can reach its end.</div></div>
+          <div class="check"><span>✓</span><div>Selection reliably updates source context, including repeated selections and destination changes.</div></div>
+          <div class="check"><span>✓</span><div>Loading, waiting, completed, empty and failed states remain truthful and concise.</div></div>
+          <div class="check"><span>✓</span><div>Tests exercise the user workflow, overflow and navigation behavior rather than only component rendering.</div></div>
+        </div>
         <table class="token-table" style="margin-top:20px">
           <thead><tr><th>Decision</th><th>Production owner</th><th>Verification</th></tr></thead>
           <tbody>

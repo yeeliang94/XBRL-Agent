@@ -122,15 +122,15 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
     {snapshot?.prepared && snapshot.status !== "succeeded" && (
       <p>Document prepared. {active && mapActive ? "Document map and notes inventory are being built." : "Notes inventory is not ready."}</p>
     )}
-    <p style={{ margin: `0 0 ${pwc.space.md}px`, color: actionRequired === "confirm_setup" ? pwc.orange700 : pwc.grey700 }}>
-      {actionRequired === "confirm_setup"
-        ? "Action required: review the detected filing details below, correct anything needed, then confirm setup to start extraction."
-        : actionRequired === "retry"
-          ? "Preparation stopped before setup could be confirmed. Retry when you are ready."
-          : snapshot?.status === "not_started"
-            ? "Start document preparation before extraction."
-            : "No action is needed yet. You can leave this page while preparation continues."}
-    </p>
+    {actionRequired !== "none" || snapshot?.status === "not_started" ? (
+      <p style={{ margin: `0 0 ${pwc.space.md}px`, color: actionRequired === "confirm_setup" ? pwc.orange700 : pwc.grey700 }}>
+        {actionRequired === "confirm_setup"
+          ? "Review the detected filing details, then confirm setup."
+          : actionRequired === "retry"
+            ? "Preparation stopped. Retry to continue."
+            : "Start document preparation."}
+      </p>
+    ) : null}
     <ol aria-label="Document preparation steps" style={{ listStyle: "none", margin: 0, padding: 0, borderTop: `1px solid ${pwc.grey200}` }}>
       {[
         {

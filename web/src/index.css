@@ -812,11 +812,12 @@ textarea:focus {
 
   .live-run-summary {
     border-left: 0 !important;
-    border-top: 1px solid #DFE3E6 !important; /* grey200 */
+    border-top: 0 !important;
     min-width: 0 !important;
     padding-left: 0 !important;
-    padding-top: 12px !important;
+    padding-top: 0 !important;
     text-align: left !important;
+    flex-wrap: wrap !important;
   }
 
   .app-header-right {

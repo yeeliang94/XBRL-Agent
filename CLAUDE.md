@@ -28,7 +28,7 @@ the task.
 | Scout behavior, extraction prompts, page access, or source-document context | 1, 12–15, 17, 29 |
 | Notes extraction, HTML, review, formatting, coverage, source lineage, or source integrity | 13, 14, 16, 22, 27, 29, 31 |
 | mTool export, clipboard decoration, filing readiness, or receipts | 16, 21, 28 |
-| Frontend layout, navigation, styles, accessibility, or shared design tokens | 7, 16, 19, 21, 27, 28, 30 |
+| Frontend layout, navigation, content hierarchy, simplification, styles, accessibility, or shared design tokens | 7, 16, 19, 21, 27, 28, 30 |
 | Authentication, authorization, production startup, or user administration | 10, 11, 24 |
 | Benchmarks, grading, repeats, suites, or quality trends | 11, 21, 23, 30 |
 
@@ -52,7 +52,7 @@ it. Detailed explanations and pinning tests are in
 4. [`compare_results.py` and current templates have known row offsets](CLAUDE-REFERENCE.md#4-compare_resultspy-vs-current-templates--row-numbering-differs).
 5. [Proxy pricing-map SSL warnings and real LLM SSL failures are different](CLAUDE-REFERENCE.md#5-ssl-two-distinct-things--only-one-is-harmless).
 6. [Per-turn token counts are deltas; full traces live on disk](CLAUDE-REFERENCE.md#6-per-turn-token-counts-are-deltas-of-cumulative-usage-approximate).
-7. [The frontend uses inline styles and the repository design system](CLAUDE-REFERENCE.md#7-frontend-uses-inline-styles-not-tailwind).
+7. [The frontend uses inline styles and the clarity-first repository design system](CLAUDE-REFERENCE.md#7-frontend-uses-inline-styles-not-tailwind).
 8. [Windows may need explicit Node.js discovery](CLAUDE-REFERENCE.md#8-nodejs-may-not-be-on-path-windows).
 9. [CLI and web runs use different output-directory identifiers](CLAUDE-REFERENCE.md#9-output-directory-structure).
 10. [Every started run reaches a terminal status and preserves a successful merge](CLAUDE-REFERENCE.md#10-run-lifecycle--runs-row-created-before-validation).
