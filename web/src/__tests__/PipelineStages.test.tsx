@@ -3,7 +3,8 @@ import { render, screen } from "@testing-library/react";
 import { PipelineStages } from "../components/PipelineStages";
 
 const PHASE_LABELS = [
-  "Prepare",
+  "Prepare document",
+  "Confirm setup",
   "Extract",
   "Check",
   "Review",
@@ -11,7 +12,7 @@ const PHASE_LABELS = [
 ];
 
 describe("PipelineStages", () => {
-  test("renders all 5 phases as step items", () => {
+  test("renders the continuous preparation-to-ready workflow", () => {
     render(
       <PipelineStages currentPhase={null} isRunning={false} isComplete={false} />,
     );
@@ -26,7 +27,7 @@ describe("PipelineStages", () => {
       <PipelineStages currentPhase="filling_workbook" isRunning={true} isComplete={false} />,
     );
     const checks = container.querySelectorAll("[data-testid='step-complete']");
-    expect(checks.length).toBe(2); // reading_template + viewing_pdf
+    expect(checks.length).toBe(3); // preparation + confirmation + extraction
   });
 
   test("marks active phase with pulsing orange dot", () => {
@@ -42,18 +43,18 @@ describe("PipelineStages", () => {
     const { container } = render(
       <PipelineStages currentPhase="reading_template" isRunning={true} isComplete={false} />,
     );
-    // 4 pending: viewing_pdf, filling_workbook, verifying, complete
+    // Check, Review and Ready remain pending while extraction starts.
     const pending = container.querySelectorAll("[data-testid='step-pending']");
-    expect(pending.length).toBe(4);
+    expect(pending.length).toBe(3);
   });
 
   test("draws connector lines between steps", () => {
     const { container } = render(
       <PipelineStages currentPhase="viewing_pdf" isRunning={true} isComplete={false} />,
     );
-    // 4 connector lines between 5 steps
+    // 5 connector lines between 6 steps
     const connectors = container.querySelectorAll("[data-testid='connector']");
-    expect(connectors.length).toBe(4);
+    expect(connectors.length).toBe(5);
   });
 
   test("shows no active phase when isRunning=false and isComplete=false", () => {
@@ -69,25 +70,25 @@ describe("PipelineStages", () => {
       <PipelineStages currentPhase="complete" isRunning={false} isComplete={true} />,
     );
     const checks = container.querySelectorAll("[data-testid='step-complete']");
-    expect(checks.length).toBe(5);
+    expect(checks.length).toBe(6);
   });
 
   test("maps coordinator stages to the run-level progress story", () => {
     const { container, rerender } = render(
       <PipelineStages currentPhase="viewing_pdf" pipelineStage="cross_checking" isRunning={true} isComplete={false} />,
     );
-    expect(container.querySelectorAll("[data-testid='step-complete']")).toHaveLength(2);
+    expect(container.querySelectorAll("[data-testid='step-complete']")).toHaveLength(3);
     expect(screen.getByText("Check")).toHaveStyle({ fontWeight: "600" });
     expect(screen.getByText("Check")).toHaveAttribute("aria-current", "step");
 
     rerender(
       <PipelineStages currentPhase="reading_template" pipelineStage="reviewing_notes" isRunning={true} isComplete={false} />,
     );
-    expect(container.querySelectorAll("[data-testid='step-complete']")).toHaveLength(3);
+    expect(container.querySelectorAll("[data-testid='step-complete']")).toHaveLength(4);
     expect(screen.getByText("Review")).toHaveStyle({ fontWeight: "600" });
   });
 
-  test("keeps scanned-note transcription visible in Prepare document", () => {
+  test("keeps run-owned source transcription within the active extraction stage", () => {
     render(
       <PipelineStages
         currentPhase={null}
@@ -96,7 +97,22 @@ describe("PipelineStages", () => {
         isComplete={false}
       />,
     );
-    expect(screen.getByText("Prepare")).toHaveStyle({ fontWeight: "600" });
+    expect(screen.getByText("Extract")).toHaveStyle({ fontWeight: "600" });
+  });
+
+  test("marks setup confirmation as an explicit action after document mapping", () => {
+    const { container } = render(
+      <PipelineStages
+        currentPhase={null}
+        preparationPhase="awaiting_confirmation"
+        preparationAction="confirm_setup"
+        isRunning={false}
+        isComplete={false}
+      />,
+    );
+    expect(container.querySelectorAll("[data-testid='step-complete']")).toHaveLength(1);
+    expect(container.querySelector("[data-testid='step-action']")).toBeInTheDocument();
+    expect(screen.getByText("Confirm setup")).toHaveAttribute("aria-current", "step");
   });
 
   test("applies PwC theme colors (orange500 active, success completed, grey300 pending)", () => {

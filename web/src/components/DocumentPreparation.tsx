@@ -6,15 +6,22 @@ import { pwc } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 import { formatElapsedMs } from "../lib/time";
 import { ElapsedTimer } from "./ElapsedTimer";
+import { PipelineStages } from "./PipelineStages";
 
 const activeStatuses = new Set(["queued", "working", "retrying"]);
 const labels = { not_started: "Waiting", queued: "Queued", working: "Working", retrying: "Retrying", succeeded: "Complete", failed: "Failed", cancelled: "Cancelled" };
 
+function detailStatus({ complete, active, stopped }: { complete: boolean; active: boolean; stopped: boolean }) {
+  if (complete) return "Done";
+  if (stopped) return "Stopped";
+  if (active) return "Working";
+  return "Waiting";
+}
+
 /** Upload-owned progress; terminal outcomes come only from persisted server state. */
-export function DocumentPreparation({ sessionId, onSnapshot, hideCompleted = false }: {
+export function DocumentPreparation({ sessionId, onSnapshot }: {
   sessionId: string;
   onSnapshot?: (snapshot: PreparationSnapshot) => void;
-  hideCompleted?: boolean;
 }) {
   const [snapshot, setSnapshot] = useState<PreparationSnapshot | null>(null);
   const [connectionError, setConnectionError] = useState<string | null>(null);
@@ -76,8 +83,19 @@ export function DocumentPreparation({ sessionId, onSnapshot, hideCompleted = fal
     }
   }
 
-  if (hideCompleted && snapshot?.status === "succeeded") return null;
   const active = snapshot != null && activeStatuses.has(snapshot.status);
+  const phase = snapshot?.phase ?? "pending";
+  const stopped = snapshot?.status === "failed" || snapshot?.status === "cancelled";
+  const pagesComplete = snapshot?.prepared === true || phase === "building_map" || phase === "reconciling_map" || phase === "awaiting_confirmation";
+  const mapComplete = phase === "awaiting_confirmation";
+  const mapActive = phase === "building_map" || phase === "reconciling_map";
+  const actionRequired = snapshot?.action_required ?? "none";
+  const total = snapshot?.total ?? 0;
+  const captured = snapshot?.captured ?? 0;
+  const checked = snapshot?.checked ?? snapshot?.verified ?? 0;
+  const readComplete = pagesComplete || (total > 0 && captured >= total);
+  // Page counts exclude the cross-page continuation checks that can finish later.
+  const checkComplete = pagesComplete;
   return <section aria-label="Document preparation" style={{ padding: `${pwc.space.lg}px 0`, borderBottom: `1px solid ${pwc.grey200}`, marginBottom: pwc.space.lg }}>
     <div style={{ display: "flex", alignItems: "center", gap: pwc.space.md, flexWrap: "wrap" }}>
       <h2 style={{ ...ui.sectionTitle, margin: 0 }}>Document preparation</h2>
@@ -86,13 +104,64 @@ export function DocumentPreparation({ sessionId, onSnapshot, hideCompleted = fal
         ? <ElapsedTimer startTime={snapshot.started_at * 1000} isRunning />
         : snapshot.updated_at != null ? <span>{formatElapsedMs(Math.max(0, snapshot.updated_at - snapshot.started_at) * 1000)}</span> : null)}
       {active && <button style={ui.buttonSecondary} disabled={busy} onClick={() => void act("cancel")}>Stop preparation</button>}
+      {snapshot?.status === "not_started" && <button style={ui.buttonSecondary} disabled={busy} onClick={() => void act("retry")}>Start preparation</button>}
       {(snapshot?.status === "failed" || snapshot?.status === "cancelled") && <button style={ui.buttonSecondary} disabled={busy} onClick={() => void act("retry")}>Retry preparation</button>}
     </div>
+    <div style={{ marginTop: pwc.space.lg }}>
+      <PipelineStages
+        currentPhase={null}
+        preparationPhase={phase}
+        preparationActive={active}
+        preparationStopped={stopped}
+        preparationAction={actionRequired}
+        isRunning={false}
+        isComplete={false}
+      />
+    </div>
     <p role="status" aria-live="polite">{connectionError ?? snapshot?.message ?? "Connecting to document preparation…"}</p>
-    {snapshot?.prepared && snapshot.status !== "succeeded" && <p>Document prepared. {snapshot.stage === "scouting" && active ? "Document map and notes inventory are being built." : "Notes inventory is not ready."}</p>}
-    {snapshot?.total != null && snapshot.total > 0 && <div style={{ display: "flex", gap: pwc.space.lg, flexWrap: "wrap" }}>
-      <span>Pages captured: {snapshot.captured ?? 0} of {snapshot.total}</span>
-      <span>Pages checked: {snapshot.checked ?? snapshot.verified ?? 0} of {snapshot.total}</span>
-    </div>}
+    {snapshot?.prepared && snapshot.status !== "succeeded" && (
+      <p>Document prepared. {active && mapActive ? "Document map and notes inventory are being built." : "Notes inventory is not ready."}</p>
+    )}
+    <p style={{ margin: `0 0 ${pwc.space.md}px`, color: actionRequired === "confirm_setup" ? pwc.orange700 : pwc.grey700 }}>
+      {actionRequired === "confirm_setup"
+        ? "Action required: review the detected filing details below, correct anything needed, then confirm setup to start extraction."
+        : actionRequired === "retry"
+          ? "Preparation stopped before setup could be confirmed. Retry when you are ready."
+          : snapshot?.status === "not_started"
+            ? "Start document preparation before extraction."
+            : "No action is needed yet. You can leave this page while preparation continues."}
+    </p>
+    <ol aria-label="Document preparation steps" style={{ listStyle: "none", margin: 0, padding: 0, borderTop: `1px solid ${pwc.grey200}` }}>
+      {[
+        {
+          label: "Read source pages",
+          detail: total > 0 ? `Pages captured: ${captured} of ${total}` : "Waiting for page count",
+          state: detailStatus({ complete: readComplete, active: active && phase === "preparing_pages" && !readComplete, stopped: stopped && !readComplete }),
+        },
+        {
+          label: "Check page readings and continuations",
+          detail: total > 0 ? `Pages checked: ${checked} of ${total}` : "Waiting for page count",
+          state: detailStatus({ complete: checkComplete, active: active && phase === "preparing_pages" && checked > 0 && !checkComplete, stopped: stopped && !checkComplete }),
+        },
+        {
+          label: "Build document map",
+          detail: phase === "reconciling_map" ? "Reconciling statement and note ownership" : "Identify statements, formats, notes and denomination",
+          state: detailStatus({ complete: mapComplete, active: active && mapActive, stopped: stopped && pagesComplete }),
+        },
+        {
+          label: "Confirm detected setup",
+          detail: "Review denomination, filing details and statement formats",
+          state: actionRequired === "confirm_setup" ? "Action required" : "Waiting",
+        },
+      ].map((step) => (
+        <li key={step.label} style={{ display: "grid", gridTemplateColumns: "minmax(180px, 1fr) minmax(220px, 2fr) auto", gap: pwc.space.md, alignItems: "center", padding: `${pwc.space.sm}px 0`, borderBottom: `1px solid ${pwc.grey200}`, fontSize: 13 }}>
+          <strong style={{ fontFamily: pwc.fontHeading, fontWeight: 600 }}>{step.label}</strong>
+          <span style={{ color: pwc.grey700 }}>{step.detail}</span>
+          <span style={{ color: step.state === "Action required" ? pwc.orange700 : step.state === "Stopped" ? pwc.errorText : pwc.grey700, fontWeight: step.state === "Working" || step.state === "Action required" ? 600 : 400 }}>
+            {step.state}
+          </span>
+        </li>
+      ))}
+    </ol>
   </section>;
 }

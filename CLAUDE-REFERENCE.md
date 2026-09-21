@@ -1335,11 +1335,21 @@ cancelled are explicit outcomes; inactivity and missing reasoning summaries neve
 imply success. Source capture, completed assessment and exact verification have
 separate counts; the UI shows pages checked, including accepted best readings.
 The document-map stage starts after source preparation and preserves the page
-counters while reporting its own status. Polling does not extend authentication idle sessions.
-The existing preparation panel owns ordinary progress and a single actionable
-failure, without feature-enable switches or duplicate banners. Pinned by
+counters while reporting its own status. The durable snapshot exposes a
+monotonic operator phase (`pending`, `preparing_pages`, `building_map`,
+`reconciling_map`, `awaiting_confirmation`) plus `action_required`; low-level
+capture, verification, and join stages may overlap and must not be presented as
+a false sequential workflow. These fields are required on the public response;
+the server backfills older durable snapshots before returning them. The shared
+UI track remains continuous across Prepare document → Confirm setup → Extract →
+Check → Review → Ready. Extraction
+cannot start until preparation reaches the explicit confirmation checkpoint.
+Polling does not extend authentication idle sessions. The existing preparation
+panel owns ordinary progress and a single actionable failure, without
+feature-enable switches or duplicate banners. Pinned by
 `tests/test_document_preparation_lifecycle.py`, `tests/test_auth_sessions.py`, and
-`web/src/__tests__/DocumentPreparation.test.tsx`.
+`web/src/__tests__/DocumentPreparation.test.tsx`, with the shared track pinned by
+`web/src/__tests__/PipelineStages.test.tsx`.
 
 Two new SSE event families surface the post-extraction silent dead
 zones (added 2026-04-27, Phases 5 & 6 of the same plan):

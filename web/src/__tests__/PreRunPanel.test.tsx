@@ -1,7 +1,7 @@
 import { describe, test, expect, vi } from "vitest";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { PreRunPanel, findInventoryGaps } from "../components/PreRunPanel";
-import type { ModelEntry, ExtendedSettingsResponse } from "../lib/types";
+import type { ModelEntry, ExtendedSettingsResponse, PreparationSnapshot } from "../lib/types";
 
 // The inline scout model picker persists through lib/api.updateSettings.
 // Mocked here so tests can assert the call shape without hitting the network.
@@ -17,6 +17,18 @@ const mockModels: ModelEntry[] = [
   { id: "gemini-3-flash", display_name: "Gemini 3 Flash", provider: "google", supports_vision: true, notes: "" },
   { id: "claude-opus-4-6", display_name: "Claude Opus 4.6", provider: "anthropic", supports_vision: true, notes: "" },
 ];
+
+function preparation(overrides: Partial<PreparationSnapshot> = {}): PreparationSnapshot {
+  return {
+    attempt_id: "a1",
+    status: "working",
+    stage: "capture",
+    phase: "preparing_pages",
+    action_required: "none",
+    message: "Reading",
+    ...overrides,
+  };
+}
 
 const mockSettings: ExtendedSettingsResponse = {
   model: "gemini-3-flash",
@@ -1696,14 +1708,104 @@ describe("notes inventory editor", () => {
 });
 
 describe("Upload-owned preparation", () => {
+  test("preserves a legacy saved denomination without selection metadata", async () => {
+    const onRun = vi.fn();
+    render(<PreRunPanel sessionId="abc" getSettings={vi.fn().mockResolvedValue(mockSettings)} onRun={onRun}
+      waitForPreparation initialConfig={{ denomination: "units" }}
+      preparation={preparation({ status: "succeeded", stage: "ready", phase: "awaiting_confirmation", action_required: "confirm_setup", infopack: {
+        scale_unit: "millions", statements: {}, notes_inventory: [],
+      } })} />);
+    await screen.findByTestId("detected-denomination");
+    expect(screen.getByRole("button", { name: "RM" })).toHaveAttribute("aria-pressed", "true");
+    startExtraction();
+    expect(onRun.mock.lastCall![0].denomination).toBe("units");
+  });
+
+  test.each([false, true])("restored drafts preserve denomination intent (explicit selection: %s)", async (explicitSelection) => {
+    const save = vi.fn();
+    const onRun = vi.fn();
+    const props = { sessionId: "abc", getSettings: vi.fn().mockResolvedValue(mockSettings), onRun, waitForPreparation: true };
+    const first = render(<PreRunPanel {...props} onConfigChange={save} preparation={preparation()} />);
+    await screen.findByRole("button", { name: "Group" });
+    // Selecting the already-selected denomination must also persist intent.
+    fireEvent.click(screen.getByRole("button", { name: explicitSelection ? "RM '000" : "Group" }));
+    await waitFor(() => expect(save).toHaveBeenCalled());
+    const saved = save.mock.lastCall![0];
+    expect(saved.denomination).toBe("thousands");
+    first.unmount();
+
+    render(<PreRunPanel {...props} initialConfig={saved}
+      preparation={preparation({ status: "succeeded", stage: "ready", phase: "awaiting_confirmation", action_required: "confirm_setup", infopack: {
+        scale_unit: "millions", statements: {}, notes_inventory: [],
+      } })} />);
+    expect(await screen.findByTestId("detected-denomination")).toHaveTextContent("RM mil");
+    expect(screen.getByRole("button", { name: explicitSelection ? "RM '000" : "RM mil" })).toHaveAttribute("aria-pressed", "true");
+    startExtraction();
+    expect(onRun.mock.lastCall![0].denomination).toBe(explicitSelection ? "thousands" : "millions");
+  });
+
+  test("does not allow a missing preparation snapshot to bypass confirmation", async () => {
+    const onRun = vi.fn();
+    render(<PreRunPanel sessionId="abc" getSettings={vi.fn().mockResolvedValue(mockSettings)} onRun={onRun}
+      waitForPreparation preparation={preparation({ attempt_id: "", status: "not_started", stage: "pending", phase: "pending", message: "Not started" })} />);
+    expect(await screen.findByRole("button", { name: "Start extraction" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Start extraction" }));
+    expect(onRun).not.toHaveBeenCalled();
+  });
+
+  test("waits for preparation, then surfaces and applies the detected denomination", async () => {
+    const onRun = vi.fn();
+    const props = { sessionId: "abc", getSettings: vi.fn().mockResolvedValue(mockSettings), onRun, waitForPreparation: true };
+    const { rerender } = render(<PreRunPanel {...props} />);
+
+    const start = await screen.findByRole("button", { name: "Start extraction" });
+    expect(start).toBeDisabled();
+
+    rerender(<PreRunPanel {...props}
+      preparation={preparation({ stage: "scouting", phase: "building_map", message: "Building document map" })} />);
+    expect(start).toBeDisabled();
+
+    rerender(<PreRunPanel {...props}
+      preparation={preparation({ status: "succeeded", stage: "ready", phase: "awaiting_confirmation", action_required: "confirm_setup", message: "Ready", infopack: {
+        scale_unit: "millions", statements: {}, notes_inventory: [],
+      } })} />);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "RM mil" })).toHaveAttribute("aria-pressed", "true"));
+    expect(screen.getByTestId("detected-denomination")).toHaveTextContent("Document scan detected RM mil");
+    const confirm = screen.getByRole("button", { name: "Confirm setup and start extraction" });
+    expect(confirm).toBeEnabled();
+    startExtraction();
+    expect(onRun.mock.calls[0][0].denomination).toBe("millions");
+  });
+
+  test("a manual denomination correction wins over the automatic finding", async () => {
+    const onRun = vi.fn();
+    const props = { sessionId: "abc", getSettings: vi.fn().mockResolvedValue(mockSettings), onRun, waitForPreparation: true };
+    const { rerender } = render(<PreRunPanel {...props}
+      preparation={preparation()} />);
+
+    await screen.findByRole("button", { name: "Start extraction" });
+    fireEvent.click(screen.getByRole("button", { name: "RM" }));
+    rerender(<PreRunPanel {...props}
+      preparation={preparation({ status: "succeeded", stage: "ready", phase: "awaiting_confirmation", action_required: "confirm_setup", message: "Ready", infopack: {
+        scale_unit: "millions", statements: {}, notes_inventory: [],
+      } })} />);
+
+    await waitFor(() => expect(screen.getByTestId("detected-denomination")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "RM" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "RM mil" })).toHaveAttribute("aria-pressed", "false");
+    startExtraction();
+    expect(onRun.mock.calls[0][0].denomination).toBe("units");
+  });
+
   test("automatic inventory preserves a saved variant when a draft is restored", async () => {
     const onRun = vi.fn();
     const onConfigChange = vi.fn();
     render(<PreRunPanel sessionId="abc" getSettings={vi.fn().mockResolvedValue(mockSettings)} onRun={onRun}
       onConfigChange={onConfigChange} initialConfig={{ variants: { SOFP: "CuNonCu" } }}
-      preparation={{ attempt_id: "a1", status: "succeeded", stage: "ready", message: "Ready", infopack: {
+      preparation={preparation({ status: "succeeded", stage: "ready", phase: "awaiting_confirmation", action_required: "confirm_setup", message: "Ready", infopack: {
         statements: { SOPL: { variant_suggestion: "Function", confidence: "HIGH" } }, notes_inventory: [],
-      } }} />);
+      } })} />);
     await waitFor(() => expect(onConfigChange).toHaveBeenCalled());
     expect(onConfigChange.mock.lastCall?.[0].variants.SOFP).toBe("CuNonCu");
     startExtraction();
@@ -1714,16 +1816,16 @@ describe("Upload-owned preparation", () => {
     const onRun = vi.fn();
     const props = { sessionId: "abc", getSettings: vi.fn().mockResolvedValue(mockSettings), onRun };
     const { rerender } = render(<PreRunPanel {...props}
-      preparation={{ attempt_id: "a1", status: "working", stage: "capture", message: "Reading" }} />);
+      preparation={preparation()} />);
     await openAdvanced();
     const select = screen.getAllByRole<HTMLSelectElement>("combobox")
       .find((element) => element.querySelector("option[value='CuNonCu']"))!;
     fireEvent.change(select, { target: { value: "CuNonCu" } });
     fireEvent.change(select, { target: { value: variant } });
     rerender(<PreRunPanel {...props}
-      preparation={{ attempt_id: "a1", status: "succeeded", stage: "ready", message: "Ready", infopack: {
+      preparation={preparation({ status: "succeeded", stage: "ready", phase: "awaiting_confirmation", action_required: "confirm_setup", message: "Ready", infopack: {
         statements: { SOFP: { variant_suggestion: "OrderOfLiquidity", confidence: "HIGH" } }, notes_inventory: [],
-      } }} />);
+      } })} />);
     startExtraction();
     expect(onRun.mock.calls[0][0].variants.SOFP).toBe(variant || undefined);
     expect(onRun.mock.calls[0][0].infopack).not.toBeNull();
@@ -1738,7 +1840,7 @@ describe("Upload-owned preparation", () => {
     try {
       const onRun = vi.fn();
       render(<PreRunPanel sessionId="abc" getSettings={vi.fn().mockResolvedValue(mockSettings)} onRun={onRun}
-        preparation={{ attempt_id: "", status: "not_started", stage: "pending", message: "Not started" }} />);
+        preparation={preparation({ attempt_id: "", status: "not_started", stage: "pending", phase: "pending", message: "Not started" })} />);
       await openAdvanced();
       fireEvent.click(screen.getByRole("button", { name: /preview scan/i }));
       await waitFor(() => expect(screen.getAllByRole<HTMLSelectElement>("combobox")
@@ -1752,16 +1854,16 @@ describe("Upload-owned preparation", () => {
 
   test.each(["failed", "cancelled"] as const)("%s preparation blocks extraction without duplicate error notices", async (status) => {
     render(<PreRunPanel sessionId="abc" getSettings={vi.fn().mockResolvedValue(mockSettings)} onRun={vi.fn()}
-      preparation={{ attempt_id: "a1", status, stage: "capture", message: "Preparation stopped" }} />);
+      preparation={preparation({ status, action_required: "retry", message: "Preparation stopped" })} />);
     expect(await screen.findByRole("button", { name: "Start extraction" })).toBeDisabled();
     expect(screen.queryByText("Preparation stopped")).toBeNull();
   });
   test("uses the automatic inventory and removes manual preview controls", async () => {
     const onRun = vi.fn();
     render(<PreRunPanel sessionId="abc" getSettings={vi.fn().mockResolvedValue(mockSettings)} onRun={onRun}
-      preparation={{ attempt_id: "a1", status: "succeeded", stage: "ready", message: "Ready", infopack: {
+      preparation={preparation({ status: "succeeded", stage: "ready", phase: "awaiting_confirmation", action_required: "confirm_setup", message: "Ready", infopack: {
         detected_standard: "mpers", statements: { SOFP: { variant_suggestion: "Default", confidence: "HIGH" } }, notes_inventory: [],
-      } }} />);
+      } })} />);
     await waitFor(() => expect(screen.getByRole("button", { name: "MPERS" })).toHaveAttribute("aria-pressed", "true"));
     await openAdvanced();
     expect(screen.queryByRole("button", { name: /preview scan/i })).toBeNull();

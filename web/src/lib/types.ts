@@ -1,7 +1,19 @@
+export type PreparationPhase =
+  | "pending"
+  | "preparing_pages"
+  | "building_map"
+  | "reconciling_map"
+  | "awaiting_confirmation";
+
+export type PreparationAction = "none" | "confirm_setup" | "retry";
+
 export interface PreparationSnapshot {
   attempt_id: string;
   status: "not_started" | "queued" | "working" | "retrying" | "succeeded" | "failed" | "cancelled";
   stage: string;
+  /** Stable, monotonic workflow state. The server backfills older snapshots. */
+  phase: PreparationPhase;
+  action_required: PreparationAction;
   message: string;
   completed?: number;
   total?: number;
@@ -726,6 +738,9 @@ export interface RunConfigPayload {
    *  Defaults to "thousands" server-side; the UI always sends it so history
    *  carries the toggle state. */
   denomination: Denomination;
+  /** Draft-only intent: false permits preparation to replace an autosaved value.
+   * Older drafts without this field retain their saved denomination. */
+  denomination_user_selected?: boolean;
   notes_to_run?: NotesTemplateType[];
   /** Per-notes-template model overrides. Unspecified templates fall back
    *  to the run's default model on the backend. Sent only when the user

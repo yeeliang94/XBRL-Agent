@@ -3209,6 +3209,8 @@ class RunConfigPatchRequest(BaseModel):
     # draft-start path rebuilds the run at the "thousands" default — defeating
     # the whole point of the user-authoritative denomination.
     denomination: Optional[Literal["units", "thousands", "millions"]] = None
+    # Draft-only selection intent; extraction uses the confirmed denomination.
+    denomination_user_selected: Optional[bool] = None
     notes_to_run: Optional[List[str]] = None
     notes_models: Optional[Dict[str, str]] = None
     # Only `split` exists (monolith removed). Unset (None) stays None so a

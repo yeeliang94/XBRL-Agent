@@ -110,6 +110,8 @@ def test_start_is_durable_and_duplicate_requests_join(upload, monkeypatch):
     first = real_start(directory, run_id)
     try:
         assert entered.wait(1)
+        assert first["phase"] == "preparing_pages"
+        assert first["action_required"] == "none"
         second = real_start(directory, run_id)
         assert first["attempt_id"] == second["attempt_id"]
         assert directory.name in prep.active_session_ids()
@@ -175,6 +177,8 @@ async def test_worker_prepares_before_scout_and_reconciles_before_ready(upload, 
     assert calls == ["capture", "map", "reconcile", "validate"]
     state = prep._read(directory)
     assert state["status"] == state["scout_status"] == "succeeded"
+    assert state["phase"] == "awaiting_confirmation"
+    assert state["action_required"] == "confirm_setup"
     assert state["prepared"] is True
     assert state["verified"] == 1
     assert state["checked"] == 2
@@ -217,6 +221,8 @@ async def test_invalid_scout_map_keeps_actionable_failure_in_preparation_status(
 
     state = prep._read(directory)
     assert state["status"] == state["scout_status"] == "failed"
+    assert state["phase"] == "building_map"
+    assert state["action_required"] == "retry"
     assert state["error"] == "DocumentMapPreparationError"
     assert state["message"].startswith(
         "The AI service returned an invalid document map after 3 attempts."
