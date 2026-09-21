@@ -284,3 +284,250 @@ def test_write_notes_boundary_records_malformed_model_payload(tmp_path: Path):
     assert built == []
     assert len(errors) == 1
     assert real_deps.unattributed_write_failures == 1
+
+
+def test_write_notes_boundary_recovers_missing_parent_from_assigned_note(caplog):
+    """A missing heading must not discard an otherwise valid Sheet-12 note."""
+    from notes.agent import _build_notes_payloads
+    from scout.notes_discoverer import NoteInventoryEntry
+
+    inventory = [
+        NoteInventoryEntry(
+            note_num=19,
+            title="Financial instruments",
+            page_range=(33, 38),
+        ),
+    ]
+    built, errors = _build_notes_payloads(
+        [{
+            "chosen_row_label": "Disclosure of financial instruments",
+            "content": "<p>Complete disclosure.</p>",
+            "evidence": "Pages 33-38, Note 19",
+            "source_pages": [33, 34, 35, 36, 37, 38],
+            "note_num": 19,
+            "source_note_refs": ["19."],
+            # parent_note intentionally omitted: the assigned inventory has
+            # the exact structured identity needed for the writer heading.
+        }],
+        sub_agent_id="notes:LIST_OF_NOTES:sub4",
+        inventory=inventory,
+    )
+
+    assert errors == []
+    assert len(built) == 1
+    assert built[0].parent_note == {
+        "number": "19.",
+        "title": "Financial instruments",
+    }
+    assert "recovered missing parent_note" in caplog.text
+
+
+def test_write_notes_boundary_repairs_mismatched_parent_identity(caplog):
+    """Coverage identity and the rendered H3 may never name different notes."""
+    from notes.agent import _build_notes_payloads
+    from scout.notes_discoverer import NoteInventoryEntry
+
+    built, errors = _build_notes_payloads(
+        [{
+            "chosen_row_label": "Disclosure of financial instruments",
+            "content": "<p>Complete disclosure.</p>",
+            "evidence": "Page 33, Note 19",
+            "source_pages": [33],
+            "note_num": 19,
+            "parent_note": {"number": "20", "title": "Wrong note"},
+        }],
+        sub_agent_id="notes:LIST_OF_NOTES:sub4",
+        inventory=[NoteInventoryEntry(
+            note_num=19,
+            title="Financial instruments",
+            page_range=(33, 38),
+        )],
+    )
+
+    assert errors == []
+    assert built[0].parent_note == {
+        "number": "19",
+        "title": "Financial instruments",
+    }
+    assert "repaired mismatched parent_note" in caplog.text
+
+
+def test_write_notes_boundary_preserves_matching_printed_heading():
+    """A valid explicit heading keeps its source punctuation and title."""
+    from notes.agent import _build_notes_payloads
+    from scout.notes_discoverer import NoteInventoryEntry
+
+    built, errors = _build_notes_payloads(
+        [{
+            "chosen_row_label": "Disclosure of financial instruments",
+            "content": "<p>Complete disclosure.</p>",
+            "evidence": "Page 33, Note 19",
+            "source_pages": [33],
+            "note_num": 19,
+            "parent_note": {
+                "number": "NOTE 19",
+                "title": "FINANCIAL INSTRUMENTS",
+            },
+        }],
+        sub_agent_id="notes:LIST_OF_NOTES:sub4",
+        inventory=[NoteInventoryEntry(
+            note_num=19,
+            title="Financial instruments",
+            page_range=(33, 38),
+        )],
+    )
+
+    assert errors == []
+    assert built[0].parent_note == {
+        "number": "NOTE 19",
+        "title": "FINANCIAL INSTRUMENTS",
+    }
+
+
+def test_write_notes_boundary_recovers_identity_for_single_note_batch():
+    """A one-note worker has one unambiguous owner even if both fields vanish."""
+    from notes.agent import _build_notes_payloads
+    from scout.notes_discoverer import NoteInventoryEntry
+
+    built, errors = _build_notes_payloads(
+        [{
+            "chosen_row_label": "Disclosure of financial instruments",
+            "content": "<p>Complete disclosure.</p>",
+            "evidence": "Page 33",
+            "source_pages": [33],
+        }],
+        sub_agent_id="notes:LIST_OF_NOTES:sub4",
+        inventory=[NoteInventoryEntry(
+            note_num=19,
+            title="Financial instruments",
+            page_range=(33, 38),
+        )],
+    )
+
+    assert errors == []
+    assert built[0].note_num == 19
+    assert built[0].parent_note == {
+        "number": "19",
+        "title": "Financial instruments",
+    }
+
+
+def test_write_notes_boundary_refuses_missing_identity_for_multi_note_batch():
+    """A multi-note worker cannot safely guess which note owns the payload."""
+    from notes.agent import _build_notes_payloads
+    from scout.notes_discoverer import NoteInventoryEntry
+
+    built, errors = _build_notes_payloads(
+        [{
+            "chosen_row_label": "Disclosure of financial instruments",
+            "content": "<p>Complete disclosure.</p>",
+            "evidence": "Page 33",
+            "source_pages": [33],
+        }],
+        sub_agent_id="notes:LIST_OF_NOTES:sub4",
+        inventory=[
+            NoteInventoryEntry(19, "Financial instruments", (33, 38)),
+            NoteInventoryEntry(20, "Revenue", (39, 39)),
+        ],
+    )
+
+    assert built == []
+    assert len(errors) == 1
+    assert "parent_note is required" in errors[0]
+
+
+def test_write_notes_boundary_does_not_guess_parent_for_unassigned_note():
+    """Recovery is exact structured identity, never a cross-note guess."""
+    from notes.agent import _build_notes_payloads
+    from scout.notes_discoverer import NoteInventoryEntry
+
+    built, errors = _build_notes_payloads(
+        [{
+            "chosen_row_label": "Disclosure of financial instruments",
+            "content": "<p>Complete disclosure.</p>",
+            "evidence": "Page 39, Note 20",
+            "source_pages": [39],
+            "note_num": 20,
+        }],
+        sub_agent_id="notes:LIST_OF_NOTES:sub4",
+        inventory=[NoteInventoryEntry(
+            note_num=19,
+            title="Financial instruments",
+            page_range=(33, 38),
+        )],
+    )
+
+    assert built == []
+    assert len(errors) == 1
+    assert "not assigned to this Sheet-12 worker" in errors[0]
+
+
+def test_write_notes_boundary_rejects_explicit_unassigned_note():
+    """A complete-looking heading cannot escape the worker's assignment."""
+    from notes.agent import _build_notes_payloads
+    from scout.notes_discoverer import NoteInventoryEntry
+
+    built, errors = _build_notes_payloads(
+        [{
+            "chosen_row_label": "Disclosure of revenue",
+            "content": "<p>Complete disclosure.</p>",
+            "evidence": "Page 39, Note 20",
+            "source_pages": [39],
+            "note_num": 20,
+            "parent_note": {"number": "20", "title": "Revenue"},
+        }],
+        sub_agent_id="notes:LIST_OF_NOTES:sub4",
+        inventory=[NoteInventoryEntry(
+            note_num=19,
+            title="Financial instruments",
+            page_range=(33, 38),
+        )],
+    )
+
+    assert built == []
+    assert len(errors) == 1
+    assert "not assigned to this Sheet-12 worker" in errors[0]
+
+
+def test_registered_write_notes_tool_wires_inventory_recovery(tmp_path: Path):
+    """Pin the live tool closure, not only the parser helper."""
+    import asyncio
+
+    from notes.agent import _ensure_label_index, create_notes_agent
+    from notes_types import NotesTemplateType
+    from scout.notes_discoverer import NoteInventoryEntry
+
+    pdf_path = tmp_path / "uploaded.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    inventory = [NoteInventoryEntry(
+        note_num=19,
+        title="Financial instruments",
+        page_range=(33, 38),
+    )]
+    agent, deps = create_notes_agent(
+        template_type=NotesTemplateType.LIST_OF_NOTES,
+        pdf_path=str(pdf_path),
+        inventory=inventory,
+        filing_level="company",
+        model="test",
+        output_dir=str(tmp_path),
+        batch_note_nums=[19],
+    )
+    deps.payload_sink = []
+    deps.sub_agent_id = "notes:LIST_OF_NOTES:sub4"
+    label = _ensure_label_index(deps)[0].original
+    tool = agent._function_toolset.tools["write_notes"].function
+
+    message = asyncio.run(tool(SimpleNamespace(deps=deps), [{
+        "chosen_row_label": label,
+        "content": "<p>Complete disclosure.</p>",
+        "evidence": "Pages 33-38, Note 19",
+        "source_pages": [33, 34, 35, 36, 37, 38],
+        "note_num": 19,
+    }]))
+
+    assert message.startswith("Collected 1 payload")
+    assert deps.payload_sink[0].parent_note == {
+        "number": "19",
+        "title": "Financial instruments",
+    }
