@@ -64,12 +64,20 @@ def test_preview_reads_canonical_fact_dimensions_and_coordinates(tmp_path: Path)
     assert fields[0]["col"]
 
 
-def test_empty_preview_overwrites_stale_result_file(tmp_path: Path):
-    from concept_model.preview import write_preview_result
+def test_empty_preview_overwrites_stale_result_file(tmp_path: Path, monkeypatch):
+    import concept_model.preview as preview
 
     path = tmp_path / "result.json"
     path.write_text('{"fields": [{"value": "stale"}]}', encoding="utf-8")
 
-    write_preview_result(path, [])
+    calls = []
+
+    def replace(source, destination):
+        calls.append(destination)
+        Path(source).replace(destination)
+
+    monkeypatch.setattr(preview, "replace_with_retry", replace)
+    preview.write_preview_result(path, [])
 
     assert json.loads(path.read_text(encoding="utf-8")) == {"fields": []}
+    assert calls == [path]

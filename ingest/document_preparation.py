@@ -31,6 +31,7 @@ from ingest.pdf_sidecar import (
     PAGE_TIMEOUT_S, _render_page, _render_is_blank,
     normalize_transcription, transcribe_pages, TranscriptionRetryExhausted,
 )
+from utils.atomic_io import replace_with_retry
 
 CONTRACT_VERSION = 5
 PREPARATION_NAME = "preparation.json"
@@ -324,7 +325,7 @@ def _atomic_text(path: Path, text: str) -> None:
             stream.write(text)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(name, path)
+        replace_with_retry(name, path)
     finally:
         if os.path.exists(name):
             os.unlink(name)
@@ -455,7 +456,7 @@ def _derived_pdf(source: Path, target: Path, pages: list[dict]) -> None:
         temporary = target.with_suffix(".tmp.pdf")
         try:
             doc.save(temporary)
-            os.replace(temporary, target)
+            replace_with_retry(temporary, target)
         finally:
             temporary.unlink(missing_ok=True)
 

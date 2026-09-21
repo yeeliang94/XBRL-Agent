@@ -146,7 +146,7 @@ def test_soffice_command_builder_moves_output(tmp_path: Path, monkeypatch):
     """_convert_with_soffice builds the right argv and relocates the produced
     <stem>.pdf to the requested dest name."""
     src = _write(tmp_path / "uploaded.docx")
-    dest = tmp_path / "uploaded.pdf"
+    dest = tmp_path / "converted.pdf"
     captured = {}
 
     def _fake_run(cmd, capture_output, text, timeout, env=None):
@@ -158,9 +158,17 @@ def test_soffice_command_builder_moves_output(tmp_path: Path, monkeypatch):
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     monkeypatch.setattr(word_convert.subprocess, "run", _fake_run)
+    promoted = []
+
+    def replace(source, destination):
+        promoted.append(destination)
+        Path(source).replace(destination)
+
+    monkeypatch.setattr(word_convert, "replace_with_retry", replace)
     word_convert._convert_with_soffice(src, dest, "soffice")
     assert "--convert-to" in captured["cmd"] and "pdf" in captured["cmd"]
     assert dest.exists()
+    assert promoted == [dest]
 
 
 def test_soffice_gets_minimal_env_without_secrets(tmp_path: Path, monkeypatch):

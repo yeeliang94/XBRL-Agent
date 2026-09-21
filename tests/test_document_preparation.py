@@ -2,6 +2,7 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import json
+from pathlib import Path
 import threading
 
 import fitz
@@ -218,6 +219,29 @@ def test_checkpoint_disk_writes_do_not_run_on_preparation_event_loop(tmp_path, m
     checkpoint = json.loads(next(tmp_path.glob("preparation-checkpoint-*.json")).read_text())
     assert len(checkpoint["calls"]) == len(calls)
     assert set(checkpoint["pages"]) == {"1", "2", "3"}
+
+
+def test_preparation_artifacts_use_resilient_atomic_replace(tmp_path, monkeypatch):
+    import ingest.document_preparation as preparation
+
+    calls = []
+
+    def replace(source, destination):
+        calls.append((Path(source), Path(destination)))
+        Path(source).replace(destination)
+
+    monkeypatch.setattr(preparation, "replace_with_retry", replace)
+    metadata = tmp_path / "preparation.json"
+    preparation._atomic_text(metadata, "{}")
+
+    source = pdf(tmp_path, 1)
+    prepared = tmp_path / "prepared.pdf"
+    preparation._derived_pdf(source, prepared, [{"page": 1, "metadata_rotation": 0, "rotation": 0}])
+
+    assert [destination for _, destination in calls] == [metadata, prepared]
+    assert metadata.read_text(encoding="utf-8") == "{}"
+    with fitz.open(prepared) as document:
+        assert len(document) == 1
 
 
 def test_concurrent_checkpoint_saves_do_not_rewrite_identical_snapshots(tmp_path, monkeypatch):

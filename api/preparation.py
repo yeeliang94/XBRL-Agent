@@ -23,6 +23,7 @@ from fastapi import APIRouter, HTTPException
 import server
 import task_registry
 from model_settings import DEFAULT_MODEL_ID
+from utils.atomic_io import replace_with_retry
 from utils.paths import validate_session_id
 
 if TYPE_CHECKING:
@@ -56,7 +57,9 @@ def _write(directory: Path, snapshot: dict) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(snapshot, handle, ensure_ascii=False)
-        os.replace(name, directory / "preparation_status.json")
+            handle.flush()
+            os.fsync(handle.fileno())
+        replace_with_retry(name, directory / "preparation_status.json")
     finally:
         if os.path.exists(name):
             os.unlink(name)
@@ -69,7 +72,13 @@ def snapshot(directory: Path) -> dict:
         if result.get("status") in _ACTIVE and not (worker and worker.is_alive()):
             result.update(status="failed", message="Document preparation was interrupted. Retry to resume.",
                           error="preparation_interrupted", updated_at=time.time())
-            _write(directory, result)
+            try:
+                _write(directory, result)
+            except OSError:
+                # Keep the UI and audit terminal even if an external process
+                # holds the status file beyond the bounded retry window. A
+                # later poll will attempt to persist the same terminal state.
+                logger.exception("Could not persist interrupted preparation status")
             _finish_interrupted_audit(directory, result)
         return result
 
@@ -171,8 +180,13 @@ def _worker(directory: Path, db_path: Path, run_id: int, attempt: str) -> None:
         asyncio.run(_prepare(directory, db_path, run_id, attempt))
     except Exception:
         logger.exception("Preparation worker failed for run %s", run_id)
-        _update(directory, attempt, status="failed", error="worker_failed",
-                message="Document preparation could not finish. Retry.")
+        try:
+            _update(directory, attempt, status="failed", error="worker_failed",
+                    message="Document preparation could not finish. Retry.")
+        except Exception:
+            # The original failure is already logged. Do not let a second
+            # status-file sharing violation escape the worker unobserved.
+            logger.exception("Could not persist worker failure status for run %s", run_id)
     finally:
         with _lock:
             if _workers.get(_key(directory)) is threading.current_thread():

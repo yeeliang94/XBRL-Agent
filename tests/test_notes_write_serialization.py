@@ -275,7 +275,7 @@ def test_failed_final_promotion_restores_previous_artifacts_and_db(
     before_workbook = output.read_bytes()
     before_sidecar = sidecar.read_bytes()
 
-    real_replace = notes_agent.os.replace
+    real_replace = notes_agent.replace_with_retry
 
     def fail_staged_workbook(source, destination):
         if (str(source).endswith(".stage.xlsx")
@@ -283,7 +283,7 @@ def test_failed_final_promotion_restores_previous_artifacts_and_db(
             raise PermissionError("injected final promotion failure")
         return real_replace(source, destination)
 
-    monkeypatch.setattr(notes_agent.os, "replace", fail_staged_workbook)
+    monkeypatch.setattr(notes_agent, "replace_with_retry", fail_staged_workbook)
     rejected = asyncio.run(tool(
         SimpleNamespace(deps=deps), sheet=sheet, row=target_row,
         block_ids=["b2"], source_pages=[2], evidence="Page 2",

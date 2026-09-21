@@ -22,6 +22,7 @@ from pydantic_ai import Agent, RunContext
 from pydantic_ai.messages import BinaryContent
 from pydantic_ai.models import Model
 from model_settings import build_model_settings
+from utils.atomic_io import replace_with_retry
 
 
 _THINKING_WARNED: set[str] = set()
@@ -2401,26 +2402,26 @@ def _write_source_and_project_impl(
                     if output_path.exists():
                         output_backup = output_path.with_name(
                             f".{output_path.name}.{promotion_id}.backup")
-                        os.replace(output_path, output_backup)
+                        replace_with_retry(output_path, output_backup)
                     if staged_sidecar.exists() and final_sidecar.exists():
                         sidecar_backup = final_sidecar.with_name(
                             f".{final_sidecar.name}.{promotion_id}.backup")
-                        os.replace(final_sidecar, sidecar_backup)
+                        replace_with_retry(final_sidecar, sidecar_backup)
                     if staged_sidecar.exists():
-                        os.replace(staged_sidecar, final_sidecar)
+                        replace_with_retry(staged_sidecar, final_sidecar)
                         staged_sidecar = None
                         sidecar_promoted = True
-                    os.replace(staged_path, output_path)
+                    replace_with_retry(staged_path, output_path)
                     staged_path = None
                     output_promoted = True
             except Exception:
                 if output_backup is not None and output_backup.exists():
-                    os.replace(output_backup, output_path)
+                    replace_with_retry(output_backup, output_path)
                     output_backup = None
                 elif output_promoted:
                     output_path.unlink(missing_ok=True)
                 if sidecar_backup is not None and sidecar_backup.exists():
-                    os.replace(sidecar_backup, final_sidecar)
+                    replace_with_retry(sidecar_backup, final_sidecar)
                     sidecar_backup = None
                 elif sidecar_promoted:
                     final_sidecar.unlink(missing_ok=True)

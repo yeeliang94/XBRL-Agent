@@ -35,6 +35,8 @@ import tempfile
 import zipfile
 from pathlib import Path
 
+from utils.atomic_io import replace_with_retry
+
 logger = logging.getLogger("server")
 
 # Wall-clock ceiling for a single conversion. A ~100-page statement converts in
@@ -202,7 +204,7 @@ def _convert_with_soffice(src: Path, dest: Path, soffice: str) -> None:
             raise WordConversionError(
                 f"LibreOffice reported success but produced no PDF at {produced}"
             )
-        os.replace(produced, dest)
+        replace_with_retry(produced, dest)
 
 
 def _convert_with_word_com(src: Path, dest: Path) -> None:

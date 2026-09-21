@@ -1546,9 +1546,12 @@ The race was first hit + fixed on the notes post-validator (a
 load+save-in-place agent, since **deleted** — its cross-sheet
 reconciliation job moved to the notes reviewer, which writes only the DB,
 never the xlsx, so it can't reproduce this). The fix pattern — a per-run
-`threading.Lock` io_lock around every load/save plus a tempfile +
-`os.replace` atomic save (atomic on Windows + POSIX) so even an un-locked
-reader sees old-or-new, never partial — is the shape now shared everywhere.
+`threading.Lock` io_lock around every load/save plus a tempfile and resilient
+atomic replacement (atomic on Windows + POSIX) so even an un-locked reader
+sees old-or-new, never partial — is the shape now shared everywhere.
+`utils.atomic_io.replace_with_retry` absorbs bounded Windows sharing/lock
+violations and busy-filesystem errors. Missing paths and Linux permission or
+ownership errors fail immediately instead of being hidden by retries.
 
 **Closed everywhere (2026-06-12, PLAN-orchestration-hardening item 8):** the
 helper was promoted to `utils/workbook_io.py::atomic_save_workbook` and
