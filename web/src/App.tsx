@@ -844,6 +844,7 @@ export default function App() {
             currentRunId={filingRunId}
             currentRunHref={currentRunHref}
             currentRunActive={viewingSavedRun || (state.view === "extract" && filingRunId != null)}
+            currentRunStatus={currentRunIsLive && state.isRunning ? "Working" : undefined}
             showConcepts={canonicalEnabled}
             isAdmin={Boolean(user?.is_admin)}
             onNewExtraction={() => {

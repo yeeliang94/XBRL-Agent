@@ -113,8 +113,9 @@ describe("TopNav", () => {
   });
 
   test("a live filing selects Overview instead of Work queue", () => {
-    render(<TopNav view="extract" extractMode="queue" currentRunId={42} onViewChange={() => {}} />);
+    render(<TopNav view="extract" extractMode="queue" currentRunId={42} currentRunStatus="Working" onViewChange={() => {}} />);
     expect(screen.getByRole("link", { name: "Work queue" })).not.toHaveAttribute("aria-current");
-    expect(screen.getByRole("link", { name: "Current run" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: /Current run.*Working/ })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("status")).toHaveTextContent("Working");
   });
 });

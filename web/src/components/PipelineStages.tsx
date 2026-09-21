@@ -9,10 +9,10 @@ interface Props {
 }
 
 const PHASES = [
-  { key: "prepare", label: "Prepare document" },
-  { key: "extract", label: "Extract data" },
-  { key: "check", label: "Combine & check" },
-  { key: "review", label: "Review issues" },
+  { key: "prepare", label: "Prepare" },
+  { key: "extract", label: "Extract" },
+  { key: "check", label: "Check" },
+  { key: "review", label: "Review" },
   { key: "ready", label: "Ready" },
 ];
 
@@ -65,8 +65,8 @@ const styles = {
   },
   track: {
     display: "grid",
-    gridTemplateColumns: "repeat(5, minmax(116px, 1fr))",
-    minWidth: 640,
+    gridTemplateColumns: "repeat(5, minmax(92px, 1fr))",
+    minWidth: 500,
   } as React.CSSProperties,
   stepWrap: {
     minWidth: 0,
@@ -187,6 +187,7 @@ export function PipelineStages({ currentPhase, pipelineStage, isRunning, isCompl
               </div>
 
               <div
+                aria-current={status === "active" ? "step" : undefined}
                 style={
                   status === "completed"
                     ? styles.completedLabel

@@ -5008,6 +5008,25 @@ async def sse_stream_with_keepalive(agen, *, auth_session_id: Optional[str] = No
             except StopAsyncIteration:
                 detach = False  # generator already done — nothing to drain
                 return
+            except Exception:
+                # The pull is complete and the run generator has failed. This
+                # is not a client disconnect, so re-awaiting the same failed
+                # task in the background drain would only rewrite its traceback
+                # to point at the drain helper. Keep the response inside the SSE
+                # contract and let the run generator's lifecycle handler own
+                # terminal persistence and incident details.
+                detach = False
+                logger.exception("Run stream failed before emitting a terminal event")
+                payload = {
+                    "message": (
+                        "The run stopped unexpectedly. Check Activity for details, "
+                        "then retry."
+                    ),
+                    "type": "run_stream_failed",
+                    "bucket": ERROR_BUCKET_FATAL,
+                }
+                yield f"event: error\ndata: {json.dumps(payload)}\n\n"
+                return
             # Start the next pull before yielding so the run keeps progressing
             # while the client consumes this frame.
             pending = asyncio.ensure_future(agen.__anext__())

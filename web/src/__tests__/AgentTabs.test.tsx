@@ -1,5 +1,5 @@
 import { describe, test, expect, vi } from "vitest";
-import { render, screen, fireEvent, within } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { AgentTabs, areAgentTabsPropsEqual, type AgentTabState } from "../components/AgentTabs";
 import type { AgentTabsProps } from "../components/AgentTabs";
 
@@ -27,13 +27,13 @@ describe("AgentTabs", () => {
       />,
     );
 
-    expect(screen.getByText("Scout")).toBeTruthy();
-    expect(screen.getByText("SOFP")).toBeTruthy();
-    expect(screen.getByText("SOPL")).toBeTruthy();
-    expect(screen.getByText("SOCI")).toBeTruthy();
-    expect(screen.getByText("SOCF")).toBeTruthy();
-    expect(screen.getByText("SOCIE")).toBeTruthy();
-    expect(screen.getByText("Validator")).toBeTruthy();
+    expect(screen.getByText("Document preparation")).toBeTruthy();
+    expect(screen.getByText("Statement of financial position")).toBeTruthy();
+    expect(screen.getByText("Profit or loss")).toBeTruthy();
+    expect(screen.getByText("Comprehensive income")).toBeTruthy();
+    expect(screen.getByText("Cash flows")).toBeTruthy();
+    expect(screen.getByText("Changes in equity")).toBeTruthy();
+    expect(screen.getByText("Cross-checks")).toBeTruthy();
   });
 
   test("clicking a tab calls onTabClick with the agentId", () => {
@@ -48,7 +48,7 @@ describe("AgentTabs", () => {
       />,
     );
 
-    fireEvent.click(screen.getByText("SOPL"));
+    fireEvent.click(screen.getByText("Profit or loss"));
     expect(clicked).toEqual(["sopl_0"]);
   });
 
@@ -63,10 +63,10 @@ describe("AgentTabs", () => {
       />,
     );
 
-    const sofpTab = screen.getByRole("tab", { name: /SOFP/ });
+    const sofpTab = screen.getByRole("tab", { name: /Statement of financial position/ });
     expect(sofpTab.getAttribute("aria-selected")).toBe("true");
 
-    const soplTab = screen.getByRole("tab", { name: /SOPL/ });
+    const soplTab = screen.getByRole("tab", { name: /Profit or loss/ });
     expect(soplTab.getAttribute("aria-selected")).toBe("false");
   });
 
@@ -82,8 +82,8 @@ describe("AgentTabs", () => {
       />,
     );
 
-    const sofpTab = screen.getByRole("tab", { name: /SOFP/ });
-    const soplTab = screen.getByRole("tab", { name: /SOPL/ });
+    const sofpTab = screen.getByRole("tab", { name: /Statement of financial position/ });
+    const soplTab = screen.getByRole("tab", { name: /Profit or loss/ });
     expect(sofpTab).toHaveAttribute("tabindex", "0");
     expect(soplTab).toHaveAttribute("tabindex", "-1");
     fireEvent.keyDown(sofpTab, { key: "ArrowDown" });
@@ -101,8 +101,26 @@ describe("AgentTabs", () => {
         onTabClick={() => {}}
       />,
     );
-    expect(screen.getByRole("tab", { name: /SOFP/ })).toHaveTextContent("Running");
-    expect(screen.getByRole("tab", { name: /Scout/ })).toHaveTextContent("Complete");
+    expect(screen.getByRole("tab", { name: /Statement of financial position/ })).toHaveTextContent("Working");
+    expect(screen.getByRole("tab", { name: /Document preparation/ })).toHaveTextContent("Complete");
+  });
+
+  test("distinguishes skipped and operator-stopped workstreams from success and failure", () => {
+    const agents = makeAgentStates();
+    agents.sopl_0.status = "skipped";
+    agents.soci_0.status = "cancelled";
+    render(
+      <AgentTabs
+        agents={agents}
+        tabOrder={Object.keys(agents)}
+        activeTab="sofp_0"
+        onTabClick={() => {}}
+      />,
+    );
+
+    expect(screen.getByRole("tab", { name: /Profit or loss/ })).toHaveTextContent("Skipped");
+    expect(screen.getByRole("tab", { name: /Comprehensive income/ })).toHaveTextContent("Stopped");
+    expect(screen.getByText("1 of 7 complete")).toBeInTheDocument();
   });
 
   test("status badges reflect agent state", () => {
@@ -117,20 +135,20 @@ describe("AgentTabs", () => {
     );
 
     // Complete shows checkmark
-    const scoutTab = screen.getByRole("tab", { name: /Scout/ });
-    expect(scoutTab.textContent).toContain("Scout");
+    const scoutTab = screen.getByRole("tab", { name: /Document preparation/ });
+    expect(scoutTab.textContent).toContain("Document preparation");
 
     // Running shows spinner indicator
-    const sofpTab = screen.getByRole("tab", { name: /SOFP/ });
+    const sofpTab = screen.getByRole("tab", { name: /Statement of financial position/ });
     expect(sofpTab.querySelector("[data-status='running']")).toBeTruthy();
     expect(sofpTab.querySelector(".pwc-working-indicator")).toBeTruthy();
 
     // Pending shows dot
-    const soplTab = screen.getByRole("tab", { name: /SOPL/ });
+    const soplTab = screen.getByRole("tab", { name: /Profit or loss/ });
     expect(soplTab.querySelector("[data-status='pending']")).toBeTruthy();
   });
 
-  test("filters the roster without changing status truth", () => {
+  test("keeps the roster concise without status filters", () => {
     const agents = makeAgentStates();
     const onTabClick = vi.fn();
     render(
@@ -142,38 +160,10 @@ describe("AgentTabs", () => {
       />,
     );
 
-    const tablist = screen.getByRole("tablist", { name: "Run workstreams" });
-    expect(within(tablist).queryByRole("button", { name: "Finished" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Finished" }));
-    expect(screen.getByRole("tab", { name: /Scout/ })).toBeTruthy();
-    expect(screen.queryByRole("tab", { name: /SOFP/ })).toBeNull();
-    expect(screen.getByRole("tab", { name: /Scout/ })).toHaveAttribute("tabindex", "0");
-    expect(onTabClick).toHaveBeenCalledWith("scout");
-    fireEvent.click(screen.getByRole("button", { name: "Working" }));
-    expect(screen.getByRole("tab", { name: /SOFP/ })).toBeTruthy();
-    expect(screen.queryByRole("tab", { name: /Scout/ })).toBeNull();
-    expect(screen.getByRole("button", { name: "Working" })).toHaveAttribute("aria-pressed", "true");
-  });
-
-  test("explains an empty filtered roster", () => {
-    const agents: Record<string, AgentTabState> = {
-      scout: { agentId: "scout", label: "Scout", status: "complete", role: "scout" },
-      sofp_0: { agentId: "sofp_0", label: "SOFP", status: "complete", role: "SOFP" },
-    };
-    render(
-      <AgentTabs
-        agents={agents}
-        tabOrder={Object.keys(agents)}
-        activeTab="sofp_0"
-        onTabClick={() => {}}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Working" }));
-
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "No agents match the Working filter.",
-    );
+    expect(screen.queryByRole("group", { name: "Filter workstreams" })).toBeNull();
+    expect(screen.getByText("AI workstreams")).toBeInTheDocument();
+    expect(screen.getByText("1 of 7 complete")).toBeInTheDocument();
+    expect(onTabClick).not.toHaveBeenCalled();
   });
 
   test("failed status renders error badge", () => {
@@ -188,8 +178,9 @@ describe("AgentTabs", () => {
       />,
     );
 
-    const sofpTab = screen.getByRole("tab", { name: /SOFP/ });
+    const sofpTab = screen.getByRole("tab", { name: /Statement of financial position/ });
     expect(sofpTab.querySelector("[data-status='failed']")).toBeTruthy();
+    expect(sofpTab).toHaveTextContent("Failed");
   });
 
   test("skeleton tabs render for unselected statements", () => {
@@ -403,11 +394,11 @@ describe("AgentTabs", () => {
         statementsInRun={["SOFP", "SOPL"]}
       />,
     );
-    expect(screen.queryByText("SOFP")).toBeTruthy();
-    expect(screen.queryByText("SOPL")).toBeTruthy();
-    expect(screen.queryByText("SOCI")).toBeNull();
-    expect(screen.queryByText("SOCF")).toBeNull();
-    expect(screen.queryByText("SOCIE")).toBeNull();
+    expect(screen.queryByText("Statement of financial position")).toBeTruthy();
+    expect(screen.queryByText("Profit or loss")).toBeTruthy();
+    expect(screen.queryByText("Comprehensive income")).toBeNull();
+    expect(screen.queryByText("Cash flows")).toBeNull();
+    expect(screen.queryByText("Changes in equity")).toBeNull();
   });
 
   test("validator tab still renders when present even if statementsInRun excludes it", () => {
@@ -430,7 +421,7 @@ describe("AgentTabs", () => {
         statementsInRun={[]}
       />,
     );
-    expect(screen.getByText("Validator")).toBeTruthy();
+    expect(screen.getByText("Cross-checks")).toBeTruthy();
   });
 
   test("scout tab still renders when present even if statementsInRun excludes it", () => {
@@ -446,7 +437,7 @@ describe("AgentTabs", () => {
         statementsInRun={[]}
       />,
     );
-    expect(screen.getByText("Scout")).toBeTruthy();
+    expect(screen.getByText("Document preparation")).toBeTruthy();
   });
 
   test("reviewer (CORRECTION) tab renders live even though it's not a picked statement", () => {
@@ -468,7 +459,7 @@ describe("AgentTabs", () => {
         statementsInRun={["SOFP", "SOPL"]}
       />,
     );
-    expect(screen.getByText("Correction")).toBeTruthy();
+    expect(screen.getByText("AI review")).toBeTruthy();
   });
 
   // ---------------------------------------------------------------------
@@ -631,7 +622,7 @@ describe("AgentTabs", () => {
     const tabs = screen.getAllByRole("tab");
     const labels = tabs.map((t) => t.textContent?.trim() ?? "");
     // Validator must be the last non-skeleton tab.
-    expect(labels[labels.length - 1]).toContain("Validator");
+    expect(labels[labels.length - 1]).toContain("Cross-checks");
   });
 
   // Per-tab abort/rerun controls now live in ActiveTabPanel's toolbar
@@ -720,16 +711,22 @@ describe("AgentTabs", () => {
       // Contract: face-statement tabs live in the statements bucket.
       const statementLabels = Array.from(statementBucket!.querySelectorAll('[role="tab"]'))
         .map((t) => t.textContent ?? "");
-      for (const face of STATEMENTS) {
-        expect(statementLabels.some((l) => l.includes(face))).toBe(true);
+      for (const label of [
+        "Statement of financial position",
+        "Profit or loss",
+        "Comprehensive income",
+        "Cash flows",
+        "Changes in equity",
+      ]) {
+        expect(statementLabels.some((item) => item.includes(label))).toBe(true);
       }
       const noteLabels = Array.from(notesBucket!.querySelectorAll('[role="tab"]'))
         .map((t) => t.textContent ?? "");
       expect(noteLabels.some((l) => l.includes("Notes 10"))).toBe(true);
       const checkLabels = Array.from(checksBucket!.querySelectorAll('[role="tab"]'))
         .map((t) => t.textContent ?? "");
-      expect(preparationBucket!.textContent).toContain("Scout");
-      expect(checkLabels.some((l) => l.includes("Scout"))).toBe(false);
+      expect(preparationBucket!.textContent).toContain("Document preparation");
+      expect(checkLabels.some((l) => l.includes("Document preparation"))).toBe(false);
       expect(checkLabels.some((l) => l.includes("Cross-checks"))).toBe(true);
     });
 
@@ -773,7 +770,7 @@ describe("AgentTabs", () => {
       expect(checksBucket).toBeTruthy();
       const notesLabels = Array.from(checksBucket!.querySelectorAll('[role="tab"]'))
         .map((t) => t.textContent ?? "");
-      expect(notesLabels.some((l) => l.includes("Notes Validator"))).toBe(true);
+      expect(notesLabels.some((l) => l.includes("Notes review"))).toBe(true);
     });
   });
 });

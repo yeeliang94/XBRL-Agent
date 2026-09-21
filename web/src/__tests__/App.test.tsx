@@ -133,14 +133,14 @@ describe("App — live activity integration", () => {
     });
     expect(captureOnEvent).toBeTruthy();
 
-    // 4. Feed a synthetic status + tool_call through the captured callback.
-    // The status event establishes the agent tab; the tool_call should land
-    // in toolTimeline and render as an update in the unified live stream.
+    // 4. Feed a synthetic status + semantic page tool through the captured
+    // callback. Raw tool operations are intentionally excluded from the
+    // operator feed; page activity remains visible in plain language.
     await act(async () => {
       captureOnEvent!({
         event: "status",
         data: {
-          phase: "reading_template",
+          phase: "viewing_pdf",
           message: "",
           agent_id: "sofp_0",
           agent_role: "SOFP",
@@ -152,9 +152,9 @@ describe("App — live activity integration", () => {
       captureOnEvent!({
         event: "tool_call",
         data: {
-          tool_name: "read_template",
+          tool_name: "view_pdf_pages",
           tool_call_id: "tc_1",
-          args: { path: "/x/01-SOFP-CuNonCu.xlsx" },
+          args: { pages: [4, 5] },
           agent_id: "sofp_0",
         },
         timestamp: Date.now() / 1000,
@@ -167,13 +167,13 @@ describe("App — live activity integration", () => {
       expect(screen.getByRole("region", { name: /live activity/i })).toBeInTheDocument();
       expect(screen.getByTestId("activity-sentence")).toBeInTheDocument();
     });
-    expect(screen.getAllByText(/Reading template/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Reviewing source pages 4 and 5/i).length).toBeGreaterThan(0);
     expect(screen.queryByTestId("tool-card")).toBeNull();
     // Legacy ChatFeed header must be gone — we stripped the whole component.
     expect(screen.queryByText(/Chat Feed/i)).toBeNull();
   });
 
-  test("Current run keeps the monitor destination after live completion", async () => {
+  test("completion opens Overview and keeps the current filing destination", async () => {
     const { uploadPdf } = await import("../lib/api");
     vi.mocked(uploadPdf).mockResolvedValueOnce({
       session_id: "sess_1", filename: "FINCO.pdf", run_id: 321,
@@ -195,21 +195,20 @@ describe("App — live activity integration", () => {
       data: { phase: "starting", message: "Starting", run_id: 321 },
       timestamp: Date.now() / 1000,
     }));
-    expect(screen.getByRole("link", { name: "Current run" })).toHaveAttribute("href", "/run/321");
+    expect(screen.getByRole("link", { name: /Current run.*Working/ })).toHaveAttribute("href", "/run/321");
     act(() => captureOnEvent!({
       event: "run_complete",
       data: { success: true, overall_status: "completed", run_id: 321 },
       timestamp: Date.now() / 1000,
     }));
-    await screen.findByRole("button", { name: "Review run results" });
+    await waitFor(() => expect(window.location.pathname).toBe("/history/321"));
     const currentRun = screen.getByRole("link", { name: "Current run" });
-    expect(currentRun).toHaveAttribute("href", "/run/321");
+    expect(currentRun).toHaveAttribute("href", "/history/321?tab=overview");
     expect(currentRun).toHaveAttribute("aria-current", "page");
     const historyLength = window.history.length;
     fireEvent.click(currentRun);
-    expect(window.location.pathname).toBe("/run/321");
+    expect(window.location.pathname).toBe("/history/321");
     expect(window.history.length).toBe(historyLength);
-    expect(screen.getByRole("button", { name: "Review run results" })).toBeInTheDocument();
   });
 
   test("figures review uses the full workspace width with navigation expanded", async () => {
@@ -278,7 +277,7 @@ describe("App — live activity integration", () => {
     );
     fireEvent.click(runButton);
     await waitFor(() => expect(captureOnEvent).not.toBeNull());
-    await screen.findByRole("button", { name: /stop all/i });
+    await screen.findByRole("button", { name: /stop run/i });
     await act(async () => {
       captureOnEvent!({
         event: "status",

@@ -117,6 +117,14 @@ describe("RunDetailView", () => {
     vi.restoreAllMocks();
   });
 
+  test("run-detail tab wrappers are presentational so the tablist owns its tabs", () => {
+    render(<RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />);
+    const tablist = screen.getByRole("tablist", { name: /run detail sections/i });
+    expect(within(tablist).getAllByRole("presentation")).toHaveLength(
+      within(tablist).getAllByRole("tab").length,
+    );
+  });
+
   test("renders filename, date, and overall status", () => {
     render(
       <RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />,
@@ -1011,8 +1019,9 @@ describe("RunDetailView", () => {
     expect(screen.getByText("$0.01")).toBeTruthy();
   });
 
-  test("Overview leads with outcomes and leaves telemetry in Activity", () => {
+  test("Overview leads with workbook readiness and elapsed time", () => {
     const detail = makeDetail({
+      agents: [makeAgent()],
       cross_checks: [
         { name: "sofp_balance", status: "passed", expected: 1, actual: 1, diff: 0, tolerance: 1, message: "" },
         { name: "socf_articulation", status: "failed", expected: 2, actual: 1, diff: 1, tolerance: 1, message: "" },
@@ -1025,10 +1034,14 @@ describe("RunDetailView", () => {
     const { container } = render(
       <RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />,
     );
-    // The outcome metrics render (1 of 2 numeric checks passing).
-    expect(screen.getByText("Checks passing")).toBeTruthy();
-    expect(screen.getByText("1/2")).toBeTruthy();
-    expect(screen.getByText("Needs attention")).toBeTruthy();
+    expect(screen.getByText("Workbook")).toBeTruthy();
+    expect(screen.getByText("Checks need attention")).toBeTruthy();
+    expect(screen.getByText("Elapsed time")).toBeTruthy();
+    expect(screen.getByText("2m 00s")).toBeTruthy();
+    const warning = screen.getByRole("alert");
+    expect(warning).toHaveTextContent(/cash-flow movements/i);
+    expect(screen.queryByTestId("items-to-check")).toBeNull();
+    expect(screen.getByRole("note")).toHaveTextContent(/verify against the source PDF/i);
     expect(container.textContent).not.toContain("Total tokens");
     fireEvent.click(screen.getByRole("tab", { name: /activity/i }));
     expect(screen.getByText(/performance details/i)).toBeTruthy();
@@ -1454,8 +1467,7 @@ describe("RunDetailView", () => {
     expect(screen.getByTestId("eval-flags").textContent).toContain("11 missing");
   });
 
-  // --- UX-QA #1: completed-with-errors warning banner ---
-  test("completed_with_errors run shows a warning banner naming the failing check", () => {
+  test("completed_with_errors surfaces a failed check as a blocking warning", () => {
     render(
       <RunDetailView
         detail={makeDetail({
@@ -1479,27 +1491,27 @@ describe("RunDetailView", () => {
         onDownload={() => {}}
       />,
     );
-    const banner = screen.getByRole("alert");
-    expect(banner.textContent).toMatch(/didn.t pass/i);
+    const warning = screen.getByRole("alert");
     // The human-readable check name appears, not the raw id.
-    expect(banner.textContent).toMatch(/balance/i);
-    expect(banner.textContent).toMatch(/expected 100.*actual 90.*difference 10/i);
+    expect(warning.textContent).toMatch(/balance/i);
+    expect(warning.textContent).toMatch(/expected 100.*actual 90.*difference 10/i);
+    expect(screen.queryByTestId("items-to-check")).toBeNull();
     const download = screen.getByRole("button", { name: /download draft/i });
     expect(download.className).toMatch(/secondary/i);
-    expect(screen.getByRole("button", { name: /review issues/i }).className).toMatch(/primary/i);
   });
 
   test("an extraction issue routes to Activity when no consistency check failed", () => {
     render(<RunDetailView detail={makeDetail({ status: "completed_with_errors", cross_checks: [], agents: [makeAgent({ status: "completed_with_errors" })] })}
       onDelete={() => {}} onDownload={() => {}} />);
-    expect(screen.getByRole("alert")).toHaveTextContent("extraction or review issues");
+    const items = screen.getByTestId("items-to-check");
+    expect(items).toHaveTextContent("Extraction or review finished with issues");
     expect(screen.queryByText(/consistency check didn.t pass/i)).toBeNull();
     expect(screen.queryByRole("button", { name: "View cross-checks" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Review issues" }));
+    fireEvent.click(within(items).getByRole("button", { name: "Open relevant review tool" }));
     expect(screen.getByTestId("run-detail-agents")).toBeInTheDocument();
   });
 
-  test("header actions follow one rule: everything except Download lives on Overview", () => {
+  test("the workbook preparation action remains available from review tools", () => {
     render(
       <RunDetailView
         detail={makeDetail({ status: "completed_with_errors", agents: [makeAgent()] })}
@@ -1507,14 +1519,9 @@ describe("RunDetailView", () => {
         onDownload={() => {}}
       />,
     );
-    // On Overview (the landing tab) the full action set renders.
-    expect(screen.getByRole("button", { name: /review issues/i })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /fill mtool template/i })).toBeNull();
     expect(screen.getAllByRole("button", { name: /download draft/i })).toHaveLength(1);
-    // On a work surface only Download remains — "Review issues" follows the
-    // same Overview-only rule as run management, not a rule of its own.
     fireEvent.click(screen.getByRole("tab", { name: /cross-checks/i }));
-    expect(screen.queryByRole("button", { name: /review issues/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /fill mtool template/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /delete run/i })).toBeNull();
     expect(screen.getByRole("button", { name: /download draft/i })).toBeTruthy();
@@ -1548,7 +1555,7 @@ describe("RunDetailView", () => {
     expect(screen.getByRole("dialog", { name: "Fill mTool template" })).toBeTruthy();
   });
 
-  test("clean completed run shows no warning banner and a primary Download", () => {
+  test("clean completed run shows no warning banner and primary workbook preparation", () => {
     render(
       // Explicitly all-succeeded: the shared fixture carries a FAILED SOPL,
       // which is a legitimate warning condition of its own.
@@ -1559,8 +1566,32 @@ describe("RunDetailView", () => {
       />,
     );
     expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("note")).toHaveTextContent(/verify against the source PDF/i);
     const download = screen.getByRole("button", { name: /download draft/i });
     expect(download.className).toMatch(/primary/i);
+  });
+
+  test("does not announce a failed check as final while automatic review is still running", () => {
+    render(
+      <RunDetailView
+        detail={makeDetail({
+          status: "running",
+          cross_checks: [{
+            name: "sofp_balance",
+            status: "failed",
+            expected: 100,
+            actual: 90,
+            diff: 10,
+            tolerance: 1,
+            message: "review running",
+          }],
+        })}
+        onDelete={() => {}}
+        onDownload={() => {}}
+      />,
+    );
+    expect(screen.queryByTestId("failed-check-warning")).toBeNull();
+    expect(screen.getByText("Extraction in progress")).toBeInTheDocument();
   });
 
   // --- UX-QA #2: abort control for a wedged running run ---
@@ -1604,29 +1635,6 @@ describe("RunDetailView", () => {
     expect(order[3]).toMatch(/SOCF/);
   });
 
-  // UX-QA #13b: the Statements tile counts face statements only, not scout/notes.
-  test("Statements count excludes scout and notes agents", () => {
-    const detail = makeDetail({
-      agents: [
-        makeAgent({ id: 1, statement_type: "SCOUT" }),
-        makeAgent({ id: 2, statement_type: "SOFP" }),
-        makeAgent({ id: 3, statement_type: "SOPL" }),
-        makeAgent({ id: 4, statement_type: "NOTES_ACC_POLICIES" }),
-        makeAgent({ id: 5, statement_type: "NOTES_LIST_OF_NOTES" }),
-        makeAgent({ id: 6, statement_type: "CORRECTION" }),
-        makeAgent({ id: 7, statement_type: "SOURCE_PREPARATION" }),
-      ],
-    });
-    render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
-    // Only SOFP + SOPL are statements → 2, not 7. ("Statements" also appears as
-    // a config row, so pick the metric tile whose text starts with the count.)
-    const metricTile = screen
-      .getAllByText("Statements")
-      .map((el) => el.parentElement)
-      .find((t) => /^\d/.test(t?.textContent ?? ""));
-    expect(metricTile?.textContent).toMatch(/^2Statements/);
-  });
-
   test("Activity gives source preparation a plain-language label", () => {
     const detail = makeDetail({
       agents: [makeAgent({ id: 1, statement_type: "SOURCE_PREPARATION" })],
@@ -1639,8 +1647,7 @@ describe("RunDetailView", () => {
     expect(row).not.toHaveTextContent("SOURCE_PREPARATION");
   });
 
-  // UX-QA #13a: advisory-only run doesn't show an amber "Needs attention".
-  test("advisory warnings don't inflate the Needs-attention count", () => {
+  test("advisory checks stay quiet inside the collapsed Items-to-check disclosure", () => {
     const detail = makeDetail({
       // "warning" is a runtime advisory status the outcomes logic compares as a
       // string; the typed union doesn't list it, so cast the fixture.
@@ -1650,10 +1657,9 @@ describe("RunDetailView", () => {
       ],
     });
     render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
-    // Advisory checks do not add attention counts or a second summary tile.
-    const tile = screen.getByText("Needs attention").parentElement;
-    expect(tile?.textContent).toMatch(/^0Needs attention/);
-    expect(screen.queryByText("Advisory notes")).toBeNull();
+    const items = screen.getByTestId("items-to-check");
+    expect(items).not.toHaveAttribute("open");
+    expect(items).toHaveTextContent("advisory");
   });
 
   test("running run without onForceAbort falls back to the disabled Delete", () => {

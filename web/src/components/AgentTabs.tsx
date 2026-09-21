@@ -1,7 +1,8 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef } from "react";
 import { pwc } from "../lib/theme";
 import type { AgentTabStatus } from "../lib/types";
 import { NON_AGENT_TAB_IDS } from "../lib/agentTabKinds";
+import { isCompletedWorkstream, workstreamStatusLabel } from "../lib/workstreamStatus";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -63,6 +64,25 @@ const SPECIAL_TAB_IDS = NON_AGENT_TAB_IDS;
 // coordinator SSE events and the frontend bucketer.
 const NOTES_TAB_PREFIX = "notes:";
 
+const WORKSTREAM_LABELS: Record<string, string> = {
+  scout: "Document preparation",
+  "source-preparation": "Source preparation",
+  SOFP: "Statement of financial position",
+  SOPL: "Profit or loss",
+  SOCI: "Comprehensive income",
+  SOCF: "Cash flows",
+  SOCIE: "Changes in equity",
+  CORRECTION: "AI review",
+  NOTES_VALIDATOR: "Notes review",
+  validator: "Cross-checks",
+};
+
+function workstreamLabel(agent: AgentTabState): string {
+  return WORKSTREAM_LABELS[agent.agentId]
+    ?? WORKSTREAM_LABELS[agent.role]
+    ?? agent.label;
+}
+
 // ---------------------------------------------------------------------------
 // Status badge — small indicator showing agent state
 // ---------------------------------------------------------------------------
@@ -96,7 +116,6 @@ function AgentTabsImpl({
   notesSkeletons,
 }: AgentTabsProps) {
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
-  const [filter, setFilter] = useState<"all" | "working" | "finished">("all");
   // Phase 8 + D.3 gating. The rule is:
   //   Render a tab if ANY of the following is true:
   //     1. The tab is a SPECIAL_TAB_IDS member (scout/validator) AND the
@@ -179,19 +198,12 @@ function AgentTabsImpl({
     else if (id.startsWith(NOTES_TAB_PREFIX)) notesActive.push(id);
     else statementActive.push(id);
   }
-  const matchesFilterFor = (id: string, value: typeof filter) => {
-    const status = agents[id]?.status;
-    if (value === "all") return true;
-    if (value === "working") return status === "running" || status === "aborting" || status === "pending";
-    return status === "complete" || status === "failed" || status === "cancelled" || status === "skipped";
-  };
-  const matchesFilter = (id: string) => matchesFilterFor(id, filter);
-  const visibleStatementActive = statementActive.filter(matchesFilter);
-  const visibleNotesActive = notesActive.filter(matchesFilter);
+  const visibleStatementActive = statementActive;
+  const visibleNotesActive = notesActive;
   const visiblePreparation = [sourcePreparationActive, scoutActive]
-    .filter((id): id is string => id != null && matchesFilter(id));
+    .filter((id): id is string => id != null);
   const visibleChecks = [notesValidatorActive, correctionActive, validatorActive]
-    .filter((id): id is string => id != null && matchesFilter(id));
+    .filter((id): id is string => id != null);
   const navigationOrder = [
     ...visiblePreparation,
     ...visibleStatementActive,
@@ -201,8 +213,6 @@ function AgentTabsImpl({
   const focusableTab = navigationOrder.includes(activeTab) ? activeTab : navigationOrder[0];
   const navigationKey = navigationOrder.join("\u0000");
 
-  // Filtering must never leave a vertical tablist with no selected/focusable
-  // tab while its detail pane still describes a hidden workstream.
   useEffect(() => {
     if (focusableTab && focusableTab !== activeTab) onTabClick(focusableTab);
   }, [activeTab, focusableTab, navigationKey, onTabClick]);
@@ -213,6 +223,7 @@ function AgentTabsImpl({
     const agent = agents[agentId];
     if (!agent) return null;
     const isActive = agentId === focusableTab;
+    const displayLabel = workstreamLabel(agent);
     return (
       <button
         key={agentId}
@@ -238,13 +249,13 @@ function AgentTabsImpl({
           onTabClick(nextId);
           tabRefs.current[nextId]?.focus();
         }}
-        title={agent.label}
+        title={displayLabel}
         className="agent-tab"
         style={{ ...styles.tab, ...(isActive ? styles.tabActive : {}) }}
       >
         <StatusBadge status={agent.status} />
         <span style={styles.tabLabelStack}>
-          <span style={styles.tabLabelText}>{agent.label}</span>
+          <span style={styles.tabLabelText}>{displayLabel}</span>
           {agent.task && (
             <span style={styles.tabTask}>
               {agent.task}{agent.taskDetail ? ` · ${agent.taskDetail}` : ""}
@@ -283,56 +294,42 @@ function AgentTabsImpl({
   };
 
   const completedCount = gatedOrder.filter((id) =>
-    agents[id]?.status === "complete" || agents[id]?.status === "skipped"
+    agents[id] != null && isCompletedWorkstream(agents[id].status)
   ).length;
+  const totalWorkstreamCount = gatedOrder.length
+    + (skeletonTabs?.length ?? 0)
+    + (notesSkeletons?.length ?? 0);
 
   return (
     <div className="workstream-nav" style={styles.tabBar}>
       <div style={styles.navigatorHeader}>
-        <div>
-          <div style={styles.navigatorTitle}>Agents</div>
-          <div style={styles.navigatorHint}>Select an agent to inspect its current work.</div>
-        </div>
-        <span style={styles.navigatorCount}>{completedCount} finished</span>
-      </div>
-
-      <div role="group" aria-label="Filter workstreams" style={styles.filters}>
-        {(["working", "all", "finished"] as const).map((value) => (
-          <button
-            key={value}
-            type="button"
-            aria-pressed={filter === value}
-            onClick={() => setFilter(value)}
-            style={{ ...styles.filterButton, ...(filter === value ? styles.filterButtonActive : {}) }}
-          >
-            {value.charAt(0).toUpperCase() + value.slice(1)}
-          </button>
-        ))}
+        <div style={styles.navigatorTitle}>AI workstreams</div>
+        <span style={styles.navigatorCount}>{completedCount} of {totalWorkstreamCount} complete</span>
       </div>
 
       <div role="tablist" aria-label="Run workstreams" aria-orientation="vertical" style={styles.tabList}>
         {visiblePreparation.length > 0 && (
           <div role="presentation" data-bucket="preparation" style={styles.tabGroup}>
-            <div role="presentation" style={styles.groupLabel}>Document preparation</div>
+            <div role="presentation" style={styles.groupLabel}>Preparation</div>
             {visiblePreparation.map(renderTab)}
           </div>
         )}
 
-        {(visibleStatementActive.length > 0 || (filter !== "finished" && (skeletonTabs?.length ?? 0) > 0)) && (
+        {(visibleStatementActive.length > 0 || (skeletonTabs?.length ?? 0) > 0) && (
           <div role="presentation" data-bucket="statements" style={styles.tabGroup}>
             <div role="presentation" style={styles.groupLabel}>Financial statements</div>
             {visibleStatementActive.map(renderTab)}
-            {filter !== "finished" && skeletonTabs?.map((label) => (
+            {skeletonTabs?.map((label) => (
               <SkeletonTab key={`skeleton-${label}`} keyPrefix="skeleton" label={label} />
             ))}
           </div>
         )}
 
-        {(visibleNotesActive.length > 0 || (filter !== "finished" && (notesSkeletons?.length ?? 0) > 0)) && (
+        {(visibleNotesActive.length > 0 || (notesSkeletons?.length ?? 0) > 0) && (
           <div role="presentation" data-bucket="notes" style={styles.tabGroup}>
             <div role="presentation" style={styles.groupLabel}>Notes</div>
             {visibleNotesActive.map(renderTab)}
-            {filter !== "finished" && notesSkeletons?.map((label) => (
+            {notesSkeletons?.map((label) => (
               <SkeletonTab key={`notes-skeleton-${label}`} keyPrefix="notes-skeleton" label={label} />
             ))}
           </div>
@@ -341,17 +338,11 @@ function AgentTabsImpl({
         {visibleChecks.length > 0 && (
           <div role="presentation" data-bucket="run-checks" style={styles.tabGroup}>
             <div role="presentation" style={styles.groupLabel}>Run checks</div>
-            {notesValidatorActive && matchesFilter(notesValidatorActive) && renderTab(notesValidatorActive)}
-            {correctionActive && matchesFilter(correctionActive) && renderTab(correctionActive)}
-            {validatorActive && matchesFilter(validatorActive) && renderTab(validatorActive)}
+            {notesValidatorActive && renderTab(notesValidatorActive)}
+            {correctionActive && renderTab(correctionActive)}
+            {validatorActive && renderTab(validatorActive)}
           </div>
         )}
-        {navigationOrder.length === 0 &&
-        (filter === "finished" || ((skeletonTabs?.length ?? 0) + (notesSkeletons?.length ?? 0) === 0)) ? (
-          <p role="status" style={styles.emptyFilter}>
-            No agents match the {filter.charAt(0).toUpperCase() + filter.slice(1)} filter.
-          </p>
-        ) : null}
       </div>
     </div>
   );
@@ -372,7 +363,7 @@ function SkeletonTab({ keyPrefix, label }: { keyPrefix: string; label: string })
     >
       <span data-status="pending" style={badgeStyles.skeleton} />
       <span style={styles.tabLabelText}>{label}</span>
-      <span style={styles.tabStatus}>Queued</span>
+      <span style={styles.tabStatus}>Waiting</span>
     </button>
   );
 }
@@ -457,13 +448,6 @@ const styles = {
     flexDirection: "column" as const,
     alignItems: "stretch" as const,
   } as React.CSSProperties,
-  emptyFilter: {
-    margin: `${pwc.space.md}px ${pwc.space.sm}px`,
-    color: pwc.grey700,
-    fontFamily: pwc.fontBody,
-    fontSize: 12,
-    lineHeight: 1.45,
-  } as React.CSSProperties,
   navigatorHeader: {
     display: "flex",
     alignItems: "flex-start",
@@ -479,39 +463,11 @@ const styles = {
     fontWeight: pwc.weight.semibold,
     color: pwc.grey900,
   },
-  navigatorHint: {
-    marginTop: 2,
-    fontFamily: pwc.fontBody,
-    fontSize: 12,
-    lineHeight: 1.4,
-    color: pwc.grey700,
-  },
   navigatorCount: {
     flexShrink: 0,
     fontFamily: pwc.fontMono,
     fontSize: 11,
     color: pwc.grey700,
-  },
-  filters: {
-    display: "flex",
-    gap: pwc.space.xs,
-    padding: `7px 9px`,
-  },
-  filterButton: {
-    minHeight: 30,
-    padding: `0 9px`,
-    border: 0,
-    borderRadius: pwc.radius.sm,
-    background: "transparent",
-    color: pwc.grey700,
-    fontFamily: pwc.fontBody,
-    fontSize: 11,
-    cursor: "pointer",
-  },
-  filterButtonActive: {
-    background: pwc.grey50,
-    color: pwc.black,
-    fontWeight: pwc.weight.medium,
   },
   tabGroup: {
     display: "flex",
@@ -719,11 +675,11 @@ const STATUS_BADGES: Record<
   AgentTabStatus,
   { wrapper: React.CSSProperties; dot: React.CSSProperties; label: string }
 > = {
-  complete:  { wrapper: badgeStyles.complete,  dot: badgeStyles.completeDot,  label: "Complete" },
-  running:   { wrapper: badgeStyles.running,   dot: badgeStyles.runningDot,   label: "Running" },
-  aborting:  { wrapper: badgeStyles.aborting,  dot: badgeStyles.abortingDot,  label: "Aborting" },
-  failed:    { wrapper: badgeStyles.failed,    dot: badgeStyles.failedDot,    label: "Failed" },
-  cancelled: { wrapper: badgeStyles.cancelled, dot: badgeStyles.cancelledDot, label: "Cancelled" },
-  skipped:   { wrapper: badgeStyles.pending,   dot: badgeStyles.pendingDot,   label: "Skipped" },
-  pending:   { wrapper: badgeStyles.pending,   dot: badgeStyles.pendingDot,   label: "Pending" },
+  complete:  { wrapper: badgeStyles.complete,  dot: badgeStyles.completeDot,  label: workstreamStatusLabel("complete") },
+  running:   { wrapper: badgeStyles.running,   dot: badgeStyles.runningDot,   label: workstreamStatusLabel("running") },
+  aborting:  { wrapper: badgeStyles.aborting,  dot: badgeStyles.abortingDot,  label: workstreamStatusLabel("aborting") },
+  failed:    { wrapper: badgeStyles.failed,    dot: badgeStyles.failedDot,    label: workstreamStatusLabel("failed") },
+  cancelled: { wrapper: badgeStyles.cancelled, dot: badgeStyles.cancelledDot, label: workstreamStatusLabel("cancelled") },
+  skipped:   { wrapper: badgeStyles.pending,   dot: badgeStyles.pendingDot,   label: workstreamStatusLabel("skipped") },
+  pending:   { wrapper: badgeStyles.pending,   dot: badgeStyles.pendingDot,   label: workstreamStatusLabel("pending") },
 };

@@ -13,6 +13,7 @@ export interface TopNavProps {
   currentRunId?: number | null;
   currentRunHref?: string;
   currentRunActive?: boolean;
+  currentRunStatus?: "Working" | "Stopped";
   onNewExtraction?: () => void;
   onOpenCurrentFiling?: () => void;
 }
@@ -39,6 +40,7 @@ export function TopNav({
   currentRunId = null,
   currentRunHref = `/history/${currentRunId}?tab=overview`,
   currentRunActive = currentRunId != null && (view === "extract" || view === "history" || view === "concepts"),
+  currentRunStatus,
   onNewExtraction,
   onOpenCurrentFiling,
 }: TopNavProps) {
@@ -54,13 +56,14 @@ export function TopNav({
     action();
   };
 
-  const link = ({ key, href, label, glyph, active, action }: {
+  const link = ({ key, href, label, glyph, active, action, status }: {
     key: string;
     href: string;
     label: string;
     glyph: ReactNode;
     active: boolean;
     action: () => void;
+    status?: "Working" | "Stopped";
   }) => (
     <a
       key={key}
@@ -74,6 +77,12 @@ export function TopNav({
         {glyph}
       </span>
       <span className="app-main-nav-label">{label}</span>
+      {status && (
+        <span role="status" style={styles.runStatus}>
+          <span className="pwc-working-indicator" aria-hidden="true" style={styles.runStatusDot} />
+          <span className="app-main-nav-label">{status}</span>
+        </span>
+      )}
     </a>
   );
 
@@ -86,7 +95,7 @@ export function TopNav({
       {currentRunId != null && (
         <div className="app-nav-current" style={{ display: "contents" }}>
           <span className="app-rail-section-label" style={styles.groupLabel}>Current filing</span>
-          {link({ key: "current-run", href: currentRunHref, label: "Current run", glyph: "◉", active: currentRunActive, action: () => onOpenCurrentFiling?.() })}
+          {link({ key: "current-run", href: currentRunHref, label: "Current run", glyph: "◉", active: currentRunActive, status: currentRunStatus, action: () => onOpenCurrentFiling?.() })}
         </div>
       )}
 
@@ -150,5 +159,21 @@ const styles = {
     textAlign: "center",
     fontSize: 12,
     fontWeight: 600,
+  } as React.CSSProperties,
+  runStatus: {
+    marginLeft: "auto",
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 5,
+    color: tokens.color.text.secondary,
+    fontSize: 10,
+    fontWeight: pwc.weight.medium,
+  } as React.CSSProperties,
+  runStatusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: "50%",
+    background: pwc.orange500,
+    flexShrink: 0,
   } as React.CSSProperties,
 } as const;
