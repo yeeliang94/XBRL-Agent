@@ -41,6 +41,23 @@ def test_agent_test_commands_use_repository_python() -> None:
     assert ".\\venv\\Scripts\\python.exe" in readme
 
 
+def test_agent_guidance_routes_frontend_work_to_clarity_first_contract() -> None:
+    """Future agents must preserve the canonical simplification direction."""
+    agents = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    router = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+    reference = (REPO_ROOT / "CLAUDE-REFERENCE.md").read_text(encoding="utf-8")
+    docs_index = (REPO_ROOT / "docs" / "README.md").read_text(encoding="utf-8")
+
+    assert "canonical UI/UX authority" in agents
+    assert "design guide wins when they differ" in agents
+    assert "content hierarchy, simplification" in router
+    assert "Clarity-first composition is load-bearing" in reference
+    assert "where am I, what needs attention" in reference
+    assert "can I do next?" in reference
+    assert "workstream count must never imply the full run is ready" in reference
+    assert "the XBRL design system wins if they differ" in docs_index
+
+
 def test_claude_router_covers_every_detailed_invariant() -> None:
     """Every stable invariant number in the reference remains routable."""
     router = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")

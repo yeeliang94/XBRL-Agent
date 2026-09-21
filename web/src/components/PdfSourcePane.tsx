@@ -35,6 +35,10 @@ export interface PdfSourcePaneProps {
   // before the user had done anything. Defaults true (existing callers only
   // render the pane once a target is selected).
   hasSelection?: boolean;
+  // Bump when the parent deliberately re-selects a source. This lets a click
+  // return the viewer to the cited page even when the new selection cites the
+  // same page list as the previous one.
+  selectionKey?: number;
 }
 
 export function PdfSourcePane({
@@ -43,6 +47,7 @@ export function PdfSourcePane({
   totalPages,
   embedded = false,
   hasSelection = true,
+  selectionKey = 0,
 }: PdfSourcePaneProps) {
   // Resolved page count: prop wins, else fetched. null = unknown / no PDF.
   const [resolvedTotal, setResolvedTotal] = useState<number | null>(
@@ -96,7 +101,7 @@ export function PdfSourcePane({
     setZoom(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- pagesKey is the
     // stable stand-in for `pages`; depending on `pages` itself defeats the fix.
-  }, [runId, pagesKey]);
+  }, [runId, pagesKey, selectionKey]);
 
   // Once the page count is known, initialise an evidence-free viewer at page
   // 1. Navigation performed while the count request was in flight is
@@ -186,16 +191,11 @@ export function PdfSourcePane({
       {isCollapsed ? null : (
         <>
 
-      {pages.length === 0 &&
-        (hasSelection ? (
-          <p style={styles.mutedSmall} data-testid="pdf-no-evidence">
-            No source page recorded for this value — jump to a page manually.
-          </p>
-        ) : (
+      {pages.length === 0 && !hasSelection && (
           <p style={styles.mutedSmall} data-testid="pdf-no-selection">
-            Select a figure or note to see the page it came from.
+            Select a field to open its source page.
           </p>
-        ))}
+      )}
 
       <div role="toolbar" style={styles.viewerToolbar} aria-label="PDF controls">
         <div style={styles.navGroup}>
@@ -374,6 +374,9 @@ const styles = {
     lineHeight: 1.45,
   } as React.CSSProperties,
   viewerToolbar: {
+    position: "sticky" as const,
+    top: 0,
+    zIndex: 10,
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
@@ -382,6 +385,7 @@ const styles = {
     flexWrap: "wrap" as const,
     paddingBottom: pwc.space.sm,
     borderBottom: `1px solid ${pwc.grey100}`,
+    background: pwc.white,
   } as React.CSSProperties,
   navGroup: { display: "flex", alignItems: "center", gap: 2 } as React.CSSProperties,
   navButton: {

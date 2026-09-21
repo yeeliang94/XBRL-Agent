@@ -76,6 +76,17 @@ describe("PdfSourcePane", () => {
     expect(img.getAttribute("src")).toBe("/api/runs/3/pdf/page/1.png");
   });
 
+  test("an explicit selection reopens the cited page even when its page list is unchanged", () => {
+    const { rerender } = render(
+      <PdfSourcePane runId={3} pages={[20]} totalPages={50} selectionKey={1} />,
+    );
+    fireEvent.click(screen.getByTestId("pdf-next"));
+    expect((screen.getByTestId("pdf-page-image") as HTMLImageElement).src).toContain("/page/21.png");
+
+    rerender(<PdfSourcePane runId={3} pages={[20]} totalPages={50} selectionKey={2} />);
+    expect((screen.getByTestId("pdf-page-image") as HTMLImageElement).src).toContain("/page/20.png");
+  });
+
   test("a cited page beyond the document is not silently redirected", () => {
     // Bad evidence (the model cited a page the PDF doesn't have) must surface
     // as a visible failed page load on the cited page — NOT silently open the
@@ -124,8 +135,8 @@ describe("PdfSourcePane", () => {
 
   test("manual page jump works with no cited evidence", () => {
     render(<PdfSourcePane runId={5} pages={[]} totalPages={50} />);
-    // With no evidence we show the guidance and default to page 1.
-    expect(screen.getByTestId("pdf-no-evidence")).toBeTruthy();
+    // With no evidence we default to page 1 without adding explanatory copy.
+    expect(screen.queryByTestId("pdf-no-evidence")).toBeNull();
     fireEvent.change(screen.getByTestId("pdf-page-input"), {
       target: { value: "8" },
     });

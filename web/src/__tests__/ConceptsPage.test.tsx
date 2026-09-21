@@ -991,12 +991,13 @@ describe("ConceptsPage", () => {
     expect(within(picker).queryByRole("option", { name: /notes/i })).toBeNull();
   });
 
-  test("page-less notes cell reads as selected-without-evidence, not as no selection", async () => {
+  test("page-less notes cell stays selected without adding empty-state copy", async () => {
     // Peer-review finding: selection used to be inferred from the reported
     // page list, so focusing a notes cell with no source_pages looked like
     // "nothing selected" (or left the previous note's pages up). Selection is
     // now tracked separately: before any focus the pane invites a selection;
-    // after focusing a page-less cell it states no page was recorded.
+    // after focusing a page-less cell the PDF controls remain available without
+    // adding another explanatory sentence to the review surface.
     mockFetch((url) => {
       if (url.includes("/notes_cells"))
         return {
@@ -1024,9 +1025,9 @@ describe("ConceptsPage", () => {
     render(<ConceptsPage runId={42} initialView="notes" />);
     await waitFor(() => screen.getByTestId("notes-review-row"));
     // The compact workspace selects its first note immediately. A page-less
-    // note therefore reports the honest no-evidence state without an extra
-    // expand/focus step.
-    await waitFor(() => screen.getByTestId("pdf-no-evidence"));
+    // note is still selected and keeps manual PDF navigation available.
+    await waitFor(() => screen.getByTestId("pdf-page-input"));
+    expect(screen.queryByTestId("pdf-no-evidence")).toBeNull();
     expect(screen.queryByTestId("pdf-no-selection")).toBeNull();
   });
 
@@ -1097,16 +1098,16 @@ describe("ConceptsPage", () => {
     const policy = screen.getByTestId("source-note-2");
     const missing = screen.getByTestId("source-note-3");
     const shared = screen.getByTestId("source-note-4");
-    expect(screen.getByRole("combobox", { name: "Notes field filter" })).toHaveValue("all");
+    expect(screen.queryByRole("combobox", { name: "Notes field filter" })).toBeNull();
     expect(missing).toHaveAccessibleName(/needs review/i);
     expect(missing).toHaveAttribute("data-tooltip", "Placement needs review");
-    expect(screen.getByText("3 of 4 notes placed")).toBeTruthy();
+    expect(screen.getByText("3/4 placed")).toBeTruthy();
     expect(screen.getAllByTestId("notes-review-row")).toHaveLength(2);
     expect(screen.getAllByTestId("notes-review-editor")).toHaveLength(1);
     expect(screen.getByRole("navigation", { name: "Notes sheet navigator" })).toBeTruthy();
     expect(screen.getByRole("button", { name: /Sheet 10 — Corporate Information/i })).toBeTruthy();
-    expect(screen.getByTestId("notes-review-evidence")).toHaveTextContent("PDF page 4");
-    expect(screen.getByTestId("notes-style-source-chip")).toHaveTextContent("Default appearance");
+    expect(screen.queryByTestId("notes-review-evidence")).toBeNull();
+    expect(screen.queryByTestId("notes-style-source-chip")).toBeNull();
     const sourceDivider = screen.getByTestId("resize-source-notes");
     expect((sourceDivider.firstElementChild as HTMLElement).style.width).toBe("1px");
     expect((sourceDivider.firstElementChild as HTMLElement).style.background).toBe("rgb(238, 239, 241)");
@@ -1138,15 +1139,22 @@ describe("ConceptsPage", () => {
     const destinations = screen.getByLabelText("Destinations for note 4");
     expect(within(destinations).getAllByRole("button")).toHaveLength(2);
     fireEvent.click(within(destinations).getByRole("button", {
-      name: "Summary of Accounting Policies · row 7",
+      name: "Revenue policy",
     }));
     expect(screen.getAllByTestId("notes-review-editor")).toHaveLength(1);
-    fireEvent.mouseDown(
-      screen.getByText("Revenue policy").closest('[data-testid="notes-review-row"]')!,
+    await waitFor(() => expect(screen.getByTestId("pdf-page-input")).toHaveValue("11"));
+    fireEvent.click(screen.getByTestId("pdf-next"));
+    expect(screen.getByTestId("pdf-page-input")).toHaveValue("12");
+    fireEvent.click(within(destinations).getByRole("button", { name: "Revenue policy" }));
+    await waitFor(() => expect(screen.getByTestId("pdf-page-input")).toHaveValue("11"));
+    const revenuePolicyRow = screen.getAllByTestId("notes-review-row").find(
+      (row) => within(row).queryByText("Revenue policy") !== null,
     );
+    expect(revenuePolicyRow).toBeTruthy();
+    fireEvent.mouseDown(revenuePolicyRow!);
     expect(shared).toHaveAttribute("aria-current", "true");
 
-    fireEvent.change(screen.getByRole("searchbox", { name: "Search source notes" }), {
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search all note fields" }), {
       target: { value: "not in the inventory" },
     });
     expect(screen.getByText("No source notes match your search.")).toBeTruthy();
@@ -1225,17 +1233,8 @@ describe("ConceptsPage", () => {
     });
     render(<ConceptsPage runId={42} initialView="notes" onRegenerateNotes={onRegenerate} />);
     await waitFor(() => screen.getByTestId("notes-source-first-workspace"));
-    const actionsSummary = screen.getByLabelText("Notes actions");
-    expect(actionsSummary).toHaveAttribute("data-tooltip", "Notes actions");
-    const actionsMenu = actionsSummary.closest("details") as HTMLDetailsElement;
-    fireEvent.click(actionsSummary);
-    fireEvent.click(screen.getByRole("button", { name: /^default appearance \(advanced\)$/i }));
-    expect(screen.getByTestId("notes-table-style-panel")).toBeInTheDocument();
-    expect(actionsMenu.open).toBe(false);
-    fireEvent.click(actionsSummary);
-    fireEvent.pointerDown(document.body);
-    expect(actionsMenu.open).toBe(false);
-    fireEvent.click(actionsSummary);
+    expect(screen.queryByLabelText("Notes actions")).toBeNull();
+    expect(screen.queryByRole("button", { name: /default appearance/i })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /re-extract notes/i }));
     await waitFor(() => expect(onRegenerate).toHaveBeenCalledWith(42));
   });

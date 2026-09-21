@@ -327,6 +327,7 @@ export function ConceptsPage({
   // up here instead (review-workspace Phase 1). Cleared on navigation below so
   // a stale note's pages don't linger when switching sheets.
   const [notesPdfPages, setNotesPdfPages] = useState<number[]>([]);
+  const [notesPdfSelectionKey, setNotesPdfSelectionKey] = useState(0);
   // Whether a notes cell is currently selected — tracked SEPARATELY from
   // notesPdfPages because a selected cell can legitimately have no recorded
   // pages. Inferring selection from pages.length made a page-less cell look
@@ -792,6 +793,7 @@ export function ConceptsPage({
   // a requested note focus sets the destination and PDF pages together.
   useEffect(() => {
     setNotesPdfPages([]);
+    setNotesPdfSelectionKey(0);
     setNotesCellSelected(false);
     setNotesFocusCell(null);
   }, [runId]);
@@ -801,6 +803,7 @@ export function ConceptsPage({
   // "selected, but no source page recorded" — not "nothing selected".
   const handleNotesCellPages = useCallback((pages: number[]) => {
     setNotesPdfPages(pages);
+    setNotesPdfSelectionKey((key) => key + 1);
     setNotesCellSelected(true);
   }, []);
 
@@ -959,6 +962,7 @@ export function ConceptsPage({
       <PdfSourcePane
         runId={runId}
         pages={pdfPages}
+        selectionKey={notesActive ? notesPdfSelectionKey : 0}
         embedded
         hasSelection={notesActive ? notesCellSelected : selectedConcept != null}
       />
@@ -2354,9 +2358,9 @@ const styles = {
     gap: pwc.space.lg,
     minWidth: 0,
     position: "sticky" as const,
-    top: pwc.space.lg,
+    top: 116,
     alignSelf: "flex-start",
-    maxHeight: "calc(100vh - 32px)",
+    maxHeight: "calc(100vh - 116px)",
     overflowY: "auto" as const,
   } as React.CSSProperties,
   resultsCol: {

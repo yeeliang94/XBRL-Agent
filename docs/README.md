@@ -19,7 +19,7 @@
 | Document | Role |
 | --- | --- |
 | [XBRL design system](xbrl-design-system.html) | Current design authority |
-| [UI prototype](prototype-ui-overhaul.html) | Direction A is the production contract |
+| [UI prototype](prototype-ui-overhaul.html) | Direction A composition examples; the XBRL design system wins if they differ |
 | [Implementation matrix](xbrl-ui-overhaul-implementation.md) | Design requirements and pinning tests |
 | [Compatibility design reference](pwc-design-system.html) | Retained for older references; not the design authority |
 | [Agent prompt audit](agent-prompt-audit.html) | Generated prompt inventory; refresh with `scripts/refresh_prompt_audit.py` |

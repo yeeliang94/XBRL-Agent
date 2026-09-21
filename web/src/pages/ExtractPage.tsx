@@ -49,19 +49,19 @@ type UploadResponseShape = { session_id: string; filename: string; run_id: numbe
 
 function liveStageMessage(stage: AppState["pipelineStage"]): string {
   switch (stage) {
-    case "scouting": return "Scanning the document and preparing page guidance.";
-    case "reading_source": return "Reading the source Word document.";
-    case "transcribing_source": return "Transcribing scanned note pages into structured source content.";
-    case "merging": return "Combining completed statements into one Excel file.";
-    case "cross_checking": return "Running cross-checks across the extracted statements.";
-    case "correcting": return "Reviewing flagged figures against the source document.";
-    case "reviewing": return "Tracing flagged figures back to the source document.";
-    case "re_checking": return "Re-running cross-checks after the review.";
-    case "reviewing_notes": return "Checking extracted notes against the source document.";
-    case "formatting_notes": return "Applying MBRS formatting while preserving source content.";
-    case "validating_notes": return "Validating the completed notes templates.";
-    case "done": return "All run stages have finished.";
-    default: return "Agents are working in parallel across the selected statements and notes.";
+    case "scouting": return "Scanning document";
+    case "reading_source": return "Reading source document";
+    case "transcribing_source": return "Preparing scanned notes";
+    case "merging": return "Combining statements";
+    case "cross_checking": return "Running cross-checks";
+    case "correcting": return "Reviewing flagged figures";
+    case "reviewing": return "Reviewing flagged figures";
+    case "re_checking": return "Re-running cross-checks";
+    case "reviewing_notes": return "Reviewing extracted notes";
+    case "formatting_notes": return "Formatting notes";
+    case "validating_notes": return "Validating notes";
+    case "done": return "Run complete";
+    default: return "Extracting selected statements and notes";
   }
 }
 
@@ -106,7 +106,7 @@ function ElapsedTime({ startTime, running }: { startTime: number; running: boole
   }, [running, startTime]);
   const elapsedSeconds = Math.max(0, Math.floor((now - startTime) / 1000));
   const label = `${Math.floor(elapsedSeconds / 60)}:${String(elapsedSeconds % 60).padStart(2, "0")}`;
-  return <div style={styles.runSummaryElapsed}>Elapsed {label}</div>;
+  return <span role="timer" aria-label={`Elapsed ${label}`} style={styles.runSummaryElapsed}>{label}</span>;
 }
 
 export function ExtractPage({
@@ -135,12 +135,22 @@ export function ExtractPage({
   // Starting replaces a long setup form. Reset its scroll position once so
   // the operator sees the new progress heading rather than the old footer.
   const wasRunning = useRef(state.isRunning);
+  const previousPipelineStage = useRef<AppState["pipelineStage"] | undefined>(undefined);
   useEffect(() => {
     if (state.isRunning && !wasRunning.current) {
       document.getElementById("main-content")?.scrollIntoView?.({ block: "start" });
     }
     wasRunning.current = state.isRunning;
   }, [state.isRunning]);
+  useEffect(() => {
+    const enteredFormatting =
+      state.pipelineStage === "formatting_notes"
+      && previousPipelineStage.current !== "formatting_notes";
+    previousPipelineStage.current = state.pipelineStage;
+    if (enteredFormatting) {
+      dispatch({ type: "SET_ACTIVE_TAB", payload: "notes-formatting" });
+    }
+  }, [dispatch, state.pipelineStage]);
 
   // PLAN-persistent-draft-uploads.md (Phase C): when the URL is /run/{id}
   // (currentRunId is non-null on mount) and we have not yet loaded that
@@ -267,16 +277,38 @@ export function ExtractPage({
           flag: null,
         } as AgentTabState;
       }
+      if (
+        state.notesInRun.length > 0
+        && (state.pipelineStage === "formatting_notes" || state.pipelineStage === "done")
+      ) {
+        agents["notes-formatting"] = {
+          agentId: "notes-formatting",
+          label: "Notes formatting",
+          role: "NOTES_FORMATTING",
+          status: state.pipelineStage === "done" ? "complete" : "running",
+          task: state.pipelineStage === "done"
+            ? "Formatting complete"
+            : state.pipelineActivity?.message ?? "Applying MBRS formatting",
+          taskDetail: state.pipelineActivity?.total
+            ? `${state.pipelineActivity.completed ?? 0} of ${state.pipelineActivity.total}`
+            : null,
+          subLabel: null,
+          flag: null,
+        } as AgentTabState;
+      }
       return agents;
     },
-    [state.agents, state.pipelineStage, state.pipelineActivity, state.pdfSidecar],
+    [state.agents, state.pipelineStage, state.pipelineActivity, state.pdfSidecar, state.notesInRun],
   );
   const agentTabsOrder = useMemo(() => {
-    if (!("source-preparation" in agentTabsAgents)) return state.agentTabOrder;
-    const without = state.agentTabOrder.filter((id) => id !== "source-preparation");
+    const syntheticIds = ["source-preparation", "notes-formatting"].filter((id) => id in agentTabsAgents);
+    if (syntheticIds.length === 0) return state.agentTabOrder;
+    const without = state.agentTabOrder.filter((id) => !syntheticIds.includes(id));
     const scoutIndex = without.indexOf("scout");
     const insertAt = scoutIndex >= 0 ? scoutIndex : 0;
-    return [...without.slice(0, insertAt), "source-preparation", ...without.slice(insertAt)];
+    const sourceIds = syntheticIds.filter((id) => id === "source-preparation");
+    const finishingIds = syntheticIds.filter((id) => id === "notes-formatting");
+    return [...without.slice(0, insertAt), ...sourceIds, ...without.slice(insertAt), ...finishingIds];
   }, [agentTabsAgents, state.agentTabOrder]);
   const agentTabsSkeletons = useMemo(
     () =>
@@ -362,17 +394,6 @@ export function ExtractPage({
             : landingMode === "new"
               ? "New extraction"
               : "Work queue"}
-        description={state.isComplete
-          ? completionStatus === "completed"
-            ? "Your workbook is ready. Opening the run overview."
-            : "Processing has ended. Opening the run overview with the next action."
-          : state.isRunning
-          ? "You can leave this page while processing continues."
-          : isResumedDraft
-            ? "Confirm the saved filing scope and continue this draft when you are ready."
-          : landingMode === "new"
-            ? "Upload one audited financial statement. Confirm the filing scope before processing begins."
-            : "Continue an active filing, resolve reviews, or start from a new financial statement."}
         actions={showQueue ? (
           <button
             type="button"
@@ -493,13 +514,6 @@ export function ExtractPage({
                       : "Run stopped"}
                 </h2>
               </div>
-              <p style={styles.runOverviewMessage}>
-                {state.isComplete
-                  ? "Processing has ended."
-                  : state.isRunning
-                    ? "Work continues in the background if you leave this page."
-                    : "The run is no longer active."}
-              </p>
               {state.isRunning && state.pipelineActivity?.total != null && state.pipelineActivity.total > 0 && (
                 <div
                   role="progressbar"
@@ -520,14 +534,14 @@ export function ExtractPage({
             </div>
             <div className="live-run-summary" style={styles.runSummary} aria-label="Workstream summary">
               <div style={styles.runSummaryPrimary}>
-                {workstreamSummary.complete} of {workstreamSummary.total} extraction workstreams complete
+                {workstreamSummary.complete}/{workstreamSummary.total} complete
               </div>
-              <div style={styles.runSummaryMeta}>
+              <span style={styles.runSummaryMeta}>
                 {state.isRunning && workstreamSummary.running === 0
-                  ? "Processing continues"
-                  : `${workstreamSummary.running} active across processing and review`}
+                  ? "Finalising"
+                  : `${workstreamSummary.running} active`}
                 {workstreamSummary.attention > 0 ? ` · ${workstreamSummary.attention} need attention` : ""}
-              </div>
+              </span>
               {state.runStartTime != null && (
                 <ElapsedTime startTime={state.runStartTime} running={state.isRunning} />
               )}
@@ -535,7 +549,7 @@ export function ExtractPage({
                 <button
                   type="button"
                   className={uiClass.btnSecondary}
-                  style={{ ...ui.buttonSecondary, ...ui.buttonSm, marginTop: pwc.space.md }}
+                  style={{ ...ui.buttonSecondary, ...ui.buttonSm }}
                   onClick={() => setConfirmStopRun(true)}
                 >
                   Stop run
@@ -883,6 +897,51 @@ export function ActiveTabPanel({
       </div>
     );
   }
+  if (state.activeTab === "notes-formatting") {
+    const completed = state.pipelineActivity?.completed ?? 0;
+    const total = state.pipelineActivity?.total ?? 0;
+    const active = state.pipelineStage === "formatting_notes";
+    const message = active
+      ? state.pipelineActivity?.message ?? "Applying MBRS formatting"
+      : "Formatting complete";
+    return (
+      <div role="tabpanel" aria-label="Notes formatting activity" style={styles.activityCardAttached}>
+        <div style={styles.activityHeader}>
+          <div style={styles.activityHeaderLeft}>
+            <div>
+              <div style={styles.activityEyebrow}>Current stage</div>
+              <div style={styles.activityTitle}>Notes formatting</div>
+            </div>
+            <span style={styles.activeAgentStatus}>{active ? "Working" : "Complete"}</span>
+          </div>
+          <div style={styles.activityHeaderRight}>
+            {showStopAll && (
+              <button type="button" onClick={onAbortAll} style={{ ...styles.toolbarBtnBase, ...styles.destructiveBtn }}>
+                Stop all
+              </button>
+            )}
+          </div>
+        </div>
+        <div style={{ padding: pwc.space.lg }}>
+          <div role="status" aria-live="polite" style={{ color: pwc.grey900, fontSize: 14 }}>
+            {message}
+          </div>
+          {total > 0 && (
+            <div
+              role="progressbar"
+              aria-label="Notes formatting progress"
+              aria-valuemin={0}
+              aria-valuemax={total}
+              aria-valuenow={completed}
+              style={styles.stageProgress}
+            >
+              <span style={{ ...styles.stageProgressFill, width: `${Math.min(100, completed / total * 100)}%` }} />
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
   if (state.activeTab === "validator") {
     // PLAN-stop-and-validation-visibility Phase 5.3: prefer the live
     // progress feed while the run is still going. Once `run_complete`
@@ -1113,28 +1172,29 @@ const styles = {
   } as const,
   runSummary: {
     flexShrink: 0,
-    minWidth: 160,
-    paddingLeft: pwc.space.xl,
-    borderLeft: `1px solid ${pwc.grey200}`,
-    textAlign: "right" as const,
+    display: "flex",
+    alignItems: "center",
+    gap: pwc.space.md,
+    color: pwc.grey700,
   } as const,
   runSummaryPrimary: {
     fontFamily: pwc.fontHeading,
-    fontSize: 14,
-    fontWeight: pwc.weight.semibold,
-    color: pwc.grey900,
+    fontSize: 12,
+    fontWeight: pwc.weight.medium,
+    color: pwc.grey700,
+    whiteSpace: "nowrap" as const,
   } as const,
   runSummaryMeta: {
-    marginTop: pwc.space.xs,
     fontFamily: pwc.fontBody,
     fontSize: 12,
-    color: pwc.grey700,
+    color: pwc.grey500,
+    whiteSpace: "nowrap" as const,
   } as const,
   runSummaryElapsed: {
-    marginTop: pwc.space.xs,
     fontFamily: pwc.fontMono,
     fontSize: 12,
-    color: pwc.grey700,
+    color: pwc.grey500,
+    whiteSpace: "nowrap" as const,
   } as const,
   usageDisclosure: {
     marginTop: pwc.space.lg,

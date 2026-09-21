@@ -350,9 +350,11 @@ unclickable). All components use inline `style={}` props. **Do not** convert
 back to className-based Tailwind.
 
 **Visual spec ([docs/xbrl-design-system.html](docs/xbrl-design-system.html)):**
-the canonical application design system. Follow Direction A in
-[`docs/prototype-ui-overhaul.html`](docs/prototype-ui-overhaul.html) exactly
-for product composition and screen states. `docs/pwc-design-system.html` is a
+the canonical application design system and the final authority when UI
+documents differ. Direction A in
+[`docs/prototype-ui-overhaul.html`](docs/prototype-ui-overhaul.html) supplies
+composition examples and screen-state context; it does not restore controls or
+copy removed by the canonical guide. `docs/pwc-design-system.html` is a
 compatibility mirror for older pinning references, not a design authority.
 Tokens live in
 `web/src/lib/theme.ts` (the `pwc` object — imported by ~30 components, so it
@@ -363,6 +365,40 @@ is the single cascade point); shared component primitives in
 tests assert exact RGB values derived from `theme.ts` tokens — change a token
 and its pinning test in the same commit. Clipboard styling
 (`web/src/lib/clipboard.ts`) is intentionally NOT tokenised (gotcha #16).
+
+**Clarity-first composition is load-bearing.** The normal interface answers
+three questions within five seconds: where am I, what needs attention, and what
+can I do next? Apply that test to the whole connected workflow, not only the
+element named in a screenshot. Specifically:
+
+- Remove introductory or background-processing sentences that repeat visible
+  state. Do not expose raw evidence prose, confidence/token metadata, internal
+  row IDs, technical sheet keys, tool names, or provider diagnostics by
+  default. Keep necessary audit detail in Activity or a clearly named closed
+  disclosure.
+- Keep one authoritative overall status. Put item-level state beside the item
+  and reserve Review, warning, and attention indicators for real exceptions or
+  material automated changes. An indicator shown on every item is forbidden.
+- Put actions beside the object they affect. Global appearance belongs in
+  Settings. Do not use an unexplained three-dot menu, unclickable tab-like
+  label, empty section, or duplicate navigation heading as visual storage.
+- Align titles, tabs, work surfaces, and footers to shared page boundaries.
+  Long notes and lists must reach their end. Read-only tables stay inside their
+  pane with meaningful description columns prioritised; edit mode may scroll
+  horizontally. Sticky controls must not cover content.
+- A field or source-note destination click updates the source PDF immediately.
+  Reselecting the same source returns to its cited page after manual paging;
+  changing destination sheets must not silently lose source context.
+- Every material wait appears in the stage heading or Live activity, including
+  notes formatting, saving, and final workbook preparation. A completed
+  workstream count must never imply the full run is ready while downstream work
+  continues.
+
+Before changing UI, classify visible content as keep, shorten, relocate, show
+only when relevant, or remove. Validate the user workflow plus long content,
+overflow, repeated selection, missing source, narrow layout, and all loading,
+complete, empty, and failed states. Update the design guide and
+`web/src/__tests__/designSystemParity.test.ts` when the shared contract changes.
 
 **Run-detail is one tabbed surface** (`RunDetailView.tsx`): Overview · Agents ·
 Notes · Cross-checks · Telemetry · Review · Values (Review + Values gated on

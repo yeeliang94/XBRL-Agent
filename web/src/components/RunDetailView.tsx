@@ -669,7 +669,6 @@ export function RunDetailView({
   const isInvestigationOutcome = isErrorOutcome || isFailed || isAborted;
   const failingChecks = crossChecks
     .filter((c) => c.status === "failed");
-  const issueTab: RunTabKey = failingChecks.length > 0 ? "checks" : "agents";
   const failingCheckSummaries = failingChecks.map((c) => {
     const values = [
       c.expected != null ? `expected ${formatAccounting(c.expected)}` : null,
@@ -683,6 +682,10 @@ export function RunDetailView({
     .map((check) =>
       `${crossCheckFailureLabel(check.name)}${check.message ? ` — ${check.message}` : ""}`,
     );
+  const issueTab: RunTabKey =
+    failingChecks.length > 0 || advisoryCheckSummaries.length > 0
+      ? "checks"
+      : "agents";
   // Run-84 finding (2026-08-05): a single statement can stop early — the step
   // cap, a timeout, a cancel — while the RUN still reports `completed`. Its
   // partial figures reach the merged workbook anyway (extraction saves facts as
@@ -711,14 +714,6 @@ export function RunDetailView({
   // returns 409 for this case, but disabling the button in the UI means
   // the bad click is impossible in the normal flow.
   const canDelete = detail.status !== "running";
-  const filingProfile = [
-    typeof detail.config?.filing_standard === "string"
-      ? detail.config.filing_standard.toUpperCase()
-      : "MFRS",
-    detail.config?.filing_level === "group" ? "Group" : "Company",
-    denominationLabel(detail.config?.denomination as string | undefined),
-  ].join(" · ");
-
   const handleDelete = () => {
     // Open the shared confirm dialog; the actual delete fires on confirm.
     setConfirmDelete(true);
@@ -823,13 +818,9 @@ export function RunDetailView({
     <div style={styles.container}>
       <header style={reviewWorkspaceActive ? styles.reviewContextHeader : styles.header}>
         <div style={styles.headerText}>
-          {!reviewWorkspaceActive && <div style={styles.kicker}>Run {detail.id}</div>}
           <h1 style={reviewWorkspaceActive ? styles.reviewContextFilename : styles.filename}>
             {detail.pdf_filename}
           </h1>
-          <div style={reviewWorkspaceActive ? styles.reviewContextProfile : styles.filingProfile}>
-            {filingProfile}
-          </div>
           <div style={styles.metaRow}>
             {statusBadge(runStatusDisplay(detail.status))}
             {!reviewWorkspaceActive && isLegacy && (
@@ -838,15 +829,7 @@ export function RunDetailView({
                 Limited historical details
               </span>
             )}
-            {!reviewWorkspaceActive && (
-              <span style={styles.dim}>{new Date(detail.created_at).toLocaleString()}</span>
-            )}
           </div>
-          {!reviewWorkspaceActive && !isDraft && (
-            <p style={styles.aiDisclaimer} role="note">
-              Figures were extracted by AI — verify against the source PDF before filing.
-            </p>
-          )}
         </div>
         <div style={styles.actions}>
           {isDraft && onResumeDraft ? (
@@ -1119,7 +1102,6 @@ export function RunDetailView({
             const active = t.key === activeTab;
             return (
               <span key={t.key} role="presentation" style={styles.tabGroup}>
-                {i === 1 && <span aria-hidden="true" style={styles.tabGroupLabel}>Review tools</span>}
                 <button
                   type="button"
                   role="tab"
@@ -1168,32 +1150,19 @@ export function RunDetailView({
             />
           </div>
           {(nonBlockingItems.length > 0 || sidecarNotice) && (
-            <details style={styles.itemsToCheck} data-testid="items-to-check">
-              <summary style={styles.perfSummary}>
-                Items to check ({nonBlockingItems.length + (sidecarNotice ? 1 : 0)})
-              </summary>
-              <div className="pwc-disclosure-content" style={styles.itemsToCheckBody}>
-                {nonBlockingItems.map((item, index) => (
-                  <p key={`${item}:${index}`} style={styles.itemToCheck}>{item}</p>
-                ))}
-                {sidecarNotice && (
-                  <div data-testid="pdf-sidecar-notice" style={styles.itemToCheck}>
-                    <strong>{sidecarNotice.title}</strong>
-                    <span>{sidecarNotice.message}</span>
-                  </div>
-                )}
-                {isErrorOutcome && (
-                  <button
-                    type="button"
-                    onClick={() => selectTab(issueTab)}
-                    className={uiClass.btnSecondary}
-                    style={{ ...ui.buttonSecondary, ...ui.buttonSm }}
-                  >
-                    Open relevant review tool
-                  </button>
-                )}
-              </div>
-            </details>
+            <div style={styles.itemsToCheck} data-testid="items-to-check">
+              <span style={styles.itemToCheck}>
+                {nonBlockingItems.length + (sidecarNotice ? 1 : 0)} item{nonBlockingItems.length + (sidecarNotice ? 1 : 0) === 1 ? " needs" : "s need"} review
+              </span>
+              <button
+                type="button"
+                onClick={() => selectTab(issueTab)}
+                className={uiClass.btnSecondary}
+                style={{ ...ui.buttonSecondary, ...ui.buttonSm }}
+              >
+                Review
+              </button>
+            </div>
           )}
           <details>
             <summary style={styles.perfSummary}>Run configuration</summary>
@@ -1747,8 +1716,12 @@ const styles = {
     paddingTop: pwc.space.md,
   } as React.CSSProperties,
   itemsToCheck: {
-    borderTop: `1px solid ${pwc.grey200}`,
-    borderBottom: `1px solid ${pwc.grey200}`,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: pwc.space.md,
+    borderTop: `1px solid ${pwc.grey100}`,
+    borderBottom: `1px solid ${pwc.grey100}`,
     padding: `${pwc.space.md}px 0`,
   } as React.CSSProperties,
   itemsToCheckBody: {
@@ -1757,13 +1730,10 @@ const styles = {
     marginTop: pwc.space.md,
   } as React.CSSProperties,
   itemToCheck: {
-    display: "grid",
-    gap: 2,
     margin: 0,
     color: pwc.grey700,
     fontFamily: pwc.fontBody,
     fontSize: 13,
-    lineHeight: 1.5,
   } as React.CSSProperties,
   perfSummary: {
     cursor: "pointer",

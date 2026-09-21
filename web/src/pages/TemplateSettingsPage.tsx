@@ -136,10 +136,7 @@ export function TemplateSettingsPage() {
 
   return (
     <div data-testid="template-settings-page" className="responsive-page" style={styles.page}>
-      <PageHeader
-        title="Field labels"
-        description="Rename how individual template line items are labelled on screen. This doesn't change the XBRL — only the display text."
-      />
+      <PageHeader title="Field labels" />
       {error && (
         <div role="alert" style={ui.alertError}>
           <span aria-hidden="true" style={ui.alertIcon(pwc.error)}>✕</span>

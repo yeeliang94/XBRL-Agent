@@ -145,14 +145,16 @@ function selectSheet(name: RegExp) {
 }
 
 describe("NotesReviewTab — read-only render (Step 9)", () => {
-  test("keeps full note previews and wraps worksheet navigation inside its rail", async () => {
+  test("truncates note previews and wraps worksheet navigation inside its rail", async () => {
     mockFetchOnce(SAMPLE);
     render(<NotesReviewTab runId={42} />);
     const previews = await screen.findAllByTestId("notes-readonly-content");
     for (const preview of previews) {
-      expect(preview.style.maxHeight).toBe("");
-      expect(preview.style.overflow).not.toBe("hidden");
+      expect(preview).toHaveStyle({ maxHeight: "440px", overflow: "hidden" });
     }
+    const selectedPreview = screen.getByTestId("notes-review-editor");
+    expect(selectedPreview).toHaveAttribute("data-editable", "false");
+    expect(selectedPreview).toHaveStyle({ maxHeight: "440px", overflowY: "auto" });
     const nav = screen.getByRole("navigation", { name: /notes sheet navigator/i });
     for (const button of within(nav).getAllByRole("button")) {
       expect(button).toHaveStyle({ whiteSpace: "normal", textAlign: "left" });
@@ -163,28 +165,14 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
   test("renders one active sheet at a time", async () => {
     mockFetchOnce(SAMPLE);
     render(<NotesReviewTab runId={42} />);
-    expect(await screen.findByRole("heading", {
-      level: 4,
-      name: "Corporate Information",
-    })).toBeInTheDocument();
-    expect(screen.queryByRole("heading", {
-      level: 4,
-      name: "Summary of Accounting Policies",
-    })).toBeNull();
+    expect(await screen.findByTestId("sheet-title")).toHaveTextContent("Corporate Information");
 
     const nav = screen.getByRole("navigation", { name: /notes sheet navigator/i });
     fireEvent.click(within(nav).getByRole("button", {
       name: /summary of accounting policies/i,
     }));
 
-    expect(screen.getByRole("heading", {
-      level: 4,
-      name: "Summary of Accounting Policies",
-    })).toBeInTheDocument();
-    expect(screen.queryByRole("heading", {
-      level: 4,
-      name: "Corporate Information",
-    })).toBeNull();
+    expect(screen.getByTestId("sheet-title")).toHaveTextContent("Summary of Accounting Policies");
   });
 
   test("renders one row per cell with label on left, html on right", async () => {
@@ -364,16 +352,23 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     render(<NotesReviewTab runId={42} />);
     const review = await screen.findByRole("button", { name: "Review Registered office" });
     const row = review.closest('[data-testid="notes-review-row"]') as HTMLElement;
-    expect(within(row).getByText("Disclosure field · Row 12")).toBeInTheDocument();
-    expect(within(row).getByText("Note content")).toBeInTheDocument();
+    expect(within(row).queryByText(/Disclosure field/)).toBeNull();
+    expect(within(row).queryByText("Note content")).toBeNull();
     const content = within(row).getByTestId("notes-readonly-content");
     expect(content).toHaveTextContent("Kuala Lumpur");
     expect(content).not.toHaveTextContent("Registered office");
-    const empty = screen.getByRole("button", { name: "Review Empty disclosure" }).closest('[data-testid="notes-review-row"]') as HTMLElement;
-    expect(within(empty).getByText("Empty")).toBeInTheDocument();
+    const empty = screen.getByText("Empty disclosure", { exact: true }).closest('[data-testid="notes-review-row"]') as HTMLElement;
+    expect(empty).toHaveAttribute("role", "button");
+    expect(empty).toHaveAttribute("aria-label", "Review Empty disclosure");
+    expect(empty).toHaveAttribute("tabindex", "0");
+    expect(within(empty).queryByText("Empty")).toBeNull();
     expect(within(empty).queryByTestId("notes-readonly-content")).not.toBeInTheDocument();
+    fireEvent.keyDown(empty, { key: "Enter" });
+    expect(await screen.findByRole("button", { name: /^Edit$/ })).toBeInTheDocument();
     fireEvent.click(review);
     expect(await screen.findByRole("button", { name: /^Edit$/ })).toBeInTheDocument();
+    expect(screen.queryByText("Compare destination")).toBeNull();
+    expect(screen.queryByRole("heading", { level: 4 })).toBeNull();
   });
 
   test.each(["not_reviewed", "inventory_unavailable"])("keeps %s coverage visible in the source inventory", async (banner) => {
@@ -387,17 +382,17 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     ), { status: 200 })) as typeof fetch;
     render(<NotesReviewTab runId={42} />);
     const inventory = screen.getByRole("region", { name: "Source note inventory" });
-    expect(await within(inventory).findByText("0 of 1 notes placed")).toBeInTheDocument();
+    expect(await within(inventory).findByText("0/1 placed")).toBeInTheDocument();
     expect(within(inventory).getByText("No destination recorded")).toBeInTheDocument();
-    expect(within(inventory).getByText("Missing")).toBeInTheDocument();
+    expect(within(inventory).getByText("Needs review")).toBeInTheDocument();
     expect(within(inventory).getByText(banner === "not_reviewed" ? /Not yet reviewed/ : /coverage could not be checked/)).toBeInTheDocument();
-    fireEvent.click(within(inventory).getByText("Sub-notes · 1 need review"));
+    fireEvent.click(within(inventory).getByText("1 sub-note needs review"));
     expect(within(inventory).getByText("1(a) · Not checked")).toBeVisible();
     fireEvent.click(within(inventory).getByTestId("source-note-1"));
     expect(within(inventory).getByTestId("source-note-1")).toHaveAttribute("aria-current", "true");
   });
 
-  test.each(["not_applicable", "confirmed_absent"])("excludes %s notes from warnings, issue navigation, and attention filtering", async (verdict) => {
+  test.each(["not_applicable", "confirmed_absent"])("excludes %s notes from coverage warnings", async (verdict) => {
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
       String(input).endsWith("/notes_cells") ? SAMPLE : String(input).endsWith("/notes-coverage") ? {
         rows: [
@@ -414,14 +409,12 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     expect(within(resolved).queryByLabelText("Needs review")).not.toBeInTheDocument();
     expect(within(unresolved).getByLabelText("Needs review")).toBeInTheDocument();
     fireEvent.click(unresolved);
-    fireEvent.click(screen.getByRole("button", { name: "Next issue" }));
     expect(unresolved).toHaveAttribute("aria-current", "true");
-    fireEvent.change(screen.getByRole("combobox", { name: "Notes field filter" }), { target: { value: "attention" } });
-    expect(screen.queryByText("Corporate info", { exact: true })).not.toBeInTheDocument();
-    expect(screen.getByText("Registered office", { exact: true })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Next issue" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Notes field filter" })).toBeNull();
   });
 
-  test("disables Next issue when every coverage gap is resolved", async () => {
+  test("does not render issue navigation when every coverage gap is resolved", async () => {
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
       String(input).endsWith("/notes_cells") ? SAMPLE : String(input).endsWith("/notes-coverage") ? {
         rows: [{ note_num: 1, title: "Resolved note", status: "missing", reviewer_verdict: "not_applicable",
@@ -430,7 +423,7 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     ), { status: 200 })) as typeof fetch;
     render(<NotesReviewTab runId={42} />);
     await screen.findByTestId("source-note-1");
-    expect(screen.getByRole("button", { name: "Next issue" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Next issue" })).toBeNull();
   });
 
   test("selects the first legacy field when empty coverage resolves after notes", async () => {
@@ -552,7 +545,7 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
   });
 });
 
-describe("NotesReviewTab — style-source chip (schema v29)", () => {
+describe("NotesReviewTab — hidden style-source metadata", () => {
   const STYLE_SAMPLE: NotesCellsResponse = {
     sheets: [
       {
@@ -583,19 +576,13 @@ describe("NotesReviewTab — style-source chip (schema v29)", () => {
     ],
   };
 
-  test("chip renders only for unstyled/floor, not ops/null", async () => {
+  test("does not surface style-source chips", async () => {
     mockFetchOnce(STYLE_SAMPLE);
     render(<NotesReviewTab runId={9} focusSheet="Notes-CI" />);
     await waitFor(() =>
       expect(screen.getByText("Plain cell")).toBeInTheDocument(),
     );
-    const chips = screen.getAllByTestId("notes-style-source-chip");
-    // Two chips: the "unstyled" row and the "floor" row.
-    const sources = chips
-      .map((c) => c.getAttribute("data-style-source"))
-      .sort();
-    expect(sources).toEqual(["floor", "unstyled"]);
-    // The agent-styled and legacy rows carry no chip.
+    expect(screen.queryByTestId("notes-style-source-chip")).toBeNull();
     expect(screen.getByText("Agent styled")).toBeInTheDocument();
     expect(screen.getByText("Legacy cell")).toBeInTheDocument();
   });
@@ -905,7 +892,7 @@ describe("NotesReviewTab — edit + save (Step 10)", () => {
     vi.useRealTimers();
   });
 
-  test("evidence column is never editable", async () => {
+  test("does not surface evidence metadata", async () => {
     mockFetchOnce(SAMPLE);
     const { container } = render(<NotesReviewTab runId={42} />);
     await waitFor(() =>
@@ -913,16 +900,9 @@ describe("NotesReviewTab — edit + save (Step 10)", () => {
     );
     selectFirstField();
     expect(screen.getByText("Corporate info")).toBeInTheDocument();
-    // Evidence is rendered as a read-only annotation — never wrapped in
-    // an editable surface. Clicking Edit on the HTML editor must not
-    // flip the evidence block contenteditable.
     fireEvent.click(screen.getAllByRole("button", { name: /edit/i })[0]);
-    const evidenceNodes = container.querySelectorAll(
-      '[data-testid="notes-review-evidence"]',
-    );
-    evidenceNodes.forEach((el) => {
-      expect(el.getAttribute("contenteditable")).toBe(null);
-    });
+    expect(container.querySelector('[data-testid="notes-review-evidence"]')).toBeNull();
+    expect(screen.queryByText("Page 3", { exact: true })).toBeNull();
   });
 });
 
@@ -2552,33 +2532,16 @@ describe("NotesReviewTab — per-run table style picker", () => {
     return calls;
   }
 
-  test("opening the panel and changing a knob PATCHes the run override", async () => {
-    const calls = mockThemeFetch();
+  test("keeps appearance controls in Settings rather than the review workspace", async () => {
+    mockThemeFetch();
     render(<NotesReviewTab runId={42} />);
     await waitFor(() =>
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
 
-    // Panel hidden until toggled.
     expect(screen.queryByTestId("notes-table-style-panel")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: /^default appearance \(advanced\)$/i }));
-    expect(screen.getByTestId("notes-table-style-panel")).toBeInTheDocument();
-
-    // Change the border style → PATCH /api/runs/42/notes_table_style.
-    fireEvent.change(screen.getByLabelText("Table border style"), {
-      target: { value: "double" },
-    });
-    expect(screen.getByLabelText("Font size in points")).not.toBeDisabled();
-    await waitFor(() => {
-      const patch = calls.find(
-        (c) =>
-          c.init?.method === "PATCH" &&
-          c.url.includes("/api/runs/42/notes_table_style"),
-      );
-      expect(patch).toBeTruthy();
-      const sent = JSON.parse(String(patch!.init!.body));
-      expect(sent.notes_table_style.borderStyle).toBe("double");
-    });
+    expect(screen.queryByRole("button", { name: /table appearance/i })).toBeNull();
+    expect(screen.getByRole("button", { name: "Re-extract notes" })).toBeInTheDocument();
   });
 });
 
@@ -2635,7 +2598,7 @@ describe("NotesReviewTab — AI formatter", () => {
     ).length;
   }
 
-  test("Format launches, polls to done, refetches cells and shows summary", async () => {
+  test("Format launches, polls to done, and refetches cells without a verbose summary", async () => {
     vi.useFakeTimers();
     let launched = false;
     const fetchMock = routedFetch({
@@ -2670,11 +2633,7 @@ describe("NotesReviewTab — AI formatter", () => {
     // One 2s poll tick resolves the pass to done.
     await vi.advanceTimersByTimeAsync(2100);
 
-    const summary = screen.getByTestId("notes-format-summary");
-    expect(summary).toHaveTextContent("Cleared borders.");
-    expect(summary).toHaveTextContent("Changed 2 row(s).");
-    expect(summary).toHaveTextContent("Confidence 90%.");
-    expect(summary).toHaveTextContent("~1,500 tokens.");
+    expect(screen.queryByTestId("notes-format-summary")).toBeNull();
     // A finished pass refetches the cells so the styled HTML renders.
     expect(notesCellsCalls(fetchMock)).toBeGreaterThan(before);
     vi.useRealTimers();
@@ -2708,7 +2667,7 @@ describe("NotesReviewTab — AI formatter", () => {
     expect(summary).toHaveTextContent("1 row(s) remain unresolved: 113.");
     expect(summary).not.toHaveTextContent("Nothing was saved");
     expect(notesCellsCalls(fetchMock)).toBeGreaterThan(before);
-    expect(screen.getByTestId("notes-format-revert")).toBeInTheDocument();
+    expect(screen.queryByTestId("notes-format-revert")).toBeNull();
     vi.useRealTimers();
   });
 
@@ -2805,10 +2764,10 @@ describe("NotesReviewTab — AI formatter", () => {
     selectFirstField();
     expect(
       screen.getByTestId("notes-format-running-banner"),
-    ).toHaveTextContent("Formatting in progress");
+    ).toHaveTextContent("Formatting notes");
   });
 
-  test("hydration on mount shows a finished pass's summary", async () => {
+  test("hydration on mount keeps a finished pass quiet", async () => {
     routedFetch({
       status: (url) =>
         url.includes("Notes-CI")
@@ -2820,11 +2779,8 @@ describe("NotesReviewTab — AI formatter", () => {
     });
 
     render(<NotesReviewTab runId={42} />);
-    await waitFor(() => {
-      expect(
-        screen.getByTestId("notes-format-summary"),
-      ).toHaveTextContent("Applied source style.");
-    });
+    await waitFor(() => expect(screen.queryByTestId("notes-format-button")).toBeNull());
+    expect(screen.queryByTestId("notes-format-summary")).toBeNull();
     expect(screen.queryByTestId("notes-format-button")).toBeNull();
   });
 
@@ -2857,10 +2813,7 @@ describe("NotesReviewTab — AI formatter", () => {
     vi.useRealTimers();
   });
 
-  test("a pass with skipped rows surfaces the skip note in the summary", async () => {
-    // The backend appends the skip note to the summary text (CAS write);
-    // the panel must surface it verbatim so the user knows why a row kept
-    // its manual edit instead of the new styling.
+  test("a completed pass keeps skipped rows visible and retryable", async () => {
     routedFetch({
       status: (url) =>
         url.includes("Notes-CI")
@@ -2874,15 +2827,43 @@ describe("NotesReviewTab — AI formatter", () => {
     });
 
     render(<NotesReviewTab runId={42} />);
-    await waitFor(() => {
-      expect(
-        screen.getByTestId("notes-format-summary"),
-      ).toHaveTextContent("skipped — edited during formatting");
-    });
+    const summary = await screen.findByTestId("notes-format-summary");
+    expect(summary).toHaveAttribute("role", "alert");
+    expect(summary).toHaveTextContent("1 row was not formatted because the content changed during formatting");
+    expect(screen.getByTestId("notes-format-button")).toHaveTextContent("Retry formatting");
   });
 
-  test("Remove-formatting confirms via dialog, calls the endpoint, and refetches cells", async () => {
-    const fetchMock = routedFetch({
+  test("shows placed field subheadings instead of worksheet names and jumps to the selected field", async () => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
+      String(input).endsWith("/notes_cells") ? SAMPLE : String(input).endsWith("/notes-coverage") ? {
+        rows: [{
+          note_num: 2,
+          title: "Property, plant and equipment",
+          status: "placed",
+          placements: [
+            { sheet: "Notes-SummaryofAccPol", row: 7, row_label: "Property, plant and equipment", kind: "fan_out" },
+            { sheet: "Notes-CI", row: 4, row_label: "Principal activities", kind: "primary" },
+          ],
+          page_lo: 16,
+          page_hi: 18,
+        }],
+      } : {},
+    ), { status: 200 })) as typeof fetch;
+
+    render(<NotesReviewTab runId={42} />);
+    const note = await screen.findByTestId("source-note-2");
+    fireEvent.click(note);
+    expect(screen.getByTestId("sheet-title")).toHaveTextContent("Corporate Information");
+    const destinations = screen.getByLabelText("Destinations for note 2");
+    expect(within(destinations).queryByRole("button", { name: "Corporate Information" })).not.toBeInTheDocument();
+    expect(within(destinations).queryByRole("button", { name: "Summary of Accounting Policies" })).not.toBeInTheDocument();
+    fireEvent.click(within(destinations).getByRole("button", { name: "Property, plant and equipment" }));
+    expect(screen.getByTestId("sheet-title")).toHaveTextContent("Summary of Accounting Policies");
+    expect(screen.getByText("Revenue", { exact: true })).toBeInTheDocument();
+  });
+
+  test("does not expose a remove-formatting action after completion", async () => {
+    routedFetch({
       status: (url) =>
         url.includes("Notes-CI")
           ? {
@@ -2893,21 +2874,8 @@ describe("NotesReviewTab — AI formatter", () => {
     });
 
     render(<NotesReviewTab runId={42} />);
-    const revertButton = await screen.findByTestId("notes-format-revert");
-    const before = notesCellsCalls(fetchMock);
-    // Opens the shared confirm dialog; the endpoint fires on confirm.
-    fireEvent.click(revertButton);
-    const dialog = screen.getByRole("dialog", { name: /remove formatting changes/i });
-    fireEvent.click(within(dialog).getByRole("button", { name: /remove formatting/i }));
-
-    await waitFor(() => {
-      expect(
-        fetchMock.mock.calls.some((c) =>
-          String(c[0]).includes("/notes-format/revert"),
-        ),
-      ).toBe(true);
-      expect(notesCellsCalls(fetchMock)).toBeGreaterThan(before);
-    });
+    await waitFor(() => expect(screen.queryByTestId("notes-format-button")).toBeNull());
+    expect(screen.queryByTestId("notes-format-revert")).toBeNull();
   });
 });
 

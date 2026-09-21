@@ -32,7 +32,7 @@ test("restores separate captured and checked counts without claiming completion"
   expect(screen.getByText("Check page readings and continuations").closest("li")).toHaveTextContent("Working");
   expect(screen.getByLabelText("Workflow progress")).toBeInTheDocument();
   expect(screen.getByText("Prepare document")).toHaveAttribute("aria-current", "step");
-  expect(screen.getByText(/No action is needed yet/)).toBeInTheDocument();
+  expect(screen.queryByText(/No action is needed yet/)).toBeNull();
   expect(screen.queryByText("Complete")).toBeNull();
   expect(screen.queryByText(/reasoning/i)).toBeNull();
 });
@@ -137,7 +137,7 @@ test("distinguishes captured pages from page checks and can start a historical p
     action_required: "none", captured: 0, checked: 0, message: "Document preparation has not started.",
   }).mockResolvedValueOnce({ ...base, status: "queued", captured: 0, checked: 0 });
   render(<DocumentPreparation sessionId="one" />);
-  expect(await screen.findByText("Start document preparation before extraction.")).toBeInTheDocument();
+  expect(await screen.findByText("Start document preparation.")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Start preparation" }));
   await waitFor(() => expect(request).toHaveBeenCalledWith("/api/preparation/one", { method: "POST" }));
 });
@@ -155,7 +155,7 @@ test("moves the workflow to an explicit setup-confirmation checkpoint", async ()
     message: "Document prepared and notes inventory ready",
   });
   render(<DocumentPreparation sessionId="one" />);
-  expect(await screen.findByText(/Action required: review the detected filing details/)).toBeInTheDocument();
+  expect(await screen.findByText(/Review the detected filing details, then confirm setup/)).toBeInTheDocument();
   expect(screen.getByText("Confirm detected setup").closest("li")).toHaveTextContent("Action required");
   expect(screen.getByTestId("step-action")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Stop preparation" })).toBeNull();

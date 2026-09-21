@@ -189,10 +189,15 @@ in `CLAUDE-REFERENCE.md` before changing the surrounding subsystem.
   `web/src/lib/theme.ts`, shared layout primitives in
   `web/src/lib/uiStyles.ts`, and interaction or responsive states in
   `web/src/index.css`.
-- Follow `docs/xbrl-design-system.html` and Direction A in
-  `docs/prototype-ui-overhaul.html`. Update shared rules, implementation, and
-  pinning tests together. Scope ARIA-tab tests to the labelled tab list and
-  keep heavy tab content lazy-mounted.
+- Treat `docs/xbrl-design-system.html` as the canonical UI/UX authority.
+  Direction A in `docs/prototype-ui-overhaul.html` supplies composition examples
+  only; the design guide wins when they differ. Apply its clarity-first contract
+  across the full affected workflow: remove repeated explanation and internal
+  metadata, reserve indicators for exceptions, keep actions contextual, align
+  shared page boundaries, contain long content and tables, preserve source-PDF
+  context, and surface every material waiting stage. Update shared rules,
+  implementation, and pinning tests together. Scope ARIA-tab tests to the
+  labelled tab list and keep heavy tab content lazy-mounted.
 - Authentication guards every `/api/*` route except the documented auth and
   health exemptions. Enforce authorization server-side. Production requires
   `SESSION_SECRET` and refuses `AUTH_MODE=dev`.

@@ -141,10 +141,10 @@ describe("Direction A shell and responsive composition", () => {
   });
 
   test("pins the worksheet-oriented Notes review composition", () => {
-    expect(designSystem).toContain("mTool worksheet navigation, all fields of the selected worksheet, and the source PDF");
+    expect(designSystem).toContain("mTool worksheet navigation with the source note inventory");
     expect(designSystem).toContain("one-pixel visible Grey 100 rule");
     expect(designSystem).toContain("mount one rich-text editor for the selected field");
-    expect(designSystem).toContain("PDF controls remain in one toolbar");
+    expect(designSystem).toContain("PDF controls remain in one sticky toolbar");
     expect(prototype).toContain(".notes-three-pane { display: grid; grid-template-columns: 240px 9px minmax(410px, 1fr) 9px minmax(330px, 35%)");
     expect(prototype).toContain('aria-label="Notes sheet navigator"');
     expect(prototype).toContain('aria-label="Resize source notes"');
@@ -163,15 +163,30 @@ describe("Direction A shell and responsive composition", () => {
 });
 
 
-describe("Template-oriented review", () => {
-  test("keeps empty alternatives, contextual actions and safe destination comparison in the design contract", () => {
-    for (const reference of [designSystem, prototype]) {
-      expect(reference).toContain("mTool worksheet");
-      expect(reference).toContain("All fields");
-      expect(reference).toContain("empty alternatives");
-      expect(reference).toContain("Compare destination");
-      expect(reference).toContain("Next issue");
-      expect(reference).toContain("Discard unsaved changes");
+describe("Simplified template-oriented review", () => {
+  test("pins the minimal Notes review contract", () => {
+    for (const requirement of [
+      "Show Review only on populated fields produced or materially changed by automation",
+      "Do not show evidence prose, appearance provenance, internal row numbers",
+      "appearance defaults belong in Settings",
+      "meaningful destination subheadings, never technical sheet names",
+      "immediately returns the PDF to the source note's cited page",
+      "description columns receive priority and wrap",
+      "Long selected notes scroll vertically inside a bounded preview",
+    ]) {
+      expect(designSystem).toContain(requirement);
+    }
+  });
+
+  test("pins the application-wide clarity contract", () => {
+    for (const requirement of [
+      "where they are, what needs attention and the next available action",
+      "Show outcomes, not implementation details",
+      "Reserve indicators for exceptions",
+      "A completed workstream count must not imply the whole run is ready",
+      "Reselecting the same item returns to that page even after manual paging",
+    ]) {
+      expect(designSystem).toContain(requirement);
     }
   });
 });

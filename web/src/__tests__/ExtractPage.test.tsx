@@ -286,13 +286,14 @@ describe("ExtractPage — render-gate regression guards", () => {
     });
     const { container } = render(<ExtractPage {...props} />);
 
-    expect(screen.getByRole("heading", { name: /agents are working in parallel/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Extracting selected statements and notes" })).toBeInTheDocument();
     expect(screen.getByTestId("pipeline-stage-label")).toHaveAttribute("aria-live", "polite");
     expect(screen.getByTestId("pipeline-stage-label")).toHaveAttribute("aria-atomic", "true");
     expect(screen.getByLabelText("Workflow progress")).toBeInTheDocument();
     expect(screen.getByRole("tablist", { name: "Run workstreams" })).toHaveAttribute("aria-orientation", "vertical");
     expect(screen.getByRole("tabpanel", { name: /SOFP activity/i })).toBeInTheDocument();
-    expect(screen.getByText("0 of 2 extraction workstreams complete")).toBeInTheDocument();
+    expect(screen.getByText("0/2 complete")).toBeInTheDocument();
+    expect(screen.queryByText(/leave this page/i)).toBeNull();
     const usage = container.querySelector("details") as HTMLDetailsElement;
     expect(usage.open).toBe(false);
     expect(usage.querySelector("summary")?.textContent).toContain("Technical usage details");
@@ -308,9 +309,9 @@ describe("ExtractPage — render-gate regression guards", () => {
       agents: { sofp_0: extraction, NOTES_VALIDATOR: reviewer },
       agentTabOrder: ["sofp_0", "NOTES_VALIDATOR"],
     } })} />);
-    expect(screen.getByText("1 of 1 extraction workstreams complete")).toBeInTheDocument();
-    expect(screen.getByText("1 active across processing and review")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: /checking extracted notes/i })).toBeInTheDocument();
+    expect(screen.getByText("1/1 complete")).toBeInTheDocument();
+    expect(screen.getByText("1 active")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Reviewing extracted notes" })).toBeInTheDocument();
   });
 
   test("keeps the live status region mounted while its message changes", () => {
@@ -370,6 +371,55 @@ describe("ExtractPage — render-gate regression guards", () => {
     expect(screen.getByRole("heading", { name: "Reading scanned note pages: 3 of 8 complete." })).toBeInTheDocument();
     expect(screen.getByRole("progressbar", { name: "Current stage progress" })).toHaveAttribute("aria-valuenow", "3");
     expect(screen.queryByText(/30ms/i)).toBeNull();
+  });
+
+  test("surfaces notes formatting as live run activity", () => {
+    const notesAgent = createAgentState("notes:CORP_INFO", "CORP_INFO", "Notes 10: Corp Info");
+    notesAgent.status = "complete";
+    render(<ExtractPage {...makeProps({ state: {
+      sessionId: "test-session",
+      filename: "test.pdf",
+      isRunning: true,
+      pipelineStage: "formatting_notes",
+      pipelineActivity: {
+        stage: "formatting_notes",
+        started_at: 1,
+        message: "Formatting notes: 2 of 3 sections complete",
+        completed: 2,
+        total: 3,
+      },
+      activeTab: "notes-formatting",
+      agents: { "notes:CORP_INFO": notesAgent },
+      agentTabOrder: ["notes:CORP_INFO"],
+      notesInRun: ["CORP_INFO"],
+    } })} />);
+
+    expect(screen.getByRole("tab", { name: /notes formatting/i })).toBeInTheDocument();
+    expect(screen.getByRole("tabpanel", { name: "Notes formatting activity" })).toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: "Notes formatting progress" })).toHaveAttribute("aria-valuenow", "2");
+    expect(screen.getAllByText("Formatting notes: 2 of 3 sections complete")).toHaveLength(2);
+  });
+
+  test("auto-selects notes formatting once without trapping later tab changes", () => {
+    const props = makeProps({ state: {
+      sessionId: "test-session",
+      filename: "test.pdf",
+      isRunning: true,
+      pipelineStage: "formatting_notes",
+      activeTab: "sofp_0",
+      agents: { sofp_0: createAgentState("sofp_0", "SOFP", "SOFP") },
+      agentTabOrder: ["sofp_0"],
+      notesInRun: ["CORP_INFO"],
+    } });
+    const { rerender } = render(<ExtractPage {...props} />);
+    expect(props.dispatch).toHaveBeenCalledWith({
+      type: "SET_ACTIVE_TAB",
+      payload: "notes-formatting",
+    });
+
+    props.dispatch.mockClear();
+    rerender(<ExtractPage {...props} state={{ ...props.state, activeTab: "sofp_0" }} />);
+    expect(props.dispatch).not.toHaveBeenCalled();
   });
 
   test("shows source preparation as a worker without exposing provider reasoning", () => {
@@ -432,7 +482,6 @@ describe("ExtractPage — render-gate regression guards", () => {
     render(<ExtractPage {...props} />);
 
     expect(screen.getByRole("heading", { name: "Run stopped" })).toBeInTheDocument();
-    expect(screen.getByText(/the run is no longer active/i)).toBeInTheDocument();
     expect(screen.queryByText(/while the run continues/i)).not.toBeInTheDocument();
     expect(screen.getAllByLabelText("Workflow progress")).toHaveLength(1);
     expect(screen.queryByRole("region", { name: "Document preparation" })).toBeNull();

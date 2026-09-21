@@ -441,10 +441,7 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
 
   return (
     <div style={styles.container}>
-      <PageHeader
-        title={TERMS.runs}
-        description="Every extraction you've run — open one to review its figures, notes and checks, or download the Excel."
-      />
+      <PageHeader title={TERMS.runs} />
       <HistoryFilters value={filters} onChange={setFilters} />
       {!isLoading && !error && (
         // A plain result count so the list isn't an unbounded wall of rows
