@@ -446,8 +446,8 @@ export function ExtractPage({
         )}
       </HomeHero>
 
-      {state.sessionId && !state.isComplete && (
-        <DocumentPreparation key={state.sessionId} sessionId={state.sessionId} hideCompleted={state.isRunning} onSnapshot={acceptPreparation} />
+      {state.sessionId && !state.isRunning && !state.isComplete && !state.hasError && (
+        <DocumentPreparation key={state.sessionId} sessionId={state.sessionId} onSnapshot={acceptPreparation} />
       )}
 
       {/* Pre-run configuration panel — shown after upload, hidden once running.
@@ -461,6 +461,7 @@ export function ExtractPage({
           key={state.currentRunId ?? "fresh"}
           sessionId={state.sessionId}
           preparation={preparation}
+          waitForPreparation
           getSettings={getExtendedSettings}
           onRun={handleMultiRun}
           initialConfig={draftConfig}

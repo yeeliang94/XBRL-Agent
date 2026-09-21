@@ -116,6 +116,18 @@ def test_patch_persists_denomination(draft_session):
     assert bad.status_code == 422
 
 
+@pytest.mark.parametrize("user_selected", [False, True])
+def test_patch_preserves_denomination_selection_intent(draft_session, user_selected):
+    client, run_id, output_dir = draft_session
+    response = client.patch(
+        f"/api/runs/{run_id}",
+        json={"denomination": "thousands", "denomination_user_selected": user_selected},
+    )
+    assert response.status_code == 200
+    assert client.patch(f"/api/runs/{run_id}", json={"filing_level": "group"}).status_code == 200
+    assert _read_config(output_dir, run_id)["denomination_user_selected"] is user_selected
+
+
 def test_patch_rejected_on_non_draft(draft_session):
     """Once a run is no longer `draft`, PATCH must 409. Editing a running
     or completed run's stored config would lie about what was extracted."""

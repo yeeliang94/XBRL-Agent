@@ -289,7 +289,7 @@ describe("ExtractPage — render-gate regression guards", () => {
     expect(screen.getByRole("heading", { name: /agents are working in parallel/i })).toBeInTheDocument();
     expect(screen.getByTestId("pipeline-stage-label")).toHaveAttribute("aria-live", "polite");
     expect(screen.getByTestId("pipeline-stage-label")).toHaveAttribute("aria-atomic", "true");
-    expect(screen.getByLabelText("Extraction progress")).toBeInTheDocument();
+    expect(screen.getByLabelText("Workflow progress")).toBeInTheDocument();
     expect(screen.getByRole("tablist", { name: "Run workstreams" })).toHaveAttribute("aria-orientation", "vertical");
     expect(screen.getByRole("tabpanel", { name: /SOFP activity/i })).toBeInTheDocument();
     expect(screen.getByText("0 of 2 extraction workstreams complete")).toBeInTheDocument();
@@ -434,5 +434,7 @@ describe("ExtractPage — render-gate regression guards", () => {
     expect(screen.getByRole("heading", { name: "Run stopped" })).toBeInTheDocument();
     expect(screen.getByText(/the run is no longer active/i)).toBeInTheDocument();
     expect(screen.queryByText(/while the run continues/i)).not.toBeInTheDocument();
+    expect(screen.getAllByLabelText("Workflow progress")).toHaveLength(1);
+    expect(screen.queryByRole("region", { name: "Document preparation" })).toBeNull();
   });
 });

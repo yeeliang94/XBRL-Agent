@@ -37,6 +37,10 @@ import { buildReasoningTimeline } from "../lib/buildReasoningTimeline";
 
 interface Props {
   preparation?: PreparationSnapshot;
+  /** Fresh uploads must wait for the upload-owned preparation result before
+   *  extraction can start. Optional for legacy/test callers without that
+   *  lifecycle. */
+  waitForPreparation?: boolean;
   sessionId: string;
   getSettings: () => Promise<ExtendedSettingsResponse>;
   onRun: (config: RunConfigPayload) => void;
@@ -309,6 +313,13 @@ function _seedFilingStandard(cfg: Record<string, unknown> | null | undefined): F
 function _seedDenomination(cfg: Record<string, unknown> | null | undefined): Denomination {
   const v = cfg?.denomination;
   return v === "units" || v === "millions" ? v : "thousands";
+}
+
+function _detectedDenomination(infopack: Record<string, unknown> | null): Denomination | null {
+  const value = infopack?.scale_unit;
+  return value === "units" || value === "thousands" || value === "millions"
+    ? value
+    : null;
 }
 
 function _seedStatementsEnabled(
@@ -629,7 +640,7 @@ function NotesInventoryEditor({
   );
 }
 
-export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onConfigChange, isAdmin = false, preparation }: Props) {
+export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onConfigChange, isAdmin = false, preparation, waitForPreparation = false }: Props) {
   // Keep the default view focused on filing scope. Operators can collapse the
   // two selection lists once they have checked them, while model overrides and
   // benchmark tooling remain behind the advanced disclosure.
@@ -686,9 +697,16 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
   // Presentation denomination the filer declares for the source figures.
   // Default RM '000 (the common Malaysian case); the agent treats this as
   // authoritative and the scout cross-checks it.
-  const [denomination, setDenomination] = useState<Denomination>(
-    () => _seedDenomination(initialConfig),
-  );
+  const [{ value: denomination, userSelected: denominationUserSelected }, setDenomination] = useState(() => ({
+    value: _seedDenomination(initialConfig),
+    // Preserve older saved choices when their selection provenance is unknown.
+    userSelected: typeof initialConfig?.denomination_user_selected === "boolean"
+      ? initialConfig.denomination_user_selected
+      : initialConfig?.denomination != null,
+  }));
+  const handleDenominationChange = useCallback((next: Denomination) => {
+    setDenomination({ value: next, userSelected: true });
+  }, []);
   // Evals workspace (Step D1): repeats-for-consistency. 1 = a normal single
   // run; 2–5 launches that many identically-configured runs back-to-back and
   // scores their agreement. Seeded from a rehydrated draft's `repeats`.
@@ -984,6 +1002,17 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       && (detected === "mfrs" || detected === "mpers")
     ) {
       setFilingStandard(detected);
+    }
+
+    // Surface the scan's presentation-unit finding in the same operator-owned
+    // control used by the run. As with filing standard and statement format,
+    // detection is only an initial suggestion: an existing or newly-made
+    // choice remains authoritative.
+    const detectedDenomination = _detectedDenomination(infopackValue);
+    if (detectedDenomination) {
+      setDenomination((current) => current.userSelected
+        ? current
+        : { value: detectedDenomination, userSelected: false });
     }
 
     const statements = (infopackValue.statements ?? {}) as Record<string, unknown>;
@@ -1308,6 +1337,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       filing_level: filingLevel,
       filing_standard: filingStandard,
       denomination,
+      denomination_user_selected: denominationUserSelected,
       notes_to_run,
       notes_models,
       // Gold-standard eval (v16): attach the benchmark only for an admin with
@@ -1322,7 +1352,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
   }, [
     statementsEnabled, variantSelections, modelOverrides, infopack,
     notesInventoryOverrides,
-    filingLevel, filingStandard, denomination, notesEnabled,
+    filingLevel, filingStandard, denomination, denominationUserSelected, notesEnabled,
     notesModelOverrides, evalEnabled, evalBenchmarkId, isAdmin, repeats,
   ]);
 
@@ -1382,9 +1412,13 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
   // toggle so a run never starts that the user expects to be graded but isn't.
   const canRun =
     (enabledStmts.length > 0 || enabledNotes.length > 0) &&
-    !evalSelectionMissing && preparation?.status !== "failed" && preparation?.status !== "cancelled";
+    !evalSelectionMissing &&
+    preparation?.status !== "failed" &&
+    preparation?.status !== "cancelled" &&
+    (!waitForPreparation || preparation?.status === "succeeded");
   const standardWasDetected =
     !filingStandardTouchedRef.current && infopack?.detected_standard === filingStandard;
+  const detectedDenomination = _detectedDenomination(infopack);
 
   return (
     <div style={styles.container}>
@@ -1528,7 +1562,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
                 type="button"
                 className="segmented-control-button"
                 aria-pressed={active}
-                onClick={() => setDenomination(d)}
+                onClick={() => handleDenominationChange(d)}
                 style={{
                   fontFamily: pwc.fontHeading,
                   fontSize: 13,
@@ -1547,6 +1581,19 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
             );
           })}
         </div>
+        {infopack?.scale_unit === "unknown" ? (
+          <span style={{ fontFamily: pwc.fontBody, fontSize: 12, color: pwc.orange700 }}>
+            Document scan could not determine the denomination. Select the value shown in the financial statements before starting extraction.
+          </span>
+        ) : detectedDenomination ? (
+          <span data-testid="detected-denomination" style={{ fontFamily: pwc.fontBody, fontSize: 12, color: pwc.grey500 }}>
+            Document scan detected {DENOMINATION_LABELS[detectedDenomination]}. Confirm or correct it before starting extraction.
+          </span>
+        ) : (
+          <span style={{ fontFamily: pwc.fontBody, fontSize: 12, color: pwc.grey500 }}>
+            Document preparation will suggest a denomination for you to confirm.
+          </span>
+        )}
       </div>
         </div>
       </section>
@@ -1974,7 +2021,9 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
         className={uiClass.btnPrimary}
         style={styles.runButton}
       >
-        Start extraction
+        {preparation?.status === "succeeded"
+          ? "Confirm setup and start extraction"
+          : "Start extraction"}
       </button>
     </div>
   );

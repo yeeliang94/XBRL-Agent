@@ -35,6 +35,39 @@ _ACTIVE = frozenset({"queued", "working", "retrying"})
 _lock = threading.RLock()
 _workers: dict[str, threading.Thread] = {}
 
+_PAGE_PREPARATION_STAGES = frozenset({
+    "checking_pages", "capturing", "verifying", "joining", "succeeded",
+})
+
+
+def _phase_for_stage(stage: object) -> str | None:
+    """Collapse concurrent implementation stages into a monotonic UI phase."""
+    if stage in _PAGE_PREPARATION_STAGES:
+        return "preparing_pages"
+    if stage == "scouting":
+        return "building_map"
+    if stage == "reconciling":
+        return "reconciling_map"
+    if stage == "ready":
+        return "awaiting_confirmation"
+    if stage == "pending":
+        return "pending"
+    return None
+
+
+def _with_workflow_state(state: dict) -> dict:
+    """Backfill the public workflow interface for older durable snapshots."""
+    result = dict(state)
+    result.setdefault("phase", _phase_for_stage(result.get("stage")) or "pending")
+    if "action_required" not in result:
+        if result.get("status") in {"failed", "cancelled"}:
+            result["action_required"] = "retry"
+        elif result.get("status") == "succeeded":
+            result["action_required"] = "confirm_setup"
+        else:
+            result["action_required"] = "none"
+    return result
+
 
 def active_session_ids() -> set[str]:
     with _lock:
@@ -49,7 +82,11 @@ def _read(directory: Path) -> dict:
     try:
         return json.loads((directory / "preparation_status.json").read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return {"status": "not_started", "stage": "pending", "message": "Document preparation has not started."}
+        return {
+            "status": "not_started", "stage": "pending", "phase": "pending",
+            "action_required": "none",
+            "message": "Document preparation has not started.",
+        }
 
 
 def _write(directory: Path, snapshot: dict) -> None:
@@ -70,7 +107,8 @@ def snapshot(directory: Path) -> dict:
         result = _read(directory)
         worker = _workers.get(_key(directory))
         if result.get("status") in _ACTIVE and not (worker and worker.is_alive()):
-            result.update(status="failed", message="Document preparation was interrupted. Retry to resume.",
+            result.update(status="failed", action_required="retry",
+                          message="Document preparation was interrupted. Retry to resume.",
                           error="preparation_interrupted", updated_at=time.time())
             try:
                 _write(directory, result)
@@ -80,7 +118,7 @@ def snapshot(directory: Path) -> dict:
                 # later poll will attempt to persist the same terminal state.
                 logger.exception("Could not persist interrupted preparation status")
             _finish_interrupted_audit(directory, result)
-        return result
+        return _with_workflow_state(result)
 
 
 def _finish_interrupted_audit(directory: Path, state: dict) -> None:
@@ -154,6 +192,7 @@ def start_preparation(directory: Path, run_id: int | None, *, retry: bool = Fals
         current = {
             "attempt_id": attempt, "run_id": run_id, "status": "queued",
             "stage": "checking_pages", "message": "Checking the uploaded document",
+            "phase": "preparing_pages", "action_required": "none",
             "completed": 0, "total": 0, "captured": 0, "verified": 0, "checked": 0,
             "prepared": False, "scout_status": "queued",
             "started_at": time.time(), "updated_at": time.time(),
@@ -169,7 +208,7 @@ def start_preparation(directory: Path, run_id: int | None, *, retry: bool = Fals
             worker.start()
         except Exception:
             _workers.pop(_key(directory), None)
-            _update(directory, attempt, status="failed", error="dispatch_failed",
+            _update(directory, attempt, status="failed", action_required="retry", error="dispatch_failed",
                     message="Document preparation could not start. Retry.")
             raise
         return current
@@ -181,7 +220,7 @@ def _worker(directory: Path, db_path: Path, run_id: int, attempt: str) -> None:
     except Exception:
         logger.exception("Preparation worker failed for run %s", run_id)
         try:
-            _update(directory, attempt, status="failed", error="worker_failed",
+            _update(directory, attempt, status="failed", action_required="retry", error="worker_failed",
                     message="Document preparation could not finish. Retry.")
         except Exception:
             # The original failure is already logged. Do not let a second
@@ -354,6 +393,9 @@ async def _prepare(directory: Path, db_path: Path, run_id: int, attempt: str) ->
             allowed = {k: v for k, v in data.items() if k in {
                 "stage", "message", "completed", "total", "captured", "verified", "checked",
             }}
+            phase = _phase_for_stage(data.get("stage"))
+            if phase is not None:
+                allowed.update(phase=phase, action_required="none")
             state = _update(directory, attempt, **allowed)
             repo.log_run_event(conn, run_id, "preparation_progress", payload=state,
                                phase=str(state.get("stage", "preparing")))
@@ -363,7 +405,8 @@ async def _prepare(directory: Path, db_path: Path, run_id: int, attempt: str) ->
                                            model_name=model_name, on_progress=progress, concurrency=10,
                                            configuration_key=configuration_key)
         status = "succeeded"
-        _update(directory, attempt, prepared=True, stage="scouting",
+        _update(directory, attempt, prepared=True, stage="scouting", phase="building_map",
+                action_required="none",
                 scout_status="working", message="Building document map and notes inventory")
         scout_id, prior_scout_usage = _start_scout_audit(conn, run_id, scout_name)
         scout_model = server._create_proxy_model(scout_name, os.environ.get("LLM_PROXY_URL", ""), api_key)
@@ -383,7 +426,9 @@ async def _prepare(directory: Path, db_path: Path, run_id: int, attempt: str) ->
         build_prepared_manifest(prepared.metadata_path,
                                 scout_note_nums=[e.note_num for e in pack.notes_inventory or []])
         infopack = json.loads(pack.to_json())
-        _update(directory, attempt, status="succeeded", stage="ready", scout_status="succeeded",
+        _update(directory, attempt, status="succeeded", stage="ready",
+                phase="awaiting_confirmation", action_required="confirm_setup",
+                scout_status="succeeded",
                 message="Document prepared and notes inventory ready", infopack=infopack,
                 source_revision=prepared.revision)
         status = scout_status = "succeeded"
@@ -391,14 +436,16 @@ async def _prepare(directory: Path, db_path: Path, run_id: int, attempt: str) ->
         if status != "succeeded":
             status = "cancelled"
         scout_status = "cancelled"
-        _update(directory, attempt, status="cancelled", scout_status="cancelled",
+        _update(directory, attempt, status="cancelled", action_required="retry",
+                scout_status="cancelled",
                 message="Document preparation cancelled")
     except Exception as exc:
         logger.warning("Preparation failed for run %s (%s)", run_id, type(exc).__name__)
         # Only approved user-facing errors are exposed, never raw provider payloads.
         from ingest.document_preparation import PreparationError
         message = str(exc) if isinstance(exc, PreparationError) else "Document preparation could not finish. Retry."
-        _update(directory, attempt, status="failed", scout_status="failed",
+        _update(directory, attempt, status="failed", action_required="retry",
+                scout_status="failed",
                 error=type(exc).__name__, message=message)
     finally:
         try:

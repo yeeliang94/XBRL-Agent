@@ -1,15 +1,20 @@
-import type { EventPhase, PipelineStage } from "../lib/types";
+import type { EventPhase, PipelineStage, PreparationAction, PreparationPhase } from "../lib/types";
 import { pwc } from "../lib/theme";
 
 interface Props {
   currentPhase: EventPhase | null;
   pipelineStage?: PipelineStage | null;
+  preparationPhase?: PreparationPhase | null;
+  preparationActive?: boolean;
+  preparationStopped?: boolean;
+  preparationAction?: PreparationAction;
   isRunning: boolean;
   isComplete: boolean;
 }
 
 const PHASES = [
-  { key: "prepare", label: "Prepare" },
+  { key: "prepare", label: "Prepare document" },
+  { key: "confirm", label: "Confirm setup" },
   { key: "extract", label: "Extract" },
   { key: "check", label: "Check" },
   { key: "review", label: "Review" },
@@ -18,43 +23,54 @@ const PHASES = [
 
 function runStageIndex(stage: PipelineStage | null | undefined): number | null {
   if (!stage) return null;
-  if (["scouting", "reading_source", "transcribing_source"].includes(stage)) return 0;
-  if (stage === "extracting") return 1;
-  if (stage === "merging" || stage === "cross_checking") return 2;
-  if (["correcting", "reviewing", "re_checking", "reviewing_notes", "formatting_notes", "validating_notes"].includes(stage)) return 3;
-  if (stage === "done") return 4;
+  if (["scouting", "reading_source", "transcribing_source", "extracting"].includes(stage)) return 2;
+  if (stage === "merging" || stage === "cross_checking") return 3;
+  if (["correcting", "reviewing", "re_checking", "reviewing_notes", "formatting_notes", "validating_notes"].includes(stage)) return 4;
+  if (stage === "done") return 5;
+  return null;
+}
+
+function preparationStageIndex(phase: PreparationPhase | null | undefined): number | null {
+  if (phase == null) return null;
+  if (phase === "pending") return 0;
+  if (["preparing_pages", "building_map", "reconciling_map"].includes(phase)) return 0;
+  if (phase === "awaiting_confirmation") return 1;
   return null;
 }
 
 function agentPhaseIndex(phase: EventPhase | null): number {
   if (!phase) return -1;
   const indexes: Record<EventPhase, number> = {
-    starting: 0,
-    scouting: 0,
-    started: 0,
-    reading_template: 0,
-    viewing_pdf: 1,
+    starting: 2,
+    scouting: 2,
+    started: 2,
+    reading_template: 2,
+    viewing_pdf: 2,
     writing_notes: 2,
-    filling_workbook: 2,
-    verifying: 3,
-    cancelled: 3,
-    complete: 4,
+    filling_workbook: 3,
+    verifying: 4,
+    cancelled: 4,
+    complete: 5,
   };
   return indexes[phase];
 }
 
-type StepStatus = "completed" | "active" | "pending";
+type StepStatus = "completed" | "active" | "action" | "stopped" | "pending";
 
 function getStepStatus(
   phaseIndex: number,
   currentIndex: number,
-  isRunning: boolean,
+  isActive: boolean,
   isComplete: boolean,
+  actionIndex: number | null,
+  stoppedIndex: number | null,
 ): StepStatus {
   if (isComplete) return "completed";
   if (currentIndex < 0) return "pending";
   if (phaseIndex < currentIndex) return "completed";
-  if (phaseIndex === currentIndex && isRunning) return "active";
+  if (phaseIndex === stoppedIndex) return "stopped";
+  if (phaseIndex === actionIndex) return "action";
+  if (phaseIndex === currentIndex && isActive) return "active";
   return "pending";
 }
 
@@ -65,8 +81,8 @@ const styles = {
   },
   track: {
     display: "grid",
-    gridTemplateColumns: "repeat(5, minmax(92px, 1fr))",
-    minWidth: 500,
+    gridTemplateColumns: "repeat(6, minmax(108px, 1fr))",
+    minWidth: 680,
   } as React.CSSProperties,
   stepWrap: {
     minWidth: 0,
@@ -101,6 +117,22 @@ const styles = {
     background: pwc.orange400,
     flexShrink: 0,
   } as React.CSSProperties,
+  actionCircle: {
+    width: 18,
+    height: 18,
+    borderRadius: "50%",
+    border: `2px solid ${pwc.orange400}`,
+    background: pwc.white,
+    flexShrink: 0,
+  } as React.CSSProperties,
+  stoppedCircle: {
+    width: 18,
+    height: 18,
+    borderRadius: "50%",
+    border: `2px solid ${pwc.error}`,
+    background: pwc.errorBg,
+    flexShrink: 0,
+  } as React.CSSProperties,
   pendingCircle: {
     width: 18,
     height: 18,
@@ -129,6 +161,20 @@ const styles = {
     color: pwc.grey900,
     marginTop: pwc.space.sm,
   },
+  actionLabel: {
+    fontFamily: pwc.fontBody,
+    fontSize: 12,
+    fontWeight: 600,
+    color: pwc.orange700,
+    marginTop: pwc.space.sm,
+  },
+  stoppedLabel: {
+    fontFamily: pwc.fontBody,
+    fontSize: 12,
+    fontWeight: 600,
+    color: pwc.errorText,
+    marginTop: pwc.space.sm,
+  },
   pendingLabel: {
     fontFamily: pwc.fontBody,
     fontSize: 12,
@@ -143,14 +189,27 @@ const styles = {
   },
 };
 
-export function PipelineStages({ currentPhase, pipelineStage, isRunning, isComplete }: Props) {
-  const currentIndex = runStageIndex(pipelineStage) ?? agentPhaseIndex(currentPhase);
+export function PipelineStages({
+  currentPhase,
+  pipelineStage,
+  preparationPhase,
+  preparationActive = false,
+  preparationStopped = false,
+  preparationAction = "none",
+  isRunning,
+  isComplete,
+}: Props) {
+  const preparationIndex = preparationStageIndex(preparationPhase);
+  const currentIndex = preparationIndex ?? runStageIndex(pipelineStage) ?? agentPhaseIndex(currentPhase);
+  const active = preparationIndex != null ? preparationActive : isRunning;
+  const actionIndex = preparationAction === "confirm_setup" ? 1 : null;
+  const stoppedIndex = preparationStopped ? preparationIndex : null;
 
   return (
-    <div aria-label="Extraction progress" style={styles.container}>
+    <div aria-label="Workflow progress" style={styles.container}>
       <div style={styles.track}>
         {PHASES.map((phase, i) => {
-          const status = getStepStatus(i, currentIndex, isRunning, isComplete);
+          const status = getStepStatus(i, currentIndex, active, isComplete, actionIndex, stoppedIndex);
 
           return (
             <div key={phase.key} style={styles.stepWrap}>
@@ -163,6 +222,12 @@ export function PipelineStages({ currentPhase, pipelineStage, isRunning, isCompl
               )}
               {status === "active" && (
                 <div data-testid="step-active" className="pwc-working-indicator" style={styles.activeCircle} />
+              )}
+              {status === "action" && (
+                <div data-testid="step-action" style={styles.actionCircle} />
+              )}
+              {status === "stopped" && (
+                <div data-testid="step-stopped" style={styles.stoppedCircle} />
               )}
               {status === "pending" && (
                 <div data-testid="step-pending" style={styles.pendingCircle}>
@@ -178,7 +243,7 @@ export function PipelineStages({ currentPhase, pipelineStage, isRunning, isCompl
                       ...styles.connector,
                       background:
                         status === "completed" &&
-                        getStepStatus(i + 1, currentIndex, isRunning, isComplete) !== "pending"
+                        getStepStatus(i + 1, currentIndex, active, isComplete, actionIndex, stoppedIndex) !== "pending"
                           ? pwc.success
                           : pwc.grey200,
                     }}
@@ -187,13 +252,17 @@ export function PipelineStages({ currentPhase, pipelineStage, isRunning, isCompl
               </div>
 
               <div
-                aria-current={status === "active" ? "step" : undefined}
+                aria-current={status === "active" || status === "action" || status === "stopped" ? "step" : undefined}
                 style={
                   status === "completed"
                     ? styles.completedLabel
                     : status === "active"
                       ? styles.activeLabel
-                      : styles.pendingLabel
+                      : status === "action"
+                        ? styles.actionLabel
+                        : status === "stopped"
+                          ? styles.stoppedLabel
+                          : styles.pendingLabel
                 }
               >
                 {phase.label}
