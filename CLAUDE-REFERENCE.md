@@ -617,8 +617,21 @@ MPERS (private-entity) run inherited. Pinned by
 
 New web uploads start durable document preparation automatically, then a unified
 Scout document map. Capture combines orientation and transcription, keeps independent
-page checks, and uses ten concurrent requests under the shared process-wide limit
-of ten. Eligible page connections are checked as their pages become available.
+page checks, and uses up to fifteen concurrent requests under the shared
+process-wide limit of fifteen. Capture and independent verification combine up
+to two ready pages per request, with explicit page IDs and image indexes. Each
+page retains its own rotation, content, assessment, uncertainty and checkpoint.
+Unmatched pages flush after a bounded wait; blank and already assessed pages do
+not require a partner. Missing, malformed or duplicate page receipts fall back
+to individual requests without discarding valid companion receipts. Failed batch
+requests fall back to bounded single-page requests; cancellation never triggers
+fallback. Focused repairs remain per page. Usage is recorded once per physical
+request, and batch tasks are drained before the preparation attempt ends.
+Provider throttling uses bounded, cancellation-aware backoff with the existing
+rate-limit helper; exhausted throttling cannot trigger another batch split or
+page recapture loop. Request slots are released during backoff.
+Pinned by `tests/test_document_preparation_batching.py`.
+Eligible page connections are checked as their pages become available.
 For PDF-only uploads, capture excludes printed page numbers and routine running
 headers/footers from source HTML and blocks, recording their original regions as
 `page_number`, `page_header`, or `page_footer` in the preparation receipt. PDF page

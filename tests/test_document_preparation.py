@@ -13,6 +13,18 @@ from ingest.document_preparation import (
 )
 
 
+@pytest.fixture(autouse=True)
+def single_page_requests(monkeypatch):
+    """Exercise existing per-page repair contracts independently of coalescing.
+
+    Default two-page transport, fallback and cancellation are exercised end to
+    end in test_document_preparation_batching.py using the real batcher.
+    """
+    async def direct(self, stage, images, context):
+        return await self.caller(stage, images, context)
+    monkeypatch.setattr("ingest.document_preparation._PageRequestBatcher.request", direct)
+
+
 def pdf(tmp_path, pages=2):
     path = tmp_path / "uploaded.pdf"
     with fitz.open() as doc:
@@ -338,15 +350,27 @@ def test_budget_cross_loop_and_cancelled_waiter_do_not_leak():
     asyncio.run(cancellation())
 
 
-def test_cancel_preserves_verified_pages_without_activation(tmp_path):
+def test_cancel_preserves_verified_pages_without_activation(tmp_path, monkeypatch):
+    import ingest.document_preparation as preparation
+    saved = threading.Event()
+    atomic_text = preparation._atomic_text
+    def observe_save(path, content):
+        atomic_text(path, content)
+        if path.name.startswith("preparation-checkpoint-"):
+            if json.loads(content).get("pages", {}).get("1", {}).get("verified"):
+                saved.set()
+    monkeypatch.setattr(preparation, "_atomic_text", observe_save)
     path = pdf(tmp_path, 2)
     base, _ = caller()
     async def cancelled(stage, images, context):
         if context.get("page") == 2:
+            # A request slot no longer implies a single page worker. Cancel only
+            # after page 1 is durably saved, which is the contract under test.
+            assert await asyncio.to_thread(saved.wait, 3)
             raise asyncio.CancelledError()
         return await base(stage, images, context)
     with pytest.raises(asyncio.CancelledError):
-        asyncio.run(prepare_document(path, None, model_name="fake", concurrency=1, _caller=cancelled))
+        asyncio.run(prepare_document(path, None, model_name="fake", concurrency=2, _caller=cancelled))
     checkpoint = json.loads(next(tmp_path.glob("preparation-checkpoint-*.json")).read_text())
     assert checkpoint["pages"]["1"]["verified"] is True
     assert not (tmp_path / "preparation.json").exists()
@@ -983,8 +1007,8 @@ def test_invalid_cached_boundary_is_discarded_before_reuse(tmp_path):
     assert [stage for stage, _ in calls] == ["joining"]
 
 
-def test_preparation_defaults_to_ten_shared_requests(tmp_path):
-    path = pdf(tmp_path, 12)
+def test_preparation_defaults_to_fifteen_shared_requests(tmp_path):
+    path = pdf(tmp_path, 18)
     async def run():
         ready = asyncio.Event()
         active = peak = initial_captures = 0
@@ -996,14 +1020,14 @@ def test_preparation_defaults_to_ten_shared_requests(tmp_path):
             try:
                 if stage == "capturing":
                     initial_captures += 1
-                    if initial_captures == 10:
+                    if initial_captures == 15:
                         ready.set()
                     await asyncio.wait_for(ready.wait(), 5)
                 return await base(stage, images, context)
             finally:
                 active -= 1
         await prepare_document(path, None, model_name="fake", _caller=parallel)
-        assert peak == 10
+        assert peak == 15
     asyncio.run(run())
 
 

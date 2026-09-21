@@ -402,7 +402,7 @@ async def _prepare(directory: Path, db_path: Path, run_id: int, attempt: str) ->
             conn.commit()
 
         prepared = await prepare_document(directory / "uploaded.pdf", model,
-                                           model_name=model_name, on_progress=progress, concurrency=10,
+                                           model_name=model_name, on_progress=progress,
                                            configuration_key=configuration_key)
         status = "succeeded"
         _update(directory, attempt, prepared=True, stage="scouting", phase="building_map",
