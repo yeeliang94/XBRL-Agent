@@ -1125,6 +1125,50 @@ async def test_formatter_malformed_row_gets_one_repair(monkeypatch, formatter_db
         assert result["summary"]
 
 
+@pytest.mark.asyncio
+async def test_formatter_one_cell_row_repair_receives_only_existing_target(
+    monkeypatch, formatter_db,
+):
+    """Run-128 regression: a one-cell row cannot accept ``cols: [2]``.
+
+    The repair turn receives the closed target catalog and can correct the
+    patch to column 1 without weakening deterministic validation.
+    """
+    from db import repository as repo
+
+    db_path, _, run_id = formatter_db
+    one_cell = "<table><tr><td>RM'000</td></tr></table>"
+    with repo.db_session(db_path) as conn:
+        repo.upsert_notes_cell(
+            conn, run_id=run_id, sheet=_SHEET, row=112,
+            label="Disclosure", html=one_cell,
+            evidence="Page 3", source_pages=[3], style_source="unstyled",
+        )
+    invalid = {
+        "sheet": _SHEET,
+        "cells": [{"row": 112, "operations": [{
+            "target": {"table": 0, "rows": [1], "cols": [2]},
+            "style": {"text_align": "right"},
+        }]}],
+        "format_summary": "Align currency caption", "confidence": 0.95,
+    }
+    corrected = json.loads(json.dumps(invalid))
+    corrected["cells"][0]["operations"][0]["target"]["cols"] = [1]
+    fake = _FakeAgent([
+        json.dumps(invalid), json.dumps(corrected), json.dumps(corrected),
+    ])
+
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
+
+    assert result["ok"] is True
+    assert result["changed_rows"] == 1
+    assert '"c": 1' in fake.prompts[1]
+    assert '"c": 2' not in fake.prompts[1]
+    with repo.db_session(db_path) as conn:
+        row = next(c for c in repo.list_notes_cells_for_run(conn, run_id) if c.row == 112)
+    assert "text-align: right" in row.html
+
+
 def test_partition_validates_merged_operations():
     from notes.formatting_agent import _partition_valid_patch
 

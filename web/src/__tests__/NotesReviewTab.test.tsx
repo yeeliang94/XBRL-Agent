@@ -387,8 +387,9 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     expect(within(inventory).getByText("Needs review")).toBeInTheDocument();
     expect(within(inventory).getByText(banner === "not_reviewed" ? /Not yet reviewed/ : /coverage could not be checked/)).toBeInTheDocument();
     fireEvent.click(within(inventory).getByText("1 sub-note needs review"));
-    expect(within(inventory).getByText("1(a) · Not checked")).toBeVisible();
-    fireEvent.click(within(inventory).getByTestId("source-note-1"));
+    const subnote = within(inventory).getByRole("button", { name: /1\(a\).*Not checked/i });
+    expect(subnote).toBeVisible();
+    fireEvent.click(subnote);
     expect(within(inventory).getByTestId("source-note-1")).toHaveAttribute("aria-current", "true");
   });
 
@@ -2846,13 +2847,16 @@ describe("NotesReviewTab — AI formatter", () => {
           ],
           page_lo: 16,
           page_hi: 18,
+          subnotes: [{ subnote_ref: "2(a)", state: "not_verified" }],
         }],
       } : {},
     ), { status: 200 })) as typeof fetch;
 
     render(<NotesReviewTab runId={42} />);
-    const note = await screen.findByTestId("source-note-2");
-    fireEvent.click(note);
+    await screen.findByTestId("source-note-2");
+    const inventory = screen.getByRole("region", { name: "Source note inventory" });
+    fireEvent.click(within(inventory).getByText("1 sub-note needs review"));
+    fireEvent.click(within(inventory).getByRole("button", { name: /2\(a\).*Not checked/i }));
     expect(screen.getByTestId("sheet-title")).toHaveTextContent("Corporate Information");
     const destinations = screen.getByLabelText("Destinations for note 2");
     expect(within(destinations).queryByRole("button", { name: "Corporate Information" })).not.toBeInTheDocument();
@@ -2860,6 +2864,35 @@ describe("NotesReviewTab — AI formatter", () => {
     fireEvent.click(within(destinations).getByRole("button", { name: "Property, plant and equipment" }));
     expect(screen.getByTestId("sheet-title")).toHaveTextContent("Summary of Accounting Policies");
     expect(screen.getByText("Revenue", { exact: true })).toBeInTheDocument();
+  });
+
+  test("sub-note click opens its single destination and reports the parent page range", async () => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
+      String(input).endsWith("/notes_cells") ? SAMPLE : String(input).endsWith("/notes-coverage") ? {
+        rows: [{
+          note_num: 2,
+          title: "Property, plant and equipment",
+          status: "placed",
+          placements: [{
+            sheet: "Notes-SummaryofAccPol", row: 7,
+            row_label: "Property, plant and equipment", kind: "primary",
+          }],
+          page_lo: 16,
+          page_hi: 18,
+          subnotes: [{ subnote_ref: "2(a)", state: "not_verified" }],
+        }],
+      } : {},
+    ), { status: 200 })) as typeof fetch;
+    const onActiveCellPages = vi.fn();
+
+    render(<NotesReviewTab runId={42} onActiveCellPages={onActiveCellPages} />);
+    const inventory = screen.getByRole("region", { name: "Source note inventory" });
+    await within(inventory).findByTestId("source-note-2");
+    fireEvent.click(within(inventory).getByText("1 sub-note needs review"));
+    fireEvent.click(within(inventory).getByRole("button", { name: /2\(a\).*Not checked/i }));
+
+    expect(screen.getByTestId("sheet-title")).toHaveTextContent("Summary of Accounting Policies");
+    expect(onActiveCellPages).toHaveBeenLastCalledWith([16, 17, 18]);
   });
 
   test("does not expose a remove-formatting action after completion", async () => {

@@ -7,7 +7,7 @@ import { HistoryFilters } from "../components/HistoryFilters";
 import { HistoryList } from "../components/HistoryList";
 import { RunDetailPage } from "../components/RunDetailPage";
 import type { RunTabKey } from "../components/RunDetailView";
-import { fetchRuns, fetchRunDetail, deleteRun, forceAbortRun } from "../lib/api";
+import { fetchRuns, fetchRunDetail, deleteRun, forceAbortRun, restartRun } from "../lib/api";
 import type { RunDetailJson, RunSummaryJson, RunsFilterParams } from "../lib/types";
 import { TERMS } from "../lib/vocabulary";
 
@@ -273,6 +273,15 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
     }
   }, []);
 
+  const handleRestart = useCallback(async (runId: number) => {
+    try {
+      const draft = await restartRun(runId);
+      onResumeDraft?.(draft.run_id);
+    } catch (err) {
+      setDetailError(userMessage(err));
+    }
+  }, [onResumeDraft]);
+
   // Step 12: Regenerate notes — the NotesReviewTab already showed the
   // confirm dialog when any cells were user-edited, so by the time this
   // handler fires the user has opted in to clobbering their edits.
@@ -433,6 +442,7 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
           onDelete={handleDelete}
           onResumeDraft={onResumeDraft}
           onForceAbort={handleForceAbort}
+          onRestart={handleRestart}
           onRegenerateNotes={handleRegenerateNotes}
         />
       </div>

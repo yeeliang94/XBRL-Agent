@@ -774,14 +774,27 @@ export function NotesReviewTab({
                       )}
                     </button>
                     {note.reason && <p style={{ ...styles.noteRailEmpty, margin: "4px 12px" }}>{note.reason}</p>}
-                    {unresolvedSubnotes.length > 0 && <details style={{ padding: "4px 12px", fontSize: 12 }}>
-                      <summary style={{ cursor: "pointer" }}>
+                    {unresolvedSubnotes.length > 0 && <details style={styles.subnoteDetails}>
+                      <summary style={styles.subnoteSummary}>
                         {unresolvedSubnotes.length} sub-note{unresolvedSubnotes.length === 1 ? " needs" : "s need"} review
                       </summary>
-                      {unresolvedSubnotes.map((sub) => <p key={sub.subnote_ref} style={{ margin: "8px 0" }}>
-                        <strong>{sub.subnote_ref} · {subNoteStateLabel(sub.state)}</strong>
-                        {sub.reason && <span style={{ display: "block", color: pwc.grey700 }}>{sub.reason}</span>}
-                      </p>)}
+                      <div style={styles.subnoteList}>
+                        {unresolvedSubnotes.map((sub) => (
+                          <button
+                            key={sub.subnote_ref}
+                            type="button"
+                            disabled={saveBlocked || moveBusy}
+                            onClick={() => selectSourceNote(note)}
+                            style={styles.subnoteButton}
+                          >
+                            <span style={styles.subnoteRef}>{sub.subnote_ref}</span>
+                            <span style={styles.subnoteCopy}>
+                              <span style={styles.subnoteState}>{subNoteStateLabel(sub.state)}</span>
+                              {sub.reason && <span style={styles.subnoteReason}>{sub.reason}</span>}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
                     </details>}
                     {selected && note.placements.length > 1 && (
                       <div
@@ -2173,6 +2186,60 @@ const styles = {
     background: pwc.orange50,
     fontSize: 10,
     fontWeight: 700,
+  } as React.CSSProperties,
+  subnoteDetails: {
+    padding: "3px 8px 5px 35px",
+    color: pwc.grey500,
+    fontSize: 10.5,
+  } as React.CSSProperties,
+  subnoteSummary: {
+    cursor: "pointer",
+    lineHeight: 1.4,
+  } as React.CSSProperties,
+  subnoteList: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 1,
+    marginTop: 3,
+  } as React.CSSProperties,
+  subnoteButton: {
+    display: "grid",
+    gridTemplateColumns: "minmax(38px, auto) minmax(0, 1fr)",
+    gap: 7,
+    alignItems: "start",
+    width: "100%",
+    minHeight: 26,
+    padding: "4px 6px",
+    border: 0,
+    borderRadius: 5,
+    background: "transparent",
+    color: pwc.grey700,
+    textAlign: "left" as const,
+    cursor: "pointer",
+  } as React.CSSProperties,
+  subnoteRef: {
+    color: pwc.grey700,
+    fontFamily: pwc.fontMono,
+    fontSize: 10,
+    lineHeight: 1.4,
+  } as React.CSSProperties,
+  subnoteCopy: {
+    minWidth: 0,
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 1,
+  } as React.CSSProperties,
+  subnoteState: {
+    color: pwc.grey700,
+    fontSize: 10.5,
+    fontWeight: 400,
+    lineHeight: 1.35,
+  } as React.CSSProperties,
+  subnoteReason: {
+    color: pwc.grey500,
+    fontSize: 10,
+    lineHeight: 1.35,
+    overflowWrap: "anywhere" as const,
   } as React.CSSProperties,
   noteRailPlacements: {
     display: "flex",

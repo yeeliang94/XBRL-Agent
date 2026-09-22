@@ -65,6 +65,8 @@ export interface RunDetailViewProps {
    *  run is `running`, an "Abort run" control replaces the disabled Delete so a
    *  dead run isn't a dead-end. Optional — absent for callers that can't act. */
   onForceAbort?: (runId: number) => void;
+  /** Clone this run into a new draft while retaining reusable source work. */
+  onRestart?: (runId: number) => void | Promise<void>;
   /** Called when the user confirms "Regenerate notes" in the Notes
    *  Review section. The parent wires this to the existing rerun
    *  endpoint. Optional — legacy callers without Step 12 UX still
@@ -522,7 +524,7 @@ function HistoricalAgentWorkspace({ agents }: { agents: RunAgentJson[] }) {
 // Tab identity for the run-detail surface. Review + Values are gated on
 // canonical mode (the reviewer diff + concept tree only exist there).
 export function RunDetailView({
-  detail, onDelete, onResumeDraft, onForceAbort, onRegenerateNotes,
+  detail, onDelete, onResumeDraft, onForceAbort, onRestart, onRegenerateNotes,
   canonicalEnabled = false, initialTab = "overview",
 }: RunDetailViewProps) {
   // Which tab is showing. Lazy content (Notes editor, Concepts workspace,
@@ -582,6 +584,7 @@ export function RunDetailView({
   // but the action is explicitly a draft download and confirms the filing
   // risk at action time. This is not persistent review sign-off.
   const [confirmDraftDownload, setConfirmDraftDownload] = useState(false);
+  const [restartPending, setRestartPending] = useState(false);
   const [notesAuditOpen, setNotesAuditOpen] = useState(false);
   const [crossChecks, setCrossChecks] = useState<RunDetailJson["cross_checks"]>(
     detail.cross_checks ?? [],
@@ -717,6 +720,15 @@ export function RunDetailView({
   const handleDelete = () => {
     // Open the shared confirm dialog; the actual delete fires on confirm.
     setConfirmDelete(true);
+  };
+  const handleRestart = async () => {
+    if (!onRestart || restartPending) return;
+    setRestartPending(true);
+    try {
+      await onRestart(detail.id);
+    } finally {
+      setRestartPending(false);
+    }
   };
 
   // One persistent navigation, ordered by the human review journey.
@@ -874,6 +886,18 @@ export function RunDetailView({
           {activeTab === "overview" && (
             <>
               <span aria-hidden="true" style={styles.actionsDivider} />
+              {!isRunning && !isDraft && onRestart && (
+                <button
+                  type="button"
+                  onClick={handleRestart}
+                  disabled={restartPending}
+                  className={uiClass.btnSecondary}
+                  style={ui.buttonSecondary}
+                  title="Create a new editable run with the same document and settings"
+                >
+                  {restartPending ? "Creating redo…" : "Redo run"}
+                </button>
+              )}
               {isRunning && onForceAbort ? (
                 // A run wedged in `running` can never be deleted (Delete is disabled
                 // and the API 409s). Give the user an escape hatch: abort it, which

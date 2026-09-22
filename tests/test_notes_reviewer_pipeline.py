@@ -119,6 +119,105 @@ def test_reviewer_pass_runs_snapshots_and_persists_flags(db_path: Path, tmp_path
     assert any(e["event"] == "complete" and e["data"].get("success") for e in events)
 
 
+def test_reviewer_cannot_finish_clean_with_unverified_subnotes(
+    db_path: Path, tmp_path,
+):
+    """A model that returns without verify_subnotes leaves a not-reviewed
+    checklist and a structured failure instead of a false completed review."""
+    import server
+
+    with repo.db_session(db_path) as conn:
+        run_id = repo.create_run(
+            conn, "x.pdf", session_id="s", output_dir=str(tmp_path),
+        )
+        repo.upsert_notes_cell(
+            conn, run_id=run_id, sheet=_S12, row=48,
+            label="Investment properties", html="<p>Disclosure</p>",
+            evidence="Page 19", source_pages=[19],
+        )
+    persist_notes_review_inputs(
+        db_path=str(db_path), run_id=run_id,
+        sidecar_entries=[{
+            "sheet": _S12, "row": 48, "row_label": "Investment properties",
+            "source_note_refs": ["9"], "content_preview": "Disclosure",
+        }],
+        inventory=[{"note_num": 9, "title": "Investment properties",
+                    "subnote_refs": ["9(a)"]}],
+    )
+
+    q: asyncio.Queue = asyncio.Queue()
+    outcome = asyncio.run(server._run_notes_reviewer_pass(
+        run_id=run_id, db_path=str(db_path), pdf_path=str(tmp_path / "x.pdf"),
+        filing_level="company", filing_standard="mfrs",
+        model=FunctionModel(lambda messages, info: ModelResponse(parts=[TextPart("done")])),
+        output_dir=str(tmp_path), merged_workbook_path=None, event_queue=q,
+        inventory_note_nums=[9], inventory_subnotes={9: ["9(a)"]},
+        sidecar_paths=[], require_coverage=True,
+    ))
+
+    assert outcome["invoked"] is True
+    assert outcome["error"] == "notes_reviewer_subnotes_unverified"
+    assert outcome["coverage"]["banner"] == "not_reviewed"
+    assert outcome["coverage"]["unverified_subnotes"] == 1
+    events = _drain(q)
+    assert any(
+        e["event"] == "complete" and e["data"].get("success") is False
+        and e["data"].get("error") == "notes_reviewer_subnotes_unverified"
+        for e in events
+    )
+
+
+def test_reviewer_cannot_finish_clean_when_coverage_finalization_fails(
+    db_path: Path, tmp_path, monkeypatch,
+):
+    import server
+    import notes.reviewer_agent as ra_mod
+
+    run_id = _seed_reviewer_target(db_path, tmp_path)
+    context = {"duplicates": [{"note_ref": "1", "sheet_11": {}, "sheet_12": {}}]}
+    monkeypatch.setattr(
+        ra_mod,
+        "create_notes_reviewer_agent",
+        lambda *a, **k: (
+            _ImmediateAgent(_ImmediateAgentRun()), _FakeReviewerDeps(), context,
+        ),
+    )
+    monkeypatch.setattr(
+        server,
+        "_persist_notes_coverage",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            sqlite3.OperationalError("database is locked")
+        ),
+    )
+    queue: asyncio.Queue = asyncio.Queue()
+
+    outcome = asyncio.run(server._run_notes_reviewer_pass(
+        run_id=run_id,
+        db_path=str(db_path),
+        pdf_path=str(tmp_path / "x.pdf"),
+        filing_level="company",
+        filing_standard="mfrs",
+        model="openai.gpt-5.4",
+        output_dir=str(tmp_path),
+        merged_workbook_path=None,
+        event_queue=queue,
+        sidecar_paths=[],
+        require_coverage=True,
+    ))
+
+    assert outcome["error"] == "notes_coverage_finalization_failed"
+    events = _drain(queue)
+    assert any(
+        event["event"] == "error"
+        and event["data"].get("type") == "notes_coverage_finalization_failed"
+        for event in events
+    )
+    assert not any(
+        event["event"] == "complete" and event["data"].get("success")
+        for event in events
+    )
+
+
 def test_reviewer_flag_persistence_failure_is_not_clean(
     db_path: Path, tmp_path, monkeypatch,
 ):

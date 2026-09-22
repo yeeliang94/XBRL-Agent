@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import List, Optional
 
@@ -202,8 +203,23 @@ def _subnote_key(ref) -> str:
     of REFERENCE STRINGS, gotcha-#14-safe (we never match a note's body to
     a row).
     """
-    import re
     return re.sub(r"[()\s]", "", str(ref).lower())
+
+
+def _subnote_key_for_note(note_num: int, ref) -> str:
+    """Canonical structured child identity within one top-level note.
+
+    Scout commonly emits ``9(a)`` while a writer or reviewer records the
+    locally printed ``(a)``. They are equivalent only in note 9. Strip that
+    exact parent prefix for direct parenthesised children, but deliberately do
+    not collapse deeper references such as ``9.1(a)`` to ``(a)`` because that
+    would merge distinct children without model judgement.
+    """
+    raw = str(ref).strip().lower()
+    match = re.fullmatch(
+        rf"(?:note\s+)?{int(note_num)}\s*((?:\([^()]+\))+)", raw,
+    )
+    return _subnote_key(match.group(1) if match else raw)
 
 
 def _top_note_nums(refs) -> set[int]:
@@ -362,17 +378,24 @@ def detect_subnote_coverage_gaps(
     cited_by_note: dict[int, set[str]] = {}
     for e in entries:
         refs = e.get("source_note_refs") or []
-        keys = {_subnote_key(r) for r in refs}
         for n in _top_note_nums(refs):
-            cited_by_note.setdefault(n, set()).update(keys)
+            cited_by_note.setdefault(n, set()).update(
+                _subnote_key_for_note(n, r) for r in refs
+            )
 
     gaps: list[dict] = []
     for note_num, subrefs in (inventory_subnotes or {}).items():
         if not subrefs:
             continue
         cited = cited_by_note.get(note_num, set())
-        cited_subs = [s for s in subrefs if _subnote_key(s) in cited]
-        missing = [s for s in subrefs if _subnote_key(s) not in cited]
+        cited_subs = [
+            s for s in subrefs
+            if _subnote_key_for_note(note_num, s) in cited
+        ]
+        missing = [
+            s for s in subrefs
+            if _subnote_key_for_note(note_num, s) not in cited
+        ]
         # Proper-subset gate: some sub-refs cited, some missing.
         if cited_subs and missing:
             gaps.append({

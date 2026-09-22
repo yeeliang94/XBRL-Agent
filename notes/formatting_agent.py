@@ -323,7 +323,7 @@ def create_notes_formatter_agent(
     # `read_note_cell` was removed 2026-08-03 (peer review): it returned
     # sheet/row/label/html/evidence/source_pages for ONE row, and the user
     # prompt's CURRENT CELLS payload already carries exactly those fields for
-    # EVERY row, plus `table_geometry`, which the tool did not have. So a call
+    # EVERY row, plus `allowed_targets`, which the tool did not have. So a call
     # could only ever return a strict subset of what the model had already
     # read, at the cost of a turn — and its schema rode on every request.
     # If a targeted re-read is ever needed, add it back returning MORE than
@@ -858,14 +858,18 @@ def _build_user_prompt(
     *,
     source_pages_attached: bool = False,
 ) -> str:
-    compact_rows = [
-        {
+    compact_rows = []
+    for c in cells:
+        geometry = _table_geometry(c.html)
+        compact_rows.append({
             "row": c.row, "label": c.label, "html": c.html,
             "evidence": c.evidence, "source_pages": c.source_pages,
-            "table_geometry": _table_geometry(c.html),
-        }
-        for c in cells
-    ]
+            # Give the first turn the same closed coordinate catalog a repair
+            # would receive. This prevents the common one-cell-row/column-2
+            # mistake without duplicating the full derived geometry beside
+            # the source HTML or weakening the deterministic validator.
+            "allowed_targets": _allowed_targets_from_geometry(geometry),
+        })
     source_instruction = (
         f"Source page images {pages} are attached below. Do not call "
         "view_pdf_pages for those pages again; use zoom_pdf_region only when "
@@ -877,6 +881,7 @@ def _build_user_prompt(
         f"Format sheet {sheet!r}. {source_instruction} Then return one JSON "
         "patch for this sheet only."
         f"{_size_signals_block(size_signals or [])}\n\n"
+        "Use only coordinates present in each row's allowed_targets catalog. "
         f"CURRENT CELLS:\n{json.dumps(compact_rows, ensure_ascii=False)}"
     )
 

@@ -28,6 +28,8 @@ export interface RunDetailPageProps {
   /** Forwarded to RunDetailView — rescue a run wedged in `running` status
    *  (UX-QA #2). Optional; when absent the abort control is not shown. */
   onForceAbort?: (runId: number) => void;
+  /** Clone a finished run into a fresh editable draft. */
+  onRestart?: (runId: number) => void | Promise<void>;
   /** Forwarded to the embedded RunDetailView so Notes Review can wire its
    *  Regenerate button. Optional for callers that don't use the notes
    *  subsystem. */
@@ -49,6 +51,7 @@ export function RunDetailPage({
   onDelete,
   onResumeDraft,
   onForceAbort,
+  onRestart,
   onRegenerateNotes,
   canonicalEnabled = false,
   initialTab,
@@ -86,6 +89,7 @@ export function RunDetailPage({
           onDelete={onDelete}
           onResumeDraft={onResumeDraft}
           onForceAbort={onForceAbort}
+          onRestart={onRestart}
           onRegenerateNotes={onRegenerateNotes}
           canonicalEnabled={canonicalEnabled}
           initialTab={initialTab}

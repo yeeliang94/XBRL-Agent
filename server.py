@@ -2110,10 +2110,17 @@ def _persist_notes_coverage(run_id: int, db_path: str, checklist, *, reviewed: b
     from db import repository as repo
     from notes.coverage_checklist import checklist_to_db_rows
 
+    from notes.coverage_checklist import SUBNOTE_NOT_VERIFIED
+
+    unverified_subnotes = sum(
+        1 for row in checklist.rows for subnote in row.subnotes
+        if subnote.state == SUBNOTE_NOT_VERIFIED
+    )
+    review_complete = reviewed and unverified_subnotes == 0
     if not checklist.inventory_available:
         banner = "inventory_unavailable"
     else:
-        banner = "reviewed" if reviewed else "not_reviewed"
+        banner = "reviewed" if review_complete else "not_reviewed"
     rows = [{"note_num": COVERAGE_META_NOTE, "subnote_ref": None, "status": banner}]
     rows.extend(checklist_to_db_rows(checklist))
     with repo.db_session(db_path) as conn:
@@ -2122,6 +2129,7 @@ def _persist_notes_coverage(run_id: int, db_path: str, checklist, *, reviewed: b
         "banner": banner,
         "inventory_available": checklist.inventory_available,
         "unresolved": len(checklist.unresolved_rows()),
+        "unverified_subnotes": unverified_subnotes,
         "counts": checklist.counts(),
     }
 
@@ -2267,11 +2275,12 @@ async def _run_notes_reviewer_pass(
     # the DRAFT straight from the DB (no verdicts) under a not_reviewed banner.
     _deps_box: dict = {}
 
-    async def _finalize_coverage(reviewed: bool) -> None:
+    async def _finalize_coverage(reviewed: bool) -> Optional[dict]:
         """Recompute + persist the coverage checklist and emit notes_coverage.
-        Gated on XBRL_NOTES_COVERAGE; best-effort (never fails the pass)."""
+        Gated on XBRL_NOTES_COVERAGE. Persistence failures are returned and
+        emitted explicitly so a reviewer cannot finish with a false success."""
         if not require_coverage and not _notes_coverage_enabled():
-            return
+            return None
         try:
             from notes.coverage_checklist import load_notes12_skips
             skips = load_notes12_skips(output_dir)
@@ -2299,10 +2308,20 @@ async def _run_notes_reviewer_pass(
                     "message": "Notes inventory unavailable — coverage could "
                                "not be checked.",
                 })
+            return summary
         except Exception:  # noqa: BLE001
             logger.warning(
                 "Failed to finalize notes coverage checklist for run %s",
                 run_id, exc_info=True)
+            error = "notes_coverage_finalization_failed"
+            await _emit("error", {
+                "type": error,
+                "message": (
+                    "The notes coverage result could not be saved. "
+                    "The review remains incomplete."
+                ),
+            })
+            return {"error": error}
 
     try:
         agent, deps, context = create_notes_reviewer_agent(
@@ -2368,7 +2387,18 @@ async def _run_notes_reviewer_pass(
             await _emit("complete", {"success": False, "error": outcome["error"]})
             _stamp_elapsed()
             return outcome
-        await _finalize_coverage(reviewed=True)
+        coverage_summary = await _finalize_coverage(reviewed=True)
+        coverage_error = (coverage_summary or {}).get("error")
+        if coverage_error:
+            outcome["error"] = coverage_error
+            await _emit("complete", {
+                "success": False,
+                "error": coverage_error,
+                "writes_performed": 0,
+                "skipped": True,
+            })
+            _stamp_elapsed()
+            return outcome
         await _emit("status", {"phase": "complete",
                                "message": "No notes findings to review — skipped."})
         await _emit("complete", {"success": True, "writes_performed": 0,
@@ -2403,7 +2433,9 @@ async def _run_notes_reviewer_pass(
         "Investigate every finding in your NOTES REVIEW PACKET. For each, view "
         "the PDF page(s) FIRST, then fix what you can ground (clear a duplicate, "
         "move a collision to an empty leaf, author/edit a missing sub-note) and "
-        f"raise_flag anything you're unsure of. You have at most {max_turns} "
+        "raise_flag anything you're unsure of. Before finishing, resolve every "
+        "unverified child reference in one or more batched verify_subnotes calls. "
+        f"You have at most {max_turns} "
         "turns. Never fabricate prose; preserve valid content over a risky fix."
     )
 
@@ -2520,12 +2552,38 @@ async def _run_notes_reviewer_pass(
         else:
             # FINAL checklist — the reviewer's verdicts + authored notes are
             # now reflected; this post-reviewer state is what the human sees.
-            await _finalize_coverage(reviewed=True)
-            await _emit("complete", {
-                "success": True,
-                "writes_performed": deps.writes_performed,
-                "flags_raised": len(deps.flags),
-            })
+            coverage_summary = await _finalize_coverage(reviewed=True)
+            coverage_error = (coverage_summary or {}).get("error")
+            unverified = int((coverage_summary or {}).get("unverified_subnotes") or 0)
+            if coverage_error:
+                outcome["error"] = coverage_error
+                await _emit("complete", {
+                    "success": False,
+                    "error": coverage_error,
+                    "writes_performed": deps.writes_performed,
+                    "flags_raised": len(deps.flags),
+                })
+            elif unverified:
+                outcome["error"] = "notes_reviewer_subnotes_unverified"
+                await _emit("error", {
+                    "type": outcome["error"],
+                    "message": (
+                        f"The notes reviewer left {unverified} sub-note "
+                        "reference(s) unverified. The review remains incomplete."
+                    ),
+                })
+                await _emit("complete", {
+                    "success": False,
+                    "error": outcome["error"],
+                    "writes_performed": deps.writes_performed,
+                    "flags_raised": len(deps.flags),
+                })
+            else:
+                await _emit("complete", {
+                    "success": True,
+                    "writes_performed": deps.writes_performed,
+                    "flags_raised": len(deps.flags),
+                })
     except _asyncio.CancelledError as exc:
         # Interrupted — append any raised flags, never delete prior open/answered.
         # The face reviewer may still own SQLite's writer slot. Cancellation

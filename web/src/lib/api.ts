@@ -408,6 +408,19 @@ export async function forceAbortRun(
   return apiFetch(`/api/runs/${runId}/force-abort`, { method: "POST" });
 }
 
+/** Clone a prior run into a new editable draft. The backend reuses validated
+ *  source preparation and its document map when they still match. */
+export async function restartRun(
+  runId: number,
+): Promise<{
+  run_id: number;
+  session_id: string;
+  preparation_reused: boolean;
+  preparation: Record<string, unknown> | null;
+}> {
+  return apiFetch(`/api/runs/${runId}/restart`, { method: "POST" });
+}
+
 /** Bulk-delete abandoned draft runs (uploads that were never started). Returns
  *  the count removed. Draft-only server-side — cannot touch real runs. */
 export async function deleteDraftRuns(): Promise<{ deleted: number }> {

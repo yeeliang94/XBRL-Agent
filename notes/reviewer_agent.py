@@ -73,7 +73,7 @@ from prompts import sanitize_source_scalar
 from tools.pdf_viewer import count_pdf_pages
 from notes.detectors import (
     _render_single_page,
-    _subnote_key,
+    _subnote_key_for_note,
     _top_note_nums,
     detect_cross_sheet_duplicates_by_ref,
     detect_cross_sheet_overlap_candidates,
@@ -89,6 +89,7 @@ from notes.coverage_checklist import (
     RESOLVED_VERDICTS,
     STATUS_SUSPECTED_GAP,
     SUBNOTE_MISSING,
+    SUBNOTE_NOT_VERIFIED,
     SUBNOTE_VERIFIED,
     build_draft_checklist,
 )
@@ -610,6 +611,13 @@ def count_open_items(context: dict) -> int:
     checklist = context.get("coverage_checklist")
     if checklist is not None:
         n += len(checklist.unresolved_rows())
+        # ``not_verified`` does not tip filing status, but it is still work the
+        # reviewer must finish. Without this count an all-coarse run skipped the
+        # model entirely and was persisted as reviewed with zero child verdicts.
+        n += sum(
+            1 for row in checklist.rows for subnote in row.subnotes
+            if subnote.state == SUBNOTE_NOT_VERIFIED
+        )
     return n
 
 
@@ -811,12 +819,14 @@ def build_notes_reviewer_packet(context: dict) -> str:
             out.append(
                 "\n[COVERAGE — UNVERIFIED SUB-REFS] these placed notes were "
                 "cited only coarsely, so it's unproven every sub-section made "
-                "it in. If you have spare turns, view the notes and put every "
+                "it in. Before finishing, view the notes and put every "
                 "note's {note_num, subnote_refs, verdict, reason, source_pages} "
                 "in ONE verify_subnotes.verifications call — 'missing' then "
                 "needs an "
-                "author/edit. Unverified sub-refs warn only; they never fail "
-                "the run, so prioritise MISSING notes and SUSPECTED GAPS first."
+                "author/edit. Unverified sub-refs do not by themselves mean "
+                "content is missing, but they must all receive a grounded "
+                "verdict before this review can finish. Prioritise MISSING "
+                "notes and SUSPECTED GAPS first."
             )
             for r in uncited_rows:
                 pending = [
@@ -887,11 +897,11 @@ def _build_context(
     entries = load_provenance_entries(run_id, db_path)
     if not entries and sidecar_paths:
         entries = load_sidecar_entries(sidecar_paths)
-    if inventory_note_nums is None or inventory_subnotes is None:
+    if not inventory_note_nums or not inventory_subnotes:
         nums, subs = load_inventory_from_db(run_id, db_path)
-        if inventory_note_nums is None:
+        if not inventory_note_nums:
             inventory_note_nums = nums
-        if inventory_subnotes is None:
+        if not inventory_subnotes:
             inventory_subnotes = subs
     # notes_cells for the title/format detector (needs the stored HTML).
     with repo.db_session(db_path) as conn:
@@ -968,7 +978,10 @@ def _build_context(
         unresolved_refs = [
             ref for ref in gap.get("missing_subnote_refs") or []
             if str(((subnote_verdicts or {}).get(
-                (int(gap["note_num"]), _subnote_key(ref)),
+                (
+                    int(gap["note_num"]),
+                    _subnote_key_for_note(int(gap["note_num"]), ref),
+                ),
                 {},
             ) or {}).get("verdict", "")).strip().lower() != SUBNOTE_VERIFIED
         ]
@@ -1178,6 +1191,12 @@ def create_notes_reviewer_agent(
     used to build the findings packet only when the run has no durable DB
     provenance.
     """
+    if not inventory_note_nums or not inventory_subnotes:
+        stored_nums, stored_subnotes = load_inventory_from_db(run_id, db_path)
+        if not inventory_note_nums:
+            inventory_note_nums = stored_nums
+        if not inventory_subnotes:
+            inventory_subnotes = stored_subnotes
     deps = NotesReviewerDeps(
         run_id=run_id, db_path=db_path, pdf_path=pdf_path,
         filing_level=filing_level, filing_standard=filing_standard,
@@ -1869,7 +1888,22 @@ def create_notes_reviewer_agent(
         ref = str(subnote_ref).strip()
         if not ref:
             return "rejected: subnote_ref is required."
-        ctx.deps.coverage_subnote_verdicts[(nn, _subnote_key(ref))] = {
+        key = _subnote_key_for_note(nn, ref)
+        inventory_subnotes = ctx.deps.inventory_subnotes or {}
+        known_refs = inventory_subnotes.get(
+            nn, inventory_subnotes.get(str(nn), []),
+        )
+        known_keys = {
+            _subnote_key_for_note(nn, known_ref) for known_ref in known_refs
+        }
+        if key not in known_keys:
+            return (
+                f"rejected: note {nn} sub-ref {ref!r} is not in the Scout "
+                "inventory for this review. Use an exact listed child reference."
+            )
+        ctx.deps.coverage_subnote_verdicts[(
+            nn, key,
+        )] = {
             "verdict": verdict, "reason": (reason or "").strip(),
         }
         return f"note {nn} sub-ref {ref!r} marked {verdict}"
