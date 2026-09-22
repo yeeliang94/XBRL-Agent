@@ -35,6 +35,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from db import repository as repo
+
 FACE_STATEMENTS = ("SOFP", "SOPL", "SOCI", "SOCF", "SOCIE")
 
 # Parent statuses a resume may start from. `running`/`draft` are refused —
@@ -278,16 +280,18 @@ def stage_resume(
                  f"reused:run_{plan.parent_run_id}",
                  _now(), _now(),
                  str(child_dir / f"{d.statement}_filled.xlsx")))
-        conn.execute(
-            "INSERT INTO run_lineage(child_run_id, parent_run_id, "
-            "source_sha256, reused_statements, rerun_statements, created_at) "
-            "VALUES (?,?,?,?,?,?)",
-            (child_run_id, plan.parent_run_id, source_sha,
-             json.dumps([f"{d.statement}/{d.variant or ''}"
-                         for d in plan.reused]),
-             json.dumps([f"{d.statement}/{d.variant or ''}"
-                         for d in plan.rerun]),
-             _now()))
+        repo.create_run_lineage(
+            conn,
+            child_run_id=child_run_id,
+            parent_run_id=plan.parent_run_id,
+            source_sha256=source_sha,
+            reused_statements=[
+                f"{d.statement}/{d.variant or ''}" for d in plan.reused
+            ],
+            rerun_statements=[
+                f"{d.statement}/{d.variant or ''}" for d in plan.rerun
+            ],
+        )
         conn.commit()
     except Exception:
         conn.rollback()

@@ -6,12 +6,14 @@ Endpoints:
   ``POST /api/abort/{session_id}``         — cancel all agents
   ``POST /api/abort/{session_id}/{agent}`` — cancel one agent
   ``POST /api/runs/{run_id}/rerun-notes``  — regenerate notes sheets
+  ``POST /api/runs/{run_id}/restart``      — clone a run into a fresh draft
   ``POST /api/rerun/{session_id}``         — re-run a single agent
 
 These wrap ``server.run_multi_agent_stream`` (which Phase 5.2 turns into the
 explicit phase pipeline). Shared state/helpers are read through ``server.X``
 at call time; ``RunConfigRequest`` is a stable model so it's imported directly.
 """
+import asyncio
 import json
 import logging
 import os
@@ -28,6 +30,60 @@ from utils.paths import validate_session_id
 logger = logging.getLogger("server")
 
 router = APIRouter()
+
+
+@router.post("/api/runs/{run_id}/restart")
+async def restart_run_endpoint(run_id: int):
+    """Create an isolated editable draft that redoes a prior run.
+
+    The original run and its outputs stay unchanged.  Valid prepared source
+    transcription and the unified document map are copied into the new session;
+    otherwise the ordinary preparation worker starts for the copied document.
+    """
+    from api.preparation import _configuration, snapshot, start_preparation
+    from recovery.run_restart import RunRestartError, clone_run_as_draft
+
+    if run_id <= 0:
+        raise HTTPException(status_code=404, detail="Run not found")
+    server._reload_runtime_settings()
+    model_name, _scout_name, configuration_key = _configuration()
+    try:
+        draft = await asyncio.to_thread(
+            clone_run_as_draft,
+            server.AUDIT_DB_PATH,
+            server.OUTPUT_DIR,
+            run_id,
+            model_name=model_name,
+            configuration_key=configuration_key,
+        )
+    except RunRestartError as exc:
+        detail = str(exc)
+        status = 404 if detail == "Run not found" or "no longer available" in detail else 409
+        raise HTTPException(status_code=status, detail=detail) from exc
+    except OSError as exc:
+        logger.exception("Could not copy source files for restart of run %s", run_id)
+        raise HTTPException(
+            status_code=500,
+            detail="The run could not be copied. Check storage permissions and try again.",
+        ) from exc
+
+    preparation = draft.preparation
+    if not draft.preparation_reused:
+        directory = server.OUTPUT_DIR / draft.session_id
+        try:
+            preparation = start_preparation(directory, draft.run_id)
+        except Exception:
+            # start_preparation persists a failed, retryable snapshot before it
+            # raises when dispatch fails.  The new draft remains usable.
+            logger.exception("Could not dispatch preparation for restarted run %s", draft.run_id)
+            preparation = snapshot(directory)
+
+    return {
+        "run_id": draft.run_id,
+        "session_id": draft.session_id,
+        "preparation_reused": draft.preparation_reused,
+        "preparation": preparation,
+    }
 
 
 @router.post("/api/run/{session_id}")

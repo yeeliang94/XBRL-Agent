@@ -367,6 +367,21 @@ describe("RunDetailView", () => {
     expect(screen.getByText("Passed")).toBeTruthy();
   });
 
+  test("offers a full redo from the overview without changing the prior run", () => {
+    const onRestart = vi.fn();
+    render(
+      <RunDetailView
+        detail={makeDetail()}
+        onDelete={vi.fn()}
+        onRestart={onRestart}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Redo run" }));
+
+    expect(onRestart).toHaveBeenCalledWith(42);
+  });
+
   test("refreshes cross-checks when the same run receives a newer snapshot", async () => {
     const first = makeDetail({ cross_checks: [] });
     const { rerender } = render(

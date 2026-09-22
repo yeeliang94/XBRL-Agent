@@ -41,7 +41,7 @@ from typing import Any, Optional
 # agree with the detectors on what "cites note N / sub-ref X" means, or the
 # two layers drift (the same reason notes/coverage.py delegates to
 # notes.labels.normalize_label).
-from notes.detectors import _subnote_key, _top_note_nums
+from notes.detectors import _subnote_key_for_note, _top_note_nums
 
 POLICIES_SHEET_DEFAULT = "Notes-SummaryofAccPol"
 
@@ -256,8 +256,9 @@ def build_draft_checklist(
       on a missing / suspected-gap row.
     - ``subnote_verdicts`` — ``{(note_num, subnote_key): {"verdict", "reason"}}``
       from ``verify_subnotes``; upgrades a ``not_verified`` sub-ref to
-      ``verified`` / ``missing``. Keys use the same ``_subnote_key`` coercion
-      as the builder's citation reconciliation, so ``(a)`` and ``a`` collapse.
+      ``verified`` / ``missing``. Keys use the same note-aware coercion as the
+      builder's citation reconciliation, so ``(a)``, ``a`` and ``9(a)``
+      collapse when they belong to note 9.
     - ``reviewer_added_notes`` — note numbers the reviewer authored back into
       place, tagged for the UI's "reviewer-added" audit marker.
     """
@@ -276,9 +277,10 @@ def build_draft_checklist(
         row = e.get("row")
         refs = e.get("source_note_refs") or []
         nums = _top_note_nums(refs)
-        keys = {_subnote_key(r) for r in refs}
         for n in nums:
-            cited_by_note.setdefault(n, set()).update(keys)
+            cited_by_note.setdefault(n, set()).update(
+                _subnote_key_for_note(n, r) for r in refs
+            )
             if sheet and row is not None:
                 placements_by_note.setdefault(n, {})[(sheet, int(row))] = (
                     e.get("row_label") or ""
@@ -300,12 +302,19 @@ def build_draft_checklist(
             continue
         present_nums.append(note_num)
         title = str(inv.get("title", "") or "")
-        # De-duplicate the scout's sub-refs (order-preserving). A vision-batch
-        # double-emit or overlapping regex can list the same ref twice; each
-        # becomes a persisted child row, and the notes_coverage_rows UNIQUE index
-        # (run_id, note_num, COALESCE(subnote_ref,'')) would then reject the whole
-        # wholesale write — silently disabling coverage for a real run.
-        subrefs = list(dict.fromkeys(inv.get("subnote_refs") or []))
+        # De-duplicate the scout's sub-refs by structured identity while
+        # retaining the first printed spelling for display. A vision batch may
+        # emit both ``9(a)`` and ``(a)`` for the same direct child; deeper
+        # ``9.1(a)`` remains distinct by the note-aware key.
+        subrefs: list[str] = []
+        seen_subref_keys: set[str] = set()
+        for raw_ref in inv.get("subnote_refs") or []:
+            ref = str(raw_ref)
+            ref_key = _subnote_key_for_note(note_num, ref)
+            if ref_key in seen_subref_keys:
+                continue
+            seen_subref_keys.add(ref_key)
+            subrefs.append(ref)
 
         coords = placements_by_note.get(note_num, {})
         placements = _classify_placements(coords, policies_sheet)
@@ -332,7 +341,7 @@ def build_draft_checklist(
         cited = cited_by_note.get(note_num, set())
         subnotes = []
         for ref in subrefs:
-            key = _subnote_key(ref)
+            key = _subnote_key_for_note(note_num, ref)
             state = SUBNOTE_CITED if key in cited else SUBNOTE_NOT_VERIFIED
             sub_reason = ""
             verdict = subnote_verdicts.get((note_num, key))

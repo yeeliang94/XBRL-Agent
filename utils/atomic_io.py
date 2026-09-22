@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import errno
+import json
 import os
+from pathlib import Path
+import tempfile
 import time
-from typing import TypeAlias
+from typing import Any, Callable, TypeAlias
 
 
 Pathish: TypeAlias = str | bytes | os.PathLike[str] | os.PathLike[bytes]
@@ -51,4 +54,27 @@ def replace_with_retry(source: Pathish, destination: Pathish) -> None:
             delay = min(delay * 2, MAX_RETRY_DELAY_SECONDS)
 
 
-__all__ = ["replace_with_retry"]
+def write_json_atomic(
+    path: str | Path,
+    payload: dict[str, Any],
+    *,
+    replace: Callable[[Pathish, Pathish], None] = replace_with_retry,
+) -> None:
+    """Durably publish a JSON object by replacing a same-directory temp file."""
+    destination = Path(path)
+    fd, temporary = tempfile.mkstemp(
+        prefix=f".{destination.stem}-",
+        suffix=".json",
+        dir=destination.parent,
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        replace(temporary, destination)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+__all__ = ["replace_with_retry", "write_json_atomic"]

@@ -9,6 +9,7 @@ vi.mock("../lib/api", async () => {
     fetchRuns: vi.fn(),
     fetchRunDetail: vi.fn(),
     deleteRun: vi.fn(),
+    restartRun: vi.fn(),
     downloadFilledUrl: (id: number) => `/api/runs/${id}/download/filled`,
   };
 });
@@ -166,6 +167,40 @@ describe("HistoryPage", () => {
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /download/i })).toBeTruthy();
     });
+  });
+
+  test("redo creates a draft and opens its setup", async () => {
+    fetchRuns.mockResolvedValue({
+      runs: [baseRun], total: 1, limit: 50, offset: 0,
+    });
+    vi.mocked(api.fetchRunDetail).mockResolvedValue({
+      id: 1,
+      created_at: "2026-04-10T00:00:00Z",
+      pdf_filename: "FINCO-Audited-2021.pdf",
+      status: "completed",
+      session_id: "sess-1",
+      output_dir: "/tmp/out/sess-1",
+      merged_workbook_path: "/tmp/out/sess-1/filled.xlsx",
+      scout_enabled: true,
+      started_at: "2026-04-10T00:00:00Z",
+      ended_at: "2026-04-10T00:01:00Z",
+      config: { statements: ["SOFP"] },
+      agents: [],
+      cross_checks: [],
+    });
+    vi.mocked(api.restartRun).mockResolvedValue({
+      run_id: 9,
+      session_id: "fresh-session",
+      preparation_reused: true,
+      preparation: { status: "succeeded" },
+    });
+    const onResumeDraft = vi.fn();
+    render(<HistoryPage onResumeDraft={onResumeDraft} />);
+    fireEvent.click(await screen.findByText("FINCO-Audited-2021.pdf"));
+    fireEvent.click(await screen.findByRole("button", { name: "Redo run" }));
+
+    await waitFor(() => expect(api.restartRun).toHaveBeenCalledWith(1));
+    expect(onResumeDraft).toHaveBeenCalledWith(9);
   });
 
   test("deleting from detail removes the row from the list", async () => {

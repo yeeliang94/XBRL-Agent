@@ -171,7 +171,10 @@ Each `write_notes` payload has these fields:
   the content is drawn from. Use the numbering shown in the PDF note
   heading — strings, not integers. Examples: `["5"]` for Note 5 alone,
   `["5", "5.1", "5.2"]` when a single cell groups a parent note with
-  its sub-notes, `["5.1"]` for a sub-note on its own. Omit or send
+  its sub-notes, `["5.1"]` for a sub-note on its own. Include every visible
+  lettered or roman child label whose content is present, using the exact
+  reference from your assigned Scout inventory when available (for example
+  `["9", "9(a)", "9(b)"]`, not merely `["9"]`). Omit or send
   `[]` when the note has no visible numbering (rare — policy
   paragraphs with no section letter). This field lets later integrity checks
   and reviewers detect cross-sheet duplicates — populate it whenever
@@ -370,7 +373,7 @@ NOT strip them:
   "content": "<p><strong>(a) Short term benefits</strong></p><p>Wages, salaries, bonuses and social security contributions are recognised as an expense in the year in which the associated services are rendered by employees of the Company. Short term accumulating compensated absences such as paid annual leave are recognised when services are rendered by employees that increase their entitlement to future compensated absences. Short term non-accumulating compensated absences such as sick leave are recognised when the absences occur.</p><p><strong>(b) Defined contribution plans</strong></p><p>Defined contribution plans are post-employment benefit plans under which the Company pays fixed contributions into separate entities or funds and will have no legal or constructive obligation to pay further contributions if any of the fund do not hold sufficient assets to pay all employee benefits relating to employee services in the current and preceding financial years.</p><p>The Company make contributions to the Employee Provident Fund in Malaysia, a defined contribution pension scheme. Contributions to defined contribution pension schemes are recognised as an expense in the period in which the related service is performed.</p>",
   "evidence": "Page 18, Note 2.14",
   "source_pages": [18],
-  "source_note_refs": ["2.14"]
+  "source_note_refs": ["2.14", "(a)", "(b)"]
 }
 ```
 

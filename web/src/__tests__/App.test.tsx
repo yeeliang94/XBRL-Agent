@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, vi, afterEach } from "vitest";
 import { render, fireEvent, cleanup, act, screen, waitFor } from "@testing-library/react";
-import type { SSEEvent, RunConfigPayload } from "../lib/types";
+import type { SSEEvent, RunConfigPayload, PreparationSnapshot } from "../lib/types";
 import type { SSEFailureKind } from "../lib/sse";
 
 // ---------------------------------------------------------------------------
@@ -13,6 +13,12 @@ import type { SSEFailureKind } from "../lib/sse";
 // event callback on first call, letting each test simulate the agent stream.
 // ---------------------------------------------------------------------------
 
+const preparedSnapshot = vi.hoisted(() => ({
+  attempt_id: "prepared-1", status: "succeeded", stage: "complete",
+  phase: "awaiting_confirmation", action_required: "confirm_setup", message: "Prepared",
+  total: 1, captured: 1, verified: 1,
+} satisfies PreparationSnapshot));
+
 let captureOnEvent: ((event: SSEEvent) => void) | null = null;
 let captureOnTransportError: ((error: string, kind: SSEFailureKind) => void) | null = null;
 
@@ -20,6 +26,10 @@ vi.mock("../lib/api", async () => {
   const actual = await vi.importActual<typeof import("../lib/api")>("../lib/api");
   return {
     ...actual,
+    apiFetch: vi.fn(async (url: string, options?: RequestInit) => {
+      if (url.startsWith("/api/preparation/")) return preparedSnapshot;
+      return actual.apiFetch(url, options);
+    }),
     // Auth gate: resolve as a signed-in dev user so the app shell renders
     // (otherwise the boot /api/auth/me check would show the login page).
     getAuthMe: vi.fn(async () => ({
@@ -116,12 +126,13 @@ describe("App — live activity integration", () => {
     });
 
     // 2. Wait deterministically for the PreRunPanel's settings fetch to
-    // resolve and the Run button to appear. Replaces the previous silent
+    // resolve, preparation to finish, and Run to become enabled. Replaces the previous silent
     // early-return that could turn the whole test into a no-op.
     const runButton = await waitFor(
       () => {
         const btn = screen.queryByRole("button", { name: /start extraction/i });
         if (!btn) throw new Error("Run button not ready");
+        expect(btn).toBeEnabled();
         return btn;
       },
       { timeout: 2000 },
@@ -188,6 +199,7 @@ describe("App — live activity integration", () => {
       });
     });
     const start = await screen.findByRole("button", { name: /start extraction/i });
+    await waitFor(() => expect(start).toBeEnabled());
     await act(async () => fireEvent.click(start));
     expect(captureOnEvent).toBeTruthy();
     act(() => captureOnEvent!({
@@ -238,6 +250,7 @@ describe("App — live activity integration", () => {
     const runButton = await waitFor(() =>
       screen.getByRole("button", { name: /start extraction/i }),
     );
+    await waitFor(() => expect(runButton).toBeEnabled());
     await act(async () => fireEvent.click(runButton));
 
     await act(async () => {
@@ -275,6 +288,7 @@ describe("App — live activity integration", () => {
     const runButton = await waitFor(() =>
       screen.getByRole("button", { name: /start extraction/i }),
     );
+    await waitFor(() => expect(runButton).toBeEnabled());
     fireEvent.click(runButton);
     await waitFor(() => expect(captureOnEvent).not.toBeNull());
     await screen.findByRole("button", { name: /stop run/i });
@@ -323,6 +337,10 @@ describe("App — live activity integration", () => {
       );
       return {
         ...actual,
+        apiFetch: vi.fn(async (url: string, options?: RequestInit) => {
+          if (url.startsWith("/api/preparation/")) return preparedSnapshot;
+          return actual.apiFetch(url, options);
+        }),
         getAuthMe: vi.fn(async () => ({
           email: "dev@localhost", display_name: "Dev", provider: "dev",
         })),
@@ -354,6 +372,7 @@ describe("App — live activity integration", () => {
     const runButton = await waitFor(() => {
       const btn = screen.queryByRole("button", { name: /start extraction/i });
       if (!btn) throw new Error("Run button not ready");
+      expect(btn).toBeEnabled();
       return btn;
     }, { timeout: 2000 });
 

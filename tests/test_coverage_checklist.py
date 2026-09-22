@@ -168,6 +168,30 @@ def test_fully_uncited_blob_write_leaves_all_subrefs_not_verified():
     )
 
 
+def test_parent_qualified_and_local_letter_refs_share_one_identity():
+    """Scout may print ``9(a)`` while extraction records the visible local
+    label ``(a)``. Within note 9 those are the same structured child, without
+    requiring any prose or label matching."""
+    cl = build_draft_checklist(
+        inventory_rows=[_inv(9, subs=["9(a)", "9(b)"])],
+        provenance_entries=[_entry(S12, 48, ["9", "(a)"])],
+    )
+    states = {s.subnote_ref: s.state for s in _row(cl, 9).subnotes}
+    assert states == {
+        "9(a)": SUBNOTE_CITED,
+        "9(b)": SUBNOTE_NOT_VERIFIED,
+    }
+
+
+def test_equivalent_child_spellings_are_deduped_by_structured_identity():
+    cl = build_draft_checklist(
+        inventory_rows=[_inv(9, subs=["9(a)", "(a)", "9.1(a)"])],
+        provenance_entries=[_entry(S12, 48, ["9"])],
+    )
+    # Direct 9(a)/(a) are one child. The deeper 9.1(a) remains distinct.
+    assert [s.subnote_ref for s in _row(cl, 9).subnotes] == ["9(a)", "9.1(a)"]
+
+
 def test_policies_fan_out_placements_classified_fan_out():
     cl = build_draft_checklist(
         inventory_rows=[_inv(3, "Significant accounting policies",

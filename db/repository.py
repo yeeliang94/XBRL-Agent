@@ -410,6 +410,30 @@ def create_run(
     return int(cur.lastrowid)
 
 
+def create_run_lineage(
+    conn: sqlite3.Connection,
+    *,
+    child_run_id: int,
+    parent_run_id: int,
+    source_sha256: str,
+    reused_statements: Iterable[str],
+    rerun_statements: Iterable[str],
+) -> None:
+    """Record one child run's immutable restart/resume relationship."""
+    conn.execute(
+        "INSERT INTO run_lineage(child_run_id, parent_run_id, source_sha256, "
+        "reused_statements, rerun_statements, created_at) VALUES (?,?,?,?,?,?)",
+        (
+            child_run_id,
+            parent_run_id,
+            source_sha256,
+            json.dumps(list(reused_statements)),
+            json.dumps(list(rerun_statements)),
+            _now(),
+        ),
+    )
+
+
 def record_run_incident(
     conn: sqlite3.Connection,
     run_id: int,
@@ -3127,6 +3151,11 @@ def delete_run(conn: sqlite3.Connection, run_id: int) -> bool:
     # set it — we double up here to make delete_run safe regardless of how
     # the connection was opened.
     conn.execute("PRAGMA foreign_keys = ON")
+    # A run may be the parent of a later redo/resume. Deleting the historical
+    # parent removes only that audit link; the child remains an independent run.
+    # ``parent_run_id`` intentionally has no cascade because deleting history
+    # must never delete a newer child run.
+    conn.execute("DELETE FROM run_lineage WHERE parent_run_id = ?", (run_id,))
     cur = conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
     return cur.rowcount > 0
 

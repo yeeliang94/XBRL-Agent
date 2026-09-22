@@ -109,6 +109,28 @@ def _row(checklist, note_num):
 # --------------------------------------------------------------------------
 
 
+def test_empty_runtime_subnote_inventory_falls_back_to_persisted_inventory(
+    db_path,
+):
+    run_id = _seed_run(db_path)
+    _seed_inv(db_path, run_id, 9, "Investment properties", ["9(a)"])
+
+    _agent_obj, deps, _context = ra.create_notes_reviewer_agent(
+        run_id=run_id,
+        db_path=str(db_path),
+        pdf_path="/tmp/x.pdf",
+        filing_level="company",
+        filing_standard="mfrs",
+        model=_scripted([[TextPart("done")]]),
+        output_dir=str(db_path.parent),
+        inventory_note_nums=[],
+        inventory_subnotes={},
+    )
+
+    assert deps.inventory_note_nums == [9]
+    assert deps.inventory_subnotes == {9: ["9(a)"]}
+
+
 def test_resolve_coverage_note_requires_grounding(db_path):
     run_id = _seed_run(db_path)
     _seed_inv(db_path, run_id, 4, "Investment properties")
@@ -263,6 +285,44 @@ def test_verify_subnote_verified_and_missing(db_path):
     assert states == {"(a)": SUBNOTE_VERIFIED, "(b)": SUBNOTE_MISSING}
     # A confirmed-missing sub-ref makes the placed row unresolved (tips status).
     assert _row(cl, 9).is_unresolved() is True
+
+
+def test_verify_local_ref_resolves_parent_qualified_inventory_ref(db_path):
+    run_id = _seed_run(db_path)
+    _seed_inv(db_path, run_id, 9, "Investment properties", subs=["9(a)"])
+    _seed_prov(db_path, run_id, 48, ["9"])
+    model = _scripted([
+        [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
+        [ToolCallPart(tool_name="verify_subnotes", args={"verifications": [{
+            "note_num": 9, "subnote_refs": ["(a)"], "verdict": "verified",
+            "reason": "present in cell", "source_pages": [19],
+        }]})],
+    ])
+    agent, deps, _ = _agent(db_path, run_id, model)
+    agent.run_sync("go", deps=deps)
+    cl = ra.recompute_notes_findings(deps)["coverage_checklist"]
+    assert {s.subnote_ref: s.state for s in _row(cl, 9).subnotes} == {
+        "9(a)": SUBNOTE_VERIFIED,
+    }
+
+
+def test_verify_subnotes_rejects_unknown_child_identity(db_path):
+    run_id = _seed_run(db_path)
+    _seed_inv(db_path, run_id, 9, subs=["9(a)"])
+    _seed_prov(db_path, run_id, 48, ["9"])
+    model = _scripted([
+        [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [19]})],
+        [ToolCallPart(tool_name="verify_subnotes", args={"verifications": [{
+            "note_num": 9, "subnote_refs": ["9.1(a)"],
+            "verdict": "verified", "reason": "invented child",
+            "source_pages": [19],
+        }]})],
+    ])
+    agent, deps, _ = _agent(db_path, run_id, model)
+    result = agent.run_sync("go", deps=deps)
+    assert deps.coverage_subnote_verdicts == {}
+    returns = _tool_return_texts(result, "verify_subnotes")
+    assert returns and "not in the Scout inventory" in returns[0]
 
 
 def test_verified_subnotes_close_detector_finding(db_path):

@@ -12,7 +12,6 @@ import logging
 import os
 from pathlib import Path
 import sqlite3
-import tempfile
 import threading
 import time
 import uuid
@@ -23,7 +22,7 @@ from fastapi import APIRouter, HTTPException
 import server
 import task_registry
 from model_settings import DEFAULT_MODEL_ID
-from utils.atomic_io import replace_with_retry
+from utils.atomic_io import replace_with_retry, write_json_atomic
 from utils.paths import validate_session_id
 
 if TYPE_CHECKING:
@@ -90,16 +89,11 @@ def _read(directory: Path) -> dict:
 
 
 def _write(directory: Path, snapshot: dict) -> None:
-    fd, name = tempfile.mkstemp(prefix=".preparation-", suffix=".json", dir=directory)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(snapshot, handle, ensure_ascii=False)
-            handle.flush()
-            os.fsync(handle.fileno())
-        replace_with_retry(name, directory / "preparation_status.json")
-    finally:
-        if os.path.exists(name):
-            os.unlink(name)
+    write_json_atomic(
+        directory / "preparation_status.json",
+        snapshot,
+        replace=replace_with_retry,
+    )
 
 
 def snapshot(directory: Path) -> dict:

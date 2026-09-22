@@ -90,7 +90,7 @@ def test_zoom_marks_the_page_as_viewed(tmp_path):
 def test_the_formatter_has_no_tool_that_re_reads_the_prompt(tmp_path):
     """`read_note_cell` returned sheet/row/label/html/evidence/source_pages
     for ONE row. `_build_user_prompt`'s CURRENT CELLS payload already
-    carries exactly those fields for EVERY row, plus `table_geometry` the
+    carries exactly those fields for EVERY row, plus `allowed_targets` the
     tool did not have — so a call could only return a strict subset of what
     the model had already read, at the cost of a turn, and its schema rode on
     every request (peer review, 2026-08-03).
@@ -108,5 +108,5 @@ def test_the_formatter_has_no_tool_that_re_reads_the_prompt(tmp_path):
     # The payload must still carry everything the tool used to serve.
     src = inspect.getsource(formatting_agent._build_user_prompt)
     for field in ("row", "label", "html", "evidence", "source_pages",
-                  "table_geometry"):
+                  "allowed_targets"):
         assert field in src, field

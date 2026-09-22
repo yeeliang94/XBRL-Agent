@@ -1887,7 +1887,13 @@ Load-bearing invariants:
   `tests/test_notes_reviewer_coverage.py`. Grounded `verified` sub-ref verdicts
   are also applied to the detector-backed `subnote_gaps` family used by
   `verify_findings`; `missing` verdicts remain open. The checklist and detector
-  may not disagree about whether the same reviewed sub-ref is resolved. The pass
+  may not disagree about whether the same reviewed sub-ref is resolved. Direct
+  parent-qualified children such as `9(a)` and their local form `(a)` share one
+  structured identity within note 9; deeper references are never collapsed.
+  Every `not_verified` child counts as reviewer work and must receive a grounded
+  batched verdict before the pass can finish as reviewed. A pass that exits with
+  unassessed children persists a `not_reviewed` banner and a structured
+  `notes_reviewer_subnotes_unverified` failure. The pass
   recomputes + persists on EVERY exit path (`_finalize_coverage` in
   `server._run_notes_reviewer_pass`): success → `reviewed`; crash/construction
   failure → `not_reviewed` draft; empty inventory → `inventory_unavailable` +
@@ -1920,8 +1926,10 @@ Load-bearing invariants:
   `suspected_gap` / unavailable inventory tips the run to
   `completed_with_errors` (`_notes_coverage_tips_status`, folded into the
   overall-status block per gotcha #10 — never a second writer). `not_verified`
-  sub-refs warn only. The reviewer skip gate uses `count_open_items` (detector
-  families + unresolved checklist rows) so a suspected-gap-only run still runs.
+  sub-refs do not themselves assert missing content or tip coverage status, but
+  they keep the reviewer pass incomplete until assessed. The reviewer skip gate
+  uses `count_open_items` (detector families + unresolved rows + unassessed
+  children) so suspected-gap-only and coarse-provenance-only runs still run.
 - **Persistence + API.** Durable in `notes_coverage_rows` (schema v28) — one
   top-level row per note + per-sub-ref child rows + a `note_num = -1` banner
   sentinel (distinguishes `inventory_unavailable` from `pre_feature`).

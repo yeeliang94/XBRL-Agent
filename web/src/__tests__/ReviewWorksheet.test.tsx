@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, afterEach, expect, test, vi } from "vitest";
 import { NotesReviewTab } from "../components/NotesReviewTab";
 import { NotesDestinationCompare } from "../components/NotesDestinationCompare";
@@ -15,7 +15,7 @@ const sheets: NotesSheet[] = [{ sheet: "Notes-CI", rows: [
   { row: 7, label: "Alternative disclosure", node_uuid: "destination", html: "", evidence: null, source_pages: [], updated_at: "" },
 ] }];
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
-afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 function notesFetch() {
   const patches: Record<string, unknown>[] = [];
@@ -35,10 +35,11 @@ test("saved content and revision survive switching to an empty alternative and b
   await screen.findByRole("button", { name: "Edit" });
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
   act(() => { screen.getByTestId("notes-review-editor").dispatchEvent(new CustomEvent("notes-review-test-edit", { bubbles: true, detail: { html: "<p>Changed</p>" } })); });
-  expect(screen.getByRole("button", { name: "Review Alternative disclosure" })).toBeDisabled();
+  fireEvent.keyDown(screen.getByRole("button", { name: "Review Alternative disclosure" }), { key: "Enter" });
+  expect(screen.getByTestId("notes-review-editor")).toHaveTextContent("Changed");
   await waitFor(() => expect(patches).toHaveLength(1), { timeout: 2500 });
-  await waitFor(() => expect(screen.getByRole("button", { name: "Review Alternative disclosure" })).toBeEnabled());
-  fireEvent.click(screen.getByRole("button", { name: "Review Alternative disclosure" }));
+  await waitFor(() => expect(within(screen.getByRole("navigation", { name: "Notes sheet navigator" })).getByRole("button")).toBeEnabled());
+  fireEvent.keyDown(screen.getByRole("button", { name: "Review Alternative disclosure" }), { key: "Enter" });
   fireEvent.click(screen.getByRole("button", { name: "Review Corporate information" }));
   expect(screen.getByTestId("notes-review-editor")).toHaveTextContent("Changed");
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
@@ -47,13 +48,13 @@ test("saved content and revision survive switching to an empty alternative and b
   expect(patches[1].expected_revision).toBe(2);
 });
 
-test("next unplaced issue keeps its own PDF and all worksheet alternatives", async () => {
+test("selecting an unplaced source note keeps its PDF and worksheet alternatives", async () => {
   notesFetch(); const pages = vi.fn();
   render(<NotesReviewTab runId={42} onActiveCellPages={pages} />);
   await screen.findByRole("button", { name: "Edit" });
-  fireEvent.click(screen.getByRole("button", { name: "Next issue" }));
+  fireEvent.click(screen.getByTestId("source-note-9"));
   await waitFor(() => expect(pages).toHaveBeenLastCalledWith([9]));
-  expect(screen.getByRole("combobox", { name: "Notes field filter" })).toHaveValue("all");
+  expect(screen.getByTestId("source-note-9")).toHaveAttribute("aria-current", "true");
   expect(screen.getAllByTestId("notes-review-row")).toHaveLength(2);
   expect(screen.queryByTestId("notes-review-editor")).toBeNull();
 });
@@ -75,19 +76,19 @@ test.each([409, 500])("a failed save (%s) preserves the draft until discard and 
   });
   await act(async () => { await vi.advanceTimersByTimeAsync(1600); });
   expect(screen.getByTestId("notes-review-editor")).toHaveTextContent("Unsaved draft");
-  expect(screen.getByRole("button", { name: "Review Alternative disclosure" })).toBeDisabled();
-  expect(screen.getByRole("combobox", { name: "Notes field filter" })).toBeDisabled();
+  fireEvent.keyDown(screen.getByRole("button", { name: "Review Alternative disclosure" }), { key: "Enter" });
+  expect(screen.getByTestId("notes-review-editor")).toHaveTextContent("Unsaved draft");
+  expect(within(screen.getByRole("navigation", { name: "Notes sheet navigator" })).getByRole("button")).toBeDisabled();
 
   fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
   expect(screen.queryByRole("button", { name: "Discard unsaved changes" })).toBeNull();
   await act(async () => { await vi.advanceTimersByTimeAsync(1600); });
   fireEvent.click(screen.getByRole("button", { name: "Discard unsaved changes" }));
   expect(screen.getByTestId("notes-review-editor")).toHaveTextContent("Original");
-  expect(screen.getByRole("button", { name: "Review Alternative disclosure" })).toBeEnabled();
-  expect(screen.getByRole("combobox", { name: "Notes field filter" })).toBeEnabled();
-  expect(screen.getByRole("button", { name: "Next issue" })).toBeEnabled();
+  expect(within(screen.getByRole("navigation", { name: "Notes sheet navigator" })).getByRole("button")).toBeEnabled();
+  expect(screen.getByTestId("source-note-9")).toBeEnabled();
 
-  fireEvent.click(screen.getByRole("button", { name: "Review Alternative disclosure" }));
+  fireEvent.keyDown(screen.getByRole("button", { name: "Review Alternative disclosure" }), { key: "Enter" });
   fireEvent.click(screen.getByRole("button", { name: "Review Corporate information" }));
   await act(async () => { await vi.advanceTimersByTimeAsync(1600); });
   expect(screen.getByTestId("notes-review-editor")).toHaveTextContent("Original");
@@ -111,10 +112,10 @@ test("changing runs during a save does not leave the new workspace locked", asyn
     }));
   });
   await act(async () => { await vi.advanceTimersByTimeAsync(1600); });
-  expect(screen.getByRole("combobox", { name: "Notes field filter" })).toBeDisabled();
+  expect(within(screen.getByRole("navigation", { name: "Notes sheet navigator" })).getByRole("button")).toBeDisabled();
   view.rerender(<NotesReviewTab runId={43} />);
   await act(async () => { await vi.advanceTimersByTimeAsync(0); });
-  expect(screen.getByRole("combobox", { name: "Notes field filter" })).toBeEnabled();
+  expect(within(screen.getByRole("navigation", { name: "Notes sheet navigator" })).getByRole("button")).toBeEnabled();
   await act(async () => { finishSave(json({ ...sheets[0].rows[0], html: "<p>Pending edit</p>" })); });
   expect(screen.getByTestId("notes-review-editor")).toHaveTextContent("Original");
 });
@@ -148,7 +149,7 @@ test("discard retains an earlier successful save when a newer draft fails", asyn
   await act(async () => { await vi.advanceTimersByTimeAsync(1600); });
   fireEvent.click(screen.getByRole("button", { name: "Discard unsaved changes" }));
   expect(screen.getByTestId("notes-review-editor")).toHaveTextContent("Saved draft");
-  fireEvent.click(screen.getByRole("button", { name: "Review Alternative disclosure" }));
+  fireEvent.keyDown(screen.getByRole("button", { name: "Review Alternative disclosure" }), { key: "Enter" });
   fireEvent.click(screen.getByRole("button", { name: "Review Corporate information" }));
   expect(screen.getByTestId("notes-review-editor")).toHaveTextContent("Saved draft");
   await act(async () => { await vi.advanceTimersByTimeAsync(1600); });
