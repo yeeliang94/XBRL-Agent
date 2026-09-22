@@ -2346,12 +2346,14 @@ async def _run_notes_reviewer_pass(
         await _await_finalization_slot()
         try:
             from db import repository as _repo
+            from notes.source_write import PLACEMENT_CONFLICT_FINDING_PREFIX
             with _repo.db_session(db_path) as conn:
                 conn.execute(
                     "DELETE FROM notes_review_flags WHERE run_id = ? "
                     "AND status = 'open' "
-                    "AND COALESCE(finding_id,'') NOT LIKE 'source-capture:%'",
-                    (run_id,),
+                    "AND COALESCE(finding_id,'') NOT LIKE 'source-capture:%' "
+                    "AND COALESCE(finding_id,'') NOT LIKE ?",
+                    (run_id, PLACEMENT_CONFLICT_FINDING_PREFIX + "%"),
                 )
         except Exception:  # noqa: BLE001
             logger.exception(
@@ -2445,11 +2447,15 @@ async def _run_notes_reviewer_pass(
         """
         try:
             from db import repository as _repo
+            from notes.source_write import PLACEMENT_CONFLICT_FINDING_PREFIX
             with _repo.db_session(db_path) as conn:
                 if replace_flags:
                     conn.execute(
                         "DELETE FROM notes_review_flags WHERE run_id = ? "
-                        "AND status = 'open' AND COALESCE(finding_id,'') NOT LIKE 'source-capture:%'", (run_id,)
+                        "AND status = 'open' "
+                        "AND COALESCE(finding_id,'') NOT LIKE 'source-capture:%' "
+                        "AND COALESCE(finding_id,'') NOT LIKE ?",
+                        (run_id, PLACEMENT_CONFLICT_FINDING_PREFIX + "%"),
                     )
                 for f in deps.flags:
                     _repo.insert_notes_review_flag(
@@ -8248,6 +8254,28 @@ async def run_multi_agent_stream(
         notes_integrity_unresolved = _notes_integrity_tips_status(
             notes_integrity_outcome
         ) or bool(prepared_snapshot is not None and notes_to_run and notes_integrity_outcome is None)
+        # A rejected second placement is deliberately absent from notes_cells,
+        # so ordinary duplicate integrity checks cannot see it. Its durable
+        # placement-conflict flag must independently prevent a false-clean run
+        # until the grounded reviewer keeps or moves the provisional placement.
+        try:
+            from db import repository as _notes_repo
+            from notes.source_write import PLACEMENT_CONFLICT_FINDING_PREFIX
+            with _notes_repo.db_session(AUDIT_DB_PATH) as _notes_conn:
+                open_notes_placement_conflicts = bool(_notes_conn.execute(
+                    "SELECT 1 FROM notes_review_flags WHERE run_id=? "
+                    "AND status='open' "
+                    "AND COALESCE(finding_id,'') LIKE ? "
+                    "LIMIT 1",
+                    (run_id, PLACEMENT_CONFLICT_FINDING_PREFIX + "%"),
+                ).fetchone())
+        except Exception:  # noqa: BLE001 — incomplete assessment fails closed
+            logger.warning(
+                "Could not read source-placement conflicts for run %s",
+                run_id,
+                exc_info=True,
+            )
+            open_notes_placement_conflicts = True
         if all_agents_ok and merge_result.success and correction_exhausted:
             overall_status = "correction_exhausted"
         elif canonical_reexport_failed:
@@ -8264,7 +8292,8 @@ async def run_multi_agent_stream(
               and not cross_check_crashed and open_conflicts == 0
               and not any_agent_flagged and not validator_failed
               and not reviewer_failed and not notes_coverage_unresolved
-              and not notes_integrity_unresolved):
+              and not notes_integrity_unresolved
+              and not open_notes_placement_conflicts):
             # Peer-review fix (2026-04-27): a cross-check pass that
             # crashed produced an empty results list, so
             # ``any_check_failed`` is misleadingly False. Without the
@@ -8298,6 +8327,15 @@ async def run_multi_agent_stream(
         elif all_agents_ok and merge_result.success and notes_integrity_unresolved:
             # Everything else is clean, but part of the source document is not
             # accounted for, or a note boundary is disputed → needs review.
+            overall_status = "completed_with_errors"
+        elif (
+            all_agents_ok
+            and merge_result.success
+            and open_notes_placement_conflicts
+        ):
+            # The duplicate was prevented, but the correct destination is
+            # still undecided. Preserve the draft and require review instead
+            # of reporting either a clean success or a technical failure.
             overall_status = "completed_with_errors"
         elif all_agents_ok and (any_check_failed or cross_check_crashed):
             overall_status = "completed_with_errors"

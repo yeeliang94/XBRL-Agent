@@ -21,20 +21,60 @@ def move_reviewed_note(
     destination_sheet: str, destination_row: int,
     expected_revision: int, destination_revision: int | None,
 ) -> None:
-    """Caller owns BEGIN IMMEDIATE; every ledger change commits with the move."""
+    """Move after active work is idle. Caller owns ``BEGIN IMMEDIATE``."""
+    _move_note(
+        conn,
+        run_id=run_id,
+        sheet=sheet,
+        row=row,
+        destination_sheet=destination_sheet,
+        destination_row=destination_row,
+        expected_revision=expected_revision,
+        destination_revision=destination_revision,
+        require_idle=True,
+    )
+
+
+def move_note_during_review(
+    conn: sqlite3.Connection, *, run_id: int, sheet: str, row: int,
+    destination_sheet: str, destination_row: int,
+    expected_revision: int, destination_revision: int | None,
+) -> None:
+    """Move inside the automatic reviewer's serialised write seam."""
+    _move_note(
+        conn,
+        run_id=run_id,
+        sheet=sheet,
+        row=row,
+        destination_sheet=destination_sheet,
+        destination_row=destination_row,
+        expected_revision=expected_revision,
+        destination_revision=destination_revision,
+        require_idle=False,
+    )
+
+
+def _move_note(
+    conn: sqlite3.Connection, *, run_id: int, sheet: str, row: int,
+    destination_sheet: str, destination_row: int,
+    expected_revision: int, destination_revision: int | None,
+    require_idle: bool,
+) -> None:
+    """Relocate one cell and every canonical ledger in the caller's txn."""
     run = repo.fetch_run(conn, run_id)
     if run is None:
         raise LookupError("Run not found")
-    if run.status in {"running", "pending"}:
+    if require_idle and run.status in {"running", "pending"}:
         raise MoveConflict("Wait for extraction to finish before moving a note.")
-    busy = conn.execute(
-        "SELECT 1 FROM notes_review_tasks WHERE run_id = ? AND status = 'running' "
-        "UNION ALL SELECT 1 FROM notes_format_tasks WHERE run_id = ? AND status = 'running' "
-        "UNION ALL SELECT 1 FROM notes_integrity_tasks WHERE run_id = ? AND status = 'running'",
-        (run_id, run_id, run_id),
-    ).fetchone()
-    if busy:
-        raise MoveConflict("Wait for the notes review or formatting pass to finish.")
+    if require_idle:
+        busy = conn.execute(
+            "SELECT 1 FROM notes_review_tasks WHERE run_id = ? AND status = 'running' "
+            "UNION ALL SELECT 1 FROM notes_format_tasks WHERE run_id = ? AND status = 'running' "
+            "UNION ALL SELECT 1 FROM notes_integrity_tasks WHERE run_id = ? AND status = 'running'",
+            (run_id, run_id, run_id),
+        ).fetchone()
+        if busy:
+            raise MoveConflict("Wait for the notes review or formatting pass to finish.")
     if (sheet, row) == (destination_sheet, destination_row):
         raise ValueError("Choose a different destination field.")
     config = run.config or {}
@@ -42,6 +82,22 @@ def move_reviewed_note(
     target = resolve_writable_html_target(
         conn, family_prefix=family, sheet=destination_sheet, row=destination_row,
     )
+    if target is None and not require_idle:
+        node = repo.fetch_notes_node(
+            conn,
+            sheet=destination_sheet,
+            row=destination_row,
+            template_prefix=family,
+        )
+        if (
+            node
+            and str(node.get("kind") or "").upper() == "LEAF"
+            and str(node.get("slot_role") or "").upper() == "INPUT"
+        ):
+            target = {
+                "label": node.get("label") or "",
+                "concept_uuid": node.get("node_uuid"),
+            }
     if target is None:
         raise ValueError("Choose a writable notes field in this run's template.")
     source = conn.execute(
@@ -127,3 +183,69 @@ def move_reviewed_note(
                          (json.dumps(items), now, coverage['id']))
     repo.add_notes_tombstone(conn, run_id=run_id, sheet=sheet, row=row)
     repo.remove_notes_tombstone(conn, run_id=run_id, sheet=destination_sheet, row=destination_row)
+
+
+def resolve_source_placement_conflict(
+    conn: sqlite3.Connection, *, run_id: int, flag_id: int,
+    finding_id: str, decision: str, answer: str,
+) -> None:
+    """Validate the recorded proposal and settle it in the caller's transaction.
+
+    A whole-cell move is safe only for a whole-cell proposal. Older findings
+    without a recorded revision/selection remain open for human review.
+    """
+    flag = conn.execute(
+        "SELECT evidence FROM notes_review_flags "
+        "WHERE id=? AND run_id=? AND finding_id=? AND status='open'",
+        (flag_id, run_id, finding_id),
+    ).fetchone()
+    if flag is None:
+        raise MoveConflict("The placement conflict changed. Reload the review packet.")
+    conflict = json.loads(flag["evidence"])
+    existing = conflict.get("existing") or []
+    if len(existing) != 1 or decision not in {"keep_existing", "move_to_proposed"}:
+        raise MoveConflict("This placement conflict requires human review.")
+    source = existing[0]
+    generation = sources.active_generation(conn, run_id)
+    if generation is None or generation["id"] != conflict["generation_id"]:
+        raise MoveConflict("The source generation changed. Reload the review packet.")
+    cell = conn.execute(
+        "SELECT * FROM notes_cells WHERE run_id=? AND sheet=? AND row=?",
+        (run_id, source["sheet"], source["row"]),
+    ).fetchone()
+    if (cell is None or cell["content_revision"] != source.get("content_revision")
+            or cell["source_generation_id"] != generation["id"]):
+        raise MoveConflict("The source placement changed. Reload the review packet.")
+    placements = conn.execute(
+        "SELECT block_id FROM notes_block_placements "
+        "WHERE run_id=? AND generation_id=? AND sheet=? AND row=? AND active=1",
+        (run_id, generation["id"], source["sheet"], source["row"]),
+    ).fetchall()
+    live_ids = {item["block_id"] for item in placements}
+    proposed_ids = set(conflict.get("proposed_block_ids") or [])
+    if not live_ids or not proposed_ids:
+        raise MoveConflict("The source placement needs human review; its selection is unavailable.")
+    if conflict["match_kind"] == "same_block":
+        if not set(conflict["block_ids"]) <= live_ids:
+            raise MoveConflict("The source placement changed. Reload the review packet.")
+        if decision == "move_to_proposed" and live_ids != proposed_ids:
+            raise MoveConflict(
+                "This proposal covers only part of a cell or adds other source parts. "
+                "Leave it open for human review; a whole-cell move would change the proposal."
+            )
+    elif conflict["match_kind"] != "same_render":
+        raise MoveConflict("This placement conflict requires human review.")
+    if decision == "move_to_proposed":
+        target = conflict["target"]
+        destination = conn.execute(
+            "SELECT content_revision FROM notes_cells WHERE run_id=? AND sheet=? AND row=?",
+            (run_id, target["sheet"], target["row"]),
+        ).fetchone()
+        move_note_during_review(
+            conn, run_id=run_id, sheet=source["sheet"], row=source["row"],
+            destination_sheet=target["sheet"], destination_row=target["row"],
+            expected_revision=cell["content_revision"],
+            destination_revision=destination["content_revision"] if destination else None,
+        )
+    if not repo.answer_notes_review_flag(conn, flag_id=flag_id, run_id=run_id, answer=answer):
+        raise MoveConflict("The placement conflict changed. Reload the review packet.")

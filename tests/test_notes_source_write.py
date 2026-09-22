@@ -195,6 +195,127 @@ def test_rewriting_the_same_cell_replaces_rather_than_accumulates(conn_gen):
     assert "Stated at cost" not in html
 
 
+def test_substantive_source_blocks_cannot_be_placed_in_two_rows(conn_gen):
+    """The Amgen reproduction: one prepared-source disclosure was accepted
+    for two policy rows and exported twice. The second write must fail before
+    it changes the destination cell or placement ledger."""
+    conn, run_id, gen = conn_gen
+    repo.upsert_notes_cell(
+        conn, run_id=run_id, sheet="Notes", row=11, label="Other policy",
+        html="", evidence=None, source_pages=[],
+    )
+    source_write.write_cell_from_blocks(
+        conn, run_id=run_id, generation_id=gen, sheet="Notes", row=10,
+        block_ids=["b1", "b2"],
+    )
+
+    with pytest.raises(source_write.SourcePlacementConflict) as caught:
+        source_write.write_cell_from_blocks(
+            conn, run_id=run_id, generation_id=gen, sheet="Notes", row=11,
+            block_ids=["b1", "b2"],
+        )
+
+    conflict = caught.value
+    assert conflict.target == source_write.PlacementCandidate("Notes", 11, "")
+    assert conflict.existing == (
+        source_write.PlacementCandidate("Notes", 10, "", 2),
+    )
+    assert "provisional" in str(conflict)
+
+    destination = conn.execute(
+        "SELECT html FROM notes_cells WHERE run_id=? AND sheet='Notes' AND row=11",
+        (run_id,),
+    ).fetchone()
+    assert destination["html"] == ""
+    assert {
+        (p["sheet"], p["row"])
+        for p in srepo.active_placements(conn, gen)
+    } == {("Notes", 10)}
+
+
+def test_identical_source_render_from_distinct_blocks_is_refused(conn_gen):
+    """Block identity alone is insufficient: duplicated prepared-source
+    capture can assign different ids to the same substantive render."""
+    conn, run_id, gen = conn_gen
+    repeated = "<p>The same substantive accounting policy.</p>"
+    srepo.write_blocks(conn, gen, [
+        SourceBlock("copy-1", "paragraph", 1, repeated),
+        SourceBlock("copy-2", "paragraph", 2, repeated),
+    ])
+    repo.upsert_notes_cell(
+        conn, run_id=run_id, sheet="Notes", row=11, label="Other policy",
+        html="", evidence=None, source_pages=[],
+    )
+    source_write.write_cell_from_blocks(
+        conn, run_id=run_id, generation_id=gen, sheet="Notes", row=10,
+        block_ids=["copy-1"],
+    )
+
+    with pytest.raises(source_write.SourcePlacementConflict) as caught:
+        source_write.write_cell_from_blocks(
+            conn, run_id=run_id, generation_id=gen, sheet="Notes", row=11,
+            block_ids=["copy-2"],
+        )
+    assert caught.value.match_kind == "same_render"
+
+
+def test_heading_context_may_repeat_across_rows(conn_gen):
+    """A shared ancestor heading is context, not duplicated disclosure
+    content. Different policy paragraphs beneath it remain independently
+    placeable."""
+    conn, run_id, gen = conn_gen
+    srepo.write_blocks(conn, gen, [
+        SourceBlock("heading", "heading", 1, "<h3>Material policies</h3>"),
+        SourceBlock(
+            "tax", "paragraph", 2, "<p>Income tax policy.</p>",
+            locator={"heading_ancestor_ids": ["heading"]},
+        ),
+        SourceBlock(
+            "benefits", "paragraph", 3, "<p>Employee benefits policy.</p>",
+            locator={"heading_ancestor_ids": ["heading"]},
+        ),
+    ])
+    repo.upsert_notes_cell(
+        conn, run_id=run_id, sheet="Notes", row=11, label="Other policy",
+        html="", evidence=None, source_pages=[],
+    )
+
+    first = source_write.write_cell_from_blocks(
+        conn, run_id=run_id, generation_id=gen, sheet="Notes", row=10,
+        block_ids=["tax"],
+    )
+    second = source_write.write_cell_from_blocks(
+        conn, run_id=run_id, generation_id=gen, sheet="Notes", row=11,
+        block_ids=["benefits"],
+    )
+
+    assert first.block_ids == ["heading", "tax"]
+    assert second.block_ids == ["heading", "benefits"]
+
+
+def test_stale_placement_for_a_deleted_cell_does_not_block_write(conn_gen):
+    conn, run_id, gen = conn_gen
+    source_write.write_cell_from_blocks(
+        conn, run_id=run_id, generation_id=gen, sheet="Notes", row=10,
+        block_ids=["b2"],
+    )
+    conn.execute(
+        "DELETE FROM notes_cells WHERE run_id=? AND sheet='Notes' AND row=10",
+        (run_id,),
+    )
+    repo.upsert_notes_cell(
+        conn, run_id=run_id, sheet="Notes", row=11, label="Replacement",
+        html="", evidence=None, source_pages=[],
+    )
+
+    outcome = source_write.write_cell_from_blocks(
+        conn, run_id=run_id, generation_id=gen, sheet="Notes", row=11,
+        block_ids=["b2"],
+    )
+
+    assert outcome.block_ids == ["b2"]
+
+
 def test_the_previous_blocks_keep_their_disposition_after_a_relink(conn_gen):
     """A relink does not silently un-use the parts it dropped — they stay
     recorded, and the integrity pass surfaces them as used somewhere they no

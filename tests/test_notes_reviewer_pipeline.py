@@ -59,8 +59,8 @@ def test_reviewer_pass_runs_snapshots_and_persists_flags(db_path: Path, tmp_path
                                html="<p>fair value</p>")
         # An empty LEAF target to re-route into.
         conn.execute(
-            "INSERT INTO notes_nodes(node_uuid, template_id, sheet, row, label, kind) "
-            "VALUES (?, ?, ?, ?, ?, 'LEAF')",
+            "INSERT INTO notes_nodes(node_uuid, template_id, sheet, row, label, kind, slot_role) "
+            "VALUES (?, ?, ?, ?, ?, 'LEAF', 'INPUT')",
             ("n80", f"{_PREFIX}notes-listofnotes-v1", _S12, 80,
              "Disclosure of financial instruments"),
         )

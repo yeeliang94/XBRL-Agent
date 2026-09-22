@@ -40,6 +40,116 @@ class SourceWriteError(ValueError):
     the agent, so it says what to do instead rather than what went wrong."""
 
 
+PLACEMENT_CONFLICT_FINDING_PREFIX = '["source_placement",'
+
+
+@dataclass(frozen=True)
+class PlacementCandidate:
+    sheet: str
+    row: int
+    label: str
+    content_revision: int | None = None
+
+
+class SourcePlacementConflict(SourceWriteError):
+    """A safe rejection whose competing destinations still need judgment.
+
+    The first successful write remains live so no disclosure is lost, but it
+    is only a candidate. Callers persist this object for the reviewer rather
+    than treating the first writer as the accounting decision.
+    """
+
+    def __init__(
+        self, *, generation_id: int, target: PlacementCandidate,
+        existing: Sequence[PlacementCandidate], block_ids: Sequence[str],
+        source_notes: Sequence[str], match_kind: str,
+        proposed_block_ids: Sequence[str] = (),
+    ) -> None:
+        self.generation_id = generation_id
+        self.target = target
+        self.existing = tuple(existing)
+        self.block_ids = tuple(sorted(set(block_ids)))
+        self.source_notes = tuple(source_notes)
+        self.match_kind = match_kind
+        self.proposed_block_ids = tuple(sorted(set(proposed_block_ids)))
+        super().__init__(self.agent_message())
+
+    @property
+    def finding_id(self) -> str:
+        identity = [
+            "source_placement", self.generation_id, list(self.block_ids),
+            list(self.proposed_block_ids),
+            [self.target.sheet, self.target.row],
+            [[c.sheet, c.row] for c in self.existing],
+        ]
+        return json.dumps(identity, ensure_ascii=True, separators=(",", ":"))
+
+    @property
+    def note_numbers(self) -> set[int]:
+        out: set[int] = set()
+        for note in self.source_notes:
+            number = note.split(" ", 1)[0].strip()
+            if number.isdigit():
+                out.add(int(number))
+        return out
+
+    def as_dict(self) -> dict:
+        return {
+            "generation_id": self.generation_id,
+            "match_kind": self.match_kind,
+            "block_ids": list(self.block_ids),
+            "proposed_block_ids": list(self.proposed_block_ids),
+            "source_notes": list(self.source_notes),
+            "target": self.target.__dict__,
+            "existing": [candidate.__dict__ for candidate in self.existing],
+        }
+
+    def agent_message(self) -> str:
+        existing = ", ".join(
+            f"{candidate.sheet} row {candidate.row} ({candidate.label!r})"
+            for candidate in self.existing
+        )
+        notes = (
+            f" Source note(s): {', '.join(self.source_notes)}."
+            if self.source_notes else ""
+        )
+        return (
+            f"placement conflict: source part(s) {', '.join(self.block_ids)} "
+            f"already support {existing}; the proposed destination is "
+            f"{self.target.sheet} row {self.target.row} ({self.target.label!r})."
+            f"{notes} The existing placement is provisional, not automatically "
+            "correct. This conflict was left for grounded review; do not retry "
+            "with unrelated source parts. Continue other supported work."
+        )
+
+
+def record_placement_conflict(
+    conn: sqlite3.Connection, *, run_id: int,
+    conflict: SourcePlacementConflict, source_pages: Sequence[int] = (),
+) -> int:
+    """Persist one deduplicated reviewer finding for a rejected proposal."""
+    existing = conn.execute(
+        "SELECT id FROM notes_review_flags "
+        "WHERE run_id=? AND finding_id=? AND status='open'",
+        (run_id, conflict.finding_id),
+    ).fetchone()
+    if existing is not None:
+        return int(existing["id"])
+    return repo.insert_notes_review_flag(
+        conn,
+        run_id=run_id,
+        kind="needs_human",
+        reason=conflict.agent_message(),
+        sheet=conflict.target.sheet,
+        row=conflict.target.row,
+        finding_id=conflict.finding_id,
+        source_pages=sorted({int(p) for p in source_pages if isinstance(p, int)}),
+        evidence=json.dumps(
+            conflict.as_dict(), ensure_ascii=True, separators=(",", ":")
+        ),
+    )
+
+
 @dataclass
 class WriteOutcome:
     sheet: str
@@ -159,6 +269,192 @@ def resolve_target(
     return node
 
 
+_NUMERIC_NOTE_PROSE_SHEETS = frozenset({
+    "Notes-Issuedcapital",
+    "Notes-RelatedPartytran",
+})
+_LIST_OF_NOTES_SHEET = "Notes-Listofnotes"
+
+
+def _heading_context_ids(available: Sequence[SourceBlock]) -> set[str]:
+    """Blocks that repeat only to preserve a selected block's ancestry."""
+    return {
+        block_id
+        for block in available
+        for block_id in (block.locator or {}).get("heading_ancestor_ids", [])
+    }
+
+
+def _approved_numeric_duplicate(
+    conn: sqlite3.Connection,
+    *,
+    run_id: int,
+    generation_id: int,
+    target: tuple[str, int],
+    other_coords: set[tuple[str, int]],
+    substantive_block_ids: set[str],
+    numeric_note_prose: bool,
+) -> bool:
+    """Whether the proposed duplicate is the one approved two-slot route.
+
+    Complete Issued Capital and Related Party prose may appear once in their
+    taxonomy text-block slot and once in List of Notes. No third destination
+    is approved. When the numeric slot was written first, its disposition
+    events are the durable approval receipt used by the later List write.
+    """
+    coords = set(other_coords)
+    coords.add(target)
+    if len(coords) != 2:
+        return False
+    sheets = {sheet for sheet, _row in coords}
+    if _LIST_OF_NOTES_SHEET not in sheets:
+        return False
+    numeric_sheets = sheets & _NUMERIC_NOTE_PROSE_SHEETS
+    if len(numeric_sheets) != 1 or sheets - numeric_sheets != {_LIST_OF_NOTES_SHEET}:
+        return False
+    if numeric_note_prose:
+        return True
+    if target[0] != _LIST_OF_NOTES_SHEET or not substantive_block_ids:
+        return False
+    approved = {
+        row["block_id"]
+        for row in conn.execute(
+            "SELECT DISTINCT block_id FROM notes_disposition_events "
+            "WHERE run_id=? AND generation_id=? "
+            "AND reason_code='APPROVED_DUPLICATE_ROUTE'",
+            (run_id, generation_id),
+        ).fetchall()
+    }
+    return substantive_block_ids <= approved
+
+
+def _refuse_unapproved_cross_row_duplicates(
+    conn: sqlite3.Connection,
+    *,
+    run_id: int,
+    generation_id: int,
+    sheet: str,
+    row: int,
+    available: Sequence[SourceBlock],
+    rendered: source_render.RenderedCell,
+    numeric_note_prose: bool,
+    target_label: str,
+) -> None:
+    """Reject duplicate source content before changing the destination.
+
+    The later integrity pass remains a backstop for legacy/corrupt ledgers.
+    New writes fail here, inside the write transaction, so a duplicate never
+    reaches ``notes_cells`` or the mTool exporter in the first place.
+    """
+    target = (sheet, row)
+    context_ids = _heading_context_ids(available)
+    substantive_ids = set(rendered.block_ids) - context_ids
+    collision_terms = ["p.render_sha256=?"]
+    collision_args: list[object] = [rendered.source_rendered_sha256]
+    if substantive_ids:
+        placeholders = ",".join("?" for _ in substantive_ids)
+        collision_terms.append(f"p.block_id IN ({placeholders})")
+        collision_args.extend(sorted(substantive_ids))
+    placements = conn.execute(
+        "SELECT p.*, c.label AS cell_label, c.content_revision FROM notes_block_placements p "
+        "JOIN notes_cells c ON c.run_id=p.run_id "
+        " AND c.sheet=p.sheet AND c.row=p.row "
+        "WHERE p.run_id=? AND p.generation_id=? AND p.active=1 "
+        "AND NOT (p.sheet=? AND p.row=?) AND ("
+        + " OR ".join(collision_terms)
+        + ") ORDER BY p.sheet,p.row,p.block_id",
+        (run_id, generation_id, sheet, row, *collision_args),
+    ).fetchall()
+    if not placements:
+        return
+
+    candidates_by_coord = {
+        (placement["sheet"], placement["row"]): PlacementCandidate(
+            placement["sheet"], placement["row"], placement["cell_label"] or "",
+            placement["content_revision"],
+        )
+        for placement in placements
+    }
+    source_note_ids = {
+        block.source_note_id for block in available
+        if block.block_id in substantive_ids and block.source_note_id
+    }
+    notes_by_id = {
+        note["source_note_id"]: " ".join(
+            part for part in (
+                str(note["top_note_num"] or "").strip(),
+                str(note["title"] or "").strip(),
+            ) if part
+        )
+        for note in srepo.fetch_notes(conn, generation_id)
+        if note["source_note_id"] in source_note_ids
+    }
+    source_notes = [
+        notes_by_id.get(note_id, note_id) for note_id in sorted(source_note_ids)
+    ]
+    proposed = PlacementCandidate(sheet, row, target_label)
+
+    conflicts: dict[str, set[tuple[str, int]]] = {}
+    for placement in placements:
+        block_id = placement["block_id"]
+        if block_id in substantive_ids:
+            conflicts.setdefault(block_id, set()).add(
+                (placement["sheet"], placement["row"])
+            )
+    unapproved_block_ids: list[str] = []
+    unapproved_coords: set[tuple[str, int]] = set()
+    for block_id, coords in conflicts.items():
+        if not _approved_numeric_duplicate(
+            conn,
+            run_id=run_id,
+            generation_id=generation_id,
+            target=target,
+            other_coords=coords,
+            substantive_block_ids={block_id},
+            numeric_note_prose=numeric_note_prose,
+        ):
+            unapproved_block_ids.append(block_id)
+            unapproved_coords.update(coords)
+    if unapproved_block_ids:
+        raise SourcePlacementConflict(
+            generation_id=generation_id,
+            target=proposed,
+            existing=[
+                candidates_by_coord[coord] for coord in sorted(unapproved_coords)
+            ],
+            block_ids=unapproved_block_ids,
+            source_notes=source_notes,
+            match_kind="same_block",
+            proposed_block_ids=rendered.block_ids,
+        )
+
+    same_render_coords = {
+        (placement["sheet"], placement["row"])
+        for placement in placements
+        if placement["render_sha256"] == rendered.source_rendered_sha256
+    }
+    if same_render_coords and not _approved_numeric_duplicate(
+        conn,
+        run_id=run_id,
+        generation_id=generation_id,
+        target=target,
+        other_coords=same_render_coords,
+        substantive_block_ids=substantive_ids,
+        numeric_note_prose=numeric_note_prose,
+    ):
+        raise SourcePlacementConflict(
+            generation_id=generation_id,
+            target=proposed,
+            existing=[
+                candidates_by_coord[coord] for coord in sorted(same_render_coords)
+            ],
+            block_ids=sorted(substantive_ids),
+            source_notes=source_notes,
+            match_kind="same_render",
+            proposed_block_ids=rendered.block_ids,
+        )
+
+
 def write_cell_from_blocks(
     conn: sqlite3.Connection,
     *,
@@ -180,8 +476,9 @@ def write_cell_from_blocks(
     """Build and store one cell from the named source blocks.
 
     Raises :class:`SourceWriteError` for anything the caller can act on: an
-    unknown block id, an empty selection, a target that is not a writable row
-    of this filing's templates, or a note too long for one cell.
+    unknown block id, an empty selection, an unapproved cross-row duplicate, a
+    target that is not a writable row of this filing's templates, or a note
+    too long for one cell.
 
     ``template_prefix`` enables target validation. It is optional only so the
     pure-unit tests can exercise rendering without a template registry; every
@@ -272,6 +569,17 @@ def write_cell_from_blocks(
             raise SourceWriteError("this cell contains a human edit; automatic source placement cannot overwrite it.")
         if expected_revision is not None and (existing is None or existing["content_revision"] != expected_revision):
             raise SourceWriteError("this cell changed after it was read; reload it before repairing.")
+        _refuse_unapproved_cross_row_duplicates(
+            conn,
+            run_id=run_id,
+            generation_id=generation_id,
+            sheet=sheet,
+            row=row,
+            available=available,
+            rendered=rendered,
+            numeric_note_prose=numeric_note_prose,
+            target_label=label,
+        )
         repo.upsert_notes_cell(
             conn, run_id=run_id, sheet=sheet, row=row, label=label,
             html=rendered.html, evidence=evidence,

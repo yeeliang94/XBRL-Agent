@@ -30,6 +30,7 @@ import { runStatusDisplay } from "../lib/runStatus";
 import { StatusIcon } from "../components/StatusIcon";
 import { semanticActivities } from "../lib/semanticActivity";
 import { isCompletedWorkstream, workstreamStatusLabel } from "../lib/workstreamStatus";
+import { notesFormattingActivity } from "../lib/notesFormattingActivity";
 
 // Re-export so existing callers / tests that imported NOTES_12_AGENT_ID
 // from ExtractPage keep working. The single source of truth lives in
@@ -277,20 +278,16 @@ export function ExtractPage({
           flag: null,
         } as AgentTabState;
       }
-      if (
-        state.notesInRun.length > 0
-        && (state.pipelineStage === "formatting_notes" || state.pipelineStage === "done")
-      ) {
+      const formatting = notesFormattingActivity(state);
+      if (formatting) {
         agents["notes-formatting"] = {
           agentId: "notes-formatting",
           label: "Notes formatting",
           role: "NOTES_FORMATTING",
-          status: state.pipelineStage === "done" ? "complete" : "running",
-          task: state.pipelineStage === "done"
-            ? "Formatting complete"
-            : state.pipelineActivity?.message ?? "Applying MBRS formatting",
-          taskDetail: state.pipelineActivity?.total
-            ? `${state.pipelineActivity.completed ?? 0} of ${state.pipelineActivity.total}`
+          status: formatting.status,
+          task: formatting.message,
+          taskDetail: formatting.progress?.total
+            ? `${formatting.progress.completed ?? 0} of ${formatting.progress.total}`
             : null,
           subLabel: null,
           flag: null,
@@ -298,7 +295,7 @@ export function ExtractPage({
       }
       return agents;
     },
-    [state.agents, state.pipelineStage, state.pipelineActivity, state.pdfSidecar, state.notesInRun],
+    [state.agents, state.pipelineStage, state.pipelineActivity, state.pdfSidecar, state.events, state.isRunning],
   );
   const agentTabsOrder = useMemo(() => {
     const syntheticIds = ["source-preparation", "notes-formatting"].filter((id) => id in agentTabsAgents);
@@ -898,12 +895,11 @@ export function ActiveTabPanel({
     );
   }
   if (state.activeTab === "notes-formatting") {
-    const completed = state.pipelineActivity?.completed ?? 0;
-    const total = state.pipelineActivity?.total ?? 0;
-    const active = state.pipelineStage === "formatting_notes";
-    const message = active
-      ? state.pipelineActivity?.message ?? "Applying MBRS formatting"
-      : "Formatting complete";
+    const formatting = notesFormattingActivity(state);
+    if (!formatting) return null;
+    const completed = formatting.progress?.completed ?? 0;
+    const total = formatting.progress?.total ?? 0;
+    const message = formatting.message;
     return (
       <div role="tabpanel" aria-label="Notes formatting activity" style={styles.activityCardAttached}>
         <div style={styles.activityHeader}>
@@ -912,7 +908,7 @@ export function ActiveTabPanel({
               <div style={styles.activityEyebrow}>Current stage</div>
               <div style={styles.activityTitle}>Notes formatting</div>
             </div>
-            <span style={styles.activeAgentStatus}>{active ? "Working" : "Complete"}</span>
+            <span style={styles.activeAgentStatus}>{workstreamStatusLabel(formatting.status)}</span>
           </div>
           <div style={styles.activityHeaderRight}>
             {showStopAll && (

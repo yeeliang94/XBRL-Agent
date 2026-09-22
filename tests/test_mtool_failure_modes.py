@@ -143,16 +143,18 @@ def test_empty_upload_is_422(client):
 
 # ------------------------------------------------------- wrong template
 
-def test_wrong_statement_template_is_refused_with_the_sheet_named(client):
+def test_wrong_statement_template_is_refused_with_matching_template_guidance(client):
     """The operator uploads the SOPL template for a SOFP run. The sheets the
-    fill needs simply aren't there — say which, don't half-fill."""
+    fill needs simply aren't there. Reject it with matching-template guidance."""
     tc, db, _ = client
     run_id = _make_run(db)
     _seed(db, run_id)
     r = _patch(tc, run_id, files=_file("sopl.xlsx", SOPL.read_bytes()))
     assert r.status_code == 422
     body = json.dumps(r.json())
-    assert "SOFP-Sub-CuNonCu" in body, body
+    assert "does not match" in body, body
+    assert "statement" in body, body
+    assert "Choose a matching mTool template" in body, body
 
 
 def test_template_with_no_matching_sheets_never_writes_anything(client,

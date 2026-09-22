@@ -1,5 +1,5 @@
 import { describe, test, expect, vi } from "vitest";
-import { act, render, screen, fireEvent } from "@testing-library/react";
+import { act, render, screen, fireEvent, within } from "@testing-library/react";
 import { ExtractPage } from "../pages/ExtractPage";
 import { initialState } from "../lib/appReducer";
 import { createAgentState } from "../lib/types";
@@ -398,6 +398,60 @@ describe("ExtractPage — render-gate regression guards", () => {
     expect(screen.getByRole("tabpanel", { name: "Notes formatting activity" })).toBeInTheDocument();
     expect(screen.getByRole("progressbar", { name: "Notes formatting progress" })).toHaveAttribute("aria-valuenow", "2");
     expect(screen.getAllByText("Formatting notes: 2 of 3 sections complete")).toHaveLength(2);
+  });
+
+  test.each(["partial", "failed", "skipped"])("%s formatting remains failed after the run finishes", (outcome) => {
+    const message = `${outcome}: Some notes could not be fully formatted. Review and retry.`;
+    const props = makeProps({ state: {
+      sessionId: "test-session", filename: "test.pdf", isRunning: true,
+      agents: { sofp_0: createAgentState("sofp_0", "SOFP", "SOFP") }, agentTabOrder: ["sofp_0"],
+      pipelineStage: "formatting_notes", activeTab: "notes-formatting",
+      notesInRun: ["CORP_INFO"],
+      events: [{ event: "pipeline_stage", timestamp: 1,
+        data: { stage: "formatting_notes", started_at: 1, completed: 1, total: 3 } }],
+    } });
+    const { rerender } = render(<ExtractPage {...props} />);
+    rerender(<ExtractPage {...props} state={{ ...props.state,
+      isRunning: false, isComplete: true, pipelineStage: "done",
+      events: [...props.state.events, { event: "error", timestamp: 2,
+        data: { type: "notes_formatting_incomplete", message } }],
+    }} />);
+    const panel = within(screen.getByRole("tabpanel", { name: "Notes formatting activity" }));
+    expect(panel.getByText("Failed")).toBeVisible();
+    expect(panel.getByText(message)).toBeVisible();
+    expect(panel.queryByText("Formatting complete")).toBeNull();
+    expect(screen.getByRole("tab", { name: /notes formatting/i })).toHaveTextContent("Failed");
+  });
+
+  test("only an observed successful formatting pass is shown complete", () => {
+    const props = makeProps({ state: {
+      sessionId: "test-session", filename: "test.pdf", isRunning: true,
+      agents: { sofp_0: createAgentState("sofp_0", "SOFP", "SOFP") }, agentTabOrder: ["sofp_0"],
+      pipelineStage: "formatting_notes", activeTab: "notes-formatting",
+      notesInRun: ["CORP_INFO"],
+      events: [{ event: "pipeline_stage", timestamp: 1,
+        data: { stage: "formatting_notes", started_at: 1 } }],
+    } });
+    const { rerender } = render(<ExtractPage {...props} />);
+    rerender(<ExtractPage {...props} state={{ ...props.state, isRunning: false, isComplete: true, pipelineStage: "done" }} />);
+    expect(within(screen.getByRole("tabpanel", { name: "Notes formatting activity" }))
+      .getByText("Formatting complete")).toBeVisible();
+    rerender(<ExtractPage {...props} state={{ ...props.state,
+      isRunning: false, isComplete: true, pipelineStage: "done", events: [], activeTab: "sofp_0",
+      agents: { sofp_0: createAgentState("sofp_0", "SOFP", "SOFP") }, agentTabOrder: ["sofp_0"],
+    }} />);
+    expect(screen.queryByRole("tab", { name: /notes formatting/i })).toBeNull();
+  });
+
+  test("stopping during formatting does not report success", () => {
+    render(<ExtractPage {...makeProps({ state: {
+      sessionId: "test-session", filename: "test.pdf", isRunning: false, hasError: true,
+      agents: { sofp_0: createAgentState("sofp_0", "SOFP", "SOFP") }, agentTabOrder: ["sofp_0"],
+      pipelineStage: "formatting_notes", activeTab: "notes-formatting", notesInRun: ["CORP_INFO"],
+    } })} />);
+    expect(within(screen.getByRole("tabpanel", { name: "Notes formatting activity" }))
+      .getByText("Stopped")).toBeVisible();
+    expect(screen.queryByText("Formatting complete")).toBeNull();
   });
 
   test("auto-selects notes formatting once without trapping later tab changes", () => {
