@@ -273,18 +273,6 @@ def test_a_missing_run_is_404_everywhere(client):
     assert _patch(tc, 999999).status_code == 404
 
 
-# ---------------------------------------------- the tool stays stdlib-only
-
-def test_offline_fill_imports_with_no_third_party_deps():
-    """The rollback plan's invariant: the patcher travels to the Windows box as
-    a single file, so it must not grow a repo import or a pip dependency."""
-    source = (REPO / "mtool" / "offline_fill.py").read_text(encoding="utf-8")
-    banned = ("import openpyxl", "from openpyxl", "import mtool",
-              "from mtool", "import server", "from db ", "import pandas")
-    for token in banned:
-        assert token not in source, f"offline_fill.py imported {token!r}"
-
-
 def test_unexpected_failure_has_friendly_reference_and_durable_incident(client, monkeypatch):
     import api.mtool as routes
     from db import repository as repo

@@ -3810,6 +3810,53 @@ def _notes_integrity_tips_status(outcome: Optional[dict]) -> bool:
     return bool(outcome and outcome.get("tips_status"))
 
 
+def _resolve_run_status(
+    *,
+    all_agents_ok: bool,
+    merge_success: bool,
+    correction_exhausted: bool,
+    canonical_reexport_failed: bool,
+    artifact_current: bool,
+    any_check_failed: bool,
+    cross_check_crashed: bool,
+    open_conflicts: int,
+    any_agent_flagged: bool,
+    validator_failed: bool,
+    reviewer_failed: bool,
+    notes_coverage_unresolved: bool,
+    notes_integrity_unresolved: bool,
+    open_notes_placement_conflicts: bool,
+    notes_formatting_incomplete: bool,
+) -> str:
+    """Return the terminal run status from observable pipeline outcomes."""
+    if all_agents_ok and merge_success and correction_exhausted:
+        status = "correction_exhausted"
+    elif canonical_reexport_failed or not artifact_current:
+        status = "completed_with_errors"
+    elif not all_agents_ok:
+        status = "failed"
+    elif not merge_success:
+        status = "completed_with_errors"
+    elif any((
+        any_check_failed,
+        cross_check_crashed,
+        open_conflicts > 0,
+        any_agent_flagged,
+        validator_failed,
+        reviewer_failed,
+        notes_coverage_unresolved,
+        notes_integrity_unresolved,
+        open_notes_placement_conflicts,
+    )):
+        status = "completed_with_errors"
+    else:
+        status = "completed"
+
+    if notes_formatting_incomplete and status == "completed":
+        return "completed_with_errors"
+    return status
+
+
 def _spot_check_enabled() -> bool:
     """Whether a CLEAN run (all cross-checks passed, no open conflicts) still
     gets a grounded spot-check (issue 1, 2026-06-21).
@@ -8334,73 +8381,23 @@ async def run_multi_agent_stream(
                 exc_info=True,
             )
             open_notes_placement_conflicts = True
-        if all_agents_ok and merge_result.success and correction_exhausted:
-            overall_status = "correction_exhausted"
-        elif canonical_reexport_failed:
-            # Facts were corrected but the workbook couldn't be regenerated —
-            # the download is stale relative to the Concepts UI. Never report
-            # this as a clean success (peer-review finding 4).
-            overall_status = "completed_with_errors"
-        elif not artifact_current:
-            # A retained scratch/merged artifact remains downloadable, but it
-            # is stale relative to canonical facts or notes. Never classify
-            # that artifact as filing-ready.
-            overall_status = "completed_with_errors"
-        elif (all_agents_ok and merge_result.success and not any_check_failed
-              and not cross_check_crashed and open_conflicts == 0
-              and not any_agent_flagged and not validator_failed
-              and not reviewer_failed and not notes_coverage_unresolved
-              and not notes_integrity_unresolved
-              and not open_notes_placement_conflicts):
-            # Peer-review fix (2026-04-27): a cross-check pass that
-            # crashed produced an empty results list, so
-            # ``any_check_failed`` is misleadingly False. Without the
-            # explicit ``cross_check_crashed`` guard, validation
-            # crashes silently became "completed" runs.
-            overall_status = "completed"
-        elif all_agents_ok and not merge_result.success:
-            overall_status = "completed_with_errors"
-        elif all_agents_ok and merge_result.success and open_conflicts > 0:
-            # Agents, merge and xlsx cross-checks are clean, but the
-            # canonical store still has unreconciled conflicts → needs review.
-            overall_status = "completed_with_errors"
-        elif all_agents_ok and merge_result.success and any_agent_flagged:
-            # Everything ran, but at least one statement finalised with an
-            # acknowledged gap (peer-review F1) → needs human review.
-            overall_status = "completed_with_errors"
-        elif all_agents_ok and merge_result.success and validator_failed:
-            # Extraction/merge/cross-checks are clean, but the notes-validator
-            # pass failed (peer-review HIGH) → needs review, not a clean badge.
-            overall_status = "completed_with_errors"
-        elif all_agents_ok and merge_result.success and reviewer_failed:
-            # Extraction/merge/cross-checks are clean, but the reviewer /
-            # spot-check pass failed to run (peer-review HIGH, 2026-06-21) →
-            # needs review, not a clean badge.
-            overall_status = "completed_with_errors"
-        elif all_agents_ok and merge_result.success and notes_coverage_unresolved:
-            # Everything else is clean, but the notes coverage checklist has an
-            # unresolved missing note / uninvestigated suspected gap, or the
-            # notes inventory was unavailable → needs review (PRD Decision 3).
-            overall_status = "completed_with_errors"
-        elif all_agents_ok and merge_result.success and notes_integrity_unresolved:
-            # Everything else is clean, but part of the source document is not
-            # accounted for, or a note boundary is disputed → needs review.
-            overall_status = "completed_with_errors"
-        elif (
-            all_agents_ok
-            and merge_result.success
-            and open_notes_placement_conflicts
-        ):
-            # The duplicate was prevented, but the correct destination is
-            # still undecided. Preserve the draft and require review instead
-            # of reporting either a clean success or a technical failure.
-            overall_status = "completed_with_errors"
-        elif all_agents_ok and (any_check_failed or cross_check_crashed):
-            overall_status = "completed_with_errors"
-        else:
-            overall_status = "failed"
-        if notes_formatting_incomplete and overall_status == "completed":
-            overall_status = "completed_with_errors"
+        overall_status = _resolve_run_status(
+            all_agents_ok=all_agents_ok,
+            merge_success=merge_result.success,
+            correction_exhausted=correction_exhausted,
+            canonical_reexport_failed=canonical_reexport_failed,
+            artifact_current=artifact_current,
+            any_check_failed=any_check_failed,
+            cross_check_crashed=cross_check_crashed,
+            open_conflicts=open_conflicts,
+            any_agent_flagged=any_agent_flagged,
+            validator_failed=validator_failed,
+            reviewer_failed=reviewer_failed,
+            notes_coverage_unresolved=notes_coverage_unresolved,
+            notes_integrity_unresolved=notes_integrity_unresolved,
+            open_notes_placement_conflicts=open_notes_placement_conflicts,
+            notes_formatting_incomplete=notes_formatting_incomplete,
+        )
         if _safe_mark_finished(db_conn, run_id, overall_status):
             terminal_status = overall_status
 

@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { ApiError, userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
-import { MtoolSheetSelection } from "./MtoolSheetSelection";
+import { friendlyMtoolSheetName, MtoolSheetSelection } from "./MtoolSheetSelection";
 import { FileDropzone } from "./FileDropzone";
 import type { FilingCoverage } from "./FilingCoverageFailurePanel";
 
@@ -235,14 +235,11 @@ const styles = {
     alignItems: "flex-start",
     justifyContent: "space-between",
     gap: pwc.space.md,
+    marginBottom: pwc.space.sm,
   } as React.CSSProperties,
   heading: {
-    fontFamily: pwc.fontHeading,
-    fontWeight: pwc.weight.medium,
+    ...ui.dialogTitle,
     fontSize: 20,
-    color: pwc.grey900,
-    margin: 0,
-    marginBottom: pwc.space.md,
   } as React.CSSProperties,
   closeX: {
     border: "none",
@@ -254,10 +251,8 @@ const styles = {
     padding: pwc.space.xs,
   } as React.CSSProperties,
   sub: {
-    fontSize: 14,
-    color: pwc.grey700,
-    margin: `0 0 ${pwc.space.xl}px`,
-    lineHeight: 1.5,
+    ...ui.bodyText,
+    margin: `0 0 ${pwc.space.lg}px`,
   } as React.CSSProperties,
   statLine: {
     fontSize: 13,
@@ -269,7 +264,7 @@ const styles = {
     gap: pwc.space.sm,
     justifyContent: "flex-end",
     flexWrap: "wrap",
-    marginTop: pwc.space.xl,
+    marginTop: pwc.space.lg,
   } as React.CSSProperties,
   noteCard: {
     borderTop: `1px solid ${pwc.grey200}`,
@@ -281,15 +276,14 @@ const styles = {
     alignItems: "center",
     justifyContent: "space-between",
     gap: pwc.space.md,
-    padding: `${pwc.space.md}px 0`,
-    borderTop: `1px solid ${pwc.grey200}`,
+    padding: `${pwc.space.sm}px 0 ${pwc.space.md}px`,
     borderBottom: `1px solid ${pwc.grey200}`,
   } as React.CSSProperties,
   summaryGrid: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
-    gap: pwc.space.lg,
-    padding: `${pwc.space.lg}px 0`,
+    gap: pwc.space.xl,
+    padding: `${pwc.space.md}px 0`,
   } as React.CSSProperties,
   summaryValue: {
     fontSize: 20,
@@ -392,10 +386,10 @@ function normaliseFieldSemantics(body: unknown): FieldSemantics | undefined {
  * Nothing is capped here. The report used to ride an HTTP header limited to 20
  * rows and 6 KB, and the UI rendered only counts — so "which rows didn't
  * land?" was a question the operator could not answer from the screen. */
-function RowDetail({ title, rows }: { title: string; rows: string[] }) {
+function RowDetail({ title, rows, defaultOpen = false }: { title: string; rows: string[]; defaultOpen?: boolean }) {
   if (rows.length === 0) return null;
   return (
-    <details style={{ marginTop: 6, fontSize: 12 }} open={rows.length <= 8}>
+    <details style={{ marginTop: 6, fontSize: 12 }} open={defaultOpen}>
       <summary style={{ cursor: "pointer" }}>
         {title} <span style={{ color: pwc.grey500 }}>({rows.length})</span>
       </summary>
@@ -514,6 +508,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
   // seen the report (and, when degraded, said so).
   const [downloadErr, setDownloadErr] = useState<string | null>(null);
   const [downloaded, setDownloaded] = useState(false);
+  const [fillQueued, setFillQueued] = useState(false);
   // Monotonic token so a slow column-detect for template A can't land its
   // result after the user has switched to template B (a stale columnMap would
   // be sent as an explicit override and MIS-TARGET writes). Bumped on every
@@ -591,6 +586,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
     setPreflight(null);
     setDownloadErr(null);
     setDownloaded(false);
+    setFillQueued(false);
     const preflightRequest = ++preflightSeq.current;
     fetch(`/api/runs/${runId}/mtool-fill/preflight`)
       .then(async (r) => {
@@ -639,8 +635,6 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
   useEffect(() => {
     if (file) fillButtonRef.current?.focus();
   }, [file]);
-
-  if (!open) return null;
 
   const notesTargetsPayload = () =>
     Object.keys(noteTargets).length > 0 ? JSON.stringify(noteTargets) : null;
@@ -724,6 +718,24 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
       if (current()) setBusy(false);
     }
   };
+
+  const requestSubmit = () => {
+    if (detectBusy) {
+      setFillQueued(true);
+      return;
+    }
+    void submit();
+  };
+
+  useEffect(() => {
+    if (!fillQueued || detectBusy) return;
+    setFillQueued(false);
+    if (columnConfidence === "low" && columnMap) return;
+    void submit();
+    // `submit` intentionally uses the state from the render in which template
+    // detection completed. A low-confidence layout remains a human decision.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fillQueued, detectBusy, columnConfidence, columnMap]);
 
   // Step two of the split: fetch the workbook the fill produced. A degraded
   // fill only releases it once the operator has acknowledged the report.
@@ -895,6 +907,9 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
   const coverageSkipped = report?.filing_coverage
     ? report.filing_coverage.unmapped + report.filing_coverage.ambiguous
     : 0;
+  const notFilledCount = report
+    ? coverageSkipped + report.unresolved.length + (report.notes?.counts.unresolved ?? 0)
+    : 0;
   const changeSheets = (sheets: string[] | null) => {
     setSelectedSheets(sheets);
     previewSeq.current += 1;
@@ -932,6 +947,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
     setPatchErr(null);
     setDownloadErr(null);
     setDownloaded(false);
+    setFillQueued(false);
     setColumnMap(null);
     setDimensionalSheets([]);
     setColumnConfidence(null);
@@ -946,6 +962,8 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
       void runPreview(nextFile, true);
     }
   };
+
+  if (!open) return null;
 
   return (
     <div
@@ -974,11 +992,10 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
         </div>
         <div style={{ overflowY: "auto", minHeight: 0, flex: "1 1 auto" }}>
         <p style={styles.sub}>
-          Upload the empty Excel template exported from mTool. We&apos;ll fill what we can
-          and leave anything without a matching place unchanged.
+          Choose an empty Excel template exported from mTool.
         </p>
 
-        <fieldset disabled={busy || downloading} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+        <fieldset disabled={busy || downloading || fillQueued} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
         {!file && (
           <FileDropzone
             accept=".xlsx"
@@ -995,7 +1012,6 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
           <div style={styles.selectedFile}>
             <div style={{ minWidth: 0 }}>
               <div style={{ fontWeight: pwc.weight.semibold, overflowWrap: "anywhere" }}>{file.name}</div>
-              <div style={{ ...styles.statLine, color: pwc.grey700 }}>Uploaded template</div>
             </div>
             <button type="button" className={uiClass.btnSecondary}
               style={{ ...ui.buttonSecondary, flexShrink: 0 }}
@@ -1019,30 +1035,24 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
         )}
 
         {file && meta && !report && (
-          <p aria-label="Fill summary" style={{ margin: `${pwc.space.lg}px 0`, color: pwc.grey700, fontSize: 14 }}>
-            Ready to fill <strong style={{ color: pwc.grey900 }}>{meta.counts.writes} figures</strong>
-            {notesCount !== null && <> and <strong style={{ color: pwc.grey900 }}>{notesCount} notes</strong></>}
-            {` across ${selectedSheets?.length ?? availableSheets.length} sheets.`}
+          <p aria-label="Fill summary" style={{ margin: `${pwc.space.md}px 0`, color: pwc.grey700, fontSize: 14 }}>
+            <strong style={{ color: pwc.grey900 }}>{meta.counts.writes} figures</strong>
+            {notesCount !== null && <> · <strong style={{ color: pwc.grey900 }}>{notesCount} notes</strong></>}
+            {` · ${selectedSheets?.length ?? availableSheets.length} sheets`}
           </p>
         )}
 
         {patchErr && (
           <div role="alert" style={ui.alertError}>Fill failed: {patchErr}</div>
         )}
-        {busy && <div role="status" style={ui.alertInfo}>Filling figures and notes, checking the saved values, and preparing your download…</div>}
+        {busy && <div role="status" style={ui.alertInfo}>Preparing your template…</div>}
         {readinessErr && <p role="status" style={styles.statLine}>Run checks are unavailable: {readinessErr} You can still fill the template; checks are repeated when you fill.</p>}
         {loadErr && (
           <div style={ui.alertError}>Could not load fill data: {loadErr}</div>
         )}
 
-        {file && !report && reviewGroups.length > 0 && (
-          <p aria-label="Run review reminders" style={{ margin: `0 0 ${pwc.space.lg}px`, color: pwc.grey700, fontSize: 13 }}>
-            {reviewGroups.reduce((sum, group) => sum + group.items.length, 0)} saved-run {reviewGroups.reduce((sum, group) => sum + group.items.length, 0) === 1 ? "item needs" : "items need"} review. This does not prevent filling the template.
-          </p>
-        )}
-
         <div hidden={!!report} style={{ display: report ? undefined : "flex", flexDirection: "column" }}>
-        {file && <details style={{ marginBottom: pwc.space.lg }}>
+        {file && <details style={{ marginBottom: pwc.space.md }}>
           <summary style={{ cursor: "pointer", fontSize: 14, fontWeight: pwc.weight.medium, color: pwc.grey900 }}>
             Customize
           </summary>
@@ -1101,12 +1111,18 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
           </label>
         )}
 
+        {reviewGroups.length > 0 && (
+          <div aria-label="Run review reminders" style={{ ...ui.supportingText, borderTop: `1px solid ${pwc.grey200}`, paddingTop: pwc.space.sm }}>
+            {reviewGroups.reduce((sum, group) => sum + group.items.length, 0)} saved-run {reviewGroups.reduce((sum, group) => sum + group.items.length, 0) === 1 ? "item needs" : "items need"} review.
+          </div>
+        )}
+
 
         </details>}
 
         {detectBusy && (
           <div role="status" style={{ ...styles.statLine, color: pwc.grey700 }}>
-            Checking the template's column layout…
+            Checking template…
           </div>
         )}
         {detectErr && (
@@ -1125,18 +1141,11 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                 <button type="button" onClick={() => void runPreview()} disabled={busy} style={{ ...ui.buttonGhost, marginTop: pwc.space.sm }} className={uiClass.btnGhost}>Try note check again</button>
               </div>
             )}
-            {preview && preview.unresolved.length === 0 && preview.errors.length === 0 && (
-              <p role="status" style={{ ...styles.statLine, color: pwc.grey700 }}>
-                {preview.notes_in_run} {preview.notes_in_run === 1 ? "note is" : "notes are"} ready to fill automatically.
-              </p>
-            )}
             {preview && (preview.unresolved.length > 0 || preview.errors.length > 0) && (
               <div
                 style={{
-                  border: `1px solid ${pwc.grey200}`,
-                  borderRadius: pwc.radius.md,
-                  padding: pwc.space.md,
-                  marginTop: pwc.space.sm,
+                  borderTop: `1px solid ${pwc.grey200}`,
+                  paddingTop: pwc.space.md,
                   fontSize: 12,
                 }}
                 aria-label="Notes preview"
@@ -1296,9 +1305,8 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
         {columnPrompt && (
           <div
             style={{
-              border: `1px solid ${pwc.grey200}`,
-              borderRadius: pwc.radius.md,
-              padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+              borderTop: `1px solid ${pwc.grey200}`,
+              paddingTop: pwc.space.md,
               marginTop: pwc.space.sm,
               fontSize: 12,
               color: pwc.grey700,
@@ -1311,9 +1319,8 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
         {columnMap && (
           <div
             style={{
-              border: `1px solid ${pwc.grey300}`,
-              borderRadius: pwc.radius.md,
-              padding: pwc.space.md,
+              borderTop: columnPrompt ? "none" : `1px solid ${pwc.grey200}`,
+              paddingTop: columnPrompt ? pwc.space.sm : pwc.space.md,
               marginTop: pwc.space.md,
               fontSize: 12,
             }}
@@ -1385,32 +1392,34 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
             }}
           >
             <h3 style={{ ...ui.sectionTitle, fontSize: 18 }}>
-              {report.status === "ok"
-                ? "Template ready"
-                : "Template filled — review needed"}
+              Template ready to download
             </h3>
+            {report.status !== "ok" && (
+              <p style={{ ...ui.bodyText, margin: `${pwc.space.xs}px 0 0` }}>
+                Some items need review before filing.
+              </p>
+            )}
             <div style={styles.summaryGrid}>
               <div><div style={styles.summaryValue}>{report.counts.written}</div><div style={{ ...styles.statLine, color: pwc.grey700 }}>figures filled</div></div>
               {report.notes && <div><div style={styles.summaryValue}>{report.notes.counts.written}</div><div style={{ ...styles.statLine, color: pwc.grey700 }}>notes filled</div></div>}
-              <div><div style={styles.summaryValue}>{coverageSkipped + report.unresolved.length + (report.notes?.counts.unresolved ?? 0)}</div><div style={{ ...styles.statLine, color: pwc.grey700 }}>items skipped</div></div>
+              {notFilledCount > 0 && <div><div style={styles.summaryValue}>{notFilledCount}</div><div style={{ ...styles.statLine, color: pwc.grey700 }}>not filled</div></div>}
             </div>
-            {(report.counts.reconciled_formula ?? 0) > 0 && <p>
-              {report.counts.reconciled_formula} calculated values agree with the reviewed figures. The template formulas were preserved.
-            </p>}
-            {Boolean(report.sheet_selection?.excluded_sheets.length) && <p style={{ overflowWrap: "anywhere" }}>
-              Partial workbook — excluded: {report.sheet_selection?.excluded_sheets.join(", ")}. {report.sheet_selection?.excluded_figures} figures and {report.sheet_selection?.excluded_notes ?? "an unknown number of"} notes were left out.
-            </p>}
-            {coverageSkipped > 0 && (
-              <p style={{ fontSize: 13, color: pwc.grey700 }}>
-                {report.filing_coverage?.mapped} of {report.filing_coverage?.requested} figures were filled. {coverageSkipped} {coverageSkipped === 1 ? "figure had" : "figures had"} no matching place in this template and {coverageSkipped === 1 ? "was" : "were"} left unchanged.
+            {Boolean(report.sheet_selection?.excluded_sheets.length) && (
+              <p style={{ ...ui.supportingText, margin: `0 0 ${pwc.space.sm}px`, overflowWrap: "anywhere" }}>
+                Partial workbook: {report.sheet_selection!.excluded_sheets.map(friendlyMtoolSheetName).join(", ")} not included. {report.sheet_selection!.excluded_figures} figures {report.sheet_selection!.excluded_notes === null ? "and any notes" : `and ${report.sheet_selection!.excluded_notes} ${report.sheet_selection!.excluded_notes === 1 ? "note" : "notes"}`} were left unchanged.
               </p>
             )}
-            <p style={{ fontSize: 13, color: pwc.grey700 }}>Download the filled copy, review any skipped items, then open it in mTool to Validate &amp; Generate.</p>
+            {coverageSkipped > 0 && (
+              <p style={{ ...ui.supportingText, margin: `0 0 ${pwc.space.sm}px` }}>
+                {coverageSkipped} {coverageSkipped === 1 ? "figure had" : "figures had"} no matching destination and {coverageSkipped === 1 ? "was" : "were"} left unchanged.
+              </p>
+            )}
+            <p style={{ ...ui.supportingText, margin: `0 0 ${pwc.space.md}px` }}>Download it, then validate and generate in mTool.</p>
             {Boolean(report.filing_coverage?.operator_resolutions?.length) && (
-              <details style={{ marginTop: 12 }}>
-                <summary>Confirmed filing destinations</summary>
-                <ul>
-                  {report.filing_coverage?.operator_resolutions?.map((item, index) => (
+              <details style={{ marginBottom: pwc.space.sm, fontSize: 12 }}>
+                <summary style={{ cursor: "pointer" }}>Confirmed filing destinations ({report.filing_coverage!.operator_resolutions!.length})</summary>
+                <ul style={{ margin: "4px 0 0", paddingLeft: 18, color: pwc.grey700 }}>
+                  {report.filing_coverage!.operator_resolutions!.map((item, index) => (
                     <li key={`${item.cell}:${index}`} style={{ overflowWrap: "anywhere" }}>
                       {item.label} · {item.period} · {item.entity_scope}: {item.cell}
                       {Object.values(item.dimensions ?? {}).length > 0 && ` · ${Object.values(item.dimensions ?? {}).join(", ")}`}
@@ -1419,8 +1428,21 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                 </ul>
               </details>
             )}
-            {report.notes && <RowDetail title="Notes errors" rows={(report.notes.errors ?? []).map(notesErrorMessage)} />}
-            {report.notes && <RowDetail title="Notes that need checking" rows={(report.notes.mismatches ?? []).map((e) => `${e.label ?? e.key ?? "Note"}: ${e.detail ?? (e.found === false ? "The saved note is missing or empty. Check it in mTool." : "The saved note differs from the source. Check it in mTool.")}`)} />}
+            {((report.counts.reconciled_formula ?? 0) > 0 || (report.unit_class_unknown?.length ?? 0) > 0) && (
+              <details style={{ marginBottom: pwc.space.sm, fontSize: 12 }}>
+                <summary style={{ cursor: "pointer" }}>Other details</summary>
+                {(report.counts.reconciled_formula ?? 0) > 0 && (
+                  <p>{report.counts.reconciled_formula} calculated values agree with the reviewed figures. The template formulas were preserved.</p>
+                )}
+                {(report.unit_class_unknown?.length ?? 0) > 0 && (
+                  <p style={{ color: pwc.grey700 }}>
+                    {report.unit_class_unknown!.length} value(s) could not be classified by unit and were written unchanged.
+                  </p>
+                )}
+              </details>
+            )}
+            {report.notes && <RowDetail title="Notes errors" defaultOpen rows={(report.notes.errors ?? []).map(notesErrorMessage)} />}
+            {report.notes && <RowDetail title="Notes that need checking" defaultOpen rows={(report.notes.mismatches ?? []).map((e) => `${e.label ?? e.key ?? "Note"}: ${e.detail ?? (e.found === false ? "The saved note is missing or empty. Check it in mTool." : "The saved note differs from the source. Check it in mTool.")}`)} />}
             {report.notes && <RowDetail title="Notes not filled" rows={(report.notes.unresolved ?? []).map((u) => `${u.label ?? "Note"}: ${u.detail ?? "Complete this note in mTool."}`)} />}
             {/* FULL row detail, not counts (Step 11A). The old header-borne
                 report capped these at 20 rows and the UI showed only totals,
@@ -1447,6 +1469,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
             />
             <RowDetail
               title="Values that differ from the reviewed figures"
+              defaultOpen
               rows={report.mismatches.map(
                 (m) => `${m.cell}: expected ${m.expected}, found ${m.found ?? "(empty)"}`,
               )}
@@ -1465,6 +1488,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
             />
             <RowDetail
               title="Errors"
+              defaultOpen
               rows={(report.errors ?? []).map((e) => e.detail ?? e.error ?? "error")}
             />
             {(report.unit_scale_warnings?.length ?? 0) > 0 && (
@@ -1476,30 +1500,19 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                 thousand.
               </div>
             )}
-            {(report.unit_class_unknown?.length ?? 0) > 0 && (
-              <div style={{ color: pwc.grey700, marginTop: 6, fontSize: 12 }}>
-                {report.unit_class_unknown!.length} row(s) aren&apos;t in the SSM unit
-                index, so we couldn&apos;t tell whether they hold money, share counts or
-                a ratio. They were written exactly as stored.
-              </div>
-            )}
-            {report.notes && (
-              <div style={{ marginTop: 6, fontSize: 12 }}>
-                <strong>Notes: </strong>
-                {[
-                  `${report.notes.counts.written} filled`,
-                  report.notes.counts.created > 0 && `${report.notes.counts.created} note spot(s) created`,
-                  report.notes.counts.unresolved > 0 && `${report.notes.counts.unresolved} not placed`,
-                  report.notes.counts.mismatches > 0 && `${report.notes.counts.mismatches} failed read-back`,
-                  report.notes.counts.errors > 0 && `${report.notes.counts.errors} error(s)`,
-                ]
-                  .filter(Boolean)
-                  .join(", ")}
+            {report.notes && (report.notes.styling_disabled ||
+              (report.notes.counts.formatting_compacted ?? 0) > 0 ||
+              (report.notes.counts.formatting_reduced ?? 0) > 0 ||
+              (report.notes.counts.formatting_dropped ?? 0) > 0 ||
+              (report.notes.counts.source_styling_dropped ?? 0) > 0 ||
+              (report.notes.counts.white_grid_dropped ?? 0) > 0) && (
+              <details style={{ marginTop: 6, fontSize: 12 }}>
+                <summary style={{ cursor: "pointer" }}>Note formatting details</summary>
                 {report.notes.styling_disabled && (
-                  <div style={{ color: pwc.grey700 }}>
+                  <p style={{ color: pwc.grey700 }}>
                     Written without styling — you chose the diagnostic “No styling” option,
                     so plain-looking notes are expected.
-                  </div>
+                  </p>
                 )}
                 {!report.notes.styling_disabled &&
                   ((report.notes.counts.formatting_compacted ?? 0) > 0 ||
@@ -1507,7 +1520,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                     (report.notes.counts.formatting_dropped ?? 0) > 0 ||
                     (report.notes.counts.source_styling_dropped ?? 0) > 0 ||
                     (report.notes.counts.white_grid_dropped ?? 0) > 0) && (
-                    <div style={{ color: pwc.grey700 }}>
+                    <p style={{ color: pwc.grey700 }}>
                       {[
                         (report.notes.counts.formatting_compacted ?? 0) > 0 &&
                           `${report.notes.counts.formatting_compacted} large note(s) used slimmer styling (looks the same)`,
@@ -1522,9 +1535,9 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                       ]
                         .filter(Boolean)
                         .join(" · ")}
-                    </div>
+                    </p>
                   )}
-              </div>
+              </details>
             )}
           </div>
         )}
@@ -1549,12 +1562,12 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
             type="button"
             ref={fillButtonRef}
             aria-label={report ? "Change options" : "Fill"}
-            onClick={report ? () => setReport(null) : submit}
-            disabled={!file || busy || downloading || selectedSheets?.length === 0}
+            onClick={report ? () => setReport(null) : requestSubmit}
+            disabled={!file || busy || downloading || fillQueued || selectedSheets?.length === 0}
             className={report ? uiClass.btnSecondary : uiClass.btnPrimary}
             style={report ? ui.buttonSecondary : ui.buttonPrimary}
           >
-            {busy ? "Filling template…" : report ? "Change options" : "Fill template"}
+            {busy || fillQueued ? "Preparing…" : report ? "Change options" : "Fill template"}
           </button>
           {report && (
             <button

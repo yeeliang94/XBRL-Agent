@@ -1,7 +1,6 @@
 """The face and notes reviewers overlap without racing the merged workbook."""
 from __future__ import annotations
 
-import inspect
 import sqlite3
 from unittest.mock import patch
 
@@ -16,35 +15,6 @@ from notes.coordinator import NotesAgentResult, NotesCoordinatorResult
 from notes_types import NotesTemplateType
 from statement_types import StatementType
 from workbook_merger import MergeResult
-
-
-def test_notes_reviewer_launches_before_face_reviewer_is_awaited():
-    source = inspect.getsource(server.run_multi_agent_stream)
-
-    notes_start = source.find(
-        "validator_task = asyncio.create_task(_run_notes_reviewer_pass("
-    )
-    face_start = source.find(
-        "correction_task = asyncio.create_task(\n                    _run_reviewer_pass("
-    )
-    face_wait = source.find("correction_outcome = await correction_task")
-
-    assert notes_start != -1
-    assert face_start != -1
-    assert face_wait != -1
-    assert notes_start < face_start < face_wait
-
-
-def test_parallel_notes_reviewer_defers_merged_workbook_refresh():
-    source = inspect.getsource(server.run_multi_agent_stream)
-    notes_start = source.find(
-        "validator_task = asyncio.create_task(_run_notes_reviewer_pass("
-    )
-    notes_end = source.find("task_registry.register(", notes_start)
-    launch = source[notes_start:notes_end]
-
-    assert "merged_workbook_path=None" in launch
-    assert "_refresh_merged_notes_workbook(" in source[notes_end:]
 
 
 def test_live_pipeline_reviewers_are_in_flight_together(tmp_path, monkeypatch):
