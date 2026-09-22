@@ -40,8 +40,8 @@ def client(tmp_path: Path, monkeypatch):
                                label="Disclosure of fair value information",
                                html="<p>fair value</p>")
         conn.execute(
-            "INSERT INTO notes_nodes(node_uuid, template_id, sheet, row, label, kind) "
-            "VALUES (?, ?, ?, ?, ?, 'LEAF')",
+            "INSERT INTO notes_nodes(node_uuid, template_id, sheet, row, label, kind, slot_role) "
+            "VALUES (?, ?, ?, ?, ?, 'LEAF', 'INPUT')",
             ("n80", f"{_PREFIX}notes-listofnotes-v1", _S12, 80,
              "Disclosure of financial instruments"),
         )

@@ -903,6 +903,10 @@ class NotesDeps:
     prepared_source_required: bool = False
     source_gap_notes: set[int] = field(default_factory=set)
     source_gap_reported: bool = False
+    # Notes whose proposed destination collided with an earlier placement.
+    # The earlier placement is provisional; the durable conflict is resolved
+    # by the grounded reviewer instead of making extraction order authoritative.
+    source_placement_conflict_notes: set[int] = field(default_factory=set)
     # Note numbers the agent actually called read_source_note for. Feeds
     # format_unconsulted_source_nudge — run 74's Accounting Policies agent
     # never consulted the source at all, so its tables were rebuilt from the
@@ -2043,7 +2047,11 @@ def _submit_coverage_receipt_impl(
         sink_labels = flat
 
     errors = receipt.validate(
-        batch_note_nums=[n for n in deps.batch_note_nums if n not in deps.source_gap_notes],
+        batch_note_nums=[
+            n for n in deps.batch_note_nums
+            if n not in deps.source_gap_notes
+            and n not in deps.source_placement_conflict_notes
+        ],
         written_row_labels=sink_labels,
     )
     if errors:
@@ -2503,6 +2511,21 @@ def _write_from_source_impl(
                 conn, deps, sheet, row, block_ids, source_pages, evidence,
                 format_ops,
             )
+    except source_write.SourcePlacementConflict as exc:
+        # The rejected write rolled back. Persist the competing proposal in a
+        # fresh transaction so it survives into the reviewer packet.
+        with repo.db_session(deps.db_path) as conn:
+            source_write.record_placement_conflict(
+                conn,
+                run_id=deps.run_id,
+                conflict=exc,
+                source_pages=source_pages,
+            )
+        deps.source_placement_conflict_notes.update(exc.note_numbers)
+        diagnostic = str(exc)
+        if diagnostic not in deps.write_skip_errors:
+            deps.write_skip_errors.append(diagnostic)
+        return f"conflict recorded for review: {diagnostic}"
     except source_write.SourceWriteError as exc:
         return f"rejected: {exc}"
 
@@ -3160,7 +3183,10 @@ def create_notes_agent(
             prose — there is no content field, deliberately. Include every part
             of the note that belongs in the template; a part you leave out is
             recorded as unaccounted for and goes to the review queue, so leave
-            one out only when it genuinely belongs nowhere on your sheet."""
+            one out only when it genuinely belongs nowhere on your sheet. If
+            this reports a placement conflict, do not substitute unrelated
+            parts or repeat the write: continue other work while the grounded
+            reviewer chooses between the recorded destinations."""
             if ctx.deps.payload_sink is None:
                 projected = await asyncio.to_thread(
                     _write_source_and_project_impl,

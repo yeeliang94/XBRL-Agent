@@ -348,6 +348,60 @@ async def test_prepared_capture_gap_is_persisted_without_false_coverage(tmp_path
     assert deps.write_skip_errors
 
 
+def test_source_collision_is_persisted_with_actionable_agent_feedback(seeded):
+    from types import SimpleNamespace
+    from notes import source_write
+
+    db, run_id, gen = seeded
+    with repo.db_session(db) as conn:
+        for row, label in ((10, "Income tax"), (11, "Deferred tax")):
+            conn.execute(
+                "INSERT INTO notes_nodes(node_uuid,template_id,sheet,row,label,kind) "
+                "VALUES(?,?,?,?,?,'LEAF')",
+                (f"policy-{row}", "mfrs-company-policies-v1",
+                 "Notes-SummaryofAccPol", row, label),
+            )
+        source_write.write_cell_from_blocks(
+            conn,
+            run_id=run_id,
+            generation_id=gen,
+            sheet="Notes-SummaryofAccPol",
+            row=10,
+            block_ids=["b1", "b2"],
+            template_prefix="mfrs-company-",
+        )
+    deps = SimpleNamespace(
+        db_path=db,
+        run_id=run_id,
+        source_generation_id=gen,
+        filing_standard="mfrs",
+        filing_level="company",
+        sheet_name="Notes-SummaryofAccPol",
+        source_placement_conflict_notes=set(),
+        write_skip_errors=[],
+    )
+
+    result = notes_agent._write_from_source_impl(
+        deps,
+        "Notes-SummaryofAccPol",
+        11,
+        ["b1", "b2"],
+        [1],
+        "page 1",
+        None,
+    )
+
+    assert "conflict recorded for review" in result
+    assert "Income tax" in result and "Deferred tax" in result
+    assert "provisional" in result
+    assert deps.source_placement_conflict_notes == {5}
+    with repo.db_session(db) as conn:
+        flags = repo.fetch_notes_review_flags(conn, run_id)
+    assert len(flags) == 1
+    assert flags[0]["finding_id"].startswith('["source_placement",')
+    assert flags[0]["source_pages"] == [1]
+
+
 def test_source_tools_identify_reconstructed_content_without_requiring_repair(seeded):
     db, _, gen = seeded
     with repo.db_session(db) as conn:

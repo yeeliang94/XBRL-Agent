@@ -392,7 +392,10 @@ element named in a screenshot. Specifically:
 - Every material wait appears in the stage heading or Live activity, including
   notes formatting, saving, and final workbook preparation. A completed
   workstream count must never imply the full run is ready while downstream work
-  continues.
+  continues. Formatting activity is complete only after an observed formatting
+  pass finishes without an incomplete-formatting event. Failed/partial passes
+  remain failed, stopped passes remain stopped, and a pass that never ran is
+  not shown as complete. Pinned by `web/src/__tests__/ExtractPage.test.tsx`.
 
 Before changing UI, classify visible content as keep, shorten, relocate, show
 only when relevant, or remove. Validate the user workflow plus long content,
@@ -2492,9 +2495,29 @@ Pinned by `tests/test_prepared_numeric_prose.py` and
 The shared source writer expands verified paragraph continuations, linked table
 parts, required related blocks and heading ancestry from locator metadata. It
 refuses stale generations, multiple top-level disclosures in one List-of-Notes
-field, and automatic replacement of human edits. Reviewer relinks carry the
+field, automatic replacement of human edits, and a second live placement of
+the same substantive block or rendered source content. The collision guard runs
+inside the write transaction, before the destination cell or placement ledger
+changes. A rejected second proposal becomes a durable placement-conflict
+finding containing both destination coordinates and labels, source block ids
+and source-note identity. The earlier write remains available but provisional;
+write order is never the accounting decision. Extraction receives the same
+actionable context, does not retry with unrelated blocks, and may finish with
+the conflict unresolved instead of tripping the silent-no-write failure. The
+grounded notes reviewer either keeps the existing placement or atomically moves
+the cell and every source ledger to the proposed destination. Resolution checks
+the active generation, recorded cell revision, live placements and open flag
+inside the same transaction as the move and answer. A whole-cell move requires
+the complete proposed selection; partial overlaps stay open for human review.
+Older flags without the recorded revision/selection also remain unresolved.
+Pinned by `tests/test_notes_reviewer_tools.py`. An open placement
+conflict tips the run to `completed_with_errors` and blocks mTool preflight; it
+is never deleted as a stale generic reviewer flag. Reviewer relinks carry the
 observed content revision. Heading context may repeat across policy destinations;
-substantive duplicate content still requires explicit approval. Routed and
+substantive duplicate content still requires explicit approval. The Issued
+Capital / Related Party narrative route is the one approved two-destination
+exception: its taxonomy text-block and the List-of-Notes field, never a third
+row. Routed and
 structured-consumed prose requires live placement, including policy-route
 exclusions; a destination name or receipt alone never proves preservation.
 Integrity hashes the actual persisted HTML rather than trusting its cached digest,

@@ -251,11 +251,15 @@ class _FakeAgent:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("reported_gap,assigned,gaps,succeeds", [
-    (False, [1], [], False), (True, [], [], False),
-    (True, [1, 2], [1], False), (True, [1, 2], [1, 2], True),
+@pytest.mark.parametrize("reported_gap,assigned,gaps,conflicts,succeeds", [
+    (False, [1], [], [], False), (True, [], [], [], False),
+    (True, [1, 2], [1], [], False),
+    (True, [1, 2], [1, 2], [], True),
+    (False, [1], [], [1], True),
 ])
-async def test_single_notes_agent_without_writes_reports_failed(tmp_path: Path, reported_gap, assigned, gaps, succeeds):
+async def test_single_notes_agent_without_writes_reports_failed(
+    tmp_path: Path, reported_gap, assigned, gaps, conflicts, succeeds,
+):
     """Agent completes its reasoning loop but never calls write_notes —
     deps.wrote_once stays False, deps.filled_path stays empty. The coordinator
     must detect the no-op and return status='failed' so a downstream merger
@@ -281,6 +285,9 @@ async def test_single_notes_agent_without_writes_reports_failed(tmp_path: Path, 
             deps.source_gap_reported = True
             deps.source_gap_notes.update(gaps)
             deps.write_skip_errors.append("Source capture requires human review: missing table")
+        if conflicts:
+            deps.source_placement_conflict_notes.update(conflicts)
+            deps.write_skip_errors.append("Placement conflict requires review")
         return _FakeAgent(), deps
 
     with patch.object(coord_mod, "create_notes_agent", side_effect=fake_create_notes_agent), \
@@ -297,7 +304,7 @@ async def test_single_notes_agent_without_writes_reports_failed(tmp_path: Path, 
     if succeeds:
         assert result.status == "succeeded"
         assert result.workbook_path == "/tmp/fake-template.xlsx"
-        assert any("missing table" in warning for warning in result.warnings)
+        assert result.warnings
         assert result.cells_written == []
     else:
         assert result.status == "failed"

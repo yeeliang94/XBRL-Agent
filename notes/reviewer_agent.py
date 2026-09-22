@@ -200,6 +200,10 @@ class NotesReviewerDeps:
         # never be dispositioned away.
         self.dispositioned_finding_keys: set = set()
         self.finding_keys_by_id: dict[str, tuple] = {}
+        # Durable extraction-time placement proposals keyed by the packet id
+        # shown to this reviewer. Each entry retains the original flag id so a
+        # grounded keep/move decision can close exactly that conflict.
+        self.placement_conflicts_by_id: dict[str, dict] = {}
         # Template family prefix ("mfrs-company-") so notes_nodes lookups
         # resolve THIS run's templates (gotcha #21).
         self.template_prefix = f"{filing_standard}-{filing_level}-"
@@ -602,6 +606,7 @@ def count_open_items(context: dict) -> int:
     """
     n = sum(len(context.get(k) or []) for k in FINDING_FAMILIES)
     n += len(context.get("source_integrity_findings") or [])
+    n += len(context.get("placement_conflicts") or [])
     checklist = context.get("coverage_checklist")
     if checklist is not None:
         n += len(checklist.unresolved_rows())
@@ -655,6 +660,28 @@ def build_notes_reviewer_packet(context: dict) -> str:
         )
 
     out: list[str] = ["=== NOTES REVIEW PACKET ==="]
+    if context.get("placement_conflicts"):
+        out.append(
+            "\n[SOURCE PLACEMENT CONFLICT] Extraction proposed the same source "
+            "content for competing destinations. The earlier placement is "
+            "provisional, not authoritative. Inspect the named blocks and PDF "
+            "pages, then call resolve_placement_conflict with the exact finding "
+            "id to keep the existing destination or atomically move it to the "
+            "proposed destination. Never substitute unrelated blocks."
+        )
+        for conflict in context["placement_conflicts"]:
+            existing = ", ".join(
+                f"{item['sheet']} row {item['row']} {item.get('label', '')!r}"
+                for item in conflict.get("existing") or []
+            )
+            target = conflict.get("target") or {}
+            out.append(_review_source_line(
+                f"finding_id={conflict['packet_finding_id']}; blocks="
+                f"{conflict.get('block_ids') or []}; source_notes="
+                f"{conflict.get('source_notes') or []}; existing={existing}; "
+                f"proposed={target.get('sheet')} row {target.get('row')} "
+                f"{target.get('label', '')!r}"
+            ))
     if context.get("source_integrity_findings"):
         out.append("\n[SOURCE COMPLETENESS] Repair these exact source blocks. Use list_source_notes, "
                    "read_source_manifest and view_source_blocks, then relink_note_cell at the appropriate "
@@ -876,9 +903,34 @@ def _build_context(
         ]
         inventory_rows = repo.fetch_notes_inventory(conn, run_id)
         from notes import source_repository, integrity_runner, integrity
+        from notes.source_write import PLACEMENT_CONFLICT_FINDING_PREFIX
         from notes.source_models import INPUT_KIND_PREPARED
         generation = source_repository.active_generation(conn, run_id)
         source_findings = []
+        placement_conflicts = []
+        for flag in repo.fetch_notes_review_flags(conn, run_id):
+            if (
+                flag.get("status") != "open"
+                or not str(flag.get("finding_id") or "").startswith(
+                    PLACEMENT_CONFLICT_FINDING_PREFIX
+                )
+            ):
+                continue
+            try:
+                conflict = json.loads(flag.get("evidence") or "{}")
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(conflict, dict):
+                continue
+            conflict.update(
+                flag_id=flag["id"],
+                flag_finding_id=flag["finding_id"],
+                source_pages=flag.get("source_pages") or [],
+            )
+            conflict["packet_finding_id"] = finding_id(
+                ("source_placement", flag["finding_id"])
+            )
+            placement_conflicts.append(conflict)
         if generation and generation["input_kind"] == INPUT_KIND_PREPARED:
             assessment = integrity.run_checks(integrity_runner.build_input(
                 conn, run_id, generation["id"], scout_available=True))
@@ -933,6 +985,7 @@ def _build_context(
         "coverage_checklist": checklist,
         "entry_count": len(entries),
         "source_integrity_findings": source_findings,
+        "placement_conflicts": placement_conflicts,
     }
 
 
@@ -944,6 +997,8 @@ def finding_keys(context: dict) -> set:
     coordinates/refs that make a finding "the same finding" across runs.
     """
     keys: set = set()
+    for conflict in context.get("placement_conflicts") or []:
+        keys.add(("source_placement", conflict.get("flag_finding_id")))
     for finding in context.get("source_integrity_findings") or []:
         keys.add(("source_integrity", finding["check"], tuple(sorted(finding.get("block_ids") or []))))
     for d in context.get("duplicates") or []:
@@ -1174,6 +1229,10 @@ def create_notes_reviewer_agent(
     deps.original_finding_keys = finding_keys(context)
     deps.finding_keys_by_id = {
         finding_id(key): key for key in deps.original_finding_keys
+    }
+    deps.placement_conflicts_by_id = {
+        conflict["packet_finding_id"]: conflict
+        for conflict in context.get("placement_conflicts") or []
     }
 
     # The reviewer prompt and its packet both used to hardcode the MFRS slot
@@ -1544,6 +1603,81 @@ def create_notes_reviewer_agent(
             to_sheet=to_sheet, to_row=to_row,
             source_pages=source_pages, evidence=evidence,
         )
+
+    @agent.tool
+    def resolve_placement_conflict(
+        ctx: RunContext[NotesReviewerDeps],
+        finding_id: str,
+        decision: str,
+        source_pages: List[int],
+        evidence: str,
+    ) -> str:
+        """Resolve one extraction-time source-placement conflict.
+
+        ``decision`` is ``keep_existing`` when the earlier destination is
+        correct, or ``move_to_proposed`` when the recorded proposed target is
+        correct. View and pass the supporting PDF pages first. A move is
+        atomic and preserves source lineage; this tool never approves a second
+        copy of the disclosure.
+        """
+        conflict = ctx.deps.placement_conflicts_by_id.get(finding_id)
+        if conflict is None:
+            return "rejected: finding_id is not an open placement conflict."
+        decision = decision.strip().lower()
+        if decision not in {"keep_existing", "move_to_proposed"}:
+            return (
+                "rejected: decision must be keep_existing or move_to_proposed."
+            )
+        pages = sorted({int(p) for p in source_pages if isinstance(p, int)})
+        if not pages or not set(pages).issubset(ctx.deps.viewed_pages):
+            missing = sorted(set(pages) - ctx.deps.viewed_pages)
+            return (
+                "rejected: view the supporting PDF page(s) first"
+                + (f": {missing}." if missing else ".")
+            )
+        if not evidence.strip():
+            return "rejected: evidence is required for the placement decision."
+        existing = conflict.get("existing") or []
+        target = conflict.get("target") or {}
+        if len(existing) != 1:
+            return (
+                "rejected: this conflict has multiple existing destinations; "
+                "send it to human review instead of choosing one automatically."
+            )
+        from notes.review_move import resolve_source_placement_conflict
+
+        with ctx.deps.io_lock:
+            if decision == "move_to_proposed":
+                if existing[0]["sheet"] not in PROSE_SHEETS:
+                    return "rejected: the source is not a prose notes sheet."
+                rejection = _guard_and_target(
+                    ctx, action="move", sheet=target["sheet"], row=target["row"],
+                    source_pages=pages,
+                )
+                if rejection is not None:
+                    return rejection
+                _ensure_snapshot(ctx)
+            try:
+                with repo.db_session(ctx.deps.db_path) as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    resolve_source_placement_conflict(
+                        conn, run_id=ctx.deps.run_id, flag_id=int(conflict["flag_id"]),
+                        finding_id=conflict["flag_finding_id"], decision=decision,
+                        answer=f"{decision}: {evidence.strip()}",
+                    )
+            except ValueError as exc:
+                return f"rejected: {exc}"
+            if decision == "move_to_proposed":
+                ctx.deps.writes_performed += 1
+                ctx.deps.correction_log.append({
+                    "op": "move", "from": [existing[0]["sheet"], existing[0]["row"]],
+                    "to": [target["sheet"], target["row"]],
+                    "evidence": _ground_evidence(pages, evidence),
+                })
+        ctx.deps.dispositioned_finding_keys.add(
+            ctx.deps.finding_keys_by_id[finding_id]
+        )
+        return f"ok: placement conflict resolved with {decision}"
 
     @agent.tool
     def clear_note_cells(
@@ -2009,52 +2143,31 @@ def create_notes_reviewer_agent(
             )
             if rej is not None:
                 return rej
-            cleaned, warnings = sanitize_notes_html(src.get("html") or "")
-            cleaned = truncate_with_footer(cleaned, source_pages)
-            # Never move-then-delete when the moved content sanitises to nothing
-            # — that would clear the source and write an empty destination (net
-            # data loss). Refuse before any write.
-            if rendered_length(cleaned) == 0:
-                _tally(ctx.deps, "empty_content")
-                return (
-                    "rejected: the source content rendered empty after "
-                    "sanitising — refusing to move nothing and delete the source."
-                )
             ev = _ground_evidence(source_pages, evidence)
-            with repo.db_session(ctx.deps.db_path) as conn:
-                node = repo.fetch_notes_node(
-                    conn, sheet=to_sheet, row=to_row,
-                    template_prefix=ctx.deps.template_prefix,
-                )
-            label = (node or {}).get("label") or ""
             _ensure_snapshot(ctx)
-            with repo.db_session(ctx.deps.db_path) as conn:
-                repo.upsert_notes_cell(
-                    conn, run_id=ctx.deps.run_id, sheet=to_sheet, row=to_row,
-                    label=label, html=cleaned, evidence=ev, source_pages=source_pages,
-                    concept_uuid=(node or {}).get("node_uuid"),
-                )
-                conn.execute(
-                    "DELETE FROM notes_cells WHERE run_id = ? AND sheet = ? AND row = ?",
-                    (ctx.deps.run_id, from_sheet, from_row),
-                )
-                # Relocate provenance with the prose so the detectors follow the
-                # move (the refs travel to the new coord); without this a moved
-                # note would look uncited and verify_findings would cry a false
-                # coverage gap.
-                repo.move_notes_provenance(
-                    conn, run_id=ctx.deps.run_id,
-                    from_sheet=from_sheet, from_row=from_row,
-                    to_sheet=to_sheet, to_row=to_row, to_label=label,
-                )
-                # Blank the vacated source cell in the workbook overlay; the
-                # destination now has content so any stale tombstone there must go.
-                repo.add_notes_tombstone(
-                    conn, run_id=ctx.deps.run_id, sheet=from_sheet, row=from_row,
-                )
-                repo.remove_notes_tombstone(
-                    conn, run_id=ctx.deps.run_id, sheet=to_sheet, row=to_row,
-                )
+            from notes.review_move import MoveConflict, move_note_during_review
+
+            destination = _read_cell(
+                ctx.deps.db_path, ctx.deps.run_id, to_sheet, to_row
+            )
+            try:
+                with repo.db_session(ctx.deps.db_path) as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    move_note_during_review(
+                        conn,
+                        run_id=ctx.deps.run_id,
+                        sheet=from_sheet,
+                        row=from_row,
+                        destination_sheet=to_sheet,
+                        destination_row=to_row,
+                        expected_revision=int(src["content_revision"]),
+                        destination_revision=(
+                            int(destination["content_revision"])
+                            if destination is not None else None
+                        ),
+                    )
+            except (MoveConflict, ValueError) as exc:
+                return f"rejected: {exc}"
             ctx.deps.writes_performed += 1
             ctx.deps.correction_log.append({
                 "op": "move", "from": [from_sheet, from_row],

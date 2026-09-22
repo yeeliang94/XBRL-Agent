@@ -49,6 +49,11 @@ reason. Continue the supported work. Do not repeatedly try a write that cannot
 repair capture. Best-effort readings with uncertain wording remain usable and
 do not need a gap report merely because their provenance says uncertain.
 
+If write_note_from_source reports a placement conflict, the earlier placement
+is provisional rather than automatically correct. Do not retry with unrelated
+blocks or claim the contested destination as written. Continue other supported
+work; the conflict is recorded for the grounded reviewer to keep or move.
+
 For a List-of-Notes batch, submit_batch_coverage once after your writes, listing
 written notes with their target labels and notes routed to other sheets with a
 skip reason. Omit notes already reported through report_source_gap; those remain

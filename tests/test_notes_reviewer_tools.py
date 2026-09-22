@@ -48,11 +48,15 @@ def _seed_run(db_path: Path) -> int:
 
 
 def _seed_node(db_path: Path, row: int, kind: str, label: str) -> None:
+    slot_role = "INPUT" if kind == "LEAF" else "PRESENTATION_ONLY"
     with repo.db_session(db_path) as conn:
         conn.execute(
-            "INSERT INTO notes_nodes(node_uuid, template_id, sheet, row, label, kind) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (f"n{row}", f"{_PREFIX}notes-listofnotes-v1", _S12, row, label, kind),
+            "INSERT INTO notes_nodes(node_uuid, template_id, sheet, row, label, kind, slot_role) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                f"n{row}", f"{_PREFIX}notes-listofnotes-v1", _S12, row,
+                label, kind, slot_role,
+            ),
         )
 
 
@@ -246,6 +250,222 @@ def test_move_reroutes_and_clears_source(db_path: Path) -> None:
             (run_id, _S12),
         ).fetchone()[0]
     assert stored_uuid == "n80"
+
+
+def test_reviewer_can_atomically_correct_the_wrong_first_source_placement(
+    db_path: Path,
+) -> None:
+    from types import SimpleNamespace
+    from notes import source_repository as sources, source_write
+    from notes.source_models import SourceBlock, SourceNote
+
+    run_id = _seed_run(db_path)
+    _seed_node(db_path, 49, "LEAF", "Income tax")
+    _seed_node(db_path, 80, "LEAF", "Deferred tax")
+    with repo.db_session(db_path) as conn:
+        generation = sources.begin_generation(
+            conn, run_id, input_kind="prepared_document"
+        )
+        sources.write_blocks(conn, generation, [
+            SourceBlock(
+                block_id="tax-policy",
+                block_kind="paragraph",
+                reading_order=1,
+                canonical_html="<p>Deferred tax is recognised.</p>",
+                source_note_id="policy-tax",
+                page=22,
+            ),
+        ])
+        sources.write_notes(conn, generation, [
+            SourceNote(
+                source_note_id="policy-tax",
+                top_note_num="13",
+                title="Deferred tax",
+                block_ids=["tax-policy"],
+            ),
+        ])
+        sources.activate_generation(conn, generation)
+        source_write.write_cell_from_blocks(
+            conn,
+            run_id=run_id,
+            generation_id=generation,
+            sheet=_S12,
+            row=49,
+            block_ids=["tax-policy"],
+            template_prefix=_PREFIX,
+        )
+        with pytest.raises(source_write.SourcePlacementConflict) as caught:
+            source_write.write_cell_from_blocks(
+                conn,
+                run_id=run_id,
+                generation_id=generation,
+                sheet=_S12,
+                row=80,
+                block_ids=["tax-policy"],
+                template_prefix=_PREFIX,
+            )
+        source_write.record_placement_conflict(
+            conn,
+            run_id=run_id,
+            conflict=caught.value,
+            source_pages=[22],
+        )
+
+    agent, deps, context = _agent(db_path, run_id, _scripted([]))
+    assert len(context["placement_conflicts"]) == 1
+    assert "SOURCE PLACEMENT CONFLICT" in ra.build_notes_reviewer_packet(context)
+    deps.viewed_pages.add(22)
+    resolver = next(
+        ts.tools["resolve_placement_conflict"].function
+        for ts in agent.toolsets
+        if "resolve_placement_conflict" in getattr(ts, "tools", {})
+    )
+    conflict_id = context["placement_conflicts"][0]["packet_finding_id"]
+
+    result = resolver(
+        SimpleNamespace(deps=deps),
+        conflict_id,
+        "move_to_proposed",
+        [22],
+        "The policy specifically addresses deferred tax on page 22.",
+    )
+
+    assert result == "ok: placement conflict resolved with move_to_proposed"
+    with repo.db_session(db_path) as conn:
+        cells = {
+            (cell.sheet, cell.row): cell
+            for cell in repo.list_notes_cells_for_run(conn, run_id)
+        }
+        placements = sources.active_placements(conn, generation)
+        flags = repo.fetch_notes_review_flags(conn, run_id)
+    assert (_S12, 49) not in cells
+    assert "Deferred tax is recognised" in cells[(_S12, 80)].html
+    assert [(p["block_id"], p["row"]) for p in placements] == [
+        ("tax-policy", 80)
+    ]
+    assert flags[0]["status"] == "answered"
+
+
+def _placement_conflict_reviewer(db_path, *, existing_ids=("tax",), proposed_ids=("tax",)):
+    from types import SimpleNamespace
+    from notes import source_repository as sources, source_write
+    from notes.source_models import SourceBlock
+
+    run_id = _seed_run(db_path)
+    for row in (49, 80, 81):
+        _seed_node(db_path, row, "LEAF", f"Policy {row}")
+    with repo.db_session(db_path) as conn:
+        generation = sources.begin_generation(conn, run_id, input_kind="prepared_document")
+        sources.write_blocks(conn, generation, [
+            SourceBlock("tax", "paragraph", 1, "<p>Deferred tax policy.</p>"),
+            SourceBlock("other", "paragraph", 2, "<p>Other policy.</p>"),
+            SourceBlock("copy", "paragraph", 3, "<p>Deferred tax policy.</p>"),
+        ])
+        sources.activate_generation(conn, generation)
+        source_write.write_cell_from_blocks(
+            conn, run_id=run_id, generation_id=generation, sheet=_S12, row=49,
+            block_ids=existing_ids, template_prefix=_PREFIX,
+        )
+        for row in (80, 81):
+            with pytest.raises(source_write.SourcePlacementConflict) as caught:
+                source_write.write_cell_from_blocks(
+                    conn, run_id=run_id, generation_id=generation, sheet=_S12, row=row,
+                    block_ids=proposed_ids, template_prefix=_PREFIX,
+                )
+            source_write.record_placement_conflict(
+                conn, run_id=run_id, conflict=caught.value, source_pages=[22],
+            )
+    agent, deps, context = _agent(db_path, run_id, _scripted([]))
+    deps.viewed_pages.add(22)
+    tool = next(ts.tools["resolve_placement_conflict"].function for ts in agent.toolsets
+                if "resolve_placement_conflict" in getattr(ts, "tools", {}))
+    conflicts = sorted(context["placement_conflicts"], key=lambda c: c["target"]["row"])
+
+    def resolve(index=0, decision="keep_existing"):
+        return tool(SimpleNamespace(deps=deps), conflicts[index]["packet_finding_id"],
+                    decision, [22], "The PDF supports this destination.")
+    return run_id, generation, resolve
+
+
+def test_reviewer_can_confirm_the_first_source_placement(db_path: Path) -> None:
+    run_id, _, resolve = _placement_conflict_reviewer(db_path)
+    assert resolve() == "ok: placement conflict resolved with keep_existing"
+    assert 49 in _cells(db_path, run_id)
+    assert 80 not in _cells(db_path, run_id)
+    with repo.db_session(db_path) as conn:
+        assert sum(f["status"] == "answered" for f in repo.fetch_notes_review_flags(conn, run_id)) == 1
+
+
+@pytest.mark.parametrize("existing_ids,proposed_ids", [
+    (("tax", "other"), ("tax",)),
+    (("tax",), ("tax", "other")),
+])
+def test_partial_placement_move_preserves_both_cells_and_open_flag(db_path, existing_ids, proposed_ids):
+    run_id, _, resolve = _placement_conflict_reviewer(
+        db_path, existing_ids=existing_ids, proposed_ids=proposed_ids,
+    )
+    before = _cells(db_path, run_id)
+    assert resolve(decision="move_to_proposed").startswith("rejected:")
+    assert _cells(db_path, run_id) == before
+    with repo.db_session(db_path) as conn:
+        assert all(f["status"] == "open" for f in repo.fetch_notes_review_flags(conn, run_id))
+
+
+def test_second_conflict_cannot_confirm_a_destination_already_moved(db_path):
+    run_id, _, resolve = _placement_conflict_reviewer(db_path)
+    assert resolve(decision="move_to_proposed").startswith("ok:")
+    assert resolve(1).startswith("rejected: The source placement changed")
+    assert set(_cells(db_path, run_id)) == {80}
+    with repo.db_session(db_path) as conn:
+        assert sorted(f["status"] for f in repo.fetch_notes_review_flags(conn, run_id)) == ["answered", "open"]
+
+
+@pytest.mark.parametrize("change", ["revision", "generation", "placements", "answered", "legacy"])
+@pytest.mark.parametrize("decision", ["keep_existing", "move_to_proposed"])
+def test_conflict_resolution_revalidates_live_state(db_path, change, decision):
+    from notes import source_repository as sources
+    run_id, generation, resolve = _placement_conflict_reviewer(db_path)
+    with repo.db_session(db_path) as conn:
+        if change == "revision":
+            repo.upsert_notes_cell(conn, run_id=run_id, sheet=_S12, row=49,
+                                   label="Changed", html="<p>Human correction.</p>")
+        elif change == "generation":
+            from notes.source_models import SourceBlock
+            newer = sources.begin_generation(conn, run_id, input_kind="prepared_document")
+            sources.write_blocks(conn, newer, [SourceBlock("new", "paragraph", 1, "<p>New source.</p>")])
+            sources.activate_generation(conn, newer)
+        elif change == "placements":
+            sources.set_cell_placements(conn, run_id, generation, _S12, 49, [])
+        elif change == "legacy":
+            import json
+            for flag in repo.fetch_notes_review_flags(conn, run_id):
+                evidence = json.loads(flag["evidence"])
+                evidence["existing"][0].pop("content_revision")
+                conn.execute("UPDATE notes_review_flags SET evidence=? WHERE id=?",
+                             (json.dumps(evidence), flag["id"]))
+        else:
+            conn.execute("UPDATE notes_review_flags SET status='answered' WHERE run_id=?", (run_id,))
+    before = _cells(db_path, run_id)
+    assert resolve(decision=decision).startswith("rejected:")
+    assert _cells(db_path, run_id) == before
+
+
+def test_same_render_conflict_can_move_the_unchanged_complete_cell(db_path):
+    run_id, _, resolve = _placement_conflict_reviewer(db_path, proposed_ids=("copy",))
+    assert resolve(decision="move_to_proposed").startswith("ok:")
+    assert set(_cells(db_path, run_id)) == {80}
+
+
+def test_flag_answer_failure_rolls_back_the_placement_move(db_path, monkeypatch):
+    from notes import source_repository as sources
+    run_id, generation, resolve = _placement_conflict_reviewer(db_path)
+    before = _cells(db_path, run_id)
+    monkeypatch.setattr(repo, "answer_notes_review_flag", lambda *a, **kw: False)
+    assert resolve(decision="move_to_proposed").startswith("rejected:")
+    assert _cells(db_path, run_id) == before
+    with repo.db_session(db_path) as conn:
+        assert {p["row"] for p in sources.active_placements(conn, generation)} == {49}
+        assert all(f["status"] == "open" for f in repo.fetch_notes_review_flags(conn, run_id))
 
 
 def test_edit_with_script_only_html_is_refused_not_destructive(db_path: Path) -> None:

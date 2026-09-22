@@ -101,6 +101,7 @@ def test_numeric_prose_duplicate_is_explicit_and_limited_to_list_of_notes(tmp_pa
         source_write.write_cell_from_blocks(conn, run_id=run, generation_id=gen,
             sheet="Notes-Listofnotes", row=20, block_ids=["a"])
         assert check_approved_duplicates(build_input(conn, run, gen)) == []
-        source_write.write_cell_from_blocks(conn, run_id=run, generation_id=gen,
-            sheet="Notes-SummaryofAccPol", row=20, block_ids=["a"])
-        assert check_approved_duplicates(build_input(conn, run, gen))
+        with pytest.raises(source_write.SourcePlacementConflict):
+            source_write.write_cell_from_blocks(conn, run_id=run, generation_id=gen,
+                sheet="Notes-SummaryofAccPol", row=20, block_ids=["a"])
+        assert check_approved_duplicates(build_input(conn, run, gen)) == []

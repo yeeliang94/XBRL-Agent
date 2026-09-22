@@ -1,6 +1,7 @@
 """Human moves are atomic, versioned and preserve the canonical source records."""
 import pytest
 from db import repository as repo
+from notes.review_move import move_note_during_review
 from tests.test_server_notes_cells_api import client_and_run  # shared isolated API fixture
 
 
@@ -63,6 +64,130 @@ def test_move_preserves_content_and_leaves_export_tombstone(client_and_run):
         assert coverage['placements'][0]['row'] == destination
     rows = client.get(f"/api/runs/{run_id}/notes_cells").json()['sheets'][0]['rows']
     assert next(row for row in rows if row['row'] == 5)['html'] == ''
+
+
+@pytest.mark.parametrize("manifest_state", ["missing", "ambiguous"])
+def test_human_move_does_not_fall_back_when_manifest_refuses_target(
+    client_and_run, manifest_state,
+):
+    client, run_id = client_and_run
+    import server
+
+    body = payload(client, run_id)
+    with repo.db_session(server.AUDIT_DB_PATH) as conn:
+        conn.execute("UPDATE runs SET status='completed' WHERE id=?", (run_id,))
+        if manifest_state == "missing":
+            conn.execute(
+                "DELETE FROM template_slots "
+                "WHERE template_id LIKE 'mfrs-company-%' AND sheet = ? AND row = ?",
+                (body["destination_sheet"], body["destination_row"]),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO template_slots SELECT target_id || ':ambiguous', "
+                "canonical_target_id, template_id || '-ambiguous', sheet, row, col, "
+                "label, slot_role, value_kind, taxonomy_element_id, dimensions_json, "
+                "mapping_source, manifest_version, workbook_fingerprint, "
+                "validation_status, exception_code FROM template_slots "
+                "WHERE template_id LIKE 'mfrs-company-%' AND sheet = ? AND row = ? "
+                "AND col = 'B' AND validation_status = 'writable' "
+                "AND slot_role = 'INPUT' LIMIT 1",
+                (body["destination_sheet"], body["destination_row"]),
+            )
+
+    response = client.post(
+        f"/api/runs/{run_id}/notes_cells/Notes-CI/5/move", json=body,
+    )
+
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"] == (
+        "Choose a writable notes field in this run's template."
+    )
+
+
+@pytest.mark.parametrize(
+    "manifest_state,slot_role,allowed",
+    [
+        ("missing", "INPUT", True),
+        ("ambiguous", "INPUT", True),
+        ("missing", "PRESENTATION_ONLY", False),
+    ],
+)
+def test_reviewer_registry_fallback_requires_an_input_leaf(
+    client_and_run, manifest_state, slot_role, allowed,
+):
+    client, run_id = client_and_run
+    import server
+
+    body = payload(client, run_id)
+    with repo.db_session(server.AUDIT_DB_PATH) as conn:
+        if manifest_state == "missing":
+            conn.execute(
+                "DELETE FROM template_slots "
+                "WHERE template_id LIKE 'mfrs-company-%' AND sheet = ? AND row = ?",
+                (body["destination_sheet"], body["destination_row"]),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO template_slots SELECT target_id || ':ambiguous', "
+                "canonical_target_id, template_id || '-ambiguous', sheet, row, col, "
+                "label, slot_role, value_kind, taxonomy_element_id, dimensions_json, "
+                "mapping_source, manifest_version, workbook_fingerprint, "
+                "validation_status, exception_code FROM template_slots "
+                "WHERE template_id LIKE 'mfrs-company-%' AND sheet = ? AND row = ? "
+                "AND col = 'B' AND validation_status = 'writable' "
+                "AND slot_role = 'INPUT' LIMIT 1",
+                (body["destination_sheet"], body["destination_row"]),
+            )
+        conn.execute(
+            "UPDATE notes_nodes SET slot_role = ? "
+            "WHERE template_id LIKE 'mfrs-company-%' AND sheet = ? AND row = ?",
+            (slot_role, body["destination_sheet"], body["destination_row"]),
+        )
+
+    with repo.db_session(server.AUDIT_DB_PATH) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if allowed:
+            move_note_during_review(
+                conn,
+                run_id=run_id,
+                sheet="Notes-CI",
+                row=5,
+                destination_sheet=body["destination_sheet"],
+                destination_row=body["destination_row"],
+                expected_revision=1,
+                destination_revision=None,
+            )
+        else:
+            with pytest.raises(
+                ValueError,
+                match="Choose a writable notes field in this run's template",
+            ):
+                move_note_during_review(
+                    conn,
+                    run_id=run_id,
+                    sheet="Notes-CI",
+                    row=5,
+                    destination_sheet=body["destination_sheet"],
+                    destination_row=body["destination_row"],
+                    expected_revision=1,
+                    destination_revision=None,
+                )
+
+    with repo.db_session(server.AUDIT_DB_PATH) as conn:
+        source = conn.execute(
+            "SELECT html FROM notes_cells WHERE run_id = ? AND sheet = 'Notes-CI' "
+            "AND row = 5",
+            (run_id,),
+        ).fetchone()
+        destination = conn.execute(
+            "SELECT html FROM notes_cells WHERE run_id = ? AND sheet = ? AND row = ?",
+            (run_id, body["destination_sheet"], body["destination_row"]),
+        ).fetchone()
+    assert (source is None) is allowed
+    assert (destination is not None) is allowed
+    if destination is not None:
+        assert destination["html"] == "<p>CI 5</p>"
 
 
 @pytest.mark.parametrize('change,status', [

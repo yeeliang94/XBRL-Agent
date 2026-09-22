@@ -1,5 +1,12 @@
 # Windows TX27 note-rendering test plan
 
+> **Status (2026-09-22): closed as a production-change proposal.** The Windows
+> investigation traced the TX27 symptoms to an earlier structurally broken
+> workbook template, not to the exporter HTML/CSS variants below. Retain this
+> document only as a reproducible differential procedure for a future incident.
+> Do not change `notes_decorate.py` or the TX27 payload dialect based on the
+> inconclusive variant results from this incident.
+
 ## Objective
 
 Identify the smallest exporter-created HTML or CSS construct that makes an

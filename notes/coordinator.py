@@ -1006,9 +1006,13 @@ async def _invoke_single_notes_agent_once(
     # Guard against silent no-op success — retryable per PLAN §4 E.1.
     if not deps.wrote_once or not deps.filled_path:
         assigned_notes = {entry.note_num for entry in deps.inventory}
-        if assigned_notes and assigned_notes <= deps.source_gap_notes:
+        unresolved_without_write = (
+            deps.source_gap_notes | deps.source_placement_conflict_notes
+        )
+        if assigned_notes and assigned_notes <= unresolved_without_write:
             # The template is blank, and persisted source-gap flags and write
-            # warnings explicitly retain the unresolved work for review.
+            # placement conflicts explicitly retain the unresolved work for
+            # review. A collision is not treated as a successful placement.
             deps.filled_path = deps.template_path
         else:
             raise _NoWriteError("Notes agent finished without writing any payloads")
