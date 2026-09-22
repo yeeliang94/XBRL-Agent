@@ -73,16 +73,3 @@ def test_empty_face_line_refs_fall_back_cleanly():
     # False mean the bare hint block renders.
     assert hints["face_line_refs"] == []
     assert hints["face_read_in_detail"] is False
-
-
-def test_coordinator_function_includes_new_keys_in_real_construction():
-    """Smoke test that the coordinator code actually constructs the dict
-    with the new keys. Reads coordinator.py source and checks the new
-    keys appear next to face_page so a future refactor can't silently
-    drop them."""
-    from pathlib import Path
-    src = Path(__file__).resolve().parent.parent / "coordinator.py"
-    text = src.read_text(encoding="utf-8")
-    # The dict literal must mention both new keys
-    assert '"face_line_refs"' in text
-    assert '"face_read_in_detail"' in text

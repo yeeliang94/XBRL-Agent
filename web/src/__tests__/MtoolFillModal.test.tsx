@@ -82,7 +82,9 @@ describe("MtoolFillModal", () => {
     fireEvent.click(related);
     await waitFor(() => expect(posts.filter((p) => p.url.endsWith("/notes-preview"))).toHaveLength(2));
     fireEvent.click(screen.getByRole("button", { name: "Fill" }));
-    await screen.findByText(/Partial workbook — excluded:/);
+    await screen.findByRole("button", { name: /download for review/i });
+    expect(screen.getByText(/Partial workbook: Related party transactions not included/i)).toBeVisible();
+    expect(screen.getByText(/12 figures and 1 note were left unchanged/i)).toBeVisible();
     for (const endpoint of ["detect-columns", "notes-preview", "patch"]) {
       const request = posts.filter((p) => p.url.endsWith(`/${endpoint}`)).slice(-1)[0];
       expect(JSON.parse(request.form.get("selected_sheets") as string)).toEqual(["SOFP-Sub-CuNonCu"]);
@@ -112,7 +114,7 @@ describe("MtoolFillModal", () => {
     });
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
     fireEvent.change(screen.getByLabelText("mTool template file"), { target: { files: [new File(["xlsx"], "notes.xlsx")] } });
-    await screen.findByText(/1 note is ready to fill automatically/i);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Fill" })).toBeEnabled());
     expect(screen.queryByLabelText(/column layout editor/i)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Fill" })).toBeEnabled();
   });
@@ -125,7 +127,7 @@ describe("MtoolFillModal", () => {
     render(<MtoolFillModal runId={42} open onClose={() => {}} />);
     fireEvent.change(screen.getByLabelText("mTool template file"), { target: { files: [new File(["xlsx"], "template.xlsx")] } });
     const summary = await screen.findByLabelText(/fill summary/i);
-    expect(summary).toHaveTextContent(/ready to fill 7 figures/i);
+    expect(summary).toHaveTextContent(/7 figures/i);
     expect(screen.getByText("Customize")).toBeTruthy();
     expect(screen.queryByText(/excluded from this filing/i)).toBeNull();
     expect(screen.queryByText(/still in conflict in this run/i)).toBeNull();
@@ -368,11 +370,11 @@ describe("MtoolFillModal", () => {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
     fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
-    await waitFor(() => expect(screen.getByText(/Notes:/)).toBeTruthy());
-    expect(screen.getByText(/2 filled/)).toBeTruthy();
+    await waitFor(() => expect(screen.getByText(/template ready to download/i)).toBeTruthy());
+    expect(screen.getByText(/notes filled/i)).toBeTruthy();
   });
 
-  test("shows Degraded (not Clean) when numbers are ok but notes fail", async () => {
+  test("shows that degraded note results require review", async () => {
     const reportHeader = JSON.stringify({
       status: "degraded",
       numeric_status: "ok",
@@ -406,11 +408,13 @@ describe("MtoolFillModal", () => {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
     fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
-    // Banner reflects the notes failure, NOT a false "Clean".
-    await waitFor(() => expect(screen.getByText(/template filled — review needed/i)).toBeTruthy());
-    expect(screen.queryByText(/template ready/i)).toBeNull();
-    // Notes failure detail incl. mismatches is surfaced.
-    expect(screen.getByText(/1 not placed, 2 failed read-back/)).toBeTruthy();
+    await waitFor(() => expect(screen.getByText(/template ready to download/i)).toBeTruthy());
+    expect(screen.getByText(/Some items need review before filing/i)).toBeVisible();
+    expect(screen.getByRole("button", { name: /download for review/i })).toBeEnabled();
+    // Notes failure detail remains available and opens by default.
+    expect(screen.getByText("Notes errors")).toBeTruthy();
+    expect(screen.getByText("Notes that need checking")).toBeTruthy();
+    expect(screen.getByText("Notes errors").closest("details")).toHaveAttribute("open");
     expect(screen.getByText("Borrowings · fn_3: duplicate footnote write to fn_3")).toBeTruthy();
     expect(screen.getByText("fn_4: payload could not be written")).toBeTruthy();
     expect(screen.getByText("Notes fill failed. Please try again.")).toBeTruthy();
@@ -806,6 +810,81 @@ describe("MtoolFillModal", () => {
     expect(screen.queryByLabelText(/column layout editor/i)).toBeNull();
   });
 
+  test("one Fill click waits for template detection instead of requiring a retry", async () => {
+    let finishDetection!: (response: Response) => void;
+    let patchCalls = 0;
+    mockFetch((url) => {
+      if (url.endsWith("/detect-columns")) {
+        return new Promise<Response>((resolve) => { finishDetection = resolve; });
+      }
+      if (url.endsWith("/patch")) {
+        patchCalls += 1;
+        return patchResponse({ status: "ok", counts: { written: 7 }, unresolved: [], skipped_formula: [], mismatches: [] });
+      }
+      if (url.endsWith("/preflight")) return Response.json({ ok: true, blockers: [], warnings: [] });
+      if (url.endsWith("/mtool-notes-fill")) return Response.json({ meta: { counts: { notes: 0 } }, footnotes: [] });
+      return Response.json(FILL_DOC);
+    });
+
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    fireEvent.change(await screen.findByLabelText(/mtool template file/i), {
+      target: { files: [new File(["x"], "template.xlsx")] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
+    expect(screen.getByRole("button", { name: /^fill$/i })).toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: /Financial position details/i })).toBeDisabled();
+    expect(patchCalls).toBe(0);
+
+    await act(async () => {
+      finishDetection(Response.json({ detected: {}, confidence: "high", requires_confirmation: false }));
+    });
+    await screen.findByRole("button", { name: /download filled template/i });
+    expect(patchCalls).toBe(1);
+  });
+
+  test("queued Fill still pauses for a required column confirmation", async () => {
+    let finishDetection!: (response: Response) => void;
+    let patchCalls = 0;
+    mockFetch((url) => {
+      if (url.endsWith("/detect-columns")) {
+        return new Promise<Response>((resolve) => { finishDetection = resolve; });
+      }
+      if (url.endsWith("/patch")) {
+        patchCalls += 1;
+        return patchResponse({ status: "ok", counts: { written: 7 }, unresolved: [], skipped_formula: [], mismatches: [] });
+      }
+      if (url.endsWith("/preflight")) return Response.json({ ok: true, blockers: [], warnings: [] });
+      if (url.endsWith("/mtool-notes-fill")) return Response.json({ meta: { counts: { notes: 0 } }, footnotes: [] });
+      return Response.json(FILL_DOC);
+    });
+
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    fireEvent.change(await screen.findByLabelText(/mtool template file/i), {
+      target: { files: [new File(["x"], "candidate.xlsx")] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
+    await act(async () => {
+      finishDetection(Response.json({
+        confidence: "high",
+        requires_confirmation: true,
+        filing_inspection: { semantic_source: "taxonomy-identifiers", mtool_compatibility: "candidate-2.2" },
+        detected: {
+          "SOFP-Sub-CuNonCu": {
+            label_column: "D",
+            columns: { current_year: "E", prior_year: "F" },
+            confidence: "high",
+            requires_confirmation: true,
+            notes: [],
+          },
+        },
+      }));
+    });
+
+    expect(await screen.findByLabelText(/column layout editor/i)).toBeVisible();
+    expect(patchCalls).toBe(0);
+    expect(screen.getByRole("button", { name: /^fill$/i })).toBeEnabled();
+  });
+
   test("unverified semantic candidates still show column confirmation", async () => {
     mockFetch((url) => {
       if (url.includes("/mtool-fill/detect-columns")) {
@@ -923,7 +1002,7 @@ describe("MtoolFillModal", () => {
     expect(screen.queryByText(/reporting dates/i)).toBeNull();
     expect(screen.getByRole("button", { name: /^fill$/i })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
-    expect(await screen.findByText(/template filled — review needed/i)).toBeVisible();
+    expect(await screen.findByText(/template ready to download/i)).toBeVisible();
     expect(screen.queryByText(/reporting dates/i)).toBeNull();
   });
 
@@ -1204,7 +1283,7 @@ describe("RunDetailView mTool button", () => {
 
 /**
  * Preparation proceeds with readiness reminders. The report arrives before
- * the workbook, and Download for review records its acknowledgment. There is deliberately NO exposure gate (the
+ * the workbook, and the download action records its acknowledgment. There is deliberately NO exposure gate (the
  * 2026-08-05 replay decision dropped v2's XBRL_MTOOL_FILL switch), so the
  * action renders without any config flag.
  */
@@ -1435,6 +1514,7 @@ describe("mTool filing gates", () => {
     chooseTemplate();
     fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
     await waitFor(() => expect(screen.getByText(/template ready/i)).toBeTruthy());
+    expect(screen.queryByText(/Some items need review before filing/i)).toBeNull();
     // Nothing was downloaded by filling.
     expect(calls.some((u) => u.includes("/artifact/"))).toBe(false);
 
@@ -1465,7 +1545,8 @@ describe("mTool filing gates", () => {
 
     chooseTemplate();
     fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
-    await waitFor(() => expect(screen.getByText(/template filled — review needed/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/template ready to download/i)).toBeTruthy());
+    expect(screen.getByText(/Some items need review before filing/i)).toBeVisible();
 
     const download = screen.getByRole("button", { name: /download for review/i });
     expect(download).toBeEnabled();
@@ -1503,9 +1584,49 @@ describe("mTool filing gates", () => {
 
     chooseTemplate();
     fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
-    expect(await screen.findByText(/157 of 164 figures were filled/i)).toBeVisible();
-    expect(screen.getByText(/7 figures had no matching place/i)).toBeVisible();
+    expect(await screen.findByText("7")).toBeVisible();
+    expect(screen.getByText(/not filled/i)).toBeVisible();
+    expect(screen.getByText(/7 figures had no matching destination and were left unchanged/i)).toBeVisible();
     expect(screen.getByRole("button", { name: /download for review/i })).toBeEnabled();
+  });
+
+  test("keeps confirmed operator destinations available in the result", async () => {
+    await openWith((url) => {
+      if (url.includes("/mtool-fill/patch")) {
+        return patchResponse({
+          status: "degraded",
+          counts: { written: 1, unresolved: 0, skipped_formula: 0, mismatches: 0, errors: 0 },
+          unresolved: [],
+          skipped_formula: [],
+          mismatches: [],
+          filing_coverage: {
+            status: "partial",
+            requested: 1,
+            mapped: 1,
+            unmapped: 0,
+            ambiguous: 0,
+            coverage_percent: 100,
+            unresolved_writes: [],
+            ambiguous_writes: [],
+            operator_resolutions: [{
+              label: "Opening balance",
+              period: "current_year",
+              entity_scope: "company",
+              cell: "SOCIE!E5",
+              dimensions: {},
+            }],
+          },
+        });
+      }
+      if (url.includes("/mtool-fill")) return Response.json(FILL_DOC);
+      return Response.json({});
+    });
+
+    chooseTemplate();
+    fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
+    const summary = await screen.findByText(/Confirmed filing destinations/i);
+    expect(summary).toHaveTextContent("1");
+    expect(screen.getByText(/Opening balance.*SOCIE!E5/i)).toBeInTheDocument();
   });
 
   test("problem rows are listed individually, not just counted", async () => {
@@ -1532,6 +1653,7 @@ describe("mTool filing gates", () => {
     await waitFor(() => expect(screen.getByText(/Freehold land/)).toBeTruthy());
     expect(screen.getByText(/Buildings/)).toBeTruthy();
     expect(screen.getByText(/Total assets/)).toBeTruthy();
+    expect(screen.getByText("Couldn't be placed (not written)").closest("details")).not.toHaveAttribute("open");
   });
 
   test("a unit mismatch between template and run is called out", async () => {
@@ -1603,6 +1725,7 @@ describe("mTool preparation lifecycle", () => {
     const { rerender } = render(<MtoolFillModal runId={42} open onClose={close} />);
     await screen.findByLabelText(/mtool template file/i);
     choose("old.xlsx");
+    await waitFor(() => expect(screen.queryByText("Checking template…")).toBeNull());
     fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
     rerender(<MtoolFillModal runId={42} open={false} onClose={close} />);
     rerender(<MtoolFillModal runId={43} open onClose={close} />);

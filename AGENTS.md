@@ -53,6 +53,9 @@ Key areas:
 4. If the request is ambiguous at a load-bearing boundary, state the competing
    interpretations and ask only when the choice would materially change the
    result.
+5. Before adding, rewriting, or deleting tests, read `docs/TESTING.md`. Extend
+   an existing behavior test when it already owns the outcome; add a new test
+   only for a distinct observable behavior or risk boundary.
 
 ### Python interpreter
 

@@ -22,6 +22,10 @@ const FRIENDLY_SHEET_NAMES: Record<string, string> = {
   "SOPL-Function": "Profit or loss",
 };
 
+export function friendlyMtoolSheetName(sheet: string): string {
+  return FRIENDLY_SHEET_NAMES[sheet] ?? sheet;
+}
+
 /** Null means all current run sheets; an empty list deliberately selects none. */
 export function MtoolSheetSelection({ sheets, selected, onChange }: Props) {
   const selectedCount = selected?.length ?? sheets.length;
@@ -40,14 +44,11 @@ export function MtoolSheetSelection({ sheets, selected, onChange }: Props) {
               onChange={(event) => onChange(event.target.checked
                 ? [...(selected ?? sheets), sheet]
                 : (selected ?? sheets).filter((item) => item !== sheet))} />
-            <span>{FRIENDLY_SHEET_NAMES[sheet] ?? sheet}</span>
+            <span>{friendlyMtoolSheetName(sheet)}</span>
           </label>
         ))}
       </div>
       {selected?.length === 0 && <p role="status">Select at least one sheet to fill.</p>}
-      {selected !== null && selected.length < sheets.length && selected.length > 0 && (
-        <p role="status" style={{ marginBottom: 0 }}>This prepares a partial workbook. Excluded sheets still need completion or review in mTool.</p>
-      )}
     </fieldset>
   );
 }

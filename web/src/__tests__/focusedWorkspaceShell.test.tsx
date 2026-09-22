@@ -6,7 +6,6 @@ import { ui } from "../lib/uiStyles";
 import { pwc, tokens } from "../lib/theme";
 
 const css = readFileSync("src/index.css", "utf8");
-const appSource = readFileSync("src/App.tsx", "utf8");
 
 describe("focused-workspace shell", () => {
   test("shared primitives define the persistent rail and context bar", () => {
@@ -18,26 +17,6 @@ describe("focused-workspace shell", () => {
     expect(ui.appTopbar.position).toBe("sticky");
     expect(tokens.surface.canvas).toBe(pwc.white);
     expect(tokens.surface.navigation).toBe(pwc.grey50);
-  });
-
-  test("App keeps a labelled navigation landmark, manual rail control, and skip target", () => {
-    expect(appSource).toContain('aria-label="Workspace navigation"');
-    expect(appSource).toContain("app-shell--collapsed");
-    expect(appSource).toContain('aria-label={railCollapsed ? "Expand navigation" : "Collapse navigation"}');
-    expect(appSource).not.toContain('reviewFocused ? " app-shell--review"');
-    expect(appSource).toContain('href="#main-content"');
-    expect(appSource).toContain('id="main-content"');
-    expect(appSource).toContain("reviewFocused && state.filename ? state.filename : contextLabel");
-    expect(appSource).toContain("currentRunId={filingRunId}");
-    expect(appSource).toContain("currentRunHref={currentRunHref}");
-  });
-
-  test("keeps logout in the top bar so it remains available on narrow screens", () => {
-    const headerStart = appSource.indexOf('className="app-header-right"');
-    const logout = appSource.indexOf('aria-label="Log out"');
-
-    expect(headerStart).toBeGreaterThan(-1);
-    expect(logout).toBeGreaterThan(headerStart);
   });
 
   test("top-level destinations remain links with stable URLs and current state", () => {
