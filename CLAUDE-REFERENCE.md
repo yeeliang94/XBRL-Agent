@@ -1112,26 +1112,33 @@ Key invariants:
     (`claim_*_task_guarded`); bounded by `XBRL_NOTES_FORMATTER_WALLCLOCK_S` (300)
     + `XBRL_NOTES_FORMATTER_MAX_REQUESTS` (16, ≤45 per gotcha #18); `error_type`
     taxonomy (`FORMATTER_ERROR_TYPES`) + token telemetry + a re-written trace;
-    repair and self-check continue the same bounded conversation so source
-    images, zooms and original cells remain available without extra model calls.
+    output-rejection retry and invalid-row repair continue the same bounded
+    conversation so source images, zooms and original cells remain available.
     A validation-repair pass receives allowed targets generated from the live
     table geometry. If that repair is empty or otherwise changes zero rows,
     the safe no-op preserves `ok=false` and the original `validation_failed`
     classification; it must not be reported as ordinary successful formatting.
     This distinguishes `no_change_needed` on the initial valid
     patch from `invalid_patch_fallback` after a rejected target;
-    `notes_formatter` ∈ `_AGENT_ROLES` with `XBRL_NOTES_FORMATTER_MIN_CONFIDENCE`
-    (0.70). Numeric sheets (13/14) are excluded (422). Pinned by
+    `notes_formatter` ∈ `_AGENT_ROLES`. The output has no model-authored
+    confidence score and there is no routine second AI self-check. Deterministic
+    validation owns safety. Numeric sheets (13/14) are excluded (422). Pinned by
     `tests/test_notes_format_patch.py`, `test_notes_formatter_routes.py`,
     `test_db_schema_v26.py`/`_v27.py`.
+    Manual retry uses the same `unstyled`/`floor` candidate set as automatic
+    PDF formatting. If a filled sheet has no candidates, it reports
+    `no_unfinished_rows` rather than claiming the sheet is empty. A successful
+    automatic pass does not expose a routine retry button; the editor remains
+    available for correction.
     Validation is isolated per notes cell: all operations for one row pass or
     fail together, including duplicate row entries, validated after merging
     their operations. A rejected row does not discard valid formatting for
     other rows. Repair receives only rejected rows; if malformed row identities
     prevent grouping, the whole patch receives one repair attempt. An empty
     repair preserves the original validation failure and its metadata.
-    Invalid self-check revisions leave the affected rows unresolved rather than
-    saving their earlier styling; existing row errors retain their root cause.
+    Formatter patches cannot introduce text underline; table rules use cell
+    borders, and existing source/human markup remains intact. Existing row
+    errors retain their root cause.
     Partial saves retain
     `ok=false`, `validation_failed`, `failed_rows`, and per-row errors, alongside
     the actual `changed_rows`. Snapshots include only saved rows. The review
@@ -1139,7 +1146,7 @@ Key invariants:
     the status API also exposes `failed_rows`. Automatic formatting counts
     partial saves separately from wholly failed sheets. Pinned by
     `test_formatter_malformed_row_gets_one_repair`,
-    `test_formatter_self_check_bad_target_keeps_other_note`,
+    `test_formatter_rejects_text_underline_with_table_border`,
     `test_partition_validates_merged_operations`,
     `test_formatter_preserves_valid_note_when_other_note_repair_is_empty` in
     `tests/test_notes_format_patch.py` and the partial-save case in
@@ -1208,9 +1215,9 @@ Key invariants:
   after the house default landed, so the agent reasoned about a boxed grey grid
   over a ruled display and would "correct" formatting that was already right.
   A new consumer must resolve through `firm_theme()`, never re-read the env var.
-  The look: accountant *ruled*, not boxed — no cell grid
-  (`borderStyle: "none"`), one rule under the header row (`headerRule`, the knob
-  added for it), bold un-filled headers, historic Arial 10pt / 4×8px density,
+  The default is neutral: no cell grid (`borderStyle: "none"`), no invented
+  header rule (`headerRule: false`), no automatic header bold, un-filled
+  headers, historic Arial 10pt / 4×8px density,
   and totals underlines left MANUAL (the auto-detect matched the word "total" in
   row text and invented rules — the reason the house-style floor was removed,
   2026-07-07). Two DISTINCT layers, do not conflate them: `NotesTableStyle()` /

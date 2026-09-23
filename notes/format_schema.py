@@ -6,18 +6,18 @@ the model wrapped its answer in prose. That repair exists because the model
 was asked for JSON in the prompt and sometimes did not comply. Declaring the
 shape lets the provider enforce it instead.
 
-This mirrors `notes/format_patch.py` EXACTLY and deliberately adds nothing:
-that module raises `FormatPatchError` on any unrecognised target or style key,
-so a schema wider than it would only move the failure, and a schema narrower
-than it would reject patches that are currently valid. `format_patch` stays
-the authority — everything here is re-validated there after the model answers.
+This uses the validator's style vocabulary except for text underline. The
+validator retains that legacy operation for stored payload compatibility, but
+the live formatter must use table borders for source-visible rules. A schema
+wider than the validator would only move failures downstream. `format_patch`
+stays the authority — every model answer is re-validated there.
 
 Keep the two in step. The vocabularies:
 
     targets   all | table | header | total_rows | numeric_cells,
               plus {"cell": {r, c}}, {"rows": [...]}, {"blocks": "all"}
     styles    border_{top,right,bottom,left} | clear_border | fill |
-              text_align | bold | italic | underline | indent | padding |
+              text_align | bold | italic | indent | padding |
               space_before | space_after | table_width
 """
 from __future__ import annotations
@@ -84,7 +84,7 @@ class Target(BaseModel):
 
 
 class Style(BaseModel):
-    """Only these keys exist. `format_patch._apply_style` raises on any other."""
+    """AI-authored style keys; legacy text underline is deliberately absent."""
     border_top: Optional[Border] = None
     border_right: Optional[Border] = None
     border_bottom: Optional[Border] = None
@@ -99,7 +99,6 @@ class Style(BaseModel):
     text_align: Optional[TextAlign] = None
     bold: Optional[bool] = None
     italic: Optional[bool] = None
-    underline: Optional[bool] = None
     indent: Optional[str] = Field(default=None, description='e.g. "1em"')
     padding: Optional[str] = Field(
         default=None, description='cell inner spacing, e.g. "4px 8px"',
@@ -134,11 +133,6 @@ class SheetFormatPatch(BaseModel):
         description="Empty when nothing needs restyling — that is a valid answer.",
     )
     format_summary: str = Field(description="Short user-facing description.")
-    confidence: float = Field(
-        ge=0.0, le=1.0,
-        description="Your honest self-assessment. A low number is respected, "
-                    "not retried — do not inflate it.",
-    )
 
 
 def patch_to_dict(patch: SheetFormatPatch) -> dict:

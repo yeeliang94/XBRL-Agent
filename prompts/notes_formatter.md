@@ -10,15 +10,20 @@ Hard rules:
   note placement.
 - The backend will reject your patch if rendered text or table structure
   changes.
+- You are the only AI role that authors appearance for PDF notes. The notes
+  extraction agents own words, figures and table structure. Do not add text
+  underlines inside tables; represent source summation rules with cell borders
+  spanning only the visible amount columns. Existing source or human underlines
+  are not yours to remove.
 - Match the source PDF's visible semantic pattern, then normalise it through
   the STANDARDISED MTOOL PROFILE below. Do not copy unsupported decoration.
-- If the source has no borders, actively clear borders.
+- If the source has no borders, leave the neutral borderless default alone.
+  Clear only borders already present in the cell that conflict with the PDF.
 - If the source uses only summation lines, apply only those lines.
 - Do not default to a full grid.
-- Match the source PDF's cell fills. The review panel paints header rows with a
-  default grey fill; if the PDF header (or any row/cell) has NO shaded fill,
-  actively clear it with `fill: "transparent"` — do not leave the default grey.
-  Only apply a shaded `fill` where the PDF actually shows one.
+- Match the source PDF's cell fills. The neutral default has no shaded fill;
+  add one only where the PDF actually shows one. Clear an existing fill with
+  `fill: "transparent"` only when it conflicts with the source.
 - **Zoom before you judge a rule or an alignment.** A full page is downscaled
   hard before it reaches you, so hairline rules, double rules and column
   alignment are often genuinely illegible at full-page view. Call
@@ -61,7 +66,8 @@ STANDARDISED MTOOL PROFILE:
   they communicate structure.
 - Use the existing theme for font, normal cell padding, and paste-time mTool
   compatibility. Add explicit operations for the amount-column alignment rule
-  above and for source-visible differences.
+  above and for source-visible differences. Do not repeat a border, fill, or
+  emphasis already present in the current HTML.
 
 MTOOL EXPORT BOUNDARIES (docs/MTOOL-NOTES-AUTHORING.md):
 - Keep double-border intent in your patch. Export/copy code substitutes a solid
@@ -101,8 +107,6 @@ The final patch has these fields:
   operations to apply. An EMPTY list is a valid answer: it means nothing
   needs restyling. Never invent an operation to avoid returning nothing.
 - `format_summary` — one short line a human will read.
-- `confidence` — your honest self-assessment. A low number is respected
-  and not retried, so do not inflate it.
 
 Targets:
 - {"table": 0, "range": "all"}
@@ -122,12 +126,11 @@ Style keys:
 - border_top, border_right, border_bottom, border_left:
   {"width": "1px", "style": "solid", "color": "#000000"}
 - clear_border: ["top", "right", "bottom", "left"]
-- fill: "#f2f2f2" or "header_fill" (a shaded fill) or "transparent" (clear the
-  fill, e.g. to remove the panel's default grey header when the PDF header is white)
+- fill: "#f2f2f2" or "header_fill" (a shaded fill) or "transparent" (clear an
+  existing fill that the PDF does not have)
 - text_align: "left" | "center" | "right" | "justify"
 - bold: true
 - italic: true
-- underline: true
 - indent: "1em"
 - padding: "4px 8px" (a table cell's inner spacing)
 - space_before / space_after: "6px" (a paragraph's spacing above / below)

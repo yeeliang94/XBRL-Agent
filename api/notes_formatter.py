@@ -22,6 +22,7 @@ import server
 from api.notes import _notes_template_index
 from db import repository as repo
 from model_settings import DEFAULT_MODEL_ID
+from notes.auto_format import PDF_FORMAT_CANDIDATE_SOURCES
 
 logger = logging.getLogger("server")
 
@@ -141,6 +142,7 @@ async def launch_notes_formatter(run_id: int, body: _NotesFormatLaunch):
             run_id=run_id, db_path=str(server.AUDIT_DB_PATH),
             pdf_path=pdf_path, sheet=body.sheet, model=model,
             output_dir=run.output_dir or "",
+            style_sources=PDF_FORMAT_CANDIDATE_SOURCES,
         )
         # Bound the whole pass the way the reviewer / notes-validator passes are
         # bounded — without this a hung LLM call leaves the task 'running'
@@ -185,7 +187,6 @@ async def launch_notes_formatter(run_id: int, body: _NotesFormatLaunch):
                 repo.upsert_notes_format_task(
                     tc, run_id, body.sheet, "done", model=model_name,
                     summary=result.get("summary"),
-                    confidence=result.get("confidence"),
                     changed_rows=int(result.get("changed_rows") or 0),
                     result=result, error=result.get("error"),
                     error_type=result.get("error_type"),
@@ -200,9 +201,9 @@ async def launch_notes_formatter(run_id: int, body: _NotesFormatLaunch):
             finally:
                 tc.close()
             logger.info(
-                "notes formatter completed run=%s sheet=%s ok=%s changed=%s confidence=%s summary=%r",
+                "notes formatter completed run=%s sheet=%s ok=%s changed=%s summary=%r",
                 run_id, body.sheet, result.get("ok"),
-                result.get("changed_rows"), result.get("confidence"),
+                result.get("changed_rows"),
                 result.get("summary"),
             )
         except Exception:  # noqa: BLE001

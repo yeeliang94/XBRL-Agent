@@ -6,11 +6,9 @@ model wrapped its answer in prose. That repair existed because the shape was
 only ASKED for, in the prompt. `notes/format_schema.py` declares it instead,
 so the provider enforces it.
 
-The risk that replaces the parse-failure risk is DRIFT: a schema narrower than
-`notes/format_patch.py` silently rejects patches that are currently valid, and
-one that is wider just moves the failure. These tests hold the two together by
-reading `format_patch`'s own constants, so adding a style key or a target mode
-there fails here until the schema follows.
+The remaining risk is DRIFT: new validator keys must be represented in the
+schema unless deliberately legacy-only, as text underline now is. These tests
+hold the AI vocabulary to the validator's supported keys.
 
 Not covered: whether a model answers a nested schema as well as it answers
 prose. That needs a live formatter run. `XBRL_NOTES_FORMATTER_STRUCTURED=0` is
@@ -47,7 +45,6 @@ def _apply(operations: list[dict]) -> str:
             "sheet": "S",
             "cells": [{"row": 1, "operations": operations}],
             "format_summary": "t",
-            "confidence": 0.9,
         }
     )
     return apply_cell_operations(
@@ -56,16 +53,14 @@ def _apply(operations: list[dict]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# The schema must not be NARROWER than the validator.
+# The schema matches the validator except for legacy text underline.
 # ---------------------------------------------------------------------------
 
-def test_every_style_key_the_validator_accepts_exists_on_the_schema():
-    """`_apply_style` raises "unsupported style key" on anything else, so its
-    accepted set is the contract."""
+def test_every_ai_style_key_the_validator_accepts_exists_on_the_schema():
+    """Only legacy underline is intentionally excluded from the AI contract."""
     accepted = set(format_patch.STYLE_TO_CSS) | {
         "clear_border", "fill", "text_align", "indent", "padding",
         "space_before", "space_after", "table_width", "bold", "italic",
-        "underline",
     }
     missing = accepted - set(Style.model_fields)
     assert not missing, f"schema cannot express style keys: {sorted(missing)}"
@@ -138,7 +133,7 @@ def test_unset_keys_are_dropped_not_serialised_as_null():
         "cells": [{"row": 1, "operations": [
             {"target": {"blocks": "all"}, "style": {"indent": "1em"}},
         ]}],
-        "format_summary": "t", "confidence": 0.5,
+        "format_summary": "t",
     })
     dumped = patch_to_dict(patch)
     assert "null" not in json.dumps(dumped)
@@ -152,18 +147,13 @@ def test_an_empty_patch_is_valid():
     an invented operation."""
     patch = SheetFormatPatch.model_validate({
         "sheet": "S", "cells": [], "format_summary": "Already correct.",
-        "confidence": 0.9,
     })
     assert patch_to_dict(patch)["cells"] == []
 
 
-def test_confidence_is_bounded():
-    from pydantic import ValidationError
-
-    with pytest.raises(ValidationError):
-        SheetFormatPatch.model_validate({
-            "sheet": "S", "cells": [], "format_summary": "t", "confidence": 1.4,
-        })
+def test_formatter_schema_does_not_request_confidence_or_text_underline():
+    assert "confidence" not in SheetFormatPatch.model_fields
+    assert "underline" not in Style.model_fields
 
 
 # ---------------------------------------------------------------------------
@@ -222,7 +212,7 @@ def test_a_validated_patch_is_converted_to_json_for_the_screening_path():
     from notes.formatting_agent import _output_json
 
     patch = SheetFormatPatch.model_validate({
-        "sheet": "Notes-CI", "cells": [], "format_summary": "t", "confidence": 0.8,
+        "sheet": "Notes-CI", "cells": [], "format_summary": "t",
     })
     assert json.loads(_output_json(patch))["sheet"] == "Notes-CI"
     # Free-form output (kill switch on) still passes through untouched.

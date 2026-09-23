@@ -2785,6 +2785,24 @@ describe("NotesReviewTab — AI formatter", () => {
     expect(screen.queryByTestId("notes-format-button")).toBeNull();
   });
 
+  test("an already-formatted sheet explains the result without offering another retry", async () => {
+    routedFetch({
+      status: (url) =>
+        url.includes("Notes-CI")
+          ? {
+              status: "done", sheet: "Notes-CI", error_type: "no_unfinished_rows",
+              error: "No unfinished PDF notes remain on Notes-CI.", changed_rows: 0,
+            }
+          : { status: "idle", sheet: "other" },
+    });
+
+    render(<NotesReviewTab runId={42} />);
+    expect(await screen.findByTestId("notes-format-summary")).toHaveTextContent(
+      /no unfinished notes.*already formatted/i,
+    );
+    expect(screen.queryByTestId("notes-format-button")).toBeNull();
+  });
+
   test("pending row save disables Format", async () => {
     vi.useFakeTimers();
     routedFetch({});

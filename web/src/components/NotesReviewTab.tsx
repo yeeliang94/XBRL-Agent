@@ -1053,6 +1053,7 @@ function SheetSection({
     return () => onSaveBlocked(false);
   }, [hasPendingRowSave, formatRequestPending, formatStatus?.status, onSaveBlocked]);
   const isFormatting = formatRequestPending || formatStatus?.status === "running";
+  const hasUnfinishedFormatWork = formatStatus?.error_type !== "no_unfinished_rows";
   const skippedFormatRows = formatStatus?.skipped_rows ?? [];
   const formatButtonLabel = hasPendingRowSave
     ? "Save pending"
@@ -1063,7 +1064,7 @@ function SheetSection({
   return (
     <section ref={sectionRef} style={styles.workspaceSheetSection}>
       <span data-testid="sheet-title" style={{ display: "none" }}>{notesSheetDisplayName(sheet.sheet)}</span>
-      {canFormat && (formatStatus?.status === "idle" || formatStatus?.status === "running" || formatStatus?.error || formatError || skippedFormatRows.length > 0) && (
+      {canFormat && hasUnfinishedFormatWork && (formatStatus?.status === "idle" || formatStatus?.status === "running" || formatStatus?.error || formatError || skippedFormatRows.length > 0) && (
       <div style={{ ...styles.sheetHeadingButton, justifyContent: "flex-end" }}>
           <button
             type="button"

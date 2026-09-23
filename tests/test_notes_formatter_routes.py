@@ -134,15 +134,38 @@ def test_notes_formatter_reports_already_running(formatter_client):
     assert body["already_running"] is True
 
 
+def test_notes_formatter_reports_already_formatted_sheet(formatter_client):
+    """A retry with no unfinished rows must not claim the sheet is empty."""
+    client, run_id, server_module = formatter_client
+    sheet = "Notes-Listofnotes"
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        repo.upsert_notes_cell(
+            conn, run_id=run_id, sheet=sheet, row=112,
+            label="Disclosure of other notes", html="<p>abc</p>",
+            evidence="Page 3", source_pages=[3], style_source="formatter",
+        )
+
+    response = client.post(
+        f"/api/runs/{run_id}/notes-format", json={"sheet": sheet},
+    )
+    assert response.status_code == 200
+    done = _poll_done(client, run_id, sheet)
+    assert done["status"] == "done"
+    assert done["error_type"] == "no_unfinished_rows"
+    assert "already formatted" in done["error"].lower()
+
+
 def test_notes_formatter_validation_failure_records_done(formatter_client, monkeypatch):
     client, run_id, server_module = formatter_client
+    seen_sources = []
+    from notes.auto_format import PDF_FORMAT_CANDIDATE_SOURCES
 
-    async def fake_run_notes_formatter(**_kwargs):
+    async def fake_run_notes_formatter(**kwargs):
+        seen_sources.append(kwargs["style_sources"])
         return {
             "ok": False,
             "error": "row 112: rendered text changed",
             "summary": "Rejected unsafe patch.",
-            "confidence": 0.9,
             "changed_rows": 0,
         }
 
@@ -158,6 +181,7 @@ def test_notes_formatter_validation_failure_records_done(formatter_client, monke
     done = _poll_done(client, run_id, "Notes-Listofnotes")
     assert done["status"] == "done"
     assert done["error"] == "row 112: rendered text changed"
+    assert seen_sources == [PDF_FORMAT_CANDIDATE_SOURCES]
     with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
         cells = repo.list_notes_cells_for_run(conn, run_id)
     assert cells[0].html == "<p>abc</p>"
@@ -272,7 +296,7 @@ def test_notes_formatter_token_totals_round_trip(formatter_client, monkeypatch):
 
     async def fake_run_notes_formatter(**_kwargs):
         return {
-            "ok": True, "summary": "Formatted.", "confidence": 0.9,
+            "ok": True, "summary": "Formatted.",
             "changed_rows": 1, "skipped_rows": [],
             "prompt_tokens": 1200, "completion_tokens": 345,
             "cache_read_tokens": 800, "cache_write_tokens": 50,

@@ -46,7 +46,7 @@ export interface NotesCell {
   sanitizer_warnings?: string[];
   // How this cell got its table styling (schema v29): "ops" = agent observed
   // it at extraction, "floor" = deterministic house style, "unstyled" = plain,
-  // "formatter" = the manual notes formatter pass styled it. null on blank
+  // "formatter" = the automatic or manual notes formatter styled it. null on blank
   // rows / reviewer-authored / legacy runs. Read-only signal so the operator
   // can spot cells that want a formatter pass (only unstyled/floor get a chip).
   style_source?: "ops" | "floor" | "unstyled" | "formatter" | null;
@@ -106,7 +106,6 @@ export interface NotesFormatStatus {
   sheet: string;
   model?: string | null;
   summary?: string | null;
-  confidence?: number | null;
   changed_rows?: number;
   /** Rows the CAS write skipped because they were edited during the pass. */
   skipped_rows?: number[];
@@ -115,7 +114,7 @@ export interface NotesFormatStatus {
   /** True when a pre-format snapshot exists — enables "Revert formatting". */
   can_revert?: boolean;
   error?: string | null;
-  /** Failure taxonomy code (timeout | turn_budget | low_confidence | ...). */
+  /** Failure taxonomy code (timeout | turn_budget | no_unfinished_rows | ...). */
   error_type?: string | null;
   prompt_tokens?: number;
   completion_tokens?: number;
