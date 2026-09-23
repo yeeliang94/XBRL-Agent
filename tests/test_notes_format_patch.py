@@ -479,11 +479,12 @@ _GOOD_PATCH = json.dumps({
 
 
 class _FakeResult:
-    def __init__(self, output: str):
+    def __init__(self, output: str, history=()):
         self.output = output
+        self.history = list(history)
 
     def all_messages(self) -> list:
-        return [f"fake-pass-message: {self.output[:40]}"]
+        return [*self.history, f"fake-pass-message: {self.output[:40]}"]
 
 
 class _FakeAgent:
@@ -501,7 +502,7 @@ class _FakeAgent:
         self.prompts.append(prompt)
         if self._on_call:
             self._on_call(self.calls)
-        return _FakeResult(self._outputs.pop(0))
+        return _FakeResult(self._outputs.pop(0), _kwargs.get("message_history") or [])
 
 
 @pytest.fixture()
@@ -591,6 +592,37 @@ async def test_formatter_attaches_known_pages_to_its_first_model_request(
     assert isinstance(first_request, list)
     assert "images [3] are attached below" in first_request[0]
     assert any(isinstance(part, BinaryContent) for part in first_request[1:])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("first_output", ["not JSON", _GOOD_PATCH])
+async def test_formatter_followups_retain_source_evidence(
+    monkeypatch, formatter_db, first_output,
+):
+    from pydantic_ai import Agent
+    from pydantic_ai.messages import BinaryContent, ModelResponse, TextPart, UserPromptPart
+    from pydantic_ai.models.function import FunctionModel
+    import notes.formatting_agent as fa
+
+    async def preload(*_args):
+        return [BinaryContent(data=b"source-page", media_type="image/png")], {3}
+
+    seen = []
+
+    def respond(messages, _info):
+        content = [p.content for m in messages for p in m.parts if isinstance(p, UserPromptPart)]
+        images = [part for value in content if isinstance(value, list)
+                  for part in value if isinstance(part, BinaryContent)]
+        seen.append(images)
+        return ModelResponse(parts=[TextPart(first_output if len(seen) == 1 else _GOOD_PATCH)])
+
+    monkeypatch.setattr(fa, "_preload_source_pages", preload)
+    result = await _run_formatter_with_fake_agent(
+        monkeypatch, formatter_db, Agent(FunctionModel(respond)),
+    )
+    assert result["ok"] is True
+    assert len(seen) == (3 if first_output == "not JSON" else 2)
+    assert all([image.data for image in images] == [b"source-page"] for images in seen)
 
 
 @pytest.mark.asyncio

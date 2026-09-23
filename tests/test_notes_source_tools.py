@@ -80,7 +80,9 @@ def test_the_source_tools_are_absent_without_a_frozen_reading(tmp_path):
     assert "list_source_notes" not in names
 
 
-def test_the_source_tools_appear_with_a_frozen_reading(tmp_path, seeded):
+@pytest.mark.asyncio
+async def test_the_source_tools_appear_with_a_frozen_reading(tmp_path, seeded):
+    from types import SimpleNamespace
     from pydantic_ai.models.test import TestModel
 
     db, run_id, gen = seeded
@@ -94,6 +96,16 @@ def test_the_source_tools_appear_with_a_frozen_reading(tmp_path, seeded):
     assert {"list_source_notes", "read_source_manifest",
             "view_source_blocks", "write_note_from_source"} <= names
     assert deps.source_generation_id == gen
+    functions = {name: tool.function for ts in agent.toolsets
+                 for name, tool in getattr(ts, "tools", {}).items()}
+    for name, args in [("list_source_notes", ()), ("read_source_manifest", (5,)),
+                       ("view_source_blocks", (["b2"],))]:
+        ctx = SimpleNamespace(deps=deps)
+        full = await functions[name](ctx, *args)
+        tail = await functions[name](ctx, *args, offset=5)
+        body = lambda text: text.split("<<<SOURCE>>>\n", 1)[1].split("\n<<<END_SOURCE>>>", 1)[0]
+        assert body(tail) == body(full)[5:]
+        assert "Invalid offset" in await functions[name](ctx, *args, offset=-1)
 
 
 def _word_upload_dir(tmp_path):
@@ -222,7 +234,8 @@ def test_document_content_carries_the_untrusted_framing(seeded):
 # caps
 # --------------------------------------------------------------------------
 
-def test_a_long_response_is_cut_and_says_so(tmp_path):
+def test_a_long_block_can_be_read_completely_in_bounded_pages(tmp_path):
+    import re
     db = tmp_path / "big.sqlite"
     init_db(db)
     with repo.db_session(db) as conn:
@@ -236,9 +249,44 @@ def test_a_long_response_is_cut_and_says_so(tmp_path):
                         source_note_id="n1"),
         ])
         srepo.activate_generation(conn, gen)
-    out = notes_agent._view_source_blocks_impl(str(db), gen, ["big"])
-    assert len(out) <= notes_agent.SOURCE_TOOL_RESPONSE_CAP + 200
-    assert "ask for fewer parts" in out
+    chunks, offset = [], 0
+    for _ in range(10):
+        out = notes_agent._view_source_blocks_impl(str(db), gen, ["big"], offset=offset)
+        assert len(out) <= notes_agent.SOURCE_TOOL_RESPONSE_CAP + 600
+        assert "UNTRUSTED" in out and "<<<END_SOURCE>>>" in out
+        chunks.append(out.split("<<<SOURCE>>>\n", 1)[1].split("\n<<<END_SOURCE>>>", 1)[0])
+        continuation = re.search(r"next_offset=(\d+)", out)
+        if continuation is None:
+            break
+        next_offset = int(continuation[1])
+        assert next_offset > offset
+        offset = next_offset
+    else:
+        pytest.fail("source pagination did not terminate")
+    assert "".join(chunks) == "--- big (paragraph) ---\n<p>" + "x" * 200_000 + "</p>"
+
+
+@pytest.mark.parametrize("impl,args", [
+    (notes_agent._list_source_notes_impl, ()),
+    (notes_agent._read_source_manifest_impl, (5,)),
+])
+def test_source_indexes_paginate_without_losing_ids(seeded, monkeypatch, impl, args):
+    import re
+    db, _run_id, gen = seeded
+    whole = impl(db, gen, *args).split("<<<SOURCE>>>\n", 1)[1].split("\n<<<END_SOURCE>>>", 1)[0]
+    monkeypatch.setattr(notes_agent, "SOURCE_TOOL_RESPONSE_CAP", 35)
+    offset, chunks = 0, []
+    for _ in range(20):
+        out = impl(db, gen, *args, offset=offset)
+        chunks.append(out.split("<<<SOURCE>>>\n", 1)[1].split("\n<<<END_SOURCE>>>", 1)[0])
+        continuation = re.search(r"next_offset=(\d+)", out)
+        if continuation is None:
+            break
+        offset = int(continuation[1])
+    else:
+        pytest.fail("index pagination did not terminate")
+    assert len(chunks) > 1
+    assert "".join(chunks) == whole
 
 
 def test_too_many_block_ids_are_bounded_per_call(seeded):
@@ -246,6 +294,26 @@ def test_too_many_block_ids_are_bounded_per_call(seeded):
     many = [f"b{i}" for i in range(200)] + ["b1"]
     out = notes_agent._view_source_blocks_impl(db, gen, many)
     assert f"first {notes_agent._SOURCE_BLOCKS_PER_CALL} parts" in out
+
+
+def test_block_read_warnings_appear_on_every_page(seeded, monkeypatch):
+    import re
+
+    db, _run_id, gen = seeded
+    monkeypatch.setattr(notes_agent, "SOURCE_TOOL_RESPONSE_CAP", 12)
+    ids = ["b1"] + [f"missing{i}" for i in range(40)]
+    offset = 0
+    for _ in range(10):
+        out = notes_agent._view_source_blocks_impl(db, gen, ids, offset=offset)
+        body = out.split("<<<SOURCE>>>\n", 1)[1].split("\n<<<END_SOURCE>>>", 1)[0]
+        assert body.startswith("[not found: missing0, missing1")
+        assert "[only the first 40 parts were returned]\n" in body
+        continuation = re.search(r"next_offset=(\d+)", out)
+        if continuation is None:
+            break
+        offset = int(continuation[1])
+    else:
+        pytest.fail("source pagination did not terminate")
 
 
 def test_previews_in_the_manifest_are_short(tmp_path):

@@ -1112,7 +1112,9 @@ Key invariants:
     (`claim_*_task_guarded`); bounded by `XBRL_NOTES_FORMATTER_WALLCLOCK_S` (300)
     + `XBRL_NOTES_FORMATTER_MAX_REQUESTS` (16, ≤45 per gotcha #18); `error_type`
     taxonomy (`FORMATTER_ERROR_TYPES`) + token telemetry + a re-written trace;
-    a validation-repair pass receives allowed targets generated from the live
+    repair and self-check continue the same bounded conversation so source
+    images, zooms and original cells remain available without extra model calls.
+    A validation-repair pass receives allowed targets generated from the live
     table geometry. If that repair is empty or otherwise changes zero rows,
     the safe no-op preserves `ok=false` and the original `validation_failed`
     classification; it must not be reported as ordinary successful formatting.
@@ -1382,6 +1384,11 @@ prompt. Graph-node counters remain the fallback for other agent roles. Do not
 show the reviewer a graph-step budget that disagrees with its prompt.
 An explicitly published token budget of `0` disables both the hard cap and its
 warning; it must not fall back to a nonzero environment default.
+
+Model-stream opening and subsequent inactivity always use the existing per-turn
+timeout, including ordinary notes extraction. `bound_inner_streams=False` exempts tool streams only
+so long workbook writes retain their existing behavior. Pinned by the before-
+and after-write stream-stall cases in `tests/test_notes_turn_timeout.py`.
 
 **Wall-clock cap on correction (2026-04-27):**
 `CORRECTION_WALLCLOCK_TIMEOUT = 300.0` in `server.py` is
@@ -2473,6 +2480,12 @@ pinned by `tests/test_notes_source_tools.py`, `tests/test_notes_coordinator.py`,
 `tests/test_notes12_token_rollup.py`.
 Numeric tools remain available only for numeric templates. Missing captured prose
 is never silently replaced with invented text.
+Source note lists, manifests and block reads accept an optional character
+`offset`. A partial response supplies the next offset; each page retains the
+untrusted-source framing. Extraction and reviewer tools share this contract,
+pinned by `tests/test_notes_source_tools.py`. Successful source writes also
+trigger the existing post-write image compaction; rejected writes retain the
+evidence, pinned by `tests/test_history_processors.py`.
 Standalone blank drafts require a nonempty assigned inventory whose every note
 has a reported source gap; one gap cannot account for other unwritten notes.
 Reviewers enforce source relinking even when a legacy rollout setting is off.

@@ -559,11 +559,12 @@ def _render_source_blocks_block() -> str:
         "split into numbered parts (blocks). For any note the source "
         "contains, do NOT retype its content or copy its markup by hand — "
         "build the cell from the source itself:\n"
-        "1. Call `list_source_notes` once to see which notes the source "
+        "1. Call `list_source_notes` to see which notes the source "
         "contains and how many parts each has.\n"
         "2. Before writing a note, call `read_source_manifest(note_num)` for "
         "its part ids, and `view_source_blocks([...])` to read parts in "
-        "full.\n"
+        "full. If a source read is partial, repeat it with the returned "
+        "next_offset as offset.\n"
         "3. Write the note with `write_note_from_source(sheet, row, "
         "block_ids)`, naming every part that belongs in that row. The cell "
         "text is assembled from the document itself, so content and "
@@ -2339,13 +2340,18 @@ def _source_untrusted_frame(body: str, label: str) -> str:
     )
 
 
-def _cap(text: str, cap: int = SOURCE_TOOL_RESPONSE_CAP) -> str:
-    if len(text) <= cap:
-        return text
-    return (
-        text[:cap]
-        + f"\n[cut at {cap:,} characters — ask for fewer parts to see the rest]"
-    )
+def _source_response(body: str, label: str, offset: int, notice: str = "") -> str:
+    """Bound source data while keeping framing and a recoverable continuation."""
+    if offset < 0 or (offset >= len(body) and offset != 0):
+        return f"Invalid offset {offset}; use 0 to start or the returned next_offset."
+    end = min(offset + SOURCE_TOOL_RESPONSE_CAP, len(body))
+    response = _source_untrusted_frame(notice + body[offset:end], label)
+    if end < len(body):
+        response += (
+            f"\n[partial; next_offset={end}. Repeat this tool with the same "
+            f"arguments and offset={end} to continue.]"
+        )
+    return response
 
 
 def _note_num_for_blocks(conn, generation_id, block_ids) -> Optional[int]:
@@ -2399,7 +2405,7 @@ def _source_block_note_nums(
         return set()
 
 
-def _list_source_notes_impl(db_path: Optional[str], generation_id: Optional[int]) -> str:
+def _list_source_notes_impl(db_path: Optional[str], generation_id: Optional[int], offset: int = 0) -> str:
     from db import repository as repo
     from notes import source_repository as srepo
 
@@ -2419,13 +2425,14 @@ def _list_source_notes_impl(db_path: Optional[str], generation_id: Optional[int]
         f"part(s)  {r['title'][:70]} [source id: {r['source_note_id']}]"
         for r in notes_rows
     ]
-    return _cap(
-        f"{len(notes_rows)} note(s) in the source document:\n" + "\n".join(lines)
+    return _source_response(
+        "\n".join(lines), f"{len(notes_rows)} note(s) in the source document.", offset,
     )
 
 
 def _read_source_manifest_impl(
-    db_path: Optional[str], generation_id: Optional[int], note_num: int | str
+    db_path: Optional[str], generation_id: Optional[int], note_num: int | str,
+    offset: int = 0,
 ) -> str:
     from db import repository as repo
     from notes import source_repository as srepo
@@ -2450,20 +2457,22 @@ def _read_source_manifest_impl(
         preview = _block_text(b["canonical_html"] or "")[:_SOURCE_PREVIEW_CHARS]
         extra = f"  [continues {b['continues_block_id']}]" if b["continues_block_id"] else ""
         lines.append(f"  {b['block_id']}  {b['block_kind']:<9} {preview}{extra}")
-    return _cap(_source_untrusted_frame(
-        "\n".join(lines), f"Note {note_num} has {len(blocks)} part(s).",
-    ))
+    return _source_response(
+        "\n".join(lines), f"Note {note_num} has {len(blocks)} part(s).", offset,
+    )
 
 
 def _view_source_blocks_impl(
-    db_path: Optional[str], generation_id: Optional[int], block_ids: List[str]
+    db_path: Optional[str], generation_id: Optional[int], block_ids: List[str],
+    offset: int = 0,
 ) -> str:
     from db import repository as repo
     from notes import source_repository as srepo
 
     if not db_path or generation_id is None:
         return "No frozen source reading is available for this run."
-    wanted = list(dict.fromkeys(block_ids))[:_SOURCE_BLOCKS_PER_CALL]
+    unique_ids = list(dict.fromkeys(block_ids))
+    wanted = unique_ids[:_SOURCE_BLOCKS_PER_CALL]
     with repo.db_session(db_path) as conn:
         by_id = {
             b["block_id"]: b for b in srepo.fetch_blocks(conn, generation_id)
@@ -2486,13 +2495,13 @@ def _view_source_blocks_impl(
             "read_source_manifest first to see the real ids."
         )
     body = "\n".join(parts)
+    notices = []
     if unknown:
-        body += f"\n[not found: {', '.join(unknown)}]"
-    if len(block_ids) > _SOURCE_BLOCKS_PER_CALL:
-        body += (
-            f"\n[only the first {_SOURCE_BLOCKS_PER_CALL} parts were returned]"
-        )
-    return _cap(_source_untrusted_frame(body, f"{len(parts)} source part(s)."))
+        notices.append(f"[not found: {', '.join(unknown)}]")
+    if len(unique_ids) > _SOURCE_BLOCKS_PER_CALL:
+        notices.append(f"[only the first {_SOURCE_BLOCKS_PER_CALL} parts were returned]")
+    notice = "\n".join(notices) + "\n" if notices else ""
+    return _source_response(body, f"{len(parts)} source part(s).", offset, notice)
 
 
 def _write_from_source_impl(
@@ -3130,38 +3139,38 @@ def create_notes_agent(
     if source_generation_id is not None:
 
         @agent.tool
-        async def list_source_notes(ctx: RunContext[NotesDeps]) -> str:
+        async def list_source_notes(ctx: RunContext[NotesDeps], offset: int = 0) -> str:
             """List the notes found in the source document, with how many parts
             each has. Use this to see what the document actually contains
-            before deciding what goes where."""
+            before deciding what goes where. If partial, continue with offset=next_offset."""
             return await asyncio.to_thread(
                 _list_source_notes_impl, ctx.deps.db_path,
-                ctx.deps.source_generation_id,
+                ctx.deps.source_generation_id, offset,
             )
 
         @agent.tool
         async def read_source_manifest(
-            ctx: RunContext[NotesDeps], note_num: int | str
+            ctx: RunContext[NotesDeps], note_num: int | str, offset: int = 0,
         ) -> str:
             """Accept the note number or stable source id (including unnumbered notes).
             List the numbered parts of one source note — id, kind and a
             short preview of each. Name these ids in `write_note_from_source`.
             Previews are short on purpose; use `view_source_blocks` to read a
-            part in full."""
+            part in full. If partial, continue with offset=next_offset."""
             return await asyncio.to_thread(
                 _read_source_manifest_impl, ctx.deps.db_path,
-                ctx.deps.source_generation_id, note_num,
+                ctx.deps.source_generation_id, note_num, offset,
             )
 
         @agent.tool
         async def view_source_blocks(
-            ctx: RunContext[NotesDeps], block_ids: List[str]
+            ctx: RunContext[NotesDeps], block_ids: List[str], offset: int = 0,
         ) -> str:
-            """Read the full content of specific source parts. Capped in size —
-            ask for fewer parts if the response says it was cut."""
+            """Read up to 40 source parts. If partial, repeat the same block_ids
+            with offset=next_offset to continue, including within a large part."""
             return await asyncio.to_thread(
                 _view_source_blocks_impl, ctx.deps.db_path,
-                ctx.deps.source_generation_id, block_ids,
+                ctx.deps.source_generation_id, block_ids, offset,
             )
 
     # Prepared numeric templates expose the same source writer for their
@@ -3418,7 +3427,7 @@ def create_notes_agent(
     async def save_result(ctx: RunContext[NotesDeps]) -> str:
         """Persist the final payload list + token report to the output dir.
 
-        Call it as `save_result()`. Every payload passed to `write_notes` is
+        Call it as `save_result()`. Every payload passed to a writing tool is
         already persisted; the completion tool does not ask the model to
         re-encode it.
         """
@@ -3449,8 +3458,8 @@ def create_notes_agent(
         ) -> str:
             """Submit the end-of-batch coverage receipt.
 
-            Call this as your LAST tool call, after all `write_notes`
-            calls. Pass the entry objects directly; do not JSON-encode them.
+            Call this as your LAST tool call, after all writes.
+            Pass the entry objects directly; do not JSON-encode them.
             Each entry is:
 
               - {"note_num": <int>, "action": "written",

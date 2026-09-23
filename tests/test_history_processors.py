@@ -6,6 +6,7 @@ duplicate template summaries. See docs/Archive/PLAN-token-cost-reduction.md.
 """
 
 import copy
+import pytest
 
 from pydantic_ai.messages import (
     BinaryContent,
@@ -137,6 +138,23 @@ def test_write_facts_is_a_write_boundary():
     assert any("Page 1" in s for s in placeholders)
     # Page markers preserved.
     assert any(s == "=== Page 1 ===" for s in first_return.content)
+
+
+@pytest.mark.parametrize("content,remaining", [
+    ("ok: Notes row 112 built from 2 source part(s), 100 characters", 1),
+    ("rejected: workbook projection failed; retry the write.", 3),
+    ("conflict recorded for review: source parts already placed", 3),
+    ("ok: Notes row 112 built from 0 source part(s), 0 characters", 3),
+])
+def test_source_write_compacts_only_after_committed_content(content, remaining):
+    messages = [
+        _image_batch_msg("view_pdf_pages", [1, 2]),
+        _failed_write_msg("write_note_from_source", content),
+        _image_batch_msg("view_pdf_pages", [3]),
+    ]
+    out = strip_stale_images(messages)
+    assert _count_images(out) == remaining
+    assert _count_images(messages) == 3
 
 
 def test_strip_stale_images_keeps_newest_batch_even_if_pre_write():

@@ -744,6 +744,13 @@ def test_prepared_missing_unnumbered_source_triggers_review_and_can_be_relinked(
     assert "unumbered-disclosure" in funcs["list_source_notes"](ctx)
     assert "u1" in funcs["read_source_manifest"](ctx, "unumbered-disclosure")
     assert "Unnumbered disclosure" in funcs["view_source_blocks"](ctx, ["u1"])
+    for name, args in [("list_source_notes", ()),
+                       ("read_source_manifest", ("unumbered-disclosure",)),
+                       ("view_source_blocks", (["u1"],))]:
+        full = funcs[name](ctx, *args)
+        tail = funcs[name](ctx, *args, offset=5)
+        body = lambda text: text.split("<<<SOURCE>>>\n", 1)[1].split("\n<<<END_SOURCE>>>", 1)[0]
+        assert body(tail) == body(full)[5:]
     result = funcs["relink_note_cell"](ctx, sheet=_S12, row=50, block_ids=["u1"])
     assert result.startswith("ok:")
     refreshed = ra.recompute_notes_findings(deps)

@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import time
+from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, List, Mapping, Optional, TypeVar
 
@@ -286,15 +287,9 @@ class AgentLoopSpec:
     # so the save-gate in extraction/agent.py can see the real iteration budget
     # (face only; the notes deps has no such field).
     set_turn_counter: bool = False
-    # When True, the inner tool/model event streams are ALSO wrapped in the
-    # per-step timeout (a provider that stalls mid-stream is caught, not just
-    # one that stalls between nodes). The face loop has always done this; the
-    # notes loop historically used a BARE ``async for`` over the inner stream
-    # and only timed out the outer node iteration. We default True (face's
-    # behaviour) but let the notes coordinator opt OUT (False) so a legitimate
-    # long-running ``write_notes`` tool call is not cancelled at the per-turn
-    # timeout — preserving notes' exact prior behaviour (peer-review MEDIUM,
-    # rewrite Phase 2).
+    # Bound inner TOOL event streams. Notes can opt out so long workbook
+    # writes are not cancelled mid-execution. Model-stream inactivity is
+    # always bounded by turn_timeout, independently of this tool policy.
     bound_inner_streams: bool = True
     # Items 6/17: whole-run wall-clock cap (seconds). Checked at the top of
     # each loop iteration — bounds the 40-slow-but-compliant-turns scenario
@@ -520,8 +515,14 @@ async def run_agent_loop(
         elif Agent.is_model_request_node(node) and spec.stream_model_nodes:
             thinking_id = f"{spec.agent_role}_think_{thinking_counter}"
             reasoning_block = ReasoningBlockAccumulator()
-            async with node.stream(agent_run.ctx) as model_stream:
-                async for event in _inner(model_stream):
+            # Opening a PydanticAI model stream waits for the provider to
+            # respond. Bound that wait as well as subsequent event gaps.
+            async with AsyncExitStack() as stream_stack:
+                model_stream = await asyncio.wait_for(
+                    stream_stack.enter_async_context(node.stream(agent_run.ctx)),
+                    timeout=spec.turn_timeout,
+                )
+                async for event in iter_with_turn_timeout(model_stream, spec.turn_timeout):
                     if isinstance(event, PartDeltaEvent):
                         delta = event.delta
                         if isinstance(delta, TextPartDelta):
