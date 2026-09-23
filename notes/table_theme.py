@@ -23,18 +23,16 @@ from typing import Any
 
 # The firm's shipped house style (2026-07-20, chosen by the product owner).
 #
-# Accountant "ruled", not boxed: no cell grid, one rule under the header row,
-# bold un-filled headers. This is how a printed financial statement looks, and
-# it is what a Word source produces — so after `data-source-styled` (gotcha #16)
-# a PDF-sourced note and a Word-sourced note finally look like the same document.
+# Neutral baseline: no cell grid or inferred header rule. The formatter alone
+# decides which visible rules the PDF supports; source Word tables pass through.
 # Totals underlines stay MANUAL: the auto-detect matched the word "total" in row
 # text and invented rules on rows that weren't totals (the reason the old
 # house-style floor was removed, 2026-07-07). Font/padding keep the historic
 # Arial 10pt / 4x8px, the only values proven to render in mTool's TX27 popup.
 HOUSE_NOTES_TABLE_STYLE: dict[str, Any] = {
     "borderStyle": "none",
-    "headerRule": True,
-    "headerBold": True,
+    "headerRule": False,
+    "headerBold": False,
     "headerFill": "transparent",
     "fontSizePt": 10,
     "cellPaddingPx": [4, 8],

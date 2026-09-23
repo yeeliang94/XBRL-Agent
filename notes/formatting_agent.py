@@ -29,7 +29,6 @@ from mtool.notes_exporter import _resolve_note_html
 from notes.format_patch import (
     FormatPatchError,
     apply_sheet_patch,
-    describe_effective_appearance,
 )
 from notes.format_schema import SheetFormatPatch, patch_to_dict
 from notes.table_theme import firm_theme
@@ -79,36 +78,9 @@ above. Do not wrap it in Markdown and do not add commentary before or after it.
 """
 
 
-def _resolve_min_confidence() -> float:
-    """Patch-confidence floor, operator-tunable via
-    XBRL_NOTES_FORMATTER_MIN_CONFIDENCE (validated + clamped to [0, 1])."""
-    default = 0.70
-    raw = os.environ.get("XBRL_NOTES_FORMATTER_MIN_CONFIDENCE", "")
-    if not raw:
-        return default
-    try:
-        v = float(raw)
-    except ValueError:
-        logger.warning(
-            "XBRL_NOTES_FORMATTER_MIN_CONFIDENCE=%r is not a number; using %.2f",
-            raw, default,
-        )
-        return default
-    if not 0.0 <= v <= 1.0:
-        clamped = min(max(v, 0.0), 1.0)
-        logger.warning(
-            "XBRL_NOTES_FORMATTER_MIN_CONFIDENCE=%.3f outside [0, 1]; "
-            "clamping to %.2f", v, clamped,
-        )
-        return clamped
-    return v
-
-
-MIN_CONFIDENCE = _resolve_min_confidence()
-
 # Cumulative per-click model-request budget across the formatter's (up to
-# four) agent.run passes — initial, output-rejection retry, validation repair,
-# self-check. Like the extraction MAX_AGENT_ITERATIONS cap, it
+# three) agent.run passes — initial, output-rejection retry, validation repair.
+# Like the extraction MAX_AGENT_ITERATIONS cap, it
 # MUST stay strictly below pydantic-ai's silent UsageLimits.request_limit=50
 # (gotcha #18) — otherwise pydantic-ai fires its own UsageLimitExceeded from
 # inside request preparation and we lose the structured "turn budget" message.
@@ -179,9 +151,10 @@ def _output_json(output: Any) -> str:
 FORMATTER_ERROR_TYPES = (
     "timeout",              # wall-clock cap (XBRL_NOTES_FORMATTER_WALLCLOCK_S)
     "turn_budget",          # cumulative request cap (UsageLimitExceeded)
-    "low_confidence",       # patch confidence below MIN_CONFIDENCE
+    "low_confidence",       # historical task rows only
     "validation_failed",    # bad JSON / content-preservation gate refused it
     "wrong_sheet",          # patch targeted a different sheet
+    "no_unfinished_rows",   # filled sheet, but no PDF styling candidates
     "precondition_failed",  # no PDF / no filled cells / missing source pages
     "model_error",          # unexpected exception in the pass
     "restarted",            # server restarted while the pass was running
@@ -335,7 +308,6 @@ def create_notes_formatter_agent(
 @dataclass(frozen=True)
 class _ScreenedPatch:
     patch: dict[str, Any]
-    confidence: float
     summary: str
 
 
@@ -343,13 +315,13 @@ def _screen_patch(
     output_text: str, sheet: str, *, revised: bool = False,
 ) -> tuple[Optional[dict[str, Any]], Optional[_ScreenedPatch], str]:
     """Run the gates every model output must pass before it may be applied:
-    JSON parse, numeric confidence, confidence threshold, sheet match.
+    JSON parse and sheet match.
 
     Returns ``(error_return, screened, stage)`` where exactly one of
     ``error_return`` / ``screened`` is set and ``stage`` names the failing
-    gate (``"parse" | "confidence" | "threshold" | "sheet" | "ok"``) so
+    gate (``"parse" | "sheet" | "ok"``) so
     callers can special-case a parse failure (the repair pass keeps the
-    original error; the self-check pass keeps the original patch).
+    original error).
     """
     prefix = "revised " if revised else ""
     try:
@@ -359,28 +331,7 @@ def _screen_patch(
             {"ok": False, "error": str(exc), "error_type": "validation_failed"},
             None, "parse",
         )
-    try:
-        confidence = float(patch.get("confidence") or 0.0)
-    except (TypeError, ValueError):
-        return (
-            {
-                "ok": False,
-                "error": f"{prefix}formatter confidence must be numeric",
-                "error_type": "validation_failed", "patch": patch,
-            },
-            None, "confidence",
-        )
     summary = str(patch.get("format_summary") or "").strip()
-    if confidence < MIN_CONFIDENCE:
-        return (
-            {
-                "ok": False, "error": "formatter confidence below threshold",
-                "error_type": "low_confidence",
-                "summary": summary or "Formatter confidence below threshold.",
-                "confidence": confidence, "patch": patch,
-            },
-            None, "threshold",
-        )
     if patch.get("sheet") != sheet:
         return (
             {
@@ -390,7 +341,7 @@ def _screen_patch(
             },
             None, "sheet",
         )
-    return None, _ScreenedPatch(patch, confidence, summary), "ok"
+    return None, _ScreenedPatch(patch, summary), "ok"
 
 
 def _usage_fields(usage: RunUsage) -> dict[str, int]:
@@ -453,12 +404,24 @@ async def _run_notes_formatter_impl(
         }
 
     with repo.db_session(db_path) as conn:
-        cells = [
+        filled_cells = [
             c for c in repo.list_notes_cells_for_run(conn, run_id)
             if c.sheet == sheet and (c.html or "").strip()
-            and (style_sources is None or c.style_source in style_sources)
         ]
+    cells = [
+        c for c in filled_cells
+        if style_sources is None or c.style_source in style_sources
+    ]
     if not cells:
+        if filled_cells and style_sources is not None:
+            return {
+                "ok": False,
+                "error": (
+                    f"No unfinished PDF notes remain on {sheet}; filled notes "
+                    "are already formatted or source-styled."
+                ),
+                "error_type": "no_unfinished_rows",
+            }
         return {
             "ok": False, "error": f"no filled prose cells found on {sheet}",
             "error_type": "precondition_failed",
@@ -500,8 +463,8 @@ async def _run_notes_formatter_impl(
     if deps is not None:
         deps.viewed_pages.update(preloaded_pages)
     # One shared usage accumulator + request cap across every pass below, so
-    # the whole click (initial + output-rejection retry + validation repair +
-    # self-check) is bounded — not each
+    # the whole click (initial + output-rejection retry + validation repair) is
+    # bounded — not each
     # pass independently. UsageLimitExceeded surfaces as a structured "turn
     # budget" outcome in the API worker (mirrors the wall-clock timeout).
     limits = UsageLimits(request_limit=MAX_FORMATTER_REQUESTS)
@@ -529,14 +492,8 @@ async def _run_notes_formatter_impl(
 
     result = await _agent_run(initial_prompt)
     err, screened, stage = _screen_patch(_output_json(result.output), sheet)
-    if err is not None and stage in ("parse", "confidence", "sheet"):
-        # Mechanically rejected output (unparseable JSON / wrong sheet /
-        # non-numeric confidence) — tell the model WHY and give it one retry,
-        # mirroring the validation-repair pass below. Without this, a model
-        # that formats well but wraps its answer in prose fails silently with
-        # no feedback. A low-confidence patch (stage "threshold") is NOT
-        # retried: that is the model's honest self-assessment, and re-asking
-        # only pressures it to inflate the number.
+    if err is not None and stage in ("parse", "sheet"):
+        # Mechanically rejected output gets one bounded correction attempt.
         logger.warning(
             "notes formatter output rejected run=%s sheet=%s stage=%s error=%s",
             run_id, sheet, stage, err.get("error"),
@@ -552,7 +509,7 @@ async def _run_notes_formatter_impl(
         err, screened = None, retry_screened
     if err is not None:
         return err
-    patch, confidence, summary = screened.patch, screened.confidence, screened.summary
+    patch, summary = screened.patch, screened.summary
 
     # Validate each notes cell independently, retaining all operations for a
     # row as one unit. A bad target must not discard unrelated valid notes.
@@ -565,7 +522,7 @@ async def _run_notes_formatter_impl(
         failure = {
             "ok": False, "error": str(exc), "error_type": "validation_failed",
             "summary": summary or "No safe formatting changes were applied.",
-            "confidence": confidence, "patch": patch, "changed_rows": 0,
+            "patch": patch, "changed_rows": 0,
         }
         repair_attempted = True
         repair_result = await _agent_run(_build_validation_repair_prompt(
@@ -584,7 +541,7 @@ async def _run_notes_formatter_impl(
             return failure
         if not apply_sheet_patch(rows_for_patch, patch).changed_rows:
             return failure
-        confidence, summary = screened.confidence, screened.summary
+        summary = screened.summary
     if row_errors and not repair_attempted:
         original_error = "; ".join(row_errors.values())
         repair_result = await _agent_run(_build_validation_repair_prompt(
@@ -620,52 +577,12 @@ async def _run_notes_formatter_impl(
             "ok": False, "error": "; ".join(row_errors.values()),
             "error_type": "validation_failed",
             "summary": "No safe formatting changes were applied.",
-            "confidence": confidence, "changed_rows": 0, "skipped_rows": [],
+            "changed_rows": 0, "skipped_rows": [],
             "failed_rows": sorted(row_errors), "row_errors": row_errors,
             "patch": rejected_patch, "repair_patch": patch,
             "before_text_hash": applied.before_text_hash,
             "after_text_hash": applied.after_text_hash,
         }
-
-    # One self-check revision pass: show the agent the sanitized preview HTML
-    # that would be saved and let it either return the same patch or a revised
-    # patch. The deterministic verifier still gates the final write.
-    if applied.changed_rows:
-        review_prompt = _build_self_check_prompt(
-            sheet, patch, applied.rows,
-            _resolve_notes_table_theme(db_path, run_id),
-        )
-        review_result = await _agent_run(review_prompt)
-        err, screened, stage = _screen_patch(
-            _output_json(review_result.output), sheet, revised=True,
-        )
-        if stage == "parse":
-            pass  # self-check output unparseable — keep the validated patch
-        elif err is not None:
-            return err
-        elif screened.patch != patch:
-            review_rows = {
-                cell["row"]: rows_for_patch[cell["row"]] for cell in patch["cells"]
-            }
-            try:
-                revised_patch, _, revised_errors = _partition_valid_patch(
-                    review_rows, screened.patch,
-                )
-            except FormatPatchError as exc:
-                return {
-                    "ok": False, "error": str(exc), "error_type": "validation_failed",
-                    "summary": screened.summary, "confidence": screened.confidence,
-                    "patch": screened.patch, "changed_rows": 0,
-                }
-            # Self-check validation has the same note-level isolation. Failed
-            # rows stay unresolved even if the model omits them in its answer.
-            for row, error in revised_errors.items():
-                if row in review_rows:
-                    row_errors.setdefault(row, error)
-            patch, confidence, summary = (
-                revised_patch, screened.confidence, screened.summary,
-            )
-            applied = apply_sheet_patch(rows_for_patch, patch)
 
     if applied.changed_rows == 0:
         return {
@@ -676,7 +593,7 @@ async def _run_notes_formatter_impl(
                 "error": "; ".join(row_errors.values()),
                 "failed_rows": sorted(row_errors), "row_errors": row_errors}
                if row_errors else {}),
-            "confidence": confidence, "changed_rows": 0, "skipped_rows": [],
+            "changed_rows": 0, "skipped_rows": [],
             "patch": patch,
             "before_text_hash": applied.before_text_hash,
             "after_text_hash": applied.after_text_hash,
@@ -734,7 +651,7 @@ async def _run_notes_formatter_impl(
             "error": "; ".join(row_errors.values()),
             "failed_rows": sorted(row_errors), "row_errors": row_errors}
            if row_errors else {}),
-        "confidence": confidence, "changed_rows": written,
+        "changed_rows": written,
         "skipped_rows": skipped_rows,
         "patch": patch, "before_text_hash": applied.before_text_hash,
         "after_text_hash": applied.after_text_hash,
@@ -763,6 +680,14 @@ def _partition_valid_patch(
             merged = {"row": row, "operations": [
                 op for entry in entries for op in entry["operations"]
             ]}
+            if any(
+                isinstance(op, dict) and isinstance(op.get("style"), dict)
+                and "underline" in op["style"]
+                for op in merged["operations"]
+            ):
+                raise FormatPatchError(
+                    "text underline is not a formatter operation; use a table border"
+                )
             apply_sheet_patch(current_rows, {"cells": [merged]})
         except FormatPatchError as exc:
             rejected.extend(entries)
@@ -1029,8 +954,7 @@ def _build_output_rejected_prompt(
         f"REJECTION: {error}\n\n"
         "Return the SAME formatting decisions as ONE raw JSON object using the "
         "patch schema — no prose, no Markdown fences, nothing before or after "
-        f"the JSON. The patch's \"sheet\" must be {sheet!r} and \"confidence\" "
-        "must be a number.\n\n"
+        f"the JSON. The patch's \"sheet\" must be {sheet!r}.\n\n"
         f"YOUR REJECTED RESPONSE:\n{snippet}"
     )
 
@@ -1043,10 +967,9 @@ def _resolve_notes_table_theme(db_path: str, run_id: int) -> dict[str, Any]:
     resolver ``server._notes_table_style`` uses. It used to re-parse the env var
     here and fall back to ``{}``; once the shipped firm default became the
     accountant-ruled house style, that made the agent reason about a boxed grey
-    grid while the panel rendered ruled and borderless, so it would "correct"
-    formatting that was already right. Mirrors ``resolveTheme`` in
-    web/src/lib/clipboardFormat.ts so the self-check describes what the panel
-    will actually render."""
+    grid while the panel rendered borderless, so it would "correct" formatting
+    that was already right. Mirrors ``resolveTheme`` in
+    web/src/lib/clipboardFormat.ts for the mTool size signals."""
     try:
         with repo.db_session(db_path) as conn:
             run = repo.fetch_run(conn, run_id)
@@ -1058,39 +981,6 @@ def _resolve_notes_table_theme(db_path: str, run_id: int) -> dict[str, Any]:
             "could not read run notes_table_style run=%s", run_id, exc_info=True,
         )
     return firm_theme()
-
-
-def _build_self_check_prompt(
-    sheet: str, patch: dict[str, Any], preview_rows: dict[int, str],
-    theme: Optional[dict[str, Any]] = None,
-) -> str:
-    # Effective rendered appearance, not raw HTML: the review panel paints a
-    # default grid + header fill from THEME CSS that is invisible in the HTML
-    # (configurable per firm/run — hence the resolved `theme`), and models
-    # misread border EXTENT out of per-cell style soup (the "double rule across
-    # the whole row instead of one column" failure).
-    appearance = [
-        {
-            "row": row,
-            "rendered_appearance": describe_effective_appearance(html, theme),
-        }
-        for row, html in sorted(preview_rows.items())
-    ]
-    return (
-        "Self-check your formatting patch against the original source pages you "
-        "viewed. Below is the EFFECTIVE RENDERED APPEARANCE of every cell after "
-        "your patch (explicit styles resolved, theme defaults shown where you "
-        "set nothing). Check each rule's EXTENT: a border must span exactly the "
-        "same cells as in the source — e.g. a summation rule under only the "
-        "amount column must not run across the label column. Check fills the "
-        "same way. If everything matches the source, return the same JSON "
-        "patch. If borders/fills/alignment are wrong, return one revised JSON "
-        "patch using the same schema. Do not change content.\n\n"
-        f"SHEET: {sheet}\n"
-        f"PATCH:\n{json.dumps(patch, ensure_ascii=False)}\n\n"
-        f"RENDERED APPEARANCE BY ROW:\n"
-        f"{json.dumps(appearance, ensure_ascii=False)}"
-    )
 
 
 def _parse_json_patch(text: str) -> dict[str, Any]:

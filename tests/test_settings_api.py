@@ -384,8 +384,8 @@ def test_house_notes_table_style_is_accountant_ruled(monkeypatch):
     monkeypatch.delenv("XBRL_NOTES_TABLE_STYLE", raising=False)
     style = server._notes_table_style()
     assert style["borderStyle"] == "none"
-    assert style["headerRule"] is True
-    assert style["headerBold"] is True
+    assert style["headerRule"] is False
+    assert style["headerBold"] is False
     assert style["headerFill"] == "transparent"
     assert style["totalsDoubleUnderline"] is False
     # Density unchanged — the only values proven in mTool's TX27 popup.
@@ -404,7 +404,7 @@ def test_operator_can_still_opt_out_to_the_historic_look(monkeypatch):
 def test_malformed_house_style_degrades_to_the_house_default(monkeypatch):
     import server
     monkeypatch.setenv("XBRL_NOTES_TABLE_STYLE", "not json{")
-    assert server._notes_table_style()["headerRule"] is True
+    assert server._notes_table_style()["headerRule"] is False
 
 
 def test_house_style_callers_cannot_mutate_the_shared_constant(monkeypatch):

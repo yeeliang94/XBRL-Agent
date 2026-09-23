@@ -104,6 +104,11 @@ describe("denominationLabel", () => {
 });
 
 describe("notesFormatErrorMessage", () => {
+  test("explains when no unfinished notes remain", () => {
+    expect(notesFormatErrorMessage("no_unfinished_rows", "internal detail")).toMatch(
+      /no unfinished notes.*already formatted/i,
+    );
+  });
   test("explains an automatic pass skipped behind the notes reviewer", () => {
     expect(notesFormatErrorMessage("reviewer_running", "internal detail")).toMatch(
       /skipped.*notes review.*running/i,

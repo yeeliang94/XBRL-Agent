@@ -257,7 +257,7 @@ specific row as a likely sign error, re-read THAT row first.</pre></details><p c
 <tr><td><b>12 List of Notes</b> (fan-out)</td><td>Disclosure notes only; one of ≤5 sub-agents each seeing a <b>batch</b>; pick from the seeded catalog verbatim; unmatched → catch-all sink (never silently dropped); skip only what belongs on another sheet; <b>mandatory coverage receipt</b> accounting for every batch note.</td></tr>
 <tr><td><b>13 Issued Capital</b></td><td>Structured numeric movement table (shares # + amount); <code>numeric_values</code> per row; <b>also</b> reproduce the disclosed table as one HTML <code>&lt;table&gt;</code> payload.</td></tr>
 <tr><td><b>14 Related Party</b></td><td>Structured numeric by transaction type + outstanding balances; income & expense both positive; reproduce the table as an HTML payload too.</td></tr>
-</table><details><summary><span>Shared notes persona — <code>prompts/_notes_base.md</code> (verbatim)</span><span class="meta">424 lines · in EVERY notes prompt</span></summary><pre class="tall">You are a senior Malaysian chartered accountant filling the SSM MBRS XBRL
+</table><details><summary><span>Shared notes persona — <code>prompts/_notes_base.md</code> (verbatim)</span><span class="meta">428 lines · in EVERY notes prompt</span></summary><pre class="tall">You are a senior Malaysian chartered accountant filling the SSM MBRS XBRL
 notes workbook templates from an audited financial-statement PDF. You read
 the disclosure notes in the PDF and copy their content — verbatim where
 possible, lightly cleaned for formatting — into the matching template row.
@@ -532,11 +532,15 @@ they are not the source for the user's formatted notes.
   paragraphs. Use `&lt;br&gt;` only for a soft line break inside a paragraph
   (rare).
 - **Emphasis:** `&lt;strong&gt;` for bold, `&lt;em&gt;` for italic. No styling
-  attributes (`style=`, `class=`).
+  attributes (`style=`, `class=`). Do not emit `&lt;u&gt;` or infer visual rules,
+  shading, alignment, or borders from a PDF. A separate formatter owns PDF
+  appearance after the content is reviewed. Use emphasis only where it is
+  part of the source's meaning, not to simulate a table rule.
 - **Lists:** `&lt;ul&gt;&lt;li&gt;…&lt;/li&gt;&lt;/ul&gt;` for bullets, `&lt;ol&gt;&lt;li&gt;…&lt;/li&gt;&lt;/ol&gt;`
   for numbered lists.
 - **Tables:** `&lt;table&gt;` with one `&lt;tr&gt;` per row. Use `&lt;th&gt;` for header
-  cells and `&lt;td&gt;` for body cells. Tables are allowed and encouraged
+  cells and `&lt;td&gt;` for body cells. Use `&lt;th&gt;` only for genuine column/row
+  headings, not to create a visual header rule. Tables are allowed and encouraged
   for movement schedules, maturity analyses, and reconciliations.
   **Reproduce the source table's row structure faithfully — one source row
   is one `&lt;tr&gt;`.** When the AFS prints the currency caption (e.g. "RM'000"

@@ -698,7 +698,7 @@ def test_source_styled_table_does_not_get_the_house_header_rule():
     review page (whose CSS zeroes it) then disagreed with mTool and clipboard."""
     from notes.table_theme import HOUSE_NOTES_TABLE_STYLE
     house = NotesTableStyle.from_theme(HOUSE_NOTES_TABLE_STYLE)
-    html = ('<table data-source-styled="true"><thead><tr><th>Country</th></tr>'
+    html = ('<table data-source-styled="true"><thead><tr><th><u>Country</u></th></tr>'
             '</thead><tbody><tr><td style="padding: 1px 0px">Qatar</td></tr>'
             '</tbody></table>')
     out = decorate_notes_html(html, house)
@@ -707,10 +707,11 @@ def test_source_styled_table_does_not_get_the_house_header_rule():
     # reach it, and undeclared edges are spelled out white for TX (run 76).
     assert "#999" not in th
     assert "border: 1px solid #ffffff" in th
-    # ...while an ordinary table still gets the rule under its header.
+    assert "<u>Country</u>" in th
+    # The neutral default also leaves an ordinary header without a visible rule.
     plain = decorate_notes_html(html.replace(' data-source-styled="true"', ''),
                                 house)
-    assert "border-bottom: 1px solid #999" in plain
+    assert "border-bottom: 1px solid #999" not in plain
 
 
 def test_border_strip_preserves_border_collapse():

@@ -45,7 +45,6 @@ def _persist_outcome(
         repo.upsert_notes_format_task(
             conn, run_id, sheet, "done", model=model_name,
             summary=result.get("summary"),
-            confidence=result.get("confidence"),
             changed_rows=int(result.get("changed_rows") or 0),
             result=result, error=result.get("error"),
             error_type=result.get("error_type"),

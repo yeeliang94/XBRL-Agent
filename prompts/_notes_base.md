@@ -273,11 +273,15 @@ they are not the source for the user's formatted notes.
   paragraphs. Use `<br>` only for a soft line break inside a paragraph
   (rare).
 - **Emphasis:** `<strong>` for bold, `<em>` for italic. No styling
-  attributes (`style=`, `class=`).
+  attributes (`style=`, `class=`). Do not emit `<u>` or infer visual rules,
+  shading, alignment, or borders from a PDF. A separate formatter owns PDF
+  appearance after the content is reviewed. Use emphasis only where it is
+  part of the source's meaning, not to simulate a table rule.
 - **Lists:** `<ul><li>…</li></ul>` for bullets, `<ol><li>…</li></ol>`
   for numbered lists.
 - **Tables:** `<table>` with one `<tr>` per row. Use `<th>` for header
-  cells and `<td>` for body cells. Tables are allowed and encouraged
+  cells and `<td>` for body cells. Use `<th>` only for genuine column/row
+  headings, not to create a visual header rule. Tables are allowed and encouraged
   for movement schedules, maturity analyses, and reconciliations.
   **Reproduce the source table's row structure faithfully — one source row
   is one `<tr>`.** When the AFS prints the currency caption (e.g. "RM'000"

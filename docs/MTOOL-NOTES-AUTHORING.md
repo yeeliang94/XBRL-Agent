@@ -117,7 +117,7 @@ The normal workflow does not require any local experiment scripts or browser har
 | Fonts, emphasis, fills, alignment and spacing | Use existing theme/editor capabilities and validated styles. Browser appearance alone does not certify the native result. The border verification was not an exhaustive test of every formatting option. |
 | CSS and units | The sanitizer's property/value allowlist is authoritative. Its current border-width validator accepts px, zero and supported keywords; direct decorator probes with pt do not prove that pt survives the canonical writer. Do not bypass sanitization. |
 | Pagination | Do not rely on HTML/CSS page-break controls for exact native pagination. Inspect native output for long notes. |
-| Text underline | Separate from table borders. Double text underline was excluded from this verification and is not newly certified by this guide. |
+| Text underline | The PDF formatter does not author text underline. It uses cell borders for source-visible table rules. Existing source or human text underline is preserved; double text underline was not certified by this guide. |
 
 ## 4. Verification status and deferred work
 
