@@ -913,10 +913,8 @@ async def _invoke_single_notes_agent_once(
                 phase_map=NOTES_PHASE_MAP,
                 phase_message=lambda role, phase: f"{role}: {phase.replace('_', ' ')}",
                 set_turn_counter=False,
-                # Preserve notes' historical behaviour: the old loop only timed
-                # out outer node iteration, NOT the inner tool/model streams, so
-                # a legitimate long-running write_notes isn't cancelled at the
-                # per-turn timeout (peer-review MEDIUM, rewrite Phase 2).
+                # Allow long workbook writes; model-stream inactivity remains
+                # bounded by NOTES_TURN_TIMEOUT in the shared runner.
                 bound_inner_streams=False,
             )
             await run_agent_loop(

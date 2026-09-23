@@ -10,6 +10,7 @@ Use the captured source for prose. Read its manifest and blocks, select complete
 paragraphs, subsections or notes, and call write_note_from_source. Code preserves
 the wording, tables, heading ancestry and linked continuations. Do not generate
 HTML, retype source prose, shorten content or infer presentation styling.
+If a source read is partial, repeat it with the returned next_offset as offset.
 
 Routing:
 - Corporate Information: select the corporate background, principal activities,
@@ -57,5 +58,6 @@ work; the conflict is recorded for the grounded reviewer to keep or move.
 For a List-of-Notes batch, submit_batch_coverage once after your writes, listing
 written notes with their target labels and notes routed to other sheets with a
 skip reason. Omit notes already reported through report_source_gap; those remain
-visible as unresolved, not covered. Then save_result. Other templates save_result
-after their writes. Do not add tasks, formatting passes or approval steps.
+visible as unresolved, not covered. The coverage receipt is your last tool call;
+the batch coordinator saves the result. Other templates call save_result after
+their writes. Do not add tasks, formatting passes or approval steps.

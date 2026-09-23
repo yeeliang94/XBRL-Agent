@@ -101,6 +101,12 @@ def test_sub_agent_prompt_mentions_submit_batch_coverage_tool(tmp_path: Path):
     ]
     prompt = _capture_sub_agent_prompt(tmp_path, batch)
     assert "submit_batch_coverage" in prompt
+    assert "write_notes" not in prompt, "prepared prose workers do not expose this tool"
+    assert "system prompt" in prompt
+    assert "capture gaps already reported" in prompt
+    prepared = (Path(__file__).resolve().parents[1] / "prompts/_notes_prepared.md").read_text()
+    assert "Then save_result" not in prepared
+    assert "coverage receipt is your last tool call" in prepared
 
 
 def test_sub_agent_prompt_empty_batch_still_renders_without_crashing(

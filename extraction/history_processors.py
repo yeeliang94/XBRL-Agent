@@ -60,7 +60,7 @@ _PAGE_MARKER_RE = re.compile(r"===\s*Page\s+(\d+)\s*===", re.IGNORECASE)
 # write_facts is the face-extraction write tool (rewrite Phase 3 renamed it
 # from fill_workbook, which is kept here for back-compat with message
 # histories recorded before the rename). write_notes is the notes write tool.
-_WRITE_TOOL_NAMES = frozenset({"write_facts", "fill_workbook", "write_notes"})
+_WRITE_TOOL_NAMES = frozenset({"write_facts", "fill_workbook", "write_notes", "write_note_from_source"})
 
 # Replacement text for collapsed duplicate template summaries — also the
 # idempotency sentinel (an already-collapsed copy is never re-replaced).
@@ -82,6 +82,7 @@ _WRITE_SUCCESS_PATTERNS = (
     re.compile(r"^Successfully wrote\s+(\d+)\s+field", re.IGNORECASE),
     re.compile(r"^Wrote\s+(\d+)\s+row", re.IGNORECASE),
     re.compile(r"^Collected\s+(\d+)\s+payload", re.IGNORECASE),
+    re.compile(r"^ok: .+ row \d+ built from (\d+) source part\(s\),", re.IGNORECASE),
 )
 
 # read_template returns a summary that opens with this banner on its first

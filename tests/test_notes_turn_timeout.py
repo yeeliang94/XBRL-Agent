@@ -56,6 +56,28 @@ class _YieldingIterable:
         return self._nodes.pop(0)
 
 
+class _StallingModelNode:
+    def __init__(self, stall_on_enter=False):
+        self.events = _SlowIterable()
+        self.stall_on_enter = stall_on_enter
+        self.enter_cancelled = False
+
+    def stream(self, _ctx):
+        from contextlib import asynccontextmanager
+
+        @asynccontextmanager
+        async def opened():
+            if self.stall_on_enter:
+                try:
+                    await asyncio.sleep(3600)
+                except asyncio.CancelledError:
+                    self.enter_cancelled = True
+                    raise
+            yield self.events
+
+        return opened()
+
+
 @pytest.mark.asyncio
 async def test_iter_with_turn_timeout_raises_when_next_node_stalls():
     """When ``__anext__`` blocks past the timeout, the helper must raise
@@ -86,7 +108,12 @@ async def test_iter_with_turn_timeout_yields_all_nodes_when_fast():
 
 
 @pytest.mark.asyncio
-async def test_single_agent_stall_after_write_returns_succeeded(tmp_path, monkeypatch):
+@pytest.mark.parametrize("stall_in_stream,stall_on_enter", [
+    (False, False), (True, False), (True, True),
+])
+async def test_single_agent_stall_after_write_returns_succeeded(
+    tmp_path, monkeypatch, stall_in_stream, stall_on_enter,
+):
     """End-to-end contract: when the LLM stalls after ``write_notes``
     succeeded, the runner must return a succeeded _SingleAgentOutcome
     (not re-raise) so the coordinator's sibling agents finish cleanly.
@@ -100,6 +127,9 @@ async def test_single_agent_stall_after_write_returns_succeeded(tmp_path, monkey
     """
     from unittest.mock import patch
     from notes import coordinator as coord
+    import agent_runner
+    stalled = _StallingModelNode(stall_on_enter)
+    monkeypatch.setattr(agent_runner.Agent, "is_model_request_node", lambda node: isinstance(node, _StallingModelNode))
 
     # Fake agent + deps so the runner doesn't need a real PDF / model.
     class _FakeTokenReport:
@@ -114,7 +144,9 @@ async def test_single_agent_stall_after_write_returns_succeeded(tmp_path, monkey
         numeric_cells: list = []
         token_report = _FakeTokenReport()
     class _FakeAgentRun:
-        def __aiter__(self): return _SlowIterable()
+        ctx = None
+        def __aiter__(self):
+            return _YieldingIterable([stalled]) if stall_in_stream else _SlowIterable()
         async def __aenter__(self): return self
         async def __aexit__(self, *a): return False
         @property
@@ -144,7 +176,7 @@ async def test_single_agent_stall_after_write_returns_succeeded(tmp_path, monkey
     async def noop_emit(*a, **kw): pass
 
     with patch.object(coord, "create_notes_agent", side_effect=fake_create_notes_agent):
-        outcome = await coord._invoke_single_notes_agent_once(
+        outcome = await asyncio.wait_for(coord._invoke_single_notes_agent_once(
             template_type=NotesTemplateType.CORP_INFO,
             pdf_path="/tmp/fake.pdf",
             inventory=[],
@@ -156,11 +188,15 @@ async def test_single_agent_stall_after_write_returns_succeeded(tmp_path, monkey
             emit=noop_emit,
             page_hints=None,
             page_offset=0,
-        )
+        ), timeout=1.0)
 
     assert outcome.filled_path == fake_deps.filled_path, (
         "stall-after-write must return the already-written workbook path"
     )
+    if stall_on_enter:
+        assert stalled.enter_cancelled
+    elif stall_in_stream:
+        assert stalled.events.cancelled
     assert outcome.total_tokens == 30
     assert outcome.prompt_tokens == 20
     assert outcome.completion_tokens == 6
@@ -171,11 +207,19 @@ async def test_single_agent_stall_after_write_returns_succeeded(tmp_path, monkey
 
 
 @pytest.mark.asyncio
-async def test_single_agent_stall_before_write_raises(tmp_path, monkeypatch):
+@pytest.mark.parametrize("stall_in_stream,stall_on_enter", [
+    (False, False), (True, False), (True, True),
+])
+async def test_single_agent_stall_before_write_raises(
+    tmp_path, monkeypatch, stall_in_stream, stall_on_enter,
+):
     """Mirror contract: a stall BEFORE any write is a real failure so the
     retry loop / coordinator treats the sheet as failed."""
     from unittest.mock import patch
     from notes import coordinator as coord
+    import agent_runner
+    stalled = _StallingModelNode(stall_on_enter)
+    monkeypatch.setattr(agent_runner.Agent, "is_model_request_node", lambda node: isinstance(node, _StallingModelNode))
 
     class _FakeTokenReport:
         def record_turn(self, *a, **kw): pass
@@ -186,7 +230,9 @@ async def test_single_agent_stall_before_write_raises(tmp_path, monkeypatch):
         write_fuzzy_matches: list = []
         token_report = _FakeTokenReport()
     class _FakeAgentRun:
-        def __aiter__(self): return _SlowIterable()
+        ctx = None
+        def __aiter__(self):
+            return _YieldingIterable([stalled]) if stall_in_stream else _SlowIterable()
         async def __aenter__(self): return self
         async def __aexit__(self, *a): return False
         @property
@@ -210,7 +256,7 @@ async def test_single_agent_stall_before_write_raises(tmp_path, monkeypatch):
 
     with patch.object(coord, "create_notes_agent", side_effect=fake_create_notes_agent), \
          pytest.raises(RuntimeError, match="stalled"):
-        await coord._invoke_single_notes_agent_once(
+        await asyncio.wait_for(coord._invoke_single_notes_agent_once(
             template_type=NotesTemplateType.CORP_INFO,
             pdf_path="/tmp/fake.pdf",
             inventory=[],
@@ -222,7 +268,7 @@ async def test_single_agent_stall_before_write_raises(tmp_path, monkeypatch):
             emit=noop_emit,
             page_hints=None,
             page_offset=0,
-        )
+        ), timeout=1.0)
 
     assert (
         tmp_path / "NOTES_CORP_INFO_conversation_trace.json"

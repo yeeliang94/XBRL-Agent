@@ -486,8 +486,8 @@ async def _run_notes_formatter_impl(
     # The old prompt forced a tool-only first model turn before the model could
     # do any work. That re-billed the full CURRENT CELLS payload (and every
     # prior part) on the second request. Attach the known source pages to the
-    # initial request so the normal path needs one model request, while keeping
-    # the view/zoom tools available for targeted follow-up inspection.
+    # initial request to avoid that extra tool-only turn, while keeping the
+    # view/zoom tools available for targeted follow-up inspection.
     source_content, preloaded_pages = await _preload_source_pages(
         pdf_path, page_set,
     )
@@ -510,15 +510,14 @@ async def _run_notes_formatter_impl(
     async def _agent_run(user_prompt: Any):
         result = await agent.run(
             user_prompt, deps=deps, usage=usage, usage_limits=limits,
+            message_history=trace_messages,
         )
         # Re-write the trace after EVERY completed pass (best-effort, gotcha
         # #6): the trace is most valuable when a LATER pass times out or
         # errors — the completed passes are already on disk by then.
-        if hasattr(result, "all_messages"):
-            try:
-                trace_messages.extend(result.all_messages())
-            except Exception:  # noqa: BLE001
-                pass
+        # Follow-up passes need the source images/zooms, not just shared deps.
+        # all_messages includes prior passes; replace rather than append them.
+        trace_messages[:] = result.all_messages()
         if output_dir and trace_messages:
             save_messages_trace(
                 trace_messages, output_dir, f"notes_format_{sheet}",
