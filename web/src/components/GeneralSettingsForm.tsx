@@ -26,8 +26,8 @@ import { ClipboardFormatControls } from "./ClipboardFormatControls";
 // ---------------------------------------------------------------------------
 
 interface Props {
-  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; notes_auto_review?: boolean; notes_coverage?: boolean; tolerance_rm?: number; spot_check?: boolean; spot_check_mode?: string; entity_memory?: boolean; pdf_sidecar?: boolean; pdf_notes_auto_format?: boolean; notes_source_integrity?: SourceIntegrityMode; notes_source_integrity_choices?: string[]; default_models?: Record<string, string>; default_model_overrides?: Record<string, string>; local_override_keys?: string[]; thinking_levels?: Record<string, string>; thinking_level_choices?: string[]; thinking_level_choices_by_model?: Record<string, string[]>; reasoning_summary?: string; reasoning_summary_choices?: string[]; notes_table_style?: Partial<ClipboardFormatOptions>; available_models?: ModelEntry[] }>;
-  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; default_models: Record<string, string>; reset_keys: string[]; auto_review: boolean; notes_auto_review: boolean; notes_coverage: boolean; spot_check: boolean; spot_check_mode: "light" | "full"; entity_memory: boolean; pdf_sidecar: boolean; pdf_notes_auto_format: boolean; notes_source_integrity: SourceIntegrityMode; tolerance_rm: number; scout_wallclock_seconds: number; scout_max_turns: number; thinking_levels: Record<string, string>; reasoning_summary: string; notes_table_style: ClipboardFormatOptions }>) => Promise<{ status: string }>;
+  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; notes_auto_review?: boolean; notes_coverage?: boolean; tolerance_rm?: number; entity_memory?: boolean; pdf_sidecar?: boolean; pdf_notes_auto_format?: boolean; notes_source_integrity?: SourceIntegrityMode; notes_source_integrity_choices?: string[]; default_models?: Record<string, string>; default_model_overrides?: Record<string, string>; local_override_keys?: string[]; thinking_levels?: Record<string, string>; thinking_level_choices?: string[]; thinking_level_choices_by_model?: Record<string, string[]>; reasoning_summary?: string; reasoning_summary_choices?: string[]; notes_table_style?: Partial<ClipboardFormatOptions>; available_models?: ModelEntry[] }>;
+  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; default_models: Record<string, string>; reset_keys: string[]; auto_review: boolean; notes_auto_review: boolean; notes_coverage: boolean; entity_memory: boolean; pdf_sidecar: boolean; pdf_notes_auto_format: boolean; notes_source_integrity: SourceIntegrityMode; tolerance_rm: number; scout_wallclock_seconds: number; scout_max_turns: number; thinking_levels: Record<string, string>; reasoning_summary: string; notes_table_style: ClipboardFormatOptions }>) => Promise<{ status: string }>;
   testConnection: (body: Partial<{ proxy_url: string; api_key: string; model: string }>) => Promise<{ status: string; model?: string; latency_ms?: number; message?: string }>;
   // When provided, a Cancel button is shown (used by the modal wrapper). The
   // page host omits it — there's nothing to cancel out of.
@@ -289,9 +289,6 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
   const [scoutWallclockSeconds, setScoutWallclockSeconds] =
     useState<number | "">(300);
   const [scoutMaxTurns, setScoutMaxTurns] = useState<number | "">(20);
-  // Clean-run spot-check (issue 1): toggle + depth. Default on / light.
-  const [spotCheck, setSpotCheck] = useState(true);
-  const [spotCheckMode, setSpotCheckMode] = useState<"light" | "full">("light");
   // Per-entity advisory memory toggle (item 28). Default on.
   // Per-role thinking level. An absent role sends nothing, which is what
   // every agent did before this setting existed.
@@ -363,8 +360,6 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         setScoutMaxTurns(
           typeof s.scout_max_turns === "number" ? s.scout_max_turns : 20,
         );
-        setSpotCheck(s.spot_check !== false);
-        setSpotCheckMode(s.spot_check_mode === "full" ? "full" : "light");
         setThinkingLevels(s.thinking_levels || {});
         const summaryChoices =
           Array.isArray(s.reasoning_summary_choices) && s.reasoning_summary_choices.length > 0
@@ -445,8 +440,6 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         tolerance_rm: toleranceRm,
         scout_wallclock_seconds: scoutWallclockSeconds,
         scout_max_turns: scoutMaxTurns,
-        spot_check: spotCheck,
-        spot_check_mode: spotCheckMode,
         entity_memory: entityMemory,
         // Send EVERY role, with "" for the ones set back to the provider
         // default. The server clears only the keys it is given, so omitting a
@@ -474,7 +467,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
     } finally {
       setSaving(false);
     }
-  }, [dirty, model, proxyUrl, apiKey, roleModelUpdates, autoReview, notesAutoReview, notesCoverage, toleranceRm, scoutWallclockSeconds, scoutMaxTurns, spotCheck, spotCheckMode, entityMemory, thinkingLevels, reasoningSummary, saveSettings]);
+  }, [dirty, model, proxyUrl, apiKey, roleModelUpdates, autoReview, notesAutoReview, notesCoverage, toleranceRm, scoutWallclockSeconds, scoutMaxTurns, entityMemory, thinkingLevels, reasoningSummary, saveSettings]);
 
   const handleUseGpt56ForEveryRole = useCallback(() => {
     setModel(GPT56_LUNA_MODEL);
@@ -916,38 +909,6 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         />
       </div>
 
-      {/* Clean-run spot-check toggle + depth (issue 1) */}
-      <div style={styles.fieldGroup}>
-        <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, cursor: "pointer" }}>
-          <input
-            type="checkbox"
-            checked={spotCheck}
-            onChange={(e) => { setSpotCheck(e.target.checked); setDirty(true); }}
-            disabled={readOnly}
-            aria-label="Spot-check runs even when all cross-checks pass"
-          />
-          <span style={styles.label}>Spot-check runs even when all cross-checks pass</span>
-        </label>
-        <p style={styles.helperText}>
-          A grounded sanity pass over the high-value figures (face totals, units,
-          signs) for runs that pass every cross-check — catching errors the
-          checks can&apos;t (wrong value vs the PDF, scale slip, double-count).
-        </p>
-        <select
-          value={spotCheckMode}
-          onChange={(e) => { setSpotCheckMode(e.target.value === "full" ? "full" : "light"); setDirty(true); }}
-          disabled={!spotCheck || readOnly}
-          style={{ ...ui.input, opacity: spotCheck ? 1 : 0.5, maxWidth: 320 }}
-          aria-label="Spot-check depth"
-        >
-          <option value="light">Light — fast sanity pass (default)</option>
-          <option value="full">Full — holistic reviewer audit</option>
-        </select>
-        <p style={styles.helperText}>
-          Light samples the highest-value figures in a few turns. Full runs the
-          same deep reviewer used for failed runs (slower, more thorough).
-        </p>
-      </div>
 
       <SettingsSectionHeading
         title="PDF notes preparation"

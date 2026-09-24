@@ -1524,12 +1524,9 @@ async def _run_reviewer_pass(
     """Reviewer pass (docs/Archive/PLAN-reviewer-agent.md) — replaces the autonomous
     canonical correction pass.
 
-    ``spot_check`` (``"light"`` / ``"full"`` / ``None``) drives the clean-run
-    spot-check (issue 1, 2026-06-21): when set, the run had NO failing checks
-    and NO open conflicts, but we still run a grounded sanity pass over the
-    high-value figures. ``light`` is a tight pass (small turn cap + the
-    ``spot_check.md`` body); ``full`` reuses the holistic reviewer. Everything
-    downstream — snapshot, re-export, revert — is reused unchanged.
+    ``spot_check`` selects the clean-run triage. It samples high-value figures
+    without writing. A grounded anomaly receives a separate, focused pass;
+    snapshot, re-export and revert remain shared with corrective review.
 
     The reviewer investigates the root cause of each failing cross-check /
     open conflict down the face → sub-sheet → PDF chain, applies grounded
@@ -1598,14 +1595,11 @@ async def _run_reviewer_pass(
         for c in (failed_checks or [])
     ]
     n_items = len(failed_payload) + len(conflicts or [])
-    spot_mode = (spot_check or "").lower() or None
-    if spot_mode not in (None, "light", "full"):
-        spot_mode = "light"
-    # Tag the outcome so the run-status logic can treat a SPOT-CHECK outcome
-    # (clean run) differently from a failure-driven reviewer outcome — e.g. a
-    # spot-check that merely exhausts its tight turn budget must NOT mark the
-    # whole clean run `correction_exhausted` (peer-review HIGH).
+    spot_mode = "light" if spot_check else None
+    # Preserve the clean-run review type in the outcome and trace.
     outcome["spot_check"] = spot_mode
+    if spot_mode is not None:
+        outcome["review_stage"] = "triage"
     # The failure-driven pass returns immediately when there's nothing to
     # investigate. The spot-check, by definition, fires on a CLEAN run
     # (n_items == 0) — so it must NOT short-circuit here.
@@ -1690,9 +1684,7 @@ async def _run_reviewer_pass(
 
     if spot_mode is not None:
         from correction.reviewer_agent import compute_spot_check_turn_cap
-        max_turns = compute_spot_check_turn_cap(
-            filing_level=filing_level, mode=spot_mode,
-        )
+        max_turns = compute_spot_check_turn_cap(filing_level=filing_level)
     else:
         max_turns = compute_reviewer_turn_cap(
             filing_level=filing_level, n_items=n_items,
@@ -1743,20 +1735,15 @@ async def _run_reviewer_pass(
 
     if spot_mode is not None:
         prompt = (
-            "All cross-checks passed and there are no open conflicts. Run a "
-            f"{'FULL holistic' if spot_mode == 'full' else 'LIGHT'} spot-check: "
-            "start with list_facts, then verify the highest-value figures "
-            "(face totals, largest line items, units, signs) against the PDF. "
-            "apply_fixes ONLY what you can ground in the PDF; raise_flag anything "
-            f"suspicious you can't resolve. You have at most {max_turns} turns. "
-            "If everything ties out, make no writes. Never plug a residual."
+            "All cross-checks passed. Triage a small sample of high-value "
+            "figures from the packet against the PDF. If you find a specific "
+            "suspected error, call request_scoped_investigation once with its "
+            "page and fact reference. A focused pass will investigate it. "
+            f"You have at most {max_turns} triage turns."
         )
         await _emit("status", {
-            "phase": "started",
-            "message": (
-                "AI review: all cross-checks passed — doing a quick sanity check "
-                "of the key figures against the PDF."
-            ),
+            "phase": "triage_started",
+            "message": "AI review triage: checking key figures against the PDF.",
         })
     else:
         prompt = (
@@ -1791,6 +1778,22 @@ async def _run_reviewer_pass(
     # generic node cap can never fire first.
     async def _loop_emit(event_type: str, data: dict) -> None:
         if event_type in ("tool_call", "tool_result", "token_update"):
+            if event_type == "token_update" and continuation_prior_usage is not None:
+                from usage_metrics import split_usage
+                from pricing import estimate_cost
+
+                prior = split_usage(continuation_prior_usage)
+                data = {
+                    **data,
+                    "prompt_tokens": data.get("prompt_tokens", 0) + prior.prompt_tokens,
+                    "completion_tokens": data.get("completion_tokens", 0) + prior.completion_tokens,
+                    "thinking_tokens": data.get("thinking_tokens", 0) + prior.thinking_tokens,
+                    "cumulative": data.get("cumulative", 0) + prior.total_tokens,
+                }
+                data["cost_estimate"] = estimate_cost(
+                    data["prompt_tokens"], data["completion_tokens"],
+                    data["thinking_tokens"], model,
+                )
             await _emit(event_type, data)
 
     _turn_records: list = []
@@ -1814,6 +1817,10 @@ async def _run_reviewer_pass(
         # relationship unchanged (model requests ≈ max_turns + 1 ≤ 26).
         max_iters=max_turns * 2 + 10,
         call_tools_cap=max_turns,
+        completion_predicate=(
+            (lambda current_deps: bool(current_deps.investigation_items))
+            if spot_mode is not None else None
+        ),
         wallclock_timeout=_wallclock_cap,
         stream_model_nodes=False,
         # Pre-migration behaviour: only node-to-node advancement was timed,
@@ -1830,7 +1837,92 @@ async def _run_reviewer_pass(
                 await run_agent_loop(
                     agent_run, deps, loop_spec, _loop_emit, _turn_records,
                 )
+            if spot_mode is not None and deps.investigation_items:
+                from dataclasses import replace
+
+                handoff_items = list(deps.investigation_items)
+                outcome["triage_turns"] = _call_tools_turns()
+                outcome["handoff_items"] = handoff_items
+                outcome["review_stage"] = "investigating"
+                await _emit("status", {
+                    "phase": "triage_handoff",
+                    "message": f"AI triage found {len(handoff_items)} item(s) for focused investigation.",
+                    "items": handoff_items,
+                })
+                remaining = max(0, _wallclock_cap - (_wc_time.monotonic() - _pass_start))
+                if _wallclock_cap > 0 and remaining <= 0:
+                    raise WallclockExceeded()
+                focused_cap = compute_reviewer_turn_cap(
+                    filing_level=filing_level, n_items=len(handoff_items),
+                )
+                max_turns += focused_cap
+                outcome["max_turns"] = max_turns
+                focused_agent, deps = create_reviewer_agent(
+                    model=model, db_path=db_path, run_id=run_id,
+                    filing_level=filing_level, filing_standard=filing_standard,
+                    pdf_path=pdf_path, investigation_handoff=handoff_items,
+                    verify_scope=verify_scope,
+                )
+                focused_spec = replace(
+                    loop_spec, call_tools_cap=focused_cap,
+                    max_iters=focused_cap * 2 + 10,
+                    wallclock_timeout=remaining,
+                    completion_predicate=lambda current_deps: bool(
+                        current_deps.investigation_resolutions),
+                )
+                await _emit("status", {
+                    "phase": "investigation_started",
+                    "message": "AI review is investigating the triage findings against the PDF.",
+                })
+                focused_records = []
+                async with focused_agent.iter(
+                    "Investigate only the handed-off items. Fix and verify grounded "
+                    "errors, flag unresolved ones, then record every outcome with "
+                    "complete_scoped_investigation.",
+                    deps=deps,
+                ) as focused_run:
+                    continuation_prior_usage = agent_run.usage
+                    continuation_prior_messages = list(agent_run.ctx.state.message_history)
+                    agent_run = focused_run
+                    try:
+                        await run_agent_loop(
+                            agent_run, deps, focused_spec, _loop_emit, focused_records,
+                        )
+                    finally:
+                        offset = max((r["turn_index"] for r in _turn_records), default=0)
+                        _turn_records.extend(
+                            {**r, "turn_index": r["turn_index"] + offset}
+                            for r in focused_records
+                        )
+                outcome["investigation_resolutions"] = list(deps.investigation_resolutions)
+                if not deps.investigation_resolutions:
+                    outcome["error"] = "reviewer_investigation_incomplete"
+                    outcome["review_stage"] = "investigation_incomplete"
+                    await _emit("error", {
+                        "type": "reviewer_investigation_incomplete",
+                        "message": "Focused AI investigation ended without resolving every handoff item.",
+                    })
+                else:
+                    unresolved = any(
+                        result["status"] == "unresolved"
+                        for result in outcome["investigation_resolutions"])
+                    if unresolved:
+                        outcome["error"] = "reviewer_investigation_unresolved"
+                    outcome["review_stage"] = (
+                        "investigation_unresolved" if unresolved
+                        else "investigation_complete")
+                    await _emit("status", {
+                        "phase": outcome["review_stage"],
+                        "message": (
+                            "Focused AI investigation recorded an unresolved item for human review."
+                            if unresolved else
+                            "Focused AI investigation recorded every handoff outcome."
+                        ),
+                        "results": outcome["investigation_resolutions"],
+                    })
         except CallToolsCapExceeded:
+            if spot_mode is not None:
+                raise
             # One bounded continuation for remaining verification. Facts and
             # the original snapshot stay live; no repeat of extraction, no
             # global cap increase, and the original wall-clock budget remains.
@@ -1867,8 +1959,26 @@ async def _run_reviewer_pass(
         outcome["writes_performed"] = deps.writes_performed
         outcome["flags_raised"] = deps.flags_raised
         outcome["turns_used"] = turn_count
+        if outcome.get("handoff_items") and deps.writes_performed > deps.verified_write_count:
+            outcome["error"] = "reviewer_unverified_writes"
+            outcome["review_stage"] = "investigation_incomplete"
+            await _emit("error", {
+                "type": "reviewer_unverified_writes",
+                "message": "AI review changed figures without completing verification.",
+            })
+        if spot_mode is not None and not outcome.get("handoff_items"):
+            outcome["review_stage"] = "triage_clean"
+            await _emit("status", {
+                "phase": "triage_complete",
+                "message": "AI review triage found no specific issue to investigate.",
+            })
+        elif spot_mode is not None and not outcome.get("error"):
+            outcome["review_stage"] = "investigation_complete"
         await _emit("complete", {
-            "success": True, "writes_performed": deps.writes_performed,
+            "success": outcome.get("error") is None,
+            "error": outcome.get("error"),
+            "review_stage": outcome.get("review_stage"),
+            "writes_performed": deps.writes_performed,
             "flags_raised": deps.flags_raised,
             "turns_used": turn_count, "max_turns": max_turns,
         })
@@ -1888,6 +1998,10 @@ async def _run_reviewer_pass(
         outcome["error"] = "reviewer_interrupted"
         outcome["writes_performed"] = deps.writes_performed
         outcome["flags_raised"] = deps.flags_raised
+        if spot_mode is not None:
+            outcome["review_stage"] = (
+                "investigation_incomplete" if outcome.get("handoff_items")
+                else "triage_incomplete")
         msg = (
             "AI review was interrupted by the model provider. Partial "
             "review edits were preserved; the run will continue."
@@ -1898,6 +2012,7 @@ async def _run_reviewer_pass(
         await _emit("complete", {
             "success": False,
             "error": "reviewer_interrupted",
+            "review_stage": outcome.get("review_stage"),
             "writes_performed": deps.writes_performed,
         })
     except CallToolsCapExceeded:
@@ -1917,9 +2032,14 @@ async def _run_reviewer_pass(
             "writes_performed": deps.writes_performed,
             "flags_raised": deps.flags_raised,
         })
+        if spot_mode is not None:
+            outcome["review_stage"] = (
+                "investigation_incomplete" if outcome.get("handoff_items")
+                else "triage_incomplete")
         await _emit("error", {"message": msg})
         await _emit("complete", {
             "success": False, "error": "reviewer_exhausted",
+            "review_stage": outcome.get("review_stage"),
             "writes_performed": deps.writes_performed,
             "turns_used": turns_used, "max_turns": max_turns,
         })
@@ -1934,9 +2054,14 @@ async def _run_reviewer_pass(
         outcome["error"] = "reviewer_wallclock_exceeded"
         outcome["writes_performed"] = deps.writes_performed
         outcome["flags_raised"] = deps.flags_raised
+        if spot_mode is not None:
+            outcome["review_stage"] = (
+                "investigation_incomplete" if outcome.get("handoff_items")
+                else "triage_incomplete")
         await _emit("error", {"type": "reviewer_wallclock_exceeded", "message": msg})
         await _emit("complete", {
             "success": False, "error": "reviewer_wallclock_exceeded",
+            "review_stage": outcome.get("review_stage"),
             "writes_performed": deps.writes_performed,
         })
     except Exception:  # noqa: BLE001
@@ -1945,9 +2070,16 @@ async def _run_reviewer_pass(
         # only (mirrors /test-connection).
         logger.exception("Reviewer run failed")
         outcome["error"] = "reviewer_exception"
+        if spot_mode is not None:
+            outcome["review_stage"] = (
+                "investigation_incomplete" if outcome.get("handoff_items")
+                else "triage_incomplete")
         msg = "Reviewer run failed; see server logs for details."
         await _emit("error", {"type": "reviewer_exception", "message": msg})
-        await _emit("complete", {"success": False, "error": outcome["error"]})
+        await _emit("complete", {
+            "success": False, "error": outcome["error"],
+            "review_stage": outcome.get("review_stage"),
+        })
     finally:
         # Phase 4: persist the reviewer's transcript so its turn-by-turn
         # judgement is auditable in the Review tab (gotcha #6 — a FAILED /
@@ -3512,8 +3644,8 @@ def _notes_coverage_enabled() -> bool:
     """Whether the holistic notes coverage checklist runs
     (docs/PLAN-notes-coverage-and-routing.md).
 
-    Controlled by ``XBRL_NOTES_COVERAGE`` (default ON), mirroring the
-    ``XBRL_SPOT_CHECK`` convention. When off, the reviewer pass skips building /
+    Controlled by ``XBRL_NOTES_COVERAGE`` (default ON). When off, the reviewer
+    pass skips building /
     persisting the checklist and coverage never tips run status — a config-flip
     rollback (Rollback Plan). Read fresh each call so a Settings toggle takes
     effect without a restart."""
@@ -3857,29 +3989,6 @@ def _resolve_run_status(
     return status
 
 
-def _spot_check_enabled() -> bool:
-    """Whether a CLEAN run (all cross-checks passed, no open conflicts) still
-    gets a grounded spot-check (issue 1, 2026-06-21).
-
-    Controlled by ``XBRL_SPOT_CHECK`` (default ON). Independent of
-    ``XBRL_AUTO_REVIEW`` — that gates the FAILURE-driven reviewer; this gates
-    the clean-run sanity pass. Read fresh each call so a Settings toggle takes
-    effect without a restart.
-    """
-    return os.environ.get("XBRL_SPOT_CHECK", "true").lower() == "true"
-
-
-def _spot_check_mode() -> str:
-    """Spot-check depth: ``"light"`` (default) or ``"full"``.
-
-    ``XBRL_SPOT_CHECK_MODE`` — ``light`` is a tight sanity pass over the
-    high-value figures; ``full`` reuses the holistic reviewer even on a clean
-    run. Any unrecognised value falls back to ``light``.
-    """
-    mode = os.environ.get("XBRL_SPOT_CHECK_MODE", "light").lower()
-    return mode if mode in ("light", "full") else "light"
-
-
 # One definition of the firm theme for every consumer (server, formatter agent).
 # Re-exported here because callers and tests reference `server.HOUSE_...`.
 from notes.table_theme import (  # noqa: E402
@@ -4023,9 +4132,6 @@ def _load_extended_settings() -> dict:
         # PDF-only, style-safe notes formatter. Default off because it adds
         # paid visual review calls per prose sheet.
         "pdf_notes_auto_format": _pdf_notes_auto_format_enabled(),
-        # Issue 1 (2026-06-21): clean-run spot-check toggle + depth. Default on/light.
-        "spot_check": _spot_check_enabled(),
-        "spot_check_mode": _spot_check_mode(),
         # Notes coverage checklist (docs/PLAN-notes-coverage-and-routing.md). Default on.
         "notes_coverage": _notes_coverage_enabled(),
         # Scanned-PDF transcribed source sidecar (docs/PLAN-pdf-source-sidecar.md).
@@ -7499,19 +7605,15 @@ async def run_multi_agent_stream(
                     "reviewer for run %s; manual re-review still available", run_id,
                 )
                 should_correct = False
-            # Issue 1 (2026-06-21): when the run is CLEAN (no failing checks,
-            # no open conflicts), still run a grounded spot-check if enabled.
-            # This reuses the whole reviewer pass (snapshot → fix → re-export →
-            # revert) with a spot_check framing; `spot_check_mode` picks the
-            # depth (light/full). Gated by its OWN toggle, independent of
-            # XBRL_AUTO_REVIEW (that gates the failure-driven pass).
+            # Every clean run receives a short, source-grounded triage. A
+            # specific anomaly is handed to a focused investigation. The
+            # auto-review toggle still governs known failed checks/conflicts.
             spot_check_mode: Optional[str] = None
-            if not hard_failures and not has_issues and _spot_check_enabled():
-                spot_check_mode = _spot_check_mode()
+            if not hard_failures and not has_issues:
+                spot_check_mode = "light"
                 should_correct = True
                 logger.info(
-                    "run %s clean — launching %s spot-check", run_id,
-                    spot_check_mode,
+                    "run %s clean — launching reviewer triage", run_id,
                 )
             if should_correct:
                 # Create + register the CORRECTION run_agent row lazily —
@@ -8289,17 +8391,9 @@ async def run_multi_agent_stream(
         validator_failed = bool(
             validator_outcome and validator_outcome.get("error")
         )
-        # Peer-review HIGH (2026-06-21): a reviewer / spot-check pass that
-        # FAILED to run (model build, snapshot, no-facts, tool exception) must
-        # not hide under a green run badge while its CORRECTION row shows
-        # "failed" — that's the same internal inconsistency the validator_failed
-        # / open_conflicts treatment already guards. Exclude `reviewer_exhausted`
-        # (a budget exhaustion, not a hard failure): it's handled by
-        # `correction_exhausted` on the failure path and is advisory-only for a
-        # spot-check (above). A genuine error tips an otherwise-clean run to
-        # completed_with_errors. Most relevant to the clean-run spot-check,
-        # which is the only path where the reviewer runs WITHOUT failing checks
-        # already forcing the run to completed_with_errors.
+        # A failed reviewer must not hide under a green run badge while its
+        # CORRECTION row is failed. Exhaustion is handled separately by
+        # correction_exhausted. Other errors tip a clean run to review needed.
         reviewer_failed = bool(
             correction_outcome and correction_outcome.get("error")
             and correction_outcome.get("error") != "reviewer_exhausted"

@@ -96,6 +96,21 @@ COPY_REPLACEMENTS = (
 
 def refresh(text: str) -> tuple[str, list[str]]:
     changed: list[str] = []
+    scoped_body = (PROMPTS / "scoped_investigation.md").read_text(encoding="utf-8").strip()
+    scoped_section = (
+        '<section id="reviewer-scoped-investigation"><h2>Scoped figures investigation</h2>'
+        '<p>After clean-run triage submits a specific issue, the reviewer uses '
+        '<code>prompts/scoped_investigation.md</code> (verbatim) with the structured '
+        'handoff packet.</p><pre>' + html.escape(scoped_body, quote=False) + '</pre></section>'
+    )
+    scoped_pattern = re.compile(r'<section id="reviewer-scoped-investigation">.*?</section>', re.S)
+    existing_scoped = scoped_pattern.search(text)
+    if existing_scoped is None:
+        text = text.replace('</body>', scoped_section + '\n</body>')
+        changed.append("scoped investigation")
+    elif existing_scoped.group() != scoped_section:
+        text = scoped_pattern.sub(lambda _: scoped_section, text)
+        changed.append("scoped investigation")
     preparation = ast.parse((ROOT / "ingest/document_preparation.py").read_text(encoding="utf-8"))
     capture_prompts = {
         target.id: ast.literal_eval(node.value)

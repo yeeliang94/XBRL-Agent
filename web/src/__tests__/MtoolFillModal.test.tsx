@@ -82,7 +82,7 @@ describe("MtoolFillModal", () => {
     fireEvent.click(related);
     await waitFor(() => expect(posts.filter((p) => p.url.endsWith("/notes-preview"))).toHaveLength(2));
     fireEvent.click(screen.getByRole("button", { name: "Fill" }));
-    await screen.findByRole("button", { name: /download for review/i });
+    await screen.findByRole("button", { name: /download draft for review/i });
     expect(screen.getByText(/Partial workbook: Related party transactions not included/i)).toBeVisible();
     expect(screen.getByText(/12 figures and 1 note were left unchanged/i)).toBeVisible();
     for (const endpoint of ["detect-columns", "notes-preview", "patch"]) {
@@ -94,7 +94,7 @@ describe("MtoolFillModal", () => {
     fireEvent.click(screen.getByRole("button", { name: "Clear all" }));
     expect(screen.getByRole("button", { name: "Fill" })).toBeDisabled();
     expect(screen.queryByText(/Partial workbook — excluded:/)).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Download for review/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Download draft for review/ })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Select all" }));
     expect(related).toBeChecked();
     rerender(<MtoolFillModal runId={42} open={false} onClose={() => {}} />);
@@ -262,7 +262,7 @@ describe("MtoolFillModal", () => {
       type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     });
     fireEvent.change(input, { target: { files: [file] } });
-    const changeButton = screen.getByRole("button", { name: "Change" });
+    const changeButton = screen.getByRole("button", { name: "Change file" });
     changeButton.focus();
     expect(changeButton).toHaveFocus();
     const replacementInput = screen.getByLabelText(/mtool template file/i);
@@ -271,7 +271,7 @@ describe("MtoolFillModal", () => {
     expect(openPicker).toHaveBeenCalledOnce();
     fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
 
-    await waitFor(() => expect(screen.getByText(/template ready/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/draft prepared/i)).toBeTruthy());
     expect(screen.getByText(/2 calculated values agree with the reviewed figures/)).toBeTruthy();
   });
 
@@ -329,7 +329,7 @@ describe("MtoolFillModal", () => {
 
     // Retry -> now includes column_map -> success.
     fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
-    await waitFor(() => expect(screen.getByText(/template ready/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/draft prepared/i)).toBeTruthy());
     expect(patchCalls).toBe(2);
   });
 
@@ -370,7 +370,7 @@ describe("MtoolFillModal", () => {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
     fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
-    await waitFor(() => expect(screen.getByText(/template ready to download/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/draft prepared/i)).toBeTruthy());
     expect(screen.getByText(/notes filled/i)).toBeTruthy();
   });
 
@@ -408,9 +408,10 @@ describe("MtoolFillModal", () => {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
     fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
-    await waitFor(() => expect(screen.getByText(/template ready to download/i)).toBeTruthy());
-    expect(screen.getByText(/Some items need review before filing/i)).toBeVisible();
-    expect(screen.getByRole("button", { name: /download for review/i })).toBeEnabled();
+    await waitFor(() => expect(screen.getByText(/draft prepared/i)).toBeTruthy());
+    expect(screen.getByText(/Finish the items below in mTool before filing/i)).toBeVisible();
+    expect(screen.getByRole("button", { name: /download draft for review/i })).toBeEnabled();
+    fireEvent.click(screen.getByText(/unfinished items and fill receipt/i));
     // Notes failure detail remains available and opens by default.
     expect(screen.getByText("Notes errors")).toBeTruthy();
     expect(screen.getByText("Notes that need checking")).toBeTruthy();
@@ -810,6 +811,55 @@ describe("MtoolFillModal", () => {
     expect(screen.queryByLabelText(/column layout editor/i)).toBeNull();
   });
 
+  test("shows detected workbook settings after upload without using run settings as substitutes", async () => {
+    mockFetch((url) => {
+      if (url.endsWith("/detect-columns")) return Response.json({
+        detected: {}, confidence: "high", requires_confirmation: false,
+        detected_settings: {
+          filing_standard: "mfrs", filing_level: "company",
+          sheets: ["SOFP-CuNonCu", "SOCI-NetOfTax"],
+          declared_unit_scales: ["thousands"], filing_family_match: true,
+        },
+      });
+      if (url.endsWith("/preflight")) return Response.json({ ok: true, blockers: [], warnings: [] });
+      if (url.endsWith("/mtool-notes-fill")) return Response.json({ meta: { counts: { notes: 0 } }, footnotes: [] });
+      return Response.json(FILL_DOC);
+    });
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    fireEvent.change(await screen.findByLabelText(/mtool template file/i), {
+      target: { files: [new File(["x"], "template.xlsx")] },
+    });
+    const settings = await screen.findByRole("region", { name: "Detected template settings" });
+    expect(within(settings).getByText("MFRS")).toBeVisible();
+    expect(within(settings).getByText("Company")).toBeVisible();
+    expect(within(settings).getByText(/Financial position · current \/ non-current/)).toBeVisible();
+    expect(within(settings).getByText(/Comprehensive income · net of tax/)).toBeVisible();
+    expect(within(settings).getByText("RM '000")).toBeVisible();
+  });
+
+  test("a detected filing-family mismatch stops filling until the template is changed", async () => {
+    mockFetch((url) => {
+      if (url.endsWith("/detect-columns")) return Response.json({
+        detected: {}, confidence: "high", requires_confirmation: false,
+        detected_settings: {
+          filing_standard: "mpers", filing_level: "company",
+          sheets: ["SOFP-CuNonCu"], declared_unit_scales: [],
+          filing_family_match: false,
+        },
+      });
+      if (url.endsWith("/preflight")) return Response.json({ ok: true, blockers: [], warnings: [] });
+      if (url.endsWith("/mtool-notes-fill")) return Response.json({ meta: { counts: { notes: 0 } }, footnotes: [] });
+      return Response.json(FILL_DOC);
+    });
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    fireEvent.change(await screen.findByLabelText(/mtool template file/i), {
+      target: { files: [new File(["x"], "wrong.xlsx")] },
+    });
+    expect(await screen.findByText(/does not match the run/i)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Fill" })).toBeDisabled();
+    expect(screen.getByText("Not stated in template")).toBeVisible();
+  });
+
   test("one Fill click waits for template detection instead of requiring a retry", async () => {
     let finishDetection!: (response: Response) => void;
     let patchCalls = 0;
@@ -838,7 +888,7 @@ describe("MtoolFillModal", () => {
     await act(async () => {
       finishDetection(Response.json({ detected: {}, confidence: "high", requires_confirmation: false }));
     });
-    await screen.findByRole("button", { name: /download filled template/i });
+    await screen.findByRole("button", { name: /download draft/i });
     expect(patchCalls).toBe(1);
   });
 
@@ -1002,7 +1052,7 @@ describe("MtoolFillModal", () => {
     expect(screen.queryByText(/reporting dates/i)).toBeNull();
     expect(screen.getByRole("button", { name: /^fill$/i })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
-    expect(await screen.findByText(/template ready to download/i)).toBeVisible();
+    expect(await screen.findByText(/draft prepared/i)).toBeVisible();
     expect(screen.queryByText(/reporting dates/i)).toBeNull();
   });
 
@@ -1104,7 +1154,7 @@ describe("MtoolFillModal", () => {
       target: { files: [new File(["x"], "t.xlsx")] },
     });
     fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
-    await waitFor(() => expect(screen.getByText(/template ready/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/draft prepared/i)).toBeTruthy());
     expect(sentStyling).toBe("styled");
   });
 
@@ -1266,8 +1316,8 @@ describe("RunDetailView mTool button", () => {
       return new Response(JSON.stringify({ concepts: [] }), { status: 200 });
     });
     render(<RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />);
-    fireEvent.click(screen.getByRole("button", { name: /download draft|prepare investigation draft/i }));
-    const dialog = await screen.findByRole("dialog", { name: /fill mtool template/i });
+    fireEvent.click(screen.getByRole("button", { name: /prepare mtool draft|prepare investigation draft/i }));
+    const dialog = await screen.findByRole("dialog", { name: /prepare mtool draft/i });
     expect(within(dialog).getByLabelText(/mtool template file/i)).toBeTruthy();
   });
 
@@ -1276,7 +1326,7 @@ describe("RunDetailView mTool button", () => {
     render(
       <RunDetailView detail={makeDetail({ status: "running" })} onDelete={() => {}} onDownload={() => {}} />
     );
-    const btn = screen.getByRole("button", { name: /download draft|prepare investigation draft/i }) as HTMLButtonElement;
+    const btn = screen.getByRole("button", { name: /prepare mtool draft|prepare investigation draft/i }) as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
   });
 });
@@ -1306,7 +1356,7 @@ describe("mTool filing gates", () => {
     mockFetch(() => new Response(JSON.stringify({ concepts: [] }), { status: 200 }));
     render(<RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />);
     expect(
-      screen.getByRole("button", { name: /download draft|prepare investigation draft/i }),
+      screen.getByRole("button", { name: /prepare mtool draft|prepare investigation draft/i }),
     ).toBeTruthy();
   });
 
@@ -1513,12 +1563,12 @@ describe("mTool filing gates", () => {
 
     chooseTemplate();
     fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
-    await waitFor(() => expect(screen.getByText(/template ready/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/draft prepared/i)).toBeTruthy());
     expect(screen.queryByText(/Some items need review before filing/i)).toBeNull();
     // Nothing was downloaded by filling.
     expect(calls.some((u) => u.includes("/artifact/"))).toBe(false);
 
-    fireEvent.click(screen.getByRole("button", { name: /download filled template/i }));
+    fireEvent.click(screen.getByRole("button", { name: /download draft/i }));
     await waitFor(() => expect(calls.some((u) => u.includes("/artifact/"))).toBe(true));
   });
 
@@ -1545,10 +1595,10 @@ describe("mTool filing gates", () => {
 
     chooseTemplate();
     fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
-    await waitFor(() => expect(screen.getByText(/template ready to download/i)).toBeTruthy());
-    expect(screen.getByText(/Some items need review before filing/i)).toBeVisible();
+    await waitFor(() => expect(screen.getByText(/draft prepared/i)).toBeTruthy());
+    expect(screen.getByText(/Finish the items below in mTool before filing/i)).toBeVisible();
 
-    const download = screen.getByRole("button", { name: /download for review/i });
+    const download = screen.getByRole("button", { name: /download draft for review/i });
     expect(download).toBeEnabled();
     expect(screen.queryByLabelText(/i have read the problems above/i)).toBeNull();
     fireEvent.click(download);
@@ -1586,8 +1636,10 @@ describe("mTool filing gates", () => {
     fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
     expect(await screen.findByText("7")).toBeVisible();
     expect(screen.getByText(/not filled/i)).toBeVisible();
-    expect(screen.getByText(/7 figures had no matching destination and were left unchanged/i)).toBeVisible();
-    expect(screen.getByRole("button", { name: /download for review/i })).toBeEnabled();
+    fireEvent.click(screen.getByText(/View 7 unfinished items and fill receipt/i));
+    fireEvent.click(screen.getByText(/Couldn't be placed \(not written\)/i));
+    expect(screen.getByText(/Opening balance/)).toBeVisible();
+    expect(screen.getByRole("button", { name: /download draft for review/i })).toBeEnabled();
   });
 
   test("keeps confirmed operator destinations available in the result", async () => {
@@ -1671,7 +1723,7 @@ describe("mTool filing gates", () => {
     });
     chooseTemplate();
     fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
-    await waitFor(() => expect(screen.getByText(/factor of a thousand/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/template says its figures are in thousands/i)).toBeVisible());
   });
 });
 
@@ -1731,7 +1783,7 @@ describe("mTool preparation lifecycle", () => {
     rerender(<MtoolFillModal runId={43} open onClose={close} />);
     await act(async () => { finish(patchResponse(cleanReport)); });
     await screen.findByLabelText(/mtool template file/i);
-    expect(screen.queryByRole("button", { name: /download filled template/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /download draft/i })).toBeNull();
     expect(screen.getByRole("button", { name: /^fill$/i })).toBeDisabled();
   });
 
@@ -1773,9 +1825,9 @@ describe("mTool preparation lifecycle", () => {
     await screen.findByLabelText(/mtool template file/i);
     choose("first.xlsx");
     fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
-    await screen.findByRole("button", { name: /download filled template/i });
+    await screen.findByRole("button", { name: /download draft/i });
     choose("second.xlsx");
-    expect(screen.queryByRole("button", { name: /download filled template/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /download draft/i })).toBeNull();
   });
 
   test.each(["empty", "oversized", "wrong extension"])("a rejected %s replacement shows its error above the existing report", async (kind) => {
@@ -1788,7 +1840,7 @@ describe("mTool preparation lifecycle", () => {
     await screen.findByLabelText(/mtool template file/i);
     choose("first.xlsx");
     fireEvent.click(screen.getByRole("button", { name: /^fill$/i }));
-    await screen.findByRole("button", { name: /download filled template/i });
+    await screen.findByRole("button", { name: /download draft/i });
     const replacement = new File(
       kind === "empty" ? [] : [kind === "oversized" ? new Uint8Array(25 * 1024 * 1024 + 1) : "x"],
       kind === "wrong extension" ? "replacement.pdf" : "replacement.xlsx",
@@ -1826,9 +1878,8 @@ describe("mTool preparation lifecycle", () => {
     const { unmount } = render(<MtoolFillModal runId={42} open onClose={() => {}} />);
     await screen.findByLabelText(/mtool template file/i);
     const dialog = screen.getByRole("dialog");
-    const closeButtons = within(dialog).getAllByRole("button", { name: "Close" });
-    const first = closeButtons[0];
-    const last = closeButtons[1];
+    const first = within(dialog).getByRole("button", { name: "Close" });
+    const last = within(dialog).getByRole("button", { name: "Cancel" });
     const rect = new DOMRect(0, 0, 100, 30);
     const rects = Object.assign([rect], { item: () => rect });
     vi.spyOn(first, "getClientRects").mockReturnValue(rects);
@@ -1838,7 +1889,7 @@ describe("mTool preparation lifecycle", () => {
     outside.focus();
     fireEvent.keyDown(outside, { key: "Tab", shiftKey });
     expect(shiftKey ? last : first).toHaveFocus();
-    const heading = within(dialog).getByRole("heading", { name: "Fill mTool template" });
+    const heading = within(dialog).getByRole("heading", { name: "Prepare mTool draft" });
     heading.tabIndex = -1;
     heading.focus();
     fireEvent.keyDown(heading, { key: "Tab", shiftKey });
@@ -1858,6 +1909,6 @@ describe("mTool preparation lifecycle", () => {
   test.each(["failed", "aborted"])("stopped %s runs offer template filling", (status) => {
     mockFetch(() => new Response(JSON.stringify({ concepts: [] })));
     render(<RunDetailView detail={makeDetail({ status: status as RunDetailJson["status"] })} onDelete={() => {}} onDownload={() => {}} />);
-    expect(screen.getByRole("button", { name: /download draft|prepare investigation draft/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /prepare mtool draft|prepare investigation draft/i })).toBeEnabled();
   });
 });

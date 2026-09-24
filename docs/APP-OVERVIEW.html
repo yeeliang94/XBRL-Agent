@@ -440,11 +440,11 @@
           <h3>The reviewer pass fixes what it can <span class="tag">Automatic</span></h3>
           <div class="plain">
             <span class="label">In plain terms</span>
-            <p>If checks fail, a second, more senior AI "reviewer" investigates the root cause — tracing a wrong total back through the sub-tables to the original PDF — and applies grounded corrections. It can only fix things it can justify from the source; anything it can't resolve it raises as a flag for a human. A one-click "Revert to original" always restores the first extraction. Even on a clean run, a light spot-check gives it a sanity read.</p>
+            <p>If checks fail, a second, more senior AI "reviewer" investigates the root cause — tracing a wrong total back through the sub-tables to the original PDF — and applies grounded corrections. It can only fix things it can justify from the source; anything it can't resolve it raises as a flag for a human. A one-click "Revert to original" always restores the first extraction. Every clean run receives a short PDF-grounded triage; a specific concern is handed to a focused investigation with its own budget and recorded outcome.</p>
           </div>
           <div class="tech">
             <span class="label">Technically</span>
-            <p><code>_run_reviewer_pass</code> investigates failing checks + open conflicts down the face→sub→PDF chain and writes through a guarded <code>apply_fixes</code> tool (the same no-plug/no-abstract guard as extraction). Safety is <em>versioning, not write-gating</em>: <code>snapshot_facts</code> runs once before any write, so revert is one click; the pass then re-exports and re-merges. Scoped to the run's <code>{standard}-{level}-</code> family. Gated by <code>XBRL_AUTO_REVIEW</code> (on) and <code>XBRL_SPOT_CHECK</code> (on) for clean runs. Manual re-review runs async on a dedicated thread, tracked in <code>run_review_tasks</code>.</p>
+            <p><code>_run_reviewer_pass</code> investigates failing checks + open conflicts down the face→sub→PDF chain and writes through a guarded <code>apply_fixes</code> tool (the same no-plug/no-abstract guard as extraction). Safety is <em>versioning, not write-gating</em>: <code>snapshot_facts</code> runs once before any write, so revert is one click; the pass then re-exports and re-merges. Scoped to the run's <code>{standard}-{level}-</code> family. <code>XBRL_AUTO_REVIEW</code> controls corrective review of known failures; clean-run triage always runs and starts a separate focused pass when it records an anomaly. Manual re-review runs async on a dedicated thread, tracked in <code>run_review_tasks</code>.</p>
           </div>
         </div>
       </div>

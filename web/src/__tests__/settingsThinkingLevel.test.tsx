@@ -20,8 +20,6 @@ const SETTINGS = {
   api_key_set: true,
   api_key_preview: "abcd...yz",
   auto_review: true,
-  spot_check: true,
-  spot_check_mode: "light",
   entity_memory: true,
   local_override_keys: ["model", "proxy_url", "api_key"],
   thinking_levels: { SOFP: "high" },
@@ -131,6 +129,9 @@ describe("thinking level in Settings", () => {
     expect(body.notes_coverage).toBe(true);
     expect(body.tolerance_rm).toBe(2.5);
     expect(body.default_models).toBeUndefined();
+    expect(body.spot_check).toBeUndefined();
+    expect(body.spot_check_mode).toBeUndefined();
+    expect(screen.queryByLabelText(/Spot-check depth/i)).toBeNull();
   });
 
   test("the saved level is shown when the form loads", async () => {

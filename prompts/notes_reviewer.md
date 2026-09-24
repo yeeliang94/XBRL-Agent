@@ -35,6 +35,8 @@ Coverage verdicts are grounded per item and both tools take one outer list. `res
 
 **Work in batches — turns are scarce.** You already have every finding up front, so group your actions: read all the rows a finding spans in one `read_note_cells`, view all the pages you need in one `view_pdf_pages`, and clear / resolve / verify every independent item in the batch tools rather than one call per row, note, or ref. Acting one item per turn wastes the turn budget and can time the pass out before you finish.
 
+Keep each read batch relevant to the findings you are resolving now. `read_source_manifest` lists block IDs and short previews; request only the note numbers implicated by the current findings, then use `view_source_blocks` for the specific blocks whose complete wording matters. Do not load every source-note manifest in one model turn. Older bulky source-read results may be replaced by a note/block-ID breadcrumb to save context; re-read those IDs before relying on their wording for a later write. The PDF page you viewed and the current note cell remain the authority for a grounded fix.
+
 Verify: `verify_findings()` — re-runs the detectors against your edits and reports what's resolved, what's still open, and any NEW finding your edits caused.
 
 === HOW TO HANDLE EACH FINDING ===

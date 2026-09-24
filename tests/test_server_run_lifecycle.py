@@ -51,6 +51,23 @@ def session_env(tmp_path, monkeypatch):
     return TestClient(server.app), session_id, out
 
 
+@pytest.fixture
+def clean_triage(monkeypatch):
+    """Keep lifecycle tests focused on their own mocked pipeline result."""
+    import server
+
+    async def completed_triage(**_kwargs):
+        return {
+            "invoked": True, "spot_check": "light",
+            "review_stage": "triage_clean", "writes_performed": 0,
+            "flags_raised": 0, "error": None, "exhausted": False,
+            "turns_used": 0, "max_turns": 6, "total_tokens": 0,
+            "total_cost": 0.0, "elapsed_seconds": 0.0,
+        }
+
+    monkeypatch.setattr(server, "_run_reviewer_pass", completed_triage)
+
+
 def _open_db(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
@@ -276,7 +293,7 @@ def test_client_disconnect_still_finalizes_row(session_env):
 # 5. Happy path persists merged_workbook_path.
 # ---------------------------------------------------------------------------
 
-def test_notes_consistency_warnings_flow_through_sse_and_db(session_env):
+def test_notes_consistency_warnings_flow_through_sse_and_db(session_env, clean_triage):
     """Phase 6.1 wire-up: warnings from `check_notes_consistency` land on
     the cross_checks table with status='warning', ride through to the
     `run_complete` SSE event, and do NOT flip overall run status to
@@ -366,7 +383,7 @@ def test_notes_consistency_warnings_flow_through_sse_and_db(session_env):
     assert run_row["status"] == "completed"
 
 
-def test_merged_workbook_path_persisted_on_success_path(session_env):
+def test_merged_workbook_path_persisted_on_success_path(session_env, clean_triage):
     client, session_id, out = session_env
     db_path = out / "xbrl_agent.db"
 
@@ -409,7 +426,7 @@ def test_merged_workbook_path_persisted_on_success_path(session_env):
 # 6. Effective model is persisted on run_agents even when no override exists.
 # ---------------------------------------------------------------------------
 
-def test_effective_model_stored_per_agent_not_only_overrides(session_env):
+def test_effective_model_stored_per_agent_not_only_overrides(session_env, clean_triage):
     """Request has override for SOFP only; SOPL must still get the
     default model recorded on its run_agents row — never null/empty."""
     client, session_id, out = session_env
@@ -454,7 +471,7 @@ def test_effective_model_stored_per_agent_not_only_overrides(session_env):
         conn.close()
 
     by_type = {a["statement_type"]: a["model"] for a in agents}
-    assert set(by_type.keys()) == {"SOFP", "SOPL"}
+    assert set(by_type.keys()) == {"SOFP", "SOPL", "CORRECTION"}
     # Both must be non-empty strings; SOPL must carry the default, not SOFP's
     # override and not an empty string.
     assert by_type["SOFP"]

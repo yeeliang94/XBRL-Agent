@@ -229,6 +229,17 @@ def _save_semantic_marker_workbook(
     wb.save(path)
 
 
+def test_inspection_identifies_native_standard_without_guessing_level(tmp_path: Path):
+    template = tmp_path / "native-mfrs.xlsx"
+    _save_semantic_marker_workbook(template)
+    report = inspect_template(str(template), {
+        "meta": {"filing_standard": "mfrs", "filing_level": "company"},
+        "writes": [], "sheets": {},
+    })
+    assert report["detected_filing_standard"] == "mfrs"
+    assert report["detected_filing_level"] is None
+
+
 def test_index_workbook_indexes_strict_taxonomy_fragments(tmp_path: Path):
     template = tmp_path / "taxonomy-identifiers.xlsx"
     wb = Workbook()

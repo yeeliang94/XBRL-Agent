@@ -1000,6 +1000,12 @@ def detect_mtool_columns(
         fingerprint = _parse_template_or_422(
             "fingerprint", fingerprint_workbook, data)
         known = describe_template(fingerprint)
+        physical_sheets = sorted(get_sheet_paths(data))
+        declared_scales = sorted({
+            scale for layout in detected.values()
+            for scale in (layout.get("declared_unit_scales") or {}).values()
+            if scale
+        })
         return JSONResponse({
             "detected": detected,
             "confidence": overall_confidence(detected) if doc["writes"] else "not_applicable",
@@ -1015,6 +1021,13 @@ def detect_mtool_columns(
             "template_description": (known or {}).get("name"),
             "unit_scale_warnings": unit_scale_mismatches(
                 detected, doc["meta"].get("denomination")),
+            "detected_settings": {
+                "filing_standard": inspection["detected_filing_standard"],
+                "filing_level": inspection["detected_filing_level"],
+                "sheets": physical_sheets,
+                "declared_unit_scales": declared_scales,
+                "filing_family_match": inspection["filing_family_match"],
+            },
             "filing_inspection": inspection,
         })
     finally:

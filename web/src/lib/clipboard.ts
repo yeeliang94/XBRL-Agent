@@ -178,7 +178,7 @@ function _hasOperatorColumnWidths(table: Element): boolean {
  *  table's rows are its own.
  *  Backend twin: `mtool/notes_decorate.py::_fit_table_width` — keep
  *  the two in step. */
-function _fitTableWidth(table: Element): void {
+function _fitTableWidth(table: Element, editableMerged = false): void {
   const rows = Array.from(table.querySelectorAll("tr")).filter(
     (r) => r.closest("table") === table,
   );
@@ -204,13 +204,91 @@ function _fitTableWidth(table: Element): void {
   );
   const nonEmpty = trailing.filter(Boolean);
   const numeric = nonEmpty.filter((t) => isNumericCellText(t)).length;
-  if (nonEmpty.length === 0 || numeric * 2 <= nonEmpty.length) return;
+  const numericColumns = Array.from({ length: ncols - 1 }, (_, index) => index + 1)
+    .filter((col) => perRow.some((cells) => cells.length > col &&
+      isNumericCellText((cells[col].textContent ?? "").trim()))).length;
+  if (nonEmpty.length === 0 ||
+      (numeric * 2 <= nonEmpty.length &&
+       !(editableMerged && numericColumns >= 2))) return;
   const share = Math.min(18, Math.max(10, Math.floor(70 / (ncols - 1))));
   const label = 100 - share * (ncols - 1);
   if (label < 30) return;
   firstFull.forEach((cell, i) => {
     cell.setAttribute("width", i === 0 ? `${label}%` : `${share}%`);
   });
+}
+
+/** TX27 cannot mouse-resize or recolour a table with merged cells. Use a
+ *  rectangular grid in the mTool-bound copy, while the editor's canonical
+ *  HTML keeps its spans. Backend twin: notes_decorate._expand_merged_cells. */
+function _span(cell: Element, name: string): number {
+  const value = Number(cell.getAttribute(name) ?? "1");
+  return Number.isSafeInteger(value) && value > 0 ? value : 1;
+}
+
+function _paintMergeInnerEdges(cell: Element, across: number, down: number,
+  colspan: number, rowspan: number): void {
+  const inner: string[] = [];
+  if (across > 0) inner.push("border-left: 1px solid #ffffff");
+  if (across < colspan - 1) inner.push("border-right: 1px solid #ffffff");
+  if (down > 0) inner.push("border-top: 1px solid #ffffff");
+  if (down < rowspan - 1) inner.push("border-bottom: 1px solid #ffffff");
+  if (inner.length > 0) {
+    cell.setAttribute("style", [cell.getAttribute("style") ?? "", ...inner]
+      .filter(Boolean).join("; "));
+  }
+}
+
+function _expandMergedCells(root: Element): Element[] {
+  const expanded: Element[] = [];
+  for (const table of Array.from(root.querySelectorAll("table"))) {
+    const rows = Array.from(table.querySelectorAll("tr")).filter(
+      (row) => row.closest("table") === table,
+    );
+    if (!rows.some((row) => Array.from(row.children).some((cell) =>
+      (cell.tagName === "TD" || cell.tagName === "TH") &&
+      (_span(cell, "colspan") > 1 || _span(cell, "rowspan") > 1)))) continue;
+    const pending = new Map<number, Map<number, Element>>();
+    rows.forEach((row, rowIndex) => {
+      const original = Array.from(row.children).filter(
+        (cell) => cell.tagName === "TD" || cell.tagName === "TH",
+      );
+      const slots = pending.get(rowIndex) ?? new Map<number, Element>();
+      pending.delete(rowIndex);
+      let column = 0;
+      for (const cell of original) {
+        while (slots.has(column)) column++;
+        const colspan = _span(cell, "colspan");
+        const rowspan = Math.min(_span(cell, "rowspan"), rows.length - rowIndex);
+        cell.removeAttribute("colspan");
+        cell.removeAttribute("rowspan");
+        if (colspan > 1) cell.removeAttribute("width");
+        slots.set(column, cell);
+        for (let down = 0; down < rowspan && rowIndex + down < rows.length; down++) {
+          const target = down === 0 ? slots :
+            (pending.get(rowIndex + down) ?? new Map<number, Element>());
+          if (down > 0) pending.set(rowIndex + down, target);
+          for (let across = 0; across < colspan; across++) {
+            if (down === 0 && across === 0) continue;
+            const blank = document.createElement(cell.tagName.toLowerCase());
+            if (cell.hasAttribute("style")) {
+              blank.setAttribute("style", cell.getAttribute("style") ?? "");
+            }
+            _paintMergeInnerEdges(blank, across, down, colspan, rowspan);
+            target.set(column + across, blank);
+          }
+        }
+        _paintMergeInnerEdges(cell, 0, 0, colspan, rowspan);
+        column += colspan;
+      }
+      if (slots.size > 0) {
+        row.replaceChildren(...Array.from(slots.entries())
+          .sort(([a], [b]) => a - b).map(([, cell]) => cell));
+      }
+    });
+    expanded.push(table);
+  }
+  return expanded;
 }
 
 function _cellStyleBase(opts: ClipboardFormatOptions): string {
@@ -344,6 +422,7 @@ function _mergeBlockStyle(
 export function decorateHtmlForClipboard(
   html: string,
   opts: ClipboardFormatOptions = DEFAULT_FORMAT_OPTIONS,
+  editableMergedCells = false,
 ): string {
   if (!html) return html;
   const tmp = document.createElement("div");
@@ -351,6 +430,7 @@ export function decorateHtmlForClipboard(
 
   const cellBase = _cellStyleBase(opts);
   const noBorder = opts.borderStyle === "none";
+  const operatorSizedTables = new Set<Element>();
 
   for (const table of Array.from(tmp.querySelectorAll("table"))) {
     // Captured BEFORE the merge below injects the decorator's own
@@ -358,6 +438,9 @@ export function decorateHtmlForClipboard(
     // the page-width fit below would never fire.
     const operatorSized =
       _tableHasExplicitWidth(table) || table.hasAttribute("width");
+    if (operatorSized || _hasOperatorColumnWidths(table)) {
+      operatorSizedTables.add(table);
+    }
     _mergeStyle(
       table,
       operatorSized ? _CLIPBOARD_TABLE_STYLE_KEEP_WIDTH : _CLIPBOARD_TABLE_STYLE,
@@ -512,6 +595,12 @@ export function decorateHtmlForClipboard(
     // The marker glyph applies to <ul> only — <ol> keeps its numbering and
     // <li> inherits. Empty when un-themed (byte-identical output).
     _mergeStyle(list, fontCss + (list.tagName === "UL" ? listMarkerCss : ""));
+  }
+
+  if (editableMergedCells) {
+    for (const table of _expandMergedCells(tmp)) {
+      if (!operatorSizedTables.has(table)) _fitTableWidth(table, true);
+    }
   }
 
   // Carry the font on the wrapping container too, so any element we did not
@@ -941,7 +1030,7 @@ export async function copyHtmlAsRichText(
       // sees the original semantic HTML and produces the same
       // pipe-separated rows as before — the inline-style pass is a
       // visual decoration only and adds nothing to the plaintext form.
-      const decorated = decorateHtmlForClipboard(html, opts);
+      const decorated = decorateHtmlForClipboard(html, opts, true);
       const ClipboardItemCtor = (
         globalThis as unknown as {
           ClipboardItem: new (items: Record<string, Blob>) => unknown;
@@ -968,7 +1057,7 @@ export async function copyHtmlAsRichText(
     holder.contentEditable = "true";
     // Same decoration pass as the modern path so legacy-fallback
     // pastes don't lose table styling.
-    holder.innerHTML = decorateHtmlForClipboard(html, opts);
+    holder.innerHTML = decorateHtmlForClipboard(html, opts, true);
     // Pull off-screen rather than display:none — hidden elements cannot
     // carry a Selection in most browsers.
     holder.style.position = "fixed";

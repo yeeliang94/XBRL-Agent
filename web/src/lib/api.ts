@@ -187,9 +187,6 @@ export async function updateSettings(
     auto_review: boolean;
     notes_auto_review: boolean;
     notes_coverage: boolean;
-    // Clean-run spot-check (issue 1): toggle + depth.
-    spot_check: boolean;
-    spot_check_mode: "light" | "full";
     entity_memory: boolean;
     // Scanned-PDF transcribed source sidecar (docs/PLAN-pdf-source-sidecar.md).
     pdf_sidecar: boolean;

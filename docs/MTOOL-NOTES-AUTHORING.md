@@ -82,10 +82,14 @@ writer → sanitizer → notes_cells → review/validated formatting
    Use the existing application theme resolution: run override over firm default.
    A bare `NotesTableStyle()` is the legacy default, not the configured house theme.
 3. `mtool/notes_decorate.py::decorate_notes_html` adds mTool transport styling.
-   The manual-copy counterpart is `web/src/lib/clipboard.ts`. Keep white-border,
-   legacy-width and double-border substitutions in these decorators; never write
-   their output back into canonical notes. Do not decorate an already decorated
-   payload a second time.
+    The manual-copy counterpart is `web/src/lib/clipboard.ts`. Keep white-border,
+    legacy-width and double-border substitutions in these decorators; never write
+    their output back into canonical notes. Do not decorate an already decorated
+    payload a second time. The mTool-bound paths expand merged cells into ordinary
+    cells so the installed TX27 editor can resize columns and change cell fills.
+    The canonical note retains its original merged cells. Empty continuation
+    cells inherit the original cell style; review the native layout when a merged
+    label is long because it may wrap within the first ordinary cell.
 4. Use only `mtool/offline_fill.py::fill_footnotes` through the established fill
    flow to patch the closed workbook into a separate output file. The patcher
    owns native note slots and XHTML wrapping. Do not rebuild mTool files with
@@ -111,7 +115,7 @@ The normal workflow does not require any local experiment scripts or browser har
 | Double table borders | Preserve double intent in canonical HTML. At export/copy, decorators replace it with solid strokes at least 3px (2.25pt), preserving colour and larger declared widths. This is an intentional substitute, not native double-border support. |
 | Ordinary solid borders | Keep their intended sides and colours. Native serialization can change units or rounding; an ordinary 1px rule saved as 1pt in the tested editor. |
 | Blank edges | Decorators use white borders where needed to suppress native grey lines. This is visually blank on a white page, not a promise of transparency over coloured backgrounds. |
-| Shared edges and merged cells | Tested cell content and spans survived. Exact appearance of one ordinary shared edge beside a colspan remains unresolved; do not promise pixel-exact collapsed borders. |
+| Shared edges and merged cells | Canonical notes retain their spans. mTool-bound copies expand spans for native editability; the text stays in the first cell and blank continuation cells may change wrapping or internal lines. Review those tables before filing. |
 | Table and column widths | Treat widths as preferences, not exact native geometry. A requested 450pt table expanded to 481.95pt; later saves changed some widths again. Do not compensate with guessed offsets. |
 | Clipboard paste | The tested unsized themed table initially overflowed. After note/workbook save and full reopen it fit the page. Inspect both states; do not claim initial-paste fidelity. |
 | Fonts, emphasis, fills, alignment and spacing | Use existing theme/editor capabilities and validated styles. Browser appearance alone does not certify the native result. The border verification was not an exhaustive test of every formatting option. |

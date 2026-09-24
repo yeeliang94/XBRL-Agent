@@ -79,8 +79,6 @@ _ADMIN_ONLY_SETTINGS_KEYS = frozenset({
     "auto_review",
     "notes_auto_review",
     "pdf_notes_auto_format",
-    "spot_check",
-    "spot_check_mode",
     "notes_coverage",
     "pdf_sidecar",
     "scout_wallclock_seconds",
@@ -101,8 +99,6 @@ _SETTING_ENV_KEYS = {
     "auto_review": "XBRL_AUTO_REVIEW",
     "notes_auto_review": "XBRL_NOTES_AUTO_REVIEW",
     "pdf_notes_auto_format": "XBRL_PDF_NOTES_AUTO_FORMAT",
-    "spot_check": "XBRL_SPOT_CHECK",
-    "spot_check_mode": "XBRL_SPOT_CHECK_MODE",
     "notes_coverage": "XBRL_NOTES_COVERAGE",
     "pdf_sidecar": "XBRL_PDF_SIDECAR",
     "scout_wallclock_seconds": "XBRL_SCOUT_WALLCLOCK_S",
@@ -228,10 +224,6 @@ async def get_config():
         # Whether the reviewer pass auto-runs after extraction (Settings
         # toggle). Surfaced here so the SPA can label the run accordingly.
         "auto_review": server._auto_review_enabled(),
-        # Clean-run spot-check (issue 1): whether a run with no failing checks
-        # still gets a grounded sanity pass, and at what depth (light/full).
-        "spot_check": server._spot_check_enabled(),
-        "spot_check_mode": server._spot_check_mode(),
         # Notes coverage checklist (docs/PLAN-notes-coverage-and-routing.md). Default on.
         "notes_coverage": server._notes_coverage_enabled(),
         # Scanned-PDF transcribed source sidecar (docs/PLAN-pdf-source-sidecar.md).
@@ -314,6 +306,11 @@ async def update_settings(body: dict, request: Request):
     that touches any such key is refused with 403; a write touching only the
     cosmetic keys (e.g. notes_table_style) is allowed for everyone.
     """
+    if {"spot_check", "spot_check_mode"}.intersection(body):
+        raise HTTPException(
+            status_code=400,
+            detail="Clean-run reviewer triage is always enabled and has no depth setting.",
+        )
     if _ADMIN_ONLY_SETTINGS_KEYS.intersection(body):
         with db_session(server.AUDIT_DB_PATH) as conn:
             denied = auth_routes._require_admin(conn, request)
@@ -465,17 +462,6 @@ async def update_settings(body: dict, request: Request):
         updates["XBRL_NOTES_AUTO_REVIEW"] = (
             "true" if body["notes_auto_review"] else "false"
         )
-    # Clean-run spot-check (issue 1): enable toggle + depth (light/full).
-    if "spot_check" in body:
-        updates["XBRL_SPOT_CHECK"] = "true" if body["spot_check"] else "false"
-    if "spot_check_mode" in body:
-        mode = str(body["spot_check_mode"]).strip().lower()
-        if mode not in ("light", "full"):
-            raise HTTPException(
-                status_code=400,
-                detail="spot_check_mode must be 'light' or 'full'.",
-            )
-        updates["XBRL_SPOT_CHECK_MODE"] = mode
     # Notes coverage checklist (docs/PLAN-notes-coverage-and-routing.md). Default on.
     if "notes_coverage" in body:
         updates["XBRL_NOTES_COVERAGE"] = (

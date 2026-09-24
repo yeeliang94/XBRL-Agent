@@ -9,6 +9,7 @@ The snapshot is what makes the run revertible end-to-end.
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 from pathlib import Path
 
@@ -355,27 +356,84 @@ async def test_reviewer_pass_noop_when_nothing_to_review(tmp_path):
     assert cnt == 0
 
 
+def _triage_then_fix(messages, info: AgentInfo) -> ModelResponse:
+    text = " ".join(str(getattr(p, "content", "")) for m in messages
+                    for p in getattr(m, "parts", []))
+    if "SCOPED INVESTIGATION HANDOFF" not in text:
+        return ModelResponse(parts=[ToolCallPart(
+            tool_name="request_scoped_investigation",
+            args={"items": [{"summary": "Cash is 100 in facts but 120 on PDF",
+                              "pdf_page": 12, "target_sheet": "SOFP",
+                              "target_row": 5, "concept_uuid": LEAF1,
+                              "evidence": "page 12: Cash 120"}]})])
+    names = [getattr(p, "tool_name", "") for m in messages
+             for p in getattr(m, "parts", []) if p.part_kind == "tool-return"]
+    if "apply_fixes" not in names:
+        return ModelResponse(parts=[ToolCallPart(
+            tool_name="apply_fixes",
+            args={"fixes": [{"concept_uuid": LEAF1, "value": 120.0,
+                              "reason": "PDF cash differs", "evidence": "page 12: Cash 120"}]})])
+    if "verify_fixes" not in names:
+        return ModelResponse(parts=[ToolCallPart(tool_name="verify_fixes", args={})])
+    return ModelResponse(parts=[ToolCallPart(
+        tool_name="complete_scoped_investigation",
+        args={"results": [{"item_index": 1, "status": "fixed_and_verified",
+                           "reason": "Cash corrected against source",
+                           "pdf_page": 12}]})])
+
+
+def _triage_then_flag(messages, info: AgentInfo) -> ModelResponse:
+    text = " ".join(str(getattr(p, "content", "")) for m in messages
+                    for p in getattr(m, "parts", []))
+    if "SCOPED INVESTIGATION HANDOFF" not in text:
+        return ModelResponse(parts=[ToolCallPart(
+            tool_name="request_scoped_investigation",
+            args={"items": [{"summary": "Cash source is ambiguous",
+                              "pdf_page": 12, "target_sheet": "SOFP",
+                              "target_row": 5, "concept_uuid": LEAF1,
+                              "evidence": "page 12: unclear unit"}]})])
+    names = [getattr(p, "tool_name", "") for m in messages
+             for p in getattr(m, "parts", []) if p.part_kind == "tool-return"]
+    if "raise_flag" not in names:
+        return ModelResponse(parts=[ToolCallPart(
+            tool_name="raise_flag",
+            args={"kind": "stuck", "reason": "Source unit remains ambiguous",
+                  "concept_uuid": LEAF1, "pdf_page": 12})])
+    return ModelResponse(parts=[ToolCallPart(
+        tool_name="complete_scoped_investigation",
+        args={"results": [{"item_index": 1, "status": "unresolved",
+                           "reason": "Source unit remains ambiguous",
+                           "pdf_page": 12}]})])
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["light", "full"])
-async def test_spot_check_runs_on_clean_run(tmp_path, mode):
-    """Issue 1: with NO failing checks and NO conflicts, a spot_check pass is
-    still invoked (it does NOT short-circuit like the failure-driven pass) and
-    snapshots-then-applies the same grounded fix, so the result stays
-    revertible. Pins both light and full depths."""
+@pytest.mark.parametrize("check_status", ["passed", "warning"])
+async def test_spot_check_runs_on_clean_run(tmp_path, monkeypatch, check_status):
+    """Triage hands a specific anomaly to a fresh, verified investigation."""
     from server import _run_reviewer_pass
+    import correction.reviewer_agent as reviewer_agent
+
+    monkeypatch.setattr(reviewer_agent, "run_verification_checks", lambda *a, **k: [
+        CrossCheckResult(name="sofp_balance", status=check_status, expected=120,
+                         actual=120, diff=0, message="OK")])
 
     db, run_id = _seed(tmp_path)
     queue: asyncio.Queue = asyncio.Queue()
     outcome = await _run_reviewer_pass(
-        failed_checks=[], conflicts=[], model=FunctionModel(_fix_cash_scripted),
+        failed_checks=[], conflicts=[], model=FunctionModel(_triage_then_fix),
         filing_level="company", event_queue=queue, db_path=db, run_id=run_id,
-        spot_check=mode)
+        spot_check="light")
 
     assert outcome["invoked"] is True, "spot-check must run on a clean run"
-    # The outcome is tagged as a spot-check so the run-status logic can treat
-    # its exhaustion as advisory rather than `correction_exhausted`.
-    assert outcome["spot_check"] == mode
+    # The outcome records clean-run triage separately from the scoped pass.
+    assert outcome["spot_check"] == "light"
     assert outcome["writes_performed"] == 1
+    assert outcome["error"] is None
+    assert outcome["review_stage"] == "investigation_complete"
+    assert outcome["handoff_items"][0]["concept_uuid"] == LEAF1
+    assert outcome["investigation_resolutions"][0]["status"] == "fixed_and_verified"
+    phases = [event["data"].get("phase") for event in list(queue._queue)]
+    assert "triage_handoff" in phases and "investigation_started" in phases
     conn = sqlite3.connect(str(db))
     try:
         # Snapshot taken before the write → revert-to-original still works.
@@ -389,6 +447,72 @@ async def test_spot_check_runs_on_clean_run(tmp_path, mode):
         assert live == 120.0
     finally:
         conn.close()
+
+
+@pytest.mark.asyncio
+async def test_failed_handoff_records_triage_once(tmp_path, monkeypatch):
+    from server import _run_reviewer_pass
+    import correction.reviewer_agent as reviewer_agent
+    import usage_metrics
+
+    original_factory = reviewer_agent.create_reviewer_agent
+    def fail_focused_agent(**kwargs):
+        if kwargs.get("investigation_handoff"):
+            raise RuntimeError("focused agent unavailable")
+        return original_factory(**kwargs)
+
+    monkeypatch.setattr(reviewer_agent, "create_reviewer_agent", fail_focused_agent)
+    monkeypatch.setattr(usage_metrics, "split_usage", lambda usage:
+                        usage_metrics.UsageMetrics(3, 4, 0, 7))
+    db, run_id = _seed(tmp_path)
+    outcome = await _run_reviewer_pass(
+        failed_checks=[], conflicts=[], model=FunctionModel(_triage_then_fix),
+        filing_level="company", event_queue=asyncio.Queue(), db_path=db,
+        run_id=run_id, spot_check="light", pdf_path=tmp_path / "x.pdf")
+
+    assert outcome["error"] == "reviewer_exception"
+    assert outcome["total_tokens"] == 7
+    trace = tmp_path / "CORRECTION_conversation_trace.json"
+    payload = json.loads(trace.read_text(encoding="utf-8"))
+    assert sum(
+        part.get("tool_name") == "request_scoped_investigation"
+        for message in payload["messages"] for part in message.get("parts", [])
+    ) == 1
+
+
+@pytest.mark.asyncio
+async def test_scoped_unresolved_item_needs_review(tmp_path):
+    from server import _run_reviewer_pass
+
+    db, run_id = _seed(tmp_path)
+    outcome = await _run_reviewer_pass(
+        failed_checks=[], conflicts=[], model=FunctionModel(_triage_then_flag),
+        filing_level="company", event_queue=asyncio.Queue(), db_path=db,
+        run_id=run_id, spot_check="light")
+
+    assert outcome["investigation_resolutions"][0]["status"] == "unresolved"
+    assert outcome["flags_raised"] == 1
+    assert outcome["error"] == "reviewer_investigation_unresolved"
+    assert outcome["review_stage"] == "investigation_unresolved"
+
+
+@pytest.mark.asyncio
+async def test_clean_triage_finishes_without_handoff(tmp_path):
+    from server import _run_reviewer_pass
+
+    db, run_id = _seed(tmp_path)
+    queue: asyncio.Queue = asyncio.Queue()
+    model = FunctionModel(lambda messages, info: ModelResponse(
+        parts=[TextPart("Sampled the cited cash and total; both agree with the PDF.")]))
+    outcome = await _run_reviewer_pass(
+        failed_checks=[], conflicts=[], model=model, filing_level="company",
+        event_queue=queue, db_path=db, run_id=run_id, spot_check="light")
+
+    assert outcome["error"] is None
+    assert outcome["review_stage"] == "triage_clean"
+    assert not outcome.get("handoff_items")
+    assert outcome["writes_performed"] == 0
+    assert "triage_complete" in [event["data"].get("phase") for event in queue._queue]
 
 
 def _always_fix(messages, info: AgentInfo) -> ModelResponse:
@@ -489,7 +613,7 @@ async def test_exhausted_reviewer_still_cascades(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_exhausted_spot_check_remains_incomplete_after_bounded_continuation(tmp_path, monkeypatch):
+async def test_exhausted_spot_check_remains_incomplete(tmp_path, monkeypatch):
     """Clean arithmetic does not make unfinished source verification complete."""
     import correction.reviewer_agent as ra
     from server import _run_reviewer_pass
@@ -506,8 +630,8 @@ async def test_exhausted_spot_check_remains_incomplete_after_bounded_continuatio
     assert outcome["exhausted"] is True
     assert outcome["error"] == "reviewer_exhausted"  # soft, not a hard failure
     assert outcome["spot_check"] == "light"
-    assert outcome["continuation_turns"] == 4
-    assert outcome["max_turns"] == 5
+    assert "continuation_turns" not in outcome
+    assert outcome["max_turns"] == 1
 
 
 @pytest.mark.asyncio

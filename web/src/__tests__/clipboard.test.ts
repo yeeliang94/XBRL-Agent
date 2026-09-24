@@ -290,7 +290,9 @@ describe("copyHtmlAsRichText", () => {
 
     try {
       const ok = await copyHtmlAsRichText(
-        "<table><tr><th>A</th></tr><tr><td>1,000</td></tr></table>",
+        '<table><tr><th>A</th><th>B</th></tr>' +
+          '<tr><td colspan="2">Heading</td></tr>' +
+          '<tr><td>Label</td><td>1,000</td></tr></table>',
       );
       expect(ok).toBe(true);
       const htmlCall = blobCalls.find((c) => c.type === "text/html");
@@ -299,6 +301,8 @@ describe("copyHtmlAsRichText", () => {
       expect(htmlCall!.content).toContain("border-collapse: collapse");
       expect(htmlCall!.content).toContain("border: 1px solid");
       expect(htmlCall!.content).toContain("text-align: right");
+      expect(htmlCall!.content).not.toContain("colspan=");
+      expect(htmlCall!.content).toContain("Heading</td><td");
     } finally {
       (globalThis as any).Blob = RealBlob;
     }
@@ -830,10 +834,11 @@ describe("source-styled tables ignore the house header rule", () => {
 // are the dialect it honours. Backend twin: notes_decorate._fit_table_width.
 describe("page-width fit", () => {
   test("an unsized table gets width=100% and a label/amounts split", () => {
-    const out = decorateHtmlForClipboard(
+    const html =
       "<table><tbody><tr><td>United Arab Emirates</td><td>60,882</td>" +
-        "<td>66,336</td></tr></tbody></table>",
-    );
+      "<td>66,336</td></tr></tbody></table>";
+    const out = decorateHtmlForClipboard(html);
+    expect(decorateHtmlForClipboard(html, undefined, true)).toBe(out);
     expect(out).toMatch(/<table[^>]*width="100%"/);
     expect(out.match(/<td[^>]*width="(\d+%)"/g)?.length).toBe(3);
     expect(out).toContain('width="64%"');
@@ -853,6 +858,60 @@ describe("page-width fit", () => {
         "<tr><td>a</td><td>1</td></tr></tbody></table>",
     );
     expect(out).toMatch(/<table[^>]*width="100%"/);
+    expect(out).not.toMatch(/<td[^>]*width="\d+%"/);
+  });
+
+  test("mTool copy expands merged cells into an editable grid", () => {
+    const out = decorateHtmlForClipboard(
+      '<table><tr><td></td><td>Note</td><td>2025 RM</td><td>2024 RM</td></tr>' +
+        '<tr><td colspan="4" style="background-color: #ddeeff">Profit before tax</td></tr>' +
+        '<tr><td rowspan="2">Auditors</td><td></td><td>50,000</td><td>49,200</td></tr>' +
+        '<tr><td></td><td>1</td><td>2</td></tr></table>',
+      undefined,
+      true,
+    );
+    const holder = document.createElement("div");
+    holder.innerHTML = out;
+    const rows = Array.from(holder.querySelectorAll("tr"));
+    expect(rows.map((row) => row.querySelectorAll("td, th").length)).toEqual([4, 4, 4, 4]);
+    expect(holder.querySelector("[colspan], [rowspan]")).toBeNull();
+    expect(Array.from(rows[1].querySelectorAll("td")).map((cell) => cell.textContent))
+      .toEqual(["Profit before tax", "", "", ""]);
+    expect(Array.from(rows[1].querySelectorAll("td")).every(
+      (cell) => cell.getAttribute("style")?.includes("background-color: #ddeeff"),
+    )).toBe(true);
+    expect(Array.from(rows[0].querySelectorAll("td")).map(
+      (cell) => cell.getAttribute("width"),
+    )).toEqual(["46%", "18%", "18%", "18%"]);
+  });
+
+  test("mTool copy keeps later cells after a bad span and hides merge borders", () => {
+    const out = decorateHtmlForClipboard(
+      '<table><tr><td colspan="2" rowspan="2" ' +
+        'style="border: 2px solid #123456; background-color: #ddeeff">Heading</td>' +
+        '<td colspan="bad">Next</td></tr><tr><td>Last</td></tr></table>',
+      undefined, true,
+    );
+    const holder = document.createElement("div");
+    holder.innerHTML = out;
+    const rows = Array.from(holder.querySelectorAll("tr"));
+    expect(rows.map((row) => Array.from(row.querySelectorAll("td"))
+      .map((cell) => cell.textContent))).toEqual([
+      ["Heading", "", "Next"], ["", "", "Last"],
+    ]);
+    expect(rows[0].querySelector("td")?.getAttribute("style"))
+      .toContain("border-right: 1px solid #ffffff");
+    expect(rows[1].querySelectorAll("td")[0].getAttribute("style"))
+      .toContain("border-top: 1px solid #ffffff");
+  });
+
+  test("mTool copy keeps natural widths for mostly text merged tables", () => {
+    const out = decorateHtmlForClipboard(
+      '<table><tr><td colspan="3">Heading</td></tr>' +
+        '<tr><td>Long description</td><td>Detailed explanation</td><td>1</td></tr>' +
+        '<tr><td>Other</td><td>More text</td><td>Footnote</td></tr></table>',
+      undefined, true,
+    );
     expect(out).not.toMatch(/<td[^>]*width="\d+%"/);
   });
 

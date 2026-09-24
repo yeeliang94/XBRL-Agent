@@ -8,7 +8,7 @@ files, and all four had drifted:
                      standard-neutrality fix had just removed
     _notes_base.md   320 lines quoted against a 460-line file
     reviewer.md       67 quoted against 77
-    spot_check.md     31 lines, tool names that no longer exist
+    spot_check.md     historical broad review wording and tools
 
 Its agent matrix also listed seven agents and omitted two live ones — the
 notes reviewer and the notes formatter, i.e. both of the agents that edit

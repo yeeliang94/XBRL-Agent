@@ -151,6 +151,15 @@ def inspect_template(
     return {
         "fingerprint": fingerprint,
         "template": descriptor,
+        "detected_filing_standard": (
+            next(iter(native_standards)) if len(native_standards) == 1 else
+            (descriptor["filing_standards"][0]
+             if descriptor and len(descriptor.get("filing_standards", [])) == 1
+             else None)),
+        "detected_filing_level": (
+            descriptor["filing_levels"][0]
+            if descriptor and len(descriptor.get("filing_levels", [])) == 1
+            else None),
         "semantic_source": semantic_source,
         "mtool_compatibility": compatibility,
         "supported_mtool_version": "2.2",

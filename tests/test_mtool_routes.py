@@ -425,6 +425,10 @@ def test_detect_columns_returns_map_and_confidence(client):
     sheet = next(iter(body["detected"]))
     assert "label_column" in body["detected"][sheet]
     assert "columns" in body["detected"][sheet]
+    settings = body["detected_settings"]
+    assert settings["filing_level"] == "company"
+    assert any(name.startswith("SOFP-") for name in settings["sheets"])
+    assert settings["filing_family_match"] is True
 
 
 def test_source_template_period_mismatch_is_detected_and_degrades_patch(client):

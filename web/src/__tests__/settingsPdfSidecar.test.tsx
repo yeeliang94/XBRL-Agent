@@ -21,8 +21,6 @@ const SETTINGS = {
   api_key_set: true,
   api_key_preview: "abcd...yz",
   auto_review: true,
-  spot_check: true,
-  spot_check_mode: "light",
   entity_memory: true,
   thinking_levels: {},
   thinking_level_choices: ["none", "low", "medium", "high"],
