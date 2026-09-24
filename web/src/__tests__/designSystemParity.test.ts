@@ -197,6 +197,8 @@ describe("Simplified template-oriented review", () => {
       "Put sheet and note options in one closed Customize disclosure",
       "meaningful statement names rather than technical worksheet keys",
       "Missing destinations are skipped, not guessed",
+      "Show unknown settings as unverified",
+      "Name the entry action Prepare mTool draft",
     ]) {
       expect(designSystem).toContain(requirement);
     }

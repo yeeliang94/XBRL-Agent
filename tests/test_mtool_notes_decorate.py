@@ -731,9 +731,11 @@ def test_border_strip_preserves_border_collapse():
 # Legacy width ATTRIBUTES are the dialect TX honours.
 
 def test_unsized_table_gets_page_width_and_column_split():
-    out = decorate_notes_html(
-        "<table><tbody><tr><td>United Arab Emirates</td><td>60,882</td>"
-        "<td>66,336</td></tr></tbody></table>", NotesTableStyle())
+    html = ("<table><tbody><tr><td>United Arab Emirates</td><td>60,882</td>"
+            "<td>66,336</td></tr></tbody></table>")
+    out = decorate_notes_html(html, NotesTableStyle())
+    assert decorate_notes_html(html, NotesTableStyle(),
+                               editable_merged_cells=True) == out
     assert re.search(r'<table[^>]*width="100%"', out)
     widths = re.findall(r'<td[^>]*width="(\d+%)"', out)
     assert widths == ["64%", "18%", "18%"]  # label keeps the rest
@@ -754,6 +756,54 @@ def test_colspan_table_gets_page_width_but_no_column_split():
         '<table><tbody><tr><td colspan="2">Header</td></tr>'
         "<tr><td>a</td><td>1</td></tr></tbody></table>", NotesTableStyle())
     assert re.search(r'<table[^>]*width="100%"', out)
+    assert not re.findall(r'<td[^>]*width="\d+%"', out)
+
+
+def test_native_editable_table_expands_merges_and_keeps_text_and_fill():
+    html = ('<table><tr><td></td><td>Note</td><td>2025 RM</td>'
+            '<td>2024 RM</td></tr>'
+            '<tr><td colspan="4" style="background-color: #ddeeff">'
+            'Profit before tax</td></tr>'
+            '<tr><td rowspan="2">Auditors</td><td></td><td>50,000</td>'
+            '<td>49,200</td></tr><tr><td></td><td>1</td><td>2</td></tr>'
+            '</table>')
+    out = decorate_notes_html(html, editable_merged_cells=True)
+    soup = BeautifulSoup(out, "html.parser")
+    rows = soup.table.find_all("tr")
+    assert [len(row.find_all(["td", "th"], recursive=False)) for row in rows] == [4] * 4
+    assert not soup.find(attrs={"colspan": True})
+    assert not soup.find(attrs={"rowspan": True})
+    assert [c.get_text() for c in rows[1].find_all("td")] == [
+        "Profit before tax", "", "", ""]
+    assert all("background-color: #ddeeff" in c.get("style", "")
+               for c in rows[1].find_all("td"))
+    assert [c.get_text() for c in rows[3].find_all("td")] == ["", "", "1", "2"]
+    assert [c.get("width") for c in rows[0].find_all("td")] == [
+        "46%", "18%", "18%", "18%"]
+
+
+def test_native_editable_merges_handle_bad_spans_and_hide_inner_borders():
+    html = ('<table><tr><td colspan="2" rowspan="2" '
+            'style="border: 2px solid #123456; background-color: #ddeeff">'
+            'Heading</td><td colspan="">Next</td></tr>'
+            '<tr><td>Last</td></tr></table>')
+    out = decorate_notes_html(html, editable_merged_cells=True)
+    rows = BeautifulSoup(out, "html.parser").table.find_all("tr")
+    assert [[c.get_text() for c in row.find_all("td")] for row in rows] == [
+        ["Heading", "", "Next"], ["", "", "Last"]]
+    cells = [[c.get("style", "") for c in row.find_all("td")] for row in rows]
+    assert "border-right: 1px solid #ffffff" in cells[0][0]
+    assert "border-bottom: 1px solid #ffffff" in cells[0][0]
+    assert "border-left: 1px solid #ffffff" in cells[0][1]
+    assert "border-top: 1px solid #ffffff" in cells[1][0]
+    assert "border: 2px solid #123456" in cells[1][1]
+
+
+def test_native_editable_text_table_with_one_number_keeps_natural_columns():
+    html = ('<table><tr><td colspan="3">Heading</td></tr>'
+            '<tr><td>Long description</td><td>Detailed explanation</td><td>1</td></tr>'
+            '<tr><td>Other</td><td>More text</td><td>Footnote</td></tr></table>')
+    out = decorate_notes_html(html, editable_merged_cells=True)
     assert not re.findall(r'<td[^>]*width="\d+%"', out)
 
 

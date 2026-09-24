@@ -870,7 +870,7 @@ export function RunDetailView({
                 : "Wait for extraction to finish or stop it first"
             }
           >
-            {isFailed || isAborted ? "Prepare investigation draft" : "Download draft"}
+            {isFailed || isAborted ? "Prepare investigation draft" : "Prepare mTool draft"}
           </button>}
           {notesPreparationBlocked && <span role="status" style={styles.dim}>Notes have unsaved changes or active formatting. Resolve any save errors in Notes before preparing.</span>}
           {/* The "Figures" tab is the single door to reviewing values — the

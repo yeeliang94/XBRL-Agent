@@ -216,6 +216,38 @@ interface Props {
   onClose: () => void;
 }
 
+type DetectedTemplateSettings = {
+  filing_standard: string | null;
+  filing_level: string | null;
+  sheets: string[];
+  declared_unit_scales: string[];
+  filing_family_match: boolean;
+};
+
+const DETECTED_STATEMENTS: Record<string, string> = {
+  "SOFP-CuNonCu": "Financial position · current / non-current",
+  "SOFP-Sub-CuNonCu": "Financial position details · current / non-current",
+  "SOFP-OrderOfLiquidity": "Financial position · liquidity order",
+  "SOPL-Function": "Profit or loss · by function",
+  "SOPL-Analysis-Function": "Profit or loss analysis · by function",
+  "SOPL-Nature": "Profit or loss · by nature",
+  "SOCI-NetOfTax": "Comprehensive income · net of tax",
+  "SOCI-BeforeTax": "Comprehensive income · before tax",
+  "SOCF-Indirect": "Cash flows · indirect",
+  "SOCF-Direct": "Cash flows · direct",
+  "SOCIE": "Changes in equity",
+};
+
+function detectedStatementLabels(sheets: string[]): string[] {
+  return Array.from(new Set(sheets.map((sheet) => DETECTED_STATEMENTS[sheet]).filter((label): label is string => !!label)));
+}
+
+function detectedScaleLabel(scales: string[]): string {
+  if (scales.length === 0) return "Not stated in template";
+  if (scales.length > 1) return "Different scales across sheets";
+  return ({ units: "RM", thousands: "RM '000", millions: "RM mil" } as Record<string, string>)[scales[0]] ?? scales[0];
+}
+
 const styles = {
   overlay: {
     ...ui.scrim,
@@ -249,6 +281,11 @@ const styles = {
     lineHeight: 1,
     cursor: "pointer",
     padding: pwc.space.xs,
+    minWidth: 40,
+    minHeight: 40,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
   } as React.CSSProperties,
   sub: {
     ...ui.bodyText,
@@ -281,8 +318,8 @@ const styles = {
   } as React.CSSProperties,
   summaryGrid: {
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
-    gap: pwc.space.xl,
+    gridTemplateColumns: "repeat(auto-fit, minmax(84px, 1fr))",
+    gap: pwc.space.md,
     padding: `${pwc.space.md}px 0`,
   } as React.CSSProperties,
   summaryValue: {
@@ -501,6 +538,8 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
   const [, setPeriodCompatibility] = useState<PeriodCompatibilityIssue[]>([]);
   const [detectBusy, setDetectBusy] = useState(false);
   const [detectErr, setDetectErr] = useState<string | null>(null);
+  const [templateSettings, setTemplateSettings] = useState<DetectedTemplateSettings | null>(null);
+  const [unitScaleWarnings, setUnitScaleWarnings] = useState<Array<{ template_declares: string; run_denomination: string }>>([]);
   // Readiness reminders never require an override to prepare a workbook.
   const [preflight, setPreflight] = useState<Preflight | null>(null);
   const [readinessErr, setReadinessErr] = useState<string | null>(null);
@@ -579,6 +618,8 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
     setColumnConfidence(null);
     setPeriodCompatibility([]);
     setDetectErr(null);
+    setTemplateSettings(null);
+    setUnitScaleWarnings([]);
     setColumnPrompt(null);
     setPreview(null);
     setPreviewErr(null);
@@ -831,6 +872,8 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
     const stale = () => seq !== detectSeq.current;
     setDetectBusy(true);
     setDetectErr(null);
+    setTemplateSettings(null);
+    setUnitScaleWarnings([]);
     setColumnMap(null);
     setColumnConfidence(null);
     setColumnPrompt(null);
@@ -848,6 +891,8 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
         throw await responseError(resp, body);
       }
       const detected = (body as { detected?: Record<string, DetectedSheet> }).detected;
+      setTemplateSettings((body as { detected_settings?: DetectedTemplateSettings }).detected_settings ?? null);
+      setUnitScaleWarnings((body as { unit_scale_warnings?: Array<{ template_declares: string; run_denomination: string }> }).unit_scale_warnings ?? []);
       setPeriodCompatibility(
         Array.isArray((body as { period_compatibility?: unknown }).period_compatibility)
           ? (body as { period_compatibility: PeriodCompatibilityIssue[] }).period_compatibility
@@ -927,6 +972,8 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
     setColumnPrompt(null);
     setDimensionalSheets([]);
     setDetectErr(null);
+    setTemplateSettings(null);
+    setUnitScaleWarnings([]);
     if (file && sheets?.length !== 0) {
       void runDetect(file, sheets);
       if (fillNotes && notesCount !== 0) void runPreview(file, true, sheets);
@@ -953,6 +1000,8 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
     setColumnConfidence(null);
     setPeriodCompatibility([]);
     setDetectErr(null);
+    setTemplateSettings(null);
+    setUnitScaleWarnings([]);
     setColumnPrompt(null);
     setPreview(null);
     setPreviewErr(null);
@@ -973,11 +1022,11 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
       }}
       role="dialog"
       aria-modal="true"
-      aria-label="Fill mTool template"
+      aria-label="Prepare mTool draft"
     >
       <div ref={dialogRef} tabIndex={-1} style={styles.modal}>
         <div style={styles.headerRow}>
-          <h2 style={styles.heading}>Fill mTool template</h2>
+          <h2 style={styles.heading}>{report ? "Draft prepared" : "Prepare mTool draft"}</h2>
           {/* Corner close — Esc + scrim-click already close, but a visible ✕
               is the discoverable affordance (E6). */}
           <button
@@ -991,16 +1040,14 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
           </button>
         </div>
         <div style={{ overflowY: "auto", minHeight: 0, flex: "1 1 auto" }}>
-        <p style={styles.sub}>
-          Choose an empty Excel template exported from mTool.
-        </p>
+        {!file && <p style={styles.sub}>Upload an empty .xlsx template exported from mTool.</p>}
 
         <fieldset disabled={busy || downloading || fillQueued} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
         {!file && (
           <FileDropzone
             accept=".xlsx"
             disabled={busy || downloading}
-            label="Drop your empty mTool template (.xlsx) here or choose a file"
+            label="Drop your mTool template here or choose a file"
             buttonLabel="Choose template"
             inputLabel="mTool template file"
             testId="mtool-template-dropzone"
@@ -1016,7 +1063,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
             <button type="button" className={uiClass.btnSecondary}
               style={{ ...ui.buttonSecondary, flexShrink: 0 }}
               onClick={() => replacementInputRef.current?.click()}>
-              Change
+              Change file
             </button>
             <input
               ref={replacementInputRef}
@@ -1036,10 +1083,31 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
 
         {file && meta && !report && (
           <p aria-label="Fill summary" style={{ margin: `${pwc.space.md}px 0`, color: pwc.grey700, fontSize: 14 }}>
-            <strong style={{ color: pwc.grey900 }}>{meta.counts.writes} figures</strong>
+            Available from this run: <strong style={{ color: pwc.grey900 }}>{meta.counts.writes} figures</strong>
             {notesCount !== null && <> · <strong style={{ color: pwc.grey900 }}>{notesCount} notes</strong></>}
-            {` · ${selectedSheets?.length ?? availableSheets.length} sheets`}
           </p>
+        )}
+
+        {file && !report && (
+          <section aria-label="Detected template settings" style={{ borderTop: `1px solid ${pwc.grey200}`, paddingTop: pwc.space.md, marginBottom: pwc.space.md }}>
+            <div style={{ fontWeight: pwc.weight.semibold, marginBottom: pwc.space.sm }}>Detected template</div>
+            {detectBusy && <div role="status" style={styles.statLine}>Checking template settings…</div>}
+            {!detectBusy && templateSettings && <>
+              <div style={{ ...styles.statLine, display: "grid", gridTemplateColumns: "minmax(105px, 130px) minmax(0, 1fr)", gap: `${pwc.space.xs}px ${pwc.space.md}px` }}>
+                <span style={{ color: pwc.grey700 }}>Standard</span><span>{templateSettings.filing_standard?.toUpperCase() ?? "Not identified"}</span>
+                <span style={{ color: pwc.grey700 }}>Filing level</span><span>{templateSettings.filing_level ? templateSettings.filing_level[0].toUpperCase() + templateSettings.filing_level.slice(1) : "Not identified"}</span>
+                <span style={{ color: pwc.grey700 }}>Statements</span><span>{detectedStatementLabels(templateSettings.sheets).join("; ") || "No statement format identified"}</span>
+                <span style={{ color: pwc.grey700 }}>Amount scale</span><span>{detectedScaleLabel(templateSettings.declared_unit_scales)}</span>
+              </div>
+              {!templateSettings.filing_family_match && <div role="alert" style={{ ...ui.alertError, marginTop: pwc.space.sm }}>
+                This template does not match the run&apos;s filing standard, company/group level, or statements. Choose a matching template.
+              </div>}
+              {unitScaleWarnings.length > 0 && <div role="alert" style={{ ...ui.alertWarning, marginTop: pwc.space.sm }}>
+                Amount scale differs: template {detectedScaleLabel([unitScaleWarnings[0].template_declares])}, run {detectedScaleLabel([unitScaleWarnings[0].run_denomination])}. Check the amounts before filing.
+              </div>}
+            </>}
+            {!detectBusy && detectErr && <div role="alert" style={ui.alertError}>Couldn&apos;t check this template: {detectErr}</div>}
+          </section>
         )}
 
         {patchErr && (
@@ -1120,16 +1188,6 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
 
         </details>}
 
-        {detectBusy && (
-          <div role="status" style={{ ...styles.statLine, color: pwc.grey700 }}>
-            Checking template…
-          </div>
-        )}
-        {detectErr && (
-          <div style={{ ...ui.alertError, marginBottom: pwc.space.md }}>
-            Couldn&apos;t read the template&apos;s columns: {detectErr}
-          </div>
-        )}
         {fillNotes && (
           <div style={{ marginBottom: pwc.space.md }}>
             {previewBusy && (
@@ -1142,7 +1200,8 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
               </div>
             )}
             {preview && (preview.unresolved.length > 0 || preview.errors.length > 0) && (
-              <div
+              <details
+                open={preview.errors.length > 0}
                 style={{
                   borderTop: `1px solid ${pwc.grey200}`,
                   paddingTop: pwc.space.md,
@@ -1150,17 +1209,17 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                 }}
                 aria-label="Notes preview"
               >
-                <div style={{ color: pwc.grey900, fontWeight: pwc.weight.medium }}>
-                  {preview.will_fill_existing.length + preview.will_create.length} of {preview.notes_in_run} notes
-                  will be placed automatically
-                </div>
-                {preview.unresolved.length > 0 && (
-                  <div style={{ color: pwc.grey700, marginTop: 4 }}>
-                    {preview.unresolved.length} {preview.unresolved.length === 1 ? "note has" : "notes have"} no
-                    certain destination. You can leave {preview.unresolved.length === 1 ? "it" : "them"} for
-                    manual completion in mTool or optionally choose a destination below.
-                  </div>
-                )}
+                <summary style={{ color: pwc.grey900, fontWeight: pwc.weight.medium, cursor: "pointer" }}>
+                  {preview.unresolved.length > 0
+                    ? `${preview.unresolved.length} ${preview.unresolved.length === 1 ? "note has" : "notes have"} no certain destination`
+                    : `${preview.errors.length} ${preview.errors.length === 1 ? "note issue" : "note issues"} to review`}
+                  {preview.unresolved.length > 0 && preview.errors.length > 0 && ` · ${preview.errors.length} ${preview.errors.length === 1 ? "issue" : "issues"}`}
+                </summary>
+                <p style={{ color: pwc.grey700, margin: `${pwc.space.xs}px 0 ${pwc.space.sm}px` }}>
+                  {preview.unresolved.length > 0
+                    ? "Uncertain notes will be left for completion in mTool unless you choose a destination below."
+                    : "Review these note issues before filling."}
+                </p>
 
                 {preview.errors.length > 0 && (
                   <div style={{ ...ui.alertError, marginTop: pwc.space.sm }}>
@@ -1297,7 +1356,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                     for notes the template doesn't have yet.
                   </div>
                 )}
-              </div>
+              </details>
             )}
           </div>
         )}
@@ -1391,12 +1450,9 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
               marginTop: pwc.space.md,
             }}
           >
-            <h3 style={{ ...ui.sectionTitle, fontSize: 18 }}>
-              Template ready to download
-            </h3>
             {report.status !== "ok" && (
               <p style={{ ...ui.bodyText, margin: `${pwc.space.xs}px 0 0` }}>
-                Some items need review before filing.
+                The draft contains every safely matched value. Finish the items below in mTool before filing.
               </p>
             )}
             <div style={styles.summaryGrid}>
@@ -1409,12 +1465,16 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                 Partial workbook: {report.sheet_selection!.excluded_sheets.map(friendlyMtoolSheetName).join(", ")} not included. {report.sheet_selection!.excluded_figures} figures {report.sheet_selection!.excluded_notes === null ? "and any notes" : `and ${report.sheet_selection!.excluded_notes} ${report.sheet_selection!.excluded_notes === 1 ? "note" : "notes"}`} were left unchanged.
               </p>
             )}
-            {coverageSkipped > 0 && (
-              <p style={{ ...ui.supportingText, margin: `0 0 ${pwc.space.sm}px` }}>
-                {coverageSkipped} {coverageSkipped === 1 ? "figure had" : "figures had"} no matching destination and {coverageSkipped === 1 ? "was" : "were"} left unchanged.
-              </p>
+            <p style={{ ...ui.supportingText, margin: `0 0 ${pwc.space.md}px` }}>After downloading, run Validate &amp; Generate in mTool.</p>
+            {(report.unit_scale_warnings?.length ?? 0) > 0 && (
+              <div role="alert" style={{ ...ui.alertWarning, marginBottom: pwc.space.md, fontSize: 12 }}>
+                This template says its figures are in {report.unit_scale_warnings![0].template_declares}, but this run&apos;s figures are in {report.unit_scale_warnings![0].run_denomination}. Check the amounts before filing.
+              </div>
             )}
-            <p style={{ ...ui.supportingText, margin: `0 0 ${pwc.space.md}px` }}>Download it, then validate and generate in mTool.</p>
+            <details style={{ fontSize: 12, marginBottom: pwc.space.md }}>
+              <summary style={{ cursor: "pointer", fontWeight: pwc.weight.medium }}>
+                {notFilledCount > 0 ? `View ${notFilledCount} unfinished items and fill receipt` : "View fill receipt"}
+              </summary>
             {Boolean(report.filing_coverage?.operator_resolutions?.length) && (
               <details style={{ marginBottom: pwc.space.sm, fontSize: 12 }}>
                 <summary style={{ cursor: "pointer" }}>Confirmed filing destinations ({report.filing_coverage!.operator_resolutions!.length})</summary>
@@ -1491,15 +1551,6 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
               defaultOpen
               rows={(report.errors ?? []).map((e) => e.detail ?? e.error ?? "error")}
             />
-            {(report.unit_scale_warnings?.length ?? 0) > 0 && (
-              <div style={{ ...ui.alertWarning, marginTop: 6, fontSize: 12 }}>
-                This template says its figures are in{" "}
-                {report.unit_scale_warnings![0].template_declares}, but this run&apos;s
-                figures are in {report.unit_scale_warnings![0].run_denomination}. Check
-                the amounts before you file — a mismatch here is off by a factor of a
-                thousand.
-              </div>
-            )}
             {report.notes && (report.notes.styling_disabled ||
               (report.notes.counts.formatting_compacted ?? 0) > 0 ||
               (report.notes.counts.formatting_reduced ?? 0) > 0 ||
@@ -1539,6 +1590,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                   )}
               </details>
             )}
+            </details>
           </div>
         )}
 
@@ -1555,15 +1607,13 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
 
         </div>
         <div style={{ ...styles.actions, flexShrink: 0, paddingTop: pwc.space.md, borderTop: `1px solid ${pwc.grey200}` }}>
-          <button type="button" onClick={onClose} className={uiClass.btnGhost} style={ui.buttonGhost}>
-            Close
-          </button>
+          {!report && <button type="button" onClick={onClose} className={uiClass.btnGhost} style={ui.buttonGhost}>Cancel</button>}
           <button
             type="button"
             ref={fillButtonRef}
             aria-label={report ? "Change options" : "Fill"}
             onClick={report ? () => setReport(null) : requestSubmit}
-            disabled={!file || busy || downloading || fillQueued || selectedSheets?.length === 0}
+            disabled={!file || busy || downloading || fillQueued || selectedSheets?.length === 0 || templateSettings?.filing_family_match === false}
             className={report ? uiClass.btnSecondary : uiClass.btnPrimary}
             style={report ? ui.buttonSecondary : ui.buttonPrimary}
           >
@@ -1582,7 +1632,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                   : "Download with the review items recorded on the fill receipt"
               }
             >
-              {downloading ? "Downloading…" : report.status === "ok" ? "Download filled template" : "Download for review"}
+              {downloading ? "Downloading…" : report.status === "ok" ? "Download draft" : "Download draft for review"}
             </button>
           )}
         </div>

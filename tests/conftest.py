@@ -48,7 +48,7 @@ def _notes_auto_review_off_by_default():
     mocked notes run and break the exact pipeline counts. Tests that exercise it
     opt IN with `monkeypatch.setenv("XBRL_NOTES_AUTO_REVIEW", "true")`; the
     settings round-trip test `delenv`s to verify the true default is ON. Set via
-    os.environ for monkeypatch.undo() resilience (like XBRL_SPOT_CHECK above).
+    os.environ for monkeypatch.undo() resilience.
     """
     prior = os.environ.get("XBRL_NOTES_AUTO_REVIEW")
     os.environ["XBRL_NOTES_AUTO_REVIEW"] = "false"
@@ -83,11 +83,8 @@ def _isolate_env_file_from_repo_dotenv(tmp_path_factory, monkeypatch):
     The run path (`api/run_control.py`), scout, reviewer, and settings endpoints
     all reload deployment and local runtime settings on each invocation.
     With ``override=True`` that re-reads the developer's real repo ``.env`` and
-    **clobbers** the env-var defaults the autouse fixtures above set — e.g. a
-    local ``.env`` carrying ``XBRL_SPOT_CHECK='true'`` re-enables the spot-check
-    mid-run and adds an unexpected CORRECTION agent, breaking the deterministic
-    pipeline-count tests (the failure only shows up on a machine that HAS a
-    populated ``.env``; CI has none, which is why it hid).
+    **clobbers** the env-var defaults the autouse fixtures above set, breaking
+    deterministic pipeline tests on machines with a populated local ``.env``.
 
     Redirecting ENV_FILE to an empty file makes that `load_dotenv` a no-op, so
     the conftest env defaults hold regardless of the developer's `.env`. Tests
@@ -105,30 +102,6 @@ def _isolate_env_file_from_repo_dotenv(tmp_path_factory, monkeypatch):
     import run
     monkeypatch.setattr(run, "ENV_FILE", empty_env)
     yield
-
-
-@pytest.fixture(autouse=True)
-def _spot_check_off_by_default():
-    """Default the clean-run spot-check (issue 1) OFF for the suite.
-
-    The spot-check fires a reviewer pass on a run with NO failing checks —
-    which is exactly the shape of the deterministic full-pipeline tests, so
-    leaving it on (the production default) would add an extra CORRECTION
-    agent/event to every clean mocked run and break their exact counts. Tests
-    that exercise the spot-check opt IN with `monkeypatch.setenv` (the trigger
-    test) or call `_run_reviewer_pass(spot_check=...)` directly; the settings
-    round-trip test `delenv`s this to verify the true default is ON. Set via
-    os.environ for the same monkeypatch.undo() resilience as AUTH_MODE above.
-    """
-    prior = os.environ.get("XBRL_SPOT_CHECK")
-    os.environ["XBRL_SPOT_CHECK"] = "false"
-    try:
-        yield
-    finally:
-        if prior is None:
-            os.environ.pop("XBRL_SPOT_CHECK", None)
-        else:
-            os.environ["XBRL_SPOT_CHECK"] = prior
 
 
 @pytest.fixture(autouse=True)

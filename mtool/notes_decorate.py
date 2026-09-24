@@ -522,7 +522,7 @@ def _solid_double_borders(el: Tag) -> None:
     el["style"] = "; ".join(out)
 
 
-def _fit_table_width(table: Tag) -> None:
+def _fit_table_width(table: Tag, *, editable_merged: bool = False) -> None:
     """Make the table fill the page in mTool's TX editor.
 
     TX ignores CSS widths (the ``width: 100%`` in ``_TABLE_STYLE`` does
@@ -539,8 +539,11 @@ def _fit_table_width(table: Tag) -> None:
       (the existing accountant-cell detector) — a two-column TEXT table
       (name / designation, address lines) must not have its second column
       crushed to 18%. Also skipped when any colspan is present (a spanned
-      header makes first-row widths ambiguous), the table has fewer than two
-      columns, or the columns are too many for the label floor to hold (9+
+      header makes first-row widths ambiguous); the native-editable pass runs
+      again after expansion and requires numeric evidence in two amount columns.
+      Skipped when
+      the table has fewer than two columns, or the columns are too many for the
+      label floor to hold (9+
       columns would sum past 100% — the page fit alone is applied and TX
       shares the width).
 
@@ -573,7 +576,13 @@ def _fit_table_width(table: Tag) -> None:
     trailing = [c.get_text().strip() for cells in per_row for c in cells[1:]]
     non_empty = [t for t in trailing if t]
     numeric = sum(1 for t in non_empty if is_numeric_cell_text(t))
-    if not non_empty or numeric * 2 <= len(non_empty):
+    numeric_columns = sum(
+        any(len(cells) > col and is_numeric_cell_text(cells[col].get_text().strip())
+            for cells in per_row)
+        for col in range(1, ncols)
+    )
+    if not non_empty or (numeric * 2 <= len(non_empty)
+                         and not (editable_merged and numeric_columns >= 2)):
         return
     # Amount columns get an equal bounded share; the label column keeps the
     # rest, floored at 30% so the labels stay readable. When both floors can't
@@ -685,9 +694,90 @@ def _cells(row: Tag) -> list[Tag]:
             if isinstance(c, Tag) and c.name in ("td", "th")]
 
 
+def _span(cell: Tag, name: str) -> int:
+    try:
+        return max(1, int(cell.get(name, "1")))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _paint_merge_inner_edges(cell: Tag, across: int, down: int,
+                             colspan: int, rowspan: int) -> None:
+    inner = []
+    if across:
+        inner.append("border-left: 1px solid #ffffff")
+    if across < colspan - 1:
+        inner.append("border-right: 1px solid #ffffff")
+    if down:
+        inner.append("border-top: 1px solid #ffffff")
+    if down < rowspan - 1:
+        inner.append("border-bottom: 1px solid #ffffff")
+    if inner:
+        cell["style"] = "; ".join(filter(None, [cell.get("style", ""), *inner]))
+
+
+def _expand_merged_cells(soup: BeautifulSoup) -> list[Tag]:
+    """Use ordinary cells for TX's editable table grid, leaving canonical HTML alone.
+
+    TX27's mouse editor cannot resize or recolour a table containing a merged
+    cell (verified with a merged/unmerged workbook pair). Empty continuation
+    cells retain the source cell's style so a filled merged area stays filled.
+    """
+    expanded: list[Tag] = []
+    for table in soup.find_all("table"):
+        rows = [r for r in table.find_all("tr") if r.find_parent("table") is table]
+        if not any(_span(c, "colspan") > 1
+                   or _span(c, "rowspan") > 1
+                   for row in rows for c in _cells(row)):
+            continue
+        pending: dict[int, dict[int, Tag]] = {}
+        for row_index, row in enumerate(rows):
+            original = _cells(row)
+            slots = pending.pop(row_index, {})
+            column = 0
+            for cell in original:
+                while column in slots:
+                    column += 1
+                colspan = _span(cell, "colspan")
+                rowspan = min(_span(cell, "rowspan"), len(rows) - row_index)
+                cell.attrs.pop("colspan", None)
+                cell.attrs.pop("rowspan", None)
+                if colspan > 1:
+                    cell.attrs.pop("width", None)  # width covered the whole span
+                slots[column] = cell
+                for down in range(rowspan):
+                    if row_index + down >= len(rows):
+                        break
+                    target = slots if down == 0 else pending.setdefault(row_index + down, {})
+                    for across in range(colspan):
+                        if down == 0 and across == 0:
+                            continue
+                        blank = soup.new_tag(cell.name)
+                        if cell.has_attr("style"):
+                            blank["style"] = cell["style"]
+                        _paint_merge_inner_edges(blank, across, down, colspan, rowspan)
+                        target[column + across] = blank
+                _paint_merge_inner_edges(cell, 0, 0, colspan, rowspan)
+                column += colspan
+            if slots:
+                row.clear()
+                for _, cell in sorted(slots.items()):
+                    row.append(cell)
+        expanded.append(table)
+    return expanded
+
+
+def editable_mtool_structure(html: str) -> str:
+    """Expected export structure after the native-editor compatibility step."""
+    soup = BeautifulSoup(html or "", "html.parser")
+    _expand_merged_cells(soup)
+    return str(soup)
+
+
 def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
                         lite: bool = False, compact: bool = False,
-                        fill_white_grid: bool = True) -> str:
+                        fill_white_grid: bool = True,
+                        editable_merged_cells: bool = False) -> str:
     """Inject the mTool-render-proven inline styles into ``html`` and return the
     decorated fragment (wrapped in a font-bearing ``<div>`` so bare
     ``<strong>`` / loose text inherit the face). Pure — does not mutate input.
@@ -701,6 +791,9 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
     wrapping) to shrink the payload ~40% while keeping the formatting a reader
     notices (borders, font, alignment, header fill). Used as a rung of the
     exporter's size-degradation ladder.
+
+    ``editable_merged_cells`` expands spans only in the mTool-bound copy. The
+    saved canonical note keeps its original table geometry.
 
     ``compact`` (mTool-only — clipboard.ts deliberately does NOT mirror it,
     docs/PLAN-mtool-compact-decoration.md) drops the repeated per-cell
@@ -733,6 +826,7 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
     # decision is per TABLE, so a user-styled table in the same note keeps the
     # full form while its siblings compact).
     compact_tables: set[int] = set()
+    operator_sized_tables: set[int] = set()
     # Tables whose grid came verbatim from the Word source (by identity, like
     # compact_tables) — the theme contributes no borders to these.
     source_styled_tables: set[int] = set()
@@ -742,6 +836,8 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
         # the page-width fit would never fire (the first-cut bug).
         operator_sized = (_table_has_explicit_width(table)
                           or table.has_attr("width"))
+        if operator_sized or _has_operator_column_widths(table):
+            operator_sized_tables.add(id(table))
         _merge_style(table,
                      _TABLE_STYLE_KEEP_WIDTH if operator_sized
                      else _TABLE_STYLE)
@@ -888,6 +984,12 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
         # <li> inherits. Empty when un-themed (byte-identical output).
         extra = list_marker_css if lst.name == "ul" else ""
         _merge_style(lst, font_css + extra)
+
+    if editable_merged_cells:
+        expanded = _expand_merged_cells(soup)
+        for table in expanded:
+            if id(table) not in operator_sized_tables:
+                _fit_table_width(table, editable_merged=True)
 
     # Carry the font on a wrapping container so any element we did not style
     # (bare <strong>, <em>, loose text) still inherits the face.

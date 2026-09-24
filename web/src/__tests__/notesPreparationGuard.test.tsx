@@ -27,7 +27,7 @@ test("preparation and run navigation wait for note saves, then export is availab
     config: { statements: [], notes_to_run: ["CORP_INFO"] }, agents: [], cross_checks: [],
   };
   render(<RunDetailView detail={detail} initialTab="notes" onDelete={vi.fn()} />);
-  const prepare = screen.getByRole("button", { name: "Download draft" });
+  const prepare = screen.getByRole("button", { name: "Prepare mTool draft" });
   const overview = within(screen.getByRole("tablist", { name: "Run detail sections" })).getByRole("tab", { name: "Overview" });
   fireEvent.click(screen.getByRole("button", { name: "Pending note edit" }));
   expect(prepare).toBeDisabled();

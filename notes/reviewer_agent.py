@@ -1305,6 +1305,7 @@ def create_notes_reviewer_agent(
     # and always carry the in-band limit warning used by the face reviewer.
     from pydantic_ai.capabilities import ProcessHistory
     from correction.history_processors import strip_stale_reviewer_images
+    from notes.reviewer_history import compact_stale_notes_reads
     from limit_warner import limit_warning_processor
     agent = Agent(
         model,
@@ -1317,6 +1318,7 @@ def create_notes_reviewer_agent(
         end_strategy="early",  # pin V1 semantics across the V2 flip (plan B.3.1)
         capabilities=[
             ProcessHistory(strip_stale_reviewer_images),
+            ProcessHistory(compact_stale_notes_reads),
             ProcessHistory(limit_warning_processor),
         ],
     )

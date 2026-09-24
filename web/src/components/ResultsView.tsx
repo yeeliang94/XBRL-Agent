@@ -529,8 +529,7 @@ function DownloadsTab({ runId, sessionId, statementsCompleted }: { runId?: numbe
         </div>
       )}
 
-      {/* Primary action — the one file the user files. One consistent name
-          ("Download draft"), no emoji (Phase 4). */}
+      {/* Primary action opens the template preparation flow. */}
       <div style={styles.downloadSection}>
         <button
           className={uiClass.btnPrimary}
@@ -538,7 +537,7 @@ function DownloadsTab({ runId, sessionId, statementsCompleted }: { runId?: numbe
           disabled={runId == null}
           style={styles.downloadPrimary}
         >
-          Download draft
+          Prepare mTool draft
         </button>
       </div>
 

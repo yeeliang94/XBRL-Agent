@@ -183,39 +183,26 @@ def test_scout_limits_reject_unsafe_values(field, value):
     assert response.status_code == 400
 
 
-def test_spot_check_toggle_and_mode_round_trip(tmp_path, monkeypatch):
-    """Issue 1: the clean-run spot-check toggle + depth persist to
-    XBRL_SPOT_CHECK / XBRL_SPOT_CHECK_MODE and are reflected by GET
-    /api/settings + /api/config."""
+def test_clean_run_triage_has_no_settings_fork(tmp_path, monkeypatch):
+    """Stale saved values cannot disable triage or select a full pass."""
     env_file = tmp_path / ".env"
     monkeypatch.setattr(server, "ENV_FILE", env_file)
-    monkeypatch.delenv("XBRL_SPOT_CHECK", raising=False)
-    monkeypatch.delenv("XBRL_SPOT_CHECK_MODE", raising=False)
-
-    # Defaults: on / light.
+    monkeypatch.setenv("XBRL_SPOT_CHECK", "false")
+    monkeypatch.setenv("XBRL_SPOT_CHECK_MODE", "full")
     s = client.get("/api/settings").json()
-    assert s["spot_check"] is True
-    assert s["spot_check_mode"] == "light"
+    assert "spot_check" not in s
+    assert "spot_check_mode" not in s
     cfg = client.get("/api/config").json()
-    assert cfg["spot_check"] is True and cfg["spot_check_mode"] == "light"
-
-    # Switch to full + off, persisted + re-read fresh.
-    resp = client.post("/api/settings", json={"spot_check": False, "spot_check_mode": "full"})
-    assert resp.status_code == 200
-    from dotenv import load_dotenv
-    load_dotenv(env_file, override=True)
-    s2 = client.get("/api/settings").json()
-    assert s2["spot_check"] is False
-    assert s2["spot_check_mode"] == "full"
-    assert server._spot_check_enabled() is False
-    assert server._spot_check_mode() == "full"
+    assert "spot_check" not in cfg
+    assert "spot_check_mode" not in cfg
 
 
-def test_spot_check_mode_rejects_invalid_value(tmp_path, monkeypatch):
-    """An unknown spot_check_mode is a 400, not silently coerced server-side."""
+@pytest.mark.parametrize("field,value", [("spot_check", False), ("spot_check_mode", "full")])
+def test_removed_spot_check_settings_rejected(tmp_path, monkeypatch, field, value):
+    """Old clients receive a clear error instead of a false saved preference."""
     env_file = tmp_path / ".env"
     monkeypatch.setattr(server, "ENV_FILE", env_file)
-    resp = client.post("/api/settings", json={"spot_check_mode": "deep"})
+    resp = client.post("/api/settings", json={field: value})
     assert resp.status_code == 400
 
 

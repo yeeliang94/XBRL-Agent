@@ -465,9 +465,9 @@ describe("RunDetailView", () => {
     render(
       <RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={onDownload} />,
     );
-    fireEvent.click(screen.getByRole("button", { name: /download/i }));
+    fireEvent.click(screen.getByRole("button", { name: /prepare mtool draft/i }));
     expect(onDownload).not.toHaveBeenCalled();
-    expect(screen.getByRole("dialog", { name: "Fill mTool template" })).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Prepare mTool draft" })).toBeTruthy();
   });
 
   test("Draft preparation does not require the old merged workbook", () => {
@@ -478,7 +478,7 @@ describe("RunDetailView", () => {
         onDownload={() => {}}
       />,
     );
-    const btn = screen.getByRole("button", { name: /download/i }) as HTMLButtonElement;
+    const btn = screen.getByRole("button", { name: /prepare mtool draft/i }) as HTMLButtonElement;
     expect(btn.disabled).toBe(false);
   });
 
@@ -1085,7 +1085,7 @@ describe("RunDetailView", () => {
       // keeps the workbook download but drops unrelated destructive/tools UI.
       expect(screen.queryByRole("button", { name: /fill mtool template/i })).toBeNull();
       expect(screen.queryByRole("button", { name: /delete run/i })).toBeNull();
-      expect(screen.getByRole("button", { name: /download draft/i })).toBeTruthy();
+      expect(screen.getByRole("button", { name: /prepare mtool draft/i })).toBeTruthy();
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -1509,7 +1509,7 @@ describe("RunDetailView", () => {
     expect(warning.textContent).toMatch(/balance/i);
     expect(warning.textContent).toMatch(/expected 100.*actual 90.*difference 10/i);
     expect(screen.queryByTestId("items-to-check")).toBeNull();
-    const download = screen.getByRole("button", { name: /download draft/i });
+    const download = screen.getByRole("button", { name: /prepare mtool draft/i });
     expect(download.className).toMatch(/secondary/i);
   });
 
@@ -1533,11 +1533,11 @@ describe("RunDetailView", () => {
       />,
     );
     expect(screen.queryByRole("button", { name: /fill mtool template/i })).toBeNull();
-    expect(screen.getAllByRole("button", { name: /download draft/i })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: /prepare mtool draft/i })).toHaveLength(1);
     fireEvent.click(screen.getByRole("tab", { name: /cross-checks/i }));
     expect(screen.queryByRole("button", { name: /fill mtool template/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /delete run/i })).toBeNull();
-    expect(screen.getByRole("button", { name: /download draft/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /prepare mtool draft/i })).toBeTruthy();
   });
 
   test.each(["failed", "aborted"] as const)("%s run explains template preparation before opening the picker", (status) => {
@@ -1548,7 +1548,7 @@ describe("RunDetailView", () => {
     const confirmation = screen.getByRole("dialog");
     expect(confirmation).toHaveTextContent("choose an mTool template to fill with the saved figures");
     fireEvent.click(within(confirmation).getByRole("button", { name: "Choose mTool template" }));
-    expect(screen.getByRole("dialog", { name: "Fill mTool template" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Prepare mTool draft" })).toBeInTheDocument();
   });
 
   test("flagged run confirms before downloading an investigation draft", () => {
@@ -1560,12 +1560,12 @@ describe("RunDetailView", () => {
         onDownload={onDownload}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: /download draft/i }));
+    fireEvent.click(screen.getByRole("button", { name: /prepare mtool draft/i }));
     expect(screen.getByRole("dialog").textContent).toMatch(/not ready to file/i);
     expect(onDownload).not.toHaveBeenCalled();
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /^choose mtool template$/i }));
     expect(onDownload).not.toHaveBeenCalled();
-    expect(screen.getByRole("dialog", { name: "Fill mTool template" })).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Prepare mTool draft" })).toBeTruthy();
   });
 
   test("clean completed run shows no warning banner and primary workbook preparation", () => {
@@ -1580,7 +1580,7 @@ describe("RunDetailView", () => {
     );
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.queryByRole("note")).toBeNull();
-    const download = screen.getByRole("button", { name: /download draft/i });
+    const download = screen.getByRole("button", { name: /prepare mtool draft/i });
     expect(download.className).toMatch(/primary/i);
   });
 

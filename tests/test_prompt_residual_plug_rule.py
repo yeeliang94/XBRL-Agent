@@ -131,11 +131,12 @@ def test_reviewer_prompt_advertises_batched_write_tools():
     )
 
 
-def test_spot_check_prompt_uses_batched_write_tools():
-    """spot_check.md is the LIGHT clean-run sanity prompt; it names the same
-    write tools and must use the batched form too."""
-    text = (_PROMPTS / "spot_check.md").read_text(encoding="utf-8")
-    assert "apply_fixes([{" in text, (
-        "spot_check.md must advertise the list-shaped apply_fixes signature"
-    )
-    assert "apply_fix(concept_uuid, value" not in text
+def test_clean_triage_hands_off_writes_to_scoped_investigation():
+    triage = (_PROMPTS / "spot_check.md").read_text(encoding="utf-8")
+    focused = (_PROMPTS / "scoped_investigation.md").read_text(encoding="utf-8")
+    assert "request_scoped_investigation" in triage
+    assert "Triage does not edit facts" in triage
+    assert "apply_fixes([{" in focused
+    assert "complete_scoped_investigation" in focused
+    assert "verify_fixes()" in focused
+    assert "apply_fix(concept_uuid, value" not in focused

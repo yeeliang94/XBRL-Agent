@@ -1373,6 +1373,16 @@ default, and fires structured `correction_exhausted` outcomes via
 `server._run_reviewer_pass`. The notes reviewer uses the same enforced cap.
 (The legacy `_run_correction_pass` was removed in rewrite Phase 1.1.)
 
+Every clean run now receives six Company or eight Group triage tool turns.
+Triage cannot write or raise a human flag; it submits specific source-page and
+fact references through `request_scoped_investigation`. Each handoff starts a
+fresh focused reviewer with its own dynamic 16–40-turn cap and a structured
+per-item closure. The handoff, stage transitions, outcomes, and both sets of
+turn records are retained. An incomplete or unverified focused pass never
+reports successful review. The old `XBRL_SPOT_CHECK` toggle and
+`XBRL_SPOT_CHECK_MODE` depth setting are inert and absent from Settings.
+Pinned by `tests/test_reviewer_pipeline.py` and `tests/test_settings_api.py`.
+
 **Wall-clock deadline behaviour (run-83 hardening, 2026-08-05):** the
 cap in `agent_runner.run_agent_loop` stops NEW MODEL THINKING only — a
 CALL-TOOLS node the model already issued executes past the deadline
@@ -1556,18 +1566,16 @@ current-consumer filtering, and historical readability),
     `tests/test_reviewer_versioning.py`.
   - **Auto-trigger toggle `XBRL_AUTO_REVIEW`** (default on) gates the automatic
     launch on the failure path; off = the user triggers it manually.
-  - **Clean-run spot-check `XBRL_SPOT_CHECK`** (default on, independent of
-    `XBRL_AUTO_REVIEW`): a run with no failing checks / open conflicts still gets
-    a grounded sanity pass, reusing `_run_reviewer_pass` via a `spot_check` arg.
-    `XBRL_SPOT_CHECK_MODE` picks depth — `light` (default, `prompts/spot_check.md`
-    + a 6/8-turn cap) or `full` (holistic `reviewer.md`). Any figures pass reaching
-    its tool-turn cap gets one four-turn continuation within the original
-    wall-clock budget. Its original snapshot and accumulated writes survive.
-    Exhaustion after continuation leaves verification incomplete, including for
-    a spot-check whose arithmetic is clean. Failure to run (`reviewer_failed`)
-    also tips the run to `completed_with_errors`. Suite default
-    OFF (`tests/conftest.py`). Pinned by `tests/test_reviewer_pipeline.py`,
-    `test_e2e.py`, `test_reviewer_agent.py`, `test_settings_api.py`.
+  - **Clean-run triage:** a run with no failing checks or open conflicts always
+    gets a grounded 6/8-turn triage, independent of `XBRL_AUTO_REVIEW`. The
+    triage cannot write or flag. It ends clean or hands at most five specific
+    PDF-grounded items to a fresh scoped investigation, which must record a
+    result for each item. Verified writes and unresolved human flags are
+    required for the corresponding outcome. Exhaustion, incomplete handoff,
+    and unresolved findings leave the run needing review. The obsolete
+    `XBRL_SPOT_CHECK` and `XBRL_SPOT_CHECK_MODE` values are ignored and absent
+    from Settings. Pinned by `tests/test_reviewer_pipeline.py`, `test_e2e.py`,
+    `test_reviewer_agent.py`, `test_settings_api.py`.
   - **Reviewer model** is user-selectable: `XBRL_DEFAULT_MODELS["reviewer"]`
     (Settings) for the auto pass, a per-request `model` override from the Review
     tab for `/re-review`; both fall back to the run's extraction model
@@ -1978,10 +1986,14 @@ inventory warning, Next issue navigation, and Needs attention filter.
 ### 28. mTool fill pipeline — semantic addressing, one patcher, receipts
 
 **Prose preservation at export (Plan A).** The notes exporter compares canonical
-content, heading/list structure, emphasis and merged-cell geometry before and
-after destination decoration. A lossy decoration is refused. The standard-library
-patcher reads back the complete expected XHTML payload, not merely a matching
-substring; duplicated or extra prose therefore cannot pass. Pinned by
+content, heading/list structure and emphasis before and after destination
+decoration. The canonical merged-cell geometry stays in `notes_cells`; the
+mTool-bound copy expands spans to empty ordinary cells because TX27 cannot
+mouse-resize or recolour a table containing a merge. The comparison uses that
+exact compatibility expansion as its expected structure, so any other structural
+change is refused. The standard-library patcher reads back the complete expected
+XHTML payload, not merely a matching substring; duplicated or extra prose
+therefore cannot pass. Pinned by
 `tests/test_mtool_notes_exporter.py` and `tests/test_mtool_offline_fill.py`.
 
 The `mtool/` package fills a run's figures into an SSM **mTool** MBRS template so

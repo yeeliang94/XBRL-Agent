@@ -41,15 +41,15 @@ describe("ResultsView — P4", () => {
     render(<ResultsView complete={completeData} sessionId="abc" runId={42}
       runStartTime={null} getResultJson={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: /downloads/i }));
-    fireEvent.click(screen.getByRole("button", { name: "Download draft" }));
-    expect(screen.getByRole("dialog", { name: "Fill mTool template" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Prepare mTool draft" }));
+    expect(screen.getByRole("dialog", { name: "Prepare mTool draft" })).toBeInTheDocument();
     expect(screen.getByLabelText("mTool template file")).toBeInTheDocument();
   });
 
   test("a run identifier is required before preparing the template", () => {
     renderResults();
     fireEvent.click(screen.getByRole("button", { name: /downloads/i }));
-    expect(screen.getByRole("button", { name: "Download draft" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Prepare mTool draft" })).toBeDisabled();
   });
 
   test("renders 3 tabs: Summary, Data Preview, Downloads", () => {
@@ -196,7 +196,7 @@ describe("ResultsView — P4", () => {
     fireEvent.click(screen.getByRole("button", { name: /downloads/i }));
     // One consistently-named primary download; the developer artifacts moved
     // under the "Diagnostics" disclosure with plain-English labels (Phase 4).
-    expect(screen.getByText(/Download draft/)).toBeInTheDocument();
+    expect(screen.getByText(/Prepare mTool draft/)).toBeInTheDocument();
     expect(screen.getByText(/Raw data \(JSON\)/)).toBeInTheDocument();
     expect(screen.getByText(/AI conversation log/)).toBeInTheDocument();
   });

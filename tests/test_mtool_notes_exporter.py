@@ -69,6 +69,25 @@ def test_notes_become_footnote_writes(notes_db):
     assert ppe["source_row"] == 17
 
 
+def test_merged_note_exports_editable_cells_without_changing_canonical_note(notes_db):
+    db, run_id = notes_db
+    html = ('<table><tr><td>Note</td><td>2025 RM</td><td>2024 RM</td></tr>'
+            '<tr><td colspan="3">Profit before tax</td></tr>'
+            '<tr><td>Auditors</td><td>50,000</td><td>49,200</td></tr></table>')
+    _add_note(db, run_id, "Notes-Listofnotes", 21, "Profit before tax", html)
+
+    doc = build_notes_fill_doc(db, run_id)
+    exported = doc["footnotes"][0]["html"]
+    assert 'colspan=' not in exported
+    assert "Profit before tax" in exported
+    assert "50,000" in exported
+    assert 'width="64%"' in exported
+    with sqlite3.connect(db) as conn:
+        saved = conn.execute("SELECT html FROM notes_cells WHERE run_id = ?",
+                             (run_id,)).fetchone()[0]
+    assert saved == html
+
+
 def test_registered_prose_slot_requires_the_exact_canonical_identity(notes_db):
     db, run_id = notes_db
     conn = sqlite3.connect(str(db))

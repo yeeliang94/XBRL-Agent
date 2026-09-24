@@ -19,8 +19,10 @@ What this module owns:
   ``fill_footnotes`` resolves it to the template's ``fn_*`` at fill time
   (decoration-tolerant fuzzy match), so this stays layout-neutral — mirroring
   how the numeric exporter defers column resolution.
-* **Render decoration, not content transform.** The note's words/structure are
-  unchanged, but the style-free DB HTML is run through
+* **Native-editable table copy.** The canonical note is unchanged. The mTool
+  copy expands merged cells into ordinary blank continuation cells because the
+  installed TX27 editor cannot resize or recolour tables containing a merge.
+  Words and numbers stay in their original cells. The copy is run through
   :func:`mtool.notes_decorate.decorate_notes_html` — the backend port of the
   clipboard decorator — so mTool's TX27 text-block editor renders borders,
   fills, fonts and numeric alignment instead of flat text. This is the SAME
@@ -37,7 +39,8 @@ from pathlib import Path
 from typing import Any
 
 from mtool.notes_decorate import (
-    DEFAULT_STYLE, NotesTableStyle, decorate_notes_html, strip_inline_styles,
+    DEFAULT_STYLE, NotesTableStyle, decorate_notes_html, editable_mtool_structure,
+    strip_inline_styles,
 )
 from mtool.offline_fill import EXCEL_CELL_CHAR_LIMIT, wrap_footnote_html
 from notes.format_verify import content_structure
@@ -160,12 +163,15 @@ def build_notes_fill_doc(
             skipped_no_label += 1
             continue
         # Decorate the style-free DB HTML so mTool's TX27 editor renders the
-        # formatting (borders/fills/font/alignment) — see the module docstring.
+        # formatting (borders/fills/font/alignment) and expands merged cells
+        # for native editing — see the module docstring.
         # `decorate=False` keeps the raw HTML (the "no styling" diagnostic
         # toggle on the fill endpoint, plus tests / debug).
         out_html, tier, destyled, grid_dropped = _resolve_note_html(
             r["html"], style, decorate)
-        if content_structure(r["html"] or "") != content_structure(out_html):
+        expected_html = (editable_mtool_structure(r["html"] or "")
+                         if decorate and tier != "oversize" else r["html"] or "")
+        if content_structure(expected_html) != content_structure(out_html):
             raise ValueError(f"MBRS formatting changed source content or structure at {r['sheet']} row {r['row']}.")
         if tier == "compact":
             formatting_compacted += 1
@@ -348,10 +354,11 @@ def _resolve_note_html(
         """One pass down the tiers for ``source``: full → compact → lite,
         then the same three with the white grid dropped, then flat. Returns
         ``(html, tier, white_grid_dropped)`` or None if nothing fits."""
-        decorated = decorate_notes_html(source, style)
+        decorated = decorate_notes_html(source, style, editable_merged_cells=True)
         if _fits(decorated):
             return decorated, "full", False
-        compact = decorate_notes_html(source, style, compact=True)
+        compact = decorate_notes_html(source, style, compact=True,
+                                      editable_merged_cells=True)
         # Compact only helps when it actually differs from full — a compact-
         # INELIGIBLE note (user-styled cells / border-none theme) decorates
         # byte-identical to full, so it can't fit either; skip straight to lite
@@ -359,26 +366,31 @@ def _resolve_note_html(
         # label.
         if compact != decorated and _fits(compact):
             return compact, "compact", False
-        lite = decorate_notes_html(source, style, lite=True)
+        lite = decorate_notes_html(source, style, lite=True,
+                                   editable_merged_cells=True)
         if _fits(lite):
             return lite, "lite", False
         # White-grid fallback: retry the same tiers without the per-cell white
         # borders (only when they actually contributed — a bordered-theme note
         # decorates identically either way and skips straight to flat).
-        nofill = decorate_notes_html(source, style, fill_white_grid=False)
+        nofill = decorate_notes_html(source, style, fill_white_grid=False,
+                                     editable_merged_cells=True)
         if nofill != decorated:
             if _fits(nofill):
                 return nofill, "full", True
             nofill_compact = decorate_notes_html(
-                source, style, compact=True, fill_white_grid=False)
+                source, style, compact=True, fill_white_grid=False,
+                editable_merged_cells=True)
             if nofill_compact != nofill and _fits(nofill_compact):
                 return nofill_compact, "compact", True
             nofill_lite = decorate_notes_html(
-                source, style, lite=True, fill_white_grid=False)
+                source, style, lite=True, fill_white_grid=False,
+                editable_merged_cells=True)
             if _fits(nofill_lite):
                 return nofill_lite, "lite", True
-        if _fits(source):
-            return source, "flat", False
+        flat = editable_mtool_structure(source)
+        if _fits(flat):
+            return flat, "flat", False
         return None
 
     landed = _walk(raw)

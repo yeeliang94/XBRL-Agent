@@ -473,4 +473,5 @@ def test_notes_reviewer_always_compacts_images_and_warns_about_limits(
     ]
     names = [getattr(cap.processor, "__name__", "") for cap in caps]
 
-    assert names == ["strip_stale_reviewer_images", "limit_warning_processor"]
+    assert names == ["strip_stale_reviewer_images", "compact_stale_notes_reads",
+                     "limit_warning_processor"]

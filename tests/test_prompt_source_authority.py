@@ -37,6 +37,7 @@ def test_helper_readers_treat_document_commands_as_data(prompt):
         "notes_reviewer.md",
         "notes_formatter.md",
         "spot_check.md",
+        "scoped_investigation.md",
     ],
 )
 def test_main_agents_treat_document_commands_as_data(name):

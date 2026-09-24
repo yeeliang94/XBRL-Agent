@@ -315,50 +315,51 @@ def test_turn_cap_below_pydantic_50(seeded):
     assert worst <= MAX_AGENT_ITERATIONS
 
 
-@pytest.mark.parametrize("level, mode, expected", [
-    ("company", "light", 6),
-    ("group", "light", 8),
-    ("company", "full", 16),   # reuses reviewer base cap (n_items=0)
-    ("group", "full", 20),     # base 16 + group 4
+@pytest.mark.parametrize("level, expected", [
+    ("company", 6),
+    ("group", 8),
 ])
-def test_spot_check_turn_cap(level, mode, expected):
-    """Issue 1: the clean-run spot-check cap. Light is a tight sanity pass;
-    full reuses the holistic reviewer budget."""
+def test_spot_check_turn_cap(level, expected):
+    """Clean-run triage is short; a handoff receives a separate budget."""
     from correction.reviewer_agent import compute_spot_check_turn_cap
-    assert compute_spot_check_turn_cap(filing_level=level, mode=mode) == expected
+    assert compute_spot_check_turn_cap(filing_level=level) == expected
 
 
 def test_spot_check_turn_cap_below_pydantic_50():
-    """Both spot-check depths stay under MAX_AGENT_ITERATIONS (gotcha #18)."""
+    """Triage stays below the framework's request cap."""
     from agent_tracing import MAX_AGENT_ITERATIONS
     from correction.reviewer_agent import compute_spot_check_turn_cap
     for level in ("company", "group"):
-        for mode in ("light", "full"):
-            assert compute_spot_check_turn_cap(
-                filing_level=level, mode=mode
-            ) < MAX_AGENT_ITERATIONS
+        assert compute_spot_check_turn_cap(filing_level=level) < MAX_AGENT_ITERATIONS
 
 
 def test_spot_check_prompt_swaps_body_and_packet(seeded):
-    """Issue 1: spot_check_mode='light' swaps to the tight spot_check.md body;
-    'full' keeps the reviewer.md body; both replace the failing-check packet
-    with a spot-check packet (no failing checks/conflicts to inline). The
-    normal path (no spot_check_mode) is unchanged."""
+    """Triage and investigation have distinct, focused instructions."""
     from correction.reviewer_agent import render_reviewer_prompt
     db_path, run_id = seeded
     light = render_reviewer_prompt(
         db_path=db_path, run_id=run_id, filing_level="company",
         filing_standard="mfrs", spot_check_mode="light",
     )
-    full = render_reviewer_prompt(
+    legacy_full = render_reviewer_prompt(
         db_path=db_path, run_id=run_id, filing_level="company",
         filing_standard="mfrs", spot_check_mode="full",
+    )
+    focused = render_reviewer_prompt(
+        db_path=db_path, run_id=run_id, filing_level="company",
+        filing_standard="mfrs", investigation_handoff=[{
+            "summary": "Cash differs from PDF", "pdf_page": 12,
+            "concept_uuid": "cash-uuid", "target_sheet": "SOFP",
+        }],
     )
     normal = render_reviewer_prompt(
         db_path=db_path, run_id=run_id, filing_level="company",
         filing_standard="mfrs",
     )
-    assert "fast spot-check" in light          # spot_check.md body
-    assert "fast spot-check" not in full       # reviewer.md body retained
-    assert "SPOT-CHECK PACKET" in light and "SPOT-CHECK PACKET" in full
+    assert "short **triage**" in light
+    assert "short **triage**" in legacy_full
+    assert "audit the whole filing" not in legacy_full
+    assert "SCOPED INVESTIGATION HANDOFF" in focused
+    assert "Cash differs from PDF" in focused
+    assert "SPOT-CHECK PACKET" in light
     assert "SPOT-CHECK PACKET" not in normal   # failing-check packet path intact

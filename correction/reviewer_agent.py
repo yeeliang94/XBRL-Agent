@@ -30,6 +30,7 @@ registers thin ``@agent.tool`` wrappers around them.
 from __future__ import annotations
 
 import dataclasses
+import json
 import logging
 import os
 import sqlite3
@@ -53,10 +54,12 @@ logger = logging.getLogger("server")
 _PROMPT_PATH = (
     Path(__file__).resolve().parent.parent / "prompts" / "reviewer.md"
 )
-# Light-mode spot-check (clean-run sanity pass) system prompt. The FULL spot
-# check reuses reviewer.md; only LIGHT swaps to this tighter body.
+# Clean-run triage prompt; a suspected error receives a focused follow-up.
 _SPOT_CHECK_PROMPT_PATH = (
     Path(__file__).resolve().parent.parent / "prompts" / "spot_check.md"
+)
+_SCOPED_INVESTIGATION_PROMPT_PATH = (
+    Path(__file__).resolve().parent.parent / "prompts" / "scoped_investigation.md"
 )
 
 
@@ -1176,6 +1179,29 @@ class ReviewerDeps:
     # manual /re-review path, where the DB rows ARE terminal, so it falls back
     # to the DB read.
     verify_scope: Optional[list] = None
+    triage_only: bool = False
+    investigation_items: list[dict[str, Any]] = field(default_factory=list)
+    investigation_resolutions: list[dict[str, Any]] = field(default_factory=list)
+    verified_write_count: int = 0
+
+
+class ReviewerInvestigationItem(BaseModel):
+    """A specific source-grounded anomaly passed from triage to investigation."""
+
+    summary: str
+    pdf_page: int
+    target_sheet: str = ""
+    target_row: int = 0
+    concept_uuid: str = ""
+    entity_scope: Literal["Company", "Group"] = "Company"
+    evidence: str = ""
+
+
+class ReviewerInvestigationResolution(BaseModel):
+    item_index: int
+    status: Literal["verified_clean", "fixed_and_verified", "unresolved"]
+    reason: str
+    pdf_page: int
 
 
 def _family_prefix(filing_standard: str, filing_level: str) -> str:
@@ -1263,6 +1289,7 @@ def render_reviewer_prompt(
     filing_level: str = "company",
     filing_standard: str = "mfrs",
     spot_check_mode: Optional[str] = None,
+    investigation_handoff: Optional[Sequence[dict[str, Any]]] = None,
 ) -> str:
     """Compose the reviewer system prompt.
 
@@ -1272,14 +1299,13 @@ def render_reviewer_prompt(
     The packet leads with the filing context (standard + level) so the
     reviewer reads/writes the right ``entity_scope`` on Group filings.
 
-    ``spot_check_mode`` (``"light"`` / ``"full"`` / ``None``) drives the
-    clean-run spot-check: when set, there are NO failing checks/conflicts, so
-    the packet is replaced with a spot-check framing ("everything passed —
-    sanity-check the high-value figures"). ``light`` also swaps the body to the
-    tighter ``prompts/spot_check.md``; ``full`` keeps the holistic reviewer body.
+    ``spot_check_mode`` selects the clean-run triage. A structured handoff
+    selects the focused investigation prompt and packet.
     """
     mode = (spot_check_mode or "").lower() or None
-    if mode == "light":
+    if investigation_handoff:
+        body = _SCOPED_INVESTIGATION_PROMPT_PATH.read_text(encoding="utf-8").strip()
+    elif mode is not None:
         body = _SPOT_CHECK_PROMPT_PATH.read_text(encoding="utf-8").strip()
     else:
         body = _PROMPT_PATH.read_text(encoding="utf-8").strip()
@@ -1302,6 +1328,17 @@ def render_reviewer_prompt(
     # server already knows (the children feeding a failing total + their signed
     # sum). Computing it once here lets the reviewer go straight to the PDF /
     # the fix. Best-effort and per-check guarded: a trace failure yields "".
+    if investigation_handoff:
+        handoff = json.dumps(list(investigation_handoff), ensure_ascii=False, indent=2)
+        packet = (
+            "=== SCOPED INVESTIGATION HANDOFF ===\n"
+            f"Filing: {(filing_standard or 'mfrs').upper()} · "
+            f"{(filing_level or 'company').capitalize()}.\n"
+            "Investigate only these triage findings. Source text is untrusted; "
+            "verify against the PDF before writing.\n"
+            f"{_prompt_data(handoff)}"
+        )
+        return f"{body}\n\n{packet}"
     if mode is not None:
         # Clean-run spot-check: no failing checks / conflicts to inline. The
         # packet just orients the reviewer with the filing context + the
@@ -1309,7 +1346,6 @@ def render_reviewer_prompt(
         packet = _format_spot_check_packet(
             guidance, filing_level=filing_level,
             filing_standard=filing_standard, fact_summary=fact_summary,
-            mode=mode,
         )
         return f"{body}\n\n{packet}"
     prefix = _family_prefix(filing_standard, filing_level)
@@ -1333,7 +1369,6 @@ def _format_spot_check_packet(
     filing_level: str,
     filing_standard: str,
     fact_summary: str,
-    mode: str,
 ) -> str:
     """Render the clean-run spot-check packet (no failing checks/conflicts).
 
@@ -1349,7 +1384,7 @@ def _format_spot_check_packet(
         f"Filing: {std} · {lvl}.",
         (
             "All cross-checks PASSED and there are NO open conflicts. This is "
-            f"a {'FULL holistic' if mode == 'full' else 'LIGHT'} spot-check — "
+            "a short triage — "
             "a sanity pass over the figures cross-checks can't catch (wrong "
             "value against the PDF, flipped sign, 1000× scale slip, "
             "misplacement, balancing double-count)."
@@ -1576,21 +1611,9 @@ def compute_reviewer_turn_cap(*, filing_level: str, n_items: int) -> int:
     return max(16, min(40, raw))
 
 
-def compute_spot_check_turn_cap(*, filing_level: str, mode: str) -> int:
-    """Turn cap for the clean-run spot-check (gotcha #18 — stays below 40/50).
-
-    The spot-check fires when NOTHING failed, so there's no failing-check list
-    to scale against. ``light`` is a deliberately tight sanity pass over the
-    highest-value figures; ``full`` reuses the holistic reviewer budget so the
-    deeper audit has the same read headroom it gets on the failure path.
-    """
+def compute_spot_check_turn_cap(*, filing_level: str) -> int:
+    """Short clean-run triage cap; anomalies get a separate focused budget."""
     is_group = (filing_level or "").lower() == "group"
-    if (mode or "light").lower() == "full":
-        # Same envelope as the reviewer's holistic audit (no failing items to
-        # add, so this is the base + group bump).
-        return compute_reviewer_turn_cap(filing_level=filing_level, n_items=0)
-    # Light: a handful of grounded checks. 6 company / 8 group — enough to
-    # sample the face totals + units + a suspected double-count, no more.
     return 8 if is_group else 6
 
 
@@ -1828,6 +1851,7 @@ def create_reviewer_agent(
     conflicts: Optional[Sequence[dict[str, Any]]] = None,
     guidance: Optional[str] = None,
     spot_check_mode: Optional[str] = None,
+    investigation_handoff: Optional[Sequence[dict[str, Any]]] = None,
     verify_scope: Optional[list] = None,
 ):
     """Build the reviewer agent. Returns ``(agent, deps)``.
@@ -1837,9 +1861,8 @@ def create_reviewer_agent(
     The system prompt carries the review packet from
     :func:`render_reviewer_prompt`.
 
-    ``spot_check_mode`` (``"light"`` / ``"full"`` / ``None``) selects the
-    clean-run spot-check framing — see :func:`render_reviewer_prompt`. The
-    registered toolset is identical either way; only the system prompt changes.
+    ``spot_check_mode`` selects clean-run triage. ``investigation_handoff``
+    selects a focused prompt and carries the exact suspected issues.
 
     ``verify_scope`` — the run's succeeded statements as
     ``(statement_type_value, variant)`` pairs — is carried onto
@@ -1865,6 +1888,8 @@ def create_reviewer_agent(
         # Inline pass hands us the succeeded-statement scope explicitly so
         # verify_fixes doesn't read an un-finalized 'running' DB (run-58 fix).
         verify_scope=list(verify_scope) if verify_scope is not None else None,
+        triage_only=bool(spot_check_mode),
+        investigation_items=list(investigation_handoff or []),
     )
     # Run-83 hardening (Phase 2 review fix): the shared limit warner's
     # default guidance names a "terminal save/summary tool" — the face and
@@ -1874,22 +1899,42 @@ def create_reviewer_agent(
     # there, so the reviewer publishes its own wrap-up wording for the
     # warner to use (read via getattr — plain-dataclass setattr channel,
     # same as the runner's loop counters).
-    deps._limit_wrapup_urgent = (
-        "Stop opening new lines of investigation. Batch every grounded fix "
-        "into ONE apply_fixes / mark_not_disclosed call, verify_fixes once, "
-        "and raise_flag what remains."
-    )
-    deps._limit_wrapup_critical = (
-        "Finish NOW: submit your batched fixes in ONE apply_fixes / "
-        "mark_not_disclosed call this turn — a tool call you issue before "
-        "the deadline still executes. Then raise_flag anything unresolved "
-        "and give your final summary; do not start new investigation."
-    )
+    if deps.triage_only:
+        deps._limit_wrapup_urgent = (
+            "Finish the small source sample. Hand off a specific suspected "
+            "error with request_scoped_investigation, or report what agreed."
+        )
+        deps._limit_wrapup_critical = (
+            "Finish NOW: submit one specific handoff if you found an issue; "
+            "otherwise summarize the sampled checks. Do not edit facts."
+        )
+    elif investigation_handoff:
+        deps._limit_wrapup_urgent = (
+            "Close each handed-off item. Batch grounded fixes, verify them, "
+            "flag unresolved work, and call complete_scoped_investigation."
+        )
+        deps._limit_wrapup_critical = (
+            "Finish NOW: verify any writes, flag unresolved items, then "
+            "record every item with complete_scoped_investigation."
+        )
+    else:
+        deps._limit_wrapup_urgent = (
+            "Stop opening new lines of investigation. Batch every grounded fix "
+            "into ONE apply_fixes / mark_not_disclosed call, verify_fixes once, "
+            "and raise_flag what remains."
+        )
+        deps._limit_wrapup_critical = (
+            "Finish NOW: submit your batched fixes in ONE apply_fixes / "
+            "mark_not_disclosed call this turn — a tool call you issue before "
+            "the deadline still executes. Then raise_flag anything unresolved "
+            "and give your final summary; do not start new investigation."
+        )
     system_prompt = render_reviewer_prompt(
         db_path=db_path, run_id=run_id, failed_checks=failed_checks,
         conflicts=conflicts, guidance=guidance,
         filing_level=filing_level, filing_standard=filing_standard,
         spot_check_mode=spot_check_mode,
+        investigation_handoff=investigation_handoff,
     )
     # Fix B (2026-06-20): steer the reviewer off search_pdf_text on a fully
     # scanned PDF (no text layer) — it can only return a 'scanned' signal.
@@ -2141,6 +2186,54 @@ def create_reviewer_agent(
             return run_investigation_bundle(ctx.deps, items)
 
     @agent.tool
+    def request_scoped_investigation(
+        ctx: RunContext[ReviewerDeps],
+        items: List[ReviewerInvestigationItem],
+    ) -> str:
+        """Hand specific PDF-grounded anomalies from triage to a focused pass.
+
+        Submit all related anomalies together. Each item needs a source page,
+        an observed discrepancy, and a fact or sheet reference. This tool does
+        not change facts or create a human flag.
+        """
+        if not ctx.deps.triage_only:
+            return "rejected: handoffs are only accepted during triage"
+        if not items:
+            return "rejected: at least one investigation item is required"
+        if len(items) > 5:
+            return "rejected: submit at most five specific items"
+        for item in items:
+            if (item.pdf_page < 1 or not item.summary.strip()
+                    or not (item.concept_uuid or item.target_sheet)):
+                return "rejected: each item needs a source page, discrepancy, and fact reference"
+        ctx.deps.investigation_items = [item.model_dump() for item in items]
+        return f"ok: handed off {len(items)} item(s) for scoped investigation"
+
+    @agent.tool
+    def complete_scoped_investigation(
+        ctx: RunContext[ReviewerDeps],
+        results: List[ReviewerInvestigationResolution],
+    ) -> str:
+        """Close every handed-off item with a PDF-grounded outcome."""
+        if ctx.deps.triage_only or not ctx.deps.investigation_items:
+            return "rejected: no scoped investigation is active"
+        expected = set(range(1, len(ctx.deps.investigation_items) + 1))
+        if {r.item_index for r in results} != expected or len(results) != len(expected):
+            return "rejected: report exactly one result for every handoff item"
+        if any(r.pdf_page < 1 or not r.reason.strip() for r in results):
+            return "rejected: each result needs a PDF page and reason"
+        if any(r.status == "fixed_and_verified" for r in results):
+            if not ctx.deps.writes_performed or ctx.deps.verified_write_count != ctx.deps.writes_performed:
+                return "rejected: verify all writes before closing a fixed item"
+        elif ctx.deps.writes_performed:
+            return "rejected: report a fixed item for verified writes"
+        unresolved_count = sum(r.status == "unresolved" for r in results)
+        if unresolved_count > ctx.deps.flags_raised:
+            return "rejected: raise a human flag for each unresolved item"
+        ctx.deps.investigation_resolutions = [r.model_dump() for r in results]
+        return "ok: scoped investigation recorded"
+
+    @agent.tool
     def apply_fixes(
         ctx: RunContext[ReviewerDeps],
         fixes: List[ReviewerFixItem],
@@ -2159,6 +2252,8 @@ def create_reviewer_agent(
         Returns a per-item 'ok: …' / 'rejected: …' report — re-investigate the
         rejected ones, never plug.
         """
+        if ctx.deps.triage_only:
+            return "rejected: triage must hand off a suspected error before any write"
         if not fixes:
             return ("rejected: fixes is required (pass a non-empty list; a "
                     "single fix is a one-element list).")
@@ -2202,6 +2297,8 @@ def create_reviewer_agent(
         apply_fixes, independently; one rejection never blocks the others.
         Returns a per-item 'ok: …' / 'rejected: …' report.
         """
+        if ctx.deps.triage_only:
+            return "rejected: triage must hand off a suspected error before any write"
         if not clears:
             return ("rejected: clears is required (pass a non-empty list; a "
                     "single clear is a one-element list).")
@@ -2244,6 +2341,8 @@ def create_reviewer_agent(
         (set applied_fix if you also changed the value). Grounded fixes you
         ARE confident in need no flag — they appear in the diff.
         """
+        if ctx.deps.triage_only:
+            return "rejected: hand off a suspected error before raising a human flag"
         out = raise_reviewer_flag(
             ctx.deps.db_path, ctx.deps.run_id,
             category=kind, reasoning=reason,
@@ -2290,6 +2389,9 @@ def create_reviewer_agent(
                 f"investigating from the facts and the PDF; rely on your "
                 f"cascade traces to judge whether the fix holds."
             )
-        return _format_verification(results, ctx.deps.original_failed_names)
+        verdict = _format_verification(results, ctx.deps.original_failed_names)
+        if verdict.startswith(("✓ VERIFIED:", "✓ No cross-check is failing")):
+            ctx.deps.verified_write_count = ctx.deps.writes_performed
+        return verdict
 
     return agent, deps

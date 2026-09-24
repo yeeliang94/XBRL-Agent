@@ -627,10 +627,6 @@ export interface ExtendedSettingsResponse extends SettingsResponse {
   auto_review: boolean;
   notes_auto_review?: boolean;
   notes_coverage?: boolean;
-  /** Whether a clean run (no failed checks) still gets a spot-check (issue 1). */
-  spot_check?: boolean;
-  /** Spot-check depth: 'light' (default) | 'full'. */
-  spot_check_mode?: string;
   /** Whether per-entity advisory memory injects prior-year prompt hints (item 28). */
   entity_memory?: boolean;
   /** Scanned-PDF transcribed source sidecar (docs/PLAN-pdf-source-sidecar.md).
