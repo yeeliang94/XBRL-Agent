@@ -36,6 +36,10 @@ function semanticToolSentence(entry: ToolTimelineEntry): string | null {
       const pages = argsPreview(entry.tool_name, entry.args);
       return finishSentence(pages ? `Reviewing source ${pages}` : "Reviewing source pages");
     }
+    case "read_page_text": {
+      const pages = argsPreview(entry.tool_name, entry.args);
+      return finishSentence(pages ? `Reading the text of source ${pages}` : "Reading source page text");
+    }
     case "write_facts":
     case "fill_workbook":
       return "Adding extracted figures.";

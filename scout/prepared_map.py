@@ -18,7 +18,7 @@ from pydantic_ai.usage import RunUsage, UsageLimits
 from ingest.document_preparation import PreparationError
 from scout.infopack import Infopack, ScoutInfopackInput
 
-CONTRACT_VERSION = 9
+CONTRACT_VERSION = 10
 REQUEST_LIMIT = 20
 OUTPUT_RETRIES = 2
 SYSTEM_PROMPT = """Build one complete financial document map from prepared source.
@@ -30,6 +30,14 @@ contain `relationship_groups`. Put `notes_inventory` inside `infopack`, never at
 the top level. Never omit `ownership_ranges`, even when every block has one owner.
 Identify entity, reporting periods, currency, scale, consolidation (company/group/both),
 MFRS/MPERS, all five primary statements and registered variants, notes and subnotes.
+Scale: set infopack.scale_unit to "units", "thousands" or "millions" by reading the
+amount-column heading on a primary statement (SOFP or SOPL), normally printed above
+the figures next to the year: "RM'000", "RM 000", "RM '000" or "RM thousand" means
+thousands; "RM million", "RM'm" or "RM mil" means millions; a bare "RM" (no 000 or
+million) means units. A bare "RM" IS an explicit declaration, not a missing one.
+If headings disagree, trust the primary statements over notes. Use "unknown" only
+after checking at least two primary statements, full blocks or page images, and
+still finding no currency heading at all.
 Choose SOFP CuNonCu when current/non-current sections OR totals appear; choose
 OrderOfLiquidity only when the source has no current/non-current split.
 SOPL Function groups expenses by role (cost of sales, administration, distribution);
@@ -116,12 +124,15 @@ class PreparedStatementRef(BaseModel):
 class MapInfopack(ScoutInfopackInput):
     # Missing metadata is not a successfully assessed empty document.
     statements: dict[str, PreparedStatementRef]
-    notes_inventory: list
+    # Optional only at the schema layer: validate_document_map rejects a
+    # missing value with a short, named repair message. A schema-level
+    # "Field required" error echoed the whole ~12k-char map back to the model.
+    notes_inventory: list | None = None
 
 
 class DocumentMap(BaseModel):
     infopack: MapInfopack
-    ownership_ranges: list[OwnershipRange]
+    ownership_ranges: list[OwnershipRange] | None = None
     relationship_groups: list[list[str]] = Field(default_factory=list)
 
 
@@ -158,6 +169,18 @@ def _inventory_value(inventory):
 
 def validate_document_map(prepared, result: DocumentMap, inventory=None):
     """Expand ranges and explicit nested furniture into one owner per block."""
+    missing = [name for name, value in (
+        ("infopack.notes_inventory", result.infopack.notes_inventory),
+        ("ownership_ranges", result.ownership_ranges),
+    ) if value is None]
+    if missing:
+        raise ValueError(
+            f"Your map is missing required field(s): {', '.join(missing)}. "
+            "Resubmit the complete map with every top-level field. "
+            "infopack.notes_inventory sits inside infopack and lists every "
+            "note (note_num, title, page_range); "
+            "ownership_ranges assigns every block to an owner."
+        )
     blocks = prepared.blocks
     positions = {b["block_id"]: i for i, b in enumerate(blocks)}
     if len(positions) != len(blocks):
@@ -333,9 +356,14 @@ async def build_prepared_document_map(prepared, model, *, on_progress=None, inve
 
     @agent.tool_plain
     async def view_pages(start_page: int, end_page: int, original: bool = False) -> list[BinaryContent]:
-        """Inspect any valid document pages, at most three per call."""
+        """Inspect pages start_page..end_page (inclusive), at most three pages per call."""
         if not 1 <= start_page <= end_page <= prepared.page_count or end_page - start_page >= 3:
-            raise ModelRetry("Select any valid document pages, at most three per call")
+            raise ModelRetry(
+                f"Requested pages {start_page}-{end_page}. Valid pages are "
+                f"1-{prepared.page_count}, and one call covers at most three "
+                "pages (end_page - start_page <= 2). Split the range into "
+                "several calls in the same turn."
+            )
         path = prepared.prepared_pdf_path
         if original:
             path = prepared.metadata_path.parent / metadata.get("source_file", "uploaded.pdf")

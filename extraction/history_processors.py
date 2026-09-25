@@ -50,6 +50,13 @@ from pydantic_ai.messages import (
     ToolReturnPart,
 )
 
+# Page images kept in history after a write before the oldest pre-write
+# batches are stripped. One page costs roughly 4-8k input tokens, most of it
+# billed at the cached rate while the history is unchanged. GPT-6 Luna reads
+# 20+ pages before its first write on long documents (2026-09-25 comparison
+# runs), so a lower budget re-created the strip-then-re-read loop.
+RETAINED_PAGE_IMAGE_BUDGET = 40
+
 # Marker the image tools emit before each page image, e.g. "=== Page 12 ===".
 _PAGE_MARKER_RE = re.compile(r"===\s*Page\s+(\d+)\s*===", re.IGNORECASE)
 
@@ -107,6 +114,14 @@ def _part_has_image(part: ToolReturnPart) -> bool:
     if isinstance(content, list):
         return any(isinstance(item, BinaryContent) for item in content)
     return isinstance(content, BinaryContent)
+
+
+def _image_count(part: ToolReturnPart) -> int:
+    """Number of image blobs carried by one tool return."""
+    content = part.content
+    if not isinstance(content, list):
+        return 0
+    return sum(isinstance(item, BinaryContent) for item in content)
 
 
 def _nearest_page_number(content: List[object], image_index: int) -> str:
@@ -247,10 +262,15 @@ def strip_stale_images(messages: List[ModelMessage]) -> List[ModelMessage]:
       them; stripping here is what caused the loop. This holds
       **unconditionally — including under token pressure** (see the
       scanned-thrash note below).
-    - **After a write**, the workbook is the source of truth, so strip images
-      from batches that *precede* the most recent write. The most recent image
-      batch is always kept so the agent is never fully blinded, and any images
-      viewed since the last write (the current fix cycle) are kept too.
+    - **After a write**, keep every image while the history holds at most
+      `RETAINED_PAGE_IMAGE_BUDGET` page images. Agents write in several rounds
+      (face sheet, then sub-sheets, then fixes), and each round needs the same
+      source pages. Stripping at the first write made them re-open those pages
+      after every write and invalidated the provider prompt cache each time
+      (trace audit, 2026-09-25). Only over the budget are batches that
+      *precede* the most recent write stripped, oldest first, until the
+      history is back under budget. The newest batch and anything viewed since
+      the last write are always kept.
 
     **Why pre-write stripping is never done (scanned-thrash fix, 2026-06-20):**
     an earlier "Plan 2" escalation stripped pre-write images down to the newest
@@ -267,7 +287,7 @@ def strip_stale_images(messages: List[ModelMessage]) -> List[ModelMessage]:
     payloads), never by blinding the agent to its own pages.
 
     Stripped `BinaryContent` blobs become a one-line placeholder that preserves
-    the `=== Page N ===` markers and actively discourages re-fetching.
+    the `=== Page N ===` markers and says how to see the page again.
 
     Generic over tool name: matches any `ToolReturnPart` whose content carries
     `BinaryContent`, so it covers `view_pdf_pages` (extraction/notes) and
@@ -290,19 +310,25 @@ def strip_stale_images(messages: List[ModelMessage]) -> List[ModelMessage]:
         # run_id=126 / scanned-PDF thrash-lock (see the function docstring).
         return messages
 
+    retained = sum(_image_count(part) for _mi, _pi, part in image_parts)
+    if retained <= RETAINED_PAGE_IMAGE_BUDGET:
+        # Post-write but within budget: the agent still needs these pages for
+        # its next write round, and keeping the prefix unchanged keeps the
+        # provider prompt cache warm.
+        return messages
+
     # Protect the single most recent image batch regardless of where it sits.
     newest_image_idx = image_parts[-1][0]
 
-    # Post-write: the workbook is the source of truth, so strip images from
-    # batches that precede the most recent successful write.
-    keep_from = last_write_idx
-
     out = messages
     for mi, pi, part in image_parts:
+        if retained <= RETAINED_PAGE_IMAGE_BUDGET:
+            break
         # Keep: the newest batch, and anything viewed at/after the write
-        # boundary (the current fix cycle). Strip only images that predate it.
-        if mi >= keep_from or mi == newest_image_idx:
+        # boundary (the current fix cycle). Strip oldest pre-write images first.
+        if mi >= last_write_idx or mi == newest_image_idx:
             continue
+        retained -= _image_count(part)
         content = part.content
         if not isinstance(content, list):
             continue
@@ -311,9 +337,9 @@ def strip_stale_images(messages: List[ModelMessage]) -> List[ModelMessage]:
             if isinstance(item, BinaryContent):
                 page = _nearest_page_number(content, idx)
                 new_content.append(
-                    f"Page {page} was viewed earlier and its data is already "
-                    f"captured in the workbook; do not re-open it just to "
-                    f"refresh context."
+                    f"Page {page} image was removed to keep the conversation "
+                    f"small. Figures you already wrote are in the workbook; "
+                    f"view the page again only if you still need values from it."
                 )
             else:
                 new_content.append(item)
@@ -670,7 +696,7 @@ def strip_stale_images_ctx(
 
     Image trimming no longer escalates with token usage — pre-write images are
     kept unconditionally (scanned-thrash fix, 2026-06-20) and post-write
-    trimming already runs at every turn — so `ctx` is intentionally unused
+    trimming is bounded by `RETAINED_PAGE_IMAGE_BUDGET` — so `ctx` is intentionally unused
     here. The wrapper is retained (rather than registering the bare
     `strip_stale_images`) only so pydantic-ai's ctx-detection contract stays
     symmetric with `compact_old_text_results_ctx`, which DOES still read the

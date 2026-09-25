@@ -95,6 +95,7 @@ def test_from_turn_metrics_rebuilds_live_cost_report():
                 "total_tokens": 125,
                 "cumulative_tokens": 125,
                 "duration_ms": 200,
+                "cache_read_tokens": 80,
             },
             {
                 "turn_index": 2,
@@ -116,7 +117,13 @@ def test_from_turn_metrics_rebuilds_live_cost_report():
     assert report.total_completion_tokens == 20
     assert report.total_thinking_tokens == 5
     assert report.turns[1].tool_name == "write_facts,verify_totals"
-    assert "Total" in report.format_table()
+    table = report.format_table()
+    assert "Total" in table
+    # Cached prompt tokens are reported at the cheaper cached rate alongside
+    # the unchanged pre-cache estimate.
+    assert report.total_cache_read_tokens == 80
+    assert report.estimate_cost_cache_adjusted() < report.estimate_cost()
+    assert "Cache-adjusted cost:" in table
 
 
 def test_estimate_cost():

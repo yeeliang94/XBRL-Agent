@@ -36,7 +36,7 @@ template has matching fields.
    - e. Sub-sheet fields with no matching note line stay empty.
 4. Fill the main sheet (SOFP-OrdOfLiq) with face-level values — these are standalone
    data-entry cells that will NOT be overwritten.
-5. Call write_facts() with ALL field mappings:
+5. Call write_facts() ONCE with ALL field mappings, main sheet and sub-sheet together:
    - Main-sheet example: {"sheet": "SOFP-OrdOfLiq", "field_label": "Cash and cash equivalents",
      "section": "assets", "col": 2, "value": 2551004, ...}
    - Sub-sheet example: {"sheet": "SOFP-Sub-OrdOfLiq", "field_label": "Trade receivables",

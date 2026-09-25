@@ -44,7 +44,7 @@ assets", "Retained earnings", "Lease liabilities", "Contract liabilities").
      fabricate a breakdown.
 4. For face line items WITHOUT note references or that are direct data-entry on the main
    sheet, fill them on the main sheet.
-5. Call write_facts() with ALL field mappings. Prioritise sub-sheet fields:
+5. Call write_facts() ONCE with ALL field mappings, main sheet and sub-sheet together. Prioritise sub-sheet fields:
    - Sub-sheet example: {"sheet": "SOFP-Sub-CuNonCu", "field_label": "Trade receivables",
      "section": "current trade receivables", "col": 2, "value": 384375, ...}
    - Main-sheet example: {"sheet": "SOFP-CuNonCu", "field_label": "Retained earnings",

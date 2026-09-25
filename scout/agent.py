@@ -435,10 +435,17 @@ recoverable but a guessed claim wastes their attention.
     different reporting currency (rare for Malaysian filings).
   - scale_unit: one of "units", "thousands", "millions", or
     "unknown". This is the units the FACE-STATEMENT values are
-    reported in (the AFS header usually says "All values in RM '000"
-    or "RM millions"). NEVER GUESS — leave it "unknown" if you cannot
-    see an explicit declaration; a wrong scale_unit causes a silent
-    1000× error in extraction.
+    reported in. Read it from the amount-column heading on the SOFP
+    or SOPL face page, normally printed above the figures next to the
+    year:
+      "RM'000", "RM 000", "RM '000", "RM thousand"  → "thousands"
+      "RM million", "RM'm", "RM mil"                → "millions"
+      a bare "RM" with no 000 / million suffix      → "units"
+    A bare "RM" IS an explicit declaration of units, not a missing
+    one. If headings disagree, trust the face statements over notes.
+    Use "unknown" only when you have looked at the column headings of
+    at least two face pages and there is no currency heading at all —
+    a wrong scale_unit causes a silent 1000× error in extraction.
   - consolidation_level: one of "company", "group", "both",
     "unknown". "group" when the AFS presents consolidated figures
     only; "company" when only the parent stand-alone; "both" when

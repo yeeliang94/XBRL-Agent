@@ -246,7 +246,7 @@ class _FakeAgentRun:
 
 
 class _FakeAgent:
-    def iter(self, _prompt, deps=None):
+    def iter(self, _prompt, deps=None, usage_limits=None):
         return _FakeAgentRun()
 
 

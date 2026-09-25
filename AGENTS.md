@@ -148,7 +148,9 @@ in `CLAUDE-REFERENCE.md` before changing the surrounding subsystem.
 
 - Before model construction, transport, cache, reasoning, or PydanticAI changes,
   read invariants 2, 2a, 5, 6, and 18. Keep live agents on
-  `end_strategy="early"` and all request caps below PydanticAI's default limit.
+  `end_strategy="early"`. A structured cap must fire before PydanticAI's
+  request limit: keep it below the default of 50, or pass an explicit limit
+  through `agent_tracing.agent_usage_limits` (invariant 18).
 - Scout page hints are advisory. Extraction agents may inspect any valid PDF
   page; no `allowed_pages` or equivalent filter may restrict them.
 - Notes matching remains model judgment. Do not add deterministic label

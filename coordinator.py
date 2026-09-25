@@ -24,6 +24,7 @@ from token_tracker import TokenReport
 # and tests/readers reference `coordinator.MAX_AGENT_ITERATIONS`. The loop
 # itself now lives in agent_runner (rewrite Phase 2).
 from agent_tracing import MAX_AGENT_ITERATIONS  # noqa: F401 (re-export)
+from agent_tracing import agent_usage_limits
 from agent_runner import (
     AgentLoopSpec,
     IterationLimitReached,
@@ -198,7 +199,7 @@ def _verify_is_clean(verify_result) -> bool:
     return True
 
 
-def build_face_page_hints(ref) -> dict:
+def build_face_page_hints(ref, notes_inventory=()) -> dict:
     """Build the per-agent ``page_hints`` dict from a scout StatementPageRef.
 
     Phase 1a adds the structural face-line refs and the `face_read_in_detail`
@@ -209,13 +210,33 @@ def build_face_page_hints(ref) -> dict:
     test exercises the SAME construction the coordinator runs, instead of a
     drifting replica.
     """
+    # Join each face line's note number to that note's pages from the scout's
+    # notes inventory. The statement-level note_pages is often the whole notes
+    # section; the per-line pages let the agent open only the notes it needs
+    # (2026-09-25 trace audit: SOFP hints of 20 pages narrowed to 6).
+    # (0, 0) marks an unknown location (operator-added note); only real,
+    # openable page ranges become hints, and the wider note_pages remains the
+    # fallback for everything else.
+    note_ranges = {
+        entry.note_num: (first, last)
+        for entry in notes_inventory
+        for first, last in [tuple(getattr(entry, "page_range", None) or (0, 0))]
+        if 1 <= first <= last
+    }
+    face_line_refs = []
+    referenced_pages: set[int] = set()
+    for r in ref.face_line_refs:
+        item = {"label": r.label, "note_num": r.note_num, "section": r.section}
+        page_range = note_ranges.get(r.note_num)
+        if page_range:
+            item["note_page_range"] = list(page_range)
+            referenced_pages.update(range(page_range[0], page_range[1] + 1))
+        face_line_refs.append(item)
     return {
         "face_page": ref.face_page,
         "note_pages": ref.note_pages,
-        "face_line_refs": [
-            {"label": r.label, "note_num": r.note_num, "section": r.section}
-            for r in ref.face_line_refs
-        ],
+        "referenced_note_pages": sorted(referenced_pages),
+        "face_line_refs": face_line_refs,
         "face_read_in_detail": ref.face_read_in_detail,
     }
 
@@ -504,7 +525,7 @@ async def run_extraction(
         scout_context = None
         if infopack is not None and stmt_type in infopack.statements:
             ref = infopack.statements[stmt_type]
-            page_hints = build_face_page_hints(ref)
+            page_hints = build_face_page_hints(ref, infopack.notes_inventory)
             # Phase 2 — top-level Infopack context shared by every
             # face statement. The renderer reads None / "unknown" as
             # "scout did not observe" and either omits the line or
@@ -1279,7 +1300,10 @@ async def _run_single_agent_attempt(
                 getattr(current_deps, "result_saved", False) is True
             ),
         )
-        async with agent.iter(prompt, deps=deps) as agent_run:
+        async with agent.iter(
+            prompt, deps=deps,
+            usage_limits=agent_usage_limits(loop_spec.max_iters),
+        ) as agent_run:
             await run_agent_loop(
                 agent_run, deps, loop_spec, _emit, _turn_records,
             )

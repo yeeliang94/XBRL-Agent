@@ -16,7 +16,9 @@ Scanned PDFs have no text layer, so a naive search would return an empty list
 the model could misread as "term absent". When the document yields no text at
 all we instead return an explicit ``scanned`` signal telling the agent to
 navigate with page images + scout hints. OCR indexing is explicitly out of
-scope (owner decision).
+scope (owner decision). When document preparation has transcribed the pages
+(``tools.page_transcript``), a scanned PDF is searched through that transcript
+instead, and each result says so (2026-09-25 owner decision).
 """
 from __future__ import annotations
 
@@ -111,7 +113,24 @@ _SCANNED_ADVISORY = (
 )
 
 
-def scanned_pdf_advisory(pdf_path: Optional[str]) -> str:
+_TRANSCRIPT_ADVISORY = (
+    "\n\n=== SCANNED DOCUMENT — READ THE PAGE TRANSCRIPT ===\n"
+    "This PDF has no text layer, but every page was transcribed during "
+    "document preparation. `search_pdf_text` searches that transcript."
+)
+_TRANSCRIPT_READ_ADVISORY = (
+    " Wherever these instructions say to view a page, read it with "
+    "`read_page_text` first: it returns each page's "
+    "transcribed tables as text at a fraction of an image's cost. Open the "
+    "page image with `view_pdf_pages` only to confirm a page marked "
+    "BEST-EFFORT, figures that do not add up, or a table whose rows or year "
+    "columns are unclear."
+)
+
+
+def scanned_pdf_advisory(
+    pdf_path: Optional[str], *, page_text_tool: bool = False,
+) -> str:
     """System-prompt suffix that steers an agent off ``search_pdf_text`` when
     the source PDF is fully scanned.
 
@@ -124,7 +143,15 @@ def scanned_pdf_advisory(pdf_path: Optional[str]) -> str:
     """
     if not pdf_path:
         return ""
-    return "" if pdf_has_text_layer(pdf_path) else _SCANNED_ADVISORY
+    if pdf_has_text_layer(pdf_path):
+        return ""
+    from tools.page_transcript import transcript_available
+
+    if transcript_available(pdf_path):
+        return _TRANSCRIPT_ADVISORY + (
+            _TRANSCRIPT_READ_ADVISORY if page_text_tool else ""
+        )
+    return _SCANNED_ADVISORY
 
 
 def _snippet_around(text: str, lo: int, hi: int) -> str:
@@ -194,6 +221,16 @@ def search_pdf_text(
     # its searchable pages rather than be written off as scanned (peer-review
     # MEDIUM).
     page_texts, page_lowers = _load_page_texts(pdf_path)
+    source = "pdf_text"
+
+    if not any(t.strip() for t in page_texts):
+        from tools.page_transcript import transcript_page_texts
+
+        transcript = transcript_page_texts(pdf_path, len(page_texts))
+        if transcript and any(t.strip() for t in transcript):
+            page_texts = transcript
+            page_lowers = [t.lower() for t in transcript]
+            source = "transcript"
 
     if not any(t.strip() for t in page_texts):
         return {
@@ -252,8 +289,14 @@ def search_pdf_text(
         if query_notes:
             entry["note"] = "; ".join(query_notes)
         results.append(entry)
+    message = None
+    if source == "transcript":
+        message = (
+            "Scanned PDF: hits come from the page transcript made during "
+            "document preparation. Confirm figures on the page before writing."
+        )
     return {
-        "scanned": False, "message": None,
+        "scanned": False, "message": message, "source": source,
         "max_hits": max_hits, "note": list_note, "results": results,
     }
 

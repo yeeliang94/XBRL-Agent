@@ -609,8 +609,9 @@ async def test_pdf_auto_format_scope_refuses_source_styled_cells(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("unfinished_source", ["unstyled", None])
 async def test_retry_formats_unfinished_note_without_restyling_finished_note(
-    monkeypatch, formatter_db,
+    monkeypatch, formatter_db, unfinished_source,
 ):
     from db import repository as repo
     from notes.auto_format import PDF_FORMAT_CANDIDATE_SOURCES
@@ -625,7 +626,7 @@ async def test_retry_formats_unfinished_note_without_restyling_finished_note(
         repo.upsert_notes_cell(
             conn, run_id=run_id, sheet=_SHEET, row=113,
             label="Unfinished note", html=_TABLE_HTML,
-            evidence="Page 3", source_pages=[3], style_source="unstyled",
+            evidence="Page 3", source_pages=[3], style_source=unfinished_source,
         )
     patch = json.loads(_GOOD_PATCH)
     patch["cells"][0]["row"] = 113
@@ -633,7 +634,7 @@ async def test_retry_formats_unfinished_note_without_restyling_finished_note(
 
     result = await _run_formatter_with_fake_agent(
         monkeypatch, formatter_db, fake,
-        style_sources=PDF_FORMAT_CANDIDATE_SOURCES,
+        style_sources=PDF_FORMAT_CANDIDATE_SOURCES | {None},
     )
 
     assert result["ok"] is True

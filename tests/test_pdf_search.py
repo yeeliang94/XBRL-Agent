@@ -319,3 +319,77 @@ def test_reviewer_agent_exposes_search_pdf_text(tmp_path):
         model=TestModel(), db_path=db, run_id=run_id, pdf_path="/tmp/x.pdf",
     )
     assert "search_pdf_text" in _tool_names(agent)
+
+
+def _with_transcript(monkeypatch, tmp_path, pages):
+    """A scanned PDF whose preparation transcribed ``pages`` ({n: (html, verified)})."""
+    import ingest.document_preparation as prep
+    from types import SimpleNamespace
+
+    folder = tmp_path / "session"
+    folder.mkdir()
+    doc = fitz.open()
+    for _ in pages:
+        doc.new_page()
+    original = folder / "uploaded.pdf"
+    doc.save(original)
+    (folder / prep.PREPARATION_NAME).write_text("{}")
+    prepared_pages = [
+        {"page": n, "html": html, "verified": verified,
+         "uncertainties": [] if verified else [{"reason": "faint scan"}]}
+        for n, (html, verified) in pages.items()
+    ]
+    monkeypatch.setattr(
+        prep, "read_prepared_document",
+        lambda path: SimpleNamespace(pages=prepared_pages) if path == original else None,
+    )
+    return str(original)
+
+
+def test_scanned_pdf_searches_and_reads_the_preparation_transcript(monkeypatch, tmp_path):
+    """2026-09-25: scanned PDFs are transcribed during preparation; search and
+    read_page_text use that transcript, labelled as such, and a best-effort
+    page tells the agent to confirm it against the image."""
+    from tools.page_transcript import read_page_text
+    from tools.pdf_search import scanned_pdf_advisory
+
+    pdf = _with_transcript(monkeypatch, tmp_path, {
+        1: ("<h1>Statement of financial position</h1>", True),
+        2: ("<table><tr><td>Inventories</td><td>1,454</td></tr></table>", False),
+    })
+
+    result = search_pdf_text(pdf, ["inventories"])
+    assert result["scanned"] is False
+    assert result["source"] == "transcript"
+    assert result["results"][0]["hits"][0]["page"] == 2
+
+    text = read_page_text(pdf, [1, 2, 9])
+    assert "=== Page 1 (transcript checked during preparation) ===" in text
+    assert "BEST-EFFORT transcript" in text and "faint scan" in text
+    assert "<td>1,454</td>" in text
+    assert "Skipped page(s) [9]" in text
+
+    assert "read_page_text" in scanned_pdf_advisory(pdf, page_text_tool=True)
+    assert "read_page_text" not in scanned_pdf_advisory(pdf)
+
+
+def test_replaced_upload_revalidates_instead_of_serving_cached_transcript(monkeypatch, tmp_path):
+    """Review finding (2026-09-25): the transcript cache keyed only on the
+    metadata file could serve the previous document's text after the upload
+    was replaced at the same path. Replacing it now forces revalidation."""
+    import ingest.document_preparation as prep
+    from pathlib import Path
+    from tools.page_transcript import read_page_text
+
+    pdf = _with_transcript(monkeypatch, tmp_path, {1: ("<p>Old document</p>", True)})
+    assert "Old document" in read_page_text(pdf, [1])
+
+    doc = fitz.open()
+    doc.new_page()
+    doc.new_page()
+    doc.save(pdf)  # replace the upload in place; preparation.json untouched
+    # The sanctioned reader now rejects the stale preparation (digest mismatch).
+    monkeypatch.setattr(prep, "read_prepared_document", lambda path: None)
+
+    assert "No page transcript is available" in read_page_text(pdf, [1])
+    assert Path(pdf).exists()

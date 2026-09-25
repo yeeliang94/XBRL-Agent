@@ -142,7 +142,7 @@ async def launch_notes_formatter(run_id: int, body: _NotesFormatLaunch):
             run_id=run_id, db_path=str(server.AUDIT_DB_PATH),
             pdf_path=pdf_path, sheet=body.sheet, model=model,
             output_dir=run.output_dir or "",
-            style_sources=PDF_FORMAT_CANDIDATE_SOURCES,
+            style_sources=PDF_FORMAT_CANDIDATE_SOURCES | {None},
         )
         # Bound the whole pass the way the reviewer / notes-validator passes are
         # bounded — without this a hung LLM call leaves the task 'running'
@@ -368,6 +368,7 @@ async def revert_notes_formatter(run_id: int, body: _NotesFormatRevert):
             if repo.cas_update_notes_cell_html(
                 conn, run_id=run_id, sheet=body.sheet, row=row,
                 expected_html=cell.html, new_html=cleaned,
+                style_source="unstyled",
             ):
                 restored_rows.append(row)
             else:

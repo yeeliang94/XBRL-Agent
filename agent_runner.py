@@ -281,7 +281,8 @@ class AgentLoopSpec:
     phase_map: Mapping[str, str]
     # (agent_role, phase) → the human-readable status message to emit.
     phase_message: Callable[[str, str], str]
-    # Iteration cap; must stay below pydantic-ai's silent 50 (gotcha #18).
+    # Node cap; callers pass agent_usage_limits(max_iters) to agent.iter so
+    # pydantic-ai's request limit never fires first (gotcha #18).
     max_iters: int = MAX_AGENT_ITERATIONS
     # When True, publish the running iteration count onto ``deps.turn_counter``
     # so the save-gate in extraction/agent.py can see the real iteration budget

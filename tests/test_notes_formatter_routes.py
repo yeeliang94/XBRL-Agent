@@ -181,7 +181,7 @@ def test_notes_formatter_validation_failure_records_done(formatter_client, monke
     done = _poll_done(client, run_id, "Notes-Listofnotes")
     assert done["status"] == "done"
     assert done["error"] == "row 112: rendered text changed"
-    assert seen_sources == [PDF_FORMAT_CANDIDATE_SOURCES]
+    assert seen_sources == [PDF_FORMAT_CANDIDATE_SOURCES | {None}]
     with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
         cells = repo.list_notes_cells_for_run(conn, run_id)
     assert cells[0].html == "<p>abc</p>"
@@ -259,6 +259,7 @@ def test_notes_formatter_revert_restores_pre_format_html(formatter_client):
             conn, run_id=run_id, sheet=sheet, row=112,
             label="Disclosure of other notes",
             html=styled, evidence="Page 3", source_pages=[3],
+            style_source="formatter",
         )
         repo.upsert_notes_format_task(
             conn, run_id, sheet, "done", model="m", summary="Formatted.",
@@ -280,6 +281,10 @@ def test_notes_formatter_revert_restores_pre_format_html(formatter_client):
     with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
         cells = repo.list_notes_cells_for_run(conn, run_id)
     assert cells[0].html == pre_format
+    assert cells[0].style_source == "unstyled"
+
+    from notes.auto_format import candidate_sheets
+    assert candidate_sheets(str(server_module.AUDIT_DB_PATH), run_id, [sheet]) == [sheet]
 
     status = client.get(
         f"/api/runs/{run_id}/notes-format/status", params={"sheet": sheet},
@@ -382,6 +387,7 @@ def test_notes_formatter_revert_keeps_content_edited_after_formatting(formatter_
             conn, run_id=run_id, sheet=sheet, row=112,
             label="Disclosure of other notes", html=edited,
             evidence="Page 3", source_pages=[3],
+            style_source="formatter",
         )
         repo.upsert_notes_format_task(
             conn, run_id, sheet, "done", model="m", summary="Formatted.",
@@ -397,6 +403,7 @@ def test_notes_formatter_revert_keeps_content_edited_after_formatting(formatter_
     with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
         cells = repo.list_notes_cells_for_run(conn, run_id)
     assert cells[0].html == edited
+    assert cells[0].style_source == "formatter"
 
 
 def test_guarded_claims_are_mutually_exclusive(formatter_client):

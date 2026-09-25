@@ -1,7 +1,7 @@
 """Unit tests for the token-cost history processors.
 
-These pin the purity contract (input list never mutated) and the
-last-batch-only retention rule for images, plus the keep-first-only rule for
+These pin the purity contract (input list never mutated), the post-write
+page-image budget and write-boundary rules for images, plus the keep-first-only rule for
 duplicate template summaries. See docs/Archive/PLAN-token-cost-reduction.md.
 """
 
@@ -17,10 +17,17 @@ from pydantic_ai.messages import (
     ToolReturnPart,
 )
 
+import extraction.history_processors as history_processors
 from extraction.history_processors import (
     strip_stale_images,
     strip_duplicate_template,
 )
+
+
+@pytest.fixture
+def no_page_budget(monkeypatch):
+    """Strip every eligible pre-write batch, isolating the boundary rules."""
+    monkeypatch.setattr(history_processors, "RETAINED_PAGE_IMAGE_BUDGET", 0)
 
 
 def _png(tag: bytes = b"img") -> BinaryContent:
@@ -96,6 +103,7 @@ def test_strip_stale_images_keeps_all_before_first_write():
     assert _count_images(out) == 6
 
 
+@pytest.mark.usefixtures("no_page_budget")
 def test_strip_stale_images_strips_pre_write_batches_after_write():
     """Once a write lands, batches that PRECEDE it are stripped (their data is
     captured in the workbook); the newest batch is always kept."""
@@ -114,6 +122,7 @@ def test_strip_stale_images_strips_pre_write_batches_after_write():
     assert _count_images(out) == 2
 
 
+@pytest.mark.usefixtures("no_page_budget")
 def test_write_facts_is_a_write_boundary():
     """Rewrite Phase 3 renamed the face write tool fill_workbook → write_facts.
     The stage-aware image trim keys off the tool NAME, so write_facts must be
@@ -133,8 +142,8 @@ def test_write_facts_is_a_write_boundary():
 
     first_return = out[0].parts[0]
     placeholders = [it for it in first_return.content if isinstance(it, str)]
-    # Wording discourages re-fetching rather than inviting it.
-    assert any("do not re-open" in s for s in placeholders)
+    # Wording says the page can be viewed again when values are still needed.
+    assert any("view the page again only if" in s for s in placeholders)
     assert any("Page 1" in s for s in placeholders)
     # Page markers preserved.
     assert any(s == "=== Page 1 ===" for s in first_return.content)
@@ -146,6 +155,7 @@ def test_write_facts_is_a_write_boundary():
     ("conflict recorded for review: source parts already placed", 3),
     ("ok: Notes row 112 built from 0 source part(s), 0 characters", 3),
 ])
+@pytest.mark.usefixtures("no_page_budget")
 def test_source_write_compacts_only_after_committed_content(content, remaining):
     messages = [
         _image_batch_msg("view_pdf_pages", [1, 2]),
@@ -157,6 +167,7 @@ def test_source_write_compacts_only_after_committed_content(content, remaining):
     assert _count_images(messages) == 3
 
 
+@pytest.mark.usefixtures("no_page_budget")
 def test_strip_stale_images_keeps_newest_batch_even_if_pre_write():
     """If the only images all predate the last write, the newest batch is still
     kept so the agent is never fully blinded."""
@@ -188,6 +199,7 @@ def test_strip_stale_images_is_pure():
     assert messages[0].parts[0].content == snapshot[0].parts[0].content
 
 
+@pytest.mark.usefixtures("no_page_budget")
 def test_strip_stale_images_generic_over_tool_name():
     # Scout uses view_pages + fills via... scout has no write, but the strip
     # still triggers off a write tool return if present. Here notes' write_notes
@@ -241,6 +253,7 @@ def test_notes_zero_row_write_is_not_a_boundary():
         assert _count_images(out) == 3, content
 
 
+@pytest.mark.usefixtures("no_page_budget")
 def test_notes_partial_write_is_a_boundary():
     """A partial notes write that committed >= 1 row IS a boundary — those rows
     really landed, so pre-write pages can trim even with skipped rows present."""
@@ -256,6 +269,7 @@ def test_notes_partial_write_is_a_boundary():
     assert _count_images(out) == 2  # pages 1,2 stripped; 4,5 kept
 
 
+@pytest.mark.usefixtures("no_page_budget")
 def test_successful_write_after_failed_write_strips_pre_write_batches():
     """Once a write actually succeeds, pre-write batches strip as before — the
     failed attempt in between doesn't change the boundary."""
@@ -269,6 +283,35 @@ def test_successful_write_after_failed_write_strips_pre_write_batches():
     out = strip_stale_images(messages)
     # Pages 1,2,3 stripped; 4,5 kept.
     assert _count_images(out) == 2
+
+
+def test_post_write_pages_kept_within_budget():
+    """Trace-audit regression (2026-09-25): agents write in several rounds and
+    need the same pages each round. Stripping at the first write made them
+    re-open every page after each write, so within budget nothing is removed
+    and the history (and provider prompt cache) is unchanged."""
+    messages = [
+        _image_batch_msg("view_pdf_pages", [8, 16, 18, 20, 21]),
+        _write_msg("write_facts"),
+        _image_batch_msg("view_pdf_pages", [19]),
+    ]
+    out = strip_stale_images(messages)
+    assert out is messages
+    assert _count_images(out) == 6
+
+
+def test_over_budget_strips_oldest_pre_write_pages_only_until_under(monkeypatch):
+    monkeypatch.setattr(history_processors, "RETAINED_PAGE_IMAGE_BUDGET", 4)
+    messages = [
+        _image_batch_msg("view_pdf_pages", [1, 2]),   # oldest -> stripped
+        _image_batch_msg("view_pdf_pages", [3, 4]),   # brings total to 4 -> kept
+        _write_msg("write_facts"),
+        _image_batch_msg("view_pdf_pages", [5]),      # newest -> kept
+    ]
+    out = strip_stale_images(messages)
+    assert _count_images(out) == 3
+    assert not any(isinstance(it, BinaryContent) for it in out[0].parts[0].content)
+    assert _count_images(out[1:2]) == 2
 
 
 def test_strip_stale_images_noop_with_single_batch():
