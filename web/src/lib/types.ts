@@ -643,7 +643,7 @@ export interface ExtendedSettingsResponse extends SettingsResponse {
    *  default, which is what every agent did before this setting existed. */
   thinking_levels?: Record<string, string>;
   thinking_level_choices?: string[];
-  /** Per-model narrowing of the above — GPT-5.6 does not accept `minimal`. */
+  /** Per-model narrowing of reasoning levels to the selected model's set. */
   thinking_level_choices_by_model?: Record<string, string[]>;
 }
 

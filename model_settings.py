@@ -22,7 +22,7 @@ Temperature is provider-aware (PLAN Phase 9). Gemini stays pinned at 1.0 —
 Gemini-3-through-proxy requires it (the "Temperature Constraint" rule in
 CLAUDE.md). Anthropic and *non-reasoning* OpenAI chat models drop to a
 lower, lower-variance temperature. OpenAI reasoning models (o-series and
-gpt-5.x — including the default ``gpt-5.4``) reject a non-default
+gpt-5.x/gpt-6 — including the default ``gpt-5.4``) reject a non-default
 temperature, so they keep 1.0; unknown / bare-string models keep 1.0 too
 (safe default). A caller may still pass an explicit ``temperature=`` to
 override the resolved default. This module is the single place the policy
@@ -108,19 +108,19 @@ PINNED_TEMPERATURE = 1.0
 # less sampling jitter; we stay above 0.0 to avoid degenerate loops.
 LOWERED_TEMPERATURE = 0.2
 
-# OpenAI model-id markers for the reasoning family (o1/o3/o4 + gpt-5.x).
+# OpenAI model-id markers for the reasoning family (o1/o3/o4 + gpt-5.x/gpt-6).
 # These reject a non-default temperature, so they keep PINNED_TEMPERATURE.
 # Checked as substrings against the (proxy-prefixed) lowercased model id, so
 # "openai.gpt-5.4" and a bare "o3-mini" both match.
-_OPENAI_REASONING_MARKERS = ("o1-", "o3-", "o4-", "gpt-5")
+_OPENAI_REASONING_MARKERS = ("o1-", "o3-", "o4-", "gpt-5", "gpt-6")
 
 
 def _default_temperature(model: Any) -> float:
     """Resolve the provider-aware default temperature for ``model``.
 
     Gemini → 1.0 (required). Anthropic → lowered. OpenAI → lowered UNLESS it
-    is a reasoning model (o-series / gpt-5.x), which keeps 1.0 because those
-    reject a non-default temperature. Unknown / bare-string → 1.0 (safe).
+    is a reasoning model (o-series / gpt-5.x / gpt-6), which keeps 1.0 because
+    those reject a non-default temperature. Unknown / bare-string → 1.0 (safe).
     """
     provider = _resolved_provider(model)
     if provider == "google":
@@ -202,19 +202,28 @@ def _resolved_provider(model: Any) -> str:
 # ---------------------------------------------------------------------------
 
 # Portable levels exposed for models that do not advertise a wider vocabulary.
-# GPT-5.6 has its own model-specific tuple below so `xhigh` and `max` remain
-# available without leaking unsupported values to other providers.
+# Newer GPT families have model-specific tuples below so `xhigh` and `max`
+# remain available without leaking unsupported values to other providers.
 #
 # `none` was added 2026-08-01 (peer review). It is not a pydantic-ai thinking
-# level — it is the OpenAI reasoning-effort value that GPT-5.6 requires when
-# function tools go over Chat Completions, and it is the only way to express
-# "reasoning off" now that omitting the field means "provider default", which
-# on GPT-5.6 is `medium`. It is translated per provider in
+# level — it is the OpenAI reasoning-effort value GPT-5.6, GPT-6 Sol, and
+# GPT-6 Luna require when function tools go over Chat Completions. It is the only way to
+# express "reasoning off" now that omitting the field means "provider default",
+# which on these models is `medium`. It is translated per provider in
 # `build_model_settings`; it never reaches Anthropic or Google as a literal.
 THINKING_LEVELS = ("none", "minimal", "low", "medium", "high")
 GPT_56_THINKING_LEVELS = ("none", "low", "medium", "high", "xhigh", "max")
+GPT_6_ASTRA_THINKING_LEVELS = ("low", "medium", "high", "xhigh", "max")
+GPT_6_SOL_THINKING_LEVELS = ("none", "low", "medium", "high", "xhigh", "max")
+GPT_6_LUNA_THINKING_LEVELS = ("none", "low", "medium", "high", "xhigh", "max")
 ALL_THINKING_LEVELS = tuple(dict.fromkeys(
-    (*THINKING_LEVELS, *GPT_56_THINKING_LEVELS)
+    (
+        *THINKING_LEVELS,
+        *GPT_56_THINKING_LEVELS,
+        *GPT_6_ASTRA_THINKING_LEVELS,
+        *GPT_6_SOL_THINKING_LEVELS,
+        *GPT_6_LUNA_THINKING_LEVELS,
+    )
 ))
 _ALL_THINKING_LEVELS = frozenset(
     ALL_THINKING_LEVELS
@@ -224,6 +233,9 @@ _ALL_THINKING_LEVELS = frozenset(
 # `none`/`xhigh`/`max`. Sending `minimal` to a 5.6-family model is a value the
 # model does not list, so fold it to the nearest thing that exists.
 _GPT_56_PLUS_MARKERS = ("gpt-5.6", "gpt-5-6")
+_GPT_6_ASTRA_MARKERS = ("gpt-6-astra",)
+_GPT_6_SOL_MARKERS = ("gpt-6-sol",)
+_GPT_6_LUNA_MARKERS = ("gpt-6-luna",)
 
 
 def _is_gpt_56_plus(model_name: str) -> bool:
@@ -231,17 +243,40 @@ def _is_gpt_56_plus(model_name: str) -> bool:
     return any(m in name for m in _GPT_56_PLUS_MARKERS)
 
 
+def _is_gpt_6_astra(model_name: str) -> bool:
+    name = (model_name or "").lower()
+    return any(m in name for m in _GPT_6_ASTRA_MARKERS)
+
+
+def _is_gpt_6_sol(model_name: str) -> bool:
+    name = (model_name or "").lower()
+    return any(m in name for m in _GPT_6_SOL_MARKERS)
+
+
+def _is_gpt_6_luna(model_name: str) -> bool:
+    name = (model_name or "").lower()
+    return any(m in name for m in _GPT_6_LUNA_MARKERS)
+
+
 def supported_thinking_levels(model_name: str) -> tuple[str, ...]:
     """The levels THIS model actually accepts.
 
     GPT-5.6 lists `none`, `low`, `medium`, `high`, `xhigh` and `max`, and
-    dropped `minimal`. Other models use the portable set — `none` is universally
-    expressible (OpenAI takes it as a literal, Anthropic and Google as
-    `thinking=False`).
+    dropped `minimal`. GPT-6 Astra lists `low`, `medium`, `high`, `xhigh` and
+    `max`, with no `none` or `minimal`; GPT-6 Sol and Luna accept `none` and
+    the other listed levels, but not `minimal`. Other models use the portable
+    set — `none` is universally expressible (OpenAI takes it as a literal,
+    Anthropic and Google as `thinking=False`).
 
     Exposed through `/api/settings` so the picker cannot offer a level the
     selected model will not honour.
     """
+    if _is_gpt_6_astra(model_name):
+        return GPT_6_ASTRA_THINKING_LEVELS
+    if _is_gpt_6_sol(model_name):
+        return GPT_6_SOL_THINKING_LEVELS
+    if _is_gpt_6_luna(model_name):
+        return GPT_6_LUNA_THINKING_LEVELS
     if _is_gpt_56_plus(model_name):
         return GPT_56_THINKING_LEVELS
     return THINKING_LEVELS
@@ -310,6 +345,14 @@ def _openai_cache_settings(model_name: str) -> dict[str, Any]:
     set `XBRL_OPENAI_CACHE_OPTIONS=1` once the request shape is confirmed
     against a live 5.6 call. Default behaviour is byte-identical to before.
     """
+    # GPT-6 guidance uses this cache-options shape; unlike the 5.6 migration,
+    # it is not opt-in for GPT-6 models.
+    if (
+        _is_gpt_6_astra(model_name)
+        or _is_gpt_6_sol(model_name)
+        or _is_gpt_6_luna(model_name)
+    ):
+        return {"extra_body": {"prompt_cache_options": {"ttl": CACHE_OPTIONS_TTL}}}
     if _is_gpt_56_plus(model_name) and os.environ.get(
         "XBRL_OPENAI_CACHE_OPTIONS", ""
     ).strip() in ("1", "true", "yes"):
@@ -326,22 +369,51 @@ def use_responses_api(model_name: str, proxy_url: str = "") -> bool:
     Every agent in this repo is a multi-turn tool caller, so on GPT-5.6 the
     Chat Completions transport costs the model its reasoning.
 
+    GPT-6 Astra requires the Responses API for function-tool calls. GPT-6 Sol
+    and Luna support function calls on Chat Completions only when reasoning is
+    `none`; Responses is selected on the direct path so configured reasoning
+    can be honored. A configured proxy keeps them on Chat Completions by default.
+    Astra fails early on a proxy until the operator confirms `/v1/responses`
+    support and sets `XBRL_OPENAI_RESPONSES=1`.
+
     Scope is deliberately narrow:
 
-    - Only the 5.6 family. `gpt-5.4` works on Chat Completions today and this
-      is not the change to disturb it with.
-    - Only the DIRECT OpenAI path by default. The enterprise LiteLLM proxy may
-      not expose `/v1/responses`, and defaulting it on there would break every
-      Windows run to fix a model nobody has run yet. Set
-      `XBRL_OPENAI_RESPONSES=1` to enable it on the proxy once confirmed, or
-      `=0` to force the old transport everywhere.
+    - GPT-5.6 uses Responses by default only on the DIRECT OpenAI path.
+      `gpt-5.4` works on Chat Completions today and this is not the change to
+      disturb it with. The enterprise LiteLLM proxy may not expose
+      `/v1/responses`, so GPT-5.6 still needs `XBRL_OPENAI_RESPONSES=1` there.
+    - GPT-6 Astra always needs Responses for this app's function-tool calls.
+      It uses Responses automatically on the direct path and refuses a proxy
+      connection until that endpoint is confirmed and the same flag is set.
+      `XBRL_OPENAI_RESPONSES=0` cannot force Astra onto Chat Completions.
+    - GPT-6 Sol and Luna use Responses automatically on the direct path, and
+      honor `XBRL_OPENAI_RESPONSES=1` on a proxy once confirmed. Chat Completions
+      remains available there with function-tool reasoning pinned to `none`.
     """
     override = os.environ.get("XBRL_OPENAI_RESPONSES", "").strip().lower()
+    if _is_gpt_6_astra(model_name):
+        if override in ("0", "false", "no"):
+            raise ValueError(
+                "GPT-6 Astra tool calls require the Responses API; "
+                "XBRL_OPENAI_RESPONSES cannot disable it."
+            )
+        if override in ("1", "true", "yes") or not proxy_url:
+            return True
+        raise ValueError(
+            "GPT-6 Astra tool calls require the Responses API. Confirm that "
+            "the configured proxy supports /v1/responses, then set "
+            "XBRL_OPENAI_RESPONSES=1, or use direct OpenAI routing."
+        )
     if override in ("0", "false", "no"):
         return False
     if override in ("1", "true", "yes"):
         return True
-    if not _is_gpt_56_plus(model_name):
+    if not (
+        _is_gpt_56_plus(model_name)
+        or _is_gpt_6_astra(model_name)
+        or _is_gpt_6_sol(model_name)
+        or _is_gpt_6_luna(model_name)
+    ):
         return False
     return not proxy_url
 
@@ -418,11 +490,25 @@ def build_model_settings(
             # incompatible case. So on the Chat Completions transport the
             # effort is pinned to `none` and the operator's choice is honoured
             # only on the Responses transport (see `use_responses_api`).
-            if type_name != "OpenAIResponsesModel" and _is_gpt_56_plus(model_name):
+            if (
+                type_name != "OpenAIResponsesModel"
+                and _is_gpt_6_astra(model_name)
+            ):
+                raise ValueError(
+                    "GPT-6 Astra tool calls require the Responses API. "
+                    "Construct it with OpenAIResponsesModel."
+                )
+            if type_name != "OpenAIResponsesModel" and (
+                _is_gpt_56_plus(model_name)
+                or _is_gpt_6_sol(model_name)
+                or _is_gpt_6_luna(model_name)
+            ):
                 if effort not in (None, "none"):
                     logger.warning(
-                        "Model %r is on Chat Completions, where GPT-5.6 function "
-                        "tools require reasoning 'none'; ignoring the configured "
+                        "Model %r is on Chat Completions, where GPT-5.6 and "
+                        "GPT-5.6, GPT-6 Sol, and Luna function tools require "
+                        "reasoning 'none'; "
+                        "ignoring the configured "
                         "level %r. Enable the Responses API (XBRL_OPENAI_RESPONSES=1) "
                         "to use reasoning with tools.", model_name, effort,
                     )
@@ -431,7 +517,10 @@ def build_model_settings(
             # OpenAI reasoning requests do not accept sampling parameters.
             # PydanticAI used to warn and silently discard this value; omit it
             # so traces and wire settings describe what the provider uses.
-            if effort in (None, "none"):
+            if _is_gpt_6_sol(model_name) or _is_gpt_6_luna(model_name):
+                if effort == "none":
+                    settings["temperature"] = temperature
+            elif effort in (None, "none") and not _is_gpt_6_astra(model_name):
                 settings["temperature"] = temperature
             settings.update(_openai_cache_settings(model_name))
             if cache_key:

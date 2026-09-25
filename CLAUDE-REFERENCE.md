@@ -183,6 +183,16 @@ vendor rules make "one OpenAI-compatible client for everything" wrong:
   The proxy path stays on Chat Completions by default because the enterprise
   proxy may not expose `/v1/responses` — flip with `XBRL_OPENAI_RESPONSES=1`
   once confirmed. `gpt-5.4` is deliberately untouched.
+- **GPT-6 Astra + function tools requires Responses API.** Direct OpenAI
+  routing selects it automatically. A configured proxy is refused at model
+  construction until its `/v1/responses` support is confirmed and
+  `XBRL_OPENAI_RESPONSES=1` is set. GPT-6 Astra's supported reasoning levels
+  omit `none` and `minimal`.
+- **GPT-6 Sol and Luna + function tools** use Responses by default on direct
+  OpenAI routing, preserving configured reasoning. Proxy Chat Completions
+  remains available with reasoning pinned to `none`; set
+  `XBRL_OPENAI_RESPONSES=1` after confirming proxy support to use Responses.
+  Both omit `minimal` from their reasoning choices.
 - **`none` is in `THINKING_LEVELS` but is NOT a pydantic-ai level.** It is the
   OpenAI wire value for "reasoning off"; pydantic-ai spells that `False`, and
   neither `ANTHROPIC_THINKING_BUDGET_MAP` nor the Google path has a key for
@@ -201,12 +211,14 @@ vendor rules make "one OpenAI-compatible client for everything" wrong:
   `24h`; `prompt_cache_options.ttl` (5.6+) accepts **`30m` and nothing else**.
   Reusing one constant for both sends `ttl: "24h"`, which is a 400 on every
   request. Hence `CACHE_RETENTION` and `CACHE_OPTIONS_TTL` are separate. The
-  new shape is **opt-in** via `XBRL_OPENAI_CACHE_OPTIONS=1` (through
-  `extra_body`, since pydantic-ai 2.9.0 has no typed field for it).
+  new shape stays **opt-in** for GPT-5.6 via `XBRL_OPENAI_CACHE_OPTIONS=1`;
+  GPT-6 Astra, Sol, and Luna use it by default (through `extra_body`, since
+  pydantic-ai 2.9.0 has no typed field for it).
 - **An unsupported level is substituted loudly, and never inverted.**
   `supported_thinking_levels(model)` is the per-model vocabulary and is
   surfaced to the Settings picker as `thinking_level_choices_by_model`, so the
-  UI cannot offer `minimal` for a 5.6 role. If one is configured anyway,
+  UI cannot offer unsupported levels for GPT-5.6 or GPT-6 models. If one is
+  configured anyway,
   `_LEVEL_FALLBACK` maps `minimal → low` — the least reasoning that still
   exists — and logs it. Mapping it to `none` disabled reasoning entirely,
   which is the opposite of what the operator asked for.
