@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { userMessage } from "../lib/errors";
 import type {
+  AdvancedSetting,
   ModelEntry,
   SettingsResponse,
   SourceIntegrityMode,
@@ -14,6 +15,11 @@ import {
   type ClipboardFormatOptions,
 } from "../lib/clipboardFormat";
 import { ClipboardFormatControls } from "./ClipboardFormatControls";
+import {
+  AdvancedSettingsSection,
+  advancedEditError,
+  type AdvancedEditValue,
+} from "./AdvancedSettingsSection";
 
 // ---------------------------------------------------------------------------
 // GeneralSettingsForm — the model / proxy / API-key + run-defaults form.
@@ -26,8 +32,8 @@ import { ClipboardFormatControls } from "./ClipboardFormatControls";
 // ---------------------------------------------------------------------------
 
 interface Props {
-  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; notes_auto_review?: boolean; notes_coverage?: boolean; tolerance_rm?: number; entity_memory?: boolean; pdf_sidecar?: boolean; pdf_notes_auto_format?: boolean; notes_source_integrity?: SourceIntegrityMode; notes_source_integrity_choices?: string[]; default_models?: Record<string, string>; default_model_overrides?: Record<string, string>; local_override_keys?: string[]; thinking_levels?: Record<string, string>; thinking_level_choices?: string[]; thinking_level_choices_by_model?: Record<string, string[]>; reasoning_summary?: string; reasoning_summary_choices?: string[]; notes_table_style?: Partial<ClipboardFormatOptions>; available_models?: ModelEntry[] }>;
-  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; default_models: Record<string, string>; reset_keys: string[]; auto_review: boolean; notes_auto_review: boolean; notes_coverage: boolean; entity_memory: boolean; pdf_sidecar: boolean; pdf_notes_auto_format: boolean; notes_source_integrity: SourceIntegrityMode; tolerance_rm: number; scout_wallclock_seconds: number; scout_max_turns: number; thinking_levels: Record<string, string>; reasoning_summary: string; notes_table_style: ClipboardFormatOptions }>) => Promise<{ status: string }>;
+  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; notes_auto_review?: boolean; notes_coverage?: boolean; tolerance_rm?: number; entity_memory?: boolean; pdf_sidecar?: boolean; pdf_notes_auto_format?: boolean; notes_source_integrity?: SourceIntegrityMode; notes_source_integrity_choices?: string[]; default_models?: Record<string, string>; default_model_overrides?: Record<string, string>; local_override_keys?: string[]; thinking_levels?: Record<string, string>; thinking_level_choices?: string[]; thinking_level_choices_by_model?: Record<string, string[]>; reasoning_summary?: string; reasoning_summary_choices?: string[]; notes_table_style?: Partial<ClipboardFormatOptions>; available_models?: ModelEntry[]; advanced_settings?: AdvancedSetting[] }>;
+  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; default_models: Record<string, string>; reset_keys: string[]; auto_review: boolean; notes_auto_review: boolean; notes_coverage: boolean; entity_memory: boolean; pdf_sidecar: boolean; pdf_notes_auto_format: boolean; notes_source_integrity: SourceIntegrityMode; tolerance_rm: number; scout_wallclock_seconds: number; scout_max_turns: number; thinking_levels: Record<string, string>; reasoning_summary: string; notes_table_style: ClipboardFormatOptions; advanced_settings: Record<string, AdvancedEditValue> }>) => Promise<{ status: string }>;
   testConnection: (body: Partial<{ proxy_url: string; api_key: string; model: string }>) => Promise<{ status: string; model?: string; latency_ms?: number; message?: string }>;
   // When provided, a Cancel button is shown (used by the modal wrapper). The
   // page host omits it — there's nothing to cancel out of.
@@ -309,6 +315,11 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
   const [levelChoicesByModel, setLevelChoicesByModel] =
     useState<Record<string, string[]>>({});
   const [entityMemory, setEntityMemory] = useState(true);
+  // Former env-only switches and limits, described by the server. Only edited
+  // keys are sent; `null` returns a key to the deployment value or default.
+  const [advancedRows, setAdvancedRows] = useState<AdvancedSetting[]>([]);
+  const [advancedEdits, setAdvancedEdits] =
+    useState<Record<string, AdvancedEditValue>>({});
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -376,6 +387,8 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         setLevelChoicesByModel(s.thinking_level_choices_by_model || {});
         setEntityMemory(s.entity_memory !== false);
         if (Array.isArray(s.available_models)) setAvailableModels(s.available_models);
+        setAdvancedRows(Array.isArray(s.advanced_settings) ? s.advanced_settings : []);
+        setAdvancedEdits({});
         setDirty(false);
       })
       .catch((e) => {
@@ -417,6 +430,11 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
       setLoadError("Enter a maximum Scout turn count between 1 and 40 before saving.");
       return;
     }
+    const advancedError = advancedEditError(advancedRows, advancedEdits);
+    if (advancedError) {
+      setLoadError(advancedError);
+      return;
+    }
     // Re-run validation against current values (user may have pressed Enter
     // before blur fired, leaving `errors` stale).
     const live = validate({ proxyUrl, apiKey, model });
@@ -449,9 +467,19 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
           THINKING_ROLES.map(({ key }) => [key, thinkingLevels[key] || ""]),
         ),
         reasoning_summary: reasoningSummary,
+        ...(Object.keys(advancedEdits).length > 0
+          ? { advanced_settings: advancedEdits }
+          : {}),
         ...(apiKey ? { api_key: apiKey } : {}),
       });
       setRoleModelUpdates({});
+      if (Object.keys(advancedEdits).length > 0) {
+        // A reset key now shows whatever .env provides, which only the server
+        // knows, so re-read the rows rather than guessing.
+        const fresh = await getSettings();
+        setAdvancedRows(Array.isArray(fresh.advanced_settings) ? fresh.advanced_settings : []);
+        setAdvancedEdits({});
+      }
       setDirty(false);
       setSaved(true);
       if (savedToastTimerRef.current !== null) {
@@ -466,7 +494,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
     } finally {
       setSaving(false);
     }
-  }, [dirty, model, proxyUrl, apiKey, roleModelUpdates, autoReview, notesAutoReview, notesCoverage, toleranceRm, scoutWallclockSeconds, scoutMaxTurns, entityMemory, thinkingLevels, reasoningSummary, saveSettings]);
+  }, [dirty, model, proxyUrl, apiKey, roleModelUpdates, autoReview, notesAutoReview, notesCoverage, toleranceRm, scoutWallclockSeconds, scoutMaxTurns, entityMemory, thinkingLevels, reasoningSummary, advancedRows, advancedEdits, getSettings, saveSettings]);
 
   const handleUseGpt56ForEveryRole = useCallback(() => {
     setModel(GPT56_LUNA_MODEL);
@@ -1033,6 +1061,27 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         <summary style={styles.label}>Default notes appearance (advanced)</summary>
         <NotesPasteFormatSection getSettings={getSettings} saveSettings={saveSettings} />
       </details>
+
+      {advancedRows.length > 0 && (
+        <>
+          <SettingsSectionHeading
+            title="Advanced settings"
+            description="Feature switches and limits that used to live only in each machine's environment file. Saved values apply to everyone on this server and override the environment file."
+          />
+          <details>
+            <summary style={styles.label}>Show advanced settings</summary>
+            <AdvancedSettingsSection
+              rows={advancedRows}
+              edits={advancedEdits}
+              readOnly={readOnly}
+              onEdit={(key, value) => {
+                setAdvancedEdits((prev) => ({ ...prev, [key]: value }));
+                setDirty(true);
+              }}
+            />
+          </details>
+        </>
+      )}
 
       {/* Test-connection result — shown above the action row (which holds the
           Test Connection button itself, admin-only). */}

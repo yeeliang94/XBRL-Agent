@@ -53,6 +53,17 @@ service key through Settings; the local JSON is written owner-only and is
 git-ignored. Saved local settings take precedence for keys the UI manages, and
 the form can remove an override to return to the deployment value.
 
+Feature switches and limits that were once env-only are listed in
+`settings_catalog.ADVANCED_SETTINGS` and rendered generically under Settings →
+Advanced settings (admin-only, `advanced_settings` on `/api/settings`). The
+pipeline readers are unchanged: they still read `os.environ`, which the saved
+file overlays. Entries marked `restart` are module constants or startup hooks
+and apply after a restart. Secrets, sign-in, and machine-specific values
+(`PORT`, output/settings paths, log file, LibreOffice/Word converter) stay in
+the environment by design. A new env-read switch belongs in the catalog;
+`tests/test_settings_api.py::test_every_advanced_setting_is_read_by_product_code`
+fails if a catalog entry has no reader.
+
 ```env
 # At least one provider API key
 GEMINI_API_KEY=
@@ -176,23 +187,18 @@ vendor rules make "one OpenAI-compatible client for everything" wrong:
 - **GPT-5.6 + function tools + Chat Completions requires effective reasoning
   `none`**, and OMITTING the reasoning field is not neutral — 5.6 then
   defaults to `medium`, which is the incompatible case. Every agent here is a
-  multi-turn tool caller. `model_settings.use_responses_api()` therefore
-  builds an `OpenAIResponsesModel` for the 5.6 family on the DIRECT OpenAI
-  path, and on Chat Completions `build_model_settings` pins
+  multi-turn tool caller. `server._create_proxy_model` therefore builds
+  every OpenAI model as an `OpenAIResponsesModel`, on the direct path and on
+  every proxy, with no opt-out setting (`XBRL_OPENAI_RESPONSES` was removed
+  2026-09-25). The enterprise proxy supports `/v1/responses` (operator-confirmed
+  2026-09-25). If an OpenAI
+  model ever reaches Chat Completions, `build_model_settings` still pins
   `openai_reasoning_effort="none"` rather than letting the default through.
-  The proxy path stays on Chat Completions by default because the enterprise
-  proxy may not expose `/v1/responses` — flip with `XBRL_OPENAI_RESPONSES=1`
-  once confirmed. `gpt-5.4` is deliberately untouched.
-- **GPT-6 Astra + function tools requires Responses API.** Direct OpenAI
-  routing selects it automatically. A configured proxy is refused at model
-  construction until its `/v1/responses` support is confirmed and
-  `XBRL_OPENAI_RESPONSES=1` is set. GPT-6 Astra's supported reasoning levels
-  omit `none` and `minimal`.
-- **GPT-6 Sol and Luna + function tools** use Responses by default on direct
-  OpenAI routing, preserving configured reasoning. Proxy Chat Completions
-  remains available with reasoning pinned to `none`; set
-  `XBRL_OPENAI_RESPONSES=1` after confirming proxy support to use Responses.
-  Both omit `minimal` from their reasoning choices.
+  Claude and Gemini on a proxy stay on Chat Completions.
+- **GPT-6 Astra + function tools requires Responses** (always selected, as
+  for every OpenAI model); `build_model_settings` refuses Chat Completions
+  settings for it. Its reasoning levels omit `none` and `minimal`. GPT-6 Sol
+  and Luna omit `minimal`.
 - **`none` is in `THINKING_LEVELS` but is NOT a pydantic-ai level.** It is the
   OpenAI wire value for "reasoning off"; pydantic-ai spells that `False`, and
   neither `ANTHROPIC_THINKING_BUDGET_MAP` nor the Google path has a key for

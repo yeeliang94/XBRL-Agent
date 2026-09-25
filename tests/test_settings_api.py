@@ -628,3 +628,99 @@ def test_legacy_pdf_settings_do_not_reject_other_settings(tmp_path, monkeypatch,
     assert settings["auto_review"] is False
     assert settings["pdf_sidecar"] is False
     assert settings["pdf_notes_auto_format"] is True
+
+
+# ---------------------------------------------------------------------------
+# Advanced settings (former env-only switches, settings_catalog.py)
+# ---------------------------------------------------------------------------
+
+def _advanced(body: dict) -> dict:
+    return {row["key"]: row for row in body["advanced_settings"]}
+
+
+def test_advanced_setting_saves_reaches_the_pipeline_and_resets(tmp_path, monkeypatch):
+    env_file = _env(tmp_path, monkeypatch)
+    env_file.write_text("XBRL_MAX_CONCURRENT_AGENTS=2\n", encoding="utf-8")
+    for key in ("XBRL_MAX_CONCURRENT_AGENTS", "XBRL_TEMPLATE_IN_PROMPT"):
+        monkeypatch.delenv(key, raising=False)
+    import runtime_settings
+    runtime_settings._FALLBACKS.pop("XBRL_MAX_CONCURRENT_AGENTS", None)
+    runtime_settings._APPLIED.pop("XBRL_MAX_CONCURRENT_AGENTS", None)
+    from agent_concurrency import max_concurrent_agents
+    from extraction.agent import _template_in_prompt_enabled
+
+    rows = _advanced(client.get("/api/settings").json())
+    assert rows["XBRL_MAX_CONCURRENT_AGENTS"]["value"] == 2
+    assert rows["XBRL_MAX_CONCURRENT_AGENTS"]["saved_here"] is False
+    assert rows["XBRL_TEMPLATE_IN_PROMPT"]["value"] is False
+
+    response = client.post("/api/settings", json={"advanced_settings": {
+        "XBRL_MAX_CONCURRENT_AGENTS": 3,
+        "XBRL_TEMPLATE_IN_PROMPT": True,
+    }})
+    assert response.status_code == 200
+    rows = _advanced(client.get("/api/settings").json())
+    assert rows["XBRL_MAX_CONCURRENT_AGENTS"]["value"] == 3
+    assert rows["XBRL_MAX_CONCURRENT_AGENTS"]["saved_here"] is True
+    # "Use default" must preview the .env value it restores, not the built-in 0.
+    assert rows["XBRL_MAX_CONCURRENT_AGENTS"]["fallback"] == 2
+    assert rows["XBRL_TEMPLATE_IN_PROMPT"]["fallback"] is False
+    assert max_concurrent_agents() == 3
+    assert _template_in_prompt_enabled() is True
+
+    client.post("/api/settings", json={"advanced_settings": {
+        "XBRL_MAX_CONCURRENT_AGENTS": None,
+        "XBRL_TEMPLATE_IN_PROMPT": None,
+    }})
+    rows = _advanced(client.get("/api/settings").json())
+    assert rows["XBRL_MAX_CONCURRENT_AGENTS"]["value"] == 2
+    assert rows["XBRL_MAX_CONCURRENT_AGENTS"]["saved_here"] is False
+    assert _template_in_prompt_enabled() is False
+
+
+@pytest.mark.parametrize("payload", [
+    {"XBRL_NOT_A_SETTING": 1},
+    {"SESSION_SECRET": "x"},
+    {"XBRL_MAX_AGENT_ITERATIONS": 50},
+    {"XBRL_MAX_AGENT_ITERATIONS": 2.5},
+    {"XBRL_FACT_BASED_CHECKS": "yes"},
+    {"XBRL_WRITE_FRESHNESS": "strict"},
+    {"XBRL_SOFT_COMPACT_TOKENS": -1},
+    ["XBRL_CACHE_PROBE"],
+])
+def test_invalid_advanced_settings_are_refused_before_any_write(
+    tmp_path, monkeypatch, payload,
+):
+    _env(tmp_path, monkeypatch)
+    response = client.post("/api/settings", json={
+        "model": "openai.gpt-5.4", "advanced_settings": payload,
+    })
+    assert response.status_code == 400
+    assert not server.SETTINGS_FILE.exists()
+
+
+@pytest.mark.parametrize("raw", ["nan", "inf", "-Infinity", "abc"])
+def test_malformed_env_value_shows_the_default_not_a_server_error(
+    tmp_path, monkeypatch, raw,
+):
+    _env(tmp_path, monkeypatch)
+    monkeypatch.setenv("XBRL_FACE_WALLCLOCK_S", raw)
+    response = client.get("/api/settings")
+    assert response.status_code == 200
+    assert _advanced(response.json())["XBRL_FACE_WALLCLOCK_S"]["value"] == 1800.0
+
+
+def test_every_advanced_setting_is_read_by_product_code():
+    """A listed setting that nothing reads would look saved and do nothing."""
+    from pathlib import Path
+    from settings_catalog import ADVANCED_SETTINGS
+
+    root = Path(server.__file__).parent
+    source = "\n".join(
+        path.read_text(encoding="utf-8", errors="replace")
+        for path in root.rglob("*.py")
+        if not {"venv", "tests", "node_modules"} & set(path.relative_to(root).parts)
+        and path.name != "settings_catalog.py"
+    )
+    unread = [s.key for s in ADVANCED_SETTINGS if f'"{s.key}"' not in source]
+    assert unread == []

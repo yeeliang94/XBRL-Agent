@@ -615,6 +615,28 @@ export interface VariantSelection {
  *  backend actually supports. */
 export type SourceIntegrityMode = string;
 
+/** One former env-only switch or limit, described by the server
+ *  (settings_catalog.py) so a new entry needs no frontend edit. */
+export interface AdvancedSetting {
+  key: string;
+  label: string;
+  help: string;
+  group: string;
+  kind: "bool" | "int" | "float" | "choice";
+  default: boolean | number | string;
+  min: number | null;
+  max: number | null;
+  choices: string[];
+  /** Read once at server start: saved now, applies after a restart. */
+  restart: boolean;
+  value: boolean | number | string;
+  /** What clearing the saved value restores: the deployment (.env) value,
+   *  else the built-in default. */
+  fallback: boolean | number | string;
+  /** Saved from this page rather than inherited from `.env` or the default. */
+  saved_here: boolean;
+}
+
 export interface ExtendedSettingsResponse extends SettingsResponse {
   available_models: ModelEntry[];
   default_models: Record<string, string>;
@@ -645,6 +667,7 @@ export interface ExtendedSettingsResponse extends SettingsResponse {
   thinking_level_choices?: string[];
   /** Per-model narrowing of reasoning levels to the selected model's set. */
   thinking_level_choices_by_model?: Record<string, string[]>;
+  advanced_settings?: AdvancedSetting[];
 }
 
 export type FilingLevel = "company" | "group";

@@ -360,64 +360,6 @@ def _openai_cache_settings(model_name: str) -> dict[str, Any]:
     return {"openai_prompt_cache_retention": CACHE_RETENTION}
 
 
-def use_responses_api(model_name: str, proxy_url: str = "") -> bool:
-    """Should this OpenAI model be created as an `OpenAIResponsesModel`?
-
-    OpenAI's GPT-5.6 guidance is explicit: "Use the Responses API for
-    reasoning, tool-calling, and multi-turn workflows", and function tools on
-    Chat Completions are compatible only with effective reasoning `none`.
-    Every agent in this repo is a multi-turn tool caller, so on GPT-5.6 the
-    Chat Completions transport costs the model its reasoning.
-
-    GPT-6 Astra requires the Responses API for function-tool calls. GPT-6 Sol
-    and Luna support function calls on Chat Completions only when reasoning is
-    `none`; Responses is selected on the direct path so configured reasoning
-    can be honored. A configured proxy keeps them on Chat Completions by default.
-    Astra fails early on a proxy until the operator confirms `/v1/responses`
-    support and sets `XBRL_OPENAI_RESPONSES=1`.
-
-    Scope is deliberately narrow:
-
-    - GPT-5.6 uses Responses by default only on the DIRECT OpenAI path.
-      `gpt-5.4` works on Chat Completions today and this is not the change to
-      disturb it with. The enterprise LiteLLM proxy may not expose
-      `/v1/responses`, so GPT-5.6 still needs `XBRL_OPENAI_RESPONSES=1` there.
-    - GPT-6 Astra always needs Responses for this app's function-tool calls.
-      It uses Responses automatically on the direct path and refuses a proxy
-      connection until that endpoint is confirmed and the same flag is set.
-      `XBRL_OPENAI_RESPONSES=0` cannot force Astra onto Chat Completions.
-    - GPT-6 Sol and Luna use Responses automatically on the direct path, and
-      honor `XBRL_OPENAI_RESPONSES=1` on a proxy once confirmed. Chat Completions
-      remains available there with function-tool reasoning pinned to `none`.
-    """
-    override = os.environ.get("XBRL_OPENAI_RESPONSES", "").strip().lower()
-    if _is_gpt_6_astra(model_name):
-        if override in ("0", "false", "no"):
-            raise ValueError(
-                "GPT-6 Astra tool calls require the Responses API; "
-                "XBRL_OPENAI_RESPONSES cannot disable it."
-            )
-        if override in ("1", "true", "yes") or not proxy_url:
-            return True
-        raise ValueError(
-            "GPT-6 Astra tool calls require the Responses API. Confirm that "
-            "the configured proxy supports /v1/responses, then set "
-            "XBRL_OPENAI_RESPONSES=1, or use direct OpenAI routing."
-        )
-    if override in ("0", "false", "no"):
-        return False
-    if override in ("1", "true", "yes"):
-        return True
-    if not (
-        _is_gpt_56_plus(model_name)
-        or _is_gpt_6_astra(model_name)
-        or _is_gpt_6_sol(model_name)
-        or _is_gpt_6_luna(model_name)
-    ):
-        return False
-    return not proxy_url
-
-
 def normalize_thinking_level(value: Any) -> str | None:
     """Accept a level or return None. Unknown values fail to None — a typo in
     Settings must not start sending an effort the provider will reject."""
@@ -489,7 +431,8 @@ def build_model_settings(
             # neutral — 5.6 then defaults to `medium`, which is the
             # incompatible case. So on the Chat Completions transport the
             # effort is pinned to `none` and the operator's choice is honoured
-            # only on the Responses transport (see `use_responses_api`).
+            # only on the Responses transport, which every OpenAI model now uses
+            # (see `server._create_proxy_model`); these checks are guards.
             if (
                 type_name != "OpenAIResponsesModel"
                 and _is_gpt_6_astra(model_name)
@@ -505,12 +448,11 @@ def build_model_settings(
             ):
                 if effort not in (None, "none"):
                     logger.warning(
-                        "Model %r is on Chat Completions, where GPT-5.6 and "
-                        "GPT-5.6, GPT-6 Sol, and Luna function tools require "
-                        "reasoning 'none'; "
-                        "ignoring the configured "
-                        "level %r. Enable the Responses API (XBRL_OPENAI_RESPONSES=1) "
-                        "to use reasoning with tools.", model_name, effort,
+                        "Model %r is on Chat Completions, where GPT-5.6, GPT-6 "
+                        "Sol, and GPT-6 Luna function tools require reasoning "
+                        "'none'; ignoring the configured level %r. OpenAI "
+                        "models should be built on the Responses API.",
+                        model_name, effort,
                     )
                 effort = "none"
             settings: dict[str, Any] = {}
