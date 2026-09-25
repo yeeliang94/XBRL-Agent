@@ -21,6 +21,7 @@ from runtime_settings import (
     update_settings as persist_runtime_settings,
 )
 from auth import routes as auth_routes
+import settings_catalog
 from db.repository import db_session
 
 logger = logging.getLogger("server")
@@ -88,6 +89,7 @@ _ADMIN_ONLY_SETTINGS_KEYS = frozenset({
     "entity_memory",
     "tolerance_rm",
     "reset_keys",
+    "advanced_settings",
 })
 
 _SETTING_ENV_KEYS = {
@@ -294,6 +296,9 @@ async def get_settings():
         # form) so a new IntegrityMode becomes selectable without a UI edit;
         # the VALUE itself rides in `extended`.
         "notes_source_integrity_choices": list(_INTEGRITY_MODES),
+        # Former env-only feature switches and limits, rendered generically by
+        # the Settings page from settings_catalog.ADVANCED_SETTINGS.
+        "advanced_settings": settings_catalog.describe(locally_saved),
         **extended,
     }
 
@@ -357,6 +362,14 @@ async def update_settings(body: dict, request: Request):
         raw_levels = candidate
 
     updates: dict[str, str | None] = {}
+
+    if "advanced_settings" in body:
+        try:
+            updates.update(
+                settings_catalog.validate_updates(body["advanced_settings"])
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
 
     if "reset_keys" in body:
         reset_keys = body["reset_keys"]

@@ -1074,8 +1074,6 @@ def _is_local_proxy(proxy_url: str) -> bool:
 # against the lowercased (possibly prefixed) model id.
 _GEMINI_THOUGHT_SIGNATURE_MARKERS = ("gemini-3", "gemini3")
 
-from model_settings import use_responses_api  # noqa: E402
-
 
 def _warn_if_gemini_loses_thought_signatures(model_name: str, proxy_url: str) -> None:
     """Refuse a configuration that is known to fail on the second tool turn.
@@ -1129,8 +1127,11 @@ def _create_proxy_model(model_name: str, proxy_url: str, api_key: str):
     1. If ``proxy_url`` is set → enterprise LiteLLM proxy (Windows). All
        models go through the OpenAI-compatible proxy endpoint — EXCEPT
        Gemini models on the local-dev proxy, which go direct (see below).
+       OpenAI models use the Responses API (``/v1/responses``); the rest use
+       Chat Completions.
     2. If ``proxy_url`` is empty (Mac / direct API):
-       - OpenAI models (gpt-*, o1-*, o3-*, o4-*) → OpenAI API via OPENAI_API_KEY
+       - OpenAI models (gpt-*, o1-*, o3-*, o4-*) → OpenAI Responses API via
+         OPENAI_API_KEY
        - Anthropic models (claude-*) → Anthropic API via ANTHROPIC_API_KEY
        - Everything else → Google Gemini API via GEMINI_API_KEY / GOOGLE_API_KEY
     """
@@ -1178,9 +1179,7 @@ def _create_proxy_model(model_name: str, proxy_url: str, api_key: str):
         # key (enterprise proxy, where GOOGLE_API_KEY is the real proxy key).
         proxy_auth = os.environ.get("LLM_PROXY_API_KEY", "") or api_key
         provider = OpenAIProvider(base_url=proxy_url, api_key=proxy_auth)
-        if _detect_provider(model_name) == "openai" and use_responses_api(
-            model_name, proxy_url
-        ):
+        if _detect_provider(model_name) == "openai":
             from pydantic_ai.models.openai import OpenAIResponsesModel
 
             return OpenAIResponsesModel(model_name, provider=provider)
@@ -1194,7 +1193,7 @@ def _create_proxy_model(model_name: str, proxy_url: str, api_key: str):
     detected = _detect_provider(model_name)
 
     if detected == "openai":
-        from pydantic_ai.models.openai import OpenAIChatModel
+        from pydantic_ai.models.openai import OpenAIResponsesModel
         from pydantic_ai.providers.openai import OpenAIProvider
 
         openai_key = os.environ.get("OPENAI_API_KEY", "")
@@ -1204,11 +1203,7 @@ def _create_proxy_model(model_name: str, proxy_url: str, api_key: str):
                 "or the deployment environment, but it is not set."
             )
         provider = OpenAIProvider(api_key=openai_key)
-        if use_responses_api(bare_name):
-            from pydantic_ai.models.openai import OpenAIResponsesModel
-
-            return OpenAIResponsesModel(bare_name, provider=provider)
-        return OpenAIChatModel(bare_name, provider=provider)
+        return OpenAIResponsesModel(bare_name, provider=provider)
 
     if detected == "anthropic":
         from pydantic_ai.models.anthropic import AnthropicModel

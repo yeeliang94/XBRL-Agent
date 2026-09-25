@@ -36,6 +36,16 @@ def read_settings(path: Path) -> dict[str, str]:
     }
 
 
+def deployment_value(key: str) -> Optional[str]:
+    """The `.env`/environment value underneath a saved setting — what
+    removing the saved value would restore. Unsaved keys return the live
+    value."""
+    with _LOCK:
+        if key in _APPLIED and os.environ.get(key) == _APPLIED[key]:
+            return _FALLBACKS.get(key)
+        return os.environ.get(key)
+
+
 def apply_settings(path: Path) -> dict[str, str]:
     settings = read_settings(path)
     with _LOCK:

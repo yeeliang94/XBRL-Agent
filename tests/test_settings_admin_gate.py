@@ -85,3 +85,12 @@ def test_unauthenticated_test_connection_is_401(env):
     client = TestClient(server.app)
     r = client.post("/api/test-connection", json={"model": "openai.gpt-5.4"})
     assert r.status_code == 401
+
+
+def test_non_admin_cannot_write_advanced_settings(env):
+    client = TestClient(server.app)
+    _login(client, "user@firm.com", "user-password")
+    r = client.post("/api/settings", json={
+        "advanced_settings": {"XBRL_MAX_CONCURRENT_AGENTS": 1},
+    })
+    assert r.status_code == 403

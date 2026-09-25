@@ -36,8 +36,7 @@ from model_settings import (
     configured_reasoning_summary,
     describe_model_runtime,
     normalize_thinking_level,
-    use_responses_api,
-)
+    )
 
 
 class _FakeChat:
@@ -126,7 +125,11 @@ def test_the_picker_is_narrowed_per_model():
             assert "minimal" not in levels, model_id
             assert "xhigh" in levels, model_id
             assert "max" in levels, model_id
-        assert "none" in levels, model_id
+        # GPT-6 Astra is the one model without a reasoning-off level.
+        if "gpt-6-astra" in model_id:
+            assert "none" not in levels, model_id
+        else:
+            assert "none" in levels, model_id
 
 
 def test_runtime_description_is_best_effort_for_hostile_provider_metadata():
@@ -287,26 +290,36 @@ def test_older_models_are_untouched_on_chat_completions():
 # Transport selection
 # ---------------------------------------------------------------------------
 
-def test_responses_api_selected_for_56_on_the_direct_path():
-    assert use_responses_api("gpt-5.6") is True
-    assert use_responses_api("openai.global.gpt-5.6") is True
+@pytest.mark.parametrize("model_name", [
+    "openai.global.gpt-5.6-luna", "openai.gpt-5.4", "openai.global.gpt-5.5-pro",
+])
+@pytest.mark.parametrize("proxy_url", [
+    "", "https://genai-sharedservice-emea.pwc.com/v1", "http://localhost:4000/v1",
+])
+def test_every_openai_model_uses_responses_on_every_route(
+    monkeypatch, model_name, proxy_url,
+):
+    """No setting chooses the OpenAI transport: direct and proxied runs,
+    old and new models, all use the Responses API."""
+    import server
+    from pydantic_ai.models.openai import OpenAIResponsesModel
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("XBRL_OPENAI_RESPONSES", "0")  # removed; must be ignored
+    model = server._create_proxy_model(model_name, proxy_url, "sk-test")
+    assert type(model) is OpenAIResponsesModel
 
 
-def test_responses_api_not_forced_onto_the_enterprise_proxy():
-    """The proxy may not expose /v1/responses; defaulting it on there would
-    break every Windows run to fix a model nobody has run yet."""
-    assert use_responses_api("gpt-5.6", "https://genai-sharedservice-emea.pwc.com/v1") is False
+def test_claude_on_the_proxy_stays_on_chat_completions():
+    import server
+    from pydantic_ai.models.openai import OpenAIChatModel
 
-
-def test_responses_api_not_applied_to_older_models():
-    assert use_responses_api("gpt-5.4") is False
-    assert use_responses_api("openai.global.gpt-5.5-pro") is False
-
-
-@pytest.mark.parametrize("value,expected", [("1", True), ("0", False)])
-def test_responses_api_override(monkeypatch, value, expected):
-    monkeypatch.setenv("XBRL_OPENAI_RESPONSES", value)
-    assert use_responses_api("gpt-5.4", "https://proxy/v1") is expected
+    model = server._create_proxy_model(
+        "bedrock.anthropic.claude-sonnet-5",
+        "https://genai-sharedservice-emea.pwc.com/v1",
+        "sk-test",
+    )
+    assert type(model) is OpenAIChatModel
 
 
 # ---------------------------------------------------------------------------
