@@ -160,17 +160,17 @@ def test_full_extraction_mocked(full_pipeline_env):
 
     # --- SSE assertions ---
 
-    # Five extractors and the mandatory clean-run triage complete.
+    # Five extractors complete. The mocked run writes no canonical facts, so
+    # the clean-run triage has nothing to review and does not launch.
     completes = [e for e in events if e["event"] == "complete"]
-    assert len(completes) == 6
+    assert len(completes) == 5
     roles = {e["data"]["agent_role"] for e in completes}
-    assert roles == {"SOFP", "SOPL", "SOCI", "SOCF", "SOCIE", "CORRECTION"}
-    assert next(e for e in completes if e["data"]["agent_role"] == "CORRECTION")["data"]["error"] == "no_extracted_facts_to_review"
+    assert roles == {"SOFP", "SOPL", "SOCI", "SOCF", "SOCIE"}
 
     # Final run_complete
     assert "run_complete" in event_types
     rc = [e for e in events if e["event"] == "run_complete"][0]["data"]
-    assert rc["success"] is False
+    assert rc["success"] is True
     assert rc["merged_workbook"] is not None
     assert len(rc["cross_checks"]) == 5
     assert set(rc["statements_completed"]) == {"SOFP", "SOPL", "SOCI", "SOCF", "SOCIE"}
@@ -182,7 +182,7 @@ def test_full_extraction_mocked(full_pipeline_env):
     assert len(merged_wb.sheetnames) == 5
     merged_wb.close()
 
-    # --- DB: 1 run, 5 extractors plus triage, 5 cross-checks ---
+    # --- DB: 1 run, 5 agents, 5 cross-checks ---
     db_path = out / "xbrl_agent.db"
     assert db_path.exists()
     conn = sqlite3.connect(str(db_path))
@@ -190,10 +190,10 @@ def test_full_extraction_mocked(full_pipeline_env):
 
     runs = conn.execute("SELECT * FROM runs").fetchall()
     assert len(runs) == 1
-    assert runs[0]["status"] == "completed_with_errors"
+    assert runs[0]["status"] == "completed"
 
     agents_db = conn.execute("SELECT * FROM run_agents ORDER BY id").fetchall()
-    assert len(agents_db) == 6
+    assert len(agents_db) == 5
 
     checks_db = conn.execute("SELECT * FROM cross_checks ORDER BY id").fetchall()
     assert len(checks_db) == 5
@@ -330,7 +330,7 @@ def test_group_filing_e2e_mocked(full_pipeline_env):
 
     # Cross-checks are fully group-aware (Phase 6), so partial=False
     rc = [e for e in events if e["event"] == "run_complete"][0]["data"]
-    assert rc["success"] is False  # no canonical facts for mandatory triage
+    assert rc["success"] is True  # no facts, so no triage to fail
     assert rc["cross_checks_partial"] is False
 
     # DB persists filing_level in run_config_json
@@ -344,14 +344,16 @@ def test_group_filing_e2e_mocked(full_pipeline_env):
 
 
 def test_clean_run_always_fires_triage(full_pipeline_env, monkeypatch):
-    """A clean run launches review triage even with obsolete settings present.
+    """A clean run with facts launches review triage even with obsolete
+    settings present.
 
-    The mocked run has no real facts, so review reports
-    ``no_extracted_facts_to_review`` after emitting its CORRECTION event.
+    The fact-presence probe is forced True so triage launches; the reviewer's
+    own guard then finds no rows and reports ``no_extracted_facts_to_review``.
     """
     client, session_id, out, session_dir = full_pipeline_env
     monkeypatch.setenv("XBRL_SPOT_CHECK", "false")
     monkeypatch.setenv("XBRL_SPOT_CHECK_MODE", "full")
+    monkeypatch.setattr("server._run_has_facts", lambda *_a, **_k: True)
 
     all_statements = list(StatementType)
     variants = {
@@ -408,8 +410,8 @@ def test_clean_run_always_fires_triage(full_pipeline_env, monkeypatch):
               if e["event"] == "pipeline_stage" and isinstance(e.get("data"), dict)]
     assert "reviewing" in stages
 
-    # Peer-review HIGH (2026-06-21): this mocked run has no real facts, so the
-    # spot-check fails with `no_extracted_facts_to_review` and its CORRECTION
+    # Peer-review HIGH (2026-06-21): the reviewer's own guard finds no real
+    # facts, so the spot-check fails with `no_extracted_facts_to_review` and its CORRECTION
     # row is "failed". A failed spot-check must NOT hide under a green badge —
     # the run is downgraded to completed_with_errors, not completed.
     db_path = out / "xbrl_agent.db"

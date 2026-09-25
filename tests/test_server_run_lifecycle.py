@@ -471,7 +471,7 @@ def test_effective_model_stored_per_agent_not_only_overrides(session_env, clean_
         conn.close()
 
     by_type = {a["statement_type"]: a["model"] for a in agents}
-    assert set(by_type.keys()) == {"SOFP", "SOPL", "CORRECTION"}
+    assert set(by_type.keys()) == {"SOFP", "SOPL"}
     # Both must be non-empty strings; SOPL must carry the default, not SOFP's
     # override and not an empty string.
     assert by_type["SOFP"]

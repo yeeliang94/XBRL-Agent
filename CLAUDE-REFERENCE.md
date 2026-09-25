@@ -1404,7 +1404,11 @@ default, and fires structured `correction_exhausted` outcomes via
 `server._run_reviewer_pass`. The notes reviewer uses the same enforced cap.
 (The legacy `_run_correction_pass` was removed in rewrite Phase 1.1.)
 
-Every clean run now receives six Company or eight Group triage tool turns.
+Every clean run that holds canonical face facts receives six Company or
+eight Group triage tool turns. A clean run with no facts (notes-only) skips
+triage rather than landing `completed_with_errors`; pinned by
+`tests/test_e2e.py::test_full_extraction_mocked` and
+`tests/test_server_notes_api.py::test_notes_models_unknown_key_ignored`.
 Triage cannot write or raise a human flag; it submits specific source-page and
 fact references through `request_scoped_investigation`. Each handoff starts a
 fresh focused reviewer with its own dynamic 16–40-turn cap and a structured

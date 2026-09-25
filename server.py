@@ -7604,7 +7604,10 @@ async def run_multi_agent_stream(
             # specific anomaly is handed to a focused investigation. The
             # auto-review toggle still governs known failed checks/conflicts.
             spot_check_mode: Optional[str] = None
-            if not hard_failures and not has_issues:
+            # A clean run with no face facts (notes-only, or a mocked run)
+            # has nothing to triage; the reviewer would refuse it and wrongly
+            # land the run completed_with_errors.
+            if not hard_failures and not has_issues and _run_has_facts(AUDIT_DB_PATH, run_id) is not False:
                 spot_check_mode = "light"
                 should_correct = True
                 logger.info(
