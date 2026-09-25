@@ -304,9 +304,8 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
   const [localOverrideKeys, setLocalOverrideKeys] = useState<Set<string>>(new Set());
   const [showRoleModels, setShowRoleModels] = useState(false);
   const [levelChoices, setLevelChoices] = useState<string[]>([]);
-  // Per-model vocabulary. GPT-5.6 dropped `minimal`, so offering it there
-  // means the operator picks a level the run then substitutes — the picker
-  // must narrow to what the selected model accepts (peer review 2026-08-02).
+  // Per-model vocabulary. GPT-5.6 and GPT-6 models have different level sets,
+  // so the picker must narrow to what the selected model accepts.
   const [levelChoicesByModel, setLevelChoicesByModel] =
     useState<Record<string, string[]>>({});
   const [entityMemory, setEntityMemory] = useState(true);

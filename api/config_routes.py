@@ -46,7 +46,8 @@ def _levels_by_model() -> dict:
 
     The global `thinking_level_choices` list stays as the superset (and the
     fallback for a model the catalogue does not know); this narrows it per
-    model so the picker cannot offer `minimal` for a GPT-5.6 role.
+    model so the picker cannot offer reasoning levels a GPT-5.6 or GPT-6 role
+    does not accept.
     """
     return {
         m["id"]: list(_supported_levels(m["id"]))
