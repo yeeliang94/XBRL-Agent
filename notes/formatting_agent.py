@@ -362,7 +362,7 @@ async def run_notes_formatter(
     sheet: str,
     model: Union[str, Model],
     output_dir: str = "",
-    style_sources: Optional[set[str]] = None,
+    style_sources: Optional[set[str | None]] = None,
 ) -> dict[str, Any]:
     """Run the formatter pass and attach cross-pass token telemetry.
 
@@ -395,7 +395,7 @@ async def _run_notes_formatter_impl(
     model: Union[str, Model],
     output_dir: str,
     usage: RunUsage,
-    style_sources: Optional[set[str]] = None,
+    style_sources: Optional[set[str | None]] = None,
 ) -> dict[str, Any]:
     if not pdf_path or not Path(pdf_path).exists():
         return {

@@ -63,7 +63,7 @@ it. Detailed explanations and pinning tests are in
 15. [`filing_standard` is a first-class MFRS/MPERS routing axis](CLAUDE-REFERENCE.md#15-mpers--first-class-filing-standard).
 16. [`notes_cells` is canonical HTML; reruns clobber edited rows after confirmation](CLAUDE-REFERENCE.md#16-notes-cells-are-html-excel-download-regenerates-from-the-db).
 17. [Abstract rows are unwritable and balancing residuals never go into catch-all rows](CLAUDE-REFERENCE.md#17-abstract-section-header-rows-are-never-writable-agents-must-not-plug-residuals).
-18. [Agent request caps stay below PydanticAI's default limit](CLAUDE-REFERENCE.md#18-iteration-caps-must-stay-below-pydantic-ais-silent-50-cap).
+18. [Structured agent caps fire before PydanticAI's request limit](CLAUDE-REFERENCE.md#18-structured-agent-caps-must-fire-before-pydanticais-request-limit).
 19. [Pipeline and cross-check progress use the shared event queue](CLAUDE-REFERENCE.md#19-pipeline-stage--cross-check-progress-events).
 20. [Post-extraction failures surface as structured events](CLAUDE-REFERENCE.md#20-silent-post-extraction-failures-are-now-structured-sse-errors).
 21. [The canonical concept model is the only extraction, review, and export path](CLAUDE-REFERENCE.md#21-canonical-concept-model--the-mandatory-pipeline).

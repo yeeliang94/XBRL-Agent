@@ -366,3 +366,29 @@ def test_unknown_range_names_the_field_and_bad_identifier(prepared):
     raw['ownership_ranges'][0]['last_block_id'] = 'stale-block'
     with pytest.raises(ValueError, match=r'ownership_ranges\[0\].last_block_id.*stale-block'):
         validate_document_map(prepared, DocumentMap.model_validate(raw))
+
+
+def test_missing_notes_inventory_gets_a_short_named_repair_message(prepared, monkeypatch):
+    """Trace audit (2026-09-25): 5 of 19 scout runs omitted notes_inventory and
+    the schema error echoed the whole ~12k-char map back. The repair message
+    now names the missing field without repeating the map."""
+    from pydantic_ai.models.function import FunctionModel
+    from pydantic_ai.messages import ModelResponse, RetryPromptPart, ToolCallPart
+    import scout.agent
+    monkeypatch.setattr(scout.agent, '_thinking_level_for', lambda role: None)
+    attempts = []
+
+    def respond(messages, info):
+        attempts.append(messages)
+        raw = mapped()
+        if len(attempts) == 1:
+            del raw['infopack']['notes_inventory']
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, raw)])
+
+    info, _ = asyncio.run(build_prepared_document_map(prepared, FunctionModel(respond)))
+    assert len(attempts) == 2
+    retry = [p for m in attempts[1] for p in m.parts if isinstance(p, RetryPromptPart)]
+    text = retry[-1].model_response()
+    assert "missing required field(s): infopack.notes_inventory" in text
+    assert len(text) < 1000
+    assert info.notes_inventory

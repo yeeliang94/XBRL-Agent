@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 import time
 
 from pricing import estimate_cost as _estimate_cost
+from pricing import estimate_cost_cache_adjusted as _estimate_cost_cache_adjusted
 
 
 @dataclass
@@ -15,6 +16,8 @@ class TurnRecord:
     cumulative_tokens: int
     duration_ms: int
     timestamp: float
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
 
 
 @dataclass
@@ -23,6 +26,8 @@ class TokenReport:
     total_prompt_tokens: int = 0
     total_completion_tokens: int = 0
     total_thinking_tokens: int = 0
+    total_cache_read_tokens: int = 0
+    total_cache_write_tokens: int = 0
     model: object = None  # str or PydanticAI model object for pricing lookup
 
     @classmethod
@@ -53,6 +58,8 @@ class TokenReport:
                 cumulative_tokens=int(metric.get("cumulative_tokens") or 0),
                 duration_ms=int(metric.get("duration_ms") or 0),
                 timestamp=0.0,
+                cache_read_tokens=int(metric.get("cache_read_tokens") or 0),
+                cache_write_tokens=int(metric.get("cache_write_tokens") or 0),
             ))
         return report
 
@@ -72,6 +79,8 @@ class TokenReport:
         self.total_prompt_tokens += record.prompt_tokens
         self.total_completion_tokens += record.completion_tokens
         self.total_thinking_tokens += record.thinking_tokens
+        self.total_cache_read_tokens += record.cache_read_tokens
+        self.total_cache_write_tokens += record.cache_write_tokens
         # Populate cumulative_tokens from the running running totals so the
         # display column shows a real monotonically-increasing number
         # regardless of what the caller passed in.
@@ -94,6 +103,11 @@ class TokenReport:
         lines.append("")
         est_cost = self.estimate_cost()
         lines.append(f"Estimated cost: ${est_cost:.4f}")
+        if self.total_cache_read_tokens or self.total_cache_write_tokens:
+            lines.append(
+                f"Cache-adjusted cost: ${self.estimate_cost_cache_adjusted():.4f} "
+                f"({self.total_cache_read_tokens} cached prompt tokens)"
+            )
         return "\n".join(lines)
 
     def estimate_cost(self) -> float:
@@ -102,4 +116,15 @@ class TokenReport:
             self.total_completion_tokens,
             self.total_thinking_tokens,
             self.model,
+        )
+
+    def estimate_cost_cache_adjusted(self) -> float:
+        """Cost with cached prompt tokens billed at the model's cached rate."""
+        return _estimate_cost_cache_adjusted(
+            self.total_prompt_tokens,
+            self.total_completion_tokens,
+            self.total_thinking_tokens,
+            self.model,
+            cache_read_tokens=self.total_cache_read_tokens,
+            cache_write_tokens=self.total_cache_write_tokens,
         )

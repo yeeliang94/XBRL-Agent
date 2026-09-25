@@ -217,7 +217,13 @@ def parse_face_coverage_entries(
             entries.append(FaceCoverageEntry(
                 ref=ref, action=action, reason=reason, target=target,
             ))
-        except (KeyError, TypeError, ValueError) as exc:
+        except KeyError as exc:
+            errors.append(
+                f"entry {index}: missing required field {exc.args[0]!r}. Each "
+                "entry needs 'ref' and 'action' (\"written\" or \"skipped\"), "
+                "plus 'target' or 'reason'"
+            )
+        except (TypeError, ValueError) as exc:
             errors.append(f"entry {index}: {exc}")
     return FaceCoverageReceipt(entries=entries), errors
 

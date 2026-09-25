@@ -48,7 +48,7 @@ from agent_runner import (
     reasoning_event_metadata,
     run_agent_with_retries,
 )
-from agent_tracing import MAX_AGENT_ITERATIONS, save_messages_trace
+from agent_tracing import MAX_AGENT_ITERATIONS, agent_usage_limits, save_messages_trace
 from notes._rate_limit import (
     RATE_LIMIT_MAX_RETRIES,
     is_rate_limit_error,
@@ -759,8 +759,15 @@ async def _invoke_sub_agent_once(
         f"Financial Instruments note pointing to Risk Management detail), "
         f"you may view it — but mention the cross-reference page(s) in "
         f"`evidence` so the reader knows the citation left your batch range. "
-        f"When practical, request all pages you expect to need in a single "
-        f"`view_pdf_pages` call instead of one page per turn.\n\n"
+        + (
+            "Read your notes through the captured source (manifest and "
+            "blocks) first; open page images with `view_pdf_pages` only to "
+            "check a part that is missing, marked uncertain, or looks wrong. "
+            if source_generation_id is not None else
+            "When practical, request all pages you expect to need in a single "
+            "`view_pdf_pages` call instead of one page per turn. "
+        )
+        + "\n\n"
     ) if batch_pages else ""
 
     # Render the assigned notes by number + title so the agent sees
@@ -861,7 +868,9 @@ async def _invoke_sub_agent_once(
     # the failed-agent trace guarantee the face coordinators give (gotcha #6).
     trace_prefix = _sub_trace_prefix(sub_agent_id, attempt)
 
-    async with agent.iter(prompt, deps=deps) as agent_run:
+    async with agent.iter(
+        prompt, deps=deps, usage_limits=agent_usage_limits(iteration_cap),
+    ) as agent_run:
         try:
             async for node in iter_with_turn_timeout(
                 agent_run, NOTES12_TURN_TIMEOUT_SECS,

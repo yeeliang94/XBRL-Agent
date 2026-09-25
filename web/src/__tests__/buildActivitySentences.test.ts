@@ -23,6 +23,7 @@ describe("buildActivitySentences", () => {
   test("shows page, figure, note and checking activity in operator language", () => {
     const tools: ToolTimelineEntry[] = [
       { tool_call_id: "pages", tool_name: "view_pdf_pages", args: { pages: [3, 4] }, result_summary: null, duration_ms: null, startTime: 1000, endTime: null, phase: "viewing_pdf" },
+      { tool_call_id: "text", tool_name: "read_page_text", args: { pages: [5] }, result_summary: null, duration_ms: null, startTime: 1500, endTime: null, phase: null },
       { tool_call_id: "figures", tool_name: "write_facts", args: {}, result_summary: "raw result", duration_ms: 1, startTime: 2000, endTime: 2001, phase: "filling_workbook" },
       { tool_call_id: "notes", tool_name: "write_notes", args: {}, result_summary: "raw result", duration_ms: 1, startTime: 3000, endTime: 3001, phase: "writing_notes" },
       { tool_call_id: "checks", tool_name: "verify_totals", args: {}, result_summary: "Balanced: True", duration_ms: 1, startTime: 4000, endTime: 4001, phase: "verifying" },
@@ -32,6 +33,7 @@ describe("buildActivitySentences", () => {
       "Checking statement totals.",
       "Adding extracted notes.",
       "Adding extracted figures.",
+      "Reading the text of source page 5.",
       "Reviewing source pages 3 and 4.",
     ]);
   });

@@ -61,55 +61,59 @@ def _sanitize_for_trace(obj: Any) -> None:
 # up and assume the agent is stuck" cap. Used by face/notes coordinators
 # and scout.
 #
-# PLAN-stop-and-validation-visibility Phase 0.3 (2026-04-27): the value
-# MUST stay strictly below pydantic-ai's silent default
-# ``UsageLimits.request_limit=50``. The 2026-04-26 incident was a face
-# agent racing that silent cap and losing — pydantic-ai fired
-# ``UsageLimitExceeded`` from inside its own request preparation,
-# bypassing our coordinator.py iteration-cap path that would have
-# emitted a structured "Hit iteration limit" SSE error. We hold a
-# 10-turn buffer (40 vs 50) so pydantic-ai's per-iteration request
-# overhead can't tip a 49-iteration agent over the silent cap.
+# The cap counts graph NODES: a model-request node and a call-tools node
+# alternate, so N nodes is roughly N/2 model requests. PydanticAI's silent
+# default ``UsageLimits.request_limit=50`` counts model REQUESTS and fires
+# ``UsageLimitExceeded`` from inside its own request preparation, bypassing
+# our structured "Hit iteration limit" path (the 2026-04-26 incident). Every
+# face/notes ``agent.iter`` therefore passes ``agent_usage_limits(cap)``, an
+# explicit request limit equal to the node cap. Requests never exceed nodes,
+# so our cap always fires first and the library default no longer bounds us.
 #
-# Operators who need more headroom can set ``XBRL_MAX_AGENT_ITERATIONS``
-# in env. Setting it >= 50 reintroduces the silent-cap race and is
-# explicitly documented as risky; pinned by
-# tests/test_max_agent_iterations_below_pydantic_cap.py.
+# Default raised 40 -> 60 on 2026-09-25: the trace audit showed agents on
+# long documents hitting 40 nodes (about 20 model turns) mid-task.
+# ``XBRL_MAX_AGENT_ITERATIONS`` overrides it, clamped to ``_SAFE_CEILING``;
+# pinned by tests/test_max_agent_iterations_below_pydantic_cap.py.
+_DEFAULT_MAX_ITERATIONS = 60
+
+
 def _resolve_max_iterations() -> int:
-    # Hard ceiling: pydantic-ai's silent ``UsageLimits.request_limit=50``
-    # races our cap. If our value is >= 50, pydantic-ai wins and the
-    # user sees ``UsageLimitExceeded`` instead of our structured "Hit
-    # iteration limit" message — exactly the 2026-04-26 incident this
-    # constant exists to prevent. Clamp the env override to 45 (5-turn
-    # buffer absorbs pydantic-ai's per-iteration overhead) and log a
-    # loud warning when an operator tried to push it past the safe
-    # ceiling. Peer-review fix (2026-04-27).
-    _SAFE_CEILING = 45
+    # Upper bound on the operator override: a runaway agent should still be
+    # stopped well before it burns an unbounded number of turns.
+    _SAFE_CEILING = 120
 
     raw = os.environ.get("XBRL_MAX_AGENT_ITERATIONS", "")
     if not raw:
-        return 40
+        return _DEFAULT_MAX_ITERATIONS
     try:
         v = int(raw)
     except ValueError:
         logger.warning(
-            "XBRL_MAX_AGENT_ITERATIONS=%r is not an int; using default 40", raw,
+            "XBRL_MAX_AGENT_ITERATIONS=%r is not an int; using default %d",
+            raw, _DEFAULT_MAX_ITERATIONS,
         )
-        return 40
+        return _DEFAULT_MAX_ITERATIONS
     if v <= 0:
-        return 40
+        return _DEFAULT_MAX_ITERATIONS
     if v > _SAFE_CEILING:
         logger.warning(
-            "XBRL_MAX_AGENT_ITERATIONS=%d exceeds safe ceiling of %d "
-            "(pydantic-ai's silent request_limit=50). Clamping to %d to "
-            "preserve the structured 'Hit iteration limit' surfacing path. "
-            "If you genuinely need more headroom, raise this with the "
-            "team — there's a deeper fix that involves explicit "
-            "UsageLimits config per agent role.",
+            "XBRL_MAX_AGENT_ITERATIONS=%d exceeds safe ceiling of %d; "
+            "clamping to %d.",
             v, _SAFE_CEILING, _SAFE_CEILING,
         )
         return _SAFE_CEILING
     return v
+
+
+def agent_usage_limits(max_iters: int):
+    """Explicit PydanticAI request limit for an agent run capped at ``max_iters`` nodes.
+
+    Replaces the library's silent 50-request default so the structured
+    iteration cap, which counts nodes, always fires first.
+    """
+    from pydantic_ai.usage import UsageLimits
+
+    return UsageLimits(request_limit=max_iters)
 
 
 MAX_AGENT_ITERATIONS = _resolve_max_iterations()

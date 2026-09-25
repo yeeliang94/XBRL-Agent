@@ -114,7 +114,14 @@ class ScoutInfopackInput(BaseModel):
     reporting_period_cy: Optional[str] = None
     reporting_period_py: Optional[str] = None
     currency: str = "RM"
-    scale_unit: str = "unknown"
+    scale_unit: str = Field(
+        default="unknown",
+        description=(
+            "Face-statement amount scale from the column heading: "
+            "\"RM'000\" -> thousands, \"RM million\" -> millions, "
+            "bare \"RM\" -> units. \"unknown\" only when no heading exists."
+        ),
+    )
     consolidation_level: str = "unknown"
     # None means the scout omitted the advisory guess. The save layer then
     # preserves the deterministic detector's value instead of serialising an

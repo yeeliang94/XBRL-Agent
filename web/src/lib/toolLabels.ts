@@ -13,6 +13,7 @@ export const TOOL_LABELS: Record<string, string> = {
   lookup_definitions: "Looking up definitions",
   read_template: "Reading template",
   view_pdf_pages: "Checking PDF pages",
+  read_page_text: "Reading page text",
   // write_facts is the current tool name (rewrite Phase 3). fill_workbook is
   // kept as a back-compat alias so runs recorded before the rename still
   // render a friendly label in History replay.
@@ -119,7 +120,7 @@ function formatPageList(pages: number[]): string {
  */
 export function argsPreview(toolName: string, args: Record<string, unknown>): string {
   // view_pdf_pages (extraction) and view_pages (scout) share the same formatter.
-  if (toolName === "view_pdf_pages" || toolName === "view_pages") {
+  if (toolName === "view_pdf_pages" || toolName === "view_pages" || toolName === "read_page_text") {
     const pages = args.pages;
     if (Array.isArray(pages) && pages.every((p) => typeof p === "number")) {
       return formatPageList(pages as number[]);

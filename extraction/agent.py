@@ -1129,7 +1129,7 @@ def create_extraction_agent(
     # it skips the call. Appends only when the PDF has no text layer; text /
     # hybrid PDFs are unchanged. The tool stays registered (prompts name it).
     from tools.pdf_search import scanned_pdf_advisory
-    system_prompt += scanned_pdf_advisory(pdf_path)
+    system_prompt += scanned_pdf_advisory(pdf_path, page_text_tool=True)
 
     # Temperature is provider-aware (Phase 9, resolved inside
     # build_model_settings): Gemini stays 1.0 (CLAUDE.md gotcha #5 — Gemini 3
@@ -1250,6 +1250,18 @@ def create_extraction_agent(
             results.append(BinaryContent(data=rendered[p], media_type="image/png"))
 
         return results
+
+    @agent.tool
+    def read_page_text(ctx: RunContext[ExtractionDeps], pages: List[int]) -> str:
+        """Read the transcribed text of PDF pages, e.g. [8, 19]. Up to ten per call.
+
+        Returns each page's tables and text as HTML from the transcript made
+        during document preparation — far cheaper than page images. Each page
+        is labelled with its capture status; confirm a BEST-EFFORT page, or any
+        figure that does not reconcile, with view_pdf_pages before writing.
+        """
+        from tools.page_transcript import read_page_text as _read_page_text
+        return _read_page_text(ctx.deps.pdf_path, pages)
 
     @agent.tool
     def search_pdf_text(ctx: RunContext[ExtractionDeps], queries: List[str]) -> str:
@@ -1506,8 +1518,9 @@ def create_extraction_agent(
         ) -> str:
             """Account for every scout-observed face line (written | skipped).
 
-            Pass one typed entry per scout-flagged line.
-            ``ref`` is the line label the scout reported. This is an AUDIT
+            Pass one entry per scout-flagged line, shaped
+            ``{"ref": ..., "action": "written" | "skipped", "target": ...,
+            "reason": ...}``. ``ref`` is the line label the scout reported. This is an AUDIT
             receipt — it never changes values. A ``written`` entry must set
             ``target`` to the field_label used in a successful ``write_facts``
             write (you may omit target when it is identical to ref). A write

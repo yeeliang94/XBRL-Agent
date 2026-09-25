@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from agent_tracing import (  # noqa: F401
     MAX_AGENT_ITERATIONS,
+    agent_usage_limits,
     save_agent_trace,
     save_messages_trace,
 )
@@ -898,7 +899,10 @@ async def _invoke_single_notes_agent_once(
             ),
         }
 
-    async with agent.iter(prompt, deps=deps) as agent_run:
+    async with agent.iter(
+        prompt, deps=deps,
+        usage_limits=agent_usage_limits(MAX_AGENT_ITERATIONS),
+    ) as agent_run:
         try:
             # Per-turn timeout guard: if the LLM's next turn stalls past
             # NOTES_TURN_TIMEOUT, TimeoutError bubbles out to the handler

@@ -776,6 +776,17 @@ Only an empty transcription from an ink-bearing page changes orientation: a
 hinted page falls back to unrotated and an unhinted page tries 90 degrees.
 Pinned by `tests/test_notes_discoverer_vision.py`, `tests/test_pdf_sidecar.py`, and
 `tests/test_pdf_sidecar_wiring.py`.
+Face page hints join each face line's note number to that note's page range in
+the scout notes inventory (`coordinator.build_face_page_hints`), and the prompt
+lists those pages first; the statement-level `note_pages` stays available as a
+wider fallback. Pinned by `tests/test_coordinator_forwards_face_line_refs.py`.
+On scanned PDFs, `search_pdf_text` searches the preparation transcript and face
+agents read it with `read_page_text` (`tools/page_transcript.py`), using page
+images to confirm best-effort pages or figures that do not reconcile. The
+transcript is exposed only through `read_prepared_document` and is labelled per
+page, never presented as certified (gotcha #31). Pinned by
+`tests/test_pdf_search.py`.
+
 ### 14. Notes feature — five supplementary templates (parallel with face)
 
 Notes agents fill MBRS templates 10–14 (MFRS) / 11–15 (MPERS) in parallel
@@ -1143,8 +1154,9 @@ Key invariants:
     validation owns safety. Numeric sheets (13/14) are excluded (422). Pinned by
     `tests/test_notes_format_patch.py`, `test_notes_formatter_routes.py`,
     `test_db_schema_v26.py`/`_v27.py`.
-    Manual retry uses the same `unstyled`/`floor` candidate set as automatic
-    PDF formatting. If a filled sheet has no candidates, it reports
+    Manual retry accepts `unstyled`/`floor` cells and older cells with no
+    style provenance; automatic PDF formatting uses only `unstyled`/`floor`.
+    If a filled sheet has no candidates, it reports
     `no_unfinished_rows` rather than claiming the sheet is empty. A successful
     automatic pass does not expose a routine retry button; the editor remains
     available for correction.
@@ -1368,21 +1380,22 @@ header-pollution failure mode returns. Pinned by
 and the end-to-end
 `test_writer_refuses_abstract_writes_on_mpers_sopl_analysis`.
 
-### 18. Iteration caps must stay below pydantic-ai's silent 50-cap
+### 18. Structured agent caps must fire before PydanticAI's request limit
 
-`agent_tracing.MAX_AGENT_ITERATIONS` was lowered from 50 to **40** on
-2026-04-27 during the stop-and-validation visibility work.
-The 2026-04-26 user-reported incident — terminal traceback
-`pydantic_ai.exceptions.UsageLimitExceeded: request_limit of 50` — was
-caused by our cap racing pydantic-ai's silent default and losing.
-Pydantic-ai 1.77's `UsageLimits.request_limit=50` fires from inside
-its own `check_before_request`, bypassing the structured "Hit
-iteration limit" path our coordinators emit.
+`agent_tracing.MAX_AGENT_ITERATIONS` counts graph nodes (model-request and
+call-tools nodes alternate). PydanticAI's default `UsageLimits.request_limit=50`
+counts model requests and fires `UsageLimitExceeded` from inside its own request
+preparation, bypassing the structured "Hit iteration limit" path (the
+2026-04-26 incident). Face, notes and List-of-Notes sub-agent runs therefore
+open `agent.iter(..., usage_limits=agent_usage_limits(cap))`, an explicit
+request limit equal to the node cap, so the structured cap always fires first.
 
-The buffer (40 vs 50) absorbs pydantic-ai's per-iteration request
-overhead. Operators can override via `XBRL_MAX_AGENT_ITERATIONS` but
-**must not raise it to ≥50** — pinned by
-`tests/test_max_agent_iterations_below_pydantic_cap.py`.
+The default is 60 nodes (about 30 model turns), raised from 40 on 2026-09-25
+after the trace audit showed agents stopping mid-task on long documents.
+`XBRL_MAX_AGENT_ITERATIONS` overrides it, clamped to 120. Any new face or
+notes `agent.iter` call must pass `agent_usage_limits`. Pinned by
+`tests/test_max_agent_iterations_below_pydantic_cap.py`, which drives a
+looping agent past 50 requests and expects the structured cap.
 
 The reviewer pass has its own dynamic tool-turn cap (16-40 since the
 2026-08-25 reviewer completion hardening; RUN-REVIEW P0-1). It is enforced

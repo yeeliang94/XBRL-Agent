@@ -241,11 +241,19 @@ def _build_scoped_navigation(page_hints: dict) -> str:
     lines.append(f"The scout agent has identified your statement's pages:")
     if face:
         lines.append(f"- Face page: {face}")
-    if notes:
+    referenced = page_hints.get("referenced_note_pages") or []
+    if referenced:
+        lines.append(f"- Pages of the notes referenced on the face: {referenced}")
+        if notes:
+            lines.append(f"- Wider note pages flagged by the scout: {notes}")
+    elif notes:
         lines.append(f"- Note pages: {notes}")
     lines.append("")
     lines.append("Start by viewing the face page to see the statement.")
-    lines.append("Then view note pages as needed for breakdowns.")
+    if referenced:
+        lines.append("Then view the pages of the notes each face line references (listed per line below). Open wider note pages only when a breakdown you need is not on those pages.")
+    else:
+        lines.append("Then view note pages as needed for breakdowns.")
     lines.append("These are recommended starting points. You may view other pages if needed (e.g. adjacent pages for context or pages the scout missed).")
     lines.append("")
     # Cost + focus nudge: SOPL once swept pages 12-25 when the scout had already
@@ -333,7 +341,17 @@ def _format_face_line_ref(entry: dict) -> str:
     label = sanitize_source_scalar(entry.get("label", ""))
     note_num = entry.get("note_num")
     if note_num is not None:
-        return f"  - {label} → Note {sanitize_source_scalar(str(note_num), 24)}"
+        pages = entry.get("note_page_range")
+        where = ""
+        if (
+            isinstance(pages, list) and len(pages) == 2
+            and all(isinstance(p, int) for p in pages)
+        ):
+            where = (
+                f" (page {pages[0]})" if pages[0] == pages[1]
+                else f" (pages {pages[0]}-{pages[1]})"
+            )
+        return f"  - {label} → Note {sanitize_source_scalar(str(note_num), 24)}{where}"
     return f"  - {label} (no note reference)"
 
 

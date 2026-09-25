@@ -306,12 +306,13 @@ def test_turn_cap_formula(is_group, n_items, expected):
 
 
 def test_turn_cap_below_pydantic_50(seeded):
-    """Worst-case dynamic cap stays below MAX_AGENT_ITERATIONS, which is
-    below pydantic-ai's silent 50 (gotcha #18)."""
+    """Worst-case dynamic cap stays below MAX_AGENT_ITERATIONS and below
+    pydantic-ai's default request limit of 50, which still bounds reviewer
+    runs because they do not pass explicit usage limits (gotcha #18)."""
     from agent_tracing import MAX_AGENT_ITERATIONS
     from correction.reviewer_agent import compute_reviewer_turn_cap
-    assert MAX_AGENT_ITERATIONS < 50
     worst = compute_reviewer_turn_cap(filing_level="group", n_items=999)
+    assert worst < 50
     assert worst <= MAX_AGENT_ITERATIONS
 
 
