@@ -6,10 +6,8 @@ server-side so a non-admin who hits the URL directly still gets a 403. Runs with
 AUTH_MODE unset so real sessions apply (the rest of the suite runs in
 AUTH_MODE=dev, where the guard is bypassed by design).
 
-NOTE: the Benchmarks library was DELIBERATELY relaxed from admin-only to
-all-authenticated when the Evals workspace opened it to every signed-in user
-(docs/PLAN-evals-workspace.md, decision #6) — its non-admin access is now pinned
-by test_eval_access.py, so those routes are intentionally absent below.
+NOTE: the Benchmarks routes that were once relaxed to all-authenticated have
+been removed (docs/human-mtool-file-comparison-plan.md, Step 11).
 """
 from __future__ import annotations
 

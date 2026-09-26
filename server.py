@@ -902,41 +902,6 @@ def _open_conflict_count(db_path, run_id) -> int:
         return 0
 
 
-def _grade_run_against_benchmark(db_path, run_id: int, benchmark_id: int):
-    """Grade a finished run against its benchmark and persist the scorecard.
-
-    Gold-standard eval (v16). Returns the score dict (the same shape
-    ``repo.fetch_eval_score`` returns) on success, or ``None`` on any failure.
-    Wrapped so a grading error NEVER fails the run — a run with a benchmark
-    that can't be graded simply lands without a score, mirroring the
-    soft-failure contract for merge / cross-check errors (gotcha #20).
-    """
-    import sqlite3
-    from db import repository as repo
-    from eval.grader import grade_run
-
-    try:
-        conn = sqlite3.connect(str(db_path))
-        conn.execute("PRAGMA foreign_keys = ON")
-        # Match the lifecycle path's pragmas: save_eval_score is a WRITE and
-        # grading fires at run-completion when other writers may be active. A
-        # default busy_timeout of 0 would raise SQLITE_BUSY on a transient
-        # lock, and the broad except below would silently drop the score.
-        conn.execute("PRAGMA busy_timeout = 5000")
-        try:
-            card = grade_run(conn, run_id, benchmark_id)
-            repo.save_eval_score(conn, run_id, benchmark_id, card)
-            conn.commit()
-            return repo.fetch_eval_score(conn, run_id, benchmark_id)
-        finally:
-            conn.close()
-    except Exception:  # noqa: BLE001 — grading must never sink a run
-        logger.warning(
-            "eval grading failed for run %s vs benchmark %s — run completes "
-            "without a score", run_id, benchmark_id, exc_info=True,
-        )
-        return None
-
 # Phase mapping: tool name → EventPhase
 PHASE_MAP = {
     "read_template": "reading_template",
@@ -3120,21 +3085,6 @@ async def _lifespan(app: FastAPI):
         logger.warning("re-review task reconciliation failed at startup",
                        exc_info=True)
 
-    # Retire suite runs left 'running' by a crash (Evals workspace, Step E3) —
-    # same discipline as the review-task reconcile above (gotcha #10 spirit).
-    try:
-        conn = _open_audit_conn()
-        try:
-            ns = repo.reconcile_stale_suite_runs(conn)
-            conn.commit()
-        finally:
-            conn.close()
-        if ns:
-            logger.info("reconciled %d stale suite run(s) at startup", ns)
-    except Exception:
-        logger.warning("suite-run reconciliation failed at startup",
-                       exc_info=True)
-
     # Retire notes re-reviews orphaned by a restart (v24) — same discipline.
     try:
         from db import repository as repo
@@ -3347,12 +3297,6 @@ class RunConfigRequest(BaseModel):
     # clients posting it don't 422.
     model: Optional[str] = None
 
-    # Gold-standard eval (v16): the benchmark this run is graded against. None
-    # on every normal run — grading only fires when the extract-page "Eval
-    # testing" toggle attached a benchmark. Persisted on runs.benchmark_id so
-    # the end-of-run grading hook and the History/run-page surfaces can find it.
-    benchmark_id: Optional[int] = None
-
     # Evals workspace (v30): how many independent, identically-configured runs
     # of this document to launch back-to-back for a consistency measurement.
     # 1 (default) = a single normal run, no repeat group. 2–5 links the runs
@@ -3415,10 +3359,6 @@ class RunConfigPatchRequest(BaseModel):
     def _normalize_orchestration(cls, v):
         return None if v is None else "split"
 
-    # Gold-standard eval (v16): the benchmark this draft run is graded
-    # against, persisted with the rest of the draft config. None leaves the
-    # run a normal (non-eval) run.
-    benchmark_id: Optional[int] = None
     # Evals workspace (v30): repeats-for-consistency, mirrors
     # RunConfigRequest.repeats. Optional so a partial PATCH that doesn't touch
     # it won't clobber a previously-saved value.
@@ -4937,53 +4877,6 @@ def _validate_and_build_run(
         )
         return None, events, new_status
 
-    # Gold-standard eval (v16): if the user attached a benchmark, validate it
-    # BEFORE extraction so a stale / mismatched selection fails fast (cheap,
-    # pre-agent) instead of running for minutes and then producing a misleading
-    # 0% (a standard/level-mismatched benchmark shares no concept uuids with the
-    # run, so grading would silently match nothing). A config error here is
-    # treated like a bad model/infopack — `_fail_run`, not a soft skip.
-    #
-    # NOTE: this can only validate standard/level + existence. It CANNOT verify
-    # the uploaded PDF is the benchmark's document — two same-(standard,level)
-    # benchmarks share template_ids/uuids, so picking the wrong document's
-    # benchmark still grades against the wrong gold. That's an inherent user
-    # responsibility (cf. picking the wrong PDF); see CLAUDE.md gotcha #23.
-    if run_config.benchmark_id is not None and db_conn is not None:
-        from eval import store as _eval_store
-        bench = None
-        try:
-            bench = _eval_store.get_benchmark(db_conn, run_config.benchmark_id)
-        except Exception:
-            # A read failure shouldn't crash validation — fall through to the
-            # not-found path below, which fails the run with a clear message.
-            logger.warning(
-                "benchmark lookup failed for id %s", run_config.benchmark_id,
-                exc_info=True,
-            )
-        if bench is None:
-            events, new_status = _fail_run(
-                db_conn, run_id,
-                f"Eval benchmark {run_config.benchmark_id} not found. "
-                "Pick an existing benchmark or turn off eval testing.",
-                error_code="benchmark_not_found",
-            )
-            return None, events, new_status
-        if (
-            bench["filing_standard"] != run_config.filing_standard
-            or bench["filing_level"] != run_config.filing_level
-        ):
-            events, new_status = _fail_run(
-                db_conn, run_id,
-                f"Eval benchmark '{bench['name']}' is "
-                f"{bench['filing_standard'].upper()} {bench['filing_level']}, "
-                f"but this run is {run_config.filing_standard.upper()} "
-                f"{run_config.filing_level}. Pick a matching benchmark or turn "
-                "off eval testing.",
-                error_code="benchmark_scope_mismatch",
-            )
-            return None, events, new_status
-
     # Item 28 — per-entity advisory memory. Persist this run's infopack so it
     # can seed FUTURE matches, then look up whether this entity was processed
     # before and, if so, build an advisory the coordinator renders into the
@@ -5033,9 +4926,6 @@ def _validate_and_build_run(
         # fail-fast guard above.
         run_id=run_id,
         db_path=str(AUDIT_DB_PATH),
-        # Gold-standard eval (v16): carried through so the end-of-run grading
-        # hook can find the benchmark. None on every normal run.
-        benchmark_id=run_config.benchmark_id,
         # Item 28 — matched prior-year advisory (or None).
         prior_year_advisory=prior_year_advisory,
     )
@@ -5271,7 +5161,6 @@ async def run_multi_agent_stream(
     model_name: str,
     *,
     existing_run_id: Optional[int] = None,
-    suite_run_id: Optional[int] = None,
     require_preparation: bool = False,
 ) -> AsyncIterator[dict]:
     """Orchestrates multi-agent extraction with SSE event multiplexing.
@@ -5444,7 +5333,6 @@ async def run_multi_agent_stream(
                     config=run_config.model_dump(),
                     scout_enabled=run_config.use_scout,
                     orchestration=getattr(run_config, "orchestration", "split"),
-                    suite_run_id=suite_run_id,
                 )
                 db_conn.commit()
             except Exception:
@@ -5456,28 +5344,6 @@ async def run_multi_agent_stream(
                 except Exception:
                     pass
                 db_conn = None
-
-    # Gold-standard eval (v16): persist the benchmark this run grades against,
-    # on whichever runs row we resolved above (draft-start or fresh). Best-
-    # effort — a failure here must never abort the run (a missing benchmark_id
-    # just means the end-of-run grading hook stays inert, like a normal run).
-    if db_conn is not None and run_id is not None and run_config.benchmark_id:
-        try:
-            db_conn.execute(
-                "UPDATE runs SET benchmark_id = ? WHERE id = ?",
-                (run_config.benchmark_id, run_id),
-            )
-            db_conn.commit()
-        except Exception:
-            logger.warning(
-                "Failed to persist benchmark_id=%s on run %s — run will "
-                "complete but won't be graded.",
-                run_config.benchmark_id, run_id, exc_info=True,
-            )
-            try:
-                db_conn.rollback()
-            except Exception:
-                pass
 
     coordinator_result = None  # type: ignore[assignment]
     merge_result = None
@@ -5673,7 +5539,7 @@ async def run_multi_agent_stream(
             "status", "error", "pipeline_stage", "scout_warnings",
             "scale_conflict", "pdf_sidecar", "partial_merge",
             "cross_check_start", "cross_check_result",
-            "cross_check_complete", "scout_complete", "eval_score",
+            "cross_check_complete", "scout_complete",
             "run_complete",
         })
 
@@ -8493,31 +8359,6 @@ async def run_multi_agent_stream(
         if _safe_mark_finished(db_conn, run_id, overall_status):
             terminal_status = overall_status
 
-        # === Gold-standard eval (v16) ===
-        # Grade the FINAL shipped output — after the reviewer pass +
-        # re-export/re-merge — so the score matches the workbook the user
-        # downloads (user decision 2026-06-04). Gated on the run carrying a
-        # benchmark_id; a normal run skips this entirely. Wrapped so a grading
-        # failure never changes the run's terminal status (gotcha #20).
-        eval_score = None
-        _benchmark_id = run_config.benchmark_id
-        if _benchmark_id and run_id is not None:
-            eval_score = _grade_run_against_benchmark(
-                AUDIT_DB_PATH, run_id, _benchmark_id
-            )
-            if eval_score is not None:
-                eval_event = {"event": "eval_score", "data": eval_score}
-                persist_event(eval_event)
-                if client_connected:
-                    try:
-                        yield eval_event
-                    except (asyncio.CancelledError, GeneratorExit):
-                        client_connected = False
-                        logger.info(
-                            "Client disconnected at eval_score yield; finalizing",
-                            extra={"session_id": session_id},
-                        )
-
         # Emit cross-check results as SSE events
         checks_data = []
         for cr in cross_check_results:
@@ -8747,22 +8588,9 @@ async def run_repeat_group_stream(
     model_name: str,
     *,
     first_run_id: Optional[int] = None,
-    suite_run_id: Optional[int] = None,
-    existing_group_id: Optional[int] = None,
-    start_index: int = 0,
-    should_abort: Optional[Callable[[], bool]] = None,
 ) -> AsyncIterator[dict]:
     """Launch N identically-configured runs of one document back-to-back and
     score their agreement (Evals workspace, Step D1 / PRD Flow 2).
-
-    Resume support (PLAN-evals-hardening Step 1): `existing_group_id` lets a
-    suite Resume top up ONLY the missing repeat indices (the gaps in the group's
-    finished set) into the SAME group, so consistency is scored over the full
-    requested set instead of a fresh partial group. (`start_index` is a legacy
-    kwarg, retained for back-compat; the gap computation supersedes it.)
-    `should_abort` is
-    checked between repeats so a batch Stop reliably prevents the next repeat
-    from starting (the in-flight one is cancelled via task_registry as before).
 
     Each child is a completely normal run through ``run_multi_agent_stream`` —
     its own audit row, traces, cross-checks, and the gotcha #10 terminal-status
@@ -8783,39 +8611,21 @@ async def run_repeat_group_stream(
 
     # Create the group up-front so a crash before the first repeat still leaves
     # an auditable row. config snapshot = the exact request every repeat runs.
-    # A resume passes the ORIGINAL group so topped-up repeats land in it.
-    group_id: Optional[int] = existing_group_id
-    if group_id is None:
-        gconn = sqlite3.connect(str(AUDIT_DB_PATH))
-        try:
-            group_id = repo.create_repeat_group(
-                gconn,
-                config=run_config.model_dump(),
-                repeats_requested=n,
-                benchmark_id=run_config.benchmark_id,
-            )
-            gconn.commit()
-        except Exception:
-            logger.warning("Failed to create repeat group for %s", session_id,
-                           exc_info=True)
-        finally:
-            gconn.close()
-
-    # Which repeat indices still need to run. Fresh run → all of them. Resume →
-    # the GAPS in the group's finished set: a completed set {0, 2} must run {1},
-    # never a blind append from a count (which re-ran 2 and left 1 unfilled when
-    # a middle repeat failed — the peer-review failed-middle-repeat finding). The
-    # legacy `start_index` kwarg is accepted for back-compat but no longer drives
-    # the loop.
-    if existing_group_id is not None and group_id is not None:
-        rconn = sqlite3.connect(str(AUDIT_DB_PATH))
-        try:
-            done_indices = repo.finished_repeat_indices(rconn, group_id)
-        finally:
-            rconn.close()
-        indices_to_run = [i for i in range(n) if i not in done_indices]
-    else:
-        indices_to_run = list(range(n))
+    group_id: Optional[int] = None
+    gconn = sqlite3.connect(str(AUDIT_DB_PATH))
+    try:
+        group_id = repo.create_repeat_group(
+            gconn,
+            config=run_config.model_dump(),
+            repeats_requested=n,
+        )
+        gconn.commit()
+    except Exception:
+        logger.warning("Failed to create repeat group for %s", session_id,
+                       exc_info=True)
+    finally:
+        gconn.close()
+    indices_to_run = list(range(n))
 
     # Tell the client the group id + total so the consistency panel can attach
     # and poll (GET /api/repeat-groups/{id}) as repeats land.
@@ -8846,11 +8656,6 @@ async def run_repeat_group_stream(
     finalized = False
     try:
         for i in indices_to_run:
-            # A batch Stop between repeats halts the group here — without this
-            # check, cancelling the in-flight repeat would let the loop roll
-            # straight into the next one (peer-review Step 1 finding).
-            if should_abort is not None and should_abort():
-                break
             # Announce which repeat is starting so the live UI can label it.
             yield {"event": "repeat_progress", "data": {
                 "group_id": group_id, "repeat_index": i, "repeats_total": n,
@@ -8888,7 +8693,6 @@ async def run_repeat_group_stream(
                         orchestration=getattr(run_config, "orchestration", "split"),
                         repeat_group_id=group_id,
                         repeat_index=i,
-                        suite_run_id=suite_run_id,
                     )
                     cc.commit()
                 finally:
@@ -9168,11 +8972,6 @@ def _run_summary_to_dict(summary) -> dict:
         "filing_standard": summary.filing_standard,
         "denomination": summary.denomination,
         "orchestration": getattr(summary, "orchestration", "split"),
-        # v16 gold-standard eval: the benchmark this run graded against (None
-        # on normal runs) + the headline accuracy in [0, 1] (None when not
-        # graded). Powers the History score column + sparkline.
-        "benchmark_id": getattr(summary, "benchmark_id", None),
-        "eval_score": getattr(summary, "eval_score", None),
         # v30 evals workspace: the build that produced this run (None on legacy
         # rows). Powers the History version column + trend attribution.
         "app_version": getattr(summary, "app_version", None),
@@ -9416,9 +9215,8 @@ from api.notes import router as _notes_router
 from api.notes_formatter import router as _notes_formatter_router
 from api.files import router as _files_router
 from api.eval import router as _eval_router
-from api.suites import router as _suites_router
-from api.suite_runner import router as _suite_runner_router
 from api.mtool import router as _mtool_router
+from api.human_file import router as _human_file_router
 from auth.routes import router as _auth_router
 
 app.include_router(_config_router)
@@ -9432,9 +9230,8 @@ app.include_router(_notes_router)
 app.include_router(_notes_formatter_router)
 app.include_router(_files_router)
 app.include_router(_eval_router)
-app.include_router(_suites_router)
-app.include_router(_suite_runner_router)
 app.include_router(_mtool_router)
+app.include_router(_human_file_router)
 app.include_router(_auth_router)
 
 # Re-export the moved handler functions as ``server.<name>`` so existing tests

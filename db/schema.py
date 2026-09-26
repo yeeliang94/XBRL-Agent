@@ -233,7 +233,10 @@ from pathlib import Path
 # v48 adds structured source receipts and their exact prepared-table terms.
 # Reconciliation and source fidelity remain separate: an arithmetically exact
 # receipt can still open a semantic-review conflict.
-CURRENT_SCHEMA_VERSION = 48
+# v49 stores one human-filled mTool file per run: the file record, the human's
+# typed figures by canonical fact key, and the human's notes by field. The
+# comparison with the run's current facts is computed on read, never stored.
+CURRENT_SCHEMA_VERSION = 49
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -1647,6 +1650,51 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         taxonomy_version      TEXT,
         manifest_versions_json TEXT,
         semantic_coverage_json TEXT
+    )
+    """,
+
+    # v49: the mTool workbook a human filled for the same document as a run.
+    # One file per run; replacing it deletes and re-inserts in one
+    # transaction. Unmatched rows and statements not compared are only ever
+    # listed, so they stay JSON on the file record.
+    """
+    CREATE TABLE IF NOT EXISTS human_files (
+        run_id              INTEGER PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+        filename            TEXT NOT NULL,
+        sha256              TEXT NOT NULL,
+        unit                TEXT NOT NULL,     -- 'units' | 'thousands' | 'millions'
+        uploaded_by         TEXT,
+        uploaded_at         TEXT NOT NULL,
+        summary_json        TEXT NOT NULL DEFAULT '{}',
+        unmatched_json      TEXT NOT NULL DEFAULT '[]',
+        not_compared_json   TEXT NOT NULL DEFAULT '[]'
+    )
+    """,
+
+    # One row per slot the human file addresses, blank or not, so "left
+    # empty" differs from "no such field in the file". ``calculated`` = the
+    # cell is an mTool formula, left out of the comparison on both sides.
+    # ``value`` is NULL for blank and calculated cells.
+    """
+    CREATE TABLE IF NOT EXISTS human_file_facts (
+        run_id           INTEGER NOT NULL REFERENCES human_files(run_id) ON DELETE CASCADE,
+        concept_uuid     TEXT NOT NULL,
+        period           TEXT NOT NULL,
+        entity_scope     TEXT NOT NULL,
+        dimension_key    TEXT NOT NULL DEFAULT '',
+        value            REAL,
+        calculated       INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (run_id, concept_uuid, period, entity_scope, dimension_key)
+    )
+    """,
+
+    """
+    CREATE TABLE IF NOT EXISTS human_file_notes (
+        run_id           INTEGER NOT NULL REFERENCES human_files(run_id) ON DELETE CASCADE,
+        concept_uuid     TEXT NOT NULL,
+        note_key         TEXT NOT NULL,
+        html             TEXT NOT NULL,
+        PRIMARY KEY (run_id, concept_uuid)
     )
     """,
 )
@@ -3560,6 +3608,21 @@ def init_db(path: str | Path) -> None:
                 ).fetchone()[0]
                 if latest < 48:
                     conn.execute("UPDATE schema_version SET version = 48")
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        # v48 -> v49: human-filled mTool file tables. The guarded statement
+        # list above creates them; this step advances exactly one version.
+        if current_version is not None and current_version < 49:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                latest = conn.execute(
+                    "SELECT version FROM schema_version"
+                ).fetchone()[0]
+                if latest < 49:
+                    conn.execute("UPDATE schema_version SET version = 49")
                 conn.commit()
             except Exception:
                 conn.rollback()

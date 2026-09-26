@@ -991,7 +991,7 @@ textarea:focus {
   background: transparent !important;
 }
 @media (max-width: 480px) {
-  .concept-tree-header, .concept-tree-row:not([data-kind="ABSTRACT"]) {
+  .concept-tree-header:not([data-human]), .concept-tree-row:not([data-kind="ABSTRACT"]):not([data-human]) {
     grid-template-columns: minmax(85px, 1fr) repeat(2, minmax(70px, 90px)) !important;
   }
 }

@@ -22,9 +22,6 @@ import { SettingsIcon } from "./components/icons";
 import { HistoryPage } from "./pages/HistoryPage";
 import { ExtractPage } from "./pages/ExtractPage";
 import { ConceptsPage } from "./pages/ConceptsPage";
-import { BenchmarksPage } from "./pages/BenchmarksPage";
-import { SuitesPage } from "./pages/SuitesPage";
-import { TERMS } from "./lib/vocabulary";
 import {
   announceRunTabChange,
   readRunTabFromUrl,
@@ -298,11 +295,8 @@ export default function App() {
   }, [checkAuth]);
 
   // Client-side guard for the one admin-only surface left: the bare
-  // "Field labels" concepts landing. Benchmarks + Evals are open to every
-  // signed-in user (PRD decision #6 — the backend routes were never
-  // admin-gated; the old redirect here was the piece contradicting the
-  // written policy). A `/concepts/{id}` run page (selectedRunId set) is the
-  // everyday Figures view and stays open.
+  // "Field labels" concepts landing. A `/concepts/{id}` run page
+  // (selectedRunId set) is the everyday Figures view and stays open.
   useEffect(() => {
     if (!user || user.is_admin) return;
     const onAdminOnly =
@@ -398,17 +392,6 @@ export default function App() {
       expected = state.selectedRunId != null
         ? `/concepts/${state.selectedRunId}`
         : "/field-labels";
-    } else if (state.view === "benchmarks") {
-      // Gold-standard eval (v16): /benchmarks lists; /benchmarks/<id> opens the
-      // gold editor. The benchmark id rides on selectedRunId (the generic
-      // selected-entity slot — see parseRouteFromPath).
-      expected = state.selectedRunId != null
-        ? `/benchmarks/${state.selectedRunId}`
-        : "/benchmarks";
-    } else if (state.view === "suites") {
-      // Evals workspace — internal navigation lives inside the page, so the
-      // top-level URL is the singleton /evals.
-      expected = "/evals";
     } else if (state.view === "settings") {
       // Singleton settings surface — no entity id rides along.
       expected = "/settings";
@@ -774,11 +757,7 @@ export default function App() {
       ? state.selectedRunId != null ? "Current filing" : "Runs"
       : state.view === "concepts"
         ? "Field labels"
-        : state.view === "benchmarks"
-          ? "Benchmarks"
-          : state.view === "suites"
-            ? TERMS.evaluationSuites
-            : "Settings";
+        : "Settings";
   const reviewFocused = state.selectedRunId != null &&
     (runTab === "notes" || runTab === "values");
   const viewingSavedRun = state.selectedRunId != null &&
@@ -990,21 +969,7 @@ export default function App() {
           </div>
         )}
         {state.view !== "settings" && state.view !== "extract" && (
-          state.view === "benchmarks" ? (
-          // Gold-standard eval (v16): the benchmark library + gold editor.
-          // selectedRunId carries the selected benchmark id (the generic
-          // selected-entity slot).
-          <BenchmarksPage
-            selectedId={state.selectedRunId}
-            onSelectBenchmark={(id) =>
-              dispatch({ type: "SET_SELECTED_RUN_ID", payload: id })
-            }
-            isAdmin={Boolean(user?.is_admin)}
-          />
-        ) : state.view === "suites" ? (
-          // Evals workspace (Phase E/F): suites, batch runner, trends + compare.
-          <SuitesPage />
-        ) : state.view === "concepts" ? (
+          state.view === "concepts" ? (
           // `/concepts/{id}` is now an alias that opens the unified run page
           // on the Values tab (the standalone full-page Concepts surface was
           // folded into the tabbed run detail — see

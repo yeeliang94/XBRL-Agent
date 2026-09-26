@@ -11,8 +11,8 @@ patterns into prompt clarifications.
 
 This is deliberately a one-way export. There is NO automatic prompt injection —
 curation stays human, consistent with the all-LLM-judgement philosophy. Each
-prompt change the digest motivates is then validated by the eval regression
-harness (item 26, scripts/eval_regression.py).
+prompt change the digest motivates is then validated by comparing a fresh run
+with its human-filled mTool file (docs/human-mtool-file-comparison-plan.md).
 
 Usage:
     python scripts/export_reviewer_flags.py                  # all runs

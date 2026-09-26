@@ -69,12 +69,6 @@ def test_numeric_note_payloads_reach_distinct_native_categories(tmp_path):
     repeated = tmp_path / 'repeated.xlsx'
     assert fill_workbook(str(output), ready, str(repeated))['status'] == 'ok'
     assert repeated.read_bytes() == output.read_bytes()
-    from eval.mtool_ingest import build_catalogue, ingest_workbook
-    with sqlite3.connect(db) as conn:
-        catalogue = build_catalogue(conn, 'mfrs', 'company', [tid])
-    reverse = ingest_workbook(output, catalogue, filing_level='company', unit_scale=1.0)
-    assert sorted((f.dimension_key, f.value) for f in reverse.facts) == sorted([
-        (dimension_key({axis: member}), value) for member, value in zip(members, [100, 20])])
     # A template explicitly declaring a comparative block gets both periods;
     # the current-only template above never receives PY figures in CY cells.
     comparative = load_workbook(native)
@@ -153,21 +147,6 @@ def test_categories_coexist_and_revert_independently(tmp_path, level):
     with sqlite3.connect(db) as conn:
         values = conn.execute('SELECT dimension_key,value FROM run_concept_facts WHERE concept_uuid=? ORDER BY dimension_key', (uuid,)).fetchall()
     assert values == sorted([(dimension_key({axis: member}), value) for member, value in zip(members, [100, 20])])
-    from eval.store import patch_gold_fact
-    from eval.grader import _gradeable_facts
-    with sqlite3.connect(db) as conn:
-        conn.row_factory = sqlite3.Row
-        benchmark = conn.execute("INSERT INTO eval_benchmarks(name,filing_standard,filing_level) VALUES ('synthetic','mfrs',?)", (level,)).lastrowid
-        conn.execute("INSERT INTO eval_benchmark_templates(benchmark_id,template_id,statement_type) VALUES (?,?,'NOTES')", (benchmark, tid))
-        for category, value in zip(members, [100, 20]):
-            patch_gold_fact(conn, benchmark, uuid, period='CY', entity_scope=scope,
-                            value=value, dimensions={axis: category})
-        gold = _gradeable_facts(conn, 'gold_concept_facts', 'benchmark_id', benchmark, [tid])
-        assert len(gold) == 2
-        patch_gold_fact(conn, benchmark, uuid, period='CY', entity_scope=scope,
-                        value=None, dimensions={axis: members[0]})
-        remaining = conn.execute('SELECT dimension_key,value FROM gold_concept_facts').fetchall()
-        assert [tuple(r) for r in remaining] == [(dimension_key({axis: members[1]}), 20)]
 
 
 def test_face_fact_cannot_acquire_an_unsupported_category(db_and_run):

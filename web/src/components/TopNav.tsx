@@ -27,8 +27,6 @@ const TOOLS: {
   canonicalOnly?: boolean;
 }[] = [
   { id: "concepts", label: "Field labels", href: "/field-labels", glyph: "Aa", adminOnly: true, canonicalOnly: true },
-  { id: "benchmarks", label: "Benchmarks", href: "/benchmarks", glyph: "◇", canonicalOnly: true },
-  { id: "suites", label: TERMS.evaluationSuites, href: "/evals", glyph: "✓", canonicalOnly: true },
 ];
 
 export function TopNav({

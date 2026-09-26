@@ -15,7 +15,6 @@ import type {
   CrossCheckResultEventData,
   PartialMergeData,
   PdfSidecarData,
-  EvalScoreJson,
   PipelineStage,
   PipelineStageData,
   ReasoningBlock,
@@ -106,9 +105,6 @@ export interface AppState {
   // one-line notice so the operator knows whether notes agents had a
   // transcript to copy from, and why not if they didn't.
   pdfSidecar: PdfSidecarData | null;
-  // Final benchmark grade emitted after the shipped workbook is evaluated.
-  // Null on ordinary runs and until grading finishes.
-  evalScore: EvalScoreJson | null;
   // PLAN-stop-and-validation-visibility Phase 5: live cross-check
   // progress per pass. The Validator tab uses this to render rows as
   // they arrive (with a spinner for not-yet-reported rows) instead of
@@ -139,8 +135,6 @@ export type AppView =
   | "extract"
   | "history"
   | "concepts"
-  | "benchmarks"
-  | "suites"
   | "settings";
 
 export type AppAction =
@@ -186,7 +180,6 @@ export const initialState: AppState = {
   partialMerge: null,
   scoutWarnings: [],
   pdfSidecar: null,
-  evalScore: null,
   crossCheckProgress: {
     phase: null,
     total: 0,
@@ -208,11 +201,6 @@ const RUN_RE = /^\/run\/(\d+)\/?$/;
 // for a run.  Mounted under selectedRunId so the App treats it the same
 // way it treats a History detail page.
 const CONCEPTS_RE = /^\/concepts\/(\d+)\/?$/;
-// Gold-standard eval (v16): `/benchmarks` lists the library; `/benchmarks/<n>`
-// opens the gold editor for one benchmark. The benchmark id rides on
-// `selectedRunId` (the generic "selected entity id" slot) so the existing
-// URL <-> state machinery carries it without a new field.
-const BENCHMARKS_RE = /^\/benchmarks\/(\d+)\/?$/;
 
 /** Derive the app view + selected/current run id from a pathname.
  *
@@ -246,19 +234,6 @@ export function parseRouteFromPath(
       selectedRunId: m ? Number(m[1]) : null,
       currentRunId: null,
     };
-  }
-  if (pathname.startsWith("/benchmarks")) {
-    const m = BENCHMARKS_RE.exec(pathname);
-    return {
-      view: "benchmarks",
-      selectedRunId: m ? Number(m[1]) : null,
-      currentRunId: null,
-    };
-  }
-  if (pathname.startsWith("/evals")) {
-    // Evals workspace (suites, batch runner, results). Internal navigation
-    // lives inside the page, so this is a singleton top-level route.
-    return { view: "suites", selectedRunId: null, currentRunId: null };
   }
   if (pathname.startsWith("/settings")) {
     // The consolidated settings page (model/proxy + account + admin users).
@@ -824,7 +799,6 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         scoutWarnings: [],
         // The transcript notice is per-run too.
         pdfSidecar: null,
-        evalScore: null,
         // Cross-check progress is per-run; start fresh.
         crossCheckProgress: {
           phase: null,
@@ -1007,10 +981,6 @@ export function appReducer(state: AppState, action: AppAction): AppState {
           // handlePerAgentEvent skipped it, so no tab). Emitted once per
           // run; keep the latest payload for the run-page notice.
           updates.pdfSidecar = event.data as PdfSidecarData;
-          break;
-
-        case "eval_score":
-          updates.evalScore = event.data as EvalScoreJson;
           break;
 
         case "cross_check_start":

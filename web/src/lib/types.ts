@@ -102,8 +102,7 @@ export type SSEEventType =
   // docs/PLAN-pdf-source-sidecar.md: outcome of the pre-agent LLM
   // transcription pass on a scanned PDF (built / skipped + reason).
   // Run-level, advisory — the run proceeds either way.
-  | "pdf_sidecar"
-  | "eval_score";
+  | "pdf_sidecar";
 
 // Every multi-agent event carries these routing fields inside `data` (the
 // backend stamps them in agent_runner.build_agent_event). We keep them in `data`
@@ -147,7 +146,6 @@ interface SSEEventDataMap {
   scale_conflict: ScaleConflictData & AgentRouting;
   // Scanned-PDF source transcript outcome (run-level; no agent_id).
   pdf_sidecar: PdfSidecarData & AgentRouting;
-  eval_score: EvalScoreJson & AgentRouting;
 }
 
 export type SSEEvent = {
@@ -766,10 +764,6 @@ export interface RunConfigPayload {
    *  explicitly selects notes templates; matches the face-statement
    *  ``models`` field shape for consistency. */
   notes_models?: Partial<Record<NotesTemplateType, string>>;
-  /** Gold-standard eval (v16): the benchmark to grade this run against, or
-   *  unset/null for a normal run. Set by the extract-page "Eval testing"
-   *  toggle; persisted on runs.benchmark_id and graded at run completion. */
-  benchmark_id?: number | null;
   /** Evals workspace (v30): how many identically-configured runs to launch
    *  back-to-back for a consistency measurement. 1 (default) = a single normal
    *  run; 2–5 links the runs into a repeat group. */
@@ -838,11 +832,6 @@ export interface RunSummaryJson {
   filing_level?: FilingLevel;
   filing_standard?: FilingStandard;
   denomination?: Denomination;
-  // Gold-standard eval (v16): the benchmark this run graded against (null on
-  // normal runs) + the headline accuracy in [0, 1] (null when not graded).
-  // Powers the History score column + sparkline.
-  benchmark_id?: number | null;
-  eval_score?: number | null;
 }
 
 export interface RunListResponse {
@@ -991,11 +980,6 @@ export interface RunDetailJson {
   cross_checks: RunCrossCheckJson[];
   // v8 telemetry rollup. Optional for back-compat with older payloads.
   telemetry_rollup?: TelemetryRollupJson;
-  // Gold-standard eval (v16): the benchmark this run graded against (null on
-  // normal runs — the Eval tab is gated on it) + the scorecard (null when not
-  // graded).
-  benchmark_id?: number | null;
-  eval_score?: EvalScoreJson | null;
   // v30 evals workspace: set when this run is one of N repeats launched
   // together for a consistency measurement (docs/PLAN-evals-workspace.md).
   repeat_group_id?: number | null;
@@ -1074,264 +1058,6 @@ export interface ConsistencyJson {
   unanimous_wrong: number | null;
 }
 
-// --- Evals workspace: suites + batch runner + results (Phase E/F) ---
-
-export interface SuiteSummaryJson {
-  id: number;
-  name: string;
-  created_at: string;
-  updated_at: string;
-  doc_count: number;
-  run_count: number;
-}
-
-export interface SuiteDocJson {
-  id: number;
-  label: string;
-  source_filename: string;
-  filing_standard: string;
-  filing_level: string;
-  benchmark_id: number | null;
-  created_at: string;
-  // v32: how figures are printed in THIS document (per-doc, Step 3).
-  denomination?: string;
-}
-
-export interface SuiteJson {
-  id: number;
-  name: string;
-  created_at: string;
-  updated_at: string;
-  docs: SuiteDocJson[];
-}
-
-export interface SuiteRunLaunch {
-  label?: string;
-  model?: string | null;
-  statements?: string[];
-  variants?: Record<string, string>;
-  use_scout?: boolean;
-  notes_to_run?: string[];
-  repeats?: number;
-}
-
-export interface SuiteRunSummaryJson {
-  id: number;
-  suite_id: number;
-  label: string;
-  model: string | null;
-  app_version: string | null;
-  status: string;
-  created_at: string;
-  ended_at: string | null;
-}
-
-export interface SuiteEstimateJson {
-  documents: number;
-  repeats: number;
-  extraction_runs: number;
-  avg_run_seconds: number | null;
-  estimated_wall_seconds: number | null;
-  concurrency: number;
-  // Step 4: spend estimates from recent same-model runs (null = no history).
-  estimated_tokens?: number | null;
-  estimated_cost_usd?: number | null;
-  tokens_range?: [number, number] | null;
-  cost_range_usd?: [number, number] | null;
-  estimate_sample_size?: number;
-  // The model the estimate assumed + whether the history sample was actually
-  // that model (false = mixed-model fallback, so the figures are rougher).
-  estimate_model?: string;
-  estimate_model_filtered?: boolean;
-}
-
-export interface DocumentScorecardJson {
-  run_id: number;
-  // The frozen-corpus document this score belongs to (lets the UI tell which
-  // documents already have a scorecard vs. which to render from doc_states).
-  doc_id?: number;
-  label: string;
-  status: string;
-  failed: boolean;
-  // Accuracy is a mean of this many finished repeats (1 = a single run).
-  repeats_scored?: number;
-  accuracy: number | null;
-  gold_cells: number;
-  matched_cells: number;
-  taxonomy: Record<string, number>;
-  per_statement: Record<string, { gold_cells: number; matched: number }>;
-  consistency: number | null;
-  cross_check_pass_rate: number | null;
-  reviewer_flags: number;
-  failed_agents: number;
-  total_tokens: number;
-  duration_s: number | null;
-  notes_coverage: number | null;
-  notes_coverage_available: boolean;
-}
-
-/** Per-document execution state on the frozen corpus — the source of truth for
- * documents that never produced a scorecard (queued / running / failed to
- * stage), so a staging failure and its reason stay visible. */
-export interface SuiteDocStateJson {
-  doc_id: number;
-  label: string;
-  state: string;
-  error: string | null;
-  benchmark_id: number | null;
-}
-
-export interface SuiteAggregateJson {
-  documents_total: number;
-  documents_graded: number;
-  documents_failed: number;
-  coverage_note: string;
-  mean_accuracy: number | null;
-  pooled_accuracy: number | null;
-  pooled_matched: number;
-  pooled_gold: number;
-  worst_document: DocumentScorecardJson | null;
-  taxonomy_totals: Record<string, number>;
-  mean_consistency: number | null;
-  mean_notes_coverage: number | null;
-  mean_cross_check_pass_rate: number | null;
-}
-
-export interface SuiteRunDetailJson {
-  suite_run: SuiteRunSummaryJson & { config?: Record<string, unknown> | null };
-  documents: DocumentScorecardJson[];
-  doc_states: SuiteDocStateJson[];
-  aggregate: SuiteAggregateJson;
-}
-
-export interface SuiteResultPointJson {
-  suite_run_id: number;
-  label: string;
-  model: string | null;
-  app_version: string | null;
-  created_at: string;
-  status: string;
-  mean_accuracy: number | null;
-  mean_consistency: number | null;
-  mean_cross_check_pass_rate: number | null;
-}
-
-export interface SuiteResultsJson {
-  suite_id: number;
-  points: SuiteResultPointJson[];
-}
-
-export interface SuiteCompareDocJson {
-  doc_id: number;
-  label: string;
-  in_both: boolean;
-  accuracy_a: number | null;
-  accuracy_b: number | null;
-  delta: number | null;
-  gold_changed: boolean;
-  // Drill-down linkage (Step 12): the representative run per side + the gold
-  // benchmark, so a compare row can open its value-level slot diff.
-  run_id_a?: number | null;
-  run_id_b?: number | null;
-  benchmark_id?: number | null;
-}
-
-export interface SuiteCompareJson {
-  suite_run_a: number;
-  suite_run_b: number;
-  documents: SuiteCompareDocJson[];
-  aggregate_delta: number | null;
-  mean_accuracy_a: number | null;
-  mean_accuracy_b: number | null;
-  common_documents: number;
-  only_in_one: number;
-  taxonomy_delta: Record<string, number>;
-  gold_changed_any: boolean;
-}
-
-// Gold-standard eval (v16) scorecard, as returned by GET /api/runs/{id}/eval
-// and embedded in the run detail. `score` = matched / gold_cells in [0, 1].
-export interface EvalScoreJson {
-  benchmark_id: number;
-  gold_cells: number;
-  matched_cells: number;
-  missing_cells: number;
-  mismatch_cells: number;
-  extra_cells: number;
-  scale_mismatch: number;
-  score: number;
-  created_at?: string;
-  // v30 (docs/PLAN-evals-workspace.md): failure diagnosis + per-statement
-  // breakdown. Null on legacy scorecards graded before the taxonomy existed.
-  taxonomy?: EvalTaxonomy | null;
-  per_statement?: Record<string, { gold_cells: number; matched: number }> | null;
-  // v33 gold-change guard: true = the reference answers were edited after
-  // this score was stamped (re-grade offered); null = unknown (legacy row).
-  gold_stale?: boolean | null;
-}
-
-// Reviewer contribution to a graded run (Step 12) — pre-reviewer snapshot
-// score vs final score. available:false when no reviewer pass ran.
-export interface ReviewerLiftJson {
-  available: boolean;
-  run_id: number;
-  pre_matched?: number;
-  final_matched?: number;
-  lift_slots?: number;
-  gold_cells?: number;
-  pre_accuracy?: number | null;
-  final_accuracy?: number | null;
-}
-
-// One slot in the compare drill-down (Step 12): the raw concept key plus the
-// human name resolved server-side (absent when the uuid no longer resolves).
-export interface SlotDiffRowJson {
-  key: [string, string, string];
-  gold: number;
-  sheet?: string;
-  label?: string;
-}
-
-export interface SlotDiffJson {
-  doc_id: number;
-  run_id_a: number;
-  run_id_b: number;
-  benchmark_id: number;
-  regressions: SlotDiffRowJson[];
-  fixes: SlotDiffRowJson[];
-}
-
-// Diagnosed failure counts — a partition of the wrong slots (missing +
-// mismatch). Every key optional so a partial/legacy blob renders safely.
-export interface EvalTaxonomy {
-  period_swap?: number;
-  scope_swap?: number;
-  sign_flip?: number;
-  scale?: number;
-  plain_wrong?: number;
-  false_not_disclosed?: number;
-  misplaced?: number;
-  unaddressed?: number;
-}
-
-// One benchmark in the library (GET /api/benchmarks list shape).
-export interface BenchmarkJson {
-  id: number;
-  name: string;
-  document: string | null;
-  filing_standard: string;
-  filing_level: string;
-  created_at: string;
-  statements: string[];
-  gold_cell_count: number;
-  // v33 (PLAN-evals-hardening Steps 9/14): archive flag, gold provenance
-  // ('run' | 'workbook' | 'mtool' | null legacy), and whether an mTool-derived
-  // benchmark's scale has been verified against a real human-filled file.
-  is_archived?: boolean;
-  source?: string | null;
-  scale_verified?: boolean;
-}
-
 export interface RunsFilterParams {
   q?: string;
   status?: string;
@@ -1339,8 +1065,6 @@ export interface RunsFilterParams {
   standard?: FilingStandard;
   dateFrom?: string;
   dateTo?: string;
-  /** Evals workspace (E6): include suite child runs (hidden by default). */
-  includeSuiteChildren?: boolean;
   limit?: number;
   offset?: number;
 }

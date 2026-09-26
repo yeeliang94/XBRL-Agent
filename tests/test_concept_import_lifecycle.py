@@ -152,16 +152,6 @@ def test_current_consumers_do_not_select_retired_identity(tmp_path: Path) -> Non
         value = read_labelled_value_last(
             ctx, StatementType.SOCF, "Cash", "CY", "Company",
         )
-        from eval.ingest import _gradeable_kinds
-        from eval.mtool_ingest import build_catalogue
-
-        kinds = _gradeable_kinds(conn, [_TEMPLATE_ID])
-        catalogue = build_catalogue(
-            conn, "mfrs", "company", [_TEMPLATE_ID],
-        )
 
     assert value.value == 250.0
     assert value.row == 10
-    assert _OLD_UUID not in kinds
-    assert kinds[_NEW_UUID] == "LEAF"
-    assert catalogue["SOFP"]["cash"].concept_uuid == _NEW_UUID

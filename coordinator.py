@@ -270,11 +270,6 @@ class RunConfig:
     # API. Both None in legacy mode. db_path is the audit/canonical SQLite DB.
     run_id: Optional[int] = None
     db_path: Optional[str] = None
-    # Gold-standard eval (v16): the benchmark this run is graded against, or
-    # None. The coordinator does not use it (grading runs in the server at
-    # run completion); it rides along so the server's grading hook can read it
-    # off the resolved config.
-    benchmark_id: Optional[int] = None
     # Item 28 — per-entity advisory memory. When the server matched this run's
     # entity to a prior completed run, it sets an entity_memory.PriorYearAdvisory
     # here. The coordinator renders its per-statement payload into the prompt

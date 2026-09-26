@@ -83,9 +83,6 @@ class Run:
     # (Phase 1) and the column is now always 'split' (retained for schema
     # stability + History read-back).
     orchestration: str = "split"
-    # v16 gold-standard eval: the benchmark this run is graded against, or
-    # None on every normal (non-eval) run.
-    benchmark_id: Optional[int] = None
     # v22 per-run notes-table style override (docs/PLAN-notes-table-theme.md).
     # The hydrated Python dict, or None when the run inherits the firm default.
     notes_table_style: Optional[dict[str, Any]] = None
@@ -95,8 +92,6 @@ class Run:
     app_version: Optional[str] = None
     repeat_group_id: Optional[int] = None
     repeat_index: Optional[int] = None
-    # v31 evals-workspace: links a suite child run back to its batch (E6).
-    suite_run_id: Optional[int] = None
 
 
 @dataclass
@@ -275,12 +270,6 @@ class RunSummary:
     # now — the monolith experiment was removed in the rewrite (Phase 1);
     # the column is retained for schema stability + History read-back.
     orchestration: str = "split"
-    # v16 gold-standard eval: the benchmark this run graded against (None on
-    # normal runs) and its headline accuracy score (matched / gold_cells, in
-    # [0, 1]); None when the run wasn't graded. Powers the History score
-    # column + sparkline.
-    benchmark_id: Optional[int] = None
-    eval_score: Optional[float] = None
     # v30 evals workspace: the build that produced this run, so History/trends
     # can attribute quality to a version. None on legacy rows.
     app_version: Optional[str] = None
@@ -362,7 +351,6 @@ def create_run(
     app_version: Optional[str] = None,
     repeat_group_id: Optional[int] = None,
     repeat_index: Optional[int] = None,
-    suite_run_id: Optional[int] = None,
 ) -> int:
     """Insert a new run row and return its id.
 
@@ -397,14 +385,14 @@ def create_run(
     cur = conn.execute(
         "INSERT INTO runs(created_at, pdf_filename, status, notes, "
         "session_id, output_dir, run_config_json, scout_enabled, started_at, "
-        "orchestration, app_version, repeat_group_id, repeat_index, suite_run_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "orchestration, app_version, repeat_group_id, repeat_index) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             now, pdf_filename, status, notes or None,
             session_id, output_dir, config_json,
             1 if scout_enabled else 0, started_at,
             orchestration or "split",
-            app_version, repeat_group_id, repeat_index, suite_run_id,
+            app_version, repeat_group_id, repeat_index,
         ),
     )
     return int(cur.lastrowid)
@@ -2614,12 +2602,10 @@ def _row_to_run(row: sqlite3.Row) -> Run:
         started_at=_get("started_at", "") or "",
         ended_at=_get("ended_at"),
         orchestration=_get("orchestration", "split") or "split",
-        benchmark_id=_get("benchmark_id"),
         notes_table_style=_parse_notes_table_style(_get("notes_table_style")),
         app_version=_get("app_version"),
         repeat_group_id=_get("repeat_group_id"),
         repeat_index=_get("repeat_index"),
-        suite_run_id=_get("suite_run_id"),
     )
 
 
@@ -2878,7 +2864,6 @@ def list_runs(
     model: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
-    include_suite_children: bool = False,
     limit: int = 50,
     offset: int = 0,
 ) -> list[RunSummary]:
@@ -2903,11 +2888,6 @@ def list_runs(
     if status:
         clauses.append("r.status = ?")
         params.append(status)
-    # Evals workspace (E6): suite child runs are hidden from History by default
-    # (decision #1) so a 30-doc suite run doesn't bury the list. The toggle
-    # passes include_suite_children=True to show them.
-    if not include_suite_children:
-        clauses.append("r.suite_run_id IS NULL")
     # Normalize date-only filters to full ISO timestamps so the lexicographic
     # comparison against `created_at` covers the full day on both ends.
     date_from_norm = _normalize_date_bound(date_from, end_of_day=False)
@@ -2962,19 +2942,6 @@ def list_runs(
             if ar["model"]:
                 models_by_run[rid].add(ar["model"])
 
-        # v16: batch-load eval scores for the whole page in ONE query (avoid an
-        # N+1). A run has at most one score; compute matched/gold_cells here so
-        # the History column + sparkline need no further math.
-        score_by_run: dict[int, float] = {}
-        score_sql = (
-            "SELECT run_id, gold_cells, matched_cells FROM eval_scores "
-            f"WHERE run_id IN ({placeholders})"
-        )
-        for sr in conn.execute(score_sql, tuple(run_ids)).fetchall():
-            gold = int(sr["gold_cells"])
-            if gold > 0:
-                score_by_run[sr["run_id"]] = int(sr["matched_cells"]) / gold
-
         summaries: list[RunSummary] = []
         for r in rows:
             started = r["started_at"] if "started_at" in r.keys() else ""
@@ -3000,8 +2967,6 @@ def list_runs(
                     # A row with a corrupt or pre-v10 config still surfaces the
                     # right path via the dedicated column.
                     orchestration=run.orchestration,
-                    benchmark_id=run.benchmark_id,
-                    eval_score=score_by_run.get(run.id),
                     app_version=run.app_version,
                 )
             )
@@ -3018,7 +2983,6 @@ def count_runs(
     model: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
-    include_suite_children: bool = False,
 ) -> int:
     """Companion to list_runs — returns the total matching count for the UI
     pagination footer. Keeps the SQL filter logic in one shape by mirroring
@@ -3031,8 +2995,6 @@ def count_runs(
     if status:
         clauses.append("r.status = ?")
         params.append(status)
-    if not include_suite_children:
-        clauses.append("r.suite_run_id IS NULL")
     # Mirror list_runs date normalization so the pagination footer count
     # matches the visible row set.
     date_from_norm = _normalize_date_bound(date_from, end_of_day=False)
@@ -3194,15 +3156,14 @@ def create_repeat_group(
     *,
     config: Optional[dict[str, Any]] = None,
     repeats_requested: int = 1,
-    benchmark_id: Optional[int] = None,
 ) -> int:
     """Create a repeat group and return its id. The N child runs link to it via
     create_run(repeat_group_id=..., repeat_index=...)."""
     cur = conn.execute(
         "INSERT INTO repeat_groups(created_at, config_json, repeats_requested, "
-        "benchmark_id, status) VALUES (?, ?, ?, ?, 'running')",
+        "status) VALUES (?, ?, ?, 'running')",
         (_now(), json.dumps(config) if config is not None else None,
-         int(repeats_requested), benchmark_id),
+         int(repeats_requested)),
     )
     return int(cur.lastrowid)
 
@@ -3220,22 +3181,6 @@ def list_repeat_group_run_ids(
         params.extend(statuses)
     sql += " ORDER BY repeat_index"
     return [r[0] for r in conn.execute(sql, tuple(params)).fetchall()]
-
-
-def finished_repeat_indices(
-    conn: sqlite3.Connection, group_id: int
-) -> set[int]:
-    """The repeat_index values in a group that have at least one terminal-
-    successful run. Resume fills the GAPS in this set (the missing indices) —
-    never blindly appends from a count, which duplicates a later index and
-    leaves an earlier one unfilled when a middle repeat fails."""
-    rows = conn.execute(
-        "SELECT DISTINCT repeat_index FROM runs WHERE repeat_group_id = ? "
-        "AND repeat_index IS NOT NULL "
-        "AND status IN ('completed','completed_with_errors')",
-        (group_id,),
-    ).fetchall()
-    return {int(r[0]) for r in rows}
 
 
 def deduped_repeat_run_ids(
@@ -3319,438 +3264,6 @@ def fetch_repeat_group(
             for c in children
         ],
     }
-
-
-# ---------------------------------------------------------------------------
-# Evals workspace Phase 2 (v31) — suites + suite runs + suite docs.
-# A Suite is a named corpus; a Suite Run is one batch execution over it. Child
-# runs link back via runs.suite_run_id. Managed source files live on disk
-# (hybrid storage); only the pointers live here.
-# ---------------------------------------------------------------------------
-def create_suite(conn: sqlite3.Connection, *, name: str) -> int:
-    now = _now()
-    cur = conn.execute(
-        "INSERT INTO eval_suites(name, created_at, updated_at) VALUES (?, ?, ?)",
-        (name, now, now),
-    )
-    return int(cur.lastrowid)
-
-
-def rename_suite(conn: sqlite3.Connection, suite_id: int, name: str) -> None:
-    conn.execute(
-        "UPDATE eval_suites SET name = ?, updated_at = ? WHERE id = ?",
-        (name, _now(), suite_id),
-    )
-
-
-def delete_suite(conn: sqlite3.Connection, suite_id: int) -> bool:
-    cur = conn.execute("DELETE FROM eval_suites WHERE id = ?", (suite_id,))
-    return cur.rowcount > 0
-
-
-def list_suites(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    """Every suite with its document + suite-run counts, newest first."""
-    prior = conn.row_factory
-    conn.row_factory = sqlite3.Row
-    try:
-        rows = conn.execute(
-            "SELECT s.id, s.name, s.created_at, s.updated_at, "
-            "(SELECT COUNT(*) FROM eval_suite_docs d WHERE d.suite_id = s.id) AS doc_count, "
-            "(SELECT COUNT(*) FROM eval_suite_runs r WHERE r.suite_id = s.id) AS run_count "
-            "FROM eval_suites s ORDER BY s.id DESC"
-        ).fetchall()
-    finally:
-        conn.row_factory = prior
-    return [dict(r) for r in rows]
-
-
-def get_suite(conn: sqlite3.Connection, suite_id: int) -> Optional[dict[str, Any]]:
-    """A suite + its documents, or None."""
-    prior = conn.row_factory
-    conn.row_factory = sqlite3.Row
-    try:
-        row = conn.execute(
-            "SELECT id, name, created_at, updated_at FROM eval_suites WHERE id = ?",
-            (suite_id,),
-        ).fetchone()
-        if row is None:
-            return None
-        docs = conn.execute(
-            "SELECT id, label, source_filename, filing_standard, filing_level, "
-            "benchmark_id, denomination, created_at FROM eval_suite_docs "
-            "WHERE suite_id = ? ORDER BY id",
-            (suite_id,),
-        ).fetchall()
-    finally:
-        conn.row_factory = prior
-    out = dict(row)
-    out["docs"] = [dict(d) for d in docs]
-    return out
-
-
-def add_suite_doc(
-    conn: sqlite3.Connection,
-    *,
-    suite_id: int,
-    label: str,
-    source_path: str,
-    source_filename: str,
-    filing_standard: str = "mfrs",
-    filing_level: str = "company",
-    benchmark_id: Optional[int] = None,
-    denomination: str = "thousands",
-) -> int:
-    cur = conn.execute(
-        "INSERT INTO eval_suite_docs(suite_id, label, source_path, "
-        "source_filename, filing_standard, filing_level, benchmark_id, "
-        "denomination, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (suite_id, label, source_path, source_filename, filing_standard,
-         filing_level, benchmark_id, denomination, _now()),
-    )
-    return int(cur.lastrowid)
-
-
-def delete_suite_doc(conn: sqlite3.Connection, doc_id: int) -> bool:
-    cur = conn.execute("DELETE FROM eval_suite_docs WHERE id = ?", (doc_id,))
-    return cur.rowcount > 0
-
-
-def update_suite_doc_denomination(
-    conn: sqlite3.Connection, suite_id: int, doc_id: int, denomination: str
-) -> bool:
-    """Edit a LIVE suite document's declared denomination. Scoped to suite_id so
-    a doc can only be edited through its own suite. Snapshots are frozen and
-    unaffected — only future suite runs pick up the change."""
-    cur = conn.execute(
-        "UPDATE eval_suite_docs SET denomination = ? WHERE id = ? AND suite_id = ?",
-        (denomination, doc_id, suite_id),
-    )
-    return cur.rowcount > 0
-
-
-def list_suite_docs(conn: sqlite3.Connection, suite_id: int) -> list[dict[str, Any]]:
-    prior = conn.row_factory
-    conn.row_factory = sqlite3.Row
-    try:
-        rows = conn.execute(
-            "SELECT id, suite_id, label, source_path, source_filename, "
-            "filing_standard, filing_level, benchmark_id, denomination, "
-            "created_at FROM eval_suite_docs WHERE suite_id = ? ORDER BY id",
-            (suite_id,),
-        ).fetchall()
-    finally:
-        conn.row_factory = prior
-    return [dict(r) for r in rows]
-
-
-def create_suite_run(
-    conn: sqlite3.Connection,
-    *,
-    suite_id: int,
-    label: str = "",
-    config: Optional[dict[str, Any]] = None,
-    model: Optional[str] = None,
-    app_version: Optional[str] = None,
-) -> int:
-    if app_version is None:
-        from utils.app_version import get_app_version
-        app_version = get_app_version()
-    cur = conn.execute(
-        "INSERT INTO eval_suite_runs(suite_id, label, config_json, model, "
-        "app_version, status, created_at) VALUES (?, ?, ?, ?, ?, 'running', ?)",
-        (suite_id, label, json.dumps(config) if config is not None else None,
-         model, app_version, _now()),
-    )
-    return int(cur.lastrowid)
-
-
-def update_suite_run_status(
-    conn: sqlite3.Connection, suite_run_id: int, status: str,
-    *, ended: bool = False,
-) -> None:
-    if ended:
-        conn.execute(
-            "UPDATE eval_suite_runs SET status = ?, ended_at = ? WHERE id = ?",
-            (status, _now(), suite_run_id),
-        )
-    else:
-        conn.execute(
-            "UPDATE eval_suite_runs SET status = ? WHERE id = ?",
-            (status, suite_run_id),
-        )
-
-
-def get_suite_run(
-    conn: sqlite3.Connection, suite_run_id: int
-) -> Optional[dict[str, Any]]:
-    """A suite run + its child run ids/statuses (ordered), or None."""
-    prior = conn.row_factory
-    conn.row_factory = sqlite3.Row
-    try:
-        row = conn.execute(
-            "SELECT id, suite_id, label, config_json, model, app_version, "
-            "status, created_at, ended_at FROM eval_suite_runs WHERE id = ?",
-            (suite_run_id,),
-        ).fetchone()
-        if row is None:
-            return None
-        children = conn.execute(
-            "SELECT id, status, pdf_filename, benchmark_id FROM runs "
-            "WHERE suite_run_id = ? ORDER BY id",
-            (suite_run_id,),
-        ).fetchall()
-    finally:
-        conn.row_factory = prior
-    out = dict(row)
-    out["config"] = _parse_json_dict(out.pop("config_json"))
-    out["runs"] = [dict(c) for c in children]
-    return out
-
-
-def list_suite_runs(
-    conn: sqlite3.Connection, suite_id: int
-) -> list[dict[str, Any]]:
-    """Suite runs for a suite, newest first (no child expansion)."""
-    prior = conn.row_factory
-    conn.row_factory = sqlite3.Row
-    try:
-        rows = conn.execute(
-            "SELECT id, suite_id, label, model, app_version, status, "
-            "created_at, ended_at FROM eval_suite_runs WHERE suite_id = ? "
-            "ORDER BY id DESC",
-            (suite_id,),
-        ).fetchall()
-    finally:
-        conn.row_factory = prior
-    return [dict(r) for r in rows]
-
-
-def snapshot_suite_run_docs(
-    conn: sqlite3.Connection, suite_run_id: int, docs: list[dict[str, Any]],
-) -> None:
-    """Freeze the suite's document list onto this suite run (v32, PLAN-evals-
-    hardening Step 2). Written at launch BEFORE any execution; the runner only
-    ever reads this snapshot, so later suite edits can't change a run's corpus.
-    Each doc dict is a live eval_suite_docs row, optionally enriched with
-    ``source_sha256`` and resolved per-doc ``variants``."""
-    now = _now()
-    for d in docs:
-        variants = d.get("variants")
-        conn.execute(
-            "INSERT OR IGNORE INTO eval_suite_run_docs("
-            "suite_run_id, suite_doc_id, label, source_path, source_filename, "
-            "source_sha256, filing_standard, filing_level, benchmark_id, "
-            "denomination, variants_json, state, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)",
-            (
-                suite_run_id, d["id"], d.get("label", ""),
-                d.get("source_path", ""), d.get("source_filename", ""),
-                d.get("source_sha256", ""),
-                d.get("filing_standard", "mfrs"), d.get("filing_level", "company"),
-                d.get("benchmark_id"),
-                d.get("denomination", "thousands"),
-                json.dumps(variants) if variants else None,
-                now, now,
-            ),
-        )
-
-
-def list_suite_run_docs(
-    conn: sqlite3.Connection, suite_run_id: int
-) -> list[dict[str, Any]]:
-    """The frozen document list of one suite run. ``id`` is aliased to the
-    ORIGINAL suite_doc_id so runner code (session ids, resume matching) treats
-    snapshot rows exactly like live doc rows."""
-    prior = conn.row_factory
-    conn.row_factory = sqlite3.Row
-    try:
-        rows = conn.execute(
-            "SELECT suite_doc_id AS id, suite_run_id, label, source_path, "
-            "source_filename, source_sha256, filing_standard, filing_level, "
-            "benchmark_id, denomination, variants_json, state, error, "
-            "created_at, updated_at "
-            "FROM eval_suite_run_docs WHERE suite_run_id = ? ORDER BY suite_doc_id",
-            (suite_run_id,),
-        ).fetchall()
-    finally:
-        conn.row_factory = prior
-    out = []
-    for r in rows:
-        d = dict(r)
-        d["variants"] = _parse_json_dict(d.pop("variants_json"))
-        out.append(d)
-    return out
-
-
-def update_suite_run_doc_state(
-    conn: sqlite3.Connection, suite_run_id: int, suite_doc_id: int,
-    state: str, *, error: Optional[str] = None,
-) -> None:
-    conn.execute(
-        "UPDATE eval_suite_run_docs SET state = ?, error = ?, updated_at = ? "
-        "WHERE suite_run_id = ? AND suite_doc_id = ?",
-        (state, error, _now(), suite_run_id, suite_doc_id),
-    )
-
-
-def reconcile_stale_suite_runs(conn: sqlite3.Connection) -> int:
-    """Retire suite runs left 'running' by a crash (mirrors
-    reconcile_stale_review_tasks). Called at startup. Returns the count.
-
-    Also retires their snapshot docs stuck 'running' to failed('server
-    restarted') — Step 15: the per-doc state must be honest after a crash.
-    'queued' docs stay queued (they never started; Resume relaunches them)."""
-    conn.execute(
-        "UPDATE eval_suite_run_docs SET state = 'failed', "
-        "error = 'server restarted', updated_at = ? "
-        "WHERE state = 'running' AND suite_run_id IN "
-        "(SELECT id FROM eval_suite_runs WHERE status = 'running')",
-        (_now(),),
-    )
-    cur = conn.execute(
-        "UPDATE eval_suite_runs SET status = 'partial', ended_at = ? "
-        "WHERE status = 'running'",
-        (_now(),),
-    )
-    return cur.rowcount
-
-
-# ---------------------------------------------------------------------------
-# Gold-standard eval / benchmark (v16) — scorecard persistence.
-# Benchmark + gold-fact CRUD lives in eval/store.py (the eval subsystem owns
-# its own writes); only the per-(run, benchmark) scorecard is persisted here,
-# alongside the other run-scoped tables.
-# ---------------------------------------------------------------------------
-
-def save_eval_score(
-    conn: sqlite3.Connection,
-    run_id: int,
-    benchmark_id: int,
-    card: Any,
-) -> None:
-    """Upsert the scorecard for a ``(run, benchmark)`` pair.
-
-    ``card`` is duck-typed (an ``eval.grader.ScoreCard``): we read its count
-    attributes without importing the eval package here, keeping the repo
-    layer free of subsystem dependencies. ``UNIQUE(run_id, benchmark_id)``
-    makes a re-grade overwrite the prior row.
-    """
-    now = _now()
-    # v30: taxonomy + per-statement breakdown persisted as JSON. Duck-typed:
-    # a card built by an older path (no taxonomy attr) serialises as NULL.
-    taxonomy = getattr(card, "taxonomy", None) or None
-    per_statement = getattr(card, "per_statement", None) or None
-    taxonomy_json = json.dumps(taxonomy) if taxonomy else None
-    per_statement_json = json.dumps(per_statement) if per_statement else None
-    # v33: stamp the gold content hash at grade time so any later gold change
-    # (edit / deletion / reassignment) is detectable against this score.
-    # Best-effort: a fingerprint failure must never block persisting the score
-    # — but it IS logged, because a NULL stamp leaves gold_stale forever
-    # "unknown" and the re-grade warning can then never clear.
-    try:
-        from eval.store import gold_fingerprint
-        fingerprint: Optional[str] = gold_fingerprint(conn, benchmark_id)
-    except Exception:
-        import logging
-        logging.getLogger("server").warning(
-            "gold fingerprint failed for benchmark %s (score saved without "
-            "a gold-version stamp)", benchmark_id, exc_info=True,
-        )
-        fingerprint = None
-    conn.execute(
-        "INSERT INTO eval_scores(run_id, benchmark_id, gold_cells, "
-        "matched_cells, missing_cells, mismatch_cells, extra_cells, "
-        "scale_mismatch, created_at, taxonomy_json, per_statement_json, "
-        "gold_fingerprint) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-        "ON CONFLICT(run_id, benchmark_id) DO UPDATE SET "
-        "gold_cells = excluded.gold_cells, "
-        "matched_cells = excluded.matched_cells, "
-        "missing_cells = excluded.missing_cells, "
-        "mismatch_cells = excluded.mismatch_cells, "
-        "extra_cells = excluded.extra_cells, "
-        "scale_mismatch = excluded.scale_mismatch, "
-        "created_at = excluded.created_at, "
-        "taxonomy_json = excluded.taxonomy_json, "
-        "per_statement_json = excluded.per_statement_json, "
-        "gold_fingerprint = excluded.gold_fingerprint",
-        (
-            run_id, benchmark_id,
-            int(card.gold_cells), int(card.matched), int(card.missing),
-            int(card.mismatch), int(card.extra), int(card.scale_mismatch),
-            now, taxonomy_json, per_statement_json, fingerprint,
-        ),
-    )
-
-
-def fetch_eval_score(
-    conn: sqlite3.Connection, run_id: int, benchmark_id: int
-) -> Optional[dict[str, Any]]:
-    """Return the scorecard dict for a ``(run, benchmark)`` pair, or ``None``.
-
-    The dict carries the raw counts plus a derived ``score`` (matched /
-    gold_cells, 0.0 when there are no gold cells) so the UI doesn't re-derive
-    it. ``benchmark_id`` is required because a run could in principle be graded
-    against more than one benchmark over its lifetime, though the MVP attaches
-    exactly one.
-    """
-    prior_factory = conn.row_factory
-    conn.row_factory = sqlite3.Row
-    try:
-        row = conn.execute(
-            "SELECT gold_cells, matched_cells, missing_cells, mismatch_cells, "
-            "extra_cells, scale_mismatch, created_at, taxonomy_json, "
-            "per_statement_json, gold_fingerprint "
-            "FROM eval_scores WHERE run_id = ? AND benchmark_id = ?",
-            (run_id, benchmark_id),
-        ).fetchone()
-    finally:
-        conn.row_factory = prior_factory
-    if row is None:
-        return None
-    gold_cells = int(row["gold_cells"])
-    matched = int(row["matched_cells"])
-    return {
-        "benchmark_id": benchmark_id,
-        "gold_cells": gold_cells,
-        "matched_cells": matched,
-        "missing_cells": int(row["missing_cells"]),
-        "mismatch_cells": int(row["mismatch_cells"]),
-        "extra_cells": int(row["extra_cells"]),
-        "scale_mismatch": int(row["scale_mismatch"]),
-        "score": (matched / gold_cells) if gold_cells > 0 else 0.0,
-        "created_at": row["created_at"],
-        # v30 — NULL on legacy scorecards; the UI degrades gracefully.
-        "taxonomy": _parse_json_dict(_row_get(row, "taxonomy_json")),
-        "per_statement": _parse_json_dict(_row_get(row, "per_statement_json")),
-        # v33 — the gold content hash this score was graded against (NULL on
-        # legacy rows: "unknown gold version", never a false "unchanged").
-        "gold_fingerprint": _row_get(row, "gold_fingerprint"),
-    }
-
-
-def fetch_eval_score_for_run(
-    conn: sqlite3.Connection, run_id: int
-) -> Optional[dict[str, Any]]:
-    """Return the scorecard for a run regardless of which benchmark it used.
-
-    Convenience for the History list + run page, where the run row already
-    carries its single ``benchmark_id`` and we just want "the score for this
-    run". Returns the most recent row if (unexpectedly) more than one exists.
-    """
-    prior_factory = conn.row_factory
-    conn.row_factory = sqlite3.Row
-    try:
-        row = conn.execute(
-            "SELECT benchmark_id FROM eval_scores WHERE run_id = ? "
-            "ORDER BY created_at DESC LIMIT 1",
-            (run_id,),
-        ).fetchone()
-    finally:
-        conn.row_factory = prior_factory
-    if row is None:
-        return None
-    return fetch_eval_score(conn, run_id, int(row["benchmark_id"]))
 
 
 # ---------------------------------------------------------------------------

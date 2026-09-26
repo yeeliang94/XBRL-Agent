@@ -9,11 +9,10 @@
 
 /** Named terms used across headings, tabs, buttons, and status sentences. */
 export const TERMS = {
-  // Top-level destinations. Route/state keys intentionally remain extract,
-  // history, and suites so display-language changes cannot break deep links.
+  // Top-level destinations. Route/state keys intentionally remain extract
+  // and history so display-language changes cannot break deep links.
   newExtraction: "New extraction",
   runs: "Runs",
-  evaluationSuites: "Evaluation suites",
   // The pre-extraction PDF read that suggests statements / formats / notes.
   preScan: "Document pre-scan",
   // The grounded pass that re-checks flagged figures against the PDF.

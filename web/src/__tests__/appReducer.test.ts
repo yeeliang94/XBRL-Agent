@@ -492,29 +492,6 @@ describe("appReducer", () => {
     expect(restarted.pipelineActivity).toBeNull();
   });
 
-  test("eval_score is retained live and cleared for the next run", () => {
-    let state = runningState();
-    state = appReducer(state, {
-      type: "EVENT",
-      payload: {
-        event: "eval_score",
-        data: {
-          benchmark_id: 7,
-          gold_cells: 10,
-          matched_cells: 9,
-          missing_cells: 1,
-          mismatch_cells: 0,
-          extra_cells: 0,
-          scale_mismatch: 0,
-          score: 0.9,
-        },
-        timestamp: 1,
-      } as SSEEvent,
-    });
-    expect(state.evalScore?.score).toBe(0.9);
-    expect(appReducer(state, { type: "RUN_STARTED" }).evalScore).toBeNull();
-  });
-
   test("RUN_STARTED clears any prior partial_merge banner", () => {
     const running = runningState();
     const withPartial = appReducer(running, {
