@@ -5,7 +5,7 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 
 from concept_model.importer import import_template
 from concept_model.parser import parse_template
@@ -14,7 +14,6 @@ from concept_model.taxonomy_semantics import (
     semantic_addresses_for,
 )
 from db.schema import init_db
-from eval.mtool_ingest import build_catalogue, ingest_workbook
 from mtool.exporter import build_fill_doc
 
 
@@ -166,17 +165,11 @@ def test_socie_resolves_to_explicit_generated_template_cell(
     filled = tmp_path / "filled.xlsx"
     report = fill_workbook(str(template), ready, str(filled), strict=True)
     assert report["status"] == "ok"
-    conn = sqlite3.connect(db)
+    workbook = load_workbook(filled, read_only=True)
     try:
-        catalogue = build_catalogue(conn, standard, level, [tree.template_id])
+        assert workbook[fact[3]][f"{fact[5]}{fact[4]}"].value == 123
     finally:
-        conn.close()
-    reverse = ingest_workbook(
-        filled, catalogue, filing_level=level, unit_scale=1.0)
-    assert [(f.concept_uuid, f.period, f.entity_scope, f.value)
-            for f in reverse.facts] == [(fact[0], fact[1], fact[2], 123.0)]
-    assert reverse.semantic_deferred == 0
-    assert reverse.matrix_deferred == 0
+        workbook.close()
 
 
 def test_inspection_reports_supported_target_and_semantic_source(tmp_path: Path):

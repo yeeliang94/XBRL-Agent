@@ -104,29 +104,20 @@ export function HistoryList({
     );
   }
 
-  // Score column (gold-standard eval, v16) only renders when the loaded
-  // rows contain at least one graded run — an all-blank column is noise.
-  const hasScores = runs.some((r) => r.eval_score != null);
-
   return (
     <div className="runs-table-wrap" style={styles.container}>
-      {/* Compact sparkline of eval scores across the listed runs (oldest →
-          newest) so improvement is visible at a glance. Only shown when ≥2
-          runs were graded. */}
-      <EvalSparkline runs={runs} />
       <table style={styles.table}>
         {/* Fixed column widths — without these the browser picks column
             widths from content, so a long filename could squash the
             timestamp/status columns. `table-layout: fixed` plus <col>
             widths makes the layout predictable regardless of content. */}
         <colgroup>
-          <col style={{ width: hasScores ? "28%" : "32%" }} />
+          <col style={{ width: "32%" }} />
           <col style={{ width: "12%" }} />
           <col style={{ width: "16%" }} />
           <col style={{ width: "15%" }} />
-          {hasScores && <col style={{ width: "8%" }} />}
           <col style={{ width: "10%" }} />
-          <col style={{ width: hasScores ? "11%" : "15%" }} />
+          <col style={{ width: "15%" }} />
         </colgroup>
         <thead>
           <tr>
@@ -136,14 +127,6 @@ export function HistoryList({
             {/* The filter has a Standard control but the list had no matching
                 column; this carries the run's standard + level (E2). */}
             <th style={styles.th}>Standard</th>
-            {hasScores && (
-              <th
-                style={{ ...styles.th, textAlign: "right" }}
-                title="Accuracy vs a benchmark's verified answers — blank unless a benchmark was attached"
-              >
-                Score
-              </th>
-            )}
             <th style={{ ...styles.th, textAlign: "right" }}>Duration</th>
             <th style={styles.th}>
               <span style={visuallyHidden}>Action</span>
@@ -236,24 +219,6 @@ export function HistoryList({
                     {run.filing_level === "group" ? "Group" : "Company"}
                   </span>
                 </td>
-                {hasScores && (
-                  <td style={{ ...styles.td, textAlign: "right" }}>
-                    {run.eval_score != null ? (
-                      <span
-                        data-testid={`history-score-${run.id}`}
-                        style={styles.scoreValue}
-                        title={`Graded against benchmark ${run.benchmark_id}`}
-                      >
-                        {Math.round(run.eval_score * 100)}%
-                      </span>
-                    ) : (
-                      <span
-                        style={styles.dim}
-                        title="Only scored when the run was graded against a benchmark"
-                      >—</span>
-                    )}
-                  </td>
-                )}
                 <td style={{ ...styles.td, textAlign: "right" }}>
                   <span style={styles.dim}>{formatDuration(run.duration_seconds)}</span>
                 </td>
@@ -278,46 +243,6 @@ export function HistoryList({
           })}
         </tbody>
       </table>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// EvalSparkline — a tiny inline-SVG trend of eval scores across the listed
-// runs (gold-standard eval, v16). `runs` arrives newest-first; we reverse to
-// chronological so the line reads left→right = oldest→newest. Only rendered
-// when at least two runs were graded. (Charts keep functional colour — the
-// monochrome rule applies to routine status, not chart marks.)
-// ---------------------------------------------------------------------------
-
-function EvalSparkline({ runs }: { runs: RunSummaryJson[] }) {
-  const scored = runs
-    .filter((r) => r.eval_score != null)
-    .slice()
-    .reverse() as Array<RunSummaryJson & { eval_score: number }>;
-  if (scored.length < 2) return null;
-
-  const W = 160;
-  const H = 32;
-  const PAD = 3;
-  const n = scored.length;
-  // Scores are already in [0, 1]; map directly to the vertical axis (1 = top).
-  const points = scored.map((r, i) => {
-    const x = PAD + (i * (W - 2 * PAD)) / (n - 1);
-    const y = PAD + (1 - r.eval_score) * (H - 2 * PAD);
-    return { x, y, score: r.eval_score };
-  });
-  const path = points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
-  const last = points[points.length - 1];
-
-  return (
-    <div data-testid="history-eval-sparkline" style={styles.sparklineWrap}>
-      <span style={styles.sparklineLabel}>Eval trend</span>
-      <svg width={W} height={H} role="img" aria-label="Eval score trend">
-        <path d={path} fill="none" stroke={pwc.orange500} strokeWidth={1.5} />
-        <circle cx={last.x} cy={last.y} r={2.5} fill={pwc.orange500} />
-      </svg>
-      <span style={styles.sparklineValue}>{Math.round(last.score * 100)}%</span>
     </div>
   );
 }
@@ -366,31 +291,6 @@ const styles = {
     borderBottom: `1px solid ${pwc.grey100}`,
     verticalAlign: "middle" as const,
     overflow: "hidden",
-  } as React.CSSProperties,
-  // Gold-standard eval score — mono for numeric alignment; readable ink.
-  scoreValue: {
-    fontFamily: pwc.fontMono,
-    fontSize: 13,
-    fontWeight: pwc.weight.medium,
-    color: pwc.grey900,
-  } as React.CSSProperties,
-  sparklineWrap: {
-    display: "flex",
-    alignItems: "center",
-    gap: pwc.space.sm,
-    padding: `${pwc.space.md}px ${pwc.space.lg}px`,
-    borderBottom: `1px solid ${pwc.grey100}`,
-    background: pwc.grey50,
-  } as React.CSSProperties,
-  sparklineLabel: {
-    ...ui.microLabel,
-    textTransform: "uppercase" as const,
-  } as React.CSSProperties,
-  sparklineValue: {
-    fontFamily: pwc.fontMono,
-    fontSize: 13,
-    fontWeight: pwc.weight.medium,
-    color: pwc.grey900,
   } as React.CSSProperties,
   // Filename cell keeps identical padding when a row becomes active.
   tdFilename: {

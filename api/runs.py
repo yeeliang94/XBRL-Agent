@@ -83,19 +83,13 @@ async def list_runs_endpoint(
     model: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
-    include_suite_children: bool = False,
     limit: int = 50,
     offset: int = 0,
     # Accept `from`/`to` aliases too so the frontend can use human-friendly
     # query params. FastAPI cannot parse a param named `from` (reserved
     # keyword), so we alias via the date-range middleware on the app.
 ):
-    """List past runs with optional filters. Newest first by default.
-
-    Suite child runs (Evals workspace) are hidden by default so a batch of 30+
-    doesn't bury the list (decision #1); pass include_suite_children=true to
-    show them.
-    """
+    """List past runs with optional filters. Newest first by default."""
     from db import repository as repo
     # Clamp once, use for both the DB query AND the response payload.
     # Previously the response echoed the raw request values, so a caller
@@ -112,7 +106,6 @@ async def list_runs_endpoint(
             model=model,
             date_from=date_from,
             date_to=date_to,
-            include_suite_children=include_suite_children,
             limit=safe_limit,
             offset=safe_offset,
         )
@@ -123,7 +116,6 @@ async def list_runs_endpoint(
             model=model,
             date_from=date_from,
             date_to=date_to,
-            include_suite_children=include_suite_children,
         )
     finally:
         conn.close()
@@ -154,12 +146,6 @@ async def get_run_detail_endpoint(run_id: int):
     conn = server._open_audit_conn()
     try:
         detail = repo.get_run_detail(conn, run_id)
-        # v16 gold-standard eval: fetch the scorecard (if any) on the same
-        # connection so the Eval tab is gated + populated from one round-trip.
-        eval_score = (
-            repo.fetch_eval_score_for_run(conn, run_id)
-            if detail is not None else None
-        )
         usage_rollup = (
             repo.fetch_model_usage_rollup(conn, run_id)
             if detail is not None else {"coverage": "unavailable", "call_count": 0}
@@ -230,19 +216,11 @@ async def get_run_detail_endpoint(run_id: int):
         # not the config blob, so a corrupt/missing config still surfaces
         # the right path. Falls back to 'split' on legacy rows.
         "orchestration": getattr(run, "orchestration", "split"),
-        # v16 gold-standard eval: the benchmark this run graded against (None
-        # on normal runs — the frontend gates the Eval tab on it) plus the
-        # scorecard dict (None when not graded).
-        "benchmark_id": getattr(run, "benchmark_id", None),
-        "eval_score": eval_score,
         # v30 evals workspace: the build that produced this run (None on legacy
         # rows), plus the repeat-group linkage when this run is one of N repeats.
         "app_version": getattr(run, "app_version", None),
         "repeat_group_id": getattr(run, "repeat_group_id", None),
         "repeat_index": getattr(run, "repeat_index", None),
-        # v31 evals workspace: links a suite child run back to its batch (E6),
-        # so the child's run detail can offer a "back to suite run" link.
-        "suite_run_id": getattr(run, "suite_run_id", None),
         # v22 per-run notes-table style override (docs/PLAN-notes-table-theme.md).
         # None on a run with no override — the Notes tab then uses the firm
         # default from /api/config.

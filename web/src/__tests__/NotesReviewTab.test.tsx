@@ -20,6 +20,7 @@ import { Highlight } from "@tiptap/extension-highlight";
 import { TextAlign } from "@tiptap/extension-text-align";
 import type { NotesCellsResponse } from "../lib/notesCells";
 import { pwc } from "../lib/theme";
+import { humanSlotKey, type HumanFigureSlot } from "../lib/humanFile";
 
 // Issue 3 (2026-06-21): empty notes cells were flipping to "Saved" without
 // the user typing — TipTap normalises an empty cell ("") to "<p></p>" on
@@ -658,6 +659,7 @@ describe("NotesReviewTab — edit + save (Step 10)", () => {
 
   test("changing html calls patch after debounce", async () => {
     vi.useFakeTimers();
+    const onComparisonChange = vi.fn();
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
       if (init?.method === "PATCH") {
         return new Response(
@@ -680,7 +682,7 @@ describe("NotesReviewTab — edit + save (Step 10)", () => {
     });
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-    render(<NotesReviewTab runId={42} />);
+    render(<NotesReviewTab runId={42} onComparisonChange={onComparisonChange} />);
     // Initial GET resolves on a microtask — flush to render the rows.
     await vi.runAllTimersAsync();
     selectFirstField();
@@ -719,6 +721,7 @@ describe("NotesReviewTab — edit + save (Step 10)", () => {
     );
     const body = JSON.parse((patches[0][1] as RequestInit).body as string);
     expect(body.html).toBe("<p>edited</p>");
+    expect(onComparisonChange).toHaveBeenCalledTimes(1);
     vi.useRealTimers();
   });
 
@@ -1768,27 +1771,43 @@ describe("NotesReviewTab — full-template projection (Phase 5)", () => {
 
   test("edits one numeric category without changing its neighbour", async () => {
     const blocked = vi.fn();
+    const onComparisonChange = vi.fn();
     const sheet = FULL_TEMPLATE.sheets[1];
     const categories = ["Ordinary", "Preference"].map((label, index) => ({
       label, dimension_key: label, dimensions: { ClassAxis: label },
       values: { cy: index === 0 ? 100 : 20, py: null }, evidence: "Page 4",
     }));
     const projection = { sheets: [{ ...sheet, rows: [{ ...sheet.rows[0], categories }] }] };
+    const humanFigures = new Map<string, HumanFigureSlot>([
+      [humanSlotKey("uuid-cap-6", "CY", "Company", "Ordinary"), {
+        concept_uuid: "uuid-cap-6", period: "CY", entity_scope: "Company",
+        dimension_key: "Ordinary", status: "agree", human_value: 100, ai_value: 100,
+      }],
+      [humanSlotKey("uuid-cap-6", "CY", "Company", "Preference"), {
+        concept_uuid: "uuid-cap-6", period: "CY", entity_scope: "Company",
+        dimension_key: "Preference", status: "different", human_value: 25, ai_value: 20,
+      }],
+    ]);
     const calls: RequestInit[] = [];
     globalThis.fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
       if (init) calls.push(init);
       return new Response(JSON.stringify(init?.method === "PATCH" ? { recomputed: [] } : projection),
         { status: 200, headers: { "Content-Type": "application/json" } });
     }) as typeof fetch;
-    render(<NotesReviewTab runId={7} onPreparationBlocked={blocked} />);
+    render(<NotesReviewTab runId={7} onPreparationBlocked={blocked}
+      humanFigures={humanFigures} onComparisonChange={onComparisonChange} />);
     const rows = await screen.findAllByTestId("notes-numeric-row");
     expect(rows).toHaveLength(2);
     expect(rows[0]).toHaveTextContent("Ordinary");
     expect(rows[1]).toHaveTextContent("Preference");
+    expect(within(rows[0]).getByTestId("numeric-human-6-Ordinary-cy")).toHaveTextContent("100");
+    expect(within(rows[1]).getByTestId("numeric-human-6-Preference-cy")).toHaveTextContent("25");
+    expect(within(rows[1]).getByRole("img", { name: "Differs from human" })).toBeInTheDocument();
     const input = within(rows[1]).getByTestId("numeric-input-6-cy");
     fireEvent.change(input, { target: { value: "25" } });
     fireEvent.blur(input);
     await waitFor(() => expect(calls.some(c => c.method === "PATCH")).toBe(true));
+    await waitFor(() => expect(onComparisonChange).toHaveBeenCalled());
     expect(JSON.parse(String(calls.find(c => c.method === "PATCH")?.body))).toMatchObject({
       value: 25, period: "CY", entity_scope: "Company", dimensions: { ClassAxis: "Preference" },
     });

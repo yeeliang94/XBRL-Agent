@@ -21,6 +21,22 @@ import {
 } from "../lib/numberFormat";
 import type { CrossCheckResult } from "../lib/types";
 import { TemplateSettingsPage } from "./TemplateSettingsPage";
+import {
+  HumanComparisonBar,
+  type ComparisonPane,
+  type ComparisonTile,
+} from "../components/HumanComparisonBar";
+import {
+  formatShare,
+  getHumanComparison,
+  humanSlotKey,
+  HUMAN_STATUS_LABEL,
+  HUMAN_STATUS_SYMBOL,
+  type HumanComparison,
+  type HumanFigureSlot,
+  type HumanFileRecord,
+  type HumanSlotStatus,
+} from "../lib/humanFile";
 
 // Phase 3.2 — sentinel selector value that swaps the main panel from the
 // face-statement tree/grid to the notes editor, so face statements and
@@ -118,14 +134,6 @@ export interface ConceptsPageProps {
   // Null when the Concepts top-nav tab is opened without a run selected —
   // the page then shows a "pick a run" empty state instead of fetching.
   runId: number | null;
-  // Gold-standard eval (v16): when source==='benchmark' the SAME grid renders
-  // a benchmark's gold facts (/api/benchmarks/{id}/concepts) and edits PATCH
-  // /api/benchmarks/{id}/facts instead of the run-fact endpoints. A minimal
-  // prop, NOT a component-library extraction (scope discipline): the run-only
-  // chrome (PDF pane, conflicts, notes, download) is suppressed and a
-  // compact gold editor is rendered. `runId` is null in this mode.
-  source?: "run" | "benchmark";
-  benchmarkId?: number | null;
   // The current cross-checks, passed by the run report so the compact
   // attention disclosure can target failing checks. Optional — the standalone
   // template view has none.
@@ -139,10 +147,27 @@ export interface ConceptsPageProps {
   /** Open the unified review workspace directly on its persistent Notes
    *  index/editor/source composition. Used by the run-detail Notes route. */
   initialView?: "figures" | "notes";
+  /** The human-filled mTool file attached to this run, if any. When set, the
+   *  right-hand panel can show the human's values instead of the Source PDF. */
+  humanFile?: HumanFileRecord | null;
+  onReplaceHumanFile?: () => void;
+  onHumanFileRemoved?: () => void;
 }
 
 type Period = "CY" | "PY";
-type RowFilter = "review" | "attention" | "extracted" | "edited" | "calculated" | "no_source" | "blank" | "all";
+type HumanRowFilter = "human_differs" | "human_missed" | "human_ai_only";
+type RowFilter = "review" | "attention" | "extracted" | "edited" | "calculated" | "no_source" | "blank" | "all" | HumanRowFilter;
+const HUMAN_ROW_FILTERS: Array<{ value: HumanRowFilter; label: string; status: HumanSlotStatus }> = [
+  { value: "human_differs", label: "Differs from human", status: "different" },
+  { value: "human_missed", label: "Missed by AI", status: "missed" },
+  { value: "human_ai_only", label: "AI-only", status: "ai_only" },
+];
+
+/** What the figures table needs to show the human columns. */
+interface HumanView {
+  slots: Map<string, HumanFigureSlot>;
+  notComparedTemplates: Set<string>;
+}
 const ROW_FILTERS: Array<{ value: RowFilter; label: string }> = [
   { value: "review", label: "Review relevant" },
   { value: "attention", label: "Needs attention" },
@@ -255,28 +280,38 @@ function displayConceptSource(row: ConceptRow): string {
   return pages.length ? `Page${pages.length === 1 ? "" : "s"} ${pages.join(", ")}` : "";
 }
 
-function treeColumns(showPeriods: boolean): string {
+function treeColumns(showPeriods: boolean, human = false): string {
+  if (human) {
+    return showPeriods
+      ? "minmax(130px, 1fr) repeat(4, minmax(88px, 120px))"
+      : "minmax(130px, 1fr) repeat(2, minmax(100px, 150px))";
+  }
   return showPeriods
     ? "minmax(130px, 1fr) minmax(88px, 120px) minmax(88px, 120px)"
     : "minmax(130px, 1fr) minmax(100px, 150px)";
 }
 
+function humanSlotsForRow(
+  row: ConceptRow,
+  human: HumanView,
+  scope: "Company" | "Group",
+): HumanFigureSlot[] {
+  return (["CY", "PY"] as const)
+    .map((period) => human.slots.get(humanSlotKey(row.concept_uuid, period, scope)))
+    .filter((slot): slot is HumanFigureSlot => slot != null);
+}
+
 export function ConceptsPage({
   runId,
-  source = "run",
-  benchmarkId = null,
   initialCrossChecks,
   onRegenerateNotes,
   onPreparationBlocked,
   initialView = "figures",
+  humanFile = null,
+  onReplaceHumanFile,
+  onHumanFileRemoved,
 }: ConceptsPageProps) {
   const initialWorkspace = useRef<WorkspacePreferences>(readWorkspacePreferences(runId));
-  // Gold-standard eval (v16): in benchmark mode we read/write gold facts; the
-  // run-only effects (edited_count and conflicts) all short-circuit on
-  // `runId == null`, which is exactly the state in benchmark mode, so they stay
-  // inert without extra guards. `effectiveId` drives the one shared load.
-  const isBenchmark = source === "benchmark";
-  const effectiveId = isBenchmark ? benchmarkId : runId;
   const [concepts, setConcepts] = useState<ConceptRow[]>([]);
   // Reporting periods (e.g. "FY2021" / "FY2020") from the run's scout, used to
   // label the CY / PY column headers with their years (D5). Null when scout
@@ -383,14 +418,9 @@ export function ConceptsPage({
   // unmount / runId change so a slow response can't land on a stale
   // component or clobber a newer run's data.
   useEffect(() => {
-    if (effectiveId == null) return;
+    if (runId == null) return;
     const controller = new AbortController();
-    // Eval (v16): benchmark mode reads gold facts from the benchmark concepts
-    // endpoint, which returns the same view-row shape so the grid is unchanged.
-    const url = isBenchmark
-      ? `/api/benchmarks/${effectiveId}/concepts`
-      : `/api/runs/${effectiveId}/concepts`;
-    fetch(url, { signal: controller.signal })
+    fetch(`/api/runs/${runId}/concepts`, { signal: controller.signal })
       .then((r) => {
         if (!r.ok) throw ApiError.fromResponse(r.status, null);
         return r.json();
@@ -401,11 +431,19 @@ export function ConceptsPage({
         setReportingPy(data.reporting_period_py ?? null);
         const loaded = (data.concepts || []) as ConceptRow[];
         const loadedTemplates = Array.from(new Set(loaded.map((row) => row.template_id)));
-        setActiveTemplate(resolveInitialWorkspaceTemplate(
+        const resolvedTemplate = resolveInitialWorkspaceTemplate(
           initialView,
           initialWorkspace.current.activeTemplate,
           loadedTemplates,
-        ));
+        );
+        setActiveTemplate(resolvedTemplate);
+        // A stored sheet that is not part of the restored statement would
+        // hide every row of it.
+        const storedSheet = initialWorkspace.current.activeSheet;
+        if (storedSheet && !loaded.some((row) =>
+          row.template_id === resolvedTemplate && row.render_sheet === storedSheet)) {
+          setActiveSheet(null);
+        }
       })
       .catch((err) => {
         // AbortError is expected on cleanup — don't surface it.
@@ -415,7 +453,7 @@ export function ConceptsPage({
     return () => {
       controller.abort();
     };
-  }, [effectiveId, initialView, isBenchmark]);
+  }, [runId, initialView]);
 
   useEffect(() => {
     if (runId == null) return;
@@ -428,6 +466,43 @@ export function ConceptsPage({
       });
     return () => controller.abort();
   }, [runId, conflictReloadKey]);
+
+  // Human-file comparison. Recomputed by the server from the run's current
+  // values, so it is re-read after every saved edit (conflictReloadKey).
+  const [comparison, setComparison] = useState<HumanComparison | null>(null);
+  const [comparisonPane, setComparisonPane] = useState<ComparisonPane>("human");
+  const humanFileId = humanFile ? `${humanFile.sha256}:${humanFile.uploaded_at}` : null;
+  useEffect(() => {
+    // A newly attached file opens on the human columns.
+    setComparisonPane("human");
+  }, [humanFileId]);
+  useEffect(() => {
+    if (runId == null || humanFileId == null) {
+      setComparison(null);
+      return;
+    }
+    let cancelled = false;
+    getHumanComparison(runId)
+      .then((data) => { if (!cancelled) setComparison(data); })
+      .catch(() => { if (!cancelled) setComparison(null); });
+    return () => { cancelled = true; };
+  }, [runId, humanFileId, conflictReloadKey]);
+  const humanActive = comparison != null && comparisonPane === "human";
+  const humanView = useMemo<HumanView | null>(() => {
+    if (!comparison) return null;
+    const slots = new Map<string, HumanFigureSlot>();
+    for (const slot of comparison.figures.slots) {
+      slots.set(humanSlotKey(slot.concept_uuid, slot.period, slot.entity_scope, slot.dimension_key), slot);
+    }
+    return {
+      slots,
+      notComparedTemplates: new Set(
+        comparison.file.not_compared
+          .filter((n) => n.reason !== "not_in_run")
+          .map((n) => n.template_id),
+      ),
+    };
+  }, [comparison]);
 
   // Open-conflict counts feed the compact attention control. Keep the request
   // keyed on conflictReloadKey so it refreshes after an edit or a manual
@@ -477,7 +552,7 @@ export function ConceptsPage({
       value: number | null,
       opts?: { keepalive?: boolean; period?: Period; entity_scope?: "Company" | "Group" }
     ) => {
-      if (effectiveId == null) return;
+      if (runId == null) return;
       const keepalive = opts?.keepalive === true;
       const period = opts?.period ?? "CY";
       // Resolve the scope from the edit options, captured when the edit was
@@ -490,22 +565,12 @@ export function ConceptsPage({
         setEditStatus((s) => ({ ...s, [editKey]: "saving" }));
       }
       try {
-        // Eval (v16): benchmark gold edits go to the benchmark facts endpoint
-        // (composite key in the body); run edits keep the per-concept URL. Gold
-        // has no cascade, so the benchmark response carries no `recomputed`.
-        const resp = isBenchmark
-          ? await fetch(`/api/benchmarks/${effectiveId}/facts`, {
-              method: "PATCH",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ concept_uuid, value, period, entity_scope }),
-              keepalive,
-            })
-          : await fetch(`/api/runs/${effectiveId}/facts/${concept_uuid}`, {
-              method: "PATCH",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ value, period, entity_scope }),
-              keepalive,
-            });
+        const resp = await fetch(`/api/runs/${runId}/facts/${concept_uuid}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ value, period, entity_scope }),
+          keepalive,
+        });
         if (keepalive) return;
         if (!resp.ok) {
           setEditStatus((s) => ({ ...s, [editKey]: "error" }));
@@ -560,15 +625,14 @@ export function ConceptsPage({
         );
         setEditStatus((s) => ({ ...s, [editKey]: "saved" }));
         // A leaf edit may open or clear a partial-state conflict in the
-        // cascade — refresh the compact attention count. (No-op for benchmark
-        // gold, which has no cascade/conflicts.)
+        // cascade — refresh the compact attention count.
         setConflictReloadKey((k) => k + 1);
       } catch (err) {
         if (keepalive) return;
         setEditStatus((s) => ({ ...s, [editKey]: "error" }));
       }
     },
-    [effectiveId, isBenchmark, activeScope]
+    [runId, activeScope]
   );
 
   // Review Workspace M2 — select a concept from outside the grid (e.g. a
@@ -647,12 +711,18 @@ export function ConceptsPage({
   // templates so a user can hop between statements via the result
   // list).  Empty query falls back to the active-template view.
   const notesActive = activeTemplate === NOTES_KEY;
+  // The human columns need the room, so the Statements list folds away at
+  // laptop width while they show. The user can open or close it either way.
+  const [workspaceWidth, setWorkspaceWidth] = useState(0);
+  const [railOpen, setRailOpen] = useState<boolean | null>(null);
+  const railFolded = humanActive && !(railOpen ?? (workspaceWidth === 0 || workspaceWidth >= 1400));
 
   useEffect(() => {
     const workspace = workspaceRef.current;
     if (!workspace) return;
     const updateLimit = () => {
       const width = workspace.getBoundingClientRect().width;
+      setWorkspaceWidth(width);
       const maxWidth = width > 0 ? Math.min(720, width * 0.34) : 720;
       pdfMaxWidthRef.current = maxWidth;
       // Store the visible width so dragging back from the limit responds
@@ -663,7 +733,7 @@ export function ConceptsPage({
     const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(updateLimit) : null;
     observer?.observe(workspace);
     return () => observer?.disconnect();
-  }, [notesActive, runId, isBenchmark]);
+  }, [notesActive, runId]);
 
   // Detect Group runs by the presence of ANY concept with Group-side
   // facts.  Phase-1 Company runs have no Group entry; the toggle stays
@@ -717,9 +787,16 @@ export function ConceptsPage({
           check.target_sheet === row.render_sheet &&
           check.target_row === row.render_row,
       );
+    const humanFilter = HUMAN_ROW_FILTERS.find((option) => option.value === rowFilter);
     const matchesRowFilter = (row: ConceptRow) => {
       const scopedRow = conceptForScope(row, activeScope);
       if (rowFilter === "all") return true;
+      if (humanFilter) {
+        // Without a comparison the stored filter falls back to every row.
+        if (!humanView) return true;
+        return humanSlotsForRow(row, humanView, activeScope)
+          .some((slot) => slot.status === humanFilter.status);
+      }
       if (row.kind === "ABSTRACT") return false;
       if (rowFilter === "attention") return rowHasIssue(row) || rowLacksSource(scopedRow);
       if (rowFilter === "extracted") return row.kind !== "COMPUTED" && rowHasValue(row);
@@ -744,7 +821,7 @@ export function ConceptsPage({
       filtered: baseRows.filter((row) => visibleUuids.has(row.concept_uuid)),
       noSourceCount: baseRows.filter((row) => rowLacksSource(conceptForScope(row, activeScope))).length,
     };
-  }, [concepts, searchQuery, activeTemplate, activeSheet, rowFilter, editStatus, actionableChecks, activeScope]);
+  }, [concepts, searchQuery, activeTemplate, activeSheet, rowFilter, editStatus, actionableChecks, activeScope, humanView]);
 
   useEffect(() => {
     if (notesActive) {
@@ -812,7 +889,6 @@ export function ConceptsPage({
   // production editor state lives, so emitting the event is not mistaken for
   // completed navigation.
   useEffect(() => {
-    if (isBenchmark) return;
     const onFocus = (event: Event) => {
       const detail = (event as CustomEvent).detail;
       if (!detail || typeof detail.sheet !== "string" || typeof detail.row !== "number") return;
@@ -829,107 +905,12 @@ export function ConceptsPage({
     };
     window.addEventListener("notes-coverage-focus", onFocus);
     return () => window.removeEventListener("notes-coverage-focus", onFocus);
-  }, [isBenchmark, runId]);
+  }, [runId]);
 
   // The pages the Source PDF pane should show: a focused notes cell's pages
   // when the notes editor is active, otherwise the selected face concept's
   // evidence pages.
   const pdfPages = notesActive ? notesPdfPages : selectedEvidencePages;
-
-  // Eval (v16): benchmark gold editor — a compact reuse of the same grid,
-  // without the run-only chrome (no PDF pane, conflicts, notes, download). Gold
-  // LEAF/MATRIX cells are editable; edits PATCH the benchmark facts endpoint.
-  if (isBenchmark) {
-    if (benchmarkId == null) {
-      return (
-        <div data-testid="benchmark-gold-empty" style={{ padding: pwc.space.xl }}>
-          <p style={styles.panelMuted}>Select a benchmark to edit its reference values.</p>
-        </div>
-      );
-    }
-    return (
-      <div
-        data-testid="benchmark-gold-editor"
-        style={{ display: "flex", flexDirection: "column", gap: pwc.space.lg }}
-      >
-        {loadError && (
-          <div style={styles.errorBanner}>Failed to load reference values: {loadError}</div>
-        )}
-        <div style={ui.alertInfo} role="note">
-          Reference-value edits save automatically when you leave a field. Each edited row shows Saving, Saved, or Save failed.
-        </div>
-        <section style={styles.toolbar} aria-label="Reference editor controls">
-          {templates.length > 1 && (
-            <div style={styles.controlGroup}>
-              <label htmlFor="gold-template" style={ui.fieldLabel}>Statement</label>
-              <select
-                id="gold-template"
-                data-testid="gold-template-select"
-                value={activeTemplate ?? ""}
-                onChange={(e) => {
-                  setActiveTemplate(e.target.value);
-                  setActiveSheet(null);
-                  setSearchQuery("");
-                }}
-                style={ui.select}
-              >
-                {templates.map((tid) => (
-                  <option key={tid} value={tid}>{templateDisplayName(tid)}</option>
-                ))}
-              </select>
-            </div>
-          )}
-          {isGroupRun && (
-            <div style={styles.controlGroup}>
-              <span style={ui.fieldLabel}>Entity</span>
-              <SegmentedControl
-                testId="gold-entity-scope-toggle"
-                values={["Company", "Group"] as const}
-                activeValue={activeScope}
-                onChange={setActiveScope}
-                buttonTestId={(scope) => `gold-scope-btn-${scope}`}
-              />
-            </div>
-          )}
-          <div style={styles.searchGroup}>
-            <label htmlFor="gold-search" style={ui.fieldLabel}>Search</label>
-            <input
-              id="gold-search"
-              data-testid="gold-search"
-              type="search"
-              placeholder="Search all sheets"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              style={{ ...ui.input, width: "100%" }}
-            />
-          </div>
-        </section>
-        {filtered.length > 0 && filtered.every((r) => r.shape === "matrix") ? (
-          <ConceptMatrixGrid
-            rows={filtered}
-            onEditValue={onEditValue}
-            editStatus={editStatus}
-            selectedUuid={selectedConceptUuid}
-            onSelectRow={setSelectedConceptUuid}
-            activeScope={activeScope}
-            showPeriods={hasPyFacts}
-            scrollOnSelectRef={scrollSelectionRef}
-          />
-        ) : (
-          <ConceptTree
-            rows={filtered}
-            onEditValue={onEditValue}
-            editStatus={editStatus}
-            selectedUuid={selectedConceptUuid}
-            onSelectRow={setSelectedConceptUuid}
-            activeScope={activeScope}
-            showPeriods={hasPyFacts}
-            scrollOnSelectRef={scrollSelectionRef}
-          />
-        )}
-      </div>
-    );
-  }
 
   if (runId == null) {
     // No run selected → this surface becomes the global template settings
@@ -941,6 +922,38 @@ export function ConceptsPage({
       </div>
     );
   }
+
+  // Human-file stat tiles: figures follow the Company/Group switch; notes are
+  // placement only.
+  let comparisonTiles: ComparisonTile[] = [];
+  let comparisonExcludes: string | null = null;
+  if (comparison) {
+    if (notesActive) {
+      const t = comparison.notes.totals;
+      comparisonTiles = [
+        { label: "Found", value: formatShare(t.both_filled, t.human_filled) },
+        { label: "AI-only", value: String(t.ai_only) },
+      ];
+      const unmatchedNotes = comparison.file.unmatched.filter((u) => u.kind === "note").length;
+      if (unmatchedNotes > 0) comparisonExcludes = `Excludes ${unmatchedNotes} unmatched note${unmatchedNotes === 1 ? "" : "s"}`;
+    } else {
+      const t = comparison.figures.totals[activeScope] ?? { human_filled: 0, both_filled: 0, same_value: 0, ai_only: 0 };
+      comparisonTiles = [
+        { label: "Found", value: formatShare(t.both_filled, t.human_filled) },
+        { label: "Same value", value: formatShare(t.same_value, t.both_filled) },
+        { label: "AI-only", value: String(t.ai_only) },
+      ];
+      const n = comparison.figures.excluded.unmatched_rows;
+      if (n > 0) comparisonExcludes = `Excludes ${n} unmatched row${n === 1 ? "" : "s"}`;
+    }
+  }
+  const activeNotCompared = !notesActive && humanActive && activeTemplate
+    ? comparison?.file.not_compared.find((n) => n.template_id === activeTemplate && n.reason !== "not_in_run") ?? null
+    : null;
+  const unmatchedFigureRows = humanActive
+    ? comparison?.file.unmatched.filter((u) => u.kind === "figure") ?? []
+    : [];
+  const tableHuman = humanActive ? humanView : null;
 
   const totalOpenConflicts = Object.values(conflictCounts).reduce(
     (a, b) => a + b,
@@ -988,9 +1001,14 @@ export function ConceptsPage({
           Sits directly beside the Source PDF so a value and the document page
           it came from are adjacent. Sheet selection and attention are compact
           controls here instead of a repeated second sidebar. */}
-      {!notesActive && <aside className="review-template-rail" aria-label="Figure template navigator"
+      {!notesActive && railFolded && (
+        <CollapsedRail label="Statements" testId="statements" onExpand={() => setRailOpen(true)} />
+      )}
+      {!notesActive && !railFolded && <aside className="review-template-rail" aria-label="Figure template navigator"
         style={{ flex: "0 0 240px", minWidth: 0, paddingRight: pwc.space.md, display: "flex", flexDirection: "column", gap: pwc.space.md }}>
-        <strong style={ui.fieldLabel}>mTool worksheets</strong>
+        {humanActive
+          ? <ColumnHeader title="mTool worksheets" testId="statements" onHide={() => setRailOpen(false)} />
+          : <strong style={ui.fieldLabel}>mTool worksheets</strong>}
             <div style={styles.controlGroup}>
               <label htmlFor="review-sheet-picker" style={ui.fieldLabel}>
                 Statement
@@ -1060,6 +1078,27 @@ export function ConceptsPage({
           </div>
         )}
 
+        {comparison && (
+          <HumanComparisonBar
+            runId={runId}
+            file={comparison.file}
+            showDetails={humanActive}
+            paneSwitch={
+              <SegmentedControl
+                testId="comparison-pane-toggle"
+                values={["Human file", "Source PDF"] as const}
+                activeValue={comparisonPane === "human" ? "Human file" : "Source PDF"}
+                onChange={(value) => setComparisonPane(value === "Human file" ? "human" : "pdf")}
+                buttonTestId={(value) => `comparison-pane-${value === "Human file" ? "human" : "pdf"}`}
+              />
+            }
+            tiles={comparisonTiles}
+            excludesNote={comparisonExcludes}
+            onReplace={onReplaceHumanFile}
+            onRemoved={onHumanFileRemoved}
+          />
+        )}
+
         {/* Both toolbar controls only apply to figure sheets, so on a
             notes sheet the whole card is skipped — rendering the shell
             with its children hidden painted an empty white box between
@@ -1086,7 +1125,7 @@ export function ConceptsPage({
               <select
                 id="concept-row-filter"
                 data-testid="row-filter"
-                value={rowFilter}
+                value={comparison || !rowFilter.startsWith("human_") ? rowFilter : "all"}
                 onChange={(e) => setRowFilter(e.target.value as RowFilter)}
                 style={ui.select}
               >
@@ -1097,6 +1136,9 @@ export function ConceptsPage({
                       ? ` (${noSourceCount})`
                       : ""}
                   </option>
+                ))}
+                {comparison && HUMAN_ROW_FILTERS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
                 ))}
               </select>
             </div>
@@ -1174,6 +1216,13 @@ export function ConceptsPage({
           </section>
         )}
 
+        {activeNotCompared && (
+          <p style={{ ...ui.metadata, margin: `0 0 ${pwc.space.md}px` }} data-testid="human-not-compared">
+            {activeNotCompared.reason === "different_variant"
+              ? `Not compared: the human file uses another layout for this statement${activeNotCompared.human_variant ? ` (${activeNotCompared.human_variant})` : ""}.`
+              : "Not compared: this statement is empty in the human file."}
+          </p>
+        )}
         {notesActive ? (
           // Notes edit in place, next to the Source PDF — focusing a cell jumps
           // the PDF pane to that note's source pages (review-workspace Phase 1).
@@ -1185,6 +1234,12 @@ export function ConceptsPage({
               onActiveCellPages={handleNotesCellPages}
               onRegenerate={onRegenerateNotes}
               onPreparationBlocked={onPreparationBlocked}
+              onComparisonChange={() => setConflictReloadKey((key) => key + 1)}
+              humanFigures={humanActive ? humanView?.slots : null}
+              human={humanActive && comparison ? {
+                html: comparison.notes.human_html,
+                status: Object.fromEntries(comparison.notes.fields.map((f) => [f.concept_uuid, f.status])),
+              } : null}
             />
           </div>
         ) : filtered.length > 0 && filtered.every((r) => r.shape === "matrix") ? (
@@ -1204,6 +1259,7 @@ export function ConceptsPage({
             scrollOnSelectRef={scrollSelectionRef}
             cyLabel={reportingCy ? `CY (${reportingCy})` : "CY"}
             pyLabel={reportingPy ? `PY (${reportingPy})` : "PY"}
+            human={tableHuman}
           />
         ) : (
           <ConceptTree
@@ -1217,7 +1273,26 @@ export function ConceptsPage({
             scrollOnSelectRef={scrollSelectionRef}
             cyLabel={reportingCy ? `CY (${reportingCy})` : "CY"}
             pyLabel={reportingPy ? `PY (${reportingPy})` : "PY"}
+            human={tableHuman}
           />
+        )}
+        {unmatchedFigureRows.length > 0 && (
+          <details data-testid="human-unmatched-rows" style={styles.unmatchedList}>
+            <summary style={styles.unmatchedSummary}>
+              {unmatchedFigureRows.length} human row{unmatchedFigureRows.length === 1 ? "" : "s"} with no matching field
+            </summary>
+            <ul style={styles.attentionList}>
+              {unmatchedFigureRows.map((u) => (
+                <li key={`${u.sheet}:${u.row}`} style={styles.unmatchedItem}>
+                  <span>{u.label || `Row ${u.row}`}</span>
+                  <span style={styles.panelMuted}>{u.sheet} · row {u.row}</span>
+                  <span style={{ fontVariantNumeric: "tabular-nums" }}>
+                    {Object.values(u.values ?? {}).map((v) => formatAccounting(v)).join(" · ")}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </details>
         )}
       </section>
 
@@ -1225,7 +1300,7 @@ export function ConceptsPage({
           source page sit side by side. The resize handle is on the PDF's LEFT
           edge now, so a rightward drag shrinks it — delta sign is flipped
           relative to the Menu handle on the far left. */}
-      {pdfCollapsed ? (
+      {humanActive ? null : pdfCollapsed ? (
         <CollapsedRail
           label="Source PDF"
           testId="pdf"
@@ -1385,6 +1460,7 @@ function ConceptTree({
   scrollOnSelectRef,
   cyLabel = "CY",
   pyLabel = "PY",
+  human = null,
 }: {
   rows: ConceptRow[];
   onEditValue: EditValueFn;
@@ -1399,6 +1475,8 @@ function ConceptTree({
   // Year-labelled column headers ("CY (FY2021)"); default to plain codes.
   cyLabel?: string;
   pyLabel?: string;
+  /** Human-file values shown as extra columns on the same rows. */
+  human?: HumanView | null;
 }) {
   const depthByUuid = new Map<string, number>();
   for (const r of rows) {
@@ -1433,14 +1511,17 @@ function ConceptTree({
       <div
         role="row"
         className="concept-tree-header"
-        style={{ ...styles.treeHeaderRow, gridTemplateColumns: treeColumns(showPeriods) }}
+        data-human={human ? "true" : undefined}
+        style={{ ...styles.treeHeaderRow, gridTemplateColumns: treeColumns(showPeriods, human != null) }}
       >
         {/* "Line item" (accountant vocabulary), not the internal "Concept"
             codename — plain-language rule (CLAUDE.md "talk like a product
             person"). Numeric column headers right-align over their figures. */}
         <div style={styles.headerCell}>Line item</div>
         <div style={styles.headerCellNumeric}>{showPeriods ? cyLabel : "Value"}</div>
+        {human && <div style={styles.headerCellNumeric}>{showPeriods ? "Human CY" : "Human"}</div>}
         {showPeriods && <div style={styles.headerCellNumeric}>{pyLabel}</div>}
+        {human && showPeriods && <div style={styles.headerCellNumeric}>Human PY</div>}
 
       </div>
       {visibleRows.map((r) => (
@@ -1459,6 +1540,7 @@ function ConceptTree({
           activeScope={activeScope}
           showPeriods={showPeriods}
           scrollOnSelectRef={scrollOnSelectRef}
+          human={human}
         />
       ))}
     </div>
@@ -1501,6 +1583,7 @@ function ConceptMatrixGrid({
   scrollOnSelectRef,
   cyLabel = "CY",
   pyLabel = "PY",
+  human = null,
 }: {
   rows: ConceptRow[];
   onEditValue: EditValueFn;
@@ -1515,6 +1598,8 @@ function ConceptMatrixGrid({
   // Year-labelled period headers ("CY (FY2021)"); default to plain codes.
   cyLabel?: string;
   pyLabel?: string;
+  /** Human-file values: one extra column after each value column. */
+  human?: HumanView | null;
 }) {
   // Distinct component columns, in spreadsheet order (B, C, …).
   const cols: string[] = [];
@@ -1534,6 +1619,7 @@ function ConceptMatrixGrid({
     label: string;
     isAbstract: boolean;
     cells: Map<string, MatrixCell>;
+    templateId: string;
   };
   const byRow = new Map<number, GridRow>();
   const order: number[] = [];
@@ -1545,6 +1631,7 @@ function ConceptMatrixGrid({
         label: r.display_label || r.canonical_label,
         isAbstract: r.kind === "ABSTRACT",
         cells: new Map(),
+        templateId: r.template_id,
       };
       byRow.set(r.render_row, g);
       order.push(r.render_row);
@@ -1587,8 +1674,12 @@ function ConceptMatrixGrid({
   // Wider columns so an input fits without clipping accountant figures.
   const visiblePeriods: Period[] = showPeriods ? ["CY", "PY"] : ["CY"];
   const valueColumns = cols.flatMap((c) =>
-    visiblePeriods.map((period) => ({ col: c, period }))
+    visiblePeriods.flatMap((period) => [
+      { col: c, period, isHuman: false },
+      ...(human ? [{ col: c, period, isHuman: true }] : []),
+    ])
   );
+  const columnsPerComponent = visiblePeriods.length * (human ? 2 : 1);
   const periodColWidth = 136;
   const gridCols = `minmax(240px, 300px) repeat(${valueColumns.length}, ${periodColWidth}px)`;
 
@@ -1612,21 +1703,21 @@ function ConceptMatrixGrid({
         <div
           style={{
             ...styles.matrixHeaderMovement,
-            gridRow: showPeriods ? "1 / span 2" : undefined,
+            gridRow: showPeriods || human ? "1 / span 2" : undefined,
           }}
         >
           Movement
         </div>
         {cols.map((col, idx) => {
           const label = colLabels.get(col) || col;
-          const start = 2 + idx * visiblePeriods.length;
+          const start = 2 + idx * columnsPerComponent;
           return (
             <div
               key={col}
               style={{
                 ...styles.matrixComponentHeader,
-                gridColumn: showPeriods
-                  ? `${start} / span ${visiblePeriods.length}`
+                gridColumn: columnsPerComponent > 1
+                  ? `${start} / span ${columnsPerComponent}`
                   : undefined,
               }}
               title={`Column ${col}: ${label}`}
@@ -1635,13 +1726,15 @@ function ConceptMatrixGrid({
             </div>
           );
         })}
-        {showPeriods && valueColumns.map(({ col, period }) => (
+        {(showPeriods || human) && valueColumns.map(({ col, period, isHuman }) => (
           <div
-            key={`${col}-${period}`}
+            key={`${col}-${period}${isHuman ? "-human" : ""}`}
             style={styles.matrixPeriodHeader}
             title={`${col} ${period}`}
           >
-            {period === "CY" ? cyLabel : pyLabel}
+            {isHuman
+              ? (showPeriods ? `Human ${period}` : "Human")
+              : showPeriods ? (period === "CY" ? cyLabel : pyLabel) : "Value"}
           </div>
         ))}
       </div>
@@ -1682,8 +1775,19 @@ function ConceptMatrixGrid({
             <div style={styles.matrixMovementCell}>
               {g.label}
             </div>
-            {valueColumns.map(({ col, period }) => {
+            {valueColumns.map(({ col, period, isHuman }) => {
               const cell = g.cells.get(col);
+              if (isHuman && human) {
+                return (
+                  <div key={`${col}-${period}-human`} style={{ padding: `${pwc.space.xs}px ${pwc.space.sm}px`, minWidth: 0 }}>
+                    <HumanValueCell
+                      slot={cell ? human.slots.get(humanSlotKey(cell.uuid, period, activeScope)) : undefined}
+                      notCompared={human.notComparedTemplates.has(g.templateId)}
+                      testId={`matrix-human-${rn}-${col}-${period}`}
+                    />
+                  </div>
+                );
+              }
               const selected = cell?.uuid === selectedUuid;
               const highlightEmpty =
                 cell?.mandatory === true && isBlankValue(cell.values[period]);
@@ -1741,6 +1845,7 @@ function ConceptRowView({
   activeScope,
   showPeriods,
   scrollOnSelectRef,
+  human = null,
 }: {
   row: ConceptRow;
   depth: number;
@@ -1753,6 +1858,7 @@ function ConceptRowView({
   /** May the selected row scroll itself into view? False for the initial
    *  auto-selection (see the owner ref in ConceptsPage). */
   scrollOnSelectRef?: React.MutableRefObject<boolean>;
+  human?: HumanView | null;
 }) {
   // M2 — when selection is driven from outside the grid (a reconciliation
   // conflict), bring the row into view. `scrollIntoView` is guarded with `?.`
@@ -1803,6 +1909,7 @@ function ConceptRowView({
       tabIndex={isAbstract ? undefined : 0}
       role={isAbstract ? undefined : "treeitem"}
       aria-selected={isAbstract ? undefined : selected}
+      data-human={human ? "true" : undefined}
       onKeyDown={(event) => {
         if (event.target === event.currentTarget && !isAbstract && (event.key === "Enter" || event.key === " ")) {
           event.preventDefault(); onSelectRow(row.concept_uuid);
@@ -1813,7 +1920,7 @@ function ConceptRowView({
         display: "grid",
         gridTemplateColumns: isAbstract
           ? "minmax(0, 1fr)"
-          : treeColumns(showPeriods),
+          : treeColumns(showPeriods, human != null),
         gap: pwc.space.lg,
         minWidth: 0,
         // Section headers are visually distinct from data rows: tighter,
@@ -1945,6 +2052,13 @@ function ConceptRowView({
               />
             )}
           </div>
+          {human && (
+            <HumanValueCell
+              slot={human.slots.get(humanSlotKey(row.concept_uuid, "CY", activeScope))}
+              notCompared={human.notComparedTemplates.has(row.template_id)}
+              testId={`human-value-${row.concept_uuid}-CY`}
+            />
+          )}
           {showPeriods && (
             <div style={styles.valueCell}>
               {isComputed ? (
@@ -1972,6 +2086,13 @@ function ConceptRowView({
                 />
               )}
             </div>
+          )}
+          {human && showPeriods && (
+            <HumanValueCell
+              slot={human.slots.get(humanSlotKey(row.concept_uuid, "PY", activeScope))}
+              notCompared={human.notComparedTemplates.has(row.template_id)}
+              testId={`human-value-${row.concept_uuid}-PY`}
+            />
           )}
           {hasConflict && <div role="alert" style={{ ...styles.stateCell, gridColumn: "1 / -1" }}>
             <StatusBadge label="Conflicting values" tone="error" />
@@ -2023,6 +2144,38 @@ function ReadOnlyValue({
   return (
     <span data-testid={testId} style={styles.readonlyValueBox}>
       {formatAccounting(value)}
+    </span>
+  );
+}
+
+/** The human's value for one slot with its marker: ✓ agree, ! different
+ *  value, ○ missed by AI, ◇ AI-only. Blank when the human file has nothing
+ *  to compare there (including cells mTool calculates). */
+function HumanValueCell({
+  slot,
+  notCompared,
+  testId,
+}: {
+  slot: HumanFigureSlot | undefined;
+  notCompared: boolean;
+  testId?: string;
+}) {
+  if (notCompared || !slot || slot.human_value == null && slot.status !== "ai_only") {
+    return <span data-testid={testId} aria-hidden="true" style={styles.humanEmpty} />;
+  }
+  // Agreement is the normal case and carries no marker; only exceptions do.
+  const marker = slot.status === "agree" ? null : HUMAN_STATUS_SYMBOL[slot.status];
+  const attention = slot.status === "different" || slot.status === "missed";
+  return (
+    <span data-testid={testId} data-human-status={slot.status} style={styles.humanCell}
+      title={HUMAN_STATUS_LABEL[slot.status]}>
+      {marker && (
+        <span aria-label={HUMAN_STATUS_LABEL[slot.status]} role="img"
+          style={{ ...styles.humanMarker, color: attention ? pwc.warning : pwc.grey500 }}>
+          {marker}
+        </span>
+      )}
+      <span style={styles.humanNumber}>{slot.human_value == null ? "" : formatAccounting(slot.human_value)}</span>
     </span>
   );
 }
@@ -2539,6 +2692,58 @@ const styles = {
     listStyle: "none",
     margin: 0,
     padding: 0,
+  } as React.CSSProperties,
+  unmatchedList: {
+    marginTop: pwc.space.lg,
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: pwc.space.xs,
+  } as React.CSSProperties,
+  unmatchedItem: {
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 2fr) minmax(0, 1fr) auto",
+    gap: pwc.space.md,
+    padding: `${pwc.space.xs}px 0`,
+    borderBottom: `1px solid ${pwc.grey100}`,
+    fontSize: 13,
+  } as React.CSSProperties,
+  // Human values are read-only: same footprint as a calculated value so the
+  // AI and human columns line up, without a second tint.
+  humanCell: {
+    display: "flex",
+    alignItems: "center",
+    gap: pwc.space.xs,
+    width: "100%",
+    boxSizing: "border-box" as const,
+    minWidth: 0,
+    minHeight: 32,
+    padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
+    border: `1px solid ${pwc.grey200}`,
+    borderRadius: pwc.radius.md,
+    background: pwc.white,
+    fontFamily: pwc.fontBody,
+    fontSize: 14,
+    fontVariantNumeric: "tabular-nums",
+    color: pwc.grey900,
+  } as React.CSSProperties,
+  humanEmpty: {
+    display: "inline-block",
+    width: "100%",
+    height: 32,
+  } as React.CSSProperties,
+  humanMarker: {
+    fontWeight: pwc.weight.semibold,
+    flex: "0 0 auto",
+  } as React.CSSProperties,
+  humanNumber: {
+    marginLeft: "auto",
+  } as React.CSSProperties,
+  unmatchedSummary: {
+    cursor: "pointer",
+    fontFamily: pwc.fontHeading,
+    fontSize: 14,
+    fontWeight: pwc.weight.medium,
+    color: pwc.grey700,
   } as React.CSSProperties,
   attentionItem: {
     width: "100%",

@@ -589,7 +589,9 @@ the stable `error_type` classification) · v44 explicit reasoning-token and
 usage-coverage columns plus the request-level `model_usage_calls` ledger · v45
 notes-review flags carry the stable detector finding id and grounded source
 pages/evidence that made the human disposition terminal · v46 current/retired
-membership for canonical concept nodes across startup template re-imports.
+membership for canonical concept nodes across startup template re-imports · v49
+`human_files` / `human_file_facts` / `human_file_notes` (#23, one human-filled
+mTool file per run; the comparison is computed on read).
 
 ### 12. Filing level — Company vs Group
 
@@ -1721,89 +1723,64 @@ projection failure leaves the cell, lineage and placement ledger unchanged
 instead of leaving a canonical row with no workbook artifact. Pinned by
 `tests/test_notes_write_serialization.py`.
 
-### 23. Gold-standard eval — gold is facts, scoped by template SET
+### 23. Human-file comparison — read by address, compared on read
 
-The `eval/` subsystem (schema v16) scores a run's extraction against a
-benchmark's human-verified gold answers. Gold lives in `gold_concept_facts`,
-the SAME shape as `run_concept_facts` (keyed by `concept_uuid + period +
-entity_scope`); grading (`eval/grader.py::grade_run`) is a set join on that key,
-so the score is exact, not a brittle cell-diff (sidesteps gotcha #4).
+A user attaches the mTool workbook a person filled for the same document to a
+completed run and compares it with the run's current values
+(docs/human-mtool-file-comparison-plan.md). It replaced the gold-benchmark
+flow. The file belongs to one run only; there is no reusable answer key.
 
 Load-bearing invariants:
 
-- **Scope by the benchmark's explicit `template_id` SET, never a
-  `{standard}-{level}-` prefix.** `template_id` encodes the variant
-  (`...-sofp-cunoncu-v1` vs `...-sofp-orderofliquidity-v1`); uuids differ per
-  variant (gotcha #21). `eval_benchmark_templates` holds the set;
-  `eval/ingest.py` + `grade_run` both filter `template_id IN (set)`.
-- **Grade LEAF / MATRIX_CELL only.** COMPUTED totals are Excel-formula-derived
-  and excluded so they can't inflate the score. Grading keys on
-  `concept_uuid`, so cross-sheet alias coords (one uuid, two render coords —
-  schema v11) are counted once.
-- **Score = `matched / gold_cells`** where `gold_cells = matched + missing +
-  mismatch`. `extra_cells` (run filled a gold-blank leaf) + `scale_mismatch`
-  (`run == gold·10^k`) are **flags, NOT in the denominator** (open question:
-  whether extras should move the headline). `not_disclosed` gold is excluded
-  from the denominator and a run value there is ignored; `explicit_zero` gold
-  grades as numeric 0.
-- **Ingestion reuses `cell_resolver.resolve_cell`** — no new mapping logic. A
-  workbook matching no benchmark template is rejected loudly (`ValueError`); so
-  is a workbook that matches sheets but yields **zero gold cells** (a useless
-  0/0 benchmark — `eval/store.create_benchmark_from_workbook` raises → 422).
-- **Two ways to author gold; prefer seeding from a run (2026-06-05).** Upload
-  ingest reads `openpyxl(data_only=True)`, which returns `None` for any
-  formula cell with **no cached value** — exactly the state of a freshly
-  machine-exported workbook (the SOCIE matrix + cross-sheet face rollups are
-  live formulas, computed only when Excel opens the file). So uploading an
-  un-recalculated export silently drops most sub-sheet/matrix leaves (the
-  2026-06-05 incident: gold seeded from `run_159_filled.xlsx` captured 64 of
-  102 facts, SOCIE collapsing 42→6). `ingest_workbook` now COUNTS those lost
-  gradeable cells (`IngestResult.skipped_formula_cells`) and surfaces a
-  `warning` in the create response. The lossless path is
-  `eval/store.create_benchmark_from_run` (`POST /api/benchmarks/from-run`):
-  it copies `run_concept_facts` (LEAF/MATRIX_CELL, scoped to the templates the
-  run wrote) straight into `gold_concept_facts`, bypassing the xlsx round-trip
-  entirely. Only seedable from a **complete** terminal run (`completed` /
-  `completed_with_errors`) — draft/running/failed/`aborted` (Stop-All partial
-  merge) are refused. It also re-rejects the **0/0 gold** the workbook path
-  guards (a run whose gradeable facts are all `not_disclosed`/blank copies rows
-  but grades 0/0 — the reject uses grader-equivalent denominator semantics, not
-  the raw copied-row count). Hand-correct values afterwards in the gold
-  editor. Pinned by `tests/test_eval_from_run.py`,
-  `test_eval_ingest.py::test_ingest_counts_uncached_formula_cells_as_warning`,
-  and `test_eval_routes.py::test_create_benchmark_from_run_endpoint`.
-- **Run-start validates the attached benchmark** (`_validate_and_build_run`):
-  it must exist and its `filing_standard`/`filing_level` must match the run, or
-  the run fails fast (config error, before extraction — not a soft skip). This
-  only catches standard/level + existence; it **cannot** verify the uploaded
-  PDF is the benchmark's document, because two same-`(standard, level)`
-  benchmarks share `template_id`s/uuids — picking the wrong *document's*
-  benchmark still grades against the wrong gold. That's inherent user
-  responsibility (like uploading the wrong PDF), not a validatable condition.
-  The extract-page picker filters to matching benchmarks and clears a stale
-  selection on a standard/level switch to make the mismatch hard to hit.
-- **Grading fires at run completion, after the reviewer + re-export/re-merge**
-  (`server._grade_run_against_benchmark`), gated on `runs.benchmark_id`, wrapped
-  in try/except (a grading failure never changes the run's terminal status —
-  gotcha #20). Emits an `eval_score` SSE event.
-- **Frontend reuses, never re-implements.** The gold editor is `ConceptsPage`
-  with a `source='benchmark'` prop (NOT a component extraction); the Eval tab,
-  Benchmarks page, extract-page toggle, and History score column are additive.
-- **COMPUTED totals are derived on-read for DISPLAY, never persisted as gold.**
-  Gold stores only leaves (ingest skips COMPUTED), so the gold editor's total
-  rows would render blank. `eval/store.gold_display_totals` re-derives them from
-  the gold leaves at query time (edge-sum + blank-child semantics mirroring the
-  run cascade, minus the conflict machinery) and `benchmark_concepts` merges
-  them into `value` + `scope_facts`. It writes nothing — grading stays
-  leaf-only and unaffected; a coordinate already carrying a gold value (e.g. an
-  ingested SOCIE MATRIX total) wins over the re-derivation. There is NO
-  gold-side equivalent of `concept_model/cascade.py` (which is `run_id`-only).
-  Pinned by `test_eval_ingest.py::test_benchmark_concepts_derives_computed_totals_from_gold_leaves`.
+- **One file per finished run (schema v49).** `human_files`,
+  `human_file_facts` and `human_file_notes` cascade on run delete. Attach,
+  replace and remove are open to any signed-in user (#24) and refused unless
+  the run is `completed` or `completed_with_errors`. Replacing deletes and
+  re-inserts in one transaction (`eval/human_file.store_human_file`).
+- **Read by address, never by label.** The reader lists every fillable slot of
+  the run's exact template set and resolves each slot's cell with
+  `mtool.template_map.resolve_filing_doc`, the resolver the mTool fill uses. It
+  reads typed numbers only. A formula cell is calculated by mTool: the slot is
+  stored `calculated` and left out of the comparison on both sides. Labels
+  repeat within a sheet, so the old label reader merged concepts and lost
+  values (plan Step 1). A typed row no slot claims is listed as unmatched.
+- **Statement compared only when the human filled an addressable slot.** A
+  typed value on an unmatched row stays in the unmatched report and cannot
+  make the statement comparable. Otherwise it is "not compared" with the
+  reason `different_variant` or `not_in_file`.
+- **Notes are tied by taxonomy element ID.** Column A of the note's row,
+  joined to `template_slots.taxonomy_element_id`. The payload is unwrapped from
+  mTool's XHTML shell (Excel `_xHHHH_` escapes decoded, body only) and then
+  sanitised with the notes whitelist. Notes compare placement only; empty
+  rendered HTML is unfilled on both sides.
+- **The user states the unit.** Only monetary human values are converted to
+  the run's denomination. Shares, per-share values and ratios stay unchanged;
+  an unknown unit class refuses non-identity conversion. A warning fires when
+  shared monetary slots differ by about 1,000×. No sign rule is applied, so a
+  sign-only difference shows as a different value.
+- **The comparison is recomputed on every read** from the run's current facts
+  and notes (`eval/human_compare.py`); nothing is stored. Found = slots both
+  filled ÷ slots the human filled. Same value = exact matches among slots both
+  filled. AI-only is a count, never a penalty. Unmatched rows, statements not
+  compared, calculated slots and AI values the file cannot address are
+  excluded and counted.
+- **Frontend.** The Figures and Notes views get a `[ Human file | Source PDF ]`
+  switch. Human values are extra columns on the SAME rows as the AI values;
+  only exceptions carry a marker (`!` different, `○` missed by the AI, `◇`
+  AI-only), per the design guide's exception-only indicator rule. Numeric
+  category members appear beside their exact AI row. Successful notes edits
+  refresh the comparison. Unmatched rows sit in a closed disclosure below the
+  table.
+- **The gold-benchmark flow is retired.** The Benchmarks page, the
+  extract-page grading toggle, run-completion grading, the Eval tab, the
+  History score column and the benchmark routes are removed.
+  `eval_benchmarks`, `eval_benchmark_templates`, `gold_concept_facts`,
+  `eval_scores` and `runs.benchmark_id` stay as inert history (#11). A saved
+  draft that still carries `benchmark_id` loads normally; the field is ignored.
 
-Pinned by `tests/test_db_schema_v16.py`, `test_eval_grader.py`,
-`test_eval_ingest.py`, `test_eval_routes.py`, `test_eval_wiring.py`, and the
-`BenchmarksPage` / `EvalTab` / `ConceptsPage` / `HistoryList` / `PreRunPanel`
-frontend tests. Full plan: docs/PLAN-eval-benchmark.md.
+Pinned by `tests/test_db_schema_v49.py`, `test_human_file_ingest.py`,
+`test_human_compare.py`, `test_human_file_routes.py`, and the
+`HumanFileComparison` / `RunDetailView` web tests.
 
 ### 24. Auth layer gates every `/api/*` route (schema v18)
 
@@ -2429,93 +2406,41 @@ Phase 0 converter spike + real-run validation (Steps 6/10) and Windows
 enablement (Step 11) are operator/hardware gates, still open. Plan:
 docs/PLAN-word-input.md.
 
-### 30. Evals workspace — repeats/consistency, mTool gold, suites, trends
+### 30. Repeats and consistency — normal runs, fixed scoring
 
-The Evals workspace (docs/PLAN-evals-workspace.md, PRD docs/PRD-evals-workspace.md)
-turns one-run-one-gold grading into a corpus-level quality system. Every eval
-child run is a **completely normal extraction run** through the existing
-pipeline; the workspace only launches, watches, grades, and aggregates — it
-NEVER alters extraction behaviour. Schema v30 (repeats/taxonomy/gold-prose) +
-v31 (suites). All additive/nullable (gotcha #11); on rollback the tables sit
-inert.
+A run can be launched as N identically configured repeats to measure how
+stable extraction is (docs/PLAN-evals-workspace.md). Every repeat is a
+completely normal extraction run; repeats only launch, watch and score
+agreement, and never alter extraction behaviour. Schema v30 added the repeat
+tables; all additive (#11).
 
 Load-bearing invariants:
 
-- **Scoring formulas are fixed and decompose (PRD Scoring Design).**
-  `accuracy = matched ÷ gold slots` (unchanged headline; a value slot is
-  concept_uuid × period × entity_scope, LEAF/MATRIX_CELL only — COMPUTED
-  totals excluded so they can't inflate). The **failure taxonomy**
-  (`eval/grader.classify_failures`: scale / sign / period-swap / scope-swap /
-  misplaced / false-not-disclosed / unaddressed / plain-wrong) NEVER softens
-  the score — it powers drill-down + trends. Beyond-gold is a trended watchdog,
-  never a headline penalty. **Consistency = unanimous agreement over the union
-  of slots any repeat filled** (`eval/consistency.py`), needs ≥2 finished
-  repeats else "unavailable" (never a misleading 100%). **Suite aggregate =
-  MEAN of per-document accuracy** (`eval/scorecards.aggregate_suite`), pooled
-  figure secondary, worst document always surfaced, failed docs excluded +
-  "N of M". These live in pure modules with hand-built fixtures — change a
-  formula and its pinning test in the same commit.
-- **Repeats ride one SSE stream** (`server.run_repeat_group_stream`, Step D1):
-  N identically-configured runs back-to-back sharing ONE `session_id` (so
-  Stop-All / disconnect reaches the live repeat) but isolated output subdirs;
-  consistency is finalized on the generator's `finally` (abort mid-group →
-  `partial`). Do NOT reintroduce a separate cancel channel.
-  Preparation uses a deep copy of each run request. Repeat folders retain the
-  prepared PDF/HTML, metadata, document map and checkpoint so every repeat uses
-  the same prepared source and inventory overrides. Pinned by
-  `tests/test_preparation_integration.py` and `tests/test_document_preparation.py`.
-- **Suite batch runner** (`api/suite_runner.py`, Step E3) is a background loop
-  (reviewer-pass thread pattern), concurrency **fixed at 3** (decision #2),
-  Resume re-launches only documents whose DISTINCT finished repeats are below
-  the requested count (identified by the deterministic
-  `suite-{suite_run}-doc-{doc}` session id; completion counts distinct repeats
-  via `COALESCE(repeat_index, id)`, never raw rows), and
-  `repo.reconcile_stale_suite_runs` retires crash-orphaned `running` suite runs
-  at startup (mirrors `reconcile_stale_review_tasks`). Child runs link via
-  `runs.suite_run_id`, threaded through `run_multi_agent_stream` /
-  `run_repeat_group_stream`. **Repeat Resume fills the GAPS** — the missing
-  repeat indices, computed from `repo.finished_repeat_indices` — never a blind
-  append from a count (which duplicated a later index and left an earlier one
-  unfilled when a middle repeat failed; consistency dedups per index via
-  `repo.deduped_repeat_run_ids`). The v32 snapshot freezes each document's
-  BYTES into a run-owned copy (`_copy_source_for_snapshot`, under
-  `output/_suite_snapshots/run_{N}`), so deleting a live suite document can't
-  strand an unfinished Resume. Snapshot copies are never auto-reclaimed —
-  deliberate (Resume may need them indefinitely), same accumulation model as
-  per-run output dirs; cleanup is future housekeeping, don't add it as a side
-  effect. An empty statement list is a
-  notes-only run (preserved, not expanded to all five); a both-empty selection
-  is rejected 422.
-- **History hides suite children by default** (Step E6): `GET /api/runs`
-  filters `suite_run_id IS NULL` unless `include_suite_children=true`
-  (decision #1). Repeat children are NOT hidden (they're normal History runs).
-- **mTool gold ingest is strict + variant-precise** (already shipped C1–C3):
-  `POST /api/benchmarks/from-mtool` requires a declared unit (no auto-guess —
-  a wrong unit silently 1000×'s every value) AND an explicit `template_ids`
-  set (gotcha #21 — uuids differ per variant). The C4 form's picker is fed by
-  `GET /api/eval/templates`. Off-template labels surface as unmatched, never
-  fuzzy-matched.
-- **Trends + compare recompute on demand from durable facts** (`eval/compare.py`,
-  F1/F2) — no heavyweight new storage. Compare unions differing document sets
-  (greyed + excluded from the aggregate delta), and warns when gold changed
-  between the two runs via a per-run gold FINGERPRINT (v33, `_gold_changed`);
-  the `updated_at` timestamp window is the legacy fallback for pre-v33 scores.
-  Pooled accuracy sums the EXACT repeat matched counts (`matched_for_pool`),
-  never per-doc rounded ints (rounding a 0.5 repeat mean to 0 corrupted it).
-  Suite "N of M" coverage is over the FROZEN corpus (`aggregate_suite(...,
-  corpus_size=)`), so a failed-to-stage document counts toward M and its state
-  + reason surface via the detail endpoint's `doc_states`.
-- **Frontend:** the "Evals" nav surface (`/evals` → `web/src/pages/SuitesPage.tsx`)
-  is admin-gated like Benchmarks (which it depends on for gold). Recharts is the
-  ONE chart dep (SVG, coexists with the inline-style rule, gotcha #7). The
-  ConsistencyPanel is a run-page SECTION, not a `role="tab"` (gotcha #7).
+- **Consistency = unanimous agreement over the union of slots any repeat
+  filled** (`eval/consistency.py`). It needs at least two finished repeats,
+  otherwise it is "unavailable", never a misleading 100%. Scoring uses one run
+  per `repeat_index` (`repo.deduped_repeat_run_ids`). The formula lives in a
+  pure module with hand-built fixtures; change it and its pinning test
+  together. The optional gold cross only applies to historical groups that
+  carry a `benchmark_id`.
+- **Repeats ride one SSE stream** (`server.run_repeat_group_stream`): N runs
+  back to back sharing ONE `session_id` (so Stop-All / disconnect reaches the
+  live repeat) with isolated output subdirs. Consistency is finalized in the
+  generator's `finally` (abort mid-group → `partial`). Do NOT reintroduce a
+  separate cancel channel. Preparation uses a deep copy of each run request.
+  Repeat folders retain the prepared PDF/HTML, metadata, document map and
+  checkpoint so every repeat uses the same prepared source and inventory
+  overrides.
+- **The ConsistencyPanel is a run-page SECTION, not a `role="tab"`** (#7).
+- **The suites workspace is retired.** The `/evals` page, suite routes, the
+  batch runner, startup suite reconciliation, scorecards, trends and compare
+  are removed. `eval_suites`, `eval_suite_docs`, `eval_suite_runs`,
+  `eval_suite_run_docs` and `runs.suite_run_id` stay as inert history (#11);
+  History no longer hides old suite child runs.
 
-Pinned by `tests/test_db_schema_v30.py`/`_v31.py`, `test_eval_taxonomy.py`,
-`test_eval_consistency.py`, `test_repeat_group_launch.py`,
-`test_eval_mtool_ingest.py`/`test_mtool_gold_routes.py`, `test_suite_routes.py`,
-`test_suite_runner.py`, `test_suite_scorecards.py`, `test_reviewer_lift.py`,
-`test_suite_compare.py`, and the `ConsistencyPanel`/`BenchmarksPage`/
-`SuitesPage`/`EvalTab` web tests.
+Pinned by `tests/test_db_schema_v30.py`/`_v31.py`, `test_eval_consistency.py`,
+`test_repeat_group_launch.py`, `test_preparation_integration.py`,
+`test_document_preparation.py`, and the `ConsistencyPanel` web test.
 
 ### 31. Notes source integrity — a COUNT, not a claim; ships OFF
 

@@ -93,7 +93,7 @@ export interface ExtractPageProps {
   onOpenRun?: (runId: number) => void;
   onViewAllRuns?: () => void;
   /** Whether the current user is an admin — gates admin-only pre-run controls
-   *  (eval/benchmark grading) inside the Advanced disclosure (Phase 3). */
+   *  (per-agent model overrides) inside the Advanced disclosure. */
   isAdmin?: boolean;
 }
 

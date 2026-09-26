@@ -49,8 +49,6 @@ function incidentNextAction(incident: RunIncidentJson): string {
     model_setup_failed: "Check model credentials and connectivity, then retry.",
     invalid_infopack: "Run Auto-detect again before restarting extraction.",
     canonical_bootstrap_failed: "Restart the server after resolving the taxonomy import error.",
-    benchmark_not_found: "Choose an existing benchmark or disable eval testing.",
-    benchmark_scope_mismatch: "Choose a benchmark with the same standard and filing level.",
     scout_failed: "Retry Auto-detect or continue without page suggestions.",
     unhandled_orchestration_exception: "Use the support reference below to investigate server logs.",
   };

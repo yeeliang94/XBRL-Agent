@@ -15,7 +15,6 @@ describe("TERMS", () => {
   test("exposes the renamed plain-English terms", () => {
     expect(TERMS.newExtraction).toBe("New extraction");
     expect(TERMS.runs).toBe("Runs");
-    expect(TERMS.evaluationSuites).toBe("Evaluation suites");
     expect(TERMS.preScan).toBe("Document pre-scan");
     expect(TERMS.aiReview).toBe("AI review");
     expect(TERMS.figures).toBe("Figures");

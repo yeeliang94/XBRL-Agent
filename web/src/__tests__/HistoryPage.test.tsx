@@ -163,9 +163,9 @@ describe("HistoryPage", () => {
     await waitFor(() => {
       expect(fetchRunDetailMock).toHaveBeenCalledWith(2);
     });
-    // Detail panel rendered — the download button is a hallmark of RunDetailView
+    // Detail panel rendered — the mTool draft action is available.
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /download/i })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Prepare mTool draft" })).toBeTruthy();
     });
   });
 
@@ -266,7 +266,7 @@ describe("HistoryPage", () => {
     });
   });
 
-  test("download action navigates window.location to the download URL", async () => {
+  test("prepare action opens the mTool dialog without direct navigation", async () => {
     fetchRuns.mockResolvedValue({
       runs: [{ ...baseRun, id: 9, pdf_filename: "DL.pdf" }],
       total: 1,
@@ -308,11 +308,11 @@ describe("HistoryPage", () => {
       await waitFor(() => expect(screen.getByText("DL.pdf")).toBeTruthy());
       fireEvent.click(screen.getByText("DL.pdf"));
       await waitFor(() =>
-        expect(screen.getByRole("button", { name: /download/i })).toBeTruthy(),
+        expect(screen.getByRole("button", { name: "Prepare mTool draft" })).toBeTruthy(),
       );
-      fireEvent.click(screen.getByRole("button", { name: /download/i }));
+      fireEvent.click(screen.getByRole("button", { name: "Prepare mTool draft" }));
       expect(setHref).not.toHaveBeenCalled();
-      expect(screen.getByRole("dialog", { name: "Fill mTool template" })).toBeTruthy();
+      expect(screen.getByRole("dialog", { name: "Prepare mTool draft" })).toBeTruthy();
     } finally {
       Object.defineProperty(window, "location", {
         writable: true,

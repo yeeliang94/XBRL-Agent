@@ -5,7 +5,6 @@ import { PdfSourcePane } from "./PdfSourcePane";
 import { parseEvidencePages } from "../lib/evidencePages";
 import { ConceptsPage } from "../pages/ConceptsPage";
 import type { ConceptRow } from "../pages/ConceptsPage";
-import { EvalTab } from "./EvalTab";
 import { runStatusDisplay, agentStatusDisplay } from "../lib/runStatus";
 import { errorGuidance } from "../lib/errorGuidance";
 import { StatusIcon } from "./StatusIcon";
@@ -16,6 +15,9 @@ import { AgentTelemetryPanel } from "./AgentTelemetryPanel";
 import { ValidatorTab } from "./ValidatorTab";
 import { ReviewTab } from "./ReviewTab";
 import { MtoolFillModal } from "./MtoolFillModal";
+import { HumanFileDialog } from "./HumanFileDialog";
+import { getHumanFile, type HumanFileRecord } from "../lib/humanFile";
+import type { Denomination } from "../lib/types";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { AgentTimeline } from "./AgentTimeline";
 import { NotesSubTabBar } from "./NotesSubTabBar";
@@ -575,6 +577,19 @@ export function RunDetailView({
   }, [initialTab, notesPreparationBlocked, tab]);
   // mTool fill modal (button, NOT a tab — gotcha #7).
   const [mtoolOpen, setMtoolOpen] = useState(false);
+  // Human-filled mTool file attached for comparison (one per run).
+  const [humanFile, setHumanFile] = useState<HumanFileRecord | null>(null);
+  const [humanDialogOpen, setHumanDialogOpen] = useState(false);
+  const canCompareHuman = detail.status === "completed" || detail.status === "completed_with_errors";
+  useEffect(() => {
+    setHumanFile(null);
+    if (!canCompareHuman) return;
+    let cancelled = false;
+    getHumanFile(detail.id)
+      .then((payload) => { if (!cancelled) setHumanFile(payload.file); })
+      .catch(() => { if (!cancelled) setHumanFile(null); });
+    return () => { cancelled = true; };
+  }, [detail.id, canCompareHuman]);
   // Delete confirmation — the shared ConfirmDialog replaces window.confirm so
   // every destructive action in the app confirms the same, plain-English way.
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -739,7 +754,6 @@ export function RunDetailView({
     { key: "checks", label: "Cross-checks" },
     { key: "agents", label: "Activity" },
     ...(canonicalEnabled ? [{ key: "review" as RunTabKey, label: "AI review" }] : []),
-    ...(detail.benchmark_id != null ? [{ key: "eval" as RunTabKey, label: "Eval" }] : []),
   ];
   const availableTabs = isDraft
     ? tabs.filter((item) => item.key === "overview")
@@ -872,6 +886,18 @@ export function RunDetailView({
           >
             {isFailed || isAborted ? "Prepare investigation draft" : "Prepare mTool draft"}
           </button>}
+          {canCompareHuman && !humanFile && (
+            <button
+              type="button"
+              data-testid="compare-human-file"
+              onClick={() => setHumanDialogOpen(true)}
+              className={uiClass.btnSecondary}
+              style={ui.buttonSecondary}
+              title="Compare this run with the mTool file a person filled for the same document"
+            >
+              Compare with human file
+            </button>
+          )}
           {notesPreparationBlocked && <span role="status" style={styles.dim}>Notes have unsaved changes or active formatting. Resolve any save errors in Notes before preparing.</span>}
           {/* The "Figures" tab is the single door to reviewing values — the
               old duplicate "Review values" button was removed (Phase 2). */}
@@ -1057,6 +1083,17 @@ export function RunDetailView({
       )}
 
       <MtoolFillModal runId={detail.id} open={mtoolOpen} onClose={() => setMtoolOpen(false)} />
+      <HumanFileDialog
+        runId={detail.id}
+        open={humanDialogOpen}
+        defaultUnit={(detail.denomination ?? (detail.config?.denomination as Denomination | undefined) ?? "thousands")}
+        existing={humanFile}
+        onClose={() => setHumanDialogOpen(false)}
+        onAttached={(record) => {
+          setHumanFile(record);
+          if (activeTab !== "values" && activeTab !== "notes") selectTab(canonicalEnabled ? "values" : "notes");
+        }}
+      />
 
       <ConfirmDialog
         isOpen={confirmDraftDownload}
@@ -1248,6 +1285,9 @@ export function RunDetailView({
             initialCrossChecks={crossChecksForValidator(crossChecks)}
             onRegenerateNotes={onRegenerateNotes}
             onPreparationBlocked={setNotesPreparationBlocked}
+            humanFile={humanFile}
+            onReplaceHumanFile={() => setHumanDialogOpen(true)}
+            onHumanFileRemoved={() => setHumanFile(null)}
           />
           <details
             style={styles.perfDetails}
@@ -1323,15 +1363,10 @@ export function RunDetailView({
             initialCrossChecks={crossChecksForValidator(crossChecks)}
             onRegenerateNotes={onRegenerateNotes}
             onPreparationBlocked={setNotesPreparationBlocked}
+            humanFile={humanFile}
+            onReplaceHumanFile={() => setHumanDialogOpen(true)}
+            onHumanFileRemoved={() => setHumanFile(null)}
           />
-        </section>
-      )}
-
-      {/* Gold-standard eval (v16): the scorecard. Lazy-mounted (only rendered
-          when this tab is active) and only present when the run was graded. */}
-      {activeTab === "eval" && detail.benchmark_id != null && (
-        <section style={styles.section} role="tabpanel" data-testid="run-detail-eval">
-          <EvalTab runId={detail.id} initialScore={detail.eval_score ?? null} />
         </section>
       )}
       </TabPanelFade>

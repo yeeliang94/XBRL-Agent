@@ -69,6 +69,7 @@ import { copyHtmlAsRichText } from "../lib/clipboard";
 import { tagNumericCells } from "../lib/tableAlign";
 import { formatGroupedInput } from "../lib/numberFormat";
 import { notesFormatErrorMessage } from "../lib/vocabulary";
+import { humanSlotKey, HUMAN_STATUS_LABEL, HUMAN_STATUS_SYMBOL, type HumanFigureSlot } from "../lib/humanFile";
 import {
   resolveTheme,
   themeToCssVars,
@@ -109,6 +110,16 @@ export interface NotesReviewTabProps {
    *  renders identically without it. */
   onActiveCellPages?: (pages: number[]) => void;
   onPreparationBlocked?: (blocked: boolean) => void;
+  /** Human-file notes by field (concept uuid). When set, each prose row gains
+   *  a read-only Human column on the same line. */
+  human?: HumanNotesView | null;
+  humanFigures?: Map<string, HumanFigureSlot> | null;
+  onComparisonChange?: () => void;
+}
+
+export interface HumanNotesView {
+  html: Record<string, string>;
+  status: Record<string, "agree" | "missed" | "ai_only">;
 }
 
 interface SourceNotePlacement {
@@ -283,6 +294,9 @@ export function NotesReviewTab({
   focusCell,
   onActiveCellPages,
   onPreparationBlocked,
+  human = null,
+  humanFigures = null,
+  onComparisonChange,
 }: NotesReviewTabProps) {
   // sheets / loading / error are the basic fetch lifecycle. We keep them
   // at the tab level (not in the individual cell editor) so one network
@@ -301,7 +315,8 @@ export function NotesReviewTab({
     setSheets((current) => current?.map((item) => item.sheet === sheet
       ? { ...item, rows: item.rows.map((cell) => cell.row === saved.row ? { ...cell, ...saved } : cell) }
       : item) ?? current);
-  }, []);
+    onComparisonChange?.();
+  }, [onComparisonChange]);
   const [filingStandard, setFilingStandard] = useState("mfrs");
 
   // Regenerate-notes confirm modal state. `pendingCount` is populated
@@ -855,6 +870,9 @@ export function NotesReviewTab({
                   onActiveCellPages={onActiveCellPages}
                   selectedCellKey={activeCellKey}
                   onCellActivate={handleWorkspaceCellActivate}
+                  human={human}
+                  humanFigures={humanFigures}
+                  onComparisonChange={onComparisonChange}
                 />
               </div>
             ) : null}
@@ -913,6 +931,9 @@ function SheetSection({
   onActiveCellPages,
   selectedCellKey = null,
   onCellActivate,
+  human = null,
+  humanFigures = null,
+  onComparisonChange,
 }: {
   runId: number;
   sheet: NotesSheet;
@@ -935,6 +956,9 @@ function SheetSection({
   onActiveCellPages?: (pages: number[]) => void;
   selectedCellKey?: string | null;
   onCellActivate?: (sheet: string, row: number) => void;
+  human?: HumanNotesView | null;
+  humanFigures?: Map<string, HumanFigureSlot> | null;
+  onComparisonChange?: () => void;
 }) {
   const [formatStatus, setFormatStatus] = useState<NotesFormatStatus | null>(null);
   const [formatError, setFormatError] = useState<string | null>(null);
@@ -1115,7 +1139,8 @@ function SheetSection({
       )}
       <div style={styles.rowStack}>
           {attentionRows?.length === 0 && <p role="status">No placed field issues in this sheet. Check the source inventory for unplaced or unresolved notes.</p>}
-          {sheet.rows.filter((cell) => attentionRows == null || attentionRows.includes(cell.row) || cell.invalid_target).map((cell) =>
+          {sheet.rows.filter((cell) => attentionRows == null || attentionRows.includes(cell.row) || cell.invalid_target).map((cell) => {
+            const row =
             // Numeric notes (sheets 13/14) carry multi-column values, not
             // HTML prose — they get value inputs wired to the facts API
             // instead of a TipTap editor (PLAN-notes-template-registry).
@@ -1125,6 +1150,8 @@ function SheetSection({
                 runId={runId}
                 cell={cell}
                 onSaveStatusChange={handleRowSaveStatus}
+                onComparisonChange={onComparisonChange}
+                humanFigures={humanFigures}
                 onActiveCellPages={onActiveCellPages}
                 selected={selectedCellKey === `${sheet.sheet}:${cell.row}`}
                 onActivate={() => onCellActivate?.(sheet.sheet, cell.row)}
@@ -1155,10 +1182,55 @@ function SheetSection({
                 onActiveCellPages={onActiveCellPages}
                 onActivate={() => onCellActivate?.(sheet.sheet, cell.row)}
               />
-            ),
-          )}
+            );
+            const field = cell.node_uuid ?? null;
+            if (!human || cell.kind === "numeric" || !field) return row;
+            // The human's note sits on the same grid row, so the pair takes
+            // the height of the longer text and never drifts out of line.
+            return (
+              <div key={`${runId}:${sheet.sheet}:${cell.row}:pair`} data-testid="notes-human-pair" style={styles.humanPair}>
+                <div style={{ minWidth: 0 }}>{row}</div>
+                <HumanNoteCell html={human.html[field]} status={human.status[field]} />
+              </div>
+            );
+          })}
       </div>
     </section>
+  );
+}
+
+/** Read-only human note for one field. Only exceptions carry a marker:
+ *  ○ missed by the AI, ◇ AI-only (the human left it empty). */
+function HumanNoteCell({
+  html,
+  status,
+}: {
+  html: string | undefined;
+  status: "agree" | "missed" | "ai_only" | undefined;
+}) {
+  const marker = status === "missed" ? "○" : status === "ai_only" ? "◇" : null;
+  const markerLabel = status === "missed" ? "Missed by AI" : "AI-only";
+  return (
+    <div data-testid="notes-human-cell" data-human-status={status ?? "none"} style={{ ...styles.workspaceCellRow, alignContent: "start" }}>
+      <div style={styles.disclosureHeader}>
+        <div style={styles.cellLabel}>Human file</div>
+        {marker && (
+          <span role="img" aria-label={markerLabel} title={markerLabel}
+            style={{ fontWeight: 600, color: status === "missed" ? pwc.warning : pwc.grey500 }}>
+            {marker}
+          </span>
+        )}
+      </div>
+      <div style={{ padding: "0 12px 16px" }}>
+        {html ? (
+          // Sanitised with the notes whitelist on upload (eval/human_file.py).
+          <div className="tiptap ProseMirror" style={styles.humanNoteBody}
+            dangerouslySetInnerHTML={{ __html: html }} />
+        ) : (
+          <p style={{ ...styles.dim, margin: 0 }}>Not in human file</p>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -1849,6 +1921,8 @@ function CellRow({
 
 function NumericCellRow(props: {
   onSaveStatusChange: (row: number, status: SaveStatus, category?: string) => void;
+  onComparisonChange?: () => void;
+  humanFigures?: Map<string, HumanFigureSlot> | null;
   runId: number;
   cell: NotesCell;
   onActiveCellPages?: (pages: number[]) => void;
@@ -1856,9 +1930,9 @@ function NumericCellRow(props: {
   onActivate?: () => void;
 }) {
   const { cell } = props;
-  if (!cell.categories?.length) return <NumericCategoryRow {...props} />;
+  if (!cell.categories?.length) return <NumericCategoryRow {...props} dimensionKey="" />;
   return <>{cell.categories.map((category) => (
-    <NumericCategoryRow {...props} key={category.dimension_key} cell={{
+    <NumericCategoryRow {...props} key={category.dimension_key} dimensionKey={category.dimension_key} cell={{
       ...cell, dimensions: category.dimensions, values: category.values,
       label: `${cell.label} — ${category.label}`, evidence: category.evidence,
     }} />
@@ -1870,6 +1944,9 @@ function NumericCategoryRow({
   cell,
   onActiveCellPages,
   onSaveStatusChange,
+  onComparisonChange,
+  humanFigures,
+  dimensionKey,
   selected = false,
   onActivate,
 }: {
@@ -1877,6 +1954,9 @@ function NumericCategoryRow({
   cell: NotesCell;
   onActiveCellPages?: (pages: number[]) => void;
   onSaveStatusChange: (row: number, status: SaveStatus, category?: string) => void;
+  onComparisonChange?: () => void;
+  humanFigures?: Map<string, HumanFigureSlot> | null;
+  dimensionKey: string;
   selected?: boolean;
   onActivate?: () => void;
 }) {
@@ -1949,11 +2029,12 @@ function NumericCategoryRow({
           [key]: parsed === null ? "" : String(parsed),
         }));
         setColumnStatus(key, "saved");
+        onComparisonChange?.();
       } catch {
         setColumnStatus(key, "failed");
       }
     },
-    [cell.concept_uuid, cell.dimensions, drafts, runId, values, setColumnStatus],
+    [cell.concept_uuid, cell.dimensions, drafts, runId, values, setColumnStatus, onComparisonChange],
   );
 
   return (
@@ -2018,6 +2099,18 @@ function NumericCategoryRow({
                   saveColumn(key);
                 }}
               />
+              {humanFigures && cell.concept_uuid && (() => {
+                const { period, entity_scope } = NUMERIC_VALUE_COLUMNS[key];
+                const slot = humanFigures.get(humanSlotKey(cell.concept_uuid, period, entity_scope, dimensionKey));
+                const marker = slot && slot.status !== "agree" ? HUMAN_STATUS_SYMBOL[slot.status] : null;
+                return <span data-testid={`numeric-human-${cell.row}-${dimensionKey || "base"}-${key}`}
+                  style={styles.numericHumanValue}>
+                  <span style={styles.numericFieldLabel}>Human {NUMERIC_VALUE_COLUMNS[key].label}</span>
+                  {marker && <span role="img" aria-label={HUMAN_STATUS_LABEL[slot!.status]}
+                    title={HUMAN_STATUS_LABEL[slot!.status]}>{marker} </span>}
+                  {slot?.human_value == null ? "—" : formatGroupedInput(String(slot.human_value))}
+                </span>;
+              })()}
               {columnStatuses[key] === "failed" && (
                 <span role="alert">
                   Could not save this value. Check the number and retry.
@@ -2491,6 +2584,19 @@ const styles = {
     padding: "12px 14px",
     borderTop: `1px solid ${pwc.grey200}`,
   } as React.CSSProperties,
+  humanPair: {
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+    gap: 12,
+    alignItems: "stretch",
+  } as React.CSSProperties,
+  // Bounded like the AI's read-only preview; long notes scroll inside.
+  humanNoteBody: {
+    minWidth: 0,
+    maxHeight: 440,
+    overflow: "auto" as const,
+    overflowWrap: "anywhere" as const,
+  } as React.CSSProperties,
   // Flat list rows separated by hairlines — not bordered cards. With the
   // sheet header carrying the visual weight, rows read as content nested
   // under the sheet rather than as peer containers.
@@ -2640,6 +2746,15 @@ const styles = {
     fontSize: 11,
     fontWeight: 600,
     color: pwc.grey700,
+  } as React.CSSProperties,
+  numericHumanValue: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 3,
+    padding: "4px 8px",
+    fontSize: 13,
+    textAlign: "right" as const,
+    color: pwc.grey900,
   } as React.CSSProperties,
   numericInput: {
     padding: "4px 8px",

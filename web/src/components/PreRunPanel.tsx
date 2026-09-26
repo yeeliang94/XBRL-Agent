@@ -13,7 +13,6 @@ import type {
   DetectedStandard,
   NotesTemplateType,
   SSEEvent,
-  BenchmarkJson,
 } from "../lib/types";
 import {
   STATEMENT_TYPES,
@@ -25,7 +24,7 @@ import {
 import { pwc, tokens } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { CloseIcon } from "./icons";
-import { abortAgent, updateSettings, fetchBenchmarks } from "../lib/api";
+import { abortAgent, updateSettings } from "../lib/api";
 import { VariantSelector } from "./VariantSelector";
 import { StatementRunConfig } from "./StatementRunConfig";
 import { NotesRunConfig } from "./NotesRunConfig";
@@ -68,8 +67,7 @@ interface Props {
    *  Optional so the panel keeps working in tests / CLI-shaped
    *  callers that don't have a draft to PATCH against. */
   onConfigChange?: (config: RunConfigPayload) => void;
-  /** Admin gate for the eval/benchmark-grading control (an internal QA
-   *  feature). Non-admins never see it. Defaults to false (Phase 3). */
+  /** Admin gate for per-agent model overrides. Defaults to false. */
   isAdmin?: boolean;
 }
 
@@ -642,8 +640,8 @@ function NotesInventoryEditor({
 
 export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onConfigChange, isAdmin = false, preparation, waitForPreparation = false }: Props) {
   // Keep the default view focused on filing scope. Operators can collapse the
-  // two selection lists once they have checked them, while model overrides and
-  // benchmark tooling remain behind the advanced disclosure.
+  // two selection lists once they have checked them, while model overrides
+  // remain behind the advanced disclosure.
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showStatements, setShowStatements] = useState(true);
   const [showNotes, setShowNotes] = useState(true);
@@ -730,61 +728,6 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
     filingStandardTouchedRef.current = true;
     setFilingStandard(next);
   }, []);
-
-  // Gold-standard eval (v16): the "Eval testing" toggle attaches a benchmark to
-  // the run, which the backend grades at completion. Seeded from a rehydrated
-  // draft's benchmark_id. The benchmark list is filtered to the run's
-  // standard+level (a benchmark's concept uuids only match its own filing).
-  const seedBenchmarkId =
-    typeof initialConfig?.benchmark_id === "number"
-      ? (initialConfig.benchmark_id as number)
-      : null;
-  const [evalEnabled, setEvalEnabled] = useState<boolean>(seedBenchmarkId != null);
-  const [evalBenchmarkId, setEvalBenchmarkId] = useState<number | null>(seedBenchmarkId);
-  const [benchmarks, setBenchmarks] = useState<BenchmarkJson[]>([]);
-  // Lazy-load the benchmark list only once the user enables eval testing — a
-  // normal run never fetches it. (Also keeps the mount path free of an extra
-  // fetch so it doesn't race the scout one-shot fetch mocks in tests.)
-  useEffect(() => {
-    if (!evalEnabled) return;
-    let cancelled = false;
-    fetchBenchmarks()
-      .then((bs) => {
-        if (!cancelled) setBenchmarks(bs);
-      })
-      .catch(() => {
-        /* eval is optional — a failed list just leaves the dropdown empty */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [evalEnabled]);
-  const evalCandidates = useMemo(
-    () =>
-      benchmarks.filter(
-        (b) =>
-          b.filing_standard === filingStandard && b.filing_level === filingLevel,
-      ),
-    [benchmarks, filingStandard, filingLevel],
-  );
-  // Clear a benchmark selection that no longer matches the chosen standard/
-  // level (the user toggled standard/level after picking). Without this a stale
-  // id is still sent on Run and the backend fails the run for a mismatch. Guard
-  // on the list being loaded so we don't wipe a valid seeded id before the
-  // fetch lands.
-  useEffect(() => {
-    if (evalBenchmarkId == null || benchmarks.length === 0) return;
-    if (!evalCandidates.some((b) => b.id === evalBenchmarkId)) {
-      setEvalBenchmarkId(null);
-    }
-  }, [evalBenchmarkId, evalCandidates, benchmarks.length]);
-  // Eval is opt-in but, once on, the user must pick a benchmark — block Run
-  // with a dangling toggle so they don't start a run that silently won't grade.
-  // Gated on isAdmin: grading is an admin-only control, so a non-admin who
-  // resumes a draft that inherited evalEnabled can neither see nor fix it —
-  // never block their Run on a hidden control (code-review MEDIUM). Their run
-  // simply isn't graded (see buildCurrentConfig's benchmark_id).
-  const evalSelectionMissing = isAdmin && evalEnabled && evalBenchmarkId == null;
 
   const [variantSelections, setVariantSelections] = useState(
     () => _seedVariantSelections(initialConfig),
@@ -1340,11 +1283,6 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       denomination_user_selected: denominationUserSelected,
       notes_to_run,
       notes_models,
-      // Gold-standard eval (v16): attach the benchmark only for an admin with
-      // the toggle on AND one selected; otherwise null keeps this a normal run.
-      // A non-admin never sends a benchmark_id even if a resumed draft carried
-      // evalEnabled (grading is admin-only — code-review MEDIUM).
-      benchmark_id: isAdmin && evalEnabled ? evalBenchmarkId : null,
       // Evals workspace (Step D1): repeats-for-consistency. Only sent when >1
       // so a normal run's config stays byte-identical to before this feature.
       ...(repeats > 1 ? { repeats } : {}),
@@ -1353,7 +1291,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
     statementsEnabled, variantSelections, modelOverrides, infopack,
     notesInventoryOverrides,
     filingLevel, filingStandard, denomination, denominationUserSelected, notesEnabled,
-    notesModelOverrides, evalEnabled, evalBenchmarkId, isAdmin, repeats,
+    notesModelOverrides, repeats,
   ]);
 
   const handleRun = useCallback(() => {
@@ -1408,11 +1346,8 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
   // PLAN §4 D.2: submitting with no notes selected still runs face-only
   // (current behaviour). Notes-only runs are also allowed so an operator
   // can refill just the notes sheets after an earlier face extraction.
-  // Eval testing, when on, requires a benchmark — block Run on a dangling
-  // toggle so a run never starts that the user expects to be graded but isn't.
   const canRun =
     (enabledStmts.length > 0 || enabledNotes.length > 0) &&
-    !evalSelectionMissing &&
     preparation?.status !== "failed" &&
     preparation?.status !== "cancelled" &&
     (!waitForPreparation || preparation?.status === "succeeded");
@@ -1628,82 +1563,6 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           <span style={{ fontFamily: pwc.fontBody, fontSize: 12, color: pwc.grey300, marginTop: 4 }}>
             Runs {repeats}× back-to-back (≈{repeats}× the time &amp; tokens); the
             run page shows a run-to-run agreement score afterwards.
-          </span>
-        )}
-      </div>
-      )}
-
-      {/* Gold-standard eval (v16): attach a benchmark to grade this run
-          against. Admin-only + inside Advanced (an internal QA feature). The
-          dropdown only offers benchmarks matching the selected filing
-          standard + level (concept uuids differ per filing). */}
-      {showAdvanced && isAdmin && (
-      <div style={styles.section}>
-        <span style={styles.sectionLabel}>Accuracy grading</span>
-        {/* A button-based switch (NOT an <input type=checkbox>) so it stays out
-            of the statement/notes checkbox set the layout tests pin, and reads
-            as a pair with the filing-standard / level button toggles above. */}
-        <div
-          style={{
-            display: "flex", alignItems: "center", gap: pwc.space.sm,
-            alignSelf: "flex-start",
-          }}
-        >
-          <button
-            type="button"
-            className="segmented-control-button"
-            role="switch"
-            aria-checked={evalEnabled}
-            aria-label="Eval testing"
-            data-testid="eval-toggle"
-            onClick={() => setEvalEnabled((v) => !v)}
-            style={{
-              fontFamily: pwc.fontHeading,
-              fontSize: 13,
-              fontWeight: 600,
-              padding: "8px 20px",
-              border: `1px solid ${evalEnabled ? pwc.black : pwc.grey200}`,
-              borderRadius: pwc.radius.md,
-              background: evalEnabled ? pwc.black : pwc.white,
-              color: evalEnabled ? pwc.white : pwc.grey700,
-              cursor: "pointer",
-            }}
-          >
-            {evalEnabled ? "On" : "Off"}
-          </button>
-          <span style={{ fontFamily: pwc.fontBody, fontSize: 13, color: pwc.grey700 }}>
-            Grade against a benchmark
-            <span style={{ color: pwc.grey300, marginLeft: 6, fontSize: 12 }}>
-              (scores extraction accuracy at run completion)
-            </span>
-          </span>
-        </div>
-        {evalEnabled && (
-          <select
-            data-testid="eval-benchmark-select"
-            value={evalBenchmarkId ?? ""}
-            onChange={(e) =>
-              setEvalBenchmarkId(e.target.value ? Number(e.target.value) : null)
-            }
-            style={{ ...ui.select, alignSelf: "flex-start", minWidth: 280 }}
-          >
-            <option value="">Select a benchmark…</option>
-            {evalCandidates.map((b) => (
-              <option key={b.id} value={b.id}>
-                {b.name} ({b.gold_cell_count} cells)
-              </option>
-            ))}
-          </select>
-        )}
-        {evalEnabled && evalCandidates.length === 0 && (
-          <span style={{ fontSize: 12, color: pwc.grey500 }}>
-            No benchmarks for {filingStandard.toUpperCase()} {filingLevel}. Create
-            one on the Benchmarks page.
-          </span>
-        )}
-        {evalSelectionMissing && evalCandidates.length > 0 && (
-          <span data-testid="eval-pick-hint" style={{ fontSize: 12, color: pwc.orange700 }}>
-            Pick a benchmark to start the run, or turn grading off.
           </span>
         )}
       </div>
@@ -1977,16 +1836,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       </DisclosureSection>
 
       {/* Run button — enabled when at least one face or notes template is
-          selected. When grading is on but no benchmark is picked, Run is
-          blocked; because that control lives inside Advanced, surface the
-          reason here too so a collapsed Advanced can't hide why Run is
-          disabled (code-review edge case). */}
-      {evalSelectionMissing && (
-        <p role="status" style={{ fontFamily: pwc.fontBody, fontSize: 12, color: pwc.orange700, margin: 0 }}>
-          Accuracy grading is on but no benchmark is picked — choose one under
-          Advanced settings, or turn grading off.
-        </p>
-      )}
+          selected. */}
       <button
         onClick={handleRun}
         disabled={!canRun}

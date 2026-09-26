@@ -30,7 +30,7 @@ the task.
 | mTool export, clipboard decoration, filing readiness, or receipts | 16, 21, 28 |
 | Frontend layout, navigation, content hierarchy, simplification, styles, accessibility, or shared design tokens | 7, 16, 19, 21, 27, 28, 30 |
 | Authentication, authorization, production startup, or user administration | 10, 11, 24 |
-| Benchmarks, grading, repeats, suites, or quality trends | 11, 21, 23, 30 |
+| Human-file comparison, repeats, or consistency | 11, 21, 23, 28, 30 |
 
 Use the narrowest applicable set. If a change crosses subsystems, read the
 union of those sections.
@@ -68,14 +68,14 @@ it. Detailed explanations and pinning tests are in
 20. [Post-extraction failures surface as structured events](CLAUDE-REFERENCE.md#20-silent-post-extraction-failures-are-now-structured-sse-errors).
 21. [The canonical concept model is the only extraction, review, and export path](CLAUDE-REFERENCE.md#21-canonical-concept-model--the-mandatory-pipeline).
 22. [Shared workbooks use serialized access and atomic saves](CLAUDE-REFERENCE.md#22-agent-workbook-tools-must-serialise--atomic-save-shared-files).
-23. [Gold evaluation compares canonical facts within an exact template set](CLAUDE-REFERENCE.md#23-gold-standard-eval--gold-is-facts-scoped-by-template-set).
+23. [A human-filled mTool file is read by address and compared on read](CLAUDE-REFERENCE.md#23-human-file-comparison--read-by-address-compared-on-read).
 24. [Authentication guards the API and authorization is enforced server-side](CLAUDE-REFERENCE.md#24-auth-layer-gates-every-api-route-schema-v18).
 25. [Fact-based cross-checking and verification default on with explicit fallbacks](CLAUDE-REFERENCE.md#25-fact-based-verification-item-32--both-flags-default-on).
 26. [The scanned-PDF readable-document feature is removed](CLAUDE-REFERENCE.md#26-scanned-pdf--readable-document--removed).
 27. [Notes coverage reports incomplete assessment as unresolved, never clean](CLAUDE-REFERENCE.md#27-notes-coverage-checklist--post-reviewer-visibility--status-tipping).
 28. [mTool filling uses semantic addressing, one standard-library patcher, and receipts](CLAUDE-REFERENCE.md#28-mtool-fill-pipeline--semantic-addressing-one-patcher-receipts).
 29. [Word input converts at upload; PDF remains the extraction spine](CLAUDE-REFERENCE.md#29-word-docx-input--convert-at-the-door-pdf-stays-the-spine).
-30. [Eval repeats and suites reuse normal runs and fixed scoring rules](CLAUDE-REFERENCE.md#30-evals-workspace--repeatsconsistency-mtool-gold-suites-trends).
+30. [Repeats reuse normal runs and a fixed consistency rule](CLAUDE-REFERENCE.md#30-repeats-and-consistency--normal-runs-fixed-scoring).
 31. [Source-integrity assessment must never produce a false clean result](CLAUDE-REFERENCE.md#31-notes-source-integrity--a-count-not-a-claim-ships-off).
 
 ## Reference Maintenance

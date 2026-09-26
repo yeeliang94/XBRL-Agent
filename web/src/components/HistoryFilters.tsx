@@ -39,7 +39,6 @@ export function HistoryFilters({ value, onChange }: HistoryFiltersProps) {
     value.standard,
     value.dateFrom,
     value.dateTo,
-    value.includeSuiteChildren,
   ].filter(Boolean).length;
   // Local mirror of the search text so the input stays responsive during
   // the debounce window. Kept in sync with incoming `value.q` so resets
@@ -163,20 +162,6 @@ export function HistoryFilters({ value, onChange }: HistoryFiltersProps) {
           }
           style={styles.input}
         />
-      </label>
-
-      {/* Evals workspace (E6): suite child runs are hidden by default so a
-          30-doc batch doesn't bury the list. This shows them on demand. */}
-      <label style={{ ...styles.label, flexDirection: "row", alignItems: "center", gap: 6 }}>
-        <input
-          type="checkbox"
-          data-testid="history-include-suite-children"
-          checked={Boolean(value.includeSuiteChildren)}
-          onChange={(e) =>
-            onChange({ ...value, includeSuiteChildren: e.target.checked || undefined })
-          }
-        />
-        <span style={styles.labelText}>Show suite runs</span>
       </label>
 
       <div style={styles.actions}>

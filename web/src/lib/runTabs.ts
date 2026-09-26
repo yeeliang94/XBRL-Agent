@@ -5,8 +5,7 @@ export type RunTabKey =
   | "checks"
   | "telemetry"
   | "review"
-  | "values"
-  | "eval";
+  | "values";
 
 export const RUN_TAB_KEYS: readonly RunTabKey[] = [
   "overview",
@@ -16,7 +15,6 @@ export const RUN_TAB_KEYS: readonly RunTabKey[] = [
   "telemetry",
   "review",
   "values",
-  "eval",
 ];
 
 export const RUN_TAB_CHANGE_EVENT = "xbrl-run-tab-change";

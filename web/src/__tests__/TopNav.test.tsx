@@ -23,19 +23,9 @@ describe("TopNav", () => {
     expect(onViewChange).toHaveBeenCalledWith("concepts");
   });
 
-  test("Benchmarks + Evals are open to every signed-in user (decision #6)", () => {
-    // The backend eval/suite routes were never admin-gated; the nav must
-    // match the written policy (PLAN-evals-hardening Step 10).
-    render(<TopNav view="extract" onViewChange={() => {}} />);
-    expect(screen.getByRole("link", { name: /benchmarks/i })).toBeTruthy();
-    expect(screen.getByRole("link", { name: /evaluation suites/i })).toBeTruthy();
-  });
-
   test("hides canonical-mode surfaces when showConcepts=false even for an admin", () => {
     render(<TopNav view="extract" onViewChange={() => {}} showConcepts={false} isAdmin />);
     expect(screen.queryByRole("link", { name: /field labels/i })).toBeNull();
-    expect(screen.queryByRole("link", { name: /benchmarks/i })).toBeNull();
-    expect(screen.queryByRole("link", { name: /evaluation suites/i })).toBeNull();
     expect(screen.getByRole("link", { name: /work queue/i })).toBeTruthy();
   });
 
@@ -46,12 +36,6 @@ describe("TopNav", () => {
     expect(screen.getByRole("link", { name: /runs/i }).getAttribute("href")).toBe("/history");
     expect(screen.getByRole("link", { name: /field labels/i }).getAttribute("href")).toBe(
       "/field-labels",
-    );
-    expect(screen.getByRole("link", { name: /benchmarks/i }).getAttribute("href")).toBe(
-      "/benchmarks",
-    );
-    expect(screen.getByRole("link", { name: /evaluation suites/i }).getAttribute("href")).toBe(
-      "/evals",
     );
   });
 
