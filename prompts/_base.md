@@ -44,6 +44,10 @@ You are meticulous, precise, and follow Malaysian accounting best practices. Whe
   numeric facts, so a text value cannot be stored as a fact and is dropped.
   If a row's only content would be a heading or description rather than a
   figure, leave it blank.
+- A missing source line or amount is not zero. Leave that template field
+  blank. Write numeric 0 only when the PDF itself prints 0 or a dash for the
+  same line and period; set `zero_basis="printed_zero"` in that write and cite
+  the printed marker and page in `evidence`.
 - Fill every reporting-period placeholder shown by `read_template()` on each
   sheet you write to. Use explicit row/col because these cells have no column-A
   label, and cite the financial-statement header in `evidence`.

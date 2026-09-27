@@ -783,7 +783,10 @@ def _combine_payloads(payloads: list[NotesPayload]) -> NotesPayload:
     # rather than getting a ``min([])`` crash.
     payloads = sorted(
         payloads,
-        key=lambda p: min(p.source_pages) if p.source_pages else 0,
+        key=lambda p: (
+            min(p.source_pages) if p.source_pages else 0,
+            p.source_reading_order if p.source_reading_order is not None else float("inf"),
+        ),
     )
 
     # Numeric: warn and take first set of values.

@@ -65,6 +65,13 @@ describe("XBRL design system is the production authority", () => {
     expect(pwc.shadow.card).toBe("none");
     expect(pwc.shadow.elevated).toBe("0 14px 40px rgba(0, 0, 0, 0.12)");
     expect(ui.card.boxShadow).toBeUndefined();
+    expect(tokens.space.pageGutter).toBe(32);
+    expect(tokens.space.paneInset).toBe(24);
+    expect(tokens.space.paragraph).toBe(12);
+    expect(ui.readingText).toMatchObject({ fontSize: 14, lineHeight: 1.6, maxWidth: "70ch" });
+    expect(designSystem).toContain("Spacing and reading rhythm");
+    expect(designSystem).toContain("Forms, tables and dialogs");
+    expect(designSystem).not.toContain('aria-label="More actions"');
   });
 });
 
@@ -114,6 +121,7 @@ describe("Direction A shell and responsive composition", () => {
     expect(designSystem).toContain("One Current run entry in the sidebar");
     expect(designSystem).toContain("Browser Back and Forward retrace visited sections");
     expect(designSystem).toContain("Completion does not mean human review is finished");
+    expect(designSystem).toContain("When tabs change, bring the new panel into view");
     expect(prototype).toContain('aria-label="Run detail sections"');
     expect(prototype).toContain('page,"Current run","◉"');
     expect(prototype).not.toContain('page,"Figures review","⌗"');
@@ -132,6 +140,17 @@ describe("Direction A shell and responsive composition", () => {
     }
     expect(prototype).toContain("@media (max-width: 1100px)");
     expect(prototype).toContain("@media (max-width: 780px)");
+  });
+
+  test("defines restrained motion for controls, content, dialogs, and status", () => {
+    for (const requirement of [
+      "Motion and feedback",
+      "Animate a loaded list or table once as a region, not every row",
+      "Reserve repeating motion for an active wait",
+      "never delay focus, navigation or a result",
+    ]) {
+      expect(designSystem).toContain(requirement);
+    }
   });
 
   test("forbids line-based hover and selected-state indicators", () => {
@@ -157,6 +176,7 @@ describe("Direction A shell and responsive composition", () => {
     expect(designSystem).toContain("no event cards, navigation buttons or nested activity panels");
     expect(designSystem).toContain("Follow new updates only while the operator remains at the bottom");
     expect(designSystem).toContain("Keep tool operations, provider reasoning, tokens and request metadata in closed technical diagnostics");
+    expect(designSystem).toContain("the activity roster shows item states without a second completion total");
     expect(prototype).toContain("Live activity");
     expect(prototype).not.toContain("Provider reasoning");
     expect(prototype).not.toContain("1 / 8");

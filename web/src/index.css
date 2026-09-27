@@ -130,6 +130,11 @@ h2 {
   to { opacity: 1; transform: scale(1); }
 }
 
+@keyframes scrim-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 /* Toast entrance — slide in from the right edge with a fade (motion-polish).
    transform/opacity only so it costs nothing; the toast docks top-right, so
    an 8px rightward start reads as "arriving" without shifting neighbours. */
@@ -182,7 +187,9 @@ details[open] > .pwc-disclosure-content {
 .activity-sentence-pulse {
   animation: pulse-subtle 1.8s var(--motion-standard) infinite;
 }
-.pwc-dialog-scrim-enter,
+.pwc-dialog-scrim-enter {
+  animation: scrim-in var(--motion-fast) var(--motion-standard) both;
+}
 .pwc-dialog-enter {
   animation: dialog-in var(--motion-fast) var(--motion-standard) both;
 }
@@ -506,6 +513,7 @@ textarea:focus {
   justify-content: center !important;
   padding-inline: 8px !important;
 }
+@media (min-width: 781px) {
 .app-shell--collapsed .app-main-nav-tab:hover .app-main-nav-label,
 .app-shell--collapsed .app-main-nav-tab:focus-visible .app-main-nav-label {
   display: block !important;
@@ -530,6 +538,7 @@ textarea:focus {
   clip: auto;
   clip-path: none;
   white-space: normal;
+}
 }
 .app-shell--collapsed .app-rail-footer {
   justify-content: center;
@@ -744,7 +753,8 @@ textarea:focus {
     min-width: 52px !important;
     min-height: 50px !important;
     justify-content: center !important;
-    gap: 0 !important;
+    flex-direction: column !important;
+    gap: 3px !important;
     padding: 0 !important;
     border: 0 !important;
     border-radius: 8px !important;
@@ -760,43 +770,18 @@ textarea:focus {
   .app-main-nav-label,
   .app-shell--collapsed .app-main-nav-label {
     display: block !important;
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    margin: -1px;
-    padding: 0;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    clip-path: inset(50%);
-    border: 0;
-    white-space: nowrap;
-  }
-
-  .app-main-nav-tab:hover .app-main-nav-label,
-  .app-main-nav-tab:focus-visible .app-main-nav-label,
-  .app-shell--collapsed .app-main-nav-tab:hover .app-main-nav-label,
-  .app-shell--collapsed .app-main-nav-tab:focus-visible .app-main-nav-label {
-    display: block !important;
-    position: absolute;
-    left: 50%;
-    top: auto;
-    bottom: calc(100% + 8px);
-    z-index: 90;
-    width: max-content;
-    max-width: 180px;
-    padding: 6px 8px;
-    border-radius: 6px;
-    background: #000000;
-    color: #FFFFFF;
-    font-size: 11px !important;
-    line-height: 1.25;
-    transform: translateX(-50%);
-    pointer-events: none;
+    position: static;
+    width: auto;
     height: auto;
     margin: 0;
+    padding: 0;
     overflow: visible;
     clip: auto;
     clip-path: none;
+    border: 0;
+    font-size: 11px !important;
+    line-height: 1.1;
+    text-align: center;
     white-space: normal;
   }
 
@@ -823,7 +808,21 @@ textarea:focus {
   .app-header-right {
     justify-content: flex-end !important;
     min-width: 0 !important;
-    width: 100% !important;
+    width: auto !important;
+    flex: 0 0 auto !important;
+  }
+
+  .app-topbar > div:first-child {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .app-breadcrumb-root {
+    display: none;
+  }
+
+  .app-context-title {
+    min-width: 0;
   }
 
   .app-header-right > span {
@@ -889,8 +888,8 @@ textarea:focus {
   .responsive-page {
     max-width: 100% !important;
     min-width: 0 !important;
-    padding-left: 16px !important;
-    padding-right: 16px !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
     width: 100% !important;
   }
 
@@ -928,6 +927,11 @@ textarea:focus {
   .review-workspace .review-menu-column > :first-child {
     flex: 0 0 auto !important;
     min-width: max-content !important;
+  }
+
+  /* The Statement picker already contains every worksheet on narrow screens. */
+  .review-template-rail nav[aria-label="Figure worksheets"] {
+    display: none !important;
   }
 
   .concept-tree-shell {

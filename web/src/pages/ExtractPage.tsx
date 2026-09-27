@@ -250,8 +250,8 @@ export function ExtractPage({
             label: a.label,
             status: a.status,
             role: a.role,
-            task: activity?.title ?? null,
-            taskDetail: activity?.detail ?? null,
+            task: a.status === "running" || a.status === "aborting" ? activity?.title ?? null : null,
+            taskDetail: a.status === "running" || a.status === "aborting" ? activity?.detail ?? null : null,
             // Phase 5.2 / peer-review [M1]: only Notes-12's fan-out
             // populates sub-agent batch metadata today; for every other
             // agent `agentSubAgentSummary` returns null and the tab
@@ -331,6 +331,7 @@ export function ExtractPage({
     return {
       total: requestedRoles.size > 0 ? requestedRoles.size : agents.length,
       complete: monitoredAgents.filter((agent) => isCompletedWorkstream(agent.status)).length,
+      started: monitoredAgents.length > 0,
       running: agents.filter((agent) => agent.status === "running" || agent.status === "aborting").length,
       // Run-check agents are deliberately outside the requested-workstream
       // denominator, but their failures must still be visible to operators.
@@ -531,11 +532,11 @@ export function ExtractPage({
             </div>
             <div className="live-run-summary" style={styles.runSummary} aria-label="Workstream summary">
               <div style={styles.runSummaryPrimary}>
-                {workstreamSummary.complete}/{workstreamSummary.total} complete
+                Selected extraction · {workstreamSummary.complete}/{workstreamSummary.total} complete
               </div>
               <span style={styles.runSummaryMeta}>
-                {state.isRunning && workstreamSummary.running === 0
-                  ? "Finalising"
+                {state.isRunning && !workstreamSummary.started
+                  ? "Starting workstreams"
                   : `${workstreamSummary.running} active`}
                 {workstreamSummary.attention > 0 ? ` · ${workstreamSummary.attention} need attention` : ""}
               </span>
@@ -1086,6 +1087,7 @@ export function ActiveTabPanel({
         toolTimeline={toolTimeline}
         reasoningBlocks={reasoningBlocks}
         isRunning={running}
+        status={activeAgent?.status}
         streamKey={`${state.activeTab ?? "run"}:${notes12SubId ?? "all"}`}
       />
     </div>

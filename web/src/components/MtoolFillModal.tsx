@@ -1016,6 +1016,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
 
   return (
     <div
+      className="pwc-dialog-scrim-enter"
       style={styles.overlay}
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
@@ -1024,7 +1025,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
       aria-modal="true"
       aria-label="Prepare mTool draft"
     >
-      <div ref={dialogRef} tabIndex={-1} style={styles.modal}>
+      <div ref={dialogRef} tabIndex={-1} style={styles.modal} className="pwc-dialog-enter">
         <div style={styles.headerRow}>
           <h2 style={styles.heading}>{report ? "Draft prepared" : "Prepare mTool draft"}</h2>
           {/* Corner close — Esc + scrim-click already close, but a visible ✕

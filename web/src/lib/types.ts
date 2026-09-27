@@ -247,7 +247,7 @@ export interface CrossCheckResultEventData {
   index: number;
   total: number;
   name: string;
-  status: "passed" | "failed" | "warning" | "not_applicable" | "pending";
+  status: "passed" | "failed" | "warning" | "not_applicable" | "pending" | "blocked";
   expected: number | null;
   actual: number | null;
   diff: number | null;
@@ -455,7 +455,7 @@ export interface AgentCompleteData {
  */
 export interface CrossCheckResult {
   name: string;
-  status: "passed" | "failed" | "warning" | "not_applicable" | "pending";
+  status: "passed" | "failed" | "warning" | "not_applicable" | "pending" | "blocked";
   expected: number | null;
   actual: number | null;
   diff: number | null;
@@ -948,7 +948,7 @@ export interface AgentTraceManifestJson {
 
 export interface RunCrossCheckJson {
   name: string;
-  status: "passed" | "failed" | "not_applicable" | "pending";
+  status: "passed" | "failed" | "not_applicable" | "pending" | "blocked";
   expected: number | null;
   actual: number | null;
   diff: number | null;

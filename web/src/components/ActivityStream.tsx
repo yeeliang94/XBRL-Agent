@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef } from "react";
-import type { ReasoningBlock, SSEEvent, ToolTimelineEntry } from "../lib/types";
+import type { AgentTabStatus, ReasoningBlock, SSEEvent, ToolTimelineEntry } from "../lib/types";
 import { buildActivitySentences } from "../lib/buildActivitySentences";
 import { pwc } from "../lib/theme";
 
@@ -8,6 +8,7 @@ interface Props {
   toolTimeline: ToolTimelineEntry[];
   reasoningBlocks: ReasoningBlock[];
   isRunning: boolean;
+  status?: AgentTabStatus;
   streamKey: string;
 }
 
@@ -52,11 +53,12 @@ export function ActivityStream({
   toolTimeline,
   reasoningBlocks,
   isRunning,
+  status,
   streamKey,
 }: Props) {
   const items = useMemo(
-    () => buildActivitySentences(events, toolTimeline).reverse(),
-    [events, toolTimeline, reasoningBlocks],
+    () => buildActivitySentences(events, toolTimeline, status).reverse(),
+    [events, toolTimeline, reasoningBlocks, status],
   );
   const scrollRef = useRef<HTMLOListElement>(null);
   const followLatestRef = useRef(true);

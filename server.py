@@ -930,6 +930,28 @@ def _public_notes_templates() -> frozenset:
 _PUBLIC_NOTES_TEMPLATES = _public_notes_templates()
 
 
+def _prepared_notes_templates(requested):
+    """Schedule every prose destination for a prepared document's notes.
+
+    A prepared source freezes the complete note inventory and verifies every
+    captured passage against live output. Running only one requested prose
+    sheet leaves other notes for the reviewer to extract within its short
+    review window. The List of Notes is the catch-all; Corporate Information
+    and Accounting Policies own their dedicated disclosures. Numeric sheets
+    remain explicit because they extract structured facts as well as prose.
+    An empty request still means a statements-only run or rerun.
+    """
+    if not requested:
+        return requested
+    from notes_types import NotesTemplateType
+
+    return set(requested) | {
+        NotesTemplateType.CORP_INFO,
+        NotesTemplateType.ACC_POLICIES,
+        NotesTemplateType.LIST_OF_NOTES,
+    }
+
+
 # `_build_default_cross_checks` moved to `cross_checks.framework` in the
 # peer-review round so `correction.agent` no longer needs a lazy
 # `from server import …`. Keep a local alias for back-compat with tests
@@ -1285,6 +1307,8 @@ def _error_type_for_outcome(error: Optional[str]) -> Optional[str]:
     if error in exact:
         return exact[error]
     lowered = error.lower()
+    if "invalid prompt" in lowered and "usage policy" in lowered:
+        return "provider_rejected"
     if "wall-clock" in lowered or "wallclock" in lowered:
         return "wallclock"
     if "per-turn timeout" in lowered or "stalled past" in lowered:
@@ -1346,6 +1370,15 @@ CORRECTION_WALLCLOCK_TIMEOUT: float = _resolve_wallclock(
 NOTES_VALIDATOR_WALLCLOCK_TIMEOUT: float = _resolve_wallclock(
     "XBRL_NOTES_VALIDATOR_WALLCLOCK_S", 300.0,
 )
+
+
+def _notes_reviewer_wallclock_limit(configured: float, n_items: int) -> float:
+    """Allow a bounded extra review window for unusually large notes packets."""
+    if configured != 300.0:
+        return configured  # An explicit operator or test override is a fixed cap.
+    return min(480.0, configured + 3.0 * max(0, n_items - 25))
+
+
 NOTES_FORMATTER_WALLCLOCK_TIMEOUT: float = _resolve_wallclock(
     "XBRL_NOTES_FORMATTER_WALLCLOCK_S", 300.0,
 )
@@ -2323,7 +2356,9 @@ async def _run_notes_reviewer_pass(
         resolve_token_budget,
         run_agent_loop,
     )
-    from notes.reviewer_agent import create_notes_reviewer_agent
+    from notes.reviewer_agent import (
+        create_notes_reviewer_agent, unverified_policy_placements,
+    )
     from notes.versioning import ensure_notes_snapshot
     from correction.reviewer_agent import compute_reviewer_turn_cap
 
@@ -2531,10 +2566,10 @@ async def _run_notes_reviewer_pass(
         "turns. Never fabricate prose; preserve valid content over a risky fix."
     )
 
-    _wallclock_cap = float(getattr(
+    _wallclock_cap = _notes_reviewer_wallclock_limit(float(getattr(
         _server_self, "NOTES_VALIDATOR_WALLCLOCK_TIMEOUT",
         NOTES_VALIDATOR_WALLCLOCK_TIMEOUT,
-    ))
+    )), n_items)
 
     async def _loop_emit(event_type: str, data: dict) -> None:
         if event_type in ("tool_call", "tool_result", "token_update"):
@@ -2644,7 +2679,9 @@ async def _run_notes_reviewer_pass(
         else:
             # FINAL checklist — the reviewer's verdicts + authored notes are
             # now reflected; this post-reviewer state is what the human sees.
-            coverage_summary = await _finalize_coverage(reviewed=True)
+            unverified_policies = unverified_policy_placements(deps)
+            coverage_summary = await _finalize_coverage(
+                reviewed=not unverified_policies)
             coverage_error = (coverage_summary or {}).get("error")
             unverified = int((coverage_summary or {}).get("unverified_subnotes") or 0)
             if coverage_error:
@@ -2667,6 +2704,20 @@ async def _run_notes_reviewer_pass(
                 await _emit("complete", {
                     "success": False,
                     "error": outcome["error"],
+                    "writes_performed": deps.writes_performed,
+                    "flags_raised": len(deps.flags),
+                })
+            elif unverified_policies:
+                outcome["error"] = "notes_reviewer_policy_placements_unverified"
+                await _emit("error", {
+                    "type": outcome["error"],
+                    "message": (
+                        "The notes reviewer did not verify policy field placement "
+                        f"for row(s) {unverified_policies}."
+                    ),
+                })
+                await _emit("complete", {
+                    "success": False, "error": outcome["error"],
                     "writes_performed": deps.writes_performed,
                     "flags_raised": len(deps.flags),
                 })
@@ -5438,6 +5489,10 @@ async def run_multi_agent_stream(
         model = validated.model
         config = validated.config
         if prepared_snapshot is not None:
+            notes_to_run = _prepared_notes_templates(notes_to_run)
+            run_config.notes_to_run = [
+                nt.value for nt in sorted(notes_to_run, key=lambda nt: nt.value)
+            ]
             from ingest.document_preparation import read_prepared_document
             prepared_document = read_prepared_document(
                 session_dir / "uploaded.pdf", model_name=prepared_snapshot.get("model_name"),

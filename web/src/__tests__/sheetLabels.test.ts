@@ -6,6 +6,7 @@ import {
   notesSheetDisplayName,
   templatePickerLabel,
   templateGroupLabel,
+  figureSheetDisplayName,
 } from "../lib/sheetLabels";
 
 describe("templateDisplayName", () => {
@@ -86,6 +87,14 @@ describe("notesSheetDisplayName", () => {
 
   test("passes unknown sheet names through unchanged", () => {
     expect(notesSheetDisplayName("Notes-Future")).toBe("Notes-Future");
+  });
+});
+
+describe("figureSheetDisplayName", () => {
+  test("shows financial areas rather than worksheet addresses", () => {
+    expect(figureSheetDisplayName("SOFP-CuNonCu")).toBe("Balance sheet");
+    expect(figureSheetDisplayName("SOFP-Cash")).toBe("Cash and cash equivalents");
+    expect(figureSheetDisplayName("SOCF-Indirect")).toBe("Cash flows");
   });
 });
 

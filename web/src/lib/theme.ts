@@ -162,6 +162,9 @@ export const tokens = {
     inset: pwc.space.md,        // dense inner padding
     group: pwc.space.lg,        // between related controls
     section: pwc.space.xxl,     // between page sections
+    pageGutter: pwc.space.xxl,  // desktop page edge; narrow screens use 16px
+    paneInset: pwc.space.xl,    // document and review panes
+    paragraph: pwc.space.md,    // gap between separate short paragraphs
   },
   radius: {
     cell: pwc.radius.sm,        // dense cells, compact references

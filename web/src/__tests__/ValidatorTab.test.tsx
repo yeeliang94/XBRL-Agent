@@ -80,6 +80,19 @@ describe("ValidatorTab", () => {
 
     const pendingRow = screen.getByTitle("soci_to_socie_tci").closest("tr")!;
     expect(pendingRow.textContent).toContain("Pending");
+    expect(pendingRow.textContent).not.toContain("agree.");
+  });
+
+  test("a missing statement is blocked, without claiming a numeric mismatch", () => {
+    render(<ValidatorTab crossChecks={[{
+      name: "socf_to_sofp_cash", status: "blocked", expected: null,
+      actual: null, diff: null, tolerance: 1,
+      message: "SOCF produced no workbook",
+    }]} />);
+    const row = screen.getByTitle("socf_to_sofp_cash").closest("tr")!;
+    expect(row).toHaveTextContent("Blocked");
+    expect(row).toHaveTextContent("comparison could not run");
+    expect(row).not.toHaveTextContent("differ");
   });
 
   test("no Actions column rendered", () => {

@@ -72,6 +72,17 @@ test("failed inventory retains preparation success and provides a single retry a
   expect(await screen.findByText("Queued")).toBeInTheDocument();
 });
 
+test("a repeated preparation failure points to replacing the source", async () => {
+  const failed = { ...base, status: "failed" as const, action_required: "retry" as const, message: "Page 18 boundary assessment did not complete." };
+  request.mockResolvedValueOnce(failed)
+    .mockResolvedValueOnce({ ...base, attempt_id: "a2", status: "queued" })
+    .mockResolvedValue({ ...failed, attempt_id: "a2" });
+  render(<DocumentPreparation sessionId="one" />);
+  fireEvent.click(await screen.findByRole("button", { name: "Retry preparation" }));
+  expect(await screen.findByText(/same step failed after retry/i)).toBeInTheDocument();
+  expect(screen.getByText(/upload a revised source document/i)).toBeInTheDocument();
+});
+
 test("cancel is explicit and does not render complete", async () => {
   request.mockResolvedValue(base);
   render(<DocumentPreparation sessionId="one" />);

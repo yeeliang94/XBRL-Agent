@@ -270,8 +270,8 @@ describe("ConceptsPage", () => {
     });
     render(<ConceptsPage runId={42} />);
     const picker = await screen.findByTestId("review-sheet-picker");
-    expect(within(picker).getByRole("option", { name: "SOFP" })).toBeTruthy();
-    expect(within(picker).getByRole("option", { name: "SOPL" })).toBeTruthy();
+    expect(within(picker).getByRole("option", { name: "SOFP · Balance sheet" })).toBeTruthy();
+    expect(within(picker).getByRole("option", { name: "SOPL · Income statement" })).toBeTruthy();
   });
 
   test("compact attention control exposes open-conflict actions", async () => {
@@ -1056,7 +1056,7 @@ describe("ConceptsPage", () => {
     });
     render(<ConceptsPage runId={42} />);
     const picker = await screen.findByTestId("review-sheet-picker");
-    expect(within(picker).getByRole("option", { name: "SOFP" })).toBeTruthy();
+    expect(within(picker).getByRole("option", { name: "SOFP · Balance sheet" })).toBeTruthy();
     expect(picker.textContent).not.toContain("mfrs-company-sofp");
   });
 
@@ -1356,7 +1356,7 @@ describe("ConceptsPage", () => {
     render(<ConceptsPage runId={42} />);
     const picker = await screen.findByTestId("review-sheet-picker");
     const labels = within(picker).getAllByRole("option").map((option) => option.textContent);
-    expect(labels.indexOf("SOFP")).toBeLessThan(labels.indexOf("SOCF"));
+    expect(labels.indexOf("SOFP · Balance sheet")).toBeLessThan(labels.indexOf("SOCF · Cash flows"));
   });
 
   test("statement picker stays compact without a second explanatory rail", async () => {
@@ -1367,7 +1367,7 @@ describe("ConceptsPage", () => {
     });
     render(<ConceptsPage runId={42} />);
     const picker = await screen.findByTestId("review-sheet-picker");
-    expect(within(picker).getByRole("option", { name: "SOFP" })).toBeTruthy();
+    expect(within(picker).getByRole("option", { name: "SOFP · Balance sheet" })).toBeTruthy();
     expect(screen.queryByText("Balance sheet")).toBeNull();
   });
 
@@ -1507,8 +1507,8 @@ describe("ConceptsPage", () => {
     render(<ConceptsPage runId={42} />);
     const picker = await screen.findByTestId("review-sheet-picker");
     const tid = "mfrs-company-sofp-cunoncu-v1";
-    expect(within(picker).getByRole("option", { name: "SOFP · SOFP-CuNonCu" })).toBeTruthy();
-    expect(within(picker).getByRole("option", { name: "SOFP · SOFP-Cash" })).toBeTruthy();
+    expect(within(picker).getByRole("option", { name: "SOFP · Balance sheet" })).toBeTruthy();
+    expect(within(picker).getByRole("option", { name: "SOFP · Cash and cash equivalents" })).toBeTruthy();
     // All sheets shown by default (no sub-sheet filter).
     expect(screen.getByTestId("concept-row-leaf-1")).toBeTruthy();
     expect(screen.getByTestId("concept-row-sub-leaf")).toBeTruthy();

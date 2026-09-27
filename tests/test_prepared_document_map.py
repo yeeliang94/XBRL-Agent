@@ -14,14 +14,16 @@ def test_prepared_scout_retains_variant_selection_guidance():
     assert "OrderOfLiquidity only when the source has no current/non-current split" in SYSTEM_PROMPT
     assert "Function groups expenses by role" in SYSTEM_PROMPT
     assert "Indirect" in SYSTEM_PROMPT and "profit with adjustments" in SYSTEM_PROMPT
+    assert "give both SOPL and SOCI references to that same page" in " ".join(SYSTEM_PROMPT.split())
 
 
 def test_prepared_scout_states_exact_top_level_output_shape():
     from scout.prepared_map import SYSTEM_PROMPT
 
     prompt = " ".join(SYSTEM_PROMPT.split())
-    assert "top-level output MUST contain `infopack` and `ownership_ranges`" in prompt
+    assert "top level MUST contain `infopack` and `ownership_ranges`" in prompt
     assert "Put `notes_inventory` inside `infopack`, never at the top level" in prompt
+    assert "amend_document_map" in prompt
 
 
 @pytest.fixture
@@ -42,6 +44,19 @@ def mapped():
         {'note_num': 1, 'title': 'Policies', 'page_range': [1, 2]}]},
         'ownership_ranges': [{'first_block_id': 'a', 'last_block_id': 'c', 'owner_kind': 'note',
                               'source_note_id': 'policy', 'source_note_num': '1', 'source_note_title': 'Policies'}]}
+
+
+def map_model():
+    from pydantic_ai.models.function import FunctionModel
+    from pydantic_ai.messages import ModelResponse, ToolCallPart
+
+    def respond(messages, info):
+        if len([part for message in messages for part in message.parts
+                if isinstance(part, ToolCallPart) and part.tool_name == 'submit_document_map']):
+            return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {'ready': True})])
+        return ModelResponse(parts=[ToolCallPart('submit_document_map', {'document_map': mapped()})])
+
+    return FunctionModel(respond)
 
 
 def test_reason_schema_exposes_allowed_codes_before_mapping_validation():
@@ -89,12 +104,47 @@ def test_duplicate_identical_range_does_not_duplicate_source(prepared):
 
 
 @pytest.mark.parametrize("reason", ["PAGE_HEADER", "PAGE_FOOTER", "PAGE_NUMBER"])
-def test_substantive_one_off_prose_cannot_be_hidden_by_a_furniture_label(prepared, reason):
+def test_substantive_one_off_prose_falls_back_to_its_semantic_owner(prepared, reason):
     result = mapped()
     result['ownership_ranges'].append({'first_block_id': 'b', 'last_block_id': 'b',
         'owner_kind': 'furniture', 'reason_code': reason})
-    with pytest.raises(ValueError, match='Furniture exclusion.*retain and reassign'):
-        validate_document_map(prepared, DocumentMap.model_validate(result))
+    _, assigned = validate_document_map(prepared, DocumentMap.model_validate(result))
+    assert assigned[1]['owner_kind'] == 'note'
+
+
+def test_unsupported_furniture_without_a_fallback_still_fails(prepared):
+    raw = mapped()
+    raw['ownership_ranges'][0]['first_block_id'] = 'b'
+    raw['ownership_ranges'].append({'first_block_id': 'a', 'last_block_id': 'a',
+        'owner_kind': 'furniture', 'reason_code': 'PAGE_HEADER'})
+    with pytest.raises(ValueError, match='Furniture exclusion'):
+        validate_document_map(prepared, DocumentMap.model_validate(raw))
+
+
+def test_one_off_branding_inside_metadata_does_not_stop_mapping(prepared):
+    prepared.blocks.append({'block_id': 'd', 'page': 2, 'block_kind': 'paragraph',
+        'canonical_html': '<p>EY Shape the future with confidence</p>', 'locator': {}})
+    raw = mapped()
+    raw['ownership_ranges'].append({'first_block_id': 'd', 'last_block_id': 'd',
+        'owner_kind': 'metadata', 'reason_code': 'DOCUMENT_METADATA'})
+    raw['ownership_ranges'].append({'first_block_id': 'd', 'last_block_id': 'd',
+        'owner_kind': 'furniture', 'reason_code': 'PAGE_HEADER'})
+    _, assigned = validate_document_map(prepared, DocumentMap.model_validate(raw))
+    assert assigned[-1]['owner_kind'] == 'metadata'
+    assert assigned[-1]['uncertainties'][0]['reason'] == 'unsupported_furniture_claim_retained_as_content'
+    assert all(not entry['uncertainties'] for entry in assigned[:-1])
+
+
+def test_same_note_overlap_merges_uncertainty_without_duplicate_owner(prepared):
+    raw = mapped()
+    raw['ownership_ranges'][0]['uncertainties'] = [{'reason': 'broad'}]
+    raw['ownership_ranges'].append({**raw['ownership_ranges'][0],
+        'first_block_id': 'b', 'last_block_id': 'b',
+        'uncertainties': [{'reason': 'boundary'}]})
+    _, assigned = validate_document_map(prepared, DocumentMap.model_validate(raw))
+    assert assigned[1]['uncertainties'] == [{'reason': 'broad'}, {'reason': 'boundary'}]
+    assert assigned[0]['uncertainties'] == [{'reason': 'broad'}]
+    assert assigned[2]['uncertainties'] == [{'reason': 'broad'}]
 
 
 def test_repeated_routine_footer_can_be_excluded(prepared):
@@ -149,14 +199,22 @@ def test_supplied_inventory_is_exact_constraint(prepared):
         validate_document_map(prepared, result, inventory={'notes_inventory': []})
 
 
+def test_unnumbered_subheading_feedback_keeps_parent_note(prepared):
+    raw = mapped()
+    raw['infopack']['notes_inventory'][0]['subnotes'] = [{
+        'subnote_ref': '', 'title': 'Compensation', 'page_range': [2, 2]}]
+    with pytest.raises(ValueError, match='keep its content under the parent note'):
+        validate_document_map(prepared, DocumentMap.model_validate(raw))
+
+
 def test_agent_map_usage_and_cache_without_paid_model(prepared, monkeypatch):
     import scout.agent
     monkeypatch.setattr(scout.agent, '_thinking_level_for', lambda role: None)
-    model = TestModel(custom_output_args=mapped(), call_tools=[])
+    model = map_model()
     usage = {}
     info, assignments = asyncio.run(build_prepared_document_map(prepared, model, usage_out=usage))
     assert info.notes_inventory and len(assignments) == 3
-    assert usage['requests'] == 1
+    assert usage['requests'] == 2
     assert (prepared.metadata_path.parent/'SCOUT_conversation_trace.json').exists()
     cached_usage = {}
     asyncio.run(build_prepared_document_map(prepared, model, usage_out=cached_usage))
@@ -242,12 +300,12 @@ def test_authored_relationship_group_cannot_cross_note_owners(prepared):
 def test_corrected_capture_same_revision_invalidates_map_cache(prepared, monkeypatch):
     import scout.agent
     monkeypatch.setattr(scout.agent, '_thinking_level_for', lambda role: None)
-    model = TestModel(custom_output_args=mapped(), call_tools=[])
+    model = map_model()
     asyncio.run(build_prepared_document_map(prepared, model))
     prepared.blocks[1]['canonical_html'] = '<p>Corrected policy text.</p>'
     usage = {}
     asyncio.run(build_prepared_document_map(prepared, model, usage_out=usage))
-    assert usage['requests'] == 1 and not usage.get('cache_hit')
+    assert usage['requests'] == 2 and not usage.get('cache_hit')
 
 
 def test_metadata_only_map_cannot_report_financial_document_success(prepared):
@@ -322,14 +380,96 @@ def test_retry_can_correct_a_mistaken_note_identity(prepared, monkeypatch):
     attempts = []
     def respond(messages, info):
         attempts.append(messages)
-        raw = mapped()
         if len(attempts) == 1:
+            raw = mapped()
             raw['infopack']['notes_inventory'][0]['note_num'] = 2
-        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, raw)])
+            return ModelResponse(parts=[ToolCallPart('submit_document_map', {'document_map': raw})])
+        if len(attempts) == 2:
+            return ModelResponse(parts=[ToolCallPart('amend_document_map', {
+                'infopack': mapped()['infopack']})])
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {'ready': True})])
     info, assignments = asyncio.run(build_prepared_document_map(prepared, FunctionModel(respond)))
-    assert len(attempts) == 2
+    assert len(attempts) == 3
     assert info.notes_inventory[0].note_num == 1
     assert all(a['owner_kind'] == 'note' for a in assignments)
+
+
+def test_scout_can_repair_one_range_without_resubmitting_map(prepared, monkeypatch):
+    from pydantic_ai.models.function import FunctionModel
+    from pydantic_ai.messages import ModelResponse, ToolCallPart
+    import scout.agent
+    monkeypatch.setattr(scout.agent, '_thinking_level_for', lambda role: None)
+    attempts = []
+
+    def respond(messages, info):
+        attempts.append(messages)
+        if len(attempts) == 1:
+            raw = mapped()
+            raw['ownership_ranges'][0]['last_block_id'] = 'b'
+            return ModelResponse(parts=[ToolCallPart('submit_document_map', {'document_map': raw})])
+        if len(attempts) == 2:
+            return ModelResponse(parts=[ToolCallPart('amend_document_map', {
+                'range_edits': [{'index': 0, 'replacement': mapped()['ownership_ranges'][0]}]})])
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {'ready': True})])
+
+    _, assignments = asyncio.run(build_prepared_document_map(prepared, FunctionModel(respond)))
+    assert len(attempts) == 3
+    assert [item['block_id'] for item in assignments] == ['a', 'b', 'c']
+
+
+def test_scout_can_view_four_pages_before_submitting_map(prepared, monkeypatch):
+    from pydantic_ai.models.function import FunctionModel
+    from pydantic_ai.messages import ModelResponse, ToolCallPart
+    import scout.agent
+    import tools.pdf_viewer
+    monkeypatch.setattr(scout.agent, '_thinking_level_for', lambda role: None)
+    prepared.page_count = 15
+    viewed = []
+    monkeypatch.setattr(tools.pdf_viewer, 'render_pages_to_png_bytes',
+        lambda path, first, last: viewed.append((first, last)) or [b'png'] * (last - first + 1))
+    calls = []
+
+    def respond(messages, info):
+        calls.append(messages)
+        if len(calls) == 1:
+            return ModelResponse(parts=[ToolCallPart('view_pages',
+                {'start_page': 12, 'end_page': 15})])
+        if len(calls) == 2:
+            return ModelResponse(parts=[ToolCallPart('submit_document_map',
+                {'document_map': mapped()})])
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {'ready': True})])
+
+    _, assignments = asyncio.run(build_prepared_document_map(prepared, FunctionModel(respond)))
+    assert viewed == [(12, 15)]
+    assert len(assignments) == 3
+
+
+def test_malformed_view_call_can_be_repaired_without_ending_scout(prepared, monkeypatch):
+    from pydantic_ai.models.function import FunctionModel
+    from pydantic_ai.messages import ModelResponse, ToolCallPart
+    import scout.agent
+    import tools.pdf_viewer
+    monkeypatch.setattr(scout.agent, '_thinking_level_for', lambda role: None)
+    monkeypatch.setattr(tools.pdf_viewer, 'render_pages_to_png_bytes',
+        lambda path, first, last: [b'png'])
+    calls = []
+
+    def respond(messages, info):
+        calls.append(messages)
+        if len(calls) == 1:
+            return ModelResponse(parts=[ToolCallPart('view_pages',
+                {'start_page': ':', 'end_page': ':'})])
+        if len(calls) == 2:
+            return ModelResponse(parts=[ToolCallPart('view_pages',
+                {'start_page': 1, 'end_page': 1})])
+        if len(calls) == 3:
+            return ModelResponse(parts=[ToolCallPart('submit_document_map',
+                {'document_map': mapped()})])
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {'ready': True})])
+
+    _, assignments = asyncio.run(build_prepared_document_map(prepared, FunctionModel(respond)))
+    assert len(calls) == 4
+    assert len(assignments) == 3
 
 
 def test_repeated_malformed_map_has_actionable_preparation_error(prepared, monkeypatch):
@@ -343,21 +483,17 @@ def test_repeated_malformed_map_has_actionable_preparation_error(prepared, monke
 
     def respond(messages, info):
         attempts.append(messages)
-        malformed = {
-            'toc_page': 1,
-            'page_offset': 0,
-            'statements': {},
-            'notes_inventory': [],
-        }
-        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, malformed)])
+        malformed = mapped()
+        malformed['ownership_ranges'][0]['last_block_id'] = 'missing'
+        return ModelResponse(parts=[ToolCallPart('submit_document_map', {'document_map': malformed})])
 
     with pytest.raises(
         PreparationError,
-        match='AI service returned an invalid document map after 3 attempts',
+        match='Scout could not finish a usable document map',
     ):
         asyncio.run(build_prepared_document_map(prepared, FunctionModel(respond)))
 
-    assert len(attempts) == 3
+    assert len(attempts) == 20
     assert (prepared.metadata_path.parent / 'SCOUT_conversation_trace.json').exists()
 
 
@@ -373,22 +509,26 @@ def test_missing_notes_inventory_gets_a_short_named_repair_message(prepared, mon
     the schema error echoed the whole ~12k-char map back. The repair message
     now names the missing field without repeating the map."""
     from pydantic_ai.models.function import FunctionModel
-    from pydantic_ai.messages import ModelResponse, RetryPromptPart, ToolCallPart
+    from pydantic_ai.messages import ModelResponse, ToolCallPart, ToolReturnPart
     import scout.agent
     monkeypatch.setattr(scout.agent, '_thinking_level_for', lambda role: None)
     attempts = []
 
     def respond(messages, info):
         attempts.append(messages)
-        raw = mapped()
         if len(attempts) == 1:
+            raw = mapped()
             del raw['infopack']['notes_inventory']
-        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, raw)])
+            return ModelResponse(parts=[ToolCallPart('submit_document_map', {'document_map': raw})])
+        if len(attempts) == 2:
+            return ModelResponse(parts=[ToolCallPart('amend_document_map', {
+                'infopack': mapped()['infopack']})])
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {'ready': True})])
 
     info, _ = asyncio.run(build_prepared_document_map(prepared, FunctionModel(respond)))
-    assert len(attempts) == 2
-    retry = [p for m in attempts[1] for p in m.parts if isinstance(p, RetryPromptPart)]
-    text = retry[-1].model_response()
+    assert len(attempts) == 3
+    feedback = [p for m in attempts[1] for p in m.parts if isinstance(p, ToolReturnPart)]
+    text = str(feedback[-1].content)
     assert "missing required field(s): infopack.notes_inventory" in text
     assert len(text) < 1000
     assert info.notes_inventory

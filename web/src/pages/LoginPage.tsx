@@ -29,7 +29,7 @@ const styles = {
   title: {
     fontFamily: pwc.fontHeading,
     fontWeight: pwc.weight.semibold,
-    fontSize: 22,
+    fontSize: 28,
     color: pwc.grey900,
     margin: 0,
   } as CSSProperties,
@@ -42,7 +42,7 @@ const styles = {
   field: {
     display: "flex",
     flexDirection: "column",
-    gap: pwc.space.xs,
+    gap: pwc.space.sm,
   } as CSSProperties,
   error: {
     ...ui.alertError,

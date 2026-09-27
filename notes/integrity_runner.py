@@ -46,6 +46,7 @@ def build_input(
             block_id=b["block_id"], block_kind=b["block_kind"],
             reading_order=b["reading_order"],
             canonical_html=b["canonical_html"] or "",
+            page=b["page"],
             locator=json.loads(b["locator_json"] or "{}"),
             source_note_id=b["source_note_id"],
             owner_kind=_owner(b["owner_kind"]),

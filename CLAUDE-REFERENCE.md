@@ -669,6 +669,23 @@ boundary repair, invalid joins are discarded and both source blocks remain
 separate with uncertainty; no invented join is published. Scout may correct a
 mistaken note identity from a rejected output; tentative discoveries are not
 immutable. Invalid range feedback names the exact field and identifier.
+Prepared Scout now builds its map in a bounded tool loop: it submits a draft,
+receives focused feedback, and can amend indexed ranges or named sections before
+marking the map ready. A mistaken one-off furniture claim inside a broad note or
+metadata range retains the broad owner and records uncertainty instead of
+stopping preparation. Overlapping ranges with the same semantic owner merge
+their uncertainty. A furniture-only claim without a safe content owner,
+conflicting note owners, uncovered blocks, and broken source relationships
+remain hard errors. The map is navigation guidance; uncertain boundaries need
+not be invented as exact ones. Pinned by `tests/test_prepared_document_map.py`.
+The Scout viewing tool accepts up to five pages per call, and tool-call retries
+have their own budget apart from final-answer retries. This keeps a malformed
+view request from ending the mapping loop before Scout submits a draft. Pinned
+by `tests/test_prepared_document_map.py`.
+When a single printed statement serves both profit or loss and comprehensive
+income, Scout supplies SOPL and SOCI hints for the same face page. A missing
+hint remains advisory and does not restrict extraction's page access. Pinned
+by `tests/test_prepared_document_map.py`.
 Ownership reason codes are enumerated in the output schema; owner-specific repair
 feedback identifies the range and allowed values. Retained note titles, including
 continuation titles, belong to their note rather than page furniture.
@@ -1352,6 +1369,11 @@ catch-all "balancing amount" plugs):
   to balance verify_totals or run_cross_checks. If the breakdown can't
   reconcile, leaf rows stay empty and the run finishes with a flagged
   imbalance — that is correct behaviour.
+- **A missing line is not zero.** The model-facing `write_facts` tool requires
+  `zero_basis="printed_zero"` for a numeric zero, with source evidence of the
+  printed zero or dash. Without that receipt the whole call is refused before
+  workbook or canonical fact writes. Pinned by
+  `tests/test_extraction_canonical_projection.py`.
 - **Verifier feedback is non-directive**: `tools/verifier.py` SOFP
   imbalance feedback carries the diagnostic ("equity+liabilities side is
   lower than assets") AND an explicit "do NOT plug a catch-all row".
@@ -1590,6 +1612,12 @@ current-consumer filtering, and historical readability),
   "Revert to original" (`revert_to_original`) restores the extraction in one
   click; the pass then re-exports + re-merges (no xlsx split-brain) and emits the
   `reviewing` stage.
+  Reviewer fact listings distinguish source-entered facts from
+  `source='cascade'` template-derived totals. A derived row's absence from the
+  PDF does not itself warrant a source-error flag; the reviewer checks the
+  underlying leaves. Missing required workbooks make dependent cross-checks
+  `blocked`, not accounting failures. Pinned by `tests/test_reviewer_tools.py`
+  and `tests/test_cross_checks.py`.
   - **Group / MPERS scoping.** `concept_nodes` holds every imported
     standard×level and uuids are minted per `(template_id, sheet, row, label)`,
     so the same `(sheet, row)` exists under each family with different uuids. The
@@ -2447,6 +2475,13 @@ Pinned by `tests/test_db_schema_v30.py`/`_v31.py`, `test_eval_consistency.py`,
 **Prepared-document contract (Plan A, September 2026).** Generations whose
 `input_kind` is `prepared_document` use full-document preparation with independent
 page checks, followed by one model-authored Scout inventory and ownership map.
+When a prepared run requests any notes template, orchestration schedules all
+three prose destinations (Corporate Information, Accounting Policies, and List
+of Notes) before creating agent rows or launching extraction. The List of Notes
+is the destination for complete disclosures that do not belong wholly on the
+other two sheets. Numeric templates remain explicitly requested; an empty notes
+request remains a statements-only run. The effective template set is saved in
+the run config. Pinned by `tests/test_preparation_integration.py`.
 Exact block coverage and source relationships are validated before activation. Their prose agents use the single `prompts/_notes_prepared.md` workflow and
 source-block tools; authored-prose tools are hidden. Missing or conflicting capture
 is recorded through `report_source_gap` with pages and a reason in the existing
@@ -2465,6 +2500,24 @@ untrusted-source framing. Extraction and reviewer tools share this contract,
 pinned by `tests/test_notes_source_tools.py`. Successful source writes also
 trigger the existing post-write image compaction; rejected writes retain the
 evidence, pinned by `tests/test_history_processors.py`.
+Prepared-source prompts show live worksheet row numbers beside labels.
+`write_note_from_source` requires the chosen row's exact label, and the shared
+source writer rejects a mismatched row/label pair before writing or recording
+placement. Matching the accounting topic to that field remains model judgment:
+the notes reviewer receives every source-linked accounting-policy placement,
+checks it against the PDF and field label, and records a grounded verdict for
+each current cell revision. An unverified policy placement leaves the reviewer
+pass incomplete. Prepared source titles captured as paragraphs gain heading
+semantics only when the block text exactly matches the reconciled source-note
+title; source wording and emphasis remain intact. Pinned by
+`tests/test_notes_source_write.py`, `tests/test_notes_reviewer_tools.py`,
+`tests/test_prepared_source_manifest.py`, and `tests/test_filing_target_registry.py`.
+Source-built disclosures may begin with prose when the source has no title;
+the reviewer does not require an invented heading. Cross-sheet cells sharing a
+note number but no substantive source blocks are distinct sections, while
+policy destination accuracy still receives grounded review. The source writer
+derives cell page references from the blocks it actually placed so formatting
+does not depend on optional model-supplied page metadata.
 Standalone blank drafts require a nonempty assigned inventory whose every note
 has a reported source gap; one gap cannot account for other unwritten notes.
 Reviewers enforce source relinking even when a legacy rollout setting is off.
@@ -2494,14 +2547,29 @@ Pinned by `tests/test_prepared_numeric_prose.py` and
 
 The shared source writer expands verified paragraph continuations, linked table
 parts, required related blocks and heading ancestry from locator metadata. It
-refuses stale generations, multiple top-level disclosures in one List-of-Notes
-field, automatic replacement of human edits, and a second live placement of
+also accepts derived note/subnote section IDs as agent selections while keeping
+the individual frozen pieces as the completeness ledger. The section index
+partitions each note by printed numbered subnotes (or lettered subsections when
+no numbered subnotes exist), including unnumbered source disclosures. A heading
+used only as ancestry context cannot expand its sibling disclosure group into
+a policy section. Reviewer writes to the List-of-Notes catch-all retain other
+source notes already in that cell, just as extraction writes do. Pinned by
+`tests/test_notes_source_write.py` and `tests/test_notes_source_tools.py`.
+The source writer
+refuses stale generations, multiple top-level disclosures in one source-write
+call, automatic replacement of human edits, and a second live placement of
 the same substantive block or rendered source content. The collision guard runs
 inside the write transaction, before the destination cell or placement ledger
 changes. A rejected second proposal becomes a durable placement-conflict
 finding containing both destination coordinates and labels, source block ids
 and source-note identity. The earlier write remains available but provisional;
-write order is never the accounting decision. Extraction receives the same
+distinct source notes may share only the List-of-Notes catch-all field. Its
+source writer composes complete sections in source order and a revision replaces
+only its own section while retaining the other notes, source pages and active
+placements. The Sheet-12 sink keeps one payload per source-note identity so its
+final workbook matches the canonical cell. Pinned by
+`tests/test_notes_source_write.py` and `tests/test_notes_write_serialization.py`.
+Write order is never the accounting decision. Extraction receives the same
 actionable context, does not retry with unrelated blocks, and may finish with
 the conflict unresolved instead of tripping the silent-no-write failure. The
 grounded notes reviewer either keeps the existing placement or atomically moves
@@ -2527,7 +2595,9 @@ validated formatting may change HTML bytes, but lost text, source emphasis,
 heading hierarchy or table geometry remains unresolved. Text must remain bound
 to its paragraphs, headings, list items, line breaks and table cells; matching
 flattened text and a separate tag skeleton is insufficient. Original source
-digests remain intact. Legacy generations retain exact digest matching.
+digests remain intact. Sheet persistence retains that lineage when a style-only
+render is verified against the active source selection. Legacy generations retain
+exact digest matching.
 Automatic deterministic repairs restore only historically established placements;
 they do not copy an entire note into the first policy destination.
 Prepared manifests reject unresolved ownership, broken links, unassessed pages
@@ -2539,6 +2609,11 @@ own list length. Incomplete assessments remain failures even when text is
 unreadable. Any dark ink, including short disclosures, goes through capture.
 Scout furniture exclusions require recurring header/footer text on another
 page or a folio-only page-number block; one-off prose stays in the source.
+For a prepared inventory, integrity accepts an excluded note-owned running
+header or footer only when the exclusion has an explicit furniture reason,
+the same short text occurs on at least three pages, and its source position is
+near the relevant page edge. The integrity snapshot retains source page numbers
+for that check. Repeated disclosure prose in the page body remains unresolved.
 Explicit human source attachment may replace a human edit; automatic source
 placement still may not. Preparation request deadlines begin after acquiring
 the AI slot; the document deadline includes queueing.
@@ -2636,6 +2711,11 @@ the one failure this feature has no defence against, so each is pinned.
   `routed`/`structured_consumed` need a destination. `UNIQUE(generation_id,
   block_id)` on usages also made one block in two cells unrepresentable, so
   the duplicate check was structurally dead — it now reads the ledger.
+  The reviewer cannot replace a placed block's usage with an exclusion,
+  route, or structured-consumption receipt; it must move or relink the cell.
+  A prepared review with more than 25 open items gets a bounded extension to
+  the five-minute wall-clock limit, up to eight minutes; an explicit override
+  remains fixed and stalled turns still fail.
 - **Prepared-source placement also drives ordinary notes coverage.** Coverage
   and reviewer routing derive top-level note identity from each live placement's
   frozen source note rather than requiring prepared writes to fabricate legacy

@@ -105,7 +105,7 @@ export function HistoryList({
   }
 
   return (
-    <div className="runs-table-wrap" style={styles.container}>
+    <div className="runs-table-wrap pwc-view-enter" style={styles.container}>
       <table style={styles.table}>
         {/* Fixed column widths — without these the browser picks column
             widths from content, so a long filename could squash the
@@ -165,7 +165,7 @@ export function HistoryList({
               <tr
                 key={run.id}
                 onClick={handleActivate}
-                className={`${uiClass.tableRow} pwc-view-enter`}
+                className={uiClass.tableRow}
                 style={isSelected ? styles.rowSelected : styles.row}
               >
                 <td style={styles.tdFilename}>

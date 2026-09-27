@@ -213,6 +213,62 @@ def test_write_facts_rejects_canonical_invalid_value_before_workbook_save(
     assert "rejected writes" in (_check_save_gate(deps) or "").lower()
 
 
+def test_extraction_zero_requires_a_printed_zero_receipt(canonical_env, tmp_path):
+    from extraction.agent import create_extraction_agent
+    from pydantic_ai.models.test import TestModel
+    from tools.fill_workbook import FactWrite
+
+    db_path, run_id, template_id, leaf = canonical_env
+    agent, deps = create_extraction_agent(
+        statement_type=StatementType.SOFP, variant="CuNonCu",
+        pdf_path="/tmp/x.pdf", template_path=str(CO_SOFP), model=TestModel(),
+        output_dir=str(tmp_path), run_id=run_id, db_path=str(db_path),
+        template_id=template_id,
+    )
+    write_tool = next(
+        tools["write_facts"] for toolset in agent.toolsets
+        if "write_facts" in (tools := toolset.tools)
+    )
+    write_fn = getattr(write_tool, "function", None) or write_tool
+    ctx = type("Ctx", (), {"deps": deps})()
+    missing = FactWrite(
+        sheet="SOFP-CuNonCu", row=leaf, value=0,
+        evidence="Page 12: no amount is disclosed for this line",
+    )
+    result = write_fn(ctx, [missing])
+    assert "zero_basis='printed_zero'" in result
+    assert not (tmp_path / "SOFP_filled.xlsx").exists()
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM run_concept_facts WHERE run_id=?", (run_id,),
+        ).fetchone()[0] == 0
+
+    from extraction.agent import _check_save_gate
+    deps.result_saved = True
+    deps.last_verify_result = object()
+    string_zero = missing.model_copy(update={"value": "0"})
+    assert "No fields from this call" in write_fn(ctx, [string_zero])
+    assert deps.result_saved is False
+    assert deps.last_verify_result is None
+    assert deps.last_fill_errors
+    assert "unresolved write" in _check_save_gate(deps)
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM run_concept_facts WHERE run_id=?", (run_id,),
+        ).fetchone()[0] == 0
+
+    valid_other_column = missing.model_copy(update={"col": 3, "value": 42})
+    assert "No fields from this call" in write_fn(ctx, [string_zero, valid_other_column])
+    assert "Successfully wrote" in write_fn(ctx, [valid_other_column])
+    assert deps.last_fill_errors  # The rejected zero is still unresolved.
+
+    printed = missing.model_copy(update={
+        "zero_basis": "printed_zero", "evidence": "Page 12: line prints a dash",
+    })
+    assert "Successfully wrote" in write_fn(ctx, [printed])
+    assert deps.last_fill_errors == []
+
+
 # --- Rewrite Phase 4.1: projection-CALL failure is FATAL ---------------------
 
 

@@ -88,6 +88,32 @@ export function statementCodeOrder(code: string): number {
   return STATEMENT_ORDER[code.toLowerCase()] ?? 99;
 }
 
+// Figure worksheet names are internal mTool addresses. The selector and
+// worksheet rail can still route by those addresses while showing the part of
+// the financial statement a reviewer will recognise.
+const FIGURE_SHEET_LABELS: Record<string, string> = {
+  "SOFP-CuNonCu": "Balance sheet",
+  "SOFP-Sub-CuNonCu": "Balance sheet details",
+  "SOFP-Cash": "Cash and cash equivalents",
+  "SOFP-OrderOfLiquidity": "Balance sheet",
+  "SOPL-Function": "Income statement",
+  "SOPL-Analysis-Function": "Income analysis",
+  "SOPL-Nature": "Income statement",
+  "SOPL-Analysis-Nature": "Income analysis",
+  "SOCI-NetOfTax": "Comprehensive income",
+  "SOCI-BeforeTax": "Comprehensive income",
+  "SOCIE": "Changes in equity",
+  "SOCF-Indirect": "Cash flows",
+  "SOCF-Direct": "Cash flows",
+  "SoRE": "Retained earnings",
+};
+
+export function figureSheetDisplayName(sheet: string): string {
+  if (FIGURE_SHEET_LABELS[sheet]) return FIGURE_SHEET_LABELS[sheet];
+  const detail = sheet.replace(/^(SOFP|SOPL|SOCI|SOCIE|SOCF|SoRE)-/, "");
+  return detail.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/-/g, " ");
+}
+
 // Notes sheet names ("Notes-CI" etc.) → plain English. The keys mirror the
 // MBRS sheet enum (notes_types.py); MFRS and MPERS share the same sheet names
 // so one map covers both filing standards.

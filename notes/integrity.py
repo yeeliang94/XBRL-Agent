@@ -20,7 +20,10 @@ wrong but we ship anyway" accumulates.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from collections import defaultdict
 from typing import Callable, Optional, Sequence
+
+from bs4 import BeautifulSoup
 
 from notes.source_models import (
     Disposition,
@@ -33,7 +36,7 @@ from notes.source_models import (
 # Bump when a check is added, removed, or changes what it counts as a problem.
 # Stored on every result so an old verdict is never silently re-interpreted
 # under new rules.
-RULE_VERSION = "integrity-5"
+RULE_VERSION = "integrity-6"
 
 UNRESOLVED = "unresolved"
 WARNING = "warning"
@@ -175,6 +178,60 @@ def _live_placements(inp: IntegrityInput, block_id: str) -> list:
     ]
 
 
+def _supported_furniture_exclusions(inp: IntegrityInput) -> set[str]:
+    """Verify an agent's furniture judgement using source repetition and position.
+
+    A broad note range can own a recurring page heading. A repetition claim
+    alone cannot establish furniture: repeated captions and disclosures are
+    source content. Require independent frozen locator evidence as well as
+    repetition and an exact page-edge position.
+    """
+    pages_by_text: dict[str, set[int]] = defaultdict(set)
+    blocks_by_page: dict[int, list[SourceBlock]] = defaultdict(list)
+    texts: dict[str, str] = {}
+    for block in inp.blocks:
+        value = " ".join(BeautifulSoup(
+            block.canonical_html or "", "html.parser"
+        ).get_text(" ", strip=True).casefold().split())
+        texts[block.block_id] = value
+        if value and block.page is not None:
+            pages_by_text[value].add(block.page)
+            blocks_by_page[block.page].append(block)
+    ranks = {
+        block.block_id: (index, len(ordered))
+        for page_blocks in blocks_by_page.values()
+        for ordered in [sorted(page_blocks, key=lambda b: b.reading_order)]
+        for index, block in enumerate(ordered)
+    }
+    accepted: set[str] = set()
+    for block in inp.blocks:
+        disposition, reason = _disposition_of(inp.usages, block.block_id)
+        if (block.owner_kind is not OwnerKind.NOTE
+                or disposition is not Disposition.EXCLUDED
+                or reason not in {"PAGE_HEADER", "PAGE_FOOTER", "REPEATED_CONTINUATION_HEADING"}
+                or block.block_kind == "table"
+                or (block.locator or {}).get("reason") != reason
+                or (block.locator or {}).get("region_kind") != {
+                    "PAGE_HEADER": "page_header",
+                    "PAGE_FOOTER": "page_footer",
+                    "REPEATED_CONTINUATION_HEADING": "continuation_heading",
+                }[reason]
+                or block.table_group_id
+                or block.continues_block_id
+                or any((block.locator or {}).get(key) for key in (
+                    "heading_ancestor_ids", "required_related_block_ids"))):
+            continue
+        value = texts[block.block_id]
+        if (not value or len(value) > 160 or len(pages_by_text[value]) < 3
+                or block.block_id not in ranks):
+            continue
+        index, count = ranks.get(block.block_id, (-1, 0))
+        if ((reason in {"PAGE_HEADER", "REPEATED_CONTINUATION_HEADING"} and index == 0)
+                or (reason == "PAGE_FOOTER" and index == count - 1)):
+            accepted.add(block.block_id)
+    return accepted
+
+
 def check_dispositions(inp: IntegrityInput) -> list[Finding]:
     """Every block has a decision, the decision is one we recognise, **and the
     decision is backed by live output**.
@@ -185,6 +242,7 @@ def check_dispositions(inp: IntegrityInput) -> list[Finding]:
     clean over content nobody had.
     """
     out: list[Finding] = []
+    supported_furniture = _supported_furniture_exclusions(inp) if inp.verified_inventory else set()
     for b in inp.blocks:
         disposition, reason = _disposition_of(inp.usages, b.block_id)
         if disposition is None:
@@ -202,7 +260,8 @@ def check_dispositions(inp: IntegrityInput) -> list[Finding]:
             ))
         elif (inp.verified_inventory and b.owner_kind is OwnerKind.NOTE
               and disposition is Disposition.EXCLUDED
-              and reason not in {"EXPLICIT_POLICY_ROUTE", "APPROVED_DUPLICATE_ROUTE"}):
+              and reason not in {"EXPLICIT_POLICY_ROUTE", "APPROVED_DUPLICATE_ROUTE"}
+              and b.block_id not in supported_furniture):
             out.append(Finding("disposition", UNRESOLVED,
                 f"note content {b.block_id} cannot be settled as page furniture or metadata",
                 [b.block_id], b.source_note_id))
@@ -239,14 +298,15 @@ def check_dispositions(inp: IntegrityInput) -> list[Finding]:
     return out
 
 
-def _block_settled(inp: IntegrityInput, bid: str) -> bool:
+def _block_settled(inp: IntegrityInput, bid: str,
+                   supported_furniture: set[str] | None = None) -> bool:
     """Settled means decided AND, for an inclusion, actually placed."""
     disposition, reason = _disposition_of(inp.usages, bid)
     if disposition is None or not is_resolved(disposition, reason):
         return False
     if inp.verified_inventory and disposition is Disposition.EXCLUDED and reason not in {"EXPLICIT_POLICY_ROUTE", "APPROVED_DUPLICATE_ROUTE"}:
         block = next((b for b in inp.blocks if b.block_id == bid), None)
-        if block and block.owner_kind is OwnerKind.NOTE:
+        if block and block.owner_kind is OwnerKind.NOTE and bid not in (supported_furniture or set()):
             return False
     if disposition in (Disposition.INCLUDED, Disposition.ROUTED, Disposition.STRUCTURED_CONSUMED) or reason in {"EXPLICIT_POLICY_ROUTE", "APPROVED_DUPLICATE_ROUTE"}:
         return bool(_live_placements(inp, bid))
@@ -256,8 +316,10 @@ def _block_settled(inp: IntegrityInput, bid: str) -> bool:
 def check_prose_note_coverage(inp: IntegrityInput) -> list[Finding]:
     """A prose note is complete only when every one of its blocks is settled."""
     out: list[Finding] = []
+    supported_furniture = _supported_furniture_exclusions(inp) if inp.verified_inventory else set()
     for n in inp.notes:
-        missing = [bid for bid in n.block_ids if not _block_settled(inp, bid)]
+        missing = [bid for bid in n.block_ids
+                   if not _block_settled(inp, bid, supported_furniture)]
         if missing:
             out.append(Finding(
                 "note_coverage", UNRESOLVED,

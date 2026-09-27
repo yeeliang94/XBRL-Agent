@@ -199,6 +199,93 @@ def test_the_manifest_lists_ids_and_kinds_for_one_note(seeded):
     assert "heading" in out and "paragraph" in out
 
 
+def test_section_listing_gives_one_complete_choice_for_a_simple_note(seeded):
+    db, _run_id, gen = seeded
+    out = notes_agent._list_source_sections_impl(db, gen, 5)
+    assert "section:n5:root" in out
+    assert "2 source parts" in out
+    assert "b2" not in out
+
+
+def test_repeated_lettered_sections_keep_distinct_source_pieces():
+    from notes.source_sections import expand_section_ids, sections_for_note
+
+    blocks = [
+        SourceBlock(block_id="a1", block_kind="heading", reading_order=0,
+                    canonical_html="<h3>(a) First topic</h3>", source_note_id="n5"),
+        SourceBlock(block_id="first", block_kind="paragraph", reading_order=1,
+                    canonical_html="<p>First disclosure.</p>", source_note_id="n5"),
+        SourceBlock(block_id="b1", block_kind="heading", reading_order=2,
+                    canonical_html="<h3>(b) Other topic</h3>", source_note_id="n5"),
+        SourceBlock(block_id="a2", block_kind="heading", reading_order=3,
+                    canonical_html="<h3>(a) Later topic</h3>", source_note_id="n5"),
+        SourceBlock(block_id="last", block_kind="paragraph", reading_order=4,
+                    canonical_html="<p>Later disclosure.</p>", source_note_id="n5"),
+    ]
+    notes = [{"source_note_id": "n5", "top_note_num": "5", "title": "Policies"}]
+
+    sections = sections_for_note(blocks, "n5", "5", "Policies")
+    assert [section.section_id for section in sections] == [
+        "section:n5:a", "section:n5:b", "section:n5:a:2",
+    ]
+    assert expand_section_ids(blocks, notes, [sections[0].section_id]) == ["a1", "first"]
+    assert expand_section_ids(blocks, notes, [sections[2].section_id]) == ["a2", "last"]
+
+
+def test_parent_sections_include_nested_numbered_and_roman_disclosures():
+    from notes.source_sections import expand_section_ids
+
+    numbered = [
+        SourceBlock("parent", "heading", 1, "<h3>3.1 Basis of preparation</h3>", source_note_id="n3"),
+        SourceBlock("child", "heading", 2, "<h4>3.1.1 Statement of compliance</h4>", source_note_id="n3",
+                    locator={"heading_ancestor_ids": ["parent"]}),
+        SourceBlock("text", "paragraph", 3, "<p>Complies with MFRS.</p>", source_note_id="n3",
+                    locator={"heading_ancestor_ids": ["parent", "child"]}),
+        SourceBlock("next", "heading", 4, "<h3>3.2 Other policy</h3>", source_note_id="n3"),
+    ]
+    notes = [{"source_note_id": "n3", "top_note_num": "3", "title": "Policies"}]
+    assert expand_section_ids(numbered, notes, ["section:n3:3.1"]) == ["parent", "child", "text"]
+
+    lettered = [
+        SourceBlock("a", "heading", 1, "<h3>(a) Leases</h3>", source_note_id="n3"),
+        SourceBlock("i", "heading", 2, "<h4>(i) As lessee</h4>", source_note_id="n3",
+                    locator={"heading_ancestor_ids": ["a"]}),
+        SourceBlock("lessee", "paragraph", 3, "<p>Lease assets.</p>", source_note_id="n3"),
+        SourceBlock("ii", "heading", 4, "<h4>(ii) As lessor</h4>", source_note_id="n3",
+                    locator={"heading_ancestor_ids": ["a"]}),
+        SourceBlock("lessor", "paragraph", 5, "<p>Lease income.</p>", source_note_id="n3"),
+        SourceBlock("b", "heading", 6, "<h3>(b) Revenue</h3>", source_note_id="n3"),
+    ]
+    assert expand_section_ids(lettered, notes, ["section:n3:a"]) == ["a", "i", "lessee", "ii", "lessor"]
+    assert expand_section_ids(lettered, notes, ["section:n3:i"]) == ["i", "lessee"]
+    assert expand_section_ids(lettered, notes, ["section:n3:ii"]) == ["ii", "lessor"]
+
+
+def test_section_id_reaches_sheet12_payload_builder_as_source_pieces(seeded):
+    from types import SimpleNamespace
+
+    db, run_id, gen = seeded
+    with repo.db_session(db) as conn:
+        conn.execute(
+            "INSERT INTO notes_nodes(node_uuid,template_id,sheet,row,label,kind) "
+            "VALUES('note5','mfrs-company-notes-v1','Notes-Listofnotes',140,"
+            "'Disclosure of receivables','LEAF')"
+        )
+        deps = SimpleNamespace(
+            run_id=run_id, source_generation_id=gen, filing_standard="mfrs",
+            filing_level="company", sheet_name="Notes-Listofnotes",
+        )
+        message, payload = notes_agent._write_from_source_in_connection(
+            conn, deps, "Notes-Listofnotes", 140, ["section:n5:root"],
+            [1], "source page 1", None,
+            target_label="Disclosure of receivables",
+        )
+    assert message.startswith("ok:")
+    assert payload.note_num == 5
+    assert payload.source_note_id == "n5"
+    assert "Stated at cost" in payload.content
+
+
 def test_a_note_with_no_parts_says_to_read_the_pdf(seeded):
     db, _run_id, gen = seeded
     assert "Read the PDF" in notes_agent._read_source_manifest_impl(db, gen, 99)

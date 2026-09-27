@@ -272,7 +272,7 @@
         <svg class="mark" viewBox="0 0 100 100" fill="none" aria-hidden="true"><path d="M12 78 L40 22 L52 50 L66 30 L88 78" stroke="currentColor" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <span>XBRL Agent</span>
       </div>
-      <div class="doc-state"><strong>Focused Workspace · v1.1</strong>Canonical production reference<br>21 September 2026</div>
+      <div class="doc-state"><strong>Focused Workspace · v1.2</strong>Canonical production reference<br>26 September 2026</div>
       <nav aria-label="Design system sections">
         <div class="nav-label">Direction</div>
         <a href="#overview">Overview</a>
@@ -281,8 +281,10 @@
         <div class="nav-label">Foundations</div>
         <a href="#colour">Colour</a>
         <a href="#type">Typography</a>
+        <a href="#spacing">Spacing and reading rhythm</a>
         <a href="#surfaces">Surfaces and borders</a>
         <a href="#actions">Actions and status</a>
+        <a href="#controls">Forms, tables and dialogs</a>
         <div class="nav-label">Product patterns</div>
         <a href="#shell">Application shell</a>
         <a href="#agents">Live agent workspace</a>
@@ -290,6 +292,7 @@
         <a href="#attention">Attention and warnings</a>
         <a href="#states">Run transitions</a>
         <div class="nav-label">Delivery</div>
+        <a href="#motion">Motion and feedback</a>
         <a href="#responsive">Responsive behaviour</a>
         <a href="#accessibility">Accessibility</a>
         <a href="#implementation">Implementation contract</a>
@@ -390,13 +393,26 @@
       </section>
 
       <section id="type">
-        <div class="section-head"><h2>Typography</h2><p>Use three levels only. Create secondary hierarchy with weight and muted colour, not another font size.</p></div>
+        <div class="section-head"><h2>Typography</h2><p>Use three primary levels. Keep small text for short metadata, not instructions or financial values. Create secondary hierarchy with weight and muted colour.</p></div>
         <div class="type-specimen">
           <div class="type-row"><span>Page title</span><div class="type-title">Figures review</div><code>28 / 700</code></div>
           <div class="type-row"><span>Section and item title</span><div class="type-section">Statement agents</div><code>16 / 680</code></div>
           <div class="type-row"><span>Body and metadata</span><div><div class="type-body">Review the extracted value against its source.</div><div class="type-body muted-example">Pages 67–69 · updated just now</div></div><code>14 / 400</code></div>
         </div>
         <div class="handoff" style="margin-top:20px"><strong>Financial values</strong>Use tabular numerals, right alignment and consistent denomination. Keep figures visually stronger than helper text: <code>font-variant-numeric: tabular-nums</code>.</div>
+      </section>
+
+      <section id="spacing">
+        <div class="section-head"><h2>Spacing and reading rhythm</h2><p>Apply one repeatable rhythm to page edges, sections, controls and document text. Use margin to separate peers and padding to contain a surface.</p></div>
+        <table class="token-table"><thead><tr><th>Relationship</th><th>Desktop</th><th>Narrow layout</th></tr></thead><tbody>
+          <tr><td>Page edge</td><td>32 px</td><td>16 px</td></tr>
+          <tr><td>Document or review pane inset</td><td>24 px</td><td>16 px</td></tr>
+          <tr><td>Major page sections</td><td>32 px</td><td>24 px</td></tr>
+          <tr><td>Related controls or fields</td><td>16 px</td><td>16 px</td></tr>
+          <tr><td>Label to control or title to metadata</td><td>8 px</td><td>8 px</td></tr>
+          <tr><td>Separate short paragraphs</td><td>12 px</td><td>12 px</td></tr>
+        </tbody></table>
+        <p style="margin-top:20px">Body copy is 14 px with 1.5 line height. Long guidance uses 1.6 line height and a maximum measure near 70 characters. Metadata may use 13 px; 12 px is reserved for short labels and timestamps. Keep instructions and financial figures at 14 px or larger. A section begins with its title and then the work, without a repeated introductory sentence.</p>
       </section>
 
       <section id="surfaces">
@@ -425,17 +441,30 @@
           <button class="button primary">Save changes</button>
           <button class="button">Open source</button>
           <button class="button quiet">View audit history</button>
-          <button class="button icon" aria-label="More actions">···</button>
+          <button class="button quiet">Retry save</button>
           <button class="button" disabled>Unavailable</button>
         </div>
         <h3>Status language</h3>
         <div class="status-row">
           <div class="status"><span class="dot working"></span><span>Working</span></div>
-          <div class="status"><span class="dot done"></span><span>Finished</span></div>
+          <div class="status"><span aria-hidden="true">✓</span><span>Finished</span></div>
           <div class="status"><span class="dot attention"></span><span>Needs attention</span></div>
           <div class="status"><span class="dot"></span><span>Waiting</span></div>
         </div>
         <p class="muted" style="margin-top:12px;font-size:12px">Always pair colour with text or an icon. Routine success stays monochrome. Use orange only for the currently active or exceptional state.</p>
+      </section>
+
+      <section id="controls">
+        <div class="section-head"><h2>Forms, tables and dialogs</h2><p>Component rules make the same task look and behave alike on every page and in every popup.</p></div>
+        <table class="token-table"><thead><tr><th>Component</th><th>Default rule</th><th>State rule</th></tr></thead><tbody>
+          <tr><td>Input and select</td><td>44 px minimum height; 14 px text; 8 px radius. Put the label above and helper text below.</td><td>Validation appears directly below the control. Keep entered values readable in disabled, saving and failed states.</td></tr>
+          <tr><td>Button</td><td>40 px standard height; 34 px compact only in separated toolbars. One primary action per decision area.</td><td>Hover changes a neutral surface or text; focus is visible; busy text names the action; disabled retains a readable label.</td></tr>
+          <tr><td>File selection</td><td>A labelled file control names accepted format and size before selection; show the selected filename afterwards.</td><td>Show file errors beside the control and offer a direct retry.</td></tr>
+          <tr><td>Financial table</td><td>Compact 28–32 px rows where content permits; description column wraps, figures align right with tabular numerals.</td><td>Keep period and unit headers legible during horizontal scrolling. Do not squeeze columns below readable width.</td></tr>
+          <tr><td>Operational list</td><td>40 px rows; use a divider only between peer items. Setup rows may use 48 px for two-line content.</td><td>Hover and selection use Grey 50; Orange 50 marks a source match or actual attention item.</td></tr>
+          <tr><td>Dialog</td><td>One heading, one decision, contextual explanation and actions at the end. Use the shared 24 px inset and modal shadow.</td><td>On narrow screens leave a 16 px viewport gutter; keep actions reachable, restore focus on close and never cover an error.</td></tr>
+        </tbody></table>
+        <div class="handoff" style="margin-top:20px"><strong>Fill roles</strong>White is the resting content fill. Grey 50 separates navigation, hover and neutral selection. Orange 50 is reserved for cited source emphasis and items needing attention. Grey 100 is a divider or compact inactive field header, not a second nested panel. Only overlapping menus, tooltips and dialogs cast shadows.</div>
       </section>
 
       <section id="shell">
@@ -481,7 +510,7 @@
             <tr><td>A chronological stream of concise operator-facing milestones drawn from source discovery, page activity, extraction, writing, checking, waits and completion.</td><td>Raw tool names, provider reasoning, prompts, tokens, request counts, stack traces and provider payloads.</td></tr>
           </tbody>
         </table>
-        <div class="handoff" style="margin-top:20px"><strong>Current event contract</strong>The production roster consumes <code>agent_id</code>, role, task, status, semantic update, timestamp and optional page evidence. Document preparation appears first because every extraction workstream depends on its page map. Before extraction, keep one continuous stage track: Prepare document → Confirm setup → Extract → Check → Review → Ready. Preparation's page capture, verification and continuation checks overlap, so show their independent counters inside Prepare document rather than inventing a sequential order. A full page-check count does not complete continuation checks; their step finishes only when source preparation finishes. After document mapping and reconciliation, Confirm setup is an explicit action state where the operator checks denomination, filing details and statement formats. Use truthful operator states: Waiting, Working, Stopping, Complete, Skipped, Stopped and Failed. Only Complete contributes to the completion count. Long-running page and formatting fan-outs expose a plain-language count in the run header. General <code>parent_agent_id</code> and <code>waiting_for</code> relationships are optional future capabilities; without them, the UI remains a truthful flat roster. Announce only the selected agent's semantic update in a stable polite status region, never the entire detail pane.</div>
+        <div class="handoff" style="margin-top:20px"><strong>Current event contract</strong>The production roster consumes <code>agent_id</code>, role, task, status, semantic update, timestamp and optional page evidence. Document preparation appears first because every extraction workstream depends on its page map. Before extraction, keep one continuous stage track: Prepare document → Confirm setup → Extract → Check → Review → Ready. Preparation's page capture, verification and continuation checks overlap, so show their independent counters inside Prepare document rather than inventing a sequential order. A full page-check count does not complete continuation checks; their step finishes only when source preparation finishes. After document mapping and reconciliation, Confirm setup is an explicit action state where the operator checks denomination, filing details and statement formats. Use truthful operator states: Waiting, Working, Stopping, Complete, Skipped, Stopped and Failed. Only Complete contributes to the completion count. Show one labelled selected-extraction count in the run header; the activity roster shows item states without a second completion total. Before requested workers start, say Starting workstreams; reserve final-stage wording for actual final work. Long-running page and formatting fan-outs expose a plain-language count in the run header. General <code>parent_agent_id</code> and <code>waiting_for</code> relationships are optional future capabilities; without them, the UI remains a truthful flat roster. Announce only the selected agent's semantic update in a stable polite status region, never the entire detail pane.</div>
         <div class="handoff" style="margin-top:12px"><strong>Live activity stream</strong>Present one flat chronological <em>Live activity</em> stream of operator-facing milestones for every active workstream. Stack concise updates from oldest to newest with the newest update at the bottom, using no event cards, navigation buttons or nested activity panels. Follow new updates only while the operator remains at the bottom; preserve their position when they scroll up to inspect earlier work. Keep tool operations, provider reasoning, tokens and request metadata in closed technical diagnostics rather than the normal stream. Announce semantic status changes politely to assistive technology and make all motion respect <code>prefers-reduced-motion</code>.</div>
       </section>
 
@@ -515,7 +544,7 @@
 
       <section id="run-navigation">
         <div class="section-head"><h2>Run navigation</h2><p>One Current run entry in the sidebar. One persistent run tab bar (sticky below the workspace header): Overview, Figures, Notes, Cross-checks, Activity and AI review. Keep the tabs visible throughout review; mount heavy content only for the active section. Notes fields stack their labels above content when the editor pane is narrow; the PDF must leave room for readable note text.</p></div>
-        <p>Show the exact completion outcome briefly, then open the run Overview automatically unless the operator chooses to inspect completed activity. Keep one Open overview fallback action during the transition. Completed activity is optional detail. The Overview always reminds the operator to verify AI-extracted figures against the source PDF. Failed consistency checks are blocking warnings: announce them, keep the workbook out of a green ready state and provide a direct route to Cross-checks. Advisory and non-blocking items may remain collapsed. All runs always opens the list. Browser Back and Forward retrace visited sections; repeated tab clicks add no history. Completion does not mean human review is finished.</p>
+        <p>Show the exact completion outcome briefly, then open the run Overview automatically unless the operator chooses to inspect completed activity. Keep one Open overview fallback action during the transition. Completed activity is optional detail. The Overview always reminds the operator to verify AI-extracted figures against the source PDF. Failed consistency checks are blocking warnings: announce them, keep the workbook out of a green ready state and provide a direct route to Cross-checks. Advisory and non-blocking items may remain collapsed. All runs always opens the list. Browser Back and Forward retrace visited sections; repeated tab clicks add no history. When tabs change, bring the new panel into view below the persistent tab bar. Completion does not mean human review is finished.</p>
       </section>
 
       <section id="states">
@@ -534,13 +563,24 @@
         <div class="handoff" style="margin-top:20px"><strong>No silent waiting</strong>Every material stage that keeps the operator waiting appears in the stage heading or Live activity stream, including document preparation, extraction, checks, AI review, notes review, notes formatting, result saving and final workbook preparation. A completed workstream count must not imply the whole run is ready while downstream work continues. Keep the summary compact: one current-stage label, an optional plain-language count, secondary elapsed time and one Stop action.</div>
       </section>
 
+      <section id="motion">
+        <div class="section-head"><h2>Motion and feedback</h2><p>Use brief motion to connect an action to its result. The interface stays readable and responsive throughout.</p></div>
+        <div class="checklist">
+          <div class="check"><span>01</span><div><strong>Controls:</strong> hover, focus and pressed feedback takes 100–140 ms. A pressed control settles by at most 1 px. Never move a whole card or table row for decoration.</div></div>
+          <div class="check"><span>02</span><div><strong>Content:</strong> a newly opened page section or tab panel may fade in with a shift of no more than 4 px over 180 ms. Animate a loaded list or table once as a region, not every row.</div></div>
+          <div class="check"><span>03</span><div><strong>Dialogs and disclosures:</strong> dialogs fade and scale from 97% over 140 ms; disclosure content reveals over 180 ms. Keep the control and its result in the same place.</div></div>
+          <div class="check"><span>04</span><div><strong>Status:</strong> update text, numbers and warnings immediately. Animate only their arrival. Reserve repeating motion for an active wait, and stop it at success, failure or cancellation.</div></div>
+          <div class="check"><span>05</span><div><strong>Reduced motion:</strong> respect <code>prefers-reduced-motion</code> for every interaction. Replace transitions and pulsing with immediate state changes; never delay focus, navigation or a result.</div></div>
+        </div>
+      </section>
+
       <section id="responsive">
         <div class="section-head"><h2>Responsive behaviour</h2><p>Preserve task order when space becomes constrained. Do not simply shrink three desktop panes until the content is unreadable.</p></div>
         <div class="checklist">
           <div class="check"><span>01</span><div><strong>Large desktop:</strong> persistent navigation, working surface and PDF or agent detail pane remain visible.</div></div>
           <div class="check"><span>02</span><div><strong>Standard desktop:</strong> narrow secondary rails first; keep the editable mTool surface dominant.</div></div>
           <div class="check"><span>03</span><div><strong>Tablet:</strong> move PDF or agent detail below the primary surface while retaining one-click selection.</div></div>
-          <div class="check"><span>04</span><div><strong>Mobile:</strong> convert persistent rails to compact horizontal navigation. Financial tables may scroll horizontally; labels and period headers remain visible.</div></div>
+          <div class="check"><span>04</span><div><strong>Mobile:</strong> keep a readable page breadcrumb and visible labels in bottom navigation. Replace the Figures worksheet rail with the labelled worksheet picker; do not repeat both controls. Financial tables scroll within their own region instead of squeezing columns below readable width.</div></div>
         </div>
       </section>
 

@@ -187,16 +187,16 @@ class TestCrossCheckSelection:
         assert all(r.status == "pending" for r in results)
         assert all("SOCIE" in r.message for r in results)
 
-    def test_missing_workbook_returns_failed(self):
-        """If statement was selected but agent failed (no workbook), check returns 'failed'."""
+    def test_missing_workbook_blocks_check_without_reporting_numeric_failure(self):
+        """A failed source agent leaves its dependent checks unrun, not numerically failed."""
         checks = [AlwaysPassCheck()]  # requires SOFP
         run_config = {"statements_to_run": {StatementType.SOFP}}
         # SOFP was run but produced no workbook — not in workbook_paths
         results = run_all(checks, workbook_paths={}, run_config=run_config)
 
         assert len(results) == 1
-        assert results[0].status == "failed"
-        assert "Workbook missing" in results[0].message
+        assert results[0].status == "blocked"
+        assert "SOFP" in results[0].message
 
     def test_notprepared_required_statement_is_not_applicable(self):
         """A valid combined statement is a resolved no-template outcome, not

@@ -172,7 +172,7 @@ export function NotesCoveragePanel({ runId }: Props) {
       >
         <span aria-hidden="true" style={styles.chevron}>{showTable ? "▾" : "▸"}</span>
         <span style={styles.title}>
-          Notes coverage — {s.placed} of {s.total} note{s.total === 1 ? "" : "s"} placed
+          Notes coverage — {s.placed} of {s.total} numbered note{s.total === 1 ? "" : "s"} placed
         </span>
         <div style={styles.headerSpacer} />
         <span style={styles.dim} data-testid="coverage-summary">

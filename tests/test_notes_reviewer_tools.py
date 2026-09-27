@@ -142,6 +142,49 @@ def test_source_reviewer_tools_and_instructions_appear_together(db_path: Path) -
     assert "relink_note_cell" in prompt
 
 
+def test_prepared_policy_placement_requires_grounded_current_verdict(db_path: Path) -> None:
+    from types import SimpleNamespace
+    from notes import source_repository as srepo
+    from notes.reviewer_agent import PolicyPlacementItem, unverified_policy_placements
+    from notes.source_models import SourceBlock, OwnerKind
+
+    run_id = _seed_run(db_path)
+    sheet = ra.POLICIES_SHEET
+    with repo.db_session(db_path) as conn:
+        generation_id = srepo.begin_generation(conn, run_id, input_kind="prepared_document")
+        srepo.write_blocks(conn, generation_id, [SourceBlock(
+            block_id="policy", block_kind="paragraph", reading_order=0,
+            canonical_html="<p>Inventory policy.</p>",
+            owner_kind=OwnerKind.NOTE, source_note_id="n4",
+        )])
+        srepo.activate_generation(conn, generation_id)
+        repo.upsert_notes_cell(conn, run_id=run_id, sheet=sheet, row=33,
+            label="Description of accounting policy for income tax",
+            html="<h3>4. Inventories</h3><p>Inventory policy.</p>")
+        conn.execute("UPDATE notes_cells SET source_generation_id=? WHERE run_id=? AND sheet=? AND row=33",
+            (generation_id, run_id, sheet))
+    agent, deps, context = _agent(db_path, run_id, _scripted([]))
+    assert context["policy_placements"][0]["row"] == 33
+    assert "POLICY DESTINATION ACCURACY" in ra.build_notes_reviewer_packet(context)
+    assert unverified_policy_placements(deps) == [33]
+    funcs = {name: tool.function for ts in agent.toolsets
+             for name, tool in getattr(ts, "tools", {}).items()}
+    item = PolicyPlacementItem(row=33,
+        target_label="Description of accounting policy for income tax",
+        verdict="needs_human", reason="The source is an inventories policy.",
+        source_pages=[20])
+    ctx = SimpleNamespace(deps=deps)
+    assert "rejected" in funcs["verify_policy_placements"](ctx, [item])
+    deps.viewed_pages.add(20)
+    assert "needs_human" in funcs["verify_policy_placements"](ctx, [item])
+    assert unverified_policy_placements(deps) == []
+    assert len(deps.flags) == 1
+    with repo.db_session(db_path) as conn:
+        repo.upsert_notes_cell(conn, run_id=run_id, sheet=sheet, row=33,
+            label=item.target_label, html="<h3>4. Inventories</h3><p>Updated policy.</p>")
+    assert unverified_policy_placements(deps) == [33]
+
+
 def test_author_into_empty_leaf_creates_cell(db_path: Path) -> None:
     run_id = _seed_run(db_path)
     _seed_node(db_path, 50, "LEAF", "Disclosure of X")
@@ -521,7 +564,27 @@ def test_title_detector_preserves_source_heading_hierarchy_only_for_source_cells
         {"sheet": _S12, "row": 51, "label": "source missing heading",
          "html": "<p>still malformed</p>", "source_built": True},
     ])
-    assert [i["row"] for i in issues] == [50, 51]
+    assert [i["row"] for i in issues] == [50]
+
+
+def test_duplicate_detector_accepts_distinct_source_partitions():
+    entries = [
+        {"sheet": "Notes-SummaryofAccPol", "row": 42,
+         "source_note_refs": ["4"]},
+        {"sheet": "Notes-Listofnotes", "row": 87,
+         "source_note_refs": ["4"]},
+    ]
+    distinct = {
+        ("Notes-SummaryofAccPol", 42): {"policy-prose"},
+        ("Notes-Listofnotes", 87): {"disclosure-table"},
+    }
+    assert det.detect_cross_sheet_duplicates_by_ref(
+        entries, substantive_blocks_by_cell=distinct,
+    ) == []
+    overlapping = {**distinct, ("Notes-Listofnotes", 87): {"policy-prose"}}
+    assert len(det.detect_cross_sheet_duplicates_by_ref(
+        entries, substantive_blocks_by_cell=overlapping,
+    )) == 1
 
 
 def test_packet_renders_present_families_only():
@@ -753,6 +816,15 @@ def test_prepared_missing_unnumbered_source_triggers_review_and_can_be_relinked(
         assert body(tail) == body(full)[5:]
     result = funcs["relink_note_cell"](ctx, sheet=_S12, row=50, block_ids=["u1"])
     assert result.startswith("ok:")
+    rejected = funcs["record_block_dispositions"](ctx, ["u1"], "structured_consumed")
+    assert "already placed" in rejected
+    with repo.db_session(db_path) as conn:
+        usage = conn.execute(
+            "SELECT sheet,row,disposition FROM notes_block_usages "
+            "WHERE generation_id=? AND block_id='u1'", (gen,),
+        ).fetchone()
+    assert (usage["sheet"], usage["row"], usage["disposition"]) == (
+        _S12, 50, "included")
     refreshed = ra.recompute_notes_findings(deps)
     assert refreshed["source_integrity_findings"] == []
     assert ra.finding_keys(context) - ra.finding_keys(refreshed)

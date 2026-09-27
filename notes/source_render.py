@@ -42,7 +42,7 @@ from notes.writer import (
 
 # Bump when the render changes shape, so a stored `source_rendered_sha256`
 # from an older build is recognisably stale rather than silently compared.
-RENDER_VERSION = "src-render-2"
+RENDER_VERSION = "src-render-4"
 
 _TABLE_OPEN_RE = re.compile(r"<table\b[^>]*>", re.IGNORECASE)
 
@@ -159,16 +159,29 @@ def _assemble(blocks: Sequence[SourceBlock]) -> str:
             out.append(_merge_table_group(pending_parts))
         pending_group, pending_parts = None, []
 
+    previous_note_id: Optional[str] = None
     for b in blocks:
         group = b.table_group_id
         if group and group == pending_group:
             pending_parts.append(b.canonical_html)
             continue
         flush()
+        if (previous_note_id and b.source_note_id
+                and b.source_note_id != previous_note_id):
+            out.append("\n\n")
+        if b.source_note_id:
+            previous_note_id = b.source_note_id
         if group:
             pending_group, pending_parts = group, [b.canonical_html]
         else:
-            out.append(b.canonical_html)
+            html = b.canonical_html
+            if (b.locator or {}).get("verified_title") and b.block_kind == "paragraph":
+                title = BeautifulSoup(html, "html.parser")
+                paragraph = title.find("p")
+                if paragraph is not None and len(title.find_all("p")) == 1:
+                    paragraph.name = "h3"
+                    html = str(title)
+            out.append(html)
     flush()
     return "".join(out)
 

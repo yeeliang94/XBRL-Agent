@@ -162,6 +162,7 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     }
     expect(screen.getByRole("complementary", { name: "Notes template navigator" }))
       .toHaveStyle({ overflowY: "auto" });
+    expect(screen.getByText("Numbered source notes")).toBeInTheDocument();
   });
   test("renders one active sheet at a time", async () => {
     mockFetchOnce(SAMPLE);

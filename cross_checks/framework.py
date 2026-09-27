@@ -111,6 +111,8 @@ class CrossCheckResult:
     - ``"passed"`` / ``"failed"`` — hard numeric pass/fail.
     - ``"pending"`` — a required statement is missing; run again after
       the missing sheet ships.
+    - ``"blocked"`` — the requested statement failed to produce a workbook;
+      no numeric comparison was possible.
     - ``"not_applicable"`` — the check's gating condition excludes this
       run (e.g. wrong variant).
     - ``"warning"`` — advisory signal (Phase 6.1 notes-consistency
@@ -362,10 +364,10 @@ def run_all_facts(
                 missing_names = sorted(s.value for s in missing_templates)
                 results.append(CrossCheckResult(
                     name=check.name,
-                    status="failed",
+                    status="blocked",
                     message=(
-                        f"Workbook missing for {', '.join(missing_names)} "
-                        f"(agent may have failed); cannot run {check.name}"
+                        f"Cannot run {check.name}: {', '.join(missing_names)} "
+                        "produced no workbook. Resolve that statement first."
                     ),
                 ))
                 continue
@@ -483,10 +485,10 @@ def run_all(
                 missing_names = sorted(s.value for s in missing_workbooks)
                 results.append(CrossCheckResult(
                     name=check.name,
-                    status="failed",
+                    status="blocked",
                     message=(
-                        f"Workbook missing for {', '.join(missing_names)} "
-                        f"(agent may have failed); cannot run {check.name}"
+                        f"Cannot run {check.name}: {', '.join(missing_names)} "
+                        "produced no workbook. Resolve that statement first."
                     ),
                 ))
                 continue

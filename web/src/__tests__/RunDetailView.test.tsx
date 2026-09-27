@@ -323,6 +323,17 @@ describe("RunDetailView", () => {
     );
   });
 
+  test("provider rejection is identified as an operational failure", () => {
+    render(<RunDetailView detail={makeDetail({
+      agents: [makeAgent({ status: "failed", error_type: "provider_rejected" })],
+    })} onDownload={vi.fn()} onDelete={vi.fn()} />);
+    clickRunTab(/activity/i);
+    fireEvent.click(screen.getByTestId("run-detail-agent-row"));
+    expect(screen.getByTestId("agent-error-type")).toHaveTextContent(
+      "Model provider rejected the request",
+    );
+  });
+
   test("failed agent renders the exact persisted terminal detail", () => {
     const refusal = "Write to SOCF-Indirect!B137 was blocked because it is formula-owned.";
     render(
@@ -343,6 +354,51 @@ describe("RunDetailView", () => {
     clickRunTab(/activity/i);
     fireEvent.click(screen.getByTestId("run-detail-agent-row"));
     expect(screen.getByTestId("agent-error-message")).toHaveTextContent(refusal);
+  });
+
+  test("failed workstream leads with failure and hides stale completion copy", () => {
+    render(<RunDetailView detail={makeDetail({ agents: [makeAgent({
+      statement_type: "NOTES_ACC_POLICIES",
+      status: "failed",
+      error_message: "Notes agent finished without writing any payloads",
+      events: [
+        { event: "status", data: { message: "ACC_POLICIES: complete" }, timestamp: 1 } as SSEEvent,
+        { event: "complete", data: { success: true }, timestamp: 2 } as SSEEvent,
+        { event: "error", data: { message: "Notes agent finished without writing any payloads" }, timestamp: 3 } as SSEEvent,
+      ],
+    })] })} onDelete={() => {}} />);
+    clickRunTab(/^activity$/i);
+    const detail = screen.getByTestId("run-detail-agent");
+    expect(within(detail).getAllByText("Notes agent finished without writing any payloads").length).toBeGreaterThan(0);
+    expect(within(detail).queryByText("Finished its assigned work")).toBeNull();
+    expect(within(detail).queryByText("ACC_POLICIES: complete")).toBeNull();
+    expect(within(detail).getByTestId("agent-error-message")).toHaveTextContent("without writing any payloads");
+  });
+
+  test("saved Activity keeps model and usage details in the technical disclosure", () => {
+    render(<RunDetailView detail={makeDetail({ agents: [makeAgent({ token_breakdown: {
+      turn_count: 2, tool_call_count: 3, prompt_tokens: 900, completion_tokens: 300,
+      thinking_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0,
+    } })] })} onDelete={() => {}} />);
+    clickRunTab(/^activity$/i);
+    const detail = screen.getByTestId("run-detail-agent");
+    expect(within(detail).queryByText(/2 turns/)).toBeNull();
+    fireEvent.click(within(detail).getByText("Technical activity"));
+    expect(within(detail).getByText(/2 turns/)).toBeInTheDocument();
+  });
+
+  test("failed notes-review roster shows the specific verification gap, not its internal code", () => {
+    render(<RunDetailView detail={makeDetail({ agents: [makeAgent({
+      statement_type: "NOTES_VALIDATOR", status: "failed", error_type: "tool_exception", error_message: null,
+      events: [
+        { event: "error", data: { message: "The notes reviewer left 26 sub-note references unverified. The review remains incomplete." }, timestamp: 1 } as SSEEvent,
+        { event: "error", data: { message: "notes_reviewer_subnotes_unverified" }, timestamp: 2 } as SSEEvent,
+      ],
+    })] })} onDelete={() => {}} />);
+    clickRunTab(/^activity$/i);
+    expect(screen.getByTestId("run-detail-agent-row")).toHaveTextContent("26 sub-note references unverified");
+    expect(screen.queryByText("notes_reviewer_subnotes_unverified")).toBeNull();
+    expect(screen.getByTestId("run-detail-agent")).toHaveTextContent("The notes reviewer left 26 sub-note references unverified");
   });
 
   test("succeeded agents render no error_type badge", () => {
@@ -367,6 +423,14 @@ describe("RunDetailView", () => {
     expect(screen.getByText("Passed")).toBeTruthy();
   });
 
+  test("surfaces a blocked cross-check as work needing attention", () => {
+    render(<RunDetailView detail={makeDetail({
+      cross_checks: [{ name: "sofp_balance", status: "blocked", expected: null,
+        actual: null, diff: null, tolerance: null, message: "SOFP unavailable" }],
+    })} onDelete={vi.fn()} onDownload={vi.fn()} />);
+    expect(screen.getByText(/waiting for required statement data/i)).toBeInTheDocument();
+  });
+
   test("offers a full redo from the overview without changing the prior run", () => {
     const onRestart = vi.fn();
     render(
@@ -377,9 +441,17 @@ describe("RunDetailView", () => {
       />,
     );
 
+    fireEvent.click(screen.getByText("Run actions"));
     fireEvent.click(screen.getByRole("button", { name: "Redo run" }));
 
     expect(onRestart).toHaveBeenCalledWith(42);
+  });
+
+  test("does not offer redo while the run is active", () => {
+    render(<RunDetailView detail={makeDetail({ status: "running" })}
+      onDelete={vi.fn()} onRestart={vi.fn()} />);
+    fireEvent.click(screen.getByText("Run actions"));
+    expect(screen.queryByRole("button", { name: "Redo run" })).toBeNull();
   });
 
   test("refreshes cross-checks when the same run receives a newer snapshot", async () => {
@@ -561,6 +633,7 @@ describe("RunDetailView", () => {
         onDownload={() => {}}
       />,
     );
+    fireEvent.click(screen.getByText("Run actions"));
     const deleteBtn = screen.getByRole("button", { name: /^delete run$/i }) as HTMLButtonElement;
     expect(deleteBtn.disabled).toBe(true);
     // A disabled button must not fire onClick under any circumstance. Even
@@ -1060,6 +1133,13 @@ describe("RunDetailView", () => {
     expect(screen.getByText(/performance details/i)).toBeTruthy();
   });
 
+  test.each(["completed", "completed_with_errors"])("%s Overview directs the operator to verify figures against the source", (status) => {
+    render(<RunDetailView detail={makeDetail({ status, agents: [makeAgent()] })} onDelete={() => {}} canonicalEnabled />);
+    expect(screen.getByText("Verify extracted figures against the source PDF before filing.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Review figures" }));
+    expect(within(screen.getByRole("tablist", { name: /run detail sections/i })).getByRole("tab", { name: "Figures" })).toHaveAttribute("aria-selected", "true");
+  });
+
   test("initialTab='values' opens the Values tab (the /concepts/{id} alias)", () => {
     // The /concepts/{id} route now opens the unified run page directly on
     // Values. ConceptsPage fetches on mount, so stub fetch.
@@ -1337,7 +1417,7 @@ describe("RunDetailView", () => {
       clickRunTab(/^cross-checks$/i);
       fireEvent.click(screen.getByTestId("recheck-btn"));
       expect(await screen.findByTestId("recheck-summary")).toHaveTextContent(
-        "1 passed · 0 failed · 1 warnings",
+        "1 passed · 0 failed · 0 blocked · 1 warnings",
       );
       expect(globalThis.fetch).toHaveBeenCalledWith(
         "/api/runs/42/recheck",
@@ -1411,6 +1491,21 @@ describe("RunDetailView", () => {
     expect(new URLSearchParams(window.location.search).get("tab")).toBe("agents");
     // The pathname is left untouched (App.tsx owns that).
     expect(window.location.pathname).toBe("/history/1");
+  });
+
+  test("switching saved-run tabs returns a scrolled page to the new panel", () => {
+    const scrollTo = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+    Object.defineProperty(window, "scrollY", { configurable: true, value: 700 });
+    try {
+      render(<RunDetailView detail={makeDetail()} onDelete={() => {}} />);
+      vi.spyOn(screen.getByTestId("run-tab-anchor"), "getBoundingClientRect")
+        .mockReturnValue({ top: -700 } as DOMRect);
+      clickRunTab(/cross-checks/i);
+      expect(scrollTo).toHaveBeenCalledWith({ top: 0, behavior: "auto" });
+      expect(screen.getByTitle("sofp_balance")).toBeInTheDocument();
+    } finally {
+      Object.defineProperty(window, "scrollY", { configurable: true, value: 0 });
+    }
   });
 
   test("arrow keys move between run-detail tabs (WAI-ARIA tabs pattern)", () => {
@@ -1584,7 +1679,7 @@ describe("RunDetailView", () => {
   });
 
   // --- UX-QA #2: abort control for a wedged running run ---
-  test("running run offers Abort (not disabled Delete) and confirms before firing", () => {
+  test("running run keeps Abort visible and Delete disabled, and confirms before aborting", () => {
     const onForceAbort = vi.fn();
     render(
       <RunDetailView
@@ -1594,7 +1689,7 @@ describe("RunDetailView", () => {
         onForceAbort={onForceAbort}
       />,
     );
-    expect(screen.queryByRole("button", { name: /delete run/i })).toBeNull();
+    expect(screen.getByRole("button", { name: /delete run/i })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: /abort run/i }));
     // Confirm dialog gates the action — its confirm button shares the label, so
     // click the last "Abort run" button (the dialog's, not the header trigger).
@@ -1661,6 +1756,7 @@ describe("RunDetailView", () => {
         onDownload={() => {}}
       />,
     );
+    fireEvent.click(screen.getByText("Run actions"));
     const del = screen.getByRole("button", { name: /delete run/i });
     expect(del).toBeDisabled();
     expect(screen.queryByRole("button", { name: /abort run/i })).toBeNull();

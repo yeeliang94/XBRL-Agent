@@ -128,10 +128,9 @@ const styles = {
     minHeight: 38,
     justifyContent: "flex-start",
     padding: "0 10px",
-    borderRadius: 7,
+    borderRadius: pwc.radius.sm,
     color: pwc.black,
     background: pwc.white,
-    boxShadow: "0 1px 2px rgba(24, 24, 22, 0.04)",
     fontWeight: pwc.weight.medium,
   } as React.CSSProperties,
   tabInactive: {
@@ -139,7 +138,7 @@ const styles = {
     minHeight: 38,
     justifyContent: "flex-start",
     padding: "0 10px",
-    borderRadius: 7,
+    borderRadius: pwc.radius.sm,
     color: tokens.color.text.secondary,
   } as React.CSSProperties,
   glyph: {

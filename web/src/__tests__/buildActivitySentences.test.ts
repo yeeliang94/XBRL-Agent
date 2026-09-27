@@ -80,6 +80,27 @@ describe("buildActivitySentences", () => {
     expect(buildActivitySentences(events, [])[0].text).toBe("SOFP: Complete.");
   });
 
+  test("a failed workstream no longer presents earlier completion as its outcome", () => {
+    const events = [
+      { event: "status", data: { message: "ACC_POLICIES: complete" }, timestamp: 1 },
+      { event: "complete", data: { success: true }, timestamp: 2 },
+      { event: "error", data: { message: "Notes agent finished without writing any payloads" }, timestamp: 3 },
+    ] as SSEEvent[];
+    expect(buildActivitySentences(events, [], "failed").map((item) => item.text)).toEqual([
+      "Notes agent finished without writing any payloads.",
+    ]);
+  });
+
+  test("keeps internal reviewer failure codes out of live activity", () => {
+    const events = [
+      { event: "status", data: { message: "notes_reviewer_subnotes_unverified" }, timestamp: 1 },
+      { event: "error", data: { message: "notes_reviewer_subnotes_unverified" }, timestamp: 2 },
+    ] as SSEEvent[];
+    expect(buildActivitySentences(events, [], "failed").map((item) => item.text)).toEqual([
+      "Note references need verification.",
+    ]);
+  });
+
   test("falls back only for tools in the canonical operator vocabulary", () => {
     const tools: ToolTimelineEntry[] = [
       { tool_call_id: "save", tool_name: "save_result", args: {}, result_summary: "ok", duration_ms: 1, startTime: 2000, endTime: 2001, phase: "complete" },

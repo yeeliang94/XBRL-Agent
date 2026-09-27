@@ -124,6 +124,7 @@ def test_agent_catalog_and_writer_share_the_same_writable_targets(tmp_path):
     )
     assert valid in labels
 
+
     rejected = write_notes_workbook(
         template_path=str(template),
         payloads=[NotesPayload(
@@ -156,6 +157,17 @@ def test_agent_catalog_and_writer_share_the_same_writable_targets(tmp_path):
     )
     assert accepted.success is True
     assert accepted.rows_written == 1
+
+
+def test_prepared_policy_catalog_exposes_live_coordinates_without_changing_labels():
+    from notes.agent import _find_catch_all_label
+
+    template = ROOT / "XBRL-template-MFRS/Company/11-Notes-AccountingPolicies.xlsx"
+    rows = _load_template_label_catalog(str(template), "Notes-SummaryofAccPol", with_rows=True)
+    assert "row 36: Description of accounting policy for inventories" in rows
+    assert "row 42: Description of accounting policy for leases" in rows
+    assert "row 48: Description of accounting policy for property, plant and equipment" in rows
+    assert _find_catch_all_label(["row 112: Disclosure of other notes to accounts"]) == "Disclosure of other notes to accounts"
 
 
 def test_template_target_parsing_is_cached_per_file_revision(monkeypatch):

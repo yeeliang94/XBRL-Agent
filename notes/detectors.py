@@ -412,10 +412,9 @@ def detect_title_format_issues(cells: list[dict]) -> list[dict]:
 
     The writer owns heading injection for authored cells, which must open with
     an ``<h3>`` note/sub-note heading (``notes.writer._inject_headings``).
-    Source-built cells instead preserve the uploaded document's verified
-    h1-h6 hierarchy and satisfy the contract with any leading semantic heading.
-    Missing headings remain **advisory only** (peer-review #6): the reviewer
-    flags them for a human; it never auto-rewrites headings.
+    Source-built cells preserve the uploaded document's hierarchy, including
+    disclosures that begin with prose. Source integrity checks their selected
+    blocks, so an invented heading is not required for those cells.
 
     ``cells`` are ``notes_cells`` rows as dicts (need ``sheet``, ``row``,
     ``label``, ``html``). Numeric/empty cells are skipped — only prose carries a
@@ -429,15 +428,10 @@ def detect_title_format_issues(cells: list[dict]) -> list[dict]:
         html = (c.get("html") or "").strip()
         if not html:
             continue
+        if c.get("source_built"):
+            continue
         prefix = html[:80].lower()
-        # Frozen-source rendering preserves the document's real h1-h6
-        # hierarchy. It must not be rewritten to an invented h3 merely to
-        # satisfy the author-written convention. Still require a leading
-        # semantic heading so a malformed source selection remains visible.
-        source_heading = bool(
-            c.get("source_built") and re.search(r"<h[1-6](?:\s|>)", prefix)
-        )
-        if "<h3" not in prefix and not source_heading:
+        if "<h3" not in prefix:
             issues.append({
                 "sheet": c.get("sheet"),
                 "row": c.get("row"),
@@ -452,6 +446,7 @@ def detect_cross_sheet_duplicates_by_ref(
     entries: list[dict],
     sheet_11: str = "Notes-SummaryofAccPol",
     sheet_12: str = "Notes-Listofnotes",
+    substantive_blocks_by_cell: Optional[dict[tuple[str, int], set[str]]] = None,
 ) -> list[dict]:
     """Return sidecar entries that share a `source_note_refs` value across
     Sheet 11 and Sheet 12.
@@ -460,7 +455,8 @@ def detect_cross_sheet_duplicates_by_ref(
       {"note_ref": str, "sheet_11": entry, "sheet_12": entry}
 
     Skips entries with empty `source_note_refs`; use
-    `detect_cross_sheet_overlap_candidates` for that fallback.
+    `detect_cross_sheet_overlap_candidates` for that fallback. Source-linked
+    cells with distinct substantive blocks are separate note sections.
     """
     by_ref_sheet: dict[str, dict[str, list[dict]]] = {}
     for e in entries:
@@ -476,6 +472,11 @@ def detect_cross_sheet_duplicates_by_ref(
         if s11 and s12:
             for a in s11:
                 for b in s12:
+                    blocks = substantive_blocks_by_cell or {}
+                    a_blocks = blocks.get((sheet_11, a.get("row")))
+                    b_blocks = blocks.get((sheet_12, b.get("row")))
+                    if a_blocks and b_blocks and a_blocks.isdisjoint(b_blocks):
+                        continue
                     duplicates.append({
                         "note_ref": ref,
                         "sheet_11": a,

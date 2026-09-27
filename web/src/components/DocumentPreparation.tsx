@@ -26,11 +26,13 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
   const [snapshot, setSnapshot] = useState<PreparationSnapshot | null>(null);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [retriedFailure, setRetriedFailure] = useState<{ message: string; attemptId: string | null } | null>(null);
   const [refresh, setRefresh] = useState(0);
   const callback = useRef(onSnapshot);
   callback.current = onSnapshot;
   const operation = useRef(0);
   const mounted = useRef(true);
+  useEffect(() => { setRetriedFailure(null); }, [sessionId]);
   useEffect(() => {
     mounted.current = true;
     return () => { mounted.current = false; operation.current += 1; };
@@ -66,6 +68,9 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
 
   async function act(action: "retry" | "cancel") {
     const revision = ++operation.current;
+    if (action === "retry" && snapshot?.status === "failed") {
+      setRetriedFailure({ message: snapshot.message, attemptId: snapshot.attempt_id ?? null });
+    }
     setBusy(true);
     try {
       const next = await apiFetch<PreparationSnapshot>(`/api/preparation/${encodeURIComponent(sessionId)}${action === "cancel" ? "/cancel" : ""}`, { method: "POST" });
@@ -90,6 +95,9 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
   const mapComplete = phase === "awaiting_confirmation";
   const mapActive = phase === "building_map" || phase === "reconciling_map";
   const actionRequired = snapshot?.action_required ?? "none";
+  const repeatedFailure = snapshot?.status === "failed"
+    && retriedFailure?.message === snapshot.message
+    && retriedFailure.attemptId !== (snapshot.attempt_id ?? null);
   const total = snapshot?.total ?? 0;
   const captured = snapshot?.captured ?? 0;
   const checked = snapshot?.checked ?? snapshot?.verified ?? 0;
@@ -127,7 +135,9 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
         {actionRequired === "confirm_setup"
           ? "Review the detected filing details, then confirm setup."
           : actionRequired === "retry"
-            ? "Preparation stopped. Retry to continue."
+            ? repeatedFailure
+              ? "The same step failed after retry. Upload a revised source document to continue."
+              : "Retry resumes saved progress. If the same step fails again, upload a revised source document."
             : "Start document preparation."}
       </p>
     ) : null}

@@ -292,11 +292,24 @@ describe("NotesIntegrityPanel", () => {
       .toHaveTextContent("1 of 2 parts still unaccounted for");
   });
 
-  test("a fully covered run says so", async () => {
+  test("recorded dispositions do not imply clean source checks", async () => {
     mockGet({
       ...PAYLOAD,
       notes: [{ ...PAYLOAD.notes[1] }],
       summary: { ...PAYLOAD.summary, unresolved: 0, notes_needing_review: 0 },
+    });
+    render(<NotesIntegrityPanel runId={7} />);
+    expect(await screen.findByTestId("notes-integrity-summary"))
+      .toHaveTextContent("1 source check still needs review");
+    expect(screen.queryByTestId("notes-integrity-all-clear")).toBeNull();
+  });
+
+  test("a fully covered run says so", async () => {
+    mockGet({
+      ...PAYLOAD,
+      notes: [{ ...PAYLOAD.notes[1] }],
+      summary: { ...PAYLOAD.summary, unresolved: 0, notes_needing_review: 0,
+                 requires_review: false },
       findings: [],
     });
     render(<NotesIntegrityPanel runId={7} />);

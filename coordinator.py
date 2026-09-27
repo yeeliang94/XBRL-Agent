@@ -158,6 +158,28 @@ def _is_transient_error(e: BaseException) -> bool:
     )
 
 
+def _is_provider_rejection(e: BaseException) -> bool:
+    """A non-transient model-provider refusal, distinct from a local tool bug."""
+    from openai import APIStatusError
+    from pydantic_ai.exceptions import ModelHTTPError
+
+    current: Optional[BaseException] = e
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, (ModelHTTPError, APIStatusError)):
+            if 400 <= current.status_code < 500 and current.status_code != 429:
+                return True
+        message = str(current).lower()
+        if "invalid prompt" in message and "usage policy" in message:
+            return True
+        next_error = current.__cause__
+        if next_error is None and not current.__suppress_context__:
+            next_error = current.__context__
+        current = next_error
+    return False
+
+
 def _safe_usage_backfill(agent_run, model, label: str) -> tuple[int, float]:
     """Best-effort (tokens, cost) capture from a finished-or-aborted run.
 
@@ -289,6 +311,7 @@ ERROR_TYPE_TOKEN_BUDGET = "token_budget_exceeded"
 ERROR_TYPE_PROJECTION_FAILED = "projection_failed"
 ERROR_TYPE_SAVE_GATE_REFUSED = "save_gate_refused"
 ERROR_TYPE_TOOL_EXCEPTION = "tool_exception"
+ERROR_TYPE_PROVIDER_REJECTED = "provider_rejected"
 ERROR_TYPE_CANCELLED = "cancelled"
 ERROR_TYPE_NO_WRITE = "no_write"
 # A transient error (429 / connection-class) that exhausted its retry budget —
@@ -1558,7 +1581,8 @@ async def _run_single_agent_attempt(
             variant=variant,
             status="failed",
             error=str(e),
-            error_type=ERROR_TYPE_TOOL_EXCEPTION,
+            error_type=(ERROR_TYPE_PROVIDER_REJECTED if _is_provider_rejection(e)
+                        else ERROR_TYPE_TOOL_EXCEPTION),
             total_tokens=_tokens,
             total_cost=_cost,
         ))
