@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { pwc, tokens } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { PdfSourcePane } from "./PdfSourcePane";
@@ -239,15 +239,27 @@ function agentDisplayName(agent: RunAgentJson): string {
 
 function agentSemanticUpdates(agent: RunAgentJson): string[] {
   const updates: string[] = [];
+  const unfinished = agent.status === "failed" || agent.status === "cancelled" || agent.status === "aborted";
+  const operatorMessage = (message: string) => unfinished && /^[a-z][a-z0-9_]+$/.test(message)
+    ? errorGuidance(message).label
+    : message;
   for (let index = agent.events.length - 1; index >= 0 && updates.length < 3; index -= 1) {
     const event = agent.events[index];
     if (event.event === "status" && event.data.message) {
-      updates.push(event.data.message);
+      if (unfinished && /:\s*complete\.?$/i.test(event.data.message)) continue;
+      updates.push(operatorMessage(event.data.message));
     } else if (event.event === "error" && event.data.message) {
-      updates.push(event.data.message);
-    } else if (event.event === "complete") {
+      updates.push(operatorMessage(event.data.message));
+    } else if (event.event === "complete" && event.data.success && !unfinished) {
       updates.push("Finished its assigned work");
+    } else if (event.event === "complete" && !event.data.success && event.data.error) {
+      updates.push(operatorMessage(event.data.error));
     }
+  }
+  if (agent.status === "failed") {
+    const reason = updates.find((update) => /\b(failed|incomplete|unverified|without writing|could not|unable)\b/i.test(update));
+    if (reason) return [reason, ...updates.filter((update) => update !== reason && update !== "Note references need verification")];
+    return updates[0] === "Note references need verification" ? updates : ["Workstream failed", ...updates];
   }
   return updates;
 }
@@ -348,24 +360,11 @@ function AgentCard({ agent, summary }: { agent: RunAgentJson; summary: AgentSumm
           )}
         </div>
         <div style={styles.agentMetaRow}>
-          <span>{displayModelId(agent.model)}</span>
-          {agent.token_breakdown && (
-            <span>
-              {agent.token_breakdown.turn_count} turns ·{" "}
-              {agent.token_breakdown.tool_call_count} tool calls
-            </span>
-          )}
           <span>{formatAgentDuration(agent)}</span>
-          <span style={styles.agentTokens}>
-            {agent.total_tokens != null
-              ? `${agent.total_tokens.toLocaleString()} tokens`
-              : "— tokens"}
-            {agent.total_cost != null ? ` · ${formatCost(agent.total_cost)}` : ""}
-          </span>
         </div>
       </div>
       <div style={styles.agentSummary}>
-        <strong>{updates[0] ?? agentStatusDisplay(agent.status).label}</strong>
+        <strong>{agent.status === "cancelled" || agent.status === "aborted" ? "Workstream stopped" : updates[0] ?? agentStatusDisplay(agent.status).label}</strong>
         <span>{sourceReference ?? "No source page was recorded for this activity."}</span>
       </div>
       {agent.error_message && (
@@ -399,6 +398,16 @@ function AgentCard({ agent, summary }: { agent: RunAgentJson; summary: AgentSumm
           Technical activity
         </summary>
         {technicalOpen ? <div style={styles.agentBody}>
+          <div style={styles.agentMetaRow}>
+            <span>{displayModelId(agent.model)}</span>
+            {agent.token_breakdown && (
+              <span>{agent.token_breakdown.turn_count} turns · {agent.token_breakdown.tool_call_count} tool calls</span>
+            )}
+            <span style={styles.agentTokens}>
+              {agent.total_tokens != null ? `${agent.total_tokens.toLocaleString()} tokens` : "— tokens"}
+              {agent.total_cost != null ? ` · ${formatCost(agent.total_cost)}` : ""}
+            </span>
+          </div>
           {showSubTabs && (
             <NotesSubTabBar
               subAgents={subAgents}
@@ -460,7 +469,6 @@ function HistoricalAgentWorkspace({ agents }: { agents: RunAgentJson[] }) {
         <div style={styles.historicalAgentRosterHeader}>
           <div>
             <h3 style={styles.sectionHeading}>Agents</h3>
-            <p style={styles.agentRosterHint}>Select an agent to inspect its recorded work.</p>
           </div>
           <div role="group" aria-label="Filter recorded agents" style={styles.agentFilters}>
             {(["current", "all", "finished"] as const).map((value) => (
@@ -480,7 +488,11 @@ function HistoricalAgentWorkspace({ agents }: { agents: RunAgentJson[] }) {
           {visibleAgents.map((agent) => {
             const selected = agent.id === selectedAgent?.id;
             const summary = summaries.get(agent.id);
-            const update = summary?.updates[0] ?? agentStatusDisplay(agent.status).label;
+            const status = agentStatusDisplay(agent.status);
+            const update = summary?.updates[0] ?? status.label;
+            const hasDistinctUpdate = update !== status.label && update !== "Finished its assigned work";
+            const subtitle = statementCodeSubtitle(agent.statement_type)
+              ?? (agent.statement_type === "SCOUT" ? "Document preparation" : null);
             return (
               <button
                 key={agent.id}
@@ -491,16 +503,16 @@ function HistoricalAgentWorkspace({ agents }: { agents: RunAgentJson[] }) {
                 className="historical-agent-row"
                 style={{ ...styles.historicalAgentRow, ...(selected ? styles.historicalAgentRowActive : {}) }}
               >
-                <StatusIcon symbol={agentStatusDisplay(agent.status).symbol} />
+                <StatusIcon symbol={status.symbol} />
                 <span style={styles.historicalAgentIdentity}>
                   <strong>{agentDisplayName(agent)}</strong>
-                  <span>{statementCodeSubtitle(agent.statement_type) ?? displayModelId(agent.model)}</span>
+                  {subtitle && <span>{subtitle}</span>}
                 </span>
                 <span style={styles.historicalAgentTask}>
-                  <strong>{update}</strong>
-                  <span>{summary?.sourceReference ?? formatAgentDuration(agent)}</span>
+                  <strong>{hasDistinctUpdate ? update : summary?.sourceReference ?? formatAgentDuration(agent)}</strong>
+                  {hasDistinctUpdate && <span>{summary?.sourceReference ?? formatAgentDuration(agent)}</span>}
                 </span>
-                <span style={styles.historicalAgentState}>{agentStatusDisplay(agent.status).label}</span>
+                <span style={styles.historicalAgentState}>{status.label}</span>
               </button>
             );
           })}
@@ -686,14 +698,14 @@ export function RunDetailView({
     detail.status === "correction_exhausted";
   const isInvestigationOutcome = isErrorOutcome || isFailed || isAborted;
   const failingChecks = crossChecks
-    .filter((c) => c.status === "failed");
+    .filter((c) => c.status === "failed" || c.status === "blocked");
   const failingCheckSummaries = failingChecks.map((c) => {
     const values = [
       c.expected != null ? `expected ${formatAccounting(c.expected)}` : null,
       c.actual != null ? `actual ${formatAccounting(c.actual)}` : null,
       c.diff != null ? `difference ${formatAccounting(c.diff)}` : null,
     ].filter(Boolean);
-    return `${crossCheckFailureLabel(c.name)}${values.length ? ` — ${values.join(", ")}` : ""}`;
+    return `${crossCheckFailureLabel(c.name)}${c.status === "blocked" ? " — waiting for required statement data" : values.length ? ` — ${values.join(", ")}` : ""}`;
   });
   const advisoryCheckSummaries = crossChecks
     .filter((check) => String(check.status) === "warning")
@@ -789,12 +801,25 @@ export function RunDetailView({
           ? "Partial results available"
           : failingChecks.length > 0
             ? "Checks need attention"
-          : "Ready to prepare";
+          : isErrorOutcome
+            ? "Prepare with issues"
+            : "Ready to prepare";
 
   // Roving keyboard navigation for the tab bar (WAI-ARIA tabs pattern):
   // Arrow keys move between tabs, Home/End jump to ends, and focus follows
   // selection. Inline styles can't express this, so it lives here.
   const tabBarRef = useRef<HTMLDivElement>(null);
+  const tabAnchorRef = useRef<HTMLDivElement>(null);
+  const previousTabRef = useRef(activeTab);
+  useLayoutEffect(() => {
+    if (previousTabRef.current === activeTab) return;
+    previousTabRef.current = activeTab;
+    const anchor = tabAnchorRef.current;
+    if (!anchor) return;
+    const panelTop = Math.max(0,
+      window.scrollY + anchor.getBoundingClientRect().top - Number(ui.appTopbar.height));
+    if (window.scrollY > panelTop) window.scrollTo({ top: panelTop, behavior: "auto" });
+  }, [activeTab]);
   const onTabKeyDown = (e: React.KeyboardEvent, index: number) => {
     let next = index;
     if (e.key === "ArrowRight") next = (index + 1) % availableTabs.length;
@@ -828,11 +853,12 @@ export function RunDetailView({
       const results = payload.results ?? [];
       const passed = results.filter((row) => row.status === "passed").length;
       const failed = results.filter((row) => row.status === "failed").length;
+      const blocked = results.filter((row) => row.status === "blocked").length;
       const warnings = results.filter((row) => String(row.status) === "warning").length;
       setCrossChecks(results);
       setRecheck({
         running: false,
-        summary: `${passed} passed · ${failed} failed · ${warnings} warnings`,
+        summary: `${passed} passed · ${failed} failed · ${blocked} blocked · ${warnings} warnings`,
       });
     } catch (error) {
       if ((error as { name?: string })?.name === "AbortError") return;
@@ -901,34 +927,11 @@ export function RunDetailView({
           {notesPreparationBlocked && <span role="status" style={styles.dim}>Notes have unsaved changes or active formatting. Resolve any save errors in Notes before preparing.</span>}
           {/* The "Figures" tab is the single door to reviewing values — the
               old duplicate "Review values" button was removed (Phase 2). */}
-          {/* ONE rule for the header: every run-level action except Download
-              lives on Overview — "Review issues" above follows it too. The
-              other tabs are work surfaces (figures, notes, checks) and should
-              not carry competing controls. Permissions are unchanged and no
-              action was removed; Overview is the landing tab, one click away.
-              That includes Abort for a wedged run (UX-QA #2): the escape
-              hatch still exists, it just lives with the other management
-              actions. */}
+          {/* Keep routine preparation in the header. Less frequent management
+              actions live under an explicitly named disclosure on Overview. */}
           {activeTab === "overview" && (
             <>
-              <span aria-hidden="true" style={styles.actionsDivider} />
-              {!isRunning && !isDraft && onRestart && (
-                <button
-                  type="button"
-                  onClick={handleRestart}
-                  disabled={restartPending}
-                  className={uiClass.btnSecondary}
-                  style={ui.buttonSecondary}
-                  title="Create a new editable run with the same document and settings"
-                >
-                  {restartPending ? "Creating redo…" : "Redo run"}
-                </button>
-              )}
-              {isRunning && onForceAbort ? (
-                // A run wedged in `running` can never be deleted (Delete is disabled
-                // and the API 409s). Give the user an escape hatch: abort it, which
-                // flips a dead row to `aborted` so Delete/Download become usable
-                // (UX-QA #2).
+              {isRunning && onForceAbort && (
                 <button
                   type="button"
                   onClick={() => setConfirmAbort(true)}
@@ -938,21 +941,33 @@ export function RunDetailView({
                 >
                   Abort run
                 </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={handleDelete}
-                  disabled={!canDelete}
-                  className={uiClass.btnDanger}
-                  style={ui.buttonDanger}
-                  title={
-                    canDelete
-                      ? "Delete run from history (on-disk files are kept)"
-                      : "Can't delete a run that's still in progress — wait for it to finish or abort it first."
-                  }
-                >
-                  Delete run
-                </button>
+              )}
+              {!isDraft && (
+                <details style={styles.runActions}>
+                  <summary style={styles.runActionsToggle}>Run actions <span className="pwc-disclosure-chevron" aria-hidden="true">⌄</span></summary>
+                  <div className="pwc-disclosure-content" style={styles.runActionButtons}>
+                    {onRestart && !isRunning && <button
+                      type="button"
+                      onClick={handleRestart}
+                      disabled={restartPending}
+                      className={uiClass.btnSecondary}
+                      style={ui.buttonSecondary}
+                      title="Create a new editable run with the same document and settings"
+                    >
+                      {restartPending ? "Creating redo…" : "Redo run"}
+                    </button>}
+                    <button
+                      type="button"
+                      onClick={handleDelete}
+                      disabled={!canDelete}
+                      className={uiClass.btnDanger}
+                      style={ui.buttonDanger}
+                      title="Delete run from history (on-disk files are kept)"
+                    >
+                      Delete run
+                    </button>
+                  </div>
+                </details>
               )}
             </>
           )}
@@ -1153,6 +1168,8 @@ export function RunDetailView({
 
       {/* Keep the same navigation visible on every run section. Overview is
           the primary landing surface; the remaining tabs are review tools. */}
+        <div ref={tabAnchorRef} aria-hidden="true" data-testid="run-tab-anchor"
+          style={{ height: 0, marginBottom: -pwc.space.lg }} />
         <div
           ref={tabBarRef}
           style={styles.tabBar}
@@ -1210,6 +1227,14 @@ export function RunDetailView({
               value={runDuration}
             />
           </div>
+          {(detail.status === "completed" || detail.status === "completed_with_errors" || detail.status === "correction_exhausted") && canonicalEnabled && (
+            <div style={styles.verificationPrompt}>
+              <span>Verify extracted figures against the source PDF before filing.</span>
+              <button type="button" onClick={() => selectTab("values")} className={uiClass.btnSecondary} style={{ ...ui.buttonSecondary, ...ui.buttonSm }}>
+                Review figures
+              </button>
+            </div>
+          )}
           {(nonBlockingItems.length > 0 || sidecarNotice) && (
             <div style={styles.itemsToCheck} data-testid="items-to-check">
               <span style={styles.itemToCheck}>
@@ -1545,17 +1570,24 @@ const styles = {
     fontFamily: pwc.fontBody,
     fontSize: 12,
   } as React.CSSProperties,
-  // Separates the destructive Delete from the everyday actions.
-  actionsDivider: {
-    alignSelf: "stretch",
-    width: 1,
-    background: pwc.grey200,
-    margin: `0 ${pwc.space.xs}px`,
+  runActions: {
+    minWidth: 0,
+  } as React.CSSProperties,
+  runActionsToggle: {
+    ...ui.buttonQuiet,
+    color: pwc.grey700,
+  } as React.CSSProperties,
+  runActionButtons: {
+    display: "flex",
+    gap: pwc.space.sm,
+    flexWrap: "wrap" as const,
+    paddingTop: pwc.space.sm,
   } as React.CSSProperties,
   // Data-dense surface tabs: compact selected fill, no accent edge line.
   tabBar: {
     position: "sticky",
     top: ui.appTopbar.height,
+    scrollMarginTop: ui.appTopbar.height,
     zIndex: 15,
     background: tokens.surface.canvas,
     paddingBlock: pwc.space.xs,
@@ -1622,12 +1654,10 @@ const styles = {
   } as React.CSSProperties,
   sectionHeading: {
     fontFamily: pwc.fontHeading,
-    fontSize: 14,
-    fontWeight: 600,
-    color: pwc.grey700,
+    fontSize: 16,
+    fontWeight: pwc.weight.semibold,
+    color: pwc.black,
     margin: 0,
-    textTransform: "uppercase" as const,
-    letterSpacing: 0.5,
   } as React.CSSProperties,
   // Button-flavoured variant of sectionHeading used for collapsible
   // sections. Strips all default button chrome so it visually matches an
@@ -1914,6 +1944,17 @@ const styles = {
     gap: pwc.space.md,
     fontFamily: pwc.fontBody,
     fontSize: 12,
+    color: pwc.grey700,
+  } as React.CSSProperties,
+  verificationPrompt: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: pwc.space.md,
+    flexWrap: "wrap" as const,
+    marginTop: pwc.space.lg,
+    fontFamily: pwc.fontBody,
+    fontSize: 13,
     color: pwc.grey700,
   } as React.CSSProperties,
   agentTokens: {

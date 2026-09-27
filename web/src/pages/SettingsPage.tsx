@@ -88,7 +88,7 @@ export function SettingsPage({ isAdmin, currentEmail }: Props) {
       </div>
 
       {activeTab === "general" && (
-        <section style={styles.section} role="tabpanel">
+        <section className="pwc-view-enter" style={styles.section} role="tabpanel">
           <GeneralSettingsForm
             getSettings={getSettings}
             saveSettings={updateSettings}
@@ -99,13 +99,13 @@ export function SettingsPage({ isAdmin, currentEmail }: Props) {
       )}
 
       {activeTab === "account" && (
-        <section style={styles.section} role="tabpanel">
+        <section className="pwc-view-enter" style={styles.section} role="tabpanel">
           <AccountTab />
         </section>
       )}
 
       {activeTab === "users" && isAdmin && (
-        <section style={styles.section} role="tabpanel">
+        <section className="pwc-view-enter" style={styles.section} role="tabpanel">
           <UsersTab currentEmail={currentEmail} />
         </section>
       )}

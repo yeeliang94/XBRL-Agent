@@ -1,5 +1,6 @@
-import type { SSEEvent, ToolTimelineEntry } from "./types";
+import type { AgentTabStatus, SSEEvent, ToolTimelineEntry } from "./types";
 import { argsPreview, humanToolName, TOOL_LABELS } from "./toolLabels";
+import { errorGuidance } from "./errorGuidance";
 
 export interface ActivitySentence {
   id: string;
@@ -15,7 +16,12 @@ function finishSentence(value: string): string {
   return `${text}.`;
 }
 
+function operatorError(value: string): string {
+  return /^[a-z][a-z0-9_]+$/.test(value) ? errorGuidance(value).label : value;
+}
+
 function statusSentence(message: string): string | null {
+  if (/^[a-z][a-z0-9_]+$/.test(message.trim())) return finishSentence(operatorError(message.trim()));
   // A matching tool_call event carries a clearer sentence and result state.
   if (/^Calling\s+[a-z0-9_]+(?:\.{3}|…)?$/i.test(message.trim())) return null;
   // Agent-loop phase echoes (for example "SOFP: viewing pdf") mirror the
@@ -70,21 +76,30 @@ function semanticToolSentence(entry: ToolTimelineEntry): string | null {
 export function buildActivitySentences(
   events: SSEEvent[],
   timeline: ToolTimelineEntry[],
+  terminalStatus?: AgentTabStatus,
 ): ActivitySentence[] {
   const sentences: ActivitySentence[] = [];
+  const failed = terminalStatus === "failed";
+  const failureCodes = new Set<string>();
+  if (failed) for (const event of events) {
+    if (event.event === "error" && event.data.message) failureCodes.add(event.data.message);
+  }
 
   for (const event of events) {
     let text: string | null = null;
     let active = false;
     if (event.event === "status" && event.data.message) {
+      if (failed && /:\s*complete\.?$/i.test(event.data.message)) continue;
+      if (failed && failureCodes.has(event.data.message)) continue;
       text = statusSentence(event.data.message);
       active = true;
     } else if (event.event === "error") {
-      text = finishSentence(event.data.message || "Workstream failed");
+      text = finishSentence(operatorError(event.data.message || "Workstream failed"));
     } else if (event.event === "complete") {
+      if (failed && event.data.success) continue;
       text = event.data.success
         ? finishSentence("Workstream completed")
-        : finishSentence(event.data.error || "Workstream failed");
+        : finishSentence(operatorError(event.data.error || "Workstream failed"));
     } else if (event.event === "run_complete") {
       const reason = event.data.message || event.data.merge_errors?.[0];
       text = event.data.success

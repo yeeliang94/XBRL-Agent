@@ -169,12 +169,12 @@ const styles = {
   main: {
     maxWidth: 1500,
     margin: "0 auto",
-    padding: "34px clamp(28px, 4vw, 62px) 110px",
+    padding: `${pwc.space.xxl}px ${tokens.space.pageGutter}px 110px`,
     display: "flex",
     flexDirection: "column" as const,
     // 32px between major stacked blocks gives the airier section rhythm the
     // design language calls for (was 24px).
-    gap: 28,
+    gap: tokens.space.section,
   } as const,
   // The concepts review workspace is a 3-column side-by-side surface that
   // genuinely benefits from the full viewport — the max-width cap left wide
@@ -183,10 +183,10 @@ const styles = {
   mainFull: {
     maxWidth: "100%",
     margin: "0 auto",
-    padding: "28px 28px 110px",
+    padding: `${pwc.space.xl}px ${tokens.space.pageGutter}px 110px`,
     display: "flex",
     flexDirection: "column" as const,
-    gap: 28,
+    gap: tokens.space.section,
   } as const,
   // History is full-width like the concepts workspace but keeps the same
   // generous side padding as the standard (capped) page so it reads
@@ -194,10 +194,10 @@ const styles = {
   mainHistory: {
     maxWidth: 1500,
     margin: "0 auto",
-    padding: "34px clamp(28px, 4vw, 62px) 110px",
+    padding: `${pwc.space.xxl}px ${tokens.space.pageGutter}px 110px`,
     display: "flex",
     flexDirection: "column" as const,
-    gap: 28,
+    gap: tokens.space.section,
   } as const,
 };
 
@@ -905,9 +905,9 @@ export default function App() {
         <header className="app-topbar" style={styles.topbar}>
           <div style={styles.context}>
             <span style={styles.breadcrumb}>
-              <span>Workspace</span>
-              <span aria-hidden="true">›</span>
-              <strong style={styles.contextTitle} title={state.filename ?? contextLabel}>
+              <span className="app-breadcrumb-root">Workspace</span>
+              <span className="app-breadcrumb-root" aria-hidden="true">›</span>
+              <strong className="app-context-title" style={styles.contextTitle} title={state.filename ?? contextLabel}>
                 {reviewFocused && state.filename ? state.filename : contextLabel}
               </strong>
             </span>

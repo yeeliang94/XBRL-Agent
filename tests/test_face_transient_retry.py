@@ -300,6 +300,24 @@ async def test_value_error_fails_fast_no_retry(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_provider_rejection_is_not_reported_as_a_tool_bug(tmp_path):
+    from coordinator import run_extraction
+
+    wb = str(tmp_path / "SOFP_filled.xlsx")
+    factory, calls = _factory_failing_then_ok(
+        ModelHTTPError(400, "test-model", {"error": "invalid prompt"}), wb,
+    )
+    config = _RunConfig(pdf_path="/tmp/t.pdf", output_dir=str(tmp_path))
+    with patch("coordinator.create_extraction_agent", side_effect=factory):
+        result = await run_extraction(config, infopack=None)
+
+    agent = result.agent_results[0]
+    assert agent.status == "failed"
+    assert agent.error_type == "provider_rejected"
+    assert calls["n"] == 1
+
+
+@pytest.mark.asyncio
 async def test_retry_clears_stale_facts_from_failed_attempt(tmp_path):
     """Peer-review HIGH (2026-06-12): ``write_facts`` projections are
     UPSERTS — a fact only the FAILED attempt wrote must not survive into

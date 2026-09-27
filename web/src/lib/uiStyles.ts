@@ -185,6 +185,17 @@ export const ui = {
     textAlign: "right",
   } as CSSProperties,
 
+  // Reading copy is distinct from compact application labels. Long guidance
+  // and document-adjacent prose should wrap at a comfortable measure.
+  readingText: {
+    fontFamily: pwc.fontBody,
+    fontSize: 14,
+    lineHeight: 1.6,
+    color: tokens.color.text.body,
+    maxWidth: "70ch",
+    margin: 0,
+  } as CSSProperties,
+
   // --- Layout ------------------------------------------------------------
   // Canonical task-based page modes (design-system Layouts & density). The
   // app shell owns the route-level mode; a page may use a narrower inner
@@ -241,7 +252,7 @@ export const ui = {
     alignItems: "center",
     justifyContent: "space-between",
     gap: pwc.space.lg,
-    padding: `0 30px`,
+    padding: `0 ${tokens.space.pageGutter}px`,
     background: "rgba(255, 255, 255, 0.94)",
     backdropFilter: "blur(12px)",
   } as CSSProperties,

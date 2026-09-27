@@ -2,8 +2,6 @@ import { useEffect, useMemo, useState, useCallback } from "react";
 import { ApiError, userMessage } from "../lib/errors";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
-import { STATUS_SYMBOLS } from "../lib/runStatus";
-import { StatusIcon } from "../components/StatusIcon";
 import { PageHeader } from "../components/PageHeader";
 import { templateGroupLabel, templatePickerLabel } from "../lib/sheetLabels";
 
@@ -51,6 +49,16 @@ export function TemplateSettingsPage() {
       (c.display_label || c.canonical_label || "").toLowerCase().includes(q),
     );
   }, [concepts, query]);
+
+  // Taxonomy files sometimes repeat the same abstract heading on adjacent
+  // rows. These rows cannot be renamed, so one visible heading is enough until
+  // the next distinct section or editable field.
+  const visibleConcepts = useMemo(() => filteredConcepts.filter((concept, index) => {
+    const previous = filteredConcepts[index - 1];
+    return !(concept.kind === "ABSTRACT" && previous?.kind === "ABSTRACT"
+      && concept.render_sheet === previous.render_sheet
+      && concept.canonical_label === previous.canonical_label);
+  }), [filteredConcepts]);
 
   // Group templates by "MFRS · Company" etc. so the picker uses <optgroup>
   // with human labels instead of a flat list of 45 cryptic ids (D3). Groups
@@ -196,17 +204,14 @@ export function TemplateSettingsPage() {
           style={{ ...ui.input, minWidth: 200 }}
         />
       </div>
-      {/* Legend — explains the two things a first-time user can't infer: why
-          some rows are greyed out (and un-renamable), and what the leading
-          asterisk means (E8). */}
+      {/* Explain only the two marks that change how a field can be used. */}
       <p style={styles.legend} data-testid="ts-legend">
         <span style={styles.legendSwatch} aria-hidden="true" />
-        Greyed rows are section headers — they can&apos;t be renamed.
-        {"  "}
-        A leading <strong>*</strong> marks a mandatory MBRS field.
+        Shaded rows are section headings. <strong>*</strong> marks a required MBRS field.
       </p>
       <div
         role="table"
+        className="pwc-view-enter"
         style={styles.tableWrap}
       >
         {concepts.length === 0 ? (
@@ -218,7 +223,7 @@ export function TemplateSettingsPage() {
             No labels match “{query}”.
           </div>
         ) : (
-          filteredConcepts.map((c) => (
+          visibleConcepts.map((c) => (
             <TemplateConceptRow
               key={c.concept_uuid}
               concept={c}
@@ -273,16 +278,16 @@ function TemplateConceptRow({
       data-testid={`ts-row-${concept.concept_uuid}`}
       style={{
         display: "grid",
-        gridTemplateColumns: "minmax(0, 1fr) 168px",
+        gridTemplateColumns: "minmax(0, 1fr) auto",
         gap: pwc.space.lg,
-        padding: `${pwc.space.lg}px ${pwc.space.xl}px`,
+        padding: `${isAbstract ? pwc.space.sm : pwc.space.md}px ${pwc.space.lg}px`,
         borderBottom: `1px solid ${pwc.grey100}`,
-        background: isAbstract ? pwc.grey100 : pwc.white,
+        background: isAbstract ? pwc.grey50 : pwc.white,
         alignItems: "center",
         fontFamily: pwc.fontBody,
-        fontSize: 15,
-        fontWeight: isAbstract ? pwc.weight.medium : pwc.weight.regular,
-        lineHeight: 1.55,
+        fontSize: 14,
+        fontWeight: isAbstract ? pwc.weight.semibold : pwc.weight.regular,
+        lineHeight: 1.5,
       }}
     >
       <div>
@@ -306,29 +311,17 @@ function TemplateConceptRow({
             style={{ ...ui.input, width: "100%" }}
           />
         ) : (
-          <div>
-            <div style={styles.labelLine}>
-              <span style={styles.labelKey}>Original</span>
-              <span>{concept.canonical_label}</span>
-            </div>
+          <div style={{ minWidth: 0 }}>
+            <span>{label}</span>
             {concept.display_label && (
-              <div style={styles.labelLine}>
-                <span style={styles.labelKey}>Custom</span>
-                <span>
-                  {label}
-            {/* Flag a customised label so it's easy to spot what's been
-                changed from the taxonomy default (E8). */}
-                  <span style={styles.edited} data-testid={`ts-edited-${concept.concept_uuid}`}>
-                    <StatusIcon symbol={STATUS_SYMBOLS.success} />
-                    Edited
-                  </span>
-                </span>
-              </div>
+              <span style={styles.edited} data-testid={`ts-edited-${concept.concept_uuid}`}>
+                Edited · original: {concept.canonical_label}
+              </span>
             )}
           </div>
         )}
       </div>
-      <div style={{ display: "flex", gap: pwc.space.sm, justifyContent: "flex-end" }}>
+      {!isAbstract && <div style={{ display: "flex", gap: pwc.space.sm, justifyContent: "flex-end", flexWrap: "wrap" }}>
         {!isAbstract && !editing && (
           <>
             {concept.display_label && (
@@ -371,7 +364,7 @@ function TemplateConceptRow({
             </button>
           </>
         )}
-      </div>
+      </div>}
     </div>
   );
 }
@@ -393,7 +386,7 @@ const styles = {
     display: "flex",
     alignItems: "center",
     gap: pwc.space.sm,
-    margin: `${pwc.space.sm}px 0 ${pwc.space.md}px`,
+    margin: 0,
     color: pwc.grey700,
     fontFamily: pwc.fontBody,
     fontSize: 13,
@@ -402,30 +395,17 @@ const styles = {
     display: "inline-block",
     width: 14,
     height: 14,
-    background: pwc.grey100,
+    background: pwc.grey50,
     border: `1px solid ${pwc.grey300}`,
     borderRadius: pwc.radius.sm,
     flexShrink: 0,
   } as React.CSSProperties,
   // Neutral edited marker: standard symbol + explicit label, no chip.
   edited: {
-    ...ui.status,
-    marginLeft: pwc.space.sm,
-    fontSize: 12,
-    color: pwc.grey700,
-  } as React.CSSProperties,
-  labelLine: {
-    display: "grid",
-    gridTemplateColumns: "64px minmax(0, 1fr)",
-    gap: pwc.space.sm,
-    alignItems: "baseline",
-  } as React.CSSProperties,
-  labelKey: {
+    display: "block",
     color: pwc.grey700,
     fontSize: 12,
-    fontWeight: pwc.weight.medium,
-    textTransform: "uppercase" as const,
-    letterSpacing: "0.04em",
+    lineHeight: 1.5,
   } as React.CSSProperties,
   tableWrap: {
     ...ui.card,

@@ -83,6 +83,7 @@ describe("NotesCoveragePanel", () => {
     expect(screen.getAllByTestId("coverage-status-placed").length).toBe(2);
     expect(screen.getByTestId("coverage-status-missing")).toBeTruthy();
     expect(screen.getByTestId("coverage-summary").textContent).toContain("1 unresolved");
+    expect(screen.getByTestId("coverage-toggle")).toHaveTextContent("2 of 3 numbered notes placed");
     // The reviewer-added marker shows.
     expect(screen.getByTestId("coverage-added-6")).toBeTruthy();
     // Routing codename (carve-out) is off the chip face now — in the tooltip.

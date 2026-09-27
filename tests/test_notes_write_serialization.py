@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 import threading
 import time
@@ -18,6 +19,8 @@ from db import repository as repo
 from db.schema import init_db
 from notes import agent as notes_agent
 from notes import source_repository as srepo
+from notes.html_sanitize import sanitize_notes_html
+from notes.writer import _combine_payloads
 from notes.source_models import SourceBlock, SourceNote
 from notes_types import NOTES_REGISTRY, NotesTemplateType, notes_template_path
 
@@ -155,6 +158,7 @@ def test_source_projection_failure_rolls_back_cell_and_lineage(
         SimpleNamespace(deps=deps),
         sheet=sheet,
         row=target_row,
+        target_label=next(node.label for node in nodes if node.row == target_row),
         block_ids=["b1"],
         source_pages=[1],
         evidence="Page 1",
@@ -170,6 +174,69 @@ def test_source_projection_failure_rolls_back_cell_and_lineage(
         ).fetchone() is None
         assert srepo.fetch_usages(conn, generation_id) == []
         assert srepo.active_placements(conn, generation_id) == []
+
+
+def test_source_catch_all_sections_survive_subagent_aggregation(tmp_path):
+    kind = NotesTemplateType.LIST_OF_NOTES
+    template = notes_template_path(kind, level="company")
+    sheet = NOTES_REGISTRY[kind].sheet_name
+    db = tmp_path / "audit.sqlite"
+    init_db(db)
+    template_id, nodes = parse_notes_template(str(template), sheet)
+    import_notes_template(db, template_id, nodes)
+    persist_template_manifest(db, template)
+    catch_all = next(node for node in nodes if node.kind == "LEAF"
+                     and node.label == "Disclosure of other notes to accounts")
+    with repo.db_session(db) as conn:
+        run_id = repo.create_run(conn, "source.pdf", session_id="s",
+                                 output_dir=str(tmp_path))
+        generation_id = srepo.begin_generation(
+            conn, run_id, input_kind="prepared_document")
+        srepo.write_blocks(conn, generation_id, [
+            SourceBlock("n11-a", "paragraph", 1, "<p>First note.</p>",
+                        page=1, source_note_id="n11"),
+            SourceBlock("b-a", "paragraph", 2, "<p>Original lease note.</p>",
+                        page=2, source_note_id="lease-b"),
+            SourceBlock("b-b", "paragraph", 2, "<p>Revised lease note.</p>",
+                        page=2, source_note_id="lease-b"),
+        ])
+        srepo.write_notes(conn, generation_id, [
+            SourceNote("n11", "11", "Other", ["n11-a"]),
+            SourceNote("lease-b", "", "Lease cash flows", ["b-a", "b-b"]),
+        ])
+        srepo.activate_generation(conn, generation_id)
+
+    _, deps = notes_agent.create_notes_agent(
+        template_type=kind, pdf_path=str(tmp_path / "source.pdf"),
+        inventory=[], filing_level="company", model=TestModel(),
+        output_dir=str(tmp_path), run_id=run_id, db_path=str(db),
+        source_generation_id=generation_id, batch_note_nums=[11],
+    )
+    deps.payload_sink = []
+    for block_id, page in [("n11-a", 1), ("b-a", 2), ("b-b", 2), ("n11-a", 1)]:
+        result = notes_agent._write_from_source_impl(
+            deps, sheet, catch_all.row, [block_id], [page], "Source page", None,
+            target_label=catch_all.label,
+        )
+        assert isinstance(result, tuple), result
+        _, payload = result
+        notes_agent._sub_agent_sink_write(deps, [payload], [])
+
+    assert len(deps.payload_sink) == 2
+    assert {p.source_note_id for p in deps.payload_sink} == {"n11", "lease-b"}
+    combined = _combine_payloads(deps.payload_sink)
+    with repo.db_session(db) as conn:
+        cell = conn.execute(
+            "SELECT html FROM notes_cells WHERE run_id=? AND sheet=? AND row=?",
+            (run_id, sheet, catch_all.row),
+        ).fetchone()["html"]
+        assert {p["block_id"] for p in srepo.active_placements(conn, generation_id)} == {
+            "n11-a", "b-b",
+        }
+    assert sanitize_notes_html(combined.content)[0] == cell
+    assert "First note." in cell
+    assert "Revised lease note." in cell
+    assert "Original lease note." not in cell
 
 
 def test_source_projection_does_not_hold_sqlite_writer_lock(tmp_path, monkeypatch):
@@ -192,7 +259,7 @@ def test_source_projection_does_not_hold_sqlite_writer_lock(tmp_path, monkeypatc
         )
         srepo.write_blocks(conn, generation_id, [SourceBlock(
             "b1", "paragraph", 1, "<p>Source disclosure.</p>",
-            source_note_id="n1",
+            source_note_id="n1", page=1,
         )])
         srepo.write_notes(conn, generation_id, [
             SourceNote("n1", "1", "Disclosure", ["b1"]),
@@ -220,10 +287,20 @@ def test_source_projection_does_not_hold_sqlite_writer_lock(tmp_path, monkeypatc
     )
     result = asyncio.run(_tool(agent, "write_note_from_source")(
         SimpleNamespace(deps=deps), sheet=sheet, row=target_row,
-        block_ids=["b1"], source_pages=[1], evidence="Page 1",
+        target_label=next(node.label for node in nodes if node.row == target_row),
+        block_ids=["b1"], evidence="Page 1",
     ))
 
     assert result.startswith("ok:"), result
+    with repo.db_session(db) as conn:
+        cell = conn.execute(
+            "SELECT source_pages FROM notes_cells WHERE run_id=? AND sheet=? AND row=?",
+            (run_id, sheet, target_row),
+        ).fetchone()
+        assert cell["source_pages"] == "[1]"
+    from notes.writer import payload_sidecar_path
+    sidecar = json.loads(Path(payload_sidecar_path(deps.filled_path)).read_text())
+    assert sidecar[0]["source_pages"] == [1]
 
 
 def test_failed_final_promotion_restores_previous_artifacts_and_db(
@@ -267,6 +344,7 @@ def test_failed_final_promotion_restores_previous_artifacts_and_db(
     tool = _tool(agent, "write_note_from_source")
     first = asyncio.run(tool(
         SimpleNamespace(deps=deps), sheet=sheet, row=target_row,
+        target_label=next(node.label for node in nodes if node.row == target_row),
         block_ids=["b1"], source_pages=[1], evidence="Page 1",
     ))
     assert first.startswith("ok:"), first
@@ -286,6 +364,7 @@ def test_failed_final_promotion_restores_previous_artifacts_and_db(
     monkeypatch.setattr(notes_agent, "replace_with_retry", fail_staged_workbook)
     rejected = asyncio.run(tool(
         SimpleNamespace(deps=deps), sheet=sheet, row=target_row,
+        target_label=next(node.label for node in nodes if node.row == target_row),
         block_ids=["b2"], source_pages=[2], evidence="Page 2",
     ))
 

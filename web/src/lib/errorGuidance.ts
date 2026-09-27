@@ -44,9 +44,21 @@ const GUIDANCE: Record<string, ErrorGuidance> = {
     label: "Provider retries were exhausted",
     action: "Check provider availability or rate limits, then retry later.",
   },
+  provider_rejected: {
+    label: "Model provider rejected the request",
+    action: "Review the provider response in Activity. Retry the affected statement after the request is accepted.",
+  },
   coordinator_incident: {
     label: "Coordinator step failed",
     action: "Review the run incident and coordinator timeline in Activity.",
+  },
+  notes_reviewer_subnotes_unverified: {
+    label: "Note references need verification",
+    action: "Review the source note references in Notes before relying on this result.",
+  },
+  notes_reviewer_policy_placements_unverified: {
+    label: "Accounting policy placements need verification",
+    action: "Open Notes to review the policy source, destination field, and reviewer findings before preparing the filing.",
   },
 };
 

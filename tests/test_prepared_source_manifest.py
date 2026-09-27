@@ -30,6 +30,30 @@ def test_prepared_manifest_keeps_structure_and_verified_page_receipts(tmp_path):
     assert manifest.blocks[1].locator["heading_ancestor_ids"] == ["h"]
 
 
+def test_prepared_italic_note_title_renders_as_heading_without_rewriting_text(tmp_path):
+    from notes.source_render import render_blocks
+    from notes.detectors import detect_title_format_issues
+
+    blocks = [
+        {"block_id": "title", "block_kind": "paragraph", "reading_order": 0,
+         "canonical_html": "<p><em>A. Cash and cash equivalents</em></p>",
+         "page": 1, "owner_kind": "note", "source_note_id": "cash_A",
+         "source_note_title": "A. Cash and cash equivalents"},
+        {"block_id": "body", "block_kind": "paragraph", "reading_order": 1,
+         "canonical_html": "<p><em>Company</em> cash balance.</p>",
+         "page": 1, "owner_kind": "note", "source_note_id": "cash_A",
+         "source_note_title": "A. Cash and cash equivalents"},
+    ]
+    manifest, _ = build_prepared_manifest(prepared(tmp_path, blocks=blocks), scout_note_nums=[])
+    assert manifest.blocks[0].locator["verified_title"] is True
+    assert not manifest.blocks[1].locator.get("verified_title")
+    rendered = render_blocks(manifest.blocks, ["title", "body"])
+    assert rendered.html.startswith("<h3><em>A. Cash and cash equivalents</em></h3>")
+    assert "<p><em>Company</em> cash balance.</p>" in rendered.html
+    assert detect_title_format_issues([{"sheet": "Notes-Listofnotes", "row": 18,
+        "html": rendered.html, "source_built": True}]) == []
+
+
 def test_missing_page_receipt_cannot_shrink_original_document_denominator(tmp_path):
     import fitz
     with fitz.open() as doc:

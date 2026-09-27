@@ -70,6 +70,7 @@ def test_source_disclosure_and_numeric_facts_use_distinct_slots(tmp_path, standa
         "source_pages": [1], "parent_note": {"number": "5", "title": "Disclosure"}}]))
     assert "Wrote 1" in number
     written = asyncio.run(funcs["write_note_from_source"](ctx, sheet=sheet, row=4,
+        target_label=prose["label"],
         block_ids=["a"], source_pages=[1], evidence="Page 1"))
     assert "ok:" in written
     book = load_workbook(deps.filled_path)

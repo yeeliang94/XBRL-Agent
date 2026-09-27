@@ -2,7 +2,7 @@ import React, { useEffect, useRef } from "react";
 import { pwc } from "../lib/theme";
 import type { AgentTabStatus } from "../lib/types";
 import { NON_AGENT_TAB_IDS } from "../lib/agentTabKinds";
-import { isCompletedWorkstream, workstreamStatusLabel } from "../lib/workstreamStatus";
+import { workstreamStatusLabel } from "../lib/workstreamStatus";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -299,18 +299,10 @@ function AgentTabsImpl({
     );
   };
 
-  const completedCount = gatedOrder.filter((id) =>
-    agents[id] != null && isCompletedWorkstream(agents[id].status)
-  ).length;
-  const totalWorkstreamCount = gatedOrder.length
-    + (skeletonTabs?.length ?? 0)
-    + (notesSkeletons?.length ?? 0);
-
   return (
     <div className="workstream-nav" style={styles.tabBar}>
       <div style={styles.navigatorHeader}>
         <div style={styles.navigatorTitle}>Run activity</div>
-        <span style={styles.navigatorCount}>{completedCount} of {totalWorkstreamCount} complete</span>
       </div>
 
       <div role="tablist" aria-label="Run workstreams" aria-orientation="vertical" style={styles.tabList}>
@@ -536,7 +528,7 @@ const styles = {
     overflow: "hidden",
     textOverflow: "ellipsis" as const,
     whiteSpace: "nowrap" as const,
-    maxWidth: 170,
+    maxWidth: "100%",
   },
   tabSubLabel: {
     fontSize: 11,

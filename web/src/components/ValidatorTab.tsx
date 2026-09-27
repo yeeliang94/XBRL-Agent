@@ -39,6 +39,7 @@ const STATUS_DISPLAY: Record<
   // Advisory only (Phase 6.1 notes-consistency).
   warning: { label: "Warning", symbol: STATUS_SYMBOLS.attention },
   pending: { label: "Pending", symbol: STATUS_SYMBOLS.inProgress },
+  blocked: { label: "Blocked", symbol: STATUS_SYMBOLS.attention },
   not_applicable: { label: "Not applicable", symbol: STATUS_SYMBOLS.inactive },
 };
 
@@ -110,7 +111,6 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
                 <tr
                   key={check.name}
                   data-testid={`cross-check-row-${check.name}`}
-                  className="pwc-view-enter"
                   onClick={
                     clickable
                       ? () => onSelectTarget!(check.target_sheet!, check.target_row!)
@@ -161,6 +161,10 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
                   <td style={{ ...styles.td, fontSize: 13, color: pwc.grey700 }}>
                     {check.status === "not_applicable" ? (
                       <span>This check does not apply to the selected filing standard or available disclosures.</span>
+                    ) : check.status === "blocked" ? (
+                      <span>A required statement did not finish. This comparison could not run.</span>
+                    ) : check.status === "pending" ? (
+                      <span>Waiting for the required statement before this comparison can run.</span>
                     ) : check.status === "failed" ? (
                       <span>{firstName} and {secondName.toLowerCase()} differ. Review the linked figures before filing.</span>
                     ) : (
@@ -205,6 +209,7 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
 
 const styles = {
   container: {
+    overflowX: "auto",
     background: pwc.white,
     borderRadius: `0 0 ${pwc.radius.md}px ${pwc.radius.md}px`,
     border: `1px solid ${pwc.grey200}`,
@@ -225,6 +230,7 @@ const styles = {
   } as React.CSSProperties,
   table: {
     width: "100%",
+    minWidth: 720,
     borderCollapse: "collapse" as const,
     fontSize: 14,
     fontFamily: pwc.fontBody,

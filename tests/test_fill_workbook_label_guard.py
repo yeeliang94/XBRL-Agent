@@ -413,6 +413,22 @@ def test_incremental_write_keeps_managed_template_writability_contract(tmp_path)
     wb.close()
 
 
+def test_duplicate_writable_label_offers_explicit_row_retry(tmp_path):
+    template = (
+        Path(__file__).resolve().parent.parent
+        / "XBRL-template-MFRS/Company/07-SOCF-Indirect.xlsx"
+    )
+    result = fill_workbook(str(template), str(tmp_path / "filled.xlsx"), [{
+        "sheet": "SOCF-Indirect", "field_label": "Interest paid",
+        "section": "Cash flows from (used in) operating activities",
+        "col": 2, "value": -33095,
+    }])
+    assert result.fields_written == 0
+    assert result.failed_request_keys[0]["kind"] == "ambiguous_label"
+    assert "rows 71, 125" in result.errors[0]
+    assert "explicit row from read_template()" in result.errors[0]
+
+
 @pytest.mark.parametrize("column", [2, 3])
 def test_duplicate_protected_profit_totals_do_not_create_unresolved_writes(tmp_path, column):
     """Run 272: duplicate formula labels were advertised as writable inputs."""

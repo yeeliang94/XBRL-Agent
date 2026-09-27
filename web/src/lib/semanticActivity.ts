@@ -1,5 +1,5 @@
 import type { SSEEvent, ToolTimelineEntry } from "./types";
-import { argsPreview, humanToolName, resultSummary } from "./toolLabels";
+import { argsPreview, resultSummary, TOOL_LABELS } from "./toolLabels";
 
 export interface SemanticActivity {
   id: string;
@@ -11,7 +11,7 @@ export interface SemanticActivity {
 
 function friendlyStatus(message: string): string {
   const calling = message.match(/^Calling\s+([a-z0-9_]+)(?:\.{3}|…)?$/i);
-  if (calling) return humanToolName(calling[1]);
+  if (calling) return TOOL_LABELS[calling[1]] ?? "Reviewing document";
   return message.replace(/_/g, " ").replace(/\.{3}$/, "…");
 }
 
@@ -33,7 +33,7 @@ export function semanticActivities(
     const detail = [preview, outcome?.text].filter(Boolean).join(" · ");
     return {
       id: entry.tool_call_id,
-      title: humanToolName(entry.tool_name),
+      title: TOOL_LABELS[entry.tool_name] ?? "Reviewing document",
       detail: detail || null,
       timestamp: entry.startTime,
       active: entry.result_summary === null,

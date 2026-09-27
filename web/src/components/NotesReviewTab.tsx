@@ -727,7 +727,7 @@ export function NotesReviewTab({
             <section aria-label="Source note inventory" style={{ marginTop: 16, borderTop: `1px solid ${pwc.grey200}`, paddingTop: 12 }}>
             <div style={styles.noteRailHeader}>
               <div>
-                <strong style={styles.noteRailTitle}>Source notes</strong>
+                <strong style={styles.noteRailTitle}>Numbered source notes</strong>
                 <p style={styles.noteRailCount}>
                   {sourceNotes == null ? "Loading…" : `${sourceNotes.filter((note) => note.status === "placed").length}/${sourceNotes.length} placed`}
                 </p>

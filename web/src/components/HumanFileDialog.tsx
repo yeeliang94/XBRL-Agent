@@ -125,12 +125,22 @@ export function HumanFileDialog({ runId, open, defaultUnit, existing, onClose, o
           <div style={styles.stack}>
             <div style={styles.field}>
               <label htmlFor="human-file-input" style={ui.fieldLabel}>mTool file</label>
+              <div style={styles.fileChoice}>
+                <button type="button" className={uiClass.btnSecondary}
+                  style={{ ...ui.buttonSecondary, ...ui.buttonSm }}
+                  disabled={busy} onClick={() => fileRef.current?.click()}>
+                  {file ? "Change file" : "Choose mTool file"}
+                </button>
+                <span style={ui.supportingText}>{file?.name ?? ".xlsx or .xlsm"}</span>
+              </div>
               <input
                 ref={fileRef}
                 id="human-file-input"
                 data-testid="human-file-input"
                 type="file"
                 accept=".xlsx,.xlsm"
+                aria-label="mTool file"
+                style={{ display: "none" }}
                 disabled={busy}
                 onChange={(e) => {
                   setFile(e.target.files?.[0] ?? null);
@@ -187,6 +197,7 @@ export function HumanFileDialog({ runId, open, defaultUnit, existing, onClose, o
 
 const styles = {
   stack: { display: "flex", flexDirection: "column", gap: pwc.space.lg } as React.CSSProperties,
-  field: { display: "flex", flexDirection: "column", gap: pwc.space.xs } as React.CSSProperties,
+  field: { display: "flex", flexDirection: "column", gap: pwc.space.sm } as React.CSSProperties,
+  fileChoice: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: pwc.space.md } as React.CSSProperties,
   body: { ...ui.bodyText, margin: 0 } as React.CSSProperties,
 };

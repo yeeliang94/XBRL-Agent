@@ -75,9 +75,9 @@ export function StatTiles({
         <span style={styles.detail}>Active runs</span>
       </div>
       <div style={styles.tile}>
-        <span style={styles.label}>Ready to file</span>
+        <span style={styles.label}>Completed</span>
         <Count n={completedThisMonth} />
-        <span style={styles.detail}>Completed this month</span>
+        <span style={styles.detail}>This month</span>
       </div>
     </div>
   );

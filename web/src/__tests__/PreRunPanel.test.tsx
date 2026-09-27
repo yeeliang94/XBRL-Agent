@@ -123,7 +123,7 @@ describe("PreRunPanel", () => {
       name: /statements to extract 5 of 5 selected/i,
     });
     const notesToggle = screen.getByRole("button", {
-      name: /notes to include none selected/i,
+      name: /notes templates no notes included/i,
     });
 
     expect(statementToggle).toHaveAttribute("aria-expanded", "true");
@@ -1591,6 +1591,21 @@ describe("notes inventory editor", () => {
 });
 
 describe("Upload-owned preparation", () => {
+  test("explains that a prepared notes run covers all prose destinations", async () => {
+    render(<PreRunPanel sessionId="abc" getSettings={vi.fn().mockResolvedValue(mockSettings)}
+      onRun={vi.fn()} waitForPreparation
+      preparation={preparation({ status: "succeeded", stage: "ready", phase: "awaiting_confirmation", action_required: "confirm_setup", infopack: {
+        scale_unit: "thousands", statements: {}, notes_inventory: [
+          { note_num: 1, title: "Corporate information", page_range: [1, 1] },
+        ],
+      } })} />);
+    await screen.findByRole("button", { name: /start extraction/i });
+    fireEvent.click(screen.getByRole("checkbox", { name: /corporate information \(note 10\)/i }));
+    expect(screen.getByText("All document notes included")).toBeInTheDocument();
+    expect(screen.getByText(/a notes run includes corporate information, accounting policies, and list of notes/i))
+      .toBeInTheDocument();
+  });
+
   test("preserves a legacy saved denomination without selection metadata", async () => {
     const onRun = vi.fn();
     render(<PreRunPanel sessionId="abc" getSettings={vi.fn().mockResolvedValue(mockSettings)} onRun={onRun}

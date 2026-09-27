@@ -101,6 +101,27 @@ def test_prepared_source_remains_clean_after_formatter_patch(run):
     assert any(f.check == "render_match" for f in _verdict(conn, run_id, gen).findings)
 
 
+def test_sheet_persistence_keeps_source_lineage_after_style_only_patch(run):
+    from notes.format_patch import apply_sheet_patch
+    from notes.persistence import persist_notes_cells
+
+    conn, run_id, gen, db = run
+    conn.execute("UPDATE notes_source_generations SET input_kind='prepared_document' WHERE id=?", (gen,))
+    _write(conn, run_id, gen, ["b1", "b2"])
+    before = conn.execute("SELECT html FROM notes_cells WHERE run_id=?", (run_id,)).fetchone()[0]
+    styled = apply_sheet_patch({10: before}, {"cells": [{"row": 10, "operations": [
+        {"target": {"blocks": "all"}, "style": {"bold": True}},
+    ]}]}).rows[10]
+    conn.commit()
+    persist_notes_cells(db_path=str(db), run_id=run_id, sheet_name="Notes",
+                        cells_written=[{"sheet": "Notes", "row": 10,
+                                        "label": "L", "html": styled}])
+    cell = conn.execute("SELECT source_generation_id,source_rendered_sha256 "
+                        "FROM notes_cells WHERE run_id=?", (run_id,)).fetchone()
+    assert cell[0] == gen and cell[1]
+    assert _verdict(conn, run_id, gen).findings == []
+
+
 @pytest.mark.parametrize(("source", "changed"), [
     ("<p>First. Second.</p><p>Third.</p>", "<p>First.</p><p>Second. Third.</p>"),
     ("<h3>Revenue recognition</h3><p>Policy details.</p>",
@@ -316,6 +337,121 @@ def test_direct_html_overwrite_cannot_hide_behind_stored_digest(run):
     _write(conn, run_id, gen, ["b1", "b2"])
     conn.execute("UPDATE notes_cells SET html = '<p>shortened</p>' WHERE run_id = ?", (run_id,))
     assert any(f.check == "render_match" for f in _verdict(conn, run_id, gen).findings)
+
+
+def test_verified_repeated_page_heading_is_a_supported_exclusion():
+    """A broad note range may contain an actual running header on many pages."""
+    blocks = [
+        SourceBlock(f"h{page}", "paragraph", page,
+                    "<p>Notes to the financial statements</p>", page=page,
+                    source_note_id="n1", owner_kind=OwnerKind.NOTE,
+                    locator={"reason": "PAGE_HEADER", "region_kind": "page_header"})
+        for page in (1, 2, 3)
+    ]
+    inp = integrity.IntegrityInput(
+        blocks=blocks,
+        notes=[SourceNote("n1", "1", block_ids=[b.block_id for b in blocks])],
+        usages={b.block_id: {"disposition": "excluded", "reason_code": "PAGE_HEADER"}
+                for b in blocks},
+        verified_inventory=True,
+    )
+    assert integrity.check_dispositions(inp) == []
+    assert integrity.check_prose_note_coverage(inp) == []
+
+
+def test_one_off_note_heading_cannot_be_hidden_as_page_furniture():
+    block = SourceBlock(
+        "heading", "paragraph", 1, "<p>Material accounting policy</p>",
+        page=1, source_note_id="n1", owner_kind=OwnerKind.NOTE,
+    )
+    inp = integrity.IntegrityInput(
+        blocks=[block], notes=[SourceNote("n1", "1", block_ids=["heading"])],
+        usages={"heading": {"disposition": "excluded", "reason_code": "PAGE_HEADER"}},
+        verified_inventory=True,
+    )
+    assert any(f.block_ids == ["heading"] for f in integrity.check_dispositions(inp))
+    assert any(f.block_ids == ["heading"] for f in integrity.check_prose_note_coverage(inp))
+
+
+def test_repeated_edge_caption_with_table_relationship_remains_unresolved():
+    blocks = [
+        SourceBlock(f"caption{page}", "paragraph", page * 10,
+                    "<p>RM'000</p>", page=page, source_note_id="n1",
+                    owner_kind=OwnerKind.NOTE,
+                    locator={"reason": "PAGE_HEADER", "region_kind": "table_caption",
+                             "required_related_block_ids": [f"table{page}"]})
+        for page in (1, 2, 3)
+    ]
+    inp = integrity.IntegrityInput(
+        blocks=blocks,
+        notes=[SourceNote("n1", "1", block_ids=[b.block_id for b in blocks])],
+        usages={b.block_id: {"disposition": "excluded", "reason_code": "PAGE_HEADER"}
+                for b in blocks},
+        verified_inventory=True,
+    )
+    assert {bid for finding in integrity.check_prose_note_coverage(inp)
+            for bid in finding.block_ids} == {b.block_id for b in blocks}
+
+
+def test_repeated_substantive_block_in_middle_of_seven_is_not_furniture():
+    blocks = []
+    for page in (1, 2, 3):
+        for index in range(7):
+            target = index == 3
+            blocks.append(SourceBlock(
+                f"p{page}-{index}", "paragraph", page * 10 + index,
+                "<p>Recurring disclosure amount</p>" if target else f"<p>Content {page}-{index}</p>",
+                page=page, source_note_id="n1" if target else None,
+                owner_kind=OwnerKind.NOTE if target else OwnerKind.FURNITURE,
+                locator={"reason": "PAGE_HEADER", "region_kind": "page_header"} if target else {},
+            ))
+    omitted = [b for b in blocks if b.owner_kind is OwnerKind.NOTE]
+    inp = integrity.IntegrityInput(
+        blocks=blocks, notes=[SourceNote("n1", "1", block_ids=[b.block_id for b in omitted])],
+        usages={b.block_id: {"disposition": "excluded", "reason_code": "PAGE_HEADER"}
+                for b in omitted}, verified_inventory=True,
+    )
+    assert {bid for finding in integrity.check_prose_note_coverage(inp)
+            for bid in finding.block_ids} == {b.block_id for b in omitted}
+
+
+def test_repeated_middle_page_note_text_cannot_be_hidden_as_header():
+    blocks = [
+        SourceBlock(f"before{page}", "paragraph", page * 10,
+                    "<p>Opening content</p>", page=page,
+                    owner_kind=OwnerKind.FURNITURE)
+        for page in (1, 2, 3)
+    ] + [
+        SourceBlock(f"h{page}", "paragraph", page * 10 + 5,
+                    "<p>Repeated disclosure</p>", page=page,
+                    source_note_id="n1", owner_kind=OwnerKind.NOTE)
+        for page in (1, 2, 3)
+    ]
+    for page in (1, 2, 3):
+        blocks.extend(
+            SourceBlock(f"lead{page}-{index}", "paragraph", page * 10 + index,
+                        f"<p>Line {index}</p>", page=page,
+                        owner_kind=OwnerKind.FURNITURE)
+            for index in range(1, 5)
+        )
+    inp = integrity.IntegrityInput(
+        blocks=blocks,
+        notes=[SourceNote("n1", "1", block_ids=[f"h{page}" for page in (1, 2, 3)])],
+        usages={f"h{page}": {"disposition": "excluded", "reason_code": "PAGE_HEADER"}
+                for page in (1, 2, 3)},
+        verified_inventory=True,
+    )
+    unresolved = {bid for finding in integrity.check_dispositions(inp)
+                  for bid in finding.block_ids}
+    assert {"h1", "h2", "h3"} <= unresolved
+
+
+def test_integrity_snapshot_keeps_page_for_furniture_verification(run):
+    conn, run_id, gen, _ = run
+    conn.execute("UPDATE notes_source_blocks SET page=7 WHERE generation_id=? AND block_id='b1'",
+                 (gen,))
+    inp = integrity_runner.build_input(conn, run_id, gen, scout_available=True)
+    assert next(block.page for block in inp.blocks if block.block_id == "b1") == 7
 
 
 def test_forged_placement_without_rendered_content_cannot_settle_block(run):

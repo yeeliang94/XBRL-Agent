@@ -209,22 +209,48 @@ def _reconcile_placements(
 def _restore_lineage(conn, run_id: int, sheet: str, cells_list, prior) -> None:
     """Put back the provenance columns the DELETE removed.
 
-    Only for coordinates that were rewritten AND whose HTML is unchanged: if
-    the rerun produced different text, the cell is no longer that source
-    render and claiming otherwise would be worse than losing the link.
+    Only for coordinates whose content still matches their selected source
+    blocks. A validated style-only change keeps the original source receipt;
+    changed wording or structure does not.
     """
     if not prior:
         return
     try:
         from notes.lineage import content_sha256
+        from notes.format_verify import verify_format_only
+        from notes.source_render import BlockSelectionError, render_blocks
+        from notes.source_write import load_blocks
+
+        available_by_generation = {}
 
         for cell in cells_list:
             coord = (str(cell.get("sheet") or sheet), int(cell["row"]))
             before = prior.get(coord)
             if before is None or not before["source_rendered_sha256"]:
                 continue
-            if content_sha256(str(cell["html"])) != before["source_rendered_sha256"]:
-                continue
+            digest = content_sha256(str(cell["html"]))
+            if digest != before["source_rendered_sha256"]:
+                generation_id = before["source_generation_id"]
+                if generation_id is None:
+                    continue
+                if generation_id not in available_by_generation:
+                    available_by_generation[generation_id] = load_blocks(
+                        conn, generation_id,
+                    )
+                available = available_by_generation[generation_id]
+                selected_ids = [r["block_id"] for r in conn.execute(
+                    "SELECT block_id FROM notes_block_placements WHERE run_id=? "
+                    "AND generation_id=? AND sheet=? AND row=? AND active=1",
+                    (run_id, generation_id, coord[0], coord[1]),
+                ).fetchall()]
+                if not selected_ids:
+                    continue
+                try:
+                    source_html = render_blocks(available, selected_ids).html
+                except BlockSelectionError:
+                    continue
+                if not verify_format_only(source_html, str(cell["html"])).ok:
+                    continue
             conn.execute(
                 "UPDATE notes_cells SET source_generation_id = ?, "
                 "source_rendered_sha256 = ?, current_html_sha256 = ?, "
@@ -232,7 +258,7 @@ def _restore_lineage(conn, run_id: int, sheet: str, cells_list, prior) -> None:
                 "source_render_version = ? "
                 "WHERE run_id = ? AND sheet = ? AND row = ?",
                 (before["source_generation_id"], before["source_rendered_sha256"],
-                 before["current_html_sha256"], before["content_origin"],
+                 digest, before["content_origin"],
                  before["source_diverged_at"], before["source_render_version"],
                  run_id, coord[0], coord[1]),
             )

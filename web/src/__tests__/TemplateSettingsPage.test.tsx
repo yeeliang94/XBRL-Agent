@@ -59,6 +59,24 @@ describe("TemplateSettingsPage", () => {
     expect(screen.getByTestId("ts-legend")).toBeTruthy();
   });
 
+  test("repeated adjacent section headings occupy one visible row", async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation(async (url: string) => ({
+      ok: true, status: 200,
+      json: async () => url.includes("/concepts") ? {
+        ...concepts,
+        concepts: [
+          concepts.concepts[1],
+          { ...concepts.concepts[1], concept_uuid: "abs-2", render_row: 8 },
+          concepts.concepts[0],
+        ],
+      } : templates,
+    } as Response));
+    render(<TemplateSettingsPage />);
+    await waitFor(() => screen.getByTestId("ts-row-abs-1"));
+    expect(screen.queryByTestId("ts-row-abs-2")).toBeNull();
+    expect(screen.getByTestId("ts-row-leaf-1")).toBeTruthy();
+  });
+
   test("the search box filters concept rows by label (E8)", async () => {
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation(
       async (url: string) => {

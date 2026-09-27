@@ -9,7 +9,9 @@ import { ResizableDivider } from "../components/ResizableDivider";
 import { ReconciliationQueue } from "../components/ReconciliationQueue";
 import { PdfSourcePane } from "../components/PdfSourcePane";
 import {
+  figureSheetDisplayName,
   templateDisplayName,
+  templateSubtitle,
   templateSortKey,
 } from "../lib/sheetLabels";
 import { parseEvidencePages } from "../lib/evidencePages";
@@ -1028,13 +1030,16 @@ export function ConceptsPage({
                 {templates.flatMap((templateId) => {
                   const sheets = sheetsByTemplate[templateId] ?? [];
                   const label = templateDisplayName(templateId);
+                  const subtitle = templateSubtitle(templateId);
                   return [
                     <option key={`${templateId}:all`} value={`${templateId}::`}>
-                      {label}
+                      {subtitle
+                        ? `${label} · ${sheets.length > 1 ? `All ${subtitle.toLowerCase()} rows` : subtitle}`
+                        : label}
                     </option>,
                     ...(sheets.length > 1 ? sheets : []).map((sheet) => (
                       <option key={`${templateId}:${sheet}`} value={`${templateId}::${sheet}`}>
-                        {label} · {sheet}
+                        {label} · {figureSheetDisplayName(sheet)}
                       </option>
                     )),
                   ];
@@ -1058,15 +1063,15 @@ export function ConceptsPage({
         {searchQuery.trim() && <nav aria-label="Matching figure fields" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           {concepts.filter((row) => `${row.canonical_label} ${row.display_label ?? ""}`.toLowerCase().includes(searchQuery.trim().toLowerCase())).map((row) => (
             <button type="button" key={`${row.concept_uuid}:${row.render_sheet}:${row.render_row}`} style={{ ...ui.buttonGhost, textAlign: "left", whiteSpace: "normal" }}
-              onClick={() => handleSelectConcept(row.concept_uuid)}>{row.display_label || row.canonical_label} · {row.render_sheet} · row {row.render_row}</button>
+              onClick={() => handleSelectConcept(row.concept_uuid)}>{row.display_label || row.canonical_label} · {figureSheetDisplayName(row.render_sheet)}</button>
           ))}
         </nav>}
         <nav aria-label="Figure worksheets" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           {templates.flatMap((templateId) => (sheetsByTemplate[templateId] ?? []).map((sheet) => (
             <button type="button" key={`${templateId}:${sheet}`} aria-current={activeTemplate === templateId && (activeSheet === sheet || activeSheet == null) ? "true" : undefined}
-              style={{ ...ui.buttonGhost, justifyContent: "flex-start", textAlign: "left", whiteSpace: "normal", overflowWrap: "anywhere", background: activeTemplate === templateId && (activeSheet === sheet || activeSheet == null) ? pwc.orange50 : undefined }}
+              style={{ ...ui.buttonGhost, justifyContent: "flex-start", textAlign: "left", whiteSpace: "normal", background: activeTemplate === templateId && (activeSheet === sheet || activeSheet == null) ? pwc.grey50 : undefined }}
               onClick={() => { setSearchQuery(""); setRowFilter("all"); setActiveTemplate(templateId); setActiveSheet(sheet); }}>
-              {templateDisplayName(templateId)} · {sheet}
+              {templateDisplayName(templateId)} · {figureSheetDisplayName(sheet)}
             </button>
           )))}
         </nav>

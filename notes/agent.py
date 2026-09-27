@@ -303,7 +303,7 @@ def _find_catch_all_label(label_catalog: Optional[list[str]]) -> str:
         if suffix_start > 0 and normalized.endswith("]"):
             normalized = normalized[:suffix_start]
         if normalized.endswith(target):
-            return label
+            return re.sub(r"^row \d+: ", "", label)
     # Catalog was provided but contains no catch-all row — the MBRS
     # generator is supposed to emit one on every notes sheet, so a miss
     # here is a generator regression worth surfacing (peer-review I-3).
@@ -390,9 +390,10 @@ def _render_label_catalog(labels: list[str]) -> Optional[str]:
         "",
         (
             "The rows below are the authoritative col-A labels from the "
-            "template you are filling. Every payload's "
-            "`chosen_row_label` MUST come from this list, copied "
-            "verbatim. The writer normalises leading `*` markers and "
+            "template you are filling. A `row N:` prefix is the actual "
+            "worksheet coordinate, not part of the label. Copy the label "
+            "after the colon into `chosen_row_label` or `target_label` and "
+            "use N as the source writer's row. The writer normalises leading `*` markers and "
             "taxonomy type suffixes (`[text block]`, `[abstract]` …) "
             "for matching, but emitting the label exactly as shown here "
             "is the safest path."
@@ -566,7 +567,8 @@ def _render_source_blocks_block() -> str:
         "full. If a source read is partial, repeat it with the returned "
         "next_offset as offset.\n"
         "3. Write the note with `write_note_from_source(sheet, row, "
-        "block_ids)`, naming every part that belongs in that row. The cell "
+        "target_label, block_ids)`, copying the row's live label and naming "
+        "every part that belongs in that row. The cell "
         "text is assembled from the document itself, so content and "
         "formatting are exact by construction — nothing to retype.\n"
         "Follow that tool's smaller schema exactly: do not pass\n"
@@ -1007,7 +1009,9 @@ class NotesDeps:
     coverage_receipt: Any = None
 
 
-def _load_template_label_catalog(template_path: str, sheet_name: str) -> list[str]:
+def _load_template_label_catalog(
+    template_path: str, sheet_name: str, *, with_rows: bool = False,
+) -> list[str]:
     """Load the col-A row labels from a notes template for prompt seeding.
 
     Opens the workbook once, reads every non-empty col-A cell on the
@@ -1038,7 +1042,8 @@ def _load_template_label_catalog(template_path: str, sheet_name: str) -> list[st
             return []
         ws = wb[sheet_name]
         return [
-            str(ws.cell(row=row, column=1).value).strip()
+            (f"row {row}: " if with_rows else "")
+            + str(ws.cell(row=row, column=1).value).strip()
             for row in range(1, ws.max_row + 1)
             if ws.cell(row=row, column=1).value not in (None, "")
             and (allowed_rows is None or row in allowed_rows)
@@ -1837,6 +1842,23 @@ def _sub_agent_sink_write(
             kept.append(e)
         deps.payload_sink[:] = kept
 
+    source_revision_targets = {
+        (resolved[0], p.source_note_id)
+        for p in accepted
+        if p.source_built and p.source_note_id
+        for resolved in [_resolve_row(entries, p.chosen_row_label)]
+        if resolved is not None
+    }
+    if source_revision_targets:
+        deps.payload_sink[:] = [
+            e for e in deps.payload_sink
+            if not (
+                e.source_built and e.source_note_id
+                and (resolved := _resolve_row(entries, e.chosen_row_label)) is not None
+                and (resolved[0], e.source_note_id) in source_revision_targets
+            )
+        ]
+
     # Equivalent-content defence for unattributed payloads and same-call
     # duplicates. Content comparison is on the resolved template row and the
     # normalized rendered text rather than raw HTML.
@@ -2462,6 +2484,40 @@ def _read_source_manifest_impl(
     )
 
 
+def _list_source_sections_impl(
+    db_path: Optional[str], generation_id: Optional[int], note_num: int | str,
+    offset: int = 0,
+) -> str:
+    """Show complete sections while keeping source parts available on demand."""
+    from db import repository as repo
+    from notes import source_repository as srepo, source_write
+    from notes.source_sections import sections_for_note
+
+    if not db_path or generation_id is None:
+        return "No frozen source reading is available for this run."
+    with repo.db_session(db_path) as conn:
+        notes = [n for n in srepo.fetch_notes(conn, generation_id)
+                 if n["source_note_id"] == str(note_num)
+                 or str(n["top_note_num"]) == str(note_num)]
+        blocks = source_write.load_blocks(conn, generation_id)
+    if not notes:
+        return f"No source note {note_num}. Call list_source_notes to see valid identities."
+    lines = []
+    for note in notes:
+        for section in sections_for_note(
+            blocks, note["source_note_id"], str(note["top_note_num"] or ""),
+            note["title"] or "",
+        ):
+            pages = ", ".join(str(page) for page in sorted(section.pages))
+            lines.append(
+                f"  {section.section_id}  {section.title[:100]}  "
+                f"[{len(section.block_ids)} source parts; PDF pp. {pages}]"
+            )
+    return _source_response(
+        "\n".join(lines), f"{len(lines)} complete section(s) for note {note_num}.", offset,
+    )
+
+
 def _view_source_blocks_impl(
     db_path: Optional[str], generation_id: Optional[int], block_ids: List[str],
     offset: int = 0,
@@ -2508,6 +2564,7 @@ def _write_from_source_impl(
     deps: "NotesDeps", sheet: str, row: int, block_ids: List[str],
     source_pages: List[int], evidence: Optional[str],
     format_ops: Optional[List[dict]],
+    *, target_label: Optional[str] = None,
 ) -> str:
     from db import repository as repo
     from notes import source_write
@@ -2518,7 +2575,7 @@ def _write_from_source_impl(
         with repo.db_session(deps.db_path) as conn:
             return _write_from_source_in_connection(
                 conn, deps, sheet, row, block_ids, source_pages, evidence,
-                format_ops,
+                format_ops, target_label=target_label,
             )
     except source_write.SourcePlacementConflict as exc:
         # The rejected write rolled back. Persist the competing proposal in a
@@ -2543,9 +2600,10 @@ def _write_from_source_in_connection(
     conn, deps: "NotesDeps", sheet: str, row: int, block_ids: List[str],
     source_pages: List[int], evidence: Optional[str],
     format_ops: Optional[List[dict]],
+    *, target_label: Optional[str] = None,
 ):
     """Build and stage one source payload on the caller-owned transaction."""
-    from notes import source_write
+    from notes import source_render, source_repository as srepo, source_write
 
     prefix = f"{deps.filing_standard}-{deps.filing_level}-"
     outcome = source_write.write_cell_from_blocks(
@@ -2557,19 +2615,42 @@ def _write_from_source_in_connection(
         format_ops=format_ops,
         actor="notes_agent",
         template_prefix=prefix,
+        target_label=target_label,
         # An extraction agent writes only its OWN sheet. It used to be able
         # to name any sheet at all, and a `Ghost` row succeeded.
         allowed_sheets=[deps.sheet_name],
     )
     back = conn.execute(
-        "SELECT label, html FROM notes_cells "
+        "SELECT label, html, source_pages FROM notes_cells "
         "WHERE run_id = ? AND sheet = ? AND row = ?",
         (deps.run_id, sheet, row),
     ).fetchone()
     label = (back["label"] if back else "") or ""
     rendered_html = (back["html"] if back else "") or ""
+    from notes.source_sections import expand_section_ids
+
+    available = source_write.load_blocks(conn, deps.source_generation_id)
+    selected_ids = source_write.expand_table_groups(
+        available,
+        expand_section_ids(
+            available, srepo.fetch_notes(conn, deps.source_generation_id),
+            block_ids,
+        ),
+    )
+    selected_blocks = [b for b in available if b.block_id in selected_ids]
+    selection_pages = sorted({b.page for b in selected_blocks if b.page is not None})
+    first_order = min((b.reading_order for b in selected_blocks), default=None)
+    source_ids = {b.source_note_id for b in available
+                  if b.block_id in selected_ids and b.source_note_id}
+    if sheet == "Notes-Listofnotes" and len(outcome.block_ids) > len(selected_ids):
+        # The canonical catch-all cell holds the union. The Sheet-12 sink
+        # collects one payload per source note and combines them once; sending
+        # the union here would copy the earlier note a second time.
+        payload_html = source_render.render_blocks(available, selected_ids).html
+    else:
+        payload_html = rendered_html
     note_num_val = _note_num_for_blocks(
-        conn, deps.source_generation_id, block_ids,
+        conn, deps.source_generation_id, selected_ids,
     )
 
     # `source_built=True` is load-bearing (peer-review CRITICAL, 2026-08-06):
@@ -2581,11 +2662,13 @@ def _write_from_source_in_connection(
     # hand-written draft of this note instead of concatenating with it.
     payload = NotesPayload(
         chosen_row_label=label,
-        content=rendered_html,
+        content=payload_html,
         evidence=evidence or "",
-        source_pages=list(source_pages),
+        source_pages=selection_pages,
         note_num=note_num_val,
         source_built=True,
+        source_note_id=next(iter(source_ids)) if len(source_ids) == 1 else None,
+        source_reading_order=first_order,
     )
     return outcome.as_message(), payload
 
@@ -2594,6 +2677,7 @@ def _write_source_and_project_impl(
     deps: "NotesDeps", sheet: str, row: int, block_ids: List[str],
     source_pages: List[int], evidence: Optional[str],
     format_ops: Optional[List[dict]],
+    *, target_label: Optional[str] = None,
 ):
     """Commit source lineage only when its workbook projection succeeds.
 
@@ -2619,7 +2703,7 @@ def _write_source_and_project_impl(
                 conn.execute("BEGIN IMMEDIATE")
                 message, payload = _write_from_source_in_connection(
                     conn, deps, sheet, row, block_ids, source_pages, evidence,
-                    format_ops,
+                    format_ops, target_label=target_label,
                 )
                 conn.rollback()
 
@@ -2653,7 +2737,7 @@ def _write_source_and_project_impl(
                     conn.execute("BEGIN IMMEDIATE")
                     committed_message, committed_payload = _write_from_source_in_connection(
                         conn, deps, sheet, row, block_ids, source_pages, evidence,
-                        format_ops,
+                        format_ops, target_label=target_label,
                     )
                     if committed_payload != payload:
                         raise source_write.SourceWriteError(
@@ -2844,6 +2928,7 @@ def create_notes_agent(
     # `read_template` tool can short-circuit repeat retrievals.
     label_catalog = _load_template_label_catalog(
         template_path_str, entry.sheet_name,
+        with_rows=source_generation_id is not None,
     )
     # Peer-review I-1: if the catalog load returned empty, the prompt's
     # row-count placeholder silently renders as "all the rows" and the
@@ -3149,6 +3234,18 @@ def create_notes_agent(
             )
 
         @agent.tool
+        async def list_source_sections(
+            ctx: RunContext[NotesDeps], note_num: int | str, offset: int = 0,
+        ) -> str:
+            """List complete note/subnote sections by number or stable source id.
+            Pass section IDs as block_ids to write_note_from_source. Read the
+            detailed manifest when a section needs closer inspection."""
+            return await asyncio.to_thread(
+                _list_source_sections_impl, ctx.deps.db_path,
+                ctx.deps.source_generation_id, note_num, offset,
+            )
+
+        @agent.tool
         async def read_source_manifest(
             ctx: RunContext[NotesDeps], note_num: int | str, offset: int = 0,
         ) -> str:
@@ -3181,13 +3278,15 @@ def create_notes_agent(
         @agent.tool
         async def write_note_from_source(
             ctx: RunContext[NotesDeps],
-            sheet: str, row: int, block_ids: List[str],
+            sheet: str, row: int, target_label: str, block_ids: List[str],
             source_pages: Optional[List[int]] = None,
             evidence: Optional[str] = None,
         ) -> str:
-            """Build a cell from the named source parts.
+            """Build a cell from complete source sections or named parts.
 
-            You choose WHICH parts of the document belong in this row; the text
+            Copy target_label from the same row in the live template. A row and
+            label mismatch is rejected before any content is written. You choose
+            WHICH parts of the document belong in this row; the text
             is built from the document itself, in document order. Do not send
             prose — there is no content field, deliberately. Include every part
             of the note that belongs in the template; a part you leave out is
@@ -3200,7 +3299,7 @@ def create_notes_agent(
                 projected = await asyncio.to_thread(
                     _write_source_and_project_impl,
                     ctx.deps, sheet, row, block_ids,
-                    source_pages or [], evidence, None,
+                    source_pages or [], evidence, None, target_label=target_label,
                 )
                 if isinstance(projected, str):
                     return projected
@@ -3209,7 +3308,7 @@ def create_notes_agent(
 
             built = await asyncio.to_thread(
                 _write_from_source_impl, ctx.deps, sheet, row, block_ids,
-                source_pages or [], evidence, None,
+                source_pages or [], evidence, None, target_label=target_label,
             )
             if isinstance(built, str):        # rejection message
                 return built

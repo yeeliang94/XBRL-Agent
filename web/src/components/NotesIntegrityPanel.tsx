@@ -239,6 +239,7 @@ export function NotesIntegrityPanel({ runId }: Props) {
 
   const s = data.summary;
   const byPage = data.input_kind !== "docx_html";
+  const openChecks = data.findings.filter((f) => f.severity === "unresolved").length;
 
   return (
     <div style={styles.panel}>
@@ -256,9 +257,10 @@ export function NotesIntegrityPanel({ runId }: Props) {
       </div>
 
       <p style={styles.summary} data-testid="notes-integrity-summary">
-        <strong>{s.unresolved}</strong> of {s.total} parts of the document are
-        not yet accounted for, across {s.notes_needing_review} of{" "}
-        {s.notes_total} notes.
+        <strong>{s.unresolved}</strong> of {s.total} parts have no recorded
+        disposition, across {s.notes_needing_review} of {s.notes_total} notes.
+        {s.requires_review && openChecks > 0 &&
+          ` ${openChecks} source check${openChecks === 1 ? "" : "s"} still ${openChecks === 1 ? "needs" : "need"} review.`}
         {data.mode === "shadow" && " Recorded only — this run's result was not changed by it."}
       </p>
 
@@ -360,7 +362,7 @@ export function NotesIntegrityPanel({ runId }: Props) {
               </li>
             );
           })}
-          {visibleNotes.length === 0 && (
+          {visibleNotes.length === 0 && !s.requires_review && (
             <li style={styles.muted} data-testid="notes-integrity-all-clear">
               Every part of the source document is accounted for.
             </li>

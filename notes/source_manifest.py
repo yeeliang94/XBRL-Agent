@@ -514,7 +514,8 @@ def build_prepared_manifest(metadata_path, *, scout_note_nums=()):
     raw_blocks = data.get("blocks") or [b for p in pages for b in p.get("blocks", [])]
     blocks, notes_by_id = [], {}
     for raw in raw_blocks:
-        locator = raw.get("locator") or {}
+        locator = {k: v for k, v in (raw.get("locator") or {}).items()
+                   if k != "verified_title"}
         page_receipt = pages_by_number.get(raw.get("page"), {})
         if page_receipt.get("capture_status") == "best_effort":
             uncertainties = page_receipt.get("uncertainties") or []
@@ -534,6 +535,17 @@ def build_prepared_manifest(metadata_path, *, scout_note_nums=()):
             locator = {**locator, "reason": reason}
         if owner is OwnerKind.UNRESOLVED or (owner is OwnerKind.NOTE and not note_id):
             raise ManifestError(f"Source ownership is unresolved for {raw.get('block_id')}.")
+        # A prepared PDF may express a note title as an italic paragraph. The
+        # independently reconciled note title identifies its exact source
+        # block; this is presentation metadata, not destination matching.
+        source_title = raw.get("source_note_title", locator.get("source_note_title", "")) or ""
+        if owner is OwnerKind.NOTE and raw["block_kind"] == "paragraph" and source_title:
+            from bs4 import BeautifulSoup
+            parsed = BeautifulSoup(raw["canonical_html"], "html.parser")
+            if (parsed.find("p") is not None
+                    and " ".join(parsed.get_text(" ").split()).casefold()
+                    == " ".join(source_title.split()).casefold()):
+                locator = {**locator, "verified_title": True}
         block = SourceBlock(
             block_id=raw["block_id"], block_kind=raw["block_kind"],
             reading_order=raw["reading_order"], canonical_html=raw["canonical_html"],

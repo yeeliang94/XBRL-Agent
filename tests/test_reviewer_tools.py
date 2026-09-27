@@ -833,6 +833,9 @@ def test_list_facts_does_not_flag_leaf_equal_to_a_computed_total(tmp_path):
     facts = list_run_facts(db, run_id, template_prefix="mfrs-company-")
     assert any(f["kind"] == "COMPUTED" and f["value"] == 100.0 for f in facts)
     assert _repeated_values(facts) == {}
+    listing = _format_fact_listing(facts)
+    assert "template-derived" in listing
+    assert "source-entered" in listing
     # But two LEAVES sharing a value are still flagged (the real over-count).
     _wf(db, run_id, LEAF2, 100.0)
     recompute_after_turn(db, run_id)

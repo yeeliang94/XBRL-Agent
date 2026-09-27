@@ -410,20 +410,37 @@ def test_a_matching_expected_disposition_is_accepted(client_run):
 
 
 def test_attach_places_an_item_into_a_cell(client_run):
-    """`attach` was one of the three promised actions the panel never had."""
     client, run_id, db = client_run
     gen = _seed(db, run_id)
-    r = client.post(
+    with repo.db_session(db) as conn:
+        conn.execute(
+            "INSERT INTO notes_nodes(node_uuid, template_id, sheet, row, label, kind, "
+            "slot_role) VALUES ('catch-all-attach', 'mfrs-company-notes-v1', "
+            "'Notes-Listofnotes', 112, 'Disclosure of other notes to accounts', "
+            "'LEAF', 'INPUT')"
+        )
+    first = client.post(
         f"/api/runs/{run_id}/notes_integrity/disposition",
-        json={"block_ids": ["b1"], "disposition": "included",
-              "target_sheet": "Notes", "target_row": 10},
+        json={"block_ids": ["b1", "b2"], "disposition": "included",
+              "target_sheet": "Notes-Listofnotes", "target_row": 112},
     )
-    # No notes_nodes registry in this fixture, so the shared writer refuses
-    # the target — which is the point: attach goes through the SAME validated
-    # writer an agent uses rather than a second, unguarded path.
-    assert r.status_code in (200, 422)
-    if r.status_code == 422:
-        assert "not a row of this filing" in r.json()["detail"]
+    assert first.status_code == 200
+    second = client.post(
+        f"/api/runs/{run_id}/notes_integrity/disposition",
+        json={"block_ids": ["b3"], "disposition": "included",
+              "target_sheet": "Notes-Listofnotes", "target_row": 112},
+    )
+    assert second.status_code == 200
+    with repo.db_session(db) as conn:
+        cell = conn.execute(
+            "SELECT html FROM notes_cells WHERE run_id=? AND sheet=? AND row=?",
+            (run_id, "Notes-Listofnotes", 112),
+        ).fetchone()
+        placed = {p["block_id"] for p in srepo.active_placements(conn, gen)
+                  if p["sheet"] == "Notes-Listofnotes" and p["row"] == 112}
+    assert "Stated at cost." in cell["html"]
+    assert "Cash at bank." in cell["html"]
+    assert placed == {"b1", "b2", "b3"}
 
 
 def test_attach_without_a_destination_is_refused(client_run):

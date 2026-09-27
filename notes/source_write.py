@@ -203,6 +203,14 @@ def expand_table_groups(
     # relationships, never inferred from labels or matching column counts.
     while True:
         previous = set(wanted)
+        # A heading carried into a selection as context must not drag in the
+        # heading's other children. Those may be a separate policy/disclosure
+        # destination under the same top-level note.
+        context_headings = {
+            ancestor
+            for bid in wanted if bid in by_id
+            for ancestor in (by_id[bid].locator or {}).get("heading_ancestor_ids", [])
+        }
         groups = {by_id[bid].table_group_id for bid in wanted
                   if bid in by_id and by_id[bid].table_group_id}
         for block in available:
@@ -212,8 +220,9 @@ def expand_table_groups(
                 if block.continues_block_id:
                     wanted.add(block.continues_block_id)
                 locator = block.locator or {}
-                for key in ("heading_ancestor_ids", "required_related_block_ids"):
-                    wanted.update(locator.get(key, []))
+                wanted.update(locator.get("heading_ancestor_ids", []))
+                if block.block_id not in context_headings:
+                    wanted.update(locator.get("required_related_block_ids", []))
         if previous == wanted:
             break
     order = {b.block_id: b.reading_order for b in available}
@@ -274,6 +283,15 @@ _NUMERIC_NOTE_PROSE_SHEETS = frozenset({
     "Notes-RelatedPartytran",
 })
 _LIST_OF_NOTES_SHEET = "Notes-Listofnotes"
+_CATCH_ALL_LABEL = "Disclosure of other notes to accounts"
+
+
+def _is_list_catch_all(sheet: str, label: str) -> bool:
+    return (
+        sheet == _LIST_OF_NOTES_SHEET
+        and label.split("[", 1)[0].strip().casefold()
+        == _CATCH_ALL_LABEL.casefold()
+    )
 
 
 def _heading_context_ids(available: Sequence[SourceBlock]) -> set[str]:
@@ -472,6 +490,7 @@ def write_cell_from_blocks(
     template_prefix: Optional[str] = None,
     allowed_sheets: Optional[Sequence[str]] = None,
     expected_revision: Optional[int] = None,
+    target_label: Optional[str] = None,
 ) -> WriteOutcome:
     """Build and store one cell from the named source blocks.
 
@@ -491,6 +510,14 @@ def write_cell_from_blocks(
             conn, sheet, row,
             template_prefix=template_prefix, allowed_sheets=allowed_sheets,
         )
+        if target_label is not None and target_label.strip().casefold() != (
+            target.get("label") or ""
+        ).strip().casefold():
+            raise SourceWriteError(
+                f"{sheet} row {row} is labelled {target.get('label')!r}, not "
+                f"{target_label!r}. Read the live template and retry with the "
+                "matching row and label."
+            )
         label = target.get("label") or label
         concept_uuid = target.get("node_uuid")
         numeric_note_prose = bool(target.get("numeric_note_prose"))
@@ -506,16 +533,26 @@ def write_cell_from_blocks(
         raise SourceWriteError("the source generation is stale or belongs to another run; reload the active source.")
     available = load_blocks(conn, generation_id)
     try:
-        wanted = expand_table_groups(available, block_ids)
+        from notes.source_sections import expand_section_ids
+
+        selected_ids = expand_section_ids(
+            available, srepo.fetch_notes(conn, generation_id), block_ids,
+        )
+        wanted = expand_table_groups(available, selected_ids)
         selected = [b for b in available if b.block_id in wanted]
         owners = {b.source_note_id for b in selected if b.source_note_id}
-        if sheet == "Notes-Listofnotes" and len(owners) > 1:
-            raise SourceWriteError("one List-of-Notes field may contain only one top-level disclosure.")
+        # Human attachment sends the cell's existing parts with the new ones;
+        # agents submit one disclosure at a time for their per-note payload.
+        if sheet == _LIST_OF_NOTES_SHEET and len(owners) > 1 and actor != "human":
+            raise SourceWriteError(
+                "select one top-level disclosure per source write; distinct "
+                "disclosures may share the catch-all field through separate writes."
+            )
         rendered = source_render.render_blocks(
             available, wanted, format_ops=format_ops,
             row_label=f"{sheet} row {row}",
         )
-    except source_render.BlockSelectionError as exc:
+    except (source_render.BlockSelectionError, ValueError) as exc:
         raise SourceWriteError(str(exc)) from exc
 
     if rendered.oversized:
@@ -541,7 +578,7 @@ def write_cell_from_blocks(
             f"the parts named for {sheet} row {row} render to nothing."
         )
 
-    asked_for = set(block_ids)
+    asked_for = set(selected_ids)
     added = [bid for bid in rendered.block_ids if bid not in asked_for]
 
     # One transaction for the cell, its lineage and its dispositions. Split
@@ -562,13 +599,52 @@ def write_cell_from_blocks(
         if active is None or active["status"] != "active":
             raise SourceWriteError("the source generation changed during rendering; reload the active source.")
         existing = conn.execute(
-            "SELECT content_origin, content_revision FROM notes_cells WHERE run_id=? AND sheet=? AND row=?",
+            "SELECT content_origin, content_revision, html, source_pages FROM notes_cells WHERE run_id=? AND sheet=? AND row=?",
             (run_id, sheet, row),
         ).fetchone()
         if existing and existing["content_origin"] == "human_modified" and actor != "human":
             raise SourceWriteError("this cell contains a human edit; automatic source placement cannot overwrite it.")
         if expected_revision is not None and (existing is None or existing["content_revision"] != expected_revision):
             raise SourceWriteError("this cell changed after it was read; reload it before repairing.")
+        if _is_list_catch_all(sheet, label) and actor in {"notes_agent", "notes_reviewer"}:
+            previous = conn.execute(
+                "SELECT block_id FROM notes_block_placements "
+                "WHERE run_id=? AND generation_id=? AND sheet=? AND row=? AND active=1",
+                (run_id, generation_id, sheet, row),
+            ).fetchall()
+            previous_ids = {entry["block_id"] for entry in previous}
+            if existing and existing["html"] and not previous_ids:
+                raise SourceWriteError(
+                    "this catch-all field contains content without source links; "
+                    "review it before adding another disclosure."
+                )
+            by_id = {block.block_id: block for block in available}
+            incoming_owners = {by_id[bid].source_note_id for bid in rendered.block_ids
+                               if by_id[bid].source_note_id}
+            retained = {
+                bid for bid in previous_ids
+                if bid in by_id and by_id[bid].source_note_id not in incoming_owners
+            }
+            if retained:
+                if format_ops:
+                    raise SourceWriteError(
+                        "formatting operations cannot be applied while combining "
+                        "distinct source notes in the catch-all field."
+                    )
+                rendered = source_render.render_blocks(
+                    available, sorted(retained | set(rendered.block_ids)),
+                    row_label=f"{sheet} row {row}",
+                )
+                if rendered.oversized:
+                    raise SourceWriteError(
+                        f"the combined catch-all disclosure exceeds the "
+                        f"{source_render.CELL_CHAR_LIMIT:,}-character cell limit; "
+                        "no source content was overwritten."
+                    )
+                old_pages = json.loads(existing["source_pages"] or "[]") if existing else []
+                source_pages = sorted(set(old_pages) | set(source_pages or []) |
+                                      {by_id[bid].page for bid in rendered.block_ids
+                                       if by_id[bid].page is not None})
         _refuse_unapproved_cross_row_duplicates(
             conn,
             run_id=run_id,
@@ -580,10 +656,16 @@ def write_cell_from_blocks(
             numeric_note_prose=numeric_note_prose,
             target_label=label,
         )
+        by_id = {block.block_id: block for block in available}
+        rendered_pages = sorted({
+            by_id[bid].page for bid in rendered.block_ids
+            if by_id[bid].page is not None
+        })
         repo.upsert_notes_cell(
             conn, run_id=run_id, sheet=sheet, row=row, label=label,
             html=rendered.html, evidence=evidence,
-            source_pages=source_pages or [], style_source=rendered.style_source,
+            source_pages=rendered_pages or source_pages or [],
+            style_source=rendered.style_source,
             concept_uuid=concept_uuid,
         )
         _lineage.mark_source_render(

@@ -104,6 +104,73 @@ def test_prepared_run_reuses_inventory_and_derived_pages_without_second_scout(do
     assert received["infopack"].statements[StatementType.SOFP].face_page == 1
 
 
+def test_prepared_notes_run_assigns_all_prose_destinations_before_extraction(
+    document, pipeline, monkeypatch,
+):
+    import notes.coordinator
+    from notes_types import NotesTemplateType
+
+    directory, db, _ = document
+    client, _, _, _ = pipeline
+    assigned = []
+
+    async def extract_notes(config, **_kwargs):
+        assigned.append(set(config.notes_to_run))
+        return notes.coordinator.NotesCoordinatorResult(agent_results=[])
+
+    monkeypatch.setattr(notes.coordinator, "run_notes_extraction", extract_notes)
+    monkeypatch.setattr(server, "_run_notes_integrity_check", Mock(return_value={
+        "tips_status": False, "requires_review": False, "missing_block_ids": [],
+    }))
+    response = client.post(f"/api/run/{directory.name}", json={
+        "statements": ["SOFP"], "variants": {"SOFP": "CuNonCu"},
+        "use_scout": True, "denomination": "thousands",
+        "notes_to_run": ["CORP_INFO"],
+    })
+
+    assert response.status_code == 200
+    expected = {
+        NotesTemplateType.CORP_INFO,
+        NotesTemplateType.ACC_POLICIES,
+        NotesTemplateType.LIST_OF_NOTES,
+    }
+    assert assigned == [expected]
+    with sqlite3.connect(db) as conn:
+        saved = json.loads(conn.execute(
+            "SELECT run_config_json FROM runs ORDER BY id DESC LIMIT 1"
+        ).fetchone()[0])
+        agent_types = {
+            row[0] for row in conn.execute(
+                "SELECT statement_type FROM run_agents "
+                "WHERE run_id = (SELECT id FROM runs ORDER BY id DESC LIMIT 1)"
+            )
+        }
+    assert set(saved["notes_to_run"]) == {nt.value for nt in expected}
+    assert {f"NOTES_{nt.value}" for nt in expected} <= agent_types
+
+
+def test_prepared_statement_only_rerun_does_not_launch_notes(document, pipeline, monkeypatch):
+    import notes.coordinator
+
+    directory, _, _ = document
+    client, _, _, _ = pipeline
+    assigned = []
+
+    async def extract_notes(config, **_kwargs):
+        assigned.append(set(config.notes_to_run))
+        return notes.coordinator.NotesCoordinatorResult(agent_results=[])
+
+    monkeypatch.setattr(notes.coordinator, "run_notes_extraction", extract_notes)
+    response = client.post(f"/api/run/{directory.name}", json={
+        "statements": ["SOFP"], "variants": {"SOFP": "CuNonCu"},
+        "use_scout": True, "denomination": "thousands",
+        "notes_to_run": [],
+    })
+
+    assert response.status_code == 200
+    assert assigned == [set()]
+
+
 @pytest.mark.asyncio
 async def test_prepared_repeats_preserve_request_and_use_preparation_each_time(document, pipeline):
     directory, db, _ = document

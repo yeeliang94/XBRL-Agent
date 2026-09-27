@@ -582,7 +582,9 @@ def _format_fact_listing(
         lines.append(
             f"  row {f['render_row']:>3} {f['canonical_label']!r} "
             f"[{f['kind']}] {f['period']}/{f['entity_scope']}: "
-            f"{f['value']} ({f['value_status']}) uuid={f['concept_uuid']}"
+            f"{f['value']} ({f['value_status']}; "
+            f"{'template-derived' if f.get('source') == 'cascade' else 'source-entered'}) "
+            f"uuid={f['concept_uuid']}"
         )
     if truncated:
         all_rows_per_sheet: dict[str, set] = {}
@@ -649,6 +651,7 @@ def read_concept_facts_text(
         lines.append(
             f"  - {f['period']}/{f['entity_scope']} {f['dimension_key']}: value={f['value']} "
             f"status={f['value_status']} children={f['children_status']} "
+            f"origin={'template-derived' if f['source'] == 'cascade' else 'source-entered'} "
             f"source={f['source']!r} evidence={f['evidence']!r}"
         )
     return "\n".join(lines)

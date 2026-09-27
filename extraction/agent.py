@@ -1300,9 +1300,56 @@ def create_extraction_agent(
                  "evidence": "..."}
               - row: the 1-indexed row number from read_template()
               - col: any column number (B=2, C=3, D=4, ... X=24)
+              - also use this mode when a label and section still match more
+                than one writable row; check the source section first
 
         Only write to data-entry cells. Never write to formula cells.
+        For a numeric zero, set zero_basis="printed_zero" only when the PDF
+        visibly prints 0 or a dash for that line and cite it in evidence.
+        Leave an undisclosed line blank rather than writing zero.
         """
+        from decimal import Decimal, InvalidOperation
+
+        def is_numeric_zero(value: object) -> bool:
+            if isinstance(value, bool) or value is None:
+                return False
+            if not isinstance(value, (int, float, str)):
+                return False
+            try:
+                return Decimal(str(value).strip().replace(",", "")) == 0
+            except InvalidOperation:
+                return False
+
+        ungrounded_zeros = [
+            f for f in facts
+            if is_numeric_zero(f.get("value") if isinstance(f, dict) else f.value)
+            and (f.get("zero_basis") if isinstance(f, dict) else f.zero_basis) != "printed_zero"
+        ]
+        if ungrounded_zeros:
+            from tools.fill_workbook import FillResult, _coerce_facts, _mapping_request_keys
+
+            message = (
+                "Failed to fill workbook. A numeric zero needs "
+                "zero_basis='printed_zero' and evidence of the printed 0 or "
+                "dash. If the PDF has no amount for that line, leave the "
+                "field blank. No fields from this call were written."
+            )
+            rejected = []
+            for mapping in _coerce_facts(facts):
+                key, base_key = _mapping_request_keys(mapping)
+                rejected.append({
+                    "key": key, "base_key": base_key, "message": message,
+                    "sheet": mapping.sheet, "col": mapping.col,
+                    "candidate_rows": [], "resolved_row": mapping.row,
+                    "kind": "zero_receipt" if is_numeric_zero(mapping.value) else "batch_rejected",
+                })
+            _update_unresolved_fill_errors(ctx.deps, FillResult(
+                success=False, fields_written=0, output_path="",
+                errors=[message], failed_request_keys=rejected,
+            ))
+            ctx.deps.result_saved = False
+            ctx.deps.last_verify_result = None
+            return message
         output_path = str(Path(ctx.deps.output_dir) / ctx.deps.filled_filename)
         source_path = (
             ctx.deps.filled_path

@@ -385,6 +385,8 @@ class _FakeReviewerDeps:
         self.coverage_note_verdicts: dict = {}
         self.coverage_subnote_verdicts: dict = {}
         self.authored_note_nums: set = set()
+        self.prepared_source_required = False
+        self.policy_placement_verdicts: dict = {}
 
 
 class _ImmediateAgentRun:
@@ -821,6 +823,16 @@ def test_reviewer_pass_times_out_on_stalled_turn(
     by_kind = {e["event"]: e["data"] for e in _drain(q)}
     assert by_kind["error"]["type"] == "notes_reviewer_wallclock_exceeded"
     assert by_kind["complete"]["success"] is False
+
+
+def test_notes_reviewer_time_budget_scales_with_packet_but_stays_bounded():
+    import server
+
+    budget = server._notes_reviewer_wallclock_limit
+    assert budget(300.0, 25) == 300.0
+    assert budget(300.0, 74) == 447.0
+    assert budget(300.0, 200) == 480.0
+    assert budget(0.1, 74) == 0.1
 
 
 def test_reviewer_pass_skips_when_no_findings(db_path: Path, tmp_path):

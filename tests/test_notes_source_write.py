@@ -19,17 +19,17 @@ from db import repository as repo
 from db.schema import init_db
 from notes import lineage, source_write
 from notes import source_repository as srepo
-from notes.source_models import ContentOrigin, Disposition, SourceBlock
+from notes.source_models import ContentOrigin, Disposition, SourceBlock, SourceNote
 
 BLOCKS = [
-    SourceBlock(block_id="b1", block_kind="heading", reading_order=0,
+    SourceBlock(block_id="b1", block_kind="heading", reading_order=0, page=3,
                 canonical_html="<h3>5. Receivables</h3>"),
-    SourceBlock(block_id="b2", block_kind="paragraph", reading_order=1,
+    SourceBlock(block_id="b2", block_kind="paragraph", reading_order=1, page=3,
                 canonical_html="<p>Stated at cost.</p>"),
-    SourceBlock(block_id="b3", block_kind="table", reading_order=2,
+    SourceBlock(block_id="b3", block_kind="table", reading_order=2, page=4,
                 canonical_html="<table><tr><td>a</td><td>1</td></tr></table>",
                 table_group_id="tg1"),
-    SourceBlock(block_id="b4", block_kind="table", reading_order=3,
+    SourceBlock(block_id="b4", block_kind="table", reading_order=3, page=4,
                 canonical_html="<table><tr><td>b</td><td>2</td></tr></table>",
                 table_group_id="tg1"),
 ]
@@ -60,6 +60,12 @@ def test_a_write_records_lineage_and_a_disposition_per_block(conn_gen):
         block_ids=["b1", "b2"], label="Receivables",
     )
     assert out.block_ids == ["b1", "b2"]
+
+    stored = conn.execute(
+        "SELECT source_pages FROM notes_cells WHERE run_id = ? AND row = 10",
+        (run_id,),
+    ).fetchone()
+    assert stored["source_pages"] == "[3]"
 
     state = lineage.read_lineage(conn, run_id, "Notes", 10)
     assert state.source_generation_id == gen
@@ -107,6 +113,25 @@ def test_a_validated_source_write_stamps_the_registry_identity(conn_gen):
         (run_id,),
     ).fetchone()
     assert stored["concept_uuid"] == "registry-11"
+
+
+def test_source_write_rejects_a_valid_row_with_the_wrong_selected_label(conn_gen):
+    conn, run_id, gen = conn_gen
+    conn.execute(
+        "INSERT INTO notes_nodes(node_uuid, template_id, sheet, row, label, kind, "
+        "slot_role) VALUES ('policy-11', 'mfrs-company-notes-v1', "
+        "'Notes', 11, 'Description of accounting policy for income tax', "
+        "'LEAF', 'INPUT')"
+    )
+    with pytest.raises(source_write.SourceWriteError, match="not 'Description of accounting policy for inventories'"):
+        source_write.write_cell_from_blocks(
+            conn, run_id=run_id, generation_id=gen, sheet="Notes", row=11,
+            target_label="Description of accounting policy for inventories",
+            block_ids=["b1", "b2"], template_prefix="mfrs-company-",
+        )
+    assert conn.execute(
+        "SELECT 1 FROM notes_cells WHERE run_id=? AND row=11", (run_id,)
+    ).fetchone() is None
 
 
 def test_naming_half_a_split_table_pulls_in_the_rest(conn_gen):
@@ -193,6 +218,75 @@ def test_rewriting_the_same_cell_replaces_rather_than_accumulates(conn_gen):
         "SELECT html FROM notes_cells WHERE run_id = ? AND row = 10", (run_id,)
     ).fetchone()["html"]
     assert "Stated at cost" not in html
+
+
+def test_distinct_source_notes_share_catch_all_without_overwriting(conn_gen):
+    conn, run_id, gen = conn_gen
+    conn.execute(
+        "INSERT INTO notes_nodes(node_uuid, template_id, sheet, row, label, kind, "
+        "slot_role) VALUES ('catch-all', 'mfrs-company-notes-v1', "
+        "'Notes-Listofnotes', 112, 'Disclosure of other notes to accounts', "
+        "'LEAF', 'INPUT')"
+    )
+    srepo.write_blocks(conn, gen, BLOCKS + [
+        SourceBlock("first-title", "heading", 10, "<h3>11. Other</h3>", source_note_id="n11"),
+        SourceBlock("first-body", "paragraph", 11, "<p>First disclosure.</p>", source_note_id="n11"),
+        SourceBlock("second-title", "heading", 12, "<h3>B. Lease cash flows</h3>", source_note_id="lease-b"),
+        SourceBlock("second-body", "paragraph", 13, "<p>Lease cash outflow.</p>", source_note_id="lease-b"),
+        SourceBlock("second-revised", "paragraph", 14, "<p>Revised lease cash outflow.</p>", source_note_id="lease-b"),
+    ])
+    kwargs = dict(run_id=run_id, generation_id=gen,
+                  sheet="Notes-Listofnotes", row=112,
+                  template_prefix="mfrs-company-")
+    with pytest.raises(source_write.SourceWriteError, match="one top-level disclosure"):
+        source_write.write_cell_from_blocks(conn, **kwargs,
+            block_ids=["first-body", "second-body"])
+    source_write.write_cell_from_blocks(conn, **kwargs,
+        block_ids=["first-title", "first-body"])
+    source_write.write_cell_from_blocks(conn, **kwargs,
+        block_ids=["second-title", "second-body"])
+    source_write.write_cell_from_blocks(conn, **kwargs,
+        block_ids=["second-title", "second-revised"])
+
+    cell = conn.execute(
+        "SELECT html FROM notes_cells WHERE run_id=? AND sheet=? AND row=?",
+        (run_id, "Notes-Listofnotes", 112),
+    ).fetchone()["html"]
+    assert "First disclosure." in cell
+    assert "Revised lease cash outflow." in cell
+    assert "<p>Lease cash outflow.</p>" not in cell
+    assert cell.index("First disclosure.") < cell.index("Revised lease cash outflow.")
+    placed = {p["block_id"] for p in srepo.active_placements(conn, gen)
+              if p["sheet"] == "Notes-Listofnotes" and p["row"] == 112}
+    assert placed == {"first-title", "first-body", "second-title", "second-revised"}
+
+
+def test_reviewer_relink_keeps_other_source_note_in_catch_all(conn_gen):
+    conn, run_id, gen = conn_gen
+    conn.execute(
+        "INSERT INTO notes_nodes(node_uuid, template_id, sheet, row, label, kind, "
+        "slot_role) VALUES ('catch-all-review', 'mfrs-company-notes-v1', "
+        "'Notes-Listofnotes', 112, 'Disclosure of other notes to accounts', "
+        "'LEAF', 'INPUT')"
+    )
+    srepo.write_blocks(conn, gen, [
+        SourceBlock("lease", "paragraph", 10, "<p>Lease cash outflows.</p>", source_note_id="lease-b"),
+        SourceBlock("related", "paragraph", 11, "<p>Related parties.</p>", source_note_id="n11"),
+    ])
+    kwargs = dict(run_id=run_id, generation_id=gen,
+                  sheet="Notes-Listofnotes", row=112,
+                  template_prefix="mfrs-company-", actor="notes_reviewer")
+    source_write.write_cell_from_blocks(conn, **kwargs, block_ids=["lease"])
+    source_write.write_cell_from_blocks(conn, **kwargs, block_ids=["related"])
+
+    cell = conn.execute(
+        "SELECT html FROM notes_cells WHERE run_id=? AND sheet=? AND row=?",
+        (run_id, "Notes-Listofnotes", 112),
+    ).fetchone()["html"]
+    assert "Lease cash outflows." in cell
+    assert "Related parties." in cell
+    assert {p["block_id"] for p in srepo.active_placements(conn, gen)
+            if p["sheet"] == "Notes-Listofnotes" and p["row"] == 112} == {"lease", "related"}
 
 
 def test_substantive_source_blocks_cannot_be_placed_in_two_rows(conn_gen):
@@ -339,6 +433,48 @@ def test_expand_table_groups_is_a_no_op_without_a_group():
 
 def test_expand_table_groups_returns_reading_order():
     assert source_write.expand_table_groups(BLOCKS, ["b4"]) == ["b3", "b4"]
+
+
+def test_policy_heading_context_does_not_pull_sibling_disclosure():
+    blocks = [
+        SourceBlock("note", "heading", 0, "<h2>4. Inventories</h2>",
+                    locator={"required_related_block_ids": ["table"]}),
+        SourceBlock("table", "table", 1, "<table><tr><td>Balances</td></tr></table>",
+                    locator={"heading_ancestor_ids": ["note"],
+                             "required_related_block_ids": ["note"]}),
+        SourceBlock("policy", "heading", 2, "<h3>4.1 Material accounting policy</h3>",
+                    locator={"heading_ancestor_ids": ["note"]}),
+        SourceBlock("method", "paragraph", 3, "<p>Measured at cost.</p>",
+                    locator={"heading_ancestor_ids": ["note", "policy"]}),
+    ]
+    assert source_write.expand_table_groups(blocks, ["policy", "method"]) == [
+        "note", "policy", "method",
+    ]
+
+
+def test_complete_policy_section_writes_without_disclosure_siblings(conn_gen):
+    conn, run_id, gen = conn_gen
+    blocks = [
+        SourceBlock("n4", "heading", 10, "<h2>4. Inventories</h2>", source_note_id="note-4",
+                    locator={"required_related_block_ids": ["balances"]}),
+        SourceBlock("balances", "table", 11, "<table><tr><td>Balances</td></tr></table>",
+                    source_note_id="note-4", locator={"heading_ancestor_ids": ["n4"],
+                                                  "required_related_block_ids": ["n4"]}),
+        SourceBlock("policy", "heading", 12, "<h3>4.1 Material accounting policy</h3>",
+                    source_note_id="note-4", locator={"heading_ancestor_ids": ["n4"]}),
+        SourceBlock("method", "paragraph", 13, "<p>Measured at cost.</p>",
+                    source_note_id="note-4", locator={"heading_ancestor_ids": ["n4", "policy"]}),
+    ]
+    srepo.write_blocks(conn, gen, blocks)
+    srepo.write_notes(conn, gen, [SourceNote("note-4", "4", "Inventories")])
+    result = source_write.write_cell_from_blocks(
+        conn, run_id=run_id, generation_id=gen, sheet="Notes", row=10,
+        block_ids=["section:note-4:4.1"],
+    )
+    assert result.block_ids == ["n4", "policy", "method"]
+    assert "Balances" not in conn.execute(
+        "SELECT html FROM notes_cells WHERE run_id=? AND sheet='Notes' AND row=10", (run_id,),
+    ).fetchone()["html"]
 
 
 def test_continuation_selection_preserves_all_pages_and_heading_context(conn_gen):

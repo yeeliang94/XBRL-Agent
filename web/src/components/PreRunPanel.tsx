@@ -1755,8 +1755,12 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           The per-note model picker also lives behind Advanced. */}
       <DisclosureSection
         id="notes-selection"
-        title="Notes to include"
-        summary={enabledNotes.length === 0 ? "None selected" : `${enabledNotes.length} of ${NOTES_TEMPLATE_TYPES.length} selected`}
+        title="Notes templates"
+        summary={enabledNotes.length === 0
+          ? "No notes included"
+          : preparation?.status === "succeeded"
+            ? "All document notes included"
+            : `${enabledNotes.length} of ${NOTES_TEMPLATE_TYPES.length} selected`}
         open={showNotes}
         onToggle={() => setShowNotes((value) => !value)}
       >
@@ -1820,10 +1824,17 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           (infopack.notes_inventory as unknown[]).length > 0 &&
           !NOTES_TEMPLATE_TYPES.some((n) => notesEnabled[n]) && (
             <div style={styles.notesNudge} role="status">
-              The preview scan found notes in this document. Tick any you’d like
-              extracted below — none are included by default.
+              The preview scan found notes in this document. Turn on notes
+              extraction below to include them; notes are off by default.
             </div>
           )}
+        {preparation?.status === "succeeded" && enabledNotes.length > 0 && (
+          <div style={styles.notesNudge} role="status">
+            A notes run includes Corporate information, Accounting policies, and
+            List of notes to cover the full document. Issued capital and Related
+            party numeric templates run when selected.
+          </div>
+        )}
         <NotesRunConfig
           enabled={notesEnabled}
           modelOverrides={notesModelOverrides}

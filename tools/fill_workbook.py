@@ -4,7 +4,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Annotated, Callable, Optional, Sequence, TypedDict, Union
+from typing import Annotated, Callable, Literal, Optional, Sequence, TypedDict, Union
 
 import openpyxl
 from pydantic import BaseModel, StringConstraints
@@ -57,6 +57,9 @@ class FactWrite(BaseModel):
     # through. pydantic DOES validate — keep the union so date cells still
     # work. int|float preserves integer-ness for the common numeric case.
     value: Optional[Union[int, float, str]] = None
+    # The extraction tool requires this receipt for a numeric zero. An absent
+    # source line is a blank fact, not an observed zero.
+    zero_basis: Optional[Literal["printed_zero"]] = None
 
 
 @dataclass
@@ -437,8 +440,8 @@ def fill_workbook(
                         mapping,
                         f"Ambiguous label '{mapping.field_label}' in sheet "
                         f"'{mapping.sheet}' matches writable rows {rows}. "
-                        "Supply the exact period/scope section from "
-                        "read_template(); no row was selected.",
+                        "Use the correct explicit row from read_template() "
+                        "after checking the source section; no row was selected.",
                         kind="ambiguous_label",
                         candidate_rows=list(resolution.candidate_rows),
                     )

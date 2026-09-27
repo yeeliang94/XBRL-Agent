@@ -120,7 +120,7 @@ describe("AgentTabs", () => {
 
     expect(screen.getByRole("tab", { name: /Profit or loss/ })).toHaveTextContent("Skipped");
     expect(screen.getByRole("tab", { name: /Comprehensive income/ })).toHaveTextContent("Stopped");
-    expect(screen.getByText("1 of 7 complete")).toBeInTheDocument();
+    expect(screen.queryByText("1 of 7 complete")).toBeNull();
   });
 
   test("status badges reflect agent state", () => {
@@ -162,7 +162,7 @@ describe("AgentTabs", () => {
 
     expect(screen.queryByRole("group", { name: "Filter workstreams" })).toBeNull();
     expect(screen.getByText("Run activity")).toBeInTheDocument();
-    expect(screen.getByText("1 of 7 complete")).toBeInTheDocument();
+    expect(screen.queryByText("1 of 7 complete")).toBeNull();
     expect(onTabClick).not.toHaveBeenCalled();
   });
 

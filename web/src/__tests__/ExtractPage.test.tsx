@@ -292,13 +292,41 @@ describe("ExtractPage — render-gate regression guards", () => {
     expect(screen.getByLabelText("Workflow progress")).toBeInTheDocument();
     expect(screen.getByRole("tablist", { name: "Run workstreams" })).toHaveAttribute("aria-orientation", "vertical");
     expect(screen.getByRole("tabpanel", { name: /SOFP activity/i })).toBeInTheDocument();
-    expect(screen.getByText("0/2 complete")).toBeInTheDocument();
+    expect(screen.getByText("Selected extraction · 0/2 complete")).toBeInTheDocument();
     expect(screen.queryByText(/leave this page/i)).toBeNull();
     const usage = container.querySelector("details") as HTMLDetailsElement;
     expect(usage.open).toBe(false);
     expect(usage.querySelector("summary")?.textContent).toContain("Technical usage details");
     expect(usage.querySelector("summary")?.textContent).toContain("$0.0123");
     expect(usage.querySelector("summary [aria-hidden='true']")).toBeInTheDocument();
+  });
+
+  test("run startup names the wait without claiming to be finalising", () => {
+    render(<ExtractPage {...makeProps({ state: {
+      sessionId: "test-session", filename: "test.pdf", isRunning: true,
+      statementsInRun: ["SOFP"],
+    } })} />);
+    expect(screen.getByText("Starting workstreams")).toBeInTheDocument();
+    expect(screen.queryByText("Finalising")).toBeNull();
+  });
+
+  test("failed live workstream drops a stale completed milestone", () => {
+    const agent = createAgentState("notes:ACC_POLICIES", "ACC_POLICIES", "Notes 11");
+    agent.status = "failed";
+    agent.events = [
+      { event: "complete", timestamp: 1, data: {
+        success: true, agent_id: "notes:ACC_POLICIES", agent_role: "ACC_POLICIES",
+        workbook_path: null, error: null,
+      } },
+      { event: "error", timestamp: 2, data: { message: "Notes agent finished without writing any payloads" } },
+    ];
+    render(<ExtractPage {...makeProps({ state: {
+      sessionId: "test-session", filename: "test.pdf", isRunning: true,
+      notesInRun: ["ACC_POLICIES"], agents: { "notes:ACC_POLICIES": agent },
+      agentTabOrder: ["notes:ACC_POLICIES"], activeTab: "notes:ACC_POLICIES",
+    } })} />);
+    expect(screen.getAllByText("Notes agent finished without writing any payloads.").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Workstream completed.")).toBeNull();
   });
 
   test("completed extraction workers do not hide a running automatic reviewer", () => {
@@ -309,7 +337,7 @@ describe("ExtractPage — render-gate regression guards", () => {
       agents: { sofp_0: extraction, NOTES_VALIDATOR: reviewer },
       agentTabOrder: ["sofp_0", "NOTES_VALIDATOR"],
     } })} />);
-    expect(screen.getByText("1/1 complete")).toBeInTheDocument();
+    expect(screen.getByText("Selected extraction · 1/1 complete")).toBeInTheDocument();
     expect(screen.getByText("1 active")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Reviewing extracted notes" })).toBeInTheDocument();
   });

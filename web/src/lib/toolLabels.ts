@@ -28,6 +28,13 @@ export const TOOL_LABELS: Record<string, string> = {
   check_variant_signals: "Checking variant signals",
   discover_notes: "Discovering notes",
   save_infopack: "Saving scout results",
+  // The live roster names reviewer work for the operator. Unrecognised tools
+  // remain generic there; their exact identifiers are available in diagnostics.
+  read_source_manifest: "Reading source note inventory",
+  relink_note_cell: "Checking note references",
+  verify_findings: "Checking review findings",
+  raise_flag: "Recording an item to review",
+  find_candidate_rows: "Checking candidate figures",
 };
 
 /** Return a human-readable label for a tool name, falling back to Title Case. */

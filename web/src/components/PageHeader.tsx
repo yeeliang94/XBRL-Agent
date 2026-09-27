@@ -59,10 +59,6 @@ const styles: Record<string, CSSProperties> = {
   },
   title: {
     ...ui.pageTitle,
-    fontSize: "clamp(24px, 2.2vw, 34px)",
-    lineHeight: 1.15,
-    fontWeight: pwc.weight.bold,
-    letterSpacing: "-0.035em",
   },
   titleCompact: {
     ...ui.pageTitleCompact,
@@ -70,10 +66,9 @@ const styles: Record<string, CSSProperties> = {
   },
   description: {
     ...ui.bodyText,
-    fontSize: 15,
     color: tokens.color.text.secondary,
-    maxWidth: 650,
-    marginTop: 9,
+    maxWidth: "70ch",
+    marginTop: pwc.space.sm,
     marginBottom: 0,
   },
   actions: {

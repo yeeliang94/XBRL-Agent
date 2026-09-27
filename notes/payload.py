@@ -226,6 +226,12 @@ class NotesPayload:
     # CRITICAL, 2026-08-06). The write_notes JSON parser never passes this
     # field, so an agent cannot set it to dodge the evidence contract.
     source_built: bool = False
+    # Frozen source identity for source-built Sheet-12 writes. An unnumbered
+    # source note has no note_num, but its later corrected write must replace
+    # its own earlier payload without replacing another note in the same row.
+    source_note_id: Optional[str] = None
+    # Frozen position disambiguates source notes starting on the same page.
+    source_reading_order: Optional[int] = None
 
     def __post_init__(self) -> None:
         from concept_model.dimensions import dimension_key

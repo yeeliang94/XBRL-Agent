@@ -48,7 +48,9 @@ describe("focused-workspace shell", () => {
     expect(mobile).toContain(".concept-tree-row > .concept-tree-label");
     expect(mobile).toContain("position: sticky !important");
     expect(mobile).not.toContain(".notes-review-row {");
-    expect(mobile).toContain("clip-path: inset(50%)");
+    expect(mobile).toContain(".app-main-nav-label");
+    expect(mobile).toContain("clip-path: none");
+    expect(mobile).toContain("font-size: 11px !important");
     expect(mobile).not.toContain(".app-main-nav-label {\n    display: none");
     expect(mobile).toContain(".review-workspace .review-menu-column > :first-child");
     expect(mobile).toContain("flex: 0 0 auto !important");

@@ -31,4 +31,20 @@ describe("semanticActivities", () => {
 
     expect(semanticActivities(events, [])[0].title).toBe("Discovering notes");
   });
+
+  test("keeps unfamiliar reviewer tool identifiers out of the live roster", () => {
+    const timeline: ToolTimelineEntry[] = [{
+      tool_call_id: "review-1", tool_name: "internal_review_operation", args: {},
+      result_summary: null, duration_ms: null, startTime: 1, endTime: null, phase: null,
+    }];
+    expect(semanticActivities([], timeline)[0].title).toBe("Reviewing document");
+  });
+
+  test("names the notes-review workstream in operator language", () => {
+    const timeline: ToolTimelineEntry[] = [{
+      tool_call_id: "review-2", tool_name: "relink_note_cell", args: {},
+      result_summary: null, duration_ms: null, startTime: 2, endTime: null, phase: null,
+    }];
+    expect(semanticActivities([], timeline)[0].title).toBe("Checking note references");
+  });
 });
