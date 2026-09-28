@@ -344,6 +344,23 @@ def test_patch_notes_cell_updates_html_and_updated_at(client_and_run) -> None:
     assert stored_identity == expected_identity
 
 
+def test_patch_notes_cell_preserves_subnote_with_table(client_and_run) -> None:
+    client, run_id = client_and_run
+    html = ('<h3>8 Revenue</h3><div data-note-section="1">'
+            '<h3>8.1 Services</h3><p>Service revenue.</p>'
+            '<table><tr><td>100</td></tr></table></div>')
+    saved = client.patch(
+        f"/api/runs/{run_id}/notes_cells/Notes-CI/5",
+        json={"html": html},
+    )
+    assert saved.status_code == 200
+    assert saved.json()["html"].count('data-note-section="1"') == 1
+    loaded = client.get(f"/api/runs/{run_id}/notes_cells").json()
+    row = next(cell for sheet in loaded["sheets"] for cell in sheet["rows"]
+               if sheet["sheet"] == "Notes-CI" and cell["row"] == 5)
+    assert row["html"] == saved.json()["html"]
+
+
 def test_patch_notes_cell_sanitises_input_html(client_and_run) -> None:
     client, run_id = client_and_run
 

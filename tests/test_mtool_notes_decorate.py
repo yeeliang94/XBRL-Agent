@@ -60,10 +60,52 @@ def test_prose_gets_arial_and_paragraph_spacing():
     assert re.match(r'<div[^>]*style="[^"]*font-family: Arial', out)
 
 
+def test_house_spacing_separates_paragraphs_and_adjacent_tables():
+    from notes.table_theme import house_style
+
+    html = ("<p>First paragraph.</p><p>Second paragraph.</p>"
+            "<table><tr><th>Category</th><th>Group</th></tr>"
+            "<tr><th>Item</th><th>2024 RM'000</th></tr>"
+            "<tr><td>Fees</td><td>1,595</td></tr></table>"
+            "<table><tr><td>Other</td><td>265</td></tr></table>")
+    out = BeautifulSoup(decorate_notes_html(
+        html, NotesTableStyle.from_theme(house_style())), "html.parser")
+    assert len(out.find_all("p")) == 2
+    assert all("margin: 0 0 16px 0" in p["style"] for p in out.find_all("p"))
+    assert all("margin: 16px 0" in t["style"] for t in out.find_all("table"))
+    header = out.find("th", string="2024 RM'000")
+    assert header is not None and "text-align: right" in header["style"]
+    group = out.find("th", string="Group")
+    assert group is not None and "text-align: right" in group["style"]
+
+
+def test_descriptive_body_text_stays_left_in_partly_numeric_column():
+    html = ("<table><tr><th>Relationship</th><th>2024</th></tr>"
+            "<tr><td>Director</td><td>12</td></tr>"
+            "<tr><td>Other</td><td>Spouse of director</td></tr></table>")
+    out = BeautifulSoup(decorate_notes_html(html), "html.parser")
+    assert "text-align: right" in out.find("th", string="2024")["style"]
+    assert "text-align: right" in out.find("td", string="12")["style"]
+    assert "text-align: left" in out.find("td", string="Spouse of director")["style"]
+
+
 def test_bold_and_inline_marks_are_preserved():
     out = decorate_notes_html("<p>a <strong>bold</strong> <em>it</em></p>")
     assert "<strong>bold</strong>" in out
     assert "<em>it</em>" in out
+
+
+def test_subnote_section_indents_its_table_and_prose_together():
+    html = ('<h3>8 Revenue</h3><div data-note-section="1">'
+            '<h3>8.1 Services</h3><p>Service revenue.</p>'
+            '<table><tr><td>100</td></tr></table></div>')
+    soup = BeautifulSoup(decorate_notes_html(html), "html.parser")
+    section = soup.select_one('div[data-note-section="1"]')
+    assert section is not None
+    assert "margin-left: 2em" in section["style"]
+    assert section.table is not None
+    assert "width: 100%" in section.table["style"]
+    assert "margin-left" not in soup.h3.get("style", "")
 
 
 # --- table decoration -------------------------------------------------------

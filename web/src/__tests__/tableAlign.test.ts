@@ -45,11 +45,12 @@ describe("shouldRightAlignCell", () => {
 });
 
 describe("tagNumericCells", () => {
-  test("tags numeric value cells and exempts the label column", () => {
+  test("tags amount-column headers and figures while exempting the label column", () => {
     const root = document.createElement("div");
     root.innerHTML =
       "<table>" +
-      "<tr><th>Item</th><th>2024</th><th>2023</th></tr>" +
+      "<tr><th>Category</th><th>Group</th><th>Company</th></tr>" +
+      "<tr><th>Item</th><th>2024 RM'000</th><th>2023 RM'000</th></tr>" +
       "<tr><td>Approved and contracted for</td><td>1,595</td><td>265</td></tr>" +
       "<tr><td>Total</td><td>17,925</td><td>20,094</td></tr>" +
       "</table>";
@@ -57,15 +58,33 @@ describe("tagNumericCells", () => {
     tagNumericCells(root);
 
     const rows = Array.from(root.querySelectorAll("tr"));
-    // Header: bare "2024"/"2023" are numeric and in value columns → right.
-    const header = Array.from(rows[0].children) as HTMLElement[];
+    // Header text follows the amount columns established by the data rows.
+    const header = Array.from(rows[1].children) as HTMLElement[];
     expect(header[0].classList.contains("is-numeric")).toBe(false); // Item
-    expect(header[1].classList.contains("is-numeric")).toBe(true); // 2024
+    expect(header[1].classList.contains("is-numeric")).toBe(true);
+    expect(header[2].classList.contains("is-numeric")).toBe(true);
+    const category = Array.from(rows[0].children) as HTMLElement[];
+    expect(category[1].classList.contains("is-numeric")).toBe(true);
+    expect(category[2].classList.contains("is-numeric")).toBe(true);
     // Data row: label left, numbers right.
-    const data = Array.from(rows[1].children) as HTMLElement[];
+    const data = Array.from(rows[2].children) as HTMLElement[];
     expect(data[0].classList.contains("is-numeric")).toBe(false);
     expect(data[1].classList.contains("is-numeric")).toBe(true);
     expect(data[2].classList.contains("is-numeric")).toBe(true);
+  });
+
+  test("keeps descriptive body text left in a column with one numeric entry", () => {
+    const root = document.createElement("div");
+    root.innerHTML = "<table>" +
+      "<tr><th>Relationship</th><th>2024</th></tr>" +
+      "<tr><td>Director</td><td>12</td></tr>" +
+      "<tr><td>Other</td><td>Spouse of director</td></tr>" +
+      "</table>";
+    tagNumericCells(root);
+    const rows = Array.from(root.querySelectorAll("tr"));
+    expect(rows[0].children[1].classList.contains("is-numeric")).toBe(true);
+    expect(rows[1].children[1].classList.contains("is-numeric")).toBe(true);
+    expect(rows[2].children[1].classList.contains("is-numeric")).toBe(false);
   });
 
   test("is idempotent — re-running clears stale tags", () => {

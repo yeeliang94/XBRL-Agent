@@ -47,7 +47,8 @@ def test_sanitizer_preserves_allowed_tags_verbatim() -> None:
     # serialises void tags like <br> as `<br/>`; accept either form
     # since both are valid HTML5 and round-trip through the editor.
     for tag in ALLOWED_TAGS:
-        cleaned, warnings = sanitize_notes_html(f"<{tag}>x</{tag}>")
+        opening = '<div data-note-section="1">' if tag == "div" else f"<{tag}>"
+        cleaned, warnings = sanitize_notes_html(f"{opening}x</{tag}>")
         lower = cleaned.lower()
         assert (f"<{tag}>" in lower) or (f"<{tag}/>" in lower) or \
                (f"<{tag} " in lower), (

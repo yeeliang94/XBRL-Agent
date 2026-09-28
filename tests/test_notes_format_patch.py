@@ -34,7 +34,7 @@ def test_prompt_pins_the_standardized_mtool_profile():
               / "prompts" / "notes_formatter.md").read_text(encoding="utf-8")
     assert "STANDARDISED MTOOL PROFILE" in prompt
     assert "Do not copy decorative brand colours" in prompt
-    assert "no borders" in prompt
+    assert "shared theme supplies the ordinary grid" in prompt.lower()
     assert "header_fill" in prompt
 
 
@@ -385,6 +385,15 @@ def test_blocks_all_excludes_paragraphs_inside_tables():
     out = apply_sheet_patch({1: html}, patch)
     assert out.rows[1].count("margin-left: 1em") == 1
     assert '<td><p>In cell</p></td>' in out.rows[1]
+
+
+def test_formatter_must_preserve_subnote_boundaries():
+    from notes.format_verify import verify_format_only
+
+    before = ('<div data-note-section="1"><p>8.1 Services</p><p>Revenue.</p></div>'
+              '<div data-note-section="1"><p>8.2 Goods</p><p>Sales.</p></div>')
+    after = before.replace('</div><div data-note-section="1">', '')
+    assert not verify_format_only(before, after).ok
 
 
 # --- Phase 4: padding + paragraph spacing ops -------------------------------

@@ -55,6 +55,24 @@ def should_right_align_cell(text: str, index: int, cells_in_row: int) -> bool:
     return is_numeric_cell_text(text)
 
 
+def _amount_columns(table: Tag) -> set[int]:
+    """Find amount columns from unmerged rows belonging to this table."""
+    columns: set[int] = set()
+    for row in table.find_all("tr"):
+        if row.find_parent("table") is not table:
+            continue
+        cells = _cells(row)
+        if len(cells) < 2 or any(
+            cell.has_attr("colspan") or cell.has_attr("rowspan") for cell in cells
+        ):
+            continue
+        columns.update(
+            index for index, cell in enumerate(cells)
+            if index > 0 and is_numeric_cell_text(cell.get_text())
+        )
+    return columns
+
+
 # --- format options (port of clipboardFormat.ts DEFAULT_FORMAT_OPTIONS) -----
 @dataclass(frozen=True)
 class NotesTableStyle:
@@ -169,10 +187,10 @@ def _border_css(o: NotesTableStyle) -> str:
     return f"border: 1px solid {color}; "
 
 
-_TABLE_STYLE = ("border-collapse: collapse; margin: 8px 0; "
-                "width: 100%; max-width: 100%; table-layout: fixed;")
-_TABLE_STYLE_KEEP_WIDTH = ("border-collapse: collapse; margin: 8px 0; "
-                           "table-layout: fixed;")
+def _table_style(gap: int, keep_width: bool = False) -> str:
+    base = f"border-collapse: collapse; margin: {gap}px 0; "
+    return base + ("table-layout: fixed;" if keep_width else
+                   "width: 100%; max-width: 100%; table-layout: fixed;")
 
 
 def _cell_style_base(o: NotesTableStyle, lite: bool = False) -> str:
@@ -818,6 +836,11 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
         return html
     soup = BeautifulSoup(html, "html.parser")
 
+    # A section is the containing block for its prose and tables. Keep this
+    # 2em offset aligned with clipboard.ts and NotesReviewTab.css.
+    for section in soup.select('div[data-note-section="1"]'):
+        _merge_style(section, "margin-left: 2em;")
+
     cell_base = _cell_style_base(style, lite=lite)
     no_border = style.border_style == "none"
 
@@ -838,9 +861,9 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
                           or table.has_attr("width"))
         if operator_sized or _has_operator_column_widths(table):
             operator_sized_tables.add(id(table))
-        _merge_style(table,
-                     _TABLE_STYLE_KEEP_WIDTH if operator_sized
-                     else _TABLE_STYLE)
+        _merge_style(table, _table_style(
+            style.paragraph_spacing_px, keep_width=operator_sized,
+        ))
         # Font + wrapping hoisted here (inheritable) so cells don't each repeat
         # ~90 chars of identical boilerplate — the size win that keeps large
         # tables under Excel's cell limit.
@@ -885,6 +908,8 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
 
     # Row-by-row so the row-label column (first cell of a multi-column row) can
     # stay left while numeric value columns go right.
+    columns_by_table = {id(table): _amount_columns(table)
+                        for table in soup.find_all("table")}
     for row in soup.find_all("tr"):
         cells = _cells(row)
         parent_table = row.find_parent("table")
@@ -894,6 +919,11 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
         # so the cells' own (often deliberately absent) borders stand.
         row_source_styled = (parent_table is not None
                              and id(parent_table) in source_styled_tables)
+        amount_cols = columns_by_table.get(id(parent_table), set())
+        has_spans = any(cell.has_attr("colspan") or cell.has_attr("rowspan")
+                        for cell in cells)
+        header_row = (row.parent.name == "thead" or
+                      bool(cells) and all(cell.name == "th" for cell in cells))
         # Stripped ONCE on the finished addition rather than on `cell_base`
         # alone: `_header_extra` contributes its own `border-bottom` (the house
         # header rule), so a base-only strip let that one edge through and made
@@ -910,7 +940,9 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
         totals_row = (style.totals_double_underline and not row_source_styled
                       and _is_totals_row(row))
         for idx, cell in enumerate(cells):
-            numeric = should_right_align_cell(cell.get_text(), idx, len(cells))
+            numeric = (should_right_align_cell(cell.get_text(), idx, len(cells))
+                       or (header_row and not has_spans and idx > 0
+                           and idx in amount_cols))
             align = " text-align: right;" if numeric else " text-align: left;"
             extra = _TOTALS_RULE if totals_row and numeric else ""
             if row_compact:

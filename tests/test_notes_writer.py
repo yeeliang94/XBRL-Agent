@@ -471,6 +471,54 @@ def test_notes_writer_sidecar_concatenates_refs_for_row_with_multiple_payloads(t
 # ---------------------------------------------------------------------------
 
 
+def test_pdf_subnote_heading_and_body_share_section():
+    from notes.writer import _sanitize_payload
+
+    payload = NotesPayload(
+        chosen_row_label=CORP_INFO_FIELD,
+        content=(' \n<div data-note-section="1"><p>Revenue from services.</p>'
+                 '<table><tr><td>100</td></tr></table></div>\n'),
+        evidence="Page 20, Note 8.1",
+        source_pages=[20],
+        parent_note={"number": "8", "title": "Revenue"},
+        sub_note={"number": "8.1", "title": "Nature of service"},
+    )
+    html = _sanitize_payload(payload, []).content
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+    assert soup.find("h3", recursive=False).get_text() == "8 Revenue"
+    section = soup.select_one('div[data-note-section="1"]')
+    assert section is not None
+    assert section.h3.get_text() == "8.1 Nature of service"
+    assert section.table.td.get_text() == "100"
+
+
+@pytest.mark.parametrize("body", [
+    ('<div data-note-section="1"><p>(a) Services</p></div>'
+     '<div data-note-section="1"><p>(b) Goods</p></div>'),
+    ('<p>Introductory text.</p>'
+     '<div data-note-section="1"><p>(a) Services</p></div>'),
+])
+def test_subnote_heading_stays_above_peer_sections(body: str):
+    from bs4 import BeautifulSoup
+    from notes.writer import _sanitize_payload
+
+    payload = NotesPayload(
+        chosen_row_label=CORP_INFO_FIELD,
+        content=body,
+        evidence="Page 20, Note 8.1",
+        source_pages=[20],
+        parent_note={"number": "8", "title": "Revenue"},
+        sub_note={"number": "8.1", "title": "Nature of revenue"},
+    )
+    soup = BeautifulSoup(_sanitize_payload(payload, []).content, "html.parser")
+    assert [node.get_text() for node in soup.find_all("h3", recursive=False)] == [
+        "8 Revenue", "8.1 Nature of revenue",
+    ]
+    assert all(section.h3 is None for section in soup.select('div[data-note-section="1"]'))
+
+
 def test_writer_prepends_parent_heading_to_prose_cell(tmp_path: Path):
     """A payload with only a parent_note gets one `<h3>` line prepended.
 
