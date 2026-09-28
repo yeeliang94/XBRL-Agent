@@ -7333,6 +7333,12 @@ async def run_multi_agent_stream(
                         "note_num": int(_n),
                         "title": str(getattr(_e, "title", "") or ""),
                         "subnote_refs": _subs,
+                        "subnote_titles": {
+                            str(getattr(_s, "subnote_ref", "")).strip():
+                                str(getattr(_s, "title", "") or "").strip()
+                            for _s in getattr(_e, "subnotes", None) or []
+                            if str(getattr(_s, "subnote_ref", "")).strip()
+                        },
                         "page_lo": _pr[0] if _pr else None,
                         "page_hi": _pr[1] if len(_pr) > 1 else None,
                     })

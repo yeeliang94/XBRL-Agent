@@ -1636,11 +1636,17 @@ def upsert_notes_inventory(
     note_num: int,
     title: str = "",
     subnote_refs: Optional[list[str]] = None,
+    subnote_titles: Optional[dict[str, str]] = None,
     page_lo: Optional[int] = None,
     page_hi: Optional[int] = None,
 ) -> int:
     """Insert/replace one scout-inventory note (UNIQUE(run_id, note_num))."""
-    subs_json = json.dumps(list(subnote_refs)) if subnote_refs else None
+    # Keep the existing JSON column compatible with older lists of strings.
+    subs_json = json.dumps([
+        {"ref": ref, "title": subnote_titles[ref]}
+        if subnote_titles and subnote_titles.get(ref) else ref
+        for ref in (subnote_refs or [])
+    ]) if subnote_refs else None
     existing = conn.execute(
         "SELECT id FROM run_notes_inventory WHERE run_id = ? AND note_num = ?",
         (run_id, note_num),
@@ -2210,7 +2216,7 @@ def fetch_notes_inventory(
     conn: sqlite3.Connection, run_id: int,
 ) -> list[dict]:
     """Return inventory rows: ``[{"note_num", "title", "subnote_refs",
-    "page_lo", "page_hi"}]`` with ``subnote_refs`` decoded to ``list[str]``."""
+    "page_lo", "page_hi"}]`` with refs decoded to ``list[str]`` and optional titles."""
     prior = conn.row_factory
     conn.row_factory = sqlite3.Row
     try:
@@ -2229,10 +2235,16 @@ def fetch_notes_inventory(
                 subs = []
         except (TypeError, json.JSONDecodeError):
             subs = []
+        refs = [str(x.get("ref", "")) if isinstance(x, dict) else str(x) for x in subs]
+        titles = {
+            str(x["ref"]): str(x["title"])
+            for x in subs if isinstance(x, dict) and x.get("ref") and x.get("title")
+        }
         out.append({
             "note_num": r["note_num"],
             "title": r["title"] or "",
-            "subnote_refs": [str(x) for x in subs],
+            "subnote_refs": refs,
+            "subnote_titles": titles,
             "page_lo": r["page_lo"],
             "page_hi": r["page_hi"],
         })

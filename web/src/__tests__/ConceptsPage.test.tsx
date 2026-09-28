@@ -860,9 +860,8 @@ describe("ConceptsPage", () => {
     render(<ConceptsPage runId={42} />);
     await waitFor(() => screen.getByTestId("concept-row-leaf-1"));
     expect(screen.queryByTestId("rename-btn-leaf-1")).toBeNull();
-    expect(screen.getByTestId("label-leaf-1").textContent).toBe(
-      "Biological assets"
-    );
+    expect(screen.getByTestId("label-leaf-1")).toHaveTextContent("Biological assets");
+    expect(screen.getByRole("button", { name: "Open source for Biological assets" })).toBeVisible();
   });
 
   // -- Phase 2.1 / 2.2: editable leaf values + in-place recompute --------

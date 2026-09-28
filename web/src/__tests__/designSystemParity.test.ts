@@ -211,6 +211,14 @@ describe("Simplified template-oriented review", () => {
     }
   });
 
+  test("pins consistent run actions and human-file comparison placement", () => {
+    expect(designSystem).toContain("Place Redo and Delete together at the end of Overview under Run actions");
+    expect(designSystem).toContain("A human-file comparison header spans the full review workspace");
+    expect(designSystem).toContain("label the extracted and human columns once above the paired rows");
+    expect(designSystem).toContain("Keep the worksheet rails visible at standard desktop widths");
+    expect(designSystem).toContain("Name a single review issue instead of showing only its count");
+  });
+
   test("pins the concise mTool preparation workflow", () => {
     for (const requirement of [
       "upload template, fill safe matches, download",

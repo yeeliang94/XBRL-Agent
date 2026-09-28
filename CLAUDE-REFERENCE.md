@@ -2014,8 +2014,9 @@ Load-bearing invariants:
   `GET /api/runs/{id}/notes-coverage` nests children under parents + derives the
   summary. The source note inventory in `NotesReviewTab.tsx` is the single
   coverage surface in the Notes tab. Keep placement counts, incomplete-review
-  and unavailable-inventory warnings, reasons, and expandable sub-note states
-  there; do not append a second checklist below the editor. Inventory selection
+  and unavailable-inventory warnings, reasons, and visible numbered sub-note
+  states there; do not append a second checklist below the editor. Persist
+  scout sub-note titles with their references for that list. Inventory selection
   uses the existing source-page and destination navigation. Pinned by
   `NotesReviewTab` and `RunDetailView` web tests.
 - **Reviewer clears preserve routing precision.** `clear_note_cells` refuses to

@@ -192,6 +192,16 @@ def test_equivalent_child_spellings_are_deduped_by_structured_identity():
     assert [s.subnote_ref for s in _row(cl, 9).subnotes] == ["9(a)", "9.1(a)"]
 
 
+def test_source_subnote_title_reaches_coverage_row():
+    from notes.coverage_checklist import checklist_to_db_rows
+
+    inventory = _inv(2, "Significant accounting policies", subs=["2.1"])
+    inventory["subnote_titles"] = {"2.1": "Description of accounting policies"}
+    checklist = build_draft_checklist(inventory_rows=[inventory], provenance_entries=[])
+    child = next(r for r in checklist_to_db_rows(checklist) if r["subnote_ref"] == "2.1")
+    assert child["title"] == "Description of accounting policies"
+
+
 def test_policies_fan_out_placements_classified_fan_out():
     cl = build_draft_checklist(
         inventory_rows=[_inv(3, "Significant accounting policies",

@@ -138,7 +138,7 @@ interface SourceNoteInventoryRow {
   reviewer_added?: boolean;
   reviewer_verdict?: string | null;
   reason?: string;
-  subnotes?: { subnote_ref: string; state: string; reason?: string }[];
+  subnotes?: { subnote_ref: string; title?: string; state: string; reason?: string }[];
   page_lo: number | null;
   page_hi: number | null;
 }
@@ -674,7 +674,7 @@ export function NotesReviewTab({
           }}
         >
           <aside style={styles.noteRail} aria-label="Notes template navigator">
-            <strong style={{ ...styles.noteRailTitle, padding: 12 }}>mTool worksheets</strong>
+            <strong style={{ ...ui.fieldLabel, padding: `0 ${pwc.space.xs}px`, marginBottom: pwc.space.md }}>mTool worksheets</strong>
             <input type="search" aria-label="Search all note fields" placeholder="Find a field, including empty fields" value={noteSearch}
               onChange={(event) => setNoteSearch(event.target.value)} style={styles.noteRailSearch} />
                 <nav style={{ display: "flex", flexDirection: "column", gap: 4 }} aria-label="Notes sheet navigator">
@@ -791,12 +791,13 @@ export function NotesReviewTab({
                       )}
                     </button>
                     {note.reason && <p style={{ ...styles.noteRailEmpty, margin: "4px 12px" }}>{note.reason}</p>}
-                    {unresolvedSubnotes.length > 0 && <details style={styles.subnoteDetails}>
-                      <summary style={styles.subnoteSummary}>
-                        {unresolvedSubnotes.length} sub-note{unresolvedSubnotes.length === 1 ? " needs" : "s need"} review
-                      </summary>
-                      <div style={styles.subnoteList}>
-                        {unresolvedSubnotes.map((sub) => (
+                    {(note.subnotes?.length ?? 0) > 0 && <div style={styles.subnoteList} aria-label={`Sub-notes for note ${note.note_num}`}>
+                        {unresolvedSubnotes.length > 0 && (
+                          <span style={styles.subnoteSummary}>
+                            {unresolvedSubnotes.length} sub-note{unresolvedSubnotes.length === 1 ? " needs" : "s need"} review
+                          </span>
+                        )}
+                        {note.subnotes?.map((sub) => (
                           <button
                             key={sub.subnote_ref}
                             type="button"
@@ -806,13 +807,17 @@ export function NotesReviewTab({
                           >
                             <span style={styles.subnoteRef}>{sub.subnote_ref}</span>
                             <span style={styles.subnoteCopy}>
-                              <span style={styles.subnoteState}>{subNoteStateLabel(sub.state)}</span>
-                              {sub.reason && <span style={styles.subnoteReason}>{sub.reason}</span>}
+                              {sub.title && <span style={styles.subnoteTitle}>{sub.title}</span>}
+                              {(sub.state === "missing" || sub.state === "not_verified") && (
+                                <>
+                                  <span style={styles.subnoteState}>{subNoteStateLabel(sub.state)}</span>
+                                  {sub.reason && <span style={styles.subnoteReason}>{sub.reason}</span>}
+                                </>
+                              )}
                             </span>
                           </button>
                         ))}
-                      </div>
-                    </details>}
+                    </div>}
                     {selected && note.placements.length > 1 && (
                       <div
                         style={styles.noteRailPlacements}
@@ -1140,6 +1145,12 @@ function SheetSection({
         </div>
       )}
       <div style={styles.rowStack}>
+          {human && sheet.rows.some((cell) => cell.kind !== "numeric" && cell.node_uuid) && (
+            <div className="notes-human-pair-header" style={styles.humanPairHeader}>
+              <span>Extracted note</span>
+              <span>Human file</span>
+            </div>
+          )}
           {attentionRows?.length === 0 && <p role="status">No placed field issues in this sheet. Check the source inventory for unplaced or unresolved notes.</p>}
           {sheet.rows.filter((cell) => attentionRows == null || attentionRows.includes(cell.row) || cell.invalid_target).map((cell) => {
             const row =
@@ -1190,9 +1201,10 @@ function SheetSection({
             // The human's note sits on the same grid row, so the pair takes
             // the height of the longer text and never drifts out of line.
             return (
-              <div key={`${runId}:${sheet.sheet}:${cell.row}:pair`} data-testid="notes-human-pair" style={styles.humanPair}>
+              <div key={`${runId}:${sheet.sheet}:${cell.row}:pair`} className="notes-human-pair" data-testid="notes-human-pair" style={styles.humanPair}>
                 <div style={{ minWidth: 0 }}>{row}</div>
-                <HumanNoteCell html={human.html[field]} status={human.status[field]} />
+                <HumanNoteCell html={human.html[field]} status={human.status[field]}
+                  selected={selectedCellKey === `${sheet.sheet}:${cell.row}`} />
               </div>
             );
           })}
@@ -1206,16 +1218,17 @@ function SheetSection({
 function HumanNoteCell({
   html,
   status,
+  selected,
 }: {
   html: string | undefined;
   status: "agree" | "missed" | "ai_only" | undefined;
+  selected: boolean;
 }) {
   const marker = status === "missed" ? "○" : status === "ai_only" ? "◇" : null;
   const markerLabel = status === "missed" ? "Missed by AI" : "AI-only";
   return (
-    <div data-testid="notes-human-cell" data-human-status={status ?? "none"} style={{ ...styles.workspaceCellRow, alignContent: "start" }}>
-      <div style={styles.disclosureHeader}>
-        <div style={styles.cellLabel}>Human file</div>
+    <div role="group" aria-label="Human file" data-testid="notes-human-cell" data-human-status={status ?? "none"} style={{ ...styles.workspaceCellRow, alignContent: "start" }}>
+      <div style={{ ...styles.humanNoteStatusRow, minHeight: selected ? 72 : 44 }}>
         {marker && (
           <span role="img" aria-label={markerLabel} title={markerLabel}
             style={{ fontWeight: 600, color: status === "missed" ? pwc.warning : pwc.grey500 }}>
@@ -2186,7 +2199,7 @@ const styles = {
     display: "flex",
     flexDirection: "column" as const,
     minWidth: 0,
-    padding: `${pwc.space.sm}px ${pwc.space.lg}px ${pwc.space.lg}px 0`,
+    padding: `0 ${pwc.space.lg}px ${pwc.space.lg}px 0`,
   } as React.CSSProperties,
   noteRailHeader: {
     display: "flex",
@@ -2230,8 +2243,8 @@ const styles = {
   } as React.CSSProperties,
   noteRailItem: {
     display: "grid",
-    gridTemplateColumns: "28px minmax(0, 1fr) 16px",
-    gap: 7,
+    gridTemplateColumns: "38px minmax(0, 1fr) 16px",
+    gap: 8,
     alignItems: "center",
     width: "100%",
     minHeight: 38,
@@ -2249,7 +2262,7 @@ const styles = {
   } as React.CSSProperties,
   noteRailNumber: {
     fontFamily: pwc.fontMono,
-    fontSize: 10,
+    fontSize: 12,
     color: pwc.grey500,
     textAlign: "center" as const,
   } as React.CSSProperties,
@@ -2283,20 +2296,16 @@ const styles = {
     fontSize: 10,
     fontWeight: 700,
   } as React.CSSProperties,
-  subnoteDetails: {
-    padding: "3px 8px 5px 35px",
-    color: pwc.grey500,
-    fontSize: 10.5,
-  } as React.CSSProperties,
   subnoteSummary: {
-    cursor: "pointer",
-    lineHeight: 1.4,
+    padding: "4px 6px 2px 65px",
+    color: pwc.orange700,
+    fontSize: 12,
+    fontWeight: 600,
   } as React.CSSProperties,
   subnoteList: {
     display: "flex",
     flexDirection: "column" as const,
     gap: 1,
-    marginTop: 3,
   } as React.CSSProperties,
   subnoteButton: {
     display: "grid",
@@ -2305,7 +2314,7 @@ const styles = {
     alignItems: "start",
     width: "100%",
     minHeight: 26,
-    padding: "4px 6px",
+    padding: "4px 6px 4px 65px",
     border: 0,
     borderRadius: 5,
     background: "transparent",
@@ -2316,7 +2325,7 @@ const styles = {
   subnoteRef: {
     color: pwc.grey700,
     fontFamily: pwc.fontMono,
-    fontSize: 10,
+    fontSize: 12,
     lineHeight: 1.4,
   } as React.CSSProperties,
   subnoteCopy: {
@@ -2325,15 +2334,20 @@ const styles = {
     flexDirection: "column" as const,
     gap: 1,
   } as React.CSSProperties,
+  subnoteTitle: {
+    fontSize: 12,
+    lineHeight: 1.4,
+    overflowWrap: "anywhere" as const,
+  } as React.CSSProperties,
   subnoteState: {
-    color: pwc.grey700,
-    fontSize: 10.5,
-    fontWeight: 400,
+    color: pwc.orange700,
+    fontSize: 12,
+    fontWeight: 600,
     lineHeight: 1.35,
   } as React.CSSProperties,
   subnoteReason: {
-    color: pwc.grey500,
-    fontSize: 10,
+    color: pwc.grey700,
+    fontSize: 11,
     lineHeight: 1.35,
     overflowWrap: "anywhere" as const,
   } as React.CSSProperties,
@@ -2591,6 +2605,20 @@ const styles = {
     gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
     gap: 12,
     alignItems: "stretch",
+  } as React.CSSProperties,
+  humanPairHeader: {
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+    gap: 12,
+    padding: `0 ${pwc.space.sm}px`,
+    ...ui.fieldLabel,
+  } as React.CSSProperties,
+  humanNoteStatusRow: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    minHeight: 44,
+    padding: `0 ${pwc.space.md}px`,
   } as React.CSSProperties,
   // Bounded like the AI's read-only preview; long notes scroll inside.
   humanNoteBody: {

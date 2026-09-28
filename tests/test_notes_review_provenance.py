@@ -44,6 +44,7 @@ _SIDECARS = [
 _INVENTORY = [
     {"note_num": 3, "title": "Right-of-use assets",
      "subnote_refs": ["3.1", "3.2", "3.3", "(a)", "(b)"],
+     "subnote_titles": {"3.1": "Lease accounting policy"},
      "page_lo": 10, "page_hi": 12},
     {"note_num": 4, "title": "Investment property",
      "subnote_refs": ["4.1"], "page_lo": 19, "page_hi": 19},
@@ -65,6 +66,7 @@ def test_provenance_and_inventory_round_trip(db_path: Path) -> None:
     assert by_row[42]["row_label"] == "Description of accounting policy for leases"
     note3 = next(r for r in inv if r["note_num"] == 3)
     assert note3["subnote_refs"] == ["3.1", "3.2", "3.3", "(a)", "(b)"]
+    assert note3["subnote_titles"] == {"3.1": "Lease accounting policy"}
 
 
 def test_detectors_identical_from_db_vs_sidecars(db_path: Path) -> None:

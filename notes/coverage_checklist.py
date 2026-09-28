@@ -109,11 +109,14 @@ class SubNoteState:
     subnote_ref: str
     state: str  # cited | not_verified (builder) | verified | missing (reviewer)
     reason: str = ""
+    title: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"subnote_ref": self.subnote_ref, "state": self.state}
         if self.reason:
             out["reason"] = self.reason
+        if self.title:
+            out["title"] = self.title
         return out
 
 
@@ -350,7 +353,10 @@ def build_draft_checklist(
                 if v in (SUBNOTE_VERIFIED, SUBNOTE_MISSING):
                     state = v
                 sub_reason = str(verdict.get("reason", "") or "").strip()
-            subnotes.append(SubNoteState(subnote_ref=ref, state=state, reason=sub_reason))
+            subnotes.append(SubNoteState(
+                subnote_ref=ref, state=state, reason=sub_reason,
+                title=str((inv.get("subnote_titles") or {}).get(ref, "")),
+            ))
 
         row = CoverageRow(
             note_num=note_num,
@@ -441,6 +447,7 @@ def checklist_to_db_rows(checklist: Checklist) -> list[dict]:
                 "subnote_ref": s.subnote_ref,
                 "status": s.state,
                 "reason": s.reason,
+                "title": s.title,
             })
     return out
 
