@@ -1017,6 +1017,21 @@ agent HTML → sanitiser → notes_cells (DB, canonical) → overlay → xlsx st
                                      ↘ NotesReviewTab (TipTap editor)
 ```
 
+PDF sub-note hierarchy uses `<div data-note-section="1">` around each
+source-backed numbered or lettered section, including its tables. Wrappers
+may nest; unmarked divs remain transparent. The writer puts a structured
+`sub_note` heading inside the section only when one marked section covers the
+whole body; the parent heading stays outside. The sanitizer and TipTap retain
+the marker, and the clipboard
+and mTool decorators add the same 2em left margin to each wrapper. The
+formatter's content check protects these boundaries. Word-source content is
+not given new section wrappers. Native mTool layout for newly indented wide
+tables still requires a save/reopen check before declaring full fidelity.
+The writer moves a `sub_note` heading inside a wrapper only when that wrapper
+is the whole body; peer sections and loose introductory text keep the heading
+above them. Rendered-length truncation enters a marked section and keeps its
+complete inner headings and tables until the final overflowing child.
+
 **Verbatim table passthrough on Word uploads (2026-07-19) — the one exception
 to "content stays style-free."** When a run carries a `source.html` sidecar
 (gotcha #29), notes agents COPY the Word table's markup — inline `style=` and
@@ -1264,12 +1279,13 @@ Key invariants:
   after the house default landed, so the agent reasoned about a boxed grey grid
   over a ruled display and would "correct" formatting that was already right.
   A new consumer must resolve through `firm_theme()`, never re-read the env var.
-  The default is neutral: no cell grid (`borderStyle: "none"`), no invented
-  header rule (`headerRule: false`), no automatic header bold, un-filled
-  headers, historic Arial 10pt / 4×8px density,
-  and totals underlines left MANUAL (the auto-detect matched the word "total" in
-  row text and invented rules — the reason the house-style floor was removed,
-  2026-07-07). Two DISTINCT layers, do not conflate them: `NotesTableStyle()` /
+  The shipped default matches the operator's chosen test appearance on fresh
+  installations: a single grid, 11pt Arial, 5×5px cell padding, transparent
+  bold headers, and 16px paragraph/table spacing. No local theme setting is
+  required. It has no inferred header rule, and totals underlines remain MANUAL
+  (the old auto-detect matched the word "total" in rows that were not totals).
+  Source-styled Word tables keep their own borders. Two DISTINCT layers, do not
+  conflate them: `NotesTableStyle()` /
   `DEFAULT_FORMAT_OPTIONS` still mean "no theme configured at all" and keep the
   historic boxed STYLING (a dozen pinning tests rely on that; the run-76
   TX-dialect attrs below layer on top for every theme, so the full output is

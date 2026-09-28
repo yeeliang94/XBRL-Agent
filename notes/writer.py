@@ -40,7 +40,7 @@ from notes.html_to_text import (
 from notes.html_sanitize import sanitize_notes_html
 
 import openpyxl
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, NavigableString, Tag
 
 from notes.payload import NotesPayload
 from utils.workbook_io import atomic_save_workbook
@@ -475,7 +475,21 @@ def _inject_headings(payload: NotesPayload) -> NotesPayload:
     headings_html = f"<h3>{parent['number']} {parent['title']}</h3>"
     sub = payload.sub_note
     if sub is not None:
-        headings_html += f"<h3>{sub['number']} {sub['title']}</h3>"
+        sub_heading = f"<h3>{sub['number']} {sub['title']}</h3>"
+        # PDF extraction can mark a complete sub-note body as one section.
+        # Put the writer-owned heading inside that section so it shares the
+        # body's indent. Word/source-built content has no such marker.
+        parsed = BeautifulSoup(payload.content, "html.parser")
+        blocks = [node for node in parsed.contents if not (
+            isinstance(node, NavigableString) and not node.strip()
+        )]
+        if (len(blocks) == 1 and isinstance(blocks[0], Tag)
+                and blocks[0].name == "div"
+                and blocks[0].get("data-note-section") == "1"):
+            heading = BeautifulSoup(sub_heading, "html.parser").h3
+            blocks[0].insert(0, heading)
+            return replace(payload, content=headings_html + str(parsed))
+        headings_html += sub_heading
     # Headings always prepend. If the agent accidentally duplicated a
     # heading inside `content` (in defiance of the prompt's "do not
     # prepend <h3> manually" rule), the cell will carry both. The

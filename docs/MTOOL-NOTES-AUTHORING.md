@@ -37,7 +37,13 @@ content, not a guarantee of pixel-exact native widths, borders or pagination.
   store; do not edit a diagnostic Excel snapshot or generated mTool payload as a
   substitute for updating the note.
 - For PDF extraction, author semantic HTML using `p`, `br`, `strong`, `em`,
-  `ul`, `ol`, `li`, `table`, `tr`, `th` and `td`. Do not invent inline styles,
+  `ul`, `ol`, `li`, `table`, `tr`, `th` and `td`. Put each clearly bounded
+  numbered or lettered sub-note and all its paragraphs, lists and tables in
+  `<div data-note-section="1">…</div>`. Nested sections nest these wrappers.
+  The writer places a structured `sub_note` heading inside its wrapper when
+  that single wrapper covers the whole body; otherwise it stays above the
+  body's peer sections.
+  Do not invent inline styles,
   CSS classes or images. The writer adds `h3` headings from structured
   `parent_note` / `sub_note`; preserve in-prose subsection labels as paragraphs.
 - If a source-document tool instructs verbatim Word-table copying, preserve its
@@ -47,7 +53,7 @@ content, not a guarantee of pixel-exact native widths, borders or pagination.
   ordinary newly authored table merely to change its appearance. Prose remains
   style-free on the extraction path.
 - The dedicated formatter may apply validated style-only patches. It must not
-  change text, numbers, table geometry, structure or placement. Use the established
+  change text, numbers, table geometry, section boundaries, structure or placement. Use the established
   formatter/editor controls rather than embedding formatting instructions in prose.
 
 Minimal synthetic content example (replace facts and structured identity with
@@ -119,6 +125,7 @@ The normal workflow does not require any local experiment scripts or browser har
 | Table and column widths | Treat widths as preferences, not exact native geometry. A requested 450pt table expanded to 481.95pt; later saves changed some widths again. Do not compensate with guessed offsets. |
 | Clipboard paste | The tested unsized themed table initially overflowed. After note/workbook save and full reopen it fit the page. Inspect both states; do not claim initial-paste fidelity. |
 | Fonts, emphasis, fills, alignment and spacing | Use existing theme/editor capabilities and validated styles. Browser appearance alone does not certify the native result. The border verification was not an exhaustive test of every formatting option. |
+| PDF sub-note indentation | Section wrappers indent headings, prose, lists and tables together in review, clipboard and export HTML. Wide tables must be checked in native mTool after save and reopen; native table-offset persistence is not certified here. Word-source formatting remains as supplied. |
 | CSS and units | The sanitizer's property/value allowlist is authoritative. Its current border-width validator accepts px, zero and supported keywords; direct decorator probes with pt do not prove that pt survives the canonical writer. Do not bypass sanitization. |
 | Pagination | Do not rely on HTML/CSS page-break controls for exact native pagination. Inspect native output for long notes. |
 | Text underline | The PDF formatter does not author text underline. It uses cell borders for source-visible table rules. Existing source or human text underline is preserved; double text underline was not certified by this guide. |

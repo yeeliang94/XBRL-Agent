@@ -83,6 +83,17 @@ def test_rendered_listofnotes_prompt_includes_schedules_rule():
     assert "SCHEDULES" in prompt or "SCHEDULE" in prompt
 
 
+def test_notes_prompt_preserves_source_paragraph_and_table_boundaries():
+    prompt = render_notes_prompt(
+        template_type=NotesTemplateType.RELATED_PARTY,
+        filing_level="company",
+        inventory=[],
+    )
+    assert "each visible source paragraph as a separate `<p>`" in prompt
+    assert "Do not join" in prompt and "adjacent paragraph" in prompt
+    assert "Keep separate source tables separate" in prompt
+
+
 def test_numeric_notes_prompt_forbids_presentation_scale_conversion():
     """Run 103's RM'000 value must stay 2,500, never become 2,500,000."""
     prompt = render_notes_prompt(

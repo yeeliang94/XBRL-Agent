@@ -60,7 +60,7 @@ from bs4 import BeautifulSoup, Tag
 # agent prompt still forbids styling, so this is a SUPERSET of the agent set,
 # not a divergence (see gotcha #16).
 ALLOWED_TAGS: frozenset[str] = frozenset({
-    "p", "br", "strong", "em", "ul", "ol", "li",
+    "p", "br", "strong", "em", "ul", "ol", "li", "div",
     "table", "thead", "tbody", "tr", "th", "td",
     "h1", "h2", "h3", "h4", "h5", "h6",
     # v2 inline marks (human-applied via the editor toolbar):
@@ -366,7 +366,7 @@ _DECOMPOSE_TAGS: frozenset[str] = frozenset({
 # Any block-level allowed tag — if the payload already contains one,
 # it does not need to be wrapped in `<p>`.
 _BLOCK_ALLOWED: frozenset[str] = frozenset({
-    "p", "ul", "ol", "table", "h1", "h2", "h3", "h4", "h5", "h6",
+    "p", "div", "ul", "ol", "table", "h1", "h2", "h3", "h4", "h5", "h6",
 })
 
 
@@ -397,6 +397,13 @@ def sanitize_notes_html(html: Optional[str]) -> tuple[str, list[str]]:
     # `<a>` would disappear silently; we want the warning surfaced.
     for node in list(soup.find_all(True)):
         _strip_unsafe_attributes(node, warnings)
+
+    # Only the explicit sub-note section is a supported div. Ordinary pasted
+    # divs remain transparent wrappers, as they were before this feature.
+    for node in list(soup.find_all("div")):
+        if node.get("data-note-section") != "1":
+            warnings.append("Removed unmarked <div> wrapper (kept its text)")
+            node.unwrap()
 
     # Pass 3: unwrap disallowed-but-safe structural tags. Allowed tags
     # are kept as-is.
@@ -483,6 +490,11 @@ def _strip_unsafe_attributes(node: Tag, warnings: list[str]) -> None:
             warnings.append(
                 f"Removed event handler {attr_name}= on <{node.name}>"
             )
+            continue
+        if tag_name == "div":
+            if lower != "data-note-section" or node.attrs[attr_name] != "1":
+                to_remove.append(attr_name)
+                warnings.append(f"Removed {attr_name}= attribute on <div>")
             continue
         if lower == "style":
             # A `style=` may carry whitelisted, human-applied formatting that

@@ -182,6 +182,32 @@ def test_truncate_preserves_first_block_even_when_second_overflows():
     assert "[truncated -- see PDF pages 1]" in rendered
 
 
+def test_truncate_large_subnote_keeps_inner_blocks_and_marker():
+    html = ('<h3>8 Revenue</h3><div data-note-section="1">'
+            '<h3>8.1 Services</h3><p>Nature of service.</p>'
+            '<table><tr><td>Fees</td><td>100</td></tr></table>'
+            '<p>' + 'Details ' * 100 + '</p></div>')
+    out = truncate_html_to_rendered_length(
+        html, max_rendered=180, source_pages=[12],
+    )
+    assert '<div data-note-section="1">' in out
+    assert '<h3>8.1 Services</h3>' in out
+    assert '<p>Nature of service.</p>' in out
+    assert '<table><tr><td>Fees</td><td>100</td></tr></table>' in out
+    assert "[truncated -- see PDF pages 12]" in out
+    assert rendered_length(out) <= 180
+
+
+def test_truncate_nested_subnote_keeps_both_section_levels():
+    html = ('<div data-note-section="1"><h3>8.1 Services</h3>'
+            '<div data-note-section="1"><p>(a) Domestic</p>'
+            '<p>' + 'Details ' * 100 + '</p></div></div>')
+    out = truncate_html_to_rendered_length(html, max_rendered=120, source_pages=[12])
+    assert out.count('data-note-section="1"') == 2
+    assert '<p>(a) Domestic</p>' in out
+    assert rendered_length(out) <= 120
+
+
 def test_truncate_no_op_when_under_cap():
     html = "<p>short</p>"
     out = truncate_html_to_rendered_length(html, max_rendered=100, source_pages=[1])

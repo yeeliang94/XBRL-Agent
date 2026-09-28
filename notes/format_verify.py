@@ -82,6 +82,8 @@ def _format_structure(html: str) -> tuple:
     """
     soup = BeautifulSoup(html or "", "html.parser")
     for node in soup.find_all(["div", "span", "strong", "b", "em", "i", "u"]):
+        if node.name == "div" and node.get("data-note-section") == "1":
+            continue
         node.unwrap()
     soup.smooth()
 
@@ -141,6 +143,8 @@ def content_structure(html: str) -> tuple:
         if isinstance(node, NavigableString):
             return (("text", str(node)),)
         children = tuple(item for child in node.children for item in walk(child))
+        if node.name == "div" and node.get("data-note-section") == "1":
+            return (("note-section", (), children),)
         if node.name in ("[document]", "div", "span"):
             return children
         attrs = tuple((key, str(node.get(key, ""))) for key in

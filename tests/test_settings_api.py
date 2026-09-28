@@ -363,21 +363,19 @@ def test_notes_table_style_prose_fields_reject_malformed(tmp_path, monkeypatch):
 
 # --- Shipped firm house style (2026-07-20) ----------------------------------
 
-def test_house_notes_table_style_is_accountant_ruled(monkeypatch):
-    """The look the product owner chose: ruled, not boxed; headers bold and
-    unfilled; totals underlines stay MANUAL (auto-detect invented rules on rows
-    that merely contained the word "total")."""
+def test_house_notes_table_style_matches_shipped_test_appearance(monkeypatch):
+    """Fresh installations use the chosen appearance without local settings."""
     import server
     monkeypatch.delenv("XBRL_NOTES_TABLE_STYLE", raising=False)
     style = server._notes_table_style()
-    assert style["borderStyle"] == "none"
+    assert style["borderStyle"] == "single"
     assert style["headerRule"] is False
-    assert style["headerBold"] is False
+    assert style["headerBold"] is True
     assert style["headerFill"] == "transparent"
     assert style["totalsDoubleUnderline"] is False
-    # Density unchanged — the only values proven in mTool's TX27 popup.
-    assert style["fontSizePt"] == 10
-    assert style["cellPaddingPx"] == [4, 8]
+    assert style["fontSizePt"] == 11
+    assert style["cellPaddingPx"] == [5, 5]
+    assert style["paragraphSpacingPx"] == 16
 
 
 def test_operator_can_still_opt_out_to_the_historic_look(monkeypatch):
@@ -398,7 +396,7 @@ def test_house_style_callers_cannot_mutate_the_shared_constant(monkeypatch):
     import server
     monkeypatch.delenv("XBRL_NOTES_TABLE_STYLE", raising=False)
     server._notes_table_style()["borderStyle"] = "double"
-    assert server.HOUSE_NOTES_TABLE_STYLE["borderStyle"] == "none"
+    assert server.HOUSE_NOTES_TABLE_STYLE["borderStyle"] == "single"
 
 
 

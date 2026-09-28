@@ -80,13 +80,17 @@ field:
   peer topics, or separate sub-note headings. Those are all parts of the same
   top-level note and stay in its one List-of-Notes field.
 - **Preserve the sub-section labels themselves in the body.** When you
-  group (a)/(b)/(i)/(ii) sub-sections into one cell, render each label
-  as a bold paragraph header BEFORE the paragraphs that belong to it,
-  e.g. `<p><strong>(a) Short term benefits</strong></p>` followed by
-  the body `<p>...</p>` paragraphs, then `<p><strong>(b) Defined
-  contribution plans</strong></p>` and its body, etc. **Do not strip
-  these labels** — the cell otherwise reads like one undifferentiated
-  wall of policy text and the auditor's structural intent is lost.
+  group (a)/(b)/(i)/(ii) or numbered sub-notes into one PDF cell, wrap
+  each complete sub-section in `<div data-note-section="1">…</div>`.
+  Put its source label first as a bold paragraph, then every paragraph,
+  list and table belonging to it, stopping before the next peer label.
+  For example, `<div data-note-section="1"><p><strong>(a) Short term
+  benefits</strong></p><p>...</p></div>`, followed by a separate div for
+  `(b)`. Nested source sections use nested divs. Keep the labels exactly
+  as printed; do not invent a section when its boundary is unclear.
+  This wrapper is for PDF extraction only; copied Word-source markup stays
+  verbatim. **Do not strip these labels** — the cell otherwise reads like
+  one undifferentiated wall of policy text.
   The writer-owned heading rule below applies ONLY to the parent_note
   / sub_note `<h3>` lines; (a)/(b) sub-section labels are body content.
 - A sub-section explaining how a parent balance is measured, depreciated,
@@ -200,6 +204,9 @@ Each `write_notes` payload has these fields:
   `{"number": "5.4", "title": "Property, Plant and Equipment"}`.
   Omit for top-level notes. When present, the writer prepends a
   second `<h3>` line AFTER the parent heading and BEFORE the body.
+  For PDF content, wrap the complete body of this sub-note in one
+  `<div data-note-section="1">`. The writer places its `<h3>` inside
+  that wrapper, so the heading and all of its content share an indent.
   Put in `number` **exactly what the PDF prints** for that sub-note,
   INCLUDING its punctuation — if the AFS prints "5.4", use `"5.4"`; if it
   prints "(a)", use `"(a)"`; if it prints "a.", use `"a."`. Keep the
@@ -271,7 +278,11 @@ they are not the source for the user's formatted notes.
 - **Paragraphs:** wrap every paragraph in `<p>…</p>`. Do not use bare
   `\n\n` for paragraph breaks — the editor won't render them as
   paragraphs. Use `<br>` only for a soft line break inside a paragraph
-  (rare).
+  (rare). Preserve each visible source paragraph as a separate `<p>`, even
+  when consecutive paragraphs have no heading between them. Do not join
+  prose before or after a table into the table or an adjacent paragraph.
+  Keep each paragraph and table in source order so the editor and mTool can
+  render the space between them.
 - **Emphasis:** `<strong>` for bold, `<em>` for italic. No styling
   attributes (`style=`, `class=`). Do not emit `<u>` or infer visual rules,
   shading, alignment, or borders from a PDF. A separate formatter owns PDF
@@ -279,6 +290,10 @@ they are not the source for the user's formatted notes.
   part of the source's meaning, not to simulate a table rule.
 - **Lists:** `<ul><li>…</li></ul>` for bullets, `<ol><li>…</li></ol>`
   for numbered lists.
+- **PDF sub-note sections:** `<div data-note-section="1">…</div>` around
+  one complete numbered or lettered sub-note, including its tables. The
+  marker carries structure only; do not add inline styling. Do not use it
+  on Word-source content.
 - **Tables:** `<table>` with one `<tr>` per row. Use `<th>` for header
   cells and `<td>` for body cells. Use `<th>` only for genuine column/row
   headings, not to create a visual header rule. Tables are allowed and encouraged
@@ -320,7 +335,8 @@ they are not the source for the user's formatted notes.
 === ALLOWED HTML TAGS ===
 
 Agent-authored `content` may use: `<p>`, `<br>`, `<strong>`, `<em>`,
-`<ul>`, `<ol>`, `<li>`, `<table>`, `<tr>`, `<th>`, `<td>`. The writer may
+`<ul>`, `<ol>`, `<li>`, `<div data-note-section="1">` (PDF only),
+`<table>`, `<tr>`, `<th>`, `<td>`. The writer may
 add `<h3>` from `parent_note` / `sub_note`; do not put it in `content`.
 Everything else — `<script>`, `<style>`, `<img>`, event handlers like
 `onclick=`, and class attributes — is stripped by the sanitiser before the
@@ -362,29 +378,28 @@ Top-level note (Note 5) — only `parent_note`:
 }
 ```
 
-When a payload also carries `sub_note` (e.g. `{"number": "5.4", "title":
-"Property, Plant and Equipment"}` under parent Note 5), the writer prepends
-TWO `<h3>` lines — parent then sub-note — before the body.
+When a PDF payload also carries `sub_note` (e.g. `{"number": "5.4", "title":
+"Property, Plant and Equipment"}` under parent Note 5), wrap its complete
+body in `<div data-note-section="1">…</div>`. The writer puts the parent
+`<h3>` before that wrapper and the sub-note `<h3>` inside it.
 
-Sub-sections within one note (Note 2.14 with (a)/(b) labels) — preserve
-the (a)/(b) labels verbatim in the body as bold paragraph headers, do
-NOT strip them:
+Sub-sections within one PDF note (Note 2.14 with (a)/(b) labels) stay
+in one payload. Each label and its content has its own section wrapper:
 
 ```json
 {
   "chosen_row_label": "Description of accounting policy for employee benefits",
   "parent_note": {"number": "2.14", "title": "Employee benefits"},
-  "content": "<p><strong>(a) Short term benefits</strong></p><p>Wages, salaries, bonuses and social security contributions are recognised as an expense in the year in which the associated services are rendered by employees of the Company. Short term accumulating compensated absences such as paid annual leave are recognised when services are rendered by employees that increase their entitlement to future compensated absences. Short term non-accumulating compensated absences such as sick leave are recognised when the absences occur.</p><p><strong>(b) Defined contribution plans</strong></p><p>Defined contribution plans are post-employment benefit plans under which the Company pays fixed contributions into separate entities or funds and will have no legal or constructive obligation to pay further contributions if any of the fund do not hold sufficient assets to pay all employee benefits relating to employee services in the current and preceding financial years.</p><p>The Company make contributions to the Employee Provident Fund in Malaysia, a defined contribution pension scheme. Contributions to defined contribution pension schemes are recognised as an expense in the period in which the related service is performed.</p>",
+  "content": "<div data-note-section=\"1\"><p><strong>(a) Short term benefits</strong></p><p>Wages and salaries are recognised as an expense when services are rendered.</p></div><div data-note-section=\"1\"><p><strong>(b) Defined contribution plans</strong></p><p>Contributions are recognised in the period of service.</p></div>",
   "evidence": "Page 18, Note 2.14",
   "source_pages": [18],
   "source_note_refs": ["2.14", "(a)", "(b)"]
 }
 ```
 
-The writer renders the Note 5 example with one `<h3>` line
-(`<h3>5 Revenue</h3>`) before the body, and the Note 2.14 example with
-one (`<h3>2.14 Employee benefits</h3>`) followed by the body — including
-its `(a)` / `(b)` bold sub-headers — verbatim.
+The writer renders the parent heading once before both sections. The
+source's full wording, not the shortened example wording, belongs in a
+real payload. Word-source content retains its original markup.
 
 === PAGE REQUESTS ===
 

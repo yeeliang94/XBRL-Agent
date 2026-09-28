@@ -1,7 +1,7 @@
 // Shared numeric-cell detection for table alignment.
 //
-// Two surfaces decide whether a notes-table cell holds a number and should
-// therefore be right-aligned: the clipboard decorator (inline styles, for
+// Two surfaces decide whether a notes-table cell belongs to an amount column
+// and should therefore be right-aligned: the clipboard decorator (inline styles, for
 // the M-Tool / Word paste — see clipboard.ts) and the in-app review editor
 // (a CSS class, see NotesReviewTab). Keeping the heuristic here means both
 // agree on what counts as numeric and where the row-label column sits, so
@@ -39,6 +39,42 @@ export function shouldRightAlignCell(
   return isNumericCellText(text);
 }
 
+/** Amount columns in a simple table. Spanning rows do not provide stable
+ * column positions, so they neither define nor inherit this fallback. */
+export function amountColumns(table: Element): Set<number> {
+  const columns = new Set<number>();
+  for (const row of Array.from(table.querySelectorAll("tr"))) {
+    if (row.closest("table") !== table) continue;
+    const cells = Array.from(row.children).filter(
+      (cell) => cell.tagName === "TD" || cell.tagName === "TH",
+    );
+    if (cells.length < 2 || cells.some((cell) =>
+      cell.hasAttribute("colspan") || cell.hasAttribute("rowspan"))) continue;
+    cells.forEach((cell, index) => {
+      if (index > 0 && isNumericCellText(cell.textContent ?? "")) {
+        columns.add(index);
+      }
+    });
+  }
+  return columns;
+}
+
+/** Figures align by their own content. Inferred amount-column alignment applies
+ * only to heading rows, so descriptive body text stays left. */
+export function shouldRightAlignTableCell(
+  cell: Element,
+  index: number,
+  cells: Element[],
+  amountCols: Set<number>,
+): boolean {
+  if (shouldRightAlignCell(cell.textContent ?? "", index, cells.length)) return true;
+  if (index === 0 || !amountCols.has(index) || cells.some((item) =>
+    item.hasAttribute("colspan") || item.hasAttribute("rowspan"))) return false;
+  const row = cell.parentElement;
+  return row?.parentElement?.tagName === "THEAD" || cells.every((item) =>
+    item.tagName === "TH");
+}
+
 /** Does the cell OWN its border through a persisted inline style? Mirrors the
  *  clipboard/mTool merge rule (`_styleFamily` in clipboard.ts /
  *  notes_decorate.py): any `border` / `border-*` declaration means the cell
@@ -56,8 +92,8 @@ function ownsBorderFamily(el: Element): boolean {
 }
 
 /** Toggle `className` on every `<td>`/`<th>` under `root` so a CSS rule can
- *  right-align numeric cells in the review editor. Idempotent — safe to call
- *  after every editor update (numeric cells get the class, the rest have it
+ *  right-align amount columns in the review editor. Idempotent — safe to call
+ *  after every editor update (amount cells get the class, the rest have it
  *  removed). Walks row by row so the row-label column can be exempted.
  *
  *  Also tags the numeric cells of "total" rows with `is-totals-num` so the
@@ -73,16 +109,21 @@ export function tagNumericCells(
   className = "is-numeric",
   totalsClassName = "is-totals-num",
 ): void {
+  const columnsByTable = new Map<Element, Set<number>>();
   for (const row of Array.from(root.querySelectorAll("tr"))) {
     const cells = Array.from(row.children).filter(
       (c) => c.tagName === "TD" || c.tagName === "TH",
     );
     const totalsRow = (row.textContent ?? "").toLowerCase().includes("total");
+    const table = row.closest("table");
+    if (table && !columnsByTable.has(table)) {
+      columnsByTable.set(table, amountColumns(table));
+    }
+    const amountCols = (table ? columnsByTable.get(table) : undefined) ??
+      new Set<number>();
     cells.forEach((cell, idx) => {
-      const right = shouldRightAlignCell(
-        cell.textContent ?? "",
-        idx,
-        cells.length,
+      const right = shouldRightAlignTableCell(
+        cell, idx, cells, amountCols,
       );
       (cell as HTMLElement).classList.toggle(className, right);
       (cell as HTMLElement).classList.toggle(

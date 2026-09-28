@@ -8,12 +8,8 @@ Two layers exist and are deliberately NOT the same thing:
 * :data:`HOUSE_NOTES_TABLE_STYLE` is the firm look an operator actually sees
   before anyone visits Settings.
 
-This module exists because those two were drifting: ``server._notes_table_style``
-resolved an unset theme to the house style while
-``notes.formatting_agent._resolve_theme`` still resolved it to ``{}``. The
-formatter agent therefore reasoned about a boxed grey grid while the display was
-ruled and borderless — it would "fix" formatting that was already correct. Any
-new consumer must resolve through here rather than re-reading the env var.
+This module keeps the editor, formatter and exporter on the same shipped theme.
+Any new consumer must resolve through here rather than re-reading the env var.
 """
 from __future__ import annotations
 
@@ -21,22 +17,22 @@ import json
 import os
 from typing import Any
 
-# The firm's shipped house style (2026-07-20, chosen by the product owner).
+# The firm's shipped house style. Fresh installations use the chosen appearance
+# without a machine-specific XBRL_NOTES_TABLE_STYLE setting.
 #
-# Neutral baseline: no cell grid or inferred header rule. The formatter alone
-# decides which visible rules the PDF supports; source Word tables pass through.
+# The single grid is the firm's chosen baseline for PDF tables. Source-styled
+# Word tables still carry their own borders and suppress the theme grid.
 # Totals underlines stay MANUAL: the auto-detect matched the word "total" in row
 # text and invented rules on rows that weren't totals (the reason the old
-# house-style floor was removed, 2026-07-07). Font/padding keep the historic
-# Arial 10pt / 4x8px, the only values proven to render in mTool's TX27 popup.
+# house-style floor was removed, 2026-07-07).
 HOUSE_NOTES_TABLE_STYLE: dict[str, Any] = {
-    "borderStyle": "none",
+    "borderStyle": "single",
     "headerRule": False,
-    "headerBold": False,
+    "headerBold": True,
     "headerFill": "transparent",
-    "fontSizePt": 10,
-    "cellPaddingPx": [4, 8],
-    "paragraphSpacingPx": 8,
+    "fontSizePt": 11,
+    "cellPaddingPx": [5, 5],
+    "paragraphSpacingPx": 16,
     "totalsDoubleUnderline": False,
 }
 

@@ -424,6 +424,18 @@ def test_paragraph_indent_survives() -> None:
     assert "margin-left: 4em" in out.lower()
 
 
+def test_subnote_section_keeps_nested_content_but_rejects_arbitrary_divs() -> None:
+    html = ('<div data-note-section="1"><p>8.1 Service</p>'
+            '<table><tr><td>100</td></tr></table>'
+            '<div data-note-section="1"><p>(a) Domestic</p></div></div>'
+            '<div><p>Outside</p></div>')
+    out = _clean(html)
+    assert out.count('data-note-section="1"') == 2
+    assert '<table><tr><td>100</td></tr></table>' in out
+    assert '<p>Outside</p>' in out
+    assert out.count('<div') == 2
+
+
 def test_indent_off_tag_and_bad_value_rejected() -> None:
     """`margin-left` is a block concern only (not on a cell), and only a
     positive em/px length is accepted."""

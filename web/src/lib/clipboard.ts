@@ -54,7 +54,7 @@
 // and its default face does not match the filing house style. The default
 // Arial 10pt face (configurable) keeps the DB / sanitiser style-free while
 // landing the paste in the expected font.
-import { isNumericCellText, shouldRightAlignCell } from "./tableAlign";
+import { amountColumns, isNumericCellText, shouldRightAlignTableCell } from "./tableAlign";
 import { resolveCellBorders, splitCssTokens } from "./cellFormatting";
 import {
   DEFAULT_FORMAT_OPTIONS,
@@ -119,8 +119,8 @@ function _borderCss(opts: ClipboardFormatOptions): string {
 // column is lost; the rows just get taller). `max-width: 100%` is belt-and-
 // braces for paste targets that lay the table out in an auto-width box.
 // (Independent of the configurable knobs.)
-const _CLIPBOARD_TABLE_STYLE =
-  "border-collapse: collapse; margin: 8px 0; " +
+const _clipboardTableStyle = (gap: number) =>
+  `border-collapse: collapse; margin: ${gap}px 0; ` +
   "width: 100%; max-width: 100%; table-layout: fixed;";
 
 // When the user has RESIZED the table (an explicit `width: …px`), forcing
@@ -128,8 +128,8 @@ const _CLIPBOARD_TABLE_STYLE =
 // column widths on paste into Word/M-Tool. In that case we keep the table's
 // own width and only add the layout helpers — `table-layout: fixed` so the
 // `<col>` widths are authoritative. (notes editor v2 follow-up.)
-const _CLIPBOARD_TABLE_STYLE_KEEP_WIDTH =
-  "border-collapse: collapse; margin: 8px 0; table-layout: fixed;";
+const _clipboardTableStyleKeepWidth = (gap: number) =>
+  `border-collapse: collapse; margin: ${gap}px 0; table-layout: fixed;`;
 
 /** Property name of one CSS declaration; the whole token when there is no
  *  colon (parity with `mtool/notes_decorate.py::_prop_of` — `indexOf` returning
@@ -428,6 +428,12 @@ export function decorateHtmlForClipboard(
   const tmp = document.createElement("div");
   tmp.innerHTML = html;
 
+  // Keep this 2em section offset aligned with notes_decorate.py and
+  // NotesReviewTab.css; the wrapper constrains its 100%-width tables.
+  for (const section of Array.from(tmp.querySelectorAll('div[data-note-section="1"]'))) {
+    _mergeStyle(section, "margin-left: 2em;");
+  }
+
   const cellBase = _cellStyleBase(opts);
   const noBorder = opts.borderStyle === "none";
   const operatorSizedTables = new Set<Element>();
@@ -443,7 +449,9 @@ export function decorateHtmlForClipboard(
     }
     _mergeStyle(
       table,
-      operatorSized ? _CLIPBOARD_TABLE_STYLE_KEEP_WIDTH : _CLIPBOARD_TABLE_STYLE,
+      operatorSized
+        ? _clipboardTableStyleKeepWidth(opts.paragraphSpacingPx)
+        : _clipboardTableStyle(opts.paragraphSpacingPx),
     );
     // Word/Outlook honour the legacy `border` attribute even when CSS
     // is partially stripped on paste. Belt-and-braces — the inline
@@ -491,10 +499,17 @@ export function decorateHtmlForClipboard(
   // row) can stay left-aligned while numeric value columns go right —
   // see shouldRightAlignCell. A bare single-cell numeric row still
   // right-aligns.
+  const columnsByTable = new Map<Element, Set<number>>();
   Array.from(tmp.querySelectorAll("tr")).forEach((row) => {
     const cells = Array.from(row.children).filter(
       (c) => c.tagName === "TD" || c.tagName === "TH",
     );
+    const table = row.closest("table");
+    if (table && !columnsByTable.has(table)) {
+      columnsByTable.set(table, amountColumns(table));
+    }
+    const amountCols = (table ? columnsByTable.get(table) : undefined) ??
+      new Set<number>();
     // Themed totals convention: the amount cells of a "total" row get the
     // double rule. Appended inside the same merged addition so a persisted
     // per-cell border still wins (the merge skips the whole border family
@@ -512,10 +527,8 @@ export function decorateHtmlForClipboard(
       !rowSourceStyled &&
       _isTotalsRow(row);
     cells.forEach((cell, idx) => {
-      const numeric = shouldRightAlignCell(
-        cell.textContent ?? "",
-        idx,
-        cells.length,
+      const numeric = shouldRightAlignTableCell(
+        cell, idx, cells, amountCols,
       );
       const align = numeric ? " text-align: right;" : " text-align: left;";
       const extra = totalsRow && numeric ? _TOTALS_RULE : "";

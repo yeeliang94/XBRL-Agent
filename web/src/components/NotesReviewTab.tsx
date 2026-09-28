@@ -47,6 +47,7 @@ import {
   restoreSelection,
 } from "../lib/cellFormatting";
 import { Indent } from "../lib/notesIndent";
+import { NotesSection } from "../lib/notesSection";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import {
@@ -239,6 +240,7 @@ const TIPTAP_EXTENSIONS = [
   TextAlign.configure({ types: ["heading", "paragraph", "listItem"] }),
   // Paragraph indentation (custom; no first-party TipTap extension).
   Indent,
+  NotesSection,
   // resizable: true enables drag-to-resize column widths. Widths serialise as
   // a standard `<colgroup><col style="width">` + cell `colwidth` attrs, which
   // the sanitiser accepts and which paste faithfully into Word/Excel.

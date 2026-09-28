@@ -6,6 +6,19 @@ import {
 } from "../lib/clipboard";
 import { DEFAULT_FORMAT_OPTIONS } from "../lib/clipboardFormat";
 
+test("sub-note wrapper indents prose and a full-width table together", () => {
+  const html = '<h3>8 Revenue</h3><div data-note-section="1">' +
+    '<h3>8.1 Services</h3><p>Service revenue.</p>' +
+    '<table><tr><td>100</td></tr></table></div>';
+  const doc = new DOMParser().parseFromString(
+    decorateHtmlForClipboard(html), "text/html",
+  );
+  const section = doc.querySelector('div[data-note-section="1"]');
+  expect(section?.getAttribute("style")).toContain("margin-left: 2em");
+  expect(section?.querySelector("table")?.getAttribute("style")).toContain("width: 100%");
+  expect(doc.body.querySelector("h3")?.textContent).toBe("8 Revenue");
+});
+
 test("double border fallback preserves content, spans, colour and other edges", () => {
   const html = '<p><u>Text underline</u></p><table data-source-styled="true" style="border:1pt double #123456"><tr><td colspan="2" style="border-width:1px 2px 4pt 1px; border-style:double hidden double solid; border-color:rgb(12, 34, 56)">Total 3190</td></tr></table>';
   const out = decorateHtmlForClipboard(html, DEFAULT_FORMAT_OPTIONS);
@@ -183,12 +196,21 @@ describe("copyHtmlAsRichText", () => {
       /<td[^>]*style="[^"]*text-align: left[^"]*">Approved and contracted for</,
     );
     expect(out).toMatch(/<td[^>]*style="[^"]*text-align: left[^"]*">Total</);
-    // Header cells: the "Item" header is text → left-aligned. The
-    // year headers contain "2024 RM'000" — non-numeric (has letters),
-    // so they stay left-aligned. That matches the editor's preview
-    // layout. (Numeric-header detection would only fire on a bare
-    // "2024" cell.)
+    // The description stays left; headings above amount columns align right.
     expect(out).toMatch(/<th[^>]*style="[^"]*text-align: left[^"]*">Item</);
+    expect(out).toMatch(/<th[^>]*style="[^"]*text-align: right[^"]*">2024 RM'000</);
+    expect(out).toMatch(/<th[^>]*style="[^"]*text-align: right[^"]*">2023 RM'000</);
+  });
+
+  test("copy keeps descriptive body text left in a partly numeric column", () => {
+    const out = decorateHtmlForClipboard("<table>" +
+      "<tr><th>Relationship</th><th>2024</th></tr>" +
+      "<tr><td>Director</td><td>12</td></tr>" +
+      "<tr><td>Other</td><td>Spouse of director</td></tr>" +
+      "</table>");
+    expect(out).toMatch(/<th[^>]*text-align: right[^>]*>2024</);
+    expect(out).toMatch(/<td[^>]*text-align: right[^>]*>12</);
+    expect(out).toMatch(/<td[^>]*text-align: left[^>]*>Spouse of director</);
   });
 
   test("decorateHtmlForClipboard_treats_dash_and_parenthesised_negatives_as_numeric", () => {

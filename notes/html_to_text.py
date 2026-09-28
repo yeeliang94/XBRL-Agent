@@ -209,9 +209,9 @@ def truncate_html_to_rendered_length(
 
     Preserves HTML well-formedness and as much original content as
     possible. Walks the top-level block children in order, keeping
-    whole blocks while they fit; when the next block would overflow
-    the budget, splits it at a text boundary and keeps a clipped copy
-    of just the head of its text content. Appends an HTML footer
+    whole blocks while they fit. Marked sub-note sections are traversed
+    recursively so their complete inner headings and tables survive; only
+    the final overflowing block is clipped to text. Appends an HTML footer
     (``<p><em>[truncated -- see PDF pages …]</em></p>``) pointing at
     ``source_pages``.
 
@@ -265,12 +265,62 @@ def truncate_html_to_rendered_length(
         # block tag as the original so well-formedness survives.
         remaining = max(0, budget - used - sep)
         if remaining > 0:
-            clipped = _clip_block_to_length(child, remaining)
+            clipped = (
+                _clip_note_section_to_length(child, remaining)
+                if child.name == "div" and child.get("data-note-section") == "1"
+                else _clip_block_to_length(child, remaining)
+            )
             if clipped:
                 kept_html.append(clipped)
         break
 
     return "".join(kept_html) + footer_html
+
+
+def _clip_note_section_to_length(section: Tag, max_len: int) -> str:
+    """Clip inside a marked sub-note, retaining complete inner HTML blocks.
+
+    The section itself is presentation structure. Treating it as one ordinary
+    block would flatten its heading and every table when its last paragraph
+    overflows. Only the final overflowing child may use the legacy text clip.
+    """
+    opening = '<div data-note-section="1">'
+    closing = "</div>"
+    kept: list[str] = []
+
+    def candidate(fragment: str) -> str:
+        return opening + "".join(kept) + fragment + closing
+
+    for child in list(section.children):
+        whole = str(child)
+        if rendered_length(candidate(whole)) <= max_len:
+            kept.append(whole)
+            continue
+        if isinstance(child, Tag):
+            clip = (
+                lambda n: _clip_note_section_to_length(child, n)
+                if child.name == "div" and child.get("data-note-section") == "1"
+                else _clip_block_to_length(child, n)
+            )
+        elif isinstance(child, NavigableString):
+            clip = lambda n: str(child)[:n]
+        else:
+            break
+        low, high = 0, max_len
+        best = ""
+        while low <= high:
+            mid = (low + high) // 2
+            fragment = clip(mid)
+            if rendered_length(candidate(fragment)) <= max_len:
+                best = fragment
+                low = mid + 1
+            else:
+                high = mid - 1
+        if best:
+            kept.append(best)
+        break
+
+    return candidate("") if kept else ""
 
 
 def _clip_block_to_length(block: Tag, max_len: int) -> str:
