@@ -2624,7 +2624,29 @@ the active generation, recorded cell revision, live placements and open flag
 inside the same transaction as the move and answer. A whole-cell move requires
 the complete proposed selection; partial overlaps stay open for human review.
 Older flags without the recorded revision/selection also remain unresolved.
-Pinned by `tests/test_notes_reviewer_tools.py`. An open placement
+Pinned by `tests/test_notes_reviewer_tools.py`.
+**Field conflicts (`match_kind="same_field"`).** An extraction write
+(`actor="notes_agent"`) into a non-catch-all field whose live placements
+belong to a different source note no longer replaces them: it raises a field
+conflict recording both notes (`existing_notes`, `source_notes`) and both
+block selections. Concurrent List-of-Notes sub-agents once silently dropped a
+note this way (Doc 3 row 140). A rewrite that still carries every note already
+in the cell is not a conflict. The reviewer's `resolve_placement_conflict`
+decides with `keep_existing`, `use_proposed` (each with an optional
+`other_row`/`other_sheet` naming an empty field or the catch-all for the other
+note) or `combine`; `notes.review_move.resolve_field_collision` applies it
+through `write_cell_from_blocks` in one transaction after checking the live
+placements still match. Conflicts are the first packet section. An agent or
+sub-agent whose only outcome is recorded conflicts is pending review, not a
+no-write failure, and is not retried (`NotesDeps.placement_conflicts_recorded`,
+`SubAgentRunResult.placement_conflict_notes`). Pinned by
+`tests/test_notes_reviewer_tools.py`, `tests/test_notes_turn_timeout.py` and
+`tests/test_notes12_coverage_e2e.py`.
+The prepared map refuses a numbered note whose ownership starts before its own
+printed number (`scout/prepared_map.py::_refuse_text_before_note_heading`),
+ignoring text repeated on other pages, so the repair loop gives a company
+introduction its own owner instead of folding it into Note 1. Pinned by
+`tests/test_prepared_document_map.py`. An open placement
 conflict tips the run to `completed_with_errors` and blocks mTool preflight; it
 is never deleted as a stale generic reviewer flag. Reviewer relinks carry the
 observed content revision. Heading context may repeat across policy destinations;

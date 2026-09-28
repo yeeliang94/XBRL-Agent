@@ -249,3 +249,107 @@ def resolve_source_placement_conflict(
         )
     if not repo.answer_notes_review_flag(conn, flag_id=flag_id, run_id=run_id, answer=answer):
         raise MoveConflict("The placement conflict changed. Reload the review packet.")
+
+
+FIELD_COLLISION_DECISIONS = frozenset({"keep_existing", "use_proposed", "combine"})
+
+
+def resolve_field_collision(
+    conn: sqlite3.Connection, *, run_id: int, flag_id: int, finding_id: str,
+    decision: str, answer: str, template_prefix: str,
+    other_sheet: str | None = None, other_row: int | None = None,
+) -> list[tuple[str, int]]:
+    """Settle two notes proposed for one field. Caller owns ``BEGIN IMMEDIATE``.
+
+    ``keep_existing`` leaves the field as it is; ``use_proposed`` puts the
+    proposed note there instead; ``combine`` keeps both in the one field.
+    For the first two, ``other_row`` (and optionally ``other_sheet``) names an
+    empty field, or the catch-all, for the note that did not win the field.
+    Without it that note stays unplaced and remains an open source finding.
+    Every write goes through the source writer, so lineage, dispositions and
+    the duplicate guard behave exactly as for any other placement. Returns the
+    cells written.
+    """
+    from notes import source_write
+
+    flag = conn.execute(
+        "SELECT evidence FROM notes_review_flags "
+        "WHERE id=? AND run_id=? AND finding_id=? AND status='open'",
+        (flag_id, run_id, finding_id),
+    ).fetchone()
+    if flag is None:
+        raise MoveConflict("The field conflict changed. Reload the review packet.")
+    conflict = json.loads(flag["evidence"])
+    if conflict.get("match_kind") != "same_field":
+        raise MoveConflict("This is not a field conflict.")
+    if decision not in FIELD_COLLISION_DECISIONS:
+        raise MoveConflict("decision must be keep_existing, use_proposed or combine.")
+    generation = sources.active_generation(conn, run_id)
+    if generation is None or generation["id"] != conflict["generation_id"]:
+        raise MoveConflict("The source generation changed. Reload the review packet.")
+    target = conflict["target"]
+    sheet, row = target["sheet"], int(target["row"])
+    existing_ids = sorted(set(conflict.get("block_ids") or []))
+    proposed_ids = sorted(set(conflict.get("proposed_block_ids") or []))
+    if not existing_ids or not proposed_ids:
+        raise MoveConflict("The field conflict needs human review; its selection is unavailable.")
+    live_ids = {
+        item["block_id"] for item in conn.execute(
+            "SELECT block_id FROM notes_block_placements "
+            "WHERE run_id=? AND generation_id=? AND sheet=? AND row=? AND active=1",
+            (run_id, generation["id"], sheet, row),
+        ).fetchall()
+    }
+    if live_ids != set(existing_ids):
+        raise MoveConflict(
+            "The field changed since the conflict was recorded. Reload the review packet."
+        )
+
+    if decision == "combine" and other_row is not None:
+        raise MoveConflict("combine keeps both notes in the one field; do not name another field.")
+    destination = (other_sheet or sheet, int(other_row)) if other_row is not None else None
+    if destination == (sheet, row):
+        raise MoveConflict("name a different field for the other note.")
+    if destination is not None:
+        occupied = conn.execute(
+            "SELECT label, html FROM notes_cells WHERE run_id=? AND sheet=? AND row=?",
+            (run_id, *destination),
+        ).fetchone()
+        if (occupied is not None and (occupied["html"] or "").strip()
+                and not source_write._is_list_catch_all(destination[0], occupied["label"] or "")):
+            raise MoveConflict(
+                f"{destination[0]} row {destination[1]} already holds content. "
+                "Choose an empty field or the catch-all field."
+            )
+
+    def write(cell: tuple[str, int], block_ids: list[str], *, combine: bool = False) -> None:
+        label_row = conn.execute(
+            "SELECT label FROM notes_cells WHERE run_id=? AND sheet=? AND row=?",
+            (run_id, *cell),
+        ).fetchone()
+        source_write.write_cell_from_blocks(
+            conn, run_id=run_id, generation_id=generation["id"],
+            sheet=cell[0], row=cell[1], block_ids=block_ids,
+            label=(label_row["label"] if label_row else "") or "",
+            evidence=answer, actor="notes_reviewer",
+            template_prefix=template_prefix, combine_notes=combine,
+        )
+
+    written: list[tuple[str, int]] = []
+    if decision == "combine":
+        write((sheet, row), sorted(set(existing_ids) | set(proposed_ids)), combine=True)
+        written.append((sheet, row))
+    elif decision == "use_proposed":
+        # Replace first so the displaced note is unplaced before it moves;
+        # the duplicate guard would otherwise see it in two fields.
+        write((sheet, row), proposed_ids)
+        written.append((sheet, row))
+        if destination is not None:
+            write(destination, existing_ids)
+            written.append(destination)
+    elif destination is not None:
+        write(destination, proposed_ids)
+        written.append(destination)
+    if not repo.answer_notes_review_flag(conn, flag_id=flag_id, run_id=run_id, answer=answer):
+        raise MoveConflict("The field conflict changed. Reload the review packet.")
+    return written

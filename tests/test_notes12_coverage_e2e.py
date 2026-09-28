@@ -282,6 +282,42 @@ async def test_e2e_fully_skipped_batch_emits_workbook_for_merge(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_e2e_batch_of_recorded_clashes_is_pending_review_not_retried(
+    tmp_path: Path,
+):
+    """A sub-agent whose notes all became clashes for the reviewer wrote
+    nothing on purpose. Retrying would only record the same proposals, so the
+    batch is not retried and the sheet does not fail."""
+    pdf_path = tmp_path / "dummy.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    config = NotesRunConfig(
+        pdf_path=str(pdf_path), output_dir=str(tmp_path), model="test",
+        notes_to_run={NotesTemplateType.LIST_OF_NOTES}, filing_level="company",
+    )
+    infopack = Infopack(
+        toc_page=1, page_offset=0,
+        notes_inventory=[NoteInventoryEntry(13, "Related company", (32, 32))],
+    )
+    calls = []
+
+    async def fake_invoke(**kwargs):
+        calls.append(kwargs["batch"])
+        kwargs["failures_out"]["placement_conflict_notes"] = {
+            e.note_num for e in kwargs["batch"]
+        }
+        return [], 0, 0, CoverageReceipt(entries=[])
+
+    with patch(
+        "notes.listofnotes_subcoordinator._invoke_sub_agent_once",
+        side_effect=fake_invoke,
+    ):
+        result = await run_notes_extraction(config, infopack=infopack)
+
+    assert len(calls) == 1
+    assert result.agent_results[0].status != "failed"
+
+
+@pytest.mark.asyncio
 async def test_e2e_empty_aggregate_without_receipt_still_fails(tmp_path: Path):
     """The carve-out is narrow: empty aggregate + NO receipt is still
     a failure. Without this the sheet would silently report succeeded

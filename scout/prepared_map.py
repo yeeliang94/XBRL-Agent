@@ -66,6 +66,8 @@ page images; index previews cannot certify detailed inspection.
 Do not invent unavailable statements. Notes inventory uses positive integer note_num,
 title, page_range [first,last], optional subnotes with subnote_ref/title/page_range.
 Unnumbered disclosures still need stable source_note_id ownership; never invent numbers.
+A numbered note starts at its own printed number: text printed before it, such as a
+company introduction above Note 1, belongs to its own owner, not to that note.
 Assign EVERY block using inclusive first_block_id/last_block_id ranges in supplied
 reading order. Use broad note/metadata ranges; explicit furniture ranges inside them
 override page headers/footers. Do not split a note range at every page number.
@@ -185,6 +187,50 @@ def _inventory_value(inventory):
     if isinstance(inventory, dict):
         inventory = inventory.get("notes_inventory", [])
     return json.loads(json.dumps(inventory, default=lambda value: asdict(value)))
+
+
+def _refuse_text_before_note_heading(blocks, assigned, block_text, text_pages) -> None:
+    """A numbered note begins at its own printed number.
+
+    Text printed before that heading (Doc 1's unnumbered company introduction
+    above "1. Basis of preparation") was sometimes mapped into the note. The
+    note's first source section then carried that text, the List-of-Notes
+    agent placed it under basis of preparation, and Corporate Information
+    could not claim it. Only a heading that visibly carries the note's number
+    is recognised, so an unfamiliar heading style never blocks a map. Text
+    repeated on other pages (a running page header above the heading) is
+    harmless and ignored.
+    """
+    first_owned: dict[str, int] = {}
+    heading_at: dict[str, int] = {}
+    for position, block in enumerate(blocks):
+        item = assigned.get(block["block_id"])
+        if not item or item["owner_kind"] != "note" or not item["source_note_num"]:
+            continue
+        note_id = item["source_note_id"]
+        first_owned.setdefault(note_id, position)
+        if note_id in heading_at or block.get("block_kind") not in (None, "heading"):
+            continue
+        number = re.escape(str(item["source_note_num"]).strip())
+        if re.match(rf"(?:note\s+)?{number}(?:[.:)]\s|\s)", block_text[block["block_id"]] + " "):
+            heading_at[note_id] = position
+    for note_id, heading in heading_at.items():
+        early = [
+            blocks[position]["block_id"]
+            for position in range(first_owned[note_id], heading)
+            if (assigned.get(blocks[position]["block_id"]) or {}).get("source_note_id") == note_id
+            and len(text_pages.get(block_text[blocks[position]["block_id"]], ())) < 2
+        ]
+        if early:
+            number = assigned[blocks[heading]["block_id"]]["source_note_num"]
+            raise ValueError(
+                f"Note {number} ownership starts before its printed heading "
+                f"{blocks[heading]['block_id']}: blocks {early[:20]} precede it. "
+                "Text printed before a note's own number is not part of that "
+                "note. Give it the owner it belongs to, such as an unnumbered "
+                "note for a company or corporate-information introduction, and "
+                "start this note at its heading. Amend only these ranges."
+            )
 
 
 def validate_document_map(prepared, result: DocumentMap, inventory=None):
@@ -335,6 +381,7 @@ def validate_document_map(prepared, result: DocumentMap, inventory=None):
             if item["source_note_id"] in identities and identities[item["source_note_id"]] != identity:
                 raise ValueError("A stable note identity has conflicting numbers or titles")
             identities[item["source_note_id"]] = identity
+    _refuse_text_before_note_heading(blocks, assigned, block_text, text_pages)
     numbers = {str(n["note_num"]) for n in data["notes_inventory"]}
     owned_numbers = {a["source_note_num"] for a in assigned.values()
                      if a["owner_kind"] == "note" and a["source_note_num"]}

@@ -683,6 +683,45 @@ def build_notes_reviewer_packet(context: dict) -> str:
         )
 
     out: list[str] = ["=== NOTES REVIEW PACKET ==="]
+    if context.get("placement_conflicts"):
+        out.append(
+            "\n[PLACEMENT CONFLICTS — SETTLE THESE FIRST] Extraction agents "
+            "proposed competing placements. The earlier placement is "
+            "provisional, not authoritative. Settle every conflict here before "
+            "the other findings, because a decision can change them. Inspect "
+            "the named blocks and PDF pages, then call "
+            "resolve_placement_conflict with the exact finding id. Same "
+            "content, two destinations: keep_existing or move_to_proposed. "
+            "Two different notes, one field: keep_existing, use_proposed "
+            "(each with other_row for the other note's correct empty field) "
+            "or, rarely, combine. Never substitute unrelated blocks."
+        )
+        for conflict in context["placement_conflicts"]:
+            target = conflict.get("target") or {}
+            field = (
+                f"{target.get('sheet')} row {target.get('row')} "
+                f"{target.get('label', '')!r}"
+            )
+            if conflict.get("match_kind") == "same_field":
+                out.append(_review_source_line(
+                    f"finding_id={conflict['packet_finding_id']}; FIELD CONFLICT "
+                    f"at {field}; already there: "
+                    f"{conflict.get('existing_notes') or []} blocks="
+                    f"{conflict.get('block_ids') or []}; proposed: "
+                    f"{conflict.get('source_notes') or []} blocks="
+                    f"{conflict.get('proposed_block_ids') or []}"
+                ))
+                continue
+            existing = ", ".join(
+                f"{item['sheet']} row {item['row']} {item.get('label', '')!r}"
+                for item in conflict.get("existing") or []
+            )
+            out.append(_review_source_line(
+                f"finding_id={conflict['packet_finding_id']}; blocks="
+                f"{conflict.get('block_ids') or []}; source_notes="
+                f"{conflict.get('source_notes') or []}; existing={existing}; "
+                f"proposed={field}"
+            ))
     if policy_placements:
         out.append(
             "\n[POLICY DESTINATION ACCURACY] Check EVERY source-linked accounting "
@@ -698,28 +737,6 @@ def build_notes_reviewer_packet(context: dict) -> str:
             out.append(_review_source_line(
                 f"row {item['row']} {item['label']!r}: "
                 f"content starts {item['preview']!r}"
-            ))
-    if context.get("placement_conflicts"):
-        out.append(
-            "\n[SOURCE PLACEMENT CONFLICT] Extraction proposed the same source "
-            "content for competing destinations. The earlier placement is "
-            "provisional, not authoritative. Inspect the named blocks and PDF "
-            "pages, then call resolve_placement_conflict with the exact finding "
-            "id to keep the existing destination or atomically move it to the "
-            "proposed destination. Never substitute unrelated blocks."
-        )
-        for conflict in context["placement_conflicts"]:
-            existing = ", ".join(
-                f"{item['sheet']} row {item['row']} {item.get('label', '')!r}"
-                for item in conflict.get("existing") or []
-            )
-            target = conflict.get("target") or {}
-            out.append(_review_source_line(
-                f"finding_id={conflict['packet_finding_id']}; blocks="
-                f"{conflict.get('block_ids') or []}; source_notes="
-                f"{conflict.get('source_notes') or []}; existing={existing}; "
-                f"proposed={target.get('sheet')} row {target.get('row')} "
-                f"{target.get('label', '')!r}"
             ))
     if context.get("source_integrity_findings"):
         out.append("\n[SOURCE COMPLETENESS] Repair these exact source blocks. Use list_source_notes, "
@@ -1732,19 +1749,38 @@ def create_notes_reviewer_agent(
         decision: str,
         source_pages: List[int],
         evidence: str,
+        other_row: Optional[int] = None,
+        other_sheet: Optional[str] = None,
     ) -> str:
-        """Resolve one extraction-time source-placement conflict.
+        """Resolve one extraction-time placement conflict.
 
-        ``decision`` is ``keep_existing`` when the earlier destination is
-        correct, or ``move_to_proposed`` when the recorded proposed target is
-        correct. View and pass the supporting PDF pages first. A move is
-        atomic and preserves source lineage; this tool never approves a second
-        copy of the disclosure.
+        Same content proposed for two destinations: ``decision`` is
+        ``keep_existing`` when the earlier destination is correct, or
+        ``move_to_proposed`` when the recorded proposed target is correct.
+
+        Two different notes proposed for ONE field (a field conflict): decide
+        which note belongs there. ``keep_existing`` keeps the note already in
+        the field, ``use_proposed`` puts the proposed note there instead, and
+        ``combine`` keeps both in that one field (rare; only when the field
+        genuinely covers both). For keep_existing or use_proposed, pass
+        ``other_row`` (and ``other_sheet`` if it differs) for an EMPTY field,
+        or the catch-all, where the other note belongs; without it that note
+        stays unplaced and remains open. The first placement is not assumed
+        correct.
+
+        View and pass the supporting PDF pages first. Every change preserves
+        source lineage; this tool never approves a second copy of a disclosure.
         """
         conflict = ctx.deps.placement_conflicts_by_id.get(finding_id)
         if conflict is None:
             return "rejected: finding_id is not an open placement conflict."
         decision = decision.strip().lower()
+        if conflict.get("match_kind") == "same_field":
+            return _resolve_field_conflict(
+                ctx, conflict, finding_id=finding_id, decision=decision,
+                source_pages=source_pages, evidence=evidence,
+                other_row=other_row, other_sheet=other_sheet,
+            )
         if decision not in {"keep_existing", "move_to_proposed"}:
             return (
                 "rejected: decision must be keep_existing or move_to_proposed."
@@ -1799,6 +1835,66 @@ def create_notes_reviewer_agent(
             ctx.deps.finding_keys_by_id[finding_id]
         )
         return f"ok: placement conflict resolved with {decision}"
+
+    def _resolve_field_conflict(
+        ctx: RunContext[NotesReviewerDeps], conflict: dict, *, finding_id: str,
+        decision: str, source_pages: List[int], evidence: str,
+        other_row: Optional[int], other_sheet: Optional[str],
+    ) -> str:
+        from notes.review_move import (
+            FIELD_COLLISION_DECISIONS, resolve_field_collision,
+        )
+
+        if decision not in FIELD_COLLISION_DECISIONS:
+            return (
+                "rejected: for a field conflict, decision must be "
+                "keep_existing, use_proposed or combine."
+            )
+        pages = sorted({int(p) for p in source_pages if isinstance(p, int)})
+        if not pages or not set(pages).issubset(ctx.deps.viewed_pages):
+            missing = sorted(set(pages) - ctx.deps.viewed_pages)
+            return (
+                "rejected: view the supporting PDF page(s) first"
+                + (f": {missing}." if missing else ".")
+            )
+        if not evidence.strip():
+            return "rejected: evidence is required for the placement decision."
+        target = conflict.get("target") or {}
+        destination_sheet = other_sheet or target.get("sheet")
+        if other_row is not None and destination_sheet not in PROSE_SHEETS:
+            return f"rejected: {destination_sheet!r} is not a prose notes sheet."
+        with ctx.deps.io_lock:
+            _ensure_snapshot(ctx)
+            try:
+                with repo.db_session(ctx.deps.db_path) as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    written = resolve_field_collision(
+                        conn, run_id=ctx.deps.run_id,
+                        flag_id=int(conflict["flag_id"]),
+                        finding_id=conflict["flag_finding_id"],
+                        decision=decision,
+                        answer=f"{decision}: {evidence.strip()}",
+                        template_prefix=ctx.deps.template_prefix,
+                        other_sheet=other_sheet, other_row=other_row,
+                    )
+            except ValueError as exc:
+                return f"rejected: {exc}"
+            for sheet, row in written:
+                ctx.deps.writes_performed += 1
+                ctx.deps.correction_log.append({
+                    "op": f"field_conflict:{decision}", "sheet": sheet, "row": row,
+                    "evidence": _ground_evidence(pages, evidence),
+                })
+        ctx.deps.dispositioned_finding_keys.add(
+            ctx.deps.finding_keys_by_id[finding_id]
+        )
+        displaced = decision in {"keep_existing", "use_proposed"} and other_row is None
+        return (
+            f"ok: field conflict resolved with {decision}"
+            + ("; the other note is still unplaced and remains an open source "
+               "finding — relink it to its correct field or flag it."
+               if displaced else ".")
+        )
 
     @agent.tool
     def clear_note_cells(
