@@ -141,6 +141,48 @@ def build_input(
     )
 
 
+def source_linked_subnote_keys(inp: integrity.IntegrityInput) -> set[tuple[int, str]]:
+    """Sub-notes whose every frozen source part is present in a live cell.
+
+    A printed sub-note (``5.1``, ``(a)``) is a section of the prepared source.
+    When all of its parts are placed in a notes cell that still exists and still
+    matches its source selection, the ledger proves the sub-note reached the
+    output, so the reviewer need not re-check it against the page. Returns
+    ``{(top_note_num, subnote_key)}`` in the coverage checklist's key space.
+    Only a verified prepared inventory qualifies.
+    """
+    if not inp.verified_inventory:
+        return set()
+    from notes.detectors import _subnote_key_for_note
+    from notes.source_sections import sections_for_note
+
+    faithful = {
+        (c.sheet, c.row) for c in inp.cells if c.selection_matches_content
+    }
+    placed = {
+        block_id for block_id, coords in inp.placements.items()
+        if any(coord in faithful and coord in inp.live_cells for coord in coords)
+    }
+    verdicts: dict[tuple[int, str], bool] = {}
+    for note in inp.notes:
+        try:
+            top = int(str(note.top_note_num))
+        except (TypeError, ValueError):
+            continue
+        prefix = f"section:{note.source_note_id}:"
+        for section in sections_for_note(
+            inp.blocks, note.source_note_id, str(top), note.title or "",
+        ):
+            ref = section.section_id[len(prefix):].split(":")[0]
+            if ref == "root" or not section.block_ids:
+                continue
+            key = (top, _subnote_key_for_note(top, ref))
+            complete = all(bid in placed for bid in section.block_ids)
+            # A repeated printed ref counts only when every occurrence is placed.
+            verdicts[key] = verdicts.get(key, True) and complete
+    return {key for key, complete in verdicts.items() if complete}
+
+
 def _owner(raw: Optional[str]):
     from notes.source_models import OwnerKind
 

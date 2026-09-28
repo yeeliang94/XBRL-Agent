@@ -2218,14 +2218,23 @@ def _compute_notes_coverage_checklist(
     from notes.detectors import load_provenance_entries
     from notes.coverage_checklist import build_draft_checklist
 
+    from notes import integrity_runner, source_repository
+    from notes.source_models import INPUT_KIND_PREPARED
+
+    source_linked_subrefs: set = set()
     with repo.db_session(db_path) as conn:
         inventory_rows = repo.fetch_notes_inventory(conn, run_id)
+        generation = source_repository.active_generation(conn, run_id)
+        if generation and generation["input_kind"] == INPUT_KIND_PREPARED:
+            source_linked_subrefs = integrity_runner.source_linked_subnote_keys(
+                integrity_runner.build_input(conn, run_id, generation["id"]))
     entries = load_provenance_entries(run_id, db_path)
     return build_draft_checklist(
         inventory_rows=inventory_rows, provenance_entries=entries,
         skip_receipts=skip_receipts,
         note_verdicts=note_verdicts, subnote_verdicts=subnote_verdicts,
         reviewer_added_notes=reviewer_added_notes,
+        source_linked_subrefs=source_linked_subrefs,
     )
 
 

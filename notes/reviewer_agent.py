@@ -994,12 +994,16 @@ def _build_context(
                 ("source_placement", flag["finding_id"])
             )
             placement_conflicts.append(conflict)
+        source_linked_subrefs: set = set()
         if generation and generation["input_kind"] == INPUT_KIND_PREPARED:
-            assessment = integrity.run_checks(integrity_runner.build_input(
-                conn, run_id, generation["id"], scout_available=True))
+            integrity_input = integrity_runner.build_input(
+                conn, run_id, generation["id"], scout_available=True)
+            assessment = integrity.run_checks(integrity_input)
             source_findings = [{"check": f.check, "block_ids": f.block_ids,
                                 "message": f.message, "note_num": f.note_num}
                                for f in assessment.findings if f.blocking]
+            source_linked_subrefs = integrity_runner.source_linked_subnote_keys(
+                integrity_input)
     checklist = build_draft_checklist(
         inventory_rows=inventory_rows,
         provenance_entries=entries,
@@ -1007,6 +1011,7 @@ def _build_context(
         note_verdicts=note_verdicts,
         subnote_verdicts=subnote_verdicts,
         reviewer_added_notes=reviewer_added_notes,
+        source_linked_subrefs=source_linked_subrefs,
     )
     # Notes the reviewer resolved without adding provenance (not_applicable /
     # confirmed_absent) are dropped from the raw detector gap family. A
@@ -1028,13 +1033,13 @@ def _build_context(
     # settle a detector omission without adding new provenance.
     subnote_gaps = []
     for gap in detect_subnote_coverage_gaps(inventory_subnotes or {}, entries):
+        note_num = int(gap["note_num"])
         unresolved_refs = [
             ref for ref in gap.get("missing_subnote_refs") or []
-            if str(((subnote_verdicts or {}).get(
-                (
-                    int(gap["note_num"]),
-                    _subnote_key_for_note(int(gap["note_num"]), ref),
-                ),
+            if (note_num, _subnote_key_for_note(note_num, ref))
+            not in source_linked_subrefs
+            and str(((subnote_verdicts or {}).get(
+                (note_num, _subnote_key_for_note(note_num, ref)),
                 {},
             ) or {}).get("verdict", "")).strip().lower() != SUBNOTE_VERIFIED
         ]
