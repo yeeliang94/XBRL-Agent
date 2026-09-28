@@ -1096,3 +1096,94 @@ class TestSubAgentSavesTrace:
         # Trace saved on the exception path too — the diagnostic exists exactly
         # when a sub-agent failed.
         assert (tmp_path / "NOTES_LIST_OF_NOTES_sub0_conversation_trace.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Sub-agent loop latency: terminal receipt and bounded provider wait
+# ---------------------------------------------------------------------------
+
+def _scripted_sub_agent(stream_function):
+    """A real PydanticAI agent behind create_notes_agent, driven by a
+    streaming FunctionModel, with a receipt tool that sets the deps field."""
+    from pydantic_ai import Agent
+    from pydantic_ai.models.function import FunctionModel
+
+    from notes.agent import NotesDeps
+    from notes_types import NotesTemplateType
+    from token_tracker import TokenReport
+
+    def _factory(**kwargs):
+        agent = Agent(FunctionModel(stream_function=stream_function),
+                      deps_type=NotesDeps)
+
+        @agent.tool
+        def submit_batch_coverage(ctx) -> str:
+            ctx.deps.coverage_receipt = object()
+            return "Coverage receipt accepted."
+
+        deps = NotesDeps(
+            pdf_path=kwargs["pdf_path"], template_path="x",
+            model=kwargs["model"], output_dir=kwargs["output_dir"],
+            token_report=TokenReport(),
+            template_type=NotesTemplateType.LIST_OF_NOTES,
+            sheet_name="Notes-Listofnotes", filing_level=kwargs["filing_level"],
+        )
+        return agent, deps
+
+    return _factory
+
+
+def _run_sub_agent(tmp_path, factory):
+    import asyncio
+
+    from notes.listofnotes_subcoordinator import _invoke_sub_agent_once
+
+    async def _run():
+        return await _invoke_sub_agent_once(
+            sub_agent_id="notes:LIST_OF_NOTES:sub0", batch=_make_inventory(1),
+            pdf_path=str(tmp_path / "x.pdf"), filing_level="company",
+            model="test", output_dir=str(tmp_path),
+        )
+
+    with patch("notes.listofnotes_subcoordinator.create_notes_agent",
+               side_effect=factory):
+        return asyncio.run(_run())
+
+
+def test_sub_agent_stops_after_its_receipt_is_accepted(tmp_path: Path):
+    """The accepted receipt is the batch's last call. The loop must not make
+    another model request just to hear a closing sentence."""
+    from pydantic_ai.models.function import DeltaToolCall
+
+    calls = []
+
+    async def _stream(messages, info):
+        calls.append(len(messages))
+        if len(calls) == 1:
+            yield {0: DeltaToolCall(name="submit_batch_coverage", json_args="{}")}
+        else:
+            yield "All notes in the batch are written."
+
+    _, _, _, receipt = _run_sub_agent(tmp_path, _scripted_sub_agent(_stream))
+    assert receipt is not None
+    assert len(calls) == 1
+
+
+def test_sub_agent_bounds_the_wait_for_a_stream_to_start(tmp_path, monkeypatch):
+    """A provider that never starts streaming must hit the step timeout rather
+    than the HTTP client's much longer default."""
+    import asyncio
+    import time
+
+    import notes.listofnotes_subcoordinator as sub
+
+    monkeypatch.setattr(sub, "NOTES12_TURN_TIMEOUT_SECS", 0.2)
+
+    async def _stall(messages, info):
+        await asyncio.sleep(30)
+        yield "never"
+
+    started = time.monotonic()
+    with pytest.raises(asyncio.TimeoutError):
+        _run_sub_agent(tmp_path, _scripted_sub_agent(_stall))
+    assert time.monotonic() - started < 5

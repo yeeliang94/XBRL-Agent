@@ -920,6 +920,10 @@ async def _invoke_single_notes_agent_once(
                 # Allow long workbook writes; model-stream inactivity remains
                 # bounded by NOTES_TURN_TIMEOUT in the shared runner.
                 bound_inner_streams=False,
+                # save_result is terminal; skip the closing chat turn.
+                completion_predicate=lambda current_deps: (
+                    getattr(current_deps, "result_saved", False) is True
+                ),
             )
             await run_agent_loop(
                 agent_run, deps, notes_spec, emit, _turn_records,
@@ -986,11 +990,17 @@ async def _invoke_single_notes_agent_once(
                     ),
                 )
 
-    result = agent_run.result
-    save_agent_trace(
-        result, output_dir, f"NOTES_{template_type.value}", turns=_turn_records,
-        runtime_metadata=describe_model_runtime(model, role=template_type.value),
-    )
+    try:
+        result = agent_run.result
+    except (AttributeError, RuntimeError):
+        result = None
+    if result is not None:
+        # An early stop at save_result has no final result; the finally block
+        # above already saved that conversation from its message history.
+        save_agent_trace(
+            result, output_dir, f"NOTES_{template_type.value}", turns=_turn_records,
+            runtime_metadata=describe_model_runtime(model, role=template_type.value),
+        )
 
     # Phase 5.1 + peer-review #2: backfill the cost report totals from
     # the final aggregate usage. Extracted into a helper so it can be
