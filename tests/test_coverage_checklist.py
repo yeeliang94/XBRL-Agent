@@ -168,6 +168,25 @@ def test_fully_uncited_blob_write_leaves_all_subrefs_not_verified():
     )
 
 
+def test_source_linked_subrefs_close_the_blob_write_blind_spot():
+    """When the placement ledger proves every source part of ``9(a)`` is in a
+    live cell, that child reads as cited without a reviewer verdict. A child
+    the ledger cannot prove stays for the reviewer, and a grounded ``missing``
+    verdict still wins over the ledger."""
+    cl = build_draft_checklist(
+        inventory_rows=[_inv(9, subs=["9(a)", "9(b)", "9(c)"])],
+        provenance_entries=[_entry(S12, 48, ["9"])],
+        source_linked_subrefs={(9, "a"), (9, "c")},
+        subnote_verdicts={(9, "c"): {"verdict": "missing", "reason": "gone"}},
+    )
+    states = {s.subnote_ref: s.state for s in _row(cl, 9).subnotes}
+    assert states == {
+        "9(a)": SUBNOTE_CITED,
+        "9(b)": SUBNOTE_NOT_VERIFIED,
+        "9(c)": "missing",
+    }
+
+
 def test_parent_qualified_and_local_letter_refs_share_one_identity():
     """Scout may print ``9(a)`` while extraction records the visible local
     label ``(a)``. Within note 9 those are the same structured child, without

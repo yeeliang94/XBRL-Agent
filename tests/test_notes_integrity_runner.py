@@ -282,3 +282,91 @@ def test_saying_a_part_is_unreadable_does_not_settle_it(run_with_source):
         conn, run_id, gen, mode=IntegrityMode.ENFORCE, scout_available=True
     )
     assert result.requires_review is True
+
+
+# --------------------------------------------------------------------------
+# sub-note proof from the placement ledger
+# --------------------------------------------------------------------------
+
+SUBNOTE_BLOCKS = [
+    SourceBlock(block_id="h5", block_kind="heading", reading_order=0,
+                canonical_html="<h3>5. Receivables</h3>", source_note_id="n5",
+                owner_kind=OwnerKind.NOTE),
+    SourceBlock(block_id="h51", block_kind="heading", reading_order=1,
+                canonical_html="<h4>5.1 Trade receivables</h4>",
+                source_note_id="n5", owner_kind=OwnerKind.NOTE),
+    SourceBlock(block_id="p51", block_kind="paragraph", reading_order=2,
+                canonical_html="<p>Trade terms are 30 days.</p>",
+                source_note_id="n5", owner_kind=OwnerKind.NOTE),
+    SourceBlock(block_id="h52", block_kind="heading", reading_order=3,
+                canonical_html="<h4>5.2 Other receivables</h4>",
+                source_note_id="n5", owner_kind=OwnerKind.NOTE),
+    SourceBlock(block_id="p52", block_kind="paragraph", reading_order=4,
+                canonical_html="<p>Deposits are refundable.</p>",
+                source_note_id="n5", owner_kind=OwnerKind.NOTE),
+]
+
+
+def _subnote_run(conn, tmp_path, input_kind):
+    run_id = repo.create_run(
+        conn, "x.pdf", session_id="s", output_dir=str(tmp_path / "s")
+    )
+    gen = srepo.begin_generation(conn, run_id, input_kind=input_kind)
+    srepo.write_blocks(conn, gen, SUBNOTE_BLOCKS)
+    srepo.write_notes(conn, gen, [
+        SourceNote(source_note_id="n5", top_note_num="5", title="Receivables"),
+    ])
+    srepo.activate_generation(conn, gen)
+    return run_id, gen
+
+
+def _place(conn, run_id, gen, block_ids):
+    repo.upsert_notes_cell(
+        conn, run_id=run_id, sheet="Notes-Listofnotes", row=140,
+        label="Receivables", html="", evidence=None, source_pages=[],
+    )
+    source_write.write_cell_from_blocks(
+        conn, run_id=run_id, generation_id=gen, sheet="Notes-Listofnotes",
+        row=140, block_ids=block_ids, label="Receivables",
+    )
+
+
+def _linked(conn, run_id, gen):
+    return integrity_runner.source_linked_subnote_keys(
+        integrity_runner.build_input(conn, run_id, gen))
+
+
+@pytest.mark.parametrize("input_kind, expect_proof", [
+    ("prepared", True),
+    ("docx_html", False),
+])
+def test_subnote_is_proven_only_when_all_its_parts_are_in_a_faithful_cell(
+    tmp_path, input_kind, expect_proof,
+):
+    """A prepared sub-note whose every source part sits in a live cell that
+    still matches its source is proven present. A partly placed sub-note, a
+    cell edited away from its source, or a non-prepared source proves nothing,
+    so the reviewer still checks it against the page."""
+    from notes.source_models import INPUT_KIND_PREPARED
+
+    db = tmp_path / "subnotes.sqlite"
+    init_db(db)
+    kind = INPUT_KIND_PREPARED if input_kind == "prepared" else input_kind
+    with repo.db_session(db) as conn:
+        run_id, gen = _subnote_run(conn, tmp_path, kind)
+        _place(conn, run_id, gen, ["h5", "h51", "p51", "h52"])
+        assert _linked(conn, run_id, gen) == (
+            {(5, "5.1")} if expect_proof else set()
+        ), "5.2 lacks its paragraph"
+
+        _place(conn, run_id, gen, ["h5", "h51", "p51", "h52", "p52"])
+        assert _linked(conn, run_id, gen) == (
+            {(5, "5.1"), (5, "5.2")} if expect_proof else set()
+        )
+
+        conn.execute(
+            "UPDATE notes_cells SET html = ? WHERE run_id = ? AND row = 140",
+            ("<p>Rewritten without the source wording.</p>", run_id),
+        )
+        assert _linked(conn, run_id, gen) == set(), (
+            "an edited cell no longer proves its sources")

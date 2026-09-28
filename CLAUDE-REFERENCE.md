@@ -1939,7 +1939,15 @@ Load-bearing invariants:
   the same transaction, so its fresh writer provenance becomes effective; a
   placement whose
   `notes_cells` target is gone does not count. Content
-  judgement (is sub-section (b) really in the cell?) is the reviewer's job.
+  judgement (is sub-section (b) really in the cell?) is the reviewer's job,
+  with one ledger exception: on a verified prepared source, a sub-ref whose
+  every frozen section part is placed in a live cell that still matches its
+  source selection reads as cited
+  (`integrity_runner.source_linked_subnote_keys`, passed as
+  `source_linked_subrefs`). The detector's `subnote_gaps` family uses the same
+  set, so checklist and detector agree. Partial placement, an edited cell, or a
+  non-prepared source proves nothing. Pinned by
+  `tests/test_notes_integrity_runner.py` and `tests/test_coverage_checklist.py`.
   Statuses: `placed` / `missing` / `skipped` /
   `suspected_gap` (INTERNAL numbering holes only — before-first / after-last is
   the documented blind spot). `skipped` remains in the persisted/API vocabulary

@@ -247,6 +247,7 @@ def build_draft_checklist(
     note_verdicts: Optional[dict[int, dict]] = None,
     subnote_verdicts: Optional[dict[tuple[int, str], dict]] = None,
     reviewer_added_notes: Optional[set[int]] = None,
+    source_linked_subrefs: Optional[set[tuple[int, str]]] = None,
 ) -> Checklist:
     """Reconcile inventory × placements into the checklist.
 
@@ -264,6 +265,10 @@ def build_draft_checklist(
       collapse when they belong to note 9.
     - ``reviewer_added_notes`` — note numbers the reviewer authored back into
       place, tagged for the UI's "reviewer-added" audit marker.
+    - ``source_linked_subrefs`` — ``{(note_num, subnote_key)}`` whose every
+      prepared-source part is placed in a live, source-faithful cell
+      (``integrity_runner.source_linked_subnote_keys``). Ledger proof, so the
+      sub-ref reads as cited without a reviewer verdict.
     """
     if not inventory_rows:
         return Checklist(rows=[], inventory_available=False)
@@ -271,6 +276,7 @@ def build_draft_checklist(
     note_verdicts = note_verdicts or {}
     subnote_verdicts = subnote_verdicts or {}
     reviewer_added_notes = reviewer_added_notes or set()
+    source_linked_subrefs = source_linked_subrefs or set()
 
     # ---- placements + cited sub-refs per top-level note -----------------
     placements_by_note: dict[int, dict[tuple[str, int], str]] = {}
@@ -347,6 +353,9 @@ def build_draft_checklist(
             key = _subnote_key_for_note(note_num, ref)
             state = SUBNOTE_CITED if key in cited else SUBNOTE_NOT_VERIFIED
             sub_reason = ""
+            if state == SUBNOTE_NOT_VERIFIED and (note_num, key) in source_linked_subrefs:
+                state = SUBNOTE_CITED
+                sub_reason = "Every source part of this sub-note is in a notes cell."
             verdict = subnote_verdicts.get((note_num, key))
             if verdict:
                 v = str(verdict.get("verdict", "")).strip().lower()
