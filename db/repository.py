@@ -2180,6 +2180,8 @@ def save_notes_format_snapshots(
     run_id: int,
     sheet: str,
     rows: dict[int, str],
+    *,
+    pass_started_at: Optional[str] = None,
 ) -> None:
     """Overwrite the sheet's pre-format snapshot (schema v27).
 
@@ -2187,15 +2189,30 @@ def save_notes_format_snapshots(
     pre-format HTML of exactly the rows the pass is about to restyle —
     "Revert formatting" restores from here. A later pass overwrites the
     previous pass's snapshot (last-pass-only revert, by design).
+
+    ``pass_started_at`` lets one pass write in several parts (the automatic
+    PDF formatter splits a large sheet into disjoint row groups). Each part
+    removes only rows snapshotted before the pass began, so parts of the same
+    pass keep each other's rows and an older pass's snapshot survives until a
+    part of the new pass actually writes.
     """
-    now = _now()
-    conn.execute(
-        "DELETE FROM notes_format_snapshots WHERE run_id = ? AND sheet = ?",
-        (run_id, sheet),
-    )
+    if pass_started_at is None:
+        now = _now()
+        conn.execute(
+            "DELETE FROM notes_format_snapshots WHERE run_id = ? AND sheet = ?",
+            (run_id, sheet),
+        )
+    else:
+        now = pass_started_at
+        conn.execute(
+            "DELETE FROM notes_format_snapshots WHERE run_id = ? AND sheet = ? "
+            "AND COALESCE(julianday(created_at), 0) < julianday(?)",
+            (run_id, sheet, pass_started_at),
+        )
     conn.executemany(
         "INSERT INTO notes_format_snapshots(run_id, sheet, row, html, created_at) "
-        "VALUES (?, ?, ?, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?) ON CONFLICT(run_id, sheet, row) DO UPDATE SET "
+        "html = excluded.html, created_at = excluded.created_at",
         [(run_id, sheet, row, html, now) for row, html in sorted(rows.items())],
     )
 

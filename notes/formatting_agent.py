@@ -14,6 +14,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
+from collections.abc import Collection
 from typing import Any, Optional, Union
 
 from bs4 import BeautifulSoup, Tag
@@ -363,8 +364,16 @@ async def run_notes_formatter(
     model: Union[str, Model],
     output_dir: str = "",
     style_sources: Optional[set[str | None]] = None,
+    rows: Optional[Collection[int]] = None,
+    pass_started_at: Optional[str] = None,
+    trace_label: Optional[str] = None,
 ) -> dict[str, Any]:
     """Run the formatter pass and attach cross-pass token telemetry.
+
+    ``rows`` limits the pass to those cells, so a caller can format disjoint
+    row groups of one sheet concurrently; parts of one pass share
+    ``pass_started_at`` for the revert snapshot and write distinct traces
+    under ``trace_label``.
 
     The shared ``RunUsage`` accumulates across every ``agent.run`` inside the
     impl; flattening it here (one exit point) keeps the many early returns in
@@ -375,7 +384,8 @@ async def run_notes_formatter(
     outcome = await _run_notes_formatter_impl(
         run_id=run_id, db_path=db_path, pdf_path=pdf_path, sheet=sheet,
         model=model, output_dir=output_dir, usage=usage,
-        style_sources=style_sources,
+        style_sources=style_sources, rows=rows,
+        pass_started_at=pass_started_at, trace_label=trace_label,
     )
     outcome.update(_usage_fields(usage))
     if outcome.get("error_type") == "validation_failed":
@@ -396,6 +406,9 @@ async def _run_notes_formatter_impl(
     output_dir: str,
     usage: RunUsage,
     style_sources: Optional[set[str | None]] = None,
+    rows: Optional[Collection[int]] = None,
+    pass_started_at: Optional[str] = None,
+    trace_label: Optional[str] = None,
 ) -> dict[str, Any]:
     if not pdf_path or not Path(pdf_path).exists():
         return {
@@ -407,6 +420,7 @@ async def _run_notes_formatter_impl(
         filled_cells = [
             c for c in repo.list_notes_cells_for_run(conn, run_id)
             if c.sheet == sheet and (c.html or "").strip()
+            and (rows is None or c.row in rows)
         ]
     cells = [
         c for c in filled_cells
@@ -483,7 +497,7 @@ async def _run_notes_formatter_impl(
         trace_messages[:] = result.all_messages()
         if output_dir and trace_messages:
             save_messages_trace(
-                trace_messages, output_dir, f"notes_format_{sheet}",
+                trace_messages, output_dir, trace_label or f"notes_format_{sheet}",
                 runtime_metadata=describe_model_runtime(
                     model, role="notes_formatter"
                 ),
@@ -632,6 +646,7 @@ async def _run_notes_formatter_impl(
             repo.save_notes_format_snapshots(
                 conn, run_id, sheet,
                 {row: rows_for_patch[row] for row in written_rows},
+                pass_started_at=pass_started_at,
             )
         written = len(written_rows)
 
