@@ -1021,15 +1021,10 @@ async def _invoke_single_notes_agent_once(
         unresolved_without_write = (
             deps.source_gap_notes | deps.source_placement_conflict_notes
         )
-        if (
-            (assigned_notes and assigned_notes <= unresolved_without_write)
-            or getattr(deps, "placement_conflicts_recorded", 0) > 0
-        ):
+        if assigned_notes and assigned_notes <= unresolved_without_write:
             # The template is blank, and persisted source-gap flags and write
-            # placement conflicts explicitly retain the unresolved work for
-            # review. A collision is not treated as a successful placement,
-            # and retrying would only record the same proposal again; the
-            # reviewer's packet and the coverage checklist carry what remains.
+            # placement conflicts account for every assigned note. A partial
+            # conflict leaves other notes unaccounted for and must be retried.
             deps.filled_path = deps.template_path
         else:
             raise _NoWriteError("Notes agent finished without writing any payloads")

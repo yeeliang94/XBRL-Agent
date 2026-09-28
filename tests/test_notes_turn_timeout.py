@@ -309,6 +309,7 @@ async def test_single_agent_stops_at_save_result_without_a_closing_turn(
     from notes import coordinator as coord
     from notes.agent import NotesDeps
     from notes_types import NotesTemplateType
+    from scout.notes_discoverer import NoteInventoryEntry
     from token_tracker import TokenReport
 
     filled = tmp_path / "NOTES_CORP_INFO_filled.xlsx"
@@ -332,6 +333,7 @@ async def test_single_agent_stops_at_save_result_without_a_closing_turn(
         def write_notes(ctx) -> str:
             if write_outcome == "conflict_recorded":
                 ctx.deps.placement_conflicts_recorded += 1
+                ctx.deps.source_placement_conflict_notes.add(1)
                 return "conflict recorded for review"
             ctx.deps.wrote_once = True
             ctx.deps.filled_path = str(filled)
@@ -347,6 +349,7 @@ async def test_single_agent_stops_at_save_result_without_a_closing_turn(
             output_dir=kwargs["output_dir"], token_report=TokenReport(),
             template_type=NotesTemplateType.CORP_INFO, sheet_name="Notes-CI",
             filing_level=kwargs["filing_level"],
+            inventory=kwargs["inventory"],
         )
         return agent, deps
 
@@ -356,7 +359,8 @@ async def test_single_agent_stops_at_save_result_without_a_closing_turn(
     with patch.object(coord, "create_notes_agent", side_effect=fake_create_notes_agent):
         outcome = await coord._invoke_single_notes_agent_once(
             template_type=NotesTemplateType.CORP_INFO, pdf_path="/tmp/fake.pdf",
-            inventory=[], filing_level="company", model="test",
+            inventory=[NoteInventoryEntry(1, "Corporate information", (1, 1))],
+            filing_level="company", model="test",
             output_dir=str(tmp_path), event_queue=None,
             agent_id="notes:CORP_INFO", emit=noop_emit,
         )

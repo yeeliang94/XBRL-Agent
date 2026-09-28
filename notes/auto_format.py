@@ -16,7 +16,7 @@ from typing import Any
 from pydantic_ai.exceptions import UsageLimitExceeded
 
 from db import repository as repo
-from notes.formatting_agent import run_notes_formatter
+from notes.formatting_agent import formatter_cell_is_candidate, run_notes_formatter
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +33,7 @@ def candidate_sheets(
     return sorted({
         c.sheet for c in cells
         if c.sheet in requested
-        and (c.html or "").strip()
-        and c.style_source in PDF_FORMAT_CANDIDATE_SOURCES
+        and formatter_cell_is_candidate(c, PDF_FORMAT_CANDIDATE_SOURCES)
     })
 
 
@@ -42,6 +41,7 @@ def candidate_sheets(
 # dozen tables) otherwise waits on one request that reads every source page and
 # writes every patch; a failed repair then repeats all of it.
 FORMAT_ROWS_PER_PART = 4
+FORMAT_MAX_CONCURRENT_REQUESTS = 4
 
 
 def _precise_now() -> str:
@@ -55,8 +55,8 @@ def _row_groups(db_path: str, run_id: int, sheet: str) -> list[list[int]]:
     with repo.db_session(db_path) as conn:
         rows = sorted(
             c.row for c in repo.list_notes_cells_for_run(conn, run_id)
-            if c.sheet == sheet and (c.html or "").strip()
-            and c.style_source in PDF_FORMAT_CANDIDATE_SOURCES
+            if c.sheet == sheet
+            and formatter_cell_is_candidate(c, PDF_FORMAT_CANDIDATE_SOURCES)
         )
     return [
         rows[i:i + FORMAT_ROWS_PER_PART]
@@ -177,6 +177,7 @@ async def run_pdf_auto_format(
     selected = candidate_sheets(db_path, run_id, sheets)
     if not selected:
         return {"sheets": {}, "formatted": 0, "partial": 0, "failed": 0, "skipped": 0}
+    model_slots = asyncio.Semaphore(FORMAT_MAX_CONCURRENT_REQUESTS)
     if on_progress is not None:
         try:
             on_progress(0, len(selected), None)
@@ -186,10 +187,12 @@ async def run_pdf_auto_format(
                 exc_info=True,
             )
 
-    async def _bounded(coro):
-        if timeout_s and timeout_s != float("inf"):
-            return await asyncio.wait_for(coro, timeout=timeout_s)
-        return await coro
+    async def _bounded(**kwargs):
+        async with model_slots:
+            coro = formatter(model=model_factory(), **kwargs)
+            if timeout_s and timeout_s != float("inf"):
+                return await asyncio.wait_for(coro, timeout=timeout_s)
+            return await coro
 
     async def one(sheet: str) -> tuple[str, dict[str, Any]]:
         try:
@@ -226,11 +229,11 @@ async def run_pdf_auto_format(
             else:
                 groups = _row_groups(db_path, run_id, sheet)
                 if len(groups) <= 1:
-                    result = await _bounded(formatter(
+                    result = await _bounded(
                         run_id=run_id, db_path=db_path, pdf_path=pdf_path,
-                        sheet=sheet, model=model_factory(), output_dir=output_dir,
+                        sheet=sheet, output_dir=output_dir,
                         style_sources=PDF_FORMAT_CANDIDATE_SOURCES,
-                    ))
+                    )
                 else:
                     # One long request per large sheet was the slowest step
                     # after review. Disjoint row groups run concurrently, share
@@ -239,14 +242,14 @@ async def run_pdf_auto_format(
 
                     async def part(index: int, group: list[int]) -> dict[str, Any]:
                         try:
-                            return await _bounded(formatter(
+                            return await _bounded(
                                 run_id=run_id, db_path=db_path, pdf_path=pdf_path,
-                                sheet=sheet, model=model_factory(),
+                                sheet=sheet,
                                 output_dir=output_dir,
                                 style_sources=PDF_FORMAT_CANDIDATE_SOURCES,
                                 rows=group, pass_started_at=pass_started_at,
                                 trace_label=f"notes_format_{sheet}_part{index}",
-                            ))
+                            )
                         except asyncio.CancelledError:
                             raise
                         except Exception as exc:  # noqa: BLE001 — per-part isolation

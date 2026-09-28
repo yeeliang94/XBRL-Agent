@@ -64,6 +64,13 @@ from tools.pdf_viewer import count_pdf_pages, render_pages_to_png_bytes
 
 logger = logging.getLogger(__name__)
 
+
+def formatter_cell_is_candidate(cell: Any, style_sources: Optional[set[str | None]]) -> bool:
+    """Use the same row eligibility for sheet selection and the formatter."""
+    return bool((cell.html or "").strip()) and (
+        style_sources is None or cell.style_source in style_sources
+    )
+
 _PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "notes_formatter.md"
 
 _STRUCTURED_OUTPUT_INSTRUCTION = """\
@@ -419,12 +426,12 @@ async def _run_notes_formatter_impl(
     with repo.db_session(db_path) as conn:
         filled_cells = [
             c for c in repo.list_notes_cells_for_run(conn, run_id)
-            if c.sheet == sheet and (c.html or "").strip()
+            if c.sheet == sheet and formatter_cell_is_candidate(c, None)
             and (rows is None or c.row in rows)
         ]
     cells = [
         c for c in filled_cells
-        if style_sources is None or c.style_source in style_sources
+        if formatter_cell_is_candidate(c, style_sources)
     ]
     if not cells:
         if filled_cells and style_sources is not None:

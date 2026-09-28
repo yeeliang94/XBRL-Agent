@@ -271,6 +271,54 @@ async def test_large_sheet_is_formatted_in_concurrent_row_groups(auto_format_db)
     assert task["prompt_tokens"] == 25
 
 
+@pytest.mark.asyncio
+async def test_auto_format_limits_model_requests_across_sheets(auto_format_db):
+    db_path, run_id, tmp_path = auto_format_db
+    with repo.db_session(db_path) as conn:
+        for sheet in ("Notes-CI", "Notes-Listofnotes"):
+            for row in range(100, 113):
+                repo.upsert_notes_cell(
+                    conn, run_id=run_id, sheet=sheet, row=row,
+                    label="Note", html="<p>Note</p>",
+                    evidence="Page 9", source_pages=[9], style_source="unstyled",
+                )
+
+    active = 0
+    maximum = 0
+    started = 0
+    first_four = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fake_formatter(**_kwargs):
+        nonlocal active, maximum, started
+        active += 1
+        started += 1
+        maximum = max(maximum, active)
+        if started == auto_format.FORMAT_MAX_CONCURRENT_REQUESTS:
+            first_four.set()
+        try:
+            await release.wait()
+        finally:
+            active -= 1
+        return {"ok": True, "changed_rows": 0}
+
+    task = asyncio.create_task(run_pdf_auto_format(
+        run_id=run_id, db_path=db_path, pdf_path=str(tmp_path / "uploaded.pdf"),
+        sheets=["Notes-CI", "Notes-Listofnotes"], model_name="model-a",
+        model_factory=object, output_dir=str(tmp_path), timeout_s=30,
+        formatter=fake_formatter,
+    ))
+    try:
+        await asyncio.wait_for(first_four.wait(), timeout=2)
+        assert started == auto_format.FORMAT_MAX_CONCURRENT_REQUESTS
+    finally:
+        release.set()
+    result = await task
+    assert started == 8
+    assert maximum == auto_format.FORMAT_MAX_CONCURRENT_REQUESTS
+    assert result["formatted"] == 2
+
+
 def test_parts_of_one_pass_share_the_revert_snapshot(auto_format_db):
     """Each part keeps the rows other parts of the same pass snapshotted and
     replaces only an older pass's snapshot."""

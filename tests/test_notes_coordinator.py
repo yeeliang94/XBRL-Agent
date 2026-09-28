@@ -256,6 +256,7 @@ class _FakeAgent:
     (True, [1, 2], [1], [], False),
     (True, [1, 2], [1, 2], [], True),
     (False, [1], [], [1], True),
+    (False, [1, 2], [], [1], False),
 ])
 async def test_single_notes_agent_without_writes_reports_failed(
     tmp_path: Path, reported_gap, assigned, gaps, conflicts, succeeds,
