@@ -78,7 +78,7 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
     <div style={embedded ? styles.embeddedContainer : styles.container}>
       {!embedded && <h3 style={styles.heading}>Cross-check results</h3>}
       {partial && (
-        <p style={{ fontFamily: pwc.fontBody, fontSize: 13, color: pwc.warningText, margin: `0 0 ${pwc.space.md}px 0` }}>
+        <p style={{ fontFamily: pwc.fontBody, fontSize: 14, color: pwc.warningText, margin: `0 0 ${pwc.space.md}px 0` }}>
           Group filing: cross-checks currently validate consolidated (Group) figures only. Standalone (Company) columns are not yet checked.
         </p>
       )}
@@ -158,7 +158,7 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
                   <td style={{ ...styles.td, ...ui.numeric }}>
                     {fmtCheckAmount(check.diff)}
                   </td>
-                  <td style={{ ...styles.td, fontSize: 13, color: pwc.grey700 }}>
+                  <td style={{ ...styles.td, fontSize: 14, color: pwc.grey700 }}>
                     {check.status === "not_applicable" ? (
                       <span>This check does not apply to the selected filing standard or available disclosures.</span>
                     ) : check.status === "blocked" ? (
@@ -284,7 +284,7 @@ const styles = {
   warningSummary: {
     cursor: "pointer",
     fontFamily: pwc.fontBody,
-    fontSize: 13,
+    fontSize: 14,
     color: pwc.grey900,
   } as React.CSSProperties,
   warningList: {
@@ -303,7 +303,7 @@ const styles = {
   } as React.CSSProperties,
   warningMessage: {
     fontFamily: pwc.fontBody,
-    fontSize: 13,
+    fontSize: 14,
     color: pwc.grey700,
     marginTop: pwc.space.xs,
     lineHeight: 1.45,

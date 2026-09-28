@@ -1029,7 +1029,7 @@ export function ConceptsPage({
         style={{ flex: "0 0 240px", minWidth: 0, paddingRight: pwc.space.md, display: "flex", flexDirection: "column", gap: pwc.space.md }}>
         {humanActive
           ? <ColumnHeader title="mTool worksheets" testId="statements" onHide={() => setRailOpen(false)} />
-          : <strong style={ui.fieldLabel}>mTool worksheets</strong>}
+          : <strong style={ui.sectionTitle}>mTool worksheets</strong>}
             <div style={styles.controlGroup}>
               <label htmlFor="review-sheet-picker" style={ui.fieldLabel}>
                 Statement
@@ -1700,7 +1700,7 @@ function ConceptMatrixGrid({
           gridTemplateColumns: gridCols,
           background: pwc.grey100,
           fontWeight: 600,
-          fontSize: 12,
+          fontSize: 14,
           borderBottom: `1px solid ${pwc.grey200}`,
         }}
       >
@@ -1753,7 +1753,7 @@ function ConceptMatrixGrid({
                 padding: `${pwc.space.xs}px ${pwc.space.md}px`,
                 background: pwc.grey50,
                 fontFamily: pwc.fontBody,
-                fontSize: 13,
+                fontSize: 14,
                 fontWeight: 600,
                 borderBottom: `1px solid ${pwc.grey100}`,
               }}
@@ -1772,7 +1772,7 @@ function ConceptMatrixGrid({
               gridTemplateColumns: gridCols,
               borderBottom: `1px solid ${pwc.grey100}`,
               fontFamily: pwc.fontBody,
-              fontSize: 13,
+              fontSize: 14,
               alignItems: "center",
             }}
           >
@@ -1940,7 +1940,7 @@ function ConceptRowView({
           : pwc.white,
         borderBottom: `1px solid ${pwc.grey100}`,
         fontFamily: pwc.fontBody,
-        fontSize: isAbstract ? 12 : 15,
+        fontSize: 14,
         fontWeight: isAbstract ? pwc.weight.semibold : pwc.weight.regular,
         letterSpacing: isAbstract ? 0.4 : undefined,
         textTransform: isAbstract ? ("uppercase" as const) : undefined,
@@ -1980,7 +1980,7 @@ function ConceptRowView({
               data-testid={`alias-marker-${row.concept_uuid}`}
               style={{
                 marginLeft: pwc.space.sm,
-                fontSize: 12,
+                fontSize: 14,
                 fontStyle: "italic",
                 color: pwc.grey700,
                 fontWeight: pwc.weight.regular,
@@ -2895,13 +2895,13 @@ const styles = {
   // Small caption under a mandatory line item whose value is still blank —
   // names the reason the input is highlighted orange.
   requiredChip: {
-    fontSize: 12,
+    fontSize: 14,
     color: pwc.warningText,
     fontWeight: pwc.weight.medium,
   } as React.CSSProperties,
   // No-source badge + its filter toggle (UX-QA #6).
   noSourceChip: {
-    fontSize: 12,
+    fontSize: 14,
     color: pwc.warningText,
     fontWeight: pwc.weight.medium,
   } as React.CSSProperties,
@@ -2911,7 +2911,7 @@ const styles = {
     background: "transparent",
     color: pwc.grey500,
     font: "inherit",
-    fontSize: 12,
+    fontSize: 14,
     textDecoration: "none",
     cursor: "pointer",
     textAlign: "left" as const,
@@ -2948,7 +2948,7 @@ const styles = {
     textAlign: "right" as const,
     color: pwc.grey500,
     fontFamily: pwc.fontHeading,
-    fontSize: 11,
+    fontSize: 14,
     fontWeight: 600,
     textTransform: "uppercase" as const,
     letterSpacing: 0,

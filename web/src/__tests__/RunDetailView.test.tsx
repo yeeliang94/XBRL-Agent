@@ -1841,7 +1841,10 @@ describe("incomplete face statements", () => {
   test("overview exposes the filing name as the page heading", () => {
     const detail = makeDetail();
     render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
-    expect(screen.getByRole("heading", { level: 1, name: detail.pdf_filename })).toBeInTheDocument();
+    const heading = screen.getByRole("heading", { level: 1, name: detail.pdf_filename });
+    expect(heading).toHaveStyle({ fontSize: "28px" });
+    clickRunTab(/^activity$/i);
+    expect(heading).toHaveStyle({ fontSize: "28px" });
   });
 
   test("a skipped statement is not reported as unfinished", () => {

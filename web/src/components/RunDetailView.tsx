@@ -878,7 +878,7 @@ export function RunDetailView({
     <div style={styles.container}>
       <header style={reviewWorkspaceActive ? styles.reviewContextHeader : styles.header}>
         <div style={styles.headerText}>
-          <h1 style={reviewWorkspaceActive ? styles.reviewContextFilename : styles.filename}>
+          <h1 style={styles.filename}>
             {detail.pdf_filename}
           </h1>
           <div style={styles.metaRow}>
@@ -1491,19 +1491,7 @@ const styles = {
     marginBottom: pwc.space.xs,
   } as React.CSSProperties,
   filename: {
-    fontFamily: pwc.fontHeading,
-    fontSize: 22,
-    fontWeight: pwc.weight.semibold,
-    letterSpacing: "-0.3px",
-    color: pwc.grey900,
-    margin: 0,
-  } as React.CSSProperties,
-  reviewContextFilename: {
-    display: "inline",
-    fontFamily: pwc.fontBody,
-    fontSize: 13,
-    fontWeight: pwc.weight.semibold,
-    color: pwc.grey900,
+    ...ui.pageTitle,
     margin: 0,
   } as React.CSSProperties,
   reviewContextProfile: {
@@ -1526,13 +1514,13 @@ const styles = {
   } as React.CSSProperties,
   dim: {
     color: pwc.grey700,
-    fontSize: 13,
+    fontSize: 14,
     fontFamily: pwc.fontBody,
   } as React.CSSProperties,
   aiDisclaimer: {
     margin: `${pwc.space.sm}px 0 0`,
     fontFamily: pwc.fontBody,
-    fontSize: 13,
+    fontSize: 14,
     color: pwc.grey700,
   } as React.CSSProperties,
   actions: {
@@ -1567,7 +1555,7 @@ const styles = {
   } as React.CSSProperties,
   errorBannerText: {
     fontFamily: pwc.fontBody,
-    fontSize: 13,
+    fontSize: 14,
     color: pwc.grey700,
   } as React.CSSProperties,
   reviewWarningStrip: {
@@ -1580,7 +1568,7 @@ const styles = {
     borderBottom: `1px solid ${pwc.grey200}`,
     color: pwc.grey900,
     fontFamily: pwc.fontBody,
-    fontSize: 12,
+    fontSize: 14,
   } as React.CSSProperties,
   runActions: {
     display: "flex",
@@ -1754,7 +1742,7 @@ const styles = {
     background: "transparent",
     color: pwc.grey700,
     fontFamily: pwc.fontBody,
-    fontSize: 11,
+    fontSize: 14,
     cursor: "pointer",
   } as React.CSSProperties,
   agentFilterButtonActive: {
@@ -1781,6 +1769,8 @@ const styles = {
     textAlign: "left",
     cursor: "pointer",
     color: pwc.black,
+    fontFamily: pwc.fontBody,
+    fontSize: 14,
   } as React.CSSProperties,
   historicalAgentRowActive: {
     background: pwc.grey50,
@@ -1841,7 +1831,7 @@ const styles = {
     margin: 0,
     color: pwc.grey700,
     fontFamily: pwc.fontBody,
-    fontSize: 13,
+    fontSize: 14,
   } as React.CSSProperties,
   perfSummary: {
     cursor: "pointer",
@@ -1876,7 +1866,7 @@ const styles = {
     display: "grid",
     gap: 4,
     color: pwc.grey700,
-    fontSize: 12,
+    fontSize: 14,
     lineHeight: 1.55,
   } as React.CSSProperties,
   agentErrorMessage: {
@@ -1887,7 +1877,7 @@ const styles = {
     background: pwc.grey50,
     border: `1px solid ${pwc.grey200}`,
     borderRadius: pwc.radius.sm,
-    fontSize: 12,
+    fontSize: 14,
     lineHeight: 1.55,
     whiteSpace: "pre-wrap" as const,
     overflowWrap: "anywhere" as const,
@@ -1910,7 +1900,7 @@ const styles = {
     gap: 8,
     alignItems: "start",
     color: pwc.black,
-    fontSize: 11,
+    fontSize: 14,
   } as React.CSSProperties,
   agentUpdateDot: {
     width: 5,
@@ -1937,12 +1927,12 @@ const styles = {
   } as React.CSSProperties,
   agentVariant: {
     color: pwc.grey500,
-    fontSize: 13,
+    fontSize: 14,
   } as React.CSSProperties,
   // Plain-English gloss next to the statement code (UX-QA #12).
   agentSubtitle: {
     fontFamily: pwc.fontBody,
-    fontSize: 13,
+    fontSize: 14,
     color: pwc.grey700,
   } as React.CSSProperties,
   // v17 (item 9): muted mono chip naming the failure class on failed rows.
@@ -1973,7 +1963,7 @@ const styles = {
     flexWrap: "wrap" as const,
     marginTop: pwc.space.lg,
     fontFamily: pwc.fontBody,
-    fontSize: 13,
+    fontSize: 14,
     color: pwc.grey700,
   } as React.CSSProperties,
   agentTokens: {
