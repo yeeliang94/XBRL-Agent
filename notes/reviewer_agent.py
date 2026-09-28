@@ -690,7 +690,8 @@ def build_notes_reviewer_packet(context: dict) -> str:
             "provisional, not authoritative. Settle every conflict here before "
             "the other findings, because a decision can change them. Inspect "
             "the named blocks and PDF pages, then call "
-            "resolve_placement_conflict with the exact finding id. Same "
+            "resolve_placement_conflict with the conflict label (C1, C2, ...) "
+            "as finding_id. Same "
             "content, two destinations: keep_existing or move_to_proposed. "
             "Two different notes, one field: keep_existing, use_proposed "
             "(each with other_row for the other note's correct empty field) "
@@ -704,7 +705,7 @@ def build_notes_reviewer_packet(context: dict) -> str:
             )
             if conflict.get("match_kind") == "same_field":
                 out.append(_review_source_line(
-                    f"finding_id={conflict['packet_finding_id']}; FIELD CONFLICT "
+                    f"conflict={conflict.get('ref')}; FIELD CONFLICT "
                     f"at {field}; already there: "
                     f"{conflict.get('existing_notes') or []} blocks="
                     f"{conflict.get('block_ids') or []}; proposed: "
@@ -717,7 +718,7 @@ def build_notes_reviewer_packet(context: dict) -> str:
                 for item in conflict.get("existing") or []
             )
             out.append(_review_source_line(
-                f"finding_id={conflict['packet_finding_id']}; blocks="
+                f"conflict={conflict.get('ref')}; blocks="
                 f"{conflict.get('block_ids') or []}; source_notes="
                 f"{conflict.get('source_notes') or []}; existing={existing}; "
                 f"proposed={field}"
@@ -1010,6 +1011,9 @@ def _build_context(
             conflict["packet_finding_id"] = finding_id(
                 ("source_placement", flag["finding_id"])
             )
+            # The finding id is a nested JSON string the model must otherwise
+            # copy exactly; a short handle is what it actually passes back.
+            conflict["ref"] = f"C{len(placement_conflicts) + 1}"
             placement_conflicts.append(conflict)
         source_linked_subrefs: set = set()
         if generation and generation["input_kind"] == INPUT_KIND_PREPARED:
@@ -1118,6 +1122,28 @@ def finding_keys(context: dict) -> set:
     for t in context.get("title_issues") or []:
         keys.add(("title", t.get("sheet"), t.get("row")))
     return keys
+
+
+def _lookup_placement_conflict(deps, value: str) -> tuple[str, Optional[dict]]:
+    """Find an open conflict by its short label, packet id or flag id.
+
+    Copies of the long id that differ only in escaping or spacing still
+    match; anything else is refused rather than guessed.
+    """
+    wanted = str(value or "").strip()
+    conflicts = deps.placement_conflicts_by_id
+    if wanted in conflicts:
+        return wanted, conflicts[wanted]
+
+    def norm(text) -> str:
+        return re.sub(r"[\s\\]", "", str(text or ""))
+
+    for packet_id, conflict in conflicts.items():
+        if wanted.upper() == str(conflict.get("ref") or "").upper() or norm(wanted) in {
+            norm(packet_id), norm(conflict.get("flag_finding_id")),
+        }:
+            return packet_id, conflict
+    return wanted, None
 
 
 def finding_id(key: tuple) -> str:
@@ -1771,9 +1797,15 @@ def create_notes_reviewer_agent(
         View and pass the supporting PDF pages first. Every change preserves
         source lineage; this tool never approves a second copy of a disclosure.
         """
-        conflict = ctx.deps.placement_conflicts_by_id.get(finding_id)
+        finding_id, conflict = _lookup_placement_conflict(ctx.deps, finding_id)
         if conflict is None:
-            return "rejected: finding_id is not an open placement conflict."
+            labels = ", ".join(
+                c.get("ref") or "" for c in ctx.deps.placement_conflicts_by_id.values()
+            )
+            return (
+                "rejected: finding_id is not an open placement conflict. Pass "
+                f"its conflict label from the packet ({labels})."
+            )
         decision = decision.strip().lower()
         if conflict.get("match_kind") == "same_field":
             return _resolve_field_conflict(

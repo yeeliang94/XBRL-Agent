@@ -476,7 +476,7 @@ def test_reviewer_decides_a_field_conflict(db_path: Path, decision, other_row, e
     )
     result = resolver(
         SimpleNamespace(deps=deps),
-        context["placement_conflicts"][0]["packet_finding_id"],
+        context["placement_conflicts"][0]["ref"],
         decision, [22, 23], "Grounded on pages 22 and 23.",
         other_row=other_row,
     )
@@ -507,9 +507,10 @@ def test_field_conflict_never_overwrites_an_occupied_destination(db_path: Path):
         for ts in agent.toolsets
         if "resolve_placement_conflict" in getattr(ts, "tools", {})
     )
+    # The model's copy of the long id often differs only in escaping.
+    mangled = context["placement_conflicts"][0]["packet_finding_id"].replace("\\", "\\\\")
     result = resolver(
-        SimpleNamespace(deps=deps),
-        context["placement_conflicts"][0]["packet_finding_id"],
+        SimpleNamespace(deps=deps), mangled,
         "use_proposed", [22, 23], "Grounded.", other_row=81,
     )
 
