@@ -292,10 +292,15 @@ async def test_iter_with_turn_timeout_uses_constant_default():
 
 
 @pytest.mark.asyncio
-async def test_single_agent_stops_at_save_result_without_a_closing_turn(tmp_path):
+@pytest.mark.parametrize("write_outcome", ["written", "conflict_recorded"])
+async def test_single_agent_stops_at_save_result_without_a_closing_turn(
+    tmp_path, write_outcome,
+):
     """save_result is terminal. The runner must not spend (and wait on) one
     more model request for a closing sentence — the turn most prone to the
-    stall this module guards against — and it still keeps a trace."""
+    stall this module guards against — and it still keeps a trace. A pass
+    whose only outcome is a clash recorded for the reviewer is pending review,
+    not a no-write failure to retry."""
     from unittest.mock import patch
 
     from pydantic_ai import Agent
@@ -325,6 +330,9 @@ async def test_single_agent_stops_at_save_result_without_a_closing_turn(tmp_path
 
         @agent.tool
         def write_notes(ctx) -> str:
+            if write_outcome == "conflict_recorded":
+                ctx.deps.placement_conflicts_recorded += 1
+                return "conflict recorded for review"
             ctx.deps.wrote_once = True
             ctx.deps.filled_path = str(filled)
             return "ok: 1 row written"
@@ -354,5 +362,7 @@ async def test_single_agent_stops_at_save_result_without_a_closing_turn(tmp_path
         )
 
     assert len(calls) == 1
-    assert outcome.filled_path == str(filled)
+    assert outcome.filled_path == (
+        str(filled) if write_outcome == "written" else "x"
+    ), "a recorded clash leaves the blank template for the reviewer"
     assert (tmp_path / "NOTES_CORP_INFO_conversation_trace.json").exists()

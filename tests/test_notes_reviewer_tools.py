@@ -356,7 +356,7 @@ def test_reviewer_can_atomically_correct_the_wrong_first_source_placement(
 
     agent, deps, context = _agent(db_path, run_id, _scripted([]))
     assert len(context["placement_conflicts"]) == 1
-    assert "SOURCE PLACEMENT CONFLICT" in ra.build_notes_reviewer_packet(context)
+    assert "PLACEMENT CONFLICTS" in ra.build_notes_reviewer_packet(context)
     deps.viewed_pages.add(22)
     resolver = next(
         ts.tools["resolve_placement_conflict"].function
@@ -387,6 +387,136 @@ def test_reviewer_can_atomically_correct_the_wrong_first_source_placement(
         ("tax-policy", 80)
     ]
     assert flags[0]["status"] == "answered"
+
+
+def _field_conflict(db_path: Path):
+    """Two extraction writes of DIFFERENT notes into one field. The second is
+    kept as a proposal; the field still holds the first note."""
+    from notes import source_repository as sources, source_write
+    from notes.source_models import SourceBlock, SourceNote
+
+    run_id = _seed_run(db_path)
+    _seed_node(db_path, 49, "LEAF", "Disclosure of other receivables")
+    _seed_node(db_path, 80, "LEAF", "Disclosure of amounts due from related companies")
+    _seed_node(db_path, 81, "LEAF", "Disclosure of deposits")
+    with repo.db_session(db_path) as conn:
+        generation = sources.begin_generation(conn, run_id, input_kind="prepared_document")
+        sources.write_blocks(conn, generation, [
+            SourceBlock(block_id="b12", block_kind="paragraph", reading_order=1,
+                        canonical_html="<p>Deposits are refundable.</p>",
+                        source_note_id="note-12", page=22),
+            SourceBlock(block_id="b13", block_kind="paragraph", reading_order=2,
+                        canonical_html="<p>The related company balance is unsecured.</p>",
+                        source_note_id="note-13", page=23),
+        ])
+        sources.write_notes(conn, generation, [
+            SourceNote(source_note_id="note-12", top_note_num="12",
+                       title="Other receivables", block_ids=["b12"]),
+            SourceNote(source_note_id="note-13", top_note_num="13",
+                       title="Amount due from a related company", block_ids=["b13"]),
+        ])
+        sources.activate_generation(conn, generation)
+    with repo.db_session(db_path) as conn:
+        source_write.write_cell_from_blocks(
+            conn, run_id=run_id, generation_id=generation, sheet=_S12, row=49,
+            block_ids=["b12"], template_prefix=_PREFIX,
+        )
+    with repo.db_session(db_path) as conn:
+        with pytest.raises(source_write.SourcePlacementConflict) as caught:
+            source_write.write_cell_from_blocks(
+                conn, run_id=run_id, generation_id=generation, sheet=_S12, row=49,
+                block_ids=["b13"], template_prefix=_PREFIX,
+            )
+    with repo.db_session(db_path) as conn:
+        source_write.record_placement_conflict(
+            conn, run_id=run_id, conflict=caught.value, source_pages=[22, 23],
+        )
+    return run_id, generation, caught.value
+
+
+def test_second_note_for_a_field_becomes_a_proposal_not_an_overwrite(db_path: Path):
+    """Extraction order must not decide a field. The later write of a
+    different note leaves the field unchanged and records both notes for the
+    reviewer; rewriting the same note is still an ordinary write."""
+    from notes import source_repository as sources, source_write
+
+    run_id, generation, conflict = _field_conflict(db_path)
+
+    assert conflict.match_kind == "same_field"
+    assert "12 Other receivables" in conflict.existing_notes
+    assert "13 Amount due from a related company" in conflict.source_notes
+    with repo.db_session(db_path) as conn:
+        placements = sources.active_placements(conn, generation)
+        source_write.write_cell_from_blocks(
+            conn, run_id=run_id, generation_id=generation, sheet=_S12, row=49,
+            block_ids=["b12"], template_prefix=_PREFIX,
+        )
+    assert [(p["block_id"], p["row"]) for p in placements] == [("b12", 49)]
+
+
+@pytest.mark.parametrize("decision, other_row, expected", [
+    ("use_proposed", 80, [("b12", 80), ("b13", 49)]),
+    ("keep_existing", 80, [("b12", 49), ("b13", 80)]),
+    ("combine", None, [("b12", 49), ("b13", 49)]),
+])
+def test_reviewer_decides_a_field_conflict(db_path: Path, decision, other_row, expected):
+    from types import SimpleNamespace
+    from notes import source_repository as sources
+
+    run_id, generation, _ = _field_conflict(db_path)
+    agent, deps, context = _agent(db_path, run_id, _scripted([]))
+    packet = ra.build_notes_reviewer_packet(context)
+    assert packet.index("PLACEMENT CONFLICTS") < packet.index("SOURCE COMPLETENESS")
+    assert "FIELD CONFLICT" in packet
+    deps.viewed_pages.update({22, 23})
+    resolver = next(
+        ts.tools["resolve_placement_conflict"].function
+        for ts in agent.toolsets
+        if "resolve_placement_conflict" in getattr(ts, "tools", {})
+    )
+    result = resolver(
+        SimpleNamespace(deps=deps),
+        context["placement_conflicts"][0]["packet_finding_id"],
+        decision, [22, 23], "Grounded on pages 22 and 23.",
+        other_row=other_row,
+    )
+
+    assert result.startswith(f"ok: field conflict resolved with {decision}")
+    with repo.db_session(db_path) as conn:
+        placements = sources.active_placements(conn, generation)
+        flags = repo.fetch_notes_review_flags(conn, run_id)
+    assert sorted((p["block_id"], p["row"]) for p in placements) == expected
+    assert flags[0]["status"] == "answered"
+
+
+def test_field_conflict_never_overwrites_an_occupied_destination(db_path: Path):
+    from types import SimpleNamespace
+    from notes import source_repository as sources
+
+    run_id, generation, _ = _field_conflict(db_path)
+    with repo.db_session(db_path) as conn:
+        repo.upsert_notes_cell(
+            conn, run_id=run_id, sheet=_S12, row=81,
+            label="Disclosure of deposits", html="<p>Authored.</p>",
+            evidence=None, source_pages=[],
+        )
+    agent, deps, context = _agent(db_path, run_id, _scripted([]))
+    deps.viewed_pages.update({22, 23})
+    resolver = next(
+        ts.tools["resolve_placement_conflict"].function
+        for ts in agent.toolsets
+        if "resolve_placement_conflict" in getattr(ts, "tools", {})
+    )
+    result = resolver(
+        SimpleNamespace(deps=deps),
+        context["placement_conflicts"][0]["packet_finding_id"],
+        "use_proposed", [22, 23], "Grounded.", other_row=81,
+    )
+
+    assert result.startswith("rejected:") and "already holds content" in result
+    with repo.db_session(db_path) as conn:
+        placements = sources.active_placements(conn, generation)
+    assert [(p["block_id"], p["row"]) for p in placements] == [("b12", 49)]
 
 
 def _placement_conflict_reviewer(db_path, *, existing_ids=("tax",), proposed_ids=("tax",)):

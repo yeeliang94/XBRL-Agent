@@ -64,8 +64,10 @@ class SourcePlacementConflict(SourceWriteError):
         existing: Sequence[PlacementCandidate], block_ids: Sequence[str],
         source_notes: Sequence[str], match_kind: str,
         proposed_block_ids: Sequence[str] = (),
+        existing_notes: Sequence[str] = (),
     ) -> None:
         self.generation_id = generation_id
+        self.existing_notes = tuple(existing_notes)
         self.target = target
         self.existing = tuple(existing)
         self.block_ids = tuple(sorted(set(block_ids)))
@@ -100,11 +102,24 @@ class SourcePlacementConflict(SourceWriteError):
             "block_ids": list(self.block_ids),
             "proposed_block_ids": list(self.proposed_block_ids),
             "source_notes": list(self.source_notes),
+            "existing_notes": list(self.existing_notes),
             "target": self.target.__dict__,
             "existing": [candidate.__dict__ for candidate in self.existing],
         }
 
     def agent_message(self) -> str:
+        if self.match_kind == "same_field":
+            held = ", ".join(self.existing_notes) or "another source note"
+            proposed = ", ".join(self.source_notes) or "your source parts"
+            return (
+                f"field conflict: {self.target.sheet} row {self.target.row} "
+                f"({self.target.label!r}) already holds {held}. Your proposal "
+                f"to place {proposed} there was recorded, and the notes "
+                "reviewer will decide which note belongs in this field, where "
+                "the other goes, or whether both belong together. Neither "
+                "placement is treated as correct yet. Do not place this note "
+                "elsewhere; continue other supported work."
+            )
         existing = ", ".join(
             f"{candidate.sheet} row {candidate.row} ({candidate.label!r})"
             for candidate in self.existing
@@ -473,6 +488,75 @@ def _refuse_unapproved_cross_row_duplicates(
         )
 
 
+def _refuse_field_collision(
+    conn: sqlite3.Connection,
+    *,
+    run_id: int,
+    generation_id: int,
+    sheet: str,
+    row: int,
+    available: Sequence[SourceBlock],
+    rendered: source_render.RenderedCell,
+    target_label: str,
+) -> None:
+    """Refuse an extraction write that would replace a different note.
+
+    Concurrent extraction agents choose destinations independently. Replacing
+    the cell's placements would silently drop the note already there, so the
+    later proposal is kept for the reviewer instead. A rewrite that still
+    carries every note already in the cell is not a collision.
+    """
+    previous_ids = {
+        entry["block_id"] for entry in conn.execute(
+            "SELECT block_id FROM notes_block_placements "
+            "WHERE run_id=? AND generation_id=? AND sheet=? AND row=? AND active=1",
+            (run_id, generation_id, sheet, row),
+        ).fetchall()
+    }
+    if not previous_ids:
+        return
+    by_id = {block.block_id: block for block in available}
+    context_ids = _heading_context_ids(available)
+
+    def owners(ids: Iterable[str]) -> set[str]:
+        return {
+            by_id[bid].source_note_id for bid in ids
+            if bid in by_id and bid not in context_ids and by_id[bid].source_note_id
+        }
+
+    incoming = owners(rendered.block_ids)
+    displaced = owners(previous_ids) - incoming
+    if not displaced:
+        return
+    names = {
+        note["source_note_id"]: " ".join(
+            part for part in (
+                str(note["top_note_num"] or "").strip(),
+                str(note["title"] or "").strip(),
+            ) if part
+        )
+        for note in srepo.fetch_notes(conn, generation_id)
+    }
+    cell = conn.execute(
+        "SELECT label, content_revision FROM notes_cells "
+        "WHERE run_id=? AND sheet=? AND row=?",
+        (run_id, sheet, row),
+    ).fetchone()
+    raise SourcePlacementConflict(
+        generation_id=generation_id,
+        target=PlacementCandidate(sheet, row, target_label),
+        existing=[PlacementCandidate(
+            sheet, row, (cell["label"] if cell else "") or target_label,
+            cell["content_revision"] if cell else None,
+        )],
+        block_ids=sorted(previous_ids),
+        source_notes=[names.get(note, note) for note in sorted(incoming)],
+        existing_notes=[names.get(note, note) for note in sorted(displaced)],
+        match_kind="same_field",
+        proposed_block_ids=rendered.block_ids,
+    )
+
+
 def write_cell_from_blocks(
     conn: sqlite3.Connection,
     *,
@@ -491,6 +575,7 @@ def write_cell_from_blocks(
     allowed_sheets: Optional[Sequence[str]] = None,
     expected_revision: Optional[int] = None,
     target_label: Optional[str] = None,
+    combine_notes: bool = False,
 ) -> WriteOutcome:
     """Build and store one cell from the named source blocks.
 
@@ -543,7 +628,10 @@ def write_cell_from_blocks(
         owners = {b.source_note_id for b in selected if b.source_note_id}
         # Human attachment sends the cell's existing parts with the new ones;
         # agents submit one disclosure at a time for their per-note payload.
-        if sheet == _LIST_OF_NOTES_SHEET and len(owners) > 1 and actor != "human":
+        # ``combine_notes`` is the reviewer's explicit decision that two
+        # colliding notes share one field.
+        if (sheet == _LIST_OF_NOTES_SHEET and len(owners) > 1
+                and actor != "human" and not combine_notes):
             raise SourceWriteError(
                 "select one top-level disclosure per source write; distinct "
                 "disclosures may share the catch-all field through separate writes."
@@ -645,6 +733,17 @@ def write_cell_from_blocks(
                 source_pages = sorted(set(old_pages) | set(source_pages or []) |
                                       {by_id[bid].page for bid in rendered.block_ids
                                        if by_id[bid].page is not None})
+        elif actor == "notes_agent":
+            _refuse_field_collision(
+                conn,
+                run_id=run_id,
+                generation_id=generation_id,
+                sheet=sheet,
+                row=row,
+                available=available,
+                rendered=rendered,
+                target_label=label,
+            )
         _refuse_unapproved_cross_row_duplicates(
             conn,
             run_id=run_id,

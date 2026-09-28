@@ -910,6 +910,10 @@ class NotesDeps:
     # The earlier placement is provisional; the durable conflict is resolved
     # by the grounded reviewer instead of making extraction order authoritative.
     source_placement_conflict_notes: set[int] = field(default_factory=set)
+    # Proposals recorded for the reviewer, including unnumbered notes that
+    # carry no note number. A pass whose only outcome is recorded proposals
+    # is pending review, not a failed attempt worth retrying.
+    placement_conflicts_recorded: int = 0
     # Note numbers the agent actually called read_source_note for. Feeds
     # format_unconsulted_source_nudge — run 74's Accounting Policies agent
     # never consulted the source at all, so its tables were rebuilt from the
@@ -2591,6 +2595,9 @@ def _write_from_source_impl(
                 source_pages=source_pages,
             )
         deps.source_placement_conflict_notes.update(exc.note_numbers)
+        deps.placement_conflicts_recorded = (
+            getattr(deps, "placement_conflicts_recorded", 0) + 1
+        )
         diagnostic = str(exc)
         if diagnostic not in deps.write_skip_errors:
             deps.write_skip_errors.append(diagnostic)

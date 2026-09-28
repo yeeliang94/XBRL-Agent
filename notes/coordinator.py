@@ -1021,10 +1021,15 @@ async def _invoke_single_notes_agent_once(
         unresolved_without_write = (
             deps.source_gap_notes | deps.source_placement_conflict_notes
         )
-        if assigned_notes and assigned_notes <= unresolved_without_write:
+        if (
+            (assigned_notes and assigned_notes <= unresolved_without_write)
+            or getattr(deps, "placement_conflicts_recorded", 0) > 0
+        ):
             # The template is blank, and persisted source-gap flags and write
             # placement conflicts explicitly retain the unresolved work for
-            # review. A collision is not treated as a successful placement.
+            # review. A collision is not treated as a successful placement,
+            # and retrying would only record the same proposal again; the
+            # reviewer's packet and the coverage checklist carry what remains.
             deps.filled_path = deps.template_path
         else:
             raise _NoWriteError("Notes agent finished without writing any payloads")
@@ -1384,6 +1389,11 @@ async def _run_list_of_notes_fanout(
                     batch_nums = {e.note_num for e in r.batch}
                     receipt_nums = {e.note_num for e in r.coverage.entries}
                     gap_nums = set(getattr(r, "source_gap_notes", ()) or ())
+                    # Clashes recorded for the reviewer are pending review,
+                    # and the reviewer packet carries them.
+                    gap_nums |= set(
+                        getattr(r, "placement_conflict_notes", ()) or ()
+                    )
                     if receipt_nums | gap_nums != batch_nums:
                         return False
                     if not all(

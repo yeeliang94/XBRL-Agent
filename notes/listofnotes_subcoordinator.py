@@ -192,6 +192,8 @@ class SubAgentRunResult:
     # handshake" — different from an outright failure.
     coverage: Optional[CoverageReceipt] = None
     source_gap_notes: set[int] = field(default_factory=set)
+    # Notes whose write became a clash recorded for the reviewer.
+    placement_conflict_notes: set[int] = field(default_factory=set)
     # The system's OWN record of writes that failed, independent of what the
     # receipt claims (run-84). ``failed_write_notes`` are notes whose payloads
     # were rejected; ``unattributed_write_failures`` counts failures that carry
@@ -589,7 +591,13 @@ async def _run_list_of_notes_sub_agent(
         if batch and not payloads:
             receipt_covers_batch = (
                 coverage is not None
-                and ({e.note_num for e in coverage.entries} | set(cur_failures.get("source_gap_notes") or ()))
+                and (
+                    {e.note_num for e in coverage.entries}
+                    | set(cur_failures.get("source_gap_notes") or ())
+                    # A proposal recorded for the reviewer is pending review;
+                    # a retry would only record it again.
+                    | set(cur_failures.get("placement_conflict_notes") or ())
+                )
                 >= {entry.note_num for entry in batch}
             )
             if not receipt_covers_batch:
@@ -608,6 +616,9 @@ async def _run_list_of_notes_sub_agent(
             thinking_tokens=cur_usage["thinking"],
             coverage=coverage,
             source_gap_notes=set(cur_failures.get("source_gap_notes") or ()),
+            placement_conflict_notes=set(
+                cur_failures.get("placement_conflict_notes") or ()
+            ),
             failed_write_notes=set(cur_failures.get("failed_notes") or ()),
             unattributed_write_failures=int(
                 cur_failures.get("unattributed") or 0),
@@ -1037,6 +1048,9 @@ async def _invoke_sub_agent_once(
     # pattern, and it keeps the arity stable for every caller and test double.
     if failures_out is not None:
         failures_out["source_gap_notes"] = set(deps.source_gap_notes)
+        failures_out["placement_conflict_notes"] = set(
+            deps.source_placement_conflict_notes
+        )
         failures_out["failed_notes"] = set(deps.failed_write_notes)
         failures_out["unattributed"] = deps.unattributed_write_failures
     return list(payload_sink), final_prompt, final_completion, deps.coverage_receipt

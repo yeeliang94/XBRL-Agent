@@ -112,6 +112,41 @@ def test_substantive_one_off_prose_falls_back_to_its_semantic_owner(prepared, re
     assert assigned[1]['owner_kind'] == 'note'
 
 
+@pytest.mark.parametrize("intro_owner, repeats_on_page_2, accepted", [
+    ("note_1", False, False),     # company introduction folded into Note 1
+    ("unnumbered", False, True),  # introduction has its own unnumbered owner
+    ("note_1", True, True),       # a running page header above the heading
+])
+def test_numbered_note_starts_at_its_own_printed_number(
+    prepared, intro_owner, repeats_on_page_2, accepted,
+):
+    """Text printed above "1. ..." must not become part of Note 1. Doc 1's
+    company introduction was mapped into Note 1, so the List-of-Notes agent
+    took it and Corporate Information could not. A repeated page header above
+    the heading is harmless and must not force a repair."""
+    intro = '<p>Example Sdn. Bhd. is incorporated and domiciled in Malaysia.</p>'
+    prepared.blocks.insert(0, {'block_id': 'z', 'page': 1, 'block_kind': 'paragraph',
+                               'canonical_html': intro, 'locator': {}})
+    if repeats_on_page_2:
+        prepared.blocks.append({'block_id': 'z2', 'page': 2, 'block_kind': 'paragraph',
+                                'canonical_html': intro, 'locator': {}})
+    raw = mapped()
+    raw['ownership_ranges'][0]['last_block_id'] = prepared.blocks[-1]['block_id']
+    if intro_owner == "note_1":
+        raw['ownership_ranges'][0]['first_block_id'] = 'z'
+    else:
+        raw['ownership_ranges'].append({
+            'first_block_id': 'z', 'last_block_id': 'z', 'owner_kind': 'note',
+            'source_note_id': 'corporate-information', 'source_note_num': '',
+            'source_note_title': 'Corporate information'})
+
+    if accepted:
+        validate_document_map(prepared, DocumentMap.model_validate(raw))
+    else:
+        with pytest.raises(ValueError, match="starts before its printed heading"):
+            validate_document_map(prepared, DocumentMap.model_validate(raw))
+
+
 def test_unsupported_furniture_without_a_fallback_still_fails(prepared):
     raw = mapped()
     raw['ownership_ranges'][0]['first_block_id'] = 'b'
