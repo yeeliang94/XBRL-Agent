@@ -797,7 +797,9 @@ export function NotesReviewTab({
                             {unresolvedSubnotes.length} sub-note{unresolvedSubnotes.length === 1 ? " needs" : "s need"} review
                           </span>
                         )}
-                        {note.subnotes?.map((sub) => (
+                        {note.subnotes?.slice().sort((a, b) =>
+                          a.subnote_ref.localeCompare(b.subnote_ref, undefined, { numeric: true }),
+                        ).map((sub) => (
                           <button
                             key={sub.subnote_ref}
                             type="button"

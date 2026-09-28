@@ -2906,6 +2906,8 @@ describe("NotesReviewTab — AI formatter", () => {
           page_hi: 18,
           subnotes: [
             { subnote_ref: "2.1", title: "Description of accounting policies", state: "verified" },
+            { subnote_ref: "2.10", title: "Employee benefits", state: "verified" },
+            { subnote_ref: "2.2", title: "New standards", state: "verified" },
             { subnote_ref: "2(a)", state: "not_verified" },
           ],
         }],
@@ -2917,6 +2919,9 @@ describe("NotesReviewTab — AI formatter", () => {
     const inventory = screen.getByRole("region", { name: "Source note inventory" });
     const reviewSummary = within(inventory).getByText("1 sub-note needs review");
     const subnote = within(inventory).getByRole("button", { name: "2.1 Description of accounting policies" });
+    expect(within(inventory).getAllByRole("button", { name: /^2\.(?:1|2|10)\s/ })
+      .map((button) => button.textContent?.match(/^2\.\d+/)?.[0]))
+      .toEqual(["2.1", "2.2", "2.10"]);
     expect(reviewSummary).toBeVisible();
     expect(subnote).toBeVisible();
     expect(parseFloat(getComputedStyle(subnote).paddingLeft))

@@ -1750,7 +1750,7 @@ function ConceptMatrixGrid({
               key={rn}
               role="row"
               style={{
-                padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+                padding: `${pwc.space.xs}px ${pwc.space.md}px`,
                 background: pwc.grey50,
                 fontFamily: pwc.fontBody,
                 fontSize: 13,
@@ -1932,9 +1932,7 @@ function ConceptRowView({
         // taxonomy headers ("Statement of cash flows" nested three deep)
         // reads as structure, not as three broken data rows (run-168
         // design critique).
-        padding: isAbstract
-          ? `${pwc.space.sm}px ${pwc.space.xl}px`
-          : `${pwc.space.sm}px ${pwc.space.xl}px`,
+        padding: `${pwc.space.xs}px ${pwc.space.xl}px`,
         background: isAbstract
           ? pwc.grey100
           : selected
@@ -1965,7 +1963,7 @@ function ConceptRowView({
           display: "flex",
           flexDirection: "column",
           gap: 2,
-          lineHeight: 1.55,
+          lineHeight: 1.4,
         }}
       >
         <span
@@ -2465,7 +2463,7 @@ function EditableValueCell({
           boxSizing: "border-box",
           minWidth: 0,
           textAlign: "right",
-          padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+          padding: `${pwc.space.xs}px ${pwc.space.md}px`,
           border: `1px solid ${
             status === "error"
               ? pwc.error
@@ -2957,7 +2955,7 @@ const styles = {
     borderLeft: `1px solid ${pwc.grey200}`,
   } as React.CSSProperties,
   matrixMovementCell: {
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    padding: `${pwc.space.xs}px ${pwc.space.md}px`,
     position: "sticky" as const,
     left: 0,
     zIndex: 2,
