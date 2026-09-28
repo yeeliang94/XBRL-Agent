@@ -674,7 +674,7 @@ export function NotesReviewTab({
           }}
         >
           <aside style={styles.noteRail} aria-label="Notes template navigator">
-            <strong style={{ ...ui.fieldLabel, padding: `0 ${pwc.space.xs}px`, marginBottom: pwc.space.md }}>mTool worksheets</strong>
+            <strong style={{ ...ui.sectionTitle, padding: `0 ${pwc.space.xs}px`, marginBottom: pwc.space.md }}>mTool worksheets</strong>
             <input type="search" aria-label="Search all note fields" placeholder="Find a field, including empty fields" value={noteSearch}
               onChange={(event) => setNoteSearch(event.target.value)} style={styles.noteRailSearch} />
                 <nav style={{ display: "flex", flexDirection: "column", gap: 4 }} aria-label="Notes sheet navigator">
@@ -1833,7 +1833,7 @@ function CellRow({
         <div style={styles.cellLabel}>{cell.label}</div>
         {cell.invalid_target && (
           <div
-            style={{ ...ui.alertWarning, marginTop: pwc.space.sm, fontSize: 12 }}
+            style={{ ...ui.alertWarning, marginTop: pwc.space.sm, fontSize: 14 }}
           >
             <div role="status">
               Not a filing field. Copy it into a writable field, then remove this
@@ -2212,12 +2212,13 @@ const styles = {
   noteRailTitle: {
     color: pwc.grey900,
     fontFamily: pwc.fontBody,
-    fontSize: 12,
+    fontSize: 16,
+    fontWeight: pwc.weight.semibold,
   } as React.CSSProperties,
   noteRailCount: {
     margin: "2px 0 0",
     color: pwc.grey700,
-    fontSize: 10,
+    fontSize: 12,
   } as React.CSSProperties,
   noteRailSearch: {
     ...ui.input,
@@ -2227,7 +2228,7 @@ const styles = {
     border: "none",
     borderRadius: 7,
     background: pwc.grey50,
-    fontSize: 11,
+    fontSize: 14,
   } as React.CSSProperties,
   noteRailList: {
     minHeight: 0,
@@ -2277,7 +2278,7 @@ const styles = {
   noteRailLabel: {
     whiteSpace: "normal" as const,
     overflowWrap: "anywhere" as const,
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: 600,
   } as React.CSSProperties,
   noteRailDestination: {
@@ -2301,7 +2302,7 @@ const styles = {
   subnoteSummary: {
     padding: "4px 6px 2px 65px",
     color: pwc.orange700,
-    fontSize: 12,
+    fontSize: 14,
     fontWeight: 600,
   } as React.CSSProperties,
   subnoteList: {
@@ -2337,7 +2338,7 @@ const styles = {
     gap: 1,
   } as React.CSSProperties,
   subnoteTitle: {
-    fontSize: 12,
+    fontSize: 14,
     lineHeight: 1.4,
     overflowWrap: "anywhere" as const,
   } as React.CSSProperties,
@@ -2349,7 +2350,7 @@ const styles = {
   } as React.CSSProperties,
   subnoteReason: {
     color: pwc.grey700,
-    fontSize: 11,
+    fontSize: 14,
     lineHeight: 1.35,
     overflowWrap: "anywhere" as const,
   } as React.CSSProperties,
@@ -2366,7 +2367,7 @@ const styles = {
     borderRadius: pwc.radius.sm,
     background: pwc.grey50,
     color: pwc.grey700,
-    fontSize: 9.5,
+    fontSize: 14,
     textAlign: "left" as const,
     cursor: "pointer",
   } as React.CSSProperties,
@@ -2374,7 +2375,7 @@ const styles = {
     margin: 0,
     padding: `${pwc.space.md}px ${pwc.space.sm}px`,
     color: pwc.grey700,
-    fontSize: 11,
+    fontSize: 14,
     lineHeight: 1.45,
   } as React.CSSProperties,
   editorPane: {
@@ -2409,7 +2410,7 @@ const styles = {
     borderRadius: pwc.radius.sm,
     background: "transparent",
     color: pwc.grey700,
-    fontSize: 12,
+    fontSize: 14,
     fontWeight: 600,
     whiteSpace: "normal" as const,
     overflowWrap: "anywhere" as const,
@@ -2424,7 +2425,7 @@ const styles = {
     borderRadius: pwc.radius.sm,
     background: pwc.grey100,
     color: pwc.grey900,
-    fontSize: 12,
+    fontSize: 14,
     fontWeight: 650,
     whiteSpace: "normal" as const,
     overflowWrap: "anywhere" as const,
@@ -2502,7 +2503,7 @@ const styles = {
     background: "transparent",
     color: pwc.grey900,
     textAlign: "left" as const,
-    fontSize: 12,
+    fontSize: 14,
     cursor: "pointer",
   } as React.CSSProperties,
   regenerateButton: {
@@ -2518,13 +2519,13 @@ const styles = {
     marginBottom: 12,
   } as React.CSSProperties,
   stylePanelHint: {
-    fontSize: 12,
+    fontSize: 14,
     color: pwc.grey700,
     margin: "0 0 10px 0",
   } as React.CSSProperties,
   dim: {
     color: pwc.grey700,
-    fontSize: 13,
+    fontSize: 14,
   } as React.CSSProperties,
   // Only the active sheet is mounted. Keeping this wrapper flat prevents a
   // second, document-length stack from forming beneath the sticky navigator.
@@ -2677,7 +2678,7 @@ const styles = {
   } as React.CSSProperties,
   cellLabel: {
     fontWeight: 600,
-    fontSize: 13,
+    fontSize: 14,
     color: pwc.grey900,
   } as React.CSSProperties,
   styleSourceChip: {
@@ -2698,7 +2699,7 @@ const styles = {
     padding: "4px 6px",
     background: pwc.grey100,
     borderRadius: 3,
-    fontSize: 11,
+    fontSize: 14,
     color: pwc.grey700,
     display: "flex",
     flexDirection: "column" as const,
@@ -2753,7 +2754,7 @@ const styles = {
   } as React.CSSProperties,
   smallButton: {
     padding: "3px 10px",
-    fontSize: 12,
+    fontSize: 14,
     fontWeight: 600,
     background: pwc.white,
     border: `1px solid ${pwc.grey300 ?? "#d1d5db"}`,
@@ -2784,13 +2785,13 @@ const styles = {
     flexDirection: "column" as const,
     gap: 3,
     padding: "4px 8px",
-    fontSize: 13,
+    fontSize: 14,
     textAlign: "right" as const,
     color: pwc.grey900,
   } as React.CSSProperties,
   numericInput: {
     padding: "4px 8px",
-    fontSize: 13,
+    fontSize: 14,
     fontFamily: pwc.fontBody,
     textAlign: "right" as const,
     border: `1px solid ${pwc.grey300 ?? "#d1d5db"}`,

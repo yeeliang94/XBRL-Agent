@@ -384,7 +384,7 @@ const styles = {
   } as React.CSSProperties,
   incidentCode: {
     fontFamily: pwc.fontMono,
-    fontSize: 11,
+    fontSize: 12,
     color: pwc.grey700,
     whiteSpace: "nowrap" as const,
   } as React.CSSProperties,
@@ -399,7 +399,7 @@ const styles = {
     marginTop: pwc.space.sm,
     color: pwc.grey700,
     fontFamily: pwc.fontMono,
-    fontSize: 11,
+    fontSize: 12,
   } as React.CSSProperties,
   technicalDetails: {
     marginTop: pwc.space.sm,
@@ -412,7 +412,7 @@ const styles = {
     overflow: "auto" as const,
     background: pwc.white,
     fontFamily: pwc.fontMono,
-    fontSize: 11,
+    fontSize: 12,
     whiteSpace: "pre-wrap" as const,
   } as React.CSSProperties,
   runEvents: {
@@ -434,7 +434,7 @@ const styles = {
     gap: pwc.space.sm,
     padding: `${pwc.space.xs}px 0`,
     color: pwc.grey700,
-    fontSize: 12,
+    fontSize: 14,
   } as React.CSSProperties,
   runEventName: {
     color: pwc.grey900,
@@ -442,14 +442,14 @@ const styles = {
   } as React.CSSProperties,
   caveat: {
     margin: 0,
-    fontSize: 12,
+    fontSize: 14,
     fontStyle: "italic" as const,
     color: pwc.grey500,
     fontFamily: pwc.fontBody,
   } as React.CSSProperties,
   dim: {
     color: pwc.grey700,
-    fontSize: 13,
+    fontSize: 14,
     fontFamily: pwc.fontBody,
     margin: 0,
   } as React.CSSProperties,
@@ -487,7 +487,7 @@ const styles = {
   agentRollup: {
     marginLeft: "auto",
     fontFamily: pwc.fontMono,
-    fontSize: 12,
+    fontSize: 14,
     color: pwc.grey700,
   } as React.CSSProperties,
   // A cost derived from a placeholder rate. Dotted underline rather than a
@@ -504,7 +504,7 @@ const styles = {
     borderCollapse: "collapse" as const,
     width: "100%",
     fontFamily: pwc.fontMono,
-    fontSize: 12,
+    fontSize: 14,
   } as React.CSSProperties,
   th: {
     textAlign: "left" as const,
@@ -538,11 +538,12 @@ const styles = {
     ...ui.buttonGhost,
     ...ui.buttonSm,
     alignSelf: "flex-start" as const,
+    fontSize: 14,
   } as React.CSSProperties,
   traceError: {
     ...ui.alertError,
     padding: pwc.space.sm,
-    fontSize: 12,
+    fontSize: 14,
   } as React.CSSProperties,
   traceDetails: {
     border: `1px solid ${pwc.grey200}`,

@@ -364,13 +364,13 @@ const styles = {
   muted: {
     margin: 0,
     color: pwc.grey700,
-    fontSize: 13,
+    fontSize: 14,
     lineHeight: 1.5,
   } as React.CSSProperties,
   mutedSmall: {
     margin: 0,
     color: pwc.grey700,
-    fontSize: 12,
+    fontSize: 14,
     lineHeight: 1.45,
   } as React.CSSProperties,
   viewerToolbar: {

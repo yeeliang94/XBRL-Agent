@@ -653,8 +653,8 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
 }
 
 const styles = {
-  dim: { color: pwc.grey500, fontSize: 13 },
-  error: { color: pwc.errorText, fontSize: 13 },
+  dim: { color: pwc.grey500, fontSize: 14 },
+  error: { color: pwc.errorText, fontSize: 14 },
   outcomeCard: {
     border: `1px solid ${pwc.grey200}`,
     borderRadius: pwc.radius.md,
@@ -705,13 +705,13 @@ const styles = {
   } as const,
   impactHelp: {
     fontFamily: pwc.fontBody,
-    fontSize: 12,
+    fontSize: 14,
     color: pwc.grey500,
   } as const,
   notice: {
     ...ui.alertInfo,
     padding: pwc.space.sm,
-    fontSize: 13,
+    fontSize: 14,
     margin: `0 0 ${pwc.space.md}px`,
   } as const,
   // Soft warning banner (items 11/12): stale totals / stale download. Warning
@@ -719,7 +719,7 @@ const styles = {
   warning: {
     ...ui.alertWarning,
     padding: pwc.space.sm,
-    fontSize: 13,
+    fontSize: 14,
     margin: `0 0 ${pwc.space.md}px`,
   } as const,
   reviewControls: {
@@ -740,7 +740,7 @@ const styles = {
     borderRadius: pwc.radius.sm,
     padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
     fontFamily: pwc.fontBody,
-    fontSize: 13,
+    fontSize: 14,
     minWidth: 220,
   } as const,
   headerRow: {
@@ -751,7 +751,7 @@ const styles = {
   } as const,
   h3: {
     fontFamily: pwc.fontHeading,
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: 600,
     color: pwc.grey900,
     margin: `${pwc.space.lg}px 0 ${pwc.space.sm}px`,
@@ -759,7 +759,7 @@ const styles = {
   table: {
     width: "100%",
     borderCollapse: "collapse" as const,
-    fontSize: 13,
+    fontSize: 14,
   } as const,
   tableScroller: {
     overflowX: "auto" as const,
@@ -801,7 +801,7 @@ const styles = {
     cursor: "pointer",
     padding: 0,
     textDecoration: "underline",
-    fontSize: 13,
+    fontSize: 14,
   } as const,
   flagStack: { display: "flex", flexDirection: "column" as const, gap: pwc.space.sm },
   flagCard: {
@@ -824,14 +824,14 @@ const styles = {
     ...ui.badge,
     borderColor: pwc.error,
   } as const,
-  flagReason: { color: pwc.grey800, fontSize: 13, margin: `${pwc.space.xs}px 0` },
+  flagReason: { color: pwc.grey800, fontSize: 14, margin: `${pwc.space.xs}px 0` },
   cascadeDetails: {
     marginTop: pwc.space.md,
     padding: `${pwc.space.sm}px ${pwc.space.md}px`,
     background: pwc.grey50,
     borderRadius: pwc.radius.sm,
     color: pwc.grey700,
-    fontSize: 13,
+    fontSize: 14,
   } as const,
   cascadeSummary: {
     cursor: "pointer",
@@ -852,7 +852,7 @@ const styles = {
     marginTop: pwc.space.xs,
     overflowWrap: "anywhere" as const,
   } as const,
-  answerGiven: { color: pwc.successText, fontSize: 13, margin: 0 },
+  answerGiven: { color: pwc.successText, fontSize: 14, margin: 0 },
   answerRow: { display: "flex", gap: pwc.space.sm, alignItems: "flex-start" },
   answerBox: {
     flex: 1,
@@ -861,7 +861,7 @@ const styles = {
     borderRadius: pwc.radius.sm,
     padding: pwc.space.sm,
     fontFamily: pwc.fontBody,
-    fontSize: 13,
+    fontSize: 14,
   } as const,
   guidanceBox: {
     width: "100%",
@@ -870,7 +870,7 @@ const styles = {
     borderRadius: pwc.radius.sm,
     padding: pwc.space.sm,
     fontFamily: pwc.fontBody,
-    fontSize: 13,
+    fontSize: 14,
     marginBottom: pwc.space.sm,
   } as const,
   rerunDetails: {
@@ -908,6 +908,6 @@ const styles = {
     ...ui.buttonSecondary,
     borderRadius: pwc.radius.sm,
     padding: `${pwc.space.xs}px ${pwc.space.md}px`,
-    fontSize: 13,
+    fontSize: 14,
   } as const,
 };

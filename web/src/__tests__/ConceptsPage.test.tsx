@@ -155,6 +155,8 @@ describe("ConceptsPage", () => {
     expect(abstractRow.getAttribute("data-kind")).toBe("ABSTRACT");
     expect(leafRow.getAttribute("data-kind")).toBe("LEAF");
     expect(computedRow.getAttribute("data-kind")).toBe("COMPUTED");
+    expect(abstractRow).toHaveStyle({ fontSize: "14px" });
+    expect(leafRow).toHaveStyle({ fontSize: "14px" });
 
     // Phase 5.3 — labels are read-only in the per-run review (renaming moved
     // to Template settings); LEAF rows carry an editable VALUE input instead.
