@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 from collections.abc import Callable, Iterable
 from typing import Any
 
@@ -35,6 +36,104 @@ def candidate_sheets(
         and (c.html or "").strip()
         and c.style_source in PDF_FORMAT_CANDIDATE_SOURCES
     })
+
+
+# Cells per concurrent formatter request. A large List-of-Notes sheet (about a
+# dozen tables) otherwise waits on one request that reads every source page and
+# writes every patch; a failed repair then repeats all of it.
+FORMAT_ROWS_PER_PART = 4
+
+
+def _precise_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace(
+        "+00:00", "Z"
+    )
+
+
+def _row_groups(db_path: str, run_id: int, sheet: str) -> list[list[int]]:
+    """Split a sheet's formatter candidates into ordered row groups."""
+    with repo.db_session(db_path) as conn:
+        rows = sorted(
+            c.row for c in repo.list_notes_cells_for_run(conn, run_id)
+            if c.sheet == sheet and (c.html or "").strip()
+            and c.style_source in PDF_FORMAT_CANDIDATE_SOURCES
+        )
+    return [
+        rows[i:i + FORMAT_ROWS_PER_PART]
+        for i in range(0, len(rows), FORMAT_ROWS_PER_PART)
+    ]
+
+
+def _failure_result(
+    exc: BaseException, timeout_s: float, run_id: int, sheet: str,
+) -> dict[str, Any]:
+    if isinstance(exc, asyncio.TimeoutError):
+        return {
+            "ok": False, "error_type": "timeout",
+            "error": f"Formatter timed out after {int(timeout_s)}s.",
+            "summary": "Formatter timed out; no changes were saved.",
+        }
+    if isinstance(exc, UsageLimitExceeded):
+        return {
+            "ok": False, "error_type": "turn_budget",
+            "error": "Formatter reached its turn budget without finishing.",
+            "summary": "Formatter stopped at its turn budget; no changes were saved.",
+        }
+    logger.error(
+        "automatic PDF notes formatter failed run=%s sheet=%s",
+        run_id, sheet, exc_info=exc,
+    )
+    return {
+        "ok": False, "error_type": "model_error",
+        "error": f"{type(exc).__name__}: {exc}",
+    }
+
+
+_TOKEN_FIELDS = (
+    "prompt_tokens", "completion_tokens", "cache_read_tokens", "cache_write_tokens",
+)
+
+
+def merge_part_results(parts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Combine row-group outcomes into one sheet outcome.
+
+    A group with nothing left to format is not a failure. The sheet is ``ok``
+    only when every remaining group is; saved rows from successful groups are
+    reported even when another group failed, so the run records a partial
+    result instead of hiding written formatting.
+    """
+    active = [
+        p for p in parts if p.get("error_type") != "no_unfinished_rows"
+    ] or parts[:1]
+    failures = [p for p in active if not p.get("ok")]
+    merged: dict[str, Any] = {
+        "ok": not failures,
+        "changed_rows": sum(int(p.get("changed_rows") or 0) for p in active),
+        "skipped_rows": sorted(
+            row for p in active for row in p.get("skipped_rows") or []
+        ),
+        "summary": " ".join(dict.fromkeys(
+            str(p["summary"]) for p in active if p.get("summary")
+        )),
+        "parts": len(parts),
+    }
+    for field_name in _TOKEN_FIELDS:
+        merged[field_name] = sum(int(p.get(field_name) or 0) for p in parts)
+    if failures:
+        merged["error_type"] = failures[0].get("error_type")
+        merged["error"] = "; ".join(
+            str(p.get("error")) for p in failures if p.get("error")
+        )
+        failed_rows = sorted(
+            row for p in failures for row in p.get("failed_rows") or []
+        )
+        if failed_rows:
+            merged["failed_rows"] = failed_rows
+            merged["row_errors"] = {
+                row: error for p in failures
+                for row, error in (p.get("row_errors") or {}).items()
+            }
+    return merged
 
 
 def _persist_outcome(
@@ -87,6 +186,11 @@ async def run_pdf_auto_format(
                 exc_info=True,
             )
 
+    async def _bounded(coro):
+        if timeout_s and timeout_s != float("inf"):
+            return await asyncio.wait_for(coro, timeout=timeout_s)
+        return await coro
+
     async def one(sheet: str) -> tuple[str, dict[str, Any]]:
         try:
             with repo.db_session(db_path) as conn:
@@ -120,16 +224,38 @@ async def run_pdf_auto_format(
                     "summary": "Automatic formatting was already in progress.",
                 }
             else:
-                coro = formatter(
-                    run_id=run_id, db_path=db_path, pdf_path=pdf_path,
-                    sheet=sheet, model=model_factory(), output_dir=output_dir,
-                    style_sources=PDF_FORMAT_CANDIDATE_SOURCES,
-                )
-                result = (
-                    await asyncio.wait_for(coro, timeout=timeout_s)
-                    if timeout_s and timeout_s != float("inf")
-                    else await coro
-                )
+                groups = _row_groups(db_path, run_id, sheet)
+                if len(groups) <= 1:
+                    result = await _bounded(formatter(
+                        run_id=run_id, db_path=db_path, pdf_path=pdf_path,
+                        sheet=sheet, model=model_factory(), output_dir=output_dir,
+                        style_sources=PDF_FORMAT_CANDIDATE_SOURCES,
+                    ))
+                else:
+                    # One long request per large sheet was the slowest step
+                    # after review. Disjoint row groups run concurrently, share
+                    # one revert snapshot, and fail independently.
+                    pass_started_at = _precise_now()
+
+                    async def part(index: int, group: list[int]) -> dict[str, Any]:
+                        try:
+                            return await _bounded(formatter(
+                                run_id=run_id, db_path=db_path, pdf_path=pdf_path,
+                                sheet=sheet, model=model_factory(),
+                                output_dir=output_dir,
+                                style_sources=PDF_FORMAT_CANDIDATE_SOURCES,
+                                rows=group, pass_started_at=pass_started_at,
+                                trace_label=f"notes_format_{sheet}_part{index}",
+                            ))
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception as exc:  # noqa: BLE001 — per-part isolation
+                            return _failure_result(exc, timeout_s, run_id, sheet)
+
+                    result = merge_part_results(await asyncio.gather(*(
+                        part(index, group)
+                        for index, group in enumerate(groups, start=1)
+                    )))
         except asyncio.CancelledError:
             result = {
                 "ok": False, "error_type": "cancelled",
@@ -145,27 +271,8 @@ async def run_pdf_auto_format(
                     run_id, sheet, exc_info=True,
                 )
             raise
-        except asyncio.TimeoutError:
-            result = {
-                "ok": False, "error_type": "timeout",
-                "error": f"Formatter timed out after {int(timeout_s)}s.",
-                "summary": "Formatter timed out; no changes were saved.",
-            }
-        except UsageLimitExceeded:
-            result = {
-                "ok": False, "error_type": "turn_budget",
-                "error": "Formatter reached its turn budget without finishing.",
-                "summary": "Formatter stopped at its turn budget; no changes were saved.",
-            }
         except Exception as exc:  # noqa: BLE001 — advisory pass, per-sheet isolation
-            logger.exception(
-                "automatic PDF notes formatter failed run=%s sheet=%s",
-                run_id, sheet,
-            )
-            result = {
-                "ok": False, "error_type": "model_error",
-                "error": f"{type(exc).__name__}: {exc}",
-            }
+            result = _failure_result(exc, timeout_s, run_id, sheet)
         _persist_outcome(db_path, run_id, sheet, model_name, result)
         return sheet, result
 

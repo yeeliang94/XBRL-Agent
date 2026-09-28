@@ -1234,7 +1234,13 @@ Key invariants:
     tests remain readable; Word source HTML is unchanged.
     Every eligible unstyled/floor prose sheet uses the existing guarded claim,
     content/number/geometry verifier, CAS writes, snapshots and bounded formatter.
-    Stop All cancels the group. `uploaded.docx` excludes Word from automatic PDF
+    Stop All cancels the group. A sheet with more than
+    `auto_format.FORMAT_ROWS_PER_PART` candidate cells is formatted as disjoint
+    row groups that run concurrently under the one sheet claim and task row;
+    `merge_part_results` reports saved rows from successful groups as a partial
+    result when another group fails. Groups share one revert snapshot through
+    `save_notes_format_snapshots(pass_started_at=...)`, which replaces only an
+    older pass's rows. `uploaded.docx` excludes Word from automatic PDF
     formatting. Partial, failed or skipped formatting stays visible through task
     results and a persisted/SSE issue, and cannot yield clean run completion.
     The Notes view offers retry for incomplete/older notes, not a routine second

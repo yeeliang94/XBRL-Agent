@@ -224,3 +224,64 @@ async def test_auto_format_counts_partial_save_separately(auto_format_db):
     assert task["changed_rows"] == 1
     assert task["result"]["failed_rows"] == [11]
     assert task["error_type"] == "validation_failed"
+
+
+@pytest.mark.asyncio
+async def test_large_sheet_is_formatted_in_concurrent_row_groups(auto_format_db):
+    """A sheet with more candidates than one part holds is split into disjoint
+    row groups that run at the same time. One group's failure leaves the other
+    groups' saved rows reported as a partial result on the single sheet task."""
+    db_path, run_id, tmp_path = auto_format_db
+    rows = list(range(100, 100 + 2 * auto_format.FORMAT_ROWS_PER_PART + 1))
+    with repo.db_session(db_path) as conn:
+        for row in rows:
+            repo.upsert_notes_cell(
+                conn, run_id=run_id, sheet="Notes-Listofnotes", row=row,
+                label="Note", html="<table><tr><td>1</td></tr></table>",
+                evidence="Page 9", source_pages=[9], style_source="unstyled",
+            )
+
+    started: list[list[int]] = []
+    all_started = asyncio.Event()
+
+    async def fake_formatter(**kwargs):
+        started.append(list(kwargs["rows"]))
+        if len(started) == 3:
+            all_started.set()
+        await asyncio.wait_for(all_started.wait(), timeout=2)
+        if kwargs["rows"][0] == rows[-1]:
+            return {"ok": False, "error_type": "model_error", "error": "boom",
+                    "prompt_tokens": 5}
+        return {"ok": True, "changed_rows": len(kwargs["rows"]),
+                "summary": "Aligned amounts.", "prompt_tokens": 10}
+
+    result = await run_pdf_auto_format(
+        run_id=run_id, db_path=db_path, pdf_path=str(tmp_path / "uploaded.pdf"),
+        sheets=["Notes-Listofnotes"], model_name="model-a", model_factory=object,
+        output_dir=str(tmp_path), timeout_s=30, formatter=fake_formatter,
+    )
+
+    assert sorted(row for group in started for row in group) == rows
+    assert len(started) == 3, "groups ran concurrently, not one after another"
+    assert result["partial"] == 1
+    with repo.db_session(db_path) as conn:
+        task = repo.fetch_notes_format_task(conn, run_id, "Notes-Listofnotes")
+    assert task["changed_rows"] == 2 * auto_format.FORMAT_ROWS_PER_PART
+    assert task["error_type"] == "model_error"
+    assert task["prompt_tokens"] == 25
+
+
+def test_parts_of_one_pass_share_the_revert_snapshot(auto_format_db):
+    """Each part keeps the rows other parts of the same pass snapshotted and
+    replaces only an older pass's snapshot."""
+    db_path, run_id, _ = auto_format_db
+    with repo.db_session(db_path) as conn:
+        repo.save_notes_format_snapshots(conn, run_id, "S", {1: "old-1", 9: "old-9"})
+        started = auto_format._precise_now()
+        repo.save_notes_format_snapshots(
+            conn, run_id, "S", {1: "a"}, pass_started_at=started)
+        repo.save_notes_format_snapshots(
+            conn, run_id, "S", {2: "b"}, pass_started_at=started)
+        assert repo.fetch_notes_format_snapshots(conn, run_id, "S") == {
+            1: "a", 2: "b",
+        }
