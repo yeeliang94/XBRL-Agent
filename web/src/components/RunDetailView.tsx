@@ -779,16 +779,24 @@ export function RunDetailView({
   const reviewWorkspaceActive = activeTab === "values" || activeTab === "notes";
   const rollup = detail.telemetry_rollup;
   const sidecarNotice = detail.pdf_sidecar ? describePdfSidecar(detail.pdf_sidecar) : null;
+  const sidecarIssue = detail.pdf_sidecar?.partial
+    ? `Source transcript has failed pages: ${detail.pdf_sidecar.failed_pages?.join(", ") || "unknown"}`
+    : sidecarNotice && !sidecarNotice.built ? sidecarNotice.title : null;
   const runDuration = formatRunDuration(detail.started_at, detail.ended_at);
   const nonBlockingItems = [
     ...advisoryCheckSummaries,
     ...(isErrorOutcome && failingCheckSummaries.length === 0
-      ? ["Extraction or review finished with issues. Open Activity for the recorded details."]
+      ? ["Extraction or review finished with issues."]
       : []),
     ...(detail.incidents ?? [])
       .filter((incident) => incident.severity !== "fatal")
       .map((incident) => incident.user_message),
   ];
+  const reviewItemCount = nonBlockingItems.length + (sidecarIssue ? 1 : 0);
+  const reviewItemMessage = reviewItemCount === 1
+    ? nonBlockingItems[0] ?? sidecarIssue
+    : `${reviewItemCount} items need review`;
+  const hasFigureStatements = !Array.isArray(detail.config?.statements) || detail.config.statements.length > 0;
   const preparationState = isDraft
     ? "Setup not complete"
     : isRunning
@@ -927,8 +935,8 @@ export function RunDetailView({
           {notesPreparationBlocked && <span role="status" style={styles.dim}>Notes have unsaved changes or active formatting. Resolve any save errors in Notes before preparing.</span>}
           {/* The "Figures" tab is the single door to reviewing values — the
               old duplicate "Review values" button was removed (Phase 2). */}
-          {/* Keep routine preparation in the header. Less frequent management
-              actions live under an explicitly named disclosure on Overview. */}
+          {/* Keep routine preparation in the header. Run management sits at
+              the end of Overview, beside the run details it affects. */}
           {activeTab === "overview" && (
             <>
               {isRunning && onForceAbort && (
@@ -941,33 +949,6 @@ export function RunDetailView({
                 >
                   Abort run
                 </button>
-              )}
-              {!isDraft && (
-                <details style={styles.runActions}>
-                  <summary style={styles.runActionsToggle}>Run actions <span className="pwc-disclosure-chevron" aria-hidden="true">⌄</span></summary>
-                  <div className="pwc-disclosure-content" style={styles.runActionButtons}>
-                    {onRestart && !isRunning && <button
-                      type="button"
-                      onClick={handleRestart}
-                      disabled={restartPending}
-                      className={uiClass.btnSecondary}
-                      style={ui.buttonSecondary}
-                      title="Create a new editable run with the same document and settings"
-                    >
-                      {restartPending ? "Creating redo…" : "Redo run"}
-                    </button>}
-                    <button
-                      type="button"
-                      onClick={handleDelete}
-                      disabled={!canDelete}
-                      className={uiClass.btnDanger}
-                      style={ui.buttonDanger}
-                      title="Delete run from history (on-disk files are kept)"
-                    >
-                      Delete run
-                    </button>
-                  </div>
-                </details>
               )}
             </>
           )}
@@ -1225,9 +1206,11 @@ export function RunDetailView({
             <MetricTile
               label="Elapsed time"
               value={runDuration}
+              secondary
             />
           </div>
-          {(detail.status === "completed" || detail.status === "completed_with_errors" || detail.status === "correction_exhausted") && canonicalEnabled && (
+          {(detail.status === "completed" || detail.status === "completed_with_errors" || detail.status === "correction_exhausted") && canonicalEnabled &&
+            hasFigureStatements && (
             <div style={styles.verificationPrompt}>
               <span>Verify extracted figures against the source PDF before filing.</span>
               <button type="button" onClick={() => selectTab("values")} className={uiClass.btnSecondary} style={{ ...ui.buttonSecondary, ...ui.buttonSm }}>
@@ -1235,10 +1218,10 @@ export function RunDetailView({
               </button>
             </div>
           )}
-          {(nonBlockingItems.length > 0 || sidecarNotice) && (
+          {reviewItemCount > 0 && (
             <div style={styles.itemsToCheck} data-testid="items-to-check">
               <span style={styles.itemToCheck}>
-                {nonBlockingItems.length + (sidecarNotice ? 1 : 0)} item{nonBlockingItems.length + (sidecarNotice ? 1 : 0) === 1 ? " needs" : "s need"} review
+                {reviewItemMessage}
               </span>
               <button
                 type="button"
@@ -1246,7 +1229,7 @@ export function RunDetailView({
                 className={uiClass.btnSecondary}
                 style={{ ...ui.buttonSecondary, ...ui.buttonSm }}
               >
-                Review
+                {issueTab === "checks" ? "View cross-checks" : "View activity"}
               </button>
             </div>
           )}
@@ -1256,6 +1239,33 @@ export function RunDetailView({
           </details>
           {detail.repeat_group_id != null && (
             <ConsistencyPanel groupId={detail.repeat_group_id} />
+          )}
+          {!isDraft && (
+            <section aria-label="Run actions" style={styles.runActions}>
+              <span style={ui.fieldLabel}>Run actions</span>
+              <div style={styles.runActionButtons}>
+                {onRestart && !isRunning && <button
+                  type="button"
+                  onClick={handleRestart}
+                  disabled={restartPending}
+                  className={uiClass.btnQuiet}
+                  style={ui.buttonQuiet}
+                  title="Create a new editable run with the same document and settings"
+                >
+                  {restartPending ? "Creating redo…" : "Redo run"}
+                </button>}
+                <button
+                  type="button"
+                  onClick={handleDelete}
+                  disabled={!canDelete}
+                  className={uiClass.btnDanger}
+                  style={ui.buttonDanger}
+                  title="Delete run from history (on-disk files are kept)"
+                >
+                  Delete run
+                </button>
+              </div>
+            </section>
           )}
         </section>
       )}
@@ -1404,16 +1414,18 @@ function MetricTile({
   label,
   value,
   tone = "neutral",
+  secondary = false,
 }: {
   label: string;
   value: string;
   tone?: "neutral" | "success" | "warning";
+  secondary?: boolean;
 }) {
   const accent =
     tone === "success" ? pwc.successText : tone === "warning" ? pwc.warningText : undefined;
   return (
     <div style={styles.metricTile}>
-      <div style={{ ...styles.metricValue, ...(accent ? { color: accent } : {}) }}>
+      <div style={{ ...styles.metricValue, ...(secondary ? styles.metricValueSecondary : {}), ...(accent ? { color: accent } : {}) }}>
         {value}
       </div>
       <div style={styles.metricLabel}>{label}</div>
@@ -1571,17 +1583,18 @@ const styles = {
     fontSize: 12,
   } as React.CSSProperties,
   runActions: {
-    minWidth: 0,
-  } as React.CSSProperties,
-  runActionsToggle: {
-    ...ui.buttonQuiet,
-    color: pwc.grey700,
+    display: "flex",
+    alignItems: "center",
+    flexWrap: "wrap" as const,
+    gap: pwc.space.md,
+    marginTop: pwc.space.xl,
+    paddingTop: pwc.space.md,
+    borderTop: `1px solid ${pwc.grey100}`,
   } as React.CSSProperties,
   runActionButtons: {
     display: "flex",
     gap: pwc.space.sm,
     flexWrap: "wrap" as const,
-    paddingTop: pwc.space.sm,
   } as React.CSSProperties,
   // Data-dense surface tabs: compact selected fill, no accent edge line.
   tabBar: {
@@ -1634,11 +1647,17 @@ const styles = {
     gap: 2,
   } as React.CSSProperties,
   metricValue: {
-    fontFamily: pwc.fontMono,
-    fontSize: 20,
-    fontWeight: pwc.weight.regular,
+    fontFamily: pwc.fontHeading,
+    fontSize: 16,
+    fontWeight: pwc.weight.semibold,
     color: pwc.grey900,
     fontVariantNumeric: "tabular-nums" as const,
+  } as React.CSSProperties,
+  metricValueSecondary: {
+    fontFamily: pwc.fontBody,
+    fontSize: 14,
+    fontWeight: pwc.weight.regular,
+    color: pwc.grey700,
   } as React.CSSProperties,
   metricLabel: {
     fontFamily: pwc.fontBody,

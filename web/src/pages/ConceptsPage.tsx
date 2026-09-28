@@ -713,18 +713,16 @@ export function ConceptsPage({
   // templates so a user can hop between statements via the result
   // list).  Empty query falls back to the active-template view.
   const notesActive = activeTemplate === NOTES_KEY;
-  // The human columns need the room, so the Statements list folds away at
-  // laptop width while they show. The user can open or close it either way.
-  const [workspaceWidth, setWorkspaceWidth] = useState(0);
+  // Both comparison views keep their worksheet navigation visible. The user
+  // may fold Figures' rail; narrow layouts place it above the table.
   const [railOpen, setRailOpen] = useState<boolean | null>(null);
-  const railFolded = humanActive && !(railOpen ?? (workspaceWidth === 0 || workspaceWidth >= 1400));
+  const railFolded = humanActive && railOpen === false;
 
   useEffect(() => {
     const workspace = workspaceRef.current;
     if (!workspace) return;
     const updateLimit = () => {
       const width = workspace.getBoundingClientRect().width;
-      setWorkspaceWidth(width);
       const maxWidth = width > 0 ? Math.min(720, width * 0.34) : 720;
       pdfMaxWidthRef.current = maxWidth;
       // Store the visible width so dragging back from the limit responds
@@ -998,7 +996,28 @@ export function ConceptsPage({
   );
 
   return (
-    <div ref={workspaceRef} data-testid="concepts-page" className="review-workspace" style={styles.shell}>
+    <div data-testid="concepts-page" style={styles.workspace}>
+      {comparison && (
+        <HumanComparisonBar
+          runId={runId}
+          file={comparison.file}
+          showDetails={humanActive}
+          paneSwitch={
+            <SegmentedControl
+              testId="comparison-pane-toggle"
+              values={["Human file", "Source PDF"] as const}
+              activeValue={comparisonPane === "human" ? "Human file" : "Source PDF"}
+              onChange={(value) => setComparisonPane(value === "Human file" ? "human" : "pdf")}
+              buttonTestId={(value) => `comparison-pane-${value === "Human file" ? "human" : "pdf"}`}
+            />
+          }
+          tiles={comparisonTiles}
+          excludesNote={comparisonExcludes}
+          onReplace={onReplaceHumanFile}
+          onRemoved={onHumanFileRemoved}
+        />
+      )}
+      <div ref={workspaceRef} className="review-workspace" style={styles.shell}>
       {/* Results + concept grid (always visible, flexes to fill).
           Sits directly beside the Source PDF so a value and the document page
           it came from are adjacent. Sheet selection and attention are compact
@@ -1081,27 +1100,6 @@ export function ConceptsPage({
           <div style={styles.errorBanner}>
             Failed to load concepts: {loadError}
           </div>
-        )}
-
-        {comparison && (
-          <HumanComparisonBar
-            runId={runId}
-            file={comparison.file}
-            showDetails={humanActive}
-            paneSwitch={
-              <SegmentedControl
-                testId="comparison-pane-toggle"
-                values={["Human file", "Source PDF"] as const}
-                activeValue={comparisonPane === "human" ? "Human file" : "Source PDF"}
-                onChange={(value) => setComparisonPane(value === "Human file" ? "human" : "pdf")}
-                buttonTestId={(value) => `comparison-pane-${value === "Human file" ? "human" : "pdf"}`}
-              />
-            }
-            tiles={comparisonTiles}
-            excludesNote={comparisonExcludes}
-            onReplace={onReplaceHumanFile}
-            onRemoved={onHumanFileRemoved}
-          />
         )}
 
         {/* Both toolbar controls only apply to figure sheets, so on a
@@ -1321,6 +1319,7 @@ export function ConceptsPage({
           {pdfColumn}
         </>
       )}
+      </div>
     </div>
   );
 }
@@ -1935,11 +1934,11 @@ function ConceptRowView({
         // design critique).
         padding: isAbstract
           ? `${pwc.space.sm}px ${pwc.space.xl}px`
-          : `${pwc.space.lg}px ${pwc.space.xl}px`,
+          : `${pwc.space.sm}px ${pwc.space.xl}px`,
         background: isAbstract
           ? pwc.grey100
           : selected
-          ? pwc.orange50
+          ? pwc.grey50
           : pwc.white,
         borderBottom: `1px solid ${pwc.grey100}`,
         fontFamily: pwc.fontBody,
@@ -1965,7 +1964,7 @@ function ConceptRowView({
           overflowWrap: "anywhere",
           display: "flex",
           flexDirection: "column",
-          gap: pwc.space.xs,
+          gap: 2,
           lineHeight: 1.55,
         }}
       >
@@ -1991,6 +1990,20 @@ function ConceptRowView({
             >
               (linked)
             </span>
+          )}
+          {selected && rowHasOpenableSource(cyScopedRow) && (
+            <button
+              type="button"
+              className="concept-source-jump"
+              style={{ ...styles.sourceJump, marginLeft: pwc.space.sm }}
+              aria-label={`Open source for ${label}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                onSelectRow(row.concept_uuid);
+              }}
+            >
+              {displayConceptSource(cyScopedRow)}
+            </button>
           )}
         </span>
         {/* Explain the orange highlight instead of leaving a bare empty
@@ -2102,21 +2115,6 @@ function ConceptRowView({
           {hasConflict && <div role="alert" style={{ ...styles.stateCell, gridColumn: "1 / -1" }}>
             <StatusBadge label="Conflicting values" tone="error" />
           </div>}
-          {selected && rowHasOpenableSource(cyScopedRow) && <div style={{ ...styles.sourceCell, gridColumn: "1 / -1" }}>
-            <button
-              type="button"
-              className="concept-source-jump"
-              style={styles.sourceJump}
-              aria-label={`Open source for ${label}`}
-              onClick={(event) => {
-                event.stopPropagation();
-                onSelectRow(row.concept_uuid);
-              }}
-            >
-              {displayConceptSource(cyScopedRow)}
-            </button>
-          </div>}
-
         </>
       )}
     </div>
@@ -2500,6 +2498,11 @@ function EditableValueCell({
 }
 
 const styles = {
+  workspace: {
+    minWidth: 0,
+    width: "100%",
+    fontFamily: pwc.fontBody,
+  } as React.CSSProperties,
   // Review workspace shell. No flex-wrap: columns keep their row so the
   // resize handles stay between them; the Results column flexes to fill.
   shell: {
@@ -2904,21 +2907,14 @@ const styles = {
     color: pwc.warningText,
     fontWeight: pwc.weight.medium,
   } as React.CSSProperties,
-  sourceCell: {
-    color: pwc.grey700,
-    fontSize: 14,
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap" as const,
-  } as React.CSSProperties,
   sourceJump: {
     padding: 0,
     border: 0,
     background: "transparent",
-    color: pwc.black,
+    color: pwc.grey500,
     font: "inherit",
-    textDecoration: "underline",
-    textUnderlineOffset: 3,
+    fontSize: 12,
+    textDecoration: "none",
     cursor: "pointer",
     textAlign: "left" as const,
   } as React.CSSProperties,

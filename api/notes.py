@@ -1014,6 +1014,7 @@ async def notes_coverage_endpoint(run_id: int):
                 order.append(n)
             parents[n]["subnotes"].append({
                 "subnote_ref": r["subnote_ref"],
+                "title": r["title"] or "",
                 "state": r["status"],
                 "reason": r["reason"],
             })

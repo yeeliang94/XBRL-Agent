@@ -231,5 +231,50 @@
   }
 }
 
+/* The app sidebar can leave a narrow review pane even on a desktop viewport. */
+@container notes-review (max-width: 780px) {
+  .notes-review-tab .notes-source-first-layout {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .notes-review-tab .notes-source-first-layout > aside {
+    position: static !important;
+    height: 260px !important;
+    min-height: 0 !important;
+    padding-right: 0 !important;
+  }
+
+  .notes-review-tab .notes-source-first-layout > [role="separator"] {
+    display: none !important;
+  }
+
+  .notes-review-tab .notes-source-first-layout > section {
+    padding-left: 0 !important;
+  }
+}
+
+@container notes-review (max-width: 560px) {
+  .notes-review-tab .notes-human-pair {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .notes-review-tab .notes-human-pair-header {
+    display: none !important;
+  }
+
+  .notes-review-tab .notes-human-pair > [role="group"]::before {
+    content: "Human file";
+    display: block;
+    padding: 8px 12px 0;
+    color: #454B50;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .notes-review-tab .notes-human-pair > [role="group"] > div:first-child {
+    min-height: 0 !important;
+  }
+}
+
 /* Rows own their label/action grid. Overriding it to one column creates an
  * implicit second column for the action toolbar and breaks pane alignment. */

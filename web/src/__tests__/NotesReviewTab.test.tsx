@@ -192,6 +192,24 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     expect(rows.length).toBe(2);
   });
 
+  test("labels the two note comparison columns once above paired fields", async () => {
+    const compared = {
+      ...SAMPLE,
+      sheets: [{
+        ...SAMPLE.sheets[0],
+        rows: SAMPLE.sheets[0].rows.map((row, index) => ({ ...row, node_uuid: `note-${index}` })),
+      }],
+    };
+    mockFetchOnce(compared);
+    render(<NotesReviewTab runId={42} human={{
+      html: { "note-0": "<p>Human legal name</p>", "note-1": "<p>Human office</p>" },
+      status: { "note-0": "agree", "note-1": "agree" },
+    }} />);
+    expect(await screen.findAllByTestId("notes-human-pair")).toHaveLength(2);
+    expect(screen.getAllByText("Human file")).toHaveLength(1);
+    expect(screen.getByText("Extracted note")).toBeInTheDocument();
+  });
+
   test("quarantined content is explained and can be removed accessibly", async () => {
     const invalid: NotesCellsResponse = {
       sheets: [{
@@ -388,9 +406,10 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     expect(within(inventory).getByText("No destination recorded")).toBeInTheDocument();
     expect(within(inventory).getByText("Needs review")).toBeInTheDocument();
     expect(within(inventory).getByText(banner === "not_reviewed" ? /Not yet reviewed/ : /coverage could not be checked/)).toBeInTheDocument();
-    fireEvent.click(within(inventory).getByText("1 sub-note needs review"));
+    expect(within(inventory).getByText("1 sub-note needs review")).toBeVisible();
     const subnote = within(inventory).getByRole("button", { name: /1\(a\).*Not checked/i });
     expect(subnote).toBeVisible();
+    expect(within(subnote).getByText("Review incomplete")).toBeVisible();
     fireEvent.click(subnote);
     expect(within(inventory).getByTestId("source-note-1")).toHaveAttribute("aria-current", "true");
   });
@@ -2885,7 +2904,10 @@ describe("NotesReviewTab — AI formatter", () => {
           ],
           page_lo: 16,
           page_hi: 18,
-          subnotes: [{ subnote_ref: "2(a)", state: "not_verified" }],
+          subnotes: [
+            { subnote_ref: "2.1", title: "Description of accounting policies", state: "verified" },
+            { subnote_ref: "2(a)", state: "not_verified" },
+          ],
         }],
       } : {},
     ), { status: 200 })) as typeof fetch;
@@ -2893,7 +2915,13 @@ describe("NotesReviewTab — AI formatter", () => {
     render(<NotesReviewTab runId={42} />);
     await screen.findByTestId("source-note-2");
     const inventory = screen.getByRole("region", { name: "Source note inventory" });
-    fireEvent.click(within(inventory).getByText("1 sub-note needs review"));
+    const reviewSummary = within(inventory).getByText("1 sub-note needs review");
+    const subnote = within(inventory).getByRole("button", { name: "2.1 Description of accounting policies" });
+    expect(reviewSummary).toBeVisible();
+    expect(subnote).toBeVisible();
+    expect(parseFloat(getComputedStyle(subnote).paddingLeft))
+      .toBeGreaterThan(parseFloat(getComputedStyle(within(inventory).getByTestId("source-note-2")).paddingLeft));
+    expect(getComputedStyle(reviewSummary).paddingLeft).toBe(getComputedStyle(subnote).paddingLeft);
     fireEvent.click(within(inventory).getByRole("button", { name: /2\(a\).*Not checked/i }));
     expect(screen.getByTestId("sheet-title")).toHaveTextContent("Corporate Information");
     const destinations = screen.getByLabelText("Destinations for note 2");
@@ -2926,7 +2954,7 @@ describe("NotesReviewTab — AI formatter", () => {
     render(<NotesReviewTab runId={42} onActiveCellPages={onActiveCellPages} />);
     const inventory = screen.getByRole("region", { name: "Source note inventory" });
     await within(inventory).findByTestId("source-note-2");
-    fireEvent.click(within(inventory).getByText("1 sub-note needs review"));
+    expect(within(inventory).getByText("1 sub-note needs review")).toBeVisible();
     fireEvent.click(within(inventory).getByRole("button", { name: /2\(a\).*Not checked/i }));
 
     expect(screen.getByTestId("sheet-title")).toHaveTextContent("Summary of Accounting Policies");

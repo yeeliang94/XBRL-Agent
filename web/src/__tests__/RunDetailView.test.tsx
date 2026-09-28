@@ -253,10 +253,7 @@ describe("RunDetailView", () => {
     expect(screen.queryByText(/^scout$/i)).toBeNull();
   });
 
-  // docs/PLAN-pdf-source-sidecar.md: the persisted transcript outcome shows
-  // on the Overview tab after a reload, so the "verify figures" caveat is
-  // still visible when the workbook is reviewed later.
-  test("renders the persisted scanned-PDF transcript notice on Overview", () => {
+  test("does not count a successful source transcript as an item needing review", () => {
     render(
       <RunDetailView
         detail={makeDetail({ pdf_sidecar: { status: "built", pages: 20, usage: { in: 56760, out: 13976 } } })}
@@ -264,9 +261,18 @@ describe("RunDetailView", () => {
         onDownload={() => {}}
       />,
     );
-    const items = screen.getByTestId("items-to-check");
-    expect(items).toHaveTextContent("1 item needs review");
-    expect(items).not.toHaveTextContent(/scanned pages|tokens|verify every number/i);
+    expect(screen.queryByTestId("items-to-check")).toBeNull();
+  });
+
+  test("shows failed transcript pages as an Overview issue when transcription is partial", () => {
+    render(
+      <RunDetailView
+        detail={makeDetail({ pdf_sidecar: { status: "built", pages: 18, partial: true, failed_pages: [12, 15] } })}
+        onDelete={() => {}}
+        onDownload={() => {}}
+      />,
+    );
+    expect(screen.getByTestId("items-to-check")).toHaveTextContent("Source transcript has failed pages: 12, 15");
   });
 
   test("no transcript notice when the pass did not apply", () => {
@@ -441,8 +447,9 @@ describe("RunDetailView", () => {
       />,
     );
 
-    fireEvent.click(screen.getByText("Run actions"));
-    fireEvent.click(screen.getByRole("button", { name: "Redo run" }));
+    const actions = screen.getByRole("region", { name: "Run actions" });
+    expect(actions).toContainElement(screen.getByRole("button", { name: "Redo run" }));
+    fireEvent.click(within(actions).getByRole("button", { name: "Redo run" }));
 
     expect(onRestart).toHaveBeenCalledWith(42);
   });
@@ -450,7 +457,6 @@ describe("RunDetailView", () => {
   test("does not offer redo while the run is active", () => {
     render(<RunDetailView detail={makeDetail({ status: "running" })}
       onDelete={vi.fn()} onRestart={vi.fn()} />);
-    fireEvent.click(screen.getByText("Run actions"));
     expect(screen.queryByRole("button", { name: "Redo run" })).toBeNull();
   });
 
@@ -633,7 +639,6 @@ describe("RunDetailView", () => {
         onDownload={() => {}}
       />,
     );
-    fireEvent.click(screen.getByText("Run actions"));
     const deleteBtn = screen.getByRole("button", { name: /^delete run$/i }) as HTMLButtonElement;
     expect(deleteBtn.disabled).toBe(true);
     // A disabled button must not fire onClick under any circumstance. Even
@@ -1140,6 +1145,14 @@ describe("RunDetailView", () => {
     expect(within(screen.getByRole("tablist", { name: /run detail sections/i })).getByRole("tab", { name: "Figures" })).toHaveAttribute("aria-selected", "true");
   });
 
+  test("notes-only Overview does not ask for figure verification", () => {
+    render(<RunDetailView detail={makeDetail({
+      config: { ...makeDetail().config!, statements: [], notes_to_run: ["CORP_INFO"] },
+      agents: [],
+    })} onDelete={() => {}} canonicalEnabled />);
+    expect(screen.queryByRole("button", { name: "Review figures" })).toBeNull();
+  });
+
   test("initialTab='values' opens the Values tab (the /concepts/{id} alias)", () => {
     // The /concepts/{id} route now opens the unified run page directly on
     // Values. ConceptsPage fetches on mount, so stub fetch.
@@ -1588,10 +1601,10 @@ describe("RunDetailView", () => {
     render(<RunDetailView detail={makeDetail({ status: "completed_with_errors", cross_checks: [], agents: [makeAgent({ status: "completed_with_errors" })] })}
       onDelete={() => {}} onDownload={() => {}} />);
     const items = screen.getByTestId("items-to-check");
-    expect(items).toHaveTextContent("1 item needs review");
+    expect(items).toHaveTextContent("Extraction or review finished with issues.");
     expect(screen.queryByText(/consistency check didn.t pass/i)).toBeNull();
     expect(screen.queryByRole("button", { name: "View cross-checks" })).toBeNull();
-    fireEvent.click(within(items).getByRole("button", { name: "Review" }));
+    fireEvent.click(within(items).getByRole("button", { name: "View activity" }));
     expect(screen.getByTestId("run-detail-agents")).toBeInTheDocument();
   });
 
@@ -1742,9 +1755,8 @@ describe("RunDetailView", () => {
     });
     render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
     const items = screen.getByTestId("items-to-check");
-    expect(items).toHaveTextContent("1 item needs review");
-    expect(items).not.toHaveTextContent("advisory");
-    fireEvent.click(within(items).getByRole("button", { name: "Review" }));
+    expect(items).toHaveTextContent("advisory");
+    fireEvent.click(within(items).getByRole("button", { name: "View cross-checks" }));
     expect(screen.getByRole("tab", { name: "Cross-checks" })).toHaveAttribute("aria-selected", "true");
   });
 
@@ -1756,7 +1768,6 @@ describe("RunDetailView", () => {
         onDownload={() => {}}
       />,
     );
-    fireEvent.click(screen.getByText("Run actions"));
     const del = screen.getByRole("button", { name: /delete run/i });
     expect(del).toBeDisabled();
     expect(screen.queryByRole("button", { name: /abort run/i })).toBeNull();

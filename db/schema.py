@@ -1224,14 +1224,14 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
     # Durable scout notes inventory. The sub-note-coverage detector needs the
     # scout-discovered sub-references per top-level note (e.g. 3 → 3.1/3.2/3.3/
     # (a)/(b)); these live only in infopack.json today. One row per top-level
-    # note. `subnote_refs` is a JSON list[str].
+    # note. `subnote_refs` is a JSON list of strings or {ref, title} objects.
     """
     CREATE TABLE IF NOT EXISTS run_notes_inventory (
         id            INTEGER PRIMARY KEY AUTOINCREMENT,
         run_id        INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
         note_num      INTEGER NOT NULL,
         title         TEXT NOT NULL DEFAULT '',
-        subnote_refs  TEXT,                       -- JSON list[str]
+        subnote_refs  TEXT,                       -- JSON list of strings or {ref, title}
         page_lo       INTEGER,
         page_hi       INTEGER,
         UNIQUE(run_id, note_num)

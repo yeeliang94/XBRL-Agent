@@ -57,7 +57,7 @@ def test_shape_nesting_and_summary(client_and_run):
          "title": "Corporate information",
          "placements": [{"sheet": "Notes-CI", "row": 6, "row_label": "x",
                          "kind": "primary"}]},
-        {"note_num": 1, "subnote_ref": "(a)", "status": "cited"},
+        {"note_num": 1, "subnote_ref": "(a)", "title": "Accounting policy", "status": "cited"},
         {"note_num": 1, "subnote_ref": "(b)", "status": "not_verified"},
         {"note_num": 5, "subnote_ref": None, "status": "missing",
          "title": "Investment properties"},
@@ -74,6 +74,7 @@ def test_shape_nesting_and_summary(client_and_run):
     assert server_module.COVERAGE_META_NOTE not in rows
     # Sub-refs nest under their parent.
     assert [s["subnote_ref"] for s in rows[1]["subnotes"]] == ["(a)", "(b)"]
+    assert rows[1]["subnotes"][0]["title"] == "Accounting policy"
     assert rows[1]["placements"][0]["sheet"] == "Notes-CI"
     # A confirmed_absent suspected gap is NOT unresolved.
     assert rows[13]["reviewer_verdict"] == "confirmed_absent"
