@@ -931,6 +931,9 @@ class NotesDeps:
     # logic so a stale `filled.xlsx` from an earlier run in the same
     # output_dir doesn't get layered on top of.
     wrote_once: bool = False
+    # Set when save_result persists the final artefacts. The coordinator
+    # stops the loop here instead of paying for a closing chat turn.
+    result_saved: bool = False
     # pydantic-ai may execute sibling sync tool calls in parallel worker
     # threads.  One notes agent owns one output workbook, so the complete
     # read-modify-replace sequence (including the state that selects the next
@@ -3544,6 +3547,7 @@ def create_notes_agent(
             encoding="utf-8",
         )
         await asyncio.to_thread(report_path.write_text, report, encoding="utf-8")
+        ctx.deps.result_saved = True
         return f"Saved {json_path.name}\n{report}"
 
     # Sheet-12 sub-agent mode only: the coverage-receipt tool. Registered

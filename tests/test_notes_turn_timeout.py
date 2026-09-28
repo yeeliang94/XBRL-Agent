@@ -289,3 +289,70 @@ async def test_iter_with_turn_timeout_uses_constant_default():
         f"NOTES_TURN_TIMEOUT={NOTES_TURN_TIMEOUT} — must be between 30s and 600s "
         "(too short cancels healthy agents mid-think; too long defeats the point)"
     )
+
+
+@pytest.mark.asyncio
+async def test_single_agent_stops_at_save_result_without_a_closing_turn(tmp_path):
+    """save_result is terminal. The runner must not spend (and wait on) one
+    more model request for a closing sentence — the turn most prone to the
+    stall this module guards against — and it still keeps a trace."""
+    from unittest.mock import patch
+
+    from pydantic_ai import Agent
+    from pydantic_ai.models.function import DeltaToolCall, FunctionModel
+
+    from notes import coordinator as coord
+    from notes.agent import NotesDeps
+    from notes_types import NotesTemplateType
+    from token_tracker import TokenReport
+
+    filled = tmp_path / "NOTES_CORP_INFO_filled.xlsx"
+    filled.write_bytes(b"fake-xlsx")
+    calls = []
+
+    async def _stream(messages, info):
+        calls.append(len(messages))
+        if len(calls) == 1:
+            yield {
+                0: DeltaToolCall(name="write_notes", json_args="{}"),
+                1: DeltaToolCall(name="save_result", json_args="{}"),
+            }
+        else:
+            yield "Saved the corporate information note."
+
+    def fake_create_notes_agent(**kwargs):
+        agent = Agent(FunctionModel(stream_function=_stream), deps_type=NotesDeps)
+
+        @agent.tool
+        def write_notes(ctx) -> str:
+            ctx.deps.wrote_once = True
+            ctx.deps.filled_path = str(filled)
+            return "ok: 1 row written"
+
+        @agent.tool
+        def save_result(ctx) -> str:
+            ctx.deps.result_saved = True
+            return "Saved."
+
+        deps = NotesDeps(
+            pdf_path=kwargs["pdf_path"], template_path="x", model=kwargs["model"],
+            output_dir=kwargs["output_dir"], token_report=TokenReport(),
+            template_type=NotesTemplateType.CORP_INFO, sheet_name="Notes-CI",
+            filing_level=kwargs["filing_level"],
+        )
+        return agent, deps
+
+    async def noop_emit(*a, **kw):
+        pass
+
+    with patch.object(coord, "create_notes_agent", side_effect=fake_create_notes_agent):
+        outcome = await coord._invoke_single_notes_agent_once(
+            template_type=NotesTemplateType.CORP_INFO, pdf_path="/tmp/fake.pdf",
+            inventory=[], filing_level="company", model="test",
+            output_dir=str(tmp_path), event_queue=None,
+            agent_id="notes:CORP_INFO", emit=noop_emit,
+        )
+
+    assert len(calls) == 1
+    assert outcome.filled_path == str(filled)
+    assert (tmp_path / "NOTES_CORP_INFO_conversation_trace.json").exists()

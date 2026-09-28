@@ -22,6 +22,7 @@ sub-agents' work still lands.
 from __future__ import annotations
 
 import asyncio
+from contextlib import AsyncExitStack
 import json
 import logging
 import os
@@ -930,7 +931,16 @@ async def _invoke_sub_agent_once(
                 elif Agent.is_model_request_node(node):
                     tid = f"{sub_agent_id}_think_{thinking_counter}"
                     reasoning_block = ReasoningBlockAccumulator()
-                    async with node.stream(agent_run.ctx) as model_stream:
+                    # Opening the stream waits for the provider's first byte.
+                    # Bound that wait too: an unbounded open once held a whole
+                    # run for ten minutes on one stalled request.
+                    async with AsyncExitStack() as stream_stack:
+                        model_stream = await asyncio.wait_for(
+                            stream_stack.enter_async_context(
+                                node.stream(agent_run.ctx)
+                            ),
+                            timeout=NOTES12_TURN_TIMEOUT_SECS,
+                        )
                         async for event in iter_with_turn_timeout(
                             model_stream, NOTES12_TURN_TIMEOUT_SECS,
                         ):
@@ -987,6 +997,11 @@ async def _invoke_sub_agent_once(
                         prompt_t, completion_t, thinking_t, model,
                     ),
                 })
+                # An accepted receipt is the batch's terminal call. The only
+                # thing left is a closing sentence nobody reads, so stop
+                # instead of paying for (and waiting on) that request.
+                if deps.coverage_receipt is not None:
+                    break
 
         finally:
             # Best-effort on EVERY exit path (success, iteration cap,

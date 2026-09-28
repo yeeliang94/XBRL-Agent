@@ -868,7 +868,13 @@ Key invariants:
   `notes12_failures.json` / `notes12_unmatched.json` side-logs.
 - **Sheet-12 stall bounds:** every outer/model/tool stream step has a 180-second
   no-progress timeout (`XBRL_NOTES12_TURN_TIMEOUT_S`), which enters the normal
-  retry lane. The parent fan-out allows one 420-second window
+  retry lane. That includes opening a model stream (the wait for the
+  provider's first byte); left unbounded, one stalled open held a Doc 3 run for
+  ten minutes until the HTTP client's own timeout. A sub-agent stops as soon as
+  its coverage receipt is accepted, and a single-sheet notes agent stops once
+  `save_result` sets `NotesDeps.result_saved`, instead of requesting a closing
+  chat turn. Pinned by `tests/test_notes12_subcoordinator.py` and
+  `tests/test_notes_turn_timeout.py`. The parent fan-out allows one 420-second window
   (`XBRL_NOTES12_FANOUT_TIMEOUT_S`) per configured generic attempt, so the
   default one retry receives a fresh window instead of inheriting the first
   attempt's remaining time. At the resulting hard deadline, remaining workers
