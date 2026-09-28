@@ -204,3 +204,55 @@ def test_replace_agent_turns_replaces_not_appends(tmp_path: Path):
             (agent_id,)).fetchone()[0] == 0
     finally:
         conn.close()
+
+
+@pytest.mark.asyncio
+async def test_non_streamed_model_request_rows_carry_latency_and_tokens(tmp_path):
+    """The reviewer does not stream model nodes, so PydanticAI runs each
+    request between loop bodies. Its wall time and tokens must land on the
+    model_request row (not 0 ms, not on the following tool row), and each
+    persisted turn keeps its own timestamp — otherwise request latency on a
+    slow proxy cannot be told apart from tool time."""
+    from server import _run_reviewer_pass
+
+    db, run_id = _seed(tmp_path)
+
+    async def _slow_fix(messages, info: AgentInfo) -> ModelResponse:
+        await asyncio.sleep(0.12)
+        return _fix_cash_scripted(messages, info)
+
+    queue: asyncio.Queue = asyncio.Queue()
+    outcome = await _run_reviewer_pass(
+        failed_checks=_FAILED, conflicts=[],
+        model=FunctionModel(_slow_fix),
+        filing_level="company", event_queue=queue, db_path=db, run_id=run_id)
+
+    records = outcome["turn_records"]
+    model_rows = [t for t in records if t.get("node_kind") == "model_request"]
+    tool_rows = [t for t in records if t.get("node_kind") == "call_tools"]
+    assert model_rows and tool_rows
+    assert all(t["duration_ms"] >= 100 for t in model_rows)
+    assert all(t["prompt_tokens"] > 0 and t["usage_status"] == "complete"
+               for t in model_rows)
+    assert all(t["total_tokens"] == 0 for t in tool_rows)
+    assert all(t["duration_ms"] < 100 for t in tool_rows)
+
+    conn = sqlite3.connect(str(db))
+    try:
+        agent_id = repo.create_run_agent(
+            conn, run_id, statement_type="CORRECTION", variant=None,
+            model="test-model")
+        repo.insert_agent_turns(conn, agent_id, records)
+        conn.commit()
+        stamps = [r[0] for r in conn.execute(
+            "SELECT ts FROM run_agent_turns WHERE run_agent_id=? "
+            "AND node_kind='model_request' ORDER BY turn_index", (agent_id,))]
+        assert len(set(stamps)) == len(stamps)
+        ledger = conn.execute(
+            "SELECT started_at, ended_at, input_tokens FROM model_usage_calls "
+            "WHERE run_agent_id=? AND status != 'bookkeeping' "
+            "ORDER BY request_index", (agent_id,)).fetchall()
+        assert ledger and all(start < end and tokens > 0
+                              for start, end, tokens in ledger)
+    finally:
+        conn.close()
