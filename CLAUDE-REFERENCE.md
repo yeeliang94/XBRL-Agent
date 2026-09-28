@@ -324,6 +324,15 @@ After completion, `server.py` also backfills run-level totals from
 (`notes/coordinator.py`) capture this; the Sheet-12 fan-out leaves per-turn
 rows empty (its sub-agents merge into one row) — rollups still populate.
 
+PydanticAI runs a node when the loop fetches the next one, so a model request
+that the caller does not stream (the face reviewer and notes reviewer set
+`stream_model_nodes=False`) happens between loop bodies. `run_agent_loop`
+folds that gap's wall time and usage delta back into the preceding row, so a
+`model_request` row carries its request latency and tokens and a `call_tools`
+row carries only tool time. Each row also stamps its own `started_at`, which
+becomes `run_agent_turns.ts` and the `model_usage_calls` request window.
+Pinned by `tests/test_reviewer_turn_telemetry.py`.
+
 Document-preparation requests retain a `RunUsage` accumulator through output
 retries, timeouts and cancellation. Their checkpoint records usage from completed
 responses even when the request fails. Pinned by

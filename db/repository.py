@@ -958,7 +958,7 @@ def insert_agent_turns(
                     else "unavailable" if t.get("node_kind") == "model_request"
                     else "not_applicable"
                 )),
-                ts,
+                str(t.get("started_at") or ts),
             )
             for t in turns
         ],
@@ -1023,8 +1023,10 @@ def _replace_model_usage_calls_from_turns(
                 f"run-agent:{run_agent_id}:request:{request_index}", int(run_id),
                 run_agent_id, str(role), str(role), request_index, model,
                 str(turn.get("provider") or classify_provider(model)),
-                str(turn.get("transport") or "unknown"), started_at,
-                ended_at or ts, str(turn.get("status") or "succeeded"), prompt,
+                str(turn.get("transport") or "unknown"),
+                turn.get("started_at") or started_at,
+                turn.get("ended_at") or ended_at or ts,
+                str(turn.get("status") or "succeeded"), prompt,
                 int(turn.get("cache_read_tokens") or 0),
                 int(turn.get("cache_write_tokens") or 0), completion,
                 reasoning, total, pre_cache_cost, adjusted_cost,

@@ -25,6 +25,7 @@ import os
 import time
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, List, Mapping, Optional, TypeVar
 
 from pydantic_ai import Agent
@@ -246,6 +247,13 @@ def _cache_write_tokens(u) -> int:
     return int(getattr(u, "cache_write_tokens", 0) or 0)
 
 
+def _utc_now_iso() -> str:
+    """Wall-clock stamp in the audit DB's format (see db.repository._now)."""
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace(
+        "+00:00", "Z"
+    )
+
+
 async def iter_with_turn_timeout(async_iterable, timeout: float):
     """Yield items from ``async_iterable`` with a per-step timeout.
 
@@ -367,6 +375,56 @@ async def run_agent_loop(
     # way so the per-turn rows show when a turn hit (or wrote) the cache.
     prev_prompt = prev_completion = prev_thinking = prev_total = 0
     prev_cache_read = prev_cache_write = 0
+    # PydanticAI runs a node when the loop fetches the NEXT one. A model
+    # request that is not streamed here (reviewer passes) therefore happens
+    # between loop bodies, after its row was appended. Fold that gap — its
+    # wall time and the usage it produced — into the row it belongs to, so
+    # model rows carry request latency and tokens, and tool rows keep tool time.
+    last_record: Optional[dict] = None
+    last_record_end = loop_start
+
+    def _settle_last_record() -> None:
+        nonlocal prev_prompt, prev_completion, prev_thinking, prev_total
+        nonlocal prev_cache_read, prev_cache_write, last_record_end
+        now = time.monotonic()
+        if last_record is None:
+            last_record_end = now
+            return
+        try:
+            usage = agent_run.usage
+            token_usage = split_usage(usage)
+            d_prompt = max(token_usage.prompt_tokens - prev_prompt, 0)
+            d_completion = max(token_usage.completion_tokens - prev_completion, 0)
+            d_thinking = max(token_usage.thinking_tokens - prev_thinking, 0)
+            d_total = max(token_usage.total_tokens - prev_total, 0)
+            cache_read_t = _cache_read_tokens(usage)
+            cache_write_t = _cache_write_tokens(usage)
+            rec = last_record
+            rec["duration_ms"] += int((now - last_record_end) * 1000)
+            rec["ended_at"] = _utc_now_iso()
+            if d_total or d_prompt or d_completion:
+                rec["prompt_tokens"] += d_prompt
+                rec["completion_tokens"] += d_completion
+                rec["thinking_tokens"] += d_thinking
+                rec["total_tokens"] += d_total
+                rec["cumulative_tokens"] = token_usage.total_tokens
+                rec["cache_read_tokens"] += max(cache_read_t - prev_cache_read, 0)
+                rec["cache_write_tokens"] += max(cache_write_t - prev_cache_write, 0)
+                rec["cost_estimate"] = estimate_cost(
+                    rec["prompt_tokens"], rec["completion_tokens"],
+                    rec["thinking_tokens"], spec.model,
+                )
+                if rec["total_tokens"] > 0:
+                    rec["usage_status"] = "complete"
+            prev_prompt = token_usage.prompt_tokens
+            prev_completion = token_usage.completion_tokens
+            prev_thinking = token_usage.thinking_tokens
+            prev_total = token_usage.total_tokens
+            prev_cache_read, prev_cache_write = cache_read_t, cache_write_t
+        except Exception:  # noqa: BLE001 — telemetry is advisory
+            logger.debug("per-turn telemetry settle skipped for %s", spec.agent_role)
+        last_record_end = now
+
     # Step 8 probe: label the history-processor rewrite log lines with this
     # agent's role (contextvar; the processors run inside this task).
     try:
@@ -401,7 +459,22 @@ async def run_agent_loop(
             return iter_with_turn_timeout(stream, spec.turn_timeout)
         return stream
 
-    async for node in iter_with_turn_timeout(agent_run, spec.turn_timeout):
+    async def _settled_nodes():
+        # Settle as each node arrives, and also when fetching raises (a stalled
+        # or failed request), so salvage paths see the time it took.
+        nodes = iter_with_turn_timeout(agent_run, spec.turn_timeout).__aiter__()
+        while True:
+            try:
+                fetched = await nodes.__anext__()
+            except StopAsyncIteration:
+                return
+            except BaseException:
+                _settle_last_record()
+                raise
+            _settle_last_record()
+            yield fetched
+
+    async for node in _settled_nodes():
         iteration += 1
         # Publish the LIVE loop counter + cap for the in-band limit warner
         # (limit_warner.py): the hard cap below counts graph NODES (model +
@@ -452,6 +525,7 @@ async def run_agent_loop(
             )
 
         node_start = time.monotonic()
+        node_started_at = _utc_now_iso()
         node_tool_names: list[str] = []
         node_kind = (
             "call_tools" if Agent.is_call_tools_node(node)
@@ -581,7 +655,8 @@ async def run_agent_loop(
             d_completion = max(completion_t - prev_completion, 0)
             d_thinking = max(thinking_t - prev_thinking, 0)
             d_total = max(total - prev_total, 0)
-            turn_records.append({
+            node_end = time.monotonic()
+            record = {
                 "turn_index": iteration,
                 "node_kind": node_kind,
                 "tool_names": ",".join(node_tool_names) or None,
@@ -600,12 +675,16 @@ async def run_agent_loop(
                 "total_tokens": d_total,
                 "cumulative_tokens": total,
                 "cost_estimate": estimate_cost(d_prompt, d_completion, d_thinking, spec.model),
-                "duration_ms": int((time.monotonic() - node_start) * 1000),
+                "duration_ms": int((node_end - node_start) * 1000),
+                "started_at": node_started_at,
+                "ended_at": _utc_now_iso(),
                 # v15 cache telemetry: this turn's contribution to cache
                 # read/write (delta of the cumulative usage).
                 "cache_read_tokens": max(cache_read_t - prev_cache_read, 0),
                 "cache_write_tokens": max(cache_write_t - prev_cache_write, 0),
-            })
+            }
+            turn_records.append(record)
+            last_record, last_record_end = record, node_end
             # Step 8 probe (PLAN-extraction-harness-efficiency): the per-turn
             # cache-read delta next to the prompt delta, on model-request
             # turns. Read together with the `history_rewrite` lines from
@@ -650,6 +729,7 @@ async def run_agent_loop(
                 f"turn(s)."
             )
 
+    _settle_last_record()
     return iteration
 
 
