@@ -1,6 +1,6 @@
 import { pwc, tokens } from "../lib/theme";
 import { denominationLabel } from "../lib/vocabulary";
-import { ui } from "../lib/uiStyles";
+import { ui, uiClass } from "../lib/uiStyles";
 import { runStatusDisplay } from "../lib/runStatus";
 import { StatusLabel } from "./StatusLabel";
 import type { RunSummaryJson } from "../lib/types";
@@ -27,6 +27,7 @@ export interface RecentRunsListProps {
   onResumeDraft: (runId: number) => void;
   onOpenRun: (runId: number) => void;
   onViewAll: () => void;
+  onClearDrafts?: () => void;
 }
 
 function formatDate(iso: string): { concise: string; exact: string } {
@@ -61,6 +62,7 @@ export function RecentRunsList({
   onResumeDraft,
   onOpenRun,
   onViewAll,
+  onClearDrafts,
 }: RecentRunsListProps) {
   return (
     <section style={styles.panel} aria-label="Recent runs">
@@ -69,11 +71,19 @@ export function RecentRunsList({
         {/* "View all" always available — even with zero runs it's a valid
             jump to the (empty) History page, and it disappears only while
             the first load is still in flight to avoid a flash. */}
-        {!isLoading && (
-          <button type="button" onClick={onViewAll} style={styles.viewAll}>
-            View all →
-          </button>
-        )}
+        <div style={styles.actions}>
+          {onClearDrafts && (
+            <button type="button" className={uiClass.btnQuiet} style={styles.viewAll}
+              onClick={onClearDrafts} data-testid="clear-drafts">
+              Clear drafts
+            </button>
+          )}
+          {!isLoading && (
+            <button type="button" onClick={onViewAll} style={styles.viewAll}>
+              View all →
+            </button>
+          )}
+        </div>
       </div>
 
       {isLoading ? (
@@ -146,9 +156,14 @@ const styles = {
     justifyContent: "space-between",
     paddingBottom: pwc.space.sm,
   } as React.CSSProperties,
+  actions: {
+    display: "flex",
+    alignItems: "center",
+    flexWrap: "wrap" as const,
+    gap: pwc.space.md,
+  } as React.CSSProperties,
   heading: {
-    ...ui.subsectionTitle,
-    fontSize: 15,
+    ...ui.sectionTitle,
   } as React.CSSProperties,
   viewAll: {
     fontFamily: pwc.fontBody,
@@ -158,7 +173,7 @@ const styles = {
     border: "none",
     cursor: "pointer",
     padding: "4px 6px",
-    minHeight: 24,
+    minHeight: 34,
   } as React.CSSProperties,
   // Divided work queue: hairline rules between rows, no nested cards.
   list: {

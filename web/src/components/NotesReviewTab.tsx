@@ -138,7 +138,7 @@ interface SourceNoteInventoryRow {
   reviewer_added?: boolean;
   reviewer_verdict?: string | null;
   reason?: string;
-  subnotes?: { subnote_ref: string; title?: string; state: string; reason?: string }[];
+  subnotes?: { subnote_ref: string; title?: string; state: string; reason?: string; placements?: SourceNotePlacement[] }[];
   page_lo: number | null;
   page_hi: number | null;
 }
@@ -309,6 +309,7 @@ export function NotesReviewTab({
   const [coverageBanner, setCoverageBanner] = useState<string | null>(null);
   const [sourceNotesError, setSourceNotesError] = useState(false);
   const [selectedSourceNote, setSelectedSourceNote] = useState<number | null>(null);
+  const [selectedSubnoteRef, setSelectedSubnoteRef] = useState<string | null>(null);
   const [sourceRailWidth, setSourceRailWidth] = useState(280);
   const [saveBlocked, setSaveBlocked] = useState(false);
   const [, setEditing] = useState(false);
@@ -387,6 +388,7 @@ export function NotesReviewTab({
     setActive((a) => ({ sheet: focusCell.sheet, key: a.key + 1 }));
     setFocusRow(focusCell.row);
     setSelectedCellKey(`${focusCell.sheet}:${focusCell.row}`);
+    setSelectedSubnoteRef(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- key is the stable
     // re-trigger; depending on the object identity would loop.
   }, [focusCell?.key]);
@@ -395,6 +397,7 @@ export function NotesReviewTab({
     setSelectedCellKey(null);
     setNoteSearch("");
     setSelectedSourceNote(null);
+    setSelectedSubnoteRef(null);
     setSourceNotes(null);
     setCoverageBanner(null);
     setSourceNotesError(false);
@@ -584,9 +587,11 @@ export function NotesReviewTab({
   const selectSourcePlacement = useCallback((
     note: SourceNoteInventoryRow,
     placement: SourceNotePlacement,
+    subnoteRef: string | null = null,
   ) => {
     if (saveBlocked || moveBusy) return;
     setSelectedSourceNote(note.note_num);
+    setSelectedSubnoteRef(subnoteRef);
     reportCellPages(sourceNotePages(note), onActiveCellPages);
     setActive((current) => ({ sheet: placement.sheet, key: current.key + 1 }));
     setFocusRow(placement.row);
@@ -594,6 +599,7 @@ export function NotesReviewTab({
   }, [onActiveCellPages, saveBlocked, moveBusy]);
 
   const selectSourceNote = useCallback((note: SourceNoteInventoryRow) => {
+    setSelectedSubnoteRef(null);
     if (note.placements.length === 1) {
       selectSourcePlacement(note, note.placements[0]);
       return;
@@ -607,10 +613,28 @@ export function NotesReviewTab({
     }
   }, [onActiveCellPages, selectSourcePlacement, saveBlocked, moveBusy]);
 
+  const selectSubnote = useCallback((
+    note: SourceNoteInventoryRow,
+    subnote: NonNullable<SourceNoteInventoryRow["subnotes"]>[number],
+  ) => {
+    const destinations = subnote.placements ?? [];
+    if (destinations.length > 0) {
+      selectSourcePlacement(note, destinations[0], subnote.subnote_ref);
+    } else if (note.placements.length === 1) {
+      selectSourcePlacement(note, note.placements[0], subnote.subnote_ref);
+    } else if (!saveBlocked && !moveBusy) {
+      setSelectedSourceNote(note.note_num);
+      setSelectedSubnoteRef(subnote.subnote_ref);
+      setSelectedCellKey(null);
+      reportCellPages(sourceNotePages(note), onActiveCellPages);
+    }
+  }, [onActiveCellPages, selectSourcePlacement, saveBlocked, moveBusy]);
+
   const handleWorkspaceCellActivate = useCallback((sheet: string, row: number) => {
     if (saveBlocked || moveBusy) return;
     const cellKey = `${sheet}:${row}`;
     setSelectedCellKey(cellKey);
+    setSelectedSubnoteRef(null);
     // A filing field can be intentionally blank or have no source placement.
     // A field can also contain more than one source note. Preserve the note
     // the reviewer arrived from when it is one of the valid matches; otherwise
@@ -695,6 +719,7 @@ export function NotesReviewTab({
                           if (saveBlocked || moveBusy) return;
                           setSelectedCellKey(null);
                           setSelectedSourceNote(null);
+                          setSelectedSubnoteRef(null);
                           setFocusRow(null);
                           setActive((current) => ({ sheet: sheet.sheet, key: current.key + 1 }));
                         }}
@@ -766,6 +791,11 @@ export function NotesReviewTab({
                 const unresolvedSubnotes = note.subnotes?.filter(
                   (sub) => sub.state === "missing" || sub.state === "not_verified",
                 ) ?? [];
+                const childDestinations = note.subnotes?.find(
+                  (sub) => sub.subnote_ref === selectedSubnoteRef,
+                )?.placements ?? [];
+                const visibleDestinations = selectedSubnoteRef && childDestinations.length
+                  ? childDestinations : note.placements;
                 return (
                   <div key={note.note_num} style={styles.noteRailItemGroup}>
                     <button
@@ -804,8 +834,11 @@ export function NotesReviewTab({
                             key={sub.subnote_ref}
                             type="button"
                             disabled={saveBlocked || moveBusy}
-                            onClick={() => selectSourceNote(note)}
-                            style={styles.subnoteButton}
+                            onClick={() => selectSubnote(note, sub)}
+                            style={{
+                              ...styles.subnoteButton,
+                              ...(selected && selectedSubnoteRef === sub.subnote_ref ? styles.noteRailItemActive : {}),
+                            }}
                           >
                             <span style={styles.subnoteRef}>{sub.subnote_ref}</span>
                             <span style={styles.subnoteCopy}>
@@ -813,25 +846,34 @@ export function NotesReviewTab({
                               {(sub.state === "missing" || sub.state === "not_verified") && (
                                 <>
                                   <span style={styles.subnoteState}>{subNoteStateLabel(sub.state)}</span>
-                                  {sub.reason && <span style={styles.subnoteReason}>{sub.reason}</span>}
+                                  {selected && selectedSubnoteRef === sub.subnote_ref && sub.reason && (
+                                    <span style={styles.subnoteReason}>{sub.reason}</span>
+                                  )}
                                 </>
                               )}
                             </span>
                           </button>
                         ))}
+                        {selected && selectedSubnoteRef && childDestinations.length === 0 && (
+                          <span style={styles.subnoteUnplaced}>
+                            Exact field not recorded. {note.placements.length === 1
+                              ? `Showing the Note ${note.note_num} field.`
+                              : `Choose a Note ${note.note_num} field below.`}
+                          </span>
+                        )}
                     </div>}
-                    {selected && note.placements.length > 1 && (
+                    {selected && visibleDestinations.length > 1 && (
                       <div
                         style={styles.noteRailPlacements}
                         aria-label={`Destinations for note ${note.note_num}`}
                       >
-                        {note.placements.map((placement) => (
+                        {visibleDestinations.map((placement) => (
                           <button
                             key={`${placement.sheet}:${placement.row}`}
                             type="button"
                             style={styles.noteRailPlacementButton}
                             disabled={saveBlocked || moveBusy}
-                            onClick={() => selectSourcePlacement(note, placement)}
+                            onClick={() => selectSourcePlacement(note, placement, selectedSubnoteRef)}
                             title={`${placement.row_label || "Open placed field"} · ${notesSheetDisplayName(placement.sheet)}`}
                           >
                             {placement.row_label || "Open placed field"}
@@ -2300,7 +2342,7 @@ const styles = {
     fontWeight: 700,
   } as React.CSSProperties,
   subnoteSummary: {
-    padding: "4px 6px 2px 65px",
+    padding: "2px 6px 2px 35px",
     color: pwc.orange700,
     fontSize: 14,
     fontWeight: 600,
@@ -2308,16 +2350,16 @@ const styles = {
   subnoteList: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: 1,
+    gap: 0,
   } as React.CSSProperties,
   subnoteButton: {
     display: "grid",
-    gridTemplateColumns: "minmax(38px, auto) minmax(0, 1fr)",
-    gap: 7,
+    gridTemplateColumns: "minmax(34px, auto) minmax(0, 1fr)",
+    gap: 5,
     alignItems: "start",
     width: "100%",
-    minHeight: 26,
-    padding: "4px 6px 4px 65px",
+    minHeight: 32,
+    padding: "3px 6px 3px 35px",
     border: 0,
     borderRadius: 5,
     background: "transparent",
@@ -2353,6 +2395,12 @@ const styles = {
     fontSize: 14,
     lineHeight: 1.35,
     overflowWrap: "anywhere" as const,
+  } as React.CSSProperties,
+  subnoteUnplaced: {
+    padding: "2px 6px 4px 35px",
+    color: pwc.grey700,
+    fontSize: 13,
+    lineHeight: 1.35,
   } as React.CSSProperties,
   noteRailPlacements: {
     display: "flex",

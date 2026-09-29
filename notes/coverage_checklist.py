@@ -45,6 +45,26 @@ from notes.detectors import _subnote_key_for_note, _top_note_nums
 
 POLICIES_SHEET_DEFAULT = "Notes-SummaryofAccPol"
 
+
+def subnote_key_for_note(note_num: int, ref: str) -> str:
+    """Normalize a printed child reference within its top-level note."""
+    return _subnote_key_for_note(note_num, ref)
+
+
+def subnote_keys_for_refs(refs: list) -> list[tuple[int, str]]:
+    """The shared note-aware keys for provenance links to child notes."""
+    nums = _top_note_nums(refs)
+    keys = []
+    for n in nums:
+        for ref in refs:
+            ref_nums = _top_note_nums([ref])
+            key = _subnote_key_for_note(n, ref)
+            if (key == str(n) or (ref_nums and n not in ref_nums)
+                    or (not ref_nums and len(nums) != 1)):
+                continue
+            keys.append((n, key))
+    return keys
+
 # Top-level row statuses.
 STATUS_PLACED = "placed"
 STATUS_MISSING = "missing"
@@ -110,6 +130,7 @@ class SubNoteState:
     state: str  # cited | not_verified (builder) | verified | missing (reviewer)
     reason: str = ""
     title: str = ""
+    placements: list[Placement] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"subnote_ref": self.subnote_ref, "state": self.state}
@@ -117,6 +138,7 @@ class SubNoteState:
             out["reason"] = self.reason
         if self.title:
             out["title"] = self.title
+        out["placements"] = [p.to_dict() for p in self.placements]
         return out
 
 
@@ -280,6 +302,7 @@ def build_draft_checklist(
 
     # ---- placements + cited sub-refs per top-level note -----------------
     placements_by_note: dict[int, dict[tuple[str, int], str]] = {}
+    placements_by_subnote: dict[tuple[int, str], dict[tuple[str, int], str]] = {}
     cited_by_note: dict[int, set[str]] = {}
     for e in provenance_entries or []:
         sheet = e.get("sheet") or ""
@@ -294,6 +317,11 @@ def build_draft_checklist(
                 placements_by_note.setdefault(n, {})[(sheet, int(row))] = (
                     e.get("row_label") or ""
                 )
+        if sheet and row is not None:
+            for key in subnote_keys_for_refs(refs):
+                placements_by_subnote.setdefault(key, {})[
+                    (sheet, int(row))
+                ] = e.get("row_label") or ""
 
     skip_by_note: dict[int, str] = {}
     for s in skip_receipts or []:
@@ -365,6 +393,9 @@ def build_draft_checklist(
             subnotes.append(SubNoteState(
                 subnote_ref=ref, state=state, reason=sub_reason,
                 title=str((inv.get("subnote_titles") or {}).get(ref, "")),
+                placements=_classify_placements(
+                    placements_by_subnote.get((note_num, key), {}), policies_sheet,
+                ),
             ))
 
         row = CoverageRow(
@@ -457,6 +488,7 @@ def checklist_to_db_rows(checklist: Checklist) -> list[dict]:
                 "status": s.state,
                 "reason": s.reason,
                 "title": s.title,
+                "placements": [p.to_dict() for p in s.placements],
             })
     return out
 

@@ -702,6 +702,52 @@ def _has_persisted_indent(el: Tag) -> bool:
     return any(_prop_of(d) == "margin-left" for d in _decls(el.get("style") or ""))
 
 
+def _indent_source_heading_levels(soup: BeautifulSoup) -> None:
+    """Indent source heading descendants and their bodies in the mTool copy."""
+    blocks = [node for node in soup.contents if isinstance(node, Tag)]
+    headings = {"h1", "h2", "h3", "h4", "h5", "h6"}
+    levels = [int(node.name[1]) for node in blocks if node.name in headings]
+    if not levels:
+        return
+    baseline = min(levels)
+    depth = 0
+    for node in blocks:
+        if node.name in headings:
+            depth = max(0, int(node.name[1]) - baseline)
+        if (depth and node.name in headings | {"p", "table", "ul", "ol"}
+                and not _has_persisted_indent(node)):
+            _merge_style(node, f"margin-left: {2 * depth}em;")
+
+
+def _add_transport_breaks(soup: BeautifulSoup) -> None:
+    """Use a real blank paragraph where TX27 ignores CSS paragraph margins."""
+    for container in [soup, *soup.select('div[data-note-section="1"]')]:
+        blocks = [node for node in container.children if isinstance(node, Tag)]
+        for left, right in zip(blocks, blocks[1:]):
+            if left.name in {"p", "table"} and right.name in {"p", "table"}:
+                spacer = soup.new_tag("p", attrs={"data-mtool-spacer": "1"})
+                spacer["style"] = "margin: 0;"
+                spacer.string = "\xa0"
+                right.insert_before(spacer)
+
+
+def add_transport_breaks(html: str) -> str:
+    """Add mTool-only blank lines to the unstyled size fallback."""
+    soup = BeautifulSoup(html, "html.parser")
+    _add_transport_breaks(soup)
+    return str(soup)
+
+
+def without_transport_breaks(html: str) -> str:
+    """Remove only the exact empty paragraphs added for mTool display."""
+    soup = BeautifulSoup(html, "html.parser")
+    for spacer in soup.select('p[data-mtool-spacer="1"]'):
+        if spacer.find(True) is not None or spacer.get_text() != "\xa0":
+            raise ValueError("mTool transport spacer contains note content")
+        spacer.decompose()
+    return str(soup)
+
+
 def _table_has_explicit_width(table: Tag) -> bool:
     # Property-exact so TipTap's `min-width` does NOT count as a user width.
     return any(_prop_of(d) == "width" for d in _decls(table.get("style") or ""))
@@ -1022,6 +1068,9 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
         for table in expanded:
             if id(table) not in operator_sized_tables:
                 _fit_table_width(table, editable_merged=True)
+
+    _indent_source_heading_levels(soup)
+    _add_transport_breaks(soup)
 
     # Carry the font on a wrapping container so any element we did not style
     # (bare <strong>, <em>, loose text) still inherits the face.

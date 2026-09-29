@@ -66,6 +66,7 @@ from db import repository as repo
 from notes.agent import _apply_cross_sheet_tokens
 from notes.html_sanitize import sanitize_notes_html
 from notes.html_to_text import rendered_length
+from notes.integrity import MISSING_DISPOSITION_DECISION
 from notes.versioning import ensure_notes_snapshot
 from notes.writer import CELL_CHAR_LIMIT, truncate_with_footer
 from notes_types import NOTES_REGISTRY, NotesTemplateType
@@ -749,7 +750,22 @@ def build_notes_reviewer_packet(context: dict) -> str:
                    "A disposition or note-level coverage claim cannot replace actual source content. "
                    "If the captured source itself is missing or wrong, raise a needs_human flag "
                    "with the affected page and finish the remaining review; relinking cannot recapture text.")
-        out.extend(_review_source_line(item) for item in context["source_integrity_findings"])
+        undecided: dict[str, list[str]] = {}
+        for item in context["source_integrity_findings"]:
+            if (item.get("code") == MISSING_DISPOSITION_DECISION
+                    and item.get("block_ids")):
+                undecided.setdefault(str(item.get("note_num") or "unknown"), []).extend(
+                    item["block_ids"]
+                )
+            else:
+                out.append(_review_source_line(item))
+        for note, ids in undecided.items():
+            for start in range(0, len(ids), 15):
+                chunk = ids[start:start + 15]
+                out.append(_review_source_line(
+                    f"note={note}; each has no recognised decision recorded; "
+                    f"block_ids={chunk}"
+                ))
 
 
     if dup:
@@ -1020,7 +1036,8 @@ def _build_context(
             integrity_input = integrity_runner.build_input(
                 conn, run_id, generation["id"], scout_available=True)
             assessment = integrity.run_checks(integrity_input)
-            source_findings = [{"check": f.check, "block_ids": f.block_ids,
+            source_findings = [{"check": f.check, "code": f.code,
+                                "block_ids": f.block_ids,
                                 "message": f.message, "note_num": f.note_num}
                                for f in assessment.findings if f.blocking]
             source_linked_subrefs = integrity_runner.source_linked_subnote_keys(

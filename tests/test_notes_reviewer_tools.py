@@ -142,6 +142,20 @@ def test_source_reviewer_tools_and_instructions_appear_together(db_path: Path) -
     assert "relink_note_cell" in prompt
 
 
+def test_source_packet_groups_repeated_missing_parts_without_losing_ids():
+    context = {
+        "source_integrity_findings": [
+            {"check": "disposition", "code": "missing_disposition_decision",
+             "note_num": "note-2", "block_ids": [bid],
+             "message": f"source part {bid} lacks a decision"}
+            for bid in ("p17-b1", "p17-b2", "p18-b1")
+        ],
+    }
+    packet = ra.build_notes_reviewer_packet(context)
+    assert packet.count("has no recognised decision recorded") == 1
+    assert all(bid in packet for bid in ("p17-b1", "p17-b2", "p18-b1"))
+
+
 def test_prepared_policy_placement_requires_grounded_current_verdict(db_path: Path) -> None:
     from types import SimpleNamespace
     from notes import source_repository as srepo

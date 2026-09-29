@@ -7,6 +7,7 @@ import pytest
 
 from db.schema import init_db
 from mtool.notes_exporter import build_notes_fill_doc
+from mtool.notes_decorate import without_transport_breaks
 from mtool.offline_fill import validate_notes_input
 
 
@@ -86,6 +87,24 @@ def test_merged_note_exports_editable_cells_without_changing_canonical_note(note
         saved = conn.execute("SELECT html FROM notes_cells WHERE run_id = ?",
                              (run_id,)).fetchone()[0]
     assert saved == html
+
+
+def test_export_adds_blank_paragraphs_without_changing_saved_note(notes_db):
+    db, run_id = notes_db
+    html = "<p>First.</p><p>Second.</p><table><tr><td>Value</td></tr></table>"
+    _add_note(db, run_id, "Notes-Listofnotes", 21, "Revenue", html)
+
+    exported = build_notes_fill_doc(db, run_id)["footnotes"][0]["html"]
+    assert exported.count('data-mtool-spacer="1"') == 2
+    with sqlite3.connect(db) as conn:
+        saved = conn.execute("SELECT html FROM notes_cells WHERE run_id = ?",
+                             (run_id,)).fetchone()[0]
+    assert saved == html
+
+
+def test_transport_break_check_rejects_disguised_content():
+    with pytest.raises(ValueError, match="contains note content"):
+        without_transport_breaks('<p data-mtool-spacer="1">Omitted words</p>')
 
 
 def test_registered_prose_slot_requires_the_exact_canonical_identity(notes_db):

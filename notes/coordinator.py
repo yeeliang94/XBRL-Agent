@@ -300,6 +300,18 @@ async def _run_gated(label: str, runner):
             runner.close()
 
 
+async def _run_after_prose(predecessors: list[asyncio.Task], label: str, runner):
+    """Wait for prose placements before the List-of-Notes agent takes a slot."""
+    started = False
+    try:
+        await asyncio.wait(predecessors, return_when=asyncio.ALL_COMPLETED)
+        started = True
+        return await _run_gated(label, runner)
+    finally:
+        if not started:
+            runner.close()
+
+
 async def run_notes_extraction(
     config: NotesRunConfig,
     infopack: Optional[Infopack] = None,
@@ -376,6 +388,17 @@ async def run_notes_extraction(
 
     # Launch one task per template.
     ordered = sorted(config.notes_to_run, key=lambda t: list(NotesTemplateType).index(t))
+    prepared_source = False
+    if config.audit_db_path and config.source_generation_id is not None:
+        from db import repository as repo
+        from notes import source_repository as srepo
+        from notes.source_models import INPUT_KIND_PREPARED
+
+        with repo.db_session(config.audit_db_path) as conn:
+            generation = srepo.fetch_generation(conn, config.source_generation_id)
+            prepared_source = bool(
+                generation and generation["input_kind"] == INPUT_KIND_PREPARED
+            )
 
     tasks: dict[NotesTemplateType, asyncio.Task] = {}
     for index, template_type in enumerate(ordered):
@@ -430,9 +453,20 @@ async def run_notes_extraction(
                 db_path=config.audit_db_path,
                 source_generation_id=config.source_generation_id,
             )
+        predecessors = []
+        if prepared_source and template_type == NotesTemplateType.LIST_OF_NOTES:
+            predecessors = [
+                tasks[t] for t in (
+                    NotesTemplateType.CORP_INFO, NotesTemplateType.ACC_POLICIES,
+                ) if t in tasks
+            ]
+        gated_runner = (
+            _run_after_prose(predecessors, agent_id, runner)
+            if predecessors else _run_gated(agent_id, runner)
+        )
         # Step 7 (XBRL_MAX_CONCURRENT_AGENTS): slot taken inside the task, so
         # registration / cancellation are unchanged (agent_concurrency.py).
-        task = asyncio.create_task(_run_gated(agent_id, runner), name=agent_id)
+        task = asyncio.create_task(gated_runner, name=agent_id)
         tasks[template_type] = task
         if session_id:
             task_registry.register(session_id, agent_id, task)

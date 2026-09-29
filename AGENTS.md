@@ -194,7 +194,9 @@ in `CLAUDE-REFERENCE.md` before changing the surrounding subsystem.
   `web/src/lib/theme.ts`, shared layout primitives in
   `web/src/lib/uiStyles.ts`, and interaction or responsive states in
   `web/src/index.css`.
-- Treat `docs/xbrl-design-system.html` as the canonical UI/UX authority.
+- For any frontend layout, navigation, content, style, or accessibility change,
+  read `docs/xbrl-design-system.html` before editing; it is the
+  canonical UI/UX authority.
   Direction A in `docs/prototype-ui-overhaul.html` supplies composition examples
   only; the design guide wins when they differ. Apply its clarity-first contract
   across the full affected workflow: remove repeated explanation and internal

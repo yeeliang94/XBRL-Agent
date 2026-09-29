@@ -35,6 +35,10 @@ the task.
 Use the narrowest applicable set. If a change crosses subsystems, read the
 union of those sections.
 
+For frontend UI work, read [`docs/xbrl-design-system.html`](docs/xbrl-design-system.html)
+before editing. It is the production design authority. Direction A in the UI
+prototype supplies examples when needed, and the XBRL guide wins if they differ.
+
 For authoring formatted notes for mTool injection, read
 [the agent guide](docs/MTOOL-NOTES-AUTHORING.md) for the production workflow,
 accepted native formatting limits, and deferred Word/PDF output verification.

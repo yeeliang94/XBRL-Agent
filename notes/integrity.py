@@ -40,6 +40,7 @@ RULE_VERSION = "integrity-6"
 
 UNRESOLVED = "unresolved"
 WARNING = "warning"
+MISSING_DISPOSITION_DECISION = "missing_disposition_decision"
 
 
 @dataclass
@@ -49,6 +50,7 @@ class Finding:
     message: str
     block_ids: list[str] = field(default_factory=list)
     note_num: Optional[str] = None
+    code: Optional[str] = None
 
     @property
     def blocking(self) -> bool:
@@ -250,6 +252,7 @@ def check_dispositions(inp: IntegrityInput) -> list[Finding]:
                 "disposition", UNRESOLVED,
                 f"block {b.block_id} has no recognised decision recorded",
                 [b.block_id], b.source_note_id,
+                code=MISSING_DISPOSITION_DECISION,
             ))
             continue
         if disposition is Disposition.UNRESOLVED:

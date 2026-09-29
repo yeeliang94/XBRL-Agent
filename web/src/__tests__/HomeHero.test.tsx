@@ -82,12 +82,11 @@ describe("HomeHero", () => {
       </HomeHero>,
     );
     // Wait for the drafts count (2) to render, so the Clear action appears.
-    await waitFor(() => expect(screen.getByTestId("clear-drafts")).toBeTruthy());
-    fireEvent.click(screen.getByTestId("clear-drafts"));
+    await waitFor(() => expect(within(screen.getByRole("region", { name: "Recent runs" })).getByRole("button", { name: "Clear drafts" })).toBeTruthy());
+    fireEvent.click(within(screen.getByRole("region", { name: "Recent runs" })).getByRole("button", { name: "Clear drafts" }));
     // Confirm dialog opens; confirm the sweep.
     await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
-    // Scope to the dialog — the drafts tile also carries a "Clear drafts"
-    // action now, so an unscoped query would be ambiguous.
+    // Scope to the dialog because the Recent runs toolbar has the same label.
     fireEvent.click(
       within(screen.getByRole("dialog")).getByRole("button", { name: /clear drafts/i }),
     );

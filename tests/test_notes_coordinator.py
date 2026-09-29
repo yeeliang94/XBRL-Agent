@@ -65,6 +65,110 @@ async def test_coordinator_runs_all_requested_templates(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_prepared_list_agent_waits_for_other_prose_placements(tmp_path: Path):
+    from db import repository as repo
+    from db.schema import init_db
+    from notes import source_repository as srepo
+    from notes.source_models import INPUT_KIND_PREPARED, SourceBlock
+
+    db = tmp_path / "audit.sqlite"
+    init_db(db)
+    with repo.db_session(db) as conn:
+        run_id = repo.create_run(conn, "x.pdf", session_id="s", output_dir=str(tmp_path))
+        generation = srepo.begin_generation(conn, run_id, input_kind=INPUT_KIND_PREPARED)
+        srepo.write_blocks(conn, generation, [
+            SourceBlock("n1", "paragraph", 0, "<p>Note content.</p>",
+                        source_note_id="note-1"),
+        ])
+        srepo.activate_generation(conn, generation)
+    config = _make_config(tmp_path, [
+        NotesTemplateType.CORP_INFO, NotesTemplateType.ACC_POLICIES,
+        NotesTemplateType.LIST_OF_NOTES,
+    ])
+    config.audit_db_path = str(db)
+    config.run_id = run_id
+    config.source_generation_id = generation
+    started = asyncio.Event()
+    release = asyncio.Event()
+    finished: set[NotesTemplateType] = set()
+
+    async def fake_single(**kwargs):
+        template = kwargs["template_type"]
+        if template == NotesTemplateType.ACC_POLICIES:
+            started.set()
+        await release.wait()
+        finished.add(template)
+        return NotesAgentResult(template_type=template, status="succeeded")
+
+    async def fake_list(**_kwargs):
+        assert finished == {NotesTemplateType.CORP_INFO, NotesTemplateType.ACC_POLICIES}
+        return NotesAgentResult(template_type=NotesTemplateType.LIST_OF_NOTES,
+                                status="succeeded")
+
+    with (patch("notes.coordinator._run_single_notes_agent", side_effect=fake_single),
+          patch("notes.coordinator._run_list_of_notes_fanout", side_effect=fake_list)):
+        task = asyncio.create_task(run_notes_extraction(config, infopack=None))
+        await asyncio.wait_for(started.wait(), timeout=2)
+        assert finished == set()
+        release.set()
+        result = await asyncio.wait_for(task, timeout=2)
+    assert result.all_succeeded
+
+
+@pytest.mark.asyncio
+async def test_prepared_list_wait_does_not_hold_agent_slot(tmp_path: Path, monkeypatch):
+    from db import repository as repo
+    from db.schema import init_db
+    from notes import source_repository as srepo
+    from notes.source_models import INPUT_KIND_PREPARED, SourceBlock
+
+    monkeypatch.setenv("XBRL_MAX_CONCURRENT_AGENTS", "2")
+    db = tmp_path / "audit.sqlite"
+    init_db(db)
+    with repo.db_session(db) as conn:
+        run_id = repo.create_run(conn, "x.pdf", session_id="s", output_dir=str(tmp_path))
+        generation = srepo.begin_generation(conn, run_id, input_kind=INPUT_KIND_PREPARED)
+        srepo.write_blocks(conn, generation, [
+            SourceBlock("n1", "paragraph", 0, "<p>Note content.</p>",
+                        source_note_id="note-1"),
+        ])
+        srepo.activate_generation(conn, generation)
+    config = _make_config(tmp_path, [
+        NotesTemplateType.CORP_INFO, NotesTemplateType.ACC_POLICIES,
+        NotesTemplateType.LIST_OF_NOTES, NotesTemplateType.ISSUED_CAPITAL,
+    ])
+    config.audit_db_path = str(db)
+    config.run_id = run_id
+    config.source_generation_id = generation
+    policy_started = asyncio.Event()
+    release_policy = asyncio.Event()
+    numeric_started = asyncio.Event()
+
+    async def fake_single(**kwargs):
+        template = kwargs["template_type"]
+        if template == NotesTemplateType.ACC_POLICIES:
+            policy_started.set()
+            await release_policy.wait()
+        if template == NotesTemplateType.ISSUED_CAPITAL:
+            numeric_started.set()
+        return NotesAgentResult(template_type=template, status="succeeded")
+
+    async def fake_list(**_kwargs):
+        return NotesAgentResult(template_type=NotesTemplateType.LIST_OF_NOTES,
+                                status="succeeded")
+
+    with (patch("notes.coordinator._run_single_notes_agent", side_effect=fake_single),
+          patch("notes.coordinator._run_list_of_notes_fanout", side_effect=fake_list)):
+        task = asyncio.create_task(run_notes_extraction(config, infopack=None))
+        try:
+            await asyncio.wait_for(policy_started.wait(), timeout=2)
+            await asyncio.wait_for(numeric_started.wait(), timeout=1)
+        finally:
+            release_policy.set()
+            await asyncio.wait_for(task, timeout=2)
+
+
+@pytest.mark.asyncio
 async def test_coordinator_isolates_per_template_failures(tmp_path: Path):
     config = _make_config(
         tmp_path,

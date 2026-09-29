@@ -1,5 +1,5 @@
 import { pwc, tokens } from "../lib/theme";
-import { ui, uiClass } from "../lib/uiStyles";
+import { ui } from "../lib/uiStyles";
 import { AnimatedNumber } from "./AnimatedNumber";
 
 // ---------------------------------------------------------------------------
@@ -22,9 +22,6 @@ export interface StatTilesProps {
   active?: number;
   drafts?: number;
   completedThisMonth?: number;
-  /** When provided AND drafts > 0, a "Clear drafts" action shows on the
-   *  drafts tile to sweep abandoned drafts (E3). Omitted → no action. */
-  onClearDrafts?: () => void;
 }
 
 /** Show the number (counting up when it changes), or a dash while it's
@@ -40,9 +37,7 @@ export function StatTiles({
   active,
   drafts,
   completedThisMonth,
-  onClearDrafts,
 }: StatTilesProps) {
-  const canClearDrafts = onClearDrafts != null && (drafts ?? 0) > 0;
   return (
     <div className="stat-tiles" style={styles.grid}>
       {/* Actionable work leads: review queue first, unstarted drafts second. */}
@@ -54,20 +49,7 @@ export function StatTiles({
       <div style={styles.tile}>
         <span style={styles.label}>Not started</span>
         <Count n={drafts} />
-        <span style={styles.labelRow}>
-          <span style={styles.detail}>Saved drafts</span>
-          {canClearDrafts && (
-            <button
-              type="button"
-              className={uiClass.btnQuiet}
-              style={styles.clearLink}
-              onClick={onClearDrafts}
-              data-testid="clear-drafts"
-            >
-              Clear drafts
-            </button>
-          )}
-        </span>
+        <span style={styles.detail}>Saved drafts</span>
       </div>
       <div style={styles.tile}>
         <span style={styles.label}>Processing</span>
@@ -94,19 +76,6 @@ const styles = {
     flexDirection: "column" as const,
     gap: pwc.space.xs,
     minWidth: 0,
-  } as React.CSSProperties,
-  labelRow: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: pwc.space.sm,
-  } as React.CSSProperties,
-  clearLink: {
-    ...ui.buttonQuiet,
-    padding: "2px 6px",
-    minHeight: 24,
-    fontSize: 12,
-    color: tokens.color.action.primary,
   } as React.CSSProperties,
   value: {
     fontFamily: pwc.fontHeading,

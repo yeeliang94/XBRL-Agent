@@ -104,10 +104,11 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
   const readComplete = pagesComplete || (total > 0 && captured >= total);
   // Page counts exclude the cross-page continuation checks that can finish later.
   const checkComplete = pagesComplete;
-  return <section aria-label="Document preparation" style={{ padding: `${pwc.space.lg}px 0`, borderBottom: `1px solid ${pwc.grey200}`, marginBottom: pwc.space.lg }}>
+  const missingDocument = snapshot == null && connectionError?.startsWith("Document not found.");
+  return <section aria-label="Document preparation" style={{ padding: `${pwc.space.lg}px 0`, borderBottom: `1px solid ${pwc.grey200}` }}>
     <div style={{ display: "flex", alignItems: "center", gap: pwc.space.md, flexWrap: "wrap" }}>
       <h2 style={{ ...ui.sectionTitle, margin: 0 }}>Document preparation</h2>
-      <span>{snapshot ? labels[snapshot.status] : "Connecting"}</span>
+      <span>{snapshot ? labels[snapshot.status] : missingDocument ? "Unavailable" : "Connecting"}</span>
       {snapshot?.started_at != null && (active
         ? <ElapsedTimer startTime={snapshot.started_at * 1000} isRunning />
         : snapshot.updated_at != null ? <span>{formatElapsedMs(Math.max(0, snapshot.updated_at - snapshot.started_at) * 1000)}</span> : null)}
@@ -115,7 +116,7 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
       {snapshot?.status === "not_started" && <button style={ui.buttonSecondary} disabled={busy} onClick={() => void act("retry")}>Start preparation</button>}
       {(snapshot?.status === "failed" || snapshot?.status === "cancelled") && <button style={ui.buttonSecondary} disabled={busy} onClick={() => void act("retry")}>Retry preparation</button>}
     </div>
-    <div style={{ marginTop: pwc.space.lg }}>
+    {!missingDocument && <div style={{ marginTop: pwc.space.lg }}>
       <PipelineStages
         currentPhase={null}
         preparationPhase={phase}
@@ -125,10 +126,10 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
         isRunning={false}
         isComplete={false}
       />
-    </div>
-    <p role="status" aria-live="polite">{connectionError ?? snapshot?.message ?? "Connecting to document preparation…"}</p>
+    </div>}
+    <p role="status" aria-live="polite" style={{ margin: `${pwc.space.md}px 0` }}>{connectionError ?? snapshot?.message ?? "Connecting to document preparation…"}</p>
     {snapshot?.prepared && snapshot.status !== "succeeded" && (
-      <p>Document prepared. {active && mapActive ? "Document map and notes inventory are being built." : "Notes inventory is not ready."}</p>
+      <p style={{ margin: `${pwc.space.md}px 0` }}>Document prepared. {active && mapActive ? "Document map and notes inventory are being built." : "Notes inventory is not ready."}</p>
     )}
     {actionRequired !== "none" || snapshot?.status === "not_started" ? (
       <p style={{ margin: `0 0 ${pwc.space.md}px`, color: actionRequired === "confirm_setup" ? pwc.orange700 : pwc.grey700 }}>
@@ -141,7 +142,7 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
             : "Start document preparation."}
       </p>
     ) : null}
-    <ol aria-label="Document preparation steps" style={{ listStyle: "none", margin: 0, padding: 0, borderTop: `1px solid ${pwc.grey200}` }}>
+    {!missingDocument && <ol aria-label="Document preparation steps" style={{ listStyle: "none", margin: 0, padding: 0, borderTop: `1px solid ${pwc.grey200}` }}>
       {[
         {
           label: "Read source pages",
@@ -164,14 +165,14 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
           state: actionRequired === "confirm_setup" ? "Action required" : "Waiting",
         },
       ].map((step) => (
-        <li key={step.label} style={{ display: "grid", gridTemplateColumns: "minmax(180px, 1fr) minmax(220px, 2fr) auto", gap: pwc.space.md, alignItems: "center", padding: `${pwc.space.sm}px 0`, borderBottom: `1px solid ${pwc.grey200}`, fontSize: 13 }}>
-          <strong style={{ fontFamily: pwc.fontHeading, fontWeight: 600 }}>{step.label}</strong>
+        <li key={step.label} className="preparation-step-row" style={{ display: "grid", gridTemplateColumns: "minmax(180px, 1fr) minmax(220px, 2fr) auto", gap: pwc.space.md, alignItems: "center", padding: `${pwc.space.sm}px 0`, borderBottom: `1px solid ${pwc.grey200}`, fontSize: 14 }}>
+          <strong style={{ fontFamily: pwc.fontHeading, fontWeight: pwc.weight.semibold }}>{step.label}</strong>
           <span style={{ color: pwc.grey700 }}>{step.detail}</span>
           <span style={{ color: step.state === "Action required" ? pwc.orange700 : step.state === "Stopped" ? pwc.errorText : pwc.grey700, fontWeight: step.state === "Working" || step.state === "Action required" ? 600 : 400 }}>
             {step.state}
           </span>
         </li>
       ))}
-    </ol>
+    </ol>}
   </section>;
 }
