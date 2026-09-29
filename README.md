@@ -46,6 +46,10 @@ cp .env.example .env
 
 Web UI at http://localhost:8002
 
+The first start installs dependencies and builds the web UI. Later starts skip
+those steps until the dependency files or frontend source change, or a built
+frontend asset goes missing.
+
 ### CLI (bypass web UI)
 
 Use the repository virtual environment explicitly. Activation is local to one

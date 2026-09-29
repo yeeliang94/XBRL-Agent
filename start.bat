@@ -109,6 +109,19 @@ if not exist "venv" (
     echo Creating virtual environment...
     %PYTHON_CMD% -m venv venv
 )
+call venv\Scripts\activate.bat
+
+:: ---- Install Python dependencies only when declarations change ----
+venv\Scripts\python.exe scripts\startup_cache.py check pip
+if errorlevel 1 (
+    echo Installing Python dependencies...
+    venv\Scripts\python.exe -m pip install -r requirements.txt -c constraints.txt -q
+    if errorlevel 1 exit /b 1
+    venv\Scripts\python.exe scripts\startup_cache.py mark pip
+    if errorlevel 1 exit /b 1
+) else (
+    echo Python dependencies unchanged; skipping install.
+)
 
 :: ---- Find Node.js (installed but not on PATH) ----
 where node >nul 2>&1
@@ -124,36 +137,38 @@ if errorlevel 1 (
 )
 echo Node.js: & node --version
 
-:: Activate venv
-call venv\Scripts\activate.bat
-
-:: Install Python deps
-echo Installing Python dependencies...
-venv\Scripts\python.exe -m pip install -r requirements.txt -c constraints.txt -q
-
 :: ---- Build frontend (if web/ exists) ----
 if exist "web\package.json" (
-    echo Installing frontend dependencies...
-    cd web
-    call npm install
-    echo Building frontend...
-    call npm run build
-    cd ..
+    venv\Scripts\python.exe scripts\startup_cache.py check npm
+    if errorlevel 1 (
+        echo Installing frontend dependencies...
+        pushd web
+        call npm install
+        if errorlevel 1 exit /b 1
+        popd
+        venv\Scripts\python.exe scripts\startup_cache.py mark npm
+        if errorlevel 1 exit /b 1
+    ) else (
+        echo Frontend dependencies unchanged; skipping install.
+    )
+    venv\Scripts\python.exe scripts\startup_cache.py check build
+    if errorlevel 1 (
+        echo Building frontend...
+        pushd web
+        call npm run build
+        if errorlevel 1 exit /b 1
+        popd
+        venv\Scripts\python.exe scripts\startup_cache.py mark build
+        if errorlevel 1 exit /b 1
+    ) else (
+        echo Frontend unchanged; skipping build.
+    )
 ) else (
     echo WARNING: web/package.json not found. Skipping frontend build.
 )
 goto :start_server
 
 :skip_frontend
-:: Still need Python deps even if no frontend
-if not exist "venv" (
-    echo Creating virtual environment...
-    %PYTHON_CMD% -m venv venv
-)
-call venv\Scripts\activate.bat
-echo Installing Python dependencies...
-venv\Scripts\python.exe -m pip install -r requirements.txt -c constraints.txt -q
-
 :start_server
 echo.
 echo Starting server on http://localhost:8002

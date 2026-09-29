@@ -46,19 +46,32 @@ fi
 # Activate venv
 source venv/bin/activate
 
-# Install Python deps
-echo "Installing Python dependencies..."
-venv/bin/python -m pip install -r requirements.txt -c constraints.txt -q
+# Install dependencies only when their declarations change.
+if ! venv/bin/python scripts/startup_cache.py check pip; then
+    echo "Installing Python dependencies..."
+    venv/bin/python -m pip install -r requirements.txt -c constraints.txt -q
+    venv/bin/python scripts/startup_cache.py mark pip
+else
+    echo "Python dependencies unchanged; skipping install."
+fi
 
 # Check Node.js
 if command -v node &> /dev/null; then
     if [ -f "web/package.json" ]; then
-        echo "Installing frontend dependencies..."
-        cd web
-        npm install
-        echo "Building frontend..."
-        npm run build
-        cd ..
+        if ! venv/bin/python scripts/startup_cache.py check npm; then
+            echo "Installing frontend dependencies..."
+            (cd web && npm install)
+            venv/bin/python scripts/startup_cache.py mark npm
+        else
+            echo "Frontend dependencies unchanged; skipping install."
+        fi
+        if ! venv/bin/python scripts/startup_cache.py check build; then
+            echo "Building frontend..."
+            (cd web && npm run build)
+            venv/bin/python scripts/startup_cache.py mark build
+        else
+            echo "Frontend unchanged; skipping build."
+        fi
     fi
 else
     echo "WARNING: Node.js not found. Frontend will not be built."
