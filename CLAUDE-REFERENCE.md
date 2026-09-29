@@ -2643,7 +2643,8 @@ no-write failure, and is not retried (`NotesDeps.placement_conflicts_recorded`,
 `tests/test_notes_reviewer_tools.py`, `tests/test_notes_turn_timeout.py` and
 `tests/test_notes12_coverage_e2e.py`.
 The prepared map refuses a numbered note whose ownership starts before its own
-printed number (`scout/prepared_map.py::_refuse_text_before_note_heading`),
+printed number, including headings captured as paragraphs
+(`scout/prepared_map.py::_refuse_text_before_note_heading`),
 ignoring text repeated on other pages, so the repair loop gives a company
 introduction its own owner instead of folding it into Note 1. Pinned by
 `tests/test_prepared_document_map.py`. An open placement

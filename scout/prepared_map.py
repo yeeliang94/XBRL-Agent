@@ -209,7 +209,7 @@ def _refuse_text_before_note_heading(blocks, assigned, block_text, text_pages) -
             continue
         note_id = item["source_note_id"]
         first_owned.setdefault(note_id, position)
-        if note_id in heading_at or block.get("block_kind") not in (None, "heading"):
+        if note_id in heading_at:
             continue
         number = re.escape(str(item["source_note_num"]).strip())
         if re.match(rf"(?:note\s+)?{number}(?:[.:)]\s|\s)", block_text[block["block_id"]] + " "):
