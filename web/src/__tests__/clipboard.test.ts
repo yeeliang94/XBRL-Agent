@@ -19,6 +19,33 @@ test("sub-note wrapper indents prose and a full-width table together", () => {
   expect(doc.body.querySelector("h3")?.textContent).toBe("8 Revenue");
 });
 
+test("copy inserts blank paragraphs between prose and table blocks", () => {
+  const html = "<h3>Note</h3><p>First.</p><p>Second.</p>" +
+    "<table><tr><td><p>Cell.</p></td></tr></table><p>After.</p>";
+  const doc = new DOMParser().parseFromString(decorateHtmlForClipboard(html), "text/html");
+  const blocks = Array.from(doc.body.firstElementChild!.children);
+  expect(blocks.map((block) => block.tagName)).toEqual([
+    "H3", "P", "P", "P", "P", "TABLE", "P", "P",
+  ]);
+  expect(doc.querySelectorAll('p[data-mtool-spacer="1"]')).toHaveLength(3);
+  expect(doc.querySelector('table [data-mtool-spacer="1"]')).toBeNull();
+});
+
+test("copy indents nested source headings and their paragraphs", () => {
+  const html = "<h3>3. Estimates</h3><p>Introduction.</p>" +
+    "<h4>(a) Judgements</h4><p>First section.</p>" +
+    "<h4>(b) Uncertainty</h4><p>Second section.</p>";
+  const doc = new DOMParser().parseFromString(decorateHtmlForClipboard(html), "text/html");
+  const headings = Array.from(doc.querySelectorAll("h3, h4"));
+  expect(headings[0].getAttribute("style")).not.toContain("margin-left");
+  expect(headings.slice(1).every((h) => h.getAttribute("style")?.includes("margin-left: 2em")))
+    .toBe(true);
+  for (const text of ["First section.", "Second section."]) {
+    const p = Array.from(doc.querySelectorAll("p")).find((node) => node.textContent === text);
+    expect(p?.getAttribute("style")).toContain("margin-left: 2em");
+  }
+});
+
 test("double border fallback preserves content, spans, colour and other edges", () => {
   const html = '<p><u>Text underline</u></p><table data-source-styled="true" style="border:1pt double #123456"><tr><td colspan="2" style="border-width:1px 2px 4pt 1px; border-style:double hidden double solid; border-color:rgb(12, 34, 56)">Total 3190</td></tr></table>';
   const out = decorateHtmlForClipboard(html, DEFAULT_FORMAT_OPTIONS);

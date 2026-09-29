@@ -18,6 +18,10 @@ test("a missing document stops polling and requests a new upload", async () => {
   render(<DocumentPreparation sessionId="gone" />);
   await act(async () => { await Promise.resolve(); });
   expect(screen.getByRole("status")).toHaveTextContent("Upload it again");
+  expect(screen.getByText("Unavailable")).toBeInTheDocument();
+  expect(screen.queryByText("Connecting")).toBeNull();
+  expect(screen.queryByLabelText("Workflow progress")).toBeNull();
+  expect(screen.queryByLabelText("Document preparation steps")).toBeNull();
   await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
   expect(request).toHaveBeenCalledTimes(1);
   expect(screen.queryByRole("button")).toBeNull();

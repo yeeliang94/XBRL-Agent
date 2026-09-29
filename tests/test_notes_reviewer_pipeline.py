@@ -830,9 +830,13 @@ def test_notes_reviewer_time_budget_scales_with_packet_but_stays_bounded():
 
     budget = server._notes_reviewer_wallclock_limit
     assert budget(300.0, 25) == 300.0
-    assert budget(300.0, 74) == 447.0
-    assert budget(300.0, 200) == 480.0
+    assert budget(300.0, 45) == 500.0
+    assert budget(300.0, 55) == 600.0
+    assert budget(300.0, 200) == 600.0
     assert budget(0.1, 74) == 0.1
+    assert budget(450.0, 74) == 450.0
+    assert budget(900.0, 74) == 600.0
+    assert budget(float("inf"), 74) == 600.0
 
 
 def test_reviewer_pass_skips_when_no_findings(db_path: Path, tmp_path):

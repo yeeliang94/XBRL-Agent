@@ -143,7 +143,7 @@ ADVANCED_SETTINGS: tuple[AdvancedSetting, ...] = (
     ),
     AdvancedSetting(
         "XBRL_NOTES_VALIDATOR_WALLCLOCK_S", "Notes reviewer time limit (seconds)",
-        "Longest the notes reviewer may run. 0 means no limit.",
+        "Default scales from 5 to 10 minutes with review size. A positive override sets a fixed limit up to 10 minutes; 0 uses the 10-minute limit.",
         _LIMITS, "float", 300.0, minimum=0, restart=True,
     ),
     AdvancedSetting(

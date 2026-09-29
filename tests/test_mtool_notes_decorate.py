@@ -70,8 +70,10 @@ def test_house_spacing_separates_paragraphs_and_adjacent_tables():
             "<table><tr><td>Other</td><td>265</td></tr></table>")
     out = BeautifulSoup(decorate_notes_html(
         html, NotesTableStyle.from_theme(house_style())), "html.parser")
-    assert len(out.find_all("p")) == 2
-    assert all("margin: 0 0 16px 0" in p["style"] for p in out.find_all("p"))
+    prose = [p for p in out.find_all("p") if p.get("data-mtool-spacer") != "1"]
+    assert len(prose) == 2
+    assert all("margin: 0 0 16px 0" in p["style"] for p in prose)
+    assert len(out.select('p[data-mtool-spacer="1"]')) == 3
     assert all("margin: 16px 0" in t["style"] for t in out.find_all("table"))
     header = out.find("th", string="2024 RM'000")
     assert header is not None and "text-align: right" in header["style"]
@@ -106,6 +108,33 @@ def test_subnote_section_indents_its_table_and_prose_together():
     assert section.table is not None
     assert "width: 100%" in section.table["style"]
     assert "margin-left" not in soup.h3.get("style", "")
+
+
+def test_prose_and_table_boundaries_have_native_blank_paragraphs():
+    html = ("<h3>Note</h3><p>First.</p><p>Second.</p>"
+            "<table><tr><td><p>Cell.</p></td></tr></table><p>After.</p>")
+    soup = BeautifulSoup(decorate_notes_html(html), "html.parser")
+    blocks = [child for child in soup.div.children if getattr(child, "name", None)]
+    assert [block.name for block in blocks] == [
+        "h3", "p", "p", "p", "p", "table", "p", "p",
+    ]
+    spacers = soup.select('p[data-mtool-spacer="1"]')
+    assert len(spacers) == 3
+    assert all(spacer.get_text() == "\xa0" for spacer in spacers)
+    assert not soup.table.select('p[data-mtool-spacer="1"]')
+
+
+def test_nested_source_headings_indent_their_body_for_mtool():
+    html = ("<h3>3. Estimates</h3><p>Introduction.</p>"
+            "<h4>(a) Judgements</h4><p>First section.</p>"
+            "<h4>(b) Uncertainty</h4><p>Second section.</p>")
+    soup = BeautifulSoup(decorate_notes_html(html), "html.parser")
+    headings = soup.find_all(["h3", "h4"])
+    assert "margin-left" not in headings[0].get("style", "")
+    assert "margin-left" not in soup.find("p", string="Introduction.").get("style", "")
+    assert all("margin-left: 2em" in h.get("style", "") for h in headings[1:])
+    for text in ("First section.", "Second section."):
+        assert "margin-left: 2em" in soup.find("p", string=text).get("style", "")
 
 
 # --- table decoration -------------------------------------------------------

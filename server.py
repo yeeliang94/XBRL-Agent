@@ -1373,10 +1373,11 @@ NOTES_VALIDATOR_WALLCLOCK_TIMEOUT: float = _resolve_wallclock(
 
 
 def _notes_reviewer_wallclock_limit(configured: float, n_items: int) -> float:
-    """Allow a bounded extra review window for unusually large notes packets."""
+    """Scale the default review window, with a ten-minute ceiling."""
+    hard_cap = 600.0
     if configured != 300.0:
-        return configured  # An explicit operator or test override is a fixed cap.
-    return min(480.0, configured + 3.0 * max(0, n_items - 25))
+        return min(hard_cap, configured)  # An operator override is a fixed cap.
+    return min(hard_cap, configured + 10.0 * max(0, n_items - 25))
 
 
 NOTES_FORMATTER_WALLCLOCK_TIMEOUT: float = _resolve_wallclock(

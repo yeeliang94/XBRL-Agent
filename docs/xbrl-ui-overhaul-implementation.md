@@ -1,15 +1,16 @@
 # XBRL focused-workspace implementation matrix
 
-Status: implemented. This matrix is maintained with the code,
-canonical design specification, and pinning tests. Direction A (“Focused
-workspace”) is the selected production direction. Prototype directions B/C and
-the prototype switcher are reference-only.
+Status: maintained implementation reference. The shared rules are in use, but
+individual screens still have local typography and spacing deviations; verify
+the current code when changing a screen. The canonical design guide governs
+the UI. Direction A (“Focused workspace”) supplies the selected composition
+examples. Prototype directions B/C and the switcher are reference-only.
 
 ## Governance and contracts
 
 | Requirement | Implementation | Verification |
 | --- | --- | --- |
-| Keep the XBRL authority in lockstep | Update `docs/xbrl-design-system.html`, Direction A behavior, `theme.ts`, `uiStyles.ts`, `index.css`, and the shared parity tests together. `docs/pwc-design-system.html` is compatibility-only. | Design-system, CSS-token, contrast, UI-style, and motion tests. |
+| Keep the XBRL authority in lockstep | Follow `docs/xbrl-design-system.html`; update the affected tokens, primitives, state rules, and pinning tests together when changing a shared UI rule. Direction A supplies examples. | Focused design-system, component, and state tests for the changed rule. |
 | Preserve inline component styling | Keep stable geometry, type, color, and layout in inline `style={}` objects. Limit CSS classes to hover, focus, animation, responsive composition, and editor states. | Source/pinning tests and final diff audit. |
 | Preserve product contracts | No change to authentication, authorization, canonical facts, run lifecycle, API routes, persistence, reviewer jobs, or workbook generation. | Existing frontend suite; backend pinning tests applicable to unchanged boundaries. |
 | Preserve tab behavior | Keep `Run detail sections` and `Sheet-12 sub-agents` as separately labelled tablists. Keep heavy run panels conditionally mounted. | `RunDetailView`, `NotesSubTabBar`, routing tests. |
@@ -21,11 +22,11 @@ the prototype switcher are reference-only.
 | --- | --- | --- | --- |
 | Narrow palette | Orange ladder, black/white, cool Grey 50–500 in `theme.ts`. | Orange is limited to identity, current activity, and attention. | Exact token/spec parity. |
 | White work surface | `tokens.surface.canvas/default`; `surface.navigation` is Grey 50. | White page and review canvas with one persistent grey rail. | CSS/token parity and shell tests. |
-| Text hierarchy | Black primary/body; 64% secondary; 46% tertiary. | Three main levels: 28px page, 16px section, 14px body; small metadata remains valid. | UI-style and contrast tests. |
+| Text hierarchy | Black primary/body; 64% secondary; 46% tertiary. | 28px page, 16px section, 14px body; 13px secondary metadata and 12px short references only. | UI-style and contrast tests. |
 | Bundled variable Inter type | `@fontsource-variable/inter` is loaded once in `main.tsx`; shared heading/body stacks in `theme.ts` prefer `Inter Variable`. | Intermediate weights render consistently across platforms instead of collapsing to fallback font weights. | CSS/spec parity and production build. |
 | Spacing/radius | Existing 4px spacing scale; 6/8/12px radii. | Compact controls and flat large surfaces. | UI-style parity. |
 | Flat surfaces | `ui.flatList`, `ui.flatRow`, `ui.paneDivider`; shadows reserved for overlaps. | Divided rows and panes replace unnecessary nested cards. | UI-style parity and component tests. |
-| Primary action hierarchy | Black fill, white text, restrained orange inset hover cue. | Orange is no longer a large button fill. | Button/contrast/CSS tests. |
+| Primary action hierarchy | Black fill, white text, and an opacity change on hover. | Orange marks identity, activity, and attention rather than a large button fill. | Button/contrast/CSS tests. |
 | Status language | Working/attention orange, finished black, waiting grey; every state retains text/icon. | Agent rows, pipeline, history, toast, and review status remain understandable without color. | Agent/status/component tests. |
 | Focus | 2px black focus ring with 2px offset. | Visible on white, grey, and orange-tint surfaces without adding another accent. | CSS/forced-colors pins. |
 
@@ -34,7 +35,7 @@ the prototype switcher are reference-only.
 | State | Implementation | Responsive/accessibility behavior | Tests |
 | --- | --- | --- | --- |
 | Default workspace | 220px sticky Grey-50 sidebar, white workspace, 64px sticky context bar. | Top-level destinations remain real links with stable URLs and `aria-current`. Skip link still targets `main#main-content`. | `App`, routing, and `TopNav` tests. |
-| Review-focused workspace | Collapse the rail to 72px only in Figures and Notes review while preserving each link’s accessible text. Overview and live-run monitoring keep the full rail. | Glyphs are decorative; labels remain in the accessibility tree when visually compacted. | Shell class/ARIA and routing tests. |
+| Collapsed navigation | The operator may collapse the rail to 72px with the explicit toggle on any route; the choice persists for the session. | Glyphs are decorative; labels remain in the accessibility tree when visually compacted. | Shell class/ARIA and routing tests. |
 | Mobile | Fixed 64px bottom navigation with horizontally scrollable destinations; compact sticky top context. | No destination is removed; content receives bottom clearance; targets stay at least 44px. Hidden labels reappear as visible hover/focus tooltips. | CSS responsive pinning and browser QA. |
 | Auth/admin utilities | Preserve existing signed-in visibility and server authorization; Settings remains directly reachable and Logout stays in the top context bar at mobile widths. | UI visibility is never treated as a security boundary. | Existing auth/nav/settings and shell-placement tests. |
 
@@ -78,7 +79,7 @@ the canonical run path remain unchanged.
 - Icon-only actions keep accessible names and shared hover/focus tooltips.
   Focus uses a visible black ring, sticky regions leave scroll margin, and
   forced colors retain boundaries.
-- Controls use the exact 40px default and 34px compact Direction A geometry.
+- Controls use the guide's 40px default and 34px compact geometry.
   Mobile navigation remains at least 44px high.
 - Reduced motion presents the same final state immediately.
 

@@ -381,8 +381,7 @@ the canonical application design system and the final authority when UI
 documents differ. Direction A in
 [`docs/prototype-ui-overhaul.html`](docs/prototype-ui-overhaul.html) supplies
 composition examples and screen-state context; it does not restore controls or
-copy removed by the canonical guide. `docs/pwc-design-system.html` is a
-compatibility mirror for older pinning references, not a design authority.
+copy removed by the canonical guide.
 Tokens live in
 `web/src/lib/theme.ts` (the `pwc` object — imported by ~30 components, so it
 is the single cascade point); shared component primitives in
@@ -1042,6 +1041,11 @@ and mTool decorators add the same 2em left margin to each wrapper. The
 formatter's content check protects these boundaries. Word-source content is
 not given new section wrappers. Native mTool layout for newly indented wide
 tables still requires a save/reopen check before declaring full fidelity.
+At copy/export time, source heading levels without wrappers also give deeper
+headings and their following prose a 2em offset per level. Adjacent paragraphs
+and tables receive marked, empty transport paragraphs so a native editor that
+ignores CSS margins still displays a blank line. Neither addition is stored in
+`notes_cells`.
 The writer moves a `sub_note` heading inside a wrapper only when that wrapper
 is the whole body; peer sections and loose introductory text keep the heading
 above them. Rendered-length truncation enters a marked section and keeps its
@@ -1512,7 +1516,11 @@ finer-grained guards firing. Override via `XBRL_CORRECTION_WALLCLOCK_S`
 (positive seconds; 0 disables). `NOTES_VALIDATOR_WALLCLOCK_TIMEOUT`
 (legacy name) is the same defence for the notes-reviewer pass — the pass
 inherited the old validator's constants and pseudo-agent id when it
-replaced it (gotcha #22).
+replaced it (gotcha #22). Its default budget is 300 seconds through 25 open
+items, then 10 additional seconds per item, capped at 600 seconds. A positive
+operator override is fixed but still capped at 600 seconds; 0 selects that
+ceiling. The wall-clock guard stops new model thinking at the deadline while
+an already issued tool call may finish under its separate timeout.
 
 ### 19. Pipeline-stage + cross-check progress events
 
@@ -2073,7 +2081,8 @@ inventory warning, Next issue navigation, and Needs attention filter.
 
 **Prose preservation at export (Plan A).** The notes exporter compares canonical
 content, heading/list structure and emphasis before and after destination
-decoration. The canonical merged-cell geometry stays in `notes_cells`; the
+decoration, excluding only exact empty transport paragraphs added between prose
+and table blocks. The canonical merged-cell geometry stays in `notes_cells`; the
 mTool-bound copy expands spans to empty ordinary cells because TX27 cannot
 mouse-resize or recolour a table containing a merge. The comparison uses that
 exact compatibility expansion as its expected structure, so any other structural
@@ -2566,6 +2575,17 @@ derives cell page references from the blocks it actually placed so formatting
 does not depend on optional model-supplied page metadata.
 Standalone blank drafts require a nonempty assigned inventory whose every note
 has a reported source gap; one gap cannot account for other unwritten notes.
+On prepared runs, Corporate Information and Accounting Policies finish before
+List-of-Notes fan-out so its cross-sheet skip receipts can be checked against
+live source placements. A batch receipt is rejected with the unplaced section
+IDs when any assigned note still has unsettled source parts; a skip claim alone
+cannot close those gaps. An individual-part write names the rest of its smallest
+source section in the tool result so an intentional split stays visible to the
+agent. Reviewer source relinks refuse to orphan parts formerly
+placed in the target cell. Repeated undecided-part findings are grouped by source
+note in the reviewer packet, while each block retains its separate integrity
+finding and identity. Pinned by `tests/test_notes_coordinator.py`,
+`tests/test_notes_source_tools.py`, and `tests/test_notes_source_write.py`.
 Reviewers enforce source relinking even when a legacy rollout setting is off.
 The user-authorized best-effort policy permits reconstruction of unreadable
 wording and exclusion of administrative stamps. Readability uncertainty alone

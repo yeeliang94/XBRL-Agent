@@ -409,8 +409,8 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     expect(within(inventory).getByText("1 sub-note needs review")).toBeVisible();
     const subnote = within(inventory).getByRole("button", { name: /1\(a\).*Not checked/i });
     expect(subnote).toBeVisible();
-    expect(within(subnote).getByText("Review incomplete")).toBeVisible();
     fireEvent.click(subnote);
+    expect(within(subnote).getByText("Review incomplete")).toBeVisible();
     expect(within(inventory).getByTestId("source-note-1")).toHaveAttribute("aria-current", "true");
   });
 
@@ -2929,6 +2929,7 @@ describe("NotesReviewTab — AI formatter", () => {
     expect(getComputedStyle(reviewSummary).paddingLeft).toBe(getComputedStyle(subnote).paddingLeft);
     fireEvent.click(within(inventory).getByRole("button", { name: /2\(a\).*Not checked/i }));
     expect(screen.getByTestId("sheet-title")).toHaveTextContent("Corporate Information");
+    expect(within(inventory).getByText(/Exact field not recorded/)).toBeVisible();
     const destinations = screen.getByLabelText("Destinations for note 2");
     expect(within(destinations).queryByRole("button", { name: "Corporate Information" })).not.toBeInTheDocument();
     expect(within(destinations).queryByRole("button", { name: "Summary of Accounting Policies" })).not.toBeInTheDocument();
@@ -2964,6 +2965,32 @@ describe("NotesReviewTab — AI formatter", () => {
 
     expect(screen.getByTestId("sheet-title")).toHaveTextContent("Summary of Accounting Policies");
     expect(onActiveCellPages).toHaveBeenLastCalledWith([16, 17, 18]);
+  });
+
+  test("sub-note in a fan-out note opens its own field", async () => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
+      String(input).endsWith("/notes_cells") ? SAMPLE : String(input).endsWith("/notes-coverage") ? {
+        rows: [{
+          note_num: 2, title: "Accounting policies", status: "placed",
+          placements: [
+            { sheet: "Notes-CI", row: 4, row_label: "Principal activities", kind: "primary" },
+            { sheet: "Notes-SummaryofAccPol", row: 7, row_label: "Revenue", kind: "fan_out" },
+          ],
+          page_lo: 16, page_hi: 18,
+          subnotes: [{
+            subnote_ref: "2.1", title: "Revenue policy", state: "verified",
+            placements: [{ sheet: "Notes-SummaryofAccPol", row: 7, row_label: "Revenue", kind: "fan_out" }],
+          }],
+        }],
+      } : {},
+    ), { status: 200 })) as typeof fetch;
+
+    render(<NotesReviewTab runId={42} />);
+    const inventory = screen.getByRole("region", { name: "Source note inventory" });
+    await within(inventory).findByTestId("source-note-2");
+    fireEvent.click(within(inventory).getByRole("button", { name: "2.1 Revenue policy" }));
+    expect(screen.getByTestId("sheet-title")).toHaveTextContent("Summary of Accounting Policies");
+    expect(screen.getByText("Revenue", { exact: true })).toBeInTheDocument();
   });
 
   test("does not expose a remove-formatting action after completion", async () => {

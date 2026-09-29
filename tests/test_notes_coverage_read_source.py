@@ -65,6 +65,110 @@ def test_coverage_comes_from_notes_coverage_rows(client_and_run):
     )
 
 
+def test_coverage_exposes_child_destinations(client_and_run):
+    client, run_id, server_module = client_and_run
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        repo.replace_notes_coverage_for_run(conn, run_id, [
+            {"note_num": 2, "title": "Accounting policies", "status": "placed", "placements": []},
+            {"note_num": 2, "subnote_ref": "2.1", "title": "Revenue", "status": "cited",
+             "placements": [{"sheet": "Notes-SummaryofAccPol", "row": 7, "row_label": "Revenue", "kind": "fan_out"}]},
+        ])
+    row = client.get(f"/api/runs/{run_id}/notes-coverage").json()["rows"][0]
+    assert row["subnotes"][0]["placements"] == [
+        {"sheet": "Notes-SummaryofAccPol", "row": 7, "row_label": "Revenue", "kind": "fan_out"},
+    ]
+
+
+def test_existing_coverage_uses_durable_subnote_provenance(client_and_run):
+    client, run_id, server_module = client_and_run
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        repo.replace_notes_coverage_for_run(conn, run_id, [
+            {"note_num": 2, "title": "Accounting policies", "status": "placed",
+             "placements": [{"sheet": "Notes-SummaryofAccPol", "row": 7,
+                             "row_label": "Revenue", "kind": "fan_out"}]},
+            {"note_num": 2, "subnote_ref": "2.1", "title": "Revenue", "status": "cited"},
+        ])
+        conn.execute(
+            "INSERT INTO notes_cell_provenance(run_id, sheet, row, row_label, source_note_refs) "
+            "VALUES (?, 'Notes-SummaryofAccPol', 7, 'Revenue', '[\"2.1\"]')",
+            (run_id,),
+        )
+        conn.execute(
+            "INSERT INTO notes_cells(run_id, sheet, row, label, html, updated_at) "
+            "VALUES (?, 'Notes-SummaryofAccPol', 7, 'Revenue', '<p>Revenue policy</p>', '')",
+            (run_id,),
+        )
+    row = client.get(f"/api/runs/{run_id}/notes-coverage").json()["rows"][0]
+    assert row["subnotes"][0]["placements"] == [
+        {"sheet": "Notes-SummaryofAccPol", "row": 7, "row_label": "Revenue", "kind": "primary"},
+    ]
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        conn.execute(
+            "DELETE FROM notes_cells WHERE run_id = ? AND sheet = 'Notes-SummaryofAccPol' AND row = 7",
+            (run_id,),
+        )
+    row = client.get(f"/api/runs/{run_id}/notes-coverage").json()["rows"][0]
+    assert row["subnotes"][0]["placements"] == []
+
+
+def test_existing_coverage_classifies_recovered_policy_fan_out(client_and_run):
+    client, run_id, server_module = client_and_run
+    sheet = "Notes-SummaryofAccPol"
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        repo.replace_notes_coverage_for_run(conn, run_id, [
+            {"note_num": 2, "title": "Accounting policies", "status": "placed"},
+            {"note_num": 2, "subnote_ref": "2.1", "title": "Revenue", "status": "cited"},
+        ])
+        for row, label in ((7, "Revenue"), (8, "Revenue recognition")):
+            conn.execute(
+                "INSERT INTO notes_cell_provenance(run_id, sheet, row, row_label, source_note_refs) "
+                "VALUES (?, ?, ?, ?, '[\"2.1\"]')",
+                (run_id, sheet, row, label),
+            )
+            conn.execute(
+                "INSERT INTO notes_cells(run_id, sheet, row, label, html, updated_at) "
+                "VALUES (?, ?, ?, ?, '<p>Policy text</p>', '')",
+                (run_id, sheet, row, label),
+            )
+    row = client.get(f"/api/runs/{run_id}/notes-coverage").json()["rows"][0]
+    assert [p["kind"] for p in row["subnotes"][0]["placements"]] == ["fan_out", "fan_out"]
+
+
+def test_existing_prepared_source_locates_subnote_blocks(client_and_run):
+    from notes import source_repository as source_repo
+    from notes.source_models import SourceBlock, SourceNote
+
+    client, run_id, server_module = client_and_run
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        repo.replace_notes_coverage_for_run(conn, run_id, [
+            {"note_num": 2, "title": "Accounting policies", "status": "placed",
+             "placements": [{"sheet": "Notes-SummaryofAccPol", "row": 7,
+                             "row_label": "Revenue", "kind": "primary"}]},
+            {"note_num": 2, "subnote_ref": "2.1", "title": "Revenue", "status": "verified"},
+        ])
+        generation_id = source_repo.begin_generation(conn, run_id, input_kind="pdf")
+        source_repo.write_blocks(conn, generation_id, [
+            SourceBlock("heading", "heading", 1, canonical_html="<h2>2.1 Revenue</h2>", source_note_id="note-2"),
+            SourceBlock("body", "paragraph", 2, canonical_html="<p>Revenue policy</p>", source_note_id="note-2"),
+        ])
+        source_repo.write_notes(conn, generation_id, [SourceNote("note-2", "2", "Accounting policies")])
+        source_repo.activate_generation(conn, generation_id)
+        conn.execute(
+            "INSERT INTO notes_cells(run_id, sheet, row, label, html, updated_at) "
+            "VALUES (?, 'Notes-SummaryofAccPol', 7, 'Revenue', '<p>Revenue policy</p>', '')",
+            (run_id,),
+        )
+        conn.executemany(
+            "INSERT INTO notes_block_placements(run_id, generation_id, block_id, sheet, row) "
+            "VALUES (?, ?, ?, 'Notes-SummaryofAccPol', 7)",
+            [(run_id, generation_id, block_id) for block_id in ("heading", "body")],
+        )
+    row = client.get(f"/api/runs/{run_id}/notes-coverage").json()["rows"][0]
+    assert row["subnotes"][0]["placements"] == [
+        {"sheet": "Notes-SummaryofAccPol", "row": 7, "row_label": "Revenue", "kind": "primary"},
+    ]
+
+
 def test_provenance_and_inventory_alone_do_not_produce_coverage(client_and_run):
     """Rows in the two legacy tables are NOT enough. This is the concrete
     reason the rollback plan had to change."""

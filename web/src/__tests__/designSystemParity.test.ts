@@ -97,6 +97,13 @@ describe("Direction A semantic roles", () => {
     expect(ui.pageTitle.fontSize).toBe(28);
     expect(ui.sectionTitle.fontSize).toBe(16);
     expect(ui.bodyText.fontSize).toBe(14);
+    expect(designSystem).toContain(`--type-page: ${ui.pageTitle.fontSize}px`);
+    expect(designSystem).toContain(`--type-section: ${ui.sectionTitle.fontSize}px`);
+    expect(designSystem).toContain(`--type-body: ${ui.bodyText.fontSize}px`);
+    expect(designSystem).toContain(`--type-metadata: ${ui.metadata.fontSize}px`);
+    expect(designSystem).toContain(`--weight-regular: ${pwc.weight.regular}`);
+    expect(designSystem).toContain(`--weight-control: ${pwc.weight.medium}`);
+    expect(designSystem).toContain(`--weight-emphasis: ${pwc.weight.semibold}`);
     expect(ui.buttonPrimary.minHeight).toBe(40);
     expect(ui.buttonPrimary.padding).toBe("0 15px");
     expect(ui.buttonSm.minHeight).toBe(34);

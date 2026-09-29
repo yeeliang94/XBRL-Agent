@@ -322,7 +322,8 @@ def resolve_field_collision(
                 "Choose an empty field or the catch-all field."
             )
 
-    def write(cell: tuple[str, int], block_ids: list[str], *, combine: bool = False) -> None:
+    def write(cell: tuple[str, int], block_ids: list[str], *, combine: bool = False,
+              replacing_conflict: bool = False) -> None:
         label_row = conn.execute(
             "SELECT label FROM notes_cells WHERE run_id=? AND sheet=? AND row=?",
             (run_id, *cell),
@@ -333,6 +334,7 @@ def resolve_field_collision(
             label=(label_row["label"] if label_row else "") or "",
             evidence=answer, actor="notes_reviewer",
             template_prefix=template_prefix, combine_notes=combine,
+            allow_unplaced_during_conflict_resolution=replacing_conflict,
         )
 
     written: list[tuple[str, int]] = []
@@ -342,7 +344,7 @@ def resolve_field_collision(
     elif decision == "use_proposed":
         # Replace first so the displaced note is unplaced before it moves;
         # the duplicate guard would otherwise see it in two fields.
-        write((sheet, row), proposed_ids)
+        write((sheet, row), proposed_ids, replacing_conflict=True)
         written.append((sheet, row))
         if destination is not None:
             write(destination, existing_ids)

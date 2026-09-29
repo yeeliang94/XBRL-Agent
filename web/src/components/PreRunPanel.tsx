@@ -82,32 +82,21 @@ const styles = {
     gap: pwc.space.xl,
   } as React.CSSProperties,
   heading: {
-    fontFamily: pwc.fontHeading,
-    fontWeight: pwc.weight.medium,
-    fontSize: 16,
-    color: pwc.grey900,
-    margin: 0,
+    ...ui.sectionTitle,
   } as React.CSSProperties,
   section: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.md,
+    gap: pwc.space.sm,
   } as React.CSSProperties,
   sectionLabel: {
-    fontFamily: pwc.fontHeading,
-    fontWeight: 500,
-    fontSize: 13,
-    color: pwc.grey500,
-    textTransform: "uppercase" as const,
-    letterSpacing: 0.5,
+    ...ui.bodyText,
+    fontWeight: pwc.weight.semibold,
   } as React.CSSProperties,
   setupGroup: {
     display: "flex",
     flexDirection: "column" as const,
     gap: pwc.space.lg,
-    padding: `${pwc.space.lg}px 0`,
-    borderTop: `1px solid ${pwc.grey200}`,
-    borderBottom: `1px solid ${pwc.grey200}`,
   } as React.CSSProperties,
   setupGrid: {
     display: "flex",
@@ -118,7 +107,6 @@ const styles = {
   disclosure: {
     display: "flex",
     flexDirection: "column" as const,
-    borderBottom: `1px solid ${pwc.grey200}`,
   } as React.CSSProperties,
   disclosureButton: {
     display: "flex",
@@ -126,25 +114,20 @@ const styles = {
     justifyContent: "space-between",
     gap: pwc.space.md,
     width: "100%",
-    padding: `${pwc.space.md}px 0`,
+    padding: `0 0 ${pwc.space.sm}px`,
     background: "transparent",
     border: "none",
     cursor: "pointer",
     textAlign: "left" as const,
   } as React.CSSProperties,
   disclosureTitle: {
-    fontFamily: pwc.fontHeading,
-    fontWeight: pwc.weight.medium,
-    fontSize: 14,
-    color: pwc.grey900,
+    ...ui.sectionTitle,
   } as React.CSSProperties,
   disclosureSummary: {
-    fontFamily: pwc.fontBody,
-    fontSize: 12,
-    color: pwc.grey500,
+    ...ui.metadata,
   } as React.CSSProperties,
   disclosureContent: {
-    padding: `0 0 ${pwc.space.lg}px`,
+    padding: `0 0 ${pwc.space.sm}px`,
   } as React.CSSProperties,
   detectedBadge: {
     display: "inline-flex",
@@ -161,20 +144,11 @@ const styles = {
   } as React.CSSProperties,
   // Post-scan "found notes" nudge (UX-QA #24).
   notesNudge: {
-    fontFamily: pwc.fontBody,
-    fontSize: 12,
-    color: pwc.grey800,
+    ...ui.bodyText,
     background: pwc.grey50,
     border: "none",
     borderRadius: pwc.radius.sm,
     padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
-    marginBottom: pwc.space.sm,
-  } as React.CSSProperties,
-  divider: {
-    height: 1,
-    background: pwc.grey200,
-    border: "none",
-    margin: 0,
   } as React.CSSProperties,
   runButton: {
     ...ui.buttonPrimary,
@@ -248,7 +222,7 @@ function DisclosureSection({
         aria-controls={id}
         style={styles.disclosureButton}
       >
-        <span style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+        <span style={{ display: "flex", flexDirection: "column", gap: pwc.space.sm }}>
           <span style={styles.disclosureTitle}>{title}</span>
           <span style={styles.disclosureSummary}>{summary}</span>
         </span>
@@ -534,27 +508,25 @@ function NotesInventoryEditor({
   };
 
   const inputStyle = {
-    fontFamily: pwc.fontBody, fontSize: 12, padding: "4px 6px",
-    border: `1px solid ${pwc.grey300}`, borderRadius: 2,
-    color: pwc.grey800, background: pwc.white,
+    ...ui.input, minWidth: 0,
   } as const;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: pwc.space.sm }}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         style={{
           alignSelf: "flex-start", background: "none", border: "none",
-          padding: 0, cursor: "pointer", fontFamily: pwc.fontBody,
-          fontSize: 12, color: tokens.color.action.primary, textDecoration: "underline",
+          minHeight: 40, padding: "0 8px", cursor: "pointer", fontFamily: pwc.fontBody,
+          fontSize: 14, color: tokens.color.action.primary, textDecoration: "underline",
         }}
         aria-expanded={open}
       >
         {open ? "Hide notes list" : "Review or edit the notes list"}
       </button>
       {open && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: pwc.space.sm }}>
           <ul
             style={{
               listStyle: "none", margin: 0, padding: 0,
@@ -580,8 +552,9 @@ function NotesInventoryEditor({
                   aria-label={`Remove note ${e.note_num}`}
                   data-tooltip={`Remove note ${e.note_num}`}
                   style={{
-                    background: "none", border: "none", padding: "0 4px",
-                    cursor: "pointer", color: pwc.grey700, fontSize: 12,
+                    background: "none", border: "none", minWidth: 40,
+                    minHeight: 40, padding: 0, cursor: "pointer",
+                    color: pwc.grey700, fontSize: 14,
                   }}
                 >
                   <CloseIcon />
@@ -598,7 +571,7 @@ function NotesInventoryEditor({
               onChange={(ev) => setNum(ev.target.value)}
               placeholder="No."
               aria-label="Missing note number"
-              style={{ ...inputStyle, width: 64 }}
+              style={{ ...inputStyle, width: 72, paddingInline: pwc.space.sm }}
             />
             <input
               type="text"
@@ -612,23 +585,18 @@ function NotesInventoryEditor({
               type="button"
               onClick={add}
               disabled={!canAdd}
-              style={{
-                fontFamily: pwc.fontBody, fontSize: 12, padding: "4px 10px",
-                border: `1px solid ${canAdd ? tokens.color.action.primary : pwc.grey300}`,
-                background: canAdd ? tokens.color.action.primary : pwc.grey100,
-                color: canAdd ? pwc.white : pwc.grey700,
-                borderRadius: 2, cursor: canAdd ? "pointer" : "not-allowed",
-              }}
+              className={uiClass.btnSecondary}
+              style={{ ...ui.buttonSecondary, minHeight: 44 }}
             >
               Add
             </button>
           </div>
           {duplicate && (
-            <span style={{ color: pwc.error, fontSize: 11 }}>
+            <span style={{ color: pwc.error, fontSize: 14 }}>
               Note {parsed} is already in the list.
             </span>
           )}
-          <span style={{ color: pwc.grey700, fontSize: 11 }}>
+          <span style={{ color: pwc.grey700, fontSize: 14 }}>
             Added notes have no page range, so agents search the whole document
             for them.
           </span>
@@ -1375,21 +1343,8 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           aria-expanded={showAdvanced}
           data-testid="advanced-toggle"
           title="Models, scan preview, and accuracy grading"
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            flexShrink: 0,
-            whiteSpace: "nowrap",
-            gap: 6,
-            padding: "4px 0",
-            background: "none",
-            border: "none",
-            cursor: "pointer",
-            fontFamily: pwc.fontHeading,
-            fontSize: 13,
-            fontWeight: pwc.weight.medium,
-            color: pwc.grey700,
-          }}
+          className={uiClass.btnQuiet}
+          style={{ ...ui.buttonQuiet, ...ui.buttonSm, flexShrink: 0, paddingInline: pwc.space.sm }}
         >
           <span aria-hidden="true">{showAdvanced ? "▾" : "▸"}</span>
           Advanced
@@ -1397,7 +1352,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       </div>
 
       <section style={styles.setupGroup} aria-labelledby="filing-details-heading">
-        <h3 id="filing-details-heading" style={{ ...styles.heading, fontSize: 14 }}>
+        <h3 id="filing-details-heading" style={ui.subsectionTitle}>
           Filing details
         </h3>
         <div style={styles.setupGrid}>
@@ -1421,7 +1376,8 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
                 onClick={() => handleFilingStandardChange(standard)}
                 style={{
                   fontFamily: pwc.fontHeading,
-                  fontSize: 13,
+                  fontSize: 14,
+                  minHeight: 40,
                   fontWeight: active ? 600 : 500,
                   padding: "8px 24px",
                   border: "none",
@@ -1454,7 +1410,8 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
                 onClick={() => setFilingLevel(level)}
                 style={{
                   fontFamily: pwc.fontHeading,
-                  fontSize: 13,
+                  fontSize: 14,
+                  minHeight: 40,
                   fontWeight: active ? 600 : 500,
                   padding: "8px 24px",
                   border: "none",
@@ -1489,7 +1446,8 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
                 onClick={() => handleDenominationChange(d)}
                 style={{
                   fontFamily: pwc.fontHeading,
-                  fontSize: 13,
+                  fontSize: 14,
+                  minHeight: 40,
                   fontWeight: active ? 600 : 500,
                   padding: "8px 24px",
                   border: "none",
@@ -1506,15 +1464,15 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           })}
         </div>
         {infopack?.scale_unit === "unknown" ? (
-          <span style={{ fontFamily: pwc.fontBody, fontSize: 12, color: pwc.orange700 }}>
+          <span style={{ ...ui.bodyText, color: pwc.orange700 }}>
             Document scan could not determine the denomination. Select the value shown in the financial statements before starting extraction.
           </span>
         ) : detectedDenomination ? (
-          <span data-testid="detected-denomination" style={{ fontFamily: pwc.fontBody, fontSize: 12, color: pwc.grey500 }}>
+          <span data-testid="detected-denomination" style={ui.bodyText}>
             Document scan detected {DENOMINATION_LABELS[detectedDenomination]}. Confirm or correct it before starting extraction.
           </span>
         ) : (
-          <span style={{ fontFamily: pwc.fontBody, fontSize: 12, color: pwc.grey500 }}>
+          <span style={ui.bodyText}>
             Document preparation will suggest a denomination for you to confirm.
           </span>
         )}
@@ -1543,7 +1501,8 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
                 onClick={() => setRepeats(n)}
                 style={{
                   fontFamily: pwc.fontHeading,
-                  fontSize: 13,
+                  fontSize: 14,
+                  minHeight: 40,
                   fontWeight: active ? 600 : 500,
                   padding: "8px 18px",
                   border: "none",
@@ -1560,7 +1519,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           })}
         </div>
         {repeats > 1 && (
-          <span style={{ fontFamily: pwc.fontBody, fontSize: 12, color: pwc.grey300, marginTop: 4 }}>
+          <span style={{ ...ui.bodyText, color: pwc.grey700 }}>
             Runs {repeats}× back-to-back (≈{repeats}× the time &amp; tokens); the
             run page shows a run-to-run agreement score afterwards.
           </span>
@@ -1571,13 +1530,12 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       {showAdvanced && (<>
       {(!preparation || preparation.status === "not_started") && <>
       {/* Optional preview for historical uploads only. */}
-      <hr style={styles.divider} />
       {/* Document pre-scan (formerly "Scout"): reads the PDF first to suggest
           statements, formats and note locations. Results are suggestions to
           verify — never enforced (gotcha #13). */}
       <div style={styles.section}>
         <span style={styles.sectionLabel}>Preview document scan</span>
-        <span style={{ fontFamily: pwc.fontBody, fontSize: 12, color: pwc.grey500, marginTop: -4 }}>
+        <span style={{ ...ui.bodyText, color: pwc.grey700 }}>
           Preparation builds the inventory automatically. Preview refreshes the
           document scan using the current model.
         </span>
@@ -1606,7 +1564,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
             </select>
           )}
         </div>
-        <p style={{ color: pwc.grey500, fontSize: 13 }}>
+        <p style={{ ...ui.bodyText, margin: 0 }}>
           Text and scanned pages are read automatically. Notes are checked and
           formatted before you review them.
         </p>
@@ -1615,7 +1573,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
             role="status"
             style={{
               fontFamily: pwc.fontBody,
-              fontSize: 12,
+              fontSize: 14,
               color: pwc.error,
               margin: 0,
             }}
@@ -1633,7 +1591,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
                   border: `2px solid ${pwc.grey200}`, borderTop: `2px solid ${pwc.orange500}`,
                   flexShrink: 0, display: "inline-block",
                 }} />
-                <span style={{ fontFamily: pwc.fontHeading, fontSize: 13, fontWeight: 600, color: pwc.grey800 }}>
+                <span style={{ ...ui.bodyText, fontWeight: pwc.weight.semibold }}>
                   {scoutProgress || "Starting document scan…"}
                 </span>
               </div>
@@ -1645,11 +1603,8 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
                 )}
                 <button
                   onClick={handleStopScout}
-                  style={{
-                    padding: "2px 10px", fontSize: 12, fontFamily: pwc.fontBody,
-                    background: pwc.grey100, border: `1px solid ${pwc.grey200}`,
-                    borderRadius: 4, cursor: "pointer", color: pwc.grey800,
-                  }}
+                  className={uiClass.btnSecondary}
+                  style={{ ...ui.buttonSecondary, ...ui.buttonSm }}
                 >
                   Stop
                 </button>
@@ -1669,16 +1624,8 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
               onClick={() => setScoutLogOpen((v) => !v)}
               aria-expanded={scoutLogOpen}
               aria-controls="scout-log-region"
-              style={{
-                padding: "4px 10px",
-                fontSize: 12,
-                fontFamily: pwc.fontBody,
-                background: pwc.white,
-                color: pwc.grey700,
-                border: `1px solid ${pwc.grey200}`,
-                borderRadius: pwc.radius.sm,
-                cursor: "pointer",
-              }}
+              className={uiClass.btnQuiet}
+              style={{ ...ui.buttonQuiet, ...ui.buttonSm }}
             >
               {scoutLogOpen ? "▾ Hide technical log" : `▸ Show technical log (${scoutToolTimeline.length})`}
             </button>
@@ -1702,14 +1649,13 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
         {scoutError && <p style={styles.errorText}>{scoutError}</p>}
         {scoutOverrideNote && (
           <div style={styles.scoutProgressPanel} role="note">
-            <span style={{ fontFamily: pwc.fontBody, fontSize: 12, color: pwc.grey800 }}>
+            <span style={ui.bodyText}>
               {scoutOverrideNote}
             </span>
           </div>
         )}
       </div>
 
-      <hr style={styles.divider} />
 
       </>}
 
@@ -1717,7 +1663,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           a supported format when a row is left blank. */}
       <div style={styles.section}>
         <span style={styles.sectionLabel}>Statement format overrides</span>
-        <span style={{ ...ui.supportingText, margin: 0 }}>
+        <span style={{ ...ui.bodyText, color: pwc.grey700 }}>
           Leave a format blank to use the document scan's recommendation.
         </span>
         <VariantSelector
@@ -1779,7 +1725,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           return (
             <div
               style={{
-                fontFamily: pwc.fontBody, fontSize: 12,
+                fontFamily: pwc.fontBody, fontSize: 14,
                 color: hintVisible ? pwc.error : pwc.grey800,
                 display: "flex", flexDirection: "column", gap: 4,
               }}

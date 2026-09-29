@@ -124,7 +124,6 @@ export function HomeHero({
           active={error ? undefined : stats?.active}
           drafts={error ? undefined : stats?.drafts}
           completedThisMonth={error ? undefined : stats?.completedThisMonth}
-          onClearDrafts={() => setConfirmClearDrafts(true)}
         />
       )}
 
@@ -136,6 +135,7 @@ export function HomeHero({
           onResumeDraft={onResumeDraft}
           onOpenRun={onOpenRun}
           onViewAll={onViewAllRuns}
+          onClearDrafts={stats != null && !error && stats.drafts > 0 ? () => setConfirmClearDrafts(true) : undefined}
         />
       )}
 

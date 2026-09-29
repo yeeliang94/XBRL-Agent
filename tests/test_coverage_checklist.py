@@ -166,6 +166,7 @@ def test_fully_uncited_blob_write_leaves_all_subrefs_not_verified():
     assert all(
         s.state == SUBNOTE_NOT_VERIFIED for s in _row(cl, 9).subnotes
     )
+    assert all(not s.placements for s in _row(cl, 9).subnotes)
 
 
 def test_source_linked_subrefs_close_the_blob_write_blind_spot():
@@ -232,6 +233,9 @@ def test_policies_fan_out_placements_classified_fan_out():
     )
     kinds = {p.kind for p in _row(cl, 3).placements}
     assert kinds == {KIND_FAN_OUT}
+    children = {s.subnote_ref: s for s in _row(cl, 3).subnotes}
+    assert [(p.sheet, p.row) for p in children["3.2"].placements] == [(S11, 10)]
+    assert [(p.sheet, p.row) for p in children["3.5"].placements] == [(S11, 22)]
 
 
 def test_carve_out_classified_on_topical_note():
@@ -308,4 +312,8 @@ def test_to_dict_round_trip_shape():
         "sheet": S10, "row": 6, "row_label": "Company details",
         "kind": KIND_PRIMARY,
     }
-    assert row["subnotes"] == [{"subnote_ref": "(a)", "state": SUBNOTE_CITED}]
+    assert row["subnotes"] == [{
+        "subnote_ref": "(a)", "state": SUBNOTE_CITED,
+        "placements": [{"sheet": S10, "row": 6,
+                        "row_label": "Company details", "kind": KIND_PRIMARY}],
+    }]

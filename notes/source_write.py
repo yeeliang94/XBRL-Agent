@@ -576,6 +576,7 @@ def write_cell_from_blocks(
     expected_revision: Optional[int] = None,
     target_label: Optional[str] = None,
     combine_notes: bool = False,
+    allow_unplaced_during_conflict_resolution: bool = False,
 ) -> WriteOutcome:
     """Build and store one cell from the named source blocks.
 
@@ -755,6 +756,32 @@ def write_cell_from_blocks(
             numeric_note_prose=numeric_note_prose,
             target_label=label,
         )
+        if actor == "notes_reviewer" and not allow_unplaced_during_conflict_resolution:
+            previous_ids = {
+                entry["block_id"] for entry in conn.execute(
+                    "SELECT block_id FROM notes_block_placements "
+                    "WHERE run_id=? AND generation_id=? AND sheet=? AND row=? AND active=1",
+                    (run_id, generation_id, sheet, row),
+                )
+            }
+            orphaned = []
+            for bid in sorted(previous_ids - set(rendered.block_ids)):
+                elsewhere = conn.execute(
+                    "SELECT 1 FROM notes_block_placements p "
+                    "JOIN notes_cells c ON c.run_id=p.run_id AND c.sheet=p.sheet AND c.row=p.row "
+                    "WHERE p.run_id=? AND p.generation_id=? AND p.block_id=? "
+                    "AND p.active=1 AND (p.sheet!=? OR p.row!=?) LIMIT 1",
+                    (run_id, generation_id, bid, sheet, row),
+                ).fetchone()
+                if elsewhere is None:
+                    orphaned.append(bid)
+            if orphaned:
+                raise SourceWriteError(
+                    f"relinking {sheet} row {row} would leave source part(s) "
+                    f"{', '.join(orphaned)} unplaced. Keep them in this cell "
+                    "until they have a grounded destination, or flag the "
+                    "uncertain placement for human review."
+                )
         by_id = {block.block_id: block for block in available}
         rendered_pages = sorted({
             by_id[bid].page for bid in rendered.block_ids
@@ -801,6 +828,38 @@ def write_cell_from_blocks(
             f"note: {', '.join(added)} were added because they are the rest "
             "of the verified continuation, table or heading context."
         )
+    bare_ids = [bid for bid in block_ids if not bid.startswith("section:")]
+    if bare_ids:
+        from notes.source_sections import sections_for_note
+
+        seen_sections: set[str] = set()
+        rendered_ids = set(rendered.block_ids)
+        source_notes = srepo.fetch_notes(conn, generation_id)
+        for note in source_notes:
+            sections = sections_for_note(
+                available, note["source_note_id"],
+                str(note["top_note_num"] or ""), note["title"] or "",
+            )
+            for bid in bare_ids:
+                containing = [section for section in sections if bid in section.block_ids]
+                if not containing:
+                    continue
+                section = min(containing, key=lambda item: len(item.block_ids))
+                if section.section_id in seen_sections:
+                    continue
+                seen_sections.add(section.section_id)
+                remainder = [part for part in section.block_ids
+                             if part not in rendered_ids]
+                if remainder:
+                    preview = ", ".join(remainder[:5])
+                    if len(remainder) > 5:
+                        preview += f", and {len(remainder) - 5} more"
+                    warnings.append(
+                        f"partial source section {section.section_id}: "
+                        f"{len(remainder)} other source part(s) remain "
+                        f"({preview}). Place or account for them before "
+                        "finishing the note."
+                    )
     return WriteOutcome(
         sheet=sheet, row=row, block_ids=list(rendered.block_ids),
         rendered_chars=rendered.rendered_chars,

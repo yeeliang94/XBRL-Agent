@@ -39,8 +39,9 @@ from pathlib import Path
 from typing import Any
 
 from mtool.notes_decorate import (
-    DEFAULT_STYLE, NotesTableStyle, decorate_notes_html, editable_mtool_structure,
-    strip_inline_styles,
+    DEFAULT_STYLE, NotesTableStyle, add_transport_breaks,
+    decorate_notes_html, editable_mtool_structure, strip_inline_styles,
+    without_transport_breaks,
 )
 from mtool.offline_fill import EXCEL_CELL_CHAR_LIMIT, wrap_footnote_html
 from notes.format_verify import content_structure
@@ -171,7 +172,8 @@ def build_notes_fill_doc(
             r["html"], style, decorate)
         expected_html = (editable_mtool_structure(r["html"] or "")
                          if decorate and tier != "oversize" else r["html"] or "")
-        if content_structure(expected_html) != content_structure(out_html):
+        checked_html = without_transport_breaks(out_html) if decorate else out_html
+        if content_structure(expected_html) != content_structure(checked_html):
             raise ValueError(f"MBRS formatting changed source content or structure at {r['sheet']} row {r['row']}.")
         if tier == "compact":
             formatting_compacted += 1
@@ -388,7 +390,7 @@ def _resolve_note_html(
                 editable_merged_cells=True)
             if _fits(nofill_lite):
                 return nofill_lite, "lite", True
-        flat = editable_mtool_structure(source)
+        flat = add_transport_breaks(editable_mtool_structure(source))
         if _fits(flat):
             return flat, "flat", False
         return None

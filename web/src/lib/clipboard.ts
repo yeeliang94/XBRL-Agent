@@ -367,6 +367,42 @@ function _hasPersistedIndent(el: Element): boolean {
     );
 }
 
+function _indentSourceHeadingLevels(root: Element): void {
+  const blocks = Array.from(root.children);
+  const headingLevel = (el: Element) =>
+    /^H[1-6]$/.test(el.tagName) ? Number(el.tagName[1]) : null;
+  const levels = blocks.map(headingLevel).filter((level): level is number => level !== null);
+  if (levels.length === 0) return;
+  const baseline = Math.min(...levels);
+  let depth = 0;
+  for (const block of blocks) {
+    const level = headingLevel(block);
+    if (level !== null) depth = Math.max(0, level - baseline);
+    if (depth > 0 && (level !== null || ["P", "TABLE", "UL", "OL"].includes(block.tagName)) &&
+        !_hasPersistedIndent(block)) {
+      _mergeStyle(block, `margin-left: ${2 * depth}em;`);
+    }
+  }
+}
+
+function _addTransportBreaks(root: Element): void {
+  const sections = Array.from(root.querySelectorAll('div[data-note-section="1"]'));
+  for (const container of [root, ...sections]) {
+    const blocks = Array.from(container.children);
+    for (let i = 0; i + 1 < blocks.length; i++) {
+      const left = blocks[i];
+      const right = blocks[i + 1];
+      if (["P", "TABLE"].includes(left.tagName) && ["P", "TABLE"].includes(right.tagName)) {
+        const spacer = document.createElement("p");
+        spacer.setAttribute("data-mtool-spacer", "1");
+        spacer.setAttribute("style", "margin: 0;");
+        spacer.textContent = "\u00a0";
+        container.insertBefore(spacer, right);
+      }
+    }
+  }
+}
+
 /**
  * Merge the paste defaults into a prose block without letting a `margin:`
  * shorthand erase the editor's persisted `margin-left`. CSS shorthands reset
@@ -615,6 +651,9 @@ export function decorateHtmlForClipboard(
       if (!operatorSizedTables.has(table)) _fitTableWidth(table, true);
     }
   }
+
+  _indentSourceHeadingLevels(tmp);
+  _addTransportBreaks(tmp);
 
   // Carry the font on the wrapping container too, so any element we did not
   // explicitly style (bare <strong>, <em>, loose text) still inherits the

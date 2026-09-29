@@ -2034,6 +2034,75 @@ def _submit_coverage_entries_impl(deps: "NotesDeps", entries: Any) -> str:
     return _submit_coverage_receipt_impl(deps, receipt)
 
 
+def _prepared_batch_source_errors(deps: "NotesDeps") -> list[str]:
+    """A cross-sheet skip is valid only when its frozen source is accounted for."""
+    if not deps.db_path or deps.source_generation_id is None:
+        return []
+    from db import repository as repo
+    from notes import integrity, integrity_runner, source_repository as srepo
+    from notes.source_models import INPUT_KIND_PREPARED
+    from notes.source_sections import sections_for_note
+    from notes.source_write import PLACEMENT_CONFLICT_FINDING_PREFIX
+
+    with repo.db_session(deps.db_path) as conn:
+        generation = srepo.fetch_generation(conn, deps.source_generation_id)
+        if generation is None or generation["input_kind"] != INPUT_KIND_PREPARED:
+            return []
+        conflicted_parts: set[str] = set()
+        for flag in conn.execute(
+            "SELECT evidence FROM notes_review_flags WHERE run_id=? AND status='open' "
+            "AND substr(finding_id, 1, ?) = ?",
+            (deps.run_id, len(PLACEMENT_CONFLICT_FINDING_PREFIX),
+             PLACEMENT_CONFLICT_FINDING_PREFIX),
+        ):
+            try:
+                conflict = json.loads(flag["evidence"] or "{}")
+            except (TypeError, ValueError):
+                continue
+            if (isinstance(conflict, dict)
+                    and conflict.get("generation_id") == deps.source_generation_id):
+                conflicted_parts.update(conflict.get("block_ids") or [])
+                conflicted_parts.update(conflict.get("proposed_block_ids") or [])
+        snapshot = integrity_runner.build_input(
+            conn, deps.run_id, deps.source_generation_id,
+        )
+    by_number = {str(note.top_note_num): note for note in snapshot.notes}
+    errors = []
+    for finding in integrity.check_prose_note_coverage(snapshot):
+        try:
+            number = int(finding.note_num or "")
+        except ValueError:
+            continue
+        if (number not in deps.batch_note_nums
+                or number in deps.source_gap_notes):
+            continue
+        note = by_number.get(str(number))
+        if note is None:
+            continue
+        missing = set(finding.block_ids) - conflicted_parts
+        if not missing:
+            continue
+        sections = sections_for_note(
+            snapshot.blocks, note.source_note_id, str(number), note.title,
+        )
+        names = [section.section_id for section in sections
+                 if missing.intersection(section.block_ids)]
+        preview = ", ".join(names[:5])
+        if len(names) > 5:
+            preview += f", and {len(names) - 5} more"
+        part_preview = ", ".join(sorted(missing)[:5])
+        if len(missing) > 5:
+            part_preview += f", and {len(missing) - 5} more"
+        errors.append(
+            f"Note {number} has {len(missing)} source part(s) still unplaced "
+            f"in {preview} (block IDs: {part_preview}). "
+            "Place the complete disclosure sections on this "
+            "sheet, or ensure the other sheet has placed them before claiming "
+            "a cross-sheet skip."
+        )
+    return errors
+
+
 def _submit_coverage_receipt_impl(
     deps: "NotesDeps", receipt: CoverageReceipt,
 ) -> str:
@@ -2084,6 +2153,7 @@ def _submit_coverage_receipt_impl(
         ],
         written_row_labels=sink_labels,
     )
+    errors.extend(_prepared_batch_source_errors(deps))
     if errors:
         # Numbered bullet list so the model can address each error on
         # its retry without losing track of which one it's fixing. Close

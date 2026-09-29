@@ -207,6 +207,19 @@ def test_section_listing_gives_one_complete_choice_for_a_simple_note(seeded):
     assert "b2" not in out
 
 
+def test_individual_part_write_names_the_rest_of_its_section(seeded):
+    from notes import source_write
+
+    db, run_id, gen = seeded
+    with repo.db_session(db) as conn:
+        outcome = source_write.write_cell_from_blocks(
+            conn, run_id=run_id, generation_id=gen,
+            sheet="Notes-Listofnotes", row=10, block_ids=["b1"],
+        )
+    assert "section:n5:root" in outcome.as_message()
+    assert "b2" in outcome.as_message()
+
+
 def test_repeated_lettered_sections_keep_distinct_source_pieces():
     from notes.source_sections import expand_section_ids, sections_for_note
 
@@ -501,6 +514,71 @@ async def test_prepared_capture_gap_is_persisted_without_false_coverage(tmp_path
     assert not deps.wrote_once
     assert deps.cells_written == []
     assert deps.write_skip_errors
+
+
+def test_prepared_batch_receipt_rejects_a_cross_sheet_skip_until_every_source_part_is_placed(
+    tmp_path, seeded,
+):
+    from pydantic_ai.models.test import TestModel
+    from notes import source_write
+
+    db, run_id, gen = seeded
+    with repo.db_session(db) as conn:
+        conn.execute("UPDATE notes_source_generations SET input_kind='prepared_document' WHERE id=?", (gen,))
+    _agent, deps = notes_agent.create_notes_agent(
+        template_type=NotesTemplateType.LIST_OF_NOTES, pdf_path="synthetic.pdf",
+        inventory=[], filing_level="company", model=TestModel(), output_dir=str(tmp_path),
+        run_id=run_id, db_path=db, source_generation_id=gen, batch_note_nums=[5],
+    )
+    deps.payload_sink = []
+    receipt = [{"note_num": 5, "action": "skipped", "reason": "Accounting Policies sheet"}]
+
+    assert "section:n5:root" in notes_agent._submit_coverage_entries_impl(deps, receipt)
+    assert deps.coverage_receipt is None
+
+    with repo.db_session(db) as conn:
+        source_write.write_cell_from_blocks(
+            conn, run_id=run_id, generation_id=gen, sheet="Notes-SummaryofAccPol",
+            row=10, block_ids=["b1"],
+        )
+    assert "section:n5:root" in notes_agent._submit_coverage_entries_impl(deps, receipt)
+
+    with repo.db_session(db) as conn:
+        source_write.write_cell_from_blocks(
+            conn, run_id=run_id, generation_id=gen, sheet="Notes-SummaryofAccPol",
+            row=10, block_ids=["b1", "b2"],
+        )
+    assert "accepted" in notes_agent._submit_coverage_entries_impl(deps, receipt)
+
+
+def test_conflict_only_exempts_its_named_parts_from_batch_coverage(tmp_path, seeded):
+    import json
+    from pydantic_ai.models.test import TestModel
+    from notes import source_write
+
+    db, run_id, gen = seeded
+    with repo.db_session(db) as conn:
+        conn.execute("UPDATE notes_source_generations SET input_kind='prepared_document' WHERE id=?", (gen,))
+        repo.insert_notes_review_flag(
+            conn, run_id=run_id, kind="needs_human", reason="placement conflict",
+            finding_id='["source_placement",1]',
+            evidence=json.dumps({"generation_id": gen, "block_ids": ["b1"]}),
+        )
+    _agent, deps = notes_agent.create_notes_agent(
+        template_type=NotesTemplateType.LIST_OF_NOTES, pdf_path="synthetic.pdf",
+        inventory=[], filing_level="company", model=TestModel(), output_dir=str(tmp_path),
+        run_id=run_id, db_path=db, source_generation_id=gen, batch_note_nums=[5],
+    )
+    deps.payload_sink = []
+    deps.source_placement_conflict_notes.add(5)
+    assert "b2" in notes_agent._submit_coverage_entries_impl(deps, [])
+
+    with repo.db_session(db) as conn:
+        source_write.write_cell_from_blocks(
+            conn, run_id=run_id, generation_id=gen,
+            sheet="Notes-Listofnotes", row=10, block_ids=["b2"],
+        )
+    assert "accepted" in notes_agent._submit_coverage_entries_impl(deps, [])
 
 
 def test_source_collision_is_persisted_with_actionable_agent_feedback(seeded):

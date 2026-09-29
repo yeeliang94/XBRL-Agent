@@ -1,7 +1,7 @@
 // XBRL focused-workspace design tokens — the single cascade point for the
 // whole web UI. `pwc` remains the object name only for source compatibility
-// with existing imports; docs/xbrl-design-system.html and Direction A in
-// docs/prototype-ui-overhaul.html are the visual source of truth.
+// with existing imports; docs/xbrl-design-system.html is the visual authority.
+// Direction A in docs/prototype-ui-overhaul.html supplies examples under it.
 //
 // NOTE: several frontend tests assert the exact rgb() form of these hexes.
 // Change a value and update its pinning test in the same commit.
@@ -11,13 +11,13 @@ export const pwc = {
   // current activity, and attention.
   black: '#000000',
   white: '#FFFFFF',
-  orange500: '#FD5108',   // Core orange (Pantone 1655C) — primary accent, active states, links
+  orange500: '#FD5108',   // Core orange (Pantone 1655C) — identity, active work, attention
   orange700: '#D64000',   // Accessible orange for small text and interactive labels
   orange400: '#FE7C39',   // Light accent — progress bars, active indicators
   orange300: '#FFAA72',   // Tint
   orange200: '#FFCDA8',   // Tint
   orange100: '#FFE8D4',   // Tint — backgrounds for highlighted content
-  orange50:  '#FFF5ED',   // Subtle tint — hover backgrounds, empty field highlight, focus ring
+  orange50:  '#FFF5ED',   // Subtle tint — cited source emphasis and attention
 
   // Greys — the cool-neutral ladder defined by the XBRL focused-workspace
   // specification. Existing token names stay stable for component consumers.

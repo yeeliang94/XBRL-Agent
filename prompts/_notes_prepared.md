@@ -72,6 +72,11 @@ conflict is recorded for the grounded reviewer to decide.
 For a List-of-Notes batch, submit_batch_coverage once after your writes, listing
 written notes with their target labels and notes routed to other sheets with a
 skip reason. Omit notes already reported through report_source_gap; those remain
-visible as unresolved, not covered. The coverage receipt is your last tool call;
-the batch coordinator saves the result. Other templates call save_result after
+visible as unresolved, not covered. The coverage receipt is your last tool call
+once accepted; the batch coordinator saves the result. A cross-sheet skip is accepted only
+when every captured part of that note has a live placement. If the receipt
+names unplaced sections, put their complete disclosure content in the best
+List-of-Notes field and resubmit; use the catch-all when no specific field fits.
+Do not call report_source_gap for a routing choice when the source is readable.
+Other templates call save_result after
 their writes. Do not add tasks, formatting passes or approval steps.

@@ -7,9 +7,8 @@
   <!--
     CANONICAL PRODUCTION DESIGN SYSTEM.
 
-    Direction A in docs/prototype-ui-overhaul.html is the exact product
-    composition and state reference. docs/pwc-design-system.html remains only
-    as an archived compatibility reference and is not a production authority.
+    Direction A in docs/prototype-ui-overhaul.html supplies composition and
+    state examples. This guide wins where they differ.
   -->
   <style>
     :root {
@@ -37,6 +36,14 @@
       --surface-subtle: #f5f7f8;
       --font-sans: "Inter Variable", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      --type-page: 28px;
+      --type-section: 16px;
+      --type-body: 14px;
+      --type-metadata: 13px;
+      --type-compact: 12px;
+      --weight-regular: 400;
+      --weight-control: 650;
+      --weight-emphasis: 680;
       --radius-sm: 6px;
       --radius-md: 8px;
       --radius-lg: 12px;
@@ -74,17 +81,17 @@
       position: sticky; top: 0; height: 100vh; overflow: auto;
       padding: 28px 20px; background: var(--grey-50); border-right: 1px solid var(--grey-200);
     }
-    .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 34px; font-size: 17px; font-weight: 720; }
+    .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 34px; font-size: var(--type-section); font-weight: var(--weight-emphasis); }
     .mark { width: 28px; color: var(--orange-500); }
-    .doc-state { margin-bottom: 26px; color: var(--text-tertiary); font-size: 11px; line-height: 1.5; }
-    .doc-state strong { display: block; color: var(--text); font-size: 11px; }
-    .nav-label { margin: 24px 8px 8px; color: var(--text-tertiary); font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
-    .doc-nav a { display: block; padding: 7px 8px; border-radius: var(--radius-sm); color: var(--text-secondary); font-size: 12px; text-decoration: none; }
+    .doc-state { margin-bottom: 26px; color: var(--text-secondary); font-size: var(--type-compact); line-height: 1.5; }
+    .doc-state strong { display: block; color: var(--text); font-size: var(--type-compact); }
+    .nav-label { margin: 24px 8px 8px; color: var(--text-secondary); font-size: var(--type-compact); font-weight: var(--weight-emphasis); letter-spacing: .08em; text-transform: uppercase; }
+    .doc-nav a { display: block; padding: 7px 8px; border-radius: var(--radius-sm); color: var(--text-secondary); font-size: var(--type-metadata); text-decoration: none; }
     .doc-nav a:hover { background: var(--white); color: var(--text); }
 
     main { width: min(1180px, 100%); padding: 58px 64px 100px; }
     .hero { max-width: 820px; margin-bottom: 76px; }
-    .hero-kicker { color: var(--orange-700); font-size: 11px; font-weight: 750; letter-spacing: .1em; text-transform: uppercase; }
+    .hero-kicker { color: var(--orange-700); font-size: var(--type-compact); font-weight: var(--weight-emphasis); letter-spacing: .08em; text-transform: uppercase; }
     h1 { margin: 12px 0 18px; font-size: clamp(32px, 4vw, 42px); line-height: 1.08; letter-spacing: -.035em; }
     .hero p { max-width: 680px; margin: 0; color: var(--text-secondary); font-size: 14px; }
     .hero-meta { display: flex; gap: 20px; flex-wrap: wrap; margin-top: 26px; color: var(--text-tertiary); font: 11px var(--font-mono); }
@@ -94,9 +101,9 @@
     .section-head h2 { margin: 0; font-size: 18px; letter-spacing: -.02em; }
     .section-head p { max-width: 680px; margin: 2px 0 0; color: var(--text-secondary); }
     h3 { margin: 34px 0 14px; font-size: 14px; }
-    .eyebrow { color: var(--text-tertiary); font-size: 10px; font-weight: 720; letter-spacing: .1em; text-transform: uppercase; }
+    .eyebrow { color: var(--text-secondary); font-size: var(--type-compact); font-weight: var(--weight-emphasis); letter-spacing: .08em; text-transform: uppercase; }
     .muted { color: var(--text-secondary); }
-    .micro { color: var(--text-tertiary); font-size: 10px; }
+    .micro { color: var(--text-secondary); font-size: var(--type-compact); }
     .rule { width: 30px; height: 3px; margin: 0 0 14px; background: var(--orange-500); }
 
     .principles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px 44px; }
@@ -108,20 +115,21 @@
     .swatches { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
     .swatch { min-width: 0; }
     .swatch-chip { height: 74px; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); }
-    .swatch strong { display: block; margin-top: 8px; font-size: 11px; }
-    .swatch code { color: var(--text-tertiary); font-size: 9px; }
+    .swatch strong { display: block; margin-top: 8px; font-size: var(--type-metadata); }
+    .swatch code { color: var(--text-secondary); font-size: var(--type-compact); }
     .token-table { width: 100%; border-collapse: collapse; }
-    .token-table th, .token-table td { padding: 12px 10px; border-bottom: 1px solid var(--line-soft); text-align: left; vertical-align: top; font-size: 12px; }
-    .token-table th { color: var(--text-tertiary); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+    .token-table th, .token-table td { padding: 12px 10px; border-bottom: 1px solid var(--line-soft); text-align: left; vertical-align: top; font-size: var(--type-body); }
+    .token-table th { color: var(--text-secondary); font-size: var(--type-compact); letter-spacing: .08em; text-transform: uppercase; }
     .token-table td:first-child { color: var(--text); font-weight: 650; }
 
     .type-specimen { display: grid; gap: 0; }
     .type-row { display: grid; grid-template-columns: 150px minmax(0, 1fr) 130px; gap: 22px; align-items: baseline; padding: 14px 0; border-bottom: 1px solid var(--line-soft); }
-    .type-row > span:first-child, .type-row code { color: var(--text-tertiary); font-size: 10px; }
-    .type-title { font-size: 28px; font-weight: 700; letter-spacing: -.025em; }
-    .type-section { font-size: 16px; font-weight: 680; }
-    .type-body { font-size: 14px; }
-    .type-body.muted-example { color: var(--text-secondary); }
+    .type-row > span:first-child, .type-row code { color: var(--text-secondary); font-size: var(--type-metadata); }
+    .type-title { font-size: var(--type-page); font-weight: var(--weight-emphasis); letter-spacing: -.01em; }
+    .type-section { font-size: var(--type-section); font-weight: var(--weight-emphasis); }
+    .type-body { font-size: var(--type-body); font-weight: var(--weight-regular); }
+    .type-body.muted-example { color: var(--text-secondary); font-size: var(--type-metadata); }
+    .type-compact { color: var(--text-secondary); font-size: var(--type-compact); }
 
     .button-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
     .button {
@@ -138,99 +146,99 @@
     .button:disabled { opacity: .38; cursor: not-allowed; }
 
     .do-dont { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 30px; }
-    .do-dont h4 { margin: 0 0 8px; font-size: 12px; }
+    .do-dont h4 { margin: 0 0 8px; font-size: var(--type-body); font-weight: var(--weight-emphasis); }
     .do-dont .do h4::before { content: "✓"; margin-right: 8px; }
     .do-dont .dont h4::before { content: "×"; margin-right: 8px; color: var(--orange-500); }
-    .do-dont p { margin: 0; color: var(--text-secondary); font-size: 12px; }
+    .do-dont p { margin: 0; color: var(--text-secondary); font-size: var(--type-body); }
 
     .status-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-    .status { display: flex; align-items: center; gap: 8px; min-height: 42px; font-size: 12px; }
+    .status { display: flex; align-items: center; gap: 8px; min-height: 42px; font-size: var(--type-body); }
     .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--grey-500); flex: 0 0 auto; }
     .dot.working, .dot.attention { background: var(--orange-500); }
     .dot.done { background: var(--black); }
     .dot.working { box-shadow: 0 0 0 3px var(--orange-50); animation: pulse 1.8s ease-in-out infinite; }
     @keyframes pulse { 0%, 100% { box-shadow: 0 0 0 2px var(--orange-50); } 50% { box-shadow: 0 0 0 5px var(--orange-50); } }
-    .warning-icon { width: 18px; height: 18px; display: inline-grid; place-items: center; border-radius: 50%; color: var(--orange-500); font-size: 12px; font-weight: 800; }
+    .warning-icon { width: 18px; height: 18px; display: inline-grid; place-items: center; border-radius: 50%; color: var(--orange-500); font-size: var(--type-compact); font-weight: var(--weight-emphasis); }
 
     .specimen { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--white); }
-    .specimen-caption { display: flex; justify-content: space-between; gap: 20px; padding: 11px 14px; border-bottom: 1px solid var(--line-soft); color: var(--text-tertiary); font-size: 10px; }
+    .specimen-caption { display: flex; justify-content: space-between; gap: 20px; padding: 11px 14px; border-bottom: 1px solid var(--line-soft); color: var(--text-secondary); font-size: var(--type-compact); }
     .specimen-body { min-height: 260px; }
 
     .shell-demo { display: grid; grid-template-columns: 170px minmax(0, 1fr); min-height: 360px; }
     .shell-sidebar { padding: 20px 14px; background: var(--grey-50); }
-    .shell-brand { display: flex; gap: 8px; align-items: center; margin-bottom: 28px; font-weight: 720; }
+    .shell-brand { display: flex; gap: 8px; align-items: center; margin-bottom: 28px; font-weight: var(--weight-emphasis); }
     .shell-brand .mark { width: 22px; }
     .shell-nav { display: grid; gap: 3px; }
-    .shell-nav span { padding: 8px 10px; border-radius: var(--radius-md); color: var(--text-secondary); font-size: 11px; }
-    .shell-nav span.active { background: var(--white); color: var(--black); font-weight: 650; }
+    .shell-nav span { padding: 8px 10px; border-radius: var(--radius-md); color: var(--text-secondary); font-size: var(--type-body); }
+    .shell-nav span.active { background: var(--white); color: var(--black); font-weight: var(--weight-control); }
     .shell-main { padding: 28px 32px; }
-    .shell-main h3 { margin: 0; font-size: 20px; }
+    .shell-main h3 { margin: 0; font-size: var(--type-section); }
     .shell-main p { margin: 5px 0 22px; color: var(--text-secondary); }
     .flat-list { display: grid; }
-    .flat-row { display: grid; grid-template-columns: minmax(180px, 1fr) 110px 110px; gap: 14px; padding: 13px 0; border-bottom: 1px solid var(--line-soft); font-size: 11px; }
-    .flat-row strong { font-size: 12px; }
+    .flat-row { display: grid; grid-template-columns: minmax(180px, 1fr) 110px 110px; gap: 14px; padding: 13px 0; border-bottom: 1px solid var(--line-soft); font-size: var(--type-metadata); }
+    .flat-row strong { font-size: var(--type-body); }
 
     .agent-demo { display: grid; grid-template-columns: minmax(480px, 1.35fr) minmax(290px, .72fr); min-height: 430px; }
     .agent-list { padding: 26px 28px; }
     .agent-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
-    .agent-head h3 { margin: 0; font-size: 17px; }
+    .agent-head h3 { margin: 0; font-size: var(--type-section); }
     .filters { display: flex; gap: 3px; }
-    .filter { min-height: 30px; padding: 0 9px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-secondary); font-size: 10px; cursor: pointer; }
-    .filter.active { background: var(--grey-50); color: var(--black); font-weight: 700; }
+    .filter { min-height: 34px; padding: 0 9px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-secondary); font-size: var(--type-metadata); cursor: pointer; }
+    .filter.active { background: var(--grey-50); color: var(--black); font-weight: var(--weight-emphasis); }
     .agent-row { position: relative; width: 100%; min-height: 58px; padding: 8px 9px; border: 0; border-radius: var(--radius-md); background: transparent; display: grid; grid-template-columns: 18px minmax(125px,.6fr) minmax(180px,1fr) auto; gap: 10px; align-items: center; text-align: left; cursor: pointer; }
     .agent-row:hover, .agent-row.active { background: var(--grey-50); }
     .agent-row.child { width: calc(100% - 22px); margin-left: 22px; }
     .agent-row.child::before { content: ""; position: absolute; left: -10px; top: 0; bottom: 0; width: 1px; background: var(--grey-200); }
     .agent-row.child::after { content: ""; position: absolute; left: -10px; top: 29px; width: 10px; height: 1px; background: var(--grey-200); }
-    .agent-name strong, .agent-task strong { display: block; font-size: 12px; }
-    .agent-name span, .agent-task span { display: block; margin-top: 2px; color: var(--text-secondary); font-size: 11px; }
-    .agent-state { color: var(--text-secondary); font-size: 11px; white-space: nowrap; }
+    .agent-name strong, .agent-task strong { display: block; font-size: var(--type-body); }
+    .agent-name span, .agent-task span { display: block; margin-top: 2px; color: var(--text-secondary); font-size: var(--type-metadata); }
+    .agent-state { color: var(--text-secondary); font-size: var(--type-metadata); white-space: nowrap; }
     .agent-detail { padding: 28px 0 24px 30px; border-left: 1px solid var(--line-soft); }
     .agent-detail-inner { padding-right: 26px; }
     .agent-detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-    .agent-detail h4 { margin: 5px 0 0; font-size: 16px; }
+    .agent-detail h4 { margin: 5px 0 0; font-size: var(--type-section); }
     .detail-copy { margin: 14px 0 20px; color: var(--text-secondary); font-size: 14px; }
-    .detail-now { display: flex; gap: 8px; align-items: center; font-size: 12px; font-weight: 700; }
-    .detail-now span:last-child { margin-left: auto; color: var(--text-secondary); font-weight: 400; }
+    .detail-now { display: flex; gap: 8px; align-items: center; font-size: var(--type-body); font-weight: var(--weight-emphasis); }
+    .detail-now span:last-child { margin-left: auto; color: var(--text-secondary); font-weight: var(--weight-regular); }
     .updates { display: grid; gap: 11px; margin-top: 12px; }
-    .update { display: grid; grid-template-columns: 38px minmax(0,1fr); gap: 9px; font-size: 12px; }
-    .update time { color: var(--text-tertiary); font: 11px var(--font-mono); }
-    .detail-links { display: grid; grid-template-columns: 88px minmax(0,1fr); gap: 6px; margin-top: 12px; color: var(--text-secondary); font-size: 12px; }
+    .update { display: grid; grid-template-columns: 48px minmax(0,1fr); gap: 9px; font-size: var(--type-body); }
+    .update time { color: var(--text-secondary); font: var(--type-compact) var(--font-mono); }
+    .detail-links { display: grid; grid-template-columns: 88px minmax(0,1fr); gap: 6px; margin-top: 12px; color: var(--text-secondary); font-size: var(--type-metadata); }
     .detail-links strong { color: var(--black); }
-    .technical { margin-top: 20px; color: var(--text-secondary); font-size: 11px; }
+    .technical { margin-top: 20px; color: var(--text-secondary); font-size: var(--type-metadata); }
     .technical summary { cursor: pointer; }
 
     .review-demo { display: grid; grid-template-columns: 160px minmax(390px, 1fr) minmax(260px, .72fr); min-height: 460px; }
     .review-rail { padding: 22px 14px; background: var(--grey-50); }
     .review-rail h4 { margin: 0 0 4px; }
-    .rail-meta { color: var(--text-secondary); font-size: 9px; }
-    .rail-search { width: 100%; margin: 14px 0 8px; padding: 8px 9px; border: 1px solid var(--grey-300); border-radius: var(--radius-sm); background: var(--white); font-size: 10px; }
-    .rail-item { width: 100%; padding: 8px 7px; border: 0; border-radius: var(--radius-sm); background: transparent; display: grid; grid-template-columns: 20px minmax(0,1fr) 16px; gap: 5px; text-align: left; font-size: 9px; cursor: pointer; }
-    .rail-item.active { background: var(--white); font-weight: 650; }
+    .rail-meta { color: var(--text-secondary); font-size: var(--type-metadata); }
+    .rail-search { width: 100%; min-height: 44px; margin: 14px 0 8px; padding: 8px 9px; border: 1px solid var(--grey-300); border-radius: var(--radius-md); background: var(--white); font-size: var(--type-body); }
+    .rail-item { width: 100%; min-height: 40px; padding: 8px 7px; border: 0; border-radius: var(--radius-sm); background: transparent; display: grid; grid-template-columns: 20px minmax(0,1fr) 16px; gap: 5px; text-align: left; font-size: var(--type-body); cursor: pointer; }
+    .rail-item.active { background: var(--white); font-weight: var(--weight-control); }
     .review-editor { min-width: 0; padding: 24px 28px; }
-    .review-editor h4 { margin: 0; font-size: 17px; }
-    .template-table { width: 100%; margin-top: 18px; border-collapse: collapse; font-size: 10px; }
+    .review-editor h4 { margin: 0; font-size: var(--type-section); }
+    .template-table { width: 100%; margin-top: 18px; border-collapse: collapse; font-size: var(--type-body); }
     .template-table th, .template-table td { padding: 10px 8px; border-bottom: 1px solid var(--line-soft); text-align: right; }
     .template-table th:first-child, .template-table td:first-child { text-align: left; }
     .template-table tr.selected { background: var(--orange-50); }
     .source-jump { border: 0; background: transparent; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
     .pdf-pane { padding: 20px; border-left: 1px solid var(--line-soft); background: var(--white); }
-    .pdf-toolbar { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 16px; font-size: 10px; }
+    .pdf-toolbar { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 16px; font-size: var(--type-metadata); }
     .pdf-page { width: min(100%, 280px); min-height: 350px; margin: 0 auto; padding: 28px 22px; border: 1px solid var(--grey-200); background: var(--white); box-shadow: 0 5px 18px rgba(0,0,0,.07); }
     .pdf-line { height: 5px; margin-bottom: 8px; border-radius: 2px; background: var(--grey-100); }
-    .pdf-highlight { margin: 18px -7px; padding: 8px 7px; border-radius: var(--radius-sm); background: var(--orange-50); font-size: 9px; }
+    .pdf-highlight { margin: 18px -7px; padding: 8px 7px; border-radius: var(--radius-sm); background: var(--orange-50); font-size: var(--type-body); }
 
     .attention-demo { display: flex; align-items: center; gap: 12px; padding: 14px 0; }
-    .attention-demo strong { font-size: 12px; }
-    .attention-demo p { margin: 1px 0 0; color: var(--text-secondary); font-size: 11px; }
+    .attention-demo strong { font-size: var(--type-body); }
+    .attention-demo p { margin: 1px 0 0; color: var(--text-secondary); font-size: var(--type-metadata); }
     .tooltip-wrap { position: relative; }
-    .tooltip { position: absolute; left: 50%; bottom: calc(100% + 8px); width: 210px; padding: 9px 10px; border-radius: var(--radius-sm); background: var(--black); color: var(--white); font-size: 9px; box-shadow: var(--shadow-float); transform: translateX(-50%); opacity: 0; pointer-events: none; transition: opacity .12s ease; }
+    .tooltip { position: absolute; left: 50%; bottom: calc(100% + 8px); width: 210px; padding: 9px 10px; border-radius: var(--radius-sm); background: var(--black); color: var(--white); font-size: var(--type-metadata); box-shadow: var(--shadow-float); transform: translateX(-50%); opacity: 0; pointer-events: none; transition: opacity .12s ease; }
     .tooltip-wrap:hover .tooltip, .tooltip-wrap:focus-within .tooltip { opacity: 1; }
 
     .checklist { display: grid; gap: 10px; }
-    .check { display: grid; grid-template-columns: 20px minmax(0,1fr); gap: 10px; color: var(--text-secondary); font-size: 12px; }
+    .check { display: grid; grid-template-columns: 20px minmax(0,1fr); gap: 10px; color: var(--text-secondary); font-size: var(--type-body); }
     .check span { color: var(--black); }
-    .handoff { padding: 18px 20px; border: 1px solid var(--grey-200); border-radius: var(--radius-sm); background: var(--grey-50); font-size: 12px; }
+    .handoff { padding: 18px 20px; border: 1px solid var(--grey-200); border-radius: var(--radius-sm); background: var(--grey-50); font-size: var(--type-body); }
     .handoff strong { display: block; margin-bottom: 4px; }
 
     @media (max-width: 980px) {
@@ -272,7 +280,7 @@
         <svg class="mark" viewBox="0 0 100 100" fill="none" aria-hidden="true"><path d="M12 78 L40 22 L52 50 L66 30 L88 78" stroke="currentColor" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <span>XBRL Agent</span>
       </div>
-      <div class="doc-state"><strong>Focused Workspace · v1.2</strong>Canonical production reference<br>26 September 2026</div>
+      <div class="doc-state"><strong>Focused Workspace · v1.3</strong>Canonical production reference<br>29 September 2026</div>
       <nav aria-label="Design system sections">
         <div class="nav-label">Direction</div>
         <a href="#overview">Overview</a>
@@ -393,12 +401,15 @@
       </section>
 
       <section id="type">
-        <div class="section-head"><h2>Typography</h2><p>Use three primary levels. Keep small text for short metadata, not instructions or financial values. Create secondary hierarchy with weight and muted colour.</p></div>
+        <div class="section-head"><h2>Typography</h2><p>Use three primary levels for product content. Metadata and short identifiers are the only smaller roles. Create secondary hierarchy with weight and muted colour.</p></div>
         <div class="type-specimen">
-          <div class="type-row"><span>Page title</span><div class="type-title">Figures review</div><code>28 / 700</code></div>
+          <div class="type-row"><span>Page title</span><div class="type-title">Figures review</div><code>28 / 680</code></div>
           <div class="type-row"><span>Section and item title</span><div class="type-section">Statement agents</div><code>16 / 680</code></div>
-          <div class="type-row"><span>Body and metadata</span><div><div class="type-body">Review the extracted value against its source.</div><div class="type-body muted-example">Pages 67–69 · updated just now</div></div><code>14 / 400</code></div>
+          <div class="type-row"><span>Body and values</span><div class="type-body">Review the extracted value against its source.</div><code>14 / 400</code></div>
+          <div class="type-row"><span>Secondary metadata</span><div class="type-body muted-example">Pages 67–69 · updated just now</div><code>13 / 400</code></div>
+          <div class="type-row"><span>Compact reference</span><div class="type-compact">Note 12 · 09:42</div><code>12 / 400</code></div>
         </div>
+        <p>Use regular 400 for body copy and figures, control 650 for buttons and selected controls, and emphasis 680 for headings or a short key label. Keep form labels and instructions at 14 px. Use 13 px for secondary metadata; reserve 12 px for short timestamps, identifiers and compact table headers. Do not use 9–11 px for readable product text or create an intermediate heading size for each panel. The documentation navigation above is page chrome; the product specimens below follow this scale.</p>
         <div class="handoff" style="margin-top:20px"><strong>Financial values</strong>Use tabular numerals, right alignment and consistent denomination. Keep figures visually stronger than helper text: <code>font-variant-numeric: tabular-nums</code>.</div>
       </section>
 
@@ -412,7 +423,7 @@
           <tr><td>Label to control or title to metadata</td><td>8 px</td><td>8 px</td></tr>
           <tr><td>Separate short paragraphs</td><td>12 px</td><td>12 px</td></tr>
         </tbody></table>
-        <p style="margin-top:20px">Body copy is 14 px with 1.5 line height. Long guidance uses 1.6 line height and a maximum measure near 70 characters. Metadata may use 13 px; 12 px is reserved for short labels and timestamps. Keep instructions and financial figures at 14 px or larger. A section begins with its title and then the work, without a repeated introductory sentence.</p>
+        <p style="margin-top:20px">Body copy is 14 px with 1.5 line height. Long guidance uses 1.6 line height and a maximum measure near 70 characters. Use the relationships above for page structure. A 4 px gap may separate parts inside one compact control; it does not replace the 8 px label gap or 16 px group gap. Keep instructions and financial figures at 14 px or larger. A section begins with its title and then the work, without a repeated introductory sentence.</p>
       </section>
 
       <section id="surfaces">
@@ -597,8 +608,8 @@
       </section>
 
       <section id="implementation">
-        <div class="section-head"><h2>Implementation contract</h2><p>This document is the production design authority. Direction A in the prototype defines the exact product composition and screen states.</p></div>
-        <div class="handoff"><strong>Current status</strong>The canonical production contract is <code>docs/xbrl-design-system.html</code>. <code>docs/pwc-design-system.html</code> is retained only for historical bookmarks and audit context; production code and pinning tests do not treat it as authority.</div>
+        <div class="section-head"><h2>Implementation contract</h2><p>This document is the production design authority. Direction A in the prototype supplies composition and screen-state examples; this guide wins where they differ.</p></div>
+        <div class="handoff"><strong>Current status</strong>The canonical production contract is <code>docs/xbrl-design-system.html</code>. Production code and pinning tests follow this guide.</div>
         <h3>UI change review gate</h3>
         <div class="checklist">
           <div class="check"><span>✓</span><div>A new operator can identify location, attention and next action within five seconds.</div></div>

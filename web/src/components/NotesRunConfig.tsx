@@ -20,13 +20,18 @@ interface Props {
 const styles = {
   table: {
     width: "100%",
+    tableLayout: "fixed" as const,
     borderCollapse: "collapse" as const,
   } as React.CSSProperties,
   row: {
     borderBottom: `1px solid ${pwc.grey100}`,
   } as React.CSSProperties,
   cell: {
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    padding: `${pwc.space.sm}px 0`,
+    verticalAlign: "middle" as const,
+  } as React.CSSProperties,
+  modelCell: {
+    padding: `${pwc.space.sm}px 0 ${pwc.space.sm}px ${pwc.space.lg}px`,
     verticalAlign: "middle" as const,
   } as React.CSSProperties,
   label: {
@@ -52,26 +57,30 @@ const styles = {
     cursor: "pointer",
   } as React.CSSProperties,
   select: {
+    minHeight: 44,
     padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
     border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.sm,
+    borderRadius: pwc.radius.md,
     fontFamily: pwc.fontBody,
-    fontSize: 13,
+    fontSize: 14,
     color: pwc.grey900,
     background: pwc.white,
     outline: "none",
-    minWidth: 180,
+    minWidth: 0,
+    width: "100%",
   } as React.CSSProperties,
   selectDisabled: {
+    minHeight: 44,
     padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
     border: `1px solid ${pwc.grey100}`,
-    borderRadius: pwc.radius.sm,
+    borderRadius: pwc.radius.md,
     fontFamily: pwc.fontBody,
-    fontSize: 13,
-    color: pwc.grey300,
+    fontSize: 14,
+    color: pwc.grey700,
     background: pwc.grey50,
     outline: "none",
-    minWidth: 180,
+    minWidth: 0,
+    width: "100%",
   } as React.CSSProperties,
 };
 
@@ -102,7 +111,7 @@ export function NotesRunConfig({
                 </label>
               </td>
               {showModels && (
-                <td style={styles.cell}>
+                <td style={styles.modelCell}>
                   <select
                     role="combobox"
                     value={modelOverrides[nt]}

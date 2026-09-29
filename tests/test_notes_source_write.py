@@ -427,6 +427,27 @@ def test_the_previous_blocks_keep_their_disposition_after_a_relink(conn_gen):
     assert usages == {"b1", "b2"}
 
 
+def test_reviewer_relink_rejects_orphaning_source_parts(conn_gen):
+    conn, run_id, gen = conn_gen
+    source_write.write_cell_from_blocks(
+        conn, run_id=run_id, generation_id=gen, sheet="Notes", row=10,
+        block_ids=["b1", "b2"],
+    )
+
+    with pytest.raises(source_write.SourceWriteError, match="b2.*unplaced"):
+        source_write.write_cell_from_blocks(
+            conn, run_id=run_id, generation_id=gen, sheet="Notes", row=10,
+            block_ids=["b1"], actor="notes_reviewer",
+        )
+
+    assert {p["block_id"] for p in srepo.active_placements(conn, gen)} == {"b1", "b2"}
+    cell = conn.execute(
+        "SELECT html FROM notes_cells WHERE run_id=? AND sheet='Notes' AND row=10",
+        (run_id,),
+    ).fetchone()
+    assert "Stated at cost" in cell["html"]
+
+
 def test_expand_table_groups_is_a_no_op_without_a_group():
     assert source_write.expand_table_groups(BLOCKS, ["b1", "b2"]) == ["b1", "b2"]
 
