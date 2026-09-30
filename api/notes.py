@@ -709,7 +709,7 @@ async def remove_invalid_notes_cell(run_id: int, sheet: str, row: int):
 def _render_from_recorded_blocks(conn, run_id: int, sheet: str, row: int):
     """Re-render a cell from the source parts it was recorded as using.
 
-    Returns ``(rendered_cell, generation_id)`` or ``(None, None)`` when this
+    Returns ``(rendered_cell, generation_id, render_version)`` or null values when this
     cell has no source lineage — an authored cell or a pre-feature run, which
     is a legitimate state and not an error.
     """
@@ -719,7 +719,7 @@ def _render_from_recorded_blocks(conn, run_id: int, sheet: str, row: int):
 
     gen = srepo.active_generation(conn, run_id)
     if gen is None:
-        return None, None
+        return None, None, None
     used = conn.execute(
         "SELECT block_id FROM notes_block_usages "
         "WHERE generation_id = ? AND sheet = ? AND row = ? "
@@ -727,7 +727,13 @@ def _render_from_recorded_blocks(conn, run_id: int, sheet: str, row: int):
         (gen["id"], sheet, row),
     ).fetchall()
     if not used:
-        return None, None
+        return None, None, None
+    cell = conn.execute(
+        "SELECT source_render_version FROM notes_cells "
+        "WHERE run_id = ? AND sheet = ? AND row = ?",
+        (run_id, sheet, row),
+    ).fetchone()
+    render_version = cell["source_render_version"] if cell else None
     rows = srepo.fetch_blocks(conn, gen["id"])
     available = [
         SourceBlock(
@@ -741,8 +747,12 @@ def _render_from_recorded_blocks(conn, run_id: int, sheet: str, row: int):
         source_render.render_blocks(
             available, [u["block_id"] for u in used],
             row_label=f"{sheet} row {row}",
+            wrap_subnotes=source_render.uses_subnote_sections(
+                gen["input_kind"], render_version,
+            ),
         ),
         gen["id"],
+        render_version,
     )
 
 
@@ -766,7 +776,7 @@ async def notes_cell_source_compare(run_id: int, sheet: str, row: int):
         if cell is None:
             raise HTTPException(status_code=404, detail="No such cell")
         state = lineage.read_lineage(conn, run_id, sheet, row) or lineage.LineageState()
-        rendered, _gen = _render_from_recorded_blocks(conn, run_id, sheet, row)
+        rendered, _gen, _version = _render_from_recorded_blocks(conn, run_id, sheet, row)
     finally:
         conn.close()
 
@@ -822,7 +832,7 @@ async def notes_cell_restore_source(
                 conn.rollback()
                 raise HTTPException(status_code=409, detail=str(exc))
 
-            rendered, gen_id = _render_from_recorded_blocks(
+            rendered, gen_id, render_version = _render_from_recorded_blocks(
                 conn, run_id, sheet, row
             )
             if rendered is None:
@@ -854,6 +864,7 @@ async def notes_cell_restore_source(
                 conn, run_id, sheet, row,
                 generation_id=gen_id,
                 rendered_sha256=rendered.source_rendered_sha256,
+                render_version=render_version,
             )
             conn.commit()
         except HTTPException:

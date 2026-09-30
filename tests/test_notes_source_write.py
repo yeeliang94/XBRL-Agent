@@ -14,6 +14,7 @@ identical guarantees. The tests below are the guarantees:
 from __future__ import annotations
 
 import pytest
+from bs4 import BeautifulSoup
 
 from db import repository as repo
 from db.schema import init_db
@@ -89,6 +90,42 @@ def test_the_written_cell_holds_the_rendered_source(conn_gen):
         "SELECT html FROM notes_cells WHERE run_id = ? AND row = 10", (run_id,)
     ).fetchone()["html"]
     assert "Receivables" in html and "Stated at cost" in html
+
+
+@pytest.mark.parametrize("input_kind, expected_sections", [
+    ("prepared_document", 2),
+    ("docx_html", 0),
+])
+def test_source_write_preserves_the_document_section_contract(
+    conn_gen, input_kind, expected_sections,
+):
+    conn, run_id, gen = conn_gen
+    conn.execute(
+        "UPDATE notes_source_generations SET input_kind = ? WHERE id = ?",
+        (input_kind, gen),
+    )
+    blocks = [
+        SourceBlock("parent", "heading", 0, "<h3>19 Financial instruments</h3>", page=34),
+        SourceBlock("credit", "heading", 1, "<h3>19.1 Credit risk</h3>", page=34),
+        SourceBlock("credit_body", "paragraph", 2, "<p>Credit exposure.</p>", page=34),
+        SourceBlock("liquidity", "heading", 3, "<h3>19.2 Liquidity risk</h3>", page=35),
+        SourceBlock("liquidity_body", "paragraph", 4, "<p>Debt maturities.</p>", page=35),
+    ]
+    srepo.write_blocks(conn, gen, blocks)
+    source_write.write_cell_from_blocks(
+        conn, run_id=run_id, generation_id=gen, sheet="Notes", row=10,
+        block_ids=[block.block_id for block in blocks],
+    )
+    html = conn.execute(
+        "SELECT html FROM notes_cells WHERE run_id = ? AND row = 10", (run_id,)
+    ).fetchone()["html"]
+    sections = BeautifulSoup(html, "html.parser").select('div[data-note-section="1"]')
+    assert len(sections) == expected_sections
+    if expected_sections:
+        assert [section.get_text(" ", strip=True) for section in sections] == [
+            "19.1 Credit risk Credit exposure.",
+            "19.2 Liquidity risk Debt maturities.",
+        ]
 
 
 def test_a_validated_source_write_stamps_the_registry_identity(conn_gen):

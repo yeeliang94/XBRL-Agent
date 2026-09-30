@@ -216,9 +216,10 @@ def _restore_lineage(conn, run_id: int, sheet: str, cells_list, prior) -> None:
     if not prior:
         return
     try:
+        from notes import source_repository as srepo
         from notes.lineage import content_sha256
         from notes.format_verify import verify_format_only
-        from notes.source_render import BlockSelectionError, render_blocks
+        from notes.source_render import BlockSelectionError, render_blocks, uses_subnote_sections
         from notes.source_write import load_blocks
 
         available_by_generation = {}
@@ -246,7 +247,12 @@ def _restore_lineage(conn, run_id: int, sheet: str, cells_list, prior) -> None:
                 if not selected_ids:
                     continue
                 try:
-                    source_html = render_blocks(available, selected_ids).html
+                    gen = srepo.fetch_generation(conn, generation_id)
+                    source_html = render_blocks(
+                        available, selected_ids,
+                        wrap_subnotes=bool(gen and uses_subnote_sections(
+                            gen["input_kind"], before["source_render_version"])),
+                    ).html
                 except BlockSelectionError:
                     continue
                 if not verify_format_only(source_html, str(cell["html"])).ok:

@@ -311,6 +311,43 @@ def test_restore_puts_the_source_version_back(client_run):
     assert state.content_origin == ContentOrigin.SOURCE_EXACT.value
 
 
+def test_prepared_source_compare_and_restore_keep_subnote_sections(client_run):
+    from notes import integrity_runner, source_render, source_write
+
+    client, run_id, db_path = client_run
+    blocks = [
+        SourceBlock("parent", "heading", 0, "<h3>19 Financial instruments</h3>"),
+        SourceBlock("subnote", "heading", 1, "<h3>19.1 Credit risk</h3>"),
+        SourceBlock("body", "paragraph", 2, "<p>Credit exposure.</p>"),
+    ]
+    with repo.db_session(db_path) as conn:
+        gen = srepo.begin_generation(conn, run_id, input_kind="prepared_document")
+        srepo.write_blocks(conn, gen, blocks)
+        srepo.activate_generation(conn, gen)
+        source_write.write_cell_from_blocks(
+            conn, run_id=run_id, generation_id=gen, sheet="Notes", row=10,
+            block_ids=[block.block_id for block in blocks],
+        )
+
+    url = f"/api/runs/{run_id}/notes_cells/Notes/10"
+    before = client.get(f"{url}/source-compare").json()
+    assert before["source_html"] == before["current_html"]
+    assert 'data-note-section="1"' in before["source_html"]
+
+    client.patch(url, json={"html": "<p>Edited.</p>"})
+    restored = client.post(f"{url}/restore-source")
+    assert restored.status_code == 200
+    assert restored.json()["html"] == before["source_html"]
+    with repo.db_session(db_path) as conn:
+        cell = conn.execute(
+            "SELECT source_render_version FROM notes_cells WHERE run_id=? AND row=10",
+            (run_id,),
+        ).fetchone()
+        snapshot = integrity_runner.build_input(conn, run_id, gen)
+    assert cell["source_render_version"] == source_render.RENDER_VERSION
+    assert snapshot.cells[0].selection_matches_content is True
+
+
 def test_restore_keeps_the_audit_history(client_run):
     """Restoring is an addition to the record, not an erasure of it."""
     client, run_id, db_path = client_run

@@ -29,11 +29,11 @@ import re
 from dataclasses import dataclass, field
 from typing import Iterable, Optional, Sequence
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 from notes.html_sanitize import sanitize_notes_html
 from notes.html_to_text import html_to_excel_text, rendered_length
-from notes.source_models import ContentOrigin, SourceBlock
+from notes.source_models import ContentOrigin, INPUT_KIND_PREPARED, SourceBlock
 from notes.writer import (
     CELL_CHAR_LIMIT,
     _strip_non_table_styles,
@@ -42,9 +42,17 @@ from notes.writer import (
 
 # Bump when the render changes shape, so a stored `source_rendered_sha256`
 # from an older build is recognisably stale rather than silently compared.
-RENDER_VERSION = "src-render-4"
+RENDER_VERSION = "src-render-5"
+
+
+def uses_subnote_sections(input_kind: str, render_version: str | None) -> bool:
+    """Use the numbered-section shape only for current prepared-source cells."""
+    return input_kind == INPUT_KIND_PREPARED and render_version == RENDER_VERSION
 
 _TABLE_OPEN_RE = re.compile(r"<table\b[^>]*>", re.IGNORECASE)
+_NUMBERED_HEADING_RE = re.compile(
+    r"^\s*(?:Note\s+)?(\d+(?:\.\d+)*)(?=\s|[.):]|$)", re.IGNORECASE,
+)
 
 
 class BlockSelectionError(ValueError):
@@ -186,6 +194,39 @@ def _assemble(blocks: Sequence[SourceBlock]) -> str:
     return "".join(out)
 
 
+def _wrap_numbered_subnotes(html: str) -> str:
+    """Keep each prepared sub-note heading with its following source blocks."""
+    soup = BeautifulSoup(html, "html.parser")
+    if soup.select_one('div[data-note-section="1"]'):
+        return html
+    root = soup.new_tag("div")
+    parent_number: str | None = None
+    sections: list[tuple[int, Tag]] = []
+    for node in list(soup.contents):
+        heading = (node if isinstance(node, Tag) and re.fullmatch(r"h[1-6]", node.name or "")
+                   else None)
+        match = _NUMBERED_HEADING_RE.match(heading.get_text(" ", strip=True)) if heading else None
+        if match:
+            number = match.group(1)
+            if "." not in number:
+                parent_number = number
+                sections.clear()
+            else:
+                if parent_number is None:
+                    parent_number = number.split(".", 1)[0]
+                if not number.startswith(parent_number + "."):
+                    sections.clear()
+                    parent_number = number.split(".", 1)[0]
+                depth = number.count(".")
+                while sections and sections[-1][0] >= depth:
+                    sections.pop()
+                section = soup.new_tag("div", attrs={"data-note-section": "1"})
+                (sections[-1][1] if sections else root).append(section)
+                sections.append((depth, section))
+        (sections[-1][1] if sections else root).append(node.extract())
+    return root.decode_contents()
+
+
 def render_blocks(
     available: Sequence[SourceBlock],
     block_ids: Iterable[str],
@@ -193,6 +234,7 @@ def render_blocks(
     format_ops: Optional[list] = None,
     row_label: str = "",
     cap: int = CELL_CHAR_LIMIT,
+    wrap_subnotes: bool = False,
 ) -> RenderedCell:
     """Build one cell from the named blocks. Deterministic and total.
 
@@ -202,6 +244,8 @@ def render_blocks(
     chosen = select_blocks(available, block_ids)
     warnings: list[str] = []
     raw = _assemble(chosen)
+    if wrap_subnotes:
+        raw = _wrap_numbered_subnotes(raw)
 
     cleaned, sanitizer_warnings = sanitize_notes_html(raw)
     warnings.extend(sanitizer_warnings)
