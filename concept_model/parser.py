@@ -471,6 +471,8 @@ def _classify_sheet(
     # ABSTRACT concept at that level.  Leaves and computed rows attach
     # to the deepest ABSTRACT above them.
     parent_by_indent: dict[int, str] = {}
+    # openpyxl recomputes max_column by scanning every cell, so read it once.
+    last_col = max(3, ws.max_column + 1)
 
     for row_num in range(1, ws.max_row + 1):
         label_cell = ws.cell(row=row_num, column=1)
@@ -481,7 +483,7 @@ def _classify_sheet(
         if not label:
             continue
 
-        kind = _classify_row(ws, row_num, label_cell, abstract_rows)
+        kind = _classify_row(ws, row_num, label_cell, abstract_rows, last_col)
         if kind is None:
             # Row has text but no recognised role (e.g. a meta header
             # cell at the top of the sheet) — skip rather than emit a
@@ -531,7 +533,7 @@ def _classify_sheet(
         # Collect formula edges (COMPUTED rows only).  Cross-sheet refs
         # are deferred to the second pass.
         if kind == "COMPUTED":
-            formula = _first_formula_in_row(ws, row_num)
+            formula = _first_formula_in_row(ws, row_num, last_col)
             if formula:
                 _collect_edges(node, sheet_name, formula, pending_cross_refs)
 
@@ -541,6 +543,7 @@ def _classify_row(
     row: int,
     label_cell,
     abstract_rows: set[int],
+    last_col: int,
 ) -> str | None:
     """Classify a single row as ABSTRACT, LEAF, or COMPUTED.
 
@@ -555,7 +558,7 @@ def _classify_row(
     # Scan the value columns (B onward) for a formula.  We stop at the
     # first one found because every template we've seen either has the
     # same formula across all value columns or none at all.
-    for col in range(2, max(3, ws.max_column + 1)):
+    for col in range(2, last_col):
         cell = ws.cell(row=row, column=col)
         val = cell.value
         if isinstance(val, str) and val.startswith("="):
@@ -563,9 +566,9 @@ def _classify_row(
     return "LEAF"
 
 
-def _first_formula_in_row(ws: Worksheet, row: int) -> str | None:
+def _first_formula_in_row(ws: Worksheet, row: int, last_col: int) -> str | None:
     """Return the first formula found in the row (cols B..max), or None."""
-    for col in range(2, max(3, ws.max_column + 1)):
+    for col in range(2, last_col):
         val = ws.cell(row=row, column=col).value
         if isinstance(val, str) and val.startswith("="):
             return val

@@ -18,6 +18,7 @@ the second.
 """
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -30,22 +31,29 @@ _AUDIT = _ROOT / "docs" / "agent-prompt-audit.html"
 
 # Searched for references to each prompt file.
 _SOURCE_SUFFIXES = (".py", ".md", ".ts", ".tsx", ".html")
-_SKIP_DIRS = {"node_modules", "venv", ".git", "__pycache__", "dist", "output"}
+# `.claude` holds agent worktrees: full repo copies that must not count as
+# references. Pruned during the walk so large trees are never listed.
+_SKIP_DIRS = {"node_modules", "venv", ".git", "__pycache__", "dist", "output", ".claude"}
+# Gitignored working documents exist only on one machine and must not decide
+# whether a prompt is live.
+_SKIP_PATHS = {_ROOT / "docs" / "local"}
 
 
 def _all_source_text() -> str:
     chunks = []
-    for path in _ROOT.rglob("*"):
-        if not path.is_file() or path.suffix not in _SOURCE_SUFFIXES:
-            continue
-        if any(part in _SKIP_DIRS for part in path.parts):
-            continue
-        if path == Path(__file__):
-            continue
-        try:
-            chunks.append(path.read_text(encoding="utf-8", errors="ignore"))
-        except OSError:
-            continue
+    for dirpath, dirnames, filenames in os.walk(_ROOT):
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in _SKIP_DIRS and Path(dirpath) / d not in _SKIP_PATHS
+        ]
+        for name in filenames:
+            path = Path(dirpath) / name
+            if path.suffix not in _SOURCE_SUFFIXES or path == Path(__file__):
+                continue
+            try:
+                chunks.append(path.read_text(encoding="utf-8", errors="ignore"))
+            except OSError:
+                continue
     return "\n".join(chunks)
 
 
@@ -58,6 +66,18 @@ def _prompt_files() -> list[str]:
     return sorted(p.name for p in _PROMPT_DIR.glob("*.md"))
 
 
+def _constructed_prompt_stems() -> set[str]:
+    """Names `prompts.render_prompt` builds from the registries at runtime."""
+    from statement_types import VARIANTS
+
+    stems = set()
+    for statement, variant in VARIANTS:
+        stmt = statement.value.lower()
+        stems.add(f"{stmt}_{variant.lower()}")
+        stems.update(f"{stmt}_{standard}" for standard in ("mfrs", "mpers"))
+    return stems
+
+
 @pytest.mark.parametrize("filename", _prompt_files())
 def test_every_prompt_file_is_referenced(filename, source_text):
     """A prompt no code path can load is dead weight that drifts silently.
@@ -66,7 +86,11 @@ def test_every_prompt_file_is_referenced(filename, source_text):
     (`f"{stmt}_{variant}.md"`), so a bare-stem reference counts.
     """
     stem = filename[:-3]
-    assert filename in source_text or stem in source_text, (
+    assert (
+        filename in source_text
+        or stem in source_text
+        or stem in _constructed_prompt_stems()
+    ), (
         f"prompts/{filename} is referenced nowhere — either wire it up or "
         f"delete it"
     )

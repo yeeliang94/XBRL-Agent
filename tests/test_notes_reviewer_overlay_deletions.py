@@ -15,6 +15,8 @@ These tests pin the fix:
 """
 from __future__ import annotations
 
+import shutil
+import tempfile
 from pathlib import Path
 
 import openpyxl
@@ -44,7 +46,7 @@ def db_path(tmp_path: Path) -> Path:
     return p
 
 
-def _seed_merged_workbook(tmp_path: Path) -> Path:
+def _build_merged_workbook(tmp_path: Path) -> Path:
     """A real merged workbook with one filled prose note (prose + evidence)."""
     src = face_template_path(StatementType.SOFP, "CuNonCu", level="company")
     face = tmp_path / "SOFP_filled.xlsx"
@@ -76,6 +78,22 @@ def _seed_merged_workbook(tmp_path: Path) -> Path:
         notes_workbook_paths={NotesTemplateType.CORP_INFO: str(notes)},
     )
     assert merged_result.success
+    return merged
+
+
+_MERGED_TEMPLATE: Path | None = None
+
+
+def _seed_merged_workbook(tmp_path: Path) -> Path:
+    """Give each test its own copy of one merged workbook built per module.
+
+    The inputs are fixed and a real merge plus recalculation takes seconds.
+    """
+    global _MERGED_TEMPLATE
+    if _MERGED_TEMPLATE is None:
+        _MERGED_TEMPLATE = _build_merged_workbook(Path(tempfile.mkdtemp()))
+    merged = tmp_path / "filled.xlsx"
+    shutil.copyfile(_MERGED_TEMPLATE, merged)
     return merged
 
 

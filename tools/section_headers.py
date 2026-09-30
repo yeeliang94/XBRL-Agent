@@ -81,6 +81,8 @@ def discover_section_headers(
     """
     extra = extra_keywords or frozenset()
     headers: list[SectionHeader] = []
+    # ws[row] recomputes max_column by scanning every cell, so read it once.
+    max_col = ws.max_column
 
     for row in range(1, ws.max_row + 1):
         cell = ws.cell(row=row, column=1)
@@ -105,7 +107,9 @@ def discover_section_headers(
         # authoritative, including any accidental formulas on true headers.
         has_formula = any(
             isinstance(value_cell.value, str) and value_cell.value.startswith("=")
-            for value_cell in ws[row][1:]
+            for (value_cell,) in ws.iter_cols(
+                min_col=2, max_col=max_col, min_row=row, max_row=row
+            )
         )
         if is_header_fill or (norm in extra and not has_formula):
             headers.append(SectionHeader(row=row, label=label_raw, normalized=norm))
