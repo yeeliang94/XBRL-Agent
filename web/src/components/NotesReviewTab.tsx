@@ -602,17 +602,15 @@ export function NotesReviewTab({
 
   const selectSourceNote = useCallback((note: SourceNoteInventoryRow) => {
     setSelectedSubnoteRef(null);
-    if (note.placements.length === 1) {
+    if (note.placements.length >= 1) {
       selectSourcePlacement(note, note.placements[0]);
       return;
     }
     if (saveBlocked || moveBusy) return;
     setSelectedSourceNote(note.note_num);
     reportCellPages(sourceNotePages(note), onActiveCellPages);
-    if (note.placements.length === 0) {
-      setFocusRow(null);
-      setSelectedCellKey(null);
-    }
+    setFocusRow(null);
+    setSelectedCellKey(null);
   }, [onActiveCellPages, selectSourcePlacement, saveBlocked, moveBusy]);
 
   const selectSubnote = useCallback((
