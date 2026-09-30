@@ -1777,6 +1777,11 @@ describe("NotesReviewTab — full-template projection (Phase 5)", () => {
     expect(blocked).toHaveBeenLastCalledWith(true);
     fireEvent.blur(py);
     await screen.findByText("Save failed");
+    const errorCell = screen.getByRole("cell", { name: "Save errors" });
+    expect(errorCell).toHaveStyle({ gridColumn: "1 / -1" });
+    expect(within(errorCell).getByRole("alert")).toHaveTextContent("Prior year: Could not save this value");
+    expect(within(errorCell).getByRole("button", { name: "Retry save" })).toBeInTheDocument();
+    expect(within(errorCell).getByRole("button", { name: "Discard unsaved changes" })).toBeInTheDocument();
     expect(blocked).toHaveBeenLastCalledWith(true);
     fail = false;
     fireEvent.change(cy, { target: { value: "5000" } });
@@ -1906,6 +1911,11 @@ describe("NotesReviewTab — full-template projection (Phase 5)", () => {
 
     const numericRow = screen.getByTestId("notes-numeric-row");
     expect(numericRow).toBeInTheDocument();
+    const header = within(screen.getByRole("table", { name: "Issued Capital values" })).getAllByRole("row")[0];
+    expect(header).toHaveTextContent("Line item");
+    expect(header).toHaveTextContent("Current year");
+    expect(header).toHaveTextContent("Prior year");
+    expect(numericRow).toHaveStyle({ gridTemplateColumns: header.style.gridTemplateColumns });
     const cy = screen.getByTestId("numeric-input-6-cy") as HTMLInputElement;
     const py = screen.getByTestId("numeric-input-6-py") as HTMLInputElement;
     // Grouped with a thousands separator at rest, mirroring the face-statement
@@ -1917,6 +1927,21 @@ describe("NotesReviewTab — full-template projection (Phase 5)", () => {
     expect(cy.value).toBe("4242");
     fireEvent.blur(cy);
     expect(cy.value).toBe("4,242");
+  });
+
+  test("aligns Group and Company values on the related party sheet", async () => {
+    mockFetchOnce({ sheets: [{ sheet: "Notes-RelatedPartytran", kind: "numeric", rows: [{
+      row: 8, label: "Transactions with directors", kind: "numeric",
+      concept_uuid: "uuid-related-8", html: "", evidence: null, source_pages: [14], updated_at: "",
+      values: { group_cy: 1200, group_py: 900, company_cy: 700, company_py: 500 },
+    }] }] });
+    render(<NotesReviewTab runId={7} />);
+    const row = await screen.findByTestId("notes-numeric-row");
+    const header = within(screen.getByRole("table", { name: "Related Party Transactions values" })).getAllByRole("row")[0];
+    expect(header).toHaveTextContent("Group CYGroup PYCompany CYCompany PY");
+    expect(row).toHaveStyle({ gridTemplateColumns: header.style.gridTemplateColumns });
+    expect(within(row).getByRole("textbox", { name: "Transactions with directors, Group CY" })).toHaveValue("1,200");
+    expect(within(row).getByRole("textbox", { name: "Transactions with directors, Company PY" })).toHaveValue("500");
   });
 
   test("editing a numeric cell PATCHes the facts endpoint", async () => {

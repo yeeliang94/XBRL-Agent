@@ -15,6 +15,7 @@
 // NotesReviewTab.css that carries selectors for structural table/list
 // rules TipTap's rendered DOM needs (prefix `.notes-review-tab`).
 import {
+  Fragment,
   useEffect,
   useRef,
   useState,
@@ -1126,6 +1127,11 @@ function SheetSection({
   }, []);
 
   const canFormat = (sheet.kind ?? "prose") === "prose";
+  const numericColumns = Object.keys(NUMERIC_VALUE_COLUMNS).filter((key) =>
+    sheet.rows.some((cell) => key in (cell.values ?? {}) || cell.categories?.some((category) => key in category.values)),
+  );
+  const numericGridColumns = `minmax(220px, 1fr) repeat(${numericColumns.length * (humanFigures ? 2 : 1)}, minmax(100px, 120px))`;
+  const numericGridMinWidth = 220 + numericColumns.length * (humanFigures ? 2 : 1) * 100;
   const hasPendingRowSave = Object.keys(rowSaveStatuses).length > 0;
   useEffect(() => {
     onSaveBlocked(hasPendingRowSave || formatRequestPending || formatStatus?.status === "running");
@@ -1192,7 +1198,20 @@ function SheetSection({
           Formatting notes…
         </div>
       )}
-      <div style={styles.rowStack}>
+      <div style={numericColumns.length ? styles.numericTable : styles.rowStack}
+        role={numericColumns.length ? "table" : undefined}
+        aria-label={numericColumns.length ? `${notesSheetDisplayName(sheet.sheet)} values` : undefined}>
+          {numericColumns.length > 0 && (
+            <div role="row" style={{ ...styles.numericTableHeader, gridTemplateColumns: numericGridColumns, minWidth: numericGridMinWidth }}>
+              <span role="columnheader">Line item</span>
+              {numericColumns.map((key) => (
+                <Fragment key={key}>
+                  <span role="columnheader" style={styles.numericColumnHeader}>{NUMERIC_VALUE_COLUMNS[key].label}</span>
+                  {humanFigures && <span role="columnheader" style={styles.numericColumnHeader}>Human {NUMERIC_VALUE_COLUMNS[key].label}</span>}
+                </Fragment>
+              ))}
+            </div>
+          )}
           {human && sheet.rows.some((cell) => cell.kind !== "numeric" && cell.node_uuid) && (
             <div className="notes-human-pair-header" style={styles.humanPairHeader}>
               <span>Extracted note</span>
@@ -1213,6 +1232,9 @@ function SheetSection({
                 onSaveStatusChange={handleRowSaveStatus}
                 onComparisonChange={onComparisonChange}
                 humanFigures={humanFigures}
+                columns={numericColumns}
+                gridTemplateColumns={numericGridColumns}
+                gridMinWidth={numericGridMinWidth}
                 onActiveCellPages={onActiveCellPages}
                 selected={selectedCellKey === `${sheet.sheet}:${cell.row}`}
                 onActivate={() => onCellActivate?.(sheet.sheet, cell.row)}
@@ -1994,6 +2016,9 @@ function NumericCellRow(props: {
   onSaveStatusChange: (row: number, status: SaveStatus, category?: string) => void;
   onComparisonChange?: () => void;
   humanFigures?: Map<string, HumanFigureSlot> | null;
+  columns: string[];
+  gridTemplateColumns: string;
+  gridMinWidth: number;
   runId: number;
   cell: NotesCell;
   onActiveCellPages?: (pages: number[]) => void;
@@ -2017,6 +2042,9 @@ function NumericCategoryRow({
   onSaveStatusChange,
   onComparisonChange,
   humanFigures,
+  columns,
+  gridTemplateColumns,
+  gridMinWidth,
   dimensionKey,
   selected = false,
   onActivate,
@@ -2027,17 +2055,14 @@ function NumericCategoryRow({
   onSaveStatusChange: (row: number, status: SaveStatus, category?: string) => void;
   onComparisonChange?: () => void;
   humanFigures?: Map<string, HumanFigureSlot> | null;
+  columns: string[];
+  gridTemplateColumns: string;
+  gridMinWidth: number;
   dimensionKey: string;
   selected?: boolean;
   onActivate?: () => void;
 }) {
   const values = cell.values ?? {};
-  // Only render the columns this filing level actually uses, in a stable
-  // canonical order (NUMERIC_VALUE_COLUMNS insertion order).
-  const columns = Object.keys(NUMERIC_VALUE_COLUMNS).filter(
-    (k) => k in values,
-  );
-
   // Local draft strings keyed by column so typing doesn't fight the number
   // round-trip; seeded from the server values.
   const [drafts, setDrafts] = useState<Record<string, string>>(() => {
@@ -2111,10 +2136,14 @@ function NumericCategoryRow({
   return (
     <div
       data-testid="notes-numeric-row"
+      role="row"
       data-cell-row={cell.row}
       className="notes-review-row"
       style={{
         ...styles.workspaceCellRow,
+        ...styles.numericTableRow,
+        gridTemplateColumns,
+        minWidth: gridMinWidth,
         ...(selected ? styles.workspaceNumericRowSelected : {}),
       }}
       onFocusCapture={() => {
@@ -2126,24 +2155,18 @@ function NumericCategoryRow({
         reportCellPages(cell.source_pages, onActiveCellPages);
       }}
     >
-      <aside style={styles.cellLeft}>
+      <div role="rowheader" style={styles.cellLeft}>
         <div style={styles.cellLabel}>{cell.label}</div>
-      </aside>
-      <div style={styles.cellRight}>
-        <div style={styles.cellToolbar}>
-          <div style={styles.cellToolbarSpacer} />
-          <SaveStatusBadge status={status} />
-
-        </div>
-        <div style={styles.numericGrid}>
-          {columns.map((key) => (
-            <label key={key} style={styles.numericField}>
-              <span style={styles.numericFieldLabel}>
-                {NUMERIC_VALUE_COLUMNS[key].label}
-              </span>
+        <SaveStatusBadge status={status} />
+      </div>
+      {columns.map((key) => (
+        <Fragment key={key}>
+          <div role="cell" style={styles.numericValueCell}>
+            {key in values && (
               <input
                 type="text"
                 inputMode="decimal"
+                aria-label={`${cell.label}, ${NUMERIC_VALUE_COLUMNS[key].label}`}
                 data-testid={`numeric-input-${cell.row}-${key}`}
                 style={styles.numericInput}
                 // Grouped (1,234) at rest; raw digits while this field is
@@ -2170,32 +2193,38 @@ function NumericCategoryRow({
                   saveColumn(key);
                 }}
               />
-              {humanFigures && cell.concept_uuid && (() => {
+            )}
+          </div>
+          {humanFigures && <div role="cell" style={styles.numericHumanValue}>
+              {cell.concept_uuid && key in values && (() => {
                 const { period, entity_scope } = NUMERIC_VALUE_COLUMNS[key];
                 const slot = humanFigures.get(humanSlotKey(cell.concept_uuid, period, entity_scope, dimensionKey));
                 const marker = slot && slot.status !== "agree" ? HUMAN_STATUS_SYMBOL[slot.status] : null;
                 return <span data-testid={`numeric-human-${cell.row}-${dimensionKey || "base"}-${key}`}
-                  style={styles.numericHumanValue}>
-                  <span style={styles.numericFieldLabel}>Human {NUMERIC_VALUE_COLUMNS[key].label}</span>
+                  style={styles.numericHumanFigure}>
                   {marker && <span role="img" aria-label={HUMAN_STATUS_LABEL[slot!.status]}
                     title={HUMAN_STATUS_LABEL[slot!.status]}>{marker} </span>}
                   {slot?.human_value == null ? "—" : formatGroupedInput(String(slot.human_value))}
                 </span>;
               })()}
-              {columnStatuses[key] === "failed" && (
-                <span role="alert">
-                  Could not save this value. Check the number and retry.
-                  <button type="button" onClick={() => saveColumn(key)}>Retry save</button>
-                  <button type="button" onClick={() => {
-                    setDrafts((previous) => ({ ...previous, [key]: values[key] == null ? "" : String(values[key]) }));
-                    setColumnStatus(key, "idle");
-                  }}>Discard unsaved changes</button>
-                </span>
-              )}
-            </label>
+          </div>}
+        </Fragment>
+      ))}
+      {columns.some((key) => columnStatuses[key] === "failed") && (
+        <div role="cell" aria-label="Save errors" aria-colspan={1 + columns.length * (humanFigures ? 2 : 1)}
+          style={styles.numericSaveErrors}>
+          {columns.filter((key) => columnStatuses[key] === "failed").map((key) => (
+            <div key={key} role="alert" style={styles.numericSaveError}>
+              <span>{NUMERIC_VALUE_COLUMNS[key].label}: Could not save this value. Check the number and retry.</span>
+              <button type="button" onClick={() => saveColumn(key)}>Retry save</button>
+              <button type="button" onClick={() => {
+                setDrafts((previous) => ({ ...previous, [key]: values[key] == null ? "" : String(values[key]) }));
+                setColumnStatus(key, "idle");
+              }}>Discard unsaved changes</button>
+            </div>
           ))}
         </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -2658,6 +2687,30 @@ const styles = {
     padding: "12px 14px",
     borderTop: `1px solid ${pwc.grey200}`,
   } as React.CSSProperties,
+  numericTable: {
+    overflowX: "auto" as const,
+    padding: "12px 14px",
+    borderTop: `1px solid ${pwc.grey200}`,
+  } as React.CSSProperties,
+  numericTableHeader: {
+    display: "grid",
+    gap: pwc.space.md,
+    padding: `${pwc.space.lg}px ${pwc.space.xl}px`,
+    background: pwc.grey50,
+    color: pwc.grey700,
+    borderBottom: `1px solid ${pwc.grey200}`,
+    fontFamily: pwc.fontHeading,
+    fontSize: 14,
+    fontWeight: pwc.weight.medium,
+  } as React.CSSProperties,
+  numericColumnHeader: {
+    textAlign: "right" as const,
+  } as React.CSSProperties,
+  numericTableRow: {
+    gap: pwc.space.md,
+    alignItems: "center",
+    padding: `${pwc.space.xs}px ${pwc.space.xl}px`,
+  } as React.CSSProperties,
   humanPair: {
     display: "grid",
     gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
@@ -2811,34 +2864,38 @@ const styles = {
     gap: pwc.space.xs,
     paddingLeft: pwc.space.sm,
   } as React.CSSProperties,
-  // Numeric notes: a small grid of value inputs (1-4 columns by filing level).
-  numericGrid: {
-    display: "flex",
-    flexWrap: "wrap" as const,
-    gap: 12,
-    padding: "4px 0",
+  numericValueCell: {
+    minWidth: 0,
+    textAlign: "right" as const,
   } as React.CSSProperties,
-  numericField: {
+  numericSaveErrors: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: 3,
-    minWidth: 110,
+    gap: pwc.space.sm,
+    gridColumn: "1 / -1",
+    minWidth: 0,
+    padding: `${pwc.space.xs}px 0`,
   } as React.CSSProperties,
-  numericFieldLabel: {
-    fontSize: 12,
-    fontWeight: 680,
-    color: pwc.grey700,
+  numericSaveError: {
+    display: "flex",
+    alignItems: "center",
+    flexWrap: "wrap" as const,
+    gap: pwc.space.sm,
+    fontSize: 14,
+    textAlign: "left" as const,
   } as React.CSSProperties,
   numericHumanValue: {
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: 3,
-    padding: "4px 8px",
+    minWidth: 0,
     fontSize: 14,
     textAlign: "right" as const,
     color: pwc.grey900,
   } as React.CSSProperties,
+  numericHumanFigure: {
+    fontVariantNumeric: "tabular-nums",
+  } as React.CSSProperties,
   numericInput: {
+    width: "100%",
+    boxSizing: "border-box" as const,
     padding: "4px 8px",
     fontSize: 14,
     fontFamily: pwc.fontBody,
