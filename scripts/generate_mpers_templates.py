@@ -474,12 +474,13 @@ def walk_role_for_taxonomy(
 ) -> list[tuple[int, str, str, bool]]:
     """Walk one role from an explicitly selected SSM taxonomy.
 
-    The generator predates multi-standard callers and its label loader keeps a
-    module-level cache. This adapter owns the temporary context switch,
-    serialises it, and restores the generator defaults after the walk.
+    The generator predates multi-standard callers. This adapter owns the
+    temporary context switch, serialises it, and restores the generator
+    defaults after the walk. The label cache is shared, not switched:
+    ``load_label_map`` always reads every label file under ``_TAXONOMY_ROOT``,
+    so its result does not depend on ``taxonomy_dir``.
     """
     global _MPERS_TAXONOMY_DIR, _ROLE_XSD
-    global _LABEL_MAP_CACHE, _LABEL_ROLE_TABLE
 
     standard = standard.lower()
     taxonomy_dir = Path(taxonomy_dir)
@@ -489,25 +490,13 @@ def walk_role_for_taxonomy(
         / f"pre_ssmt-fs-{standard}_2022-12-31_role-{role_number}.xml"
     )
     with _TAXONOMY_CONTEXT_LOCK:
-        old = (
-            _MPERS_TAXONOMY_DIR,
-            _ROLE_XSD,
-            _LABEL_MAP_CACHE,
-            _LABEL_ROLE_TABLE,
-        )
+        old = (_MPERS_TAXONOMY_DIR, _ROLE_XSD)
         try:
             _MPERS_TAXONOMY_DIR = taxonomy_dir
             _ROLE_XSD = role_xsd
-            _LABEL_MAP_CACHE = None
-            _LABEL_ROLE_TABLE = {}
             return walk_role(pre_file)
         finally:
-            (
-                _MPERS_TAXONOMY_DIR,
-                _ROLE_XSD,
-                _LABEL_MAP_CACHE,
-                _LABEL_ROLE_TABLE,
-            ) = old
+            _MPERS_TAXONOMY_DIR, _ROLE_XSD = old
 
 
 # Column-layout constants — pinned by the Phase 1 MFRS format tests.
