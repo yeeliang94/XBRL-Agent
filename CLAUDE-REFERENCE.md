@@ -1041,6 +1041,12 @@ and mTool decorators add the same 2em left margin to each wrapper. The
 formatter's content check protects these boundaries. Word-source content is
 not given new section wrappers. Native mTool layout for newly indented wide
 tables still requires a save/reopen check before declaring full fidelity.
+The prepared-source renderer wraps each numbered sub-note heading with its
+following source blocks before persisting the cell. This keeps peer sub-notes
+and their prose, lists and tables together in review and export without changing
+the source text or table geometry. The source render version advances when this
+saved HTML shape changes. Pinned by the source-render, source-write,
+notes-section and notes-decoration tests.
 At copy/export time, source heading levels without wrappers also give deeper
 headings and their following prose a 2em offset per level. Adjacent paragraphs
 and tables receive marked, empty transport paragraphs so a native editor that

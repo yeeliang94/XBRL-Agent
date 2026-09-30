@@ -100,13 +100,16 @@ def test_bold_and_inline_marks_are_preserved():
 def test_subnote_section_indents_its_table_and_prose_together():
     html = ('<h3>8 Revenue</h3><div data-note-section="1">'
             '<h3>8.1 Services</h3><p>Service revenue.</p>'
-            '<table><tr><td>100</td></tr></table></div>')
+            '<table><tr><td>100</td></tr></table></div>'
+            '<div data-note-section="1"><h3>8.2 Goods</h3>'
+            '<p>Goods revenue.</p><table><tr><td>200</td></tr></table></div>')
     soup = BeautifulSoup(decorate_notes_html(html), "html.parser")
-    section = soup.select_one('div[data-note-section="1"]')
-    assert section is not None
-    assert "margin-left: 2em" in section["style"]
-    assert section.table is not None
-    assert "width: 100%" in section.table["style"]
+    sections = soup.select('div[data-note-section="1"]')
+    assert [section.h3.get_text() for section in sections] == ["8.1 Services", "8.2 Goods"]
+    assert [section.p.get_text() for section in sections] == ["Service revenue.", "Goods revenue."]
+    for section in sections:
+        assert "margin-left: 2em" in section["style"]
+        assert "width: 100%" in section.table["style"]
     assert "margin-left" not in soup.h3.get("style", "")
 
 

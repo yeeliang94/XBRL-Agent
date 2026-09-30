@@ -8,6 +8,7 @@ half a split table, a silent truncation — all fail instead.
 from __future__ import annotations
 
 import pytest
+from bs4 import BeautifulSoup
 
 from notes import source_render as sr
 from notes.html_to_text import rendered_length
@@ -54,6 +55,38 @@ def test_rendered_text_matches_the_source_text():
     ids = [b.block_id for b in BLOCKS]
     out = sr.render_blocks(BLOCKS, ids)
     assert out.text.split() == sr.source_text_of(BLOCKS).split()
+
+
+def test_prepared_subnotes_indent_each_heading_with_its_own_content():
+    blocks = [
+        _b(0, "<h3>19 Financial instruments</h3>", kind="heading"),
+        _b(1, "<h3>19.1 Credit risk</h3>", kind="heading"),
+        _b(2, "<p>Credit exposure is monitored.</p>"),
+        _b(3, "<ul><li>Customer balances</li></ul>", kind="list"),
+        _b(4, "<table><tr><td>Credit exposure</td></tr></table>", kind="table"),
+        _b(5, "<h3>19.2 Liquidity risk</h3>", kind="heading"),
+        _b(6, "<p>Maturities are reviewed.</p>"),
+        _b(7, "<table><tr><td>Debt maturity</td></tr></table>", kind="table"),
+        _b(8, "<h3>Note 20 Subsequent events</h3>", kind="heading"),
+        _b(9, "<p>There were no events.</p>"),
+    ]
+    out = sr.render_blocks(blocks, [b.block_id for b in blocks], wrap_subnotes=True)
+    soup = BeautifulSoup(out.html, "html.parser")
+    sections = soup.select('div[data-note-section="1"]')
+    assert len(sections) == 2
+    assert [section.h3.get_text() for section in sections] == [
+        "19.1 Credit risk", "19.2 Liquidity risk",
+    ]
+    assert [section.p.get_text() for section in sections] == [
+        "Credit exposure is monitored.", "Maturities are reviewed.",
+    ]
+    assert [section.table.get_text() for section in sections] == [
+        "Credit exposure", "Debt maturity",
+    ]
+    assert sections[0].ul.li.get_text() == "Customer balances"
+    assert soup.find("h3", string="Note 20 Subsequent events").find_parent(
+        attrs={"data-note-section": "1"}) is None
+    assert out.text.split() == sr.source_text_of(blocks).split()
 
 
 def test_an_unknown_block_id_is_refused():

@@ -2726,7 +2726,10 @@ def _write_from_source_in_connection(
         # The canonical catch-all cell holds the union. The Sheet-12 sink
         # collects one payload per source note and combines them once; sending
         # the union here would copy the earlier note a second time.
-        payload_html = source_render.render_blocks(available, selected_ids).html
+        payload_html = source_render.render_blocks(
+            available, selected_ids,
+            wrap_subnotes=deps.prepared_source_required,
+        ).html
     else:
         payload_html = rendered_html
     note_num_val = _note_num_for_blocks(

@@ -617,6 +617,9 @@ def write_cell_from_blocks(
     generation = srepo.fetch_generation(conn, generation_id)
     if generation is None or generation["run_id"] != run_id or generation["status"] != "active":
         raise SourceWriteError("the source generation is stale or belongs to another run; reload the active source.")
+    wrap_subnotes = source_render.uses_subnote_sections(
+        generation["input_kind"], source_render.RENDER_VERSION,
+    )
     available = load_blocks(conn, generation_id)
     try:
         from notes.source_sections import expand_section_ids
@@ -640,6 +643,7 @@ def write_cell_from_blocks(
         rendered = source_render.render_blocks(
             available, wanted, format_ops=format_ops,
             row_label=f"{sheet} row {row}",
+            wrap_subnotes=wrap_subnotes,
         )
     except (source_render.BlockSelectionError, ValueError) as exc:
         raise SourceWriteError(str(exc)) from exc
@@ -723,6 +727,7 @@ def write_cell_from_blocks(
                 rendered = source_render.render_blocks(
                     available, sorted(retained | set(rendered.block_ids)),
                     row_label=f"{sheet} row {row}",
+                    wrap_subnotes=wrap_subnotes,
                 )
                 if rendered.oversized:
                     raise SourceWriteError(

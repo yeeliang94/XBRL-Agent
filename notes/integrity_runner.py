@@ -86,7 +86,7 @@ def build_input(
 
     cells = []
     for r in conn.execute(
-        "SELECT sheet, row, html, source_rendered_sha256, current_html_sha256, "
+        "SELECT sheet, row, html, source_rendered_sha256, source_render_version, current_html_sha256, "
         "content_origin FROM notes_cells WHERE run_id = ? ORDER BY sheet, row",
         (run_id,),
     ).fetchall():
@@ -95,10 +95,14 @@ def build_input(
         if not ids:
             continue
         from notes.html_to_text import rendered_length
-        from notes.source_render import render_blocks, BlockSelectionError
+        from notes.source_render import render_blocks, BlockSelectionError, uses_subnote_sections
         from notes.format_verify import verify_format_only
         try:
-            selected_html = render_blocks(blocks, ids).html
+            selected_html = render_blocks(
+                blocks, ids,
+                wrap_subnotes=bool(gen and uses_subnote_sections(
+                    gen["input_kind"], r["source_render_version"])),
+            ).html
             selection_matches = verify_format_only(selected_html, r["html"] or "").ok
         except BlockSelectionError:
             selection_matches = False
