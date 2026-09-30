@@ -41,8 +41,8 @@ export interface HumanFileRecord {
   not_compared: HumanNotCompared[];
 }
 
-/** ✓ agree · ! different value · ○ missed by AI · ◇ AI-only */
-export type HumanSlotStatus = "agree" | "different" | "missed" | "ai_only";
+/** Agreement, difference, missed, AI-only, or an excluded human zero. */
+export type HumanSlotStatus = "agree" | "different" | "missed" | "ai_only" | "zero_blank";
 
 export interface HumanFigureSlot {
   concept_uuid: string;
@@ -59,6 +59,7 @@ export interface HumanFigureTotals {
   both_filled: number;
   same_value: number;
   ai_only: number;
+  zero_blank_excluded: number;
 }
 
 export interface HumanComparison {
@@ -70,7 +71,7 @@ export interface HumanComparison {
   };
   notes: {
     totals: { human_filled: number; both_filled: number; ai_only: number };
-    fields: { concept_uuid: string; status: Exclude<HumanSlotStatus, "different"> }[];
+    fields: { concept_uuid: string; status: "agree" | "missed" | "ai_only" }[];
     human_html: Record<string, string>;
   };
 }
@@ -80,6 +81,7 @@ export const HUMAN_STATUS_SYMBOL: Record<HumanSlotStatus, string> = {
   different: "!",
   missed: "○",
   ai_only: "◇",
+  zero_blank: "·",
 };
 
 export const HUMAN_STATUS_LABEL: Record<HumanSlotStatus, string> = {
@@ -87,6 +89,7 @@ export const HUMAN_STATUS_LABEL: Record<HumanSlotStatus, string> = {
   different: "Differs from human",
   missed: "Missed by AI",
   ai_only: "AI-only",
+  zero_blank: "Human zero, AI blank — excluded from figures statistics",
 };
 
 /** Lookup key for one value slot shown in the figures table. */

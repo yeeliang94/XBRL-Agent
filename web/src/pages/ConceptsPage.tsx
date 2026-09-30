@@ -938,14 +938,18 @@ export function ConceptsPage({
       const unmatchedNotes = comparison.file.unmatched.filter((u) => u.kind === "note").length;
       if (unmatchedNotes > 0) comparisonExcludes = `Excludes ${unmatchedNotes} unmatched note${unmatchedNotes === 1 ? "" : "s"}`;
     } else {
-      const t = comparison.figures.totals[activeScope] ?? { human_filled: 0, both_filled: 0, same_value: 0, ai_only: 0 };
+      const t = comparison.figures.totals[activeScope] ?? { human_filled: 0, both_filled: 0, same_value: 0, ai_only: 0, zero_blank_excluded: 0 };
       comparisonTiles = [
         { label: "Found", value: formatShare(t.both_filled, t.human_filled) },
         { label: "Same value", value: formatShare(t.same_value, t.both_filled) },
         { label: "AI-only", value: String(t.ai_only) },
       ];
       const n = comparison.figures.excluded.unmatched_rows;
-      if (n > 0) comparisonExcludes = `Excludes ${n} unmatched row${n === 1 ? "" : "s"}`;
+      const exclusions = [
+        t.zero_blank_excluded > 0 ? `${t.zero_blank_excluded} human zero / AI blank slot${t.zero_blank_excluded === 1 ? "" : "s"}` : null,
+        n > 0 ? `${n} unmatched row${n === 1 ? "" : "s"}` : null,
+      ].filter(Boolean);
+      if (exclusions.length > 0) comparisonExcludes = `Excludes ${exclusions.join(" and ")}`;
     }
   }
   const activeNotCompared = !notesActive && humanActive && activeTemplate
@@ -2152,8 +2156,8 @@ function ReadOnlyValue({
   );
 }
 
-/** The human's value for one slot with its marker: ✓ agree, ! different
- *  value, ○ missed by AI, ◇ AI-only. Blank when the human file has nothing
+/** The human's value for one slot with its marker: ! different value,
+ *  ○ missed by AI, ◇ AI-only, · excluded zero. Blank when the human file has nothing
  *  to compare there (including cells mTool calculates). */
 function HumanValueCell({
   slot,
