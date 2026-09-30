@@ -52,7 +52,8 @@ def test_attach_compare_edit_replace_and_remove(app, tmp_path):
     totals = client.get(f"/api/runs/{run_id}/human-comparison").json()[
         "figures"]["totals"]["Company"]
     assert totals == {"human_filled": len(facts), "both_filled": len(facts),
-                      "same_value": len(facts), "ai_only": 0}
+                      "same_value": len(facts), "ai_only": 0,
+                      "zero_blank_excluded": 0}
 
     with sqlite3.connect(db) as conn:
         conn.execute(

@@ -20,7 +20,8 @@ def test_found_same_value_and_ai_only_follow_the_agreed_formulas():
     result = compare_figures(human, ai)
 
     assert result["totals"] == {"Company": {
-        "human_filled": 50, "both_filled": 45, "same_value": 40, "ai_only": 3}}
+        "human_filled": 50, "both_filled": 45, "same_value": 40,
+        "ai_only": 3, "zero_blank_excluded": 0}}
     statuses = {s["concept_uuid"]: s["status"] for s in result["slots"]}
     assert statuses["u0"] == "agree"
     assert statuses["u41"] == "different"
@@ -39,8 +40,10 @@ def test_each_period_and_scope_is_its_own_slot():
     result = compare_figures(human, ai)
 
     assert result["totals"] == {
-        "Group": {"human_filled": 2, "both_filled": 1, "same_value": 1, "ai_only": 0},
-        "Company": {"human_filled": 1, "both_filled": 1, "same_value": 1, "ai_only": 0},
+        "Group": {"human_filled": 2, "both_filled": 1, "same_value": 1,
+                  "ai_only": 0, "zero_blank_excluded": 0},
+        "Company": {"human_filled": 1, "both_filled": 1, "same_value": 1,
+                    "ai_only": 0, "zero_blank_excluded": 0},
     }
     assert [s["status"] for s in result["slots"]
             if s["period"] == "PY"] == ["missed"]
@@ -58,8 +61,32 @@ def test_calculated_and_unaddressable_slots_are_left_out():
     result = compare_figures(human, ai)
 
     assert result["totals"]["Company"] == {
-        "human_filled": 1, "both_filled": 1, "same_value": 1, "ai_only": 0}
+        "human_filled": 1, "both_filled": 1, "same_value": 1,
+        "ai_only": 0, "zero_blank_excluded": 0}
     assert result["excluded"] == {"calculated": 1, "not_addressable": 1}
+
+
+def test_human_zero_ai_blank_stays_visible_but_does_not_affect_figures_totals():
+    human = {
+        ("excluded", "CY", "Company", ""): _typed(0),
+        ("true_zero", "PY", "Company", ""): _typed(0),
+        ("missed", "CY", "Company", ""): _typed(10),
+        ("other_scope", "CY", "Group", ""): _typed(0),
+    }
+    ai = {("true_zero", "PY", "Company", ""): 0.0}
+
+    result = compare_figures(human, ai)
+
+    assert result["totals"] == {
+        "Company": {"human_filled": 2, "both_filled": 1, "same_value": 1,
+                    "ai_only": 0, "zero_blank_excluded": 1},
+        "Group": {"human_filled": 0, "both_filled": 0, "same_value": 0,
+                  "ai_only": 0, "zero_blank_excluded": 1},
+    }
+    assert {s["concept_uuid"]: s["status"] for s in result["slots"]} == {
+        "excluded": "zero_blank", "true_zero": "agree",
+        "missed": "missed", "other_scope": "zero_blank",
+    }
 
 
 def test_notes_compare_placement_only():

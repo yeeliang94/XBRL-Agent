@@ -1847,11 +1847,15 @@ Load-bearing invariants:
   filled ÷ slots the human filled. Same value = exact matches among slots both
   filled. AI-only is a count, never a penalty. Unmatched rows, statements not
   compared, calculated slots and AI values the file cannot address are
-  excluded and counted.
+  excluded and counted. A human zero opposite an AI blank remains visible as
+  `zero_blank` but is excluded from the Found denominator and reported per scope;
+  it is not treated as proof that the zero was a filing placeholder. Other
+  human zeros remain in the comparison.
 - **Frontend.** The Figures and Notes views get a `[ Human file | Source PDF ]`
   switch. Human values are extra columns on the SAME rows as the AI values;
   only exceptions carry a marker (`!` different, `○` missed by the AI, `◇`
-  AI-only), per the design guide's exception-only indicator rule. Numeric
+  AI-only, `·` excluded human zero), per the design guide's exception-only
+  indicator rule. Numeric
   category members appear beside their exact AI row. Successful notes edits
   refresh the comparison. Unmatched rows sit in a closed disclosure below the
   table.

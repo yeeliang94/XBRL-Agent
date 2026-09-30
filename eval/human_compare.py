@@ -4,7 +4,8 @@ The comparison is recomputed on every read from the run's current facts and
 notes, so user edits change the numbers immediately. Nothing here is stored.
 
 Figures: a slot is field x period x entity scope (x category member).
-  * Found      = slots both filled / slots the human filled
+  * Found      = slots both filled / slots the human filled, excluding human
+                 zero / AI blank slots
   * Same value = slots with an exactly equal value / slots both filled
   * AI-only    = slots the AI filled and the human left empty (a count, not
                  a penalty)
@@ -40,7 +41,8 @@ def compare_figures(
 
     def scope_totals(scope: str) -> dict[str, int]:
         return totals.setdefault(scope, {
-            "human_filled": 0, "both_filled": 0, "same_value": 0, "ai_only": 0})
+            "human_filled": 0, "both_filled": 0, "same_value": 0,
+            "ai_only": 0, "zero_blank_excluded": 0})
 
     for key in sorted(human.keys() | ai.keys()):
         h = human.get(key)
@@ -58,6 +60,9 @@ def compare_figures(
         if hv is None:
             status = "ai_only"
             t["ai_only"] += 1
+        elif hv == 0 and a is None:
+            status = "zero_blank"
+            t["zero_blank_excluded"] += 1
         else:
             t["human_filled"] += 1
             if a is None:
