@@ -13,6 +13,7 @@ import {
   canonicalizeHtmlForCompare,
 } from "../components/NotesReviewTab";
 import { Editor } from "@tiptap/core";
+import { readFileSync } from "node:fs";
 import { StarterKit } from "@tiptap/starter-kit";
 import { TextStyle } from "@tiptap/extension-text-style";
 import { Color } from "@tiptap/extension-color";
@@ -21,6 +22,8 @@ import { TextAlign } from "@tiptap/extension-text-align";
 import type { NotesCellsResponse } from "../lib/notesCells";
 import { pwc } from "../lib/theme";
 import { humanSlotKey, type HumanFigureSlot } from "../lib/humanFile";
+
+const notesCss = readFileSync("src/components/NotesReviewTab.css", "utf8");
 
 // Issue 3 (2026-06-21): empty notes cells were flipping to "Saved" without
 // the user typing — TipTap normalises an empty cell ("") to "<p></p>" on
@@ -190,6 +193,23 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     expect(screen.queryByText("Revenue")).toBeNull();
     const rows = container.querySelectorAll('[data-testid="notes-review-row"]');
     expect(rows.length).toBe(2);
+  });
+
+  test("indents a sub-note heading and its body when the writer emits adjacent headings", async () => {
+    mockFetchOnce({ sheets: [{ sheet: "Notes-CI", rows: [
+      SAMPLE.sheets[0].rows[0],
+      {
+        ...SAMPLE.sheets[0].rows[1],
+        html: "<h3>2 Accounting policies</h3><h3>2.10 Employee benefits</h3><p>Short term benefits.</p>",
+      },
+    ] }] });
+    render(<><style>{notesCss}</style><NotesReviewTab runId={42} /></>);
+    const heading = await screen.findByText("2.10 Employee benefits");
+    expect(getComputedStyle(heading).marginLeft).toBe("2em");
+    expect(getComputedStyle(screen.getByText("Short term benefits.")).marginLeft).toBe("2em");
+    fireEvent.click(screen.getByRole("button", { name: "Review Registered office" }));
+    expect(getComputedStyle(screen.getByText("2.10 Employee benefits")).marginLeft).toBe("2em");
+    expect(getComputedStyle(screen.getByText("Short term benefits.")).marginLeft).toBe("2em");
   });
 
   test("labels the two note comparison columns once above paired fields", async () => {
@@ -2054,9 +2074,12 @@ describe("NotesReviewTab — table format bar", () => {
     expect(screen.getByRole("group", { name: "Text formatting" })).toBeInTheDocument();
     expect(screen.getByRole("group", { name: "Borders" })).toBeInTheDocument();
     expect(screen.getByRole("group", { name: "Table structure" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Insert table" })).toHaveTextContent("▦");
-    expect(screen.getByRole("button", { name: "Fill Grey" })).toHaveTextContent("■");
-    expect(screen.getByRole("button", { name: "Border Top" })).toHaveTextContent("▔");
+    // Every toolbar control draws a vendored SVG icon, never a typed symbol.
+    for (const name of ["Insert table", "Fill Grey", "Border Top", "Align left", "Align centre", "Align right"]) {
+      const control = screen.getByRole("button", { name });
+      expect(control.querySelector("svg")).not.toBeNull();
+      expect(control).toHaveTextContent("");
+    }
     for (const control of [
       screen.getByRole("button", { name: "Bold" }),
       screen.getByRole("button", { name: "Text colour Blue" }),
@@ -2930,15 +2953,16 @@ describe("NotesReviewTab — AI formatter", () => {
     fireEvent.click(within(inventory).getByRole("button", { name: /2\(a\).*Not checked/i }));
     expect(screen.getByTestId("sheet-title")).toHaveTextContent("Corporate Information");
     expect(within(inventory).getByText(/Exact field not recorded/)).toBeVisible();
-    const destinations = screen.getByLabelText("Destinations for note 2");
-    expect(within(destinations).queryByRole("button", { name: "Corporate Information" })).not.toBeInTheDocument();
-    expect(within(destinations).queryByRole("button", { name: "Summary of Accounting Policies" })).not.toBeInTheDocument();
+    expect(within(inventory).queryByLabelText("Destinations for note 2")).not.toBeInTheDocument();
+    fireEvent.click(within(inventory).getByTestId("source-note-2"));
+    const destinations = within(inventory).getByLabelText("Destinations for note 2");
+    expect(within(destinations).getByRole("button", { name: "Property, plant and equipment" })).toBeVisible();
     fireEvent.click(within(destinations).getByRole("button", { name: "Property, plant and equipment" }));
     expect(screen.getByTestId("sheet-title")).toHaveTextContent("Summary of Accounting Policies");
     expect(screen.getByText("Revenue", { exact: true })).toBeInTheDocument();
   });
 
-  test("sub-note click opens its single destination and reports the parent page range", async () => {
+  test("sub-note click opens its own PDF page and falls back when its page is unknown", async () => {
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
       String(input).endsWith("/notes_cells") ? SAMPLE : String(input).endsWith("/notes-coverage") ? {
         rows: [{
@@ -2949,9 +2973,12 @@ describe("NotesReviewTab — AI formatter", () => {
             sheet: "Notes-SummaryofAccPol", row: 7,
             row_label: "Property, plant and equipment", kind: "primary",
           }],
-          page_lo: 16,
-          page_hi: 18,
-          subnotes: [{ subnote_ref: "2(a)", state: "not_verified" }],
+          page_lo: 10,
+          page_hi: 12,
+          subnotes: [
+            { subnote_ref: "2(a)", state: "not_verified", page_lo: 12, page_hi: 12 },
+            { subnote_ref: "2(b)", state: "not_verified" },
+          ],
         }],
       } : {},
     ), { status: 200 })) as typeof fetch;
@@ -2960,14 +2987,16 @@ describe("NotesReviewTab — AI formatter", () => {
     render(<NotesReviewTab runId={42} onActiveCellPages={onActiveCellPages} />);
     const inventory = screen.getByRole("region", { name: "Source note inventory" });
     await within(inventory).findByTestId("source-note-2");
-    expect(within(inventory).getByText("1 sub-note needs review")).toBeVisible();
+    expect(within(inventory).getByText("2 sub-notes need review")).toBeVisible();
     fireEvent.click(within(inventory).getByRole("button", { name: /2\(a\).*Not checked/i }));
 
     expect(screen.getByTestId("sheet-title")).toHaveTextContent("Summary of Accounting Policies");
-    expect(onActiveCellPages).toHaveBeenLastCalledWith([16, 17, 18]);
+    expect(onActiveCellPages).toHaveBeenLastCalledWith([12]);
+    fireEvent.click(within(inventory).getByRole("button", { name: /2\(b\).*Not checked/i }));
+    expect(onActiveCellPages).toHaveBeenLastCalledWith([10, 11, 12]);
   });
 
-  test("sub-note in a fan-out note opens its own field", async () => {
+  test.each([false, true])("sub-note retains its field navigation and source pages (multiple=%s)", async (multiple) => {
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
       String(input).endsWith("/notes_cells") ? SAMPLE : String(input).endsWith("/notes-coverage") ? {
         rows: [{
@@ -2979,18 +3008,33 @@ describe("NotesReviewTab — AI formatter", () => {
           page_lo: 16, page_hi: 18,
           subnotes: [{
             subnote_ref: "2.1", title: "Revenue policy", state: "verified",
-            placements: [{ sheet: "Notes-SummaryofAccPol", row: 7, row_label: "Revenue", kind: "fan_out" }],
+            page_lo: 18, page_hi: 18,
+            placements: [
+              { sheet: "Notes-SummaryofAccPol", row: 7, row_label: "Revenue", kind: "fan_out" },
+              ...(multiple ? [{ sheet: "Notes-CI", row: 4, row_label: "Principal activities", kind: "primary" }] : []),
+            ],
           }],
         }],
       } : {},
     ), { status: 200 })) as typeof fetch;
 
-    render(<NotesReviewTab runId={42} />);
+    const onActiveCellPages = vi.fn();
+    render(<NotesReviewTab runId={42} onActiveCellPages={onActiveCellPages} />);
     const inventory = screen.getByRole("region", { name: "Source note inventory" });
     await within(inventory).findByTestId("source-note-2");
     fireEvent.click(within(inventory).getByRole("button", { name: "2.1 Revenue policy" }));
     expect(screen.getByTestId("sheet-title")).toHaveTextContent("Summary of Accounting Policies");
-    expect(screen.getByText("Revenue", { exact: true })).toBeInTheDocument();
+    expect(onActiveCellPages).toHaveBeenLastCalledWith([18]);
+    if (multiple) {
+      fireEvent.click(within(inventory).getByRole("button", { name: "Principal activities" }));
+      expect(screen.getByTestId("sheet-title")).toHaveTextContent("Corporate Information");
+      expect(onActiveCellPages).toHaveBeenLastCalledWith([18]);
+      fireEvent.click(within(inventory).getByRole("button", { name: "Revenue" }));
+      expect(screen.getByTestId("sheet-title")).toHaveTextContent("Summary of Accounting Policies");
+      expect(onActiveCellPages).toHaveBeenLastCalledWith([18]);
+    } else {
+      expect(within(inventory).queryByRole("button", { name: "Revenue" })).toBeNull();
+    }
   });
 
   test("does not expose a remove-formatting action after completion", async () => {

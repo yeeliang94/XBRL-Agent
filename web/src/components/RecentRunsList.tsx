@@ -4,6 +4,7 @@ import { ui, uiClass } from "../lib/uiStyles";
 import { runStatusDisplay } from "../lib/runStatus";
 import { StatusLabel } from "./StatusLabel";
 import type { RunSummaryJson } from "../lib/types";
+import { ArrowForward } from "./iconGlyphs";
 
 // ---------------------------------------------------------------------------
 // RecentRunsList — the "pick up where you left off" work queue on the
@@ -80,7 +81,8 @@ export function RecentRunsList({
           )}
           {!isLoading && (
             <button type="button" onClick={onViewAll} style={styles.viewAll}>
-              View all →
+              View all
+              <ArrowForward size={16} />
             </button>
           )}
         </div>
@@ -133,7 +135,8 @@ export function RecentRunsList({
                   {date.concise}
                 </span>
                 <span className="recent-run-action" style={styles.action}>
-                  {actionLabel} →
+                  {actionLabel}
+                  <ArrowForward size={16} />
                 </span>
               </button>
             );
@@ -166,14 +169,9 @@ const styles = {
     ...ui.sectionTitle,
   } as React.CSSProperties,
   viewAll: {
-    fontFamily: pwc.fontBody,
-    fontSize: 13,
-    color: tokens.color.action.primary,
-    background: "none",
-    border: "none",
-    cursor: "pointer",
-    padding: "4px 6px",
-    minHeight: 34,
+    ...ui.buttonQuiet,
+    ...ui.buttonSm,
+    gap: pwc.space.xs,
   } as React.CSSProperties,
   // Divided work queue: hairline rules between rows, no nested cards.
   list: {
@@ -188,7 +186,9 @@ const styles = {
     display: "flex",
     alignItems: "center",
     gap: pwc.space.lg,
-    padding: `10px ${pwc.space.xs}px`,
+    minHeight: 40,
+    padding: `${pwc.space.sm}px ${pwc.space.sm}px`,
+    fontSize: 14,
     border: "none",
     borderBottom: `1px solid ${tokens.color.border.subtle}`,
     background: "transparent",
@@ -209,19 +209,22 @@ const styles = {
   } as React.CSSProperties,
   profile: {
     fontFamily: pwc.fontBody,
-    fontSize: 12,
+    fontSize: 13,
     color: tokens.color.text.secondary,
     whiteSpace: "nowrap" as const,
   } as React.CSSProperties,
   date: {
     fontFamily: pwc.fontBody,
-    fontSize: 12,
+    fontSize: 13,
     color: tokens.color.text.secondary,
     whiteSpace: "nowrap" as const,
   } as React.CSSProperties,
   action: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: pwc.space.xs,
     fontFamily: pwc.fontBody,
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: pwc.weight.medium,
     color: tokens.color.action.primary,
     flexShrink: 0,

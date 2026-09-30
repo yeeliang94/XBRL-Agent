@@ -7,6 +7,7 @@ coverage rows.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -57,7 +58,8 @@ def test_shape_nesting_and_summary(client_and_run):
          "title": "Corporate information",
          "placements": [{"sheet": "Notes-CI", "row": 6, "row_label": "x",
                          "kind": "primary"}]},
-        {"note_num": 1, "subnote_ref": "(a)", "title": "Accounting policy", "status": "cited"},
+        {"note_num": 1, "subnote_ref": "(a)", "title": "Accounting policy", "status": "cited",
+         "page_lo": 12, "page_hi": 12},
         {"note_num": 1, "subnote_ref": "(b)", "status": "not_verified"},
         {"note_num": 5, "subnote_ref": None, "status": "missing",
          "title": "Investment properties"},
@@ -75,6 +77,8 @@ def test_shape_nesting_and_summary(client_and_run):
     # Sub-refs nest under their parent.
     assert [s["subnote_ref"] for s in rows[1]["subnotes"]] == ["(a)", "(b)"]
     assert rows[1]["subnotes"][0]["title"] == "Accounting policy"
+    assert rows[1]["subnotes"][0]["page_lo"] == 12
+    assert rows[1]["subnotes"][0]["page_hi"] == 12
     assert rows[1]["placements"][0]["sheet"] == "Notes-CI"
     # A confirmed_absent suspected gap is NOT unresolved.
     assert rows[13]["reviewer_verdict"] == "confirmed_absent"
@@ -85,6 +89,25 @@ def test_shape_nesting_and_summary(client_and_run):
     assert summary["suspected_gap"] == 1
     # Only the missing note (5) is unresolved; note 13 is resolved.
     assert summary["unresolved"] == 1
+
+
+def test_legacy_run_uses_saved_scout_subnote_page_when_child_row_lacks_it(client_and_run):
+    import server as server_module
+    client, run_id = client_and_run
+    _persist(server_module, run_id, [
+        {"note_num": 2, "status": "placed", "title": "Accounting policies",
+         "page_lo": 10, "page_hi": 12},
+        {"note_num": 2, "subnote_ref": "2.10", "status": "cited"},
+    ])
+    (server_module.OUTPUT_DIR / "infopack.json").write_text(json.dumps({
+        "notes_inventory": [{
+            "note_num": 2, "page_range": [10, 12],
+            "subnotes": [{"subnote_ref": "2.10", "page_range": [12, 12]}],
+        }],
+    }))
+
+    child = client.get(f"/api/runs/{run_id}/notes-coverage").json()["rows"][0]["subnotes"][0]
+    assert (child["page_lo"], child["page_hi"]) == (12, 12)
 
 
 def test_inventory_unavailable_banner(client_and_run):

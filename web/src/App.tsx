@@ -18,7 +18,8 @@ import {
 import { SettingsPage } from "./pages/SettingsPage";
 import { TopNav } from "./components/TopNav";
 import { SuccessToast } from "./components/SuccessToast";
-import { SettingsIcon } from "./components/icons";
+import { Icon, SettingsIcon } from "./components/icons";
+import { ChevronRight, LeftPanelClose, LeftPanelOpen, Logout } from "./components/iconGlyphs";
 import { HistoryPage } from "./pages/HistoryPage";
 import { ExtractPage } from "./pages/ExtractPage";
 import { ConceptsPage } from "./pages/ConceptsPage";
@@ -55,8 +56,8 @@ const styles = {
     minHeight: 32,
     padding: 0,
     marginLeft: "auto",
-    borderRadius: pwc.radius.sm,
-    color: tokens.color.text.secondary,
+    borderRadius: tokens.radius.control,
+    color: tokens.color.icon.rest,
   } as const,
   brandMark: {
     width: 27,
@@ -69,8 +70,8 @@ const styles = {
     // Brand wordmark at semibold — the design system sets titles, headings
     // and the wordmark at 600 (two text weights: regular for body/data,
     // semibold for headings; no Light 300).
-    fontWeight: pwc.weight.bold,
-    fontSize: 17,
+    fontWeight: pwc.weight.semibold,
+    fontSize: 16,
     letterSpacing: "-0.02em",
     color: pwc.black,
     margin: 0,
@@ -78,11 +79,9 @@ const styles = {
   railSectionLabel: {
     padding: "16px 10px 7px",
     fontFamily: pwc.fontBody,
-    fontSize: 10,
-    fontWeight: pwc.weight.bold,
+    fontSize: 12,
+    fontWeight: pwc.weight.semibold,
     color: tokens.color.text.muted,
-    textTransform: "uppercase" as const,
-    letterSpacing: "0.09em",
   } as const,
   railNav: {
     flex: 1,
@@ -107,8 +106,8 @@ const styles = {
     background: pwc.black,
     color: pwc.white,
     fontFamily: pwc.fontBody,
-    fontSize: 11,
-    fontWeight: pwc.weight.bold,
+    fontSize: 12,
+    fontWeight: pwc.weight.semibold,
   } as const,
   userCopy: {
     minWidth: 0,
@@ -809,7 +808,7 @@ export default function App() {
             aria-controls="app-primary-navigation"
             title={railCollapsed ? "Expand navigation" : "Collapse navigation"}
           >
-            <span aria-hidden="true">{railCollapsed ? "›" : "‹"}</span>
+            <Icon glyph={railCollapsed ? LeftPanelOpen : LeftPanelClose} size={20} />
           </button>
         </div>
         <div id="app-primary-navigation" className="app-rail-nav" style={styles.railNav}>
@@ -906,7 +905,7 @@ export default function App() {
           <div style={styles.context}>
             <span style={styles.breadcrumb}>
               <span className="app-breadcrumb-root">Workspace</span>
-              <span className="app-breadcrumb-root" aria-hidden="true">›</span>
+              <span className="app-breadcrumb-root" aria-hidden="true" style={{ color: tokens.color.icon.rest, lineHeight: 0 }}><ChevronRight size={16} /></span>
               <strong className="app-context-title" style={styles.contextTitle} title={state.filename ?? contextLabel}>
                 {reviewFocused && state.filename ? state.filename : contextLabel}
               </strong>
@@ -921,7 +920,8 @@ export default function App() {
               aria-label="Log out"
               title="Log out"
             >
-              Log out
+              <Icon glyph={Logout} size={20} color={tokens.color.icon.rest} />
+              <span>Log out</span>
             </button>
           )}
           <button

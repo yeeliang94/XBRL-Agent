@@ -3,6 +3,7 @@ import type { CSSProperties, FormEvent } from "react";
 import { pwc, tokens } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { loginPassword } from "../lib/api";
+import { ErrorCircle } from "../components/iconGlyphs";
 
 // PLAN auth Phase 1.4 — the email + password login form. SSO (Microsoft) is a
 // later phase; until then password is the only method. Inline styles + theme
@@ -97,7 +98,7 @@ export function LoginPage({ onAuthenticated }: LoginPageProps) {
 
         {error && (
           <div style={styles.error} role="alert">
-            <span aria-hidden="true" style={ui.alertIcon(pwc.error)}>✕</span>
+            <span aria-hidden="true" style={ui.alertIcon(pwc.error)}><ErrorCircle size={20} /></span>
             <span>{error}</span>
           </div>
         )}

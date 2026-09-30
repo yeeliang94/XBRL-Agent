@@ -47,7 +47,7 @@ describe("RecentRunsList", () => {
     render(<RecentRunsList {...makeProps()} />);
     expect(screen.getByText("DRAFT-2024.pdf")).toBeTruthy();
     expect(screen.getByText("FINCO-2023.pdf")).toBeTruthy();
-    expect(screen.getByText(/completed/i)).toBeTruthy();
+    expect(screen.getByText(/^complete$/i)).toBeTruthy();
   });
 
   test("clicking a draft fires onResumeDraft with its id", () => {
@@ -85,13 +85,13 @@ describe("RecentRunsList", () => {
 
   test("draft rows offer 'Continue setup' and statuses render monochrome (CS3)", () => {
     render(<RecentRunsList {...makeProps()} />);
-    expect(screen.getByText("Continue setup →")).toBeInTheDocument();
+    expect(screen.getByText("Continue setup")).toBeInTheDocument();
     expect(screen.queryByText("Resume")).toBeNull();
-    // Monochrome status: aria-hidden neutral symbol next to the label.
-    const completed = screen.getByText("Completed");
+    // Routine success: aria-hidden black icon next to the label.
+    const completed = screen.getByText("Complete");
     const symbol = completed.parentElement!.parentElement!.querySelector('[aria-hidden="true"]');
     expect(symbol?.getAttribute("data-status-icon")).toBe("success");
-    expect((symbol as HTMLElement).style.color).toBe("rgba(0, 0, 0, 0.64)");
+    expect((symbol as HTMLElement).style.color).toBe("rgb(0, 0, 0)");
   });
 
   test("rows stay transparent and use their own clean work-queue interaction", () => {
@@ -100,6 +100,6 @@ describe("RecentRunsList", () => {
     expect(row.classList.contains("pwc-table-row")).toBe(false);
     expect(row.classList.contains("recent-run-row")).toBe(true);
     expect(row.style.background).toBe("transparent");
-    expect(screen.getByText("Continue setup →")).toHaveClass("recent-run-action");
+    expect(screen.getByText("Continue setup")).toHaveClass("recent-run-action");
   });
 });

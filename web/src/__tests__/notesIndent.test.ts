@@ -5,13 +5,17 @@
 import { describe, it, expect } from "vitest";
 import { Editor } from "@tiptap/core";
 import { StarterKit } from "@tiptap/starter-kit";
+import { readFileSync } from "node:fs";
 import {
   Indent,
   indentBlocks,
   outdentBlocks,
   INDENT_STEP_EM,
   MAX_INDENT_LEVEL,
+  indentUnwrappedSubnote,
 } from "../lib/notesIndent";
+
+const notesCss = readFileSync("src/components/NotesReviewTab.css", "utf8");
 
 function makeEditor(html: string): Editor {
   return new Editor({
@@ -53,6 +57,43 @@ function firstListItemIndent(editor: Editor): number {
 }
 
 describe("notesIndent", () => {
+  it("shows legacy sub-note indentation without changing the saved editor HTML", () => {
+    const editor = makeEditor("<h3>2 Accounting policies</h3><h3>2.10 Employee benefits</h3><p>Benefits.</p><h3>3 Estimates</h3><p>Judgements.</p>");
+    const wrapper = document.createElement("div");
+    wrapper.className = "notes-review-tab";
+    const style = document.createElement("style");
+    style.textContent = notesCss;
+    wrapper.append(style, editor.view.dom);
+    document.body.append(wrapper);
+    const margin = (index: number) => getComputedStyle(editor.view.dom.children[index]).marginLeft;
+    const original = editor.getHTML();
+    indentUnwrappedSubnote(editor.view.dom);
+    expect(margin(1)).toBe("2em");
+    expect(margin(2)).toBe("2em");
+    expect(parseFloat(margin(3)) || 0).toBe(0);
+    expect(parseFloat(margin(4)) || 0).toBe(0);
+    expect(editor.getHTML()).toBe(original);
+    const from = editor.state.doc.child(0).nodeSize + 1;
+    editor.commands.insertContentAt({ from, to: from + 4 }, "3");
+    indentUnwrappedSubnote(editor.view.dom);
+    expect(parseFloat(margin(1)) || 0).toBe(0);
+    expect(parseFloat(margin(2)) || 0).toBe(0);
+    // A saved explicit offset continues to win over the display class.
+    editor.commands.setContent('<h3>2 Policies</h3><h3>2.10 Benefits</h3><p style="margin-left: 4em">Benefits.</p>');
+    indentUnwrappedSubnote(editor.view.dom);
+    expect(margin(2)).toBe("4em");
+    expect(editor.getHTML()).toContain("margin-left: 4em");
+    editor.destroy();
+    wrapper.remove();
+  });
+
+  it("keeps two different top-level notes aligned", () => {
+    const editor = makeEditor("<h3>2 Accounting policies</h3><h3>3 Estimates</h3><p>Judgements.</p>");
+    indentUnwrappedSubnote(editor.view.dom);
+    expect(editor.view.dom.querySelectorAll(".notes-inferred-subnote")).toHaveLength(0);
+    editor.destroy();
+  });
+
   it("indentBlocks increases the level and renders margin-left", () => {
     const editor = makeEditor("<p>hello</p>");
     indentBlocks(editor);

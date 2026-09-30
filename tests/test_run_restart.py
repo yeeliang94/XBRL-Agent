@@ -14,6 +14,7 @@ import api.preparation as preparation
 import recovery.run_restart as restart
 from db import repository as repo
 from db.schema import init_db
+from ingest.document_preparation import CONTRACT_VERSION
 
 
 def _sha256(path):
@@ -34,7 +35,7 @@ def _write_reusable_preparation(source_dir, *, model="model", config="config-key
         "status": "succeeded",
         "inventory_reconciled": True,
         "source_sha256": _sha256(uploaded),
-        "contract_version": 6,
+        "contract_version": CONTRACT_VERSION,
         "model_name": model,
         "configuration_key": config,
         "revision": "revision",

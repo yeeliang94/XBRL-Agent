@@ -6,7 +6,8 @@
 //
 // Inline styles only (gotcha #7).
 
-import { pwc } from "../lib/theme";
+import { pwc, tokens } from "../lib/theme";
+import { ui } from "../lib/uiStyles";
 import type {
   BorderStyle,
   ClipboardFormatOptions,
@@ -42,16 +43,10 @@ const styles = {
     marginBottom: pwc.space.md,
   } as React.CSSProperties,
   label: {
-    fontSize: 13,
-    color: pwc.grey700,
-    fontWeight: 500,
+    ...ui.fieldLabel,
   } as React.CSSProperties,
   control: {
-    fontSize: 14,
-    padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
-    border: `1px solid ${pwc.grey300}`,
-    borderRadius: pwc.radius.sm,
-    background: "#fff",
+    ...ui.select,
   } as React.CSSProperties,
   row: {
     display: "flex",
@@ -62,7 +57,7 @@ const styles = {
   numberField: {
     display: "flex",
     flexDirection: "column",
-    gap: pwc.space.xs,
+    gap: pwc.space.sm,
   } as React.CSSProperties,
   numberInput: {
     width: 88,
@@ -74,13 +69,13 @@ const styles = {
     alignItems: "center",
   } as React.CSSProperties,
   swatch: {
-    minWidth: 28,
-    height: 24,
-    padding: "0 6px",
-    borderRadius: pwc.radius.sm,
+    minWidth: 34,
+    height: 34,
+    padding: "0 8px",
+    borderRadius: tokens.radius.control,
     border: `1px solid ${pwc.grey300}`,
     cursor: "pointer",
-    fontSize: 11,
+    fontSize: 13,
     lineHeight: 1,
     display: "inline-flex",
     alignItems: "center",

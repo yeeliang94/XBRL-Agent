@@ -156,10 +156,33 @@ def test_source_packet_groups_repeated_missing_parts_without_losing_ids():
     assert all(bid in packet for bid in ("p17-b1", "p17-b2", "p18-b1"))
 
 
+def test_source_packet_defers_findings_caused_by_open_placement_conflict():
+    context = {
+        "placement_conflicts": [{
+            "ref": "C1", "match_kind": "same_field",
+            "target": {"sheet": _S12, "row": 140, "label": "Other receivables"},
+            "proposed_block_ids": ["p31-b2", "p31-b3"],
+        }],
+        "source_integrity_findings": [
+            {"check": "disposition", "code": "missing_disposition_decision",
+             "note_num": "12", "block_ids": ["p31-b2", "p31-b3"],
+             "message": "source parts lack a decision"},
+            {"check": "disposition", "code": "missing_disposition_decision",
+             "note_num": "13", "block_ids": ["p32-b1"],
+             "message": "another source part lacks a decision"},
+        ],
+    }
+    packet = ra.build_notes_reviewer_packet(context)
+    assert "1 source-completeness finding(s) depend" in packet
+    assert "Do not flag the same parts twice" in packet
+    assert "p32-b1" in packet
+    assert "source parts lack a decision" not in packet
+
+
 def test_prepared_policy_placement_requires_grounded_current_verdict(db_path: Path) -> None:
     from types import SimpleNamespace
     from notes import source_repository as srepo
-    from notes.reviewer_agent import PolicyPlacementItem, unverified_policy_placements
+    from notes.reviewer_agent import PlacementVerificationItem, unverified_policy_placements
     from notes.source_models import SourceBlock, OwnerKind
 
     run_id = _seed_run(db_path)
@@ -183,7 +206,7 @@ def test_prepared_policy_placement_requires_grounded_current_verdict(db_path: Pa
     assert unverified_policy_placements(deps) == [33]
     funcs = {name: tool.function for ts in agent.toolsets
              for name, tool in getattr(ts, "tools", {}).items()}
-    item = PolicyPlacementItem(row=33,
+    item = PlacementVerificationItem(row=33,
         target_label="Description of accounting policy for income tax",
         verdict="needs_human", reason="The source is an inventories policy.",
         source_pages=[20])
@@ -403,6 +426,53 @@ def test_reviewer_can_atomically_correct_the_wrong_first_source_placement(
     assert flags[0]["status"] == "answered"
 
 
+def test_reviewer_cell_move_reconciles_stale_same_block_conflict(db_path: Path):
+    from notes import review_move, source_repository as sources, source_write
+    from notes.source_models import SourceBlock, SourceNote
+
+    run_id = _seed_run(db_path)
+    _seed_node(db_path, 49, "LEAF", "Income tax")
+    _seed_node(db_path, 80, "LEAF", "Deferred tax")
+    with repo.db_session(db_path) as conn:
+        generation = sources.begin_generation(
+            conn, run_id, input_kind="prepared_document")
+        sources.write_blocks(conn, generation, [SourceBlock(
+            block_id="tax", block_kind="paragraph", reading_order=1,
+            canonical_html="<p>Deferred tax is recognised.</p>",
+            source_note_id="note-tax", page=22,
+        )])
+        sources.write_notes(conn, generation, [SourceNote(
+            source_note_id="note-tax", top_note_num="13",
+            title="Deferred tax", block_ids=["tax"],
+        )])
+        sources.activate_generation(conn, generation)
+        source_write.write_cell_from_blocks(conn, run_id=run_id,
+            generation_id=generation, sheet=_S12, row=49,
+            block_ids=["tax"], template_prefix=_PREFIX)
+        with pytest.raises(source_write.SourcePlacementConflict) as caught:
+            source_write.write_cell_from_blocks(conn, run_id=run_id,
+                generation_id=generation, sheet=_S12, row=80,
+                block_ids=["tax"], template_prefix=_PREFIX)
+        source_write.record_placement_conflict(
+            conn, run_id=run_id, conflict=caught.value, source_pages=[22])
+    with repo.db_session(db_path) as conn:
+        assert review_move.reconcile_reviewed_placement_conflicts(
+            conn, run_id=run_id) == 0
+        revision = conn.execute(
+            "SELECT content_revision FROM notes_cells WHERE run_id=? AND sheet=? AND row=49",
+            (run_id, _S12),
+        ).fetchone()[0]
+        review_move.move_note_during_review(conn, run_id=run_id,
+            sheet=_S12, row=49, destination_sheet=_S12, destination_row=80,
+            expected_revision=revision, destination_revision=None)
+        assert review_move.reconcile_reviewed_placement_conflicts(
+            conn, run_id=run_id) == 1
+        assert review_move.reconcile_reviewed_placement_conflicts(
+            conn, run_id=run_id) == 0
+        flags = repo.fetch_notes_review_flags(conn, run_id)
+    assert flags[0]["status"] == "answered"
+
+
 def _field_conflict(db_path: Path):
     """Two extraction writes of DIFFERENT notes into one field. The second is
     kept as a proposal; the field still holds the first note."""
@@ -471,7 +541,6 @@ def test_second_note_for_a_field_becomes_a_proposal_not_an_overwrite(db_path: Pa
 @pytest.mark.parametrize("decision, other_row, expected", [
     ("use_proposed", 80, [("b12", 80), ("b13", 49)]),
     ("keep_existing", 80, [("b12", 49), ("b13", 80)]),
-    ("combine", None, [("b12", 49), ("b13", 49)]),
 ])
 def test_reviewer_decides_a_field_conflict(db_path: Path, decision, other_row, expected):
     from types import SimpleNamespace
@@ -501,6 +570,38 @@ def test_reviewer_decides_a_field_conflict(db_path: Path, decision, other_row, e
         flags = repo.fetch_notes_review_flags(conn, run_id)
     assert sorted((p["block_id"], p["row"]) for p in placements) == expected
     assert flags[0]["status"] == "answered"
+
+
+def test_field_conflict_cannot_be_answered_while_stranding_other_note(db_path: Path):
+    from notes import review_move, source_repository as sources
+
+    run_id, generation, _ = _field_conflict(db_path)
+    with repo.db_session(db_path) as conn:
+        flag = repo.fetch_notes_review_flags(conn, run_id)[0]
+        with pytest.raises(review_move.MoveConflict, match="Choose other_row"):
+            review_move.resolve_field_collision(
+                conn, run_id=run_id, flag_id=flag["id"],
+                finding_id=flag["finding_id"], decision="keep_existing",
+                answer="Keep Note 12", template_prefix=_PREFIX,
+            )
+        placements = sources.active_placements(conn, generation)
+        flags = repo.fetch_notes_review_flags(conn, run_id)
+    assert [(p["block_id"], p["row"]) for p in placements] == [("b12", 49)]
+    assert flags[0]["status"] == "open"
+
+
+def test_distinct_notes_cannot_combine_in_specific_field(db_path: Path):
+    from notes import review_move
+
+    run_id, _generation, _conflict = _field_conflict(db_path)
+    with repo.db_session(db_path) as conn:
+        flag = repo.fetch_notes_review_flags(conn, run_id)[0]
+        with pytest.raises(review_move.MoveConflict, match="catch-all"):
+            review_move.resolve_field_collision(
+                conn, run_id=run_id, flag_id=flag["id"],
+                finding_id=flag["finding_id"], decision="combine",
+                answer="Combine", template_prefix=_PREFIX,
+            )
 
 
 def test_field_conflict_never_overwrites_an_occupied_destination(db_path: Path):
@@ -973,6 +1074,162 @@ def test_prepared_missing_unnumbered_source_triggers_review_and_can_be_relinked(
     refreshed = ra.recompute_notes_findings(deps)
     assert refreshed["source_integrity_findings"] == []
     assert ra.finding_keys(context) - ra.finding_keys(refreshed)
+
+
+def test_reviewer_transfers_one_complete_section_from_mixed_cell(db_path, monkeypatch):
+    """Moving standards text must retain the basis section in its source cell."""
+    from notes import source_repository as sources, source_write, review_move
+    from notes.source_models import SourceBlock, SourceNote
+
+    run_id = _seed_run(db_path)
+    _seed_node(db_path, 57, "LEAF", "Disclosure of basis of preparation")
+    _seed_node(db_path, 7, "LEAF", "Disclosure of new standards")
+    with repo.db_session(db_path) as conn:
+        gen = sources.begin_generation(conn, run_id, input_kind="prepared_document")
+        blocks = [
+            SourceBlock("root", "heading", 0, "<h2>2. Policies</h2>",
+                        source_note_id="note-2", page=16),
+            SourceBlock("h1", "heading", 1, "<h3>2.1 Basis</h3>",
+                        source_note_id="note-2", page=16),
+            SourceBlock("p1", "paragraph", 2, "<p>Historical cost basis.</p>",
+                        source_note_id="note-2", page=16),
+            SourceBlock("h2", "heading", 3, "<h3>2.2 New standards</h3>",
+                        source_note_id="note-2", page=17),
+            SourceBlock("p2", "paragraph", 4, "<p>New standards are not yet effective.</p>",
+                        source_note_id="note-2", page=17),
+        ]
+        sources.write_blocks(conn, gen, blocks)
+        sources.write_notes(conn, gen, [SourceNote("note-2", "2", "Policies",
+            [block.block_id for block in blocks])])
+        sources.activate_generation(conn, gen)
+        source_write.write_cell_from_blocks(conn, run_id=run_id, generation_id=gen,
+            sheet=_S12, row=57, block_ids=[block.block_id for block in blocks],
+            template_prefix=_PREFIX)
+    real_write = source_write.write_cell_from_blocks
+    calls = 0
+
+    def fail_destination(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("destination write failed")
+        return real_write(*args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(source_write, "write_cell_from_blocks", fail_destination)
+        with pytest.raises(RuntimeError, match="destination write failed"):
+            with repo.db_session(db_path) as conn:
+                review_move.transfer_source_sections(conn, run_id=run_id,
+                    generation_id=gen, source_sheet=_S12, source_row=57,
+                    destination_sheet=_S12, destination_row=7,
+                    section_ids=["section:note-2:2.2"], template_prefix=_PREFIX)
+    unchanged = _cells(db_path, run_id)
+    assert "not yet effective" in unchanged[57]
+    assert 7 not in unchanged
+    with repo.db_session(db_path) as conn:
+        review_move.transfer_source_sections(conn, run_id=run_id, generation_id=gen,
+            source_sheet=_S12, source_row=57, destination_sheet=_S12,
+            destination_row=7, section_ids=["section:note-2:2.2"],
+            template_prefix=_PREFIX)
+    cells = _cells(db_path, run_id)
+    assert "Historical cost basis" in cells[57]
+    assert "not yet effective" not in cells[57]
+    assert "not yet effective" in cells[7]
+    with repo.db_session(db_path) as conn:
+        placed = {(p["block_id"], p["row"]) for p in sources.active_placements(conn, gen)}
+    assert ("p1", 57) in placed and ("p2", 7) in placed
+
+
+@pytest.mark.parametrize("verdict", [None, "correct", "needs_human"])
+def test_complete_prepared_sections_are_reviewed_as_partition_not_split(db_path, tmp_path, verdict):
+    from notes import source_repository as sources, source_write
+    from notes.source_models import SourceBlock, SourceNote
+
+    run_id = _seed_run(db_path)
+    _seed_node(db_path, 7, "LEAF", "Effective new standards")
+    _seed_node(db_path, 137, "LEAF", "Standards not yet effective")
+    with repo.db_session(db_path) as conn:
+        gen = sources.begin_generation(conn, run_id, input_kind="prepared_document")
+        blocks = [
+            SourceBlock("root", "heading", 0, "<h2>2. Policies</h2>",
+                        source_note_id="note-2", page=16),
+            SourceBlock("h2", "heading", 1, "<h3>2.2 Effective standards</h3>",
+                        source_note_id="note-2", page=17),
+            SourceBlock("p2", "paragraph", 2, "<p>Now effective.</p>",
+                        source_note_id="note-2", page=17),
+            SourceBlock("h3", "heading", 3, "<h3>2.3 Future standards</h3>",
+                        source_note_id="note-2", page=18),
+            SourceBlock("p3", "paragraph", 4, "<p>Not yet effective.</p>",
+                        source_note_id="note-2", page=18),
+        ]
+        sources.write_blocks(conn, gen, blocks)
+        sources.write_notes(conn, gen, [SourceNote(
+            "note-2", "2", "Policies", [block.block_id for block in blocks],
+        )])
+        sources.activate_generation(conn, gen)
+        for row, section in ((7, "2.2"), (137, "2.3")):
+            source_write.write_cell_from_blocks(conn, run_id=run_id,
+                generation_id=gen, sheet=_S12, row=row,
+                block_ids=[f"section:note-2:{section}"],
+                template_prefix=_PREFIX)
+        split = {"note_num": 2, "sheet": _S12, "rows": [
+            {"row": 7, "row_label": "Effective new standards"},
+            {"row": 137, "row_label": "Standards not yet effective"},
+        ], "source_note_refs": ["2"]}
+        unresolved, partitions = ra.classify_source_section_partitions(
+            conn, run_id, [split],
+        )
+        assert unresolved == [] and partitions == [split]
+        incomplete = {**split, "rows": [split["rows"][0],
+                                       {"row": 138, "row_label": "Empty"}]}
+        unresolved, partitions = ra.classify_source_section_partitions(
+            conn, run_id, [incomplete],
+        )
+        assert unresolved == [incomplete] and partitions == []
+
+    # Complete coverage alone must not turn destination review green.
+    import asyncio
+    import server
+    from types import SimpleNamespace
+
+    verifications = [
+        {"row": row, "target_label": label, "verdict": verdict,
+         "reason": "Compared the section heading with the field.", "source_pages": [page]}
+        for row, label, page in ((7, "Effective new standards", 17),
+                                 (137, "Standards not yet effective", 18))
+    ]
+    steps = [
+        [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [17, 18]})],
+        [ToolCallPart(tool_name="verify_section_placements", args={"verifications": verifications})],
+    ] if verdict else []
+    outcome = asyncio.run(server._run_notes_reviewer_pass(
+        run_id=run_id, db_path=str(db_path), pdf_path=str(tmp_path / "x.pdf"),
+        filing_level="company", filing_standard="mfrs", model=_scripted(steps),
+        output_dir=str(tmp_path), merged_workbook_path=None, sidecar_paths=[], event_queue=None,
+    ))
+    assert outcome["invoked"]
+    assert outcome["error"] == (None if verdict else "notes_reviewer_section_placements_unverified")
+    assert outcome["flags_raised"] == (2 if verdict == "needs_human" else 0)
+
+    if verdict == "correct":
+        agent, deps, context = _agent(db_path, run_id, _scripted([]))
+        assert len(context["section_placements"]) == 2
+        assert "STILL open" in ra.format_notes_verification(context, ra.finding_keys(context))
+        funcs = {name: tool.function for ts in agent.toolsets
+                 for name, tool in getattr(ts, "tools", {}).items()}
+        items = [ra.PlacementVerificationItem(**item) for item in verifications]
+        ctx = SimpleNamespace(deps=deps)
+        assert "rejected" in funcs["verify_section_placements"](ctx, items)
+        assert sorted(ra.unverified_section_placements(deps)) == [7, 137]
+        deps.viewed_pages.update([17, 18])
+        assert "rejected" not in funcs["verify_section_placements"](ctx, items)
+        assert ra.unverified_section_placements(deps) == []
+        assert not any(key[0] == "section_placement"
+                       for key in ra.finding_keys(ra.recompute_notes_findings(deps)))
+        with repo.db_session(db_path) as conn:
+            repo.upsert_notes_cell(conn, run_id=run_id, sheet=_S12, row=7,
+                label="Effective new standards", html="<p>Changed standards disclosure.</p>")
+        assert ra.unverified_section_placements(deps) == [7]
 
 
 def test_source_destinations_returns_complete_json_for_long_labels(db_path):

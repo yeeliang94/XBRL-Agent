@@ -217,9 +217,11 @@ def test_source_subnote_title_reaches_coverage_row():
 
     inventory = _inv(2, "Significant accounting policies", subs=["2.1"])
     inventory["subnote_titles"] = {"2.1": "Description of accounting policies"}
+    inventory["subnote_pages"] = {"2.1": {"page_lo": 12, "page_hi": 12}}
     checklist = build_draft_checklist(inventory_rows=[inventory], provenance_entries=[])
     child = next(r for r in checklist_to_db_rows(checklist) if r["subnote_ref"] == "2.1")
     assert child["title"] == "Description of accounting policies"
+    assert (child["page_lo"], child["page_hi"]) == (12, 12)
 
 
 def test_policies_fan_out_placements_classified_fan_out():

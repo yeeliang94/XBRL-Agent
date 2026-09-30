@@ -1231,7 +1231,7 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         run_id        INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
         note_num      INTEGER NOT NULL,
         title         TEXT NOT NULL DEFAULT '',
-        subnote_refs  TEXT,                       -- JSON list of strings or {ref, title}
+        subnote_refs  TEXT,                       -- JSON list of strings or {ref, title, page_lo, page_hi}
         page_lo       INTEGER,
         page_hi       INTEGER,
         UNIQUE(run_id, note_num)

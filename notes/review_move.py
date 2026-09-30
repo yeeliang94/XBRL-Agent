@@ -16,6 +16,145 @@ class MoveConflict(ValueError):
     """The compared cells or the run are no longer safe to move."""
 
 
+def reconcile_reviewed_placement_conflicts(
+    conn: sqlite3.Connection, *, run_id: int,
+) -> int:
+    """Close same-block proposals whose complete source selection was moved.
+
+    Reviewer writes can satisfy a proposal through a cell move or relink, not
+    only through resolve_placement_conflict. The active placement ledger is
+    authoritative for whether the original conflict still exists.
+    """
+    generation = sources.active_generation(conn, run_id)
+    if generation is None:
+        return 0
+    locations: dict[str, set[tuple[str, int]]] = {}
+    for placement in sources.active_placements(conn, generation["id"]):
+        locations.setdefault(placement["block_id"], set()).add(
+            (placement["sheet"], placement["row"])
+        )
+    block_kinds = {
+        row["block_id"]: row["block_kind"]
+        for row in conn.execute(
+            "SELECT block_id,block_kind FROM notes_source_blocks WHERE generation_id=?",
+            (generation["id"],),
+        )
+    }
+    settled = 0
+    for flag in repo.fetch_notes_review_flags(conn, run_id):
+        if flag["status"] != "open":
+            continue
+        try:
+            conflict = json.loads(flag.get("evidence") or "{}")
+        except (TypeError, ValueError):
+            continue
+        if (not isinstance(conflict, dict)
+                or conflict.get("match_kind") != "same_block"
+                or conflict.get("generation_id") != generation["id"]):
+            continue
+        target = conflict.get("target") or {}
+        coordinate = (target.get("sheet"), target.get("row"))
+        selected = set(conflict.get("proposed_block_ids") or [])
+        if not coordinate[0] or not isinstance(coordinate[1], int) or not selected:
+            continue
+        if all(
+            coordinate in locations.get(block_id, set())
+            and (block_kinds.get(block_id) == "heading"
+                 or locations[block_id] == {coordinate})
+            for block_id in selected
+        ):
+            repo.answer_notes_review_flag(
+                conn, flag_id=flag["id"], run_id=run_id,
+                answer="Reviewer placed every proposed source part in the proposed field.",
+            )
+            settled += 1
+    return settled
+
+
+def transfer_source_sections(
+    conn: sqlite3.Connection, *, run_id: int, generation_id: int,
+    source_sheet: str, source_row: int,
+    destination_sheet: str, destination_row: int,
+    section_ids: list[str], template_prefix: str,
+    evidence: str | None = None,
+) -> None:
+    """Move complete frozen sections out of a mixed cell in one transaction.
+
+    Both cells are rebuilt by the existing source writer. A failed destination
+    write rolls back the source change with the caller's transaction.
+    """
+    from notes import source_write
+    from notes.source_sections import expand_section_ids
+    from notes.html_to_text import rendered_length
+
+    if (source_sheet, source_row) == (destination_sheet, destination_row):
+        raise MoveConflict("Choose a different destination field.")
+    if not section_ids or any(not item.startswith("section:") for item in section_ids):
+        raise MoveConflict("Select complete source section IDs for a transfer.")
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    generation = sources.fetch_generation(conn, generation_id)
+    if (generation is None or generation["run_id"] != run_id
+            or generation["status"] != "active"):
+        raise MoveConflict("The source generation changed. Reload the review.")
+    origin = conn.execute(
+        "SELECT label, content_revision, content_origin FROM notes_cells "
+        "WHERE run_id=? AND sheet=? AND row=?",
+        (run_id, source_sheet, source_row),
+    ).fetchone()
+    if origin is None or origin["content_origin"] == "human_modified":
+        raise MoveConflict("The source cell is absent or contains a human edit.")
+    target = conn.execute(
+        "SELECT content_revision, html, source_generation_id FROM notes_cells "
+        "WHERE run_id=? AND sheet=? AND row=?",
+        (run_id, destination_sheet, destination_row),
+    ).fetchone()
+    if target and (rendered_length(target["html"] or "")
+                   or target["source_generation_id"] is not None):
+        raise MoveConflict("The destination contains content or source records.")
+    available = source_write.load_blocks(conn, generation_id)
+    try:
+        moving = set(expand_section_ids(
+            available, sources.fetch_notes(conn, generation_id), section_ids,
+        ))
+    except ValueError as exc:
+        raise MoveConflict(str(exc)) from exc
+    active = {item["block_id"] for item in conn.execute(
+        "SELECT block_id FROM notes_block_placements WHERE run_id=? "
+        "AND generation_id=? AND sheet=? AND row=? AND active=1",
+        (run_id, generation_id, source_sheet, source_row),
+    )}
+    if not moving or not moving <= active:
+        raise MoveConflict("The selected section is not wholly in the source cell.")
+    remaining = active - moving
+    by_id = {block.block_id: block for block in available}
+    if not any(by_id[bid].block_kind != "heading" for bid in remaining):
+        raise MoveConflict("This is a whole-cell move; use move_note_cell instead.")
+    source_write.write_cell_from_blocks(
+        conn, run_id=run_id, generation_id=generation_id,
+        sheet=source_sheet, row=source_row,
+        block_ids=sorted(remaining, key=lambda bid: by_id[bid].reading_order),
+        label=origin["label"] or "", actor="notes_reviewer",
+        evidence=evidence, template_prefix=template_prefix,
+        expected_revision=origin["content_revision"],
+        allow_unplaced_during_conflict_resolution=True,
+    )
+    source_write.write_cell_from_blocks(
+        conn, run_id=run_id, generation_id=generation_id,
+        sheet=destination_sheet, row=destination_row,
+        block_ids=section_ids, actor="notes_reviewer", evidence=evidence,
+        template_prefix=template_prefix,
+        expected_revision=target["content_revision"] if target else None,
+    )
+    placed = {item["block_id"] for item in conn.execute(
+        "SELECT block_id FROM notes_block_placements WHERE run_id=? "
+        "AND generation_id=? AND sheet=? AND row=? AND active=1",
+        (run_id, generation_id, destination_sheet, destination_row),
+    )}
+    if not moving <= placed:
+        raise MoveConflict("The destination did not retain every selected source part.")
+
+
 def move_reviewed_note(
     conn: sqlite3.Connection, *, run_id: int, sheet: str, row: int,
     destination_sheet: str, destination_row: int,
@@ -265,7 +404,7 @@ def resolve_field_collision(
     proposed note there instead; ``combine`` keeps both in the one field.
     For the first two, ``other_row`` (and optionally ``other_sheet``) names an
     empty field, or the catch-all, for the note that did not win the field.
-    Without it that note stays unplaced and remains an open source finding.
+    A decision cannot strand the other note without a destination.
     Every write goes through the source writer, so lineage, dispositions and
     the duplicate guard behave exactly as for any other placement. Returns the
     cells written.
@@ -284,6 +423,11 @@ def resolve_field_collision(
         raise MoveConflict("This is not a field conflict.")
     if decision not in FIELD_COLLISION_DECISIONS:
         raise MoveConflict("decision must be keep_existing, use_proposed or combine.")
+    if decision in {"keep_existing", "use_proposed"} and other_row is None:
+        raise MoveConflict(
+            "Choose other_row for the note that does not win this field, "
+            "or leave the conflict open for human review."
+        )
     generation = sources.active_generation(conn, run_id)
     if generation is None or generation["id"] != conflict["generation_id"]:
         raise MoveConflict("The source generation changed. Reload the review packet.")
@@ -304,6 +448,18 @@ def resolve_field_collision(
         raise MoveConflict(
             "The field changed since the conflict was recorded. Reload the review packet."
         )
+
+    if decision == "combine":
+        current = conn.execute(
+            "SELECT label FROM notes_cells WHERE run_id=? AND sheet=? AND row=?",
+            (run_id, sheet, row),
+        ).fetchone()
+        if not current or not source_write._is_list_catch_all(sheet, current["label"] or ""):
+            raise MoveConflict(
+                "Distinct source notes may be combined automatically only in "
+                "the List-of-Notes catch-all field. Choose a separate field "
+                "for the other note or request human review."
+            )
 
     if decision == "combine" and other_row is not None:
         raise MoveConflict("combine keeps both notes in the one field; do not name another field.")

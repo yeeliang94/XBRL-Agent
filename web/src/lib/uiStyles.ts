@@ -80,8 +80,8 @@ const alertBase: CSSProperties = {
   border: `1px solid ${tokens.color.border.subtle}`,
   color: tokens.color.text.body,
   fontFamily: pwc.fontBody,
-  fontSize: 15,
-  lineHeight: 1.55,
+  fontSize: 14,
+  lineHeight: 1.5,
 };
 
 // Quiet — low-priority toolbar/navigation action. The former Subtle and
@@ -121,7 +121,7 @@ export const ui = {
   } as CSSProperties,
   pageTitleCompact: {
     fontFamily: pwc.fontHeading,
-    fontSize: 20,
+    fontSize: 16,
     lineHeight: 1.2,
     letterSpacing: "-0.01em",
     fontWeight: pwc.weight.semibold,
@@ -138,8 +138,8 @@ export const ui = {
   } as CSSProperties,
   subsectionTitle: {
     fontFamily: pwc.fontHeading,
-    fontSize: 15,
-    lineHeight: 1.35,
+    fontSize: 14,
+    lineHeight: 1.4,
     fontWeight: pwc.weight.semibold,
     color: tokens.color.text.primary,
     margin: 0,
@@ -161,7 +161,7 @@ export const ui = {
   metadata: {
     fontFamily: pwc.fontBody,
     fontSize: 13,
-    lineHeight: 1.45,
+    lineHeight: 1.5,
     fontWeight: pwc.weight.regular,
     color: tokens.color.text.secondary,
   } as CSSProperties,
@@ -169,10 +169,10 @@ export const ui = {
   // long labels, or instructions.
   microLabel: {
     fontFamily: pwc.fontHeading,
-    fontSize: 11,
+    fontSize: 12,
     lineHeight: 1.4,
     fontWeight: pwc.weight.semibold,
-    letterSpacing: 0.2,
+    letterSpacing: 0,
     color: tokens.color.text.secondary,
   } as CSSProperties,
   financialValue: {
@@ -253,8 +253,7 @@ export const ui = {
     justifyContent: "space-between",
     gap: pwc.space.lg,
     padding: `0 ${tokens.space.pageGutter}px`,
-    background: "rgba(255, 255, 255, 0.94)",
-    backdropFilter: "blur(12px)",
+    background: tokens.surface.canvas,
   } as CSSProperties,
   paneDivider: {
     borderLeft: `1px solid ${tokens.color.border.subtle}`,
@@ -339,16 +338,20 @@ export const ui = {
     color: tokens.color.text.secondary,
   } as CSSProperties,
 
+  // Single-line controls use one fixed 44px height so a row of mixed
+  // inputs, selects and date pickers shares a baseline.
   input: {
     ...controlBase,
+    height: 44,
     minHeight: 44,
-    padding: `11px ${pwc.space.lg}px`,
+    padding: `0 ${pwc.space.lg}px`,
   } as CSSProperties,
 
   select: {
     ...controlBase,
+    height: 44,
     minHeight: 44,
-    padding: `11px ${pwc.space.lg}px`,
+    padding: `0 ${pwc.space.lg}px`,
   } as CSSProperties,
 
   textarea: {
@@ -384,14 +387,14 @@ export const ui = {
   buttonSubtle: buttonQuiet,
   buttonGhost: buttonQuiet,
 
-  // Destructive action (delete / abort). Outline style so it stays quiet
-  // until hovered — destructive buttons shouldn't compete with the primary
-  // CTA for attention. Hover fill lives in index.css (.pwc-btn-danger).
+  // Destructive action (delete / stop). Orange outline and accessible orange
+  // text so it reads as destructive without a large orange fill; hover fill
+  // lives in index.css (.pwc-btn-danger).
   buttonDanger: {
     ...buttonBase,
-    color: pwc.errorText,
+    color: pwc.orange700,
     background: tokens.surface.default,
-    borderColor: pwc.errorText,
+    borderColor: pwc.orange500,
   } as CSSProperties,
 
   // Size modifiers — spread after a variant: { ...ui.buttonPrimary, ...ui.buttonSm }
@@ -400,19 +403,18 @@ export const ui = {
   buttonSm: {
     minHeight: 34,
     padding: "0 12px",
-    fontSize: 13,
+    fontSize: 14,
   } as CSSProperties,
 
   buttonLg: {
     minHeight: 48,
     padding: "12px 24px",
-    fontSize: 15,
+    fontSize: 14,
   } as CSSProperties,
 
-  // --- Monochrome status (design-system Status) ---------------------------
-  // Routine status = neutral symbol + explicit text. No coloured dot, pill,
-  // border, or fill. The symbol is aria-hidden; the text is the accessible
-  // name. See components/StatusLabel.tsx and lib/runStatus.ts for the
+  // --- Status (design-system Status) ---------------------------------------
+  // Status = family-coloured icon + explicit text. No coloured pill, border,
+  // or fill. The icon is aria-hidden; the text is the accessible name. See components/StatusLabel.tsx and lib/runStatus.ts for the
   // canonical symbol families (○ ✓ ! × – ◇).
   status: {
     display: "inline-flex",
@@ -424,7 +426,7 @@ export const ui = {
     color: tokens.color.text.body,
     whiteSpace: "nowrap",
   } as CSSProperties,
-  // Box for the status icon (components/StatusIcon.tsx draws a Phosphor icon
+  // Box for the status icon (components/StatusIcon.tsx draws a Material icon
   // inside it). inline-flex centres the SVG; width/colour are the contract the
   // parity tests pin. fontSize/fontWeight remain for any legacy text glyph.
   statusSymbol: {
@@ -458,9 +460,10 @@ export const ui = {
     overflowX: "auto",
   } as CSSProperties,
   tab: {
-    padding: "8px 16px",
+    minHeight: 34,
+    padding: "0 16px",
     fontFamily: pwc.fontHeading,
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: pwc.weight.medium,
     background: "none",
     border: "none",
@@ -505,7 +508,7 @@ export const ui = {
   } as CSSProperties,
   dialogTitle: {
     fontFamily: pwc.fontHeading,
-    fontSize: 18,
+    fontSize: 16,
     lineHeight: 1.3,
     fontWeight: pwc.weight.semibold,
     color: tokens.color.text.primary,
@@ -582,8 +585,9 @@ export const ui = {
   // the design-system alert icon size.
   alertIcon: (color: string): CSSProperties => ({
     color,
-    fontSize: 16,
-    lineHeight: 1.4,
+    display: "inline-flex",
+    lineHeight: 1,
+    marginTop: 1,
     flexShrink: 0,
   }),
 
@@ -621,7 +625,7 @@ export const ui = {
     borderRadius: tokens.radius.control,
     border: "1px solid transparent",
     background: "transparent",
-    color: tokens.color.text.secondary,
+    color: tokens.color.icon.rest,
     cursor: "pointer",
   } as CSSProperties,
 

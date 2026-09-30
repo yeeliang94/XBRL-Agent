@@ -146,6 +146,16 @@ export const tokens = {
       strong: pwc.grey300,      // decorative emphasis borders, disabled
       control: pwc.grey500,
     },
+    // Icon colour roles (design-system Iconography). Resting icons are grey so
+    // text stays dominant; orange marks the current place, live work and
+    // attention; black marks routine success and icons inside primary text.
+    icon: {
+      rest: pwc.grey500,
+      strong: pwc.black,
+      active: pwc.orange500,
+      attention: pwc.orange500,
+      tileSurface: pwc.orange50,
+    },
     focus: {
       ring: pwc.black,
       halo: pwc.grey100,

@@ -20,7 +20,7 @@ body {
   color: #000000;
   font-family: "Inter Variable", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 14px;
-  line-height: 1.45;
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   overflow-x: hidden;
@@ -28,6 +28,29 @@ body {
 
 * {
   box-sizing: border-box;
+}
+
+/* Form controls do not inherit the page font by default, so any button or
+   field without an explicit inline font fell back to the browser's Arial
+   13.33px. Inherit the workspace type; inline sizes still win. */
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  letter-spacing: inherit;
+}
+
+/* UI emphasis uses the emphasis weight (680). Note content keeps its own
+   source-styled weights in NotesReviewTab.css. */
+:where(strong, b):not(.notes-review-tab *) {
+  font-weight: 680;
+}
+
+/* Working status icon: one slow rotation while work is live; static under
+   reduced motion (handled by the global reduced-motion block below). */
+.status-icon-working svg {
+  animation: spin 1.2s linear infinite;
 }
 
 /* Headings wrap without a lone word on the last line; no-op where
@@ -52,7 +75,7 @@ h2 {
   color: #FFFFFF;
   font-family: "Inter Variable", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 14px;
-  font-weight: 500;
+  font-weight: 650;
   text-decoration: none;
   transform: translateY(-200%);
   transition: transform var(--motion-fast) var(--motion-standard);
@@ -208,7 +231,7 @@ details[open] > .pwc-disclosure-content {
   transform: rotate(90deg);
 }
 details[open] > summary .pwc-disclosure-chevron {
-  transform: rotate(180deg);
+  transform: rotate(90deg);
 }
 .pwc-skeleton {
   animation: skeleton-shimmer 1.8s var(--motion-standard) infinite;
@@ -326,11 +349,39 @@ textarea:focus {
   background: #F5F7F8;
 }
 
-/* Work-queue recents are a plain divided list, not selected table rows.
-   Keep the surface clear and let the trailing action carry hover intent. */
+/* Work-queue recents are an operational list: Grey 50 hover like every
+   other list row, plus the trailing action underline. */
 .recent-run-row:hover,
 .recent-run-row:focus-visible {
-  background: transparent;
+  background: #F5F7F8;
+}
+
+/* Field labels: one Rename control per hovered or focused row, not a
+   column of 400 identical buttons. Touch screens cannot hover, so they
+   always show it. */
+.ts-row:hover,
+.ts-row:focus-within {
+  background: #F5F7F8 !important;
+}
+.ts-row .ts-row-action {
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--motion-standard);
+}
+.ts-row:hover .ts-row-action,
+.ts-row:focus-within .ts-row-action,
+.ts-row .ts-row-action:focus-visible {
+  opacity: 1;
+}
+@media (hover: none) {
+  .ts-row .ts-row-action {
+    opacity: 1;
+  }
+}
+
+/* Wide screens show the worksheet list; narrow screens swap it for the
+   labelled picker (design system: never both). */
+.review-sheet-picker-group {
+  display: none !important;
 }
 
 .recent-run-row:hover .recent-run-action,
@@ -448,9 +499,9 @@ textarea:focus {
   background: #000000;
   color: #FFFFFF;
   font-family: "Inter Variable", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 1.25;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.35;
   text-align: left;
   white-space: normal;
   opacity: 0;
@@ -527,8 +578,8 @@ textarea:focus {
   border-radius: 6px;
   background: #000000;
   color: #FFFFFF;
-  font-size: 11px;
-  line-height: 1.25;
+  font-size: 12px;
+  line-height: 1.35;
   transform: translateY(-50%);
   pointer-events: none;
   width: max-content;
@@ -550,11 +601,30 @@ textarea:focus {
   padding-right: 28px !important;
 }
 
-.technical-activity > summary {
+/* Every native disclosure uses the same chevron as DisclosureChevron: the
+   Material Rounded chevron_right, grey at rest, turning down when open. */
+summary {
   list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
 }
-.technical-activity > summary::-webkit-details-marker {
+summary::-webkit-details-marker {
   display: none;
+}
+summary::before {
+  content: "";
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  background-color: #6B7280;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -960 960 960'%3E%3Cpath d='M536.92-480.62 358.77-659.15q-7.08-6.7-6.77-15.81.31-9.12 7.39-16 7.07-6.89 16.3-6.89t16.31 7.08l189.92 189.92q4.62 4.62 6.81 9.43 2.19 4.8 2.19 10.61T588.73-470q-2.19 5-6.81 9.62L391.38-269.85q-6.69 6.7-15.8 6.58-9.12-.12-16.19-7.19-7.08-7.08-7.08-16.31 0-9.23 7.08-16.31l177.53-177.54Z'/%3E%3C/svg%3E") center / 20px no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -960 960 960'%3E%3Cpath d='M536.92-480.62 358.77-659.15q-7.08-6.7-6.77-15.81.31-9.12 7.39-16 7.07-6.89 16.3-6.89t16.31 7.08l189.92 189.92q4.62 4.62 6.81 9.43 2.19 4.8 2.19 10.61T588.73-470q-2.19 5-6.81 9.62L391.38-269.85q-6.69 6.7-15.8 6.58-9.12-.12-16.19-7.19-7.08-7.08-7.08-16.31 0-9.23 7.08-16.31l177.53-177.54Z'/%3E%3C/svg%3E") center / 20px no-repeat;
+  transition: transform var(--motion-fast) var(--motion-standard);
+}
+details[open] > summary::before {
+  transform: rotate(90deg);
 }
 
 /* Forced-colors / high-contrast: keep control boundaries and card borders
@@ -778,8 +848,7 @@ textarea:focus {
 
   .app-main-nav-glyph,
   .app-shell--collapsed .app-main-nav-glyph {
-    display: inline-block;
-    font-size: 15px !important;
+    display: inline-flex;
   }
 
   .app-main-nav-label,
@@ -794,8 +863,8 @@ textarea:focus {
     clip: auto;
     clip-path: none;
     border: 0;
-    font-size: 11px !important;
-    line-height: 1.1;
+    font-size: 12px !important;
+    line-height: 1.2;
     text-align: center;
     white-space: normal;
   }
@@ -947,6 +1016,16 @@ textarea:focus {
   /* The Statement picker already contains every worksheet on narrow screens. */
   .review-template-rail nav[aria-label="Figure worksheets"] {
     display: none !important;
+  }
+
+  .review-sheet-picker-group {
+    display: flex !important;
+  }
+
+  .review-template-rail {
+    position: static !important;
+    max-height: none !important;
+    overflow: visible !important;
   }
 
   .concept-tree-shell {

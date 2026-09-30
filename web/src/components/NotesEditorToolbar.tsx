@@ -24,7 +24,44 @@ import {
   TEXT_COLORS,
   type PaletteSwatch,
 } from "../lib/notesPalette";
-import { pwc } from "../lib/theme";
+import { pwc, tokens } from "../lib/theme";
+import type { Glyph } from "./iconGlyphs";
+import {
+  AddColumnLeft,
+  AddColumnRight,
+  AddRowAbove,
+  AddRowBelow,
+  BorderAll,
+  BorderBottom,
+  BorderClear,
+  BorderLeft,
+  BorderRight,
+  BorderTop,
+  CellMerge,
+  Delete,
+  FormatAlignCenter,
+  FormatAlignLeft,
+  FormatAlignRight,
+  FormatBold,
+  FormatClear,
+  FormatColorFill,
+  FormatColorReset,
+  FormatH3,
+  FormatIndentDecrease,
+  FormatIndentIncrease,
+  FormatItalic,
+  FormatListBulleted,
+  FormatListNumbered,
+  FormatUnderlined,
+  PlaylistRemove,
+  StrikethroughS,
+  Subscript,
+  Superscript,
+  Table,
+  Toolbar,
+  VariableRemove,
+  VerticalSplit,
+} from "./iconGlyphs";
 
 const FILL_PRESETS: ReadonlyArray<{ label: string; color: string }> = [
   { label: "White", color: "#ffffff" },
@@ -83,6 +120,7 @@ export function NotesEditorToolbar({ editor }: { editor: Editor }) {
       aria-label={ariaLabel}
       title={ariaLabel}
       data-tooltip={ariaLabel}
+      className="pwc-btn-quiet"
       style={active ? styles.buttonActive : styles.button}
       {...guarded(onClick)}
     >
@@ -99,11 +137,9 @@ export function NotesEditorToolbar({ editor }: { editor: Editor }) {
     </div>
   );
 
-  const alignIcon = (align: "left" | "center" | "right") => (
-    <span aria-hidden="true" style={{ ...styles.alignIcon, textAlign: align }}>
-      ≡
-    </span>
-  );
+  const icon = (G: Glyph) => <G size={20} />;
+  const alignIcon = (align: "left" | "center" | "right") =>
+    icon(align === "left" ? FormatAlignLeft : align === "center" ? FormatAlignCenter : FormatAlignRight);
 
   const swatch = (item: PaletteSwatch, kind: "text" | "highlight") => {
     const apply = () => {
@@ -125,7 +161,7 @@ export function NotesEditorToolbar({ editor }: { editor: Editor }) {
         style={{ ...styles.swatch, background: item.value ?? pwc.white }}
         {...guarded(apply)}
       >
-        {item.value === null ? "✕" : ""}
+        {item.value === null ? <FormatColorReset size={18} /> : null}
       </button>
     );
   };
@@ -147,37 +183,37 @@ export function NotesEditorToolbar({ editor }: { editor: Editor }) {
           "Text formatting",
           <>
             {button(
-              <span style={{ fontWeight: 700 }}>B</span>,
+              icon(FormatBold),
               "Bold",
               () => editor.chain().focus().toggleBold().run(),
               editor.isActive("bold"),
             )}
             {button(
-              <span style={{ fontStyle: "italic" }}>I</span>,
+              icon(FormatItalic),
               "Italic",
               () => editor.chain().focus().toggleItalic().run(),
               editor.isActive("italic"),
             )}
             {button(
-              <span style={{ textDecoration: "underline" }}>U</span>,
+              icon(FormatUnderlined),
               "Underline",
               () => editor.chain().focus().toggleUnderline().run(),
               editor.isActive("underline"),
             )}
             {button(
-              <span style={{ textDecoration: "line-through" }}>S</span>,
+              icon(StrikethroughS),
               "Strikethrough",
               () => editor.chain().focus().toggleStrike().run(),
               editor.isActive("strike"),
             )}
             {button(
-              "x²",
+              icon(Superscript),
               "Superscript",
               () => editor.chain().focus().toggleSuperscript().run(),
               editor.isActive("superscript"),
             )}
             {button(
-              "x₂",
+              icon(Subscript),
               "Subscript",
               () => editor.chain().focus().toggleSubscript().run(),
               editor.isActive("subscript"),
@@ -214,26 +250,26 @@ export function NotesEditorToolbar({ editor }: { editor: Editor }) {
               editor.isActive({ textAlign: "right" }),
             )}
             {button(
-              "•≡",
+              icon(FormatListBulleted),
               "Bullet list",
               () => editor.chain().focus().toggleBulletList().run(),
               editor.isActive("bulletList"),
             )}
             {button(
-              "1≡",
+              icon(FormatListNumbered),
               "Numbered list",
               () => editor.chain().focus().toggleOrderedList().run(),
               editor.isActive("orderedList"),
             )}
             {button(
-              "H3",
+              icon(FormatH3),
               "Heading",
               () => editor.chain().focus().toggleHeading({ level: 3 }).run(),
               editor.isActive("heading", { level: 3 }),
             )}
-            {button("⇤", "Decrease indent", () => outdentBlocks(editor))}
-            {button("⇥", "Increase indent", () => indentBlocks(editor))}
-            {button("▦", "Insert table", () =>
+            {button(icon(FormatIndentDecrease), "Decrease indent", () => outdentBlocks(editor))}
+            {button(icon(FormatIndentIncrease), "Increase indent", () => indentBlocks(editor))}
+            {button(icon(Table), "Insert table", () =>
               editor
                 .chain()
                 .focus()
@@ -255,11 +291,15 @@ export function NotesEditorToolbar({ editor }: { editor: Editor }) {
             "Cell fill",
             <>
               {FILL_PRESETS.map((preset) =>
-                button("■", `Fill ${preset.label}`, () =>
-                  applyCellFill(editor, preset.color),
+                button(
+                  <span style={{ display: "inline-flex", color: pwc.grey700, borderBottom: `4px solid ${preset.color}`, boxShadow: `0 1px 0 ${pwc.grey300}` }}>
+                    <FormatColorFill size={18} />
+                  </span>,
+                  `Fill ${preset.label}`,
+                  () => applyCellFill(editor, preset.color),
                 ),
               )}
-              {button("∅", "No fill", () => applyCellFill(editor, FILL_NONE))}
+              {button(icon(FormatColorReset), "No fill", () => applyCellFill(editor, FILL_NONE))}
             </>,
           )}
           {group(
@@ -267,25 +307,27 @@ export function NotesEditorToolbar({ editor }: { editor: Editor }) {
             <>
               {BORDER_SIDES.map(({ side, label }) =>
                 button(
-                  side === "Top"
-                    ? "▔"
-                    : side === "Right"
-                      ? "▕"
-                      : side === "Bottom"
-                        ? "▁"
-                        : "▏",
+                  icon(
+                    side === "Top"
+                      ? BorderTop
+                      : side === "Right"
+                        ? BorderRight
+                        : side === "Bottom"
+                          ? BorderBottom
+                          : BorderLeft,
+                  ),
                   `Border ${label}`,
                   () => toggleCellBorderSide(editor, side, paintValue),
                   sidePainted(side),
                 ),
               )}
-              {button("⊞", "Border all", () =>
+              {button(icon(BorderAll), "Border all", () =>
                 applyCellBorderAll(editor, paintValue),
               )}
-              {button("⊠", "Border none", () =>
+              {button(icon(BorderClear), "Border none", () =>
                 applyCellBorderAll(editor, BORDER_HIDDEN),
               )}
-              {button("═", "Double underline", () =>
+              {button(<span style={{ fontSize: 16, fontWeight: 680, textDecoration: "underline double", textUnderlineOffset: 3 }}>U</span>, "Double underline", () =>
                 applyCellDoubleUnderline(editor),
               )}
             </>,
@@ -327,7 +369,7 @@ export function NotesEditorToolbar({ editor }: { editor: Editor }) {
                 }}
                 {...guarded(() => setBorderPaint(BORDER_HIDDEN))}
               >
-                ✕
+                <FormatColorReset size={18} />
               </button>
             </>,
           )}
@@ -344,39 +386,39 @@ export function NotesEditorToolbar({ editor }: { editor: Editor }) {
           )}
           {group(
             "Reset",
-            button("↺", "Reset cell to theme", () => resetCellToTheme(editor)),
+            button(icon(FormatClear), "Reset cell to theme", () => resetCellToTheme(editor)),
           )}
           {group(
             "Table structure",
             <>
-              {button("▤↑", "Insert row above", () =>
+              {button(icon(AddRowAbove), "Insert row above", () =>
                 editor.chain().focus().addRowBefore().run(),
               )}
-              {button("▤↓", "Insert row below", () =>
+              {button(icon(AddRowBelow), "Insert row below", () =>
                 editor.chain().focus().addRowAfter().run(),
               )}
-              {button("▥←", "Insert column left", () =>
+              {button(icon(AddColumnLeft), "Insert column left", () =>
                 editor.chain().focus().addColumnBefore().run(),
               )}
-              {button("▥→", "Insert column right", () =>
+              {button(icon(AddColumnRight), "Insert column right", () =>
                 editor.chain().focus().addColumnAfter().run(),
               )}
-              {button("⊞", "Merge cells", () =>
+              {button(icon(CellMerge), "Merge cells", () =>
                 editor.chain().focus().mergeCells().run(),
               )}
-              {button("⊟", "Split cell", () =>
+              {button(icon(VerticalSplit), "Split cell", () =>
                 editor.chain().focus().splitCell().run(),
               )}
-              {button("━", "Toggle header row", () =>
+              {button(icon(Toolbar), "Toggle header row", () =>
                 editor.chain().focus().toggleHeaderRow().run(),
               )}
-              {button("▤−", "Delete row", () =>
+              {button(icon(PlaylistRemove), "Delete row", () =>
                 editor.chain().focus().deleteRow().run(),
               )}
-              {button("▥−", "Delete column", () =>
+              {button(icon(VariableRemove), "Delete column", () =>
                 editor.chain().focus().deleteColumn().run(),
               )}
-              {button("▦×", "Delete table", () =>
+              {button(icon(Delete), "Delete table", () =>
                 editor.chain().focus().deleteTable().run(),
               )}
             </>,
@@ -388,86 +430,72 @@ export function NotesEditorToolbar({ editor }: { editor: Editor }) {
 }
 
 const styles = {
-  root: { display: "flex", flexDirection: "column", gap: 4, marginTop: 4 },
+  root: { display: "flex", flexDirection: "column", gap: pwc.space.xs, marginTop: pwc.space.xs },
   row: {
     display: "flex",
     flexWrap: "wrap",
     alignItems: "center",
-    gap: 6,
-    padding: "7px 8px",
-    background: pwc.grey100,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: 4,
+    gap: pwc.space.sm,
+    padding: pwc.space.sm,
+    background: pwc.grey50,
+    borderRadius: tokens.radius.control,
   },
   tableRow: {
     display: "flex",
     flexWrap: "wrap",
     alignItems: "center",
-    gap: 6,
-    padding: "7px 8px",
-    marginTop: 4,
-    background: pwc.grey100,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: 4,
+    gap: pwc.space.sm,
+    padding: pwc.space.sm,
+    marginTop: pwc.space.xs,
+    background: pwc.grey50,
+    borderRadius: tokens.radius.control,
   },
   group: {
     display: "inline-flex",
     alignItems: "center",
-    gap: 3,
-    padding: "3px 4px",
-    background: pwc.white,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: 4,
+    gap: 2,
+    padding: "0 4px",
   },
   groupLabel: {
-    color: pwc.grey700,
-    fontSize: 10,
-    fontWeight: 700,
-    letterSpacing: 0.3,
-    textTransform: "uppercase",
+    color: tokens.color.text.secondary,
+    fontSize: 12,
+    fontWeight: pwc.weight.medium,
     whiteSpace: "nowrap",
-    marginRight: 1,
+    marginRight: pwc.space.xs,
   },
-  alignIcon: { display: "inline-block", width: 13, lineHeight: 1 },
   swatch: {
     width: 28,
     height: 28,
     padding: 0,
     border: `1px solid ${pwc.grey300}`,
-    borderRadius: 3,
+    borderRadius: pwc.radius.sm,
     cursor: "pointer",
-    fontSize: 10,
-    lineHeight: 1,
-    color: pwc.grey700,
+    color: tokens.color.icon.rest,
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
   },
   button: {
-    minWidth: 28,
-    height: 28,
-    padding: "2px 5px",
-    fontSize: 13,
-    fontFamily: pwc.fontBody,
-    background: pwc.white,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: 3,
-    color: pwc.grey700,
+    minWidth: 34,
+    height: 34,
+    padding: "0 5px",
+    background: "transparent",
+    border: "1px solid transparent",
+    borderRadius: tokens.radius.control,
+    color: tokens.color.icon.rest,
     cursor: "pointer",
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
   },
   buttonActive: {
-    minWidth: 28,
-    height: 28,
-    padding: "2px 5px",
-    fontSize: 13,
-    fontFamily: pwc.fontBody,
-    background: pwc.grey100,
+    minWidth: 34,
+    height: 34,
+    padding: "0 5px",
+    background: pwc.white,
     border: `1px solid ${pwc.grey300}`,
-    borderRadius: 3,
-    color: pwc.grey900,
+    borderRadius: tokens.radius.control,
+    color: tokens.color.icon.strong,
     cursor: "pointer",
     display: "inline-flex",
     alignItems: "center",

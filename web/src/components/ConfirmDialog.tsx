@@ -147,8 +147,8 @@ export function ConfirmDialog({
           <button
             ref={cancelRef}
             type="button"
-            className={uiClass.btnSecondary}
-            style={{ ...ui.buttonSecondary, ...ui.buttonSm }}
+            className={uiClass.btnQuiet}
+            style={ui.buttonQuiet}
             onClick={onCancel}
             disabled={busy}
           >
@@ -158,7 +158,7 @@ export function ConfirmDialog({
             ref={confirmRef}
             type="button"
             className={danger ? uiClass.btnDanger : uiClass.btnPrimary}
-            style={{ ...(danger ? ui.buttonDanger : ui.buttonPrimary), ...ui.buttonSm }}
+            style={danger ? ui.buttonDanger : ui.buttonPrimary}
             onClick={onConfirm}
             disabled={busy}
           >

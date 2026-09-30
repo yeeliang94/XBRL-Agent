@@ -46,9 +46,10 @@ import {
   captureSelection,
   restoreSelection,
 } from "../lib/cellFormatting";
-import { Indent } from "../lib/notesIndent";
+import { Indent, indentUnwrappedSubnote } from "../lib/notesIndent";
 import { NotesSection } from "../lib/notesSection";
-import { pwc } from "../lib/theme";
+import { pwc, tokens } from "../lib/theme";
+import { Check, ContentCopy, Edit } from "./iconGlyphs";
 import { ui, uiClass } from "../lib/uiStyles";
 import {
   fetchNotesCells,
@@ -138,7 +139,7 @@ interface SourceNoteInventoryRow {
   reviewer_added?: boolean;
   reviewer_verdict?: string | null;
   reason?: string;
-  subnotes?: { subnote_ref: string; title?: string; state: string; reason?: string; placements?: SourceNotePlacement[] }[];
+  subnotes?: { subnote_ref: string; title?: string; state: string; reason?: string; placements?: SourceNotePlacement[]; page_lo?: number | null; page_hi?: number | null }[];
   page_lo: number | null;
   page_hi: number | null;
 }
@@ -149,8 +150,8 @@ function sourceNoteNeedsReview(note: SourceNoteInventoryRow): boolean {
     && (note.status === "missing" || note.status === "suspected_gap");
 }
 
-function sourceNotePages(note: SourceNoteInventoryRow): number[] {
-  if (note.page_lo == null) return [];
+function sourceNotePages(note: { page_lo?: number | null; page_hi?: number | null }): number[] {
+  if (note.page_lo == null || note.page_lo < 1) return [];
   const hi = Math.max(note.page_lo, note.page_hi ?? note.page_lo);
   return Array.from({ length: hi - note.page_lo + 1 }, (_, index) => note.page_lo! + index);
 }
@@ -588,11 +589,12 @@ export function NotesReviewTab({
     note: SourceNoteInventoryRow,
     placement: SourceNotePlacement,
     subnoteRef: string | null = null,
+    pages: number[] = sourceNotePages(note),
   ) => {
     if (saveBlocked || moveBusy) return;
     setSelectedSourceNote(note.note_num);
     setSelectedSubnoteRef(subnoteRef);
-    reportCellPages(sourceNotePages(note), onActiveCellPages);
+    reportCellPages(pages, onActiveCellPages);
     setActive((current) => ({ sheet: placement.sheet, key: current.key + 1 }));
     setFocusRow(placement.row);
     setSelectedCellKey(`${placement.sheet}:${placement.row}`);
@@ -618,15 +620,17 @@ export function NotesReviewTab({
     subnote: NonNullable<SourceNoteInventoryRow["subnotes"]>[number],
   ) => {
     const destinations = subnote.placements ?? [];
+    const pages = sourceNotePages(subnote);
+    const sourcePages = pages.length > 0 ? pages : sourceNotePages(note);
     if (destinations.length > 0) {
-      selectSourcePlacement(note, destinations[0], subnote.subnote_ref);
+      selectSourcePlacement(note, destinations[0], subnote.subnote_ref, sourcePages);
     } else if (note.placements.length === 1) {
-      selectSourcePlacement(note, note.placements[0], subnote.subnote_ref);
+      selectSourcePlacement(note, note.placements[0], subnote.subnote_ref, sourcePages);
     } else if (!saveBlocked && !moveBusy) {
       setSelectedSourceNote(note.note_num);
       setSelectedSubnoteRef(subnote.subnote_ref);
       setSelectedCellKey(null);
-      reportCellPages(sourceNotePages(note), onActiveCellPages);
+      reportCellPages(sourcePages, onActiveCellPages);
     }
   }, [onActiveCellPages, selectSourcePlacement, saveBlocked, moveBusy]);
 
@@ -791,11 +795,11 @@ export function NotesReviewTab({
                 const unresolvedSubnotes = note.subnotes?.filter(
                   (sub) => sub.state === "missing" || sub.state === "not_verified",
                 ) ?? [];
-                const childDestinations = note.subnotes?.find(
+                const selectedSubnote = note.subnotes?.find(
                   (sub) => sub.subnote_ref === selectedSubnoteRef,
-                )?.placements ?? [];
-                const visibleDestinations = selectedSubnoteRef && childDestinations.length
-                  ? childDestinations : note.placements;
+                );
+                const childDestinations = selectedSubnote?.placements ?? [];
+                const visibleDestinations = selectedSubnote ? childDestinations : note.placements;
                 return (
                   <div key={note.note_num} style={styles.noteRailItemGroup}>
                     <button
@@ -856,9 +860,7 @@ export function NotesReviewTab({
                         ))}
                         {selected && selectedSubnoteRef && childDestinations.length === 0 && (
                           <span style={styles.subnoteUnplaced}>
-                            Exact field not recorded. {note.placements.length === 1
-                              ? `Showing the Note ${note.note_num} field.`
-                              : `Choose a Note ${note.note_num} field below.`}
+                            Exact field not recorded.
                           </span>
                         )}
                     </div>}
@@ -873,7 +875,11 @@ export function NotesReviewTab({
                             type="button"
                             style={styles.noteRailPlacementButton}
                             disabled={saveBlocked || moveBusy}
-                            onClick={() => selectSourcePlacement(note, placement, selectedSubnoteRef)}
+                            onClick={() => {
+                              const childPages = selectedSubnote ? sourceNotePages(selectedSubnote) : [];
+                              selectSourcePlacement(note, placement, selectedSubnoteRef,
+                                childPages.length > 0 ? childPages : sourceNotePages(note));
+                            }}
                             title={`${placement.row_label || "Open placed field"} · ${notesSheetDisplayName(placement.sheet)}`}
                           >
                             {placement.row_label || "Open placed field"}
@@ -1275,7 +1281,7 @@ function HumanNoteCell({
       <div style={{ ...styles.humanNoteStatusRow, minHeight: selected ? 72 : 44 }}>
         {marker && (
           <span role="img" aria-label={markerLabel} title={markerLabel}
-            style={{ fontWeight: 600, color: status === "missed" ? pwc.warning : pwc.grey500 }}>
+            style={{ fontWeight: 680, color: status === "missed" ? pwc.warning : pwc.grey500 }}>
             {marker}
           </span>
         )}
@@ -1317,7 +1323,10 @@ function WorkspaceReadOnlyCellRow({
   // notes_cells. Apply the same shared tagger used by the selected TipTap
   // editor so the lightweight browse view still matches clipboard output.
   useEffect(() => {
-    if (contentRef.current) tagNumericCells(contentRef.current);
+    if (contentRef.current) {
+      tagNumericCells(contentRef.current);
+      indentUnwrappedSubnote(contentRef.current);
+    }
   }, [cell.html]);
 
   const activate = () => {
@@ -1350,7 +1359,7 @@ function WorkspaceReadOnlyCellRow({
           <div style={styles.cellLabel}>{cell.label}</div>
         </aside>
         {!blank && <div style={styles.cellToolbar}>
-          <button type="button" disabled={disabled} style={styles.smallButton} onClick={activate} aria-label={`Review ${cell.label}`}>Review</button>
+          <button type="button" disabled={disabled} className={uiClass.btnSecondary} style={styles.smallButton} onClick={activate} aria-label={`Review ${cell.label}`}>Review</button>
         </div>}
       </div>
       {!blank && <div style={{ padding: "0 12px 16px" }}>
@@ -1649,7 +1658,10 @@ function CellRow({
   // style-free).
   useEffect(() => {
     if (!editor) return;
-    const apply = () => tagNumericCells(editor.view.dom);
+    const apply = () => {
+      tagNumericCells(editor.view.dom);
+      indentUnwrappedSubnote(editor.view.dom);
+    };
     apply();
     editor.on("update", apply);
     return () => {
@@ -1913,11 +1925,11 @@ function CellRow({
           <SaveStatusBadge status={status} />
           {status === "failed" && (
             <>
-              <button type="button" style={styles.smallButton} onClick={() => {
+              <button type="button" className={uiClass.btnSecondary} style={styles.smallButton} onClick={() => {
                 setStatus("dirty");
                 scheduleSave();
               }}>Retry save</button>
-              <button type="button" style={styles.smallButton} onClick={discardUnsavedChanges}>
+              <button type="button" className={uiClass.btnSecondary} style={styles.smallButton} onClick={discardUnsavedChanges}>
                 Discard unsaved changes
               </button>
             </>
@@ -1937,21 +1949,23 @@ function CellRow({
           )}
           <button
             type="button"
-            style={styles.smallButton}
+            className={uiClass.btnSecondary} style={styles.smallButton}
             onClick={toggleEditable}
             disabled={cell.invalid_target || moveBusy}
             title={cell.invalid_target
               ? "Move this content to a writable filing field before editing"
               : undefined}
           >
+            {editable ? <Check size={20} /> : <Edit size={20} />}
             {editable ? "Done" : "Edit"}
           </button>
           <button
             type="button"
-            style={styles.smallButton}
+            className={uiClass.btnSecondary} style={styles.smallButton}
             onClick={handleCopy}
             title="Copies using your Notes paste format defaults in Settings"
           >
+            <ContentCopy size={20} />
             Copy
           </button>
         </div>
@@ -2265,12 +2279,6 @@ const styles = {
   noteRailSearch: {
     ...ui.input,
     width: "100%",
-    minHeight: 34,
-    padding: "0 9px",
-    border: "none",
-    borderRadius: 7,
-    background: pwc.grey50,
-    fontSize: 14,
   } as React.CSSProperties,
   noteRailList: {
     minHeight: 0,
@@ -2292,10 +2300,10 @@ const styles = {
     gap: 8,
     alignItems: "center",
     width: "100%",
-    minHeight: 38,
-    padding: "6px 7px",
+    minHeight: 40,
+    padding: "6px 8px",
     border: "none",
-    borderRadius: 7,
+    borderRadius: tokens.radius.control,
     background: "transparent",
     color: pwc.grey700,
     textAlign: "left" as const,
@@ -2306,7 +2314,8 @@ const styles = {
     color: pwc.grey900,
   } as React.CSSProperties,
   noteRailNumber: {
-    fontFamily: pwc.fontMono,
+    fontFamily: pwc.fontBody,
+    fontVariantNumeric: "tabular-nums",
     fontSize: 12,
     color: pwc.grey500,
     textAlign: "center" as const,
@@ -2321,7 +2330,7 @@ const styles = {
     whiteSpace: "normal" as const,
     overflowWrap: "anywhere" as const,
     fontSize: 14,
-    fontWeight: 600,
+    fontWeight: 680,
   } as React.CSSProperties,
   noteRailDestination: {
     whiteSpace: "normal" as const,
@@ -2338,14 +2347,14 @@ const styles = {
     borderRadius: 4,
     color: pwc.orange700,
     background: pwc.orange50,
-    fontSize: 10,
-    fontWeight: 700,
+    fontSize: 12,
+    fontWeight: 680,
   } as React.CSSProperties,
   subnoteSummary: {
     padding: "2px 6px 2px 35px",
     color: pwc.orange700,
     fontSize: 14,
-    fontWeight: 600,
+    fontWeight: 680,
   } as React.CSSProperties,
   subnoteList: {
     display: "flex",
@@ -2369,7 +2378,8 @@ const styles = {
   } as React.CSSProperties,
   subnoteRef: {
     color: pwc.grey700,
-    fontFamily: pwc.fontMono,
+    fontFamily: pwc.fontBody,
+    fontVariantNumeric: "tabular-nums",
     fontSize: 12,
     lineHeight: 1.4,
   } as React.CSSProperties,
@@ -2387,7 +2397,7 @@ const styles = {
   subnoteState: {
     color: pwc.orange700,
     fontSize: 12,
-    fontWeight: 600,
+    fontWeight: 680,
     lineHeight: 1.35,
   } as React.CSSProperties,
   subnoteReason: {
@@ -2459,7 +2469,7 @@ const styles = {
     background: "transparent",
     color: pwc.grey700,
     fontSize: 14,
-    fontWeight: 600,
+    fontWeight: 680,
     whiteSpace: "normal" as const,
     overflowWrap: "anywhere" as const,
     textAlign: "left" as const,
@@ -2498,7 +2508,7 @@ const styles = {
     alignItems: "center",
     color: pwc.grey700,
     fontSize: 12,
-    fontWeight: 600,
+    fontWeight: 680,
     cursor: "pointer",
   } as React.CSSProperties,
   noteOptionsPanel: {
@@ -2528,7 +2538,7 @@ const styles = {
     color: pwc.grey700,
     cursor: "pointer",
     listStyle: "none",
-    fontWeight: 700,
+    fontWeight: 680,
   } as React.CSSProperties,
   actionsMenuPanel: {
     position: "absolute" as const,
@@ -2612,12 +2622,11 @@ const styles = {
     textAlign: "left" as const,
   } as React.CSSProperties,
   sheetHeadingText: {
-    fontFamily: pwc.fontMono,
+    fontFamily: pwc.fontBody,
+    fontVariantNumeric: "tabular-nums",
     fontSize: 14,
-    fontWeight: 600,
+    fontWeight: 680,
     color: pwc.grey900,
-    textTransform: "uppercase" as const,
-    letterSpacing: 0.4,
   } as React.CSSProperties,
   sheetFormatButton: {
     ...ui.buttonGhost,
@@ -2725,7 +2734,7 @@ const styles = {
     gap: 4,
   } as React.CSSProperties,
   cellLabel: {
-    fontWeight: 600,
+    fontWeight: 680,
     fontSize: 14,
     color: pwc.grey900,
   } as React.CSSProperties,
@@ -2737,8 +2746,8 @@ const styles = {
     border: `1px solid ${pwc.grey300}`,
     background: pwc.grey100,
     color: pwc.grey700,
-    fontSize: 10,
-    fontWeight: 600,
+    fontSize: 12,
+    fontWeight: 680,
     letterSpacing: 0.2,
     whiteSpace: "nowrap" as const,
   } as React.CSSProperties,
@@ -2757,10 +2766,8 @@ const styles = {
     overflow: "hidden",
   } as React.CSSProperties,
   evidenceLabel: {
-    textTransform: "uppercase" as const,
-    letterSpacing: 0.3,
-    fontWeight: 600,
-    fontSize: 10,
+    fontWeight: 680,
+    fontSize: 12,
   } as React.CSSProperties,
   evidenceText: {
     display: "block",
@@ -2801,14 +2808,10 @@ const styles = {
     flex: 1,
   } as React.CSSProperties,
   smallButton: {
-    padding: "3px 10px",
-    fontSize: 14,
-    fontWeight: 600,
-    background: pwc.white,
-    border: `1px solid ${pwc.grey300 ?? "#d1d5db"}`,
-    borderRadius: 3,
-    color: pwc.grey900,
-    cursor: "pointer",
+    ...ui.buttonSecondary,
+    ...ui.buttonSm,
+    gap: pwc.space.xs,
+    paddingLeft: pwc.space.sm,
   } as React.CSSProperties,
   // Numeric notes: a small grid of value inputs (1-4 columns by filing level).
   numericGrid: {
@@ -2824,8 +2827,8 @@ const styles = {
     minWidth: 110,
   } as React.CSSProperties,
   numericFieldLabel: {
-    fontSize: 11,
-    fontWeight: 600,
+    fontSize: 12,
+    fontWeight: 680,
     color: pwc.grey700,
   } as React.CSSProperties,
   numericHumanValue: {
@@ -2842,30 +2845,27 @@ const styles = {
     fontSize: 14,
     fontFamily: pwc.fontBody,
     textAlign: "right" as const,
+    fontVariantNumeric: "tabular-nums",
     border: `1px solid ${pwc.grey300 ?? "#d1d5db"}`,
-    borderRadius: 3,
+    borderRadius: pwc.radius.sm,
     color: pwc.grey900,
   } as React.CSSProperties,
   statusBadge: {
-    fontSize: 11,
-    fontWeight: 600,
-    textTransform: "uppercase" as const,
-    letterSpacing: 0.4,
+    fontSize: 12,
+    fontWeight: 680,
   } as React.CSSProperties,
   formatAdjustedNotice: {
     padding: "2px 5px",
-    fontSize: 10,
-    fontWeight: 600,
+    fontSize: 12,
+    fontWeight: 680,
     color: pwc.grey700,
     background: pwc.grey100,
     border: `1px solid ${pwc.grey200}`,
     borderRadius: 3,
   } as React.CSSProperties,
   copiedChip: {
-    fontSize: 11,
-    fontWeight: 600,
+    fontSize: 12,
+    fontWeight: 680,
     color: pwc.success,
-    textTransform: "uppercase" as const,
-    letterSpacing: 0.4,
   } as React.CSSProperties,
 } as const;

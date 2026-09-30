@@ -8,6 +8,7 @@ import { ApiError, userMessage } from "../lib/errors";
 import { flagKindLabel, humanize } from "../lib/vocabulary";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { SkeletonText } from "./Skeleton";
+import { DisclosureChevron } from "./icons";
 
 /**
  * Notes Reviewer panel (docs/PLAN.md — Notes Reviewer, Phase 4).
@@ -240,6 +241,8 @@ export function NotesReviewerPanel({ runId }: Props) {
       </p>
     );
   if (!data) return null;
+  const openFlags = data.flags.filter((flag) => flag.status === "open");
+  const closedFlags = data.flags.filter((flag) => flag.status !== "open");
 
   // Nothing to show and no flags — keep the panel quiet (just the re-review
   // control) so it doesn't clutter the editor on a clean run.
@@ -266,11 +269,11 @@ export function NotesReviewerPanel({ runId }: Props) {
           aria-expanded={expanded}
           data-testid="notes-reviewer-toggle"
         >
-          <span aria-hidden="true" style={styles.chevron}>{expanded ? "▾" : "▸"}</span>
+          <DisclosureChevron open={expanded} />
           <span style={styles.title}>Notes review</span>
           <span style={styles.dim}>
             {data.diff.length} change{data.diff.length === 1 ? "" : "s"} ·{" "}
-            {data.flags.length} flag{data.flags.length === 1 ? "" : "s"}
+            {openFlags.length} open flag{openFlags.length === 1 ? "" : "s"}
           </span>
         </button>
         {data.has_reviewer_version ? (
@@ -379,12 +382,10 @@ export function NotesReviewerPanel({ runId }: Props) {
             </table>
           )}
 
-          <h4 style={styles.h4}>Flags ({data.flags.length})</h4>
-          {data.flags.length === 0 ? (
-            <p style={styles.dim}>No flags.</p>
-          ) : (
+          {openFlags.length > 0 && <h4 style={styles.h4}>Needs review ({openFlags.length})</h4>}
+          {openFlags.length > 0 && (
             <div style={styles.flagStack}>
-              {data.flags.map((f) => (
+              {openFlags.map((f) => (
                 <div key={f.id} style={styles.flagCard} data-testid={`notes-flag-${f.id}`}>
                   <div style={styles.flagHead}>
                     <span style={styles.kindChip}>
@@ -405,7 +406,10 @@ export function NotesReviewerPanel({ runId }: Props) {
                     </p>
                   )}
                   {f.evidence && (
-                    <p style={styles.flagEvidence}>{f.evidence}</p>
+                    <details style={styles.flagEvidence}>
+                      <summary>Technical evidence</summary>
+                      <p>{f.evidence}</p>
+                    </details>
                   )}
                   {f.answer ? (
                     <p style={styles.answerGiven}>Your answer: {f.answer}</p>
@@ -433,6 +437,18 @@ export function NotesReviewerPanel({ runId }: Props) {
                 </div>
               ))}
             </div>
+          )}
+          {closedFlags.length > 0 && (
+            <details style={styles.flagHistory}>
+              <summary>Flag history ({closedFlags.length})</summary>
+              {closedFlags.map((f) => (
+                <div key={f.id} style={styles.historyItem}>
+                  <span style={styles.dim}>{humanize(f.status)}</span>
+                  <p style={styles.flagReason}>{f.reason}</p>
+                  {f.answer && <p style={styles.answerGiven}>Decision: {f.answer}</p>}
+                </div>
+              ))}
+            </details>
           )}
         </>
       )}
@@ -474,7 +490,7 @@ const styles = {
     textAlign: "left" as const,
   } as const,
   chevron: { color: pwc.grey500, fontSize: 12, width: 12, display: "inline-block" } as const,
-  title: { fontFamily: pwc.fontHeading, fontWeight: 600, color: pwc.grey900, fontSize: 14 },
+  title: { fontFamily: pwc.fontHeading, fontWeight: 680, color: pwc.grey900, fontSize: 14 },
   badge: {
     ...ui.badge,
     borderColor: pwc.info,
@@ -498,7 +514,7 @@ const styles = {
   h4: {
     fontFamily: pwc.fontHeading,
     fontSize: 14,
-    fontWeight: 600,
+    fontWeight: 680,
     color: pwc.grey900,
     margin: `${pwc.space.md}px 0 ${pwc.space.sm}px`,
   } as const,
@@ -508,7 +524,7 @@ const styles = {
     padding: pwc.space.sm,
     borderBottom: `1px solid ${pwc.grey200}`,
     color: pwc.grey700,
-    fontWeight: 600,
+    fontWeight: 680,
   } as const,
   td: {
     padding: pwc.space.sm,
@@ -516,19 +532,21 @@ const styles = {
     verticalAlign: "top" as const,
     color: pwc.grey800,
   } as const,
-  cellLabel: { fontWeight: 600, color: pwc.grey900 },
+  cellLabel: { fontWeight: 680, color: pwc.grey900 },
   oldVal: { color: pwc.grey500, textDecoration: "line-through" },
-  newVal: { color: pwc.successText, fontWeight: 600, marginTop: 2 },
+  newVal: { color: pwc.successText, fontWeight: 680, marginTop: 2 },
   changeChip: {
     background: pwc.grey100,
     border: `1px solid ${pwc.grey200}`,
     color: pwc.grey700,
     borderRadius: pwc.radius.pill,
     padding: `1px ${pwc.space.sm}px`,
-    fontSize: 11,
-    fontWeight: 600,
+    fontSize: 12,
+    fontWeight: 680,
   } as const,
   flagStack: { display: "flex", flexDirection: "column" as const, gap: pwc.space.sm },
+  flagHistory: { marginTop: pwc.space.md, color: pwc.grey500, fontSize: 13 },
+  historyItem: { marginTop: pwc.space.sm, paddingTop: pwc.space.sm },
   flagCard: {
     border: "none",
     borderRadius: 0,
@@ -546,7 +564,7 @@ const styles = {
     borderColor: pwc.warning,
   } as const,
   flagReason: { color: pwc.grey800, fontSize: 13, margin: `${pwc.space.xs}px 0` },
-  flagGrounding: { color: pwc.grey700, fontSize: 12, fontWeight: 600, margin: 0 },
+  flagGrounding: { color: pwc.grey700, fontSize: 12, fontWeight: 680, margin: 0 },
   flagEvidence: {
     color: pwc.grey700,
     fontSize: 13,
@@ -576,7 +594,7 @@ const styles = {
     border: `1px solid ${pwc.errorBorder}`,
     borderRadius: pwc.radius.md,
     padding: `${pwc.space.xs}px ${pwc.space.md}px`,
-    fontWeight: 600,
+    fontWeight: 680,
     cursor: "pointer",
   } as const,
   smallBtn: {

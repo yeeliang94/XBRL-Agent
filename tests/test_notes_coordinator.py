@@ -329,9 +329,9 @@ class _FakeAgentRun:
     @property
     def usage(self):
         class U:
-            total_tokens = 0
-            input_tokens = 0
-            output_tokens = 0
+            total_tokens = 42
+            input_tokens = 30
+            output_tokens = 12
         return U()
 
     async def __aenter__(self):
@@ -415,3 +415,5 @@ async def test_single_notes_agent_without_writes_reports_failed(
         assert result.status == "failed"
         assert result.workbook_path is None
         assert "without writing" in (result.error or "")
+        assert result.error_type == "no_write"
+        assert result.total_tokens == 84  # both failed attempts used a model

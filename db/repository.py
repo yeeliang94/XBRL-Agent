@@ -1639,16 +1639,29 @@ def upsert_notes_inventory(
     title: str = "",
     subnote_refs: Optional[list[str]] = None,
     subnote_titles: Optional[dict[str, str]] = None,
+    subnote_pages: Optional[dict[str, dict[str, int]]] = None,
     page_lo: Optional[int] = None,
     page_hi: Optional[int] = None,
 ) -> int:
     """Insert/replace one scout-inventory note (UNIQUE(run_id, note_num))."""
     # Keep the existing JSON column compatible with older lists of strings.
-    subs_json = json.dumps([
-        {"ref": ref, "title": subnote_titles[ref]}
-        if subnote_titles and subnote_titles.get(ref) else ref
-        for ref in (subnote_refs or [])
-    ]) if subnote_refs else None
+    subs = []
+    for ref in subnote_refs or []:
+        child_title = (subnote_titles or {}).get(ref)
+        pages = (subnote_pages or {}).get(ref) or {}
+        page_start = pages.get("page_lo")
+        page_end = pages.get("page_hi")
+        if child_title or (isinstance(page_start, int) and page_start > 0):
+            child = {"ref": ref}
+            if child_title:
+                child["title"] = child_title
+            if isinstance(page_start, int) and page_start > 0:
+                child["page_lo"] = page_start
+                child["page_hi"] = page_end if isinstance(page_end, int) and page_end >= page_start else page_start
+            subs.append(child)
+        else:
+            subs.append(ref)
+    subs_json = json.dumps(subs) if subs else None
     existing = conn.execute(
         "SELECT id FROM run_notes_inventory WHERE run_id = ? AND note_num = ?",
         (run_id, note_num),
@@ -2259,11 +2272,17 @@ def fetch_notes_inventory(
             str(x["ref"]): str(x["title"])
             for x in subs if isinstance(x, dict) and x.get("ref") and x.get("title")
         }
+        pages = {
+            str(x["ref"]): {"page_lo": x["page_lo"], "page_hi": x.get("page_hi", x["page_lo"])}
+            for x in subs if isinstance(x, dict) and x.get("ref")
+            and isinstance(x.get("page_lo"), int) and x["page_lo"] > 0
+        }
         out.append({
             "note_num": r["note_num"],
             "title": r["title"] or "",
             "subnote_refs": refs,
             "subnote_titles": titles,
+            "subnote_pages": pages,
             "page_lo": r["page_lo"],
             "page_hi": r["page_hi"],
         })

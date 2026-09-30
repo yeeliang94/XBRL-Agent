@@ -1,8 +1,10 @@
-import type { MouseEvent, ReactNode } from "react";
+import type { MouseEvent } from "react";
 import { pwc, tokens } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 import type { AppView } from "../lib/appReducer";
 import { TERMS } from "../lib/vocabulary";
+import type { Glyph } from "./iconGlyphs";
+import { Description, Inbox, NoteAdd, RunHistory, TextFields } from "./iconGlyphs";
 
 export interface TopNavProps {
   view: AppView;
@@ -22,11 +24,11 @@ const TOOLS: {
   id: AppView;
   label: string;
   href: string;
-  glyph: string;
+  glyph: Glyph;
   adminOnly?: boolean;
   canonicalOnly?: boolean;
 }[] = [
-  { id: "concepts", label: "Field labels", href: "/field-labels", glyph: "Aa", adminOnly: true, canonicalOnly: true },
+  { id: "concepts", label: "Field labels", href: "/field-labels", glyph: TextFields, adminOnly: true, canonicalOnly: true },
 ];
 
 export function TopNav({
@@ -58,7 +60,7 @@ export function TopNav({
     key: string;
     href: string;
     label: string;
-    glyph: ReactNode;
+    glyph: Glyph;
     active: boolean;
     action: () => void;
     status?: "Working" | "Stopped";
@@ -72,7 +74,7 @@ export function TopNav({
       style={active ? styles.tabActive : styles.tabInactive}
     >
       <span className="app-main-nav-glyph" style={active ? styles.glyphActive : styles.glyph} aria-hidden="true">
-        {glyph}
+        {glyph({ size: 20 })}
       </span>
       <span className="app-main-nav-label">{label}</span>
       {status && (
@@ -86,14 +88,14 @@ export function TopNav({
 
   return (
     <nav className="app-main-nav" style={styles.nav} aria-label="Main navigation">
-      {link({ key: "work-queue", href: "/", label: "Work queue", glyph: "⌂", active: view === "extract" && extractMode === "queue" && currentRunId == null, action: () => onViewChange("extract") })}
-      {link({ key: "new-extraction", href: "/#new-extraction", label: "New extraction", glyph: "＋", active: view === "extract" && extractMode === "new" && currentRunId == null, action: () => onNewExtraction?.() })}
-      {link({ key: "runs", href: "/history", label: TERMS.runs, glyph: "▤", active: view === "history" && !currentRunActive, action: () => onViewChange("history") })}
+      {link({ key: "work-queue", href: "/", label: "Work queue", glyph: Inbox, active: view === "extract" && extractMode === "queue" && currentRunId == null, action: () => onViewChange("extract") })}
+      {link({ key: "new-extraction", href: "/#new-extraction", label: "New extraction", glyph: NoteAdd, active: view === "extract" && extractMode === "new" && currentRunId == null, action: () => onNewExtraction?.() })}
+      {link({ key: "runs", href: "/history", label: TERMS.runs, glyph: RunHistory, active: view === "history" && !currentRunActive, action: () => onViewChange("history") })}
 
       {currentRunId != null && (
         <div className="app-nav-current" style={{ display: "contents" }}>
           <span className="app-rail-section-label" style={styles.groupLabel}>Current filing</span>
-          {link({ key: "current-run", href: currentRunHref, label: "Current run", glyph: "◉", active: currentRunActive, status: currentRunStatus, action: () => onOpenCurrentFiling?.() })}
+          {link({ key: "current-run", href: currentRunHref, label: "Current run", glyph: Description, active: currentRunActive, status: currentRunStatus, action: () => onOpenCurrentFiling?.() })}
         </div>
       )}
 
@@ -118,44 +120,40 @@ const styles = {
     padding: "16px 10px 7px",
     color: tokens.color.text.muted,
     fontFamily: pwc.fontBody,
-    fontSize: 10,
-    fontWeight: pwc.weight.bold,
-    letterSpacing: "0.09em",
-    textTransform: "uppercase",
+    fontSize: 12,
+    fontWeight: pwc.weight.semibold,
   } as React.CSSProperties,
   tabActive: {
     ...ui.buttonQuiet,
-    minHeight: 38,
+    minHeight: 40,
     justifyContent: "flex-start",
     padding: "0 10px",
-    borderRadius: pwc.radius.sm,
+    borderRadius: tokens.radius.control,
     color: pwc.black,
     background: pwc.white,
     fontWeight: pwc.weight.medium,
   } as React.CSSProperties,
   tabInactive: {
     ...ui.buttonQuiet,
-    minHeight: 38,
+    minHeight: 40,
     justifyContent: "flex-start",
     padding: "0 10px",
-    borderRadius: pwc.radius.sm,
+    borderRadius: tokens.radius.control,
     color: tokens.color.text.secondary,
   } as React.CSSProperties,
   glyph: {
-    display: "inline-block",
-    width: 18,
-    color: tokens.color.text.muted,
-    textAlign: "center",
-    fontSize: 12,
-    fontWeight: 600,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 20,
+    color: tokens.color.icon.rest,
   } as React.CSSProperties,
   glyphActive: {
-    display: "inline-block",
-    width: 18,
-    color: pwc.orange500,
-    textAlign: "center",
-    fontSize: 12,
-    fontWeight: 600,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 20,
+    color: tokens.color.icon.active,
   } as React.CSSProperties,
   runStatus: {
     marginLeft: "auto",
@@ -163,7 +161,7 @@ const styles = {
     alignItems: "center",
     gap: 5,
     color: tokens.color.text.secondary,
-    fontSize: 10,
+    fontSize: 12,
     fontWeight: pwc.weight.medium,
   } as React.CSSProperties,
   runStatusDot: {

@@ -894,6 +894,13 @@ title, page_range [first,last], optional subnotes with subnote_ref/title/page_ra
 Unnumbered disclosures still need stable source_note_id ownership; never invent numbers.
 A numbered note starts at its own printed number: text printed before it, such as a
 company introduction above Note 1, belongs to its own owner, not to that note.
+Substantive prose after the notes-section title and before Note 1 belongs to
+an unnumbered source note, not document metadata. The section title itself
+may remain metadata.
+If genuine document metadata (such as a reporting-period subtitle) follows
+that title, supply metadata_reason explaining its role in the source. Split
+the range before any substantive introduction; a metadata reason cannot
+justify excluding disclosure prose.
 Assign EVERY block using inclusive first_block_id/last_block_id ranges in supplied
 reading order. Use broad note/metadata ranges; explicit furniture ranges inside them
 override page headers/footers. Do not split a note range at every page number.

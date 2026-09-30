@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { pwc } from "../lib/theme";
-import { ui } from "../lib/uiStyles";
+import { pwc, tokens } from "../lib/theme";
+import { ui, uiClass } from "../lib/uiStyles";
 import { STATUS_SYMBOLS } from "../lib/runStatus";
 import { StatusIcon } from "./StatusIcon";
 import type { ModelEntry } from "../lib/types";
@@ -602,7 +602,7 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
       <section style={styles.rerunDetails}>
         <h3 style={styles.rerunSummary}>Run AI review again</h3>
         <div style={styles.rerunBody}>
-          <p style={styles.dim}>
+          <p style={{ ...styles.dim, margin: `0 0 ${pwc.space.md}px` }}>
             Recheck open issues against the PDF and optionally give the reviewer extra guidance.
           </p>
           <textarea
@@ -633,6 +633,7 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
             </label>
             <button
               type="button"
+              className={uiClass.btnSecondary}
               style={styles.reviewBtn}
               onClick={reReview}
               disabled={busy !== null}
@@ -663,18 +664,16 @@ const styles = {
   } as const,
   outcomeEyebrow: {
     fontFamily: pwc.fontHeading,
-    fontSize: 11,
-    fontWeight: 600,
-    color: pwc.orange700,
-    textTransform: "uppercase" as const,
-    letterSpacing: "0.04em",
+    fontSize: 12,
+    fontWeight: 680,
+    color: tokens.color.text.secondary,
     marginBottom: 2,
   } as const,
   outcomeTitle: {
     fontFamily: pwc.fontHeading,
-    fontSize: 18,
+    fontSize: 16,
     lineHeight: 1.3,
-    fontWeight: 600,
+    fontWeight: 680,
     color: pwc.grey900,
     margin: `0 0 ${pwc.space.xs}px`,
   } as const,
@@ -694,13 +693,13 @@ const styles = {
   impactValue: {
     fontFamily: pwc.fontHeading,
     fontSize: 14,
-    fontWeight: 600,
+    fontWeight: 680,
     color: pwc.grey900,
   } as const,
   impactAttention: {
     fontFamily: pwc.fontHeading,
     fontSize: 14,
-    fontWeight: 600,
+    fontWeight: 680,
     color: pwc.warningText,
   } as const,
   impactHelp: {
@@ -728,19 +727,13 @@ const styles = {
     gap: pwc.space.md,
   } as const,
   modelLabel: {
+    ...ui.fieldLabel,
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.xs,
-    fontSize: 12,
-    color: pwc.grey700,
-    fontWeight: 600,
+    gap: pwc.space.sm,
   } as const,
   modelSelect: {
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.sm,
-    padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
-    fontFamily: pwc.fontBody,
-    fontSize: 14,
+    ...ui.select,
     minWidth: 220,
   } as const,
   headerRow: {
@@ -752,7 +745,7 @@ const styles = {
   h3: {
     fontFamily: pwc.fontHeading,
     fontSize: 16,
-    fontWeight: 600,
+    fontWeight: 680,
     color: pwc.grey900,
     margin: `${pwc.space.lg}px 0 ${pwc.space.sm}px`,
   } as const,
@@ -769,7 +762,7 @@ const styles = {
     padding: pwc.space.sm,
     borderBottom: `1px solid ${pwc.grey200}`,
     color: pwc.grey700,
-    fontWeight: 600,
+    fontWeight: 680,
   } as const,
   td: {
     padding: pwc.space.sm,
@@ -777,9 +770,9 @@ const styles = {
     verticalAlign: "top" as const,
     color: pwc.grey800,
   } as const,
-  cellLabel: { fontWeight: 600, color: pwc.grey900 },
+  cellLabel: { fontWeight: 680, color: pwc.grey900 },
   oldVal: { color: pwc.grey500, textDecoration: "line-through" },
-  newVal: { color: pwc.successText, fontWeight: 600 },
+  newVal: { color: pwc.successText, fontWeight: 680 },
   arrow: { color: pwc.grey500 },
   evidenceRow: {
     display: "flex",
@@ -789,10 +782,8 @@ const styles = {
     color: pwc.grey500,
   } as const,
   evidenceLabel: {
-    fontSize: 11,
-    fontWeight: 600,
-    textTransform: "uppercase" as const,
-    letterSpacing: "0.03em",
+    fontSize: 12,
+    fontWeight: 680,
   } as const,
   linkBtn: {
     background: "none",
@@ -835,7 +826,7 @@ const styles = {
   } as const,
   cascadeSummary: {
     cursor: "pointer",
-    fontWeight: 600,
+    fontWeight: 680,
     color: pwc.grey800,
   } as const,
   cascadeHelp: {
@@ -864,25 +855,17 @@ const styles = {
     fontSize: 14,
   } as const,
   guidanceBox: {
+    ...ui.textarea,
     width: "100%",
-    minHeight: 60,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.sm,
-    padding: pwc.space.sm,
-    fontFamily: pwc.fontBody,
-    fontSize: 14,
-    marginBottom: pwc.space.sm,
+    marginBottom: pwc.space.lg,
   } as const,
   rerunDetails: {
-    marginTop: pwc.space.xl,
+    marginTop: pwc.space.xxl,
     borderTop: `1px solid ${pwc.grey200}`,
-    paddingTop: pwc.space.md,
+    paddingTop: pwc.space.xl,
   } as const,
   rerunSummary: {
-    fontFamily: pwc.fontHeading,
-    fontSize: 14,
-    fontWeight: 600,
-    color: pwc.grey800,
+    ...ui.sectionTitle,
   } as const,
   rerunBody: {
     paddingTop: pwc.space.sm,
@@ -893,7 +876,7 @@ const styles = {
   // PLAN-design-qa-fixes.md C1).
   reviewBtn: {
     ...ui.buttonSecondary,
-    ...ui.buttonSm,
+    minHeight: 44,
   } as const,
   revertBtn: {
     background: "#fff",
@@ -901,7 +884,7 @@ const styles = {
     border: `1px solid ${pwc.errorBorder}`,
     borderRadius: pwc.radius.md,
     padding: `${pwc.space.xs}px ${pwc.space.md}px`,
-    fontWeight: 600,
+    fontWeight: 680,
     cursor: "pointer",
   } as const,
   smallBtn: {

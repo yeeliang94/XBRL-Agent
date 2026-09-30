@@ -3,6 +3,7 @@ import { ui, uiClass } from "../lib/uiStyles";
 import { RunDetailView } from "./RunDetailView";
 import type { RunDetailViewProps } from "./RunDetailView";
 import type { RunDetailJson } from "../lib/types";
+import { ArrowBack } from "./iconGlyphs";
 
 // ---------------------------------------------------------------------------
 // RunDetailPage — full-page run detail, routed at /history/<id>. Replaces
@@ -66,10 +67,8 @@ export function RunDetailPage({
           style={styles.backButton}
           aria-label="All runs"
         >
-          {/* Unicode left arrow — keeps the button self-contained without
-              pulling in an SVG icon and matches the inline-style rule in
-              CLAUDE.md gotcha #7. */}
-          ← All runs
+          <ArrowBack size={20} />
+          All runs
         </button>
         {/* The run number is NOT repeated here — the detail view's kicker
             ("RUN {id}") already names the run, and two copies of the same

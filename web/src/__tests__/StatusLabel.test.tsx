@@ -7,18 +7,18 @@ import { runStatusDisplay, STATUS_SYMBOLS } from "../lib/runStatus";
 
 describe("StatusLabel", () => {
   test("renders the explicit label with an aria-hidden neutral symbol", () => {
-    render(<StatusLabel state="success" label="Completed" />);
-    const label = screen.getByText("Completed");
+    render(<StatusLabel state="success" label="Complete" />);
+    const label = screen.getByText("Complete");
     expect(label).toBeInTheDocument();
     const symbol = (document.querySelector('[data-status-icon="success"]') as HTMLElement);
     expect(symbol).toHaveAttribute("aria-hidden", "true");
   });
 
-  test("the symbol is monochrome — no status hue, pill, or fill", () => {
+  test("the icon carries its family colour — no pill or fill", () => {
     render(<StatusLabel state="failure" label="Failed" />);
     const symbol = (document.querySelector('[data-status-icon="failure"]') as HTMLElement);
-    // Secondary black at 64%; the wrapper carries no background/border.
-    expect(symbol).toHaveStyle({ color: "rgba(0, 0, 0, 0.64)" });
+    // Failure is an exception: orange icon; the wrapper carries no background/border.
+    expect(symbol).toHaveStyle({ color: "rgb(253, 81, 8)" });
     const wrapper = symbol.parentElement!;
     expect(wrapper.style.backgroundColor).toBe("");
     expect(wrapper.style.borderWidth).toBe("");
@@ -27,7 +27,7 @@ describe("StatusLabel", () => {
   test("accepts a resolved symbol from a status map", () => {
     const display = runStatusDisplay("completed_with_errors");
     render(<StatusLabel state="attention" symbol={display.symbol} label={display.label} />);
-    expect(screen.getByText("Completed with errors")).toBeInTheDocument();
+    expect(screen.getByText("Needs review")).toBeInTheDocument();
     expect(document.querySelector('[data-status-icon="attention"]')).toHaveAttribute("aria-hidden", "true");
   });
 
@@ -45,7 +45,7 @@ describe("StatusLabel", () => {
     expect(runStatusDisplay("completed_with_errors").symbol).toBe(STATUS_SYMBOLS.attention);
     expect(runStatusDisplay("correction_exhausted").symbol).toBe(STATUS_SYMBOLS.attention);
     expect(runStatusDisplay("failed").symbol).toBe(STATUS_SYMBOLS.failure);
-    expect(runStatusDisplay("aborted").symbol).toBe(STATUS_SYMBOLS.failure);
+    expect(runStatusDisplay("aborted").symbol).toBe(STATUS_SYMBOLS.inactive);
     // Unknown statuses degrade to the inactive family, never a colour.
     expect(runStatusDisplay("future_status").symbol).toBe(STATUS_SYMBOLS.inactive);
   });

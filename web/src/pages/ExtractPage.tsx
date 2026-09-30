@@ -192,10 +192,12 @@ export function ExtractPage({
       return;
     }
     let cancelled = false;
+    let settled = false;
     rehydratedRunIdRef.current = id;
     fetchRunDetail(id)
       .then((detail) => {
         if (cancelled) return;
+        settled = true;
         // A shared /run/{id} link only means "resume this upload" for an
         // actual DRAFT. For a completed / running / failed run, dropping the
         // user into a blank "Start extraction" config panel looks like they're
@@ -235,6 +237,13 @@ export function ExtractPage({
       });
     return () => {
       cancelled = true;
+      // A load cancelled before it finished (React StrictMode's dev
+      // double-run, or a dependency change mid-fetch) must not count as
+      // done — otherwise the re-run skips the fetch and "Resume setup"
+      // leaves the user on the Work queue.
+      if (!settled && rehydratedRunIdRef.current === id) {
+        rehydratedRunIdRef.current = null;
+      }
     };
   }, [state.currentRunId, state.sessionId, state.sessionRunId, dispatch]);
 
@@ -396,7 +405,7 @@ export function ExtractPage({
           <button
             type="button"
             className={uiClass.btnPrimary}
-            style={{ ...ui.buttonPrimary, ...ui.buttonSm }}
+            style={ui.buttonPrimary}
             onClick={() => {
               onOpenNewExtraction?.();
               const target = document.querySelector<HTMLElement>("[data-testid='drop-zone']");
@@ -1118,17 +1127,15 @@ const styles = {
   } as const,
   runEyebrow: {
     fontFamily: pwc.fontHeading,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: pwc.weight.semibold,
     color: pwc.orange700,
-    letterSpacing: "0.04em",
-    textTransform: "uppercase" as const,
     marginBottom: pwc.space.xs,
   } as const,
   runOverviewTitle: {
     margin: 0,
     fontFamily: pwc.fontHeading,
-    fontSize: 20,
+    fontSize: 16,
     lineHeight: 1.3,
     fontWeight: pwc.weight.semibold,
     color: pwc.grey900,
@@ -1189,7 +1196,8 @@ const styles = {
     whiteSpace: "nowrap" as const,
   } as const,
   runSummaryElapsed: {
-    fontFamily: pwc.fontMono,
+    fontFamily: pwc.fontBody,
+    fontVariantNumeric: "tabular-nums",
     fontSize: 12,
     color: pwc.grey500,
     whiteSpace: "nowrap" as const,
@@ -1211,7 +1219,8 @@ const styles = {
     color: pwc.grey700,
   } as const,
   usageSummaryValue: {
-    fontFamily: pwc.fontMono,
+    fontFamily: pwc.fontBody,
+    fontVariantNumeric: "tabular-nums",
     fontSize: 12,
     fontWeight: pwc.weight.regular,
     color: pwc.grey900,
@@ -1278,13 +1287,13 @@ const styles = {
   activityTitle: {
     fontFamily: pwc.fontHeading,
     fontSize: 16,
-    fontWeight: 600,
+    fontWeight: 680,
     color: pwc.grey900,
     whiteSpace: "nowrap" as const,
   } as const,
   activityEyebrow: {
     fontFamily: pwc.fontHeading,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: pwc.weight.semibold,
     color: pwc.grey700,
     letterSpacing: "0.02em",
@@ -1298,8 +1307,9 @@ const styles = {
     borderLeft: `1px solid ${pwc.grey200}`,
   } as const,
   activityCount: {
-    fontFamily: pwc.fontMono,
-    fontSize: 11,
+    fontFamily: pwc.fontBody,
+    fontVariantNumeric: "tabular-nums",
+    fontSize: 12,
     color: pwc.grey500,
   } as const,
   // Compact ghost buttons sitting in the activity-header toolbar. Sized
@@ -1308,8 +1318,8 @@ const styles = {
   // powers `rerunBtn`. Spread base + variant inline at use sites.
   toolbarBtnBase: {
     fontFamily: pwc.fontHeading,
-    fontSize: 11,
-    fontWeight: 600,
+    fontSize: 12,
+    fontWeight: 680,
     borderRadius: pwc.radius.sm,
     padding: `2px ${pwc.space.sm}px`,
     cursor: "pointer",
@@ -1333,9 +1343,9 @@ const styles = {
   } as const,
   errorTitle: {
     fontFamily: pwc.fontHeading,
-    fontWeight: 600,
+    fontWeight: 680,
     color: pwc.errorText,
-    fontSize: 15,
+    fontSize: 14,
     margin: 0,
   } as const,
   errorMessage: {
@@ -1365,9 +1375,9 @@ const styles = {
   } as const,
   partialMergeTitle: {
     fontFamily: pwc.fontHeading,
-    fontWeight: 600,
+    fontWeight: 680,
     color: pwc.warningText,
-    fontSize: 15,
+    fontSize: 14,
     margin: 0,
   } as const,
   partialMergeMessage: {

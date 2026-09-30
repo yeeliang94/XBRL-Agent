@@ -131,11 +131,9 @@ const styles = {
   heading: {
     minHeight: 24,
     fontFamily: pwc.fontHeading,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: pwc.weight.semibold,
     color: pwc.grey700,
-    textTransform: "uppercase" as const,
-    letterSpacing: "0.02em",
   } as const,
   feed: {
     maxHeight: "min(52vh, 520px)",

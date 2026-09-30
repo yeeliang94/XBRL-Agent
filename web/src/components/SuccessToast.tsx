@@ -111,7 +111,7 @@ const styles = {
   } as React.CSSProperties,
   message: {
     flex: 1,
-    fontWeight: 500,
+    fontWeight: 650,
   } as React.CSSProperties,
   closeBtn: {
     background: "none",

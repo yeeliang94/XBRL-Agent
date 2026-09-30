@@ -18,7 +18,7 @@ the notes reviewer agent, which consumes this draft checklist and upgrades
 
 Inputs mirror the durable stores:
 - ``inventory_rows`` — ``db.repository.fetch_notes_inventory`` shape:
-  ``{"note_num", "title", "subnote_refs", "page_lo", "page_hi"}``.
+  ``{"note_num", "title", "subnote_refs", "subnote_pages", "page_lo", "page_hi"}``.
 - ``provenance_entries`` — the effective detector ``entries`` shape
   (``notes.detectors.load_provenance_entries``):
   ``{"sheet", "row", "row_label", "source_note_refs", ...}``.
@@ -131,6 +131,8 @@ class SubNoteState:
     reason: str = ""
     title: str = ""
     placements: list[Placement] = field(default_factory=list)
+    page_lo: Optional[int] = None
+    page_hi: Optional[int] = None
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"subnote_ref": self.subnote_ref, "state": self.state}
@@ -139,6 +141,9 @@ class SubNoteState:
         if self.title:
             out["title"] = self.title
         out["placements"] = [p.to_dict() for p in self.placements]
+        if self.page_lo is not None:
+            out["page_lo"] = self.page_lo
+            out["page_hi"] = self.page_hi
         return out
 
 
@@ -396,6 +401,8 @@ def build_draft_checklist(
                 placements=_classify_placements(
                     placements_by_subnote.get((note_num, key), {}), policies_sheet,
                 ),
+                page_lo=((inv.get("subnote_pages") or {}).get(ref) or {}).get("page_lo"),
+                page_hi=((inv.get("subnote_pages") or {}).get(ref) or {}).get("page_hi"),
             ))
 
         row = CoverageRow(
@@ -489,6 +496,8 @@ def checklist_to_db_rows(checklist: Checklist) -> list[dict]:
                 "reason": s.reason,
                 "title": s.title,
                 "placements": [p.to_dict() for p in s.placements],
+                "page_lo": s.page_lo,
+                "page_hi": s.page_hi,
             })
     return out
 

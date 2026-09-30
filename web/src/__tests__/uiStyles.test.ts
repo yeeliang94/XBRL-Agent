@@ -54,9 +54,9 @@ describe("buttons — four roles, canonical geometry", () => {
     expect(ui.buttonQuiet.background).toBe("transparent");
   });
 
-  test("destructive stays quiet-outline with readable error text", () => {
-    expect(ui.buttonDanger.color).toBe(pwc.errorText);
-    expect(ui.buttonDanger.borderColor).toBe(pwc.errorText);
+  test("destructive is an orange outline with accessible orange text", () => {
+    expect(ui.buttonDanger.color).toBe(pwc.orange700);
+    expect(ui.buttonDanger.borderColor).toBe(pwc.orange500);
     expect(ui.buttonDanger.background).toBe(pwc.white);
   });
 
@@ -97,7 +97,9 @@ describe("ui.status — explicit status primitive", () => {
 
 describe("ui.tab — shared surface tab", () => {
   test("uses fill and weight without an indicator line", () => {
-    expect(ui.tab.padding).toBe("8px 16px");
+    expect(ui.tab.padding).toBe("0 16px");
+    expect(ui.tab.minHeight).toBe(34);
+    expect(ui.tab.fontSize).toBe(14);
     expect(ui.tab.border).toBe("none");
     expect(ui.tab.borderBottom).toBeUndefined();
     expect(ui.tab.marginBottom).toBeUndefined();

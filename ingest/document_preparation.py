@@ -34,7 +34,7 @@ from ingest.pdf_sidecar import (
 from notes._rate_limit import RATE_LIMIT_MAX_RETRIES, compute_backoff_delay, is_rate_limit_error
 from utils.atomic_io import replace_with_retry
 
-CONTRACT_VERSION = 6
+CONTRACT_VERSION = 7
 PREPARATION_NAME = "preparation.json"
 # A process-wide ceiling across documents and background event loops. Local
 # per-document concurrency cannot exceed this shared request limit.
@@ -856,7 +856,7 @@ async def prepare_document(
     batcher = _PageRequestBatcher(physical_request)
 
     async def request(stage: str, images: list[bytes], context: dict) -> dict:
-        if stage in {"capturing", "verifying"} and not context.get("best_effort"):
+        if stage == "capturing" and not context.get("best_effort"):
             return await batcher.request(stage, images, context)
         return await physical_request(stage, images, context)
 

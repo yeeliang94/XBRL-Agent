@@ -94,6 +94,29 @@ describe("NotesReviewerPanel", () => {
     expect(screen.getByText(/needs your review/i)).toBeTruthy();
   });
 
+  test("answered flags stay in audit history, not the open-review count", async () => {
+    mockApi([]);
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+      async (url: string) => ({
+        ok: true,
+        status: 200,
+        json: async () => url.includes("/api/settings") ? settingsPayload : {
+          ...reviewPayload,
+          flags: [{ ...reviewPayload.flags[0], status: "answered",
+                    answer: "Separate rows confirmed." }],
+        },
+      }) as Response,
+    );
+    render(<NotesReviewerPanel runId={7} />);
+    await waitFor(() => screen.getByTestId("notes-reviewer-toggle"));
+    expect(screen.getByTestId("notes-reviewer-toggle").textContent)
+      .toContain("0 open flags");
+    fireEvent.click(screen.getByTestId("notes-reviewer-toggle"));
+    expect(screen.queryByText(/needs your review/i)).toBeNull();
+    const history = screen.getByText("Flag history (1)").closest("details");
+    expect(history?.open).toBe(false);
+  });
+
   test("Re-review posts the selected model to /notes-review/re-review", async () => {
     const posts: { url: string; init?: RequestInit }[] = [];
     mockApi(posts);

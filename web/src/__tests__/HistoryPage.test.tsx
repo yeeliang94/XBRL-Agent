@@ -253,7 +253,7 @@ describe("HistoryPage", () => {
 
     // Opens the shared confirm dialog; confirm inside it to actually delete.
     fireEvent.click(screen.getByRole("button", { name: /^delete run$/i }));
-    const dialog = screen.getByRole("dialog", { name: /delete run/i });
+    const dialog = screen.getByRole("dialog", { name: /delete this run/i });
     fireEvent.click(within(dialog).getByRole("button", { name: /^delete run$/i }));
 
     // deleteRun called with the right id

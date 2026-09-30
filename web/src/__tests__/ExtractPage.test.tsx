@@ -210,10 +210,10 @@ describe("ExtractPage — render-gate regression guards", () => {
   });
 
   test.each([
-    ["completed", "Completed"],
-    ["completed_with_errors", "Completed with errors"],
+    ["completed", "Complete"],
+    ["completed_with_errors", "Needs review"],
     ["failed", "Failed"],
-    ["aborted", "Aborted"],
+    ["aborted", "Stopped"],
   ])("completion names the %s outcome and keeps one review action", (overallStatus, label) => {
     render(<ExtractPage {...makeProps({ state: {
       sessionId: "s", isComplete: true,

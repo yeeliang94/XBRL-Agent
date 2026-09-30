@@ -23,7 +23,7 @@ import {
 } from "../lib/types";
 import { pwc, tokens } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
-import { CloseIcon } from "./icons";
+import { CloseIcon, DisclosureChevron } from "./icons";
 import { abortAgent, updateSettings } from "../lib/api";
 import { VariantSelector } from "./VariantSelector";
 import { StatementRunConfig } from "./StatementRunConfig";
@@ -137,7 +137,7 @@ const styles = {
     background: pwc.grey50,
     color: pwc.grey700,
     fontFamily: pwc.fontBody,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: pwc.weight.medium,
     letterSpacing: 0,
     textTransform: "none" as const,
@@ -226,13 +226,7 @@ function DisclosureSection({
           <span style={styles.disclosureTitle}>{title}</span>
           <span style={styles.disclosureSummary}>{summary}</span>
         </span>
-        <span
-          aria-hidden="true"
-          className={`pwc-disclosure-chevron${open ? " is-open" : ""}`}
-          style={{ color: pwc.grey500, fontSize: 14 }}
-        >
-          ›
-        </span>
+        <DisclosureChevron open={open} />
       </button>
       <div
         id={id}
@@ -1346,7 +1340,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           className={uiClass.btnQuiet}
           style={{ ...ui.buttonQuiet, ...ui.buttonSm, flexShrink: 0, paddingInline: pwc.space.sm }}
         >
-          <span aria-hidden="true">{showAdvanced ? "▾" : "▸"}</span>
+          <DisclosureChevron open={showAdvanced} />
           Advanced
         </button>
       </div>
@@ -1627,7 +1621,8 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
               className={uiClass.btnQuiet}
               style={{ ...ui.buttonQuiet, ...ui.buttonSm }}
             >
-              {scoutLogOpen ? "▾ Hide technical log" : `▸ Show technical log (${scoutToolTimeline.length})`}
+              <DisclosureChevron open={scoutLogOpen} />
+              {scoutLogOpen ? "Hide technical log" : `Show technical log (${scoutToolTimeline.length})`}
             </button>
             {scoutLogOpen && (
               <div

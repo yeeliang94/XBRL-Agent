@@ -101,6 +101,31 @@ def test_introduced_finding_cannot_be_dispositioned_away():
     assert "VERIFIED" not in out
 
 
+def test_flag_cleanup_preserves_distinct_human_concerns_and_removes_stale_work():
+    stale = ("source_integrity", "disposition", ("p32-b4",))
+    still_open = ("collision", 140, (12, 13))
+    flags = [
+        {"finding_id": "stale", "kind": "stuck", "reason": "Note 12 part missing"},
+        {"finding_id": "stale", "kind": "needs_human", "reason": "Source text is ambiguous",
+         "source_pages": [32], "evidence": "Page 32 remains unclear"},
+        {"finding_id": "open", "reason": "Two notes in row 140"},
+        {"finding_id": "open", "reason": "Duplicate description"},
+        {"finding_id": "open", "reason": "Two notes in row 140"},
+        {"finding_id": None, "kind": "needs_human", "sheet": ra.POLICIES_SHEET,
+         "row": 4, "placement_revision": 2,
+         "reason": "Old policy placement concern"},
+        {"finding_id": None, "reason": "Separate human concern"},
+    ]
+    kept = ra.prune_resolved_review_flags(
+        flags, {"stale": stale, "open": still_open}, {still_open},
+        placement_revisions={(ra.POLICIES_SHEET, 57): 1},
+    )
+    assert [flag["reason"] for flag in kept] == [
+        "Source text is ambiguous", "Two notes in row 140",
+        "Duplicate description", "Separate human concern",
+    ]
+
+
 # --------------------------------------------------------------------------
 # Provenance sync helpers — clear deletes, move preserves refs
 # --------------------------------------------------------------------------

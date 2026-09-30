@@ -1046,6 +1046,11 @@ headings and their following prose a 2em offset per level. Adjacent paragraphs
 and tables receive marked, empty transport paragraphs so a native editor that
 ignores CSS margins still displays a blank line. Neither addition is stored in
 `notes_cells`.
+When a parent and sub-note are saved as adjacent `h3` headings without a
+section wrapper, the sub-note heading and following blocks receive a 2em
+display/export indent until the next top-level note heading. Peer notes in a
+combined catch-all field remain aligned. The review view applies this without
+rewriting the saved HTML. The shipped notes paragraph gap is 10px across review, copy and mTool.
 The writer moves a `sub_note` heading inside a wrapper only when that wrapper
 is the whole body; peer sections and loose introductory text keep the heading
 above them. Rendered-length truncation enters a marked section and keeps its
@@ -1943,9 +1948,13 @@ reads it.
 A holistic, human-visible **coverage checklist** reconciles every top-level
 note in the scout inventory against WHERE its content landed across ALL notes
 sheets (docs/PLAN-notes-coverage-and-routing.md). Two coupled hardenings: the
-checklist, and a **top-line routing rule** (notes stay whole; only
-explicitly-labelled material/significant accounting-policy sections carve out
-to the policies sheet — enforced by prompt tiers + `detect_topline_splits`).
+checklist, and a **top-line routing rule** (authored notes stay whole; prepared
+source may also route complete, distinct numbered sections to different
+List-of-Notes fields when the source ledger proves each section is intact.
+The reviewer judges destination accuracy against the PDF and records a verdict
+for each current destination revision. Unchecked or subsequently edited section
+destinations keep review incomplete. Pinned by
+`tests/test_notes_reviewer_tools.py`. Other fragments remain top-line splits — enforced by prompt tiers + `detect_topline_splits`).
 
 Load-bearing invariants:
 
@@ -2019,6 +2028,11 @@ Load-bearing invariants:
   current pass; the unchanged detector result then reads as sent to human
   review rather than STILL open. A flag without an id remains advisory, and a
   finding introduced by the reviewer's own edits can never be flag-cleared.
+  After reviewer edits, stale packet flags are removed, but a grounded packet
+  `needs_human` concern remains for the human even if its detector signal
+  clears. A placement verdict tied to an obsolete cell revision is still
+  removed. Distinct reasons for the same finding remain separate; exact
+  duplicate flags are collapsed.
   The id, source pages, and evidence persist in `notes_review_flags` (schema
   v45). A persistence failure is a structured reviewer failure and cannot
   finish clean after the model was told the finding was handled. Pinned by
@@ -2053,8 +2067,12 @@ Load-bearing invariants:
   coverage surface in the Notes tab. Keep placement counts, incomplete-review
   and unavailable-inventory warnings, reasons, and visible numbered sub-note
   states there; do not append a second checklist below the editor. Persist
-  scout sub-note titles with their references for that list. Inventory selection
-  uses the existing source-page and destination navigation. Pinned by
+  scout sub-note titles and page ranges with their references for that list.
+  Selecting a sub-note opens its own cited PDF page; use the parent note page
+  only when the child page is unavailable. A child with multiple placements
+  retains every destination link, and switching fields keeps its cited pages.
+  For older runs, recover child pages
+  from the saved Scout Infopack when coverage rows lack them. Pinned by
   `NotesReviewTab` and `RunDetailView` web tests.
 - **Reviewer clears preserve routing precision.** `clear_note_cells` refuses to
   remove the last provenance placement of a note. It also refuses to clear one
@@ -2530,6 +2548,18 @@ Pinned by `tests/test_db_schema_v30.py`/`_v31.py`, `test_eval_consistency.py`,
 **Prepared-document contract (Plan A, September 2026).** Generations whose
 `input_kind` is `prepared_document` use full-document preparation with independent
 page checks, followed by one model-authored Scout inventory and ownership map.
+The notes-section heading is a source boundary: substantive blocks between
+that heading and the first printed numbered note require an unnumbered note
+owner. Metadata in that boundary requires an explicit `metadata_reason` from
+Scout explaining its source role (for example, a reporting-period subtitle).
+Unexplained exclusions are rejected before source-manifest activation; the
+model judges content meaning, without deterministic topic or date matching.
+Pinned by `tests/test_prepared_document_map.py`.
+Capture requests may share a model call, but page verification inspects one
+original PDF page and its candidate HTML per request. A paired verification
+can approve text copied from the neighboring page under the expected page ID;
+single-page verification must send mismatches through the existing repair path.
+Pinned by `tests/test_document_preparation_batching.py`.
 When a prepared run requests any notes template, orchestration schedules all
 three prose destinations (Corporate Information, Accounting Policies, and List
 of Notes) before creating agent rows or launching extraction. The List of Notes
@@ -2568,6 +2598,16 @@ title; source wording and emphasis remain intact. Pinned by
 `tests/test_notes_source_write.py`, `tests/test_notes_reviewer_tools.py`,
 `tests/test_prepared_source_manifest.py`, and `tests/test_filing_target_registry.py`.
 Source-built disclosures may begin with prose when the source has no title;
+the reviewer may transfer complete frozen source sections from a mixed cell to
+an empty leaf by rebuilding both cells in one transaction. A failed transfer
+must leave both cells unchanged. Distinct source notes may share only the
+List-of-Notes catch-all field; specific fields require separate placement or
+human review. Settling a same-field conflict requires a destination for the
+other note. After any reviewer write, same-block placement flags are reconciled
+against all active source parts; shared ancestor headings may remain in other
+cells, but substantive parts must live only in the proposed field. Placement
+conflicts precede findings about the same proposed blocks in the reviewer
+packet. Pinned by `tests/test_notes_reviewer_tools.py`.
 the reviewer does not require an invented heading. Cross-sheet cells sharing a
 note number but no substantive source blocks are distinct sections, while
 policy destination accuracy still receives grounded review. The source writer

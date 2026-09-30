@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from "react";
-import { pwc } from "../lib/theme";
+import { pwc, tokens } from "../lib/theme";
+import { UploadFile } from "./iconGlyphs";
 import { ui, uiClass } from "../lib/uiStyles";
 
 // ---------------------------------------------------------------------------
@@ -94,22 +95,9 @@ export function FileDropzone({
           ...(disabled ? styles.dropZoneDisabled : {}),
         }}
       >
-        <svg
-          aria-hidden="true"
-          width="46"
-          height="56"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke={pwc.grey500}
-          strokeWidth="1.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-          <polyline points="14 2 14 8 20 8" />
-          <line x1="12" y1="12" x2="12" y2="17" />
-          <polyline points="9.5 14.5 12 12 14.5 14.5" />
-        </svg>
+        <span aria-hidden="true" style={styles.iconTile}>
+          <UploadFile size={28} />
+        </span>
         <span style={styles.dropText}>{label}</span>
         {children}
         <span
@@ -162,10 +150,22 @@ const styles = {
     cursor: "not-allowed",
     opacity: 0.6,
   } as React.CSSProperties,
+  // Upload and empty areas: orange icon on a light-orange tile
+  // (design-system Iconography).
+  iconTile: {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 56,
+    height: 56,
+    borderRadius: tokens.radius.panel,
+    background: tokens.color.icon.tileSurface,
+    color: tokens.color.icon.active,
+  } as React.CSSProperties,
   dropText: {
     fontFamily: pwc.fontBody,
     color: pwc.black,
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: pwc.weight.semibold,
     margin: 0,
   } as React.CSSProperties,

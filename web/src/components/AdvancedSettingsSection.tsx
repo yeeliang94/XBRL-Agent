@@ -183,7 +183,7 @@ const styles = {
   } as React.CSSProperties,
   label: {
     fontFamily: pwc.fontHeading,
-    fontWeight: 500,
+    fontWeight: 650,
     fontSize: 14,
     color: pwc.grey700,
     display: "block",

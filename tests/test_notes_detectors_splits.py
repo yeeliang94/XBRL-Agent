@@ -158,10 +158,22 @@ def test_packet_renders_topline_split_block():
     packet = ra.build_notes_reviewer_packet({"topline_splits": [_split_finding()]})
     assert "TOP-LINE SPLIT" in packet
     assert "row 31" in packet and "row 44" in packet
-    assert "always a routing violation" in packet
+    assert "This is a routing violation" in packet
     assert "exactly one field" in packet
     assert "material/significant accounting policy" in packet
     assert "raise_flag" in packet
+
+
+def test_packet_treats_complete_source_sections_as_reviewable_partition():
+    import notes.reviewer_agent as ra
+
+    packet = ra.build_notes_reviewer_packet({
+        "topline_splits": [], "section_partitions": [_split_finding()],
+    })
+    assert "COMPLETE SOURCE-SECTION PARTITIONS" in packet
+    assert "row 31" in packet and "row 44" in packet
+    assert "This is a routing violation" not in packet
+    assert ra.count_open_items({"section_partitions": [_split_finding()]}) > 0
 
 
 def test_packet_duplication_block_names_the_carve_out_partition():

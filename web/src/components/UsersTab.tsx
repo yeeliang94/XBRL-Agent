@@ -79,7 +79,7 @@ const styles = {
   } as React.CSSProperties,
   heading: {
     fontFamily: pwc.fontHeading,
-    fontWeight: 500,
+    fontWeight: 650,
     fontSize: 14,
     color: pwc.grey700,
     marginBottom: pwc.space.sm,
@@ -101,11 +101,9 @@ const styles = {
     flexDirection: "column" as const,
     gap: 2,
     fontFamily: pwc.fontHeading,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: pwc.weight.semibold,
     color: pwc.grey700,
-    textTransform: "uppercase" as const,
-    letterSpacing: "0.04em",
   } as React.CSSProperties,
   youLabel: {
     ...ui.badge,

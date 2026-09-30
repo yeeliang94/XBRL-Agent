@@ -170,7 +170,7 @@ export function ReconciliationQueue({
               <div
                 style={{
                   fontSize: 13,
-                  fontWeight: 600,
+                  fontWeight: 680,
                   lineHeight: 1.4,
                   color: pwc.grey900,
                 }}
@@ -246,7 +246,7 @@ export function ReconciliationQueue({
           marginBottom: pwc.space.md,
           fontFamily: pwc.fontHeading,
           color: pwc.grey900,
-          fontSize: 15,
+          fontSize: 14,
           fontWeight: pwc.weight.semibold,
         }}
       >

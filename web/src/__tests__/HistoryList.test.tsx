@@ -37,7 +37,7 @@ describe("HistoryList", () => {
     render(<HistoryList runs={makeRuns()} onRunSelected={() => {}} />);
     expect(screen.getByText("FINCO-Audited-2021.pdf")).toBeTruthy();
     expect(screen.getByText("ACME-2023.pdf")).toBeTruthy();
-    expect(screen.getByText(/completed/i)).toBeTruthy();
+    expect(screen.getByText(/^complete$/i)).toBeTruthy();
     expect(screen.getByText(/failed/i)).toBeTruthy();
   });
 
@@ -111,9 +111,9 @@ describe("HistoryList", () => {
       },
     ];
     render(<HistoryList runs={drafts} onRunSelected={() => {}} />);
-    // The badge label is "Not started" (the user-friendly form), not the
-    // raw enum string "draft".
-    expect(screen.getByText("Not started")).toBeInTheDocument();
+    // The badge label is "Waiting" (the design-system state), not the raw
+    // enum string "draft".
+    expect(screen.getByText("Waiting")).toBeInTheDocument();
   });
 
   test("clicking a draft row fires onResumeDraft, not onRunSelected", () => {
@@ -156,7 +156,7 @@ describe("HistoryList", () => {
     ];
     render(<HistoryList runs={runs} onRunSelected={() => {}} />);
     // Friendly label, not the raw enum value
-    expect(screen.getByText(/completed.*with.*errors/i)).toBeTruthy();
+    expect(screen.getByText("Needs review")).toBeTruthy();
     expect(screen.queryByText("completed_with_errors")).toBeNull();
   });
 
@@ -194,11 +194,11 @@ describe("HistoryList", () => {
 
   test("status is a neutral symbol + explicit label, no coloured pill", () => {
     render(<HistoryList runs={makeRuns()} onRunSelected={() => {}} />);
-    const completed = screen.getByText("Completed");
+    const completed = screen.getByText("Complete");
     const symbol = completed.parentElement!.querySelector('[aria-hidden="true"]');
     expect(symbol?.getAttribute("data-status-icon")).toBe("success");
-    // grey700 symbol — never a status hue.
-    expect((symbol as HTMLElement).style.color).toBe("rgba(0, 0, 0, 0.64)");
+    // Routine success stays monochrome black; orange is for work/attention.
+    expect((symbol as HTMLElement).style.color).toBe("rgb(0, 0, 0)");
     const failed = screen.getByText("Failed");
     expect(failed.parentElement!.querySelector('[aria-hidden="true"]')?.getAttribute("data-status-icon")).toBe("failure");
   });

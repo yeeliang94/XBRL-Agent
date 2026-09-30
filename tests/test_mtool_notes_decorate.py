@@ -72,9 +72,9 @@ def test_house_spacing_separates_paragraphs_and_adjacent_tables():
         html, NotesTableStyle.from_theme(house_style())), "html.parser")
     prose = [p for p in out.find_all("p") if p.get("data-mtool-spacer") != "1"]
     assert len(prose) == 2
-    assert all("margin: 0 0 16px 0" in p["style"] for p in prose)
+    assert all("margin: 0 0 10px 0" in p["style"] for p in prose)
     assert len(out.select('p[data-mtool-spacer="1"]')) == 3
-    assert all("margin: 16px 0" in t["style"] for t in out.find_all("table"))
+    assert all("margin: 10px 0" in t["style"] for t in out.find_all("table"))
     header = out.find("th", string="2024 RM'000")
     assert header is not None and "text-align: right" in header["style"]
     group = out.find("th", string="Group")
@@ -135,6 +135,24 @@ def test_nested_source_headings_indent_their_body_for_mtool():
     assert all("margin-left: 2em" in h.get("style", "") for h in headings[1:])
     for text in ("First section.", "Second section."):
         assert "margin-left: 2em" in soup.find("p", string=text).get("style", "")
+
+
+def test_adjacent_same_level_subnote_heading_and_body_indent_for_mtool():
+    html = ("<h3>2 Accounting policies</h3><h3>2.10 Employee benefits</h3>"
+            "<p>Short term benefits.</p><h3>3 Estimates</h3><p>Judgements.</p>")
+    soup = BeautifulSoup(decorate_notes_html(html), "html.parser")
+    assert "margin-left: 2em" in soup.find("h3", string="2.10 Employee benefits")["style"]
+    assert "margin-left: 2em" in soup.find("p", string="Short term benefits.")["style"]
+    assert "margin-left" not in soup.find("h3", string="3 Estimates")["style"]
+    assert "margin-left" not in soup.find("p", string="Judgements.")["style"]
+
+
+def test_adjacent_top_level_notes_remain_aligned_for_mtool():
+    html = ("<h3>2 Accounting policies</h3><h3>3 Estimates</h3>"
+            "<p>Judgements.</p>")
+    soup = BeautifulSoup(decorate_notes_html(html), "html.parser")
+    assert "margin-left" not in soup.find("h3", string="3 Estimates")["style"]
+    assert "margin-left" not in soup.find("p", string="Judgements.")["style"]
 
 
 # --- table decoration -------------------------------------------------------

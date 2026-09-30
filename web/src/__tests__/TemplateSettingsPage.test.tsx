@@ -54,7 +54,12 @@ describe("TemplateSettingsPage", () => {
     expect(screen.getByText("Biological assets")).toBeTruthy();
     // ABSTRACT rows are not renamable.
     expect(screen.queryByTestId("ts-rename-btn-abs-1")).toBeNull();
-    expect(screen.getByTestId("ts-rename-btn-leaf-1")).toBeTruthy();
+    // One rename control per hovered/focused row, named for its field —
+    // not a visible button repeated down the whole list.
+    const rename = screen.getByTestId("ts-rename-btn-leaf-1");
+    expect(rename).toHaveClass("ts-row-action");
+    expect(rename).toHaveAccessibleName("Rename Biological assets");
+    expect(screen.getByTestId("ts-row-leaf-1")).toHaveClass("ts-row");
     // E8: a legend explains greyed headers + the * mandatory marker.
     expect(screen.getByTestId("ts-legend")).toBeTruthy();
   });

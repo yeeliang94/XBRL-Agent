@@ -308,6 +308,10 @@ def compute_notes_review_diff(
             cur_html = cur["html"] if cur is not None else None
             if snap is not None and cur is not None and orig_html == cur_html:
                 continue  # unchanged
+            if snap is not None and cur is not None:
+                from notes.format_verify import verify_format_only
+                if verify_format_only(orig_html or "", cur_html or "").ok:
+                    continue  # formatter styling is not a prose review edit
             if snap is None:
                 change = "authored"
             elif cur is None:

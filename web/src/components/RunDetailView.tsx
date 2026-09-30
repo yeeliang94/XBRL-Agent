@@ -5,7 +5,7 @@ import { PdfSourcePane } from "./PdfSourcePane";
 import { parseEvidencePages } from "../lib/evidencePages";
 import { ConceptsPage } from "../pages/ConceptsPage";
 import type { ConceptRow } from "../pages/ConceptsPage";
-import { runStatusDisplay, agentStatusDisplay } from "../lib/runStatus";
+import { runStatusDisplay, agentStatusDisplay, STATUS_SYMBOLS } from "../lib/runStatus";
 import { errorGuidance } from "../lib/errorGuidance";
 import { StatusIcon } from "./StatusIcon";
 import type { RunStatusDisplay } from "../lib/runStatus";
@@ -64,7 +64,7 @@ export interface RunDetailViewProps {
   /** Resume configuration for an unstarted draft. */
   onResumeDraft?: (runId: number) => void;
   /** Rescue a run wedged in `running` status (UX-QA #2). When provided and the
-   *  run is `running`, an "Abort run" control replaces the disabled Delete so a
+   *  run is `running`, a "Stop run" control replaces the disabled Delete so a
    *  dead run isn't a dead-end. Optional — absent for callers that can't act. */
   onForceAbort?: (runId: number) => void;
   /** Clone this run into a new draft while retaining reusable source work. */
@@ -783,6 +783,7 @@ export function RunDetailView({
     ? `Source transcript has failed pages: ${detail.pdf_sidecar.failed_pages?.join(", ") || "unknown"}`
     : sidecarNotice && !sidecarNotice.built ? sidecarNotice.title : null;
   const runDuration = formatRunDuration(detail.started_at, detail.ended_at);
+  const liveElapsed = useLiveElapsed(isRunning ? detail.started_at : null);
   const nonBlockingItems = [
     ...advisoryCheckSummaries,
     ...(isErrorOutcome && failingCheckSummaries.length === 0
@@ -800,7 +801,7 @@ export function RunDetailView({
   const preparationState = isDraft
     ? "Setup not complete"
     : isRunning
-      ? "Extraction in progress"
+      ? "Not ready yet"
       : isFailed || isAborted
         ? detail.merged_workbook_path
           ? "Partial results available"
@@ -810,7 +811,7 @@ export function RunDetailView({
           : failingChecks.length > 0
             ? "Checks need attention"
           : isErrorOutcome
-            ? "Prepare with issues"
+            ? "Ready, with items to review"
             : "Ready to prepare";
 
   // Roving keyboard navigation for the tab bar (WAI-ARIA tabs pattern):
@@ -937,20 +938,16 @@ export function RunDetailView({
               old duplicate "Review values" button was removed (Phase 2). */}
           {/* Keep routine preparation in the header. Run management sits at
               the end of Overview, beside the run details it affects. */}
-          {activeTab === "overview" && (
-            <>
-              {isRunning && onForceAbort && (
-                <button
-                  type="button"
-                  onClick={() => setConfirmAbort(true)}
-                  className={uiClass.btnDanger}
-                  style={ui.buttonDanger}
-                  title="Stop this run and mark it aborted — use this if a run has been stuck for a long time."
-                >
-                  Abort run
-                </button>
-              )}
-            </>
+          {isRunning && onForceAbort && (
+            <button
+              type="button"
+              onClick={() => setConfirmAbort(true)}
+              className={uiClass.btnDanger}
+              style={ui.buttonDanger}
+              title="Stop this run — use this if a run has been stuck for a long time."
+            >
+              Stop run
+            </button>
           )}
         </div>
       </header>
@@ -1066,17 +1063,6 @@ export function RunDetailView({
         </div>
       )}
 
-      {!reviewWorkspaceActive && isDraft && (
-        <div style={ui.alertInfo} role="status">
-          Setup has not been completed. Resume setup to choose statement formats and start extraction.
-        </div>
-      )}
-
-      {isRunning && (
-        <div style={ui.alertInfo} role="status">
-          Extraction is still running. Figures and notes may change until processing finishes.
-        </div>
-      )}
 
       <MtoolFillModal runId={detail.id} open={mtoolOpen} onClose={() => setMtoolOpen(false)} />
       <HumanFileDialog
@@ -1093,17 +1079,20 @@ export function RunDetailView({
 
       <ConfirmDialog
         isOpen={confirmDraftDownload}
-        title="Prepare investigation draft?"
+        title={isFailed || isAborted ? "Prepare investigation draft?" : "Prepare mTool draft for review?"}
         message={
           <>
             {isFailed || isAborted ? (
               <>This run did not finish normally. Next, choose an mTool template to fill with the saved figures. The resulting draft is for investigation only; it is not ready to file.</>
             ) : (
-              <>This run has <strong>{failingChecks.length} unresolved check{failingChecks.length === 1 ? "" : "s"}</strong>. Next, choose an mTool template to prepare a draft for investigation or review; it is not ready to file.</>
+              failingChecks.length > 0
+                ? <>This run has <strong>{failingChecks.length} unresolved check{failingChecks.length === 1 ? "" : "s"}</strong>. Next, choose an mTool template to prepare a draft for review; it is not ready to file.</>
+                : <>This run finished with items that need review. Next, choose an mTool template to prepare a draft for review; it is not ready to file.</>
             )}
           </>
         }
         confirmLabel="Choose mTool template"
+        danger={false}
         onConfirm={() => {
           setConfirmDraftDownload(false);
           setMtoolOpen(true);
@@ -1113,15 +1102,15 @@ export function RunDetailView({
 
       <ConfirmDialog
         isOpen={confirmAbort}
-        title={`Abort run ${detail.id}?`}
+        title="Stop this run?"
         message={
           <>
-            This marks <strong>{detail.pdf_filename}</strong> as aborted so you
+            This marks <strong>{detail.pdf_filename}</strong> as stopped so you
             can delete or re-run it. Use this only if the run has clearly
             stopped — any work still in progress will be lost.
           </>
         }
-        confirmLabel="Abort run"
+        confirmLabel="Stop run"
         onConfirm={() => {
           setConfirmAbort(false);
           onForceAbort?.(detail.id);
@@ -1131,7 +1120,7 @@ export function RunDetailView({
 
       <ConfirmDialog
         isOpen={confirmDelete}
-        title={`Delete run ${detail.id}?`}
+        title="Delete this run?"
         message={
           <>
             This removes <strong>{detail.pdf_filename}</strong> from your history.
@@ -1205,10 +1194,13 @@ export function RunDetailView({
             />
             <MetricTile
               label="Elapsed time"
-              value={runDuration}
+              value={isRunning ? liveElapsed : runDuration}
               secondary
             />
           </div>
+          {isRunning && (
+            <LiveRunSummary agents={detail.agents ?? []} onViewActivity={() => selectTab("agents")} />
+          )}
           {(detail.status === "completed" || detail.status === "completed_with_errors" || detail.status === "correction_exhausted") && canonicalEnabled &&
             hasFigureStatements && (
             <div style={styles.verificationPrompt}>
@@ -1410,6 +1402,54 @@ export function RunDetailView({
 }
 
 /** A single labelled metric in the Overview strip. */
+/** Ticking elapsed time for a working run; "—" without a start time. */
+function useLiveElapsed(startedAt: string | null): string {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!startedAt) return;
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [startedAt]);
+  if (!startedAt) return "—";
+  const elapsed = now - new Date(startedAt).getTime();
+  return Number.isFinite(elapsed) && elapsed >= 0 ? formatDurationMs(elapsed) : "—";
+}
+
+const COMPLETE_AGENT_STATUSES = new Set(["succeeded", "completed"]);
+
+/** Live progress for a working run (design system: one current-stage label,
+ *  a plain-language count, secondary elapsed time; no silent waiting). The
+ *  run detail refreshes while the run is working, so this stays current. */
+function LiveRunSummary({ agents, onViewActivity }: { agents: RunAgentJson[]; onViewActivity: () => void }) {
+  const complete = agents.filter((a) => COMPLETE_AGENT_STATUSES.has(a.status)).length;
+  const working = agents
+    .filter((a) => a.status === "running")
+    .map((a) => STATEMENT_LABELS[a.statement_type as keyof typeof STATEMENT_LABELS] ?? agentDisplayName(a));
+  const workingText = working.length === 0
+    ? "Starting workstreams"
+    : working.length <= 2
+      ? `Working on ${working.join(" and ")}`
+      : `Working on ${working.slice(0, 2).join(", ")} and ${working.length - 2} more`;
+  return (
+    <div style={styles.liveSummary} data-testid="live-run-summary">
+      <div style={styles.liveSummaryText}>
+        <span role="status" aria-live="polite" style={styles.liveSummaryStage}>
+          <StatusIcon symbol={STATUS_SYMBOLS.inProgress} />
+          {workingText}
+        </span>
+        {agents.length > 0 && (
+          <span style={styles.liveSummaryCount}>
+            {complete} of {agents.length} workstreams complete
+          </span>
+        )}
+      </div>
+      <button type="button" onClick={onViewActivity} className={uiClass.btnSecondary} style={{ ...ui.buttonSecondary, ...ui.buttonSm }}>
+        View activity
+      </button>
+    </div>
+  );
+}
+
 function MetricTile({
   label,
   value,
@@ -1483,10 +1523,8 @@ const styles = {
   } as React.CSSProperties,
   kicker: {
     fontFamily: pwc.fontHeading,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: pwc.weight.medium,
-    textTransform: "uppercase" as const,
-    letterSpacing: "2px",
     color: pwc.orange500,
     marginBottom: pwc.space.xs,
   } as React.CSSProperties,
@@ -1526,6 +1564,7 @@ const styles = {
   actions: {
     display: "flex",
     alignItems: "center",
+    flexWrap: "wrap" as const,
     gap: pwc.space.sm,
   } as React.CSSProperties,
   // Finished-but-flagged summary. The tint and explicit copy carry meaning;
@@ -1594,7 +1633,8 @@ const styles = {
     paddingBlock: pwc.space.xs,
     display: "flex",
     gap: pwc.space.xs,
-    flexWrap: "wrap" as const,
+    flexWrap: "nowrap" as const,
+    overflowX: "auto" as const,
   } as React.CSSProperties,
   tabGroup: {
     display: "inline-flex",
@@ -1604,7 +1644,6 @@ const styles = {
   tabGroupLabel: {
     ...ui.microLabel,
     marginLeft: pwc.space.md,
-    textTransform: "uppercase" as const,
   } as React.CSSProperties,
   tab: {
     ...ui.tab,
@@ -1649,9 +1688,7 @@ const styles = {
   } as React.CSSProperties,
   metricLabel: {
     fontFamily: pwc.fontBody,
-    fontSize: 11,
-    textTransform: "uppercase" as const,
-    letterSpacing: 0.5,
+    fontSize: 12,
     color: pwc.grey700,
   } as React.CSSProperties,
   section: {
@@ -1672,11 +1709,9 @@ const styles = {
   collapsibleSectionHeading: {
     fontFamily: pwc.fontHeading,
     fontSize: 14,
-    fontWeight: 600,
+    fontWeight: 680,
     color: pwc.grey700,
     margin: 0,
-    textTransform: "uppercase" as const,
-    letterSpacing: 0.5,
     background: "transparent",
     border: "none",
     padding: 0,
@@ -1700,7 +1735,7 @@ const styles = {
     fontSize: 14,
   } as React.CSSProperties,
   dt: {
-    fontWeight: 600,
+    fontWeight: 680,
     color: pwc.grey700,
     minWidth: 140,
   } as React.CSSProperties,
@@ -1728,7 +1763,7 @@ const styles = {
   agentRosterHint: {
     margin: "3px 0 0",
     color: pwc.grey700,
-    fontSize: 11,
+    fontSize: 12,
   } as React.CSSProperties,
   agentFilters: {
     display: "flex",
@@ -1787,7 +1822,7 @@ const styles = {
   } as React.CSSProperties,
   historicalAgentState: {
     color: pwc.grey700,
-    fontSize: 11,
+    fontSize: 12,
     whiteSpace: "nowrap",
   } as React.CSSProperties,
   historicalAgentDetailPane: {
@@ -1889,10 +1924,8 @@ const styles = {
   agentDetailLabel: {
     margin: 0,
     color: pwc.grey700,
-    fontSize: 10,
+    fontSize: 12,
     fontWeight: pwc.weight.semibold,
-    letterSpacing: "0.08em",
-    textTransform: "uppercase",
   } as React.CSSProperties,
   agentRecentUpdate: {
     display: "grid",
@@ -1920,8 +1953,8 @@ const styles = {
     flexWrap: "wrap" as const,
   } as React.CSSProperties,
   agentStatement: {
-    fontFamily: pwc.fontMono,
-    fontWeight: 600,
+    fontFamily: pwc.fontHeading,
+    fontWeight: 680,
     fontSize: 14,
     color: pwc.grey900,
   } as React.CSSProperties,
@@ -1939,7 +1972,7 @@ const styles = {
   agentErrorType: {
     color: pwc.grey500,
     fontFamily: pwc.fontMono,
-    fontSize: 11,
+    fontSize: 12,
     border: `1px solid ${pwc.grey300}`,
     borderRadius: pwc.radius.sm,
     padding: "1px 6px",
@@ -1954,6 +1987,37 @@ const styles = {
     fontFamily: pwc.fontBody,
     fontSize: 12,
     color: pwc.grey700,
+  } as React.CSSProperties,
+  liveSummary: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: pwc.space.md,
+    flexWrap: "wrap" as const,
+    marginTop: pwc.space.lg,
+    padding: `${pwc.space.md}px 0`,
+    borderTop: `1px solid ${tokens.color.border.subtle}`,
+    borderBottom: `1px solid ${tokens.color.border.subtle}`,
+  } as React.CSSProperties,
+  liveSummaryText: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: pwc.space.xs,
+    minWidth: 0,
+  } as React.CSSProperties,
+  liveSummaryStage: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: pwc.space.sm,
+    fontFamily: pwc.fontBody,
+    fontSize: 14,
+    fontWeight: pwc.weight.medium,
+    color: tokens.color.text.primary,
+  } as React.CSSProperties,
+  liveSummaryCount: {
+    ...ui.metadata,
+    paddingLeft: 24,
+    fontVariantNumeric: "tabular-nums",
   } as React.CSSProperties,
   verificationPrompt: {
     display: "flex",

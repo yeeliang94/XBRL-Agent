@@ -1,5 +1,6 @@
 import { useId, useState } from "react";
-import { pwc } from "../lib/theme";
+import { pwc, tokens } from "../lib/theme";
+import { DisclosureChevron } from "./icons";
 
 // ---------------------------------------------------------------------------
 // Disclosure — the one expand-to-view primitive behind every collapsed
@@ -56,20 +57,10 @@ export function Disclosure({ summary, children, defaultOpen = false, open, onTog
           fontFamily: pwc.fontHeading,
           fontSize: 14,
           fontWeight: pwc.weight.medium,
-          color: pwc.grey700,
+          color: tokens.color.text.primary,
         }}
       >
-        <span
-          aria-hidden="true"
-          className={`pwc-disclosure-chevron${isOpen ? " is-open" : ""}`}
-          style={{
-            display: "inline-block",
-            fontSize: 12,
-            color: pwc.grey500,
-          }}
-        >
-          ▶
-        </span>
+        <DisclosureChevron open={isOpen} />
         {summary}
       </button>
       {isOpen && (
