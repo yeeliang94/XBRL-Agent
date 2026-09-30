@@ -61,6 +61,21 @@ async function openAdvanced() {
   }
 }
 
+/** Notes are all on by default; untick every notes template not in `keep`. */
+function untickNotesExcept(keep: RegExp[]) {
+  const labels = [
+    "Corporate information (Note 10)",
+    "Accounting policies (Note 11)",
+    "List of notes (Note 12)",
+    "Issued capital (Note 13)",
+    "Related party transactions (Note 14)",
+  ];
+  for (const label of labels) {
+    if (keep.some((k) => k.test(label))) continue;
+    fireEvent.click(screen.getByRole("checkbox", { name: new RegExp(label.replace(/[()]/g, "\\$&"), "i") }));
+  }
+}
+
 describe("PreRunPanel", () => {
   test("filing choices expose their selected state", async () => {
     render(<PreRunPanel sessionId="abc-123" getSettings={vi.fn().mockResolvedValue(mockSettings)} onRun={vi.fn()} />);
@@ -92,11 +107,18 @@ describe("PreRunPanel", () => {
       expect(screen.getAllByRole("checkbox")).toHaveLength(10);
     });
     expect(screen.queryByTestId("automatic-pipeline-summary")).toBeNull();
-    expect(screen.getByRole("heading", { name: /filing details/i })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: /filing details/i })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /filing details/i })).toBeNull();
     expect(screen.getByRole("button", { name: /^advanced$/i })).toHaveAttribute(
       "aria-expanded",
       "false",
     );
+    // Format overrides stay visible with Advanced collapsed; the repeats
+    // control and the "leave blank" hint are gone.
+    expect(screen.getByText("Statement format overrides")).toBeInTheDocument();
+    expect(screen.queryByText(/leave a format blank/i)).toBeNull();
+    expect(screen.queryByText(/repeats \(consistency\)/i)).toBeNull();
+    expect(screen.queryByTestId("repeats-2")).toBeNull();
   });
 
   test("collapsed setup disclosures retain their controlled region and use the reveal transition", async () => {
@@ -123,7 +145,7 @@ describe("PreRunPanel", () => {
       name: /statements to extract 5 of 5 selected/i,
     });
     const notesToggle = screen.getByRole("button", {
-      name: /notes templates no notes included/i,
+      name: /notes templates 5 of 5 selected/i,
     });
 
     expect(statementToggle).toHaveAttribute("aria-expanded", "true");
@@ -527,7 +549,7 @@ describe("PreRunPanel", () => {
     );
   });
 
-  test("renders 5 notes checkboxes, all off by default", async () => {
+  test("renders 5 notes checkboxes, all on by default", async () => {
     const getSettings = vi.fn().mockResolvedValue(mockSettings);
     render(
       <PreRunPanel sessionId="abc-123" getSettings={getSettings} onRun={vi.fn()} />,
@@ -540,7 +562,7 @@ describe("PreRunPanel", () => {
       ).toBeInTheDocument();
     });
 
-    // All 5 notes labels present + all unchecked.
+    // All 5 notes labels present + all checked.
     const noteLabels = [
       /corporate information \(note 10\)/i,
       /accounting policies \(note 11\)/i,
@@ -550,11 +572,11 @@ describe("PreRunPanel", () => {
     ];
     for (const label of noteLabels) {
       const cb = screen.getByRole("checkbox", { name: label }) as HTMLInputElement;
-      expect(cb.checked).toBe(false);
+      expect(cb.checked).toBe(true);
     }
   });
 
-  test("ticking a notes checkbox populates notes_to_run on submit", async () => {
+  test("unticking notes checkboxes narrows notes_to_run on submit", async () => {
     const onRun = vi.fn();
     const getSettings = vi.fn().mockResolvedValue(mockSettings);
     render(
@@ -565,13 +587,8 @@ describe("PreRunPanel", () => {
       expect(screen.getByRole("button", { name: /start extraction/i })).toBeInTheDocument();
     });
 
-    // Enable Notes 10 and Notes 13
-    fireEvent.click(
-      screen.getByRole("checkbox", { name: /corporate information \(note 10\)/i }),
-    );
-    fireEvent.click(
-      screen.getByRole("checkbox", { name: /issued capital \(note 13\)/i }),
-    );
+    // Keep Notes 10 and Notes 13 only.
+    untickNotesExcept([/corporate information/i, /issued capital/i]);
 
     startExtraction();
 
@@ -593,10 +610,8 @@ describe("PreRunPanel", () => {
       expect(screen.getByRole("button", { name: /start extraction/i })).toBeInTheDocument();
     });
 
-    // Enable Notes 11 only, then pick a non-default model for it.
-    fireEvent.click(
-      screen.getByRole("checkbox", { name: /accounting policies \(note 11\)/i }),
-    );
+    // Keep Notes 11 only, then pick a non-default model for it.
+    untickNotesExcept([/accounting policies/i]);
 
     // Per-note model pickers live behind the Advanced disclosure now (Phase 3).
     fireEvent.click(screen.getByTestId("advanced-toggle"));
@@ -617,7 +632,7 @@ describe("PreRunPanel", () => {
     expect(payload.notes_models).toEqual({ ACC_POLICIES: "claude-opus-4-6" });
   });
 
-  test("no notes selected → notes_to_run is empty (face-only run, no regression)", async () => {
+  test("notes default to every template; unticking all gives a face-only run", async () => {
     const onRun = vi.fn();
     const getSettings = vi.fn().mockResolvedValue(mockSettings);
     render(
@@ -629,8 +644,15 @@ describe("PreRunPanel", () => {
     });
 
     startExtraction();
+    expect(onRun).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        notes_to_run: ["CORP_INFO", "ACC_POLICIES", "LIST_OF_NOTES", "ISSUED_CAPITAL", "RELATED_PARTY"],
+      }),
+    );
 
-    expect(onRun).toHaveBeenCalledWith(
+    untickNotesExcept([]);
+    startExtraction();
+    expect(onRun).toHaveBeenLastCalledWith(
       expect.objectContaining({ notes_to_run: [] }),
     );
   });
@@ -650,6 +672,7 @@ describe("PreRunPanel", () => {
     // [SOFP, SOPL, SOCI, SOCF, SOCIE, notes×5] → indices 0..4.
     const checkboxes = screen.getAllByRole("checkbox");
     for (let i = 0; i < 5; i++) fireEvent.click(checkboxes[i]);
+    untickNotesExcept([]);
 
     // With no face statements and no notes, Run must be disabled.
     const runBtn = screen.getByRole("button", { name: /start extraction/i }) as HTMLButtonElement;

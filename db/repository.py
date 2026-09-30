@@ -86,9 +86,7 @@ class Run:
     # v22 per-run notes-table style override (docs/PLAN-notes-table-theme.md).
     # The hydrated Python dict, or None when the run inherits the firm default.
     notes_table_style: Optional[dict[str, Any]] = None
-    # v30 evals-workspace fields (docs/PLAN-evals-workspace.md). `app_version`
-    # is the build that produced the run (None on legacy rows). `repeat_group_id`
-    # / `repeat_index` link a run into a consistency repeat group.
+    # v30 fields. Repeat links are retained for historical rows only.
     app_version: Optional[str] = None
     repeat_group_id: Optional[int] = None
     repeat_index: Optional[int] = None
@@ -349,8 +347,6 @@ def create_run(
     status: str = "running",
     orchestration: str = "split",
     app_version: Optional[str] = None,
-    repeat_group_id: Optional[int] = None,
-    repeat_index: Optional[int] = None,
 ) -> int:
     """Insert a new run row and return its id.
 
@@ -375,8 +371,7 @@ def create_run(
     # uses started_at to compute wall-clock duration; an empty string means
     # "no duration yet" (vs ended_at-minus-started_at for finished runs).
     started_at = "" if status == "draft" else now
-    # Stamp the running build so the Evals workspace can trend quality across
-    # versions (v30). Resolved lazily and cached, so this is cheap after the
+    # Stamp the running build (v30). Resolved lazily and cached, so this is cheap after the
     # first run. Callers may override (tests pin a value).
     if app_version is None:
         from utils.app_version import get_app_version
@@ -385,14 +380,14 @@ def create_run(
     cur = conn.execute(
         "INSERT INTO runs(created_at, pdf_filename, status, notes, "
         "session_id, output_dir, run_config_json, scout_enabled, started_at, "
-        "orchestration, app_version, repeat_group_id, repeat_index) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "orchestration, app_version) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             now, pdf_filename, status, notes or None,
             session_id, output_dir, config_json,
             1 if scout_enabled else 0, started_at,
             orchestration or "split",
-            app_version, repeat_group_id, repeat_index,
+            app_version,
         ),
     )
     return int(cur.lastrowid)
@@ -3195,125 +3190,6 @@ def delete_draft_runs(
     else:
         cur = conn.execute("DELETE FROM runs WHERE status = 'draft'")
     return cur.rowcount
-
-
-# ---------------------------------------------------------------------------
-# Repeat groups (v30) — consistency scoring across N runs of one document.
-# ---------------------------------------------------------------------------
-
-def create_repeat_group(
-    conn: sqlite3.Connection,
-    *,
-    config: Optional[dict[str, Any]] = None,
-    repeats_requested: int = 1,
-) -> int:
-    """Create a repeat group and return its id. The N child runs link to it via
-    create_run(repeat_group_id=..., repeat_index=...)."""
-    cur = conn.execute(
-        "INSERT INTO repeat_groups(created_at, config_json, repeats_requested, "
-        "status) VALUES (?, ?, ?, 'running')",
-        (_now(), json.dumps(config) if config is not None else None,
-         int(repeats_requested)),
-    )
-    return int(cur.lastrowid)
-
-
-def list_repeat_group_run_ids(
-    conn: sqlite3.Connection, group_id: int, *, statuses: Optional[list[str]] = None
-) -> list[int]:
-    """Run ids in a repeat group, ordered by repeat_index. Optionally filtered to
-    a set of statuses (e.g. the finished ones for consistency)."""
-    sql = "SELECT id FROM runs WHERE repeat_group_id = ?"
-    params: list[Any] = [group_id]
-    if statuses:
-        placeholders = ",".join("?" for _ in statuses)
-        sql += f" AND status IN ({placeholders})"
-        params.extend(statuses)
-    sql += " ORDER BY repeat_index"
-    return [r[0] for r in conn.execute(sql, tuple(params)).fetchall()]
-
-
-def deduped_repeat_run_ids(
-    conn: sqlite3.Connection, group_id: int, *, statuses: Optional[list[str]] = None
-) -> list[int]:
-    """One run id per repeat_index (the newest attempt), ordered by index and
-    optionally filtered to a set of statuses. Consistency scores over THIS list,
-    not every row, so a duplicated index (e.g. from a legacy buggy resume) is
-    counted once instead of double-weighting one repeat."""
-    sql = "SELECT repeat_index, MAX(id) FROM runs WHERE repeat_group_id = ?"
-    params: list[Any] = [group_id]
-    if statuses:
-        placeholders = ",".join("?" for _ in statuses)
-        sql += f" AND status IN ({placeholders})"
-        params.extend(statuses)
-    sql += (
-        " AND repeat_index IS NOT NULL GROUP BY repeat_index ORDER BY repeat_index"
-    )
-    return [int(r[1]) for r in conn.execute(sql, tuple(params)).fetchall()]
-
-
-def save_repeat_group_consistency(
-    conn: sqlite3.Connection,
-    group_id: int,
-    consistency: Optional[dict[str, Any]],
-    status: str,
-) -> None:
-    """Persist the computed consistency result + terminal status on the group."""
-    conn.execute(
-        "UPDATE repeat_groups SET consistency_json = ?, status = ? WHERE id = ?",
-        (json.dumps(consistency) if consistency is not None else None,
-         status, group_id),
-    )
-
-
-def fetch_repeat_group(
-    conn: sqlite3.Connection, group_id: int
-) -> Optional[dict[str, Any]]:
-    """The group row + its child run ids/statuses, or None."""
-    prior_factory = conn.row_factory
-    conn.row_factory = sqlite3.Row
-    try:
-        row = conn.execute(
-            "SELECT id, created_at, repeats_requested, benchmark_id, status, "
-            "config_json, consistency_json FROM repeat_groups WHERE id = ?",
-            (group_id,),
-        ).fetchone()
-        if row is None:
-            return None
-        # Each child carries its own accuracy (PRD: "each repeat's accuracy
-        # score, so the user sees both 'how right' and 'how stable'") — the
-        # LEFT JOIN reads the stamped eval_scores row when the repeat was
-        # graded, NULL otherwise.
-        children = conn.execute(
-            "SELECT r.id, r.status, r.repeat_index, "
-            "s.gold_cells, s.matched_cells "
-            "FROM runs r LEFT JOIN eval_scores s ON s.run_id = r.id "
-            "WHERE r.repeat_group_id = ? ORDER BY r.repeat_index",
-            (group_id,),
-        ).fetchall()
-    finally:
-        conn.row_factory = prior_factory
-    return {
-        "id": row["id"],
-        "created_at": row["created_at"],
-        "repeats_requested": row["repeats_requested"],
-        "benchmark_id": row["benchmark_id"],
-        "status": row["status"],
-        "config": _parse_json_dict(row["config_json"]),
-        "consistency": _parse_json_dict(row["consistency_json"]),
-        "runs": [
-            {
-                "id": c["id"],
-                "status": c["status"],
-                "repeat_index": c["repeat_index"],
-                "accuracy": (
-                    (c["matched_cells"] / c["gold_cells"])
-                    if c["gold_cells"] else None
-                ),
-            }
-            for c in children
-        ],
-    }
 
 
 # ---------------------------------------------------------------------------

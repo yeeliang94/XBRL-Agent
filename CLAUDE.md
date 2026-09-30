@@ -30,7 +30,7 @@ the task.
 | mTool export, clipboard decoration, filing readiness, or receipts | 16, 21, 28 |
 | Frontend layout, navigation, content hierarchy, simplification, styles, accessibility, or shared design tokens | 7, 16, 19, 21, 27, 28, 30 |
 | Authentication, authorization, production startup, or user administration | 10, 11, 24 |
-| Human-file comparison, repeats, or consistency | 11, 21, 23, 28, 30 |
+| Human-file comparison | 11, 21, 23, 28 |
 
 Use the narrowest applicable set. If a change crosses subsystems, read the
 union of those sections.
@@ -79,7 +79,7 @@ it. Detailed explanations and pinning tests are in
 27. [Notes coverage reports incomplete assessment as unresolved, never clean](CLAUDE-REFERENCE.md#27-notes-coverage-checklist--post-reviewer-visibility--status-tipping).
 28. [mTool filling uses semantic addressing, one standard-library patcher, and receipts](CLAUDE-REFERENCE.md#28-mtool-fill-pipeline--semantic-addressing-one-patcher-receipts).
 29. [Word input converts at upload; PDF remains the extraction spine](CLAUDE-REFERENCE.md#29-word-docx-input--convert-at-the-door-pdf-stays-the-spine).
-30. [Repeats reuse normal runs and a fixed consistency rule](CLAUDE-REFERENCE.md#30-repeats-and-consistency--normal-runs-fixed-scoring).
+30. [Repeat-run compatibility history](CLAUDE-REFERENCE.md#30-repeat-run-compatibility-history).
 31. [Source-integrity assessment must never produce a false clean result](CLAUDE-REFERENCE.md#31-notes-source-integrity--a-count-not-a-claim-ships-off).
 
 ## Reference Maintenance

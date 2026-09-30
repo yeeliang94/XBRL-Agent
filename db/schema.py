@@ -292,9 +292,8 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         -- (review happens after extraction), hence its own column, not the
         -- draft-only run_config_json path.
         notes_table_style     TEXT,
-        -- v30 evals-workspace columns (docs/PLAN-evals-workspace.md). All
-        -- nullable: app_version stamps which build produced the run;
-        -- repeat_group_id/repeat_index link repeats for consistency scoring.
+        -- v30 columns. app_version stamps the build; repeat links remain
+        -- nullable for historical data from the retired repeat-run feature.
         -- The REFERENCES points forward to repeat_groups (created later in this
         -- statement list — SQLite resolves FK targets lazily).
         app_version           TEXT,
@@ -1026,12 +1025,8 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
     )
     """,
     # --- v30: Evals workspace (docs/PLAN-evals-workspace.md) ---
-    # A repeat group links N runs of the SAME document launched together so the
-    # consistency scorer can compare them (PRD Family 2). `config_json` is the
-    # frozen launch config all repeats share; `consistency_json` is the computed
-    # result (NULL until the last repeat finishes). `benchmark_id` is copied here
-    # so the group knows its gold without re-reading a child run. `status` has no
-    # CHECK constraint on purpose (gotcha #11): running | complete | partial.
+    # Retained as inert history after repeat-run execution was removed. Keep
+    # the original shape so older databases migrate without losing rows.
     """
     CREATE TABLE IF NOT EXISTS repeat_groups (
         id                 INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1944,8 +1939,8 @@ _V29_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
 #   - runs.app_version       — which build/prompt version produced this run, so
 #                              "better over time" is answerable (PRD Technical
 #                              Approach). NULL on every legacy run.
-#   - runs.repeat_group_id   — links a run to its repeat group (consistency).
-#   - runs.repeat_index      — 0-based position within the group.
+#   - runs.repeat_group_id   — historical repeat-group link (now inert).
+#   - runs.repeat_index      — historical position within the group (now inert).
 #   - eval_scores.taxonomy_json     — the failure-diagnosis counts (sign flip,
 #                                     period swap, …) as JSON. NULL = legacy
 #                                     scorecard graded before the taxonomy.

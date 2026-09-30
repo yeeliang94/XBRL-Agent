@@ -171,24 +171,19 @@ def test_prepared_statement_only_rerun_does_not_launch_notes(document, pipeline,
     assert assigned == [set()]
 
 
-@pytest.mark.asyncio
-async def test_prepared_repeats_preserve_request_and_use_preparation_each_time(document, pipeline):
+def test_legacy_repeats_setting_starts_one_run(document, pipeline):
     directory, db, _ = document
-    _, join, scout, _ = pipeline
-    config = server.RunConfigRequest(statements=["SOFP"], variants={"SOFP": "CuNonCu"},
-                                    use_scout=True, repeats=2, denomination="thousands")
-    original = config.model_dump()
-    events = [event async for event in server.run_repeat_group_stream(
-        session_id=directory.name, session_dir=directory, run_config=config,
-        api_key="synthetic-key", proxy_url="", model_name="scripted-model",
-    )]
-    assert sum(event["event"] == "run_complete" for event in events) == 2
-    assert config.model_dump() == original
-    assert [call.args[0] for call in join.await_args_list] == [directory, directory / "repeat_1"]
-    scout.assert_not_awaited()
+    client, join, _, _ = pipeline
+    response = client.post(f"/api/run/{directory.name}", json={
+        "statements": ["SOFP"], "variants": {"SOFP": "CuNonCu"},
+        "use_scout": True, "denomination": "thousands", "repeats": 3,
+    })
+
+    assert response.status_code == 200
+    assert response.text.count("event: run_complete") == 1
+    join.assert_awaited_once()
     with sqlite3.connect(db) as conn:
-        configs = conn.execute("SELECT DISTINCT run_config_json FROM runs WHERE repeat_group_id IS NOT NULL").fetchall()
-    assert len(configs) == 1
+        assert conn.execute("SELECT COUNT(*) FROM repeat_groups").fetchone()[0] == 0
 
 
 @pytest.mark.parametrize("assessment_fails", [False, True])

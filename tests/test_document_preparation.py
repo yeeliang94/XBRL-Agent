@@ -170,23 +170,6 @@ def test_metadata_rotation_not_applied_twice(tmp_path):
     assert result.pages[0]["metadata_rotation"] == 90
 
 
-def test_repeat_copies_complete_preparation_for_reuse_and_inventory_remap(tmp_path):
-    import server
-    path = pdf(tmp_path, 1)
-    call, _ = caller()
-    prepared = asyncio.run(prepare_document(path, None, model_name="fake", _caller=call))
-    state = {"status": "succeeded", "model_name": "fake", "infopack": {"notes_inventory": []}}
-    (tmp_path / "preparation_status.json").write_text(json.dumps(state))
-    repeat = server._seed_repeat_session_dir(tmp_path, 1)
-    copied = read_prepared_document(repeat / "uploaded.pdf", model_name="fake")
-    assert copied is not None
-    assert copied.revision == prepared.revision
-    assert copied.prepared_pdf_path.parent == repeat
-    assert json.loads((repeat / "preparation_status.json").read_text()) == state
-    checkpoint = next(tmp_path.glob("preparation-checkpoint-*.json"))
-    assert (repeat / checkpoint.name).read_bytes() == checkpoint.read_bytes()
-
-
 def test_repeated_reads_reuse_hashes_but_same_size_edits_invalidate(tmp_path, monkeypatch):
     import os
     from pathlib import Path

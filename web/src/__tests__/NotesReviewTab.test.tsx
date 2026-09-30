@@ -683,8 +683,7 @@ describe("NotesReviewTab — edit + save (Step 10)", () => {
     );
     selectFirstField();
     expect(screen.getByText("Corporate info")).toBeInTheDocument();
-    // Match the row's exact "Edit" button — the header "Re-extract notes
-    // (replaces your edits)" button also contains "edit".
+    // Select the row's Edit action.
     const editButtons = screen.getAllByRole("button", { name: /^edit$/i });
     fireEvent.click(editButtons[0]);
     // After clicking Edit, the corresponding editor element gains
@@ -1239,114 +1238,6 @@ describe("NotesReviewTab — single formatting experience", () => {
   });
 });
 
-describe("NotesReviewTab — regenerate confirm (Step 12)", () => {
-  test("regenerate button opens confirm dialog when edits exist", async () => {
-    const fetchMock = vi.fn(async (url: string) => {
-      if (url.includes("/edited_count")) {
-        return new Response(JSON.stringify({ count: 3 }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-      return new Response(JSON.stringify(SAMPLE), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    });
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
-
-    render(<NotesReviewTab runId={42} onRegenerate={vi.fn()} />);
-    await waitFor(() =>
-      expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
-    );
-    fireEvent.click(screen.getByRole("button", { name: /re-extract notes/i }));
-    await waitFor(() => {
-      expect(screen.getByRole("dialog")).toBeInTheDocument();
-      expect(screen.getByText(/replace 3 edited/i)).toBeInTheDocument();
-    });
-    // A5 (docs/PLAN-design-qa-fixes.md): the action re-extracts IN PLACE via
-    // the rerun-notes endpoint — the copy must NOT describe the old
-    // Extract-page manual re-upload flow.
-    const dialogText = screen.getByRole("dialog").textContent ?? "";
-    expect(dialogText.toLowerCase()).not.toContain("click rerun");
-    expect(dialogText.toLowerCase()).not.toMatch(/re-?upload|extract page/);
-    expect(dialogText.toLowerCase()).toMatch(/fresh notes extraction/);
-  });
-
-  test("re-extract button is disabled when no handler is wired", async () => {
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(JSON.stringify(SAMPLE), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-    );
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
-    render(<NotesReviewTab runId={42} />);
-    await waitFor(() =>
-      expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
-    );
-    expect(
-      screen.getByRole("button", { name: /re-extract notes/i }),
-    ).toBeDisabled();
-  });
-
-  test("regenerate button skips dialog when no edits", async () => {
-    const onRegenerate = vi.fn();
-    const fetchMock = vi.fn(async (url: string) => {
-      if (url.includes("/edited_count")) {
-        return new Response(JSON.stringify({ count: 0 }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-      return new Response(JSON.stringify(SAMPLE), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    });
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
-
-    render(<NotesReviewTab runId={42} onRegenerate={onRegenerate} />);
-    await waitFor(() =>
-      expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
-    );
-    fireEvent.click(screen.getByRole("button", { name: /re-extract notes/i }));
-    await waitFor(() => expect(onRegenerate).toHaveBeenCalledWith(42));
-    expect(screen.queryByRole("dialog")).toBeNull();
-  });
-
-  test("confirm dialog clobbers via rerun endpoint", async () => {
-    const onRegenerate = vi.fn();
-    const fetchMock = vi.fn(async (url: string) => {
-      if (url.includes("/edited_count")) {
-        return new Response(JSON.stringify({ count: 2 }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-      return new Response(JSON.stringify(SAMPLE), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    });
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
-
-    render(<NotesReviewTab runId={42} onRegenerate={onRegenerate} />);
-    await waitFor(() =>
-      expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
-    );
-    fireEvent.click(screen.getByRole("button", { name: /re-extract notes/i }));
-    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
-    fireEvent.click(
-      within(screen.getByRole("dialog")).getByRole("button", {
-        name: /re-extract notes/i,
-      }),
-    );
-    expect(onRegenerate).toHaveBeenCalledWith(42);
-  });
-});
-
 // ---------------------------------------------------------------------------
 // Peer-review [MEDIUM] #4 — sanitizer_warnings must surface to the user.
 //
@@ -1356,86 +1247,6 @@ describe("NotesReviewTab — regenerate confirm (Step 12)", () => {
 // pasting `<script>alert()</script>` saw their markup silently disappear
 // without knowing why. These tests pin that the warnings render after save.
 // ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Peer-review [HIGH] #2 — /edited_count must fail closed.
-//
-// Earlier behaviour: when the endpoint returned non-OK (5xx) or the
-// network request failed, the code called onRegenerate directly without
-// confirmation. That bypasses the overwrite warning precisely when the
-// safety check is unavailable — the opposite of what an operator wants.
-// Fix: show a generic "we couldn't verify your edits" confirm modal and
-// only call onRegenerate after the user explicitly confirms.
-// ---------------------------------------------------------------------------
-
-describe("NotesReviewTab edited_count fail-closed", () => {
-  test("non-OK edited_count response opens a generic confirm modal", async () => {
-    const onRegenerate = vi.fn();
-    const fetchMock = vi.fn(async (url: string) => {
-      if (url.includes("/edited_count")) {
-        return new Response(JSON.stringify({ detail: "boom" }), {
-          status: 500,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-      return new Response(JSON.stringify(SAMPLE), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    });
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
-
-    render(<NotesReviewTab runId={42} onRegenerate={onRegenerate} />);
-    await waitFor(() =>
-      expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
-    );
-    fireEvent.click(screen.getByRole("button", { name: /re-extract notes/i }));
-
-    // The confirm modal must open — with copy that signals the safety
-    // check could not run — rather than silently proceeding.
-    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
-    expect(screen.getByRole("dialog")).toHaveTextContent(
-      /couldn.?t verify|could not verify/i,
-    );
-    expect(onRegenerate).not.toHaveBeenCalled();
-
-    // User explicitly confirms → regenerate fires. (The unknown-count branch
-    // keeps its own copy, but the confirm button shares the header's label,
-    // so scope to the dialog.)
-    fireEvent.click(
-      within(screen.getByRole("dialog")).getByRole("button", {
-        name: /re-extract notes/i,
-      }),
-    );
-    expect(onRegenerate).toHaveBeenCalledWith(42);
-  });
-
-  test("fetch rejection opens the same generic confirm modal", async () => {
-    const onRegenerate = vi.fn();
-    const fetchMock = vi.fn(async (url: string) => {
-      if (url.includes("/edited_count")) {
-        throw new Error("network down");
-      }
-      return new Response(JSON.stringify(SAMPLE), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    });
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
-
-    render(<NotesReviewTab runId={42} onRegenerate={onRegenerate} />);
-    await waitFor(() =>
-      expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
-    );
-    fireEvent.click(screen.getByRole("button", { name: /re-extract notes/i }));
-
-    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
-    expect(screen.getByRole("dialog")).toHaveTextContent(
-      /couldn.?t verify|could not verify/i,
-    );
-    expect(onRegenerate).not.toHaveBeenCalled();
-  });
-});
 
 // ---------------------------------------------------------------------------
 // Peer-review [MEDIUM] #3 — pending edits must flush on unmount.
@@ -2629,7 +2440,7 @@ describe("NotesReviewTab — per-run table style picker", () => {
 
     expect(screen.queryByTestId("notes-table-style-panel")).toBeNull();
     expect(screen.queryByRole("button", { name: /table appearance/i })).toBeNull();
-    expect(screen.getByRole("button", { name: "Re-extract notes" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Re-extract notes" })).toBeNull();
   });
 });
 

@@ -5,7 +5,6 @@ Endpoints:
   ``POST /api/runs/{run_id}/start``        — start a persistent-draft run
   ``POST /api/abort/{session_id}``         — cancel all agents
   ``POST /api/abort/{session_id}/{agent}`` — cancel one agent
-  ``POST /api/runs/{run_id}/rerun-notes``  — regenerate notes sheets
   ``POST /api/runs/{run_id}/restart``      — clone a run into a fresh draft
   ``POST /api/rerun/{session_id}``         — re-run a single agent
 
@@ -142,28 +141,15 @@ async def run_multi_extraction(session_id: str, body: RunConfigRequest, request:
                 correlation_id or f"run-{session_id}",
             )
             try:
-                if getattr(body, "repeats", 1) and body.repeats > 1:
-                    # Repeats-for-consistency: N linked runs behind one stream
-                    # (Evals workspace, Step D1). first_run_id=None → the group
-                    # stream mints every child row itself.
-                    agen = server.run_repeat_group_stream(
-                        session_id=session_id,
-                        session_dir=session_dir,
-                        run_config=body,
-                        api_key=api_key,
-                        proxy_url=proxy_url,
-                        model_name=model_name,
-                    )
-                else:
-                    agen = server.run_multi_agent_stream(
-                        require_preparation=True,
-                        session_id=session_id,
-                        session_dir=session_dir,
-                        run_config=body,
-                        api_key=api_key,
-                        proxy_url=proxy_url,
-                        model_name=model_name,
-                    )
+                agen = server.run_multi_agent_stream(
+                    require_preparation=True,
+                    session_id=session_id,
+                    session_dir=session_dir,
+                    run_config=body,
+                    api_key=api_key,
+                    proxy_url=proxy_url,
+                    model_name=model_name,
+                )
                 async for frame in server.sse_stream_with_keepalive(
                     agen, auth_session_id=auth_session_id
                 ):
@@ -325,30 +311,16 @@ async def start_run_endpoint(run_id: int, request: Request):
                 correlation_id or f"run-{run_id}",
             )
             try:
-                if getattr(run_config, "repeats", 1) and run_config.repeats > 1:
-                    # Repeats-for-consistency (Evals workspace, Step D1): the
-                    # already-flipped draft row becomes repeat 0, the group stream
-                    # mints repeats 1..N-1.
-                    agen = server.run_repeat_group_stream(
-                        session_id=session_id,
-                        session_dir=session_dir,
-                        run_config=run_config,
-                        api_key=api_key,
-                        proxy_url=proxy_url,
-                        model_name=model_name,
-                        first_run_id=run_id,
-                    )
-                else:
-                    agen = server.run_multi_agent_stream(
-                        require_preparation=True,
-                        session_id=session_id,
-                        session_dir=session_dir,
-                        run_config=run_config,
-                        api_key=api_key,
-                        proxy_url=proxy_url,
-                        model_name=model_name,
-                        existing_run_id=run_id,
-                    )
+                agen = server.run_multi_agent_stream(
+                    require_preparation=True,
+                    session_id=session_id,
+                    session_dir=session_dir,
+                    run_config=run_config,
+                    api_key=api_key,
+                    proxy_url=proxy_url,
+                    model_name=model_name,
+                    existing_run_id=run_id,
+                )
                 async for frame in server.sse_stream_with_keepalive(
                     agen, auth_session_id=auth_session_id
                 ):
@@ -491,142 +463,6 @@ async def force_abort_run(run_id: int):
 # ---------------------------------------------------------------------------
 # Rerun endpoint — re-extract a single statement in an existing session
 # ---------------------------------------------------------------------------
-
-@router.post("/api/runs/{run_id}/rerun-notes")
-async def rerun_notes(run_id: int, request: Request):
-    """Regenerate the notes sheets for a completed run.
-
-    Peer-review [HIGH] #1: before this endpoint existed, the
-    Regenerate-notes button on the History-page run detail redirected
-    to `/?session=<id>#notes` — a URL no code consumed. Users clicking
-    it landed on the Extract page with no Rerun affordance (that button
-    only shows for failed/cancelled agents). This endpoint is the real
-    target: it reads the run's session + config from the DB, builds a
-    notes-only `RunConfigRequest` server-side, and delegates to the same
-    `run_multi_agent_stream` the per-agent rerun uses.
-
-    Keeping the config build server-side (instead of expecting the
-    frontend to reconstruct a RunConfigRequest from the run detail
-    payload) means the Regenerate flow stays resilient to new
-    RunConfigRequest fields landing in the future — only this endpoint
-    needs to learn about them.
-    """
-    # Look up the run row — we need its session_id (for active-runs
-    # locking + output dir) and its stored `run_config_json`.
-    import sqlite3 as _sqlite3
-    conn = _sqlite3.connect(str(server.AUDIT_DB_PATH))
-    try:
-        from db.repository import fetch_run as _fetch_run
-        run = _fetch_run(conn, run_id)
-    finally:
-        conn.close()
-
-    if run is None:
-        raise HTTPException(status_code=404, detail=f"Run {run_id} not found.")
-
-    config = run.config or {}
-    notes_to_run = config.get("notes_to_run") or []
-    if not notes_to_run:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "This run has no notes templates in its config — nothing "
-                "to regenerate. Run the notes pipeline on a fresh session "
-                "instead."
-            ),
-        )
-
-    session_id = run.session_id
-    if not session_id:
-        raise HTTPException(
-            status_code=400,
-            detail="This run is too old to regenerate. Please start a new extraction instead.",
-        )
-
-    if session_id in server.active_runs:
-        raise HTTPException(
-            status_code=409,
-            detail="Extraction still running for this session. Wait for it to finish before regenerating.",
-        )
-
-    session_dir = server.OUTPUT_DIR / session_id
-    pdf_path = session_dir / "uploaded.pdf"
-    if not pdf_path.exists():
-        raise HTTPException(
-            status_code=404,
-            detail="PDF not found for this session — cannot regenerate.",
-        )
-
-    # Build a notes-only RunConfigRequest from the stored config. Clear
-    # `statements` so only the notes coordinator runs; preserve
-    # filing_level, filing_standard, infopack, use_scout, and any
-    # per-template model overrides so the regenerated notes match the
-    # original run's environment.
-    try:
-        regen_config = RunConfigRequest(
-            statements=[],
-            variants={},
-            models={},
-            infopack=config.get("infopack"),
-            use_scout=False,  # no new scout pass — reuse stored infopack
-            scanned_pdf=bool(config.get("scanned_pdf", False)),
-            notes_inventory_overrides=config.get("notes_inventory_overrides"),
-            filing_level=config.get("filing_level", "company"),
-            filing_standard=config.get("filing_standard", "mfrs"),
-            notes_to_run=list(notes_to_run),
-            notes_models=config.get("notes_models") or {},
-        )
-    except Exception:
-        # Malformed stored config — surface rather than crash mid-stream.
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "This run's saved settings couldn't be read, so notes can't be "
-                "regenerated. Please start a new extraction instead."
-            ),
-        )
-
-    server._reload_runtime_settings()
-    api_key = server._resolve_api_key()
-    proxy_url = os.environ.get("LLM_PROXY_URL", "")
-    model_name = os.environ.get("TEST_MODEL", DEFAULT_MODEL_ID)
-
-    if not api_key:
-        raise HTTPException(
-            status_code=400,
-            detail="API key not set. Check Settings.",
-        )
-
-    server.active_runs.add(session_id)
-    auth_session_id = server._auth_session_id_from_request(request)
-
-    async def event_stream():
-        agen = server.run_multi_agent_stream(
-            session_id=session_id,
-            session_dir=session_dir,
-            run_config=regen_config,
-            api_key=api_key,
-            proxy_url=proxy_url,
-            model_name=model_name,
-        )
-        try:
-            async for frame in server.sse_stream_with_keepalive(
-                agen, auth_session_id=auth_session_id
-            ):
-                yield frame
-        finally:
-            server.active_runs.discard(session_id)
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
 
 @router.post("/api/rerun/{session_id}")
 async def rerun_agent(session_id: str, body: RunConfigRequest, request: Request):

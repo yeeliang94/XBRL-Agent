@@ -1,14 +1,12 @@
 // Notes Review tab — post-run WYSIWYG editor for notes_cells rows.
 //
-// Covers Steps 9–12 of docs/Archive/PLAN-NOTES-RICH-EDITOR.md:
+// Covers Steps 9–11 of docs/Archive/PLAN-NOTES-RICH-EDITOR.md:
 //
 //   9.  Read-only render of every cell's HTML, one active sheet at a time.
 //  10.  Per-cell edit mode with a formatting toolbar and a debounced
 //       PATCH save; inline "Saved / Saving / Save failed" status chip.
 //  11.  Copy-as-rich-text button that writes both text/html and
 //       text/plain to the clipboard so the HTML round-trips to M-Tool.
-//  12.  Regenerate-notes button with a confirm dialog when edits exist
-//       (driven by /api/runs/{id}/notes_cells/edited_count).
 //
 // TipTap is the editor (see plan Key Decisions). All component styling
 // is inline (gotcha #7); the one exception is the scoped
@@ -92,10 +90,6 @@ const SAVE_DEBOUNCE_MS = 1500;
 /** Props for the top-level tab. */
 export interface NotesReviewTabProps {
   runId: number;
-  /** Called when the user confirms "Regenerate notes" — the parent wires
-   *  this to the existing rerun endpoint. Optional so a standalone
-   *  render (e.g. in a screenshot test) still works. */
-  onRegenerate?: (runId: number) => void;
   /** Sheet to open when the reviewer picks a notes sub-tab in the
    *  SheetNavigator. null opens the first available sheet. */
   focusSheet?: string | null;
@@ -198,13 +192,6 @@ type SaveStatus = "idle" | "dirty" | "saving" | "saved" | "failed";
  *  sides as blank-equivalent suppresses that phantom save. */
 export { isBlankHtml } from "../lib/notesCells";
 
-/** Sentinel for `pendingCount` when the edited_count endpoint failed or
- *  was unreachable — we can't determine the overwrite count so the modal
- *  shows a generic "couldn't verify your edits" warning instead of a
- *  specific number. Using -1 rather than a second state field keeps the
- *  existing `pendingCount !== null` modal-open check working unchanged. */
-const UNKNOWN_COUNT = -1;
-
 /** The shared TipTap extension stack. Pulled out so every editor
  *  instance uses the same configuration — deviation would mean one
  *  editor could accept a tag the sanitiser strips on the way back.
@@ -293,7 +280,6 @@ export function canonicalizeHtmlForCompare(html: string): string {
 
 export function NotesReviewTab({
   runId,
-  onRegenerate,
   focusSheet,
   focusCell,
   onActiveCellPages,
@@ -323,11 +309,6 @@ export function NotesReviewTab({
     onComparisonChange?.();
   }, [onComparisonChange]);
   const [filingStandard, setFilingStandard] = useState("mfrs");
-
-  // Regenerate-notes confirm modal state. `pendingCount` is populated
-  // by the edited_count fetch; a truthy value opens the dialog and
-  // stores the message "This will overwrite N edited cells".
-  const [pendingCount, setPendingCount] = useState<number | null>(null);
 
   // Formatter default is loaded once and threaded into each sheet. Empty lets
   // the server use the run's model.
@@ -536,7 +517,6 @@ export function NotesReviewTab({
     };
   }, [runId]);
 
-  const isEmpty = sheets !== null && sheets.length === 0;
   const noteEntries = useMemo(
     () => (sheets ?? []).flatMap((sheet) =>
       // The projection deliberately includes blank filing fields. They are
@@ -652,41 +632,6 @@ export function NotesReviewTab({
   }, [onPreparationBlocked, saveBlocked, moveBusy]);
   useEffect(() => () => onPreparationBlocked?.(false), [onPreparationBlocked]);
 
-  // Regenerate click — pre-fetch edited_count so we only show the confirm
-  // modal when there's actually something to overwrite (Step 12).
-  //
-  // Peer-review [HIGH] #2: previously this handler fell open on non-OK
-  // responses and network errors, calling `onRegenerate` silently. That
-  // bypassed the overwrite warning precisely when the safety check was
-  // unavailable. Now we fail closed: an error opens the confirm modal
-  // with copy that signals the safety check didn't run, and regenerate
-  // only fires after the user explicitly confirms.
-  //
-  // `pendingCount` carries the known overwrite count, or the sentinel
-  // UNKNOWN_COUNT (-1) when we couldn't determine it. `null` = no modal.
-  const handleRegenerateClick = useCallback(async () => {
-    try {
-      const res = await fetch(
-        `/api/runs/${runId}/notes_cells/edited_count`,
-      );
-      if (!res.ok) {
-        // Endpoint reachable but unhappy (5xx, 404 on legacy deploys,
-        // etc.) — we can't know whether edits exist, so we must ask.
-        setPendingCount(UNKNOWN_COUNT);
-        return;
-      }
-      const body = (await res.json()) as { count: number };
-      if (!body.count || body.count <= 0) {
-        onRegenerate?.(runId);
-        return;
-      }
-      setPendingCount(body.count);
-    } catch {
-      // Network error / unreachable backend — ask rather than assume.
-      setPendingCount(UNKNOWN_COUNT);
-    }
-  }, [runId, onRegenerate]);
-
   return (
       <div
         className="notes-review-tab"
@@ -701,7 +646,11 @@ export function NotesReviewTab({
           }}
         >
           <aside style={styles.noteRail} aria-label="Notes template navigator">
-            <strong style={{ ...ui.sectionTitle, padding: `0 ${pwc.space.xs}px`, marginBottom: pwc.space.md }}>mTool worksheets</strong>
+            {/* Same 44px header band as the Source PDF column, so both titles
+                and the search box / PDF card below them line up. */}
+            <div style={{ display: "flex", alignItems: "center", minHeight: 44, padding: `0 ${pwc.space.xs}px`, marginBottom: pwc.space.lg }}>
+              <strong style={ui.sectionTitle}>mTool worksheets</strong>
+            </div>
             <input type="search" aria-label="Search all note fields" placeholder="Find a field, including empty fields" value={noteSearch}
               onChange={(event) => setNoteSearch(event.target.value)} style={styles.noteRailSearch} />
                 <nav style={{ display: "flex", flexDirection: "column", gap: 4 }} aria-label="Notes sheet navigator">
@@ -741,20 +690,7 @@ export function NotesReviewTab({
                 </button>
               ))}
             </nav>}
-            {sheets !== null && !isEmpty && (
-              <div style={styles.noteOptions}>
-                <button
-                  type="button"
-                  style={styles.noteOptionsButton}
-                  onClick={handleRegenerateClick}
-                  disabled={!onRegenerate}
-                  title={onRegenerate ? "Run notes extraction again" : "Re-extraction isn't available in this view"}
-                >
-                  Re-extract notes
-                </button>
-              </div>
-            )}
-            <section aria-label="Source note inventory" style={{ marginTop: 16, borderTop: `1px solid ${pwc.grey200}`, paddingTop: 12 }}>
+            <section aria-label="Source note inventory" style={{ marginTop: 16, paddingTop: 12 }}>
             <div style={styles.noteRailHeader}>
               <div>
                 <strong style={styles.noteRailTitle}>Numbered source notes</strong>
@@ -934,34 +870,6 @@ export function NotesReviewTab({
             ) : null}
           </section>
         </div>
-        <ConfirmDialog
-          isOpen={pendingCount !== null}
-          title="Re-extract notes?"
-          message={
-            pendingCount === UNKNOWN_COUNT ? (
-              <>
-                We couldn&apos;t verify whether your edits would be overwritten —
-                the safety check failed. Re-extracting will replace every cell on
-                this run&apos;s notes sheets. If you have unsaved edits, cancel and
-                try again in a moment.
-              </>
-            ) : (
-              <>
-                This starts a fresh notes extraction on this PDF. When it
-                finishes it will replace {pendingCount ?? 0} edited cell
-                {pendingCount === 1 ? "" : "s"} on this run&apos;s notes sheets.
-                Your current edits stay in place until the new run completes.
-              </>
-            )
-          }
-          confirmLabel="Re-extract notes"
-          danger={false}
-          onConfirm={() => {
-            setPendingCount(null);
-            onRegenerate?.(runId);
-          }}
-          onCancel={() => setPendingCount(null)}
-        />
       </div>
   );
 }
@@ -2260,6 +2168,9 @@ function SaveStatusBadge({ status }: { status: SaveStatus }) {
 // borders, and the ProseMirror placeholder hooks.
 // ---------------------------------------------------------------------------
 
+/** Left edge of a source-note heading's text; sub-note numbers start here. */
+const NOTE_RAIL_TITLE_INSET = 36;
+
 const styles = {
   root: {
     containerType: "inline-size",
@@ -2323,7 +2234,9 @@ const styles = {
   } as React.CSSProperties,
   noteRailItem: {
     display: "grid",
-    gridTemplateColumns: "38px minmax(0, 1fr) 16px",
+    // 8px padding + 20px number + 8px gap = NOTE_RAIL_TITLE_INSET, so the
+    // heading text starts exactly where the sub-note numbers start.
+    gridTemplateColumns: "20px minmax(0, 1fr) 16px",
     gap: 8,
     alignItems: "center",
     width: "100%",
@@ -2345,7 +2258,7 @@ const styles = {
     fontVariantNumeric: "tabular-nums",
     fontSize: 12,
     color: pwc.grey500,
-    textAlign: "center" as const,
+    textAlign: "left" as const,
   } as React.CSSProperties,
   noteRailCopy: {
     minWidth: 0,
@@ -2378,7 +2291,7 @@ const styles = {
     fontWeight: 680,
   } as React.CSSProperties,
   subnoteSummary: {
-    padding: "2px 6px 2px 35px",
+    padding: `2px 6px 2px ${NOTE_RAIL_TITLE_INSET}px`,
     color: pwc.orange700,
     fontSize: 14,
     fontWeight: 680,
@@ -2395,7 +2308,7 @@ const styles = {
     alignItems: "start",
     width: "100%",
     minHeight: 32,
-    padding: "3px 6px 3px 35px",
+    padding: `3px 6px 3px ${NOTE_RAIL_TITLE_INSET}px`,
     border: 0,
     borderRadius: 5,
     background: "transparent",
@@ -2522,38 +2435,6 @@ const styles = {
     position: "relative" as const,
     flexShrink: 0,
     marginLeft: "auto",
-  } as React.CSSProperties,
-  noteOptions: {
-    marginTop: pwc.space.md,
-    paddingTop: pwc.space.sm,
-    borderTop: `1px solid ${pwc.grey200}`,
-  } as React.CSSProperties,
-  noteOptionsSummary: {
-    minHeight: 32,
-    padding: `0 ${pwc.space.sm}px`,
-    display: "flex",
-    alignItems: "center",
-    color: pwc.grey700,
-    fontSize: 12,
-    fontWeight: 680,
-    cursor: "pointer",
-  } as React.CSSProperties,
-  noteOptionsPanel: {
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: 2,
-    padding: `2px 0 ${pwc.space.xs}px`,
-  } as React.CSSProperties,
-  noteOptionsButton: {
-    minHeight: 32,
-    padding: `0 ${pwc.space.sm}px`,
-    border: "none",
-    borderRadius: pwc.radius.sm,
-    background: "transparent",
-    color: pwc.grey900,
-    textAlign: "left" as const,
-    fontSize: 12,
-    cursor: "pointer",
   } as React.CSSProperties,
   actionsMenuSummary: {
     width: 34,

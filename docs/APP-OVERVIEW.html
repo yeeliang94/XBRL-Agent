@@ -483,14 +483,6 @@
           </div>
         </div>
         <div class="ui-card">
-          <h4>Evals &amp; benchmarks</h4>
-          <p><strong>Plain:</strong> measures how accurate the tool is by scoring a run against a human-verified "gold" answer, and tracks that accuracy over time and across many documents.</p>
-          <div class="tech">
-            <span class="label">Technically</span>
-            <p>Gold stored as facts (same shape as run facts); grading is a set-join on <code>concept_uuid</code> — exact, not a brittle cell-diff. Repeats/consistency, suites, and trend charts sit on top (<code>eval/</code>).</p>
-          </div>
-        </div>
-        <div class="ui-card">
           <h4>Telemetry &amp; audit trail</h4>
           <p><strong>Plain:</strong> every run records timing, token usage, tool activity, and a full transcript of what each agent did — so a failure is debuggable and a success is defensible.</p>
           <div class="tech">
