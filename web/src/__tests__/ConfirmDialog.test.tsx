@@ -62,12 +62,16 @@ describe("ConfirmDialog", () => {
     expect(onConfirm).not.toHaveBeenCalled();
   });
 
-  test("destructive confirm remains monochrome in the focused workspace", () => {
+  test("destructive confirm is an orange outline, never an orange fill", () => {
     renderDialog();
     const confirm = screen.getByRole("button", { name: "Delete run" });
-    // Orange is reserved for local attention/activity rather than text blocks.
-    expect(confirm.style.color).toBe("rgb(0, 0, 0)");
+    // Accessible orange text and an orange outline mark the destructive
+    // choice; orange is never a large button fill.
+    expect(confirm.style.color).toBe("rgb(214, 64, 0)");
+    expect(confirm.style.borderColor).toBe("rgb(253, 81, 8)");
     expect(confirm.style.backgroundColor).toBe("rgb(255, 255, 255)");
+    // Cancel is quiet so the decision has one prominent action.
+    expect(screen.getByRole("button", { name: "Cancel" }).style.backgroundColor).toBe("transparent");
   });
 
   test("renders nothing when closed", () => {

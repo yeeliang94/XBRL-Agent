@@ -122,7 +122,7 @@ describe("AgentTimeline", () => {
     ] as unknown as SSEEvent[];
     render(<AgentTimeline events={events} toolTimeline={[]} isRunning={false} />);
     expect(screen.getByText(/Run finished/i)).toBeInTheDocument();
-    expect(screen.getByText(/Completed/i)).toBeInTheDocument();
+    expect(screen.getByText(/^Complete$/)).toBeInTheDocument();
   });
 
   test("successful completion keeps diagnostics collapsed without a warning count", () => {
@@ -147,7 +147,7 @@ describe("AgentTimeline", () => {
     const row = container.querySelector("[data-terminal='done-with-warnings']");
     expect(row).toBeTruthy();
 
-    expect(screen.getByText("Completed with issues")).toBeInTheDocument();
+    expect(screen.getByText("Needs review")).toBeInTheDocument();
     expect(screen.queryByText(/Completed · 2 warnings/i)).toBeNull();
     expect(screen.getByText("Completion details").closest("details")).not.toHaveAttribute("open");
     for (const w of warnings) {
@@ -192,7 +192,7 @@ describe("AgentTimeline", () => {
     const { container } = render(
       <AgentTimeline events={events} toolTimeline={[]} isRunning={false} />,
     );
-    expect(screen.getByText(/Completed/i)).toBeInTheDocument();
+    expect(screen.getByText(/^Complete$/)).toBeInTheDocument();
     expect(container.querySelector("[data-terminal='done']")).toBeTruthy();
   });
 
@@ -210,7 +210,7 @@ describe("AgentTimeline", () => {
     );
     expect(container.querySelector("[data-terminal='completed-with-errors']")).toBeTruthy();
     expect(container.querySelector("[data-terminal='error']")).toBeNull();
-    expect(screen.getByText(/Completed with errors/i)).toBeInTheDocument();
+    expect(screen.getByText(/Needs review/i)).toBeInTheDocument();
   });
 
   test("run_complete with success:false and merge_errors shows the first error", () => {

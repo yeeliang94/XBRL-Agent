@@ -375,7 +375,7 @@ def test_house_notes_table_style_matches_shipped_test_appearance(monkeypatch):
     assert style["totalsDoubleUnderline"] is False
     assert style["fontSizePt"] == 11
     assert style["cellPaddingPx"] == [5, 5]
-    assert style["paragraphSpacingPx"] == 16
+    assert style["paragraphSpacingPx"] == 10
 
 
 def test_operator_can_still_opt_out_to_the_historic_look(monkeypatch):

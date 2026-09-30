@@ -325,6 +325,7 @@ def persist_notes_review_inputs(
                     str(ref): str(title)
                     for ref, title in (item.get("subnote_titles") or {}).items()  # type: ignore[union-attr]
                 },
+                subnote_pages=item.get("subnote_pages"),  # type: ignore[arg-type]
                 page_lo=item.get("page_lo"),  # type: ignore[arg-type]
                 page_hi=item.get("page_hi"),  # type: ignore[arg-type]
             )

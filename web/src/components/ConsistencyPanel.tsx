@@ -252,8 +252,8 @@ const styles = {
   } as React.CSSProperties,
   sectionHeading: {
     fontFamily: pwc.fontHeading,
-    fontSize: 15,
-    fontWeight: 600,
+    fontSize: 14,
+    fontWeight: 680,
     color: pwc.grey900,
     margin: 0,
   } as React.CSSProperties,
@@ -302,7 +302,7 @@ const styles = {
   sectionTitle: {
     fontFamily: pwc.fontHeading,
     fontSize: 13,
-    fontWeight: 600,
+    fontWeight: 680,
     color: pwc.grey800,
   } as React.CSSProperties,
   detailGrid: {
@@ -319,13 +319,13 @@ const styles = {
   } as React.CSSProperties,
   metricValue: {
     fontFamily: pwc.fontMono,
-    fontSize: 22,
+    fontSize: 16,
     fontWeight: pwc.weight.regular,
   } as React.CSSProperties,
   metricLabel: {
     fontFamily: pwc.fontHeading,
     fontSize: 12,
-    fontWeight: 500,
+    fontWeight: 650,
     color: pwc.grey500,
   } as React.CSSProperties,
   tableWrap: {
@@ -343,7 +343,7 @@ const styles = {
     padding: "8px 12px",
     fontFamily: pwc.fontHeading,
     fontSize: 12,
-    fontWeight: 600,
+    fontWeight: 680,
     color: pwc.grey700,
     background: pwc.grey100,
     borderBottom: `1px solid ${pwc.grey200}`,
@@ -353,7 +353,7 @@ const styles = {
     padding: "8px 12px",
     fontFamily: pwc.fontHeading,
     fontSize: 12,
-    fontWeight: 600,
+    fontWeight: 680,
     color: pwc.grey700,
     background: pwc.grey100,
     borderBottom: `1px solid ${pwc.grey200}`,

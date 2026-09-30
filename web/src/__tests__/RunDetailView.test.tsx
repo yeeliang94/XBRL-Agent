@@ -130,9 +130,9 @@ describe("RunDetailView", () => {
       <RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />,
     );
     expect(screen.getByText("FINCO-Audited-2021.pdf")).toBeTruthy();
-    // "Completed" appears in both the overall status badge and the SOFP
+    // "Complete" appears in both the overall status badge and the SOFP
     // agent-row status; assert at least one is present.
-    expect(screen.getAllByText(/completed/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/^complete$/i).length).toBeGreaterThan(0);
   });
 
   test("per-agent duration sums turn compute time, not the shared batch window", () => {
@@ -291,7 +291,7 @@ describe("RunDetailView", () => {
     const agentsSection = screen.getByTestId("run-detail-agents");
     expect(agentsSection.textContent).toContain("SOFP");
     expect(agentsSection.textContent).toContain("SOPL");
-    expect(agentsSection.textContent?.toLowerCase()).toContain("completed");
+    expect(agentsSection.textContent?.toLowerCase()).toContain("complete");
     expect(agentsSection.textContent?.toLowerCase()).toContain("failed");
   });
 
@@ -568,7 +568,7 @@ describe("RunDetailView", () => {
     // Click the header trigger to open the shared ConfirmDialog…
     fireEvent.click(screen.getByRole("button", { name: /^delete run$/i }));
     // …then confirm inside the dialog (title identifies the modal).
-    const dialog = screen.getByRole("dialog", { name: /delete run/i });
+    const dialog = screen.getByRole("dialog", { name: /delete this run/i });
     fireEvent.click(within(dialog).getByRole("button", { name: /^delete run$/i }));
     expect(onDelete).toHaveBeenCalledWith(42);
   });
@@ -599,7 +599,7 @@ describe("RunDetailView", () => {
     clickRunTab(/^activity$/i);
     const agentsSection = screen.getByTestId("run-detail-agents");
     // Friendly label appears
-    expect(agentsSection.textContent?.toLowerCase()).toContain("completed");
+    expect(agentsSection.textContent?.toLowerCase()).toContain("complete");
     // Raw enum does NOT leak into the UI
     expect(agentsSection.textContent).not.toContain("succeeded");
   });
@@ -612,7 +612,7 @@ describe("RunDetailView", () => {
         onDownload={() => {}}
       />,
     );
-    expect(screen.getByText(/completed.*with.*errors/i)).toBeTruthy();
+    expect(screen.getAllByText("Needs review").length).toBeGreaterThan(0);
   });
 
   test("Delete button does NOT fire onDelete when the dialog is cancelled", () => {
@@ -621,7 +621,7 @@ describe("RunDetailView", () => {
       <RunDetailView detail={makeDetail()} onDelete={onDelete} onDownload={() => {}} />,
     );
     fireEvent.click(screen.getByRole("button", { name: /^delete run$/i }));
-    const dialog = screen.getByRole("dialog", { name: /delete run/i });
+    const dialog = screen.getByRole("dialog", { name: /delete this run/i });
     fireEvent.click(within(dialog).getByRole("button", { name: /cancel/i }));
     expect(onDelete).not.toHaveBeenCalled();
   });
@@ -1688,7 +1688,7 @@ describe("RunDetailView", () => {
       />,
     );
     expect(screen.queryByTestId("failed-check-warning")).toBeNull();
-    expect(screen.getByText("Extraction in progress")).toBeInTheDocument();
+    expect(screen.getByText("Not ready yet")).toBeInTheDocument();
   });
 
   // --- UX-QA #2: abort control for a wedged running run ---
@@ -1703,12 +1703,39 @@ describe("RunDetailView", () => {
       />,
     );
     expect(screen.getByRole("button", { name: /delete run/i })).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: /abort run/i }));
+    fireEvent.click(screen.getByRole("button", { name: /stop run/i }));
     // Confirm dialog gates the action — its confirm button shares the label, so
-    // click the last "Abort run" button (the dialog's, not the header trigger).
-    const abortButtons = screen.getAllByRole("button", { name: /^abort run$/i });
+    // click the last "Stop run" button (the dialog's, not the header trigger).
+    const abortButtons = screen.getAllByRole("button", { name: /^stop run$/i });
     fireEvent.click(abortButtons[abortButtons.length - 1]);
     expect(onForceAbort).toHaveBeenCalledWith(42);
+  });
+
+  test("working run Overview shows what is working, a completion count and a ticking time", () => {
+    render(
+      <RunDetailView
+        detail={makeDetail({
+          status: "running",
+          merged_workbook_path: null,
+          started_at: new Date(Date.now() - 65_000).toISOString(),
+          ended_at: null,
+          agents: [
+            makeAgent({ id: 1, statement_type: "SOFP", status: "succeeded" }),
+            makeAgent({ id: 2, statement_type: "SOPL", status: "running" }),
+            makeAgent({ id: 3, statement_type: "SOCF", status: "running" }),
+          ],
+        })}
+        onDelete={() => {}}
+        onDownload={() => {}}
+      />,
+    );
+    const summary = screen.getByTestId("live-run-summary");
+    expect(within(summary).getByRole("status")).toHaveTextContent(/^Working on .+ and .+$/);
+    expect(summary).toHaveTextContent("1 of 3 workstreams complete");
+    // Elapsed time counts from the start instead of showing a dash.
+    expect(screen.getByText(/^1m 0[5-9]s$/)).toBeInTheDocument();
+    fireEvent.click(within(summary).getByRole("button", { name: "View activity" }));
+    expect(screen.getByTestId("run-detail-agents")).toBeInTheDocument();
   });
 
   // UX-QA #14: Activity lists statements in reading order, not backend order.
@@ -1778,10 +1805,10 @@ describe("RunDetailView", () => {
       <RunDetailView detail={makeDetail({ status: "completed" })} onDelete={() => {}} onDownload={() => {}} />,
     );
     // Monochrome status: aria-hidden ✓ in grey700 next to the explicit label.
-    const label = screen.getAllByText("Completed")[0];
+    const label = screen.getAllByText("Complete")[0];
     const symbol = label.parentElement!.querySelector('[aria-hidden="true"]');
     expect(symbol?.getAttribute("data-status-icon")).toBe("success");
-    expect((symbol as HTMLElement).style.color).toBe("rgba(0, 0, 0, 0.64)");
+    expect((symbol as HTMLElement).style.color).toBe("rgb(0, 0, 0)");
 
     // Shared tab treatment: dark active text and a quiet selected surface.
     const tablist = screen.getByRole("tablist", { name: /run detail sections/i });

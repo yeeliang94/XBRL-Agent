@@ -363,7 +363,11 @@ describe("App routing", () => {
     });
     window.history.replaceState({}, "", "/run/42");
     const { default: App } = await import("../App");
-    render(<App />);
+    // StrictMode mirrors main.tsx: its dev double-run cancels the first
+    // load, and the re-run must still fetch rather than treat the draft as
+    // already loaded (the "Resume setup lands on Work queue" bug).
+    const { StrictMode } = await import("react");
+    render(<StrictMode><App /></StrictMode>);
     // Wait for fetchRunDetail to resolve and the dispatch to commit.
     await new Promise((r) => setTimeout(r, 0));
     await new Promise((r) => setTimeout(r, 0));

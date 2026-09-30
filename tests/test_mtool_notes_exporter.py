@@ -4,11 +4,13 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from bs4 import BeautifulSoup
 
 from db.schema import init_db
 from mtool.notes_exporter import build_notes_fill_doc
-from mtool.notes_decorate import without_transport_breaks
+from mtool.notes_decorate import NotesTableStyle, without_transport_breaks
 from mtool.offline_fill import validate_notes_input
+from notes.table_theme import house_style
 
 
 def _init_run(db: Path) -> int:
@@ -174,6 +176,28 @@ def test_html_is_render_decorated_by_default(notes_db):
     assert "text-align: right" in html           # numeric cell aligned
     # still valid fill-notes input after decoration
     assert validate_notes_input(doc) == []
+
+
+def test_subnote_indent_and_house_spacing_reach_the_mtool_fill_doc(notes_db):
+    db, run_id = notes_db
+    html = ("<h3>2 Accounting policies</h3><h3>2.10 Employee benefits</h3>"
+            "<p>Short term benefits.</p>")
+    _add_note(db, run_id, "Notes-Listofnotes", 17, "Accounting policies", html)
+
+    doc = build_notes_fill_doc(
+        db, run_id, style=NotesTableStyle.from_theme(house_style()))
+    soup = BeautifulSoup(doc["footnotes"][0]["html"], "html.parser")
+    heading_style = soup.find("h3", string="2.10 Employee benefits")["style"]
+    assert "margin-left: 2em" in heading_style
+    assert "margin: 12px" not in heading_style
+    body_style = soup.find("p", string="Short term benefits.")["style"]
+    assert "margin-left: 2em" in body_style
+    assert "margin-bottom: 10px" in body_style
+    assert "margin: 0 0" not in body_style
+    assert validate_notes_input(doc) == []
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT html FROM notes_cells WHERE run_id = ?",
+                            (run_id,)).fetchone()[0] == html
 
 
 def test_decorate_false_keeps_raw_html(notes_db):

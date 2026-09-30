@@ -50,11 +50,9 @@ const styles: Record<string, CSSProperties> = {
   },
   eyebrow: {
     fontFamily: pwc.fontHeading,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: pwc.weight.semibold,
-    textTransform: "uppercase",
-    letterSpacing: 0,
-    color: tokens.color.brand.accent,
+    color: tokens.color.text.secondary,
     marginBottom: pwc.space.sm,
   },
   title: {

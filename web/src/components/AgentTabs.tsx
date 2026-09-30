@@ -282,7 +282,7 @@ function AgentTabsImpl({
             style={{
               marginLeft: 4,
               color: pwc.warningText,
-              fontSize: 11,
+              fontSize: 12,
               fontWeight: pwc.weight.medium,
               whiteSpace: "nowrap",
             }}
@@ -457,15 +457,16 @@ const styles = {
   },
   navigatorTitle: {
     fontFamily: pwc.fontHeading,
-    fontSize: 17,
+    fontSize: 16,
     lineHeight: 1.3,
     fontWeight: pwc.weight.semibold,
     color: pwc.grey900,
   },
   navigatorCount: {
     flexShrink: 0,
-    fontFamily: pwc.fontMono,
-    fontSize: 11,
+    fontFamily: pwc.fontBody,
+    fontVariantNumeric: "tabular-nums",
+    fontSize: 12,
     color: pwc.grey700,
   },
   tabGroup: {
@@ -477,7 +478,7 @@ const styles = {
   groupLabel: {
     padding: `0 ${pwc.space.sm}px ${pwc.space.xs}px`,
     fontFamily: pwc.fontHeading,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: pwc.weight.semibold,
     color: pwc.grey700,
     letterSpacing: "0.02em",
@@ -531,7 +532,7 @@ const styles = {
     maxWidth: "100%",
   },
   tabSubLabel: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: 400,
     color: pwc.grey500,
     fontFamily: pwc.fontBody,
@@ -547,7 +548,7 @@ const styles = {
     textOverflow: "ellipsis" as const,
     whiteSpace: "nowrap" as const,
     fontFamily: pwc.fontBody,
-    fontSize: 11,
+    fontSize: 12,
     lineHeight: 1.3,
     fontWeight: pwc.weight.regular,
     color: pwc.grey500,
@@ -556,7 +557,7 @@ const styles = {
     marginLeft: "auto",
     flexShrink: 0,
     fontFamily: pwc.fontBody,
-    fontSize: 11,
+    fontSize: 12,
     color: pwc.grey700,
   },
   tabStatusRunning: {

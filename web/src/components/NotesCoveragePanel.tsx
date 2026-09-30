@@ -6,6 +6,7 @@ import { ui } from "../lib/uiStyles";
 import { STATUS_SYMBOLS, type StatusSymbol } from "../lib/runStatus";
 import { StatusIcon } from "./StatusIcon";
 import { SkeletonText } from "./Skeleton";
+import { DisclosureChevron } from "./icons";
 
 /**
  * Notes Coverage checklist panel (docs/PLAN-notes-coverage-and-routing.md
@@ -170,7 +171,7 @@ export function NotesCoveragePanel({ runId }: Props) {
         aria-expanded={showTable}
         data-testid="coverage-toggle"
       >
-        <span aria-hidden="true" style={styles.chevron}>{showTable ? "▾" : "▸"}</span>
+        <DisclosureChevron open={showTable} />
         <span style={styles.title}>
           Notes coverage — {s.placed} of {s.total} numbered note{s.total === 1 ? "" : "s"} placed
         </span>
@@ -245,9 +246,9 @@ export function NotesCoveragePanel({ runId }: Props) {
                           aria-expanded={isOpen}
                           data-testid={`coverage-subnotes-toggle-${row.note_num}`}
                         >
-                          {isOpen ? "▾" : "▸"} sub-notes {verifiedSubs}/
-                          {row.subnotes.length}
-                          {verifiedSubs < row.subnotes.length ? " ⚠" : ""}
+                          <DisclosureChevron open={isOpen} />
+                          Sub-notes {verifiedSubs}/{row.subnotes.length}
+                          {verifiedSubs < row.subnotes.length && <StatusIcon symbol={STATUS_SYMBOLS.attention} size={16} />}
                         </button>
                       )}
                     </td>
@@ -359,7 +360,7 @@ const styles = {
   headerSpacer: { flex: 1 },
   title: {
     fontFamily: pwc.fontHeading,
-    fontWeight: 600,
+    fontWeight: 680,
     color: pwc.grey900,
     fontSize: 14,
   } as const,
@@ -381,7 +382,7 @@ const styles = {
     padding: pwc.space.sm,
     borderBottom: `1px solid ${pwc.grey200}`,
     color: pwc.grey700,
-    fontWeight: 600,
+    fontWeight: 680,
   } as const,
   td: {
     padding: pwc.space.sm,
@@ -389,7 +390,7 @@ const styles = {
     verticalAlign: "top" as const,
     color: pwc.grey800,
   } as const,
-  cellLabel: { fontWeight: 600, color: pwc.grey900 },
+  cellLabel: { fontWeight: 680, color: pwc.grey900 },
   statusBadge: {
     ...ui.badge,
   } as const,
@@ -417,8 +418,8 @@ const styles = {
     color: pwc.grey500,
     borderRadius: pwc.radius.pill,
     padding: `0 6px`,
-    fontSize: 10,
-    fontWeight: 600,
+    fontSize: 12,
+    fontWeight: 680,
   } as const,
   addedChip: {
     display: "inline-block",
@@ -426,8 +427,8 @@ const styles = {
     color: pwc.info,
     borderRadius: pwc.radius.pill,
     padding: `0 ${pwc.space.sm}px`,
-    fontSize: 10,
-    fontWeight: 600,
+    fontSize: 12,
+    fontWeight: 680,
     marginTop: 2,
   } as const,
   subToggle: {
@@ -450,6 +451,6 @@ const styles = {
     alignItems: "baseline",
     padding: "2px 0",
   } as const,
-  subRef: { fontWeight: 600, color: pwc.grey800, minWidth: 40 },
-  subState: { fontSize: 12, fontWeight: 600 },
+  subRef: { fontWeight: 680, color: pwc.grey800, minWidth: 40 },
+  subState: { fontSize: 12, fontWeight: 680 },
 };

@@ -710,13 +710,22 @@ def _indent_source_heading_levels(soup: BeautifulSoup) -> None:
     if not levels:
         return
     baseline = min(levels)
+    parent = (re.match(r"^\s*(\d+)(?=\s|\.|$)", blocks[0].get_text())
+              if blocks[0].name == "h3" else None)
+    sub = (re.match(r"^\s*(\d+)(?:\.\d+|\([a-zivx]+\))(?=\s|\.|$)",
+                    blocks[1].get_text(), re.I)
+           if len(blocks) > 1 and blocks[1].name == "h3" else None)
+    adjacent_subnote = bool(parent and sub and parent.group(1) == sub.group(1))
     depth = 0
-    for node in blocks:
+    for index, node in enumerate(blocks):
+        if index > 0 and node.name == "h3" and re.match(r"^\s*\d+[.)]?(?=\s|$)", node.get_text()):
+            adjacent_subnote = False
         if node.name in headings:
             depth = max(0, int(node.name[1]) - baseline)
-        if (depth and node.name in headings | {"p", "table", "ul", "ol"}
+        effective_depth = max(1, depth) if adjacent_subnote and index > 0 else depth
+        if (effective_depth and node.name in headings | {"p", "table", "ul", "ol"}
                 and not _has_persisted_indent(node)):
-            _merge_style(node, f"margin-left: {2 * depth}em;")
+            _merge_style(node, f"margin-left: {2 * effective_depth}em;")
 
 
 def _add_transport_breaks(soup: BeautifulSoup) -> None:
@@ -1041,6 +1050,7 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
     for el in soup.find_all(["table", "thead", "tbody", "tfoot", "tr", "td", "th", "colgroup", "col"]):
         _solid_double_borders(el)
 
+    _indent_source_heading_levels(soup)
     para_style = _paragraph_style(style)
     heading_style = _heading_style(style)
     font_css = _font_css(style)
@@ -1052,8 +1062,9 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
             _merge_style(p, para_style)
     for h in soup.find_all(("h1", "h2", "h3", "h4", "h5", "h6")):
         if _has_persisted_indent(h):
-            _merge_style(h, font_css + " margin-top: 12px; margin-right: 0; "
-                         "margin-bottom: 6px; font-weight: 600;")
+            weight = style.heading_weight if style.heading_weight is not None else 600
+            _merge_style(h, _heading_font_css(style) + " margin-top: 12px; margin-right: 0; "
+                         f"margin-bottom: 6px; font-weight: {weight};")
         else:
             _merge_style(h, heading_style)
     list_marker_css = _list_marker_css(style)
@@ -1069,7 +1080,6 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
             if id(table) not in operator_sized_tables:
                 _fit_table_width(table, editable_merged=True)
 
-    _indent_source_heading_levels(soup)
     _add_transport_breaks(soup)
 
     # Carry the font on a wrapping container so any element we did not style

@@ -43,15 +43,15 @@ const styles = {
     alignItems: "center",
     justifyContent: "center",
     color: pwc.error,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: pwc.weight.semibold,
     fontFamily: pwc.fontMono,
   } as React.CSSProperties,
   fileName: {
     fontFamily: pwc.fontBody,
-    fontWeight: 500,
+    fontWeight: 650,
     color: pwc.grey900,
-    fontSize: 15,
+    fontSize: 14,
   } as React.CSSProperties,
   runButton: {
     padding: "10px 24px",
@@ -61,7 +61,7 @@ const styles = {
     borderRadius: pwc.radius.md,
     fontSize: 14,
     fontFamily: pwc.fontHeading,
-    fontWeight: 600,
+    fontWeight: 680,
     cursor: "pointer",
   } as React.CSSProperties,
   runningRow: {

@@ -18,7 +18,7 @@ from pydantic_ai.usage import RunUsage, UsageLimits
 from ingest.document_preparation import PreparationError
 from scout.infopack import Infopack, ScoutInfopackInput
 
-CONTRACT_VERSION = 12
+CONTRACT_VERSION = 14
 REQUEST_LIMIT = 20
 OUTPUT_RETRIES = 1
 TOOL_RETRIES = 4
@@ -68,6 +68,13 @@ title, page_range [first,last], optional subnotes with subnote_ref/title/page_ra
 Unnumbered disclosures still need stable source_note_id ownership; never invent numbers.
 A numbered note starts at its own printed number: text printed before it, such as a
 company introduction above Note 1, belongs to its own owner, not to that note.
+Substantive prose after the notes-section title and before Note 1 belongs to
+an unnumbered source note, not document metadata. The section title itself
+may remain metadata.
+If genuine document metadata (such as a reporting-period subtitle) follows
+that title, supply metadata_reason explaining its role in the source. Split
+the range before any substantive introduction; a metadata reason cannot
+justify excluding disclosure prose.
 Assign EVERY block using inclusive first_block_id/last_block_id ranges in supplied
 reading order. Use broad note/metadata ranges; explicit furniture ranges inside them
 override page headers/footers. Do not split a note range at every page number.
@@ -109,6 +116,7 @@ class OwnershipRange(BaseModel):
     source_note_num: str = ""
     source_note_title: str = ""
     reason_code: Literal["", "DOCUMENT_METADATA", "PAGE_HEADER", "PAGE_FOOTER", "PAGE_NUMBER"] = ""
+    metadata_reason: str = ""
     uncertainties: list[dict] = Field(default_factory=list)
 
 
@@ -231,6 +239,39 @@ def _refuse_text_before_note_heading(blocks, assigned, block_text, text_pages) -
                 "note for a company or corporate-information introduction, and "
                 "start this note at its heading. Amend only these ranges."
             )
+
+
+def _refuse_unowned_notes_introduction(blocks, assigned, block_text) -> None:
+    """Keep prose after the notes-section heading in the disclosure ledger.
+
+    A numbered-note boundary check cannot see an introduction classified as
+    metadata. Require an explicit source-grounded reason for metadata in this
+    boundary, leaving the content classification and destination to the model.
+    """
+    first_note = next((i for i, block in enumerate(blocks)
+        if (assigned[block["block_id"]]["owner_kind"] == "note"
+            and assigned[block["block_id"]]["source_note_num"])), None)
+    if first_note is None:
+        return
+    title = next((i for i in range(first_note - 1, -1, -1)
+        if re.search(
+            r"\bnotes?\s+to\s+(?:the\s+)?financial\s+statements\b",
+            block_text[blocks[i]["block_id"]],
+        )), None)
+    if title is None:
+        return
+    missed = [block["block_id"] for block in blocks[title + 1:first_note]
+        if assigned[block["block_id"]]["owner_kind"] == "metadata"
+        and block_text[block["block_id"]]
+        and not assigned[block["block_id"]]["metadata_reason"].strip()]
+    if missed:
+        raise ValueError(
+            "Check for an unnumbered disclosure before the first printed note: "
+            f"blocks {missed[:20]} are metadata without a source-grounded reason. "
+            "Give substantive prose its own unnumbered note owner. For genuine "
+            "document metadata, supply metadata_reason explaining its role; "
+            "split that range from any disclosure prose."
+        )
 
 
 def validate_document_map(prepared, result: DocumentMap, inventory=None):
@@ -382,6 +423,7 @@ def validate_document_map(prepared, result: DocumentMap, inventory=None):
                 raise ValueError("A stable note identity has conflicting numbers or titles")
             identities[item["source_note_id"]] = identity
     _refuse_text_before_note_heading(blocks, assigned, block_text, text_pages)
+    _refuse_unowned_notes_introduction(blocks, assigned, block_text)
     numbers = {str(n["note_num"]) for n in data["notes_inventory"]}
     owned_numbers = {a["source_note_num"] for a in assigned.values()
                      if a["owner_kind"] == "note" and a["source_note_num"]}

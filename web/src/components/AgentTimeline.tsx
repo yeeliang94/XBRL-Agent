@@ -90,7 +90,7 @@ const styles = {
   terminalLabel: {
     fontFamily: pwc.fontHeading,
     fontSize: 14,
-    fontWeight: 600,
+    fontWeight: 680,
     color: pwc.grey900,
   } as React.CSSProperties,
   // Status is carried by the dot, icon and text. Direction A does not add a
@@ -116,7 +116,7 @@ const styles = {
   warningsTitle: {
     fontFamily: pwc.fontHeading,
     fontSize: 12,
-    fontWeight: 600,
+    fontWeight: 680,
     color: pwc.grey800,
     marginBottom: 4,
   } as React.CSSProperties,
@@ -156,12 +156,12 @@ const styles = {
     marginBottom: pwc.space.xs,
     fontFamily: pwc.fontHeading,
     fontSize: 12,
-    fontWeight: 600,
+    fontWeight: 680,
     color: pwc.grey800,
   } as React.CSSProperties,
   reasoningMeta: {
     fontFamily: pwc.fontBody,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: 400,
     color: pwc.grey500,
   } as React.CSSProperties,
@@ -258,7 +258,7 @@ function TerminalRow({ event }: { event: TerminalEvent }) {
             </div>
             <span style={{ ...ui.status, flexShrink: 0 }}>
               <StatusIcon symbol={hasWarnings ? STATUS_SYMBOLS.attention : STATUS_SYMBOLS.success} />
-              {hasWarnings ? "Completed with issues" : "Completed"}
+              {hasWarnings ? "Needs review" : "Complete"}
             </span>
           </div>
           {hasWarnings && (

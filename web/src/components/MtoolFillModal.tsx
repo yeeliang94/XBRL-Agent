@@ -5,6 +5,7 @@ import { ui, uiClass } from "../lib/uiStyles";
 import { friendlyMtoolSheetName, MtoolSheetSelection } from "./MtoolSheetSelection";
 import { FileDropzone } from "./FileDropzone";
 import type { FilingCoverage } from "./FilingCoverageFailurePanel";
+import { Close } from "./iconGlyphs";
 
 /** Template-first preparation: upload, automatic checks, fill, then download.
  * Run warnings are advisory. Exact destinations and the original workbook
@@ -271,13 +272,13 @@ const styles = {
   } as React.CSSProperties,
   heading: {
     ...ui.dialogTitle,
-    fontSize: 20,
+    fontSize: 16,
   } as React.CSSProperties,
   closeX: {
     border: "none",
     background: "transparent",
     color: pwc.grey500,
-    fontSize: 18,
+    fontSize: 16,
     lineHeight: 1,
     cursor: "pointer",
     padding: pwc.space.xs,
@@ -323,7 +324,7 @@ const styles = {
     padding: `${pwc.space.md}px 0`,
   } as React.CSSProperties,
   summaryValue: {
-    fontSize: 20,
+    fontSize: 16,
     fontWeight: pwc.weight.semibold,
     color: pwc.grey900,
     lineHeight: 1.2,
@@ -1037,7 +1038,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
             onClick={onClose}
             style={styles.closeX}
           >
-            ✕
+            <Close size={20} />
           </button>
         </div>
         <div style={{ overflowY: "auto", minHeight: 0, flex: "1 1 auto" }}>

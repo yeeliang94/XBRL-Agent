@@ -118,3 +118,22 @@ function adjustIndent(editor: Editor, delta: 1 | -1): boolean {
 
 export const indentBlocks = (editor: Editor): boolean => adjustIndent(editor, 1);
 export const outdentBlocks = (editor: Editor): boolean => adjustIndent(editor, -1);
+
+// Legacy writer output has a parent h3 immediately followed by a sub-note h3
+// without a section wrapper. Apply a view-only offset so existing saved cells
+// read correctly without changing their canonical HTML or arming a PATCH.
+export function indentUnwrappedSubnote(root: Element): void {
+  const blocks = Array.from(root.children) as HTMLElement[];
+  // Recalculate display-only offsets after edits. A class lets persisted
+  // inline indentation keep precedence without us clearing the user's style.
+  for (const block of blocks) block.classList.remove("notes-inferred-subnote");
+  if (blocks[0]?.tagName !== "H3" || blocks[1]?.tagName !== "H3") return;
+  const parent = /^\s*(\d+)(?=\s|\.|$)/.exec(blocks[0].textContent ?? "");
+  const sub = /^\s*(\d+)(?:\.\d+|\([a-zivx]+\))(?=\s|\.|$)/i.exec(blocks[1].textContent ?? "");
+  if (!parent || !sub || parent[1] !== sub[1]) return;
+  for (const block of blocks.slice(1)) {
+    if (block.tagName === "H3" && /^\s*\d+[.)]?(?=\s|$)/.test(block.textContent ?? "")) break;
+    if (!/^(H[3-6]|P|UL|OL|TABLE)$/.test(block.tagName) || block.style.marginLeft) continue;
+    block.classList.add("notes-inferred-subnote");
+  }
+}

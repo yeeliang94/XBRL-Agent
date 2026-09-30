@@ -687,30 +687,55 @@ async def _run_single_notes_agent(
     # per failed attempt; ``total_attempts`` for log/UX display is derived
     # from its length.
     attempts: list[dict[str, Any]] = []
+    attempt_usage: list[dict[str, Any]] = []
+
+    def _rollup_attempts() -> dict[str, Any]:
+        keys = ("total_tokens", "total_cost", "prompt_tokens", "completion_tokens",
+                "cache_read_tokens", "cache_write_tokens", "tool_call_count")
+        totals = {key: sum(item.get(key, 0) for item in attempt_usage) for key in keys}
+        totals["turns"] = [turn for item in attempt_usage for turn in item.get("turns", [])]
+        return totals
 
     async def _attempt(retry_index: int) -> NotesAgentResult:
         # One whole invocation. Raises on failure (the invoke never converts
         # a failure to a result), so the scaffold classifies + retries; on
         # success we build the succeeded NotesAgentResult here.
-        outcome = await _invoke_single_notes_agent_once(
-            template_type=template_type,
-            pdf_path=pdf_path,
-            inventory=inventory,
-            filing_level=filing_level,
-            model=model,
-            output_dir=output_dir,
-            event_queue=event_queue,
-            agent_id=agent_id,
-            emit=_emit,
-            page_hints=page_hints,
-            page_offset=page_offset,
-            filing_standard=filing_standard,
-            denomination=denomination,
-            scout_context=scout_context,
-            run_id=run_id,
-            db_path=db_path,
-            source_generation_id=source_generation_id,
-        )
+        captured: dict[str, Any] = {}
+        try:
+            outcome = await _invoke_single_notes_agent_once(
+                template_type=template_type,
+                pdf_path=pdf_path,
+                inventory=inventory,
+                filing_level=filing_level,
+                model=model,
+                output_dir=output_dir,
+                event_queue=event_queue,
+                agent_id=agent_id,
+                emit=_emit,
+                page_hints=page_hints,
+                page_offset=page_offset,
+                filing_standard=filing_standard,
+                denomination=denomination,
+                scout_context=scout_context,
+                run_id=run_id,
+                db_path=db_path,
+                source_generation_id=source_generation_id,
+                attempt_usage_out=captured,
+            )
+        finally:
+            if captured:
+                attempt_usage.append(captured)
+        if not captured:
+            attempt_usage.append({
+                "total_tokens": outcome.total_tokens,
+                "total_cost": outcome.total_cost,
+                "prompt_tokens": outcome.prompt_tokens,
+                "completion_tokens": outcome.completion_tokens,
+                "cache_read_tokens": outcome.cache_read_tokens,
+                "cache_write_tokens": outcome.cache_write_tokens,
+                "tool_call_count": outcome.tool_call_count,
+                "turns": list(outcome.turns),
+            })
         if retry_index > 0:
             logger.info("Notes agent %s recovered on attempt %d",
                         template_type.value, retry_index + 1)
@@ -725,6 +750,7 @@ async def _run_single_notes_agent(
             "workbook_path": outcome.filled_path,
             "warnings": warnings,
         })
+        usage = _rollup_attempts()
         return NotesAgentResult(
             template_type=template_type,
             status="succeeded",
@@ -732,16 +758,16 @@ async def _run_single_notes_agent(
             warnings=warnings,
             cells_written=list(outcome.cells_written),
             numeric_cells=list(outcome.numeric_cells),
-            total_tokens=outcome.total_tokens,
-            total_cost=outcome.total_cost,
+            total_tokens=usage["total_tokens"],
+            total_cost=usage["total_cost"],
             # v8 per-turn telemetry (peer-review [2]).
-            turns=list(outcome.turns),
-            prompt_tokens=outcome.prompt_tokens,
-            completion_tokens=outcome.completion_tokens,
-            cache_read_tokens=outcome.cache_read_tokens,
-            cache_write_tokens=outcome.cache_write_tokens,
-            turn_count=len(outcome.turns),
-            tool_call_count=outcome.tool_call_count,
+            turns=usage["turns"],
+            prompt_tokens=usage["prompt_tokens"],
+            completion_tokens=usage["completion_tokens"],
+            cache_read_tokens=usage["cache_read_tokens"],
+            cache_write_tokens=usage["cache_write_tokens"],
+            turn_count=len(usage["turns"]),
+            tool_call_count=usage["tool_call_count"],
         )
 
     def _record_attempt(e: BaseException) -> None:
@@ -800,15 +826,24 @@ async def _run_single_notes_agent(
         # terminal), but keep the original empty-list fallback (`""`) verbatim
         # so this stays byte-identical to the pre-refactor classification.
         last_exc_class = attempts[-1]["error_type"] if attempts else ""
+        usage = _rollup_attempts()
         return NotesAgentResult(
             template_type=template_type,
             status="failed",
             error=last_error,
             error_type=(
-                "turn_timeout" if last_exc_class == "TimeoutError"
+                "no_write" if isinstance(e, _NoWriteError)
+                else "turn_timeout" if last_exc_class == "TimeoutError"
                 else "transient_exhausted" if is_rate_limit_error(e)
                 else "tool_exception"
             ),
+            total_tokens=usage["total_tokens"], total_cost=usage["total_cost"],
+            turns=usage["turns"], prompt_tokens=usage["prompt_tokens"],
+            completion_tokens=usage["completion_tokens"],
+            cache_read_tokens=usage["cache_read_tokens"],
+            cache_write_tokens=usage["cache_write_tokens"],
+            turn_count=len(usage["turns"]),
+            tool_call_count=usage["tool_call_count"],
         )
 
     # Two retry budgets, consumed independently (so a flaky TPM bucket doesn't
@@ -850,6 +885,7 @@ async def _invoke_single_notes_agent_once(
     run_id: Optional[int] = None,
     db_path: Optional[str] = None,
     source_generation_id: Optional[int] = None,
+    attempt_usage_out: Optional[dict[str, Any]] = None,
 ) -> _SingleAgentOutcome:
     """One invocation of a single-sheet notes agent.
 
@@ -997,6 +1033,9 @@ async def _invoke_single_notes_agent_once(
                 "without writing any payloads"
             )
         finally:
+            if attempt_usage_out is not None:
+                attempt_usage_out.update(_usage_snapshot(agent_run))
+                attempt_usage_out["turns"] = list(_turn_records)
             # Every exit path gets a debuggable trace, including pre-write
             # failures, cancellation, and the post-write timeout salvage path.
             # A completed run is saved once below from its final result.  Only

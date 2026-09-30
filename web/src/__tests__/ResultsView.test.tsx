@@ -152,14 +152,14 @@ describe("ResultsView — P4", () => {
     expect(screen.getByText(/5,000/)).toBeInTheDocument();
     expect(screen.getByText(/\$0\.0035/)).toBeInTheDocument();
     expect(screen.getByText(/02:00/)).toBeInTheDocument(); // ~120s elapsed
-    // Status uses the shared vocabulary ("Completed"), unified across surfaces.
-    expect(screen.getByText(/Completed/i)).toBeInTheDocument();
+    // Status uses the shared vocabulary ("Complete"), unified across surfaces.
+    expect(screen.getByText(/^Complete$/)).toBeInTheDocument();
   });
 
   // UX-QA #22: completed_with_errors must NOT render as "Didn't finish".
   test("completed_with_errors shows the shared label, never 'Didn't finish'", () => {
     renderResults({ success: false, overallStatus: "completed_with_errors" });
-    expect(screen.getByText(/Completed with errors/i)).toBeInTheDocument();
+    expect(screen.getByText(/Needs review/i)).toBeInTheDocument();
     expect(screen.queryByText(/Didn't finish/i)).toBeNull();
   });
 

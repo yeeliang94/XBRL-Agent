@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { pwc } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 import { pdfPageUrl, fetchPdfPageCount } from "../lib/api";
+import { ChevronLeft, ChevronRight, FitScreen, ZoomIn, ZoomOut } from "./iconGlyphs";
 
 // ---------------------------------------------------------------------------
 // PdfSourcePane — shows a rendered source-PDF page beside the value grid so a
@@ -208,7 +209,7 @@ export function PdfSourcePane({
             data-tooltip="Previous PDF page"
             style={{ ...styles.compactButton, opacity: canPrev ? 1 : 0.4 }}
           >
-            ‹
+            <ChevronLeft size={20} />
           </button>
           <span style={styles.pageIndicator}>
             <input
@@ -230,7 +231,7 @@ export function PdfSourcePane({
             data-tooltip="Next PDF page"
             style={{ ...styles.compactButton, opacity: canNext ? 1 : 0.4 }}
           >
-            ›
+            <ChevronRight size={20} />
           </button>
         </div>
 
@@ -270,16 +271,18 @@ export function PdfSourcePane({
             aria-label="Zoom out"
             data-tooltip="Zoom out"
           >
-            −
+            <ZoomOut size={20} />
           </button>
           <button
             type="button"
             data-testid="pdf-zoom-fit"
             onClick={() => setZoom(1)}
-            style={styles.fitButton}
+            style={styles.compactButton}
             title="Fit to width"
+            aria-label="Fit to width"
+            data-tooltip="Fit to width"
           >
-            Fit
+            <FitScreen size={20} />
           </button>
           <button
             type="button"
@@ -290,7 +293,7 @@ export function PdfSourcePane({
             aria-label="Zoom in"
             data-tooltip="Zoom in"
           >
-            +
+            <ZoomIn size={20} />
           </button>
         </div>
       </div>
@@ -350,7 +353,7 @@ const styles = {
   title: {
     margin: 0,
     fontFamily: pwc.fontHeading,
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: pwc.weight.semibold,
     color: pwc.grey900,
   } as React.CSSProperties,
@@ -406,31 +409,15 @@ const styles = {
     padding: `${pwc.space.xs}px 2px`,
     border: "none",
     borderRadius: pwc.radius.sm,
-    fontFamily: pwc.fontMono,
-    fontSize: 13,
+    fontVariantNumeric: "tabular-nums",
+    fontSize: 14,
   } as React.CSSProperties,
   pageTotal: { color: pwc.grey700, marginLeft: 4 } as React.CSSProperties,
   compactButton: {
-    width: 32,
-    minHeight: 32,
+    ...ui.iconButton,
+    width: 34,
+    minHeight: 34,
     padding: 0,
-    border: "none",
-    borderRadius: pwc.radius.sm,
-    background: "transparent",
-    color: pwc.grey900,
-    cursor: "pointer",
-    fontSize: 15,
-  } as React.CSSProperties,
-  fitButton: {
-    minWidth: 36,
-    minHeight: 32,
-    padding: `0 ${pwc.space.xs}px`,
-    border: "none",
-    borderRadius: pwc.radius.sm,
-    background: "transparent",
-    color: pwc.grey700,
-    cursor: "pointer",
-    fontSize: 11,
   } as React.CSSProperties,
   sourcesMenu: { position: "relative" as const } as React.CSSProperties,
   sourcesSummary: {
@@ -442,8 +429,8 @@ const styles = {
     color: pwc.grey700,
     cursor: "pointer",
     listStyle: "none",
-    fontSize: 11,
-    fontWeight: 600,
+    fontSize: 13,
+    fontWeight: 650,
   } as React.CSSProperties,
   sourcesPanel: {
     position: "absolute" as const,
@@ -466,7 +453,7 @@ const styles = {
     color: pwc.grey900,
     textAlign: "left" as const,
     cursor: "pointer",
-    fontSize: 12,
+    fontSize: 13,
   } as React.CSSProperties,
   viewport: {
     overflow: "auto",

@@ -7,6 +7,7 @@ import { formatElapsedMs } from "../lib/time";
 import { runStatusDisplay } from "../lib/runStatus";
 import { MtoolFillModal } from "./MtoolFillModal";
 import { StatusIcon } from "./StatusIcon";
+import { ArrowForward } from "./iconGlyphs";
 
 interface Props {
   complete: CompleteData;
@@ -80,15 +81,13 @@ const styles = {
   } as React.CSSProperties,
   cardLabel: {
     fontFamily: pwc.fontHeading,
-    fontSize: 11,
+    fontSize: 12,
     color: pwc.grey500,
-    textTransform: "uppercase" as const,
-    letterSpacing: "0.05em",
     marginBottom: pwc.space.xs,
   } as React.CSSProperties,
   cardValue: {
     fontFamily: pwc.fontMono,
-    fontSize: 20,
+    fontSize: 16,
     // Metric values at regular weight (design .ui-card .v — no Light 300).
     fontWeight: pwc.weight.regular,
     color: pwc.grey900,
@@ -109,7 +108,7 @@ const styles = {
   th: {
     background: pwc.grey100,
     fontFamily: pwc.fontHeading,
-    fontWeight: 600,
+    fontWeight: 680,
     color: pwc.grey900,
     fontSize: 13,
     padding: `${pwc.space.sm}px ${pwc.space.md}px`,
@@ -183,7 +182,7 @@ const styles = {
     background: "none",
     border: "none",
     color: pwc.orange500,
-    fontWeight: 600,
+    fontWeight: 680,
     fontSize: 13,
     cursor: "pointer",
   } as React.CSSProperties,
@@ -220,11 +219,9 @@ const styles = {
   } as React.CSSProperties,
   downloadSectionLabel: {
     fontFamily: pwc.fontHeading,
-    fontSize: 11,
-    fontWeight: 600,
+    fontSize: 12,
+    fontWeight: 680,
     color: pwc.grey500,
-    textTransform: "uppercase" as const,
-    letterSpacing: "0.05em",
     marginBottom: pwc.space.sm,
   } as React.CSSProperties,
 };
@@ -319,7 +316,8 @@ export function ResultsView({ complete, sessionId, runStartTime, getResultJson, 
               onClick={() => onViewConcepts(runId)}
               style={styles.reconcileLink}
             >
-              Review conflicts →
+              Review conflicts
+              <ArrowForward size={16} />
             </button>
           )}
         </div>

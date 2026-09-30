@@ -374,13 +374,22 @@ function _indentSourceHeadingLevels(root: Element): void {
   const levels = blocks.map(headingLevel).filter((level): level is number => level !== null);
   if (levels.length === 0) return;
   const baseline = Math.min(...levels);
+  const parent = blocks[0]?.tagName === "H3"
+    ? /^\s*(\d+)(?=\s|\.|$)/.exec(blocks[0].textContent ?? "") : null;
+  const sub = blocks[1]?.tagName === "H3"
+    ? /^\s*(\d+)(?:\.\d+|\([a-zivx]+\))(?=\s|\.|$)/i.exec(blocks[1].textContent ?? "") : null;
+  let adjacentSubnote = !!parent && !!sub && parent[1] === sub[1];
   let depth = 0;
-  for (const block of blocks) {
+  for (const [index, block] of blocks.entries()) {
+    if (index > 0 && block.tagName === "H3" && /^\s*\d+[.)]?(?=\s|$)/.test(block.textContent ?? "")) {
+      adjacentSubnote = false;
+    }
     const level = headingLevel(block);
     if (level !== null) depth = Math.max(0, level - baseline);
-    if (depth > 0 && (level !== null || ["P", "TABLE", "UL", "OL"].includes(block.tagName)) &&
+    const effectiveDepth = adjacentSubnote && index > 0 ? Math.max(1, depth) : depth;
+    if (effectiveDepth > 0 && (level !== null || ["P", "TABLE", "UL", "OL"].includes(block.tagName)) &&
         !_hasPersistedIndent(block)) {
-      _mergeStyle(block, `margin-left: ${2 * depth}em;`);
+      _mergeStyle(block, `margin-left: ${2 * effectiveDepth}em;`);
     }
   }
 }
@@ -618,6 +627,7 @@ export function decorateHtmlForClipboard(
     _solidDoubleBorders(el);
   }
 
+  _indentSourceHeadingLevels(tmp);
   // Prose: Arial + a bottom margin so non-table cells paste with a
   // consistent face and visible gaps between paragraphs.
   const paragraphStyle = _paragraphStyle(opts);
@@ -635,8 +645,8 @@ export function decorateHtmlForClipboard(
     _mergeBlockStyle(
       h,
       headingStyle,
-      fontCss +
-        " margin-top: 12px; margin-right: 0; margin-bottom: 6px; font-weight: 600;",
+      _headingFontCss(opts) +
+        ` margin-top: 12px; margin-right: 0; margin-bottom: 6px; font-weight: ${opts.headingWeight ?? 600};`,
     );
   }
   const listMarkerCss = _listMarkerCss(opts);
@@ -652,7 +662,6 @@ export function decorateHtmlForClipboard(
     }
   }
 
-  _indentSourceHeadingLevels(tmp);
   _addTransportBreaks(tmp);
 
   // Carry the font on the wrapping container too, so any element we did not

@@ -2368,6 +2368,7 @@ async def _run_notes_reviewer_pass(
     )
     from notes.reviewer_agent import (
         create_notes_reviewer_agent, unverified_policy_placements,
+        unverified_section_placements,
     )
     from notes.versioning import ensure_notes_snapshot
     from correction.reviewer_agent import compute_reviewer_turn_cap
@@ -2615,6 +2616,37 @@ async def _run_notes_reviewer_pass(
         so an interrupted rerun can't erase prior open flags either.
         """
         try:
+            from notes.review_move import reconcile_reviewed_placement_conflicts
+            from db import repository as _repo
+            with _repo.db_session(db_path) as conn:
+                reconcile_reviewed_placement_conflicts(conn, run_id=run_id)
+        except Exception:  # noqa: BLE001
+            # A failed reconciliation must leave the source conflict visible.
+            logger.warning("Could not reconcile source-placement conflicts", exc_info=True)
+        if deps.flags:
+            try:
+                from notes.reviewer_agent import (
+                    finding_keys, prune_resolved_review_flags,
+                    recompute_notes_findings,
+                )
+                live_keys = finding_keys(recompute_notes_findings(deps))
+                with _repo.db_session(db_path) as conn:
+                    placement_revisions = {
+                        (row["sheet"], row["row"]): row["content_revision"]
+                        for row in conn.execute(
+                            "SELECT sheet,row,content_revision FROM notes_cells "
+                            "WHERE run_id=?",
+                            (run_id,),
+                        )
+                    }
+                deps.flags[:] = prune_resolved_review_flags(
+                    deps.flags, deps.finding_keys_by_id, live_keys,
+                    placement_revisions,
+                )
+            except Exception:  # noqa: BLE001
+                # An incomplete reassessment cannot justify dropping flags.
+                logger.warning("Could not reconcile notes-review flags", exc_info=True)
+        try:
             from db import repository as _repo
             from notes.source_write import PLACEMENT_CONFLICT_FINDING_PREFIX
             with _repo.db_session(db_path) as conn:
@@ -2690,8 +2722,9 @@ async def _run_notes_reviewer_pass(
             # FINAL checklist — the reviewer's verdicts + authored notes are
             # now reflected; this post-reviewer state is what the human sees.
             unverified_policies = unverified_policy_placements(deps)
+            unverified_sections = unverified_section_placements(deps)
             coverage_summary = await _finalize_coverage(
-                reviewed=not unverified_policies)
+                reviewed=not (unverified_policies or unverified_sections))
             coverage_error = (coverage_summary or {}).get("error")
             unverified = int((coverage_summary or {}).get("unverified_subnotes") or 0)
             if coverage_error:
@@ -2717,13 +2750,15 @@ async def _run_notes_reviewer_pass(
                     "writes_performed": deps.writes_performed,
                     "flags_raised": len(deps.flags),
                 })
-            elif unverified_policies:
-                outcome["error"] = "notes_reviewer_policy_placements_unverified"
+            elif unverified_policies or unverified_sections:
+                placement_kind = "policy" if unverified_policies else "section"
+                pending_rows = unverified_policies or unverified_sections
+                outcome["error"] = f"notes_reviewer_{placement_kind}_placements_unverified"
                 await _emit("error", {
                     "type": outcome["error"],
                     "message": (
-                        "The notes reviewer did not verify policy field placement "
-                        f"for row(s) {unverified_policies}."
+                        f"The notes reviewer did not verify {placement_kind} field placement "
+                        f"for row(s) {pending_rows}."
                     ),
                 })
                 await _emit("complete", {
@@ -7348,6 +7383,15 @@ async def run_multi_agent_stream(
                                 str(getattr(_s, "title", "") or "").strip()
                             for _s in getattr(_e, "subnotes", None) or []
                             if str(getattr(_s, "subnote_ref", "")).strip()
+                        },
+                        "subnote_pages": {
+                            str(getattr(_s, "subnote_ref", "")).strip(): {
+                                "page_lo": _s.page_range[0],
+                                "page_hi": _s.page_range[1],
+                            }
+                            for _s in getattr(_e, "subnotes", None) or []
+                            if str(getattr(_s, "subnote_ref", "")).strip()
+                            and getattr(_s, "page_range", None)
                         },
                         "page_lo": _pr[0] if _pr else None,
                         "page_hi": _pr[1] if len(_pr) > 1 else None,

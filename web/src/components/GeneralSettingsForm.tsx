@@ -110,7 +110,7 @@ const styles = {
   } as React.CSSProperties,
   label: {
     fontFamily: pwc.fontHeading,
-    fontWeight: 500,
+    fontWeight: 650,
     fontSize: 14,
     color: pwc.grey700,
     display: "block",
@@ -152,14 +152,13 @@ const styles = {
     marginTop: pwc.space.xs,
   } as React.CSSProperties,
   actions: {
-    display: "flex",
-    alignItems: "center",
     // Test Connection sits on the left, Save/Cancel group on the right (C4).
-    justifyContent: "space-between",
-    gap: pwc.space.md,
+    // Pinned to the bottom of the viewport so Save stays reachable on this
+    // long form.
+    ...ui.stickyActionBar,
+    boxShadow: "none",
+    paddingInline: 0,
     marginTop: pwc.space.xl,
-    paddingTop: pwc.space.lg,
-    borderTop: `1px solid ${pwc.grey200}`,
   } as React.CSSProperties,
   actionsRight: {
     display: "flex",
@@ -168,15 +167,12 @@ const styles = {
   } as React.CSSProperties,
   cancelButton: {
     ...ui.buttonSecondary,
-    ...ui.buttonSm,
   } as React.CSSProperties,
   saveButton: {
     ...ui.buttonPrimary,
-    ...ui.buttonSm,
   } as React.CSSProperties,
   testButton: {
     ...ui.buttonSecondary,
-    ...ui.buttonSm,
   } as React.CSSProperties,
   testResult: {
     fontFamily: pwc.fontBody,
@@ -971,6 +967,10 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
           silent migration. Per role rather than global because scout is
           navigation and extraction is judgement; one level would overpay on
           one or underpower the other. */}
+      {/* Per-role reasoning controls are rarely changed; keep them closed so
+          the page leads with the settings people actually adjust. */}
+      <details style={styles.fieldGroup}>
+        <summary style={styles.label}>AI reasoning (advanced)</summary>
       <div style={styles.fieldGroup}>
         <label style={styles.label}>Thinking level</label>
         <p style={styles.helperText}>
@@ -1048,6 +1048,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
           ))}
         </select>
       </div>
+      </details>
 
       <SettingsSectionHeading
         title="Notes appearance"
@@ -1094,8 +1095,8 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
             </>
           ) : (
             <>
-              <span style={{ color: pwc.error, fontSize: 16 }}>✗</span>
-              <span style={{ color: pwc.error }}>{testResult.message}</span>
+              <StatusIcon symbol={STATUS_SYMBOLS.failure} size={16} />
+              <span>{testResult.message}</span>
             </>
           )}
         </div>

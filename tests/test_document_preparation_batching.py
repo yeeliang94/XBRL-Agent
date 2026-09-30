@@ -1,4 +1,4 @@
-"""Offline end-to-end coverage of the production two-page request path."""
+"""Offline coverage of batched capture and independent page verification."""
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import json
@@ -60,22 +60,55 @@ def test_default_pairs_pages_and_flushes_odd_page(tmp_path, count):
 
     prepared = run(source(tmp_path, count), call)
     assert [p["html"] for p in prepared.pages] == [f"<p>Content {i}</p>" for i in range(1, count + 1)]
-    for stage in ("capturing", "verifying"):
-        requests = [context for name, context in calls if name == stage]
-        assert len(requests) == (count + 1) // 2
-        assert sum(len(c.get("pages", [c])) for c in requests) == count
+    captures = [context for name, context in calls if name == "capturing"]
+    verifications = [context for name, context in calls if name == "verifying"]
+    assert len(captures) == (count + 1) // 2
+    assert sum(len(c.get("pages", [c])) for c in captures) == count
+    assert len(verifications) == count
+    assert all("pages" not in context for context in verifications)
     checkpoint = json.loads(next(tmp_path.glob("preparation-checkpoint-*.json")).read_text())
     assert len(checkpoint["calls"]) == len(calls)
     assert sum(c["usage"]["total_tokens"] for c in checkpoint["calls"]) == count * 20
 
 
+def test_wrong_page_capture_is_repaired_by_independent_verification(tmp_path):
+    """A page-labelled batch receipt can still contain its neighbour's text."""
+    calls = []
+
+    async def call(stage, images, context):
+        calls.append((stage, context))
+        if stage == "capturing" and "pages" in context:
+            pages = context["pages"]
+            return {"pages": [
+                {**receipt(page["page"]), "html": f"<p>Content {other['page']}</p>"}
+                for page, other in zip(pages, reversed(pages))
+            ]}
+        if stage == "verifying" and "pages" in context:
+            return response(context)
+        result = response(context)
+        if stage == "verifying":
+            page = context["page"]
+            result["verified"] = result["complete"] = (
+                context["html"] == f"<p>Content {page}</p>"
+            )
+            if not result["verified"]:
+                result["issues"] = ["The candidate belongs to another page."]
+        return result
+
+    prepared = run(source(tmp_path, 2), call)
+    assert [page["html"] for page in prepared.pages] == [
+        "<p>Content 1</p>", "<p>Content 2</p>",
+    ]
+    assert any(stage == "verifying" and context.get("page") == 1
+               for stage, context in calls)
+
+
 @pytest.mark.parametrize("defect", ["missing", "duplicate", "invalid", "foreign"])
-@pytest.mark.parametrize("stage", ["capturing", "verifying"])
-def test_bad_receipt_retries_only_affected_page(tmp_path, defect, stage):
+def test_bad_capture_receipt_retries_only_affected_page(tmp_path, defect):
     singles = []
     async def call(name, images, context):
         result = response(context)
-        if name == stage and "pages" in context:
+        if name == "capturing" and "pages" in context:
             good, bad = receipt(1), receipt(2)
             if defect == "missing":
                 result["pages"] = [good]
@@ -86,7 +119,7 @@ def test_bad_receipt_retries_only_affected_page(tmp_path, defect, stage):
             else:
                 bad["non_text_regions"] = [{"reason": "scanner_noise", "bbox": [0, 0, 900, 900]}]
                 result["pages"] = [good, bad]
-        elif name == stage:
+        elif name == "capturing":
             singles.append(context["page"])
         return result
 
@@ -209,12 +242,9 @@ def test_focused_images_in_verification_have_explicit_page_ownership(tmp_path):
             for entry in result.get("pages", [result]):
                 entry["non_text_regions"] = [{"reason": "scanner_noise", "bbox": [0.0, 0.0, 0.1, 0.1]}]
         if stage == "verifying":
-            assert "pages" in context
-            for entry in context["pages"]:
-                number = entry["page"]
-                assert [images[i] for i in entry["image_indexes"]] == [
-                    f"{number}:0".encode(), f"focus:{number}:0".encode()]
-                checked.append(number)
+            number = context["page"]
+            assert images == [f"{number}:0".encode(), f"focus:{number}:0".encode()]
+            checked.append(number)
         return result
 
     run(source(tmp_path, 2), call)
@@ -415,7 +445,7 @@ def test_fifteen_physical_requests_shared_across_document_loops(tmp_path):
     assert budget._active == 0 and not budget._waiting
 
 
-def test_real_agent_uses_batch_output_schema_and_records_usage_once(tmp_path):
+def test_real_agent_uses_batch_capture_and_single_page_verification(tmp_path):
     from pydantic_ai.messages import ModelResponse, ToolCallPart, UserPromptPart
     from pydantic_ai.models.function import FunctionModel
     from pydantic_ai.usage import RequestUsage
@@ -425,7 +455,10 @@ def test_real_agent_uses_batch_output_schema_and_records_usage_once(tmp_path):
         prompt = next(part for message in messages for part in message.parts
                       if isinstance(part, UserPromptPart))
         context = json.loads(prompt.content[1])
-        assert len(context["pages"]) == 2
+        if "pages" in context:
+            assert len(context["pages"]) == 2
+        else:
+            assert context["page"] in (1, 2)
         calls.append(context)
         return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, response(context))],
                              usage=RequestUsage(input_tokens=30, output_tokens=10))
@@ -433,9 +466,9 @@ def test_real_agent_uses_batch_output_schema_and_records_usage_once(tmp_path):
     prepared = asyncio.run(preparation.prepare_document(
         source(tmp_path, 2), FunctionModel(respond), model_name="offline-function"))
     assert len(prepared.pages) == 2
-    assert len(calls) == 2
+    assert len(calls) == 3
     checkpoint = json.loads(next(tmp_path.glob("preparation-checkpoint-*.json")).read_text())
-    assert sum(c["usage"]["total_tokens"] for c in checkpoint["calls"]) == 80
+    assert sum(c["usage"]["total_tokens"] for c in checkpoint["calls"]) == 120
 
 
 def test_failed_batch_output_usage_survives_single_page_recovery(tmp_path):

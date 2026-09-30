@@ -359,7 +359,7 @@ const styles = {
   sectionTitle: {
     margin: 0,
     fontFamily: pwc.fontHeading,
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: pwc.weight.semibold,
   } as React.CSSProperties,
   incidentCard: {
@@ -471,7 +471,7 @@ const styles = {
   } as React.CSSProperties,
   agentName: {
     fontFamily: pwc.fontMono,
-    fontWeight: 600,
+    fontWeight: 680,
     fontSize: 14,
     color: pwc.grey900,
   } as React.CSSProperties,
@@ -511,7 +511,7 @@ const styles = {
     padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
     borderBottom: `1px solid ${pwc.grey200}`,
     color: pwc.grey700,
-    fontWeight: 600,
+    fontWeight: 680,
     whiteSpace: "nowrap" as const,
   } as React.CSSProperties,
   thNum: {
@@ -519,7 +519,7 @@ const styles = {
     padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
     borderBottom: `1px solid ${pwc.grey200}`,
     color: pwc.grey700,
-    fontWeight: 600,
+    fontWeight: 680,
     whiteSpace: "nowrap" as const,
   } as React.CSSProperties,
   td: {
@@ -572,7 +572,7 @@ const styles = {
     cursor: "pointer",
     fontFamily: pwc.fontHeading,
     fontSize: 12,
-    fontWeight: 600,
+    fontWeight: 680,
     color: pwc.grey700,
   } as React.CSSProperties,
   tracePre: {
@@ -582,7 +582,7 @@ const styles = {
     overflow: "auto" as const,
     background: pwc.grey50,
     fontFamily: pwc.fontMono,
-    fontSize: 11,
+    fontSize: 12,
     lineHeight: 1.5,
     color: pwc.grey900,
     whiteSpace: "pre-wrap" as const,

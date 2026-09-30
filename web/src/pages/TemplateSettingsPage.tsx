@@ -4,6 +4,7 @@ import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { PageHeader } from "../components/PageHeader";
 import { templateGroupLabel, templatePickerLabel } from "../lib/sheetLabels";
+import { Edit, ErrorCircle } from "../components/iconGlyphs";
 
 // ---------------------------------------------------------------------------
 // TemplateSettingsPage — Phase 5.1 global template settings.
@@ -147,7 +148,7 @@ export function TemplateSettingsPage() {
       <PageHeader title="Field labels" />
       {error && (
         <div role="alert" style={ui.alertError}>
-          <span aria-hidden="true" style={ui.alertIcon(pwc.error)}>✕</span>
+          <span aria-hidden="true" style={ui.alertIcon(pwc.error)}><ErrorCircle size={20} /></span>
           <div>{error}</div>
         </div>
       )}
@@ -166,6 +167,7 @@ export function TemplateSettingsPage() {
       ) : (
         <>
       <div className="quality-toolbar" style={styles.toolbar}>
+        <div style={styles.field}>
         <label htmlFor="ts-template" style={ui.fieldLabel}>
           Template
         </label>
@@ -190,6 +192,8 @@ export function TemplateSettingsPage() {
             </optgroup>
           ))}
         </select>
+        </div>
+        <div style={styles.field}>
         <label htmlFor="ts-search" style={ui.fieldLabel}>
           Search
         </label>
@@ -203,6 +207,7 @@ export function TemplateSettingsPage() {
           aria-label="Filter labels"
           style={{ ...ui.input, minWidth: 200 }}
         />
+        </div>
       </div>
       {/* Explain only the two marks that change how a field can be used. */}
       <p style={styles.legend} data-testid="ts-legend">
@@ -276,11 +281,13 @@ function TemplateConceptRow({
   return (
     <div
       data-testid={`ts-row-${concept.concept_uuid}`}
+      className={isAbstract ? undefined : "ts-row"}
       style={{
         display: "grid",
         gridTemplateColumns: "minmax(0, 1fr) auto",
         gap: pwc.space.lg,
-        padding: `${isAbstract ? pwc.space.sm : pwc.space.md}px ${pwc.space.lg}px`,
+        minHeight: 40,
+        padding: `${pwc.space.xs}px ${pwc.space.lg}px`,
         borderBottom: `1px solid ${pwc.grey100}`,
         background: isAbstract ? pwc.grey50 : pwc.white,
         alignItems: "center",
@@ -334,12 +341,16 @@ function TemplateConceptRow({
                 Reset
               </button>
             )}
+            {/* Shown on row hover or keyboard focus only (index.css .ts-row),
+                so the list does not repeat a button on every field. */}
             <button
               data-testid={`ts-rename-btn-${concept.concept_uuid}`}
               onClick={startEditing}
-              className={uiClass.btnSecondary}
-              style={{ ...ui.buttonSecondary, ...ui.buttonSm }}
+              aria-label={`Rename ${label}`}
+              className={`${uiClass.btnQuiet} ts-row-action`}
+              style={{ ...ui.buttonQuiet, minHeight: 32, padding: `0 ${pwc.space.sm}px`, gap: pwc.space.xs }}
             >
+              <Edit size={20} />
               Rename
             </button>
           </>
@@ -380,7 +391,12 @@ const styles = {
   } as React.CSSProperties,
   toolbar: {
     ...ui.filterToolbar,
-    alignItems: "center",
+    gap: pwc.space.lg,
+  } as React.CSSProperties,
+  field: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: pwc.space.sm,
   } as React.CSSProperties,
   legend: {
     display: "flex",
@@ -393,11 +409,10 @@ const styles = {
   } as React.CSSProperties,
   legendSwatch: {
     display: "inline-block",
-    width: 14,
-    height: 14,
-    background: pwc.grey50,
-    border: `1px solid ${pwc.grey300}`,
-    borderRadius: pwc.radius.sm,
+    width: 28,
+    height: 12,
+    background: pwc.grey100,
+    borderRadius: 2,
     flexShrink: 0,
   } as React.CSSProperties,
   // Neutral edited marker: standard symbol + explicit label, no chip.
@@ -414,6 +429,6 @@ const styles = {
   emptyRow: {
     color: pwc.grey700,
     padding: `${pwc.space.lg}px ${pwc.space.xl}px`,
-    fontSize: 15,
+    fontSize: 14,
   } as React.CSSProperties,
 } as const;

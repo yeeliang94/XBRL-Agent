@@ -67,6 +67,7 @@ from notes.agent import _apply_cross_sheet_tokens
 from notes.html_sanitize import sanitize_notes_html
 from notes.html_to_text import rendered_length
 from notes.integrity import MISSING_DISPOSITION_DECISION
+from notes.section_review import classify_source_section_partitions, pending_section_placements
 from notes.versioning import ensure_notes_snapshot
 from notes.writer import CELL_CHAR_LIMIT, truncate_with_footer
 from notes_types import NOTES_REGISTRY, NotesTemplateType
@@ -230,6 +231,7 @@ class NotesReviewerDeps:
         self.coverage_note_verdicts: dict[int, dict] = {}
         self.coverage_subnote_verdicts: dict[tuple[int, str], dict] = {}
         self.policy_placement_verdicts: dict[int, dict] = {}
+        self.section_placement_verdicts: dict[int, dict] = {}
         # Note numbers the reviewer AUTHORED back into place (audit marker on
         # the checklist row). Seeded by the author write path.
         self.authored_note_nums: set[int] = set()
@@ -586,8 +588,8 @@ class SubnoteVerificationItem(BaseModel):
     source_pages: List[int]
 
 
-class PolicyPlacementItem(BaseModel):
-    """Grounded judgment on one current accounting-policy destination."""
+class PlacementVerificationItem(BaseModel):
+    """Grounded judgment on one current source-linked destination."""
 
     row: int
     target_label: str
@@ -623,6 +625,7 @@ def count_open_items(context: dict) -> int:
     n += len(context.get("source_integrity_findings") or [])
     n += len(context.get("placement_conflicts") or [])
     n += len(context.get("policy_placements") or [])
+    n += len(context.get("section_partitions") or [])
     checklist = context.get("coverage_checklist")
     if checklist is not None:
         n += len(checklist.unresolved_rows())
@@ -648,6 +651,7 @@ def build_notes_reviewer_packet(context: dict) -> str:
     collisions = context.get("row_collisions") or []
     subnote = context.get("subnote_gaps") or []
     splits = context.get("topline_splits") or []
+    section_partitions = context.get("section_partitions") or []
     titles = context.get("title_issues") or []
     policy_placements = context.get("policy_placements") or []
     checklist = context.get("coverage_checklist")
@@ -696,7 +700,8 @@ def build_notes_reviewer_packet(context: dict) -> str:
             "content, two destinations: keep_existing or move_to_proposed. "
             "Two different notes, one field: keep_existing, use_proposed "
             "(each with other_row for the other note's correct empty field) "
-            "or, rarely, combine. Never substitute unrelated blocks."
+            "or combine only in the List-of-Notes catch-all field. Never "
+            "combine distinct notes in a specific field or substitute unrelated blocks."
         )
         for conflict in context["placement_conflicts"]:
             target = conflict.get("target") or {}
@@ -740,10 +745,30 @@ def build_notes_reviewer_packet(context: dict) -> str:
                 f"row {item['row']} {item['label']!r}: "
                 f"content starts {item['preview']!r}"
             ))
-    if context.get("source_integrity_findings"):
+    blocked_ids = {
+        str(block_id)
+        for conflict in context.get("placement_conflicts") or []
+        for block_id in (conflict.get("proposed_block_ids") or [])
+    }
+    actionable_source_findings = []
+    deferred_source_findings = []
+    for finding in context.get("source_integrity_findings") or []:
+        ids = {str(block_id) for block_id in finding.get("block_ids") or []}
+        (deferred_source_findings if ids and ids <= blocked_ids
+         else actionable_source_findings).append(finding)
+    if deferred_source_findings:
+        out.append(
+            f"\n{len(deferred_source_findings)} source-completeness finding(s) "
+            "depend on the placement conflicts above. Resolve those conflicts, "
+            "then call verify_findings to see whether any source parts remain "
+            "unaccounted for. Do not flag the same parts twice."
+        )
+    if actionable_source_findings:
         out.append("\n[SOURCE COMPLETENESS] Repair these exact source blocks. Use list_source_notes, "
                    "list_source_sections and inspect disputed parts with read_source_manifest or "
                    "view_source_blocks, then relink_note_cell at the appropriate destination. "
+                   "If the section is already inside a mixed cell, use "
+                   "transfer_source_sections so its siblings stay in that cell. "
                    "Preserve policy partitions. Unnumbered source notes have stable source ids. "
                    "If no specific List-of-Notes field fits an unnumbered disclosure, relink its "
                    "section alone to the catch-all field; other source notes there are retained. "
@@ -751,7 +776,7 @@ def build_notes_reviewer_packet(context: dict) -> str:
                    "If the captured source itself is missing or wrong, raise a needs_human flag "
                    "with the affected page and finish the remaining review; relinking cannot recapture text.")
         undecided: dict[str, list[str]] = {}
-        for item in context["source_integrity_findings"]:
+        for item in actionable_source_findings:
             if (item.get("code") == MISSING_DISPOSITION_DECISION
                     and item.get("block_ids")):
                 undecided.setdefault(str(item.get("note_num") or "unknown"), []).extend(
@@ -803,10 +828,11 @@ def build_notes_reviewer_packet(context: dict) -> str:
     if splits:
         out.append(
             "\n[TOP-LINE SPLIT] one top-level note's content landed on ≥2 rows "
-            "of the List of Notes sheet. This is always a routing violation: "
-            "one top-level note must remain complete in exactly one field, even "
-            "when it contains materially different peer topics. The only "
-            "cross-sheet carve-out is an explicitly-labelled 'material/"
+            "of the List of Notes sheet without a proven complete source-section "
+            "partition. This is a routing violation: keep the note complete "
+            "in exactly one field unless distinct complete source sections "
+            "are independently evidenced. A cross-sheet carve-out for an "
+            "explicitly-labelled 'material/"
             "significant accounting policy' sub-section (belongs on Sheet {{CROSS_SHEET:accounting_policies}}). "
             "View the note's pages, identify the field that best represents the "
             "printed top-level heading and primary subject, restore the complete "
@@ -825,6 +851,25 @@ def build_notes_reviewer_packet(context: dict) -> str:
             out.append(_review_source_line(
                 f"note {s['note_num']} on {s['sheet']}: {rows_desc} "
                 f"(refs {s['source_note_refs']})"
+            ))
+    if section_partitions:
+        out.append(
+            "\n[COMPLETE SOURCE-SECTION PARTITIONS] Each listed List-of-Notes "
+            "row contains whole, distinct frozen source sections from the same "
+            "printed note. Check their PDF headings against each destination "
+            "field. Separate fields are acceptable when each complete section "
+            "matches its field. Call verify_section_placements for every row "
+            "after viewing its source pages; move a wrong placement first or "
+            "record needs_human when its destination cannot be established. "
+            "An unchecked or subsequently changed row keeps review incomplete."
+        )
+        for item in section_partitions:
+            rows_desc = ", ".join(
+                f"row {row['row']} {row['row_label']!r}"
+                for row in item["rows"]
+            )
+            out.append(_review_source_line(
+                f"note {item['note_num']}: {rows_desc}"
             ))
     if subnote:
         out.append(
@@ -941,6 +986,7 @@ def _build_context(
     subnote_verdicts: Optional[dict] = None,
     reviewer_added_notes: Optional[set] = None,
     skip_receipts: Optional[list] = None,
+    section_verdicts: Optional[dict[int, dict]] = None,
 ) -> dict:
     """Run all five detectors + build the holistic coverage checklist from the
     durable DB inputs.
@@ -1083,6 +1129,17 @@ def _build_context(
         ]
         if unresolved_refs:
             subnote_gaps.append({**gap, "missing_subnote_refs": unresolved_refs})
+    topline_splits = detect_topline_splits(entries)
+    section_partitions = []
+    section_placements = []
+    if topline_splits:
+        with repo.db_session(db_path) as conn:
+            topline_splits, section_partitions = classify_source_section_partitions(
+                conn, run_id, topline_splits,
+            )
+            section_placements = pending_section_placements(
+                conn, run_id, section_partitions, section_verdicts or {},
+            )
     return {
         "duplicates": detect_cross_sheet_duplicates_by_ref(
             entries, substantive_blocks_by_cell=substantive_blocks_by_cell,
@@ -1091,7 +1148,9 @@ def _build_context(
         "coverage_gaps": coverage_gaps,
         "row_collisions": detect_same_sheet_row_collisions(entries),
         "subnote_gaps": subnote_gaps,
-        "topline_splits": detect_topline_splits(entries),
+        "topline_splits": topline_splits,
+        "section_partitions": section_partitions,
+        "section_placements": section_placements,
         "title_issues": detect_title_format_issues(cells),
         "coverage_checklist": checklist,
         "entry_count": len(entries),
@@ -1109,6 +1168,9 @@ def finding_keys(context: dict) -> set:
     coordinates/refs that make a finding "the same finding" across runs.
     """
     keys: set = set()
+    for placement in context.get("section_placements") or []:
+        keys.add(("section_placement", placement["sheet"], placement["row"],
+                  placement["content_revision"]))
     for conflict in context.get("placement_conflicts") or []:
         keys.add(("source_placement", conflict.get("flag_finding_id")))
     for finding in context.get("source_integrity_findings") or []:
@@ -1139,6 +1201,39 @@ def finding_keys(context: dict) -> set:
     for t in context.get("title_issues") or []:
         keys.add(("title", t.get("sheet"), t.get("row")))
     return keys
+
+
+def prune_resolved_review_flags(
+    flags: list[dict], key_by_id: dict[str, tuple], live_keys: set,
+    placement_revisions: dict[tuple[str, int], int] | None = None,
+) -> list[dict]:
+    """Keep human work tied to findings still present after reviewer writes.
+
+    Unlinked and explicit needs_human concerns remain visible. Other packet
+    flags for findings that became resolved are stale work.
+    """
+    kept = []
+    seen = set()
+    for flag in flags:
+        if ("placement_revision" in flag and placement_revisions is not None
+                and placement_revisions.get((flag.get("sheet"), flag.get("row")))
+                != flag["placement_revision"]):
+            continue
+        packet_id = flag.get("finding_id")
+        key = key_by_id.get(packet_id) if packet_id else None
+        if key is not None and key not in live_keys and flag.get("kind") != "needs_human":
+            continue
+        if key is not None:
+            signature = (
+                key, flag.get("kind"), flag.get("reason"), flag.get("sheet"),
+                flag.get("row"), tuple(flag.get("source_pages") or ()),
+                flag.get("evidence"),
+            )
+            if signature in seen:
+                continue
+            seen.add(signature)
+        kept.append(flag)
+    return kept
 
 
 def _lookup_placement_conflict(deps, value: str) -> tuple[str, Optional[dict]]:
@@ -1238,7 +1333,16 @@ def recompute_notes_findings(deps: "NotesReviewerDeps") -> dict:
         subnote_verdicts=deps.coverage_subnote_verdicts,
         reviewer_added_notes=deps.authored_note_nums,
         skip_receipts=deps.skip_receipts,
+        section_verdicts=deps.section_placement_verdicts,
     )
+
+
+def unverified_section_placements(deps: "NotesReviewerDeps") -> list[int]:
+    """Current complete-section destinations still lacking a live verdict."""
+    if not deps.prepared_source_required:
+        return []
+    return [item["row"] for item in
+            recompute_notes_findings(deps)["section_placements"]]
 
 
 def unverified_policy_placements(deps: "NotesReviewerDeps") -> list[int]:
@@ -1419,7 +1523,9 @@ def create_notes_reviewer_agent(
             f"{source_mode_rule}\n"
             "Use list_source_notes and list_source_sections (number or stable id) "
             "to choose complete sections; use read_source_manifest and view_source_blocks "
-            "for disputed details. Section IDs work in relink_note_cell. Continue "
+            "for disputed details. Section IDs work in relink_note_cell. "
+            "Use transfer_source_sections to move a complete section out of a "
+            "mixed source cell into an empty field in one guarded transaction. Continue "
             "partial reads with the returned next_offset as offset. "
             "list_source_destinations includes valid narrative fields "
             "on Issued Capital and Related Party templates. Never invent block ids.\n"
@@ -1667,6 +1773,59 @@ def create_notes_reviewer_agent(
             })
         return outcome.as_message()
 
+    def transfer_source_sections(
+        ctx: RunContext[NotesReviewerDeps],
+        source_sheet: str, source_row: int,
+        destination_sheet: str, destination_row: int,
+        section_ids: List[str],
+        source_pages: Optional[List[int]] = None,
+        evidence: Optional[str] = None,
+    ) -> str:
+        """Move complete source sections out of a mixed cell atomically.
+
+        The source and destination are rebuilt from frozen blocks together.
+        If either write is refused, neither cell changes. Use section IDs from
+        list_source_sections, not hand-selected partial block lists.
+        """
+        from notes.review_move import MoveConflict, transfer_source_sections as move
+        from notes.source_write import SourceWriteError
+
+        gen_id = _active_generation_id(ctx)
+        if gen_id is None:
+            return "rejected: this run has no frozen source reading."
+        kind, message = classify_notes_fix_guard(
+            action="relink", source_pages=source_pages,
+            viewed_pages=ctx.deps.viewed_pages,
+        )
+        if kind is not None:
+            return message or "rejected: view the supporting PDF pages first."
+        with ctx.deps.io_lock:
+            _ensure_snapshot(ctx)
+            try:
+                with repo.db_session(ctx.deps.db_path) as conn:
+                    move(
+                        conn, run_id=ctx.deps.run_id, generation_id=gen_id,
+                        source_sheet=source_sheet, source_row=source_row,
+                        destination_sheet=destination_sheet,
+                        destination_row=destination_row,
+                        section_ids=section_ids,
+                        template_prefix=ctx.deps.template_prefix,
+                        evidence=_ground_evidence(source_pages or [], evidence),
+                    )
+            except (MoveConflict, SourceWriteError) as exc:
+                return f"rejected: {exc}"
+            ctx.deps.writes_performed += 1
+            ctx.deps.correction_log.append({
+                "op": "transfer_source_sections",
+                "sheet": destination_sheet, "row": destination_row,
+                "evidence": ", ".join(section_ids),
+            })
+        return (
+            "ok: moved complete source section(s) to "
+            f"{destination_sheet} row {destination_row}; rebuilt "
+            f"{source_sheet} row {source_row} without them."
+        )
+
     def record_block_dispositions(
         ctx: RunContext[NotesReviewerDeps],
         block_ids: List[str], disposition: str,
@@ -1726,6 +1885,7 @@ def create_notes_reviewer_agent(
 
     if deps.source_generation_id is not None:
         agent.tool(relink_note_cell)
+        agent.tool(transfer_source_sections)
         agent.tool(record_block_dispositions)
 
         @agent.tool
@@ -1937,13 +2097,7 @@ def create_notes_reviewer_agent(
         ctx.deps.dispositioned_finding_keys.add(
             ctx.deps.finding_keys_by_id[finding_id]
         )
-        displaced = decision in {"keep_existing", "use_proposed"} and other_row is None
-        return (
-            f"ok: field conflict resolved with {decision}"
-            + ("; the other note is still unplaced and remains an open source "
-               "finding — relink it to its correct field or flag it."
-               if displaced else ".")
-        )
+        return f"ok: field conflict resolved with {decision}."
 
     @agent.tool
     def clear_note_cells(
@@ -2216,22 +2370,25 @@ def create_notes_reviewer_agent(
             outcomes, "recorded {ok} sub-ref verdict(s) across notes"
         )
 
-    @agent.tool
-    def verify_policy_placements(
-        ctx: RunContext[NotesReviewerDeps],
-        verifications: List[PolicyPlacementItem],
+    def _verify_placements(
+        ctx: RunContext[NotesReviewerDeps], verifications: List[PlacementVerificationItem],
+        *, sheet: str, verdicts: dict[int, dict],
     ) -> str:
-        """Check every current source-linked accounting policy against its field.
-
-        View the supporting PDF pages first. Move a wrongly placed cell to an
-        empty correct field before recording `correct`; use `needs_human` when
-        the destination cannot be established. Batch independent rows here.
-        """
         if not verifications:
-            return "rejected: verifications must contain at least one policy row."
+            return "rejected: verifications must contain at least one row."
         results = []
         with ctx.deps.io_lock:
+            section_rows = None
+            if sheet == LIST_OF_NOTES_SHEET:
+                section_rows = {
+                    row["row"]
+                    for partition in recompute_notes_findings(ctx.deps)["section_partitions"]
+                    for row in partition["rows"]
+                }
             for item in verifications:
+                if section_rows is not None and item.row not in section_rows:
+                    results.append(f"row {item.row}: rejected: not a current section destination")
+                    continue
                 pages = {p for p in item.source_pages if isinstance(p, int)}
                 if not pages or not pages <= ctx.deps.viewed_pages:
                     results.append(f"row {item.row}: rejected: view source page(s) first")
@@ -2239,26 +2396,56 @@ def create_notes_reviewer_agent(
                 if item.verdict not in {"correct", "needs_human"} or not item.reason.strip():
                     results.append(f"row {item.row}: rejected: verdict and reason are required")
                     continue
-                current = _read_cell(ctx.deps.db_path, ctx.deps.run_id, POLICIES_SHEET, item.row)
+                current = _read_cell(ctx.deps.db_path, ctx.deps.run_id, sheet, item.row)
                 if current is None or current["label"] != item.target_label:
                     results.append(f"row {item.row}: rejected: current row and label differ; reload the field")
                     continue
-                ctx.deps.policy_placement_verdicts[item.row] = {
+                verdicts[item.row] = {
                     "revision": current["content_revision"],
                     "verdict": item.verdict,
                 }
-                if item.verdict == "needs_human" and not any(
-                    f.get("sheet") == POLICIES_SHEET and f.get("row") == item.row
-                    and f.get("reason") == item.reason for f in ctx.deps.flags
-                ):
+                ctx.deps.flags[:] = [
+                    flag for flag in ctx.deps.flags
+                    if not (flag.get("sheet") == sheet and flag.get("row") == item.row
+                            and "placement_revision" in flag)
+                ]
+                if item.verdict == "needs_human":
                     ctx.deps.flags.append({
                         "kind": "needs_human", "reason": item.reason,
-                        "sheet": POLICIES_SHEET, "row": item.row,
+                        "sheet": sheet, "row": item.row,
+                        "placement_revision": current["content_revision"],
                         "finding_id": None, "source_pages": sorted(pages),
                         "evidence": item.reason,
                     })
                 results.append(f"row {item.row}: {item.verdict}")
-        return "policy placements: " + "; ".join(results)
+        return "placements: " + "; ".join(results)
+
+    @agent.tool
+    def verify_policy_placements(
+        ctx: RunContext[NotesReviewerDeps],
+        verifications: List[PlacementVerificationItem],
+    ) -> str:
+        """Check each current source-linked accounting policy against its field.
+
+        View supporting PDF pages first. Move wrongly placed content before
+        recording correct; use needs_human with a reason when uncertain.
+        """
+        return _verify_placements(ctx, verifications, sheet=POLICIES_SHEET,
+                                  verdicts=ctx.deps.policy_placement_verdicts)
+
+    @agent.tool
+    def verify_section_placements(
+        ctx: RunContext[NotesReviewerDeps],
+        verifications: List[PlacementVerificationItem],
+    ) -> str:
+        """Check each complete source-section destination on List of Notes.
+
+        View supporting PDF pages first and compare the section with its exact
+        target label. Move wrongly placed content before recording correct;
+        use needs_human with a reason when uncertain. Edits invalidate verdicts.
+        """
+        return _verify_placements(ctx, verifications, sheet=LIST_OF_NOTES_SHEET,
+                                  verdicts=ctx.deps.section_placement_verdicts)
 
     # -------------------- shared write impls --------------------
 

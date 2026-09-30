@@ -82,7 +82,7 @@ const styles = {
     // Regular weight on the large number — hierarchy from size, not boldness
     // (design system: two text weights, no Light 300).
     fontWeight: pwc.weight.regular,
-    fontSize: 24,
+    fontSize: 28,
     lineHeight: 1.1,
     color: pwc.grey900,
     // Fixed-width digits so a counting value doesn't jitter and tiles line up.
@@ -90,10 +90,8 @@ const styles = {
   } as React.CSSProperties,
   label: {
     fontFamily: pwc.fontBody,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: pwc.weight.semibold,
-    letterSpacing: "0.08em",
-    textTransform: "uppercase" as const,
     color: tokens.color.text.secondary,
   } as React.CSSProperties,
   detail: {

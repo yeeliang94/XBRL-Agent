@@ -179,3 +179,17 @@ def test_diff_reports_authored_edited_cleared(db_path: Path) -> None:
         )
     diff = {d["row"]: d["change"] for d in compute_notes_review_diff(str(db_path), run_id)}
     assert diff == {10: "edited", 11: "cleared", 12: "authored"}
+
+
+def test_diff_does_not_attribute_formatter_only_style_to_reviewer(db_path: Path) -> None:
+    run_id = _seed_run(db_path)
+    persist_notes_cells(
+        db_path=str(db_path), run_id=run_id, sheet_name=_SHEET,
+        cells_written=[_cell(10, "<p>Unchanged disclosure.</p>")],
+    )
+    snapshot_notes_cells(str(db_path), run_id)
+    with repo.db_session(db_path) as conn:
+        repo.upsert_notes_cell(conn, run_id=run_id, sheet=_SHEET, row=10,
+            label="Row 10", html='<p style="text-align: center">Unchanged disclosure.</p>',
+            style_source="formatter")
+    assert compute_notes_review_diff(str(db_path), run_id) == []

@@ -1,7 +1,8 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { ApiError, userMessage } from "../lib/errors";
-import { pwc } from "../lib/theme";
-import { ui } from "../lib/uiStyles";
+import { pwc, tokens } from "../lib/theme";
+import { ExpandMore, LeftPanelClose } from "../components/iconGlyphs";
+import { ui, uiClass } from "../lib/uiStyles";
 import { STATUS_SYMBOLS } from "../lib/runStatus";
 import { StatusIcon } from "../components/StatusIcon";
 import { NotesReviewTab } from "../components/NotesReviewTab";
@@ -1026,11 +1027,11 @@ export function ConceptsPage({
         <CollapsedRail label="Statements" testId="statements" onExpand={() => setRailOpen(true)} />
       )}
       {!notesActive && !railFolded && <aside className="review-template-rail" aria-label="Figure template navigator"
-        style={{ flex: "0 0 240px", minWidth: 0, paddingRight: pwc.space.md, display: "flex", flexDirection: "column", gap: pwc.space.md }}>
+        style={styles.templateRail}>
         {humanActive
           ? <ColumnHeader title="mTool worksheets" testId="statements" onHide={() => setRailOpen(false)} />
           : <strong style={ui.sectionTitle}>mTool worksheets</strong>}
-            <div style={styles.controlGroup}>
+            <div className="review-sheet-picker-group" style={styles.controlGroup}>
               <label htmlFor="review-sheet-picker" style={ui.fieldLabel}>
                 Statement
               </label>
@@ -1088,7 +1089,8 @@ export function ConceptsPage({
         <nav aria-label="Figure worksheets" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           {templates.flatMap((templateId) => (sheetsByTemplate[templateId] ?? []).map((sheet) => (
             <button type="button" key={`${templateId}:${sheet}`} aria-current={activeTemplate === templateId && (activeSheet === sheet || activeSheet == null) ? "true" : undefined}
-              style={{ ...ui.buttonGhost, justifyContent: "flex-start", textAlign: "left", whiteSpace: "normal", background: activeTemplate === templateId && (activeSheet === sheet || activeSheet == null) ? pwc.grey50 : undefined }}
+              className={uiClass.btnQuiet}
+              style={activeTemplate === templateId && (activeSheet === sheet || activeSheet == null) ? styles.worksheetItemActive : styles.worksheetItem}
               onClick={() => { setSearchQuery(""); setRowFilter("all"); setActiveTemplate(templateId); setActiveSheet(sheet); }}>
               {templateDisplayName(templateId)} · {figureSheetDisplayName(sheet)}
             </button>
@@ -1370,7 +1372,7 @@ function CollapsiblePanel({
             transform: open ? "none" : "rotate(-90deg)",
           }}
         >
-          ▾
+          <ExpandMore size={20} />
         </span>
       </button>
       {(open || keepMounted) && (
@@ -1402,7 +1404,8 @@ function ColumnHeader({
         title={`Hide ${title} panel`}
         aria-label={`Hide ${title} panel`}
       >
-        « Hide
+        <LeftPanelClose size={20} style={title === "Source PDF" ? { transform: "scaleX(-1)" } : undefined} />
+        <span>Hide</span>
       </button>
     </div>
   );
@@ -1699,7 +1702,7 @@ function ConceptMatrixGrid({
           display: "grid",
           gridTemplateColumns: gridCols,
           background: pwc.grey100,
-          fontWeight: 600,
+          fontWeight: 680,
           fontSize: 14,
           borderBottom: `1px solid ${pwc.grey200}`,
         }}
@@ -1754,7 +1757,7 @@ function ConceptMatrixGrid({
                 background: pwc.grey50,
                 fontFamily: pwc.fontBody,
                 fontSize: 14,
-                fontWeight: 600,
+                fontWeight: 680,
                 borderBottom: `1px solid ${pwc.grey100}`,
               }}
             >
@@ -2483,7 +2486,7 @@ function EditableValueCell({
           data-testid={statusTestId}
           role={status === "error" ? "alert" : "status"}
           style={{
-            fontSize: 11,
+            fontSize: 12,
             lineHeight: 1,
             color: status === "error" ? pwc.error : pwc.grey500,
           }}
@@ -2522,6 +2525,21 @@ const styles = {
     maxHeight: "calc(100vh - 116px)",
     overflowY: "auto" as const,
   } as React.CSSProperties,
+  // Worksheet navigation stays in view while the figures scroll, like the
+  // PDF column and the Notes rail (design system: keep navigation available).
+  templateRail: {
+    flex: "0 0 240px",
+    minWidth: 0,
+    paddingRight: pwc.space.md,
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: pwc.space.md,
+    position: "sticky" as const,
+    top: 116,
+    alignSelf: "flex-start",
+    maxHeight: "calc(100vh - 116px)",
+    overflowY: "auto" as const,
+  } as React.CSSProperties,
   resultsCol: {
     flex: "1 1 460px",
     minWidth: 0,
@@ -2537,20 +2555,19 @@ const styles = {
   } as React.CSSProperties,
   columnHeaderTitle: {
     fontFamily: pwc.fontHeading,
-    fontSize: 11,
-    fontWeight: 600,
-    color: pwc.grey500,
-    textTransform: "uppercase" as const,
-    letterSpacing: 0,
+    fontSize: 16,
+    fontWeight: 680,
+    color: tokens.color.text.primary,
+    whiteSpace: "nowrap" as const,
   } as React.CSSProperties,
   columnHideBtn: {
-    border: "none",
-    background: "transparent",
-    color: pwc.grey500,
-    fontSize: 11,
-    fontWeight: 600,
-    cursor: "pointer",
-    padding: `2px ${pwc.space.xs}px`,
+    ...ui.iconButton,
+    gap: pwc.space.xs,
+    minHeight: 34,
+    padding: `0 ${pwc.space.sm}px`,
+    fontSize: 13,
+    fontWeight: 650,
+    color: tokens.color.text.secondary,
   } as React.CSSProperties,
   collapsedRail: {
     flex: "0 0 40px",
@@ -2571,14 +2588,14 @@ const styles = {
   collapsedRailChevron: {
     fontSize: 14,
     lineHeight: 1,
-    fontWeight: 600,
+    fontWeight: 680,
   } as React.CSSProperties,
   collapsedRailLabel: {
     writingMode: "vertical-rl" as const,
     transform: "rotate(180deg)",
     fontFamily: pwc.fontHeading,
-    fontSize: 11,
-    fontWeight: 600,
+    fontSize: 12,
+    fontWeight: 680,
     letterSpacing: 0,
   } as React.CSSProperties,
   panelCard: {
@@ -2606,15 +2623,13 @@ const styles = {
   } as React.CSSProperties,
   panelHeaderTitle: {
     fontFamily: pwc.fontHeading,
-    fontSize: 11,
-    fontWeight: 600,
-    color: pwc.grey500,
-    textTransform: "uppercase" as const,
-    letterSpacing: 0,
+    fontSize: 14,
+    fontWeight: 680,
+    color: tokens.color.text.primary,
   } as React.CSSProperties,
   panelChevron: {
-    color: pwc.grey500,
-    fontSize: 12,
+    display: "inline-flex",
+    color: tokens.color.icon.rest,
   } as React.CSSProperties,
   panelBody: {
     padding: pwc.space.lg,
@@ -2643,14 +2658,31 @@ const styles = {
   controlGroup: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.xs,
+    gap: pwc.space.sm,
   } as React.CSSProperties,
   searchGroup: {
     flex: "0 0 auto",
     minWidth: 0,
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.xs,
+    gap: pwc.space.sm,
+  } as React.CSSProperties,
+  worksheetItem: {
+    ...ui.buttonQuiet,
+    justifyContent: "flex-start",
+    textAlign: "left" as const,
+    whiteSpace: "normal" as const,
+    fontWeight: pwc.weight.regular,
+    color: tokens.color.text.secondary,
+  } as React.CSSProperties,
+  worksheetItemActive: {
+    ...ui.buttonQuiet,
+    justifyContent: "flex-start",
+    textAlign: "left" as const,
+    whiteSpace: "normal" as const,
+    fontWeight: pwc.weight.medium,
+    color: tokens.color.text.primary,
+    background: tokens.surface.sunken,
   } as React.CSSProperties,
   visibleRowCount: {
     color: pwc.grey700,
@@ -2675,7 +2707,7 @@ const styles = {
     color: pwc.orange500,
     fontFamily: pwc.fontBody,
     fontSize: 12,
-    fontWeight: 700,
+    fontWeight: 680,
     cursor: "pointer",
   } as React.CSSProperties,
   attentionPanel: {
@@ -2798,11 +2830,9 @@ const styles = {
   } as React.CSSProperties,
   evidenceLabel: {
     fontFamily: pwc.fontHeading,
-    fontSize: 11,
-    fontWeight: 500,
+    fontSize: 12,
+    fontWeight: 650,
     color: pwc.grey500,
-    textTransform: "uppercase" as const,
-    letterSpacing: 0,
     marginBottom: 2,
   } as React.CSSProperties,
   evidenceText: {
@@ -2949,9 +2979,7 @@ const styles = {
     color: pwc.grey500,
     fontFamily: pwc.fontHeading,
     fontSize: 14,
-    fontWeight: 600,
-    textTransform: "uppercase" as const,
-    letterSpacing: 0,
+    fontWeight: 680,
     borderLeft: `1px solid ${pwc.grey200}`,
   } as React.CSSProperties,
   matrixMovementCell: {

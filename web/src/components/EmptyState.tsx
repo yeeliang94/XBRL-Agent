@@ -21,7 +21,7 @@ export function EmptyState({ title, explanation, action, style }: EmptyStateProp
       <div
         style={{
           fontFamily: pwc.fontHeading,
-          fontSize: 15,
+          fontSize: 14,
           fontWeight: pwc.weight.semibold,
           color: pwc.grey900,
         }}

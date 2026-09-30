@@ -72,6 +72,11 @@
   width: 100%;
 }
 
+/* View-only legacy hierarchy; explicit user indentation remains inline. */
+.notes-review-tab .tiptap > .notes-inferred-subnote {
+  margin-left: 2em;
+}
+
 /* Keep large tables inside the review column. Browse mode is deliberately a
  * compact preview; selecting Edit restores horizontal scrolling and the full
  * cell contents. */
@@ -231,8 +236,21 @@
   }
 }
 
-/* The app sidebar can leave a narrow review pane even on a desktop viewport. */
-@container notes-review (max-width: 780px) {
+/* The app sidebar and PDF pane leave roughly 740px here on a 1440px desktop.
+   Keep the worksheet rail beside the fields (design system: three persistent
+   panes at standard desktop) with a narrower rail, and stack only when the
+   fields column would drop below the prototype's 410px minimum. */
+@container notes-review (max-width: 900px) {
+  .notes-review-tab .notes-source-first-layout {
+    grid-template-columns: 220px minmax(0, 1fr) !important;
+  }
+
+  .notes-review-tab .notes-source-first-layout > [role="separator"] {
+    display: none !important;
+  }
+}
+
+@container notes-review (max-width: 640px) {
   .notes-review-tab .notes-source-first-layout {
     grid-template-columns: minmax(0, 1fr) !important;
   }

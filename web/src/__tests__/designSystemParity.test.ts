@@ -160,6 +160,18 @@ describe("Direction A shell and responsive composition", () => {
     }
   });
 
+  test("pins one icon family and its colour roles", () => {
+    for (const requirement of [
+      "Google Material Symbols, Rounded, weight 300, unfilled",
+      "never type a Unicode symbol",
+      "Current place and live work",
+      "Routine success stays monochrome",
+      "Destructive actions use an orange outline",
+    ]) {
+      expect(designSystem).toContain(requirement);
+    }
+  });
+
   test("forbids line-based hover and selected-state indicators", () => {
     expect(designSystem).toContain("Do not use accent lines for hover, pressed, active or selected states");
     expect(prototype).toContain("Interactive states use surface, text and icon changes; never accent edge or underline indicators");

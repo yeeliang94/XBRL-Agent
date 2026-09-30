@@ -139,6 +139,11 @@ describe("thinking level in Settings", () => {
       /Thinking level for Statement of financial position/i,
     );
     expect((select as HTMLSelectElement).value).toBe("high");
+    // Rarely-changed per-role controls start folded under one disclosure.
+    const section = select.closest("details");
+    expect(section).not.toBeNull();
+    expect(section).not.toHaveAttribute("open");
+    expect(section!.querySelector("summary")).toHaveTextContent("AI reasoning (advanced)");
   });
 
   test("choosing a level actually submits it", async () => {

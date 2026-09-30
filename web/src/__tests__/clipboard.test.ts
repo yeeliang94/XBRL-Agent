@@ -46,6 +46,29 @@ test("copy indents nested source headings and their paragraphs", () => {
   }
 });
 
+test("copy indents an adjacent same-level sub-note heading and its body", () => {
+  const html = "<h3>2 Accounting policies</h3><h3>2.10 Employee benefits</h3>" +
+    "<p>Short term benefits.</p><h3>3 Estimates</h3><p>Judgements.</p>";
+  const doc = new DOMParser().parseFromString(decorateHtmlForClipboard(html), "text/html");
+  const headingStyle = doc.querySelectorAll("h3")[1].getAttribute("style") ?? "";
+  const bodyStyle = doc.querySelector("p")?.getAttribute("style") ?? "";
+  expect(headingStyle).toContain("margin-left: 2em");
+  expect(headingStyle).not.toContain("margin: 12px");
+  expect(bodyStyle).toContain("margin-left: 2em");
+  expect(bodyStyle).toContain("margin-bottom: 8px");
+  expect(bodyStyle).not.toContain("margin: 0 0");
+  expect(doc.querySelectorAll("h3")[2].getAttribute("style")).not.toContain("margin-left");
+  expect(Array.from(doc.querySelectorAll("p")).find((p) => p.textContent === "Judgements.")?.getAttribute("style"))
+    .not.toContain("margin-left");
+});
+
+test("copy keeps adjacent top-level headings aligned", () => {
+  const html = "<h3>2 Accounting policies</h3><h3>3 Estimates</h3><p>Judgements.</p>";
+  const doc = new DOMParser().parseFromString(decorateHtmlForClipboard(html), "text/html");
+  expect(doc.querySelectorAll("h3")[1].getAttribute("style")).not.toContain("margin-left");
+  expect(doc.querySelector("p")?.getAttribute("style")).not.toContain("margin-left");
+});
+
 test("double border fallback preserves content, spans, colour and other edges", () => {
   const html = '<p><u>Text underline</u></p><table data-source-styled="true" style="border:1pt double #123456"><tr><td colspan="2" style="border-width:1px 2px 4pt 1px; border-style:double hidden double solid; border-color:rgb(12, 34, 56)">Total 3190</td></tr></table>';
   const out = decorateHtmlForClipboard(html, DEFAULT_FORMAT_OPTIONS);

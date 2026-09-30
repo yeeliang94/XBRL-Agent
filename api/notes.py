@@ -16,6 +16,7 @@ import json
 import logging
 import re
 import sqlite3
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -981,6 +982,33 @@ async def notes_coverage_endpoint(run_id: int):
     finally:
         conn.close()
 
+    # Older runs stored Scout's child page ranges only in the saved Infopack.
+    # Recover them for navigation without changing the persisted checklist.
+    saved_child_pages: dict[tuple[int, str], tuple[int, int]] = {}
+    if run.output_dir and any(
+        r["subnote_ref"] is not None and r["page_lo"] is None for r in db_rows
+    ):
+        try:
+            infopack = json.loads((Path(run.output_dir) / "infopack.json").read_text())
+            for note in infopack.get("notes_inventory", []):
+                note_num = note.get("note_num")
+                if not isinstance(note_num, int):
+                    continue
+                for child in note.get("subnotes", []):
+                    ref = child.get("subnote_ref")
+                    pages = child.get("page_range")
+                    if (
+                        isinstance(ref, str) and isinstance(pages, list)
+                        and len(pages) == 2
+                        and all(type(page) is int and page > 0 for page in pages)
+                        and pages[0] <= pages[1]
+                    ):
+                        saved_child_pages[
+                            (note_num, subnote_key_for_note(note_num, ref))
+                        ] = (pages[0], pages[1])
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
+
     # The banner meta row (note_num == COVERAGE_META_NOTE) carries the banner in
     # its `status`; its absence means the feature never ran for this run.
     banner = "pre_feature"
@@ -1012,6 +1040,9 @@ async def notes_coverage_endpoint(run_id: int):
             }
             order.append(n)
         else:
+            saved_pages = saved_child_pages.get(
+                (n, subnote_key_for_note(n, r["subnote_ref"])),
+            )
             parents.setdefault(n, {
                 "note_num": n, "title": "", "status": "", "reason": "",
                 "placements": [], "reviewer_added": False,
@@ -1025,6 +1056,12 @@ async def notes_coverage_endpoint(run_id: int):
                 "title": r["title"] or "",
                 "state": r["status"],
                 "reason": r["reason"],
+                "page_lo": r["page_lo"] if r["page_lo"] is not None else (
+                    saved_pages[0] if saved_pages else None
+                ),
+                "page_hi": r["page_hi"] if r["page_hi"] is not None else (
+                    saved_pages[1] if saved_pages else None
+                ),
                 "placements": r["placements"] or navigation.get(
                     (n, subnote_key_for_note(n, r["subnote_ref"])), [],
                 ),

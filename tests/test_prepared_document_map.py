@@ -151,6 +151,52 @@ def test_numbered_note_starts_at_its_own_printed_number(
             validate_document_map(prepared, DocumentMap.model_validate(raw))
 
 
+@pytest.mark.parametrize("first_note_page", [1, 2])
+def test_unnumbered_disclosure_after_notes_heading_cannot_be_metadata(prepared, first_note_page):
+    """An introduction must stay owned even when Note 1 starts on a new page."""
+    for block in prepared.blocks[:2]:
+        block["page"] = first_note_page
+    prepared.blocks.insert(0, {'block_id': 'intro', 'page': 1,
+        'block_kind': 'paragraph',
+        'canonical_html': '<p>The company is incorporated in Malaysia and provides services.</p>',
+        'locator': {}})
+    prepared.blocks.insert(0, {'block_id': 'notes-title', 'page': 1,
+        'block_kind': 'heading',
+        'canonical_html': '<h1>Notes to the financial statements</h1>',
+        'locator': {}})
+    raw = mapped()
+    raw['ownership_ranges'].insert(0, {'first_block_id': 'notes-title',
+        'last_block_id': 'intro', 'owner_kind': 'metadata',
+        'reason_code': 'DOCUMENT_METADATA'})
+    with pytest.raises(ValueError, match='unnumbered disclosure'):
+        validate_document_map(prepared, DocumentMap.model_validate(raw))
+
+    raw['ownership_ranges'][0]['last_block_id'] = 'notes-title'
+    raw['ownership_ranges'].insert(1, {'first_block_id': 'intro',
+        'last_block_id': 'intro', 'owner_kind': 'note',
+        'source_note_id': 'corporate-information', 'source_note_num': '',
+        'source_note_title': 'Corporate information'})
+    _, assigned = validate_document_map(prepared, DocumentMap.model_validate(raw))
+    assert assigned[1]['owner_kind'] == 'note'
+
+
+
+def test_notes_reporting_period_can_remain_metadata_with_source_reason(prepared):
+    prepared.blocks[:0] = [
+        {'block_id': 'notes-title', 'page': 1, 'block_kind': 'heading',
+         'canonical_html': '<h1>Notes to the financial statements</h1>', 'locator': {}},
+        {'block_id': 'period', 'page': 1, 'block_kind': 'paragraph',
+         'canonical_html': '<p>For the financial year ended 31 December 2025</p>', 'locator': {}},
+    ]
+    raw = mapped()
+    raw['ownership_ranges'].insert(0, {
+        'first_block_id': 'notes-title', 'last_block_id': 'period',
+        'owner_kind': 'metadata', 'reason_code': 'DOCUMENT_METADATA',
+        'metadata_reason': 'The section title and reporting-period subtitle identify the document, not a disclosure.',
+    })
+    _, assignments = validate_document_map(prepared, DocumentMap.model_validate(raw))
+    assert [item['owner_kind'] for item in assignments[:2]] == ['metadata', 'metadata']
+
 def test_unsupported_furniture_without_a_fallback_still_fails(prepared):
     raw = mapped()
     raw['ownership_ranges'][0]['first_block_id'] = 'b'
