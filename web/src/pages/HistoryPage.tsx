@@ -282,101 +282,6 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
     }
   }, [onResumeDraft]);
 
-  // Step 12: Regenerate notes — the NotesReviewTab already showed the
-  // confirm dialog when any cells were user-edited, so by the time this
-  // handler fires the user has opted in to clobbering their edits.
-  //
-  // Peer-review [HIGH] #1: earlier this redirected to `?session=...#notes`,
-  // a URL no code consumed. The regenerate now POSTs to the
-  // `/api/runs/{id}/rerun-notes` endpoint (which reads the run's stored
-  // session + config server-side and kicks off a notes-only
-  // run_multi_agent_stream). We consume the SSE stream just enough to
-  // know when it's done, then refresh the run detail so the editor
-  // picks up the fresh notes cells.
-  const [regenStatus, setRegenStatus] = useState<
-    "idle" | "running" | "succeeded" | "failed"
-  >("idle");
-  const handleRegenerateNotes = useCallback(
-    async (targetRunId: number) => {
-      setRegenStatus("running");
-      try {
-        const resp = await fetch(`/api/runs/${targetRunId}/rerun-notes`, {
-          method: "POST",
-        });
-        if (!resp.ok || !resp.body) {
-          // Drain the body so the failure isn't silently lost, but surface it
-          // through the UI banner (regenStatus) rather than console output
-          // (peer-review [4]).
-          await resp.text().catch(() => "");
-          setRegenStatus("failed");
-          return;
-        }
-        // Consume the SSE stream until `run_complete` arrives. We don't
-        // render per-event progress in History — this is a "show a
-        // spinner, refresh when done" flow. ExtractPage remains the
-        // live-streaming surface for in-progress runs.
-        //
-        // The regenerate creates a NEW run_id server-side (every
-        // run_multi_agent_stream invocation inserts a fresh runs row).
-        // We parse it out of the stream so we can navigate the detail
-        // page to the new run when the stream finishes — otherwise
-        // the page would keep displaying the old run's notes cells
-        // indefinitely, even though the new run is the fresh one.
-        const reader = resp.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-        let completed = false;
-        let newRunId: number | null = null;
-        while (!completed) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          // Opportunistically snag the run_id from any SSE `data:`
-          // line that carries it. Both the `status: starting` and
-          // `run_complete` events include it now. Cheap substring
-          // extraction avoids parsing every frame.
-          if (newRunId === null) {
-            const match = buffer.match(/"run_id"\s*:\s*(\d+)/);
-            if (match) newRunId = parseInt(match[1], 10);
-          }
-          if (buffer.includes("event: session-expired")) {
-            // Session idled out mid-regenerate — drop to the login page.
-            window.dispatchEvent(new CustomEvent("auth:unauthorized"));
-            setRegenStatus("failed");
-            return;
-          }
-          if (buffer.includes("event: run_complete")) {
-            completed = true;
-          }
-        }
-        setRegenStatus("succeeded");
-        // Navigate to the newly-created run so the editor shows the
-        // regenerated content. The pushState/popstate plumbing in
-        // App.tsx picks this up via the `selectedRunId` state. Fall
-        // back to refreshing the current detail if the stream didn't
-        // surface a run_id (legacy backend).
-        if (newRunId !== null && newRunId !== targetRunId) {
-          window.history.pushState({}, "", `/history/${newRunId}`);
-          // Trigger the App-level popstate handler so URL → state
-          // round-trips uniformly (ensures document.title updates too).
-          window.dispatchEvent(new PopStateEvent("popstate"));
-        } else {
-          try {
-            const fresh = await fetchRunDetail(targetRunId);
-            setDetail(fresh);
-          } catch {
-            /* leave stale detail — user can refresh manually */
-          }
-        }
-      } catch {
-        // Network/transport failure — surfaced via the regenStatus banner
-        // (peer-review [4]); no console output in production UI.
-        setRegenStatus("failed");
-      }
-    },
-    [],
-  );
-
   // Client-side filing-standard filter. The server doesn't filter on this
   // today (per the plan: launch volumes are low and the JSON1 predicate
   // isn't guaranteed across SQLite builds). We still paginate server-side,
@@ -409,18 +314,6 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
   if (selectedId != null) {
     return (
       <div style={styles.detailContainer}>
-        {regenStatus === "running" && (
-          <div role="status" style={styles.regenBanner}>
-            Regenerating notes — this usually takes 30-60 seconds. You
-            can keep this tab open; the editor will refresh automatically
-            when it finishes.
-          </div>
-        )}
-        {regenStatus === "failed" && (
-          <div role="alert" style={styles.regenBannerError}>
-            Regenerate failed. Check the server logs, then try again.
-          </div>
-        )}
         <RunDetailPage
           detail={detail}
           isLoading={isDetailLoading}
@@ -443,7 +336,6 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
           onResumeDraft={onResumeDraft}
           onForceAbort={handleForceAbort}
           onRestart={handleRestart}
-          onRegenerateNotes={handleRegenerateNotes}
         />
       </div>
     );
@@ -536,22 +428,6 @@ const styles = {
     display: "flex",
     flexDirection: "column" as const,
     gap: pwc.space.lg,
-  } as React.CSSProperties,
-  regenBanner: {
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-    background: pwc.grey50,
-    border: "none",
-    borderRadius: pwc.radius.md,
-    color: pwc.grey800,
-    fontSize: 13,
-  } as React.CSSProperties,
-  regenBannerError: {
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-    background: pwc.orange50,
-    border: "none",
-    borderRadius: pwc.radius.md,
-    color: pwc.grey800,
-    fontSize: 13,
   } as React.CSSProperties,
   loadMoreBtn: {
     ...ui.buttonQuiet,

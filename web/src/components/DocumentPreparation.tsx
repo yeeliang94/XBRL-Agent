@@ -105,7 +105,7 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
   // Page counts exclude the cross-page continuation checks that can finish later.
   const checkComplete = pagesComplete;
   const missingDocument = snapshot == null && connectionError?.startsWith("Document not found.");
-  return <section aria-label="Document preparation" style={{ padding: `${pwc.space.lg}px 0`, borderBottom: `1px solid ${pwc.grey200}` }}>
+  return <section aria-label="Document preparation" style={{ padding: `${pwc.space.lg}px 0` }}>
     <div style={{ display: "flex", alignItems: "center", gap: pwc.space.md, flexWrap: "wrap" }}>
       <h2 style={{ ...ui.sectionTitle, margin: 0 }}>Document preparation</h2>
       <span>{snapshot ? labels[snapshot.status] : missingDocument ? "Unavailable" : "Connecting"}</span>
@@ -165,10 +165,10 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
           state: actionRequired === "confirm_setup" ? "Action required" : "Waiting",
         },
       ].map((step) => (
-        <li key={step.label} className="preparation-step-row" style={{ display: "grid", gridTemplateColumns: "minmax(180px, 1fr) minmax(220px, 2fr) auto", gap: pwc.space.md, alignItems: "center", padding: `${pwc.space.sm}px 0`, borderBottom: `1px solid ${pwc.grey200}`, fontSize: 14 }}>
+        <li key={step.label} className="preparation-step-row" style={{ display: "grid", gridTemplateColumns: "minmax(180px, 1fr) minmax(220px, 2fr) 120px", gap: pwc.space.md, alignItems: "center", padding: `${pwc.space.sm}px 0`, borderBottom: `1px solid ${pwc.grey200}`, fontSize: 14 }}>
           <strong style={{ fontFamily: pwc.fontHeading, fontWeight: pwc.weight.semibold }}>{step.label}</strong>
           <span style={{ color: pwc.grey700 }}>{step.detail}</span>
-          <span style={{ color: step.state === "Action required" ? pwc.orange700 : step.state === "Stopped" ? pwc.errorText : pwc.grey700, fontWeight: step.state === "Working" || step.state === "Action required" ? 600 : 400 }}>
+          <span style={{ textAlign: "right", color: step.state === "Action required" ? pwc.orange700 : step.state === "Stopped" ? pwc.errorText : pwc.grey700, fontWeight: step.state === "Working" || step.state === "Action required" ? 600 : 400 }}>
             {step.state}
           </span>
         </li>

@@ -764,10 +764,6 @@ export interface RunConfigPayload {
    *  explicitly selects notes templates; matches the face-statement
    *  ``models`` field shape for consistency. */
   notes_models?: Partial<Record<NotesTemplateType, string>>;
-  /** Evals workspace (v30): how many identically-configured runs to launch
-   *  back-to-back for a consistency measurement. 1 (default) = a single normal
-   *  run; 2–5 links the runs into a repeat group. */
-  repeats?: number;
 }
 
 // --- Phase 10: Per-agent state for tab-based UI ---
@@ -980,10 +976,6 @@ export interface RunDetailJson {
   cross_checks: RunCrossCheckJson[];
   // v8 telemetry rollup. Optional for back-compat with older payloads.
   telemetry_rollup?: TelemetryRollupJson;
-  // v30 evals workspace: set when this run is one of N repeats launched
-  // together for a consistency measurement (docs/PLAN-evals-workspace.md).
-  repeat_group_id?: number | null;
-  repeat_index?: number | null;
   app_version?: string | null;
   // docs/PLAN-pdf-source-sidecar.md: persisted outcome of the scanned-PDF
   // transcription pass, so the run page shows the notice after a reload.
@@ -1009,53 +1001,6 @@ export interface RunEventJson {
   event: string;
   data: Record<string, unknown>;
   timestamp: number;
-}
-
-// Evals workspace (v30): a repeat group + its computed consistency result,
-// as returned by GET /api/repeat-groups/{id}. Feeds the ConsistencyPanel.
-export interface RepeatGroupJson {
-  id: number;
-  created_at: string;
-  repeats_requested: number;
-  benchmark_id: number | null;
-  status: string; // running | complete | partial
-  config: Record<string, unknown> | null;
-  consistency: ConsistencyJson | null;
-  // accuracy: the repeat's own graded score (null when ungraded) — the PRD
-  // requires per-repeat accuracy next to the stability figure (Step 11).
-  runs: {
-    id: number;
-    status: string;
-    repeat_index: number | null;
-    accuracy?: number | null;
-  }[];
-}
-
-export interface ConsistencyDisagreement {
-  key: [string, string, string]; // concept_uuid, period, entity_scope
-  // Human line-item name resolved server-side (Step 11); absent when the
-  // concept uuid no longer resolves — the panel falls back to the raw key.
-  sheet?: string;
-  label?: string;
-  // presence rows
-  filled_by?: number[];
-  n_present?: number;
-  n_repeats?: number;
-  // value rows
-  values?: number[];
-  spread?: number;
-}
-
-export interface ConsistencyJson {
-  available: boolean;
-  n_repeats: number;
-  union_slots: number;
-  unanimous: number;
-  consistency: number | null;
-  presence_disagreements: ConsistencyDisagreement[];
-  value_disagreements: ConsistencyDisagreement[];
-  unanimous_right: number | null;
-  unanimous_wrong: number | null;
 }
 
 export interface RunsFilterParams {

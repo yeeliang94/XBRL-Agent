@@ -208,7 +208,7 @@ describe("Simplified template-oriented review", () => {
     for (const requirement of [
       "Show Review only on populated fields produced or materially changed by automation",
       "Do not show evidence prose, appearance provenance, internal row numbers",
-      "appearance defaults belong in Settings",
+      "Appearance defaults belong in Settings",
       "meaningful destination subheadings, never technical sheet names",
       "immediately returns the PDF to the source note's cited page",
       "description columns receive priority and wrap",
@@ -216,6 +216,7 @@ describe("Simplified template-oriented review", () => {
     ]) {
       expect(designSystem).toContain(requirement);
     }
+    expect(designSystem).not.toContain("Re-extract notes");
   });
 
   test("pins the application-wide clarity contract", () => {

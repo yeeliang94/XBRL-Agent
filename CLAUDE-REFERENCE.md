@@ -556,7 +556,7 @@ Two rules govern every step:
   status value must not require a full-table migration (same for the
   `error_type` columns).
 
-Two things are **retained but inert — do NOT "clean them up":**
+These items are **retained but inert — do NOT "clean them up":**
 
 - **`runs.orchestration`** (v10, `TEXT DEFAULT 'split'`) — the monolith
   experiment was deleted, but the column stays (always `'split'`) so the schema
@@ -564,6 +564,8 @@ Two things are **retained but inert — do NOT "clean them up":**
 - **`doc_conversions`** table (v21) — the scanned-PDF feature was removed
   (gotcha #26); the table stays as an inert artifact so the migration chain
   replays intact. No code reads it.
+- **`repeat_groups`** table and `runs.repeat_group_id` / `repeat_index` (v30) —
+  repeat-run execution was removed; old rows and the migration path remain.
 
 Migration history currently documented here through v46, with each feature
 detailed in its linked gotcha: v11
@@ -1126,10 +1128,9 @@ Key invariants:
 - **Cap is 30,000 RENDERED chars** (`notes.html_to_text.rendered_length`), not
   raw HTML; sanitiser + writer enforce it, and the PATCH endpoint returns 413
   over the limit.
-- **Agent re-run CLOBBERS edits:** the coordinator calls
+- **A targeted agent retry replaces existing sheet rows:** the coordinator calls
   `delete_notes_cells_for_run_sheet(run_id, sheet)` before writing a fresh batch.
-  A confirm dialog gates this, fed by
-  `GET /api/runs/{run_id}/notes_cells/edited_count`.
+  The post-run notes re-extraction action and its edited-count endpoint were removed.
 - **The HTML tag whitelist in `prompts/_notes_base.md` must match the sanitiser's
   `ALLOWED_TAGS`** (`notes/html_sanitize.py`) — a divergence silently strips
   markup the prompt invited.
@@ -2517,41 +2518,13 @@ Phase 0 converter spike + real-run validation (Steps 6/10) and Windows
 enablement (Step 11) are operator/hardware gates, still open. Plan:
 docs/PLAN-word-input.md.
 
-### 30. Repeats and consistency — normal runs, fixed scoring
+### 30. Repeat-run compatibility history
 
-A run can be launched as N identically configured repeats to measure how
-stable extraction is (docs/PLAN-evals-workspace.md). Every repeat is a
-completely normal extraction run; repeats only launch, watch and score
-agreement, and never alter extraction behaviour. Schema v30 added the repeat
-tables; all additive (#11).
-
-Load-bearing invariants:
-
-- **Consistency = unanimous agreement over the union of slots any repeat
-  filled** (`eval/consistency.py`). It needs at least two finished repeats,
-  otherwise it is "unavailable", never a misleading 100%. Scoring uses one run
-  per `repeat_index` (`repo.deduped_repeat_run_ids`). The formula lives in a
-  pure module with hand-built fixtures; change it and its pinning test
-  together. The optional gold cross only applies to historical groups that
-  carry a `benchmark_id`.
-- **Repeats ride one SSE stream** (`server.run_repeat_group_stream`): N runs
-  back to back sharing ONE `session_id` (so Stop-All / disconnect reaches the
-  live repeat) with isolated output subdirs. Consistency is finalized in the
-  generator's `finally` (abort mid-group → `partial`). Do NOT reintroduce a
-  separate cancel channel. Preparation uses a deep copy of each run request.
-  Repeat folders retain the prepared PDF/HTML, metadata, document map and
-  checkpoint so every repeat uses the same prepared source and inventory
-  overrides.
-- **The ConsistencyPanel is a run-page SECTION, not a `role="tab"`** (#7).
-- **The suites workspace is retired.** The `/evals` page, suite routes, the
-  batch runner, startup suite reconciliation, scorecards, trends and compare
-  are removed. `eval_suites`, `eval_suite_docs`, `eval_suite_runs`,
-  `eval_suite_run_docs` and `runs.suite_run_id` stay as inert history (#11);
-  History no longer hides old suite child runs.
-
-Pinned by `tests/test_db_schema_v30.py`/`_v31.py`, `test_eval_consistency.py`,
-`test_repeat_group_launch.py`, `test_preparation_integration.py`,
-`test_document_preparation.py`, and the `ConsistencyPanel` web test.
+Repeat-run launching and scoring were removed. New extraction requests always
+start one run, even when an older saved draft contains a `repeats` setting.
+The v30 `repeat_groups` table and `runs.repeat_group_id` / `repeat_index`
+columns remain inert so existing databases migrate forward and historical runs
+remain readable. Pinned by `tests/test_db_schema_v30.py` and `_v31.py`.
 
 ### 31. Notes source integrity — a COUNT, not a claim; ships OFF
 

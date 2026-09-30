@@ -248,14 +248,6 @@ const makeEmptySelections = (): Record<StatementType, VariantSelection> =>
 const makeAllEnabled = (): Record<StatementType, boolean> =>
   mapStatements(() => true);
 
-// Notes templates start OFF by default — PLAN §4 Phase D.2: "5 new checkboxes
-// (default OFF)". Users opt in per run.
-const makeNotesDisabled = (): Record<NotesTemplateType, boolean> => {
-  const out = {} as Record<NotesTemplateType, boolean>;
-  for (const nt of NOTES_TEMPLATE_TYPES) out[nt] = false;
-  return out;
-};
-
 // ---------------------------------------------------------------------------
 // initialConfig narrowing helpers (peer-review MEDIUM #5)
 //
@@ -332,13 +324,14 @@ function _seedModelOverrides(
 function _seedNotesEnabled(
   cfg: Record<string, unknown> | null | undefined,
 ): Record<NotesTemplateType, boolean> {
-  const out = makeNotesDisabled();
+  const out = {} as Record<NotesTemplateType, boolean>;
+  for (const nt of NOTES_TEMPLATE_TYPES) out[nt] = true;
   if (!cfg || !Array.isArray(cfg.notes_to_run)) return out;
   const wanted = new Set<string>(
     (cfg.notes_to_run as unknown[]).filter((n): n is string => typeof n === "string"),
   );
   for (const nt of NOTES_TEMPLATE_TYPES) {
-    if (wanted.has(nt)) out[nt] = true;
+    out[nt] = wanted.has(nt);
   }
   return out;
 }
@@ -667,14 +660,6 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
   const handleDenominationChange = useCallback((next: Denomination) => {
     setDenomination({ value: next, userSelected: true });
   }, []);
-  // Evals workspace (Step D1): repeats-for-consistency. 1 = a normal single
-  // run; 2–5 launches that many identically-configured runs back-to-back and
-  // scores their agreement. Seeded from a rehydrated draft's `repeats`.
-  const [repeats, setRepeats] = useState<number>(() => {
-    const v = (initialConfig as { repeats?: unknown } | undefined)?.repeats;
-    const n = typeof v === "number" ? v : 1;
-    return Math.max(1, Math.min(5, n));
-  });
   // When rehydrating, treat the persisted standard as user intent — scout
   // must NOT silently overwrite a user's saved choice on a refresh.
   const filingStandardTouchedRef = useRef(initialConfig?.filing_standard != null);
@@ -1245,15 +1230,12 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       denomination_user_selected: denominationUserSelected,
       notes_to_run,
       notes_models,
-      // Evals workspace (Step D1): repeats-for-consistency. Only sent when >1
-      // so a normal run's config stays byte-identical to before this feature.
-      ...(repeats > 1 ? { repeats } : {}),
     };
   }, [
     statementsEnabled, variantSelections, modelOverrides, infopack,
     notesInventoryOverrides,
     filingLevel, filingStandard, denomination, denominationUserSelected, notesEnabled,
-    notesModelOverrides, repeats,
+    notesModelOverrides,
   ]);
 
   const handleRun = useCallback(() => {
@@ -1345,10 +1327,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
         </button>
       </div>
 
-      <section style={styles.setupGroup} aria-labelledby="filing-details-heading">
-        <h3 id="filing-details-heading" style={ui.subsectionTitle}>
-          Filing details
-        </h3>
+      <section style={styles.setupGroup} aria-label="Filing details">
         <div style={styles.setupGrid}>
 
       {/* Filing standard: MFRS (default) or MPERS. Mirrors the Filing Level
@@ -1473,53 +1452,6 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       </div>
         </div>
       </section>
-
-      {/* Evals workspace (Step D1): repeats-for-consistency. Open to all users
-          (no gold needed), inside Advanced. 1 = a normal run; 2–5 launches that
-          many identically-configured runs back-to-back and scores their
-          agreement — flaky extraction becomes measurable even without gold. */}
-      {showAdvanced && (
-      <div style={styles.section}>
-        <span style={styles.sectionLabel}>Repeats (consistency)</span>
-        <div style={{ display: "inline-flex", alignSelf: "flex-start", border: `1px solid ${pwc.grey200}`, borderRadius: pwc.radius.md, overflow: "hidden" }}>
-          {([1, 2, 3, 4, 5] as const).map((n, idx) => {
-            const active = repeats === n;
-            return (
-              <button
-                key={n}
-                type="button"
-                className="segmented-control-button"
-                aria-label={`Repeats ${n}`}
-                aria-pressed={active}
-                data-testid={`repeats-${n}`}
-                onClick={() => setRepeats(n)}
-                style={{
-                  fontFamily: pwc.fontHeading,
-                  fontSize: 14,
-                  minHeight: 40,
-                  fontWeight: active ? 600 : 500,
-                  padding: "8px 18px",
-                  border: "none",
-                  borderRight: idx < 4 ? `1px solid ${pwc.grey200}` : "none",
-                  borderRadius: 0,
-                  background: active ? pwc.black : pwc.white,
-                  color: active ? pwc.white : pwc.grey700,
-                  cursor: "pointer",
-                }}
-              >
-                {n}
-              </button>
-            );
-          })}
-        </div>
-        {repeats > 1 && (
-          <span style={{ ...ui.bodyText, color: pwc.grey700 }}>
-            Runs {repeats}× back-to-back (≈{repeats}× the time &amp; tokens); the
-            run page shows a run-to-run agreement score afterwards.
-          </span>
-        )}
-      </div>
-      )}
 
       {showAdvanced && (<>
       {(!preparation || preparation.status === "not_started") && <>
@@ -1654,13 +1586,12 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
 
       </>}
 
+      </>)}
+
       {/* Statement formats are optional overrides. The automatic scout picks
           a supported format when a row is left blank. */}
       <div style={styles.section}>
         <span style={styles.sectionLabel}>Statement format overrides</span>
-        <span style={{ ...ui.bodyText, color: pwc.grey700 }}>
-          Leave a format blank to use the document scan's recommendation.
-        </span>
         <VariantSelector
           selections={variantSelections}
           enabledStatements={enabledStmts}
@@ -1668,8 +1599,6 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           filingStandard={filingStandard}
         />
       </div>
-
-      </>)}
 
       {/* Which statements to extract. The per-statement AI-model picker only
           shows inside Advanced (Phase 3). */}
@@ -1692,7 +1621,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
         </div>
       </DisclosureSection>
 
-      {/* Notes templates — independent of face statements. Default OFF.
+      {/* Notes templates — independent of face statements. Selected by default.
           The per-note model picker also lives behind Advanced. */}
       <DisclosureSection
         id="notes-selection"
@@ -1755,20 +1684,6 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
             </div>
           );
         })()}
-        {/* Post-scan nudge (UX-QA #24): notes default OFF and read as
-            "available, not selected" — but after a scan that found notes,
-            invite the user to include them. Otherwise a scan that reports
-            "Found 14 notes" seems to do nothing, and users conclude notes
-            can't be included at all. */}
-        {infopack &&
-          Array.isArray(infopack.notes_inventory) &&
-          (infopack.notes_inventory as unknown[]).length > 0 &&
-          !NOTES_TEMPLATE_TYPES.some((n) => notesEnabled[n]) && (
-            <div style={styles.notesNudge} role="status">
-              The preview scan found notes in this document. Turn on notes
-              extraction below to include them; notes are off by default.
-            </div>
-          )}
         {preparation?.status === "succeeded" && enabledNotes.length > 0 && (
           <div style={styles.notesNudge} role="status">
             A notes run includes Corporate information, Accounting policies, and

@@ -117,7 +117,7 @@ def test_create_run_accepts_explicit_override(tmp_path):
     with db_session(db) as conn:
         run_id = create_run(
             conn, "x.pdf", session_id="s", output_dir="/tmp/s",
-            app_version="explicit-1.0", repeat_group_id=None, repeat_index=None,
+            app_version="explicit-1.0",
         )
         run = fetch_run(conn, run_id)
     assert run.app_version == "explicit-1.0"

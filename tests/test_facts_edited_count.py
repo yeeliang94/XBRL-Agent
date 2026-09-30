@@ -1,6 +1,6 @@
 """Phase 2.3 — GET /api/runs/{id}/facts/edited_count.
 
-The face-statement analogue of notes_cells/edited_count: it counts the
+This endpoint counts the
 user_override facts touched after the run finished, so a re-run / correction
 confirm dialog can warn "N edited values will be overwritten". The signal is
 value_status='user_override' AND updated_at > run.ended_at — neither the

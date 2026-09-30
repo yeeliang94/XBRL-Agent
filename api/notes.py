@@ -1,9 +1,8 @@
-"""Notes-cell + edited-count routes.
+"""Notes-cell and fact edited-count routes.
 
 Endpoints:
   ``GET   /api/runs/{run_id}/notes_cells``                 — cells grouped by sheet
   ``PATCH /api/runs/{run_id}/notes_cells/{sheet}/{row}``   — edit one cell's HTML
-  ``GET   /api/runs/{run_id}/notes_cells/edited_count``    — post-run notes edits
   ``GET   /api/runs/{run_id}/facts/edited_count``          — post-run fact edits
   ``GET   /api/runs/{run_id}/notes_tables``                — every table, for review
 
@@ -888,45 +887,12 @@ async def notes_cell_restore_source(
     }
 
 
-@router.get("/api/runs/{run_id}/notes_cells/edited_count")
-async def notes_cells_edited_count_endpoint(run_id: int):
-    """Step 12 of docs/Archive/PLAN-NOTES-RICH-EDITOR.md — count how many
-    ``notes_cells`` rows were touched *after* the run finished.
-
-    The Regenerate-notes confirm dialog opens only when this returns
-    ``count > 0``. Comparing ``updated_at > runs.ended_at`` is the
-    cheap proxy for "user edited this cell post-run" — the writer
-    never updates cells after the run's terminal event, so any later
-    ``updated_at`` came from the PATCH endpoint.
-
-    404 if the run does not exist. For runs that are still executing
-    (``ended_at`` is NULL), we report 0 — there's nothing to lose
-    because the agent is still the canonical source.
-    """
-    from db import repository as repo
-    conn = server._open_audit_conn()
-    try:
-        run = repo.fetch_run(conn, run_id)
-        if run is None:
-            raise HTTPException(status_code=404, detail="Run not found")
-        if not run.ended_at:
-            return {"count": 0}
-        row = conn.execute(
-            "SELECT COUNT(*) FROM notes_cells "
-            "WHERE run_id = ? AND updated_at > ?",
-            (run_id, run.ended_at),
-        ).fetchone()
-    finally:
-        conn.close()
-    return {"count": int(row[0]) if row else 0}
-
-
 @router.get("/api/runs/{run_id}/facts/edited_count")
 async def facts_edited_count_endpoint(run_id: int):
     """Phase 2.3 — count face-statement values the user edited after the
-    run finished (the face-statement analogue of notes_cells/edited_count).
+    run finished.
 
-    Mirrors the notes contract: a re-run / correction pass clobbers user
+    A re-run / correction pass clobbers user
     edits, so the confirm dialog opens only when this returns ``count > 0``.
     A user edit is a ``run_concept_facts`` row stamped ``source='manual edit'``
     (set only by ``patch_fact_value``) whose ``updated_at`` is after the run's

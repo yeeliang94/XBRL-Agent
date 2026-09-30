@@ -141,11 +141,6 @@ export interface ConceptsPageProps {
   // attention disclosure can target failing checks. Optional — the standalone
   // template view has none.
   initialCrossChecks?: CrossCheckResult[];
-  // Re-extract-notes handler, threaded to the embedded notes editor so its
-  // "Re-extract notes" button actually launches a rerun (it used to no-op in
-  // this path once the Notes-tab link-out was removed). Optional — absent in
-  // the standalone template view, where the button falls back to inert.
-  onRegenerateNotes?: (runId: number) => void;
   onPreparationBlocked?: (blocked: boolean) => void;
   /** Open the unified review workspace directly on its persistent Notes
    *  index/editor/source composition. Used by the run-detail Notes route. */
@@ -307,7 +302,6 @@ function humanSlotsForRow(
 export function ConceptsPage({
   runId,
   initialCrossChecks,
-  onRegenerateNotes,
   onPreparationBlocked,
   initialView = "figures",
   humanFile = null,
@@ -1034,7 +1028,7 @@ export function ConceptsPage({
         style={styles.templateRail}>
         {humanActive
           ? <ColumnHeader title="mTool worksheets" testId="statements" onHide={() => setRailOpen(false)} />
-          : <strong style={ui.sectionTitle}>mTool worksheets</strong>}
+          : <div style={styles.columnHeader}><strong style={ui.sectionTitle}>mTool worksheets</strong></div>}
             <div className="review-sheet-picker-group" style={styles.controlGroup}>
               <label htmlFor="review-sheet-picker" style={ui.fieldLabel}>
                 Statement
@@ -1071,7 +1065,7 @@ export function ConceptsPage({
               </select>
             </div>
             <div style={styles.searchGroup}>
-              <label htmlFor="concept-search" style={ui.fieldLabel}>
+              <label htmlFor="concept-search" style={styles.visuallyHidden}>
                 Search
               </label>
               <input
@@ -1115,7 +1109,7 @@ export function ConceptsPage({
         {!notesActive && (
           <section style={styles.toolbar} aria-label="Review controls">
             {isGroupRun && (
-              <div style={styles.controlGroup}>
+              <div style={styles.inlineControlGroup}>
                 <span style={ui.fieldLabel}>Entity</span>
                 <SegmentedControl
                   testId="entity-scope-toggle"
@@ -1127,7 +1121,7 @@ export function ConceptsPage({
               </div>
             )}
 
-            <div style={styles.controlGroup}>
+            <div style={styles.inlineControlGroup}>
               <label htmlFor="concept-row-filter" style={ui.fieldLabel}>
                 Rows
               </label>
@@ -1241,7 +1235,6 @@ export function ConceptsPage({
               focusSheet={activeNotesSheet}
               focusCell={notesFocusCell}
               onActiveCellPages={handleNotesCellPages}
-              onRegenerate={onRegenerateNotes}
               onPreparationBlocked={onPreparationBlocked}
               onComparisonChange={() => setConflictReloadKey((key) => key + 1)}
               humanFigures={humanActive ? humanView?.slots : null}
@@ -2502,6 +2495,9 @@ function EditableValueCell({
   );
 }
 
+/** Height of the shared header band at the top of each review column. */
+const REVIEW_HEADER_HEIGHT = 44;
+
 const styles = {
   workspace: {
     minWidth: 0,
@@ -2537,7 +2533,7 @@ const styles = {
     paddingRight: pwc.space.md,
     display: "flex",
     flexDirection: "column" as const,
-    gap: pwc.space.md,
+    gap: pwc.space.lg,
     position: "sticky" as const,
     top: 116,
     alignSelf: "flex-start",
@@ -2551,10 +2547,14 @@ const styles = {
     flexDirection: "column" as const,
     paddingRight: pwc.space.lg,
   } as React.CSSProperties,
+  // Every review column opens with a header band of this height, so the
+  // column titles and the Rows filter share one line and the search box,
+  // table and PDF card below them all start at the same height.
   columnHeader: {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
+    minHeight: REVIEW_HEADER_HEIGHT,
     padding: `0 ${pwc.space.xs}px`,
   } as React.CSSProperties,
   columnHeaderTitle: {
@@ -2649,12 +2649,12 @@ const styles = {
     lineHeight: 1.5,
   } as React.CSSProperties,
   toolbar: {
-    padding: `0 0 ${pwc.space.md}px`,
+    minHeight: REVIEW_HEADER_HEIGHT,
     marginBottom: pwc.space.lg,
     display: "flex",
     flexWrap: "wrap",
     gap: pwc.space.md,
-    alignItems: "end",
+    alignItems: "center",
     position: "sticky" as const,
     top: 0,
     zIndex: 5,
@@ -2663,6 +2663,22 @@ const styles = {
     display: "flex",
     flexDirection: "column" as const,
     gap: pwc.space.sm,
+  } as React.CSSProperties,
+  inlineControlGroup: {
+    display: "flex",
+    alignItems: "center",
+    gap: pwc.space.sm,
+  } as React.CSSProperties,
+  visuallyHidden: {
+    position: "absolute",
+    width: 1,
+    height: 1,
+    padding: 0,
+    margin: -1,
+    overflow: "hidden",
+    clip: "rect(0, 0, 0, 0)",
+    whiteSpace: "nowrap",
+    border: 0,
   } as React.CSSProperties,
   searchGroup: {
     flex: "0 0 auto",
@@ -2692,7 +2708,6 @@ const styles = {
     color: pwc.grey700,
     fontSize: 12,
     marginLeft: "auto",
-    paddingBottom: pwc.space.sm,
     whiteSpace: "nowrap" as const,
   } as React.CSSProperties,
   editedValuesSummary: {

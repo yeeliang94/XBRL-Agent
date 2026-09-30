@@ -3393,25 +3393,6 @@ class RunConfigRequest(BaseModel):
     # clients posting it don't 422.
     model: Optional[str] = None
 
-    # Evals workspace (v30): how many independent, identically-configured runs
-    # of this document to launch back-to-back for a consistency measurement.
-    # 1 (default) = a single normal run, no repeat group. 2–5 links the runs
-    # into a repeat_groups row and computes a run-to-run agreement score after
-    # the last one finishes (docs/PLAN-evals-workspace.md, Step D1).
-    repeats: int = 1
-
-    @field_validator("repeats")
-    @classmethod
-    def _clamp_repeats(cls, v: int) -> int:
-        # Defensive clamp so a malformed client can't spawn a runaway batch.
-        # Mirrors the extract-page control's 1..5 range.
-        try:
-            n = int(v)
-        except (TypeError, ValueError):
-            return 1
-        return max(1, min(5, n))
-
-
 class RunConfigPatchRequest(BaseModel):
     """Partial-update body for PATCH /api/runs/{id}.
 
@@ -3455,21 +3436,6 @@ class RunConfigPatchRequest(BaseModel):
     def _normalize_orchestration(cls, v):
         return None if v is None else "split"
 
-    # Evals workspace (v30): repeats-for-consistency, mirrors
-    # RunConfigRequest.repeats. Optional so a partial PATCH that doesn't touch
-    # it won't clobber a previously-saved value.
-    repeats: Optional[int] = None
-
-    @field_validator("repeats")
-    @classmethod
-    def _clamp_repeats_patch(cls, v):
-        if v is None:
-            return None
-        try:
-            n = int(v)
-        except (TypeError, ValueError):
-            return 1
-        return max(1, min(5, n))
     # `infopack` is the scout-derived inventory the legacy `POST /api/run/
     # {session_id}` endpoint receives in its request body. For the
     # persistent-draft flow there is no separate "scout output store" on
@@ -8649,212 +8615,6 @@ async def run_multi_agent_stream(
 
 
 # ---------------------------------------------------------------------------
-# Repeats + consistency (Evals workspace, Step D1)
-# ---------------------------------------------------------------------------
-def _seed_repeat_session_dir(base_dir: Path, index: int) -> Path:
-    """Give repeat *index* its own output subdir seeded with the run's inputs.
-
-    Repeat 0 uses the base session dir untouched (the common single-run shape).
-    Repeats 1..N-1 get ``{base}/repeat_{i}/`` with ``uploaded.pdf`` (and the
-    optional Word/HTML sidecars + filename record) copied in, so each repeat's
-    traces + workbooks are isolated instead of clobbering the previous one.
-    All repeats share the same ``session_id`` on purpose — that keeps Stop-All
-    (``/api/abort/{session_id}``) and the active-runs lock reaching whichever
-    repeat is currently in flight (they run strictly one at a time).
-    """
-    if index == 0:
-        return base_dir
-    sub = base_dir / f"repeat_{index}"
-    sub.mkdir(parents=True, exist_ok=True)
-    import shutil
-    # source_meta.json travels WITH source.html (peer review 2026-08-11):
-    # without it a transcribed sidecar is misclassified as Word-origin on
-    # repeats 1..N-1, so repeat prompts diverge and consistency scoring
-    # compares two different workflows.
-    for name in ("uploaded.pdf", "uploaded.docx", "source.html",
-                 "source_meta.json", "original_filename.txt"):
-        src = base_dir / name
-        if src.exists():
-            try:
-                shutil.copy2(src, sub / name)
-            except OSError:
-                logger.warning(
-                    "Failed to copy %s into repeat dir %s", name, sub,
-                    exc_info=True,
-                )
-    # Prepared inputs include revision-owned PDF/HTML, map cache and the
-    # checkpoint needed by inventory overrides. Keep the readiness marker last.
-    # Copy failures must stop the group rather than compare different pipelines.
-    preparation_files = sorted({*base_dir.glob("prepared-*"),
-                                *base_dir.glob("preparation-checkpoint-*.json")})
-    preparation_files += [base_dir / "preparation.json", base_dir / "preparation_status.json"]
-    for src in preparation_files:
-        if src.is_file():
-            shutil.copy2(src, sub / src.name)
-    return sub
-
-
-async def run_repeat_group_stream(
-    session_id: str,
-    session_dir: Path,
-    run_config: RunConfigRequest,
-    api_key: str,
-    proxy_url: str,
-    model_name: str,
-    *,
-    first_run_id: Optional[int] = None,
-) -> AsyncIterator[dict]:
-    """Launch N identically-configured runs of one document back-to-back and
-    score their agreement (Evals workspace, Step D1 / PRD Flow 2).
-
-    Each child is a completely normal run through ``run_multi_agent_stream`` —
-    its own audit row, traces, cross-checks, and the gotcha #10 terminal-status
-    guarantee. The children are linked by a ``repeat_groups`` row
-    (``repeat_group_id`` / ``repeat_index``); after the last one finishes we
-    compute + persist consistency on the group (``finalize_repeat_group``).
-
-    Sequential-in-one-stream by design: the client stays attached for the whole
-    group exactly as it does for one long run, so Stop-All / client-disconnect
-    abort the current repeat and the ``finally`` finalizes the group as
-    ``partial`` over whatever finished — no separate cancel channel needed.
-    """
-    from db import repository as repo
-    from eval.consistency import finalize_repeat_group
-    import sqlite3
-
-    n = max(1, min(5, int(getattr(run_config, "repeats", 1) or 1)))
-
-    # Create the group up-front so a crash before the first repeat still leaves
-    # an auditable row. config snapshot = the exact request every repeat runs.
-    group_id: Optional[int] = None
-    gconn = sqlite3.connect(str(AUDIT_DB_PATH))
-    try:
-        group_id = repo.create_repeat_group(
-            gconn,
-            config=run_config.model_dump(),
-            repeats_requested=n,
-        )
-        gconn.commit()
-    except Exception:
-        logger.warning("Failed to create repeat group for %s", session_id,
-                       exc_info=True)
-    finally:
-        gconn.close()
-    indices_to_run = list(range(n))
-
-    # Tell the client the group id + total so the consistency panel can attach
-    # and poll (GET /api/repeat-groups/{id}) as repeats land.
-    yield {"event": "repeat_group", "data": {
-        "group_id": group_id, "repeats_total": n,
-        "repeat_index": indices_to_run[0] if indices_to_run else n,
-    }}
-
-    def _finalize_group() -> Optional[dict]:
-        """Compute + persist consistency over whatever finished (best-effort so
-        a scoring failure never masks the run outcome — gotcha #20 spirit).
-        Returns the result dict, or None on failure / no group."""
-        if group_id is None:
-            return None
-        fconn = sqlite3.connect(str(AUDIT_DB_PATH))
-        try:
-            result = finalize_repeat_group(fconn, group_id)
-            fconn.commit()
-            return result.to_dict()
-        except Exception:
-            logger.warning("Failed to finalize repeat group %s", group_id,
-                           exc_info=True)
-            return None
-        finally:
-            fconn.close()
-
-    current_agen = None
-    finalized = False
-    try:
-        for i in indices_to_run:
-            # Announce which repeat is starting so the live UI can label it.
-            yield {"event": "repeat_progress", "data": {
-                "group_id": group_id, "repeat_index": i, "repeats_total": n,
-            }}
-
-            # Row ownership: repeat 0 reuses the already-running draft row when
-            # the draft-start path handed us one; otherwise this generator mints
-            # each child row (status running, linked to the group) and hands it
-            # to run_multi_agent_stream via existing_run_id.
-            child_dir = _seed_repeat_session_dir(session_dir, i)
-            child_run_id: Optional[int] = None
-            if i == 0 and first_run_id is not None:
-                child_run_id = first_run_id
-                if group_id is not None:
-                    lc = sqlite3.connect(str(AUDIT_DB_PATH))
-                    try:
-                        lc.execute(
-                            "UPDATE runs SET repeat_group_id = ?, "
-                            "repeat_index = 0 WHERE id = ?",
-                            (group_id, first_run_id),
-                        )
-                        lc.commit()
-                    finally:
-                        lc.close()
-            else:
-                cc = sqlite3.connect(str(AUDIT_DB_PATH))
-                try:
-                    child_run_id = repo.create_run(
-                        cc,
-                        pdf_filename="uploaded.pdf",
-                        session_id=session_id,
-                        output_dir=str(child_dir),
-                        config=run_config.model_dump(),
-                        scout_enabled=run_config.use_scout,
-                        orchestration=getattr(run_config, "orchestration", "split"),
-                        repeat_group_id=group_id,
-                        repeat_index=i,
-                    )
-                    cc.commit()
-                finally:
-                    cc.close()
-
-            current_agen = run_multi_agent_stream(
-                session_id=session_id,
-                session_dir=child_dir,
-                run_config=run_config,
-                api_key=api_key,
-                proxy_url=proxy_url,
-                model_name=model_name,
-                existing_run_id=child_run_id,
-            )
-            # Pass every child event straight through; the leading
-            # repeat_progress event tells the client which repeat produced them.
-            async for frame in current_agen:
-                yield frame
-            current_agen = None  # this repeat finished on its own
-
-        # Normal-completion path: finalize + surface consistency here, where
-        # yielding is safe. The finally handles the abort/disconnect path (it
-        # can't yield — the generator is closing).
-        result = _finalize_group()
-        finalized = True
-        if result is not None:
-            yield {"event": "consistency", "data": {
-                "group_id": group_id, **result,
-            }}
-    finally:
-        # Deterministic close of the in-flight child on abort/disconnect: an
-        # `async for` does NOT aclose its iterator when the body raises
-        # GeneratorExit, so without this the child's terminal-status write
-        # (gotcha #10) would depend on non-deterministic GC finalization.
-        if current_agen is not None:
-            try:
-                await current_agen.aclose()
-            except Exception:
-                pass
-        # If we didn't reach the normal finalize (abort/disconnect/exception),
-        # persist consistency now over whatever finished (lands 'partial'). No
-        # yield here — the generator may be closing.
-        if not finalized:
-            _finalize_group()
-
-
-# ---------------------------------------------------------------------------
 # Reviewer-pass orchestration helpers — used by api/reviewer.py (which reads
 # them as ``server.X``). The re-review / revert ROUTES live in api/reviewer.py;
 # these helpers stay here so they share the run_multi_agent_stream / fact-
@@ -9329,7 +9089,6 @@ from api.runs import router as _runs_router
 from api.notes import router as _notes_router
 from api.notes_formatter import router as _notes_formatter_router
 from api.files import router as _files_router
-from api.eval import router as _eval_router
 from api.mtool import router as _mtool_router
 from api.human_file import router as _human_file_router
 from auth.routes import router as _auth_router
@@ -9344,7 +9103,6 @@ app.include_router(_runs_router)
 app.include_router(_notes_router)
 app.include_router(_notes_formatter_router)
 app.include_router(_files_router)
-app.include_router(_eval_router)
 app.include_router(_mtool_router)
 app.include_router(_human_file_router)
 app.include_router(_auth_router)
@@ -9359,7 +9117,7 @@ from api.config_routes import (  # noqa: E402,F401
 from api.uploads import upload_pdf, scout_pdf  # noqa: E402,F401
 from api.run_control import (  # noqa: E402,F401
     run_multi_extraction, start_run_endpoint, abort_session, abort_agent,
-    rerun_notes, rerun_agent,
+    rerun_agent,
 )
 from api.reviewer import (  # noqa: E402,F401
     re_review, re_review_status, revert_to_original_endpoint,
@@ -9370,7 +9128,7 @@ from api.runs import (  # noqa: E402,F401
 )
 from api.notes import (  # noqa: E402,F401
     list_notes_cells_endpoint, patch_notes_cell_endpoint,
-    notes_cells_edited_count_endpoint, facts_edited_count_endpoint,
+    facts_edited_count_endpoint,
 )
 from api.notes_formatter import (  # noqa: E402,F401
     launch_notes_formatter, notes_formatter_status, notes_formatter_trace,

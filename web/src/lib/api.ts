@@ -11,7 +11,6 @@ import type {
   AgentTraceJson,
   AgentTraceManifestJson,
   SourceIntegrityMode,
-  RepeatGroupJson,
 } from "./types";
 import type { ClipboardFormatOptions } from "./clipboardFormat";
 import { ApiError } from "./errors";
@@ -472,17 +471,6 @@ export async function fetchPdfPageCount(runId: number): Promise<number | null> {
   try {
     const data = await apiFetch<{ pages: number }>(pdfInfoUrl(runId));
     return data.pages;
-  } catch {
-    return null;
-  }
-}
-
-/** Evals workspace (v30): fetch a repeat group + its consistency result. */
-export async function fetchRepeatGroup(
-  groupId: number,
-): Promise<RepeatGroupJson | null> {
-  try {
-    return await apiFetch<RepeatGroupJson>(`/api/repeat-groups/${groupId}`);
   } catch {
     return null;
   }

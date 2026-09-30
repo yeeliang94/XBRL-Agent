@@ -25,7 +25,6 @@ import { TabPanelFade } from "./TabPanelFade";
 import { NotesReviewerPanel } from "./NotesReviewerPanel";
 import { NotesTablesPanel } from "./NotesTablesPanel";
 import { NotesIntegrityPanel } from "./NotesIntegrityPanel";
-import { ConsistencyPanel } from "./ConsistencyPanel";
 import {
   buildToolTimeline,
   filterEventsBySubAgent,
@@ -69,11 +68,6 @@ export interface RunDetailViewProps {
   onForceAbort?: (runId: number) => void;
   /** Clone this run into a new draft while retaining reusable source work. */
   onRestart?: (runId: number) => void | Promise<void>;
-  /** Called when the user confirms "Regenerate notes" in the Notes
-   *  Review section. The parent wires this to the existing rerun
-   *  endpoint. Optional — legacy callers without Step 12 UX still
-   *  render the detail view unchanged. */
-  onRegenerateNotes?: (runId: number) => void;
   /** Gate the review link on canonical mode so legacy runs (which
    *  have no concept tree) don't link to an empty page — matches the TopNav
    *  / Results gating (peer-review F6). Defaults to false: hidden unless the
@@ -538,7 +532,7 @@ function HistoricalAgentWorkspace({ agents }: { agents: RunAgentJson[] }) {
 // Tab identity for the run-detail surface. Review + Values are gated on
 // canonical mode (the reviewer diff + concept tree only exist there).
 export function RunDetailView({
-  detail, onDelete, onResumeDraft, onForceAbort, onRestart, onRegenerateNotes,
+  detail, onDelete, onResumeDraft, onForceAbort, onRestart,
   canonicalEnabled = false, initialTab = "overview",
 }: RunDetailViewProps) {
   // Which tab is showing. Lazy content (Notes editor, Concepts workspace,
@@ -1229,9 +1223,6 @@ export function RunDetailView({
             <summary style={styles.perfSummary}>Run configuration</summary>
             <ConfigBlock config={detail.config} />
           </details>
-          {detail.repeat_group_id != null && (
-            <ConsistencyPanel groupId={detail.repeat_group_id} />
-          )}
           {!isDraft && (
             <section aria-label="Run actions" style={styles.runActions}>
               <span style={ui.fieldLabel}>Run actions</span>
@@ -1310,7 +1301,6 @@ export function RunDetailView({
             runId={detail.id}
             initialView="notes"
             initialCrossChecks={crossChecksForValidator(crossChecks)}
-            onRegenerateNotes={onRegenerateNotes}
             onPreparationBlocked={setNotesPreparationBlocked}
             humanFile={humanFile}
             onReplaceHumanFile={() => setHumanDialogOpen(true)}
@@ -1388,7 +1378,6 @@ export function RunDetailView({
             runId={detail.id}
             initialView="figures"
             initialCrossChecks={crossChecksForValidator(crossChecks)}
-            onRegenerateNotes={onRegenerateNotes}
             onPreparationBlocked={setNotesPreparationBlocked}
             humanFile={humanFile}
             onReplaceHumanFile={() => setHumanDialogOpen(true)}
@@ -1798,7 +1787,7 @@ const styles = {
     borderRadius: pwc.radius.md,
     background: "transparent",
     display: "grid",
-    gridTemplateColumns: "20px minmax(145px, 0.58fr) minmax(210px, 1fr) auto",
+    gridTemplateColumns: "20px minmax(180px, 36%) minmax(0, 1fr) 100px",
     gap: 11,
     alignItems: "center",
     textAlign: "left",
@@ -1823,6 +1812,7 @@ const styles = {
   historicalAgentState: {
     color: pwc.grey700,
     fontSize: 12,
+    textAlign: "right" as const,
     whiteSpace: "nowrap",
   } as React.CSSProperties,
   historicalAgentDetailPane: {
@@ -1885,7 +1875,7 @@ const styles = {
     display: "flex",
     flexDirection: "column" as const,
     gap: 4,
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    padding: 0,
     background: "transparent",
     border: "none",
     width: "100%",

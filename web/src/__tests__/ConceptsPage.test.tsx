@@ -1222,24 +1222,6 @@ describe("ConceptsPage", () => {
     expect(screen.queryByTestId("panel-notes-checklist")).toBeNull();
   });
 
-  test("compact Notes review keeps the re-extract action reachable", async () => {
-    const onRegenerate = vi.fn();
-    mockFetch((url) => {
-      if (url.includes("edited_count")) return { count: 0 };
-      if (url.includes("/notes-coverage")) return {};
-      if (url.includes("/notes_cells")) return { sheets: [{ sheet: "Notes-CI", rows: [] }] };
-      if (url.includes("/concepts")) return sampleConcepts;
-      if (url.includes("/conflicts")) return { conflicts: [] };
-      return {};
-    });
-    render(<ConceptsPage runId={42} initialView="notes" onRegenerateNotes={onRegenerate} />);
-    await waitFor(() => screen.getByTestId("notes-source-first-workspace"));
-    expect(screen.queryByLabelText("Notes actions")).toBeNull();
-    expect(screen.queryByRole("button", { name: /default appearance/i })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: /re-extract notes/i }));
-    await waitFor(() => expect(onRegenerate).toHaveBeenCalledWith(42));
-  });
-
   test("notes coverage is not duplicated inside the everyday review workspace", async () => {
     mockFetch((url) => {
       if (url.includes("/notes_cells")) return { sheets: [] };

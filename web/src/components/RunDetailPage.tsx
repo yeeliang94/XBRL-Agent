@@ -31,10 +31,6 @@ export interface RunDetailPageProps {
   onForceAbort?: (runId: number) => void;
   /** Clone a finished run into a fresh editable draft. */
   onRestart?: (runId: number) => void | Promise<void>;
-  /** Forwarded to the embedded RunDetailView so Notes Review can wire its
-   *  Regenerate button. Optional for callers that don't use the notes
-   *  subsystem. */
-  onRegenerateNotes?: (runId: number) => void;
   /** Forwarded to RunDetailView to gate the "View Concepts" link on
    *  canonical mode (peer-review F6). */
   canonicalEnabled?: boolean;
@@ -53,7 +49,6 @@ export function RunDetailPage({
   onResumeDraft,
   onForceAbort,
   onRestart,
-  onRegenerateNotes,
   canonicalEnabled = false,
   initialTab,
 }: RunDetailPageProps) {
@@ -89,7 +84,6 @@ export function RunDetailPage({
           onResumeDraft={onResumeDraft}
           onForceAbort={onForceAbort}
           onRestart={onRestart}
-          onRegenerateNotes={onRegenerateNotes}
           canonicalEnabled={canonicalEnabled}
           initialTab={initialTab}
         />

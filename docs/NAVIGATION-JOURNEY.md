@@ -12,7 +12,7 @@ followed by the implemented navigation contract.
 | Sidebar / queue | New extraction | Upload surface at `/#new-extraction`; sidebar resets the previous settled session. |
 | Upload | Choose/drop PDF or Word | Uploads, saves a draft when possible, opens setup at `/run/{id}`. |
 | Setup | Filing scope, statements, notes | Changes the saved extraction configuration. |
-| Setup | Advanced settings | Reveals models, scan preparation, grading and repeat controls in place. |
+| Setup | Advanced settings | Reveals model and document-scan controls in place. |
 | Setup | Start extraction | Starts the stream; replaces setup with live progress and agent activity at `/run/{id}`. |
 | Live activity | Workstream / agent | Selects recorded/current activity within the monitor, not the editable output. |
 | Live activity | Stop all / stop agent / retry | Mutates processing; retry is an explicit run action, not navigation. |
