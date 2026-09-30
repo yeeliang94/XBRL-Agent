@@ -1,4 +1,6 @@
+import functools
 import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -13,6 +15,38 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # already polluted os.environ before the fixture could redirect the path.
 _TEST_SETTINGS_ROOT = Path(tempfile.mkdtemp(prefix="xbrl-agent-test-settings-"))
 os.environ["XBRL_SETTINGS_FILE"] = str(_TEST_SETTINGS_ROOT / "settings.json")
+
+
+# About 2,000 tests create a fresh audit database. A fresh ``init_db`` commits
+# every CREATE statement separately (~55 ms each; ~30% of suite time), so a new
+# file starts as a copy of one database this process built with the real
+# ``init_db``. The real ``init_db`` still runs on every call, now through its
+# idempotent already-current path. Existing files, including the older-version
+# databases that migration tests build, go straight to the real function.
+# Patched at import time, before any module binds ``init_db`` by name.
+import db
+import db.schema
+
+_real_init_db = db.schema.init_db
+_template_db: Path | None = None
+
+
+@functools.wraps(_real_init_db)
+def _init_db_from_template(path):
+    global _template_db
+    target = Path(path)
+    if str(path) != ":memory:" and (not target.exists() or target.stat().st_size == 0):
+        if _template_db is None:
+            template = _TEST_SETTINGS_ROOT / f"template-{os.getpid()}.db"
+            _real_init_db(template)
+            _template_db = template
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(_template_db, target)
+    return _real_init_db(path)
+
+
+db.schema.init_db = _init_db_from_template
+db.init_db = _init_db_from_template
 
 
 @pytest.fixture(autouse=True)
@@ -74,6 +108,24 @@ def _isolate_paid_pdf_formatter(monkeypatch):
         return {"sheets": {}, "formatted": 0, "partial": 0, "failed": 0, "skipped": 0}
 
     monkeypatch.setattr(notes.auto_format, "run_pdf_auto_format", no_paid_format)
+
+
+@pytest.fixture(autouse=True)
+def _no_launch_stagger(monkeypatch):
+    """Mocked agents need no provider rate-limit spacing.
+
+    Production staggers parallel notes agents and List-of-Notes sub-agents so
+    they do not hit the provider in the same instant. With mocked models that
+    spacing is only real-clock waiting. Stagger tests pass ``launch_delay``
+    explicitly and replace ``asyncio.sleep``.
+    """
+    import notes.coordinator
+    import notes.listofnotes_subcoordinator
+
+    monkeypatch.setattr(notes.coordinator, "NOTES_LAUNCH_STAGGER_SECS", 0.0)
+    monkeypatch.setattr(
+        notes.listofnotes_subcoordinator, "_SUB_AGENT_LAUNCH_STAGGER_SECS", 0.0
+    )
 
 
 @pytest.fixture(autouse=True)

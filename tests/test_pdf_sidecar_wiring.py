@@ -237,7 +237,12 @@ def test_repeat_staging_copies_the_sidecar_bundle(tmp_path):
     assert source_origin_for(sub / "uploaded.pdf") == "llm_transcription"
 
 
-def test_legacy_transcription_setting_cannot_enable_paid_work(monkeypatch):
+def test_legacy_transcription_setting_cannot_enable_paid_work(tmp_path, monkeypatch):
+    # Saving settings writes an audit row; never let it reach the real DB.
+    from db.schema import init_db
+    db_path = tmp_path / "xbrl.db"
+    init_db(db_path)
+    monkeypatch.setattr(server, "AUDIT_DB_PATH", db_path)
     monkeypatch.setenv("XBRL_PDF_SIDECAR", "true")
     assert client.get("/api/settings").json()["pdf_sidecar"] is False
     assert client.get("/api/config").json()["pdf_sidecar"] is False
