@@ -8,10 +8,16 @@ comparison can be recomputed from the run's current facts on every read.
 Figures are read by address, the inverse of the mTool fill: every fillable
 slot of the run's templates is resolved to its cell with
 ``mtool.template_map.resolve_filing_doc`` and the cell is read. A typed number
-is the human's value. A formula cell is calculated by mTool, so the slot is
-stored as ``calculated`` and left out of the comparison on both sides. Label
-matching is not used: labels repeat within a sheet and silently merge
-concepts (docs/human-mtool-file-comparison-plan.md, Step 1).
+is the human's value. A formula cell, and any total the run computes, is
+stored as ``calculated``: the comparison derives the human's total from the
+human's own inputs and never scores it. Cached formula results are not read;
+a file the mTool fill patched carries stale ones. Label matching is not used:
+labels repeat within a sheet and silently merge concepts
+(docs/human-mtool-file-comparison-plan.md, Step 1).
+
+On the category sheets (share capital, related parties) mTool's ``Total``
+column carries no category member. It is the field's value without a
+category, so it is read into the slot with no dimension.
 
 Notes are tied to a field by the taxonomy element ID the mTool note row
 carries, joined to ``template_slots``. Prose is never matched by label. The
@@ -45,7 +51,12 @@ from mtool.offline_fill import (
     read_footnote_rows,
     split_ref,
 )
-from mtool.template_map import index_workbook, resolve_filing_doc
+from mtool.template_map import (
+    _block_for_primary_row,
+    _dimensional_period_blocks,
+    index_workbook,
+    resolve_filing_doc,
+)
 from mtool.units import MONETARY, unit_class_for_label
 from notes.html_sanitize import sanitize_notes_html
 from notes.html_to_text import rendered_length
@@ -188,7 +199,7 @@ def _slot_writes(conn, template_ids, level: str, standard: str,
         JOIN concept_targets t USING(concept_uuid)
         LEFT JOIN concept_semantic_addresses sa USING(concept_uuid)
         LEFT JOIN taxonomy_concepts tc ON tc.source_element_id = sa.primary_concept
-        WHERE n.is_current = 1 AND n.kind IN ('LEAF', 'MATRIX_CELL')
+        WHERE n.is_current = 1 AND n.kind IN ('LEAF', 'MATRIX_CELL', 'COMPUTED')
         """ + f"AND n.template_id IN ({','.join('?' * len(ids))})",
         ids,
     ).fetchall()
@@ -239,6 +250,26 @@ def _slot_writes(conn, template_ids, level: str, standard: str,
         else:
             writes.append(write)
     return writes
+
+
+def _category_total_columns(cells: dict) -> dict[int, list[str]]:
+    """All Total columns in each category block, before period resolution."""
+    out = {}
+    for dom_row in category_domain_rows(cells):
+        for col, (_kind, text) in cells.get(dom_row, {}).items():
+            if (text or "").strip().lower() == "total":
+                out.setdefault(dom_row, []).append(col)
+    return out
+
+
+def _cell_number(cell) -> float | None:
+    """The typed number in a cell; formula results are never read."""
+    if not cell or cell[0] != "N":
+        return None
+    try:
+        return float(cell[1])
+    except (TypeError, ValueError):
+        return None
 
 
 def _row_label(row_cells: dict, label_col: str | None) -> str:
@@ -298,8 +329,8 @@ def _note_fragment(payload: str) -> str:
     return body.group(1) if body else text
 
 
-def _read_notes(conn, data, standard: str, level: str,
-                notes_templates: set[str]) -> tuple[list, list, dict]:
+def _read_notes(conn, data, standard: str, level: str, notes_templates: set[str],
+                statements) -> tuple[list, list, dict]:
     sheet_paths = get_sheet_paths(data)
     payloads = read_footnote_rows(data, sheet_paths, get_shared_strings(data))
     targets = inspect_footnotes(data)["targets"]
@@ -328,6 +359,8 @@ def _read_notes(conn, data, standard: str, level: str,
             })
             continue
         concept_uuid, template_id = slots[0]
+        if template_id in statements and template_id not in notes_templates:
+            continue  # a footnote on a statement figure; figures are compared
         if template_id not in notes_templates:
             outside[template_id] += 1
             continue
@@ -393,6 +426,7 @@ def read_human_file(conn: sqlite3.Connection, run_id: int, path: str | Path,
         write["concept_uuid"]: (write["unit_class"], write["label"])
         for write in writes
     }
+    totals = {write["concept_uuid"] for write in writes if write["kind"] == "COMPUTED"}
     sheets: dict[str, dict] = {}
     for write in writes:
         sheets.setdefault(write["sheet"], {"label_column": None, "columns": {}})[
@@ -414,33 +448,57 @@ def read_human_file(conn: sqlite3.Connection, run_id: int, path: str | Path,
     result = HumanFileRead()
     claimed: dict[str, set[tuple[int, str]]] = defaultdict(set)
     by_template: dict[str, list[dict]] = defaultdict(list)
+    total_columns = {sheet: _category_total_columns(cells_by_sheet.get(sheet, {}))
+                     for sheet in _CATEGORY_AXIS_BY_SHEET}
+    period_blocks = {sheet: _dimensional_period_blocks(cells_by_sheet.get(sheet, {}))
+                     for sheet in _CATEGORY_AXIS_BY_SHEET}
+    category_rows: dict[tuple, tuple[dict, int]] = {}
+
+    def add_fact(write: dict, row: int, col: str, dimension_key: str) -> None:
+        sheet = write["sheet"]
+        claimed[sheet].add((row, col))
+        # Blank cells are kept (value None): they separate "the human left
+        # this field empty" from "the human's file has no such field".
+        cell = cells_by_sheet.get(sheet, {}).get(row, {}).get(col)
+        unit_class, label = unit_by_concept[write["concept_uuid"]]
+        calculated = write["concept_uuid"] in totals or bool(cell and cell[0] == "F")
+        value = _cell_number(cell)
+        if scale != 1 and unit_class is None and value is not None:
+            if not calculated:
+                raise HumanFileError(
+                    f"The unit of {label!r} on {sheet} is unknown; "
+                    "the file cannot be converted safely."
+                )
+            value = None  # a total in an unknown unit is not shown
+        if value is not None and unit_class == MONETARY:
+            value *= scale
+        by_template[write["template_id"]].append({
+            "concept_uuid": write["concept_uuid"], "period": write["period"],
+            "entity_scope": write["entity_scope"], "dimension_key": dimension_key,
+            "value": value, "calculated": calculated, "unit_class": unit_class,
+        })
+
     for write in ready["writes"]:
         if not write.get("cell"):
             continue  # label-only fallback: never read by guess
         col, row = split_ref(write["cell"])
-        claimed[write["sheet"]].add((row, col))
-        # Blank cells are kept (value None): they separate "the human left
-        # this field empty" from "the human's file has no such field".
-        cell = cells_by_sheet.get(write["sheet"], {}).get(row, {}).get(col)
-        unit_class, label = unit_by_concept[write["concept_uuid"]]
-        if scale != 1 and unit_class is None and cell and cell[0] == "N":
-            raise HumanFileError(
-                f"The unit of {label!r} on {write['sheet']} is unknown; "
-                "the file cannot be converted safely."
-            )
-        fact = {
-            "concept_uuid": write["concept_uuid"], "period": write["period"],
-            "entity_scope": write["entity_scope"],
-            "dimension_key": write.get("dimension_key") or "",
-            "value": None, "calculated": bool(cell and cell[0] == "F"),
-            "unit_class": unit_class,
-        }
-        if cell and cell[0] == "N":
-            try:
-                fact["value"] = float(cell[1]) * (scale if unit_class == MONETARY else 1)
-            except (TypeError, ValueError):
-                pass
-        by_template[write["template_id"]].append(fact)
+        dimension_key = write.get("dimension_key") or ""
+        add_fact(write, row, col, dimension_key)
+        if dimension_key and total_columns.get(write["sheet"]):
+            category_rows.setdefault(
+                (write["concept_uuid"], write["period"], write["entity_scope"]),
+                (write, row))
+    # The Total column sits on the same row as the field's category columns.
+    for write, row in category_rows.values():
+        block = _block_for_primary_row(period_blocks[write["sheet"]], row)
+        if block is not None:
+            period_role = "current_year" if write["period"] == "CY" else "prior_year"
+            columns = [col for col in total_columns[write["sheet"]].get(block["dom_row"], [])
+                       if block["column_periods"].get(col) == period_role]
+            # Multiple totals for the same period may belong to different
+            # entities. Leave them unmatched rather than guess their scope.
+            if len(columns) == 1:
+                add_fact(write, row, columns[0], "")
 
     sheets_by_template = _template_sheets(conn, statements)
     typed_by_sheet = {
@@ -458,7 +516,9 @@ def read_human_file(conn: sqlite3.Connection, run_id: int, path: str | Path,
                 if loose:
                     unmatched.append({"kind": "figure", "sheet": sheet, "row": row,
                                       "label": info["label"], "values": loose})
-        if any(f["value"] is not None for f in facts):
+        # Compared only when the human typed an input value: mTool's own
+        # totals show zero even on an empty statement.
+        if any(f["value"] is not None and not f["calculated"] for f in facts):
             result.facts.extend(facts)
             result.unmatched.extend(unmatched)
             continue
@@ -475,7 +535,7 @@ def read_human_file(conn: sqlite3.Connection, run_id: int, path: str | Path,
         })
 
     notes, note_unmatched, outside = _read_notes(
-        conn, data, standard, level, shape["notes_templates"])
+        conn, data, standard, level, shape["notes_templates"], statements)
     result.notes = notes
     result.unmatched.extend(note_unmatched)
     for template_id, count in outside.items():
@@ -484,7 +544,8 @@ def read_human_file(conn: sqlite3.Connection, run_id: int, path: str | Path,
             "reason": "not_in_run", "notes": count,
         })
 
-    typed = sum(1 for f in result.facts if f["value"] is not None)
+    typed = sum(1 for f in result.facts
+                if f["value"] is not None and not f["calculated"])
     calculated = sum(1 for f in result.facts if f["calculated"])
     if typed == 0 and not result.notes:
         variants = [f"{n['statement']} ({n['human_variant']})"

@@ -744,8 +744,25 @@ def _recheck_from_facts(run_id: int) -> Optional[list[dict]]:
             for r in results
         ]
         # Re-attach the preserved advisory warnings so the check set stays
-        # stable across a recheck (no phantom "8/11 → 8/8" shrink).
-        return numeric_rows + advisory_rows
+        # stable across a recheck (no phantom "8/11 → 8/8" shrink). Notes
+        # footing reads figures, so an edit can clear or raise it.
+        footing_results = _run_notes_numeric_footing(
+            run_id, filing_level, filing_standard)
+        # Only a completed assessment can replace the previous warnings.
+        if not any(r.name == _NOTES_FOOTING_INCOMPLETE for r in footing_results):
+            advisory_rows = [r for r in advisory_rows
+                             if not r["name"].startswith(_NOTES_FOOTING_PREFIX)]
+        else:
+            advisory_rows = [r for r in advisory_rows
+                             if r["name"] != _NOTES_FOOTING_INCOMPLETE]
+        footing_rows = [
+            {"name": r.name, "status": r.status, "expected": r.expected,
+             "actual": r.actual, "diff": r.diff, "tolerance": r.tolerance,
+             "message": r.message, "target_sheet": None, "target_row": None,
+             "comparands_json": None}
+            for r in footing_results
+        ]
+        return numeric_rows + advisory_rows + footing_rows
     except Exception:  # noqa: BLE001 — a re-check must never 500 the page
         logger.exception("on-demand re-check failed for run %s", run_id)
         return None
@@ -4378,6 +4395,51 @@ def _run_notes_face_tieouts(merged_path: str, run_id: int,
 _NOTES_FACE_TIEOUT_PREFIX = "Notes↔face tie-out:"
 
 
+_NOTES_FOOTING_PREFIX = "Notes footing:"
+_NOTES_FOOTING_INCOMPLETE = f"{_NOTES_FOOTING_PREFIX} Assessment incomplete"
+
+
+def _run_notes_numeric_footing(run_id: int, filing_level: str,
+                               filing_standard: str) -> list:
+    """Advisory: share-capital and related-party figures that do not add up.
+
+    Reads the run's facts, never writes. Infrastructure trouble is an
+    incomplete assessment warning, never a successful empty result.
+    """
+    import sqlite3
+    from cross_checks.framework import CrossCheckResult
+    try:
+        from cross_checks.notes_numeric_footing import (
+            TOLERANCE, check_notes_numeric_footing,
+        )
+        import server as _self
+        with sqlite3.connect(str(_self.AUDIT_DB_PATH)) as conn:
+            findings = check_notes_numeric_footing(
+                conn, run_id, filing_level, filing_standard)
+    except Exception:  # noqa: BLE001 — advisory, never fail a run
+        logger.warning(
+            "notes numeric footing check raised on run %s", run_id, exc_info=True)
+        return [CrossCheckResult(
+            name=_NOTES_FOOTING_INCOMPLETE,
+            status="warning",
+            message="Numeric notes arithmetic could not be checked. Retry validation; "
+                    "previous footing warnings remain unresolved.",
+        )]
+    return [
+        CrossCheckResult(
+            name=f"{_NOTES_FOOTING_PREFIX} {f.topic} — {f.field} [{f.category}, {f.period}"
+                 f"{', ' + f.scope if filing_level == 'group' else ''}]",
+            status="warning",
+            expected=f.expected,
+            actual=f.actual,
+            diff=f.actual - f.expected,
+            tolerance=TOLERANCE,
+            message=f.message,
+        )
+        for f in findings
+    ]
+
+
 def _reviewer_actionable_failures(failures: list) -> list:
     """Return hard failures the face-facts reviewer can actually re-check.
 
@@ -4567,6 +4629,11 @@ async def _run_notes_advisories(
     out.extend(await _run_notes_advisory_bounded(
         _run_socf_section_placement, merged_path, infopack, run_id,
         run_id=run_id, label="socf-section-placement"))
+    # Share-capital and related-party figures that do not add up. Neither the
+    # taxonomy nor mTool sums these sheets, so nothing else catches a slip.
+    out.extend(await _run_notes_advisory_bounded(
+        _run_notes_numeric_footing, run_id, filing_level, filing_standard,
+        run_id=run_id, label="notes-numeric-footing"))
     return out
 
 

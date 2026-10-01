@@ -7,6 +7,7 @@ old label reader).
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from openpyxl.workbook.defined_name import DefinedName
 
 from db.schema import init_db
 from mtool.offline_fill import wrap_footnote_html
+from eval.human_compare import load_comparison
 from eval.human_file import (
     HumanFileError,
     ingest_human_file,
@@ -88,10 +90,14 @@ def test_unaddressed_typed_row_is_unmatched_and_formula_cell_is_calculated(
 
     assert [(u["sheet"], u["row"], u["label"], u["values"]) for u in read.unmatched] == [
         ("SOFP-CuNonCu", header_row, header_label, {"B": 77.0})]
-    calculated = [f for f in read.facts if f["calculated"]]
-    assert [(f["concept_uuid"], f["period"], f["value"]) for f in calculated] == [
-        (formula_uuid, "CY", None)]
+    # The formula cell and the run's totals are calculated; no formula
+    # result is read, since a patched file carries stale cached values.
+    calculated = {(f["concept_uuid"], f["period"]): f["value"]
+                  for f in read.facts if f["calculated"]}
+    assert calculated[(formula_uuid, "CY")] is None
+    assert set(calculated.values()) == {None}
     assert (formula_uuid, "CY") not in _typed(read)
+    assert read.summary["typed_values"] == len(facts) - 1
 
 
 def test_statement_filled_in_another_variant_is_not_compared(sofp_db, tmp_path):
@@ -265,3 +271,81 @@ def test_replacing_a_file_keeps_one_record_and_refuses_unfinished_runs(
         draft = add_run(sofp_db, sofp_config(), status="draft")
         with pytest.raises(HumanFileError, match="completed run"):
             read_human_file(conn, draft, path, "units")
+
+
+def test_statement_marked_not_in_run_never_hides_the_run_values(sofp_db, tmp_path):
+    # mTool lets a preparer attach a footnote to any figure. One on a face
+    # statement row was stored as the statement being "not in run", which
+    # dropped every run value on it: identical figures read as missed.
+    run_id = add_run(sofp_db, sofp_config())
+    facts = leaf_facts(sofp_db)
+    path = filled_file(sofp_db, run_id, facts, tmp_path)
+    with sqlite3.connect(sofp_db) as conn:
+        ingest_human_file(conn, run_id, path, filename="h.xlsx", unit="units",
+                          uploaded_by=None)
+        conn.execute(
+            "UPDATE human_files SET not_compared_json = ? WHERE run_id = ?",
+            (json.dumps([{"template_id": SOFP, "statement": SOFP,
+                          "reason": "not_in_run", "notes": 1}]), run_id))
+        figures = load_comparison(conn, run_id)["figures"]
+
+    assert {s["status"] for s in figures["slots"] if not s.get("calculated")} == {"agree"}
+    assert figures["totals"]["Company"]["same_value"] == len(facts)
+
+
+@pytest.mark.parametrize("prior_total,total_date", [
+    (None, None), (900, "31/12/2024"), (900, "31/12/2025"),
+])
+def test_category_total_column_is_the_field_without_a_category(tmp_path, prior_total, total_date):
+    # mTool's share-capital sheet has one column per share class plus a
+    # Total column with no category member. A value typed there is the
+    # field's own value, not an unmatched row.
+    db = tmp_path / "audit.db"
+    init_db(db)
+    template_id = import_template_file(db, tmp_path, "13-Notes-IssuedCapital.xlsx")
+    run_id = add_run(db, {"filing_standard": "mfrs", "filing_level": "company",
+                          "statements": [], "notes_to_run": ["ISSUED_CAPITAL"],
+                          "denomination": "units"})
+    xsd = "full_ifrs-cor_2022-03-24.xsd#"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Notes-Issuedcapital"
+    ws["E18"] = (f"{xsd}ifrs-full_DisclosureOfClassesOfShareCapitalTable::"
+                 f"{xsd}ifrs-full_ClassesOfShareCapitalAxis::"
+                 f"{xsd}ifrs-full_OrdinarySharesMember")
+    ws["C19"], ws["D19"] = "#LAYOUTSCSR#", "#PRIM#"
+    ws["C20"], ws["E20"], ws["F20"] = "#DOM#", "Ordinary shares", "Total"
+    ws["C24"], ws["E24"], ws["F24"] = "#ENDT#", "31/12/2025", "31/12/2025"
+    ws["A31"] = f"{xsd}ifrs-full_NumberOfSharesIssuedAndFullyPaid"
+    ws["D31"] = "*Number of shares issued and fully paid"
+    ws["E31"], ws["F31"] = 1000, 1000
+    if prior_total is not None:
+        ws["G18"] = ws["E18"].value
+        ws["G20"], ws["H20"] = "Ordinary shares", "Total"
+        ws["G24"], ws["H24"] = "31/12/2024", total_date
+        ws["G31"], ws["H31"] = prior_total, prior_total
+    path = tmp_path / "category.xlsx"
+    wb.save(path)
+
+    with sqlite3.connect(db) as conn:
+        read = read_human_file(conn, run_id, path, "units")
+        uuid = conn.execute(
+            "SELECT concept_uuid FROM concept_nodes WHERE template_id = ? "
+            "AND canonical_label = '*Number of shares issued and fully paid'",
+            (template_id,)).fetchone()[0]
+
+    ambiguous = total_date == "31/12/2025"
+    if ambiguous:
+        assert [u["values"] for u in read.unmatched] == [{"F": 1000.0, "H": 900.0}]
+    else:
+        assert read.unmatched == []
+    ordinary = '{"ifrs-full_ClassesOfShareCapitalAxis":"ifrs-full_OrdinarySharesMember"}'
+    expected = {("CY", ordinary, 1000.0)}
+    if not ambiguous:
+        expected.add(("CY", "", 1000.0))
+    if prior_total is not None:
+        expected.add(("PY", ordinary, float(prior_total)))
+        if not ambiguous:
+            expected.add(("PY", "", float(prior_total)))
+    assert {(f["period"], f["dimension_key"], f["value"]) for f in read.facts
+            if f["concept_uuid"] == uuid and f["value"] is not None} == expected

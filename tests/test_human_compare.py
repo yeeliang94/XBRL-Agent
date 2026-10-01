@@ -1,7 +1,7 @@
 """Comparison formulas for a run versus its human mTool file (eval/human_compare.py)."""
 from __future__ import annotations
 
-from eval.human_compare import compare_figures, compare_notes
+from eval.human_compare import compare_figures, compare_notes, derive_totals
 
 
 def _typed(value):
@@ -49,21 +49,46 @@ def test_each_period_and_scope_is_its_own_slot():
             if s["period"] == "PY"] == ["missed"]
 
 
-def test_calculated_and_unaddressable_slots_are_left_out():
+def test_totals_are_shown_but_never_scored_and_unaddressable_slots_are_left_out():
     human = {
-        ("total", "CY", "Company", ""): {"value": None, "calculated": True},
+        ("total", "CY", "Company", ""): {"value": 90.0, "calculated": True},
+        ("blank_total", "CY", "Company", ""): {"value": None, "calculated": True},
         ("u", "CY", "Company", ""): _typed(5.0),
     }
-    ai = {("total", "CY", "Company", ""): 99.0,
-          ("u", "CY", "Company", ""): 5.0,
+    ai = {("u", "CY", "Company", ""): 5.0,
           ("elsewhere", "CY", "Company", ""): 7.0}
+    ai_totals = {**ai, ("total", "CY", "Company", ""): 99.0}
 
-    result = compare_figures(human, ai)
+    result = compare_figures(human, ai, ai_totals)
 
     assert result["totals"]["Company"] == {
         "human_filled": 1, "both_filled": 1, "same_value": 1,
         "ai_only": 0, "zero_blank_excluded": 0}
-    assert result["excluded"] == {"calculated": 1, "not_addressable": 1}
+    assert result["excluded"] == {"calculated": 2, "not_addressable": 1}
+    total = next(s for s in result["slots"] if s["concept_uuid"] == "total")
+    assert (total["status"], total["calculated"], total["human_value"],
+            total["ai_value"]) == ("different", True, 90.0, 99.0)
+    assert "blank_total" not in {s["concept_uuid"] for s in result["slots"]}
+
+
+def test_human_totals_are_derived_from_the_human_inputs():
+    # total = a - b; grand = total + c. A typed total is kept; a total with
+    # no numeric child stays blank; each period is its own sum.
+    edges = {"total": [("a", 1.0), ("b", -1.0)],
+             "grand": [("total", 1.0), ("c", 1.0)],
+             "empty": [("x", 1.0)]}
+    values = {("a", "CY", "Company", ""): 10.0, ("b", "CY", "Company", ""): 3.0,
+              ("c", "CY", "Company", ""): 1.0, ("a", "PY", "Company", ""): 4.0,
+              ("grand", "PY", "Company", ""): 50.0}
+    keys = [(u, p, "Company", "") for u in ("total", "grand", "empty")
+            for p in ("CY", "PY")]
+
+    assert derive_totals(values, edges, keys) == {
+        ("total", "CY", "Company", ""): 7.0,
+        ("grand", "CY", "Company", ""): 8.0,
+        ("total", "PY", "Company", ""): 4.0,
+        ("grand", "PY", "Company", ""): 50.0,
+    }
 
 
 def test_human_zero_ai_blank_stays_visible_but_does_not_affect_figures_totals():

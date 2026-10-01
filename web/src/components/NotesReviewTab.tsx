@@ -1933,9 +1933,17 @@ function NumericCellRow(props: {
   selected?: boolean;
   onActivate?: () => void;
 }) {
-  const { cell } = props;
+  const { cell, humanFigures } = props;
   if (!cell.categories?.length) return <NumericCategoryRow {...props} dimensionKey="" />;
-  return <>{cell.categories.map((category) => (
+  // mTool's Total column is the field without a category. Show the human's
+  // total on its own row when the run has category values only.
+  const humanTotal = humanFigures && cell.concept_uuid && !cell.categories.some((c) => c.dimension_key === "")
+    && Object.values(NUMERIC_VALUE_COLUMNS).some(({ period, entity_scope }) =>
+      humanFigures.get(humanSlotKey(cell.concept_uuid!, period, entity_scope, ""))?.human_value != null);
+  const categories = humanTotal
+    ? [...cell.categories, { dimension_key: "", dimensions: {}, label: "Total", values: cell.values ?? {}, evidence: null }]
+    : cell.categories;
+  return <>{categories.map((category) => (
     <NumericCategoryRow {...props} key={category.dimension_key} dimensionKey={category.dimension_key} cell={{
       ...cell, dimensions: category.dimensions, values: category.values,
       label: `${cell.label} — ${category.label}`, evidence: category.evidence,
@@ -2107,9 +2115,11 @@ function NumericCategoryRow({
               {cell.concept_uuid && key in values && (() => {
                 const { period, entity_scope } = NUMERIC_VALUE_COLUMNS[key];
                 const slot = humanFigures.get(humanSlotKey(cell.concept_uuid, period, entity_scope, dimensionKey));
-                const marker = slot && slot.status !== "agree" ? HUMAN_STATUS_SYMBOL[slot.status] : null;
+                // Only a difference carries a marker; a zero opposite a blank is muted.
+                const marker = slot && slot.status !== "agree" && slot.status !== "zero_blank"
+                  ? HUMAN_STATUS_SYMBOL[slot.status] : null;
                 return <span data-testid={`numeric-human-${cell.row}-${dimensionKey || "base"}-${key}`}
-                  style={styles.numericHumanFigure}>
+                  style={{ ...styles.numericHumanFigure, ...(slot?.status === "zero_blank" ? { color: pwc.grey500 } : null) }}>
                   {marker && <span role="img" aria-label={HUMAN_STATUS_LABEL[slot!.status]}
                     title={HUMAN_STATUS_LABEL[slot!.status]}>{marker} </span>}
                   {slot?.human_value == null ? "—" : formatGroupedInput(String(slot.human_value))}

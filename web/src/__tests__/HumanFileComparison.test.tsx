@@ -26,7 +26,10 @@ const file: HumanFileRecord = {
   run_id: 7, filename: "human.xlsx", sha256: "abc", unit: "thousands",
   uploaded_by: "Reviewer", uploaded_at: "2026-09-25T10:00:00Z",
   summary: { typed_values: 3, notes: 0 },
-  unmatched: [{ kind: "figure", sheet: "SOFP-CuNonCu", row: 40, label: "Goodwill extra", values: { C: 12 } }],
+  unmatched: [
+    { kind: "figure", sheet: "SOFP-CuNonCu", row: 40, label: "Goodwill extra", values: { C: 12 } },
+    { kind: "figure", sheet: "SOFP-Sub-CuNonCu", row: 9, label: "Sub-sheet extra", values: { C: 5 } },
+  ],
   not_compared: [],
 };
 
@@ -40,6 +43,7 @@ const comparison: HumanComparison = {
       { concept_uuid: "inv", period: "CY", entity_scope: "Company", dimension_key: "", status: "missed", human_value: 30, ai_value: null },
       { concept_uuid: "cash", period: "PY", entity_scope: "Company", dimension_key: "", status: "ai_only", human_value: null, ai_value: 90 },
       { concept_uuid: "zero", period: "CY", entity_scope: "Company", dimension_key: "", status: "zero_blank", human_value: 0, ai_value: null },
+      { concept_uuid: "total", period: "CY", entity_scope: "Company", dimension_key: "", status: "different", calculated: true, human_value: 380, ai_value: 300 },
     ],
     excluded: { calculated: 0, not_addressable: 0, unmatched_rows: 1 },
   },
@@ -51,7 +55,7 @@ function mockApi() {
     const body = url.includes("/human-comparison")
       ? comparison
       : url.endsWith("/concepts")
-        ? { concepts: [leaf("cash", "Cash", 10, 100, 90), leaf("ppe", "Property", 11, 200, null), leaf("inv", "Inventories", 12, null, null), leaf("zero", "* Other", 13, null, null)] }
+        ? { concepts: [leaf("cash", "Cash", 10, 100, 90), leaf("ppe", "Property", 11, 200, null), leaf("inv", "Inventories", 12, null, null), leaf("zero", "* Other", 13, null, null), { ...leaf("total", "Total assets", 14, 300, null), kind: "COMPUTED", editable: false }] }
         : url.includes("/conflicts") ? { conflicts: [] } : { count: 0 };
     return { ok: true, status: 200, json: async () => body } as Response;
   });
@@ -74,8 +78,16 @@ describe("figures view with a human file", () => {
     expect(tiles).toHaveTextContent("1 of 2 (50%)");
     expect(tiles).toHaveTextContent("Excludes 1 human zero / AI blank slot");
     expect(tiles).toHaveTextContent("1 unmatched row");
-    expect(within(screen.getByTestId("concept-row-zero")).getByRole("img", { name: /excluded from figures statistics/ })).toBeInTheDocument();
+    // A human zero opposite an AI blank is shown without a marker.
+    expect(within(screen.getByTestId("concept-row-zero")).getByTestId("human-value-zero-CY")).toHaveTextContent("0");
+    expect(within(screen.getByTestId("concept-row-zero")).queryByRole("img")).not.toBeInTheDocument();
+    // The human's total sits beside the run's total and is marked when it differs.
+    const totalRow = screen.getByTestId("concept-row-total");
+    expect(within(totalRow).getByTestId("human-value-total-CY")).toHaveTextContent("380");
+    expect(within(totalRow).getByRole("img", { name: "Differs from human" })).toBeInTheDocument();
+    // Unmatched human rows are listed for the worksheet being read only.
     expect(screen.getByTestId("human-unmatched-rows")).toHaveTextContent("Goodwill extra");
+    expect(screen.getByTestId("human-unmatched-rows")).not.toHaveTextContent("Sub-sheet extra");
     // The Source PDF pane is replaced while the human columns show.
     expect(screen.queryByText("Source PDF", { selector: "span" })).not.toBeInTheDocument();
   });
@@ -84,9 +96,11 @@ describe("figures view with a human file", () => {
     mockApi();
     render(<ConceptsPage runId={7} humanFile={file} />);
     await screen.findByTestId("human-comparison-tiles");
+    expect(screen.getByRole("option", { name: "Differs from human (2)" })).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Rows"), { target: { value: "human_differs" } });
     await waitFor(() => expect(screen.queryByTestId("concept-row-cash")).not.toBeInTheDocument());
     expect(screen.getByTestId("concept-row-ppe")).toBeInTheDocument();
+    expect(screen.getByTestId("concept-row-total")).toBeInTheDocument();
     expect(screen.queryByTestId("concept-row-inv")).not.toBeInTheDocument();
   });
 
