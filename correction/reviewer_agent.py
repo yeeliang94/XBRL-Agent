@@ -1210,7 +1210,7 @@ class ReviewerInvestigationResolution(BaseModel):
 def _family_prefix(filing_standard: str, filing_level: str) -> str:
     """The ``concept_nodes.template_id`` prefix for a run's template family.
 
-    Template ids are ``{standard}-{level}-{slug}-v1`` (parser._derive_template_id),
+    Template ids are ``{standard}-{level}-{slug}-v1`` (parser.derive_template_id),
     so ``"mfrs-group-"`` scopes a (sheet, row) lookup to exactly that family.
     """
     return f"{(filing_standard or 'mfrs').lower()}-{(filing_level or 'company').lower()}-"

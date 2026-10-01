@@ -36,7 +36,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from concept_model.parser import _derive_template_id
+from concept_model.parser import derive_template_id
 from mtool.column_detect import (
     ConflictingPeriodMarkersError,
     category_domain_rows,
@@ -126,14 +126,14 @@ def run_filing_shape(conn: sqlite3.Connection, run_id: int) -> dict[str, Any]:
             path = template_path(StatementType(statement), variant, level, standard)
         except (KeyError, ValueError):
             continue  # NotPrepared or unknown variant: nothing to compare
-        statements[_derive_template_id(path)] = statement
+        statements[derive_template_id(path)] = statement
     notes_templates: set[str] = set()
     notes_to_run = set(config.get("notes_to_run") or [])
     for template_type, entry in NOTES_REGISTRY.items():
         if template_type.value not in notes_to_run:
             continue
         try:
-            template_id = _derive_template_id(
+            template_id = derive_template_id(
                 notes_template_path(template_type, level, standard))
         except ValueError:
             continue
@@ -160,7 +160,7 @@ def _other_variant_templates(statement: str, level: str, standard: str,
             path = template_path(stmt, variant_name, level, standard)
         except ValueError:
             continue
-        template_id = _derive_template_id(path)
+        template_id = derive_template_id(path)
         if template_id != exclude:
             out[template_id] = variant_name
     return out

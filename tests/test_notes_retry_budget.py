@@ -85,10 +85,29 @@ async def test_single_agent_retries_once_on_exception(tmp_path: Path):
     assert len(calls) == 2, "expected exactly one retry (2 total attempts)"
     assert result.status == "succeeded"
     assert result.workbook_path is not None
-    for attempt in (0, 1):
-        saved = tmp_path / f'NOTES_CORP_INFO_attempt{attempt}_conversation_trace.json'
-        assert json.loads(saved.read_text()) == {'attempt': attempt + 1}
+    saved = tmp_path / 'NOTES_CORP_INFO_attempt0_conversation_trace.json'
+    assert json.loads(saved.read_text()) == {'attempt': 1}
+    assert not (tmp_path / 'NOTES_CORP_INFO_attempt1_conversation_trace.json').exists()
     assert json.loads((tmp_path / 'NOTES_CORP_INFO_conversation_trace.json').read_text()) == {'attempt': 2}
+
+
+@pytest.mark.asyncio
+async def test_single_attempt_keeps_only_the_conventional_trace(tmp_path: Path):
+    async def invoke(**kwargs):
+        (tmp_path / "NOTES_CORP_INFO_conversation_trace.json").write_text(
+            '{"attempt": 1}', encoding="utf-8")
+        return _ok(str(tmp_path / "NOTES_CORP_INFO_filled.xlsx"))
+
+    with patch.object(coord_mod, "_invoke_single_notes_agent_once", side_effect=invoke):
+        result = await _run_single_notes_agent(
+            template_type=NotesTemplateType.CORP_INFO, pdf_path="x.pdf",
+            inventory=[], filing_level="company", model="test",
+            output_dir=str(tmp_path),
+        )
+
+    assert result.status == "succeeded"
+    assert [p.name for p in tmp_path.glob("*conversation_trace.json")] == [
+        "NOTES_CORP_INFO_conversation_trace.json"]
 
 
 @pytest.mark.asyncio

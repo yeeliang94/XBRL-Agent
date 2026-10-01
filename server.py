@@ -195,7 +195,7 @@ def _export_canonical_workbooks(
     import shutil
     from statement_types import template_path as _tpl_path
     from concept_model.exporter import export_run_to_xlsx
-    from concept_model.parser import _derive_template_id
+    from concept_model.parser import derive_template_id
 
     # Nothing canonical exists to render. The scratch workbook is the only
     # representation and the established zero-fact fallback is benign; avoid
@@ -227,7 +227,7 @@ def _export_canonical_workbooks(
             applied = export_run_to_xlsx(
                 db_path, run_id, canon_path,
                 filing_level=filing_level,
-                template_id=_derive_template_id(Path(master)),
+                template_id=derive_template_id(Path(master)),
                 reporting_period_cy=reporting_period_cy,
                 reporting_period_py=reporting_period_py,
                 carry_forward_row1_from=scratch_path,
@@ -6763,7 +6763,7 @@ async def run_multi_agent_stream(
         # longer carry field payloads, so merging them produced an empty tab.
         # Always replace result.json — including with [] — so a reused output
         # directory cannot leak a prior run's figures.
-        from concept_model.parser import _derive_template_id
+        from concept_model.parser import derive_template_id
         from concept_model.preview import build_preview_fields, write_preview_result
         from statement_types import (
             FACTS_BEARING_AGENT_STATUSES,
@@ -6789,7 +6789,7 @@ async def run_multi_agent_stream(
                     exc_info=True,
                 )
                 continue
-            statements_by_template_id[_derive_template_id(master)] = (
+            statements_by_template_id[derive_template_id(master)] = (
                 agent_result.statement_type.value
             )
         try:

@@ -34,7 +34,7 @@ from concept_model.importer import (
     import_group_targets,
     import_template,
 )
-from concept_model.parser import parse_template, _derive_template_id
+from concept_model.parser import parse_template, derive_template_id
 from db.schema import init_db
 
 

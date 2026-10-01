@@ -170,7 +170,7 @@ def test_durable_reexport_includes_numeric_note_edit(tmp_path):
     (peer-review follow-up)."""
     import server
     from db.schema import init_db
-    from concept_model.parser import parse_template, _derive_template_id
+    from concept_model.parser import parse_template, derive_template_id
     from concept_model.importer import import_template, import_company_targets
     from concept_model.bootstrap import import_all_notes_templates
     from notes_types import NotesTemplateType, notes_template_path

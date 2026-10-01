@@ -18,7 +18,7 @@ from typing import Any
 import openpyxl
 
 from concept_model.notes_parser import parse_notes_template
-from concept_model.parser import ConceptNode, _derive_template_id, parse_template
+from concept_model.parser import ConceptNode, derive_template_id, parse_template
 from concept_model.taxonomy_semantics import taxonomy_concept
 
 
@@ -418,7 +418,7 @@ def persist_template_manifest(db_path: str | Path, path_value: str | Path) -> in
     """Replace one template's v41 taxonomy/slot manifest atomically."""
     path = Path(path_value).resolve()
     fingerprint = _workbook_fingerprint(path)
-    template_id = _derive_template_id(path)
+    template_id = derive_template_id(path)
     conn = sqlite3.connect(str(db_path))
     conn.execute("PRAGMA foreign_keys = ON")
     existing = conn.execute(

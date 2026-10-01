@@ -815,9 +815,9 @@ async def _run_single_agent(
         numbers, so the hygiene invariant is untouched."""
         nonlocal salvage_hint
         if run_id is not None and db_path:
-            from concept_model.parser import _derive_template_id
+            from concept_model.parser import derive_template_id
             from concept_model.facts_api import clear_facts_for_template
-            template_id = _derive_template_id(Path(template_path))
+            template_id = derive_template_id(Path(template_path))
             salvage_hint = _summarize_discarded_facts(db_path, run_id, template_id)
             cleared = clear_facts_for_template(db_path, run_id, template_id)
             if cleared:
@@ -1038,8 +1038,8 @@ async def _run_single_agent_attempt(
     # right tree. None in legacy mode.
     template_id = None
     if run_id is not None and db_path:
-        from concept_model.parser import _derive_template_id
-        template_id = _derive_template_id(Path(template_path))
+        from concept_model.parser import derive_template_id
+        template_id = derive_template_id(Path(template_path))
 
     # Push events into the queue when streaming is active (the attempt body
     # has no cancellation-teardown path, so only the plain emit is needed).
