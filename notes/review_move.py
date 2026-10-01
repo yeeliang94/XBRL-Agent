@@ -198,6 +198,7 @@ def _move_note(
     destination_sheet: str, destination_row: int,
     expected_revision: int, destination_revision: int | None,
     require_idle: bool,
+    actor: str = 'human',
 ) -> None:
     """Relocate one cell and every canonical ledger in the caller's txn."""
     run = repo.fetch_run(conn, run_id)
@@ -304,7 +305,7 @@ def _move_note(
             continue
         sources.record_disposition_in_txn(
             conn, run_id, usage['generation_id'], usage['block_id'], Disposition(usage['disposition']),
-            reason_code=usage['reason_code'], actor='human',
+            reason_code=usage['reason_code'], actor=actor,
             note=f"Moved from {sheet} row {row} to {destination_sheet} row {destination_row}",
             sheet=destination_sheet, row=destination_row, concept_uuid=target['concept_uuid'],
             target_kind=usage['target_kind'], route_type=usage['route_type'],

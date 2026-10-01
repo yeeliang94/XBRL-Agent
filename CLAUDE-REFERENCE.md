@@ -727,6 +727,10 @@ The Settings page exposes the Scout's whole-run deadline and model-turn cap as
 of every new Scout run, so a saved change applies without a server restart.
 The maximum remains below PydanticAI's 50-request ceiling (gotcha #18).
 
+On Windows, prepared-source hashes are recomputed because creation timestamps
+cannot invalidate same-size edits with restored modification times. Pinned by
+`tests/test_document_preparation.py`.
+
 Extraction agents receive `page_hints` (face_page + note_pages) as recommended
 starting points. Agents can freely view **any** PDF page — there is no
 `allowed_pages` enforcement. `view_pdf_pages` only validates 1 ≤ page ≤ N.
@@ -867,6 +871,13 @@ Key invariants:
 - **Retry budget:** every notes agent and Sheet-12 sub-agent retried at most
   once. Exhaustion writes `notes_<TEMPLATE>_failures.json` /
   `notes12_failures.json` / `notes12_unmatched.json` side-logs.
+- **Sheet-12 accepted work survives a later failure.** A worker's accepted
+  payload sink survives retry exhaustion and the fan-out deadline and is
+  included in the partial draft. Across retries, the same structured
+  note/row revision rule replaces earlier chunks. Retained content does not
+  supply a missing coverage receipt or excuse a retry that writes nothing;
+  failed batches and partial-coverage warnings remain visible. Manual
+  cancellation still aborts. Pinned by `tests/test_notes12_subcoordinator.py`.
 - **Sheet-12 stall bounds:** every outer/model/tool stream step has a 180-second
   no-progress timeout (`XBRL_NOTES12_TURN_TIMEOUT_S`), which enters the normal
   retry lane. That includes opening a model stream (the wait for the
@@ -1514,10 +1525,16 @@ show the reviewer a graph-step budget that disagrees with its prompt.
 An explicitly published token budget of `0` disables both the hard cap and its
 warning; it must not fall back to a nonzero environment default.
 
-Model-stream opening and subsequent inactivity always use the existing per-turn
-timeout, including ordinary notes extraction. `bound_inner_streams=False` exempts tool streams only
+Model-stream opening and all streamed events share one complete-request
+deadline using the existing per-turn timeout, including ordinary notes
+extraction and List-of-Notes workers. Partial events cannot extend that deadline.
+Provider stream cleanup gets at most two further seconds; cancellation-resistant
+late opening is closed when it returns. `bound_inner_streams=False` exempts tool streams only
 so long workbook writes retain their existing behavior. Pinned by the before-
 and after-write stream-stall cases in `tests/test_notes_turn_timeout.py`.
+Ordinary notes retries retain an attempt-numbered conversation trace in addition
+to the latest conventional path. Failed attempts remain inspectable after a
+successful retry, pinned by `tests/test_notes_retry_budget.py`.
 
 **Wall-clock cap on correction (2026-04-27):**
 `CORRECTION_WALLCLOCK_TIMEOUT = 300.0` in `server.py` is
@@ -2675,6 +2692,22 @@ only its own section while retaining the other notes, source pages and active
 placements. The Sheet-12 sink keeps one payload per source-note identity so its
 final workbook matches the canonical cell. Pinned by
 `tests/test_notes_source_write.py` and `tests/test_notes_write_serialization.py`.
+Extraction may correct its own unchanged source-built cell with
+`move_own_source_cell`. The destination must be an empty writable field in the
+same sheet and exact filing family, with its current label. The worker must own
+the source revision; human edits, intervening revisions, shared source-note
+cells and changed source generations are refused. Workbook promotion, canonical
+placements and tombstones remain transactional. Pinning tests are in
+`tests/test_notes_write_serialization.py`.
+`request_source_recheck` recaptures one identified prepared-PDF block and checks
+it in a separate model request against the original page. It preserves block
+identity and geometry and publishes an inactive candidate generation. Activation
+is permitted only before any cells or placements exist, with unchanged parent
+generation and inherited exclusions in the same transaction. It never replaces
+source beneath concurrent extraction or human work. Native Word source is not
+recaptured. Pinning tests are in `tests/test_notes_source_repair.py`.
+Every attempted source-model stage retains its context, receipt or failure type
+and known usage in a source-recheck trace under the run output directory.
 Write order is never the accounting decision. Extraction receives the same
 actionable context, does not retry with unrelated blocks, and may finish with
 the conflict unresolved instead of tripping the silent-no-write failure. The
@@ -2865,6 +2898,11 @@ the one failure this feature has no defence against, so each is pinned.
   use. Validating in each caller is how `Ghost` row 999 wrote successfully and
   verified clean. An extraction agent additionally may write only its OWN
   sheet.
+  Its success receipt names the resolved destination label, a bounded list
+  of the rendered source part IDs, and their source pages. It reports the
+  content that was saved, including automatically added context, rather than
+  repeating only the requested selection. Pinned by
+  `tests/test_notes_source_tools.py` and `tests/test_notes_source_write.py`.
 - **One digest function for cell content.** `source_rendered_sha256` and
   `current_html_sha256` are both `lineage.content_sha256`; the render shape
   lives in `notes_cells.source_render_version`. Folding the version into the

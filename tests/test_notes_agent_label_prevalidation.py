@@ -209,6 +209,7 @@ def test_sub_agent_helper_appends_only_accepted_payloads(tmp_path: Path):
     msg = _sub_agent_sink_write(deps, [good, bad], parse_errors=[])
 
     assert deps.payload_sink == [good]
+    assert deps.payload_write_count == 1
     assert "Collected 1" in msg
     assert "Rejected 1" in msg
     # Rejected label is named back to the agent so the next turn can fix it.
@@ -225,6 +226,7 @@ def test_sub_agent_helper_surfaces_candidate_hints(tmp_path: Path):
     bad = _payload("Disclosure of taxation")
 
     msg = _sub_agent_sink_write(deps, [bad], parse_errors=[])
+    assert deps.payload_write_count == 0
     lower = msg.lower()
     # Must show at least one real label the agent can pick from.
     assert "disclosure of" in lower

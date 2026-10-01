@@ -173,6 +173,8 @@ class WriteOutcome:
     rendered_chars: int
     style_source: str
     warnings: list[str] = field(default_factory=list)
+    label: str = ""
+    source_pages: list[int] = field(default_factory=list)
 
     def as_message(self) -> str:
         base = (
@@ -180,7 +182,13 @@ class WriteOutcome:
             f"{len(self.block_ids)} source part(s), {self.rendered_chars:,} "
             f"characters"
         )
-        return base + ("\n" + "\n".join(self.warnings) if self.warnings else "")
+        parts = ", ".join(self.block_ids[:12])
+        if len(self.block_ids) > 12:
+            parts += f", and {len(self.block_ids) - 12} more"
+        receipt = [base, f"destination: {self.label}", f"saved source parts: {parts}"]
+        if self.source_pages:
+            receipt.append(f"source pages: {', '.join(map(str, self.source_pages))}")
+        return "\n".join(receipt + self.warnings)
 
 
 def load_blocks(conn: sqlite3.Connection, generation_id: int) -> list[SourceBlock]:
@@ -869,4 +877,5 @@ def write_cell_from_blocks(
         sheet=sheet, row=row, block_ids=list(rendered.block_ids),
         rendered_chars=rendered.rendered_chars,
         style_source=rendered.style_source, warnings=warnings,
+        label=label, source_pages=rendered_pages,
     )

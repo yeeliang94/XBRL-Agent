@@ -33,6 +33,45 @@ def _payload(label: str, note_num: int) -> NotesPayload:
 
 
 @pytest.mark.asyncio
+async def test_e2e_failed_worker_keeps_accepted_content_in_partial_workbook(tmp_path: Path):
+    import openpyxl
+
+    pdf_path = tmp_path / "dummy.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    config = NotesRunConfig(
+        pdf_path=str(pdf_path), output_dir=str(tmp_path), model="test",
+        notes_to_run={NotesTemplateType.LIST_OF_NOTES}, filing_level="company",
+    )
+    infopack = Infopack(toc_page=1, page_offset=0, notes_inventory=[
+        NoteInventoryEntry(1, "Borrowings", (21, 21)),
+    ])
+    payload = _payload("Disclosure of borrowings", 1)
+
+    async def fake_invoke(**kwargs):
+        if not kwargs["payloads_out"]:
+            kwargs["payloads_out"].append(payload)
+        raise RuntimeError("provider failed after write")
+
+    with patch("notes.listofnotes_subcoordinator._invoke_sub_agent_once", side_effect=fake_invoke):
+        result = await run_notes_extraction(config, infopack=infopack)
+
+    agent = result.agent_results[0]
+    assert agent.workbook_path is not None
+    assert any("partial coverage" in warning for warning in agent.warnings)
+    assert len(agent.cells_written) == 1
+    assert "body for note 1" in agent.cells_written[0]["html"]
+    workbook = openpyxl.load_workbook(agent.workbook_path)
+    try:
+        cell = agent.cells_written[0]
+        assert "body for note 1" in workbook[cell["sheet"]].cell(cell["row"], 2).value
+    finally:
+        workbook.close()
+    coverage = json.loads((tmp_path / "notes12_coverage.json").read_text())
+    assert coverage["entries"][0]["status"] == "failed"
+    assert coverage["entries"][0]["uncovered_note_nums"] == [1]
+
+
+@pytest.mark.asyncio
 async def test_e2e_clean_receipt_no_coverage_warnings(tmp_path: Path):
     """Happy path: sub-agents submit valid receipts covering every
     batch note. No coverage warnings should appear in the agent result,

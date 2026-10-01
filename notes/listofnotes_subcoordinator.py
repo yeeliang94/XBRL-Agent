@@ -16,13 +16,12 @@ Contract:
            - side-log paths (notes12_unmatched.json, notes12_failures.json)
 
 Retry budget: each sub-agent is retried at most once (PLAN section 2 #10).
-A failed sub-agent after its retry contributes no payloads — the other
+A failed sub-agent retains accepted payloads with unresolved coverage — the other
 sub-agents' work still lands.
 """
 from __future__ import annotations
 
 import asyncio
-from contextlib import AsyncExitStack
 import json
 import logging
 import os
@@ -45,6 +44,7 @@ from agent_runner import (
     ReasoningBlockAccumulator,
     RetryPolicy,
     iter_with_turn_timeout,
+    bounded_model_events,
     make_emitter,
     reasoning_event_metadata,
     run_agent_with_retries,
@@ -289,16 +289,19 @@ async def run_listofnotes_subcoordinator(
 
     batches = split_inventory_contiguous(inventory, n_batches=parallel)
 
-    # Track the (task, sub_id, batch) triple so a task that raises
+    # Keep each task's accepted sink so a task that raises
     # unexpectedly (bypassing _run_list_of_notes_sub_agent's own exception
     # handling) can still be surfaced as a failed SubAgentRunResult instead
     # of silently vanishing from the failure log.
-    task_metadata: list[tuple[asyncio.Task, str, list[NoteInventoryEntry]]] = []
+    task_metadata: list[
+        tuple[asyncio.Task, str, list[NoteInventoryEntry], list[NotesPayload]]
+    ] = []
 
     async def _run_sub_with_cleanup(
         sub_id: str,
         batch: list[NoteInventoryEntry],
         launch_delay: float,
+        payloads_out: list[NotesPayload],
     ) -> SubAgentRunResult:
         """Run a sub-agent and guarantee task_registry unregistration on exit.
 
@@ -334,6 +337,7 @@ async def run_listofnotes_subcoordinator(
                 run_id=run_id,
                 db_path=db_path,
                 source_generation_id=source_generation_id,
+                payloads_out=payloads_out,
             )
         except asyncio.CancelledError:
             # Persist a terminal sub-agent event for manual stop and deadline
@@ -355,17 +359,20 @@ async def run_listofnotes_subcoordinator(
         # per-minute-token bucket in the same instant. First sub-agent
         # starts immediately (delay=0); later ones sleep at the top of
         # their runner. See _SUB_AGENT_LAUNCH_STAGGER_SECS for rationale.
+        retained_payloads: list[NotesPayload] = []
         task = asyncio.create_task(
-            _run_sub_with_cleanup(sub_id, batch, i * _SUB_AGENT_LAUNCH_STAGGER_SECS),
+            _run_sub_with_cleanup(
+                sub_id, batch, i * _SUB_AGENT_LAUNCH_STAGGER_SECS, retained_payloads,
+            ),
             name=sub_id,
         )
-        task_metadata.append((task, sub_id, batch))
+        task_metadata.append((task, sub_id, batch, retained_payloads))
         if session_id:
             task_registry.register(session_id, sub_id, task)
 
     sub_results: list[SubAgentRunResult] = []
     if task_metadata:
-        tasks = [t for t, _, _ in task_metadata]
+        tasks = [item[0] for item in task_metadata]
         # Give the initial attempt and each configured generic retry one full
         # deadline window. Previously all attempts shared a single window, so
         # a retry that began late was cancelled before it had a fair chance to
@@ -393,7 +400,7 @@ async def run_listofnotes_subcoordinator(
             await asyncio.wait(tasks, timeout=5.0)
             raise
 
-        for t, sub_id, batch in task_metadata:
+        for t, sub_id, batch, retained_payloads in task_metadata:
             if t in deadline_tasks:
                 message = (
                     f"Sheet-12 fan-out deadline exceeded after "
@@ -419,7 +426,7 @@ async def run_listofnotes_subcoordinator(
                 sub_results.append(SubAgentRunResult(
                     sub_agent_id=sub_id,
                     batch=batch,
-                    payloads=[],
+                    payloads=list(retained_payloads),
                     status="failed",
                     error=message,
                     retry_count=max_retries,
@@ -434,7 +441,7 @@ async def run_listofnotes_subcoordinator(
                 sub_results.append(SubAgentRunResult(
                     sub_agent_id=sub_id,
                     batch=batch,
-                    payloads=[],
+                    payloads=list(retained_payloads),
                     status="failed",
                     error="Cancelled",
                     retry_count=0,
@@ -447,7 +454,7 @@ async def run_listofnotes_subcoordinator(
                 sub_results.append(SubAgentRunResult(
                     sub_agent_id=sub_id,
                     batch=batch,
-                    payloads=[],
+                    payloads=list(retained_payloads),
                     status="failed",
                     error=f"Unexpected task error: {e}",
                     retry_count=max_retries,
@@ -458,8 +465,7 @@ async def run_listofnotes_subcoordinator(
     # happens naturally in `notes.writer._combine_payloads`.
     aggregated: list[NotesPayload] = []
     for r in sub_results:
-        if r.status == "succeeded":
-            aggregated.extend(r.payloads)
+        aggregated.extend(r.payloads)
 
     unmatched = [p for p in aggregated if _is_row_112(p.chosen_row_label)]
 
@@ -506,12 +512,14 @@ async def _run_list_of_notes_sub_agent(
     run_id: Optional[int] = None,
     db_path: Optional[str] = None,
     source_generation_id: Optional[int] = None,
+    payloads_out: Optional[list[NotesPayload]] = None,
 ) -> SubAgentRunResult:
     """Run one sub-agent over its batch.
 
     Retries the full invocation once on any generic exception; after
     ``max_retries`` consecutive failures, marks the sub-agent as failed
-    and returns an empty payload list. Rate-limit (HTTP 429) failures
+    and retains accepted payloads for the partial draft. Rate-limit (HTTP 429)
+    failures
     use a separate, larger budget (``RATE_LIMIT_MAX_RETRIES``) with
     honoured retry-after hints and jittered backoff — a TPM throttle
     isn't a real failure and shouldn't burn the generic-error budget.
@@ -531,6 +539,7 @@ async def _run_list_of_notes_sub_agent(
     # retry_index, which the scaffold passes in (each retry bumps it by one,
     # both for the generic and the rate-limit lane).
     retries_performed = 0
+    retained_payloads = payloads_out if payloads_out is not None else []
     # Track the last attempt's usage so both success and failure paths return
     # populated token counts. Final assignment wins — per Phase 5 we don't sum
     # across retries because the operator cares about the last attempt's cost,
@@ -574,7 +583,10 @@ async def _run_list_of_notes_sub_agent(
             run_id=run_id,
             db_path=db_path,
             source_generation_id=source_generation_id,
+            payloads_out=retained_payloads,
         )
+        if payloads:
+            retained_payloads[:] = payloads
         last_prompt_tokens = prompt_t
         last_completion_tokens = completion_t
         # Zero-payload guard (peer-review #2): a non-empty batch that produces
@@ -608,7 +620,7 @@ async def _run_list_of_notes_sub_agent(
         return SubAgentRunResult(
             sub_agent_id=sub_agent_id,
             batch=batch,
-            payloads=payloads,
+            payloads=list(retained_payloads),
             status="succeeded",
             retry_count=retries_performed,
             prompt_tokens=last_prompt_tokens,
@@ -636,13 +648,19 @@ async def _run_list_of_notes_sub_agent(
         return SubAgentRunResult(
             sub_agent_id=sub_agent_id,
             batch=batch,
-            payloads=[],
+            payloads=list(retained_payloads),
             status="failed",
             error=last_error,
             retry_count=retries_performed,
             prompt_tokens=last_prompt_tokens,
             completion_tokens=last_completion_tokens,
             thinking_tokens=cur_usage["thinking"],
+            source_gap_notes=set(cur_failures.get("source_gap_notes") or ()),
+            placement_conflict_notes=set(
+                cur_failures.get("placement_conflict_notes") or ()
+            ),
+            failed_write_notes=set(cur_failures.get("failed_notes") or ()),
+            unattributed_write_failures=int(cur_failures.get("unattributed") or 0),
         )
 
     # Same two-budget treatment as notes.coordinator._run_single_notes_agent.
@@ -685,6 +703,7 @@ async def _invoke_sub_agent_once(
     run_id: Optional[int] = None,
     db_path: Optional[str] = None,
     source_generation_id: Optional[int] = None,
+    payloads_out: Optional[list[NotesPayload]] = None,
 ) -> tuple[list[NotesPayload], int, int, Optional[CoverageReceipt]]:
     """Single attempt at a sub-agent run.
 
@@ -707,7 +726,9 @@ async def _invoke_sub_agent_once(
     ``"prompt"`` and ``"completion"`` keys on every iteration so a
     mid-run raise doesn't drop token counts already spent.
     """
-    payload_sink: list[NotesPayload] = []
+    # Reuse the sink so structured same-note/same-row revisions also replace
+    # accepted chunks from an earlier attempt. Coverage belongs to this attempt.
+    payload_sink = payloads_out if payloads_out is not None else []
 
     # Peer-review [HIGH]: batch_note_nums MUST be passed at factory time,
     # not set post-construction. `create_notes_agent` registers the
@@ -945,39 +966,32 @@ async def _invoke_sub_agent_once(
                     # Opening the stream waits for the provider's first byte.
                     # Bound that wait too: an unbounded open once held a whole
                     # run for ten minutes on one stalled request.
-                    async with AsyncExitStack() as stream_stack:
-                        model_stream = await asyncio.wait_for(
-                            stream_stack.enter_async_context(
-                                node.stream(agent_run.ctx)
-                            ),
-                            timeout=NOTES12_TURN_TIMEOUT_SECS,
-                        )
-                        async for event in iter_with_turn_timeout(
-                            model_stream, NOTES12_TURN_TIMEOUT_SECS,
-                        ):
-                            if isinstance(event, PartDeltaEvent):
-                                delta = event.delta
-                                if isinstance(delta, TextPartDelta):
-                                    completed_block = reasoning_block.finish()
-                                    if completed_block is not None:
-                                        await _emit("thinking_end", {
-                                            "thinking_id": tid,
-                                            **completed_block,
-                                            **reasoning_meta,
-                                        })
-                                        thinking_counter += 1
-                                        tid = f"{sub_agent_id}_think_{thinking_counter}"
-                                    await _emit("text_delta", {"content": delta.content_delta})
-                                elif isinstance(delta, ThinkingPartDelta):
-                                    chunk = delta.content_delta or ""
-                                    started_block = reasoning_block.add_delta(chunk)
-                                    delta_payload = {
-                                        "content": chunk,
+                    async for event in bounded_model_events(
+                        node.stream(agent_run.ctx), NOTES12_TURN_TIMEOUT_SECS,
+                    ):
+                        if isinstance(event, PartDeltaEvent):
+                            delta = event.delta
+                            if isinstance(delta, TextPartDelta):
+                                completed_block = reasoning_block.finish()
+                                if completed_block is not None:
+                                    await _emit("thinking_end", {
                                         "thinking_id": tid,
-                                    }
-                                    if started_block:
-                                        delta_payload.update(reasoning_meta)
-                                    await _emit("thinking_delta", delta_payload)
+                                        **completed_block,
+                                        **reasoning_meta,
+                                    })
+                                    thinking_counter += 1
+                                    tid = f"{sub_agent_id}_think_{thinking_counter}"
+                                await _emit("text_delta", {"content": delta.content_delta})
+                            elif isinstance(delta, ThinkingPartDelta):
+                                chunk = delta.content_delta or ""
+                                started_block = reasoning_block.add_delta(chunk)
+                                delta_payload = {
+                                    "content": chunk,
+                                    "thinking_id": tid,
+                                }
+                                if started_block:
+                                    delta_payload.update(reasoning_meta)
+                                await _emit("thinking_delta", delta_payload)
                     completed_block = reasoning_block.finish()
                     if completed_block is not None:
                         await _emit("thinking_end", {
@@ -1015,6 +1029,13 @@ async def _invoke_sub_agent_once(
                     break
 
         finally:
+            if failures_out is not None:
+                failures_out["source_gap_notes"] = set(deps.source_gap_notes)
+                failures_out["placement_conflict_notes"] = set(
+                    deps.source_placement_conflict_notes
+                )
+                failures_out["failed_notes"] = set(deps.failed_write_notes)
+                failures_out["unattributed"] = deps.unattributed_write_failures
             # Best-effort on EVERY exit path (success, iteration cap,
             # LLM error, cancel) — save_messages_trace never raises.
             save_messages_trace(
@@ -1043,17 +1064,11 @@ async def _invoke_sub_agent_once(
     # the terminal call. We pass the attribute through regardless — the
     # aggregator decides how to treat None (uncovered) vs a populated
     # receipt (covered, possibly with skips).
-    # The system's own write-failure record (run-84), reported through an
-    # out-param rather than a wider return tuple — `usage_out` above set that
-    # pattern, and it keeps the arity stable for every caller and test double.
-    if failures_out is not None:
-        failures_out["source_gap_notes"] = set(deps.source_gap_notes)
-        failures_out["placement_conflict_notes"] = set(
-            deps.source_placement_conflict_notes
-        )
-        failures_out["failed_notes"] = set(deps.failed_write_notes)
-        failures_out["unattributed"] = deps.unattributed_write_failures
-    return list(payload_sink), final_prompt, final_completion, deps.coverage_receipt
+    # Earlier accepted work must not mask a retry that silently writes nothing.
+    return (
+        list(payload_sink) if deps.payload_write_count else [],
+        final_prompt, final_completion, deps.coverage_receipt,
+    )
 
 
 # ---------------------------------------------------------------------------

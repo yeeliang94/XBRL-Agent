@@ -100,6 +100,7 @@ def activate_generation(
 
     Refuses an empty manifest: 0 of 0 blocks handled would score a perfect
     result for having read nothing.
+    Joins an ambient transaction and leaves its commit to the caller.
     """
     gen = fetch_generation(conn, generation_id)
     if gen is None:
@@ -120,8 +121,10 @@ def activate_generation(
         )
 
     run_id = gen["run_id"]
+    owns_txn = not conn.in_transaction
     try:
-        conn.execute("BEGIN IMMEDIATE")
+        if owns_txn:
+            conn.execute("BEGIN IMMEDIATE")
         # Supersede FIRST: if this half fails we must not be left with two
         # active generations, and the promotion has not happened yet.
         conn.execute(
@@ -135,9 +138,11 @@ def activate_generation(
             "WHERE id = ?",
             (GenerationStatus.ACTIVE.value, _now(), pages_processed, generation_id),
         )
-        conn.commit()
+        if owns_txn:
+            conn.commit()
     except Exception:
-        conn.rollback()
+        if owns_txn:
+            conn.rollback()
         raise
 
 

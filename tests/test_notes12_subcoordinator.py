@@ -217,7 +217,7 @@ class TestRetryAndIsolation:
                 return SubAgentRunResult(
                     sub_agent_id=sub_agent_id,
                     batch=batch,
-                    payloads=[],
+                    payloads=[_make_payload(f"Disclosure of note {batch[0].note_num}")],
                     status="failed",
                     error="simulated failure",
                     retry_count=1,
@@ -242,9 +242,14 @@ class TestRetryAndIsolation:
         statuses = [r.status for r in result.sub_agent_results]
         assert statuses.count("failed") == 1
         assert statuses.count("succeeded") == 4
-        # Result aggregates payloads from the 4 successful sub-agents only.
-        assert len(result.aggregated_payloads) == 8  # 10 items - 2 from failing batch
+        # The accepted note from the failed batch also reaches the draft.
+        assert len(result.aggregated_payloads) == 9
         assert not result.all_succeeded
+        failed = next(r for r in result.sub_agent_results if r.status == "failed")
+        coverage = json.loads(Path(result.coverage_path).read_text())
+        entry = next(e for e in coverage["entries"] if e["sub_agent_id"] == failed.sub_agent_id)
+        assert entry["receipt"] is None
+        assert entry["uncovered_note_nums"] == [n.note_num for n in failed.batch]
 
     @pytest.mark.asyncio
     async def test_retry_budget_retries_once_then_gives_up(self, tmp_path: Path):
@@ -758,6 +763,7 @@ class TestTaskRegistryCleanup:
 
         async def fake_sub(sub_agent_id, batch, **_):
             if sub_agent_id.endswith("sub0"):
+                _["payloads_out"].append(_make_payload("Disclosure of receivables"))
                 await _asyncio.sleep(10)
             return SubAgentRunResult(
                 sub_agent_id=sub_agent_id,
@@ -789,6 +795,9 @@ class TestTaskRegistryCleanup:
             if item.sub_agent_id.endswith("sub0")
         )
         assert stalled.status == "failed"
+        assert len(stalled.payloads) == 1
+        assert stalled.payloads[0] in result.aggregated_payloads
+        assert stalled.coverage is None
         assert "deadline" in (stalled.error or "").lower()
         assert result.failures_path is not None
         assert session_id not in task_registry._tasks
@@ -998,10 +1007,11 @@ class TestSubAgentSavesTrace:
     fake agent whose .iter() yields a working async context so the finally
     block runs; the trace file must land on disk either way."""
 
-    def _fake_factory_and_run(self, tmp_path, raise_exc=None):
+    def _fake_factory_and_run(self, tmp_path, raise_exc=None, on_step=None):
         from notes.agent import NotesDeps
         from notes_types import NotesTemplateType as NT
         from token_tracker import TokenReport
+        active_deps = None
 
         class _Usage:
             input_tokens = 0
@@ -1026,6 +1036,8 @@ class TestSubAgentSavesTrace:
                 return self
 
             async def __anext__(self):
+                if on_step is not None:
+                    on_step(active_deps)
                 if raise_exc is not None:
                     raise raise_exc
                 raise StopAsyncIteration
@@ -1046,6 +1058,7 @@ class TestSubAgentSavesTrace:
                 return _CtxMgr()
 
         def _factory(**kwargs):
+            nonlocal active_deps
             deps = NotesDeps(
                 pdf_path=kwargs["pdf_path"],
                 template_path="x",
@@ -1057,9 +1070,57 @@ class TestSubAgentSavesTrace:
                 filing_level=kwargs["filing_level"],
             )
             deps.coverage_receipt = None
+            active_deps = deps
             return _FakeAgent(), deps
 
         return _factory
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("retry_outcome", ["failure", "silent", "revision"])
+    async def test_accepted_write_survives_later_failure_and_retry(self, tmp_path, retry_outcome):
+        from notes.agent import _sub_agent_sink_write
+        from notes.listofnotes_subcoordinator import _run_list_of_notes_sub_agent
+        from notes_types import NotesTemplateType, notes_template_path
+
+        first = _make_payload("Disclosure of financial instruments", "<p>First draft.</p>")
+        revision = _make_payload("Disclosure of financial instruments", "<p>Corrected draft.</p>")
+        first.note_num = revision.note_num = 1
+        calls = []
+
+        def accept(deps, payload):
+            deps.template_path = str(notes_template_path(NotesTemplateType.LIST_OF_NOTES, level="company"))
+            _sub_agent_sink_write(deps, [payload], parse_errors=[])
+            assert deps.payload_write_count == 1
+
+        def factory(**kwargs):
+            attempt = len(calls)
+            calls.append(attempt)
+            if attempt == 0:
+                callback = lambda deps: accept(deps, first)
+                error = RuntimeError("provider failed after accepted write")
+            else:
+                callback = (lambda deps: accept(deps, revision)) if retry_outcome == "revision" else None
+                error = RuntimeError("provider still unavailable") if retry_outcome == "failure" else None
+                if retry_outcome == "failure":
+                    def callback(deps):
+                        deps.failed_write_notes.add(1)
+                        deps.unattributed_write_failures = 1
+            return self._fake_factory_and_run(tmp_path, raise_exc=error, on_step=callback)(**kwargs)
+
+        with patch("notes.listofnotes_subcoordinator.create_notes_agent", side_effect=factory):
+            result = await _run_list_of_notes_sub_agent(
+                sub_agent_id="notes:LIST_OF_NOTES:sub0", batch=_make_inventory(1),
+                pdf_path=str(tmp_path / "x.pdf"), filing_level="company",
+                model="test", output_dir=str(tmp_path), max_retries=1,
+            )
+        assert calls == [0, 1]
+        assert result.retry_count == 1
+        assert result.coverage is None
+        assert result.payloads == ([revision] if retry_outcome == "revision" else [first])
+        assert result.status == ("succeeded" if retry_outcome == "revision" else "failed")
+        if retry_outcome == "failure":
+            assert result.failed_write_notes == {1}
+            assert result.unattributed_write_failures == 1
 
     def _drive(self, tmp_path, factory):
         import asyncio

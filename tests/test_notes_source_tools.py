@@ -294,6 +294,8 @@ def test_section_id_reaches_sheet12_payload_builder_as_source_pieces(seeded):
             target_label="Disclosure of receivables",
         )
     assert message.startswith("ok:")
+    assert "destination: Disclosure of receivables" in message
+    assert "saved source parts: b1, b2" in message
     assert payload.note_num == 5
     assert payload.source_note_id == "n5"
     assert "Stated at cost" in payload.content

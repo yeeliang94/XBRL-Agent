@@ -322,6 +322,22 @@ _COMMON = (
     "disclosure words on a best-effort basis and retain uncertainty provenance. "
 )
 _PROMPTS = {
+    "recapturing_block": (
+        "Recheck only the source block identified by block_id and previous_html. "
+        "The full original PDF page provides context, not additional content to append. "
+        "Return the complete corrected HTML of that single block. Preserve unaffected "
+        "wording and structure. Correct omissions only when visible in the original. "
+        "Do not merge neighboring blocks, invent ownership, or alter table geometry. "
+        "Report uncertainty and explain every correction in issues."
+    ),
+    "verifying_block": (
+        "Independently inspect the original PDF page and the identified source block. "
+        "Compare previous_html with candidate html. Verify all original words, numbers, "
+        "signs and table cells in that block; check that unaffected content survives. "
+        "Do not certify from the candidate alone. Set verified and complete true only "
+        "when the corrected block faithfully represents its original source region. "
+        "Do not include neighboring blocks in the verification target."
+    ),
     "native_verifying": (
         "The original Word HTML is the authoritative native source structure. "
         "Compare it against the complete prepared page HTML, allowing page "
@@ -466,7 +482,10 @@ def _atomic_text(path: Path, text: str) -> None:
 def _digest(path: Path) -> str:
     path = path.resolve()
     before = _file_signature(path)
-    digest = _cached_digest(path, before)
+    # Windows ctime is creation time: same-size edits with restored mtime can
+    # retain this entire signature. Rehash there so source reuse stays honest.
+    digest = (_cached_digest.__wrapped__(path, before) if os.name == "nt"
+              else _cached_digest(path, before))
     if _file_signature(path) != before:
         raise OSError("Prepared source changed while hashing")
     return digest
@@ -479,8 +498,8 @@ def _file_signature(path: Path) -> tuple[int, ...]:
 
 @lru_cache(maxsize=256)
 def _cached_digest(path: Path, signature: tuple[int, ...]) -> str:
-    # Thread-safe bounded cache of immutable strings; ctime also invalidates
-    # same-size edits whose modification timestamp was restored.
+    # Thread-safe bounded cache of immutable strings. On POSIX, ctime also
+    # invalidates same-size edits whose modification timestamp was restored.
     hasher = hashlib.sha256()
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):

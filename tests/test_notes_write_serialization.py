@@ -8,6 +8,7 @@ import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
+import pytest
 
 from openpyxl import load_workbook
 from pydantic_ai.models.test import TestModel
@@ -303,8 +304,9 @@ def test_source_projection_does_not_hold_sqlite_writer_lock(tmp_path, monkeypatc
     assert sidecar[0]["source_pages"] == [1]
 
 
+@pytest.mark.parametrize('operation', ['replace', 'move', 'move_ok', 'human', 'stale', 'occupied', 'sink'])
 def test_failed_final_promotion_restores_previous_artifacts_and_db(
-    tmp_path, monkeypatch,
+    tmp_path, monkeypatch, operation,
 ):
     from notes.writer import payload_sidecar_path
 
@@ -352,6 +354,21 @@ def test_failed_final_promotion_restores_previous_artifacts_and_db(
     sidecar = payload_sidecar_path(str(output))
     before_workbook = output.read_bytes()
     before_sidecar = sidecar.read_bytes()
+    destination = next(node for node in nodes if node.kind == 'LEAF' and node.row != target_row)
+    if operation == 'human':
+        from notes import lineage
+        with repo.db_session(db) as conn:
+            lineage.mark_human_edit(conn, run_id, sheet, target_row, '<p>Human edit.</p>')
+    if operation == 'stale':
+        with repo.db_session(db) as conn:
+            conn.execute('UPDATE notes_cells SET content_revision=content_revision+1 WHERE run_id=?', (run_id,))
+    if operation == 'occupied':
+        with repo.db_session(db) as conn:
+            repo.upsert_notes_cell(conn, run_id=run_id, sheet=sheet, row=destination.row,
+                label=destination.label, html='<p>Occupied.</p>', evidence=None, source_pages=[])
+    if operation == 'sink':
+        deps.payload_sink = []
+        deps.coverage_receipt = object()  # Previously acknowledged the old destination.
 
     real_replace = notes_agent.replace_with_retry
 
@@ -361,12 +378,41 @@ def test_failed_final_promotion_restores_previous_artifacts_and_db(
             raise PermissionError("injected final promotion failure")
         return real_replace(source, destination)
 
-    monkeypatch.setattr(notes_agent, "replace_with_retry", fail_staged_workbook)
-    rejected = asyncio.run(tool(
-        SimpleNamespace(deps=deps), sheet=sheet, row=target_row,
-        target_label=next(node.label for node in nodes if node.row == target_row),
-        block_ids=["b2"], source_pages=[2], evidence="Page 2",
-    ))
+    if operation in ('replace', 'move'):
+        monkeypatch.setattr(notes_agent, "replace_with_retry", fail_staged_workbook)
+    if operation == 'replace':
+        rejected = asyncio.run(tool(
+            SimpleNamespace(deps=deps), sheet=sheet, row=target_row,
+            target_label=next(node.label for node in nodes if node.row == target_row),
+            block_ids=["b2"], source_pages=[2], evidence="Page 2",
+        ))
+    else:
+        rejected = asyncio.run(_tool(agent, 'move_own_source_cell')(
+            SimpleNamespace(deps=deps), source_row=target_row,
+            destination_row=destination.row, target_label=destination.label,
+            evidence='Source belongs in this destination'))
+    if operation in ('move_ok', 'sink'):
+        assert rejected.startswith('Moved'), rejected
+        with repo.db_session(db) as conn:
+            cells = conn.execute('SELECT row,html FROM notes_cells WHERE run_id=?', (run_id,)).fetchall()
+            assert [(c['row'], c['html']) for c in cells] == [(destination.row, '<p>First version.</p>')]
+            assert {p['row'] for p in srepo.active_placements(conn, generation_id)} == {destination.row}
+        if operation == 'sink':
+            assert [p.chosen_row_label for p in deps.payload_sink] == [destination.label]
+            assert deps.coverage_receipt is None
+            assert 'Resubmit batch coverage' in rejected
+        else:
+            workbook = load_workbook(output)
+            assert not workbook[sheet].cell(target_row, 2).value
+            assert 'First version' in workbook[sheet].cell(destination.row, 2).value
+            workbook.close()
+        return
+    if operation in ('human', 'stale', 'occupied'):
+        assert rejected.startswith('rejected:'), rejected
+        assert output.read_bytes() == before_workbook
+        with repo.db_session(db) as conn:
+            assert {p['row'] for p in srepo.active_placements(conn, generation_id)} == {target_row}
+        return
 
     assert rejected.startswith("rejected: workbook projection failed"), rejected
     assert output.read_bytes() == before_workbook

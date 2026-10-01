@@ -80,6 +80,22 @@ def test_a_write_records_lineage_and_a_disposition_per_block(conn_gen):
         assert (u["sheet"], u["row"]) == ("Notes", 10)
 
 
+def test_large_write_receipt_is_bounded_without_shortening_saved_content(conn_gen):
+    conn, run_id, gen = conn_gen
+    blocks = [SourceBlock(f"part-{n}", "paragraph", n, f"<p>Source paragraph {n}.</p>")
+              for n in range(14)]
+    srepo.write_blocks(conn, gen, blocks)
+    outcome = source_write.write_cell_from_blocks(
+        conn, run_id=run_id, generation_id=gen, sheet="Notes", row=10,
+        block_ids=[block.block_id for block in blocks], label="Receivables",
+    )
+    receipt = outcome.as_message()
+    assert "part-11, and 2 more" in receipt
+    assert "part-12" not in receipt and "part-13" not in receipt
+    saved = conn.execute("SELECT html FROM notes_cells WHERE run_id=? AND row=10", (run_id,)).fetchone()[0]
+    assert all(f"Source paragraph {n}." in saved for n in range(14))
+
+
 def test_the_written_cell_holds_the_rendered_source(conn_gen):
     conn, run_id, gen = conn_gen
     source_write.write_cell_from_blocks(
@@ -520,7 +536,9 @@ def test_complete_policy_section_writes_without_disclosure_siblings(conn_gen):
                                                   "required_related_block_ids": ["n4"]}),
         SourceBlock("policy", "heading", 12, "<h3>4.1 Material accounting policy</h3>",
                     source_note_id="note-4", locator={"heading_ancestor_ids": ["n4"]}),
-        SourceBlock("method", "paragraph", 13, "<p>Measured at cost.</p>",
+        SourceBlock("method", "paragraph", 13, "<p>not to recognised</p>",
+                    source_note_id="note-4", locator={"heading_ancestor_ids": ["n4", "policy"]}),
+        SourceBlock("policy-table", "table", 14, "<table><tr><td>Policy rates</td><td>-</td></tr></table>",
                     source_note_id="note-4", locator={"heading_ancestor_ids": ["n4", "policy"]}),
     ]
     srepo.write_blocks(conn, gen, blocks)
@@ -529,25 +547,30 @@ def test_complete_policy_section_writes_without_disclosure_siblings(conn_gen):
         conn, run_id=run_id, generation_id=gen, sheet="Notes", row=10,
         block_ids=["section:note-4:4.1"],
     )
-    assert result.block_ids == ["n4", "policy", "method"]
-    assert "Balances" not in conn.execute(
+    assert result.block_ids == ["n4", "policy", "method", "policy-table"]
+    saved = conn.execute(
         "SELECT html FROM notes_cells WHERE run_id=? AND sheet='Notes' AND row=10", (run_id,),
     ).fetchone()["html"]
+    assert "Balances" not in saved
+    assert "not to recognised" in saved
+    assert "Policy rates" in saved and "<td>-</td>" in saved
 
 
 def test_continuation_selection_preserves_all_pages_and_heading_context(conn_gen):
     conn, run_id, gen = conn_gen
     blocks = [
         SourceBlock("h", "heading", 10, "<h3>Policies</h3>"),
-        SourceBlock("p1", "paragraph", 11, "<p>First part</p>",
+        SourceBlock("p1", "paragraph", 11, "<p>First part</p>", page=2,
                     locator={"heading_ancestor_ids": ["h"]}),
-        SourceBlock("p2", "paragraph", 12, "<p>second part</p>", continues_block_id="p1"),
-        SourceBlock("p3", "paragraph", 13, "<p>last part</p>", continues_block_id="p2"),
+        SourceBlock("p2", "paragraph", 12, "<p>second part</p>", page=3, continues_block_id="p1"),
+        SourceBlock("p3", "paragraph", 13, "<p>last part</p>", page=4, continues_block_id="p2"),
     ]
     srepo.write_blocks(conn, gen, blocks)
     result = source_write.write_cell_from_blocks(conn, run_id=run_id, generation_id=gen,
         sheet="Notes", row=10, block_ids=["p2"])
     assert result.block_ids == ["h", "p1", "p2", "p3"]
+    assert "saved source parts: h, p1, p2, p3" in result.as_message()
+    assert "source pages: 2, 3, 4" in result.as_message()
 
 
 def test_missing_verified_continuation_is_refused(conn_gen):

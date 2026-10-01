@@ -188,7 +188,10 @@ def test_repeated_reads_reuse_hashes_but_same_size_edits_invalidate(tmp_path, mo
     initial_reads = len(opened)
     assert read_prepared_document(path) is not None
     assert read_prepared_document(path) is not None
-    assert len(opened) == initial_reads
+    if os.name == "nt":
+        assert len(opened) > initial_reads
+    else:
+        assert len(opened) == initial_reads
     stat = prepared.source_html_path.stat()
     html = prepared.source_html_path.read_text()
     assert "Text" in html
