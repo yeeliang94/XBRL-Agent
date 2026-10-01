@@ -1607,6 +1607,10 @@ fix in `_emit_stage`).
   check that raises, and must not also absorb a missing symbol into an empty
   list that reads as "nothing to warn about". Pinned by
   `tests/test_socf_section_placement.py`.
+- **Numeric-notes checker failures stay unresolved.** A failed footing
+  assessment emits an incomplete-assessment warning. Recheck and persisted
+  refresh retain previous footing warnings until a successful assessment
+  replaces them. Pinned by `tests/test_recheck_endpoint.py`.
 
 ### 20. Silent post-extraction failures are now structured SSE errors
 
@@ -1825,10 +1829,15 @@ Load-bearing invariants:
 - **Read by address, never by label.** The reader lists every fillable slot of
   the run's exact template set and resolves each slot's cell with
   `mtool.template_map.resolve_filing_doc`, the resolver the mTool fill uses. It
-  reads typed numbers only. A formula cell is calculated by mTool: the slot is
-  stored `calculated` and left out of the comparison on both sides. Labels
-  repeat within a sheet, so the old label reader merged concepts and lost
-  values (plan Step 1). A typed row no slot claims is listed as unmatched.
+  reads typed numbers only; cached formula results are never read, because a
+  file the mTool fill patched carries stale ones. A formula cell, and every
+  COMPUTED concept, is stored `calculated`. Labels repeat within a sheet, so
+  the old label reader merged concepts and lost values (plan Step 1). A typed
+  row no slot claims is listed as unmatched. On the share-capital and
+  related-party sheets, mTool's `Total` column carries no category member: it
+  is read into the field's slot with no dimension, beside the category slots.
+  Resolve each Total column within its dated period block. Ambiguous totals
+  for the same period remain unmatched rather than guessing an entity scope.
 - **Statement compared only when the human filled an addressable slot.** A
   typed value on an unmatched row stays in the unmatched report and cannot
   make the statement comparable. Otherwise it is "not compared" with the
@@ -1848,15 +1857,23 @@ Load-bearing invariants:
   filled ÷ slots the human filled. Same value = exact matches among slots both
   filled. AI-only is a count, never a penalty. Unmatched rows, statements not
   compared, calculated slots and AI values the file cannot address are
-  excluded and counted. A human zero opposite an AI blank remains visible as
+  excluded and counted. A calculated slot is still shown: the human's total is
+  derived from the human's inputs through `concept_edges` (a typed total is
+  kept) and marked only when it differs from the run's total. Only a
+  `different_variant` or `not_in_file` statement drops the run's values; a
+  `not_in_run` entry names a notes template the run did not extract, and a
+  footnote on a statement figure is never recorded as one. A statement is
+  compared only when the human typed an input value. A human zero opposite an AI blank remains visible as
   `zero_blank` but is excluded from the Found denominator and reported per scope;
   it is not treated as proof that the zero was a filing placeholder. Other
   human zeros remain in the comparison.
 - **Frontend.** The Figures and Notes views get a `[ Human file | Source PDF ]`
   switch. Human values are extra columns on the SAME rows as the AI values;
-  only exceptions carry a marker (`!` different, `○` missed by the AI, `◇`
-  AI-only, `·` excluded human zero), per the design guide's exception-only
-  indicator rule. Numeric
+  only differences carry a marker (`!` different, `○` missed by the AI, `◇`
+  AI-only); an excluded human zero is shown muted with no marker, per the
+  design guide's exception-only indicator rule. The Rows filter options show
+  per-worksheet counts, and the unmatched list shows only the worksheet being
+  read. Numeric
   category members appear beside their exact AI row. Successful notes edits
   refresh the comparison. Unmatched rows sit in a closed disclosure below the
   table.

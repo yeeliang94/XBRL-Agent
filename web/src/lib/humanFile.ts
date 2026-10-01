@@ -50,6 +50,8 @@ export interface HumanFigureSlot {
   entity_scope: string;
   dimension_key: string;
   status: HumanSlotStatus;
+  /** A total: shown beside the run's total, never scored. */
+  calculated?: boolean;
   human_value: number | null;
   ai_value: number | null;
 }
@@ -89,7 +91,7 @@ export const HUMAN_STATUS_LABEL: Record<HumanSlotStatus, string> = {
   different: "Differs from human",
   missed: "Missed by AI",
   ai_only: "AI-only",
-  zero_blank: "Human zero, AI blank — excluded from figures statistics",
+  zero_blank: "Human zero, AI blank — not counted as a difference",
 };
 
 /** Lookup key for one value slot shown in the figures table. */

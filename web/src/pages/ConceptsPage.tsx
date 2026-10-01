@@ -753,7 +753,7 @@ export function ConceptsPage({
     ),
   ), [concepts, activeScope, actionableChecks]);
 
-  const { filtered, noSourceCount } = useMemo(() => {
+  const { filtered, noSourceCount, humanFilterCounts } = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     const baseRows = q
       ? concepts.filter((c) => {
@@ -812,9 +812,20 @@ export function ConceptsPage({
         parent = byUuid.get(parent)?.parent_uuid ?? null;
       }
     }
+    // Fields (not alias rows) on the current worksheet per human status.
+    const humanFilterCounts: Partial<Record<HumanRowFilter, number>> = {};
+    if (humanView) {
+      for (const option of HUMAN_ROW_FILTERS) {
+        humanFilterCounts[option.value] = new Set(baseRows
+          .filter((row) => humanSlotsForRow(row, humanView, activeScope)
+            .some((slot) => slot.status === option.status))
+          .map((row) => row.concept_uuid)).size;
+      }
+    }
     return {
       filtered: baseRows.filter((row) => visibleUuids.has(row.concept_uuid)),
       noSourceCount: baseRows.filter((row) => rowLacksSource(conceptForScope(row, activeScope))).length,
+      humanFilterCounts,
     };
   }, [concepts, searchQuery, activeTemplate, activeSheet, rowFilter, editStatus, actionableChecks, activeScope, humanView]);
 
@@ -949,8 +960,14 @@ export function ConceptsPage({
   const activeNotCompared = !notesActive && humanActive && activeTemplate
     ? comparison?.file.not_compared.find((n) => n.template_id === activeTemplate && n.reason !== "not_in_run") ?? null
     : null;
+  // Only the human rows on the worksheet being read.
+  const visibleSheets = new Set(notesActive
+    ? (activeNotesSheet ? [activeNotesSheet] : [])
+    : activeSheet
+      ? [activeSheet]
+      : activeTemplate ? sheetsByTemplate[activeTemplate] ?? [] : []);
   const unmatchedFigureRows = humanActive
-    ? comparison?.file.unmatched.filter((u) => u.kind === "figure") ?? []
+    ? comparison?.file.unmatched.filter((u) => u.kind === "figure" && visibleSheets.has(u.sheet)) ?? []
     : [];
   const tableHuman = humanActive ? humanView : null;
 
@@ -1141,7 +1158,10 @@ export function ConceptsPage({
                   </option>
                 ))}
                 {comparison && HUMAN_ROW_FILTERS.map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                    {humanFilterCounts[option.value] != null ? ` (${humanFilterCounts[option.value]})` : ""}
+                  </option>
                 ))}
               </select>
             </div>
@@ -2149,9 +2169,10 @@ function ReadOnlyValue({
   );
 }
 
-/** The human's value for one slot with its marker: ! different value,
- *  ○ missed by AI, ◇ AI-only, · excluded zero. Blank when the human file has nothing
- *  to compare there (including cells mTool calculates). */
+/** The human's value for one slot. Only a difference carries a marker:
+ *  ! different value, ○ missed by AI, ◇ AI-only. A human zero opposite an AI
+ *  blank and a total are shown muted. Blank when the human file has
+ *  nothing there. */
 function HumanValueCell({
   slot,
   notCompared,
@@ -2165,10 +2186,17 @@ function HumanValueCell({
     return <span data-testid={testId} aria-hidden="true" style={styles.humanEmpty} />;
   }
   // Agreement is the normal case and carries no marker; only exceptions do.
-  const marker = slot.status === "agree" ? null : HUMAN_STATUS_SYMBOL[slot.status];
+  // A zero opposite a blank is not a difference worth a marker.
+  const quiet = slot.status === "agree" || slot.status === "zero_blank";
+  const marker = quiet ? null : HUMAN_STATUS_SYMBOL[slot.status];
   const attention = slot.status === "different" || slot.status === "missed";
   return (
-    <span data-testid={testId} data-human-status={slot.status} style={styles.humanCell}
+    <span data-testid={testId} data-human-status={slot.status}
+      style={{
+        ...styles.humanCell,
+        ...(slot.calculated ? styles.humanTotal : null),
+        ...(slot.status === "zero_blank" ? styles.humanQuiet : null),
+      }}
       title={HUMAN_STATUS_LABEL[slot.status]}>
       {marker && (
         <span aria-label={HUMAN_STATUS_LABEL[slot.status]} role="img"
@@ -2782,6 +2810,14 @@ const styles = {
     fontSize: 14,
     fontVariantNumeric: "tabular-nums",
     color: pwc.grey900,
+  } as React.CSSProperties,
+  // A human total mirrors the run's read-only total box.
+  humanTotal: {
+    background: pwc.grey50,
+    color: pwc.grey800,
+  } as React.CSSProperties,
+  humanQuiet: {
+    color: pwc.grey500,
   } as React.CSSProperties,
   humanEmpty: {
     display: "inline-block",

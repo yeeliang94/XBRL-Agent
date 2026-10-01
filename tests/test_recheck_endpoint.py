@@ -116,7 +116,8 @@ def test_recheck_fact_based_does_not_rebuild_workbook(client: TestClient, monkey
         assert {"name", "status", "message"} <= set(res.keys())
 
 
-def test_recheck_preserves_advisory_warnings(client: TestClient):
+@pytest.mark.parametrize("checker_failed", [False, True])
+def test_recheck_preserves_advisory_warnings(client: TestClient, monkeypatch, checker_failed):
     """A3 (docs/PLAN-design-qa-fixes.md): the numeric recheck can't re-derive
     the advisory notes-warnings, so it must carry the persisted ``warning``
     rows through — otherwise the check set silently shrinks after a Validate
@@ -132,17 +133,54 @@ def test_recheck_preserves_advisory_warnings(client: TestClient):
             (client.run_id, "Notes consistency: Sheet 11 ↔ Sheet 12",
              "warning", "cites pages [19] vs [21] — no overlap"),
         )
+        # A footing warning is recomputed from the figures, not carried: the
+        # figures it described no longer exist, so it must not survive.
+        conn.execute(
+            "INSERT INTO cross_checks(run_id, check_name, status, message) "
+            "VALUES (?,?,?,?)",
+            (client.run_id, "Notes footing: Related parties — Rental expense "
+             "[Total, CY]", "warning", "stale"),
+        )
         conn.commit()
     finally:
         conn.close()
+
+    if checker_failed:
+        from cross_checks import notes_numeric_footing
+        original_check = notes_numeric_footing.check_notes_numeric_footing
+
+        def fail_check(*args, **kwargs):
+            raise _sq.OperationalError("database is locked")
+
+        monkeypatch.setattr(
+            "cross_checks.notes_numeric_footing.check_notes_numeric_footing", fail_check)
 
     body = client.get(f"/api/runs/{client.run_id}/recheck").json()
     names = [r["name"] for r in body["results"]]
     warnings = [r for r in body["results"] if r["status"] == "warning"]
     assert "Notes consistency: Sheet 11 ↔ Sheet 12" in names
-    assert len(warnings) == 1
+    assert len(warnings) == (3 if checker_failed else 1)
+    footing_name = "Notes footing: Related parties — Rental expense [Total, CY]"
+    assert (footing_name in names) == checker_failed
+    assert (srv._NOTES_FOOTING_INCOMPLETE in names) == checker_failed
     # And the numeric checks are still present alongside it.
     assert any(r["status"] in {"passed", "failed"} for r in body["results"])
+    # Re-review/revert also replace persisted rows. A failed assessment must
+    # preserve the original warning there, and recovery must clear it.
+    assert srv._refresh_persisted_cross_checks(client.run_id)
+    with _sq.connect(srv.AUDIT_DB_PATH) as conn:
+        saved = {r[0] for r in conn.execute(
+            "SELECT check_name FROM cross_checks WHERE run_id = ?", (client.run_id,))}
+    assert (footing_name in saved) == checker_failed
+    assert (srv._NOTES_FOOTING_INCOMPLETE in saved) == checker_failed
+    if checker_failed:
+        monkeypatch.setattr(notes_numeric_footing, "check_notes_numeric_footing", original_check)
+        assert srv._refresh_persisted_cross_checks(client.run_id)
+        with _sq.connect(srv.AUDIT_DB_PATH) as conn:
+            saved = {r[0] for r in conn.execute(
+                "SELECT check_name FROM cross_checks WHERE run_id = ?", (client.run_id,))}
+        assert footing_name not in saved
+        assert srv._NOTES_FOOTING_INCOMPLETE not in saved
 
 
 def test_recheck_unknown_run_404(client: TestClient):

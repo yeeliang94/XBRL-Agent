@@ -1643,6 +1643,11 @@ describe("NotesReviewTab — full-template projection (Phase 5)", () => {
         concept_uuid: "uuid-cap-6", period: "CY", entity_scope: "Company",
         dimension_key: "Preference", status: "different", human_value: 25, ai_value: 20,
       }],
+      // mTool's Total column: the field without a category.
+      [humanSlotKey("uuid-cap-6", "CY", "Company", ""), {
+        concept_uuid: "uuid-cap-6", period: "CY", entity_scope: "Company",
+        dimension_key: "", status: "missed", human_value: 125, ai_value: null,
+      }],
     ]);
     const calls: RequestInit[] = [];
     globalThis.fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
@@ -1653,9 +1658,11 @@ describe("NotesReviewTab — full-template projection (Phase 5)", () => {
     render(<NotesReviewTab runId={7} onPreparationBlocked={blocked}
       humanFigures={humanFigures} onComparisonChange={onComparisonChange} />);
     const rows = await screen.findAllByTestId("notes-numeric-row");
-    expect(rows).toHaveLength(2);
+    expect(rows).toHaveLength(3);
     expect(rows[0]).toHaveTextContent("Ordinary");
     expect(rows[1]).toHaveTextContent("Preference");
+    expect(rows[2]).toHaveTextContent("Total");
+    expect(within(rows[2]).getByTestId("numeric-human-6-base-cy")).toHaveTextContent("125");
     expect(within(rows[0]).getByTestId("numeric-human-6-Ordinary-cy")).toHaveTextContent("100");
     expect(within(rows[1]).getByTestId("numeric-human-6-Preference-cy")).toHaveTextContent("25");
     expect(within(rows[1]).getByRole("img", { name: "Differs from human" })).toBeInTheDocument();
