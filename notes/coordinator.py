@@ -701,6 +701,12 @@ async def _run_single_notes_agent(
         # a failure to a result), so the scaffold classifies + retries; on
         # success we build the succeeded NotesAgentResult here.
         captured: dict[str, Any] = {}
+        trace = Path(output_dir) / f"NOTES_{template_type.value}_conversation_trace.json"
+        try:
+            trace_before = trace.read_bytes() if trace.exists() else None
+        except OSError:
+            trace_before = None
+            logger.warning("Could not read prior notes trace", exc_info=True)
         try:
             outcome = await _invoke_single_notes_agent_once(
                 template_type=template_type,
@@ -725,6 +731,14 @@ async def _run_single_notes_agent(
         finally:
             if captured:
                 attempt_usage.append(captured)
+            # Keep every attempt, while retaining the conventional latest path
+            # for existing trace readers and the Activity panel.
+            try:
+                if trace.exists() and trace.read_bytes() != trace_before:
+                    shutil.copyfile(trace, trace.with_name(
+                        f"NOTES_{template_type.value}_attempt{retry_index}_conversation_trace.json"))
+            except OSError:
+                logger.warning("Could not retain notes attempt trace", exc_info=True)
         if not captured:
             attempt_usage.append({
                 "total_tokens": outcome.total_tokens,

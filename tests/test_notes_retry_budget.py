@@ -65,6 +65,8 @@ async def test_single_agent_retries_once_on_exception(tmp_path: Path):
 
     async def flaky_invoke(**kwargs):
         calls.append(1)
+        (tmp_path / 'NOTES_CORP_INFO_conversation_trace.json').write_text(
+            json.dumps({'attempt': len(calls)}), encoding='utf-8')
         if len(calls) == 1:
             raise RuntimeError("transient upstream hiccup")
         # Second attempt succeeds.
@@ -83,6 +85,10 @@ async def test_single_agent_retries_once_on_exception(tmp_path: Path):
     assert len(calls) == 2, "expected exactly one retry (2 total attempts)"
     assert result.status == "succeeded"
     assert result.workbook_path is not None
+    for attempt in (0, 1):
+        saved = tmp_path / f'NOTES_CORP_INFO_attempt{attempt}_conversation_trace.json'
+        assert json.loads(saved.read_text()) == {'attempt': attempt + 1}
+    assert json.loads((tmp_path / 'NOTES_CORP_INFO_conversation_trace.json').read_text()) == {'attempt': 2}
 
 
 @pytest.mark.asyncio

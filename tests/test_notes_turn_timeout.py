@@ -17,6 +17,52 @@ import asyncio
 import pytest
 
 
+@pytest.mark.asyncio
+async def test_partial_events_cannot_extend_the_complete_request_deadline(monkeypatch):
+    from contextlib import asynccontextmanager
+    import agent_runner
+    clock = [0.0]
+    monkeypatch.setattr(agent_runner.time, 'monotonic', lambda: clock[0])
+    closed = []
+    async def events():
+        for i in range(20):
+            clock[0] += 0.3
+            yield i
+    @asynccontextmanager
+    async def manager():
+        try:
+            yield events()
+        finally:
+            closed.append(True)
+    received = []
+    with pytest.raises(asyncio.TimeoutError):
+        async for event in agent_runner.bounded_model_events(manager(), 1.0):
+            received.append(event)
+    assert len(received) < 20
+    assert closed == [True]
+
+
+@pytest.mark.asyncio
+async def test_cancellation_resistant_open_is_closed_when_it_eventually_returns():
+    from agent_runner import bounded_model_events
+    released = asyncio.Event()
+    closed = asyncio.Event()
+    class Manager:
+        async def __aenter__(self):
+            try:
+                await released.wait()
+            except asyncio.CancelledError:
+                await released.wait()
+            return _YieldingIterable([])
+        async def __aexit__(self, *args):
+            closed.set()
+    with pytest.raises(asyncio.TimeoutError):
+        async for _ in bounded_model_events(Manager(), 0.01):
+            pass
+    released.set()
+    await asyncio.wait_for(closed.wait(), 1)
+
+
 class _SlowIterable:
     """Async iterator that blocks on the first ``__anext__`` forever.
 

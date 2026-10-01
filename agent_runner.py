@@ -23,7 +23,6 @@ import json
 import logging
 import os
 import time
-from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, List, Mapping, Optional, TypeVar
@@ -271,6 +270,67 @@ async def iter_with_turn_timeout(async_iterable, timeout: float):
         except StopAsyncIteration:
             return
         yield node
+
+
+async def bounded_model_events(manager, timeout: float):
+    """Bound a complete model request, including opening and stream cleanup.
+
+    Frequent empty/partial events must not extend the request indefinitely.
+    Tasks belong to this invocation's event loop; no async state is shared.
+    """
+    deadline = time.monotonic() + timeout
+
+    async def wait_owned(awaitable, seconds, late_open=False):
+        if seconds <= 0:
+            if hasattr(awaitable, 'close'):
+                awaitable.close()
+            raise asyncio.TimeoutError("Model request exceeded its turn deadline")
+        task = asyncio.ensure_future(awaitable)
+        try:
+            done, _ = await asyncio.wait({task}, timeout=max(0.0, seconds))
+            if done:
+                return task.result()
+            raise asyncio.TimeoutError("Model request exceeded its turn deadline")
+        finally:
+            if not task.done():
+                task.cancel()
+                # A provider may resist cancellation during network cleanup.
+                # Its abandoned model stream cannot execute application tools.
+                def drain(finished):
+                    if finished.cancelled():
+                        return
+                    if finished.exception() is None and late_open:
+                        cleanup = asyncio.create_task(wait_owned(manager.__aexit__(None, None, None), 2.0))
+                        cleanup.add_done_callback(lambda done: done.exception() if not done.cancelled() else None)
+                task.add_done_callback(drain)
+                await asyncio.wait({task}, timeout=0.05)
+
+    entered = False
+    failure = None
+    try:
+        stream = await wait_owned(manager.__aenter__(), deadline - time.monotonic(), late_open=True)
+        entered = True
+        iterator = stream.__aiter__()
+        while True:
+            try:
+                event = await wait_owned(iterator.__anext__(), deadline - time.monotonic())
+            except StopAsyncIteration:
+                break
+            yield event
+    except BaseException as exc:
+        failure = exc
+        raise
+    finally:
+        if entered:
+            try:
+                await wait_owned(
+                    manager.__aexit__(type(failure) if failure else None, failure,
+                                      failure.__traceback__ if failure else None),
+                    2.0,
+                )
+            except asyncio.TimeoutError:
+                if failure is None:
+                    raise
 
 
 @dataclass
@@ -591,36 +651,33 @@ async def run_agent_loop(
             thinking_id = f"{spec.agent_role}_think_{thinking_counter}"
             reasoning_block = ReasoningBlockAccumulator()
             # Opening a PydanticAI model stream waits for the provider to
-            # respond. Bound that wait as well as subsequent event gaps.
-            async with AsyncExitStack() as stream_stack:
-                model_stream = await asyncio.wait_for(
-                    stream_stack.enter_async_context(node.stream(agent_run.ctx)),
-                    timeout=spec.turn_timeout,
-                )
-                async for event in iter_with_turn_timeout(model_stream, spec.turn_timeout):
-                    if isinstance(event, PartDeltaEvent):
-                        delta = event.delta
-                        if isinstance(delta, TextPartDelta):
-                            completed_block = reasoning_block.finish()
-                            if completed_block is not None:
-                                await emit("thinking_end", {
-                                    "thinking_id": thinking_id,
-                                    **completed_block,
-                                    **reasoning_meta,
-                                })
-                                thinking_counter += 1
-                                thinking_id = f"{spec.agent_role}_think_{thinking_counter}"
-                            await emit("text_delta", {"content": delta.content_delta})
-                        elif isinstance(delta, ThinkingPartDelta):
-                            chunk = delta.content_delta or ""
-                            started_block = reasoning_block.add_delta(chunk)
-                            delta_payload = {
-                                "content": chunk,
+            # respond. Opening and all events share one request deadline.
+            async for event in bounded_model_events(
+                node.stream(agent_run.ctx), spec.turn_timeout,
+            ):
+                if isinstance(event, PartDeltaEvent):
+                    delta = event.delta
+                    if isinstance(delta, TextPartDelta):
+                        completed_block = reasoning_block.finish()
+                        if completed_block is not None:
+                            await emit("thinking_end", {
                                 "thinking_id": thinking_id,
-                            }
-                            if started_block:
-                                delta_payload.update(reasoning_meta)
-                            await emit("thinking_delta", delta_payload)
+                                **completed_block,
+                                **reasoning_meta,
+                            })
+                            thinking_counter += 1
+                            thinking_id = f"{spec.agent_role}_think_{thinking_counter}"
+                        await emit("text_delta", {"content": delta.content_delta})
+                    elif isinstance(delta, ThinkingPartDelta):
+                        chunk = delta.content_delta or ""
+                        started_block = reasoning_block.add_delta(chunk)
+                        delta_payload = {
+                            "content": chunk,
+                            "thinking_id": thinking_id,
+                        }
+                        if started_block:
+                            delta_payload.update(reasoning_meta)
+                        await emit("thinking_delta", delta_payload)
             completed_block = reasoning_block.finish()
             if completed_block is not None:
                 await emit("thinking_end", {
