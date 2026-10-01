@@ -1532,9 +1532,10 @@ Provider stream cleanup gets at most two further seconds; cancellation-resistant
 late opening is closed when it returns. `bound_inner_streams=False` exempts tool streams only
 so long workbook writes retain their existing behavior. Pinned by the before-
 and after-write stream-stall cases in `tests/test_notes_turn_timeout.py`.
-Ordinary notes retries retain an attempt-numbered conversation trace in addition
-to the latest conventional path. Failed attempts remain inspectable after a
-successful retry, pinned by `tests/test_notes_retry_budget.py`.
+Ordinary notes failures retain an attempt-numbered conversation trace in addition
+to the latest conventional path. Successful attempts write only the conventional
+trace; failed attempts remain inspectable after a successful retry, pinned by
+`tests/test_notes_retry_budget.py`.
 
 **Wall-clock cap on correction (2026-04-27):**
 `CORRECTION_WALLCLOCK_TIMEOUT = 300.0` in `server.py` is
@@ -1625,7 +1626,10 @@ fix in `_emit_stage`).
   list that reads as "nothing to warn about". Pinned by
   `tests/test_socf_section_placement.py`.
 - **Numeric-notes checker failures stay unresolved.** A failed footing
-  assessment emits an incomplete-assessment warning. Recheck and persisted
+  assessment emits an incomplete-assessment warning. Unsupported category axes
+  and conflicting facts also remain incomplete instead of silently dropping
+  dimensions or choosing one value. Pinned by `tests/test_notes_numeric_footing.py`.
+  Recheck and persisted
   refresh retain previous footing warnings until a successful assessment
   replaces them. Pinned by `tests/test_recheck_endpoint.py`.
 
@@ -2699,15 +2703,10 @@ the source revision; human edits, intervening revisions, shared source-note
 cells and changed source generations are refused. Workbook promotion, canonical
 placements and tombstones remain transactional. Pinning tests are in
 `tests/test_notes_write_serialization.py`.
-`request_source_recheck` recaptures one identified prepared-PDF block and checks
-it in a separate model request against the original page. It preserves block
-identity and geometry and publishes an inactive candidate generation. Activation
-is permitted only before any cells or placements exist, with unchanged parent
-generation and inherited exclusions in the same transaction. It never replaces
-source beneath concurrent extraction or human work. Native Word source is not
-recaptured. Pinning tests are in `tests/test_notes_source_repair.py`.
-Every attempted source-model stage retains its context, receipt or failure type
-and known usage in a source-recheck trace under the run output directory.
+Suspected capture errors use `report_source_gap` for human review. Extraction
+does not expose a recapture tool: an inactive correction cannot change the
+draft, and source cannot be replaced beneath concurrent writers or human work.
+Pinned by `tests/test_notes_source_tools.py`.
 Write order is never the accounting decision. Extraction receives the same
 actionable context, does not retry with unrelated blocks, and may finish with
 the conflict unresolved instead of tripping the silent-no-write failure. The

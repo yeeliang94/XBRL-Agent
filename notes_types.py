@@ -116,7 +116,7 @@ def notes_template_ids(*, numeric_only: bool = False) -> frozenset[str]:
     Used to scope DB queries precisely instead of a brittle ``'%-notes-%'``
     LIKE pattern — a future face slug that happened to contain "notes" would
     otherwise be mis-classified as a notes template (PLAN-notes-template-registry
-    code-review hardening). Mints the SAME ids :func:`_derive_template_id`
+    code-review hardening). Mints the SAME ids :func:`derive_template_id`
     produces at import time, across ``{mfrs,mpers} × {company,group}``, so the
     set always matches what the bootstrap actually imported.
 
@@ -126,7 +126,7 @@ def notes_template_ids(*, numeric_only: bool = False) -> frozenset[str]:
     """
     # Lazy import keeps notes_types free of a concept_model dependency at module
     # load (concept_model imports notes_types, not the other way round).
-    from concept_model.parser import _derive_template_id
+    from concept_model.parser import derive_template_id
 
     out: set[str] = set()
     for template_type, entry in NOTES_REGISTRY.items():
@@ -140,5 +140,5 @@ def notes_template_ids(*, numeric_only: bool = False) -> frozenset[str]:
                     )
                 except ValueError:
                     continue
-                out.add(_derive_template_id(path))
+                out.add(derive_template_id(path))
     return frozenset(out)

@@ -952,7 +952,6 @@ class NotesDeps:
     # sink from an earlier attempt. Prevents old work masking a silent retry.
     payload_write_count: int = 0
     owned_source_revisions: dict[int, int] = field(default_factory=dict)
-    source_recheck_attempts: int = 0
     sub_agent_id: Optional[str] = None
     # Per-sheet write diagnostics accumulated across every write_notes
     # invocation — the agent may call the tool multiple times and we want
@@ -2765,22 +2764,37 @@ def _write_from_source_in_connection(
     return outcome.as_message(), payload
 
 
-def _source_revision(conn, deps, row):
-    return conn.execute('SELECT content_revision FROM notes_cells WHERE run_id=? AND sheet=? AND row=?',
-                        (deps.run_id, deps.sheet_name, row)).fetchone()['content_revision']
+def _source_revision(conn, deps: NotesDeps, row: int) -> int:
+    """Read the revision produced by a source write in this transaction."""
+    cell = conn.execute(
+        'SELECT content_revision FROM notes_cells WHERE run_id=? AND sheet=? AND row=?',
+        (deps.run_id, deps.sheet_name, row),
+    ).fetchone()
+    return cell['content_revision']
 
 
-def _move_owned_in_connection(conn, deps, source_row, destination_row, target_label):
+def _move_owned_in_connection(
+    conn, deps: NotesDeps, source_row: int, destination_row: int, target_label: str,
+) -> list[str]:
+    """Validate worker ownership before moving the cell and its source ledgers.
+
+    Called in both the staging transaction and final workbook promotion so
+    intervening edits cannot be overwritten.
+    """
     from notes import source_repository as srepo, source_write
-    from notes.review_move import _move_note
+    from notes.review_move import move_note_in_transaction
     from concept_model.filing_targets import resolve_writable_html_target
     owned_revision = deps.owned_source_revisions.get(source_row)
-    source = conn.execute('SELECT * FROM notes_cells WHERE run_id=? AND sheet=? AND row=?',
-                          (deps.run_id, deps.sheet_name, source_row)).fetchone()
+    source = conn.execute(
+        'SELECT * FROM notes_cells WHERE run_id=? AND sheet=? AND row=?',
+        (deps.run_id, deps.sheet_name, source_row),
+    ).fetchone()
     generation = srepo.active_generation(conn, deps.run_id)
-    target = resolve_writable_html_target(conn,
+    target = resolve_writable_html_target(
+        conn,
         family_prefix=f'{deps.filing_standard}-{deps.filing_level}-',
-        sheet=deps.sheet_name, row=destination_row)
+        sheet=deps.sheet_name, row=destination_row,
+    )
     if (source is None or owned_revision is None or source['content_revision'] != owned_revision
             or source['content_origin'] == 'human_modified' or generation is None
             or generation['id'] != deps.source_generation_id
@@ -2794,14 +2808,20 @@ def _move_owned_in_connection(conn, deps, source_row, destination_row, target_la
     owners = {b.source_note_id for b in blocks if b.block_id in ids}
     if not ids or len(owners) != 1 or None in owners:
         raise source_write.SourceWriteError('A shared or unlinked cell requires reviewer resolution')
-    _move_note(conn, run_id=deps.run_id, sheet=deps.sheet_name, row=source_row,
+    move_note_in_transaction(
+        conn, run_id=deps.run_id, sheet=deps.sheet_name, row=source_row,
         destination_sheet=deps.sheet_name, destination_row=destination_row,
         expected_revision=owned_revision, destination_revision=None, require_idle=False,
-        actor='notes_agent')
+        actor='notes_agent',
+    )
     return ids
 
 
-def _move_own_source_impl(deps, source_row, destination_row, target_label, evidence):
+def _move_own_source_impl(
+    deps: NotesDeps, source_row: int, destination_row: int,
+    target_label: str, evidence: str,
+) -> str:
+    """Move a worker's source-built draft without losing workbook or sink state."""
     from db import repository as repo
     from notes import source_write, source_repository as srepo
     try:
@@ -2809,29 +2829,44 @@ def _move_own_source_impl(deps, source_row, destination_row, target_label, evide
             raise source_write.SourceWriteError('Explain the source-backed placement correction')
         with deps.io_lock:
             if deps.payload_sink is None:
+                # Standalone agents stage and promote the workbook with the
+                # canonical move. Sheet-12 workers update their retained sink.
                 with repo.db_session(deps.db_path) as conn:
                     ids = [p['block_id'] for p in srepo.active_placements(conn, deps.source_generation_id)
                            if p['sheet'] == deps.sheet_name and p['row'] == source_row]
-                result = _write_source_and_project_impl(deps, deps.sheet_name, destination_row,
-                    ids, [], evidence, None, target_label=target_label, move_from=source_row)
+                result = _write_source_and_project_impl(
+                    deps, deps.sheet_name, destination_row, ids, [], evidence,
+                    None, target_label=target_label, move_from=source_row,
+                )
                 if isinstance(result, str):
                     return result
                 message, _ = result
             else:
                 with repo.db_session(deps.db_path) as conn:
                     conn.execute('BEGIN IMMEDIATE')
-                    ids = _move_owned_in_connection(conn, deps, source_row, destination_row, target_label)
-                    message, payload = _write_from_source_in_connection(conn, deps,
-                        deps.sheet_name, destination_row, ids, [], evidence, None, target_label=target_label)
+                    ids = _move_owned_in_connection(
+                        conn, deps, source_row, destination_row, target_label,
+                    )
+                    message, payload = _write_from_source_in_connection(
+                        conn, deps, deps.sheet_name, destination_row, ids, [],
+                        evidence, None, target_label=target_label,
+                    )
                     next_sink = [p for p in deps.payload_sink if p.source_note_id != payload.source_note_id]
                     next_sink.append(payload)
                     revision = _source_revision(conn, deps, destination_row)
+                # Publish memory state only after the database commit succeeds.
                 deps.payload_sink[:] = next_sink
                 deps.owned_source_revisions[destination_row] = revision
                 deps.coverage_receipt = None
             deps.owned_source_revisions.pop(source_row, None)
-            reminder = ' Resubmit batch coverage for the corrected destination.' if deps.payload_sink is not None else ''
-            return f'Moved your source-built content from row {source_row} to row {destination_row}. {message}{reminder}'
+            reminder = (
+                ' Resubmit batch coverage for the corrected destination.'
+                if deps.payload_sink is not None else ''
+            )
+            return (
+                f'Moved your source-built content from row {source_row} '
+                f'to row {destination_row}. {message}{reminder}'
+            )
     except (ValueError, source_write.SourceWriteError) as exc:
         return f'rejected: {exc}'
 
@@ -3717,48 +3752,6 @@ def create_notes_agent(
             ctx.deps.source_gap_reported = True
             ctx.deps.write_skip_errors.append(f"Source capture requires human review: {reason}")
             return "Recorded for human review. Complete the other notes; this note remains unresolved."
-
-        @agent.tool
-        async def request_source_recheck(ctx: RunContext[NotesDeps], block_id: str,
-                                         reason: str) -> str:
-            """Independently recapture and verify one suspect source block.
-
-            One request per worker. A verified candidate is a new source revision;
-            it requires an idle pre-write activation and never replaces source
-            under concurrent writers. Complete other supported work meanwhile.
-            """
-            if ctx.deps.source_recheck_attempts:
-                return 'A source recheck was already attempted; continue other work or report a source gap.'
-            from notes.source_recheck import recheck_source_block
-            from notes import source_repository as srepo
-            from db import repository as repo
-            with repo.db_session(ctx.deps.db_path) as conn:
-                blocks = {b['block_id']: b for b in srepo.fetch_blocks(conn, ctx.deps.source_generation_id)}
-                selected = blocks.get(block_id)
-                if selected is None:
-                    return 'Copy an exact block_id from the source manifest.'
-                if selected['page'] is None:
-                    return 'This block has no PDF page; report the source gap for review.'
-                note = next((n for n in srepo.fetch_notes(conn, ctx.deps.source_generation_id)
-                             if n['source_note_id'] == selected['source_note_id']), None)
-                if (ctx.deps.batch_note_nums is not None and note is not None
-                        and str(note['top_note_num']) not in {str(n) for n in ctx.deps.batch_note_nums}):
-                    return 'Recheck a block from your assigned notes.'
-            ctx.deps.source_recheck_attempts += 1
-            original = Path(ctx.deps.pdf_path).parent / 'uploaded.pdf'
-            try:
-                result = await recheck_source_block(db_path=ctx.deps.db_path,
-                    run_id=ctx.deps.run_id, generation_id=ctx.deps.source_generation_id,
-                    block_id=block_id, pdf_path=str(original if original.exists() else ctx.deps.pdf_path),
-                    model=ctx.deps.model, reason=reason)
-            except Exception as exc:
-                report_source_gap(ctx, [selected['page']], f'Source recheck unresolved: {exc}',
-                                  int(note['top_note_num']) if note and str(note['top_note_num']).isdigit() else None)
-                return f'Source recheck remains unresolved: {exc}'
-            report_source_gap(ctx, [selected['page']],
-                f'Verified source candidate {result["candidate_generation_id"]} awaits idle activation: {reason}',
-                int(note['top_note_num']) if note and str(note['top_note_num']).isdigit() else None)
-            return json.dumps(result) + '\nCandidate saved; current source and placements remain unchanged. Review is required before activation.'
 
     @agent.tool
     async def save_result(ctx: RunContext[NotesDeps]) -> str:

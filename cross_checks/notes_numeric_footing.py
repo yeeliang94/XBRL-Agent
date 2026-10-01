@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from concept_model.dimensions import numeric_category_catalog
-from concept_model.parser import _derive_template_id
+from concept_model.parser import derive_template_id
 from notes_types import NotesTemplateType, notes_template_path
 
 TOLERANCE = 1.0
@@ -109,12 +109,12 @@ def check_notes_numeric_footing(
 ) -> list[FootingFinding]:
     """Every place the run's share-capital and related-party figures do not
     add up. Read-only."""
-    totals = {member for roots in numeric_category_catalog(
-        filing_standard, roots_only=True).values() for member in roots}
+    catalog = numeric_category_catalog(filing_standard)
+    roots = numeric_category_catalog(filing_standard, roots_only=True)
     findings: list[FootingFinding] = []
     for template_type, topic in _TOPICS.items():
         try:
-            template_id = _derive_template_id(Path(notes_template_path(
+            template_id = derive_template_id(Path(notes_template_path(
                 template_type, filing_level, filing_standard)))
         except ValueError:
             continue
@@ -131,9 +131,28 @@ def check_notes_numeric_footing(
             "AND COALESCE(f.value_status, '') != 'not_disclosed'",
             (run_id, template_id),
         ):
-            members = list(json.loads(dim_key or "{}").values())
-            category = "" if not members or members[0] in totals else members[0]
-            values.setdefault((uuid, period, scope, category), float(value))
+            dimensions = json.loads(dim_key or "{}")
+            # Numeric notes accept one category axis. Never collapse additional
+            # dimensions into a misleading category subtotal.
+            if not isinstance(dimensions, dict) or len(dimensions) > 1:
+                raise ValueError("Numeric notes arithmetic requires at most one category axis")
+            category = ""
+            if dimensions:
+                axis, member = next(iter(dimensions.items()))
+                suffix = ("ClassesOfShareCapitalAxis"
+                          if template_type is NotesTemplateType.ISSUED_CAPITAL
+                          else "CategoriesOfRelatedPartiesAxis")
+                if not axis.endswith(suffix) or member not in catalog.get(axis, []):
+                    raise ValueError("Numeric notes arithmetic found an unsupported category")
+                category = "" if member in roots.get(axis, []) else member
+            key = (uuid, period, scope, category)
+            number = float(value)
+            # Undimensioned totals and explicit total members share an identity.
+            # A disagreement leaves assessment unresolved, rather than choosing
+            # whichever row SQLite happened to return first.
+            if key in values and values[key] != number:
+                raise ValueError("Numeric notes arithmetic found conflicting values for one category")
+            values[key] = number
             concepts[uuid] = (label.lstrip("*").strip(), _local(primary), row or 0)
 
         by_name: dict[str, list[str]] = {}

@@ -27,7 +27,7 @@ CO_SOFP = REPO / "XBRL-template-MFRS" / "Company" / "01-SOFP-CuNonCu.xlsx"
 @pytest.fixture
 def seeded(tmp_path: Path):
     from db.schema import init_db
-    from concept_model.parser import parse_template, _derive_template_id
+    from concept_model.parser import parse_template, derive_template_id
     from concept_model.importer import import_template, import_company_targets
     from concept_model.facts_api import write_fact, FactWrite
 
@@ -37,7 +37,7 @@ def seeded(tmp_path: Path):
     jp = tmp_path / "tree.json"
     jp.write_text(json.dumps(tree.to_json(), sort_keys=True), encoding="utf-8")
     import_template(db_path, jp)
-    template_id = _derive_template_id(CO_SOFP)
+    template_id = derive_template_id(CO_SOFP)
     # Phase 6.1: the exporter routes every fact via a single concept_targets
     # lookup and RAISES on an applicable fact with no target (CLAUDE.md gotcha
     # #21). A hand-rolled Company DB must precompute its targets.
@@ -153,11 +153,11 @@ def test_export_returns_applied_count_and_scopes_by_template(seeded, tmp_path):
     """export_run_to_xlsx returns how many facts it applied, and a
     template_id filter scopes which facts (and which unmapped check) apply."""
     from concept_model.exporter import export_run_to_xlsx
-    from concept_model.parser import _derive_template_id
+    from concept_model.parser import derive_template_id
     import shutil
 
     db_path, run_id, _sheet, _row = seeded
-    tid = _derive_template_id(CO_SOFP)
+    tid = derive_template_id(CO_SOFP)
     work = tmp_path / "filled.xlsx"
     shutil.copyfile(CO_SOFP, work)
 
@@ -170,13 +170,13 @@ def test_export_zero_facts_returns_zero(seeded, tmp_path):
     """A template with no facts for the run applies nothing (so the caller
     knows not to repoint to a blank workbook)."""
     from concept_model.exporter import export_run_to_xlsx
-    from concept_model.parser import _derive_template_id
+    from concept_model.parser import derive_template_id
     import shutil
 
     db_path, run_id, _sheet, _row = seeded
     # SOPL template id — the run only has SOFP facts.
     sopl = REPO / "XBRL-template-MFRS" / "Company" / "03-SOPL-Function.xlsx"
-    sopl_tid = _derive_template_id(sopl)
+    sopl_tid = derive_template_id(sopl)
     work = tmp_path / "sopl.xlsx"
     shutil.copyfile(sopl, work)
     applied = export_run_to_xlsx(
@@ -216,7 +216,7 @@ def test_group_export_wiring_fills_both_scope_columns(tmp_path):
     through _export_canonical_workbooks (Phase E)."""
     import server
     from db.schema import init_db
-    from concept_model.parser import parse_template, _derive_template_id
+    from concept_model.parser import parse_template, derive_template_id
     from concept_model.importer import (
     import_company_targets,
     import_group_targets,

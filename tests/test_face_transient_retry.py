@@ -331,7 +331,7 @@ async def test_retry_clears_stale_facts_from_failed_attempt(tmp_path):
     db = tmp_path / "audit.db"
     init_db(db)
     template_path = str(tmp_path / "Company" / "01-SOFP-CuNonCu.xlsx")
-    # _derive_template_id(Company/01-SOFP-CuNonCu.xlsx) → this id:
+    # derive_template_id(Company/01-SOFP-CuNonCu.xlsx) → this id:
     template_id = "mfrs-company-sofp-cunoncu-v1"
     other_template_id = "mfrs-company-sopl-function-v1"
 
