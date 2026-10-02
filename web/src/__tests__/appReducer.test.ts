@@ -262,47 +262,6 @@ describe("appReducer", () => {
     expect(state.activeTab).toBeFalsy();
   });
 
-  // ---------------------------------------------------------------------------
-  // Scanned-PDF source transcript notice (pdf_sidecar).
-  // ---------------------------------------------------------------------------
-
-  test("pdf_sidecar event is captured into pdfSidecar without creating a tab", () => {
-    const running = runningState();
-    const state = appReducer(running, {
-      type: "EVENT",
-      payload: {
-        event: "pdf_sidecar",
-        data: { status: "built", pages: 20, usage: { in: 56760, out: 13976 } },
-        timestamp: 1,
-      } as SSEEvent,
-    });
-    expect(state.pdfSidecar).toEqual({
-      status: "built",
-      pages: 20,
-      usage: { in: 56760, out: 13976 },
-    });
-    // Run-level event: no agent slot, no tab, still running.
-    expect(Object.keys(state.agents)).toHaveLength(0);
-    expect(state.agentTabOrder).toHaveLength(0);
-    expect(state.activeTab).toBeFalsy();
-    expect(state.isRunning).toBe(true);
-  });
-
-  test("RUN_STARTED clears a prior pdf_sidecar outcome", () => {
-    const running = runningState();
-    const withSidecar = appReducer(running, {
-      type: "EVENT",
-      payload: {
-        event: "pdf_sidecar",
-        data: { status: "skipped", reason: "no_notes_inventory" },
-        timestamp: 1,
-      } as SSEEvent,
-    });
-    expect(withSidecar.pdfSidecar?.status).toBe("skipped");
-    const restarted = appReducer(withSidecar, { type: "RUN_STARTED" });
-    expect(restarted.pdfSidecar).toBeNull();
-  });
-
   test("RUN_STARTED clears any prior scout warnings", () => {
     const running = runningState();
     const withWarnings = appReducer(running, {
@@ -443,7 +402,7 @@ describe("appReducer", () => {
     let state = runningState();
     expect(state.pipelineStage).toBeNull();
 
-    const stages = ["transcribing_source", "extracting", "merging", "cross_checking", "correcting", "formatting_notes", "done"] as const;
+    const stages = ["extracting", "merging", "cross_checking", "correcting", "formatting_notes", "done"] as const;
     for (const stage of stages) {
       state = appReducer(state, {
         type: "EVENT",
@@ -463,9 +422,9 @@ describe("appReducer", () => {
       payload: {
         event: "pipeline_stage",
         data: {
-          stage: "transcribing_source",
+          stage: "extracting",
           started_at: 1700000000,
-          message: "Reading scanned note pages: 2 of 5 complete.",
+          message: "Extracting figures: 2 of 5 statements complete.",
           completed: 2,
           total: 5,
         },

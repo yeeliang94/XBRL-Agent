@@ -16,7 +16,6 @@
 
 export const NON_AGENT_TAB_IDS: ReadonlySet<string> = new Set([
   "scout",
-  "source-preparation",
   "notes-formatting",
   "validator",
   "NOTES_VALIDATOR",

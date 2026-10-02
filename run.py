@@ -232,8 +232,6 @@ def run_agent(
     )
 
 
-
-
 def _save_conversation_trace(result, output_dir: str):
     """Dump the full agent conversation (minus binary image data) for debugging."""
     import dataclasses

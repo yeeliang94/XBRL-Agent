@@ -14,7 +14,6 @@ import type {
   CrossCheckPhase,
   CrossCheckResultEventData,
   PartialMergeData,
-  PdfSidecarData,
   PipelineStage,
   PipelineStageData,
   ReasoningBlock,
@@ -98,13 +97,6 @@ export interface AppState {
   // reconciliation) SSE events. Both are advisory and carry no agent_id, so
   // they feed a single banner rather than any agent tab. Empty on a clean run.
   scoutWarnings: string[];
-  // docs/PLAN-pdf-source-sidecar.md: outcome of the scanned-PDF source
-  // transcription pass (``pdf_sidecar`` SSE event). Null until the event
-  // arrives (and always null when the setting is off or the PDF has a text
-  // layer — the server emits nothing then). Advisory: ExtractPage renders a
-  // one-line notice so the operator knows whether notes agents had a
-  // transcript to copy from, and why not if they didn't.
-  pdfSidecar: PdfSidecarData | null;
   // PLAN-stop-and-validation-visibility Phase 5: live cross-check
   // progress per pass. The Validator tab uses this to render rows as
   // they arrive (with a spinner for not-yet-reported rows) instead of
@@ -179,7 +171,6 @@ export const initialState: AppState = {
   toast: null,
   partialMerge: null,
   scoutWarnings: [],
-  pdfSidecar: null,
   crossCheckProgress: {
     phase: null,
     total: 0,
@@ -797,8 +788,6 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         // Scout warnings are per-run; clear them so a clean run doesn't
         // inherit the previous run's warnings.
         scoutWarnings: [],
-        // The transcript notice is per-run too.
-        pdfSidecar: null,
         // Cross-check progress is per-run; start fresh.
         crossCheckProgress: {
           phase: null,
@@ -975,13 +964,6 @@ export function appReducer(state: AppState, action: AppAction): AppState {
           }
           break;
         }
-
-        case "pdf_sidecar":
-          // Scanned-PDF source transcript outcome (run-level, no agent_id —
-          // handlePerAgentEvent skipped it, so no tab). Emitted once per
-          // run; keep the latest payload for the run-page notice.
-          updates.pdfSidecar = event.data as PdfSidecarData;
-          break;
 
         case "cross_check_start":
           // Phase 5: a new cross-check pass starts. Reset the working

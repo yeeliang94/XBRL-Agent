@@ -1,14 +1,7 @@
 import { describe, test, expect } from "vitest";
 import { describePdfSidecar } from "../lib/pdfSidecar";
 
-/**
- * Wording for the ``pdf_sidecar`` SSE event (docs/PLAN-pdf-source-sidecar.md).
- *
- * The operator needs two facts: did the notes agents get a transcript, and if
- * not, why. Every server-side skip reason must map to a sentence, and an
- * unknown reason must still be quoted rather than dropped — a new server code
- * should never turn the notice blank.
- */
+// Historical transcript outcomes retain readable notices, including unknown reasons.
 describe("describePdfSidecar", () => {
   test("built: reports the page count and the figure-verification caveat", () => {
     const n = describePdfSidecar({ status: "built", pages: 20 });

@@ -25,7 +25,6 @@ import { buildToolTimeline, filterEventsBySubAgent } from "../lib/buildToolTimel
 import { buildReasoningTimeline } from "../lib/buildReasoningTimeline";
 import { NOTES_12_AGENT_ID, isNotes12AgentId } from "../lib/notes";
 import { isNonAgentTab } from "../lib/agentTabKinds";
-import { describePdfSidecar } from "../lib/pdfSidecar";
 import { runStatusDisplay } from "../lib/runStatus";
 import { StatusIcon } from "../components/StatusIcon";
 import { semanticActivities } from "../lib/semanticActivity";
@@ -52,7 +51,6 @@ function liveStageMessage(stage: AppState["pipelineStage"]): string {
   switch (stage) {
     case "scouting": return "Scanning document";
     case "reading_source": return "Reading source document";
-    case "transcribing_source": return "Preparing scanned notes";
     case "merging": return "Combining statements";
     case "cross_checking": return "Running cross-checks";
     case "correcting": return "Reviewing flagged figures";
@@ -273,20 +271,6 @@ export function ExtractPage({
           } as AgentTabState];
         }),
       );
-      if (state.pipelineStage === "transcribing_source" || state.pdfSidecar) {
-        agents["source-preparation"] = {
-          agentId: "source-preparation",
-          label: "Source preparation",
-          role: "SOURCE_PREPARATION",
-          status: state.pipelineStage === "transcribing_source" ? "running" : state.pdfSidecar?.status === "built" ? "complete" : "pending",
-          task: state.pipelineActivity?.message ?? "Preparing scanned source pages",
-          taskDetail: state.pipelineActivity?.total
-            ? `${state.pipelineActivity.completed ?? 0} of ${state.pipelineActivity.total}`
-            : null,
-          subLabel: null,
-          flag: null,
-        } as AgentTabState;
-      }
       const formatting = notesFormattingActivity(state);
       if (formatting) {
         agents["notes-formatting"] = {
@@ -304,17 +288,11 @@ export function ExtractPage({
       }
       return agents;
     },
-    [state.agents, state.pipelineStage, state.pipelineActivity, state.pdfSidecar, state.events, state.isRunning],
+    [state.agents, state.pipelineStage, state.pipelineActivity, state.events, state.isRunning],
   );
   const agentTabsOrder = useMemo(() => {
-    const syntheticIds = ["source-preparation", "notes-formatting"].filter((id) => id in agentTabsAgents);
-    if (syntheticIds.length === 0) return state.agentTabOrder;
-    const without = state.agentTabOrder.filter((id) => !syntheticIds.includes(id));
-    const scoutIndex = without.indexOf("scout");
-    const insertAt = scoutIndex >= 0 ? scoutIndex : 0;
-    const sourceIds = syntheticIds.filter((id) => id === "source-preparation");
-    const finishingIds = syntheticIds.filter((id) => id === "notes-formatting");
-    return [...without.slice(0, insertAt), ...sourceIds, ...without.slice(insertAt), ...finishingIds];
+    if (!("notes-formatting" in agentTabsAgents)) return state.agentTabOrder;
+    return [...state.agentTabOrder.filter((id) => id !== "notes-formatting"), "notes-formatting"];
   }, [agentTabsAgents, state.agentTabOrder]);
   const agentTabsSkeletons = useMemo(
     () =>
@@ -355,10 +333,6 @@ export function ExtractPage({
     (id: string) => dispatch({ type: "SET_ACTIVE_TAB", payload: id }),
     [dispatch],
   );
-  // docs/PLAN-pdf-source-sidecar.md: scanned-PDF source transcript notice.
-  // Emitted once before the notes agents launch, only when the Settings
-  // toggle is on and the PDF is a scan. Advisory in both outcomes.
-  const sidecarNotice = state.pdfSidecar ? describePdfSidecar(state.pdfSidecar) : null;
   const scaleConflicts = [...new Set(state.events.flatMap((event) =>
     event.event === "scale_conflict" && event.data.message ? [event.data.message] : [],
   ))];
@@ -666,14 +640,6 @@ export function ExtractPage({
         </details>
       )}
 
-      {/* Same run-level palette as the scout banner; no agent tab (no agent_id). */}
-      {sidecarNotice && !preparation && !state.isRunning && (
-        <div role="status" data-testid="pdf-sidecar-notice" style={styles.partialMergeBox}>
-          <h3 style={styles.partialMergeTitle}>{sidecarNotice.title}</h3>
-          <p style={styles.partialMergeMessage}>{sidecarNotice.message}</p>
-        </div>
-      )}
-
       {/* PLAN-stop-and-validation-visibility Phase 2.3: partial-merge banner.
           Surfaces immediately above the cancel error so the operator
           knows their work was preserved. Distinct (warning) palette
@@ -848,62 +814,6 @@ export function ActiveTabPanel({
       reasoningBlocks: aggregateReasoning,
     };
   }, [rawEvents, notes12SubId, showSubTabs, aggregateTimeline, aggregateReasoning]);
-  if (state.activeTab === "source-preparation") {
-    const completed = state.pipelineActivity?.completed ?? 0;
-    const total = state.pipelineActivity?.total ?? 0;
-    const active = state.pipelineStage === "transcribing_source";
-    const sourceMessage = active
-      ? state.pipelineActivity?.message ?? "Preparing scanned source pages."
-      : state.pdfSidecar
-        ? describePdfSidecar(state.pdfSidecar).message
-        : "Awaiting a confirmed source preparation outcome.";
-    return (
-      <div role="tabpanel" aria-label="Source preparation activity" style={styles.activityCardAttached}>
-        <div style={styles.activityHeader}>
-          <div style={styles.activityHeaderLeft}>
-            <div>
-              <div style={styles.activityEyebrow}>Selected workstream</div>
-              <div style={styles.activityTitle}>Source preparation</div>
-            </div>
-            <span style={styles.activeAgentStatus}>{active ? "Working" : state.pdfSidecar?.status === "built" ? "Complete" : "Waiting"}</span>
-          </div>
-          <div style={styles.activityHeaderRight}>
-            {showStopAll && (
-              <button type="button" onClick={onAbortAll} style={{ ...styles.toolbarBtnBase, ...styles.destructiveBtn }}>
-                Stop all
-              </button>
-            )}
-          </div>
-        </div>
-        <div style={{ padding: pwc.space.lg }}>
-          <p style={{ margin: 0, color: pwc.grey700, fontSize: 14 }}>
-            {sourceMessage}
-          </p>
-          {total > 0 && (
-            <div
-              role="progressbar"
-              aria-label="Source preparation progress"
-              aria-valuemin={0}
-              aria-valuemax={total}
-              aria-valuenow={completed}
-              style={styles.stageProgress}
-            >
-              <span style={{ ...styles.stageProgressFill, width: `${Math.min(100, completed / total * 100)}%` }} />
-            </div>
-          )}
-          {reasoningBlocks.length > 0 ? (
-            <ActivityStream
-              events={events}
-              toolTimeline={toolTimeline}
-              reasoningBlocks={reasoningBlocks}
-              isRunning={active}
-              streamKey="source-preparation"
-            />
-          ) : null}
-        </div>
-      </div>
-    );
-  }
   if (state.activeTab === "notes-formatting") {
     const formatting = notesFormattingActivity(state);
     if (!formatting) return null;
