@@ -161,8 +161,9 @@ from pathlib import Path
 # v34 adds `run_lineage` — stage-level resume audit trail (plan
 # agent-efficiency Phase 4A): child run → parent run link with the parent
 # source hash (computed at resume time) and the reused/rerun statement lists.
-# Pure CREATE TABLE IF NOT EXISTS walk-forward (new table, no ALTER); inert
-# unless XBRL_STAGE_RESUME is used. Pinned by tests/test_db_schema_v34.py.
+# Pure CREATE TABLE IF NOT EXISTS walk-forward (new table, no ALTER). Now
+# used by web redo drafts; CLI stage resume is retired. Pinned by
+# tests/test_db_schema_v34.py and tests/test_run_restart.py.
 # v35 adds the notes source-integrity model (PLAN-notes-source-integrity-build
 # Phase 3): `notes_source_generations` / `_notes` / `_blocks`,
 # `notes_block_usages`, the append-only `notes_disposition_events`, and
@@ -1415,7 +1416,7 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
     # `source_sha256` is the parent's uploaded.pdf hash computed AT RESUME
     # TIME (no hash is recorded at upload — the file itself is kept on
     # disk, gotcha #29). reused/rerun statements are JSON lists of
-    # "STATEMENT/variant" strings. Inert when XBRL_STAGE_RESUME is off.
+    # "STATEMENT/variant" strings. Web redo records a full rerun with no reuse.
     # -----------------------------------------------------------------
     """
     CREATE TABLE IF NOT EXISTS run_lineage (

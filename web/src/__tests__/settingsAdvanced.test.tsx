@@ -10,10 +10,10 @@ const ROWS = [
     choices: [], restart: false, value: 3, fallback: 2, saved_here: true,
   },
   {
-    key: "XBRL_MAX_AGENT_ITERATIONS", label: "Maximum turns per extraction agent",
-    help: "Model responses one statement agent may use.",
-    group: "Time and turn limits", kind: "int", default: 40, min: 1, max: 45,
-    choices: [], restart: true, value: 40, fallback: 40, saved_here: false,
+    key: "XBRL_MAX_AGENT_ITERATIONS", label: "Maximum steps per extraction agent",
+    help: "One step is a model response or a tool-execution stage.",
+    group: "Time and turn limits", kind: "int", default: 60, min: 1, max: 120,
+    choices: [], restart: true, value: 60, fallback: 60, saved_here: false,
   },
   {
     key: "XBRL_TEMPLATE_IN_PROMPT", label: "Put the template in the agent's instructions",
@@ -55,6 +55,9 @@ describe("Advanced settings", () => {
     const { saveSettings, getSettings } = renderForm();
     const agents = await screen.findByLabelText("Agents running at once");
     expect(agents).toHaveValue(3);
+    const steps = screen.getByLabelText("Maximum steps per extraction agent");
+    expect(steps).toHaveValue(60);
+    fireEvent.change(steps, { target: { value: "120" } });
     expect(screen.getByText(/Takes effect after the server restarts/)).toBeTruthy();
 
     // Clearing a saved override previews the deployment value (2), not the
@@ -71,6 +74,7 @@ describe("Advanced settings", () => {
     await waitFor(() => expect(saveSettings).toHaveBeenCalled());
     expect(saveSettings.mock.calls[0][0].advanced_settings).toEqual({
       XBRL_MAX_CONCURRENT_AGENTS: 5,
+      XBRL_MAX_AGENT_ITERATIONS: 120,
       XBRL_TEMPLATE_IN_PROMPT: null,
     });
     // Re-read so a reset row shows the server's fallback value.
@@ -80,11 +84,11 @@ describe("Advanced settings", () => {
 
   test("blocks a value outside the allowed range", async () => {
     const { saveSettings } = renderForm();
-    const turns = await screen.findByLabelText("Maximum turns per extraction agent");
-    fireEvent.change(turns, { target: { value: "50" } });
+    const turns = await screen.findByLabelText("Maximum steps per extraction agent");
+    fireEvent.change(turns, { target: { value: "121" } });
     fireEvent.click(screen.getByRole("button", { name: /save shared settings/i }));
 
-    expect(screen.getByText(/must be at most 45/)).toBeTruthy();
+    expect(screen.getByText(/must be at most 120/)).toBeTruthy();
     expect(saveSettings).not.toHaveBeenCalled();
   });
 

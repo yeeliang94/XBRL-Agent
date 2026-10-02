@@ -649,12 +649,6 @@ export interface ExtendedSettingsResponse extends SettingsResponse {
   notes_coverage?: boolean;
   /** Whether per-entity advisory memory injects prior-year prompt hints (item 28). */
   entity_memory?: boolean;
-  /** Scanned-PDF transcribed source sidecar (docs/PLAN-pdf-source-sidecar.md).
-   *  Default off; admin-only because it adds paid vision calls per run. */
-  pdf_sidecar?: boolean;
-  /** Automatically standardise PDF prose notes after review. PDF-only and
-   *  default off because it adds a paid formatter pass per prose sheet. */
-  pdf_notes_auto_format?: boolean;
   /** Notes source-integrity rollout mode (gotcha #31). Default 'off'. */
   notes_source_integrity?: SourceIntegrityMode;
   /** Server-supplied vocabulary, so a new mode needs no frontend edit. */
