@@ -188,10 +188,6 @@ export async function updateSettings(
     notes_auto_review: boolean;
     notes_coverage: boolean;
     entity_memory: boolean;
-    // Scanned-PDF transcribed source sidecar (docs/PLAN-pdf-source-sidecar.md).
-    pdf_sidecar: boolean;
-    // PDF-only post-review formatter; default off because it adds paid passes.
-    pdf_notes_auto_format: boolean;
     // Notes source-integrity rollout mode (gotcha #31).
     notes_source_integrity: SourceIntegrityMode;
     thinking_levels: Record<string, string>;

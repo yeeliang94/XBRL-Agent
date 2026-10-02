@@ -497,6 +497,25 @@ def test_notes_reviewer_always_compacts_images_and_warns_about_limits(
         if isinstance(cap, ProcessHistory)
     ]
     names = [getattr(cap.processor, "__name__", "") for cap in caps]
-
     assert names == ["strip_stale_reviewer_images", "compact_stale_notes_reads",
                      "limit_warning_processor"]
+
+    from types import SimpleNamespace
+    import inspect
+    from pydantic_ai.messages import BinaryContent, ModelRequest, ToolReturnPart
+
+    messages = [ModelRequest(parts=[ToolReturnPart(
+        tool_name="view_pdf_pages", tool_call_id=f"page-{page}",
+        content=[f"=== Page {page} ===", BinaryContent(data=f"page-{page}".encode(), media_type="image/png")],
+    )]) for page in range(1, 5)]
+    ctx = SimpleNamespace(deps=_deps, usage=SimpleNamespace(requests=0, total_tokens=0))
+    for capability in caps:
+        if len(inspect.signature(capability.processor).parameters) == 2:
+            messages = capability.processor(ctx, messages)
+        else:
+            messages = capability.processor(messages)
+    images = [item.data for message in messages for part in message.parts
+              if isinstance(part, ToolReturnPart) for item in part.content
+              if isinstance(item, BinaryContent)]
+    assert images == [b"page-3", b"page-4"]
+    assert "image was removed here to save cost" in messages[0].parts[0].content[1]
