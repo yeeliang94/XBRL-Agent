@@ -116,11 +116,11 @@ def test_auto_review_toggle_round_trips(tmp_path, monkeypatch):
 
 def test_pdf_notes_formatting_cannot_be_disabled_by_legacy_settings(monkeypatch):
     monkeypatch.setenv("XBRL_PDF_NOTES_AUTO_FORMAT", "false")
-    assert client.get("/api/settings").json()["pdf_notes_auto_format"] is True
-    assert client.get("/api/config").json()["pdf_notes_auto_format"] is True
+    assert "pdf_notes_auto_format" not in client.get("/api/settings").json()
+    assert "pdf_notes_auto_format" not in client.get("/api/config").json()
     response = client.post("/api/settings", json={"pdf_notes_auto_format": False})
     assert response.status_code == 200
-    assert server._pdf_notes_auto_format_enabled() is True
+    assert "XBRL_PDF_NOTES_AUTO_FORMAT" not in server.SETTINGS_FILE.read_text()
 
 
 def test_notes_coverage_toggle_round_trips(tmp_path, monkeypatch):
@@ -624,8 +624,17 @@ def test_legacy_pdf_settings_do_not_reject_other_settings(tmp_path, monkeypatch,
     assert response.status_code == 200
     settings = client.get("/api/settings").json()
     assert settings["auto_review"] is False
-    assert settings["pdf_sidecar"] is False
-    assert settings["pdf_notes_auto_format"] is True
+    assert "pdf_sidecar" not in settings
+    assert "pdf_notes_auto_format" not in settings
+    saved = server.SETTINGS_FILE.read_text()
+    assert "XBRL_PDF_SIDECAR" not in saved
+    assert "XBRL_PDF_NOTES_AUTO_FORMAT" not in saved
+    assert "pdf_sidecar" not in client.get("/api/config").json()
+    assert "XBRL_PDF_SIDECAR_PAGE_CAP" not in _advanced(settings)
+    response = client.post("/api/settings", json={
+        "advanced_settings": {"XBRL_PDF_SIDECAR_PAGE_CAP": 80},
+    })
+    assert response.status_code == 400
 
 
 # ---------------------------------------------------------------------------
@@ -639,22 +648,33 @@ def _advanced(body: dict) -> dict:
 def test_advanced_setting_saves_reaches_the_pipeline_and_resets(tmp_path, monkeypatch):
     env_file = _env(tmp_path, monkeypatch)
     env_file.write_text("XBRL_MAX_CONCURRENT_AGENTS=2\n", encoding="utf-8")
-    for key in ("XBRL_MAX_CONCURRENT_AGENTS", "XBRL_TEMPLATE_IN_PROMPT"):
+    for key in ("XBRL_MAX_CONCURRENT_AGENTS", "XBRL_TEMPLATE_IN_PROMPT",
+                "XBRL_REVIEWER_COMPACT_CONTEXT", "XBRL_MAX_AGENT_ITERATIONS"):
         monkeypatch.delenv(key, raising=False)
     import runtime_settings
     runtime_settings._FALLBACKS.pop("XBRL_MAX_CONCURRENT_AGENTS", None)
     runtime_settings._APPLIED.pop("XBRL_MAX_CONCURRENT_AGENTS", None)
+    from agent_tracing import resolve_max_iterations
+    import os
     from agent_concurrency import max_concurrent_agents
     from extraction.agent import _template_in_prompt_enabled
+    from correction.history_processors import reviewer_compact_context_enabled
 
     rows = _advanced(client.get("/api/settings").json())
+    assert rows["XBRL_MAX_AGENT_ITERATIONS"]["value"] == 60
+    assert rows["XBRL_MAX_AGENT_ITERATIONS"]["default"] == 60
+    assert rows["XBRL_MAX_AGENT_ITERATIONS"]["max"] == 120
+    assert rows["XBRL_MAX_AGENT_ITERATIONS"]["restart"] is True
     assert rows["XBRL_MAX_CONCURRENT_AGENTS"]["value"] == 2
     assert rows["XBRL_MAX_CONCURRENT_AGENTS"]["saved_here"] is False
     assert rows["XBRL_TEMPLATE_IN_PROMPT"]["value"] is False
+    assert rows["XBRL_REVIEWER_COMPACT_CONTEXT"]["value"] is False
 
     response = client.post("/api/settings", json={"advanced_settings": {
         "XBRL_MAX_CONCURRENT_AGENTS": 3,
         "XBRL_TEMPLATE_IN_PROMPT": True,
+        "XBRL_MAX_AGENT_ITERATIONS": 120,
+        "XBRL_REVIEWER_COMPACT_CONTEXT": True,
     }})
     assert response.status_code == 200
     rows = _advanced(client.get("/api/settings").json())
@@ -663,33 +683,47 @@ def test_advanced_setting_saves_reaches_the_pipeline_and_resets(tmp_path, monkey
     # "Use default" must preview the .env value it restores, not the built-in 0.
     assert rows["XBRL_MAX_CONCURRENT_AGENTS"]["fallback"] == 2
     assert rows["XBRL_TEMPLATE_IN_PROMPT"]["fallback"] is False
+    assert resolve_max_iterations(os.environ.get("XBRL_MAX_AGENT_ITERATIONS")) == 120
+    assert rows["XBRL_MAX_AGENT_ITERATIONS"]["value"] == 120
     assert max_concurrent_agents() == 3
     assert _template_in_prompt_enabled() is True
+    assert reviewer_compact_context_enabled() is True
+    assert rows["XBRL_REVIEWER_COMPACT_CONTEXT"]["saved_here"] is True
 
     client.post("/api/settings", json={"advanced_settings": {
         "XBRL_MAX_CONCURRENT_AGENTS": None,
         "XBRL_TEMPLATE_IN_PROMPT": None,
+        "XBRL_MAX_AGENT_ITERATIONS": None,
+        "XBRL_REVIEWER_COMPACT_CONTEXT": None,
     }})
     rows = _advanced(client.get("/api/settings").json())
     assert rows["XBRL_MAX_CONCURRENT_AGENTS"]["value"] == 2
     assert rows["XBRL_MAX_CONCURRENT_AGENTS"]["saved_here"] is False
     assert _template_in_prompt_enabled() is False
+    assert rows["XBRL_MAX_AGENT_ITERATIONS"]["value"] == 60
+    assert resolve_max_iterations(os.environ.get("XBRL_MAX_AGENT_ITERATIONS")) == 60
+    assert reviewer_compact_context_enabled() is False
 
 
 @pytest.mark.parametrize("payload", [
     {"XBRL_NOT_A_SETTING": 1},
     {"SESSION_SECRET": "x"},
-    {"XBRL_MAX_AGENT_ITERATIONS": 50},
+    {"XBRL_MAX_AGENT_ITERATIONS": 121},
+    {"XBRL_MAX_AGENT_ITERATIONS": 0},
     {"XBRL_MAX_AGENT_ITERATIONS": 2.5},
     {"XBRL_FACT_BASED_CHECKS": "yes"},
     {"XBRL_WRITE_FRESHNESS": "strict"},
     {"XBRL_SOFT_COMPACT_TOKENS": -1},
-    ["XBRL_CACHE_PROBE"],
+    ["XBRL_LOG_LEVEL"],
+    {"XBRL_CACHE_PROBE": True},
+    {"XBRL_STAGE_RESUME": True},
 ])
 def test_invalid_advanced_settings_are_refused_before_any_write(
     tmp_path, monkeypatch, payload,
 ):
     _env(tmp_path, monkeypatch)
+    rows = _advanced(client.get("/api/settings").json())
+    assert not {"XBRL_CACHE_PROBE", "XBRL_STAGE_RESUME"}.intersection(rows)
     response = client.post("/api/settings", json={
         "model": "openai.gpt-5.4", "advanced_settings": payload,
     })
@@ -697,15 +731,21 @@ def test_invalid_advanced_settings_are_refused_before_any_write(
     assert not server.SETTINGS_FILE.exists()
 
 
-@pytest.mark.parametrize("raw", ["nan", "inf", "-Infinity", "abc"])
+@pytest.mark.parametrize("key,raw,expected", [
+    *[("XBRL_FACE_WALLCLOCK_S", raw, 1800.0)
+      for raw in ("nan", "inf", "-Infinity", "abc")],
+    ("XBRL_MAX_AGENT_ITERATIONS", "abc", 60),
+    ("XBRL_MAX_AGENT_ITERATIONS", "0", 60),
+    ("XBRL_MAX_AGENT_ITERATIONS", "500", 120),
+])
 def test_malformed_env_value_shows_the_default_not_a_server_error(
-    tmp_path, monkeypatch, raw,
+    tmp_path, monkeypatch, key, raw, expected,
 ):
     _env(tmp_path, monkeypatch)
-    monkeypatch.setenv("XBRL_FACE_WALLCLOCK_S", raw)
+    monkeypatch.setenv(key, raw)
     response = client.get("/api/settings")
     assert response.status_code == 200
-    assert _advanced(response.json())["XBRL_FACE_WALLCLOCK_S"]["value"] == 1800.0
+    assert _advanced(response.json())[key]["value"] == expected
 
 
 def test_every_advanced_setting_is_read_by_product_code():

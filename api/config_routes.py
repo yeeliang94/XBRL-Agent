@@ -80,9 +80,7 @@ _ADMIN_ONLY_SETTINGS_KEYS = frozenset({
     "reasoning_summary",
     "auto_review",
     "notes_auto_review",
-    "pdf_notes_auto_format",
     "notes_coverage",
-    "pdf_sidecar",
     "scout_wallclock_seconds",
     "scout_max_turns",
     "notes_source_integrity",
@@ -101,9 +99,7 @@ _SETTING_ENV_KEYS = {
     "reasoning_summary": "XBRL_REASONING_SUMMARY",
     "auto_review": "XBRL_AUTO_REVIEW",
     "notes_auto_review": "XBRL_NOTES_AUTO_REVIEW",
-    "pdf_notes_auto_format": "XBRL_PDF_NOTES_AUTO_FORMAT",
     "notes_coverage": "XBRL_NOTES_COVERAGE",
-    "pdf_sidecar": "XBRL_PDF_SIDECAR",
     "scout_wallclock_seconds": "XBRL_SCOUT_WALLCLOCK_S",
     "scout_max_turns": "XBRL_SCOUT_MAX_TURNS",
     "notes_source_integrity": "XBRL_NOTES_SOURCE_INTEGRITY",
@@ -229,12 +225,6 @@ async def get_config():
         "auto_review": server._auto_review_enabled(),
         # Notes coverage checklist (docs/PLAN-notes-coverage-and-routing.md). Default on.
         "notes_coverage": server._notes_coverage_enabled(),
-        # Scanned-PDF transcribed source sidecar (docs/PLAN-pdf-source-sidecar.md).
-        # Default off.
-        "pdf_sidecar": server._pdf_sidecar_enabled(),
-        # PDF-only post-review formatter. Default off because it adds one
-        # paid visual formatting pass per prose sheet.
-        "pdf_notes_auto_format": server._pdf_notes_auto_format_enabled(),
         # Notes source integrity rollout mode (gotcha #31). Default off.
         # `shadow` computes the verdict and changes nothing; `enforce` makes
         # the block-id path live and lets an unresolved block tip run status.

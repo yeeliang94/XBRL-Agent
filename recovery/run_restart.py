@@ -8,6 +8,7 @@ validate.  Callers can then use the ordinary draft-edit and start interfaces.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -15,8 +16,16 @@ import uuid
 
 from db import repository as repo
 from ingest.document_preparation import read_prepared_document
-from recovery.stage_resume import compute_source_sha256
 from utils.atomic_io import write_json_atomic
+
+
+def compute_source_sha256(pdf_path: str | Path) -> str:
+    """Hash the retained source document for the redo lineage record."""
+    digest = hashlib.sha256()
+    with open(pdf_path, "rb") as source:
+        for chunk in iter(lambda: source.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 class RunRestartError(RuntimeError):
