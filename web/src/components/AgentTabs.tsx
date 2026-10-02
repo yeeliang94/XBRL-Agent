@@ -66,7 +66,6 @@ const NOTES_TAB_PREFIX = "notes:";
 
 const WORKSTREAM_LABELS: Record<string, string> = {
   scout: "Document preparation",
-  "source-preparation": "Source preparation",
   "notes-formatting": "Notes formatting",
   SOFP: "Statement of financial position",
   SOPL: "Profit or loss",
@@ -134,7 +133,6 @@ function AgentTabsImpl({
     const statementIds: string[] = [];
     const notesIds: string[] = [];
     let scoutId: string | null = null;
-    let sourcePreparationId: string | null = null;
     let notesFormattingId: string | null = null;
     let validatorId: string | null = null;
     let notesValidatorId: string | null = null;
@@ -151,7 +149,6 @@ function AgentTabsImpl({
         // `id === …` case, and fall through `continue` into nowhere (the
         // very disappearance we're fixing).
         if (id === "scout") scoutId = id;
-        else if (id === "source-preparation") sourcePreparationId = id;
         else if (id === "notes-formatting") notesFormattingId = id;
         else if (id === "validator") validatorId = id;
         else if (id === "NOTES_VALIDATOR") notesValidatorId = id;
@@ -172,7 +169,6 @@ function AgentTabsImpl({
     }
     return [
       ...(scoutId ? [scoutId] : []),
-      ...(sourcePreparationId ? [sourcePreparationId] : []),
       ...statementIds,
       ...notesIds,
       ...(notesValidatorId ? [notesValidatorId] : []),
@@ -189,14 +185,12 @@ function AgentTabsImpl({
   const statementActive: string[] = [];
   const notesActive: string[] = [];
   let scoutActive: string | null = null;
-  let sourcePreparationActive: string | null = null;
   let notesFormattingActive: string | null = null;
   let validatorActive: string | null = null;
   let notesValidatorActive: string | null = null;
   let correctionActive: string | null = null;
   for (const id of gatedOrder) {
     if (id === "scout") scoutActive = id;
-    else if (id === "source-preparation") sourcePreparationActive = id;
     else if (id === "notes-formatting") notesFormattingActive = id;
     else if (id === "validator") validatorActive = id;
     else if (id === "NOTES_VALIDATOR") notesValidatorActive = id;
@@ -206,7 +200,7 @@ function AgentTabsImpl({
   }
   const visibleStatementActive = statementActive;
   const visibleNotesActive = notesActive;
-  const visiblePreparation = [sourcePreparationActive, scoutActive]
+  const visiblePreparation = [scoutActive]
     .filter((id): id is string => id != null);
   const visibleChecks = [notesValidatorActive, correctionActive, validatorActive, notesFormattingActive]
     .filter((id): id is string => id != null);

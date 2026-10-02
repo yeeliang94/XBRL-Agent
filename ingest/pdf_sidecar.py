@@ -25,10 +25,9 @@ from notes.source_snippets import source_html_path_for
 logger = logging.getLogger(__name__)
 
 SOURCE_META_NAME = "source_meta.json"
-# The run-level outcome of the pass (the ``pdf_sidecar`` SSE payload), kept on
-# disk so the History run page can show the same notice after a reload. On
-# disk rather than the DB per the hybrid-storage rule (gotcha #6): a small
-# per-run artifact, no schema step. Absent = the pass did not apply.
+# Historical outcome of the retired pre-extraction transcript stage. Kept on
+# disk for run-history notices under the hybrid-storage rule (gotcha #6).
+# New runs do not create this artifact.
 SIDECAR_OUTCOME_NAME = "pdf_sidecar_outcome.json"
 
 # Gotcha #31: provider vision inputs are downscaled to a fixed token budget —

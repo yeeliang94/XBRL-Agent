@@ -820,19 +820,18 @@ read as advisory only:
 
 All three additions degrade gracefully: empty `face_line_refs` /
 `subnotes` / context fields fall through to today's bare hint blocks.
-Scanned-PDF sidecar transcription may use inventory ranges to choose which
-pages to inspect, but those ranges never prove note completeness. If any
-requested page fails, no partial sidecar is published; notes agents fall back
-to direct PDF vision. The same Scout vision inventory emits sparse page
-rotation corrections only when the primary financial content clearly needs a
-90/180/270-degree clockwise turn; upright and uncertain pages are omitted and
-there is no confidence field. The sidecar retries transport/provider failures
-at the same orientation. A genuinely blank render is retained as an empty page
-without a provider call so it cannot invalidate an otherwise complete sidecar.
-Only an empty transcription from an ink-bearing page changes orientation: a
-hinted page falls back to unrotated and an unhinted page tries 90 degrees.
-Pinned by `tests/test_notes_discoverer_vision.py`, `tests/test_pdf_sidecar.py`, and
-`tests/test_pdf_sidecar_wiring.py`.
+The Scout-selected pre-extraction transcription stage is retired. Upload-time
+preparation still uses the shared page transcriber; historical transcript
+outcomes remain readable. Scout vision emits sparse page rotation corrections
+only when the primary financial content clearly needs a 90/180/270-degree
+clockwise turn; upright and uncertain pages are omitted and there is no
+confidence field. The shared transcriber retries transport/provider failures
+at the same orientation. A blank render is retained as an empty page without
+a provider call. Only an empty transcription from an ink-bearing page changes
+orientation: a hinted page falls back to unrotated and an unhinted page tries
+90 degrees. Pinned by `tests/test_notes_discoverer_vision.py`,
+`tests/test_pdf_sidecar.py`, `tests/test_pdf_sidecar_wiring.py`, and
+`tests/test_preparation_integration.py`.
 Face page hints join each face line's note number to that note's page range in
 the scout notes inventory (`coordinator.build_face_page_hints`), and the prompt
 lists those pages first; the statement-level `note_pages` stays available as a
