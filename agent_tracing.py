@@ -72,36 +72,34 @@ def _sanitize_for_trace(obj: Any) -> None:
 #
 # Default raised 40 -> 60 on 2026-09-25: the trace audit showed agents on
 # long documents hitting 40 nodes (about 20 model turns) mid-task.
-# ``XBRL_MAX_AGENT_ITERATIONS`` overrides it, clamped to ``_SAFE_CEILING``;
+# ``XBRL_MAX_AGENT_ITERATIONS`` overrides it, clamped to ``MAX_AGENT_ITERATIONS_CEILING``;
 # pinned by tests/test_max_agent_iterations_below_pydantic_cap.py.
-_DEFAULT_MAX_ITERATIONS = 60
+DEFAULT_MAX_AGENT_ITERATIONS = 60
+MAX_AGENT_ITERATIONS_CEILING = 120
 
 
-def _resolve_max_iterations() -> int:
+def resolve_max_iterations(raw: str | None) -> int:
     # Upper bound on the operator override: a runaway agent should still be
     # stopped well before it burns an unbounded number of turns.
-    _SAFE_CEILING = 120
-
-    raw = os.environ.get("XBRL_MAX_AGENT_ITERATIONS", "")
     if not raw:
-        return _DEFAULT_MAX_ITERATIONS
+        return DEFAULT_MAX_AGENT_ITERATIONS
     try:
         v = int(raw)
     except ValueError:
         logger.warning(
             "XBRL_MAX_AGENT_ITERATIONS=%r is not an int; using default %d",
-            raw, _DEFAULT_MAX_ITERATIONS,
+            raw, DEFAULT_MAX_AGENT_ITERATIONS,
         )
-        return _DEFAULT_MAX_ITERATIONS
+        return DEFAULT_MAX_AGENT_ITERATIONS
     if v <= 0:
-        return _DEFAULT_MAX_ITERATIONS
-    if v > _SAFE_CEILING:
+        return DEFAULT_MAX_AGENT_ITERATIONS
+    if v > MAX_AGENT_ITERATIONS_CEILING:
         logger.warning(
             "XBRL_MAX_AGENT_ITERATIONS=%d exceeds safe ceiling of %d; "
             "clamping to %d.",
-            v, _SAFE_CEILING, _SAFE_CEILING,
+            v, MAX_AGENT_ITERATIONS_CEILING, MAX_AGENT_ITERATIONS_CEILING,
         )
-        return _SAFE_CEILING
+        return MAX_AGENT_ITERATIONS_CEILING
     return v
 
 
@@ -116,7 +114,9 @@ def agent_usage_limits(max_iters: int):
     return UsageLimits(request_limit=max_iters)
 
 
-MAX_AGENT_ITERATIONS = _resolve_max_iterations()
+MAX_AGENT_ITERATIONS = resolve_max_iterations(
+    os.environ.get("XBRL_MAX_AGENT_ITERATIONS"),
+)
 
 
 def strip_binary(obj: Any) -> None:
