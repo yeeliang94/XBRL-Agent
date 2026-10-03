@@ -40,8 +40,24 @@ class CLBGTieOutCheck:
         return combine_period_evaluations(self.name, evaluations, tolerance)
 
     def run_facts(self, ctx, tolerance):
-        from cross_checks.facts_util import read_labelled_value, read_matrix_value
+        from cross_checks.facts_util import LabelledValue, _fact_value, read_labelled_value, read_matrix_value
         def read(statement, label, matrix, spec):
+            if statement == StatementType.SOPL:
+                template_id = ctx.template_ids.get(statement)
+                row = ctx.conn.execute(
+                    "SELECT n.concept_uuid, n.render_sheet, n.render_row "
+                    "FROM concept_nodes n JOIN concept_semantic_addresses a USING(concept_uuid) "
+                    "WHERE n.template_id = ? AND n.is_current = 1 "
+                    "AND a.primary_concept = 'ifrs-full_ProfitLoss' "
+                    "ORDER BY n.render_row LIMIT 1", (template_id,),
+                ).fetchone()
+                # The first ProfitLoss is the income total; the later occurrence
+                # is the independent attribution total. Never use continuing operations.
+                if row is None:
+                    return LabelledValue(None, None, None)
+                uuid, sheet, number = row
+                return LabelledValue(_fact_value(ctx, template_id, uuid, spec.period, spec.entity_scope),
+                                     sheet, number)
             if matrix:
                 return read_matrix_value(ctx, statement, label, "N", spec.period, spec.entity_scope)
             return read_labelled_value(ctx, statement, label, spec.period, spec.entity_scope)
@@ -55,10 +71,21 @@ class CLBGTieOutCheck:
         from types import SimpleNamespace
         from cross_checks.util import open_workbook, find_value_by_label, find_value_in_block
         from scripts.generate_clbg_templates import fund_line_items
+        from concept_model.taxonomy_semantics import semantic_addresses_for
+        from statement_types import template_path
         workbooks = {statement: open_workbook(workbook_paths[statement]) for statement in self.required_statements}
         def read(statement, label, matrix, spec):
             wb = workbooks[statement]
             ws = wb["SOCIE"] if matrix else wb[wb.sheetnames[0]]
+            if statement == StatementType.SOPL:
+                variant = "Function" if ws.title == "SOIE-Function" else "Nature"
+                addresses = semantic_addresses_for(str(template_path(statement, variant, standard="clbg")))
+                rows = [row for (sheet, row, _), address in addresses.items()
+                        if sheet == ws.title and address["primary_concept"] == "ifrs-full_ProfitLoss"]
+                number = min(rows) if rows else None
+                value = None if number is None else find_value_in_block(
+                    ws, label, spec.column, number, number, wb=wb, blank_formula_as_none=True)
+                return SimpleNamespace(value=value, sheet=ws.title, row=number)
             if matrix:
                 start = 6 + (0 if spec.period == "CY" else len(fund_line_items())+3)
                 value = find_value_in_block(ws, label, 14, start, start+len(fund_line_items())-1,

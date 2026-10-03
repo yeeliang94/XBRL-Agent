@@ -403,9 +403,9 @@ def test_statement_verify_e2e_parity(tmp_path, monkeypatch, standard, fixture, s
         for level in ("company", "group")
         for filename, variant in (("10-SoRE.xlsx", "SoRE"), ("09-SOCIE.xlsx", "Default"))
     ] + [("clbg", "company", "09-SOCIE.xlsx", "Default")]
-    for defect in (None, "restated", "other_closing", "missing_opening", "no_py")
+    for defect in (None, "restated", "other_closing", "missing_opening", "no_py", "unchanged")
 ] + [("clbg", "company", "09-SOCIE.xlsx", "Default", defect)
-     for defect in ("movement", "missing_movement")])
+     for defect in ("movement", "missing_movement", "no_oci", "missing_subtotal")])
 def test_mpers_balance_verification_with_real_template(tmp_path, monkeypatch, standard, level, filename, variant, defect):
     """Valid MPERS balances pass; source opening and every scope/period matter."""
     fixture = REPO / f"XBRL-template-{standard.upper()}" / level.capitalize() / filename
@@ -439,7 +439,17 @@ def test_mpers_balance_verification_with_real_template(tmp_path, monkeypatch, st
             elif standard == "clbg" and label == "total changes in fund/equity": value = 18
             if value is not None:
                 conn.execute("UPDATE run_concept_facts SET value=? WHERE run_id=? AND concept_uuid=?", (value, run_id, uuid))
-        if defect == "restated":
+        if defect == "unchanged":
+            # An ordinary unchanged column has no movement facts, including
+            # explicit zero facts. Both real verifier paths must accept it.
+            conn.execute("DELETE FROM run_concept_facts WHERE run_id=? AND concept_uuid NOT IN (SELECT concept_uuid FROM concept_nodes WHERE canonical_label LIKE '%at beginning of period%' OR canonical_label LIKE '%at end of period')", (run_id,))
+            conn.execute("UPDATE run_concept_facts SET value=100 WHERE run_id=?", (run_id,))
+        elif defect == "no_oci":
+            # Optional zero movements are commonly left undisclosed.
+            conn.execute("DELETE FROM run_concept_facts WHERE run_id=? AND value=0", (run_id,))
+        elif defect == "missing_subtotal":
+            conn.execute("DELETE FROM run_concept_facts WHERE run_id=? AND concept_uuid IN (SELECT concept_uuid FROM concept_nodes WHERE canonical_label='Total comprehensive surplus (deficit)')", (run_id,))
+        elif defect == "restated":
             conn.execute("UPDATE run_concept_facts SET value=999 WHERE run_id=? AND concept_uuid IN (SELECT concept_uuid FROM concept_nodes WHERE canonical_label LIKE '%at beginning of period, restated')", (run_id,))
             conn.execute("UPDATE run_concept_facts SET value=1017 WHERE run_id=? AND concept_uuid IN (SELECT concept_uuid FROM concept_nodes WHERE canonical_label LIKE '%at end of period')", (run_id,))
         elif defect == "other_closing":
@@ -463,7 +473,7 @@ def test_mpers_balance_verification_with_real_template(tmp_path, monkeypatch, st
     monkeypatch.setenv("XBRL_FACT_BASED_VERIFY", "1")
     facts = verify_statement(str(work), StatementType.SOCIE, variant, filing_level=level, filing_standard=standard, db_path=str(db), run_id=run_id, template_id=tid)
     _assert_verify_parity(xlsx, facts)
-    assert facts.is_balanced is (defect in {None, "no_py"}), facts.mismatches
+    assert facts.is_balanced is (defect in {None, "no_py", "unchanged", "no_oci"}), facts.mismatches
     if defect == "restated":
         assert any("!= opening" in m for m in facts.mismatches)
     elif defect == "other_closing":
@@ -471,7 +481,7 @@ def test_mpers_balance_verification_with_real_template(tmp_path, monkeypatch, st
         if level == "group": assert any("company_cy:" in m for m in facts.mismatches)
     elif defect == "missing_opening":
         assert any("missing opening" in m for m in facts.mismatches)
-    elif defect in {"movement", "missing_movement"}:
+    elif defect in {"movement", "missing_movement", "missing_subtotal"}:
         assert any("comprehensive surplus" in m for m in facts.mismatches)
     elif defect == "no_py":
         assert not any("_py" in key for key in facts.computed_totals)

@@ -393,6 +393,35 @@ def test_docx_conversion_missing_native_content_cannot_pass(tmp_path, monkeypatc
     assert not (tmp_path / "preparation.json").exists()
 
 
+@pytest.mark.parametrize("markers", [("a", "b"), ("i", "ii")])
+def test_docx_nondecimal_lists_do_not_invent_missing_conversion_content(tmp_path, monkeypatch, markers):
+    # Mammoth exposes an ol without retaining Word's alphabetic/Roman style.
+    native = "<ol><li>Corporate information</li><li>Policies</li></ol>"
+    path = pdf(tmp_path, 1, texts=[f"({markers[0]}) Corporate information ({markers[1]}) Policies"])
+    (tmp_path / "uploaded.docx").write_bytes(b"native-source-fixture")
+    monkeypatch.setattr("ingest.docx_html.extract_docx_html", lambda _: native)
+    from ingest import document_preparation
+    pdf_tokens = document_preparation._pdf_content_tokens
+    event_loop_thread = threading.get_ident()
+
+    def read_pdf_off_loop(path):
+        assert threading.get_ident() != event_loop_thread
+        return pdf_tokens(path)
+
+    monkeypatch.setattr(document_preparation, "_pdf_content_tokens", read_pdf_off_loop)
+    base, _ = caller()
+
+    async def capture(stage, images, context):
+        result = await base(stage, images, context)
+        if stage == "capturing":
+            result["html"] = native
+        return result
+
+    result = asyncio.run(prepare_document(path, None, model_name="fake", _caller=capture))
+    assert result.metadata_path.exists()
+    assert json.loads(result.metadata_path.read_text())["native_structure_verified"] is True
+
+
 @pytest.mark.parametrize("assessment_complete", [True, False])
 def test_docx_structure_uncertainty_is_retained_without_blocking(tmp_path, monkeypatch, assessment_complete):
     path = pdf(tmp_path, 1, texts=["Note Text 1"])

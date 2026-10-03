@@ -6567,23 +6567,9 @@ async def run_multi_agent_stream(
             if db_conn is None or run_id is None:
                 return
             try:
-                # Comparison and subsequent downloads need the actual layouts,
-                # including variants selected automatically by the coordinator.
-                stored_run = repo.fetch_run(db_conn, run_id)
-                if stored_run is not None:
-                    stored_config = dict(stored_run.config or {})
-                    stored_config["variants"] = {
-                        **(stored_config.get("variants") or {}),
-                        **{
-                            result.statement_type.value: result.variant
-                            for result in coordinator_result.agent_results
-                            if result.variant is not None
-                        },
-                    }
-                    db_conn.execute(
-                        "UPDATE runs SET run_config_json = ? WHERE id = ?",
-                        (json.dumps(stored_config), run_id),
-                    )
+                # Preserve requested variants in the run configuration. Actual
+                # resolved layouts belong on the agent rows below, which also
+                # supply comparison/download routing after the run finishes.
                 for agent_result in coordinator_result.agent_results:
                     run_agent_id = run_agent_ids_by_stmt.get(agent_result.statement_type)
                     if run_agent_id is None:

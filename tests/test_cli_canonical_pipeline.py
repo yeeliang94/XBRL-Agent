@@ -42,7 +42,8 @@ def cli_env(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("first_financial_statements", [False, True])
-def test_cli_run_agent_drives_canonical_pipeline(cli_env, first_financial_statements):
+@pytest.mark.parametrize("requested_variants", [{}, {"SOFP": "CuNonCu"}])
+def test_cli_run_agent_drives_canonical_pipeline(cli_env, first_financial_statements, requested_variants):
     out, pdf = cli_env
     stmts = {StatementType.SOFP, StatementType.SOPL}
 
@@ -103,6 +104,7 @@ def test_cli_run_agent_drives_canonical_pipeline(cli_env, first_financial_statem
             pdf_path=pdf, model="test-model", output_dir=str(out),
             statements=stmts, denomination="thousands",
             first_financial_statements=first_financial_statements,
+            variants=requested_variants,
         )
 
     assert result.success is True
@@ -120,7 +122,7 @@ def test_cli_run_agent_drives_canonical_pipeline(cli_env, first_financial_statem
         assert runs[0]["status"] == "completed"
         saved_config = json.loads(runs[0]["run_config_json"])
         assert saved_config["first_financial_statements"] is first_financial_statements
-        assert saved_config["variants"] == {"SOFP": "CuNonCu", "SOPL": "Function"}
+        assert saved_config["variants"] == requested_variants
         from eval.human_file import run_filing_shape
         assert run_filing_shape(conn, runs[0]["id"])["statements"] == {
             "mfrs-company-sofp-cunoncu-v1": "SOFP",
@@ -128,6 +130,9 @@ def test_cli_run_agent_drives_canonical_pipeline(cli_env, first_financial_statem
         }
         agents = conn.execute("SELECT * FROM run_agents").fetchall()
         assert len(agents) == 3
+        assert {agent["statement_type"]: agent["variant"] for agent in agents
+                if agent["statement_type"] != "SCOUT"} == {
+                    "SOFP": "CuNonCu", "SOPL": "Function"}
         assert any(
             agent["statement_type"] == "SCOUT"
             and agent["status"] == "succeeded"

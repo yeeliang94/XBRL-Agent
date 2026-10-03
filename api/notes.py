@@ -286,8 +286,8 @@ def _numeric_sheet_rows(
                 categories[-1]["resolution_tokens"] = scope_values({
                     scope: {period: category_resolution_token(
                         conn, run_id, n["concept_uuid"], period, scope)
-                        for period, value in periods.items() if value is not None}
-                    for scope, periods in instance["scopes"].items()
+                        for period, value in by_period.items() if value is not None}
+                    for scope, by_period in instance["scopes"].items()
                 })
         rows.append({
             "row": n["row"],

@@ -789,9 +789,9 @@ def _verify_socie_facts(
             if opening_mismatch:
                 is_balanced = False
                 mismatches.append(opening_mismatch)
-            if any(v is None for v in (restated, increase, closing)):
+            if any(v is None for v in (restated, closing)):
                 is_balanced = False
-                mismatches.append(f"{label}: missing restated opening, total increase or closing balance — cannot verify articulation")
+                mismatches.append(f"{label}: missing restated opening or closing balance — cannot verify articulation")
                 continue
         restated = restated or 0.0
         increase = increase or 0.0

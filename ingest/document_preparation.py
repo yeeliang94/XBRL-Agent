@@ -45,15 +45,16 @@ class PreparationError(RuntimeError):
     """A source cannot be published as complete."""
 
 
-def _word_content_tokens(html: str) -> Counter:
+def _word_content_tokens(html: str, *, include_list_markers: bool = True) -> Counter:
     """Count lexical content independently of PDF reading order or dot leaders.
 
-    Decimal HTML list markers are rendered text even though BeautifulSoup's
-    get_text omits them. Structural equivalence is still assessed separately.
+    HTML list markers can help compare capture representations, but Mammoth
+    does not retain Word's numbering style. Exclude inferred markers from the
+    hard conversion check. Structural equivalence is assessed separately.
     """
     soup = BeautifulSoup(html, "html.parser")
     markers = []
-    for ordered in soup.find_all("ol"):
+    for ordered in soup.find_all("ol") if include_list_markers else ():
         if ordered.get("type", "1") != "1":
             continue
         try:
@@ -68,6 +69,13 @@ def _word_content_tokens(html: str) -> Counter:
             markers.append(str(number))
             number += 1
     return Counter(re.findall(r"\w+", soup.get_text(" ").casefold()) + markers)
+
+
+def _pdf_content_tokens(path: Path) -> Counter:
+    with fitz.open(path) as converted:
+        return Counter(re.findall(
+            r"\w+", " ".join(page.get_text() for page in converted).casefold()
+        ))
 
 
 class _PreparationRequestTimeout(PreparationError, TranscriptionRetryExhausted):
@@ -1171,11 +1179,8 @@ async def prepare_document(
             # Conversion and capture are different boundaries. Reading order,
             # table layout and implicit list markers can change representation;
             # lexical containment alone never certifies structural fidelity.
-            native_tokens = _word_content_tokens(native_html)
-            with fitz.open(pdf) as converted:
-                converted_tokens = Counter(re.findall(
-                    r"\w+", " ".join(page.get_text() for page in converted).casefold()
-                ))
+            native_tokens = _word_content_tokens(native_html, include_list_markers=False)
+            converted_tokens = await asyncio.to_thread(_pdf_content_tokens, pdf)
             if not native_tokens or native_tokens - converted_tokens:
                 raise PreparationError("Prepared pages do not preserve the original Word content. Please check the conversion.")
             capture_missing = native_tokens - _word_content_tokens(html)
