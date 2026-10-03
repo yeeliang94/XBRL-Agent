@@ -1008,6 +1008,11 @@ Key invariants:
   Missing, ambiguous or overlapping targets must fail before saving the workbook.
   Pinned by `tests/test_canonical_export.py`, `tests/test_socie_parser_matrix.py`,
   `tests/test_mtool_socie_input_totals.py` and `tests/test_verifier_shadow.py`.
+  Undisclosed movement values contribute zero in balance verification. Required
+  opening/restated/closing balances remain required. CLBG comprehensive-surplus
+  and fund-change equations still reject a blank subtotal when its populated
+  source components imply a nonzero value. The real-template shadow tests cover
+  unchanged columns, absent OCI and missing movement subtotals in both paths.
 - **CLBG is an explicit filing family.** `XBRL-template-CLBG/Company/` is
   generated from the CLBG SSM linkbases. SOPL routes to income and expenditure;
   SOCIE routes to changes in fund. Fund dimensions are not equity dimensions.
@@ -1895,10 +1900,12 @@ instead of leaving a canonical row with no workbook artifact. Pinned by
 
 ### 23. Human-file comparison — read by address, compared on read
 
-Resolved statement variants are persisted after extraction, including automatic
-Scout/default selection. Historical runs missing that config map may use a
-unique terminal `run_agents.variant`; Scout hints and registry defaults must
-never invent the historical layout. Pinned by
+Requested statement variants remain in `run_config_json.variants`; automatic
+Scout/default selection must not replace that request or disable detection on
+a later run. Resolved variants are persisted on `run_agents` after extraction.
+Comparison/download routing uses a requested variant or a unique terminal
+`run_agents.variant`; Scout hints and registry defaults must never invent the
+historical layout. Pinned by
 `tests/test_cli_canonical_pipeline.py` and `tests/test_human_file_ingest.py`.
 
 `first_financial_statements=true` means first statements after incorporation,
@@ -2653,7 +2660,10 @@ primary input).
 Word preparation checks conversion and capture separately. The converted PDF
 must retain the native Word lexical-content denominator; missing content fails
 conversion validation. Reading order, dot leaders and implicit decimal HTML
-list markers do not establish loss by themselves. Capture gaps remain unresolved
+list markers do not establish loss by themselves. Mammoth HTML does not retain
+Word's numbering style, so inferred list markers are excluded from the hard
+conversion denominator. The full PDF token read runs outside the event loop.
+Capture gaps remain unresolved
 even when a native structural assessment claims clean; publish best-effort
 receipts with `native_structure_verified=false` and page uncertainties. An
 incomplete native structural assessment likewise remains unresolved, with

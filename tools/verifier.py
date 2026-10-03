@@ -1104,9 +1104,10 @@ def _clbg_movement_mismatches(
         ("comprehensive surplus", tci, surplus, oci),
         ("changes in fund/equity", changes, tci, contributions),
     ):
-        if any(v is None for v in (actual, left, right)):
-            mismatches.append(f"{label}: missing {name} or its source components — cannot verify movement")
-        elif abs(actual - left - right) > _balance_tolerance(actual, left, right):
+        # Undisclosed movements contribute zero. A blank subtotal with
+        # populated, nonzero components still fails this equation.
+        actual, left, right = (v if v is not None else 0.0 for v in (actual, left, right))
+        if abs(actual - left - right) > _balance_tolerance(actual, left, right):
             mismatches.append(f"{label}: {name} ({actual}) != source components ({left}) + ({right}) = {left + right}")
     return mismatches
 
@@ -1261,9 +1262,9 @@ def _verify_socie(
             if opening_mismatch:
                 is_balanced = False
                 mismatches.append(opening_mismatch)
-            if any(v is None for v in (restated, increase, closing)):
+            if any(v is None for v in (restated, closing)):
                 is_balanced = False
-                mismatches.append(f"{label}: missing restated opening, total increase or closing balance — cannot verify articulation")
+                mismatches.append(f"{label}: missing restated opening or closing balance — cannot verify articulation")
                 continue
         restated = restated or 0.0
         increase = increase or 0.0
