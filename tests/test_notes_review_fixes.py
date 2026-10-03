@@ -266,7 +266,7 @@ async def test_notes_coordinator_exception_fails_overall_run(
 
 
 @pytest.mark.asyncio
-async def test_notes_tasks_registered_in_task_registry():
+async def test_notes_tasks_registered_in_task_registry(tmp_path):
     """run_notes_extraction(session_id=...) should register each task."""
     import task_registry
     from notes.coordinator import NotesRunConfig, run_notes_extraction
@@ -284,8 +284,8 @@ async def test_notes_tasks_registered_in_task_registry():
     with patch("notes.coordinator._run_single_notes_agent", side_effect=stub_agent):
         coord_task = asyncio.create_task(run_notes_extraction(
             NotesRunConfig(
-                pdf_path="/tmp/fake.pdf",
-                output_dir="/tmp",
+                pdf_path=str(tmp_path / "fake.pdf"),
+                output_dir=str(tmp_path),
                 model="fake",
                 notes_to_run={NotesTemplateType.CORP_INFO, NotesTemplateType.ACC_POLICIES},
             ),
@@ -306,7 +306,7 @@ async def test_notes_tasks_registered_in_task_registry():
 
 
 @pytest.mark.asyncio
-async def test_notes_tasks_cancellable_via_task_registry():
+async def test_notes_tasks_cancellable_via_task_registry(tmp_path):
     """task_registry.cancel_all(session_id) should cancel notes tasks.
 
     This is the invariant the `/api/abort/{session_id}` endpoint relies on —
@@ -335,8 +335,8 @@ async def test_notes_tasks_cancellable_via_task_registry():
     with patch("notes.coordinator._run_single_notes_agent", side_effect=stub_agent):
         coord_task = asyncio.create_task(run_notes_extraction(
             NotesRunConfig(
-                pdf_path="/tmp/fake.pdf",
-                output_dir="/tmp",
+                pdf_path=str(tmp_path / "fake.pdf"),
+                output_dir=str(tmp_path),
                 model="fake",
                 notes_to_run={NotesTemplateType.CORP_INFO},
             ),

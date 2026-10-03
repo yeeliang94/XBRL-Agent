@@ -22,7 +22,7 @@ Mapping from xlsx geometry to fact space:
 * SOFP additionally reads PY (col C / col E) — ``(PY, scope)``.
 * The SOCIE matrix's vertical blocks (group_cy / group_py / company_cy /
   company_py) map to the four ``(period, entity_scope)`` combinations; the Total
-  column (MFRS ``X`` / MPERS ``B``) is read by ``matrix_col``.
+  column (MFRS ``X`` / MPERS ``O`` / CLBG ``N``) is read by ``matrix_col``.
 
 Parity contract vs the xlsx path (proven by ``tests/test_verifier_shadow.py``):
 
@@ -60,6 +60,8 @@ from tools.verifier import (
     _imbalance_diagnostic,
     _normalize_label,
     _sofp_imbalance_feedback,
+    _opening_restatement_mismatch,
+    _clbg_movement_mismatches,
 )
 
 
@@ -88,14 +90,14 @@ def verify_statement_facts(
     facts = read_run_facts(conn, run_id, [template_id])
 
     if name == StatementType.SOFP.value:
-        result = _verify_sofp_facts(nodes, facts, filing_level, pdf_values)
+        result = _verify_sofp_facts(nodes, facts, filing_level, pdf_values, filing_standard)
     elif name == StatementType.SOCIE.value:
         result = _verify_socie_facts(
             nodes, facts, variant, filing_level, filing_standard, pdf_values)
     elif name == StatementType.SOCF.value:
         result = _verify_socf_facts(nodes, facts, filing_level, pdf_values)
     elif name == StatementType.SOPL.value:
-        result = _verify_sopl_facts(nodes, facts, filing_level, pdf_values)
+        result = _verify_sopl_facts(nodes, facts, filing_level, pdf_values, filing_standard)
     elif name == StatementType.SOCI.value:
         result = _verify_soci_facts(nodes, facts, filing_level, pdf_values)
     else:
@@ -230,6 +232,7 @@ def _matrix_label_exists(
 def _verify_sofp_facts(
     nodes: list[dict], facts: dict, filing_level: str,
     pdf_values: Optional[dict[str, float]],
+    filing_standard: str = "mfrs",
 ) -> VerificationResult:
     main = _sofp_main_sheet(nodes)
     primary = _primary_scope(filing_level)
@@ -240,7 +243,7 @@ def _verify_sofp_facts(
     feedback_lines: list[str] = []
 
     ta = _find_total_uuid(nodes, "total assets", main)
-    el = _find_total_uuid(nodes, "total equity and liabilities", main)
+    el = _find_total_uuid(nodes, "total fund/equity and liabilities" if filing_standard == "clbg" else "total equity and liabilities", main)
 
     def _set(key: str, uuid: Optional[str], period: str, scope: str) -> None:
         if uuid is None:
@@ -470,8 +473,9 @@ def _verify_socf_facts(
 def _verify_sopl_facts(
     nodes: list[dict], facts: dict, filing_level: str,
     pdf_values: Optional[dict[str, float]],
+    filing_standard: str = "mfrs",
 ) -> VerificationResult:
-    sheet = _sheet_present(nodes, ["SOPL-Function", "SOPL-Nature"])
+    sheet = _sheet_present(nodes, ["SOIE-Function", "SOIE-Nature"] if filing_standard == "clbg" else ["SOPL-Function", "SOPL-Nature"])
     rows = _rows_on_sheet(nodes, sheet) if sheet else []
 
     computed_totals: dict[str, float] = {}
@@ -482,9 +486,11 @@ def _verify_sopl_facts(
     profit_loss_uuid = None
     total_profit_uuid = None
     last_profit_loss_uuid = None
+    from tools.verifier import _clbg_profit_rows
+    clbg_profit_rows = set(_clbg_profit_rows(sheet)) if filing_standard == "clbg" else set()
     for n in rows:
         norm = _normalize_label(str(n["label"]))
-        if norm == "profit (loss)":
+        if norm == "profit (loss)" or n["row"] in clbg_profit_rows:
             if profit_loss_uuid is None:
                 profit_loss_uuid = n["uuid"]
             last_profit_loss_uuid = n["uuid"]
@@ -682,7 +688,12 @@ def _verify_socie_facts(
     is_balanced = True
 
     is_sore = (variant or "").strip().lower() == "sore" or sheet.lower() == "sore"
-    if is_sore:
+    if filing_standard == "clbg":
+        restated_label = "balance at beginning of period, restated"
+        total_label = "total changes in fund/equity"
+        closing_label = "balance at end of period"
+        pretty = tuple(f"'{label}'" for label in (restated_label, total_label, closing_label))
+    elif is_sore:
         restated_label = "retained earnings at beginning of period, restated"
         total_label = "total increase (decrease) in retained earnings"
         closing_label = "retained earnings at end of period"
@@ -697,11 +708,23 @@ def _verify_socie_facts(
                   "'Total increase (decrease) in equity'",
                   "'Equity at end of period'")
 
-    total_col = socie_total_col(filing_standard)  # 'X' (MFRS) / 'B' (MPERS)
+    total_col = "N" if filing_standard == "clbg" else socie_total_col(filing_standard)
+    linear = is_sore and all(n["matrix_col"] is None for n in nodes)
 
-    have_restated = _matrix_label_exists(nodes, sheet, restated_label, total_col)
-    have_total = _matrix_label_exists(nodes, sheet, total_label, total_col)
-    have_closing = _matrix_label_exists(nodes, sheet, closing_label, total_col)
+    def value(row_label: str, period: str, scope: str, column: str = total_col) -> Optional[float]:
+        if linear:
+            uuid = _find_total_uuid(nodes, row_label, sheet)
+            return _fact_value(facts, uuid, period, scope) if uuid else None
+        return _matrix_value(nodes, facts, sheet, row_label, column, period, scope)
+
+    def label_exists(row_label: str) -> bool:
+        if linear:
+            return _find_total_uuid(nodes, row_label, sheet) is not None
+        return _matrix_label_exists(nodes, sheet, row_label, total_col)
+
+    have_restated = label_exists(restated_label)
+    have_total = label_exists(total_label)
+    have_closing = label_exists(closing_label)
     if not have_restated or not have_total or not have_closing:
         missing = []
         if not have_restated:
@@ -727,10 +750,52 @@ def _verify_socie_facts(
     else:
         blocks = [("cy", "CY", "Company"), ("py", "PY", "Company")]
 
-    for label, period, scope in blocks:
-        restated = _matrix_value(nodes, facts, sheet, restated_label, total_col, period, scope) or 0.0
-        increase = _matrix_value(nodes, facts, sheet, total_label, total_col, period, scope) or 0.0
-        closing = _matrix_value(nodes, facts, sheet, closing_label, total_col, period, scope) or 0.0
+    columns = [total_col]
+    if filing_standard in {"mpers", "clbg"} and not linear:
+        from cross_checks.facts_util import socie_component_cols
+        columns = (list("BCDEFGHJM") if filing_standard == "clbg"
+                   else socie_component_cols(filing_standard)) + [total_col]
+    for block_label, period, scope, column in (
+        (label, period, scope, column) for label, period, scope in blocks for column in columns
+    ):
+        label = block_label if column == total_col else f"{block_label} [{column}]"
+        restated = value(restated_label, period, scope, column)
+        increase = value(total_label, period, scope, column)
+        closing = value(closing_label, period, scope, column)
+        if filing_standard in {"mpers", "clbg"}:
+            opening_label = restated_label.removesuffix(", restated")
+            opening = value(opening_label, period, scope, column)
+            adjustment = value("impact of changes in accounting policies", period, scope, column)
+            movement_values = []
+            if filing_standard == "clbg":
+                prior = value("other prior period adjustments", period, scope, column)
+                adjustment = ((adjustment or 0.0) + (prior or 0.0)
+                              if adjustment is not None or prior is not None else None)
+                movement_values = [value(row_label, period, scope, column) for row_label in (
+                    "total surplus (deficit)", "total other comprehensive surplus (deficit)",
+                    "total comprehensive surplus (deficit)", "total contributions by and distributions to owners",
+                )]
+            if all(v is None for v in (opening, adjustment, restated, increase, closing, *movement_values)):
+                continue
+            if filing_standard == "clbg":
+                movement_mismatches = _clbg_movement_mismatches(label, *movement_values, increase)
+                if movement_mismatches:
+                    is_balanced = False
+                    mismatches.extend(movement_mismatches)
+            opening_mismatch = _opening_restatement_mismatch(
+                label, opening, adjustment, restated,
+                "opening adjustments" if filing_standard == "clbg" else "accounting-policy adjustment",
+            )
+            if opening_mismatch:
+                is_balanced = False
+                mismatches.append(opening_mismatch)
+            if any(v is None for v in (restated, increase, closing)):
+                is_balanced = False
+                mismatches.append(f"{label}: missing restated opening, total increase or closing balance — cannot verify articulation")
+                continue
+        restated = restated or 0.0
+        increase = increase or 0.0
+        closing = closing or 0.0
 
         computed_totals[f"restated_equity_{label}"] = restated
         computed_totals[f"total_increase_{label}"] = increase
@@ -801,12 +866,12 @@ def _collect_unfilled_mandatory_socie_facts(
     nodes: list[dict], facts: dict, sheet: str, filing_level: str,
     filing_standard: str,
 ) -> list[str]:
-    """SOCIE mandatory scan. The MFRS matrix row is filled if ANY of its matrix
+    """SOCIE mandatory scan. A matrix row is filled if ANY of its matrix
     cells carries a fact in the required scope(s) — the row's data can sit in
     any equity-component column (mirrors the xlsx ``is_mfrs_socie_matrix``
     any-column rule). MPERS SoRE's flat layout reuses the linear scan."""
-    is_mfrs_matrix = filing_standard == "mfrs"
-    if not is_mfrs_matrix:
+    is_matrix = any(n["matrix_col"] is not None for n in nodes)
+    if not is_matrix:
         return _collect_unfilled_mandatory_facts(nodes, facts, sheet, filing_level)
 
     scopes = ["Group", "Company"] if filing_level == "group" else ["Company"]

@@ -364,3 +364,21 @@ def test_formula_audit_commands_are_clean(module: str, result_line: str) -> None
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert result_line in completed.stdout
+
+
+@pytest.mark.parametrize("level", ["company", "group"])
+@pytest.mark.parametrize("cell", ["C37", "O35"])
+def test_mpers_matrix_audit_detects_comparative_formula_corruption(tmp_path, level, cell):
+    """Audit both primitive movement formulas and nested component totals in PY."""
+    from scripts.audit_mpers_formulas import audit_template
+    source = REPO / 'XBRL-template-MPERS' / level.capitalize() / '09-SOCIE.xlsx'
+    path = tmp_path / '09-SOCIE.xlsx'
+    wb = openpyxl.load_workbook(source)
+    assert str(wb['SOCIE'][cell].value).startswith('=')
+    wb['SOCIE'][cell] = '=1*B30'
+    wb.save(path)
+    wb.close()
+    audit = audit_template(path, level)['sheets']['SOCIE']
+    assert audit['formulas_wrong'] == 1
+    assert audit['formulas_missing'] == 0
+    assert audit['issues'][0]['cell'] == cell

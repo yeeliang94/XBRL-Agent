@@ -73,7 +73,7 @@ def active_template_paths(repository_root: str | Path) -> list[Path]:
     root = Path(repository_root)
     return sorted(
         path
-        for standard in ("MFRS", "MPERS")
+        for standard in ("MFRS", "MPERS", "CLBG")
         for level in ("Company", "Group")
         for path in (root / f"XBRL-template-{standard}" / level).glob("*.xlsx")
     )
@@ -96,7 +96,7 @@ def _is_managed_template(path_value: str | Path) -> bool:
     parts = relative.parts
     return (
         len(parts) == 3
-        and parts[0] in {"XBRL-template-MFRS", "XBRL-template-MPERS"}
+        and parts[0] in {"XBRL-template-MFRS", "XBRL-template-MPERS", "XBRL-template-CLBG"}
         and parts[1] in {"Company", "Group"}
         and path.suffix.lower() == ".xlsx"
     )

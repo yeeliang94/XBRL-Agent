@@ -1122,6 +1122,14 @@ def create_extraction_agent(
         # the block (today's behaviour preserved).
         scout_context=scout_context,
     )
+    if (scout_context or {}).get("_first_financial_statements") is True:
+        system_prompt += (
+            "\n\nFIRST FINANCIAL STATEMENTS AFTER INCORPORATION: this filing has "
+            "only the current reporting period (CY). Fill only CY targets for "
+            "each entity scope. Prior-period columns or blocks in the internal "
+            "template are not applicable: do not write PY values, zeros, dates "
+            "or opening comparatives, and do not infer a prior year."
+        )
 
     # Fix B (2026-06-20): on a fully-scanned PDF, search_pdf_text can only ever
     # return a 'scanned' signal — calling it burns a turn for nothing (which
@@ -1367,6 +1375,7 @@ def create_extraction_agent(
             validator_context = canonical_cell_write_validator(
                 ctx.deps.db_path,
                 ctx.deps.template_id,
+                run_id=ctx.deps.run_id,
             )
         with validator_context as write_validator:
             result = _fill_workbook_impl(

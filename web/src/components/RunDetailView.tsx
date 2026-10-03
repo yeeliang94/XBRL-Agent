@@ -168,6 +168,7 @@ function crossChecksForValidator(
     // (the original bug) left every row non-clickable despite backend support.
     target_sheet: r.target_sheet,
     target_row: r.target_row,
+    comparands: r.comparands,
   }));
 }
 
@@ -277,7 +278,7 @@ interface AgentSummary {
   sourceReference: string | null;
 }
 
-function AgentCard({ agent, summary }: { agent: RunAgentJson; summary: AgentSummary }) {
+function AgentCard({ agent, summary, filingStandard }: { agent: RunAgentJson; summary: AgentSummary; filingStandard?: unknown }) {
   // Sheet-12 sub-tab selection — mirrors the live ExtractPage path so
   // replay looks identical to live once the operator picks a sub. null =
   // "All" (every sub-agent merged, same as pre-sub-tab behaviour).
@@ -332,9 +333,9 @@ function AgentCard({ agent, summary }: { agent: RunAgentJson; summary: AgentSumm
           <span style={styles.agentStatement}>{displayName}</span>
           {/* Plain-English gloss for face-statement codes (UX-QA #12/legend) —
               "SOFP" alone assumes the reader speaks MBRS shorthand. */}
-          {statementCodeSubtitle(agent.statement_type) && (
+          {statementCodeSubtitle(agent.statement_type, filingStandard) && (
             <span style={styles.agentSubtitle}>
-              {statementCodeSubtitle(agent.statement_type)}
+              {statementCodeSubtitle(agent.statement_type, filingStandard)}
             </span>
           )}
           {agent.variant && (
@@ -421,7 +422,7 @@ function AgentCard({ agent, summary }: { agent: RunAgentJson; summary: AgentSumm
   );
 }
 
-function HistoricalAgentWorkspace({ agents }: { agents: RunAgentJson[] }) {
+function HistoricalAgentWorkspace({ agents, filingStandard }: { agents: RunAgentJson[]; filingStandard?: unknown }) {
   const orderedAgents = useMemo(
     () => [...agents].sort((a, b) => agentActivityOrder(a) - agentActivityOrder(b)),
     [agents],
@@ -485,7 +486,7 @@ function HistoricalAgentWorkspace({ agents }: { agents: RunAgentJson[] }) {
             const status = agentStatusDisplay(agent.status);
             const update = summary?.updates[0] ?? status.label;
             const hasDistinctUpdate = update !== status.label && update !== "Finished its assigned work";
-            const subtitle = statementCodeSubtitle(agent.statement_type)
+            const subtitle = statementCodeSubtitle(agent.statement_type, filingStandard)
               ?? (agent.statement_type === "SCOUT" ? "Document preparation" : null);
             return (
               <button
@@ -521,6 +522,7 @@ function HistoricalAgentWorkspace({ agents }: { agents: RunAgentJson[] }) {
           <AgentCard
             key={selectedAgent.id}
             agent={selectedAgent}
+            filingStandard={filingStandard}
             summary={summaries.get(selectedAgent.id) ?? { updates: [], sourceReference: null }}
           />
         )}
@@ -1258,7 +1260,7 @@ export function RunDetailView({
           {detail.agents.length === 0 ? (
             <p style={styles.dim}>Nothing was recorded for this run yet.</p>
           ) : (
-            <HistoricalAgentWorkspace agents={detail.agents} />
+            <HistoricalAgentWorkspace agents={detail.agents} filingStandard={detail.filing_standard ?? detail.config?.filing_standard} />
           )}
           {/* Timing + AI-usage detail (the former Telemetry tab), tucked into a
               collapsed disclosure so the everyday view stays about what the AI

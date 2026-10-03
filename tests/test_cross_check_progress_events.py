@@ -23,7 +23,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from coordinator import AgentResult, CoordinatorResult
-from cross_checks.framework import CrossCheckResult
+from cross_checks.framework import CrossCheckResult, Comparand
 from statement_types import StatementType
 from workbook_merger import MergeResult
 
@@ -102,7 +102,9 @@ def test_initial_cross_check_run_emits_progress_events(session_env):
     # without calling on_check would not produce the per-check events
     # — use ``side_effect`` to mirror the real framework's contract.
     fake_results = [
-        CrossCheckResult(name="check_a", status="passed", message="ok"),
+        CrossCheckResult(name="check_a", status="passed", message="ok", comparands=[
+            Comparand(label="Total assets", sheet="SOFP", value=80, role="lhs", period="PY"),
+        ]),
         CrossCheckResult(name="check_b", status="failed",
                          expected=100.0, actual=90.0, diff=-10.0,
                          tolerance=1.0, message="off by 10"),
@@ -156,6 +158,14 @@ def test_initial_cross_check_run_emits_progress_events(session_env):
 
     assert resp.status_code == 200
     body = resp.text
+    import json
+    frames = [json.loads(block.split("data: ", 1)[1].strip())
+              for block in body.split("\n\n") if block.startswith("event: cross_check_result\n")]
+    assert frames[0]["comparands"][0]["period"] == "PY"
+    assert frames[0]["comparands"][0]["value"] == 80
+    completed = next(json.loads(block.split("data: ", 1)[1].strip())
+                     for block in body.split("\n\n") if block.startswith("event: run_complete\n"))
+    assert completed["cross_checks"][0]["comparands"] == frames[0]["comparands"]
 
     # Start event must precede any per-check result.
     assert "event: cross_check_start" in body, (

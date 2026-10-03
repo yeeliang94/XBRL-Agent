@@ -161,11 +161,14 @@ def _numeric_sheet_rows(
     if not nodes:
         return []
 
+    from concept_model.periods import run_periods
+    periods = run_periods(conn, run_id)
     facts: dict[str, dict] = {}
     for f in conn.execute(
         "SELECT concept_uuid, period, entity_scope, value, dimension_key, evidence "
-        "FROM run_concept_facts WHERE run_id = ?",
-        (run_id,),
+        "FROM run_concept_facts WHERE run_id = ? AND period IN ("
+        + ",".join("?" for _ in periods) + ")",
+        (run_id, *periods),
     ).fetchall():
         category = facts.setdefault(f["concept_uuid"], {}).setdefault(
             f["dimension_key"], {"scopes": {}, "evidence": []})
@@ -174,7 +177,19 @@ def _numeric_sheet_rows(
             category["evidence"].append(f["evidence"])
 
     from concept_model.filing_targets import resolve_writable_html_target
+    from concept_model.dimensions import numeric_category_catalog
+    from concept_model.facts_api import category_resolution_token
     from db.repository import decode_source_pages
+
+    suffix = ("ClassesOfShareCapitalAxis" if sheet == "Notes-Issuedcapital"
+              else "CategoriesOfRelatedPartiesAxis")
+    category_options = [
+        {"dimensions": {axis: member}, "label": re.sub(
+            r"(?<=[a-z])(?=[A-Z])", " ", member.split("_", 1)[-1].removesuffix("Member"))}
+        for axis, members in numeric_category_catalog(template_id.split("-")[0]).items()
+        if axis.endswith(suffix)
+        for member in members
+    ] if sheet in {"Notes-Issuedcapital", "Notes-RelatedPartytran"} else []
 
     html_cells = {
         c["row"]: c
@@ -244,16 +259,19 @@ def _numeric_sheet_rows(
 
         def scope_values(scope):
             if level == "group":
-                return {
+                values = {
                     "group_cy": scope.get("Group", {}).get("CY"),
                     "group_py": scope.get("Group", {}).get("PY"),
                     "company_cy": scope.get("Company", {}).get("CY"),
                     "company_py": scope.get("Company", {}).get("PY"),
                 }
-            return {
-                "cy": scope.get("Company", {}).get("CY"),
-                "py": scope.get("Company", {}).get("PY"),
-            }
+            else:
+                values = {
+                    "cy": scope.get("Company", {}).get("CY"),
+                    "py": scope.get("Company", {}).get("PY"),
+                }
+            return {key: value for key, value in values.items()
+                    if "PY" in periods or not key.endswith("py")}
         instances = facts.get(n["concept_uuid"], {})
         categories = []
         for key, instance in sorted(instances.items()):
@@ -264,13 +282,21 @@ def _numeric_sheet_rows(
             categories.append({"dimension_key": key, "dimensions": dimensions,
                                "label": label, "values": scope_values(instance["scopes"]),
                                "evidence": "; ".join(instance["evidence"]) or None})
+            if not key and category_options:
+                categories[-1]["resolution_tokens"] = scope_values({
+                    scope: {period: category_resolution_token(
+                        conn, run_id, n["concept_uuid"], period, scope)
+                        for period, value in periods.items() if value is not None}
+                    for scope, periods in instance["scopes"].items()
+                })
         rows.append({
             "row": n["row"],
             "label": n["display_label"] or n["canonical_label"],
             "kind": "numeric",
             "concept_uuid": n["concept_uuid"],
             "values": scope_values(instances.get("", {}).get("scopes", {})),
-            "categories": categories if any(instances) else [],
+            "categories": categories if instances else [],
+            "category_options": category_options,
             "updated_at": "",
         })
     return rows

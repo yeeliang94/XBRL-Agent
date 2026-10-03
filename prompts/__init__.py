@@ -391,6 +391,16 @@ def sanitize_source_scalar(raw: object, max_chars: int = 240) -> str:
 
 
 _STANDARD_BLOCKS = {
+    "clbg": (
+        "=== FILING FAMILY: CLBG ===\n"
+        "This is a company limited by guarantee. Use the SSM CLBG taxonomy\n"
+        "templates and the accounting framework stated in the source. CLBG\n"
+        "is a filing family, not an accounting standard. SOPL is the internal\n"
+        "slot for income and expenditure; SOCIE is changes in fund. There is\n"
+        "no standalone SOCI or issued-capital notes template. Keep accumulated\n"
+        "funds, members funds and reserve components distinct. Do not import\n"
+        "MFRS share-capital labels or MPERS equity layouts into this template."
+    ),
     "mfrs": (
         "=== FILING STANDARD: MFRS ===\n"
         "This filing is prepared under MFRS (Malaysian Financial Reporting\n"

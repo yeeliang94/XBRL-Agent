@@ -773,6 +773,9 @@ details[open] > summary::before {
 }
 
 @media (max-width: 780px) {
+  .human-comparison-file {
+    justify-content: flex-start !important;
+  }
   .preparation-step-row {
     grid-template-columns: minmax(0, 1fr) auto !important;
     gap: 4px 12px !important;

@@ -67,6 +67,7 @@ Windows acceptance run before it is enabled.
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -144,6 +145,9 @@ def build_fill_doc(
     rows, snapshot = snapshot_facts(
         db_path, run_id,
         filing_standard=filing_standard, filing_level=filing_level)
+    from concept_model.periods import run_periods
+    with sqlite3.connect(str(db_path)) as conn:
+        periods = run_periods(conn, run_id)
 
     # Every conflict in the SAME snapshot the writes come from, so the
     # preflight verdict and the receipt describe one revision of the facts
@@ -190,6 +194,9 @@ def build_fill_doc(
     seen: set[tuple[str, str, str, str]] = set()
 
     for r in rows:
+        if r['period'] not in periods:
+            excluded_out_of_scope += 1
+            continue
         if (r['data_type'] or '').lower().endswith('textblockitemtype'):
             excluded_invalid_target += 1
             continue
@@ -308,6 +315,7 @@ def build_fill_doc(
         "conflicts": snapshot_conflicts,
         "filing_standard": filing_standard.lower(),
         "filing_level": filing_level.lower(),
+        "first_financial_statements": periods == ('CY',),
         "denomination": denomination,
         "sheets_covered": sorted(sheets),
         "counts": {

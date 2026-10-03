@@ -924,93 +924,73 @@ def _collect_rows_with_calc(
     return rows, calc_blocks
 
 
-def _apply_group_socie_layout(
-    ws,
-    rows: list[tuple[int, str, str, bool]],
-    calc_blocks: list[tuple[str, dict[str, list[tuple[str, int]]]]] | None = None,
-) -> None:
-    """Write the Group SOCIE 4-block layout onto a sheet.
+def mpers_socie_components() -> list[tuple[str, str, list[str]]]:
+    """Native equity columns and subtotal children from role 610000's domain."""
+    path = _MPERS_TAXONOMY_DIR / 'def_ssmt-fs-mpers_2022-12-31_role-610000.xml'
+    root = ET.parse(path).getroot()
+    x = '{http://www.w3.org/1999/xlink}'
+    locators = {loc.get(x + 'label'): loc.get(x + 'href').split('#')[-1]
+                for loc in root.findall('.//link:loc', _NS)}
+    children: dict[str, list[tuple[float, str]]] = defaultdict(list)
+    for arc in root.findall('.//link:definitionArc', _NS):
+        if not arc.get(x + 'arcrole', '').endswith('/domain-member'):
+            continue
+        parent, child = locators[arc.get(x + 'from')], locators[arc.get(x + 'to')]
+        if parent.endswith('Member') and child.endswith('Member'):
+            children[parent].append((float(arc.get('order', 0)), child))
+    result = []
+    def walk(member: str) -> None:
+        descendants = [child for _, child in sorted(children.get(member, []))]
+        for child in descendants:
+            walk(child)
+        label = 'Total' if member == 'ifrs-smes_EquityMember' else _strip_display_suffix(_resolve_preferred_label(member, None))
+        result.append((member, label, descendants))
+    walk('ifrs-smes_EquityMember')
+    if len(result) != 14:
+        raise ValueError('MPERS SOCIE component domain changed; review native column semantics')
+    return result
 
-    MFRS Group SOCIE format (Phase 1 pin): four 23-row blocks at rows
-    3-25, 27-49, 51-73, 75-97, each prefixed by a one-line block header
-    ("Group - Current period", "Group - Prior period", "Company - Current
-    period", "Company - Prior period"), blank separators at 26/50/74.
 
-    The body of each block is the same MPERS SOCIE row-set. Each block
-    carries its own column-B value column + column-D source column,
-    mirroring MPERS Company SOCIE's 4-column layout per block (decided
-    in PLAN-mpers-group-socie-formulas.md D1: Option A).
-
-    When ``calc_blocks`` is provided, ``_inject_sum_formulas`` runs once
-    per block with a ``base_row`` offset so the same SOCIE calc (role
-    610000) lands in all 4 vertical blocks. ``calc_blocks=None`` keeps
-    the legacy label-only behaviour for callers that don't have access
-    to the calc data (none today, but the default keeps the helper
-    independently usable).
-    """
+def _apply_socie_matrix_layout(ws, rows, calc_blocks, level: str) -> None:
+    """Generate per-component source inputs and taxonomy-derived subtotals."""
     from openpyxl.styles import Font
-
-    bold_font = Font(bold=True)
-
-    # The 4-block structure is pinned by the format reference. We compute 22
-    # body rows per block (the 23rd row-slot is the block header itself).
-    # The underlying row-set (rows) may be longer/shorter than 22 — we use
-    # min(22, len(rows)) so we don't overflow the block.
-    block_ranges = [(3, 25), (27, 49), (51, 73), (75, 97)]
-    block_headers = [
-        "Group - Current period",
-        "Group - Prior period",
-        "Company - Current period",
-        "Company - Prior period",
-    ]
-
-    # Truncate the row-set to 22 entries so the 23-row block fits.
-    truncated = rows[:22]
-
-    # Row 1: global period placeholder + Source header. Mirrors MFRS Group
-    # SOCIE row 1 (single placeholder in col B; "Source" header in col D
-    # for parity with MPERS Company SOCIE's 4-col layout).
-    ws.cell(row=1, column=2, value=_PERIOD_PLACEHOLDER)
-    ws.cell(row=1, column=4, value="Source")
-
-    for (start, _end), header in zip(block_ranges, block_headers):
-        ws.cell(row=start, column=1, value=header).font = bold_font
-        for idx, (_depth, _concept_id, label, is_abstract) in enumerate(truncated):
-            r = start + 1 + idx
-            cell = ws.cell(row=r, column=1, value=label)
-            # SOCIE abstract rows are rare (the linkbase has mostly leaves
-            # under the 'Components of equity' axis) but we paint them when
-            # present for parity with MFRS's hand-curated SOCIE template.
-            if is_abstract:
+    from openpyxl.utils import get_column_letter
+    components = mpers_socie_components()
+    columns = {member: get_column_letter(index) for index, (member, _, _) in enumerate(components, 2)}
+    if len(rows) != 22:
+        raise ValueError('MPERS SOCIE presentation rows changed; review stacked block geometry')
+    headers = (['Company - Current period', 'Company - Prior period'] if level == 'company' else
+               ['Group - Current period', 'Group - Prior period', 'Company - Current period', 'Company - Prior period'])
+    ws.cell(1, 2, _PERIOD_PLACEHOLDER)
+    ws.cell(1, 16, 'Source')
+    for index, (_, label, _) in enumerate(components, 2):
+        ws.cell(2, index, label)
+        ws.column_dimensions[get_column_letter(index)].width = 18.0
+    for block, header in enumerate(headers):
+        start = 3 + 24 * block
+        ws.cell(start, 1, header).font = Font(bold=True)
+        for offset, (_, _, label, abstract) in enumerate(rows):
+            cell = ws.cell(start + 1 + offset, 1, label)
+            if abstract:
                 _apply_abstract_row_styling(cell)
-            elif isinstance(label, str) and label.startswith("*"):
-                cell.font = bold_font
+            elif label.startswith('*'):
+                cell.font = Font(bold=True)
+        _inject_sum_formulas(ws, rows, calc_blocks or [], tuple(columns.values()), base_row=start + 1)
+        for offset, (_, _, _, abstract) in enumerate(rows):
+            if abstract:
+                continue
+            row = start + 1 + offset
+            for member, _, descendants in components:
+                if descendants:
+                    ws[f'{columns[member]}{row}'] = '=' + '+'.join(f'{columns[child]}{row}' for child in descendants)
+    ws.freeze_panes = 'B4'
+    ws.column_dimensions['A'].width = 55.0
+    ws.column_dimensions['P'].width = 40.0
 
-    # Inject per-block subtotal formulas using the SOCIE calc (610000).
-    # Each block needs the same calc applied with its own row offset:
-    # the body of block (header_row, _) starts at header_row + 1, so
-    # base_row = start + 1.
-    if calc_blocks:
-        for start, _end in block_ranges:
-            _inject_sum_formulas(
-                ws,
-                truncated,
-                calc_blocks,
-                value_columns=("B",),
-                base_row=start + 1,
-            )
 
-    # Equity-at-end row is the last body row in each block by MFRS
-    # convention — bold if it isn't already.
-    for start, end in block_ranges:
-        last_cell = ws.cell(row=end, column=1)
-        if last_cell.value is not None and not last_cell.font.bold:
-            last_cell.font = bold_font
-
-    ws.freeze_panes = "A4"
-    ws.column_dimensions["A"].width = 55.0
-    ws.column_dimensions["B"].width = 18.0
-    ws.column_dimensions["D"].width = 40.0
+def _apply_group_socie_layout(ws, rows, calc_blocks=None) -> None:
+    """Generate the four native MPERS equity-component blocks."""
+    _apply_socie_matrix_layout(ws, rows, calc_blocks, 'group')
 
 
 def build_template(filename: str, level: str, out_dir: Path) -> Path:
@@ -1021,9 +1001,7 @@ def build_template(filename: str, level: str, out_dir: Path) -> Path:
 
       * Company layout (4 columns) when level=="company".
       * Group layout (6 columns) when level=="group".
-      * Group SOCIE special case (4 vertical row blocks) when level=="group"
-        and filename=="09-SOCIE.xlsx" — same 24-col width but laid out as
-        a stacked block structure.
+      * SOCIE component matrix B..O, with two Company blocks or four Group blocks.
     """
     import openpyxl
 
@@ -1053,12 +1031,12 @@ def build_template(filename: str, level: str, out_dir: Path) -> Path:
         ws = wb.create_sheet(title=sheet_name)
         rows, calc = _collect_rows_with_calc(role_number)
 
-        if level == "company":
+        if filename == '09-SOCIE.xlsx' and level in {'company', 'group'}:
+            _apply_socie_matrix_layout(ws, rows, calc, level)
+        elif level == "company":
             _apply_company_sheet_layout(ws, rows)
             if calc:
                 _inject_sum_formulas(ws, rows, calc, value_columns=("B", "C"))
-        elif level == "group" and filename == "09-SOCIE.xlsx":
-            _apply_group_socie_layout(ws, rows, calc)
         elif level == "group":
             _apply_group_sheet_layout(ws, rows)
             if calc:
@@ -1105,7 +1083,8 @@ def snapshot_backup_originals(level: str = "company") -> Path:
     dst_dir = _REPO_ROOT / "XBRL-template-MPERS" / "backup-originals" / ("Company" if level == "company" else "Group")
     dst_dir.mkdir(parents=True, exist_ok=True)
     for src in src_dir.glob("*.xlsx"):
-        shutil.copy2(src, dst_dir / src.name)
+        if not (dst_dir / src.name).exists():
+            shutil.copy2(src, dst_dir / src.name)
     return dst_dir
 
 
@@ -1229,16 +1208,39 @@ def _cli() -> int:
         action="store_true",
         help="After emitting, copy all files to XBRL-template-MPERS/backup-originals/",
     )
+    parser.add_argument('--filename', choices=[name for name, _ in _TEMPLATE_MAPPING],
+                        help='Regenerate only this template.')
+    parser.add_argument('--snapshot-dir', type=Path,
+                        help='Save before/after snapshots here without replacing backup-originals.')
     args = parser.parse_args()
 
-    emitted = generate_all(level=args.level, statements=args.statements)
+    if args.snapshot_dir and not args.snapshot:
+        parser.error('--snapshot-dir requires --snapshot')
+    out_dir = _REPO_ROOT / 'XBRL-template-MPERS' / args.level.capitalize()
+    if args.snapshot_dir:
+        import shutil
+        before_dir = args.snapshot_dir / 'before' / args.level.capitalize()
+        before_dir.mkdir(parents=True, exist_ok=True)
+        for source in ([out_dir / args.filename] if args.filename else out_dir.glob('*.xlsx')):
+            target = before_dir / source.name
+            if target.exists():
+                raise FileExistsError(f'Before snapshot already exists: {target}')
+            shutil.copy2(source, target)
+    emitted = ([build_template(args.filename, args.level, out_dir)] if args.filename else
+               generate_all(level=args.level, statements=args.statements))
     print(f"emitted {len(emitted)} file(s) under {emitted[0].parent if emitted else '(none)'}")
     for p in emitted:
         print(f"  {p.relative_to(_REPO_ROOT)}")
 
     if args.snapshot:
-        dst = snapshot_backup_originals(level=args.level)
-        print(f"snapshotted to {dst.relative_to(_REPO_ROOT)}")
+        if args.snapshot_dir:
+            dst = args.snapshot_dir / 'after' / args.level.capitalize()
+            dst.mkdir(parents=True, exist_ok=True)
+            for source in emitted:
+                shutil.copy2(source, dst / source.name)
+        else:
+            dst = snapshot_backup_originals(level=args.level)
+        print(f"snapshotted to {dst}")
     return 0
 
 

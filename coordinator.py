@@ -42,6 +42,7 @@ from statement_types import (
     get_variant,
     template_path as get_template_path,
     variants_for_standard,
+    variant_applies_to_standard,
 )
 from extraction.agent import create_extraction_agent
 from model_settings import DEFAULT_MODEL_ID, describe_model_runtime
@@ -287,6 +288,7 @@ class RunConfig:
     # the scale as authoritative instead of guessing it from the PDF header.
     # Default "thousands" (RM '000) keeps every pre-existing caller unchanged.
     denomination: str = "thousands"
+    first_financial_statements: bool = False
     # Canonical mode (Phase B): when both are set, extraction agents project
     # their cell writes into run_concept_facts for this run via the facts
     # API. Both None in legacy mode. db_path is the audit/canonical SQLite DB.
@@ -502,7 +504,7 @@ async def run_extraction(
                 except KeyError:
                     suggested = None
                 else:
-                    if config.filing_standard not in sv.applies_to_standard:
+                    if not variant_applies_to_standard(sv, config.filing_standard):
                         logger.info(
                             "Dropping scout suggestion %s/%s — not applicable "
                             "to standard %s; falling back to registry default",
@@ -566,12 +568,17 @@ async def run_extraction(
         # threading. Kept advisory-only; see entity_memory.py + render_prompt.
         # getattr keeps test/CLI configs that predate the field working.
         prior_advisory = getattr(config, "prior_year_advisory", None)
-        if prior_advisory is not None:
+        if prior_advisory is not None and not getattr(config, "first_financial_statements", False):
             if scout_context is None:
                 scout_context = {}
             scout_context["_prior_year"] = prior_advisory.to_prompt_dict(
                 stmt_type.value
             )
+
+        if getattr(config, "first_financial_statements", False):
+            scout_context = dict(scout_context or {})
+            scout_context["_first_financial_statements"] = True
+            scout_context["reporting_period_py"] = None
 
         # Citation hygiene: thread the scout-measured printed-folio↔PDF-page
         # offset so the face prompt tells the agent to cite PDF page indices

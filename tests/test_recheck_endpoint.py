@@ -90,7 +90,8 @@ def test_recheck_returns_results(client: TestClient):
     assert isinstance(body["results"], list)
     # Each result carries the standard cross-check shape.
     for res in body["results"]:
-        assert {"name", "status", "message"} <= set(res.keys())
+        assert {"name", "status", "message", "comparands"} <= set(res.keys())
+        assert res["comparands"] == json.loads(res.get("comparands_json") or "[]")
 
 
 def test_recheck_fact_based_does_not_rebuild_workbook(client: TestClient, monkeypatch):

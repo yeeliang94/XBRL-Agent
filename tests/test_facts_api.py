@@ -120,6 +120,38 @@ def test_post_facts_rejects_unknown_concept_uuid(client: TestClient) -> None:
     assert "concept" in r.json()["detail"].lower()
 
 
+@pytest.mark.parametrize("level", ["company", "group"])
+def test_manifest_presentation_title_is_not_numeric_input(client, level):
+    """A style-derived LEAF title must not bypass authoritative input ownership."""
+    from concept_model.bootstrap import _import_one
+    from concept_model.filing_targets import targets_for_template
+
+    path = REPO / "XBRL-template-MFRS" / level.title() / "05-SOCI-BeforeTax.xlsx"
+    _import_one(client.db_path, path, level)
+    targets = targets_for_template(path)[1]
+    title = next(t for t in targets if t.row == 3)
+    assert title.slot_role == "PRESENTATION_ONLY" and not title.writable
+    with sqlite3.connect(client.db_path) as conn:
+        assert conn.execute("SELECT kind FROM concept_nodes WHERE concept_uuid=?",
+                            (title.canonical_target_id,)).fetchone()[0] == "LEAF"
+        conn.execute("UPDATE runs SET run_config_json=? WHERE id=?",
+                     (json.dumps({"filing_standard": "mfrs", "filing_level": level}), client.run_id))
+    scope = level.title()
+    response = _post_fact(client, concept_uuid=title.canonical_target_id, entity_scope=scope)
+    assert response.status_code == 400
+    assert "not a writable filing field" in response.json()["detail"]
+    with sqlite3.connect(client.db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM run_concept_facts WHERE run_id=? AND concept_uuid=?",
+                            (client.run_id, title.canonical_target_id)).fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM concept_fact_events WHERE run_id=? AND concept_uuid=?",
+                            (client.run_id, title.canonical_target_id)).fetchone()[0] == 0
+    leaf = next(t for t in targets if t.writable)
+    assert _post_fact(client, concept_uuid=leaf.canonical_target_id, entity_scope=scope).status_code == 200
+    formula = next(t for t in targets if t.slot_role == "FORMULA")
+    assert _post_fact(client, concept_uuid=formula.canonical_target_id, entity_scope=scope,
+                      children_status="aggregate_only").status_code == 200
+
+
 def test_post_facts_rejects_observed_on_computed_concept(
     client: TestClient,
 ) -> None:
@@ -144,8 +176,19 @@ def test_post_facts_rejects_observed_on_abstract_concept(
     assert "abstract" in detail or "header" in detail
 
 
-def test_post_facts_accepts_observed_on_leaf_concept(client: TestClient) -> None:
+@pytest.mark.parametrize("first_period", [False, True])
+def test_post_facts_accepts_observed_on_leaf_concept(client: TestClient, first_period) -> None:
     """Step 1.6: the happy path — observed value on a LEAF row → 200."""
+    if first_period:
+        with sqlite3.connect(client.db_path) as conn:
+            conn.execute("UPDATE runs SET run_config_json = ? WHERE id = ?",
+                         (json.dumps({"first_financial_statements": True}), client.run_id))
+        refused = _post_fact(client, concept_uuid=client.leaf_uuid,
+                             period="PY", value_status="observed", value=40.0)
+        assert refused.status_code == 400
+        with sqlite3.connect(client.db_path) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM run_concept_facts WHERE run_id = ?",
+                                (client.run_id,)).fetchone()[0] == 0
     r = _post_fact(client, concept_uuid=client.leaf_uuid,
                    value_status="observed", value=42.0)
     assert r.status_code == 200

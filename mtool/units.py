@@ -39,7 +39,7 @@ from notes.labels import normalize_label
 _THIS_DIR = Path(__file__).resolve().parent
 _INDEX_DIR = _THIS_DIR.parent / "concept_model"
 
-SUPPORTED_STANDARDS = ("mfrs", "mpers")
+SUPPORTED_STANDARDS = ("mfrs", "mpers", "clbg")
 
 MONETARY = "monetary"
 SHARES = "shares"

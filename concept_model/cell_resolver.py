@@ -134,6 +134,8 @@ class ProjectionResult:
 def canonical_cell_write_validator(
     db_path,
     template_id: str,
+    *,
+    run_id: int | None = None,
 ) -> Iterator[CellWriteValidator]:
     """Yield canonical validation before a workbook cell is changed.
 
@@ -166,7 +168,7 @@ def canonical_cell_write_validator(
                 evidence=write.get("evidence") or None,
                 actor="extraction",
             )
-            validate_scalar_fact(conn, fact)
+            validate_scalar_fact(conn, fact, run_id=run_id)
         except HTTPException as exc:
             return str(exc.detail)
         except ValidationError:

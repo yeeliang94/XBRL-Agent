@@ -62,6 +62,8 @@ def register_concept_routes(app, audit_db_getter) -> None:
             ).fetchone()
             if run is None:
                 raise HTTPException(status_code=404, detail="Run not found")
+            from concept_model.periods import run_periods
+            periods = run_periods(conn, run_id)
 
             # Reporting periods (e.g. "FY2021" / "FY2020") if scout captured
             # them — so the Figures grid can label the CY / PY columns with
@@ -80,6 +82,8 @@ def register_concept_routes(app, audit_db_getter) -> None:
                         reporting_py = py if isinstance(py, str) and py.strip() else None
             except (ValueError, TypeError):
                 pass  # malformed config → no year labels, not an error
+            if "PY" not in periods:
+                reporting_py = None
 
             # Peer-review #3: scope concept_nodes to ONLY the templates
             # this run actually touched.  Without this filter a
@@ -178,6 +182,8 @@ def register_concept_routes(app, audit_db_getter) -> None:
             scope_fact_details_by_uuid: dict[str, dict] = {}
             category_facts_by_uuid = {}
             for f in all_facts:
+                if f["period"] not in periods:
+                    continue
                 if f["dimension_key"]:
                     category_facts_by_uuid.setdefault(f["concept_uuid"], []).append(dict(f))
                     continue

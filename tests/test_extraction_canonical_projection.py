@@ -130,9 +130,11 @@ def test_writer_rejects_unmapped_managed_cell_before_projection(canonical_env, t
     assert warning is None
 
 
+@pytest.mark.parametrize("first_period", [False, True])
 def test_write_facts_rejects_canonical_invalid_value_before_workbook_save(
     canonical_env,
     tmp_path,
+    first_period,
 ):
     """A cell rejected by canonical validation never lands in the scratch xlsx.
 
@@ -147,6 +149,11 @@ def test_write_facts_rejects_canonical_invalid_value_before_workbook_save(
     from tools.verifier import VerificationResult
 
     db_path, run_id, template_id, leaf = canonical_env
+    column = 3 if first_period else 2
+    if first_period:
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("UPDATE runs SET run_config_json = ? WHERE id = ?",
+                         (json.dumps({"first_financial_statements": True}), run_id))
     agent, deps = create_extraction_agent(
         statement_type=StatementType.SOFP,
         variant="CuNonCu",
@@ -169,15 +176,15 @@ def test_write_facts_rejects_canonical_invalid_value_before_workbook_save(
 
     workbook = openpyxl.load_workbook(CO_SOFP, data_only=False)
     try:
-        original_value = workbook["SOFP-CuNonCu"].cell(row=leaf, column=2).value
+        original_value = workbook["SOFP-CuNonCu"].cell(row=leaf, column=column).value
     finally:
         workbook.close()
 
     message = write_fn(ctx, [{
         "sheet": "SOFP-CuNonCu",
         "row": leaf,
-        "col": 2,
-        "value": "not a numeric fact",
+        "col": column,
+        "value": 123 if first_period else "not a numeric fact",
         "evidence": "Page 12, statement heading",
     }])
 
@@ -185,7 +192,7 @@ def test_write_facts_rejects_canonical_invalid_value_before_workbook_save(
     workbook = openpyxl.load_workbook(output_path, data_only=False)
     try:
         assert (
-            workbook["SOFP-CuNonCu"].cell(row=leaf, column=2).value
+            workbook["SOFP-CuNonCu"].cell(row=leaf, column=column).value
             == original_value
         )
     finally:
@@ -202,6 +209,8 @@ def test_write_facts_rejects_canonical_invalid_value_before_workbook_save(
 
     assert fact_count == 0
     assert "canonical fact validation" in message.lower()
+    if first_period:
+        assert "prior-period facts are not applicable" in message
     assert deps.last_fill_errors
 
     deps.last_verify_result = VerificationResult(

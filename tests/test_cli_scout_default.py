@@ -16,6 +16,8 @@ def test_parser_defaults_scout_on_with_explicit_off_switch():
     parser = run.build_parser()
     assert parser.parse_args([]).use_scout is True
     assert parser.parse_args(["--no-scout"]).use_scout is False
+    assert parser.parse_args([]).first_financial_statements is False
+    assert parser.parse_args(["--first-financial-statements"]).first_financial_statements is True
 
 
 def test_cli_rejects_no_scout_without_denomination(capsys):

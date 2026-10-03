@@ -357,20 +357,124 @@ def _run_verify_shadow(tmp_path, monkeypatch, fixture, stmt, variant,
 # fixed (tools/verifier.py::_resolve_cell_value, pinned by
 # tests/test_verifier_formula.py::test_diamond_reference_counts_each_path), so
 # the fact path and the xlsx path now agree byte-for-byte on SOCF-Indirect too.
-@pytest.mark.parametrize("fixture,stmt,variant", [
-    ("07-SOCF-Indirect.xlsx", StatementType.SOCF, "Indirect"),
-    ("08-SOCF-Direct.xlsx", StatementType.SOCF, "Direct"),
-    ("03-SOPL-Function.xlsx", StatementType.SOPL, "Function"),
-    ("06-SOCI-NetOfTax.xlsx", StatementType.SOCI, "NetOfTax"),
-    ("09-SOCIE.xlsx", StatementType.SOCIE, "Default"),
+@pytest.mark.parametrize("standard,fixture,stmt,variant", [
+    ("mfrs", "07-SOCF-Indirect.xlsx", StatementType.SOCF, "Indirect"),
+    ("mfrs", "08-SOCF-Direct.xlsx", StatementType.SOCF, "Direct"),
+    ("mfrs", "03-SOPL-Function.xlsx", StatementType.SOPL, "Function"),
+    ("mfrs", "06-SOCI-NetOfTax.xlsx", StatementType.SOCI, "NetOfTax"),
+    ("mfrs", "09-SOCIE.xlsx", StatementType.SOCIE, "Default"),
+    ("clbg", "01-SOFP-CuNonCu.xlsx", StatementType.SOFP, "CuNonCu"),
+    ("clbg", "03-SOPL-Function.xlsx", StatementType.SOPL, "Function"),
+    ("clbg", "04-SOPL-Nature.xlsx", StatementType.SOPL, "Nature"),
+    ("clbg", "07-SOCF-Indirect.xlsx", StatementType.SOCF, "Indirect"),
 ])
-def test_statement_verify_e2e_parity(tmp_path, monkeypatch, fixture, stmt, variant):
+def test_statement_verify_e2e_parity(tmp_path, monkeypatch, standard, fixture, stmt, variant):
+    template = REPO / f"XBRL-template-{standard.upper()}" / "Company" / fixture
     xlsx, facts = _run_verify_shadow(
-        tmp_path, monkeypatch, MFRS / fixture, stmt, variant,
-        filing_level="company", standard="mfrs")
+        tmp_path, monkeypatch, template, stmt, variant,
+        filing_level="company", standard=standard)
     _assert_verify_parity(xlsx, facts)
     assert set(xlsx.mandatory_unfilled) <= set(facts.mandatory_unfilled), (
         f"{stmt.value}: fact mandatory scan must be ⊇ xlsx scan")
+    if standard == "clbg" and stmt == StatementType.SOPL:
+        import openpyxl
+        from concept_model.taxonomy_semantics import semantic_addresses_for
+        from tools.verifier import _resolve_cell_value
+        addresses = semantic_addresses_for(str(template.resolve()))
+        with_workbook = openpyxl.load_workbook(tmp_path / "filled.xlsx")
+        try:
+            sheet = f"SOIE-{variant}"
+            def value(concept):
+                row = min(row for (s, row, _), address in addresses.items()
+                          if s == sheet and address["primary_concept"] == concept)
+                return _resolve_cell_value(with_workbook, sheet, f"B{row}")
+            final = value("ifrs-full_ProfitLoss")
+            continuing = value("ifrs-full_ProfitLossFromContinuingOperations")
+            assert final != continuing
+            assert facts.computed_totals["profit_loss_cy"] == final
+        finally:
+            with_workbook.close()
+
+
+@pytest.mark.parametrize("standard,level,filename,variant,defect", [
+    (standard, level, filename, variant, defect)
+    for standard, level, filename, variant in [
+        ("mpers", level, filename, variant)
+        for level in ("company", "group")
+        for filename, variant in (("10-SoRE.xlsx", "SoRE"), ("09-SOCIE.xlsx", "Default"))
+    ] + [("clbg", "company", "09-SOCIE.xlsx", "Default")]
+    for defect in (None, "restated", "other_closing", "missing_opening", "no_py")
+] + [("clbg", "company", "09-SOCIE.xlsx", "Default", defect)
+     for defect in ("movement", "missing_movement")])
+def test_mpers_balance_verification_with_real_template(tmp_path, monkeypatch, standard, level, filename, variant, defect):
+    """Valid MPERS balances pass; source opening and every scope/period matter."""
+    fixture = REPO / f"XBRL-template-{standard.upper()}" / level.capitalize() / filename
+    db = tmp_path / "balance.db"
+    init_db(db)
+    tree = parse_template(str(fixture))
+    jp = tmp_path / "tree.json"
+    jp.write_text(json.dumps(tree.to_json()), encoding="utf-8")
+    tid = import_template(db, jp)
+    (import_group_targets if level == "group" else import_company_targets)(db, tid)
+    with sqlite3.connect(db) as conn:
+        run_id = conn.execute(
+            "INSERT INTO runs(created_at,pdf_filename,status) VALUES ('2026-10-03','test.pdf','running')"
+        ).lastrowid
+        _seed_all_data_facts(conn, run_id, tid, value=0.0)
+        conn.execute("DELETE FROM run_concept_facts WHERE run_id=? AND concept_uuid IN (SELECT parent_uuid FROM concept_edges)", (run_id,))
+        nodes = conn.execute(
+            "SELECT concept_uuid,canonical_label FROM concept_nodes WHERE template_id=? AND kind IN ('LEAF','MATRIX_CELL') AND NOT EXISTS (SELECT 1 FROM concept_edges WHERE parent_uuid=concept_uuid)",
+            (tid,),
+        ).fetchall()
+        for uuid, raw_label in nodes:
+            label = raw_label.lstrip("*").strip().lower()
+            value = None
+            if label.endswith("at beginning of period"): value = 100
+            elif label == "impact of changes in accounting policies": value = 5
+            elif label.endswith("at beginning of period, restated"): value = 105
+            elif label.endswith("at end of period"): value = 123
+            elif label in {"profit (loss)", "total surplus (deficit)"}: value = 20
+            elif label in {"dividends paid", "dividend paid"}: value = 2
+            elif standard == "clbg" and label == "total comprehensive surplus (deficit)": value = 20
+            elif standard == "clbg" and label == "total changes in fund/equity": value = 18
+            if value is not None:
+                conn.execute("UPDATE run_concept_facts SET value=? WHERE run_id=? AND concept_uuid=?", (value, run_id, uuid))
+        if defect == "restated":
+            conn.execute("UPDATE run_concept_facts SET value=999 WHERE run_id=? AND concept_uuid IN (SELECT concept_uuid FROM concept_nodes WHERE canonical_label LIKE '%at beginning of period, restated')", (run_id,))
+            conn.execute("UPDATE run_concept_facts SET value=1017 WHERE run_id=? AND concept_uuid IN (SELECT concept_uuid FROM concept_nodes WHERE canonical_label LIKE '%at end of period')", (run_id,))
+        elif defect == "other_closing":
+            conn.execute("UPDATE run_concept_facts SET value=999 WHERE run_id=? AND (period='PY' OR entity_scope='Company' AND ?='group') AND concept_uuid IN (SELECT concept_uuid FROM concept_nodes WHERE canonical_label LIKE '%at end of period')", (run_id, level))
+        elif defect == "missing_opening":
+            conn.execute("DELETE FROM run_concept_facts WHERE run_id=? AND concept_uuid IN (SELECT concept_uuid FROM concept_nodes WHERE canonical_label LIKE '%at beginning of period')", (run_id,))
+        elif defect == "movement":
+            for label, value in (("Total comprehensive surplus (deficit)", 999),
+                                 ("Total changes in fund/equity", 997), ("Balance at end of period", 1102)):
+                conn.execute("UPDATE run_concept_facts SET value=? WHERE run_id=? AND concept_uuid IN (SELECT concept_uuid FROM concept_nodes WHERE canonical_label=?)", (value, run_id, label))
+        elif defect == "missing_movement":
+            conn.execute("DELETE FROM run_concept_facts WHERE run_id=? AND concept_uuid IN (SELECT concept_uuid FROM concept_nodes WHERE canonical_label='Total surplus (deficit)')", (run_id,))
+        elif defect == "no_py":
+            conn.execute("DELETE FROM run_concept_facts WHERE run_id=? AND period='PY'", (run_id,))
+    recompute_after_turn(db, run_id)
+    work = tmp_path / "filled.xlsx"
+    shutil.copyfile(fixture, work)
+    export_run_to_xlsx(db, run_id, str(work), template_id=tid, filing_level=level)
+    monkeypatch.setenv("XBRL_FACT_BASED_VERIFY", "0")
+    xlsx = verify_statement(str(work), StatementType.SOCIE, variant, filing_level=level, filing_standard=standard)
+    monkeypatch.setenv("XBRL_FACT_BASED_VERIFY", "1")
+    facts = verify_statement(str(work), StatementType.SOCIE, variant, filing_level=level, filing_standard=standard, db_path=str(db), run_id=run_id, template_id=tid)
+    _assert_verify_parity(xlsx, facts)
+    assert facts.is_balanced is (defect in {None, "no_py"}), facts.mismatches
+    if defect == "restated":
+        assert any("!= opening" in m for m in facts.mismatches)
+    elif defect == "other_closing":
+        assert any("py:" in m for m in facts.mismatches)
+        if level == "group": assert any("company_cy:" in m for m in facts.mismatches)
+    elif defect == "missing_opening":
+        assert any("missing opening" in m for m in facts.mismatches)
+    elif defect in {"movement", "missing_movement"}:
+        assert any("comprehensive surplus" in m for m in facts.mismatches)
+    elif defect == "no_py":
+        assert not any("_py" in key for key in facts.computed_totals)
 
 
 def test_fact_verify_flag_off_uses_xlsx_path(sofp_run, tmp_path, monkeypatch):

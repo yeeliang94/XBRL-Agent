@@ -45,10 +45,62 @@ def _typed(read) -> dict[tuple[str, str], float]:
             for f in read.facts if f["value"] is not None}
 
 
+@pytest.mark.parametrize('standard', ['mpers','clbg'])
+def test_native_note_alias_keeps_category_identity_on_read(tmp_path, standard):
+    """Category expansion must inspect the verified physical sheet before reading."""
+    from concept_model.bootstrap import _import_one
+    from concept_model.dimensions import dimension_key
+    from notes_types import NotesTemplateType, notes_template_path
+    db = tmp_path/'categories.db'
+    init_db(db)
+    note = NotesTemplateType.ISSUED_CAPITAL if standard == 'mpers' else NotesTemplateType.RELATED_PARTY
+    tid = _import_one(db,notes_template_path(note,standard=standard),'company')
+    run = add_run(db,{'filing_standard':standard,'filing_level':'company','denomination':'units',
+                     'notes_to_run':[note.value]})
+    label = 'Number of shares issued and fully paid' if standard == 'mpers' else 'Donation income'
+    with sqlite3.connect(db) as conn:
+        uuid, primary = conn.execute('SELECT n.concept_uuid,sa.primary_concept FROM concept_nodes n '
+            'JOIN concept_semantic_addresses sa USING(concept_uuid) WHERE n.template_id=? '
+            "AND n.kind='LEAF' AND ltrim(n.canonical_label,'* ')=?",(tid,label)).fetchone()
+    axis, member, table = (
+        ('ifrs-smes_ClassesOfShareCapitalAxis','ssmt-mpers_OrdinarySharesMember','ifrs-smes_DisclosureOfClassesOfShareCapitalTable')
+        if standard == 'mpers' else
+        ('ifrs-full_CategoriesOfRelatedPartiesAxis','ifrs-full_ParentMember','ifrs-full_DisclosureOfTransactionsBetweenRelatedPartiesTable'))
+    wb = Workbook(); ws = wb.active
+    ws.title = 'Notes-IssuedCap' if standard == 'mpers' else 'Notes-Relatedpartytransactions'
+    if standard == 'clbg':
+        ws['A1'] = 'http://xbrl.ssm.com.my/role/ssm/rol_ssmt-fs-clbg_2022-12-31/ssmt-fs-clbg_2022-12-31_role-640000'
+        ws['B1'] = 'native.xsd#ssmt-mfrs_DisclosureOnRelatedPartyTransactionsAbstract'
+    ws['E2'] = '::'.join('native.xsd#'+identifier for identifier in (table,axis,member))
+    ws['B3'] = 'native.xsd#'+axis; ws['C3'] = '#DOM#'; ws['D3'] = '#PRIM#'
+    ws['E3'] = 'Ordinary shares' if standard == 'mpers' else 'Parent'
+    ws['C4'] = '#ENDT#'; ws['E4'] = '31/12/2026'
+    ws['A7'] = 'native.xsd#'+primary; ws['D7'] = label; ws['E7'] = 123
+    path = tmp_path/'native-note.xlsx'; wb.save(path); wb.close()
+    with sqlite3.connect(db) as conn:
+        conn.row_factory = sqlite3.Row
+        read = read_human_file(conn,run,path,'units')
+    values = [f for f in read.facts if f['concept_uuid'] == uuid and f['value'] is not None]
+    assert len(values) == 1
+    assert values[0]['value'] == 123
+    assert values[0]['dimension_key'] == dimension_key({axis:member})
+
+
+@pytest.mark.parametrize("historical_auto_variant", [False, True])
 def test_round_trip_reads_every_filled_value_including_same_label_fields(
-    sofp_db, tmp_path,
+    sofp_db, tmp_path, historical_auto_variant,
 ):
-    run_id = add_run(sofp_db, sofp_config())
+    config = sofp_config()
+    if historical_auto_variant:
+        config["variants"] = {}
+    run_id = add_run(sofp_db, config)
+    if historical_auto_variant:
+        with sqlite3.connect(sofp_db) as conn:
+            conn.execute(
+                "INSERT INTO run_agents(run_id, statement_type, variant, status, started_at) "
+                "VALUES (?, 'SOFP', 'CuNonCu', 'succeeded', '2026-10-03')",
+                (run_id,),
+            )
     facts = leaf_facts(sofp_db)
     path = filled_file(sofp_db, run_id, facts, tmp_path)
 
@@ -100,16 +152,40 @@ def test_unaddressed_typed_row_is_unmatched_and_formula_cell_is_calculated(
     assert read.summary["typed_values"] == len(facts) - 1
 
 
-def test_statement_filled_in_another_variant_is_not_compared(sofp_db, tmp_path):
+@pytest.mark.parametrize("historical_auto_variant", [False, True])
+def test_statement_filled_in_another_variant_is_not_compared(
+    sofp_db, tmp_path, historical_auto_variant,
+):
     import_template_file(sofp_db, tmp_path, "02-SOFP-OrderOfLiquidity.xlsx")
     source_run = add_run(sofp_db, sofp_config())
     path = filled_file(sofp_db, source_run, leaf_facts(sofp_db), tmp_path)
-    run_id = add_run(sofp_db, sofp_config(variant="OrderOfLiquidity"))
+    config = sofp_config(variant="OrderOfLiquidity")
+    if historical_auto_variant:
+        config["variants"] = {}
+    run_id = add_run(sofp_db, config)
+    if historical_auto_variant:
+        with sqlite3.connect(sofp_db) as conn:
+            conn.execute(
+                "INSERT INTO run_agents(run_id, statement_type, variant, status, started_at) "
+                "VALUES (?, 'SOFP', 'OrderOfLiquidity', 'succeeded', '2026-10-03')",
+                (run_id,),
+            )
 
     with sqlite3.connect(sofp_db) as conn, pytest.raises(
         HumanFileError, match=r"different statement layout: SOFP \(CuNonCu\)"
     ):
         read_human_file(conn, run_id, path, "units")
+
+
+def test_unknown_automatic_variant_does_not_guess_from_scout(sofp_db):
+    from eval.human_file import run_filing_shape
+
+    config = sofp_config()
+    config["variants"] = {}
+    config["infopack"] = {"statements": {"SOFP": {"variant_suggestion": "CuNonCu"}}}
+    run_id = add_run(sofp_db, config)
+    with sqlite3.connect(sofp_db) as conn:
+        assert run_filing_shape(conn, run_id)["statements"] == {}
 
 
 def test_unit_converts_to_run_denomination_and_warns_on_1000x(sofp_db, tmp_path):

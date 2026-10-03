@@ -149,7 +149,7 @@ function selectSheet(name: RegExp) {
 }
 
 describe("NotesReviewTab — read-only render (Step 9)", () => {
-  test("truncates note previews and wraps worksheet navigation inside its rail", async () => {
+  test("keeps pane headings outside navigation scrolling and bounds long note previews", async () => {
     mockFetchOnce(SAMPLE);
     render(<NotesReviewTab runId={42} />);
     const previews = await screen.findAllByTestId("notes-readonly-content");
@@ -164,7 +164,12 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
       expect(button).toHaveStyle({ whiteSpace: "normal", textAlign: "left" });
     }
     expect(screen.getByRole("complementary", { name: "Notes template navigator" }))
-      .toHaveStyle({ overflowY: "auto" });
+      .toHaveStyle({ overflow: "hidden" });
+    const scrollingList = screen.getByRole("region", { name: "Worksheet and source note list" });
+    expect(scrollingList).toHaveStyle({ overflowY: "auto", minHeight: 0 });
+    expect(scrollingList).toContainElement(nav);
+    expect(scrollingList).not.toContainElement(screen.getByRole("heading", { name: "mTool worksheets" }));
+    expect(screen.getByRole("heading", { name: "Note content" })).toBeVisible();
     expect(screen.getByText("Numbered source notes")).toHaveStyle({ fontSize: "16px" });
   });
   test("renders one active sheet at a time", async () => {
@@ -173,11 +178,18 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     expect(await screen.findByTestId("sheet-title")).toHaveTextContent("Corporate Information");
 
     const nav = screen.getByRole("navigation", { name: /notes sheet navigator/i });
+    const corporate = within(nav).getByRole("button", { name: /corporate information/i });
+    expect(corporate).toHaveStyle({ background: "transparent", fontWeight: 680 });
+    expect(corporate.querySelector('[aria-hidden="true"]')).not.toBeNull();
     fireEvent.click(within(nav).getByRole("button", {
       name: /summary of accounting policies/i,
     }));
 
     expect(screen.getByTestId("sheet-title")).toHaveTextContent("Summary of Accounting Policies");
+    expect(corporate).not.toHaveAttribute("aria-current");
+    expect(corporate.querySelector('[aria-hidden="true"]')).toBeNull();
+    expect(within(nav).getByRole("button", { name: /summary of accounting policies/i }))
+      .toHaveStyle({ background: "transparent", fontWeight: 680 });
   });
 
   test("renders one row per cell with label on left, html on right", async () => {
@@ -223,11 +235,21 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     mockFetchOnce(compared);
     render(<NotesReviewTab runId={42} human={{
       html: { "note-0": "<p>Human legal name</p>", "note-1": "<p>Human office</p>" },
-      status: { "note-0": "agree", "note-1": "agree" },
+      status: { "note-0": "agree", "note-1": "missed" },
     }} />);
     expect(await screen.findAllByTestId("notes-human-pair")).toHaveLength(2);
     expect(screen.getAllByText("Human file")).toHaveLength(1);
     expect(screen.getByText("Extracted note")).toBeInTheDocument();
+    expect(screen.getAllByText("Corporate info")).toHaveLength(1);
+    expect(screen.getAllByText("Registered office")).toHaveLength(1);
+    const humanCells = screen.getAllByTestId("notes-human-cell");
+    expect(within(humanCells[0]).queryByRole("img")).toBeNull();
+    expect(within(humanCells[1]).getByRole("img", { name: "Missed by AI" })).toBeVisible();
+    expect(screen.getByText("Human legal name").parentElement).toHaveStyle({ borderColor: pwc.grey300 });
+    fireEvent.click(screen.getByRole("button", { name: "Review Registered office" }));
+    expect(screen.getAllByText("Registered office")).toHaveLength(1);
+    expect(screen.getByTestId("notes-review-editor")).toHaveAttribute("data-editable", "false");
+    expect(screen.getByText("Human office")).toBeVisible();
   });
 
   test("quarantined content is explained and can be removed accessibly", async () => {
@@ -397,6 +419,7 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     const content = within(row).getByTestId("notes-readonly-content");
     expect(content).toHaveTextContent("Kuala Lumpur");
     expect(content).not.toHaveTextContent("Registered office");
+    expect(content).toHaveStyle({ border: `1px solid ${pwc.grey300}`, padding: "8px 10px" });
     const empty = screen.getByText("Empty disclosure", { exact: true }).closest('[data-testid="notes-review-row"]') as HTMLElement;
     expect(empty).toHaveAttribute("role", "button");
     expect(empty).toHaveAttribute("aria-label", "Review Empty disclosure");
@@ -1625,6 +1648,125 @@ describe("NotesReviewTab — full-template projection (Phase 5)", () => {
     await waitFor(() => expect(blocked).toHaveBeenLastCalledWith(false));
   });
 
+  test("values without source-resolution tokens have no category action", async () => {
+    const row = { ...FULL_TEMPLATE.sheets[1].rows[0], category_options: [{ label: "Ordinary shares", dimensions: { ClassAxis: "OrdinaryMember" } }],
+      categories: [{ dimension_key: "", dimensions: {}, label: "Unclassified", values: { cy: 4242, py: null }, evidence: null, resolution_tokens: { cy: null, py: null } }] };
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({ sheets: [{ ...FULL_TEMPLATE.sheets[1], rows: [row] }] }), { status: 200 })) as typeof fetch;
+    render(<NotesReviewTab runId={7} />);
+    await screen.findByTestId("numeric-input-6-cy");
+    expect(screen.queryByRole("button", { name: "Resolve category" })).not.toBeInTheDocument();
+  });
+
+  test.each([["py", false], ["company_cy", false], ["py", true]] as const)("resolves only the selected unclassified source slot %s (refresh failure: %s)", async (slot, refreshFailure) => {
+    const blocked = vi.fn();
+    const comparison = vi.fn();
+    const isGroup = slot === "company_cy";
+    const values = isGroup ? { group_cy: 100, group_py: 90, company_cy: 80, company_py: 70 } : { cy: 100, py: 90 };
+    const tokens = Object.fromEntries(Object.keys(values).map((key) => [key, `token-${key}`]));
+    const options = [{ label: "Ordinary shares", dimensions: { ClassAxis: "OrdinaryMember" } },
+      { label: "Preference shares", dimensions: { ClassAxis: "PreferenceMember" } }];
+    const row = { ...FULL_TEMPLATE.sheets[1].rows[0], category_options: options,
+      categories: [{ dimension_key: "", dimensions: {}, label: "Unclassified", values, evidence: "Page 4", resolution_tokens: tokens }] };
+    const projection = { sheets: [{ ...FULL_TEMPLATE.sheets[1], rows: [row] }] };
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    let resolved = false;
+    let remainingRefreshFailures = refreshFailure ? 2 : 0;
+    globalThis.fetch = vi.fn(async (url: unknown, init?: RequestInit) => {
+      requests.push({ url: String(url), init });
+      if (init?.method === "POST") { resolved = true; return new Response("{}", { status: 200 }); }
+      if (resolved && String(url).endsWith("/notes_cells") && remainingRefreshFailures-- > 0) return new Response("{}", { status: 503 });
+      const body = resolved ? { sheets: [{ ...projection.sheets[0], rows: [{ ...row, categories: [{ ...row.categories[0],
+        values: { ...values, [slot]: null }, resolution_tokens: { ...tokens, [slot]: undefined } },
+        { dimension_key: "preference", dimensions: options[1].dimensions, label: "Preference shares",
+          values: { [slot]: values[slot as keyof typeof values] }, evidence: "Page 4; PDF page 4, preference shares", resolution_tokens: {} }] }] }] } : projection;
+      return new Response(JSON.stringify(body), { status: 200 });
+    }) as typeof fetch;
+    render(<NotesReviewTab runId={7} onPreparationBlocked={blocked} onComparisonChange={comparison} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Resolve category" }));
+    const period = screen.getByRole("combobox", { name: "Period and entity" });
+    const category = screen.getByRole("combobox", { name: "Category" });
+    const citation = screen.getByRole("textbox", { name: "Source citation" });
+    const apply = screen.getByRole("button", { name: "Apply category" });
+    expect(period).toHaveValue(""); expect(category).toHaveValue(""); expect(citation).toHaveValue("");
+    expect(apply).toBeDisabled();
+    fireEvent.change(period, { target: { value: slot } });
+    fireEvent.change(category, { target: { value: "1" } });
+    expect(apply).toBeDisabled();
+    fireEvent.change(citation, { target: { value: "PDF page 4, preference shares" } });
+    fireEvent.click(apply);
+    await waitFor(() => expect(comparison).toHaveBeenCalled());
+    if (refreshFailure) {
+      expect(await screen.findByRole("alert")).toHaveTextContent("Category saved. Notes could not be refreshed.");
+      expect(screen.queryByRole("button", { name: "Apply category" })).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Refresh notes" }));
+      await waitFor(() => expect(requests.filter((request) => request.url.endsWith("/notes_cells"))).toHaveLength(3));
+      await waitFor(() => expect(screen.getByRole("button", { name: "Refresh notes" })).toBeEnabled());
+      expect(screen.getByRole("alert")).toHaveTextContent("Category saved.");
+      fireEvent.click(screen.getByRole("button", { name: "Refresh notes" }));
+      await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    }
+    const writes = requests.filter((request) => request.init?.method === "POST");
+    expect(writes).toHaveLength(1);
+    expect(writes[0].url).toBe("/api/runs/7/facts/uuid-cap-6/category");
+    expect(JSON.parse(String(writes[0].init?.body))).toEqual({ dimensions: options[1].dimensions,
+      period: isGroup ? "CY" : "PY", entity_scope: "Company", expected_token: `token-${slot}`,
+      evidence: "PDF page 4, preference shares" });
+    expect(requests.filter((request) => request.url.endsWith("/notes_cells"))).toHaveLength(refreshFailure ? 4 : 2);
+    await waitFor(() => expect(blocked).toHaveBeenLastCalledWith(false));
+    const unclassified = screen.getAllByTestId("notes-numeric-row")[0];
+    expect(within(unclassified).getByTestId(`numeric-input-6-${slot}`)).toHaveValue("");
+  });
+
+  test.each(["Source fact changed; refresh before resolving", "The selected category already contains a fact"])("a rejected category resolution reports %s without overwriting values", async (message) => {
+    const source = { ...FULL_TEMPLATE.sheets[1].rows[0], category_options: [{ label: "Ordinary shares", dimensions: { ClassAxis: "OrdinaryMember" } }],
+      categories: [{ dimension_key: "", dimensions: {}, label: "Unclassified", values: { cy: 4242, py: null }, evidence: "Page 4", resolution_tokens: { cy: "old-token" } }] };
+    const projection = { sheets: [{ ...FULL_TEMPLATE.sheets[1], rows: [source] }] };
+    const requests: RequestInit[] = [];
+    globalThis.fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      if (init) requests.push(init);
+      return new Response(JSON.stringify(init?.method === "POST" ? { detail: message } : projection),
+        { status: init?.method === "POST" ? 409 : 200 });
+    }) as typeof fetch;
+    render(<NotesReviewTab runId={7} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Resolve category" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "Period and entity" }), { target: { value: "cy" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Category" }), { target: { value: "0" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Source citation" }), { target: { value: "PDF page 4" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply category" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(message);
+    expect(screen.getByTestId("numeric-input-6-cy")).toHaveValue("4,242");
+    expect(requests.filter((request) => request.method === "POST")).toHaveLength(1);
+    expect(requests.some((request) => request.method === "PATCH")).toBe(false);
+  });
+
+  test("editing an unclassified source value refreshes its resolution token", async () => {
+    let amount = 4242;
+    let token = "before-edit";
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    globalThis.fetch = vi.fn(async (url: unknown, init?: RequestInit) => {
+      requests.push({ url: String(url), init });
+      if (init?.method === "PATCH") { amount = 5000; token = "after-edit"; return new Response("{}", { status: 200 }); }
+      if (init?.method === "POST") return new Response(JSON.stringify({ detail: "Test keeps the source unresolved" }), { status: 409 });
+      const row = { ...FULL_TEMPLATE.sheets[1].rows[0], category_options: [{ label: "Ordinary shares", dimensions: { ClassAxis: "OrdinaryMember" } }],
+        categories: [{ dimension_key: "", dimensions: {}, label: "Unclassified", values: { cy: amount, py: null }, evidence: "Page 4", resolution_tokens: { cy: token, py: null } }] };
+      return new Response(JSON.stringify({ sheets: [{ ...FULL_TEMPLATE.sheets[1], rows: [row] }] }), { status: 200 });
+    }) as typeof fetch;
+    render(<NotesReviewTab runId={7} />);
+    const input = await screen.findByTestId("numeric-input-6-cy");
+    fireEvent.change(input, { target: { value: "5000" } });
+    fireEvent.blur(input);
+    await screen.findByText("Saved");
+    fireEvent.click(screen.getByRole("button", { name: "Resolve category" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "Period and entity" }), { target: { value: "cy" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Category" }), { target: { value: "0" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Source citation" }), { target: { value: "PDF page 4" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply category" }));
+    await screen.findByRole("alert");
+    const write = requests.find((request) => request.init?.method === "POST");
+    expect(JSON.parse(String(write?.init?.body)).expected_token).toBe("after-edit");
+    expect(requests.filter((request) => request.url.endsWith("/notes_cells"))).toHaveLength(2);
+  });
+
   test("edits one numeric category without changing its neighbour", async () => {
     const blocked = vi.fn();
     const onComparisonChange = vi.fn();
@@ -1696,10 +1838,16 @@ describe("NotesReviewTab — full-template projection (Phase 5)", () => {
     render(<NotesReviewTab runId={7} />);
     const [first, second] = await screen.findAllByTestId("notes-numeric-row");
     fireEvent.mouseDown(first);
-    expect(first).toHaveStyle({ background: pwc.grey100 });
+    expect(first).toHaveAttribute("aria-selected", "true");
+    expect(within(first).getByRole("rowheader").querySelector('[aria-hidden="true"]')).not.toBeNull();
+    expect(first).toHaveStyle({ background: pwc.white });
     expect(second).toHaveStyle({ background: pwc.white });
     fireEvent.focus(within(second).getByTestId("numeric-input-7-cy"));
-    expect(second).toHaveStyle({ background: pwc.grey100 });
+    expect(second).toHaveAttribute("aria-selected", "true");
+    expect(first).toHaveAttribute("aria-selected", "false");
+    expect(within(first).getByRole("rowheader").querySelector('[aria-hidden="true"]')).toBeNull();
+    expect(within(second).getByRole("rowheader").querySelector('[aria-hidden="true"]')).not.toBeNull();
+    expect(second).toHaveStyle({ background: pwc.white });
     expect(first).toHaveStyle({ background: pwc.white });
   });
 
@@ -2794,13 +2942,16 @@ describe("NotesReviewTab — AI formatter", () => {
       .toBeGreaterThan(parseFloat(getComputedStyle(within(inventory).getByTestId("source-note-2")).paddingLeft));
     expect(getComputedStyle(reviewSummary).paddingLeft).toBe(getComputedStyle(subnote).paddingLeft);
     fireEvent.click(within(inventory).getByRole("button", { name: /2\(a\).*Not checked/i }));
+    expect(within(inventory).getByRole("button", { name: /2\(a\).*Not checked/i })).toHaveAttribute("aria-current", "true");
     expect(screen.getByTestId("sheet-title")).toHaveTextContent("Corporate Information");
     expect(within(inventory).getByText(/Exact field not recorded/)).toBeVisible();
     expect(within(inventory).queryByLabelText("Destinations for note 2")).not.toBeInTheDocument();
     fireEvent.click(within(inventory).getByTestId("source-note-2"));
+    expect(within(inventory).getByTestId("source-note-2")).toHaveStyle({ background: "transparent", fontWeight: 680 });
     const destinations = within(inventory).getByLabelText("Destinations for note 2");
     expect(within(destinations).getByRole("button", { name: "Property, plant and equipment" })).toBeVisible();
     fireEvent.click(within(destinations).getByRole("button", { name: "Property, plant and equipment" }));
+    expect(within(destinations).getByRole("button", { name: "Property, plant and equipment" })).toHaveAttribute("aria-current", "true");
     expect(screen.getByTestId("sheet-title")).toHaveTextContent("Summary of Accounting Policies");
     expect(screen.getByText("Revenue", { exact: true })).toBeInTheDocument();
   });

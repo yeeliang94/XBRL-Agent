@@ -37,6 +37,7 @@ _MPERS_TEMPLATE_DIR = Path(__file__).resolve().parent / "XBRL-template-MPERS"
 _TEMPLATE_DIRS_BY_STANDARD: dict[str, Path] = {
     "mfrs": _TEMPLATE_DIR,
     "mpers": _MPERS_TEMPLATE_DIR,
+    "clbg": Path(__file__).resolve().parent / "XBRL-template-CLBG",
 }
 
 
@@ -101,6 +102,8 @@ def notes_template_path(
             f"must be one of {tuple(_TEMPLATE_DIRS_BY_STANDARD)}"
         )
     entry = NOTES_REGISTRY[template_type]
+    if standard == "clbg" and (level != "company" or template_type == NotesTemplateType.ISSUED_CAPITAL):
+        raise ValueError("CLBG supports Company notes without an issued-capital template")
     # MFRS keeps the filename pinned on the registry entry so any caller that
     # reads entry.template_filename directly still gets the 10..14 file. MPERS
     # routes through the override map.

@@ -54,7 +54,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse, Response
 from starlette.background import BackgroundTask
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from utils.atomic_io import replace_with_retry
 
 # Suppress LiteLLM SSL warnings (enterprise firewall blocks GitHub pricing fetch)
@@ -715,7 +715,7 @@ def _recheck_from_facts(run_id: int) -> Optional[list[dict]]:
         )
         try:
             results = run_cross_check_pass_sync(
-                plan, build_default_cross_checks(), check_config,
+                plan, build_default_cross_checks(filing_standard), check_config,
                 tolerance=tolerance, timeout=timeout,
             )
         except (_FuturesTimeoutError, TimeoutError):
@@ -3361,6 +3361,8 @@ class RunConfigRequest(BaseModel):
     # Explicit operator signal for image-only PDFs. The run-owned scout must
     # receive this too; previously only the optional preview honoured it.
     scanned_pdf: bool = False
+    # First statements after incorporation have no comparative reporting period.
+    first_financial_statements: bool = False
     # Human corrections to the preview's note list. Kept separate from scout
     # output so a mandatory fresh scan can improve its hints without erasing
     # additions/deletions the operator deliberately made.
@@ -3371,7 +3373,16 @@ class RunConfigRequest(BaseModel):
     # legacy rows) continue to resolve to the MFRS template tree without
     # changes. `"mpers"` routes through XBRL-template-MPERS/ and enables
     # the SoRE variant on SOCIE.
-    filing_standard: Literal["mfrs", "mpers"] = "mfrs"
+    filing_standard: Literal["mfrs", "mpers", "clbg"] = "mfrs"
+
+    @model_validator(mode="after")
+    def _validate_clbg_shape(self):
+        if self.filing_standard == "clbg":
+            if self.filing_level != "company":
+                raise ValueError("CLBG currently supports Company filings only")
+            if "ISSUED_CAPITAL" in self.notes_to_run:
+                raise ValueError("CLBG has no issued-capital notes template")
+        return self
     # Presentation denomination the user declares for the source statements.
     # The figures in MBRS statements are reported at a scale ("RM '000",
     # "RM mil", or actual RM); the agent transcribes figures verbatim and uses
@@ -3430,9 +3441,10 @@ class RunConfigPatchRequest(BaseModel):
     models: Optional[Dict[str, str]] = None
     use_scout: Optional[bool] = None
     scanned_pdf: Optional[bool] = None
+    first_financial_statements: Optional[bool] = None
     notes_inventory_overrides: Optional["NotesInventoryOverrides"] = None
     filing_level: Optional[Literal["company", "group"]] = None
-    filing_standard: Optional[Literal["mfrs", "mpers"]] = None
+    filing_standard: Optional[Literal["mfrs", "mpers", "clbg"]] = None
     # Mirrors RunConfigRequest.denomination. Must be present here too, or a
     # debounced draft PATCH silently drops a non-default scale and the
     # draft-start path rebuilds the run at the "thousands" default — defeating
@@ -4884,7 +4896,8 @@ def _validate_and_build_run(
                 exception=e,
             )
             return None, events, new_status
-        if run_config.filing_standard not in v.applies_to_standard:
+        from statement_types import variant_applies_to_standard
+        if not variant_applies_to_standard(v, run_config.filing_standard):
             allowed = (
                 ", ".join(sorted(v.applies_to_standard)).upper() or "(none)"
             )
@@ -5049,6 +5062,7 @@ def _validate_and_build_run(
         filing_level=run_config.filing_level,
         filing_standard=run_config.filing_standard,
         denomination=run_config.denomination,
+        first_financial_statements=run_config.first_financial_statements,
         # Canonical mode is mandatory: always thread the run_id + DB into
         # the coordinator so extraction agents project their writes into
         # run_concept_facts. Bootstrap success is guaranteed by the
@@ -6960,6 +6974,23 @@ async def run_multi_agent_stream(
             if db_conn is None or run_id is None:
                 return
             try:
+                # Comparison and subsequent downloads need the actual layouts,
+                # including variants selected automatically by the coordinator.
+                stored_run = repo.fetch_run(db_conn, run_id)
+                if stored_run is not None:
+                    stored_config = dict(stored_run.config or {})
+                    stored_config["variants"] = {
+                        **(stored_config.get("variants") or {}),
+                        **{
+                            result.statement_type.value: result.variant
+                            for result in coordinator_result.agent_results
+                            if result.variant is not None
+                        },
+                    }
+                    db_conn.execute(
+                        "UPDATE runs SET run_config_json = ? WHERE id = ?",
+                        (json.dumps(stored_config), run_id),
+                    )
                 for agent_result in coordinator_result.agent_results:
                     run_agent_id = run_agent_ids_by_stmt.get(agent_result.statement_type)
                     if run_agent_id is None:
@@ -7128,7 +7159,7 @@ async def run_multi_agent_stream(
         # Run cross-checks (Phase 5 wiring). See `_build_default_cross_checks`
         # at module scope for the canonical registry the MPERS wiring tests
         # pin against.
-        all_checks = _build_default_cross_checks()
+        all_checks = _build_default_cross_checks(run_config.filing_standard)
         statement_outcomes = {
             result.statement_type: {
                 "status": result.status,
@@ -7207,6 +7238,7 @@ async def run_multi_agent_stream(
                         "message": result.message,
                         "target_sheet": result.target_sheet,
                         "target_row": result.target_row,
+                        "comparands": [dataclasses.asdict(value) for value in result.comparands],
                     },
                 })
             except asyncio.QueueFull:
@@ -7917,6 +7949,7 @@ async def run_multi_agent_stream(
                                     "message": result.message,
                                     "target_sheet": result.target_sheet,
                                     "target_row": result.target_row,
+                                    "comparands": [dataclasses.asdict(value) for value in result.comparands],
                                 },
                             })
                         except asyncio.QueueFull:
@@ -8520,6 +8553,7 @@ async def run_multi_agent_stream(
                 "message": cr.message,
                 "target_sheet": cr.target_sheet,
                 "target_row": cr.target_row,
+                "comparands": [dataclasses.asdict(value) for value in cr.comparands],
             })
         cross_checks_partial = False
 
@@ -8853,6 +8887,9 @@ def _save_review_task(
 # All reads go through `db.repository`; this module never speaks raw SQL.
 # ---------------------------------------------------------------------------
 
+_audit_connection_init_lock = threading.Lock()
+
+
 def _open_audit_conn():
     """Open an audit-DB connection with the same pragmas as the lifecycle
     path. Callers must close it themselves (or use the contextmanager via
@@ -8868,10 +8905,17 @@ def _open_audit_conn():
     idempotent, so the extra call is a no-op once the schema is set up.
     """
     import sqlite3
-    conn = sqlite3.connect(str(AUDIT_DB_PATH))
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA busy_timeout = 5000")
+    # Concurrent first readers must not race the rollback-journal to WAL
+    # transition. The lock covers setup only, not queries or transactions.
+    with _audit_connection_init_lock:
+        conn = sqlite3.connect(str(AUDIT_DB_PATH))
+        try:
+            conn.execute("PRAGMA busy_timeout = 5000")
+            conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute("PRAGMA journal_mode = WAL")
+        except Exception:
+            conn.close()
+            raise
     conn.row_factory = sqlite3.Row
     # Defensive init for non-lifespan callers. The `sqlite_master` probe
     # is cheap and the `init_db` path short-circuits via `IF NOT EXISTS`
@@ -8885,10 +8929,15 @@ def _open_audit_conn():
         conn.close()
         from db.schema import init_db
         init_db(AUDIT_DB_PATH)
-        conn = sqlite3.connect(str(AUDIT_DB_PATH))
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA journal_mode = WAL")
-        conn.execute("PRAGMA busy_timeout = 5000")
+        with _audit_connection_init_lock:
+            conn = sqlite3.connect(str(AUDIT_DB_PATH))
+            try:
+                conn.execute("PRAGMA busy_timeout = 5000")
+                conn.execute("PRAGMA foreign_keys = ON")
+                conn.execute("PRAGMA journal_mode = WAL")
+            except Exception:
+                conn.close()
+                raise
         conn.row_factory = sqlite3.Row
     return conn
 

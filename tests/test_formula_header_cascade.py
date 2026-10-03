@@ -47,8 +47,8 @@ def test_all_numeric_template_graphs_have_complete_computed_dependencies(tmp_pat
 
     db = tmp_path / 'all-templates.db'
     init_db(db)
-    assert len(import_all_face_templates(db)) == 38
-    assert len(import_all_notes_templates(db)) == 20
+    assert len(import_all_face_templates(db)) == 43
+    assert len(import_all_notes_templates(db)) == 24
     with sqlite3.connect(db) as conn:
         abstract_dependencies = conn.execute(
             "SELECT p.template_id,p.render_sheet,p.render_row,c.render_sheet,c.render_row "

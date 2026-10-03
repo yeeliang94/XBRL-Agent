@@ -18,7 +18,7 @@ Pins three regressions surfaced by team-lead peer review:
    history / UI.
 
 4. tools/verifier._verify_socie must resolve the total column from
-   filing_standard. MPERS SOCIE / SoRE uses a flat B/C layout; the
+   filing_standard. MPERS SOCIE uses total O and SoRE uses flat B/C; the
    pre-fix code hardcoded col X (24) and read None on every block,
    false-flagging every MPERS SOCIE as imbalanced.
 """
@@ -245,29 +245,30 @@ async def test_notprepared_variant_produces_skipped_result(tmp_path):
 def _build_socie_workbook(
     path: Path,
     *,
-    layout: str,  # "mfrs_matrix" or "mpers_flat"
+    layout: str,  # "mfrs_matrix" or "mpers_matrix"
     restated: float,
     increase: float,
     closing: float,
 ) -> None:
-    """Synthesize a SOCIE workbook with the three labels _verify_socie
-    looks up. `layout` decides whether values land in col X (24) or col B (2).
+    """Synthesize balances with total X for MFRS or total O for MPERS.
     """
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "SOCIE"
 
+    ws.cell(2, 1).value = "Equity at beginning of period"
     ws.cell(3, 1).value = "Equity at beginning of period, restated"
     ws.cell(4, 1).value = "Total increase (decrease) in equity"
     ws.cell(5, 1).value = "Equity at end of period"
 
     if layout == "mfrs_matrix":
         col = 24
-    elif layout == "mpers_flat":
-        col = 2
+    elif layout == "mpers_matrix":
+        col = 15
     else:  # pragma: no cover
         raise ValueError(layout)
 
+    ws.cell(2, col).value = restated
     ws.cell(3, col).value = restated
     ws.cell(4, col).value = increase
     ws.cell(5, col).value = closing
@@ -296,15 +297,13 @@ def test_verify_socie_mfrs_reads_col_24(tmp_path):
     assert result.is_balanced is True
 
 
-def test_verify_socie_mpers_reads_col_2(tmp_path):
-    """MPERS SOCIE is a flat B/C layout. The pre-fix verifier hardcoded
-    col 24 and read None — every block false-flagged as imbalanced.
-    With filing_standard='mpers' the read must pick col B (2)."""
+def test_verify_socie_mpers_reads_col_15(tmp_path):
+    """The MPERS matrix aggregate must read O rather than MFRS total X."""
     from tools.verifier import verify_statement
 
     path = tmp_path / "mpers_socie.xlsx"
     _build_socie_workbook(
-        path, layout="mpers_flat",
+        path, layout="mpers_matrix",
         restated=1000.0, increase=200.0, closing=1200.0,
     )
 
@@ -328,7 +327,7 @@ def test_verify_socie_mpers_with_mfrs_flag_misreads(tmp_path):
 
     path = tmp_path / "mpers_socie_misread.xlsx"
     _build_socie_workbook(
-        path, layout="mpers_flat",
+        path, layout="mpers_matrix",
         restated=1000.0, increase=200.0, closing=1200.0,
     )
 
@@ -395,9 +394,11 @@ def test_verify_sore_uses_retained_earnings_labels(tmp_path):
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "SoRE"
+    ws.cell(2, 1).value = "Retained earnings at beginning of period"
     ws.cell(3, 1).value = "Retained earnings at beginning of period, restated"
     ws.cell(4, 1).value = "Total increase (decrease) in retained earnings"
     ws.cell(5, 1).value = "Retained earnings at end of period"
+    ws.cell(2, 2).value = 1000.0
     ws.cell(3, 2).value = 1000.0
     ws.cell(4, 2).value = 200.0
     ws.cell(5, 2).value = 1200.0
@@ -420,9 +421,11 @@ def test_verify_sore_imbalance_is_detected(tmp_path):
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "SoRE"
+    ws.cell(2, 1).value = "Retained earnings at beginning of period"
     ws.cell(3, 1).value = "Retained earnings at beginning of period, restated"
     ws.cell(4, 1).value = "Total increase (decrease) in retained earnings"
     ws.cell(5, 1).value = "Retained earnings at end of period"
+    ws.cell(2, 2).value = 1000.0
     ws.cell(3, 2).value = 1000.0
     ws.cell(4, 2).value = 200.0
     ws.cell(5, 2).value = 9999.0  # != 1200

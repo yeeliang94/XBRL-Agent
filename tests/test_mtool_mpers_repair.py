@@ -290,7 +290,7 @@ def test_mpers_preparation_endpoint_preserves_calculations_and_receipt(client, t
 
 
 def test_supplied_mpers_workbook_balanced_sore(tmp_path):
-    source=ROOT/'data/FS-MPERS-Test_Sdn_Bhd-12345678910-01122025.xlsx'
+    source=ROOT/'data/mTool_MPERS_Company_SOFP-CuNonCu_SOPL-Function_SOCI-BeforeTax_SOCF-Indirect_SORE_RM.xlsx'
     if not source.exists(): pytest.skip('supplied MPERS workbook unavailable')
     ready,coverage=resolve_filing_doc(str(source),sore_doc())
     assert coverage['mapped']==12,coverage
@@ -370,7 +370,7 @@ def test_supplied_mpers_all_prose_slots_keep_their_taxonomy_and_content(tmp_path
     from mtool.notes_exporter import build_notes_fill_doc
     from mtool.offline_fill import fill_footnotes
     from db.schema import init_db
-    source=ROOT/'data/FS-MPERS-Test_Sdn_Bhd-12345678910-01122025.xlsx'
+    source=ROOT/'data/mTool_MPERS_Company_SOFP-CuNonCu_SOPL-Function_SOCI-BeforeTax_SOCF-Indirect_SORE_RM.xlsx'
     if not source.exists(): pytest.skip('supplied MPERS workbook unavailable')
     db=tmp_path/'notes.db';init_db(db)
     with sqlite3.connect(db) as c:
@@ -408,7 +408,7 @@ def test_supplied_mpers_api_category_retry_notes_receipt_and_download(client):
     from concept_model.notes_parser import parse_notes_template
     from concept_model.notes_importer import import_notes_template
     from concept_model.filing_targets import persist_template_manifest
-    source=ROOT/'data/FS-MPERS-Test_Sdn_Bhd-12345678910-01122025.xlsx'
+    source=ROOT/'data/mTool_MPERS_Company_SOFP-CuNonCu_SOPL-Function_SOCI-BeforeTax_SOCF-Indirect_SORE_RM.xlsx'
     if not source.exists(): pytest.skip('supplied MPERS workbook unavailable')
     tc,db,_=client
     with sqlite3.connect(db) as c:

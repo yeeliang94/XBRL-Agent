@@ -39,7 +39,11 @@ describe("PdfSourcePane", () => {
 
   test("clicking a cited chip jumps to that page", () => {
     render(<PdfSourcePane runId={3} pages={[19, 20]} totalPages={50} />);
+    expect(screen.getByTestId("pdf-cited-19")).toHaveAttribute("aria-current", "page");
     fireEvent.click(screen.getByTestId("pdf-cited-20"));
+    expect(screen.getByTestId("pdf-cited-20")).toHaveAttribute("aria-current", "page");
+    expect(screen.getByTestId("pdf-cited-20")).toHaveStyle({ background: "transparent", fontWeight: 680 });
+    expect(screen.getByTestId("pdf-cited-19")).not.toHaveAttribute("aria-current");
     const img = screen.getByTestId("pdf-page-image") as HTMLImageElement;
     expect(img.getAttribute("src")).toBe("/api/runs/3/pdf/page/20.png");
   });

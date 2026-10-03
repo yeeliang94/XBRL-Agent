@@ -64,12 +64,15 @@ export interface NotesCell {
   concept_uuid?: string | null;
   values?: Record<string, number | null>;
   dimensions?: Record<string, string>;
+  category_options?: Array<{ dimensions: Record<string, string>; label: string }>;
+  resolution_tokens?: Record<string, string | null>;
   categories?: Array<{
     dimension_key: string;
     dimensions: Record<string, string>;
     label: string;
     values: Record<string, number | null>;
     evidence: string | null;
+    resolution_tokens?: Record<string, string | null>;
   }>;
 }
 
@@ -337,5 +340,25 @@ export async function patchNotesFact(
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ value, period, entity_scope: entityScope, dimensions }),
+  });
+}
+
+
+/** Move one unclassified source fact into the category the reviewer selected. */
+export async function resolveNotesCategory(
+  runId: number,
+  conceptUuid: string,
+  body: {
+    dimensions: Record<string, string>;
+    period: "CY" | "PY";
+    entity_scope: "Company" | "Group";
+    expected_token: string;
+    evidence: string;
+  },
+): Promise<unknown> {
+  return authenticatedApiFetch<unknown>(`/api/runs/${runId}/facts/${conceptUuid}/category`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
   });
 }

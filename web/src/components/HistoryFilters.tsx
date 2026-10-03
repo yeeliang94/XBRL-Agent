@@ -128,7 +128,7 @@ export function HistoryFilters({ value, onChange }: HistoryFiltersProps) {
             onChange({
               ...value,
               // Empty option clears the filter so "All" returns every row.
-              standard: v === "mfrs" || v === "mpers" ? (v as FilingStandard) : undefined,
+              standard: v === "mfrs" || v === "mpers" || v === "clbg" ? (v as FilingStandard) : undefined,
             });
           }}
           style={styles.select}
@@ -137,6 +137,7 @@ export function HistoryFilters({ value, onChange }: HistoryFiltersProps) {
           <option value="">All</option>
           <option value="mfrs">MFRS</option>
           <option value="mpers">MPERS</option>
+          <option value="clbg">CLBG</option>
         </select>
       </label>
 

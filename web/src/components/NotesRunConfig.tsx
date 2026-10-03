@@ -1,4 +1,4 @@
-import type { NotesTemplateType, ModelEntry } from "../lib/types";
+import type { NotesTemplateType, ModelEntry, FilingStandard } from "../lib/types";
 import { NOTES_TEMPLATE_TYPES, NOTES_TEMPLATE_LABELS } from "../lib/types";
 import { pwc } from "../lib/theme";
 
@@ -11,6 +11,7 @@ interface Props {
   /** Show the per-note AI-model picker column. Defaults to true; the pre-run
    *  panel passes false to keep model choices under Advanced (Phase 3). */
   showModels?: boolean;
+  filingStandard?: FilingStandard;
 }
 
 // Layout mirrors StatementRunConfig.tsx so the Notes section renders as a
@@ -91,11 +92,12 @@ export function NotesRunConfig({
   onToggleNote,
   onModelChange,
   showModels = true,
+  filingStandard = "mfrs",
 }: Props) {
   return (
     <table style={styles.table} role="group" aria-label="Notes templates">
       <tbody>
-        {NOTES_TEMPLATE_TYPES.map((nt) => {
+        {NOTES_TEMPLATE_TYPES.filter((nt) => filingStandard !== "clbg" || nt !== "ISSUED_CAPITAL").map((nt) => {
           const isEnabled = enabled[nt];
           return (
             <tr key={nt} style={styles.row}>

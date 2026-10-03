@@ -25,6 +25,7 @@ from scripts.generate_mpers_templates import (
     _PRE_TO_CALC_ROLE,
     _pre_file_for_role,
     parse_calc_linkbase_grouped_for_pre_role,
+    mpers_socie_components,
     walk_role,
 )
 
@@ -95,6 +96,7 @@ def _parse_formula_refs(formula_str: str) -> list[tuple[int, int]]:
 
 def _compute_expected_formulas(
     role_number: str,
+    first_body_row: int = _FIRST_BODY_ROW,
 ) -> list[tuple[int, list[tuple[int, int]]]]:
     """Return ``[(xlsx_row, expected_children), …]`` for one role.
 
@@ -110,7 +112,7 @@ def _compute_expected_formulas(
     concept_to_rows: dict[str, list[int]] = {}
     first_occurrence: dict[str, int] = {}
     for idx, (_depth, concept_id, _label, _abs) in enumerate(rows):
-        xlsx_row = _FIRST_BODY_ROW + idx
+        xlsx_row = first_body_row + idx
         concept_to_rows.setdefault(concept_id, []).append(xlsx_row)
         first_occurrence.setdefault(concept_id, xlsx_row)
 
@@ -169,6 +171,42 @@ def audit_template(template_path: Path, level: str) -> dict:
     sheet_names = _SHEET_NAMES.get(filename, [])
     wb = openpyxl.load_workbook(template_path)
     result: dict = {"filename": filename, "level": level, "sheets": {}}
+
+    if filename == "09-SOCIE.xlsx":
+        ws = wb["SOCIE"]
+        components = mpers_socie_components()
+        columns = {member: openpyxl.utils.get_column_letter(col)
+                   for col, (member, _, _) in enumerate(components, 2)}
+        expected = {}
+        movement_rows = walk_role(_pre_file_for_role("610000"))
+        for block in range(2 if level == "company" else 4):
+            offset = block * (len(movement_rows) + 2)
+            for member, _, children in components:
+                col = columns[member]
+                if children:
+                    for index, (_, _, _, abstract) in enumerate(movement_rows):
+                        if not abstract:
+                            expected[f"{col}{4+offset+index}"] = "=" + "+".join(
+                                f"{columns[child]}{4+offset+index}" for child in children)
+                else:
+                    for row, children_refs in _compute_expected_formulas("610000", 4):
+                        expected[f"{col}{row+offset}"] = "=" + "+".join(
+                            f"{weight}*{col}{child_row+offset}" for child_row, weight in children_refs)
+        sheet_result = {"expected_formulas": len(expected), "formulas_correct": 0,
+                        "formulas_wrong": 0, "formulas_missing": 0, "issues": []}
+        for cell, formula in expected.items():
+            actual = ws[cell].value
+            if actual == formula:
+                sheet_result["formulas_correct"] += 1
+            else:
+                missing = not isinstance(actual, str) or not actual.startswith("=")
+                sheet_result["formulas_missing" if missing else "formulas_wrong"] += 1
+                sheet_result["issues"].append({"type": "missing" if missing else "mismatch",
+                                               "cell": cell, "formula": actual,
+                                               "expected_only": formula, "actual_only": actual})
+        result["sheets"]["SOCIE"] = sheet_result
+        wb.close()
+        return result
 
     value_cols = _value_columns_for(filename, level)
     if value_cols is None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import pytest
 from pathlib import Path
 
 
@@ -45,10 +46,21 @@ def _seed(tmp_path: Path):
     return db_path, run_id, template_id, label
 
 
-def test_preview_reads_canonical_fact_dimensions_and_coordinates(tmp_path: Path):
+@pytest.mark.parametrize("first_period", [False, True])
+def test_preview_reads_canonical_fact_dimensions_and_coordinates(tmp_path: Path, first_period):
     from concept_model.preview import build_preview_fields
 
     db_path, run_id, template_id, label = _seed(tmp_path)
+    if first_period:
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("UPDATE runs SET run_config_json = ? WHERE id = ?",
+                         (json.dumps({"first_financial_statements": True}), run_id))
+            conn.execute(
+                "INSERT INTO run_concept_facts(run_id, concept_uuid, period, entity_scope, "
+                "value, value_status, source, evidence) SELECT run_id, concept_uuid, 'PY', "
+                "entity_scope, 999, value_status, source, evidence FROM run_concept_facts "
+                "WHERE run_id = ?", (run_id,),
+            )
     fields = build_preview_fields(
         db_path, run_id, {template_id: "SOFP"},
     )

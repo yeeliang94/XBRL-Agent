@@ -49,6 +49,7 @@ from mtool.offline_fill import (
     inspect_footnotes,
     load_workbook_entries,
     read_footnote_rows,
+    resolve_sheet_name,
     split_ref,
 )
 from mtool.template_map import (
@@ -119,9 +120,25 @@ def run_filing_shape(conn: sqlite3.Connection, run_id: int) -> dict[str, Any]:
     standard = str(config.get("filing_standard") or "mfrs").lower()
     level = str(config.get("filing_level") or "company").lower()
 
+    # Older automatically selected runs kept their resolved layouts only on
+    # the agent rows. Scout suggestions are advisory, so do not infer a layout
+    # from them (or from a registry default) when the actual variant is unknown.
+    recorded_variants: dict[str, set[str]] = {}
+    for statement, variant in conn.execute(
+        "SELECT statement_type, variant FROM run_agents WHERE run_id = ? "
+        "AND variant IS NOT NULL AND status IN "
+        "('succeeded', 'completed_with_errors', 'skipped')",
+        (run_id,),
+    ):
+        recorded_variants.setdefault(statement, set()).add(variant)
+
     statements: dict[str, str] = {}
     for statement in config.get("statements") or []:
         variant = (config.get("variants") or {}).get(statement)
+        if not variant:
+            actual = recorded_variants.get(statement, set())
+            if len(actual) == 1:
+                variant = next(iter(actual))
         try:
             path = template_path(StatementType(statement), variant, level, standard)
         except (KeyError, ValueError):
@@ -144,6 +161,7 @@ def run_filing_shape(conn: sqlite3.Connection, run_id: int) -> dict[str, Any]:
         "standard": standard,
         "level": level,
         "denomination": str(config.get("denomination") or "thousands").lower(),
+        "first_financial_statements": config.get("first_financial_statements") is True,
         "statements": statements,
         "notes_templates": notes_templates,
     }
@@ -235,8 +253,9 @@ def _slot_writes(conn, template_ids, level: str, standard: str,
         if t_sheet and t_row and t_col:
             write["target_hint"] = {"sheet": t_sheet, "row": t_row, "col": t_col}
         axis_suffix = _CATEGORY_AXIS_BY_SHEET.get(sheet)
+        native_sheet = resolve_sheet_name(sheet, cells_by_sheet)
         if (axis_suffix and semantic and not semantic["dimensions"]
-                and category_domain_rows(cells_by_sheet.get(sheet, {}))):
+                and category_domain_rows(cells_by_sheet.get(native_sheet, {}))):
             from concept_model.dimensions import dimension_key, numeric_category_catalog
             for axis, members in numeric_category_catalog(standard).items():
                 if not axis.endswith(axis_suffix):
@@ -422,6 +441,8 @@ def read_human_file(conn: sqlite3.Connection, run_id: int, path: str | Path,
 
     statements = shape["statements"]
     writes = _slot_writes(conn, statements, level, standard, cells_by_sheet)
+    if shape["first_financial_statements"]:
+        writes = [write for write in writes if write["period"] == "CY"]
     unit_by_concept = {
         write["concept_uuid"]: (write["unit_class"], write["label"])
         for write in writes

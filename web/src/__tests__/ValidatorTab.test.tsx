@@ -1,5 +1,5 @@
 import { describe, test, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 import { ValidatorTab } from "../components/ValidatorTab";
 import type { CrossCheckResult } from "../lib/types";
 
@@ -13,6 +13,36 @@ function makeCrossChecks(): CrossCheckResult[] {
 }
 
 describe("ValidatorTab", () => {
+  test("compares both years without losing statement or Company figures", () => {
+    render(<ValidatorTab crossChecks={[{
+      name: "sopl_to_socie_profit", status: "failed", expected: 80, actual: 70,
+      diff: 10, tolerance: 1, message: "Previous year differs",
+      comparands: [
+        { label: "Profit (loss)", sheet: "SOPL", statement: "SOPL", role: "lhs", period: "PY", value: 80 },
+        { label: "Profit (loss)", sheet: "SOCIE", statement: "SOCIE", role: "rhs", period: "PY", value: 70 },
+        { label: "Profit (loss)", sheet: "SOPL", statement: "SOPL", role: "lhs", period: "CY", value: 100 },
+        { label: "Profit (loss)", sheet: "SOCIE", statement: "SOCIE", role: "rhs", period: "CY", value: 100 },
+        { label: "Profit (loss) [company]", sheet: "SOPL", statement: "SOPL", role: "lhs", period: "CY", value: 50 },
+      ],
+    }]} />);
+    const table = screen.getByRole("table");
+    expect(within(table).getAllByRole("columnheader").map((cell) => cell.textContent)).toEqual(["Compared figure", "Current year", "Previous year"]);
+    const rows = within(table).getAllByRole("row").slice(1);
+    expect(within(rows[0]).getAllByRole("cell").map((cell) => cell.textContent)).toEqual(["100", "80"]);
+    expect(within(rows[1]).getAllByRole("cell").map((cell) => cell.textContent)).toEqual(["100", "70"]);
+    expect(rows[0]).not.toHaveTextContent("Changes in Equity");
+    expect(rows[2]).toHaveTextContent("Profit (loss) (Company)");
+    expect(within(rows[2]).getAllByRole("cell").map((cell) => cell.textContent)).toEqual(["50", "—"]);
+    expect(screen.getByText("Technical details").closest("details")).not.toHaveAttribute("open");
+  });
+
+  test("legacy summaries do not claim which year was checked", () => {
+    render(<ValidatorTab crossChecks={[makeCrossChecks()[0]]} />);
+    expect(screen.getByRole("columnheader", { name: "Saved comparison" })).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Current year" })).toBeNull();
+    expect(screen.getByText(/Year detail was not saved/)).toBeInTheDocument();
+  });
+
   test("renders all 4 status states", () => {
     render(<ValidatorTab crossChecks={makeCrossChecks()} />);
 
@@ -31,20 +61,19 @@ describe("ValidatorTab", () => {
     ];
     const onSelectTarget = vi.fn();
     render(<ValidatorTab crossChecks={checks} onSelectTarget={onSelectTarget} />);
-    fireEvent.click(screen.getByTestId("cross-check-row-sofp_balance"));
+    fireEvent.click(screen.getByRole("button", { name: "Review figures" }));
     expect(onSelectTarget).toHaveBeenCalledWith("SOFP-CuNonCu", 42);
   });
 
-  test("a targeted check is keyboard reachable and activates with Enter", () => {
+  test("a targeted check provides a native keyboard-accessible button", () => {
     const checks: CrossCheckResult[] = [
       { name: "sofp_balance", status: "failed", expected: 1000, actual: 990, diff: 10, tolerance: 1, message: "off", target_sheet: "SOFP-CuNonCu", target_row: 42 },
     ];
     const onSelectTarget = vi.fn();
     render(<ValidatorTab crossChecks={checks} onSelectTarget={onSelectTarget} />);
-    const row = screen.getByTestId("cross-check-row-sofp_balance");
-    expect(row).toHaveAttribute("tabindex", "0");
-    expect(row).toHaveAttribute("role", "button");
-    fireEvent.keyDown(row, { key: "Enter" });
+    const button = screen.getByRole("button", { name: "Review figures" });
+    expect(button.tagName).toBe("BUTTON");
+    fireEvent.click(button);
     expect(onSelectTarget).toHaveBeenCalledWith("SOFP-CuNonCu", 42);
   });
 
@@ -61,14 +90,14 @@ describe("ValidatorTab", () => {
   test("passed row shows pass badge", () => {
     render(<ValidatorTab crossChecks={makeCrossChecks()} />);
 
-    const passedRow = screen.getByTitle("sofp_balance").closest("tr")!;
+    const passedRow = screen.getByTitle("sofp_balance").closest("section")!;
     expect(passedRow.textContent).toContain("Passed");
   });
 
   test("failed row shows fail badge with expected/actual/diff", () => {
     render(<ValidatorTab crossChecks={makeCrossChecks()} />);
 
-    const failedRow = screen.getByTitle("sopl_to_socie_profit").closest("tr")!;
+    const failedRow = screen.getByTitle("sopl_to_socie_profit").closest("section")!;
     expect(failedRow.textContent).toContain("Failed");
     expect(failedRow.textContent).toContain("500");
     expect(failedRow.textContent).toContain("480");
@@ -78,7 +107,7 @@ describe("ValidatorTab", () => {
   test("pending row still shows Pending status text", () => {
     render(<ValidatorTab crossChecks={makeCrossChecks()} />);
 
-    const pendingRow = screen.getByTitle("soci_to_socie_tci").closest("tr")!;
+    const pendingRow = screen.getByTitle("soci_to_socie_tci").closest("section")!;
     expect(pendingRow.textContent).toContain("Pending");
     expect(pendingRow.textContent).not.toContain("agree.");
   });
@@ -89,7 +118,7 @@ describe("ValidatorTab", () => {
       actual: null, diff: null, tolerance: 1,
       message: "SOCF produced no workbook",
     }]} />);
-    const row = screen.getByTitle("socf_to_sofp_cash").closest("tr")!;
+    const row = screen.getByTitle("socf_to_sofp_cash").closest("section")!;
     expect(row).toHaveTextContent("Blocked");
     expect(row).toHaveTextContent("comparison could not run");
     expect(row).not.toHaveTextContent("differ");
@@ -113,7 +142,7 @@ describe("ValidatorTab", () => {
   test("not_applicable row is styled muted", () => {
     render(<ValidatorTab crossChecks={makeCrossChecks()} />);
 
-    const naRow = screen.getByTitle("socf_to_sofp_cash").closest("tr")!;
+    const naRow = screen.getByTitle("socf_to_sofp_cash").closest("section")!;
     expect(naRow.textContent).toContain("Not applicable");
   });
 

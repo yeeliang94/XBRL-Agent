@@ -44,7 +44,7 @@ export function HumanComparisonBar({
       <div style={styles.row}>
         {paneSwitch}
         {showDetails && (
-            <div style={styles.file} data-testid="human-file-header">
+            <div className="human-comparison-file" style={styles.file} data-testid="human-file-header">
               <span style={styles.fileName} title={file.filename}>{file.filename}</span>
               <span style={ui.metadata}>
                 {[file.uploaded_by, new Date(file.uploaded_at).toLocaleDateString()].filter(Boolean).join(" · ")}
@@ -114,6 +114,7 @@ const styles = {
     alignItems: "center",
     flexWrap: "wrap",
     gap: pwc.space.xl,
+    justifyContent: "space-between",
   } as React.CSSProperties,
   tiles: {
     display: "flex",
@@ -141,6 +142,8 @@ const styles = {
     flexWrap: "wrap",
     gap: pwc.space.sm,
     minWidth: 0,
+    flex: "1 1 320px",
+    justifyContent: "flex-end",
   } as React.CSSProperties,
   fileName: {
     fontFamily: pwc.fontBody,
@@ -148,5 +151,7 @@ const styles = {
     fontWeight: pwc.weight.semibold,
     color: pwc.grey900,
     overflowWrap: "anywhere",
+    minWidth: 0,
+    maxWidth: "100%",
   } as React.CSSProperties,
 };

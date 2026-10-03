@@ -112,7 +112,8 @@ def test_scope_facts_keep_value_and_provenance_together(client: TestClient) -> N
     }
 
 
-def test_get_concepts_surfaces_reporting_periods(client: TestClient) -> None:
+@pytest.mark.parametrize("first_period", [False, True])
+def test_get_concepts_surfaces_reporting_periods(client: TestClient, first_period) -> None:
     """D5: the endpoint exposes the scout's reporting periods so the Figures
     grid can label CY / PY with their years. Absent scout data → nulls."""
     import sqlite3 as _sq
@@ -127,7 +128,7 @@ def test_get_concepts_surfaces_reporting_periods(client: TestClient) -> None:
     try:
         conn.execute(
             "UPDATE runs SET run_config_json = ? WHERE id = ?",
-            (json.dumps({"infopack": {
+            (json.dumps({"first_financial_statements": first_period, "infopack": {
                 "reporting_period_cy": "FY2021",
                 "reporting_period_py": "FY2020",
             }}), client.run_id),
@@ -138,7 +139,7 @@ def test_get_concepts_surfaces_reporting_periods(client: TestClient) -> None:
 
     payload = client.get(f"/api/runs/{client.run_id}/concepts").json()
     assert payload["reporting_period_cy"] == "FY2021"
-    assert payload["reporting_period_py"] == "FY2020"
+    assert payload["reporting_period_py"] == (None if first_period else "FY2020")
 
 
 def test_get_concepts_emits_alias_rows_with_face_coords(

@@ -270,7 +270,7 @@ def test_serialization_is_deterministic_for_same_template() -> None:
 
 
 def test_parses_every_live_template_without_error() -> None:
-    """Walk both template roots and parse every .xlsx except backups.
+    """Parse numbered live templates in every supported family directory.
 
     SOCIE is allowed to raise ``UnsupportedSchemaShape`` (matrix layout
     deferred to Phase 5); anything else must succeed."""
@@ -279,13 +279,14 @@ def test_parses_every_live_template_without_error() -> None:
     errors: list[tuple[Path, Exception]] = []
     parsed = 0
     skipped_matrix = 0
-    for root in (REPO_ROOT / "XBRL-template-MFRS",
-                 REPO_ROOT / "XBRL-template-MPERS"):
-        if not root.is_dir():
-            continue
-        for xlsx in root.rglob("*.xlsx"):
-            if any(p.startswith("backup") for p in xlsx.parts):
-                continue
+    for standard, level in (
+        ("MFRS", "Company"), ("MFRS", "Group"),
+        ("MPERS", "Company"), ("MPERS", "Group"), ("CLBG", "Company"),
+    ):
+        root = REPO_ROOT / f"XBRL-template-{standard}" / level
+        assert root.is_dir(), f"supported template directory missing: {root}"
+        # Generated output workbooks and backup snapshots are not templates.
+        for xlsx in root.glob("[0-9][0-9]-*.xlsx"):
             try:
                 cp.parse_template(str(xlsx))
                 parsed += 1

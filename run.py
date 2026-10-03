@@ -99,6 +99,7 @@ def run_agent(
     denomination: Optional[str] = None,
     variants: Optional[Dict[str, str]] = None,
     use_scout: bool = True,
+    first_financial_statements: bool = False,
 ) -> AgentResult:
     """Run a CLI extraction through the SAME canonical pipeline as the web server.
 
@@ -174,6 +175,7 @@ def run_agent(
         filing_level=filing_level,
         filing_standard=filing_standard,
         denomination=denomination,
+        first_financial_statements=first_financial_statements,
         # Explicit per-statement variants (e.g. {"SOFP": "OrderOfLiquidity"}).
         # Without these the coordinator resolves the registry DEFAULT variant,
         # so a non-default benchmark would extract the wrong template shape.
@@ -317,6 +319,7 @@ def run_resume(
         filing_level=plan.filing_level,
         filing_standard=plan.filing_standard,
         denomination=plan.parent_config.get("denomination"),
+        first_financial_statements=bool(plan.parent_config.get("first_financial_statements")),
         variants={d.statement: d.variant
                   for d in plan.rerun if d.variant},
     )
@@ -498,10 +501,11 @@ def build_parser():
                         help="Base output directory (default: output/ next to this script)")
     parser.add_argument("--level", default="company", choices=["company", "group"],
                         help="Filing level: company (standalone) or group (consolidated + company)")
-    parser.add_argument("--standard", default="mfrs", choices=["mfrs", "mpers"],
+    parser.add_argument("--standard", default="mfrs", choices=["mfrs", "mpers", "clbg"],
                         help="Filing standard: mfrs (default, routes to "
                              "XBRL-template-MFRS/) or mpers (routes to "
-                             "XBRL-template-MPERS/ and enables SoRE).")
+                             "XBRL-template-MPERS/ and enables SoRE), or clbg "
+                             "(Company limited by guarantee).")
     parser.add_argument("--denomination", default=None,
                         choices=["units", "thousands", "millions"],
                         help="Presentation scale the filer declares for the "
@@ -513,6 +517,8 @@ def build_parser():
                         help="Skip the scout pass (on by default). Scout tells "
                              "the agents which pages to open; hints are "
                              "advisory only.")
+    parser.add_argument("--first-financial-statements", action="store_true",
+                        help="First statements after incorporation; extract only the current period.")
     parser.add_argument("--resume-from", type=int, default=None,
                         metavar="RUN_ID",
                         help="Stage-level resume (Phase 4A): reuse the given "
@@ -577,6 +583,7 @@ if __name__ == "__main__":
         filing_level=args.level,
         filing_standard=args.standard,
         denomination=args.denomination,
+        first_financial_statements=args.first_financial_statements,
         use_scout=args.use_scout,
     )
     if args.output_dir:

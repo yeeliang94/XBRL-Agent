@@ -1732,7 +1732,7 @@ def run_verification_checks(
             filing_level=filing_level, filing_standard=filing_standard,
         )
         return run_all_facts(
-            build_default_cross_checks(), ctx, check_config, tolerance=tolerance,
+            build_default_cross_checks(filing_standard), ctx, check_config, tolerance=tolerance,
         )
     finally:
         conn.close()

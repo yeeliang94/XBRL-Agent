@@ -25,8 +25,8 @@ _VALID_CONFIDENCE: set[str] = {"HIGH", "MEDIUM", "LOW"}
 # Scout's MFRS-vs-MPERS guess. "unknown" when the signals are ambiguous or
 # absent — the UI falls back to the user toggle default (MFRS) without
 # prompting. Narrowed to these three strings by `detect_filing_standard`.
-DetectedStandard = Literal["mfrs", "mpers", "unknown"]
-_VALID_DETECTED_STANDARD: set[str] = {"mfrs", "mpers", "unknown"}
+DetectedStandard = Literal["mfrs", "mpers", "clbg", "unknown"]
+_VALID_DETECTED_STANDARD: set[str] = {"mfrs", "mpers", "clbg", "unknown"}
 
 # Phase 2 — units the agent may see on a face page header. "unknown" is
 # the safe default — the prompt renders a loud "VERIFY UNIT" block in

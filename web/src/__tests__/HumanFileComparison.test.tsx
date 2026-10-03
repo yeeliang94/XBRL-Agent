@@ -67,8 +67,11 @@ describe("figures view with a human file", () => {
     render(<ConceptsPage runId={7} humanFile={file} />);
     const cashRow = await screen.findByTestId("concept-row-cash");
     await waitFor(() => expect(within(cashRow).getByTestId("human-value-cash-CY")).toHaveTextContent("100"));
+    expect(within(cashRow).getByRole("textbox", { name: /current period/ })).toHaveStyle({ height: "32px" });
     expect(within(cashRow).queryByRole("img", { name: "Same as human" })).not.toBeInTheDocument();
     expect(within(cashRow).getByRole("img", { name: "AI-only" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Extracted CY" })).toBeVisible();
+    expect(screen.getByRole("columnheader", { name: "Human CY" })).toBeVisible();
     const ppeRow = screen.getByTestId("concept-row-ppe");
     expect(within(ppeRow).getByTestId("human-value-ppe-CY")).toHaveTextContent("250");
     expect(within(ppeRow).getByRole("img", { name: "Differs from human" })).toHaveTextContent("!");

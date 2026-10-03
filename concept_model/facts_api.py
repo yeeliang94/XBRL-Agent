@@ -22,6 +22,7 @@ the correction agent did" UI have a durable history.
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
 from datetime import datetime, timezone
 from typing import Literal, Optional, Sequence
@@ -227,6 +228,8 @@ def _validate(fact: FactWrite, concept, is_formula: bool) -> None:
 def validate_scalar_fact(
     conn: sqlite3.Connection,
     body: "FactWrite",
+    *,
+    run_id: int | None = None,
 ) -> tuple[sqlite3.Row, bool]:
     """Validate one scalar fact without changing canonical persistence.
 
@@ -236,6 +239,13 @@ def validate_scalar_fact(
     returned concept and formula flag let apply_fact reuse the lookup without
     repeating policy.
     """
+    if run_id is not None:
+        from concept_model.periods import run_periods
+        if body.period not in run_periods(conn, run_id):
+            raise HTTPException(status_code=400, detail=(
+                "First financial statements have only a current period; "
+                "prior-period facts are not applicable."
+            ))
     if not body.concept_uuid:
         raise HTTPException(
             status_code=400,
@@ -266,6 +276,19 @@ def validate_scalar_fact(
         raise HTTPException(status_code=400, detail=(
             'This concept is a text disclosure. Save its content as a note, not a numeric fact.'))
     _validate(body, concept, is_formula)
+    if not is_formula:
+        # Style-derived LEAF nodes can represent reviewed presentation-only
+        # titles. An authoritative manifest must not turn those captions into
+        # filing facts. Formula overrides retain the existing status policy;
+        # old/synthetic nodes without a manifest retain their existing guards.
+        slots = conn.execute(
+            "SELECT validation_status FROM template_slots WHERE canonical_target_id = ?",
+            (body.concept_uuid,),
+        ).fetchall()
+        if slots and not any(slot[0] == "writable" for slot in slots):
+            raise HTTPException(status_code=400, detail=(
+                "This concept is not a writable filing field in its template manifest."
+            ))
     return concept, is_formula
 
 
@@ -309,7 +332,7 @@ def apply_fact(
     # guard below keys on this, not on kind, so a matrix total can't
     # be POSTed an observed literal without aggregate_only the way a
     # COMPUTED row can't.
-    concept, is_formula = validate_scalar_fact(conn, body)
+    concept, is_formula = validate_scalar_fact(conn, body, run_id=run_id)
     try:
         dims = instance_key(conn, body.concept_uuid, body.dimensions)
     except ValueError as exc:
@@ -707,6 +730,118 @@ def patch_fact_value(
     return result
 
 
+class CategoryResolution(BaseModel):
+    """Source-confirmed classification of one unresolved note fact."""
+
+    dimensions: dict[str, str]
+    period: Literal["CY", "PY"] = "CY"
+    entity_scope: Literal["Company", "Group"] = "Company"
+    expected_token: str = Field(min_length=1)
+    evidence: str = Field(min_length=1)
+
+
+def category_resolution_token(conn, run_id, concept_uuid, period, entity_scope):
+    row = conn.execute(
+        "SELECT * FROM run_concept_facts WHERE run_id=? AND concept_uuid=? "
+        "AND period=? AND entity_scope=? AND dimension_key=''",
+        (run_id, concept_uuid, period, entity_scope),
+    ).fetchone()
+    if row is None or row["value"] is None:
+        return None
+    event = conn.execute(
+        "SELECT MAX(id) FROM concept_fact_events WHERE run_id=? AND concept_uuid=? "
+        "AND period=? AND entity_scope=? AND dimension_key=''",
+        (run_id, concept_uuid, period, entity_scope),
+    ).fetchone()[0]
+    payload = json.dumps([dict(row), event], sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def resolve_fact_category(db_path, run_id: int, concept_uuid: str, body: CategoryResolution):
+    """Move one fact to a verified category atomically; never merge or guess."""
+    conn = _open_conn(str(db_path))
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        run = conn.execute("SELECT run_config_json FROM runs WHERE id=?", (run_id,)).fetchone()
+        if run is None:
+            raise HTTPException(404, "Run not found")
+        config = json.loads(run[0] or "{}")
+        standard = str(config.get("filing_standard", "mfrs")).lower()
+        level = str(config.get("filing_level", "company")).lower()
+        node = conn.execute(
+            "SELECT template_id, render_sheet, kind FROM concept_nodes WHERE concept_uuid=?",
+            (concept_uuid,),
+        ).fetchone()
+        if (node is None or not node["template_id"].startswith(f"{standard}-{level}-")
+                or node["kind"] != "LEAF"
+                or node["render_sheet"] not in {"Notes-Issuedcapital", "Notes-RelatedPartytran"}):
+            raise HTTPException(400, "Choose a numeric category note in this run's template family")
+        if level != "group" and body.entity_scope != "Company":
+            raise HTTPException(400, "Company filings cannot classify Group facts")
+        from concept_model.periods import run_periods
+        if body.period not in run_periods(conn, run_id):
+            raise HTTPException(400, "This period is not applicable to this filing")
+        if not body.evidence.strip():
+            raise HTTPException(400, "Source evidence is required to confirm the category")
+        try:
+            dims = instance_key(conn, concept_uuid, body.dimensions)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        if not dims:
+            raise HTTPException(400, "Choose a source-supported taxonomy category")
+        identity = (run_id, concept_uuid, body.period, body.entity_scope)
+        source = conn.execute(
+            "SELECT * FROM run_concept_facts WHERE run_id=? AND concept_uuid=? "
+            "AND period=? AND entity_scope=? AND dimension_key=''", identity,
+        ).fetchone()
+        if category_resolution_token(conn, *identity) != body.expected_token:
+            raise HTTPException(409, "The unresolved value changed. Reload the notes before classifying it")
+        if source is None or source["value"] is None:
+            raise HTTPException(409, "There is no populated unresolved fact to classify")
+        if source["value_status"] == "conflict" or conn.execute(
+            "SELECT 1 FROM run_concept_conflicts WHERE run_id=? AND concept_uuid=? "
+            "AND period=? AND entity_scope=? AND dimension_key='' AND status='open'", identity,
+        ).fetchone():
+            raise HTTPException(409, "Resolve the fact's conflict before assigning its category")
+        if conn.execute(
+            "SELECT 1 FROM run_concept_facts WHERE run_id=? AND concept_uuid=? "
+            "AND period=? AND entity_scope=? AND dimension_key=?", (*identity, dims),
+        ).fetchone():
+            raise HTTPException(409, "This category already has a fact. Review both entries without overwriting it")
+        # The restore point and the move share the write lock, so concurrent
+        # edits cannot put a later value in the original-extraction snapshot.
+        if not conn.execute("SELECT 1 FROM run_fact_snapshots WHERE run_id=? LIMIT 1", (run_id,)).fetchone():
+            conn.execute(
+                "INSERT INTO run_fact_snapshots(run_id,concept_uuid,period,entity_scope,dimension_key,"
+                "value,value_status,children_status,source,evidence,snapshot_at) "
+                "SELECT run_id,concept_uuid,period,entity_scope,dimension_key,value,value_status,"
+                "children_status,source,evidence,? FROM run_concept_facts WHERE run_id=?", (_now(), run_id),
+            )
+        evidence = "\n".join(filter(None, [source["evidence"], body.evidence.strip()]))
+        result = apply_fact(conn, run_id, FactWrite(
+            concept_uuid=concept_uuid, period=body.period, entity_scope=body.entity_scope,
+            dimensions=body.dimensions, value=source["value"], value_status="user_override",
+            source="category resolution", evidence=evidence, actor="user",
+        ), commit=False)
+        conn.execute(
+            "INSERT INTO concept_fact_events(run_id,concept_uuid,period,entity_scope,actor,ts,"
+            "before_json,after_json,dimension_key) VALUES(?,?,?,?,?,?,?,NULL,'')",
+            (*identity, "user", _now(), json.dumps(dict(source))),
+        )
+        for table in ("run_concept_facts", "fact_source_receipts"):
+            conn.execute(
+                f"DELETE FROM {table} WHERE run_id=? AND concept_uuid=? AND period=? "
+                "AND entity_scope=? AND dimension_key=''", identity,
+            )
+        conn.commit()
+        return result
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def register_facts_routes(app, audit_db_getter) -> None:
     """Attach the facts API to a FastAPI app.
 
@@ -722,6 +857,10 @@ def register_facts_routes(app, audit_db_getter) -> None:
     @app.patch("/api/runs/{run_id}/facts/{concept_uuid}")
     def patch_fact(run_id: int, concept_uuid: str, body: FactValuePatch):
         return patch_fact_value(audit_db_getter(), run_id, concept_uuid, body)
+
+    @app.post("/api/runs/{run_id}/facts/{concept_uuid}/category")
+    def resolve_category(run_id: int, concept_uuid: str, body: CategoryResolution):
+        return resolve_fact_category(audit_db_getter(), run_id, concept_uuid, body)
 
 
 def _post_notes_fact(conn: sqlite3.Connection, run_id: int, body: "FactWrite"):

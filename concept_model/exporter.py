@@ -149,6 +149,31 @@ def export_run_to_xlsx(
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
+        from concept_model.periods import run_periods
+        periods = run_periods(conn, run_id)
+        if "PY" not in periods:
+            # Internal templates retain their comparative grid, but those
+            # targets must stay blank for a first-period filing.
+            # Retired MPERS Company PY targets in column C now overlap CY
+            # retained earnings, so clear only the current template's targets.
+            py_targets = conn.execute(
+                "SELECT t.target_sheet, t.target_row, t.target_col "
+                "FROM concept_targets t JOIN concept_nodes n USING(concept_uuid) "
+                "WHERE t.period = 'PY' AND n.is_current = 1 AND (? IS NULL OR n.template_id = ?) "
+                "UNION SELECT a.alias_sheet, a.alias_row, t.target_col "
+                "FROM concept_render_aliases a JOIN concept_nodes n USING(concept_uuid) "
+                "JOIN concept_targets t USING(concept_uuid) "
+                "WHERE t.period = 'PY' AND n.is_current = 1 AND (? IS NULL OR n.template_id = ?)",
+                (template_id, template_id, template_id, template_id),
+            ).fetchall()
+            for sheet, row, col in py_targets:
+                if sheet in wb.sheetnames:
+                    wb[sheet][f"{col}{row}"] = None
+            for sheet in wb.worksheets:
+                for cells in sheet.iter_rows(min_row=1, max_row=3):
+                    for cell in cells:
+                        if cell.column % 2 and _is_date_placeholder(cell.value):
+                            cell.value = None
         # Pull every fact joined to its concept_node and template shape,
         # LEFT JOINing ``concept_targets`` so each (period, entity_scope)
         # dimension routes to its dedicated cell. As of Phase 6.1 routing is
@@ -166,6 +191,7 @@ def export_run_to_xlsx(
                    f.value, f.value_status, f.children_status,
                    f.source, f.evidence,
                    n.canonical_label, n.kind, n.render_sheet,
+                   n.template_id, n.is_current, n.matrix_col_label,
                    n.render_row, n.render_col,
                    tpl.shape AS shape,
                    t.target_col AS target_col,
@@ -183,6 +209,45 @@ def export_run_to_xlsx(
             """,
             (run_id, template_id, template_id),
         ).fetchall()
+        rows = [dict(row) for row in rows]
+        for row in rows:
+            if not (
+                row["period"] in periods
+                and row["template_id"].startswith("mpers-")
+                and row["render_sheet"] == "SOCIE"
+                and not row["is_current"]
+                and row["matrix_col_label"] == "Value"
+                and "SOCIE" in wb.sheetnames
+                and wb["SOCIE"]["O2"].value == "Total"
+            ):
+                continue
+            # Pre-matrix MPERS facts are aggregate equity, not issued capital.
+            # Resolve their total in the new geometry without changing history.
+            # The label distinguishes opening/restated/closing occurrences of
+            # the same primary concept; targets supply period and entity scope.
+            matches = conn.execute(
+                "SELECT t.target_sheet, t.target_row, t.target_col "
+                "FROM concept_semantic_addresses old "
+                "JOIN concept_semantic_addresses new ON new.primary_concept = old.primary_concept "
+                "JOIN concept_nodes n ON n.concept_uuid = new.concept_uuid "
+                "JOIN concept_targets t ON t.concept_uuid = n.concept_uuid "
+                "WHERE old.concept_uuid = ? AND n.template_id = ? AND n.is_current = 1 "
+                "AND LTRIM(n.canonical_label, '* ') = LTRIM(?, '* ') "
+                "AND new.dimensions_json = ? AND t.period = ? AND t.entity_scope = ?",
+                (row["concept_uuid"], row["template_id"], row["canonical_label"],
+                 '{"ifrs-smes_ComponentsOfEquityAxis":"ifrs-smes_EquityMember"}',
+                 row["period"], row["entity_scope"]),
+            ).fetchall()
+            if len(matches) != 1:
+                raise ValueError("Historical MPERS aggregate has no unique current total target")
+            target = dict(matches[0])
+            if any(other is not row and all(other[key] == target[key] for key in target)
+                   for other in rows):
+                raise ValueError("Historical MPERS aggregate overlaps another exported fact")
+            row.update(target)
+            # A historical aggregate has no component breakdown. Preserve its
+            # literal even if it was previously derived from vertical inputs.
+            row["children_status"] = None
     finally:
         conn.close()
 
@@ -198,6 +263,8 @@ def export_run_to_xlsx(
     unmapped: list[tuple] = []
     from concept_model.dimensions import diagnostic_rows
     for r in diagnostic_rows(rows):
+        if r["period"] not in periods:
+            continue
         is_matrix = r["shape"] == "matrix"
         if not is_matrix and r["entity_scope"] not in applicable:
             # Out-of-scope fact for this filing level — no cell to land in.
@@ -335,7 +402,8 @@ def export_run_to_xlsx(
     # Both only ever overwrite a cell that still holds the "YYYY" placeholder,
     # so they are self-targeting — never a data, label, or Source cell.
     _stamp_period_headers(
-        wb, reporting_period_cy, reporting_period_py, carry_forward_row1_from
+        wb, reporting_period_cy, reporting_period_py if "PY" in periods else None,
+        carry_forward_row1_from,
     )
 
     # Item 8 / gotcha #22: atomic save so a concurrent reader of the export
