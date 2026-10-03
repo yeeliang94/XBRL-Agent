@@ -422,13 +422,8 @@ def test_sopl_prompt_keeps_loss_expenses_positive():
     assert "impairment loss on trade receivables" in flat
 
 
-def test_socie_mpers_group_section_does_not_advertise_efg_columns():
-    """Negative pin (peer-review H1): MPERS Group SOCIE has only col B
-    per block — no E/F value columns. The prompt previously claimed
-    "Group filings additionally use: E (col=5) = Company CY, F (col=6) =
-    evidence", which contradicted the four-block layout already
-    described elsewhere in the same file. Guard against the line
-    re-appearing in a future edit."""
+def test_socie_mpers_group_section_keeps_scope_in_blocks():
+    """Group scope uses stacked blocks, while E/F remain equity components."""
     body = (_PROMPT_DIR / "socie_mpers.md").read_text(encoding="utf-8")
     flat = _flatten(body)
     # The exact stale phrasings.
@@ -438,10 +433,9 @@ def test_socie_mpers_group_section_does_not_advertise_efg_columns():
     assert "f (col=6) = evidence" not in flat, (
         "socie_mpers.md still advertises a non-existent col F for Group SOCIE"
     )
-    # Positive guidance: explicitly call out NO additional columns.
-    assert "no additional value columns" in flat or "no e/f" in flat, (
-        "socie_mpers.md must explicitly state Group has no E/F value columns"
-    )
+    assert "b (2): issued capital" in flat
+    assert "o (15): total" in flat
+    assert "company - prior period" in flat
 
 
 def test_equity_prompts_follow_dividend_formula_sign():

@@ -9,7 +9,7 @@ the agent to "use explicit `row` and `col` coordinates".
 Measured against the live templates, that is wrong twice:
 
     MFRS  Group SOCIE   24 cols x 97 rows   overlay correct
-    MPERS Group SOCIE    4 cols x 97 rows   column claim wrong
+    MPERS Group SOCIE   16 cols x 97 rows   native MPERS matrix
     MPERS Group SoRE     6 cols x 16 rows   column AND row claim wrong
 
 The failure is silent, which is why this is pinned rather than left to
@@ -68,7 +68,7 @@ def _template_shape(standard: str, variant: str, level: str = "group"):
 
 @pytest.mark.parametrize("standard,variant,cols,rows", [
     ("mfrs", "Default", 24, 97),
-    ("mpers", "Default", 4, 97),
+    ("mpers", "Default", 16, 97),
     ("mpers", "SoRE", 6, 16),
 ])
 def test_live_group_socie_template_shapes(standard, variant, cols, rows):
@@ -87,16 +87,13 @@ def test_mfrs_group_socie_keeps_the_matrix_overlay():
 
 
 def test_mpers_group_socie_never_claims_24_columns():
-    """The MPERS Group SOCIE template has 4 columns. Columns E-X do not
-    exist, so a write there is silently dropped by resolve_cell."""
+    """The native MPERS matrix uses B..O without the MFRS B..X overlay."""
     prompt = _render("mpers", "Default")
     assert MATRIX_MARKER not in prompt
-    # It may only DENY the component columns (socie_mpers.md does), never
-    # assert them.
-    assert "per-equity-component columns" in prompt
-    # The 4-block structure is real on MPERS and must survive — it just
-    # comes from socie_mpers.md rather than the MFRS overlay.
-    assert FOUR_BLOCK_MARKER in prompt
+    assert "B (2): Issued capital" in prompt
+    assert "O (15): Total" in prompt
+    # The MPERS prompt owns its four-block structure.
+    assert "four" in prompt and "stacked blocks" in prompt
     assert "Company - Prior period" in prompt
 
 

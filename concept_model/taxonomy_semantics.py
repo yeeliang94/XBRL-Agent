@@ -175,6 +175,7 @@ def _standard_and_level(path: Path) -> tuple[str, str] | None:
     lowered = [part.lower() for part in path.parts]
     standard = (
         "mpers" if any("xbrl-template-mpers" in part for part in lowered)
+        else "clbg" if any("xbrl-template-clbg" in part for part in lowered)
         else "mfrs" if any("xbrl-template-mfrs" in part for part in lowered)
         else None
     )
@@ -193,6 +194,9 @@ def _role_rows(standard: str, role: str) -> tuple[tuple[int, str, str, bool], ..
     """
     from scripts import generate_mpers_templates as taxonomy
 
+    if standard == "clbg":
+        from scripts.generate_clbg_templates import role_rows
+        return role_rows(role)
     root = Path(__file__).resolve().parent.parent
     tax_dir = root / "SSMxT_2022v1.0/rep/ssm/ca-2016/fs" / standard
     return tuple(taxonomy.walk_role_for_taxonomy(tax_dir, standard, role))
@@ -221,7 +225,11 @@ def _address(primary: str, dimensions: dict[str, str] | None = None) -> dict[str
 
 
 def _linear_addresses(path: Path, standard: str) -> dict[tuple[str, int, str | None], dict[str, Any]]:
-    roles = _ROLES_BY_FILE.get(path.name)
+    if standard == "clbg":
+        from scripts.generate_clbg_templates import TEMPLATES
+        roles = tuple(item[1] for item in TEMPLATES.get(path.name, ()))
+    else:
+        roles = _ROLES_BY_FILE.get(path.name)
     if not roles:
         return {}
     wb = openpyxl.load_workbook(path, read_only=True, data_only=False)
@@ -270,15 +278,28 @@ def _matrix_addresses(path: Path, standard: str, level: str) -> dict[tuple[str, 
     wb = openpyxl.load_workbook(path, read_only=True, data_only=False)
     try:
         ws = wb["SOCIE"] if "SOCIE" in wb.sheetnames else wb[wb.sheetnames[0]]
+        if standard == "clbg":
+            from scripts.generate_clbg_templates import FUND_AXIS, fund_components, fund_line_items
+            return {
+                (ws.title, row, openpyxl.utils.get_column_letter(col)): _address(primary, {FUND_AXIS: member})
+                for row, (_, primary, _, _) in enumerate(fund_line_items(), 6)
+                for col, (member, _, _) in enumerate(fund_components(), 2)
+            }
         taxonomy_rows = list(_role_rows(standard, "610000"))
 
         if standard == "mpers":
-            # MPERS's single value column is not a component dimension.  The
-            # canonical parser starts at Equity and excludes the two title rows.
+            from scripts.generate_mpers_templates import mpers_socie_components
             line_items = taxonomy_rows[2:]
-            # Company begins at row 5; Group has one additional block heading.
-            base_row = 6 if level == "group" else 5
-            rows = list(range(base_row, base_row + len(line_items)))
+            matrix = bool(ws.cell(2, 2).value and ws.cell(2, 15).value == 'Total')
+            base_row = 6 if matrix or level == "group" else 5
+            rows = range(base_row, base_row + len(line_items))
+            if matrix:
+                return {
+                    (ws.title, row, openpyxl.utils.get_column_letter(col)): _address(
+                        primary, {'ifrs-smes_ComponentsOfEquityAxis': member})
+                    for row, (_, primary, _, _) in zip(rows, line_items)
+                    for col, (member, _, _) in enumerate(mpers_socie_components(), 2)
+                }
             return {
                 (ws.title, row, "B"): _address(concept_id)
                 for row, (_depth, concept_id, _label, _abstract) in zip(rows, line_items)

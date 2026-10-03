@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from typing import Literal
 
-DetectedStandard = Literal["mfrs", "mpers", "unknown"]
+DetectedStandard = Literal["mfrs", "mpers", "clbg", "unknown"]
 
 
 # Keyword sets. Patterns are lowercase substrings — callers normalise the
@@ -61,6 +61,8 @@ def detect_filing_standard(text: str) -> DetectedStandard:
     if not text:
         return "unknown"
     lower = text.lower()
+    if _any_hit(lower, ("company limited by guarantee", "companies limited by guarantee", "fs-clbg")):
+        return "clbg"
     has_mpers = _any_hit(lower, _MPERS_KEYWORDS)
     has_mfrs = _any_hit(lower, _MFRS_KEYWORDS)
     if has_mpers and has_mfrs:

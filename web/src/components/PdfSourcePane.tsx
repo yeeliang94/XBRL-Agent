@@ -249,12 +249,14 @@ export function PdfSourcePane({
                     if (sourcesMenuRef.current) sourcesMenuRef.current.open = false;
                   }}
                   aria-label={`Open cited PDF page ${page}`}
+                  aria-current={page === current ? "page" : undefined}
                   style={{
                     ...styles.sourcePageButton,
-                    background: page === current ? pwc.grey100 : pwc.white,
+                    ...(page === current ? ui.reviewSelection : {}),
                   }}
                 >
-                  Page {page}
+                  <span>Page {page}</span>
+                  {page === current && <ChevronRight size={16} style={ui.reviewSelectionMarker} />}
                 </button>
               ))}
             </div>
@@ -445,6 +447,10 @@ const styles = {
     boxShadow: pwc.shadow.elevated,
   } as React.CSSProperties,
   sourcePageButton: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
     width: "100%",
     minHeight: 32,
     padding: `0 ${pwc.space.sm}px`,

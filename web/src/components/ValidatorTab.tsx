@@ -7,7 +7,8 @@ import {
   crossCheckLabel,
   crossCheckParties,
 } from "../lib/vocabulary";
-import type { CrossCheckResult } from "../lib/types";
+import type { CrossCheckComparand, CrossCheckResult } from "../lib/types";
+import { STATEMENT_LABELS } from "../lib/types";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -55,6 +56,21 @@ function advisoryName(name: string): string {
   return name.replace(/\s*↔\s*/g, " and ");
 }
 
+function figureRows(comparands: CrossCheckComparand[]) {
+  const rows = new Map<string, { label: string; source: string; values: Map<string, CrossCheckComparand> }>();
+  for (const figure of comparands) {
+    const key = JSON.stringify([figure.label, figure.sheet, figure.role]);
+    const row = rows.get(key) ?? {
+      label: figure.label.replace(/\s*\[company\]/gi, " (Company)"),
+      source: STATEMENT_LABELS[figure.statement as keyof typeof STATEMENT_LABELS] ?? "",
+      values: new Map(),
+    };
+    row.values.set(figure.period, figure);
+    rows.set(key, row);
+  }
+  return [...rows.values()];
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -82,107 +98,52 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
           Group filing: cross-checks currently validate consolidated (Group) figures only. Standalone (Company) columns are not yet checked.
         </p>
       )}
-      {numericChecks.length > 0 && (
-        <table style={styles.table}>
-          <thead>
-            <tr>
-              <th style={styles.th}>Check</th>
-              <th style={styles.th}>Status</th>
-              <th style={styles.th}>Compared figures</th>
-              <th style={{ ...styles.th, textAlign: "right" }}>Difference</th>
-              <th style={styles.th}>Explanation</th>
-            </tr>
-          </thead>
-          <tbody>
-            {numericChecks.map((check) => {
-              const display = STATUS_DISPLAY[check.status];
-              const [firstName, secondName] = crossCheckParties(check.name);
-              const checkLabel = check.status === "failed"
-                ? crossCheckFailureLabel(check.name)
-                : crossCheckLabel(check.name);
-              const isMuted = check.status === "not_applicable";
-              // Clickable only when the host wired a handler AND this check
-              // carries a resolved target cell.
-              const clickable =
-                onSelectTarget != null &&
-                check.target_sheet != null &&
-                check.target_row != null;
-              return (
-                <tr
-                  key={check.name}
-                  data-testid={`cross-check-row-${check.name}`}
-                  onClick={
-                    clickable
-                      ? () => onSelectTarget!(check.target_sheet!, check.target_row!)
-                      : undefined
-                  }
-                  role={clickable ? "button" : undefined}
-                  tabIndex={clickable ? 0 : undefined}
-                  onKeyDown={clickable ? (event) => {
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      onSelectTarget!(check.target_sheet!, check.target_row!);
-                    }
-                  } : undefined}
-                  style={{
-                    ...(isMuted ? styles.rowMuted : styles.row),
-                    cursor: clickable ? "pointer" : "default",
-                  }}
-                >
-                  <td style={styles.td}>
-                    {/* Plain-language check name; the raw snake_case id stays
-                        available as a tooltip for anyone who needs it (D1). */}
-                    <span title={check.name}>{checkLabel}</span>
-                  </td>
-                  <td style={styles.td}>
-                    {/* Keyed on status so a live pending→passed/failed flip
-                        remounts the pill and crossfades to the new colour/label
-                        instead of snapping. */}
-                    <span
-                      key={check.status}
-                      className="pwc-status-change"
-                      style={{
-                        ...ui.status,
-                      }}
-                    >
-                      <StatusIcon symbol={display.symbol} />
-                      {display.label}
-                    </span>
-                  </td>
-                  <td style={styles.td}>
-                    <div style={styles.figurePair}>
-                      <span>{firstName}: <strong>{fmtCheckAmount(check.expected)}</strong></span>
-                      <span>{secondName}: <strong>{fmtCheckAmount(check.actual)}</strong></span>
-                    </div>
-                  </td>
-                  <td style={{ ...styles.td, ...ui.numeric }}>
-                    {fmtCheckAmount(check.diff)}
-                  </td>
-                  <td style={{ ...styles.td, fontSize: 14, color: pwc.grey700 }}>
-                    {check.status === "not_applicable" ? (
-                      <span>This check does not apply to the selected filing standard or available disclosures.</span>
-                    ) : check.status === "blocked" ? (
-                      <span>A required statement did not finish. This comparison could not run.</span>
-                    ) : check.status === "pending" ? (
-                      <span>Waiting for the required statement before this comparison can run.</span>
-                    ) : check.status === "failed" ? (
-                      <span>{firstName} and {secondName.toLowerCase()} differ. Review the linked figures before filing.</span>
-                    ) : (
-                      <span>{firstName} and {secondName.toLowerCase()} agree.</span>
-                    )}
-                    {check.message && (
-                      <details style={styles.technicalDetails}>
-                        <summary>Technical details</summary>
-                        <code>{check.message}</code>
-                      </details>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      )}
+      <div style={styles.checkList}>
+        {numericChecks.map((check) => {
+          const display = STATUS_DISPLAY[check.status];
+          const label = check.status === "failed" ? crossCheckFailureLabel(check.name) : crossCheckLabel(check.name);
+          const rows = figureRows(check.comparands ?? []);
+          const periods = ["CY", "PY", ...new Set((check.comparands ?? []).map((figure) => figure.period).filter((period) => period !== "CY" && period !== "PY"))];
+          const [first, second] = crossCheckParties(check.name);
+          const hasValues = check.status === "passed" || check.status === "failed";
+          const target = onSelectTarget && check.target_sheet != null && check.target_row != null;
+          return (
+            <section key={check.name} aria-label={label} data-testid={`cross-check-row-${check.name}`} style={styles.check}>
+              <div style={styles.checkHeader}>
+                <h4 style={styles.checkTitle}><span title={check.name}>{label}</span></h4>
+                <span style={ui.status}><StatusIcon symbol={display.symbol} />{display.label}</span>
+                {target && <button type="button" style={{ ...ui.buttonQuiet, ...ui.buttonSm }} onClick={() => onSelectTarget!(check.target_sheet!, check.target_row!)}>Review figures</button>}
+              </div>
+              {hasValues ? (
+                <div role="region" aria-label={`${label} compared figures`} tabIndex={0} style={styles.tableRegion}>
+                  <table aria-label={label} style={styles.table}>
+                    <thead><tr>
+                      <th scope="col" style={{ ...styles.th, width: "50%" }}>Compared figure</th>
+                      {rows.length > 0 ? periods.map((period) => <th key={period} scope="col" style={{ ...styles.th, ...ui.numeric }}>{period === "CY" ? "Current year" : period === "PY" ? "Previous year" : period}</th>) : <th scope="col" style={{ ...styles.th, ...ui.numeric }}>Saved comparison</th>}
+                    </tr></thead>
+                    <tbody>
+                      {rows.length > 0 ? rows.map((row, index) => (
+                        <tr key={index}>
+                          <th scope="row" style={styles.figureLabel}>{row.label}{row.source && <div style={styles.sourceLabel}>{row.source}</div>}</th>
+                          {periods.map((period) => <td key={period} style={styles.number}>{fmtCheckAmount(row.values.get(period)?.value)}</td>)}
+                        </tr>
+                      )) : <>
+                        <tr><th scope="row" style={styles.figureLabel}>{first}</th><td style={styles.number}>{fmtCheckAmount(check.expected)}</td></tr>
+                        <tr><th scope="row" style={styles.figureLabel}>{second}</th><td style={styles.number}>{fmtCheckAmount(check.actual)}</td></tr>
+                      </>}
+                    </tbody>
+                  </table>
+                </div>
+              ) : <p style={styles.note}>{check.status === "blocked" ? "A required statement did not finish. This comparison could not run." : check.status === "pending" ? "Waiting for the required statement before this comparison can run." : "This check does not apply to the selected filing standard or available disclosures."}</p>}
+              {hasValues && <div style={styles.checkFooter}>
+                <span>Summary difference <strong style={ui.numeric}>{fmtCheckAmount(check.diff)}</strong></span>
+                {rows.length === 0 ? <span style={styles.footerNote}>Year detail was not saved for this check. Rerun checks to refresh.</span> : rows.some((row) => periods.some((period) => row.values.get(period)?.value == null)) && <span style={styles.footerNote}>— No saved figure for this year</span>}
+              </div>}
+              {check.message && <details style={styles.technicalDetails}><summary>Technical details</summary><p style={styles.detailText}>{check.message}</p></details>}
+            </section>
+          );
+        })}
+      </div>
 
       {warningChecks.length > 0 && (
         <div style={styles.warningsSection}>
@@ -230,42 +191,30 @@ const styles = {
   } as React.CSSProperties,
   table: {
     width: "100%",
-    minWidth: 720,
+    minWidth: 460,
+    tableLayout: "fixed" as const,
     borderCollapse: "collapse" as const,
     fontSize: 14,
     fontFamily: pwc.fontBody,
   } as React.CSSProperties,
-  figurePair: {
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: 2,
-    fontVariantNumeric: "tabular-nums",
-  } as React.CSSProperties,
-  technicalDetails: {
-    marginTop: pwc.space.xs,
-    color: pwc.grey500,
-    overflowWrap: "anywhere" as const,
-  } as React.CSSProperties,
+  checkList: { display: "grid", gap: pwc.space.lg, minWidth: 0 } as React.CSSProperties,
+  check: { border: `1px solid ${pwc.grey200}`, borderRadius: pwc.radius.md, overflow: "hidden", minWidth: 0 } as React.CSSProperties,
+  checkHeader: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: pwc.space.md, padding: pwc.space.md, background: pwc.grey50 } as React.CSSProperties,
+  checkTitle: { flex: "1 1 300px", fontFamily: pwc.fontHeading, fontSize: 14, fontWeight: pwc.weight.semibold, margin: 0, overflowWrap: "anywhere" } as React.CSSProperties,
+  tableRegion: { overflowX: "auto", maxWidth: "100%" } as React.CSSProperties,
+  figureLabel: { textAlign: "left", fontWeight: pwc.weight.regular, padding: `${pwc.space.sm}px ${pwc.space.md}px`, borderBottom: `1px solid ${pwc.grey100}`, overflowWrap: "anywhere" } as React.CSSProperties,
+  sourceLabel: { color: pwc.grey700, fontSize: 12, marginTop: pwc.space.xs } as React.CSSProperties,
+  number: { ...ui.numeric, padding: `${pwc.space.sm}px ${pwc.space.md}px`, borderBottom: `1px solid ${pwc.grey100}`, whiteSpace: "nowrap" } as React.CSSProperties,
+  checkFooter: { display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: pwc.space.sm, padding: pwc.space.md, fontSize: 13 } as React.CSSProperties,
+  note: { color: pwc.grey700, fontSize: 13, margin: pwc.space.md } as React.CSSProperties,
+  footerNote: { color: pwc.grey700 } as React.CSSProperties,
+  technicalDetails: { padding: `0 ${pwc.space.md}px ${pwc.space.md}px`, fontSize: 13, color: pwc.grey700, overflowWrap: "anywhere" } as React.CSSProperties,
+  detailText: { margin: `${pwc.space.sm}px 0 0`, lineHeight: 1.5, overflowWrap: "anywhere" } as React.CSSProperties,
   // Sentence-case headers (design-system Tables), compact density.
   th: {
     ...ui.thDense,
     background: "transparent",
     borderBottom: `2px solid ${pwc.grey200}`,
-  } as React.CSSProperties,
-  td: {
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-    borderBottom: `1px solid ${pwc.grey100}`,
-    verticalAlign: "middle" as const,
-  } as React.CSSProperties,
-  row: {} as React.CSSProperties,
-  rowMuted: {
-    opacity: 0.5,
-  } as React.CSSProperties,
-  // Status pill (PASS / FAIL / WARNING). Geometry comes from the shared
-  // pill primitive; the dynamic colour/background is overridden per status
-  // at the call sites.
-  badge: {
-    ...ui.badge,
   } as React.CSSProperties,
   empty: {
     padding: pwc.space.xl,

@@ -67,9 +67,7 @@ class SOPLToSOCIEProfitCheck:
                 blank_formula_as_none=spec.period == "PY"), sopl_ws.title)
             block = socie_period_block(
                 filing_standard, filing_level, spec.entity_scope, spec.period)
-            if filing_standard == "mpers":
-                base_col = 2
-            elif block is None:
+            if block is None:
                 base_col = socie_column(socie_ws, filing_standard=filing_standard)
             else:
                 base_col = socie_column(

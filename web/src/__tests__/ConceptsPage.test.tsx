@@ -1130,7 +1130,7 @@ describe("ConceptsPage", () => {
     expect(
       screen.getByText("Unused disclosure").closest('[data-testid="notes-review-row"]'),
     ).toHaveStyle({ background: pwc.white });
-    expect(screen.getByText("Unused disclosure").closest("aside")).toHaveStyle({ background: pwc.grey100 });
+    expect(screen.getByText("Unused disclosure").closest("aside")).toHaveStyle({ background: "transparent" });
     expect(screen.queryAllByTestId(/^source-note-/).some(
       (note) => note.getAttribute("aria-current") === "true",
     )).toBe(false);

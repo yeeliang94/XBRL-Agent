@@ -36,6 +36,14 @@ describe("AgentTabs", () => {
     expect(screen.getByText("Cross-checks")).toBeTruthy();
   });
 
+  test("CLBG live workstreams use income and funds labels", () => {
+    const agents = makeAgentStates();
+    render(<AgentTabs agents={agents} tabOrder={["sopl_0", "socie_0"]}
+      activeTab="sopl_0" onTabClick={() => {}} filingStandard="clbg" />);
+    expect(screen.getByText("Income and expenditure")).toBeInTheDocument();
+    expect(screen.getByText("Changes in funds")).toBeInTheDocument();
+  });
+
   test("clicking a tab calls onTabClick with the agentId", () => {
     const agents = makeAgentStates();
     const clicked: string[] = [];

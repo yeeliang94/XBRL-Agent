@@ -3,9 +3,9 @@
 Root cause: render_prompt() dispatches SOCIE-Default to `prompts/socie.md`
 regardless of filing_standard. That file is MFRS-specific — it describes a
 24-column matrix and hardcodes row numbers (6-25 CY, 30-49 PY) that only
-exist in the MFRS template. On MPERS Company the template is a flat 2-col
-layout with 24 rows; on MPERS Group the same labels repeat across four
-vertical blocks. The MFRS row-coordinate instructions misfire on both.
+exist in the MFRS template. MPERS uses its own 14-component matrix and
+native reserve members. Its period/scope blocks are separate from the
+MFRS component and movement instructions.
 
 Fix contract: a new `prompts/socie_mpers.md` takes precedence over `socie.md`
 when filing_standard="mpers" (and the variant isn't a dedicated MPERS variant
@@ -44,13 +44,15 @@ class TestMpersSocieDefaultPrompt:
         # Group path must still load the MPERS-native file, not the MFRS default.
         assert "mpers" in prompt.lower()
 
-    def test_does_not_claim_matrix_template(self):
+    def test_describes_mpers_component_matrix(self):
         prompt = self._render()
         # The MFRS SOCIE prompt explicitly calls the template a matrix —
         # that's wrong on MPERS. Any positive marker for matrix layout is
         # a regression.
-        assert "matrix template" not in prompt.lower()
-        assert "matrix layout" not in prompt.lower()
+        assert 'matrix layout' in prompt.lower()
+        assert 'O (15): Total' in prompt
+        assert 'I, K, L or O' in prompt
+        assert 'source closing balance' in prompt
 
     def test_does_not_hardcode_mfrs_row_ranges(self):
         prompt = self._render()

@@ -192,12 +192,24 @@ def test_get_run_detail_returns_full_payload(api_env):
         config={"statements": ["SOFP", "SOPL"], "variants": {}, "models": {}, "denomination": "thousands", "use_scout": False, "infopack": None},
         agent_models=[("SOFP", "gemini-3-flash"), ("SOPL", "gpt-5.4")],
     )
+    figures = [
+        {"label": "Total assets", "sheet": "SOFP", "value": value,
+         "role": "lhs", "statement": "SOFP", "row": 30, "period": period}
+        for period, value in [("CY", 100), ("PY", 80)]
+    ]
+    with repo.db_session(db_path) as conn:
+        repo.save_cross_check(conn, run_id, check_name="sofp_balance", status="passed",
+                              comparands_json=json.dumps(figures))
+        repo.save_cross_check(conn, run_id, check_name="legacy", status="passed")
     body = client.get(f"/api/runs/{run_id}").json()
     assert body["id"] == run_id
     assert body["pdf_filename"] == "finco.pdf"
     assert body["session_id"] == "detail"
     assert {a["statement_type"] for a in body["agents"]} == {"SOFP", "SOPL"}
     assert body["config"]["statements"] == ["SOFP", "SOPL"]
+    checks = {check["name"]: check for check in body["cross_checks"]}
+    assert checks["sofp_balance"]["comparands"] == figures
+    assert checks["legacy"]["comparands"] == []
 
 
 def test_get_run_detail_exposes_agent_error_message(api_env):

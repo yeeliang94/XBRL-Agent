@@ -80,10 +80,10 @@ def test_financial_reporting_status_is_context_not_a_writable_note_target():
 def test_all_active_variants_have_complete_writable_semantics():
     audit = audit_active_templates(ROOT)
 
-    assert audit["templates"] == 58
-    assert audit["worksheets"] == 74
-    assert audit["numeric_slots"] == 7988
-    assert audit["prose_slots"] == 688
+    assert audit["templates"] == 67
+    assert audit["worksheets"] == 86
+    assert audit["numeric_slots"] == 10292
+    assert audit["prose_slots"] == 815
     assert audit["unclassified_slots"] == 0
     assert audit["missing_required_mappings"] == []
     assert audit["structural_writable_slots"] == []
@@ -107,7 +107,7 @@ def test_all_active_variants_have_complete_writable_semantics():
             "14-Notes-RelatedParty.xlsx",
         }
     ]
-    assert len(numeric_notes) == 4
+    assert len(numeric_notes) == 5
     assert all(item["writable_slots"] > 0 for item in numeric_notes)
     assert all(item["mapped_writable_slots"] == item["writable_slots"] for item in numeric_notes)
 

@@ -22,7 +22,11 @@ describe("XBRL design system is the production authority", () => {
   });
 
   test("keeps notes field hierarchy and coverage in the source inventory", () => {
-    expect(designSystem).toContain("grey disclosure field header above white note content");
+    expect(designSystem).toContain("plain bold field headings above white note content");
+    expect(designSystem).toContain("Selected Notes items use bold black text and a small right-pointing chevron without a fill");
+    expect(designSystem).toContain("Comparison pairs share one field heading and shared grid rows for actions, editing tools and content");
+    expect(designSystem).toContain("Give every extracted note block a thin Grey 300 border, including unselected previews");
+    expect(designSystem).toContain("Give human note blocks the same thin neutral border");
     expect(designSystem).toContain("do not repeat the checklist below the editor");
     expect(designSystem).toContain("without warning counts or repeated review banners");
     expect(designSystem).toContain("Keep incomplete output, failed saves, and actionable filing issues visible");
@@ -71,6 +75,8 @@ describe("XBRL design system is the production authority", () => {
     expect(ui.readingText).toMatchObject({ fontSize: 14, lineHeight: 1.6, maxWidth: "70ch" });
     expect(designSystem).toContain("Spacing and reading rhythm");
     expect(designSystem).toContain("Forms, tables and dialogs");
+    expect(designSystem).toContain("aligned current-year and previous-year columns");
+    expect(designSystem).toContain("Show saved summaries without a year label when period detail is unavailable");
     expect(designSystem).not.toContain('aria-label="More actions"');
   });
 });
@@ -213,6 +219,7 @@ describe("Simplified template-oriented review", () => {
       "immediately returns the PDF to the source note's cited page",
       "description columns receive priority and wrap",
       "Long selected notes scroll vertically inside a bounded preview",
+      "Align mTool worksheets, Note content and Source PDF in one shared 44px heading band",
     ]) {
       expect(designSystem).toContain(requirement);
     }

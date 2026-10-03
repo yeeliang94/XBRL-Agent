@@ -978,7 +978,7 @@ export function ConceptsPage({
   const attentionCount =
     failingChecks.length + totalOpenConflicts;
   const pdfColumn = (
-    <div className="review-source-column" style={{ ...styles.column, flex: `0 1 ${pdfWidth}px`, width: pdfWidth, maxWidth: "34%" }}>
+    <div className="review-source-column" style={{ ...styles.column, ...(notesActive ? { overflow: "hidden" } : {}), flex: `0 1 ${pdfWidth}px`, width: pdfWidth, maxWidth: "34%" }}>
       <ColumnHeader
         title="Source PDF"
         testId="pdf"
@@ -988,6 +988,7 @@ export function ConceptsPage({
           evidence pages so a reviewer can eyeball the figure against the
           document without leaving the page (M1). `embedded` because the
           column header above already says "Source PDF" and owns Hide. */}
+      <div style={notesActive ? { minHeight: 0, overflowY: "auto", scrollbarWidth: "thin" } : undefined}>
       <PdfSourcePane
         runId={runId}
         pages={pdfPages}
@@ -995,6 +996,7 @@ export function ConceptsPage({
         embedded
         hasSelection={notesActive ? notesCellSelected : selectedConcept != null}
       />
+      </div>
       {/* Field details — the technical metadata (template, cell, source,
           evidence) for the selected value. Collapsed by default so the everyday
           view stays label + figures; opened on demand (review-workspace
@@ -1541,11 +1543,11 @@ function ConceptTree({
         {/* "Line item" (accountant vocabulary), not the internal "Concept"
             codename — plain-language rule (CLAUDE.md "talk like a product
             person"). Numeric column headers right-align over their figures. */}
-        <div style={styles.headerCell}>Line item</div>
-        <div style={styles.headerCellNumeric}>{showPeriods ? cyLabel : "Value"}</div>
-        {human && <div style={styles.headerCellNumeric}>{showPeriods ? "Human CY" : "Human"}</div>}
-        {showPeriods && <div style={styles.headerCellNumeric}>{pyLabel}</div>}
-        {human && showPeriods && <div style={styles.headerCellNumeric}>Human PY</div>}
+        <div role="columnheader" style={styles.headerCell}>Line item</div>
+        <div role="columnheader" style={styles.headerCellNumeric}>{human ? "Extracted " : ""}{showPeriods ? cyLabel : "Value"}</div>
+        {human && <div role="columnheader" style={styles.headerCellNumeric}>Human {showPeriods ? cyLabel : "value"}</div>}
+        {showPeriods && <div role="columnheader" style={styles.headerCellNumeric}>{human ? "Extracted " : ""}{pyLabel}</div>}
+        {human && showPeriods && <div role="columnheader" style={styles.headerCellNumeric}>Human {pyLabel}</div>}
 
       </div>
       {visibleRows.map((r) => (
@@ -1757,8 +1759,8 @@ function ConceptMatrixGrid({
             title={`${col} ${period}`}
           >
             {isHuman
-              ? (showPeriods ? `Human ${period}` : "Human")
-              : showPeriods ? (period === "CY" ? cyLabel : pyLabel) : "Value"}
+              ? `Human ${showPeriods ? (period === "CY" ? cyLabel : pyLabel) : "value"}`
+              : `${human ? "Extracted " : ""}${showPeriods ? (period === "CY" ? cyLabel : pyLabel) : "Value"}`}
           </div>
         ))}
       </div>
@@ -2491,7 +2493,8 @@ function EditableValueCell({
           boxSizing: "border-box",
           minWidth: 0,
           textAlign: "right",
-          padding: `${pwc.space.xs}px ${pwc.space.md}px`,
+          height: 32,
+          padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
           border: `1px solid ${
             status === "error"
               ? pwc.error
@@ -2579,11 +2582,8 @@ const styles = {
   // column titles and the Rows filter share one line and the search box,
   // table and PDF card below them all start at the same height.
   columnHeader: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
+    ...ui.reviewPaneHeader,
     minHeight: REVIEW_HEADER_HEIGHT,
-    padding: `0 ${pwc.space.xs}px`,
   } as React.CSSProperties,
   columnHeaderTitle: {
     fontFamily: pwc.fontHeading,

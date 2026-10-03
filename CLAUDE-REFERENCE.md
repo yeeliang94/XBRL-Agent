@@ -605,6 +605,10 @@ mTool file per run; the comparison is computed on read).
 
 ### 12. Filing level — Company vs Group
 
+Reporting-period cardinality is a separate axis: `first_financial_statements`
+selects only CY after incorporation for either entity level. See invariant 23's
+single-period contract and pinning tests.
+
 Each run has one `filing_level` (`"company"` or `"group"`, default
 `"company"`) that flows end-to-end: `RunConfigRequest` → `RunConfig` →
 `template_path()` → agent prompts → verifier → cross-checks → history.
@@ -619,7 +623,7 @@ Each run has one `filing_level` (`"company"` or `"group"`, default
   | Template | Cols | Rows | Group overlay applied |
   |---|---|---|---|
   | MFRS Group SOCIE | 24 | 97 | `_group_socie_overlay.md` (matrix) |
-  | MPERS Group SOCIE | 4 | 97 | none — `socie_mpers.md` describes the blocks |
+  | MPERS Group SOCIE | 16 | 97 | none — `socie_mpers.md` describes the component blocks |
   | MPERS Group SoRE | 6 | 16 | `_group_overlay.md` (plain 6-col) |
 
   **`_group_socie_overlay.md` must never be applied outside MFRS Default.**
@@ -964,8 +968,31 @@ Key invariants:
   `variant=SoRE`.
 - Server rejects variant/standard mismatches (e.g. `SOCIE/SoRE` on MFRS)
   before launching any agent.
-- **Always run the generator with `--snapshot`** so the previous version
-  lands in `backup-originals/` for schema-drift diffing.
+- **Always run the generator with `--snapshot`**. Existing `backup-originals/`
+  snapshots are immutable. Use `--snapshot-dir` for a fresh before/after audit
+  directory and `--filename` when regenerating only the changed workbook.
+- **MPERS SOCIE captures full equity components.** Company has two vertical
+  period blocks; Group has four period/scope blocks. The definition linkbase
+  supplies fourteen components in B–O, with Total in O and Source in P.
+  Subtotal columns follow the taxonomy hierarchy. Opening, restated opening
+  and closing primitive balances remain source inputs and are verified against
+  the movement equations. The linear SoRE variant remains B=CY/C=PY.
+  Component concepts use new MPERS-only identities so historical aggregate B
+  facts cannot silently become issued capital. MFRS identities and B–X geometry
+  stay unchanged. When exporting historical aggregate facts into the component
+  matrix, resolve the Total target by taxonomy identity, row label, period and
+  entity scope, and retain the aggregate literal without changing stored facts.
+  Missing, ambiguous or overlapping targets must fail before saving the workbook.
+  Pinned by `tests/test_canonical_export.py`, `tests/test_socie_parser_matrix.py`,
+  `tests/test_mtool_socie_input_totals.py` and `tests/test_verifier_shadow.py`.
+- **CLBG is an explicit filing family.** `XBRL-template-CLBG/Company/` is
+  generated from the CLBG SSM linkbases. SOPL routes to income and expenditure;
+  SOCIE routes to changes in fund. Fund dimensions are not equity dimensions.
+  CLBG has no standalone SOCI, issued-capital note, direct SOCF or liquidity-order
+  SOFP. Unsupported Group requests are rejected before extraction. The exact
+  fund checks are selected only for CLBG; MFRS retains its existing check list.
+  Pinned by `tests/test_clbg_filing.py`, `tests/test_verifier_shadow.py` and
+  `tests/test_mtool_filing_resolution.py`.
 - **Template formatting parity with MFRS (2026-04-23):** the MPERS
   generator (`scripts/generate_mpers_templates.py`) now strips SSM
   ReportingLabel suffixes (`[text block]` / `[textblock]` /
@@ -993,8 +1020,8 @@ Key invariants:
   system prompt so agents pick from the live MPERS vocabulary, not
   their MFRS training prior. SOCIE cross-checks (`socie_to_sofp_equity`,
   `sopl_to_socie_profit`, `soci_to_socie_tci`) branch on
-  `filing_standard`: MPERS reads col B (2), MFRS keeps col X (24) for
-  equity/TCI and the NCI-aware col 24/3 for profit.
+  `filing_standard`: MPERS Default reads Total col O (15), MFRS keeps col X
+  (24) for equity/TCI and the NCI-aware col 24/3 for profit. SoRE stays linear.
 - **Prompt-file precedence (`prompts/__init__.py`):** variant-specific
   `{stmt}_{variant}.md` wins over filing-standard-specific
   `{stmt}_{standard}.md`, which wins over the generic `{stmt}.md`.
@@ -1438,6 +1465,12 @@ catch-all "balancing amount" plugs):
   printed zero or dash. Without that receipt the whole call is refused before
   workbook or canonical fact writes. Pinned by
   `tests/test_extraction_canonical_projection.py`.
+- **Manifest presentation slots are not scalar inputs.** A style-derived LEAF
+  can be a reviewed presentation-only title. When authoritative slots exist,
+  the scalar facts API requires a writable slot for a non-formula concept.
+  Formula aggregate-only overrides retain their existing status guard, and
+  manifest-free legacy/synthetic nodes retain their kind guards. Pinned by
+  `tests/test_facts_api.py::test_manifest_presentation_title_is_not_numeric_input`.
 - **Verifier feedback is non-directive**: `tools/verifier.py` SOFP
   imbalance feedback carries the diagnostic ("equity+liabilities side is
   lower than assets") AND an explicit "do NOT plug a catch-all row".
@@ -1831,12 +1864,38 @@ instead of leaving a canonical row with no workbook artifact. Pinned by
 
 ### 23. Human-file comparison — read by address, compared on read
 
+Resolved statement variants are persisted after extraction, including automatic
+Scout/default selection. Historical runs missing that config map may use a
+unique terminal `run_agents.variant`; Scout hints and registry defaults must
+never invent the historical layout. Pinned by
+`tests/test_cli_canonical_pipeline.py` and `tests/test_human_file_ingest.py`.
+
+`first_financial_statements=true` means first statements after incorporation,
+not first-time adoption. It is a run-level single-CY filing shape independent of
+standard, entity level and statement variant. Prior-period writes are refused
+before scratch-workbook mutation and canonical persistence. Export, preview,
+review and human comparison omit PY rather than creating zeros or dates;
+internal comparative template grids may remain but their PY targets are blank.
+The operator selects Reporting periods in filing setup, or uses CLI
+`--first-financial-statements`. Pinned by `tests/test_cli_canonical_pipeline.py`,
+`tests/test_extraction_canonical_projection.py`, `tests/test_canonical_export.py`,
+`tests/test_result_preview_canonical.py`, `tests/test_concepts_routes.py`, and
+`PreRunPanel` frontend tests.
+
 A user attaches the mTool workbook a person filled for the same document to a
 completed run and compares it with the run's current values
 (docs/human-mtool-file-comparison-plan.md). It replaced the gold-benchmark
 flow. The file belongs to one run only; there is no reusable answer key.
 
 Load-bearing invariants:
+
+- Native Group consolidation markers define Company/Group scope independently
+  of category axes. SOCIE destinations are constrained by exact component,
+  period and scope. FirstTime exports use CY only; absent comparative sections
+  never receive invented writes. MPERS and CLBG full matrices carry their own
+  component axes; shared MFRS namespaces do not make a CLBG fund workbook MFRS.
+  Pinned by `tests/test_mtool_filing_resolution.py`,
+  `tests/test_mtool_socie_input_totals.py` and `tests/test_clbg_filing.py`.
 
 - **One file per finished run (schema v49).** `human_files`,
   `human_file_facts` and `human_file_notes` cascade on run delete. Attach,
@@ -2207,10 +2266,14 @@ Load-bearing invariants:
   maps to EquityMember only alongside the matching table/axis metadata.
   Pinned by `tests/test_mtool_protected_inputs.py` and
   `tests/test_mtool_socie_input_totals.py`.
-- **MPERS native destinations retain canonical identity.** The standalone
+- **Native destinations retain canonical identity.** The standalone
   patcher's `resolve_sheet_name` is shared by numeric detection/resolution and
-  prose filling. Only observed sheet-name equivalents backed by the MPERS
-  taxonomy markers may resolve; ambiguous names and wrong-standard templates
+  prose filling and human-file category expansion. Observed MPERS sheet-name
+  equivalents require the exact taxonomy marker. CLBG equivalents require both
+  the exact CLBG role URI and the corresponding taxonomy marker: related-party
+  transactions (role 640000), SOFP subclassification (210100), and material
+  accounting policies (620000). Shared MFRS namespace prefixes alone do not
+  establish CLBG identity. Ambiguous names and wrong-standard templates
   remain blocked. Known filing-standard, Company/Group, or statement-family
   mismatches return a named 422 before numeric or notes writes; they are not
   partial-fill cases. Selection checks both canonical and resolved physical sheets.
@@ -2375,6 +2438,17 @@ Load-bearing invariants:
   `tests/test_mtool_routes.py`. The `MtoolFillModal` web tests pin the simplified
   skip-and-report flow; `FilingCoverageFailurePanel` tests cover that standalone
   component, not a destination picker in the modal.
+  The notes review category action instead updates the canonical fact itself:
+  one source-confirmed period and entity at a time, with explicit taxonomy
+  membership and evidence. It moves the unresolved instance atomically, journals
+  both removal and addition, preserves the original snapshot, invalidates source
+  receipts, and refuses stale values, existing category facts, open conflicts,
+  foreign template families and inapplicable periods. It never guesses a class
+  or copies classification across years. Pinned by
+  `tests/test_numeric_dimensions.py` and `NotesReviewTab` web tests.
+  FirstTime numeric Notes expose only active current-period values and category
+  tokens; retained historical comparative facts remain stored, not editable
+  through the current-period-only view.
   Dimensional year markers are resolved per column as well as per row block;
   adjacent CY/PY columns must never share a destination. Collisions return
   structured partial coverage naming every affected figure and retaining its
@@ -2544,6 +2618,19 @@ primary input).
   rule — this bullet must not drift from it again.
 - **No DB schema change** — files live on disk (hybrid-storage, gotcha #6). The
   inert `doc_conversions` table (gotcha #11) is NOT reused.
+
+Word preparation checks conversion and capture separately. The converted PDF
+must retain the native Word lexical-content denominator; missing content fails
+conversion validation. Reading order, dot leaders and implicit decimal HTML
+list markers do not establish loss by themselves. Capture gaps remain unresolved
+even when a native structural assessment claims clean; publish best-effort
+receipts with `native_structure_verified=false` and page uncertainties. An
+incomplete native structural assessment likewise remains unresolved, with
+`native_assessment_complete=false`; its retained receipt may be reused without
+certifying the source as clean. Lexical
+containment never certifies structural equivalence. Pinned by
+`tests/test_document_preparation.py` (missing native content, representation
+changes, and retained capture uncertainty).
 
 Pinned by `tests/test_word_convert.py`, `test_docx_html.py`,
 `test_notes_source_snippets.py`, `test_notes_source_prompt.py`,

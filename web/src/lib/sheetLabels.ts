@@ -53,6 +53,10 @@ const STATEMENT_SUBTITLES: Record<string, string> = {
  *  statement code isn't recognised (the raw id is already shown as the name). */
 export function templateSubtitle(templateId: string): string | null {
   const code = statementCode(templateId);
+  if (templateId.startsWith("clbg-")) {
+    if (code === "sopl") return "Income and expenditure";
+    if (code === "socie") return "Changes in funds";
+  }
   return code == null ? null : STATEMENT_SUBTITLES[code] ?? null;
 }
 
@@ -78,7 +82,11 @@ export function templateSortKey(templateId: string): number {
 /** Plain-language subtitle for a BARE statement code ("SOFP" → "Balance
  *  sheet"), or null if unrecognised. Sibling of templateSubtitle for callers
  *  (the Activity tab) that hold the raw statement_type, not a template_id. */
-export function statementCodeSubtitle(code: string): string | null {
+export function statementCodeSubtitle(code: string, standard?: unknown): string | null {
+  if (standard === "clbg") {
+    if (code.toUpperCase() === "SOPL") return "Income and expenditure";
+    if (code.toUpperCase() === "SOCIE") return "Changes in funds";
+  }
   return STATEMENT_SUBTITLES[code.toLowerCase()] ?? null;
 }
 
@@ -160,7 +168,7 @@ const TEMPLATE_NOTES_NAMES: Record<string, string> = {
   relatedpartytran: "Related Party Transactions",
 };
 
-const TEMPLATE_ID_RE = /^(mfrs|mpers)-(company|group)-(.+)-v\d+$/;
+const TEMPLATE_ID_RE = /^(mfrs|mpers|clbg)-(company|group)-(.+)-v\d+$/;
 
 function titleCase(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);

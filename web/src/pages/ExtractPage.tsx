@@ -605,6 +605,7 @@ export function ExtractPage({
       {showActivity && (state.isRunning || state.agentTabOrder.length > 0) && (
         <div className="multi-agent-workspace" style={styles.activitySection}>
           <AgentTabs
+            filingStandard={state.lastRunConfig?.filing_standard}
             agents={agentTabsAgents}
             tabOrder={agentTabsOrder}
             // Fallback to "" when both activeTab and agentTabOrder are empty

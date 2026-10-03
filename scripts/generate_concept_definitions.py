@@ -27,6 +27,7 @@ taxonomy upgrade.
 from __future__ import annotations
 
 import json
+import argparse
 import re
 import sys
 import xml.etree.ElementTree as ET
@@ -71,6 +72,11 @@ _DOCUMENTATION_ROLE = re.compile(r"/ReportingDocumentation$")
 # Concepts with no SSM documentation simply won't appear; the tool returns an
 # explicit no-match for them.
 _DOC_LINKBASES: dict[str, list[Path]] = {
+    "clbg": [
+        _REPO_ROOT / "SSMxT_2022v1.0/rep/ssm/ca-2016/fs/clbg/doc_en-ssmt-fs-clbg_2022-12-31.xml",
+        _REPO_ROOT / "SSMxT_2022v1.0/def/ic/cor-ca2016/ssmt-mfrs-cor/doc_ssmt-mfrs-cor_2022-12-31.xml",
+        _REPO_ROOT / "SSMxT_2022v1.0/def/ic/cor-ca2016/ssmt-cor/doc_ssmt-cor_2022-12-31.xml",
+    ],
     "mfrs": [
         _REPO_ROOT
         / "SSMxT_2022v1.0/rep/ssm/ca-2016/fs/mfrs/doc_en-ssmt-fs-mfrs_2022-12-31.xml",
@@ -210,8 +216,11 @@ def build_index(standard: str) -> list[dict[str, str]]:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--standard", choices=list(_DOC_LINKBASES), help="Regenerate only the requested filing family")
+    args = parser.parse_args()
     _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    for standard in _DOC_LINKBASES:
+    for standard in ([args.standard] if args.standard else _DOC_LINKBASES):
         entries = build_index(standard)
         if not entries:
             # A standard with zero definitions means the linkbase path or role

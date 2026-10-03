@@ -30,6 +30,164 @@ REPO = Path(__file__).resolve().parent.parent
 FIXTURE = REPO / "XBRL-template-MFRS" / "Company" / "01-SOFP-CuNonCu.xlsx"
 
 
+@pytest.mark.parametrize("level", ["Company", "Group"])
+@pytest.mark.parametrize("boundary", ["historical", "first_period", "missing_address", "mixed_total"])
+def test_historical_mpers_aggregate_exports_as_total(tmp_path, level, boundary):
+    """Reimport must not relabel historical aggregate equity as issued capital."""
+    root = REPO / "XBRL-template-MPERS"
+    # Company backup-originals predates the aggregate layout that shipped;
+    # this fixture retains the pre-component Company B=CY/C=PY workbook.
+    old_path = (REPO / "tests/fixtures/XBRL-template-MPERS/Company/09-SOCIE.xlsx"
+                if level == "Company" else root / "backup-originals/Group/09-SOCIE.xlsx")
+    old = parse_template(str(old_path))
+    current_path = root / level / "09-SOCIE.xlsx"
+    current = parse_template(str(current_path))
+    db = tmp_path / "history.db"
+    init_db(db)
+    for tree in (old, current):
+        payload = tmp_path / "tree.json"
+        payload.write_text(json.dumps(tree.to_json()), encoding="utf-8")
+        import_template(db, payload)
+    opening = next(n for n in old.concepts if n.kind == "MATRIX_CELL"
+                   and n.canonical_label.lstrip("*") == "Equity at beginning of period")
+    closing = next(n for n in old.concepts if n.kind == "MATRIX_CELL"
+                   and n.canonical_label.lstrip("*") == "Equity at end of period")
+    conn = sqlite3.connect(db)
+    try:
+        run_id = conn.execute(
+            "INSERT INTO runs(created_at,pdf_filename,status) VALUES('now','old.pdf','succeeded')"
+        ).lastrowid
+        if boundary == "first_period":
+            conn.execute("UPDATE runs SET run_config_json=? WHERE id=?",
+                         (json.dumps({"first_financial_statements": True}), run_id))
+        scopes = [("Company", "CY", 6), ("Company", "PY", 30)] if level == "Company" else [
+            ("Group", "CY", 6), ("Group", "PY", 30),
+            ("Company", "CY", 54), ("Company", "PY", 78),
+        ]
+        expected = {}
+        for index, (scope, period, row) in enumerate(scopes, 1):
+            for node, offset in ((opening, 0), (closing, 19)):
+                value = index * 1000 + offset
+                conn.execute(
+                    "INSERT INTO run_concept_facts(run_id,concept_uuid,period,entity_scope,"
+                    "value,value_status,children_status,source,updated_at) "
+                    "VALUES(?,?,?,?,?,'observed','itemised','historical','now')",
+                    (run_id, node.concept_uuid, period, scope, value),
+                )
+                if boundary != "first_period" or period == "CY":
+                    expected[f"O{row + offset}"] = value
+        before = conn.execute("SELECT * FROM run_concept_facts").fetchall()
+        if boundary == "missing_address":
+            conn.execute("DELETE FROM concept_semantic_addresses WHERE concept_uuid=?",
+                         (opening.concept_uuid,))
+        elif boundary == "mixed_total":
+            total = next(n for n in current.concepts if n.render_key.get("matrix_col") == "O"
+                         and n.render_key["row"] == 6)
+            conn.execute(
+                "INSERT INTO run_concept_facts(run_id,concept_uuid,period,entity_scope,value,"
+                "value_status,source,updated_at) VALUES(?,?,'CY',?,999,'observed','current','now')",
+                (run_id, total.concept_uuid, scopes[0][0]),
+            )
+        conn.commit()
+        work = tmp_path / "export.xlsx"
+        shutil.copyfile(current_path, work)
+        if boundary in {"missing_address", "mixed_total"}:
+            original = work.read_bytes()
+            with pytest.raises(ValueError, match="Historical MPERS aggregate"):
+                export_run_to_xlsx(db, run_id, work, template_id=current.template_id,
+                                   filing_level=level.lower())
+            assert work.read_bytes() == original
+            return
+        template = openpyxl.load_workbook(current_path)
+        try:
+            cy_formulas = {cell.coordinate: cell.value
+                           for cells in template["SOCIE"].iter_rows(min_row=6, max_row=25, max_col=14)
+                           for cell in cells if cell.data_type == "f"}
+        finally:
+            template.close()
+        assert export_run_to_xlsx(db, run_id, work, template_id=current.template_id,
+                                  filing_level=level.lower()) == len(expected)
+        wb = openpyxl.load_workbook(work)
+        try:
+            ws = wb["SOCIE"]
+            assert ws["B2"].value == "Issued capital"
+            assert ws["O2"].value == "Total"
+            for address, value in expected.items():
+                assert ws[address].value == value
+                assert ws[f"B{ws[address].row}"].value is None
+            for address, formula in cy_formulas.items():
+                assert ws[address].value == formula
+            if boundary == "first_period":
+                assert ws["O30"].value is None
+                assert ws["O49"].value is None
+        finally:
+            wb.close()
+        assert conn.execute("SELECT * FROM run_concept_facts").fetchall() == before
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("relative", [
+    "XBRL-template-MFRS/Company/14-Notes-RelatedParty.xlsx",
+    "XBRL-template-CLBG/Company/10-Notes-CorporateInfo.xlsx",
+])
+@pytest.mark.parametrize("corrupt_physical_output", [False, True])
+def test_all_field_audit_reports_independent_numeric_and_html_readback(
+    tmp_path, monkeypatch, relative, corrupt_physical_output,
+):
+    """A correct database cannot conceal a wrong emitted physical value."""
+    from scripts import audit_field_roundtrip as audit
+    from concept_model.filing_targets import targets_for_template
+
+    path = REPO / relative
+    targets = targets_for_template(path)[1]
+    first = next(t for t in targets if t.writable)
+    if corrupt_physical_output:
+        if first.value_kind == "html":
+            original_overlay = audit.overlay_notes_cells_into_workbook
+
+            def corrupt_overlay(**kwargs):
+                output = original_overlay(**kwargs)
+                wb = openpyxl.load_workbook(output)
+                wb[first.sheet][f"B{first.row}"] = "Wrong physical disclosure."
+                wb.save(output)
+                wb.close()
+                return output
+
+            monkeypatch.setattr(audit, "overlay_notes_cells_into_workbook", corrupt_overlay)
+        else:
+            original_export = audit.export_run_to_xlsx
+
+            def corrupt_export(db, run_id, output, **kwargs):
+                applied = original_export(db, run_id, output, **kwargs)
+                wb = openpyxl.load_workbook(output)
+                wb[first.sheet][f"B{first.row}"] = -999999
+                wb.save(output)
+                wb.close()
+                return applied
+
+            monkeypatch.setattr(audit, "export_run_to_xlsx", corrupt_export)
+
+    summary = audit.audit_templates([path], tmp_path / "field-audit")
+    assert summary["declared_slots"] == len(targets)
+    assert summary["writable_slots"] == sum(t.writable for t in targets)
+    assert summary["nonwritable_slots"] == sum(not t.writable for t in targets)
+    detail = summary["templates_detail"][0]
+    assert detail["source_unchanged"]
+    assert not detail["formula_changes"]
+    assert not detail["style_changes"]
+    assert detail["sheet_protection_preserved"]
+    assert detail["merged_cells_preserved"]
+    rows = [json.loads(line) for line in (tmp_path / "field-audit/physical-results.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert all(row["database_pass"] for row in rows if row["writable"])
+    if corrupt_physical_output:
+        assert summary["physical_statuses"]["readback_mismatch"] == 1
+        assert summary["declared_statuses"]["needs_review"] == 1
+    else:
+        assert set(summary["declared_statuses"]) <= {"passed", "preserved"}
+        assert set(summary["physical_statuses"]) <= {"passed", "preserved"}
+
+
 @pytest.fixture
 def seeded(tmp_path: Path) -> tuple[Path, int, str, Path]:
     """Initialise a v4 DB with a parsed SOFP template, a run row, and a
@@ -97,7 +255,8 @@ def _seed_fact(db: Path, run_id: int, concept_uuid: str, *,
         conn.close()
 
 
-def test_carry_forward_row1_dates_from_scratch(seeded) -> None:
+@pytest.mark.parametrize("first_period", [False, True])
+def test_carry_forward_row1_dates_from_scratch(seeded, first_period) -> None:
     """Phase 4.1: row-1 reporting-period dates are non-concept cells that don't
     project to facts, so the fact-render keeps the template placeholder
     '01/01/YYYY - 31/12/YYYY'. When the agent's scratch workbook is supplied,
@@ -106,6 +265,10 @@ def test_carry_forward_row1_dates_from_scratch(seeded) -> None:
     db, run_id, template_id, work = seeded
     leaf = _uuid_for_row(db, "SOFP-CuNonCu", 10)
     _seed_fact(db, run_id, leaf, value=123.0)
+    if first_period:
+        with sqlite3.connect(db) as conn:
+            conn.execute("UPDATE runs SET run_config_json = ? WHERE id = ?",
+                         (json.dumps({"first_financial_statements": True}), run_id))
 
     # Build a scratch workbook from the template, stamping real dates into B1/C1
     # on the face sheet, and leave the sub-sheet's placeholder untouched.
@@ -123,11 +286,13 @@ def test_carry_forward_row1_dates_from_scratch(seeded) -> None:
     face = wb["SOFP-CuNonCu"]
     # Real dates carried into the value columns.
     assert face["B1"].value == "01/01/2021 - 31/12/2021"
-    assert face["C1"].value == "01/01/2020 - 31/12/2020"
+    assert face["C1"].value == (None if first_period else "01/01/2020 - 31/12/2020")
     # Col A is not a date placeholder — never carried (stays template/label).
     assert face["A1"].value != "SHOULD NOT BE CARRIED"
     # The fact still landed (carry-forward doesn't disturb values).
     assert face["B10"].value == 123.0
+    if first_period:
+        assert face["C10"].value is None
     # The sub-sheet's placeholder stays placeholder (scratch had no real date).
     assert wb["SOFP-Sub-CuNonCu"]["B1"].value == "01/01/YYYY - 31/12/YYYY"
 

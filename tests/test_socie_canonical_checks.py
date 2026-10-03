@@ -2,7 +2,7 @@
 
 The xlsx-based SOCIE cross-checks already pick their read column by
 filing standard (gotcha #15): MFRS reads the Total column X (24), MPERS
-reads col B (2), and Group filings scope each read to a vertical block
+reads col O (15), and both Company/Group filings scope each read to a vertical block
 range (cross_checks.util.SOCIE_GROUP_BLOCKS).
 
 These tests pin that a *canonical-mode* SOCIE export lands the
@@ -97,12 +97,12 @@ def test_mpers_group_equity_total_lands_in_cross_check_column(tmp_path: Path) ->
         pytest.skip("fixture missing")
     db = tmp_path / "x.db"
     init_db(db)
-    # MPERS total column is B (2).
-    work = _seed_and_export(db, MPERS_GROUP, tmp_path, matrix_col="B", value=67890.0)
+    # MPERS total column is O (15).
+    work = _seed_and_export(db, MPERS_GROUP, tmp_path, matrix_col="O", value=67890.0)
 
     wb = open_workbook(str(work))
     ws = wb["SOCIE"]
-    col = socie_total_column("mpers")  # 2
+    col = socie_total_column("mpers")  # 15
     start, end = SOCIE_GROUP_BLOCKS["group_cy"]
     got = find_value_in_block(ws, _EQUITY_END, col, start, end, wb=wb)
     assert got == 67890.0

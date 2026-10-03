@@ -176,11 +176,11 @@ def test_framework_gates_sore_out_on_mfrs() -> None:
 
 def test_socie_checks_branch_by_standard() -> None:
     """SOCIE total column differs by standard (gotcha #15): MFRS col X
-    (24), MPERS col B (2)."""
+    (24), MPERS col O (15)."""
     from cross_checks.util import socie_total_column
 
     assert socie_total_column("mfrs") == 24
-    assert socie_total_column("mpers") == 2
+    assert socie_total_column("mpers") == 15
 
 
 # -- 6.6 — facts API rejects writes to MPERS ABSTRACT concepts --------

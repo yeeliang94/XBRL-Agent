@@ -87,7 +87,11 @@ def recompute_after_turn(db_path: str | Path, run_id: int) -> None:
             (run_id,),
         ).fetchall()
 
+        from concept_model.periods import run_periods
+        periods = run_periods(conn, run_id)
         for period, entity_scope, dims in scope_pairs:
+            if period not in periods:
+                continue
             _recompute_scope(conn, run_id, period, entity_scope, dims)
         conn.commit()
     finally:

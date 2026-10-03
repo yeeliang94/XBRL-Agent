@@ -19,6 +19,7 @@ from typing import Any
 
 from mtool.column_detect import (
     category_domain_rows,
+    entity_scope_rows,
     describe_template,
     detect_column_map,
     fingerprint_workbook,
@@ -61,6 +62,7 @@ def index_workbook(data: dict) -> tuple[dict, dict]:
     for sheet, entry in paths.items():
         cells = read_sheet_cells(data[entry], shared)
         by_sheet[sheet] = cells
+        category_rows = category_domain_rows(cells)
         for row, row_cells in cells.items():
             for col, (_kind, raw) in row_cells.items():
                 text = (raw or "").strip()
@@ -71,22 +73,39 @@ def index_workbook(data: dict) -> tuple[dict, dict]:
                             (sheet, int(row), col))
         # mTool 2.2 encodes the SOCIE all-components column as numeric 0
         # beside the table::axis::member headers, with the display label Total.
-        # It is the EquityMember total, not a missing source category. Require
+        # It is the equity or CLBG fund total, not a missing source category. Require
         # the exact axis/table header and total marker together; never infer a
         # default from a blank column or position.
         for row, row_cells in cells.items():
-            if not any(
-                {"ifrs-full_StatementOfChangesInEquityTable", "ifrs-full_ComponentsOfEquityAxis"}
-                <= set(_taxonomy_identifiers(raw or ""))
-                for _, raw in row_cells.values()
-            ):
+            total_members = [f"{prefix}_EquityMember" for prefix in ('ifrs-full', 'ifrs-smes') if any(
+                {f"{prefix}_StatementOfChangesInEquityTable", f"{prefix}_ComponentsOfEquityAxis"}
+                <= set(_taxonomy_identifiers(raw or "")) for _, raw in row_cells.values())]
+            if any({'ssmt-mfrs_StatementOfChangesInFundTable', 'ssmt-mfrs_ComponentsOfFundAxis'}
+                   <= set(_taxonomy_identifiers(raw or "")) for _, raw in row_cells.values()):
+                total_members.append('ssmt-mfrs_FundsAndReservesMember')
+            for prefix in ('ifrs-full', 'ifrs-smes'):
+                for table, axis, member in (
+                    ('DisclosureOfClassesOfShareCapitalTable', 'ClassesOfShareCapitalAxis', 'ClassesOfShareCapitalMember'),
+                    ('DisclosureOfTransactionsBetweenRelatedPartiesTable', 'CategoriesOfRelatedPartiesAxis', 'EntitysTotalForRelatedPartiesMember'),
+                ):
+                    if any({f'{prefix}_{table}', f'{prefix}_{axis}'}
+                            <= set(_taxonomy_identifiers(raw or '')) for _, raw in row_cells.values()):
+                        total_members.append(f'{prefix}_{member}')
+            if not total_members:
                 continue
             for col, (kind, raw) in row_cells.items():
                 total_marker = (kind == "N" and raw == "0") or (
-                    kind == "S" and raw == "0:::abc::abc::abc"
+                    kind == "S" and (raw in {"0:::abc::abc::abc", "0:::0", "0:::0:::abc::abc::abc"}
+                    or re.fullmatch(
+                        r"0::[A-Za-z0-9_.-]+\.xsd#ifrs-full_ConsolidatedAndSeparateFinancialStatementsAxis"
+                        r"::[A-Za-z0-9_.-]+\.xsd#ifrs-full_SeparateMember:::0(?::::abc::abc::abc)?",
+                        raw or ""))
                 )
-                if total_marker and cells.get(row + 2, {}).get(col, (None, ""))[1] == "Total":
-                    occurrences["ifrs-full_EquityMember"].append((sheet, int(row), col))
+                next_category = next((r for r in category_rows if r > row), None)
+                total_rows = [row + 2] + ([next_category] if next_category else [])
+                if total_marker and any(cells.get(r, {}).get(col, (None, ""))[1] == "Total" for r in total_rows):
+                    for member in total_members:
+                        occurrences[member].append((sheet, int(row), col))
     return occurrences, by_sheet
 
 
@@ -127,6 +146,8 @@ def inspect_template(
             native_standards.add('mpers')
         elif identifier.startswith(('ifrs-full_', 'ssmt-mfrs_')):
             native_standards.add('mfrs')
+    if {'ssmt-mfrs_FundBalance', 'ssmt_DisclosureOnStatementOfIncomeAndExpenditureAbstract'} & occurrences.keys():
+        native_standards = {'clbg'}
     if expected_standard and native_standards and expected_standard not in native_standards:
         family_match = False
     if descriptor and descriptor.get("source") == "generated":
@@ -199,6 +220,7 @@ def _dimensional_period_blocks(cells: dict) -> list[dict[str, Any]]:
     dates is the same evidence-backed rule used by column detection.
     """
     dom_rows = category_domain_rows(cells)
+    scopes = entity_scope_rows(cells)
     end_rows = _marker_rows(cells, "#ENDT#")
     raw_blocks: list[dict[str, Any]] = []
     for index, dom_row in enumerate(dom_rows):
@@ -219,6 +241,8 @@ def _dimensional_period_blocks(cells: dict) -> list[dict[str, Any]]:
             "next_dom_row": next_dom,
             "end_date": max(dates) if dates else None,
             "column_dates": dict(column_dates),
+            "entity_scopes": scopes[max((r for r in scopes if r <= dom_row), default=0)]
+                if any(r <= dom_row for r in scopes) else {},
         })
 
     ordered_dates = sorted(
@@ -274,6 +298,7 @@ def _dimension_column(
     sheet: str,
     block: dict[str, Any] | None = None,
     period: str | None = None,
+    entity_scope: str | None = None,
 ) -> str | None:
     if not dimensions:
         return None
@@ -285,6 +310,8 @@ def _dimension_column(
             if found_sheet != sheet:
                 continue
             if block is not None:
+                if block.get("entity_scopes") and block["entity_scopes"].get(col) != entity_scope:
+                    continue
                 if period and block.get("column_periods", {}).get(col) != period:
                     continue
                 # Dimension-member headers precede their ``#DOM#`` marker.
@@ -377,6 +404,8 @@ def _resolution_options(
                         continue
                     if block.get("column_periods", {}).get(col) != _write_period_role(write):
                         continue
+                    if block.get("entity_scopes") and block["entity_scopes"].get(col) != write.get("entity_scope"):
+                        continue
                     cell = f"{sheet}!{col}{row}"
                     dims = {axes[0]: members[0]}
                     member_label = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ",
@@ -439,6 +468,7 @@ def _filter_candidates_for_period(
         if (
             (block := _block_for_primary_row(blocks, item[1])) is not None
             and desired_period in block["period_roles"]
+            and (not block.get("entity_scopes") or write.get("entity_scope") in block["entity_scopes"].values())
         )
     ]
     if candidates and not filtered:
@@ -544,6 +574,7 @@ def _resolve_taxonomy_target(
             col = _dimension_column(
                 occurrences, dimensions, sheet=candidate_sheet, block=block,
                 period=_write_period_role(write),
+                entity_scope=write.get("entity_scope"),
             )
             if col:
                 narrowed.append((candidate_sheet, row, col))

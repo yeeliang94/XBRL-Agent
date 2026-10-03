@@ -157,6 +157,8 @@ def load_comparison(conn: sqlite3.Connection, run_id: int) -> dict[str, Any] | N
     record = load_human_file(conn, run_id)
     if record is None:
         return None
+    from concept_model.periods import run_periods
+    periods = run_periods(conn, run_id)
     # A template "not in the run" is a notes template the run did not extract;
     # it holds no run values, so only statements the human left empty or
     # filled in another layout drop the run's values.
@@ -167,6 +169,7 @@ def load_comparison(conn: sqlite3.Connection, run_id: int) -> dict[str, Any] | N
         for r in conn.execute(
             "SELECT concept_uuid, period, entity_scope, dimension_key, value, "
             "calculated FROM human_file_facts WHERE run_id = ?", (run_id,))
+        if r[1] in periods
     }
     edges: dict[str, list[tuple[str, float]]] = {}
     for parent, child, coefficient in conn.execute(
@@ -185,7 +188,7 @@ def load_comparison(conn: sqlite3.Connection, run_id: int) -> dict[str, Any] | N
         "JOIN concept_nodes n ON n.concept_uuid = f.concept_uuid "
         "WHERE f.run_id = ? AND f.value IS NOT NULL "
         "AND COALESCE(f.value_status, '') != 'not_disclosed'", (run_id,)):
-        if r[5] in not_compared:
+        if r[1] not in periods or r[5] in not_compared:
             continue
         key = (r[0], r[1], r[2], r[3] or "")
         ai_totals[key] = r[4]

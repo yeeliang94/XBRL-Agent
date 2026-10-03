@@ -257,6 +257,7 @@ export interface CrossCheckResultEventData {
   // no natural anchor).
   target_sheet?: string | null;
   target_row?: number | null;
+  comparands?: CrossCheckComparand[];
 }
 
 /** Pass-level summary — emitted once at the end of each cross-check
@@ -447,6 +448,17 @@ export interface AgentCompleteData {
   flag?: string | null;
 }
 
+/** A compared figure and its statement, source cell, and reporting period. */
+export interface CrossCheckComparand {
+  label: string;
+  sheet: string;
+  value: number | null;
+  role: string;
+  statement: string;
+  row?: number | null;
+  period: string;
+}
+
 /** Cross-check result as emitted in run_complete SSE event.
  *
  * ``"warning"`` is advisory (Phase 6.1 notes-consistency check). It
@@ -464,6 +476,7 @@ export interface CrossCheckResult {
   // Review Workspace Step 8 — click-to-cell target (null when no anchor).
   target_sheet?: string | null;
   target_row?: number | null;
+  comparands?: CrossCheckComparand[];
 }
 
 /** Final aggregate event for multi-agent runs. */
@@ -583,6 +596,16 @@ export const STATEMENT_LABELS: Record<StatementType, string> = {
   SOCIE: "Statement of Changes in Equity",
 };
 
+export function statementLabel(statement: StatementType, standard: FilingStandard = "mfrs"): string {
+  if (standard === "clbg") {
+    if (statement === "SOPL") return "Statement of Income and Expenditure";
+    if (statement === "SOCIE") return "Statement of Changes in Funds";
+    if (statement === "SOCI") return "Comprehensive income — not prepared";
+  }
+  return STATEMENT_LABELS[statement];
+}
+
+
 /** Known variants per statement type (matches statement_types.py registry).
  *  NotPrepared is a meta-variant meaning no standalone SOCI was found —
  *  it's included so the UI can display it but extraction is skipped. */
@@ -672,7 +695,7 @@ export type FilingLevel = "company" | "group";
 
 /** Parallel to `FilingLevel` — which taxonomy the templates come from.
  *  Default is MFRS so every pre-existing caller keeps working. */
-export type FilingStandard = "mfrs" | "mpers";
+export type FilingStandard = "mfrs" | "mpers" | "clbg";
 
 /** Scout's auto-detected standard from TOC / front-matter text. The UI
  *  preselects the toggle from this; the user toggle always wins. */
@@ -697,6 +720,13 @@ export function variantsFor(
   statement: StatementType,
   standard: FilingStandard,
 ): string[] {
+  if (standard === "clbg") {
+    const clbgVariants: Record<StatementType, string[]> = {
+      SOFP: ["CuNonCu"], SOPL: ["Function", "Nature"], SOCI: ["NotPrepared"],
+      SOCF: ["Indirect"], SOCIE: ["Default"],
+    };
+    return clbgVariants[statement];
+  }
   if (statement === "SOCIE") {
     return standard === "mpers" ? ["Default", "SoRE"] : ["Default"];
   }
@@ -738,6 +768,8 @@ export interface RunConfigPayload {
   /** Operator-declared image-only PDF; forces the automatic scan's visual
    * notes-inventory safety path. */
   scanned_pdf?: boolean;
+  /** First statements after incorporation: current period only. */
+  first_financial_statements?: boolean;
   /** Human note-list corrections, reapplied after every fresh scan. */
   notes_inventory_overrides?: {
     added: Array<{
@@ -953,6 +985,7 @@ export interface RunCrossCheckJson {
   // Review Workspace Step 8 — click-to-cell target (null when no anchor).
   target_sheet?: string | null;
   target_row?: number | null;
+  comparands?: CrossCheckComparand[];
 }
 
 export interface RunDetailJson {

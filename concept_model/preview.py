@@ -23,6 +23,8 @@ def build_preview_fields(
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     try:
+        from concept_model.periods import run_periods
+        periods = run_periods(conn, run_id)
         rows = conn.execute(
             f"""
             SELECT n.template_id,
@@ -64,6 +66,7 @@ def build_preview_fields(
             "dimensions": json.loads(row["dimension_key"] or "{}"),
         }
         for row in rows
+        if row["period"] in periods
     ]
 
 

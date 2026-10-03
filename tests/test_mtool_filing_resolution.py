@@ -8,6 +8,52 @@ from test_mtool_template_map import _save_semantic_marker_workbook
 from mtool.template_map import resolve_filing_doc
 
 
+@pytest.mark.parametrize('first_time', [False, True])
+def test_native_group_scope_and_periods_remain_distinct(tmp_path, first_time):
+    """Native consolidation markers must place both scopes without guessing PY."""
+    from pathlib import Path
+    from mtool.offline_fill import fill_workbook, load_workbook_entries
+    from mtool.template_map import index_workbook
+    root = Path(__file__).resolve().parents[1]
+    source = next((root / 'data').glob(
+        '*Group_FirstTime*.xlsx' if first_time else '*Group_SOFP*.xlsx'))
+    writes = []
+    for period in ('CY', 'PY'):
+        for scope in ('Group', 'Company'):
+            for sheet, primary, label, dimensions in [
+                ('SOFP-CuNonCu', 'ifrs-full_DeferredTaxAssets', 'Deferred tax assets', {}),
+                ('SOCIE', 'ifrs-full_Equity', '*Equity at beginning of period', {
+                    'ifrs-full_ComponentsOfEquityAxis': 'ifrs-full_RetainedEarningsMember'}),
+                ('SOCIE', 'ifrs-full_Equity', '*Equity at beginning of period', {
+                    'ifrs-full_ComponentsOfEquityAxis': 'ifrs-full_EquityMember'}),
+            ]:
+                writes.append({'sheet': sheet, 'label': label, 'value': 100 + len(writes),
+                               'period': period, 'entity_scope': scope, 'kind': 'MATRIX_CELL' if dimensions else 'LEAF',
+                               'column_role': scope.lower() + ('_current_year' if period == 'CY' else '_prior_year'),
+                               'semantic_address': {'primary_concept': primary, 'dimensions': dimensions}})
+    doc = {'meta': {'filing_standard': 'mfrs', 'filing_level': 'group'},
+           'sheets': {sheet: {'columns': {w['column_role']: None for w in writes if w['sheet'] == sheet}}
+                      for sheet in ('SOFP-CuNonCu', 'SOCIE')}, 'writes': writes}
+    ready, coverage = resolve_filing_doc(str(source), doc)
+    expected = 6 if first_time else 12
+    assert coverage['mapped'] == expected, coverage
+    assert len({(w['sheet'], w['cell']) for w in ready['writes']}) == expected
+    if first_time:
+        assert all(w['period'] == 'CY' for w in ready['writes'])
+        assert coverage['unmapped'] == 6
+    else:
+        assert coverage['unmapped'] == coverage['ambiguous'] == 0
+    output = tmp_path / 'native-filled.xlsx'
+    report = fill_workbook(str(source), ready, str(output))
+    assert len(report['written']) == expected
+    _, entries, _ = load_workbook_entries(str(output))
+    _, cells = index_workbook(entries)
+    from mtool.offline_fill import split_ref
+    for write in ready['writes']:
+        col, row = split_ref(write['cell'])
+        assert float(cells[write['sheet']][row][col][1]) == write['value']
+
+
 def _doc():
     return {"sheets": {"SOCIE": {"columns": {}}}, "writes": [{
         "concept_uuid": "fact-1", "sheet": "SOCIE", "label": "Profit or loss",
@@ -212,3 +258,92 @@ def test_matrix_exact_label_prefers_unique_input_over_formula(tmp_path):
     assert report["ambiguous"] == 0, report
     assert ready["writes"][0]["cell"] == "E5"
     assert not ready["writes"][0].get("reconcile_formula")
+
+
+@pytest.mark.parametrize('prefix', ['ifrs-full','ifrs-smes'])
+@pytest.mark.parametrize('family', ['capital','related'])
+@pytest.mark.parametrize('verified_total', [True,False])
+def test_category_note_zero_total_requires_exact_table_axis_and_total_label(tmp_path, prefix, family, verified_total):
+    """Native totals must preserve their disclosed aggregate category identity."""
+    from openpyxl import Workbook
+    table, axis, component, total = (
+        ('DisclosureOfClassesOfShareCapitalTable','ClassesOfShareCapitalAxis','OrdinarySharesMember','ClassesOfShareCapitalMember')
+        if family == 'capital' else
+        ('DisclosureOfTransactionsBetweenRelatedPartiesTable','CategoriesOfRelatedPartiesAxis','ParentMember','EntitysTotalForRelatedPartiesMember'))
+    book = Workbook(); sheet = book.active; sheet.title = 'Notes-Issuedcapital' if family == 'capital' else 'Notes-RelatedPartytran'
+    href = lambda identifier: 'native.xsd#'+prefix+'_'+identifier
+    sheet['E2'] = '::'.join(map(href,[table,axis,component]))
+    sheet['F2'] = 0
+    sheet['C3'] = '#DOM#'; sheet['D3'] = '#PRIM#'
+    sheet['B3'] = '::'.join(map(href,[table,axis]))
+    sheet['E3'] = 'Ordinary shares' if family == 'capital' else 'Parent'
+    sheet['F3'] = 'Total' if verified_total else 'Unknown category'
+    sheet['C4'] = '#ENDT#'; sheet['E4'] = sheet['F4'] = '31/12/2026'
+    sheet['A6'] = href('Revenue'); sheet['D6'] = 'Source amount'
+    path = tmp_path/'native.xlsx'; book.save(path); book.close()
+    write = {'sheet':sheet.title,'label':'Source amount','value':125,'kind':'LEAF','period':'CY',
+             'entity_scope':'Company','column_role':'company_current_year','semantic_address':{
+                 'primary_concept':prefix+'_Revenue','dimensions':{prefix+'_'+axis:prefix+'_'+total}}}
+    ready, report = resolve_filing_doc(str(path),{'meta':{'filing_standard':'mfrs' if prefix=='ifrs-full' else 'mpers',
+                                                        'filing_level':'company'},'writes':[write], 'checks':[],
+                                                'sheets':{sheet.title:{'columns':{'company_current_year':None}}}})
+    assert report['mapped'] == int(verified_total), report
+    assert report['unmapped'] == int(not verified_total), report
+    if verified_total:
+        assert ready['writes'][0]['cell'] == 'F6'
+
+
+@pytest.mark.parametrize('clbg_role', [True,False])
+def test_clbg_related_party_native_alias_requires_exact_role(clbg_role):
+    from mtool.offline_fill import resolve_sheet_name
+    cells = {'Notes-Relatedpartytransactions':{1:{'A':('S',
+        'http://xbrl.ssm.com.my/role/ssm/rol_ssmt-fs-clbg_2022-12-31/ssmt-fs-clbg_2022-12-31_role-640000'
+        if clbg_role else 'http://xbrl.ssm.com.my/role/ssm/rol_ssmt-fs-mfrs_2022-12-31/ssmt-fs-mfrs_2022-12-31_role-750000')},
+        2:{'B':('S','native.xsd#ssmt-mfrs_DisclosureOnRelatedPartyTransactionsAbstract'),
+           'E':('S','native.xsd#ifrs-full_CategoriesOfRelatedPartiesAxis')}}}
+    assert resolve_sheet_name('Notes-RelatedPartytran',cells) == ('Notes-Relatedpartytransactions' if clbg_role else None)
+
+
+@pytest.mark.parametrize('standard,pattern,minimum_inputs', [
+    ('mfrs','mTool_MFRS_Company*NetOfTax*SOCIE_RM.xlsx',332),
+    ('mpers','mTool_MPERS_Company*NetOfTax*Indirect*SOCIE_RM.xlsx',336),
+    ('clbg','mTool_CLBG_Company*.xlsx',96),
+])
+def test_real_native_category_note_fields_round_trip_independent_xml(tmp_path, standard, pattern, minimum_inputs):
+    """Every native category input retains independent raw-XML destination identity."""
+    from pathlib import Path
+    from scripts.audit_native_category_fields import run_workbook
+    source = next((Path(__file__).resolve().parents[1]/'data').glob(pattern),None)
+    if source is None:
+        pytest.skip('optional native '+standard+' category workbook not present')
+    result = run_workbook(source,tmp_path/'native-category-audit')
+    assert result['outcomes'].get('mapped_correctly',0) >= minimum_inputs, result
+    assert not any(result['outcomes'].get(k,0) for k in (
+        'stored','wrong_native_destination','numeric_readback_failed','public_write_rejected')), result
+    assert result['unresolved_reason_counts'] == {'template_period_section_missing':minimum_inputs}, result
+    assert result['source_unchanged']
+    assert not result['style_changes'] and not result['formula_changes']
+    assert not result['reverse_issues'] and result['reverse_error'] is None, result
+    assert all(n['outcome'] == 'rejected_as_designed' for n in result['negatives'])
+
+
+@pytest.mark.parametrize('clbg_role,exact_marker', [(True,True),(False,True),(True,False)])
+def test_clbg_sofp_sub_alias_requires_exact_role_and_marker(clbg_role, exact_marker):
+    from mtool.offline_fill import resolve_sheet_name
+    family = 'clbg' if clbg_role else 'mfrs'
+    cells = {'SOFP-Sub':{1:{'A':('S',
+        f'http://xbrl.ssm.com.my/role/ssm/rol_ssmt-fs-{family}_2022-12-31/ssmt-fs-{family}_2022-12-31_role-210100')},
+        10:{'A':('S','native.xsd#'+('ssmt-mfrs_DisclosureOnSubclassificationOfAssetsLiabilitiesAndEquityAbstract'
+                                   if exact_marker else 'ssmt-mfrs_DisclosureOnStatementOfFinancialPositionAbstract'))}}}
+    assert resolve_sheet_name('SOFP-Sub-CuNonCu',cells) == ('SOFP-Sub' if clbg_role and exact_marker else None)
+
+
+@pytest.mark.parametrize('clbg_role,exact_marker', [(True,True),(False,True),(True,False)])
+def test_clbg_accounting_policies_alias_requires_exact_role_and_marker(clbg_role, exact_marker):
+    from mtool.offline_fill import resolve_sheet_name
+    family = 'clbg' if clbg_role else 'mfrs'
+    cells = {'Notes-SummaryOfAcc':{1:{'A':('S',
+        f'http://xbrl.ssm.com.my/role/ssm/rol_ssmt-fs-{family}_2022-12-31/ssmt-fs-{family}_2022-12-31_role-620000')},
+        10:{'A':('S','native.xsd#'+('ssmt_DisclosureOnSummaryOfMaterialAccountingPoliciesAbstract'
+                                   if exact_marker else 'ssmt-mfrs_DisclosureOnRelatedPartyTransactionsAbstract'))}}}
+    assert resolve_sheet_name('Notes-SummaryOfAccPol',cells) == ('Notes-SummaryOfAcc' if clbg_role and exact_marker else None)

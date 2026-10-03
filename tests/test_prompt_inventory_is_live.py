@@ -74,7 +74,7 @@ def _constructed_prompt_stems() -> set[str]:
     for statement, variant in VARIANTS:
         stmt = statement.value.lower()
         stems.add(f"{stmt}_{variant.lower()}")
-        stems.update(f"{stmt}_{standard}" for standard in ("mfrs", "mpers"))
+        stems.update(f"{stmt}_{standard}" for standard in ("mfrs", "mpers", "clbg"))
     return stems
 
 

@@ -256,7 +256,7 @@ def test_concurrent_fills_do_not_collide(client):
         results = list(pool.map(one, range(4)))
 
     assert all(r.status_code == 200 for r in results), [
-        r.status_code for r in results]
+        (r.status_code, r.text) for r in results if r.status_code != 200]
     artifacts = {r.json()["artifact_id"] for r in results}
     assert len(artifacts) == 4, "artifact ids collided"
     # Each fill left its own receipt — the audit trail doesn't merge them.

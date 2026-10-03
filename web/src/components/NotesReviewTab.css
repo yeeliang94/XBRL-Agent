@@ -115,6 +115,10 @@
   overflow-x: auto;
 }
 
+.notes-review-tab [data-testid="notes-review-editor"][data-editable="false"] .tiptap:not(:focus-within) {
+  box-shadow: none;
+}
+
 /* A block wrapper reduces the available line width for its whole sub-note,
  * so an enclosed 100%-width table stays within the indented section. Keep
  * this 2em offset aligned with clipboard.ts and notes_decorate.py. */
@@ -274,6 +278,16 @@
 @container notes-review (max-width: 560px) {
   .notes-review-tab .notes-human-pair {
     grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: none !important;
+  }
+
+  .notes-review-tab .notes-human-pair :is(.notes-human-extracted, .notes-review-row, [data-comparison-body]) {
+    grid-template-rows: none !important;
+    grid-row: auto !important;
+  }
+
+  .notes-review-tab .notes-human-pair [data-comparison-content] {
+    grid-row: auto !important;
   }
 
   .notes-review-tab .notes-human-pair-header {
@@ -285,8 +299,17 @@
     display: block;
     padding: 8px 12px 0;
     color: #454B50;
-    font-size: 12px;
-    font-weight: 600;
+    font-size: 14px;
+    font-weight: 650;
+  }
+
+  .notes-review-tab .notes-human-extracted::before {
+    content: "Extracted note";
+    display: block;
+    padding: 8px 12px;
+    color: #454B50;
+    font-size: 14px;
+    font-weight: 650;
   }
 
   .notes-review-tab .notes-human-pair > [role="group"] > div:first-child {

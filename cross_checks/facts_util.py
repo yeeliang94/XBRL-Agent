@@ -108,11 +108,11 @@ def read_labelled_value(
 # --- SOCIE matrix column selection (fact-space twin of cross_checks.util) ----
 #
 # MFRS SOCIE is a 23-column matrix: Total=X, Retained earnings=C, NCI=W.
-# MPERS SOCIE is a flat single-column layout: everything lives in matrix_col B.
+# MPERS SOCIE uses Total=O, Retained earnings=C and NCI=N.
 
 def socie_total_col(filing_standard: str) -> str:
     """The matrix column holding an aggregate Total (equity-at-end, TCI)."""
-    return "B" if filing_standard == "mpers" else "X"
+    return "O" if filing_standard == "mpers" else "X"
 
 
 # Primitive component columns of an MFRS SOCIE row (fact-space twin of
@@ -129,18 +129,14 @@ _MFRS_SOCIE_COMPONENT_COLS = [
 
 
 def socie_component_cols(filing_standard: str) -> list[str]:
-    """Component matrix columns whose row values sum to col X's Total.
-
-    MPERS keeps its total in col B, so the fallback there is ``["B"]`` — a
-    no-op re-read of the same cell.
-    """
-    return ["B"] if filing_standard == "mpers" \
+    """Primitive matrix components; intermediate subtotal columns are excluded."""
+    return list("BCDEFGHJMN") if filing_standard == "mpers" \
         else list(_MFRS_SOCIE_COMPONENT_COLS)
 
 
 def socie_retained_col(filing_standard: str) -> str:
     """The matrix column read for profit when there's no NCI data (MFRS col C)."""
-    return "B" if filing_standard == "mpers" else "C"
+    return "C"
 
 
 def socie_period_col(
@@ -151,30 +147,24 @@ def socie_period_col(
 ) -> str:
     """Fact-space twin of ``util.socie_period_column``.
 
-    MPERS Company renders PY through a target alias in column C, but the
-    canonical matrix concept remains column B; the period dimension selects
-    the comparative fact. Block-shaped Group SOCIE likewise keeps column B.
-    MFRS periods retain their matrix component column.
+    Both standards retain the component column; period and scope select the fact.
     """
-    return "B" if filing_standard == "mpers" else mfrs_col
+    return mfrs_col
 
 
 def socie_has_nci(ctx, stmt: StatementType, period: str, entity_scope: str) -> bool:
     """True when the SOCIE NCI column carries any non-zero numeric fact.
 
-    Fact-space twin of ``cross_checks.util.has_nci_data`` (which scanned the
-    workbook's col W). MPERS has no NCI column, so always False there.
+    Reads MFRS column W or MPERS column N within the requested period/scope.
     """
-    if ctx.filing_standard == "mpers":
-        return False
     template_id = ctx.template_ids.get(stmt)
     if template_id is None:
         return False
     nci_uuids = {
         r[0] for r in ctx.conn.execute(
             "SELECT concept_uuid FROM concept_nodes "
-            "WHERE template_id = ? AND matrix_col = 'W' AND is_current = 1",
-            (template_id,),
+            "WHERE template_id = ? AND matrix_col = ? AND is_current = 1",
+            (template_id, "N" if ctx.filing_standard == "mpers" else "W"),
         )
     }
     if not nci_uuids:

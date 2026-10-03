@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from "react";
 import { pwc } from "../lib/theme";
-import type { AgentTabStatus } from "../lib/types";
+import type { AgentTabStatus, FilingStandard } from "../lib/types";
 import { NON_AGENT_TAB_IDS } from "../lib/agentTabKinds";
 import { workstreamStatusLabel } from "../lib/workstreamStatus";
 
@@ -31,6 +31,7 @@ export interface AgentTabState {
 
 export interface AgentTabsProps {
   agents: Record<string, AgentTabState>;
+  filingStandard?: FilingStandard;
   tabOrder: string[];          // ordered agent IDs for active tabs
   activeTab: string;
   onTabClick: (agentId: string) => void;
@@ -78,7 +79,11 @@ const WORKSTREAM_LABELS: Record<string, string> = {
   validator: "Cross-checks",
 };
 
-function workstreamLabel(agent: AgentTabState): string {
+function workstreamLabel(agent: AgentTabState, filingStandard?: FilingStandard): string {
+  if (filingStandard === "clbg") {
+    if (agent.role === "SOPL" || agent.agentId === "SOPL") return "Income and expenditure";
+    if (agent.role === "SOCIE" || agent.agentId === "SOCIE") return "Changes in funds";
+  }
   return WORKSTREAM_LABELS[agent.agentId]
     ?? WORKSTREAM_LABELS[agent.role]
     ?? agent.label;
@@ -108,6 +113,7 @@ function StatusBadge({ status }: { status: AgentTabStatus }) {
 
 function AgentTabsImpl({
   agents,
+  filingStandard,
   tabOrder,
   activeTab,
   onTabClick,
@@ -229,7 +235,7 @@ function AgentTabsImpl({
     const agent = agents[agentId];
     if (!agent) return null;
     const isActive = agentId === focusableTab;
-    const displayLabel = workstreamLabel(agent);
+    const displayLabel = workstreamLabel(agent, filingStandard);
     return (
       <button
         key={agentId}
@@ -380,6 +386,7 @@ export function areAgentTabsPropsEqual(
   next: AgentTabsProps,
 ): boolean {
   if (
+    prev.filingStandard !== next.filingStandard ||
     prev.activeTab !== next.activeTab ||
     prev.onTabClick !== next.onTabClick
   ) {

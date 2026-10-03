@@ -191,7 +191,7 @@ class CrossCheck(Protocol):
         ...
 
 
-def build_default_cross_checks() -> list:
+def build_default_cross_checks(filing_standard: str = "mfrs") -> list:
     """Return a fresh list of the cross-checks the server runs on every merge.
 
     Instantiated per call so callers can't accidentally share check state
@@ -214,6 +214,7 @@ def build_default_cross_checks() -> list:
     from cross_checks.sore_to_sofp_retained_earnings import (
         SoREToSOFPRetainedEarningsCheck,
     )
+    from cross_checks.clbg import clbg_checks
     return [
         SOFPBalanceCheck(),
         SOPLToSOCIEProfitCheck(),
@@ -224,7 +225,7 @@ def build_default_cross_checks() -> list:
         SOPLAttributionFootingCheck(),
         SOCIAttributionFootingCheck(),
         SoREToSOFPRetainedEarningsCheck(),
-    ]
+    ] + (clbg_checks() if filing_standard == "clbg" else [])
 
 
 @dataclass

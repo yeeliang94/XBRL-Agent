@@ -382,7 +382,7 @@ def test_socie_e2e_all_geometries(name: str, tmp_path: Path) -> None:
         )
 
 
-def test_mpers_company_period_as_column(tmp_path: Path) -> None:
+def test_mpers_company_period_blocks_preserve_component(tmp_path: Path) -> None:
     db = tmp_path / "x.db"
     init_db(db)
     tid = _import(db, SOCIE["mpers_company"], tmp_path)
@@ -390,7 +390,7 @@ def test_mpers_company_period_as_column(tmp_path: Path) -> None:
     conn = sqlite3.connect(str(db))
     node = conn.execute(
         "SELECT concept_uuid FROM concept_nodes "
-        "WHERE template_id = ? AND render_row = 10 AND matrix_col = 'B'", (tid,)
+        "WHERE template_id = ? AND render_row = 11 AND matrix_col = 'C'", (tid,)
     ).fetchone()[0]
     conn.execute(
         "INSERT INTO run_concept_facts(run_id, concept_uuid, period, entity_scope, "
@@ -410,5 +410,7 @@ def test_mpers_company_period_as_column(tmp_path: Path) -> None:
     export_run_to_xlsx(db, run_id, str(work), filing_level="company")
     wb = openpyxl.load_workbook(str(work), data_only=False)
     ws = wb["SOCIE"]
-    assert ws["B10"].value == 50.0   # CY → col B
-    assert ws["C10"].value == 60.0   # PY → col C
+    assert ws["C11"].value == 50.0
+    assert ws["C35"].value == 60.0
+    assert ws['B11'].value is None
+    wb.close()

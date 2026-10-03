@@ -129,17 +129,23 @@ def test_leaf_fact_becomes_a_write(company_db):
     assert doc["meta"]["counts"]["writes"] == 1
 
 
-def test_cy_and_py_map_to_distinct_roles(company_db):
+@pytest.mark.parametrize('first_financial_statements', [False, True])
+def test_cy_and_py_map_to_distinct_roles(company_db, first_financial_statements):
     db, run_id = company_db
     uuid, sheet, label = _find_leaf(db)
     _seed(db, run_id, uuid, period="CY", value=100)
     _seed(db, run_id, uuid, period="PY", value=90)
+    with sqlite3.connect(db) as conn:
+        conn.execute('UPDATE runs SET run_config_json=? WHERE id=?',
+                     (json.dumps({'first_financial_statements': first_financial_statements}), run_id))
     doc = build_fill_doc(db, run_id, filing_standard="mfrs",
                          filing_level="company")
     roles = {w["column_role"]: w["value"] for w in doc["writes"]}
-    assert roles == {"current_year": 100, "prior_year": 90}
-    assert doc["sheets"][sheet]["columns"] == {
-        "current_year": None, "prior_year": None}
+    assert roles == ({'current_year': 100} if first_financial_statements else
+                     {"current_year": 100, "prior_year": 90})
+    assert doc["sheets"][sheet]["columns"] == {role: None for role in roles}
+    with sqlite3.connect(db) as conn:
+        assert conn.execute('SELECT count(*) FROM run_concept_facts WHERE run_id=?', (run_id,)).fetchone()[0] == 2
 
 
 def test_not_disclosed_is_counted_not_written(company_db):

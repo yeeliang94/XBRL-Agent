@@ -222,8 +222,8 @@ def _attach_semantic_addresses(tree: ConceptTree, path: Path) -> None:
 # A SOCIE block is a self-contained statement-of-changes-in-equity, opened
 # by an "Equity at beginning of period" row and closed by "Equity at end of
 # period".  Group filings stack four such blocks vertically (gotcha #12);
-# MFRS Company stacks two (CY then PY); MPERS Company has a single block
-# where the period is a column (B=CY, C=PY) instead of a stacked block.
+# Company matrices stack two (CY then PY). Historical aggregate MPERS
+# Company templates have one block with period columns B=CY and C=PY.
 _SOCIE_BLOCK_OPEN = "equity at beginning of period"
 _SOCIE_BLOCK_CLOSE = "equity at end of period"
 
@@ -236,11 +236,11 @@ def _find_socie_blocks(ws: Worksheet) -> list[tuple[int, int]]:
     """Return ordered (begin_row, end_row) pairs, one per stacked block."""
     begins = [
         r for r in range(1, ws.max_row + 1)
-        if _socie_norm(ws.cell(r, 1).value) == _SOCIE_BLOCK_OPEN
+        if _socie_norm(ws.cell(r, 1).value) in {_SOCIE_BLOCK_OPEN, "balance at beginning of period"}
     ]
     ends = [
         r for r in range(1, ws.max_row + 1)
-        if _socie_norm(ws.cell(r, 1).value) == _SOCIE_BLOCK_CLOSE
+        if _socie_norm(ws.cell(r, 1).value) in {_SOCIE_BLOCK_CLOSE, "balance at end of period"}
     ]
     return list(zip(begins, ends))
 
@@ -248,8 +248,8 @@ def _find_socie_blocks(ws: Worksheet) -> list[tuple[int, int]]:
 def _socie_component_cols(ws: Worksheet) -> list[str]:
     """Equity-component column letters from the row-2 header.
 
-    MFRS SOCIE carries 23 component headers in B..X; MPERS SOCIE has no
-    row-2 headers and uses a single value column (B).
+    MFRS SOCIE carries 23 component headers in B..X; MPERS carries 14 in
+    B..O. Historical aggregate MPERS templates have a single value column.
     """
     cols = [
         get_column_letter(c)
@@ -264,8 +264,8 @@ def _socie_component_label(ws: Worksheet, col: str) -> str:
 
     ``matrix_col`` remains the spreadsheet column letter used for routing.
     This companion label is what the review UI should display as the column
-    header. MPERS SOCIE has no row-2 component headers, so its single column
-    is intentionally labelled as a generic value column.
+    header. Historical aggregate templates without component headers use
+    the generic value label.
     """
     value = ws.cell(2, get_col_index(col)).value
     label = str(value or "").strip()
@@ -349,7 +349,9 @@ def _parse_socie_matrix(path: Path, template_id: str) -> ConceptTree:
                 single_block,
             )
             uid = _mint_uuid(
-                template_id, sheet_name, row, f"{col}::{label}"
+                template_id, sheet_name, row,
+                (f"{col}::{component_label}::{label}" if template_id.startswith('mpers-')
+                 and ws.cell(2, 15).value == 'Total' else f"{col}::{label}")
             )
             node = ConceptNode(
                 concept_uuid=uid,
@@ -440,6 +442,8 @@ def _derive_template_id(path: Path) -> str:
         low = part.lower()
         if "mpers" in low:
             standard = "mpers"
+        elif "clbg" in low:
+            standard = "clbg"
         if low == "group":
             level = "group"
         elif low == "company":
@@ -826,6 +830,7 @@ def _cli_all(pretty: bool) -> int:
     template_roots = [
         repo / "XBRL-template-MFRS",
         repo / "XBRL-template-MPERS",
+        repo / "XBRL-template-CLBG",
     ]
     skipped: list[tuple[Path, str]] = []
     ok = 0

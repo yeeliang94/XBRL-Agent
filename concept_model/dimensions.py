@@ -16,12 +16,12 @@ import xml.etree.ElementTree as ET
 @lru_cache(maxsize=4)
 def numeric_category_catalog(standard: str, *, roots_only: bool = False) -> dict[str, list[str]]:
     """Read valid category members from SSM's definition linkbases."""
-    if standard not in {"mfrs", "mpers"}:
+    if standard not in {"mfrs", "mpers", "clbg"}:
         raise ValueError("Unknown filing standard")
     root = Path(__file__).resolve().parents[1] / "SSMxT_2022v1.0/rep/ssm/ca-2016/fs" / standard
     xlink = "{http://www.w3.org/1999/xlink}"
     catalog = {}
-    for role in ("740000", "750000"):
+    for role in (("640000",) if standard == "clbg" else ("740000", "750000")):
         path, = root.glob(f"def_*role-{role}.xml")
         tree = ET.parse(path)
         for link in tree.getroot():

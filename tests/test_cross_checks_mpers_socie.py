@@ -1,24 +1,4 @@
-"""Phase 5 MPERS hardening — reproduce the three run-#105 SOCIE
-cross-check failures in a test, then drive them green.
-
-Red tests for `docs/Archive/PLAN-mpers-notes-hardening.md` Phase 5.
-
-Run #105 produced:
-  sopl_to_socie_profit   failed — SOPL (-20678) vs SOCIE (-21329), diff 651
-  soci_to_socie_tci      failed — "Could not find TCI values: SOCI=-20678, SOCIE=None"
-  socie_to_sofp_equity   failed — "Could not find equity values: SOCIE=None, SOFP=963391"
-
-The SOCIE-side value-lookups pinned col 24 (X = "Total") which is
-the MFRS matrix layout. MPERS SOCIE has max_col 4 — col 24 is empty
-and the helpers return None. The fix: when the filing standard is
-MPERS, read col 2 (B = CY) / col 3 (C = PY) like every other MPERS
-statement.
-
-Fixtures here synthesise MPERS-shaped workbooks with openpyxl rather
-than shipping real filled files — keeps the tests self-contained and
-lets us exercise both "all values match" and "one value missing"
-without needing a real run.
-"""
+"""SOCIE cross-checks use each standard's component matrix and period blocks."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -38,31 +18,18 @@ from statement_types import StatementType
 
 def _build_mpers_company_socie(path: Path, equity_cy: float, equity_py: float,
                                 profit_cy: float, tci_cy: float):
-    """Minimal MPERS Company SOCIE — matches the 09-SOCIE.xlsx layout
-    observed in run #105 (max_row 44, max_col 2-3, labels carry SSM
-    type suffixes, `Equity at end of period` at row 44)."""
+    """MPERS Company has separate CY/PY blocks with total O, retained C."""
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "SOCIE"
-    rows = [
-        (3, "Disclosure of changes in equity [abstract]"),
-        (24, "Statement of changes in equity [line items]"),
-        (25, "Equity at beginning of period"),
-        (30, "Profit (loss)"),
-        (31, "Total other comprehensive income"),
-        (32, "*Total comprehensive income"),
-        (43, "*Total increase (decrease) in equity"),
-        (44, "Equity at end of period"),
-    ]
-    for r, lbl in rows:
-        ws.cell(r, 1).value = lbl
-    # Populate values in cols B (CY) / C (PY) like MPERS.
-    ws.cell(30, 2).value = profit_cy
-    ws.cell(31, 2).value = 0
-    ws.cell(32, 2).value = tci_cy  # concrete value (not a formula) to keep
-                                    # the cross-check test data_only-agnostic
-    ws.cell(44, 2).value = equity_cy
-    ws.cell(44, 3).value = equity_py
+    for offset in (0, 24):
+        for row, label in ((6, "Equity at beginning of period"), (11, "Profit (loss)"),
+                           (13, "*Total comprehensive income"), (25, "Equity at end of period")):
+            ws.cell(row + offset, 1, label)
+    ws.cell(11, 3, profit_cy)
+    ws.cell(13, 15, tci_cy)
+    ws.cell(25, 15, equity_cy)
+    ws.cell(49, 15, equity_py)
     wb.save(path)
 
 
@@ -141,8 +108,7 @@ def mpers_workbooks(tmp_path):
 
 
 def test_mpers_socie_to_sofp_equity_resolves(mpers_workbooks, mpers_run_config):
-    """MPERS Company SOCIE stores `Equity at end of period` at col 2,
-    not col 24. The check must read col 2 when the run is MPERS."""
+    """MPERS equity reads total O in the appropriate period block."""
     check = SOCIEToSOFPEquityCheck()
     result = check.run(
         mpers_workbooks, tolerance=1.0,

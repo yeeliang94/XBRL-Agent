@@ -36,7 +36,12 @@ Identical to MFRS:
 
 - **Company templates:** 4 cols — A=label, B=CY, C=PY, D=source.
 - **Group templates:** 6 cols — A=label, B=Group CY, C=Group PY, D=Company CY, E=Company PY, F=source.
-- **Group SOCIE** uses the 4-block vertical layout (same as MFRS).
+- **SOCIE Default** uses component columns B..O and Source P. Company has
+  two stacked period blocks; Group has four period/entity blocks. Issued
+  capital, retained earnings, reserves and non-controlling interests retain
+  distinct facts. I/K/L/O are taxonomy-derived component subtotals; O is total
+  equity. Primitive opening, restated opening and closing balances remain
+  source controls. SoRE keeps its separate linear layout.
 
 ## Pipeline Entry Points
 
@@ -95,6 +100,9 @@ venv/bin/python scripts/generate_mpers_templates.py --level company --snapshot
 
 # Regenerate Group templates (15 files; SOCIE uses 4-block layout)
 venv/bin/python scripts/generate_mpers_templates.py --level group --snapshot
+
+# Regenerate only SOCIE and preserve existing immutable backup originals
+venv/bin/python scripts/generate_mpers_templates.py --level company --filename 09-SOCIE.xlsx --snapshot --snapshot-dir docs/local/mpers-socie-change
 ```
 
 **Always pass `--snapshot`** when regenerating — it writes the previous

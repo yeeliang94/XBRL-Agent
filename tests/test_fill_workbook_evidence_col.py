@@ -48,14 +48,14 @@ EVIDENCE_CASES = [
         "SOCIE",
         "company",
         "Profit (loss)",
-        4,
+        16,
     ),
     (
         "XBRL-template-MPERS/Group/09-SOCIE.xlsx",
         "SOCIE",
         "group",
         "Profit (loss)",
-        4,
+        16,
     ),
     (
         "XBRL-template-MPERS/Company/10-SoRE.xlsx",

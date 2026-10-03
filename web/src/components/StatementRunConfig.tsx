@@ -1,5 +1,5 @@
-import type { StatementType, ModelEntry } from "../lib/types";
-import { STATEMENT_TYPES, STATEMENT_LABELS } from "../lib/types";
+import type { StatementType, ModelEntry, FilingStandard } from "../lib/types";
+import { STATEMENT_TYPES, statementLabel } from "../lib/types";
 import { pwc } from "../lib/theme";
 
 interface Props {
@@ -12,6 +12,7 @@ interface Props {
    *  existing callers/tests are unaffected; the pre-run panel passes false to
    *  keep model choices under its Advanced disclosure (Phase 3). */
   showModels?: boolean;
+  filingStandard?: FilingStandard;
 }
 
 const styles = {
@@ -99,12 +100,14 @@ export function StatementRunConfig({
   onToggleStatement,
   onModelChange,
   showModels = true,
+  filingStandard = "mfrs",
 }: Props) {
   return (
     <table style={styles.table}>
       <tbody>
         {STATEMENT_TYPES.map((stmt) => {
-          const isEnabled = enabled[stmt];
+          const unavailable = filingStandard === "clbg" && stmt === "SOCI";
+          const isEnabled = enabled[stmt] && !unavailable;
           return (
             <tr key={stmt} style={styles.row}>
               <td style={styles.cell}>
@@ -112,17 +115,18 @@ export function StatementRunConfig({
                   <input
                     type="checkbox"
                     checked={isEnabled}
+                    disabled={unavailable}
                     onChange={(e) => onToggleStatement(stmt, e.target.checked)}
                   />
                   <span style={styles.stmtCode}>{stmt}</span>
-                  <span style={styles.stmtName}>{STATEMENT_LABELS[stmt]}</span>
+                  <span style={styles.stmtName}>{statementLabel(stmt, filingStandard)}</span>
                 </label>
               </td>
               {showModels && (
                 <td style={styles.modelCell}>
                   <select
                     role="combobox"
-                    aria-label={`Model for ${stmt} — ${STATEMENT_LABELS[stmt]}`}
+                    aria-label={`Model for ${stmt} — ${statementLabel(stmt, filingStandard)}`}
                     value={modelOverrides[stmt]}
                     disabled={!isEnabled}
                     onChange={(e) => onModelChange(stmt, e.target.value)}

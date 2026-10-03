@@ -154,3 +154,191 @@ def test_face_fact_cannot_acquire_an_unsupported_category(db_and_run):
     db, run, uuid = db_and_run
     with pytest.raises(HTTPException, match='additional category axis'):
         write_fact(db, run, FactWrite(concept_uuid=uuid, dimensions={'ClassAxis': 'Ordinary'}, value=1))
+
+
+@pytest.fixture
+def unresolved_category(tmp_path):
+    """A source value whose category has deliberately not been guessed."""
+    from db.schema import init_db
+    from notes_types import NotesTemplateType, notes_template_path
+    from test_mtool_exporter import _import, _init_run
+    db = tmp_path / 'category.db'
+    init_db(db)
+    tid = _import(db, notes_template_path(NotesTemplateType.ISSUED_CAPITAL, level='company'))
+    run = _init_run(db)
+    with sqlite3.connect(db) as conn:
+        uuid = conn.execute("SELECT concept_uuid FROM concept_nodes WHERE template_id=? "
+                            "AND canonical_label='*Number of shares issued and fully paid'", (tid,)).fetchone()[0]
+    write_fact(db, run, FactWrite(concept_uuid=uuid, value=100, evidence='Page 4: share register'))
+    write_fact(db, run, FactWrite(concept_uuid=uuid, period='PY', value=90))
+    return db, run, uuid, tid
+
+
+def _resolution_request(db, run, uuid, **changes):
+    from concept_model.facts_api import CategoryResolution, category_resolution_token
+    with sqlite3.connect(db) as conn:
+        conn.row_factory = sqlite3.Row
+        token = category_resolution_token(conn, run, uuid, 'CY', 'Company')
+    values = dict(dimensions={'ifrs-full_ClassesOfShareCapitalAxis': 'ifrs-full_OrdinarySharesMember'},
+                  expected_token=token, evidence='Page 4: source identifies ordinary shares')
+    values.update(changes)
+    return CategoryResolution(**values)
+
+
+def test_confirmed_category_survives_review_export_and_revert(unresolved_category):
+    from api.notes import _numeric_sheet_rows
+    from concept_model.facts_api import register_facts_routes
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from mtool.exporter import build_fill_doc
+    db, run, uuid, tid = unresolved_category
+    with sqlite3.connect(db) as conn:
+        conn.execute("INSERT INTO fact_source_receipts(run_id,concept_uuid,period,entity_scope,"
+                     "transform,arithmetic_status,semantic_status,created_at) VALUES(?,?,'CY','Company',"
+                     "'literal','passed','matched','2026-10-03')", (run, uuid))
+        conn.row_factory = sqlite3.Row
+        row = next(r for r in _numeric_sheet_rows(conn, run, tid, 'Notes-Issuedcapital', 'company')
+                   if r.get('concept_uuid') == uuid)
+    request = _resolution_request(db, run, uuid)
+    assert row['categories'][0]['resolution_tokens']['cy'] == request.expected_token
+    assert request.dimensions in [option['dimensions'] for option in row['category_options']]
+    app = FastAPI()
+    register_facts_routes(app, lambda: db)
+    with TestClient(app) as client:
+        response = client.post(f'/api/runs/{run}/facts/{uuid}/category', json=request.model_dump())
+    assert response.status_code == 200
+    result = response.json()
+    assert result['value'] == 100
+    doc = build_fill_doc(db, run, filing_standard='mfrs', filing_level='company')
+    cy = [w for w in doc['writes'] if w['concept_uuid'] == uuid and w['period'] == 'CY']
+    assert len(cy) == 1 and cy[0]['dimension_key'] == dimension_key(request.dimensions)
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT period,dimension_key,value FROM run_concept_facts WHERE concept_uuid=? "
+                            "ORDER BY period", (uuid,)).fetchall() == [
+            ('CY', dimension_key(request.dimensions), 100), ('PY', '', 90)]
+        assert conn.execute("SELECT COUNT(*) FROM concept_fact_events WHERE concept_uuid=? "
+                            "AND after_json IS NULL AND dimension_key=''", (uuid,)).fetchone()[0] == 1
+        assert conn.execute('SELECT COUNT(*) FROM fact_source_receipts WHERE run_id=?', (run,)).fetchone()[0] == 0
+        assert conn.execute("SELECT evidence FROM run_concept_facts WHERE concept_uuid=? AND period='CY'",
+                            (uuid,)).fetchone()[0] == 'Page 4: share register\n' + request.evidence
+    assert len(compute_review_diff(db, run)) == 2  # Removal and source-confirmed addition.
+    assert revert_to_original(db, run)['reverted']
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT period,dimension_key,value FROM run_concept_facts WHERE concept_uuid=? "
+                            "ORDER BY period", (uuid,)).fetchall() == [('CY', '', 100), ('PY', '', 90)]
+
+
+@pytest.mark.parametrize('boundary', ['stale', 'occupied', 'wrong_axis', 'wrong_family',
+                                     'wrong_scope', 'first_time_py', 'conflict', 'blank_evidence'])
+def test_category_resolution_refuses_unsafe_moves_without_partial_writes(unresolved_category, boundary):
+    import json
+    from fastapi import HTTPException
+    from concept_model.facts_api import resolve_fact_category
+    db, run, uuid, _ = unresolved_category
+    request = _resolution_request(db, run, uuid)
+    code = 400
+    if boundary == 'stale':
+        write_fact(db, run, FactWrite(concept_uuid=uuid, value=101))
+        code = 409
+    elif boundary == 'occupied':
+        write_fact(db, run, FactWrite(concept_uuid=uuid, dimensions=request.dimensions, value=12))
+        code = 409
+    elif boundary == 'wrong_axis':
+        request.dimensions = {'ifrs-full_CategoriesOfRelatedPartiesAxis': 'ifrs-full_ParentMember'}
+    elif boundary == 'wrong_family':
+        with sqlite3.connect(db) as conn:
+            conn.execute('UPDATE runs SET run_config_json=? WHERE id=?',
+                         (json.dumps({'filing_standard': 'mpers'}), run))
+    elif boundary == 'wrong_scope':
+        request.entity_scope = 'Group'
+    elif boundary == 'first_time_py':
+        with sqlite3.connect(db) as conn:
+            conn.execute('UPDATE runs SET run_config_json=? WHERE id=?',
+                         (json.dumps({'first_financial_statements': True}), run))
+        request.period = 'PY'
+    elif boundary == 'conflict':
+        write_fact(db, run, FactWrite(concept_uuid=uuid, value=100, value_status='conflict'))
+        request = _resolution_request(db, run, uuid)
+        code = 409
+    elif boundary == 'blank_evidence':
+        request.evidence = ' '
+    with sqlite3.connect(db) as conn:
+        before = conn.execute('SELECT * FROM run_concept_facts ORDER BY dimension_key').fetchall()
+        events = conn.execute('SELECT COUNT(*) FROM concept_fact_events').fetchone()[0]
+    with pytest.raises(HTTPException) as exc:
+        resolve_fact_category(db, run, uuid, request)
+    assert exc.value.status_code == code
+    with sqlite3.connect(db) as conn:
+        assert conn.execute('SELECT * FROM run_concept_facts ORDER BY dimension_key').fetchall() == before
+        assert conn.execute('SELECT COUNT(*) FROM concept_fact_events').fetchone()[0] == events
+        assert conn.execute('SELECT COUNT(*) FROM run_fact_snapshots').fetchone()[0] == 0
+
+
+@pytest.mark.parametrize('standard,level', [('mfrs', 'group'), ('mpers', 'company'),
+                                           ('mpers', 'group'), ('clbg', 'company')])
+def test_category_resolution_uses_exact_run_family_and_scope(tmp_path, standard, level):
+    import json
+    from db.schema import init_db
+    from notes_types import NotesTemplateType, notes_template_path
+    from test_mtool_exporter import _import, _init_run
+    from concept_model.dimensions import numeric_category_catalog
+    from concept_model.facts_api import resolve_fact_category, CategoryResolution, category_resolution_token
+    from mtool.exporter import build_fill_doc
+    db = tmp_path / 'family.db'
+    init_db(db)
+    tid = _import(db, notes_template_path(NotesTemplateType.RELATED_PARTY, level=level,
+                                        standard=standard), group=level == 'group')
+    run = _init_run(db)
+    scope = 'Group' if level == 'group' else 'Company'
+    with sqlite3.connect(db) as conn:
+        conn.execute('UPDATE runs SET run_config_json=? WHERE id=?',
+                     (json.dumps({'filing_standard': standard, 'filing_level': level}), run))
+        uuid = conn.execute("SELECT concept_uuid FROM concept_nodes WHERE template_id=? AND kind='LEAF' "
+                            "AND canonical_label NOT LIKE '%Disclosure%' ORDER BY render_row LIMIT 1", (tid,)).fetchone()[0]
+    write_fact(db, run, FactWrite(concept_uuid=uuid, entity_scope=scope, value=23))
+    catalog = numeric_category_catalog(standard)
+    axis = next(a for a in catalog if a.endswith('CategoriesOfRelatedPartiesAxis'))
+    member = next(m for m in catalog[axis] if m.endswith('ParentMember'))
+    with sqlite3.connect(db) as conn:
+        conn.row_factory = sqlite3.Row
+        token = category_resolution_token(conn, run, uuid, 'CY', scope)
+    resolve_fact_category(db, run, uuid, CategoryResolution(dimensions={axis: member}, entity_scope=scope,
+                          expected_token=token, evidence='Page 8: transaction with parent'))
+    writes = build_fill_doc(db, run, filing_standard=standard, filing_level=level)['writes']
+    fact, = [w for w in writes if w['concept_uuid'] == uuid]
+    assert fact['value'] == 23 and fact['entity_scope'] == scope
+    assert fact['dimension_key'] == dimension_key({axis: member})
+
+
+def test_category_move_rolls_back_target_audit_and_snapshot_on_storage_failure(unresolved_category):
+    from concept_model.facts_api import resolve_fact_category
+    db, run, uuid, _ = unresolved_category
+    request = _resolution_request(db, run, uuid)
+    with sqlite3.connect(db) as conn:
+        before = conn.execute('SELECT * FROM run_concept_facts').fetchall()
+        events = conn.execute('SELECT COUNT(*) FROM concept_fact_events').fetchone()[0]
+        conn.execute("CREATE TRIGGER reject_category_removal BEFORE DELETE ON run_concept_facts "
+                     "WHEN OLD.dimension_key='' BEGIN SELECT RAISE(ABORT,'storage failure'); END")
+    with pytest.raises(sqlite3.IntegrityError, match='storage failure'):
+        resolve_fact_category(db, run, uuid, request)
+    with sqlite3.connect(db) as conn:
+        assert conn.execute('SELECT * FROM run_concept_facts').fetchall() == before
+        assert conn.execute('SELECT COUNT(*) FROM concept_fact_events').fetchone()[0] == events
+        assert conn.execute('SELECT COUNT(*) FROM run_fact_snapshots').fetchone()[0] == 0
+
+
+def test_first_time_notes_hide_retained_comparatives_without_deleting_them(unresolved_category):
+    import json
+    from api.notes import _numeric_sheet_rows
+    db, run, uuid, tid = unresolved_category
+    with sqlite3.connect(db) as conn:
+        conn.execute('UPDATE runs SET run_config_json=? WHERE id=?',
+                     (json.dumps({'first_financial_statements': True}), run))
+        conn.row_factory = sqlite3.Row
+        row = next(r for r in _numeric_sheet_rows(conn, run, tid, 'Notes-Issuedcapital', 'company')
+                   if r.get('concept_uuid') == uuid)
+        assert row['values'] == {'cy': 100}
+        assert row['categories'][0]['values'] == {'cy': 100}
+        assert set(row['categories'][0]['resolution_tokens']) == {'cy'}
+        assert conn.execute("SELECT value FROM run_concept_facts WHERE concept_uuid=? AND period='PY'",
+                            (uuid,)).fetchone()[0] == 90

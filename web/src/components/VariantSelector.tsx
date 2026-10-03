@@ -6,7 +6,7 @@ import type {
 } from "../lib/types";
 import {
   STATEMENT_TYPES,
-  STATEMENT_LABELS,
+  statementLabel,
   variantsFor,
 } from "../lib/types";
 import { variantLabel } from "../lib/vocabulary";
@@ -129,13 +129,13 @@ export function VariantSelector({
           <div key={stmt} style={styles.row}>
             <span
               style={isEnabled ? styles.label : styles.labelDisabled}
-              title={STATEMENT_LABELS[stmt]}
+              title={statementLabel(stmt, filingStandard)}
             >
               {stmt}
             </span>
             <select
               role="combobox"
-              aria-label={`Format for ${stmt} — ${STATEMENT_LABELS[stmt]}`}
+              aria-label={`Format for ${stmt} — ${statementLabel(stmt, filingStandard)}`}
               value={sel.variant}
               disabled={!isEnabled}
               onChange={(e) =>

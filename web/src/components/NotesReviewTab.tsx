@@ -48,7 +48,7 @@ import {
 import { Indent, indentUnwrappedSubnote } from "../lib/notesIndent";
 import { NotesSection } from "../lib/notesSection";
 import { pwc, tokens } from "../lib/theme";
-import { Check, ContentCopy, Edit } from "./iconGlyphs";
+import { Check, ChevronRight, ContentCopy, Edit } from "./iconGlyphs";
 import { ui, uiClass } from "../lib/uiStyles";
 import {
   fetchNotesCells,
@@ -57,6 +57,7 @@ import {
   patchNotesCell,
   removeInvalidNotesCell,
   patchNotesFact,
+  resolveNotesCategory,
   parseNumericInput,
   sortSheetsBySlot,
   isBlankHtml,
@@ -293,6 +294,8 @@ export function NotesReviewTab({
   // failure surfaces in a single banner instead of per-cell flicker.
   const [sheets, setSheets] = useState<NotesSheet[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [categoryRefreshFailed, setCategoryRefreshFailed] = useState(false);
+  const [categoryRefreshing, setCategoryRefreshing] = useState(false);
   const [sourceNotes, setSourceNotes] = useState<SourceNoteInventoryRow[] | null>(null);
   const [coverageBanner, setCoverageBanner] = useState<string | null>(null);
   const [sourceNotesError, setSourceNotesError] = useState(false);
@@ -394,6 +397,7 @@ export function NotesReviewTab({
     // window would write A's content into B's notes_cells row.
     setSheets(null);
     setLoadError(null);
+    setCategoryRefreshFailed(false);
     let cancelled = false;
     fetchNotesCells(runId)
       .then((resp) => {
@@ -446,6 +450,21 @@ export function NotesReviewTab({
       setLoadError(err.message);
     });
   }, [runId]);
+
+  const reloadCategoryNotes = useCallback(async (categorySaved = false) => {
+    if (!categorySaved) { await reloadNotes(); return; }
+    setCategoryRefreshing(true);
+    try {
+      const resp = await fetchNotesCells(runId);
+      setSheets(sortSheetsBySlot(resp.sheets));
+      setLoadError(null);
+      setCategoryRefreshFailed(false);
+    } catch (err) {
+      // The category POST has committed. Recovery must only reload its result.
+      setCategoryRefreshFailed(true);
+      setLoadError(userMessage(err));
+    } finally { setCategoryRefreshing(false); }
+  }, [reloadNotes, runId]);
 
   const handleCellRemoved = useCallback((removedSheet: string, removedRow: number) => {
     setSheets((current) => current?.map((item) => (
@@ -646,11 +665,10 @@ export function NotesReviewTab({
           }}
         >
           <aside style={styles.noteRail} aria-label="Notes template navigator">
-            {/* Same 44px header band as the Source PDF column, so both titles
-                and the search box / PDF card below them line up. */}
-            <div style={{ display: "flex", alignItems: "center", minHeight: 44, padding: `0 ${pwc.space.xs}px`, marginBottom: pwc.space.lg }}>
-              <strong style={ui.sectionTitle}>mTool worksheets</strong>
+            <div style={{ ...ui.reviewPaneHeader, marginBottom: pwc.space.lg }}>
+              <h2 style={{ ...ui.sectionTitle, margin: 0 }}>mTool worksheets</h2>
             </div>
+            <div aria-label="Worksheet and source note list" role="region" style={styles.noteRailBody}>
             <input type="search" aria-label="Search all note fields" placeholder="Find a field, including empty fields" value={noteSearch}
               onChange={(event) => setNoteSearch(event.target.value)} style={styles.noteRailSearch} />
                 <nav style={{ display: "flex", flexDirection: "column", gap: 4 }} aria-label="Notes sheet navigator">
@@ -676,7 +694,8 @@ export function NotesReviewTab({
                           setActive((current) => ({ sheet: sheet.sheet, key: current.key + 1 }));
                         }}
                       >
-                        {label} · {notesSheetDisplayName(sheet.sheet)}
+                        <span style={{ minWidth: 0 }}>{label} · {notesSheetDisplayName(sheet.sheet)}</span>
+                        {selected && <ChevronRight size={16} style={ui.reviewSelectionMarker} />}
                       </button>
                     );
                   })}
@@ -684,9 +703,11 @@ export function NotesReviewTab({
 
             {noteSearch.trim() && <nav aria-label="Matching note fields" style={{ display: "flex", flexDirection: "column" }}>
               {noteEntries.filter(({ cell, sheet }) => `${cell.label} ${sheet.sheet}`.toLowerCase().includes(noteSearch.trim().toLowerCase())).map(({ cell, sheet, key }) => (
-                <button key={key} type="button" disabled={saveBlocked || moveBusy} style={{ ...styles.workspaceSheetButton, textAlign: "left", whiteSpace: "normal" }}
+                <button key={key} type="button" disabled={saveBlocked || moveBusy} aria-current={activeCellKey === key ? "true" : undefined}
+                  style={{ ...styles.workspaceSheetButton, ...(activeCellKey === key ? ui.reviewSelection : {}) }}
                   onClick={() => { setActive((current) => ({ sheet: sheet.sheet, key: current.key + 1 })); setFocusRow(cell.row); handleWorkspaceCellActivate(sheet.sheet, cell.row); reportCellPages(cell.source_pages, onActiveCellPages); }}>
-                  {cell.label}{isBlankHtml(cell.html) && cell.kind !== "numeric" ? " · Empty" : ""}
+                  <span style={{ minWidth: 0 }}>{cell.label}{isBlankHtml(cell.html) && cell.kind !== "numeric" ? " · Empty" : ""}</span>
+                  {activeCellKey === key && <ChevronRight size={16} style={ui.reviewSelectionMarker} />}
                 </button>
               ))}
             </nav>}
@@ -755,9 +776,12 @@ export function NotesReviewTab({
                         <span style={styles.noteRailLabel}>{note.title || `Note ${note.note_num}`}</span>
                         {statusLabel && <span style={styles.noteRailDestination}>{statusLabel}</span>}
                       </span>
+                      <span style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                      {selected && <ChevronRight size={16} style={ui.reviewSelectionMarker} />}
                       {needsReview && (
                         <span style={styles.noteRailAttention} aria-label="Needs review">!</span>
                       )}
+                      </span>
                     </button>
                     {note.reason && <p style={{ ...styles.noteRailEmpty, margin: "4px 12px" }}>{note.reason}</p>}
                     {(note.subnotes?.length ?? 0) > 0 && <div style={styles.subnoteList} aria-label={`Sub-notes for note ${note.note_num}`}>
@@ -773,6 +797,7 @@ export function NotesReviewTab({
                             key={sub.subnote_ref}
                             type="button"
                             disabled={saveBlocked || moveBusy}
+                            aria-current={selected && selectedSubnoteRef === sub.subnote_ref ? "true" : undefined}
                             onClick={() => selectSubnote(note, sub)}
                             style={{
                               ...styles.subnoteButton,
@@ -791,6 +816,7 @@ export function NotesReviewTab({
                                 </>
                               )}
                             </span>
+                            {selected && selectedSubnoteRef === sub.subnote_ref && <ChevronRight size={16} style={ui.reviewSelectionMarker} />}
                           </button>
                         ))}
                         {selected && selectedSubnoteRef && childDestinations.length === 0 && (
@@ -808,7 +834,8 @@ export function NotesReviewTab({
                           <button
                             key={`${placement.sheet}:${placement.row}`}
                             type="button"
-                            style={styles.noteRailPlacementButton}
+                            aria-current={activeCellKey === `${placement.sheet}:${placement.row}` ? "true" : undefined}
+                            style={{ ...styles.noteRailPlacementButton, ...(activeCellKey === `${placement.sheet}:${placement.row}` ? ui.reviewSelection : {}) }}
                             disabled={saveBlocked || moveBusy}
                             onClick={() => {
                               const childPages = selectedSubnote ? sourceNotePages(selectedSubnote) : [];
@@ -817,7 +844,8 @@ export function NotesReviewTab({
                             }}
                             title={`${placement.row_label || "Open placed field"} · ${notesSheetDisplayName(placement.sheet)}`}
                           >
-                            {placement.row_label || "Open placed field"}
+                            <span style={{ minWidth: 0 }}>{placement.row_label || "Open placed field"}</span>
+                            {activeCellKey === `${placement.sheet}:${placement.row}` && <ChevronRight size={16} style={ui.reviewSelectionMarker} />}
                           </button>
                         ))}
                       </div>
@@ -827,6 +855,7 @@ export function NotesReviewTab({
               })}
             </nav>
             </section>
+            </div>
           </aside>
 
           <ResizableDivider
@@ -836,8 +865,15 @@ export function NotesReviewTab({
           />
 
           <section style={styles.editorPane} aria-label="XBRL notes fields">
+            <div style={{ ...ui.reviewPaneHeader, position: "sticky", top: 116, zIndex: 2, marginBottom: pwc.space.lg }}>
+              <h2 style={{ ...ui.sectionTitle, margin: 0 }}>Note content</h2>
+            </div>
             {loadError ? (
-              <p style={styles.dim}>Notes could not be loaded. Refresh the page to try again.</p>
+              categoryRefreshFailed ? <div role="alert" style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-start" }}>
+                <p style={styles.dim}>Category saved. Notes could not be refreshed.</p>
+                <button type="button" className={uiClass.btnGhost} disabled={categoryRefreshing}
+                  onClick={() => { void reloadCategoryNotes(true); }}>{categoryRefreshing ? "Refreshing…" : "Refresh notes"}</button>
+              </div> : <p style={styles.dim}>Notes could not be loaded. Refresh the page to try again.</p>
             ) : sheets === null ? (
               <p style={styles.dim}>Loading XBRL fields…</p>
             ) : noteEntries.length === 0 ? (
@@ -853,6 +889,7 @@ export function NotesReviewTab({
                   focusKey={active.key}
                   focusRow={focusRow}
                   onFormatted={reloadNotes}
+                  onCategoryResolved={reloadCategoryNotes}
                   onCellRemoved={handleCellRemoved}
                   onCellSaved={handleCellSaved}
                   onSaveBlocked={setSaveBlocked}
@@ -884,6 +921,7 @@ function SheetSection({
   theme,
   formatterDefaultModel,
   onFormatted,
+  onCategoryResolved,
   onCellRemoved,
   onCellSaved,
   onSaveBlocked,
@@ -905,6 +943,7 @@ function SheetSection({
   theme: ClipboardFormatOptions;
   formatterDefaultModel: string;
   onFormatted: () => Promise<void>;
+  onCategoryResolved: (categorySaved?: boolean) => Promise<void>;
   onCellRemoved: (sheet: string, row: number) => void;
   onCellSaved: (sheet: string, cell: NotesCell) => void;
   onSaveBlocked: (blocked: boolean) => void;
@@ -1114,7 +1153,7 @@ function SheetSection({
               <span role="columnheader">Line item</span>
               {numericColumns.map((key) => (
                 <Fragment key={key}>
-                  <span role="columnheader" style={styles.numericColumnHeader}>{NUMERIC_VALUE_COLUMNS[key].label}</span>
+                  <span role="columnheader" style={styles.numericColumnHeader}>{humanFigures ? "Extracted " : ""}{NUMERIC_VALUE_COLUMNS[key].label}</span>
                   {humanFigures && <span role="columnheader" style={styles.numericColumnHeader}>Human {NUMERIC_VALUE_COLUMNS[key].label}</span>}
                 </Fragment>
               ))}
@@ -1139,6 +1178,7 @@ function SheetSection({
                 cell={cell}
                 onSaveStatusChange={handleRowSaveStatus}
                 onComparisonChange={onComparisonChange}
+                onCategoryResolved={onCategoryResolved}
                 humanFigures={humanFigures}
                 columns={numericColumns}
                 gridTemplateColumns={numericGridColumns}
@@ -1151,6 +1191,7 @@ function SheetSection({
               <WorkspaceReadOnlyCellRow
                 key={`${runId}:${sheet.sheet}:${cell.row}`}
                 cell={cell}
+                fieldHeadingExternal={Boolean(human && cell.node_uuid)}
                 disabled={hasPendingRowSave || moveBusy}
                 onActiveCellPages={hasPendingRowSave || moveBusy ? undefined : onActiveCellPages}
                 onActivate={() => onCellActivate?.(sheet.sheet, cell.row)}
@@ -1164,6 +1205,7 @@ function SheetSection({
                 runId={runId}
                 sheet={sheet.sheet}
                 cell={cell}
+                fieldHeadingExternal={Boolean(human && cell.node_uuid)}
                 theme={theme}
                 onSaveStatusChange={handleRowSaveStatus}
                 onCellSaved={onCellSaved}
@@ -1179,11 +1221,15 @@ function SheetSection({
             // The human's note sits on the same grid row, so the pair takes
             // the height of the longer text and never drifts out of line.
             return (
-              <div key={`${runId}:${sheet.sheet}:${cell.row}:pair`} className="notes-human-pair" data-testid="notes-human-pair" style={styles.humanPair}>
-                <div style={{ minWidth: 0 }}>{row}</div>
+              <section key={`${runId}:${sheet.sheet}:${cell.row}:pair`} aria-label={cell.label}>
+                <h3 style={{ ...styles.cellLabel, margin: 0, padding: "12px" }}>{cell.label}</h3>
+                <div className="notes-human-pair" data-testid="notes-human-pair" style={styles.humanPair}>
+                <div className="notes-human-extracted" style={styles.comparisonRows}>{row}</div>
                 <HumanNoteCell html={human.html[field]} status={human.status[field]}
+                  blank={isBlankHtml(cell.html)}
                   selected={selectedCellKey === `${sheet.sheet}:${cell.row}`} />
-              </div>
+                </div>
+              </section>
             );
           })}
       </div>
@@ -1197,16 +1243,18 @@ function HumanNoteCell({
   html,
   status,
   selected,
+  blank,
 }: {
   html: string | undefined;
   status: "agree" | "missed" | "ai_only" | undefined;
   selected: boolean;
+  blank: boolean;
 }) {
   const marker = status === "missed" ? "○" : status === "ai_only" ? "◇" : null;
   const markerLabel = status === "missed" ? "Missed by AI" : "AI-only";
   return (
-    <div role="group" aria-label="Human file" data-testid="notes-human-cell" data-human-status={status ?? "none"} style={{ ...styles.workspaceCellRow, alignContent: "start" }}>
-      <div style={{ ...styles.humanNoteStatusRow, minHeight: selected ? 72 : 44 }}>
+    <div role="group" aria-label="Human file" data-testid="notes-human-cell" data-human-status={status ?? "none"} style={{ ...styles.workspaceCellRow, ...styles.comparisonRows }}>
+      <div style={{ ...styles.humanNoteStatusRow, minHeight: blank && !selected ? 0 : 34, padding: selected ? "0 12px" : "12px", boxSizing: "content-box" }}>
         {marker && (
           <span role="img" aria-label={markerLabel} title={markerLabel}
             style={{ fontWeight: 680, color: status === "missed" ? pwc.warning : pwc.grey500 }}>
@@ -1214,10 +1262,10 @@ function HumanNoteCell({
           </span>
         )}
       </div>
-      <div style={{ padding: "0 12px 16px" }}>
+      <div data-comparison-content style={{ padding: "0 12px 16px", gridRow: 3, minWidth: 0 }}>
         {html ? (
           // Sanitised with the notes whitelist on upload (eval/human_file.py).
-          <div className="tiptap ProseMirror" style={styles.humanNoteBody}
+          <div className="tiptap ProseMirror" style={{ ...styles.humanNoteBody, borderColor: pwc.grey300 }}
             dangerouslySetInnerHTML={{ __html: html }} />
         ) : (
           <p style={{ ...styles.dim, margin: 0 }}>Not in human file</p>
@@ -1235,11 +1283,13 @@ function HumanNoteCell({
 
 function WorkspaceReadOnlyCellRow({
   cell,
+  fieldHeadingExternal = false,
   disabled,
   onActiveCellPages,
   onActivate,
 }: {
   cell: NotesCell;
+  fieldHeadingExternal?: boolean;
   disabled: boolean;
   onActiveCellPages?: (pages: number[]) => void;
   onActivate: () => void;
@@ -1268,7 +1318,7 @@ function WorkspaceReadOnlyCellRow({
       data-testid="notes-review-row"
       data-cell-row={cell.row}
       className="notes-review-row"
-      style={styles.workspaceCellRow}
+      style={{ ...styles.workspaceCellRow, ...(fieldHeadingExternal ? styles.comparisonRows : {}) }}
       role={blank ? "button" : undefined}
       tabIndex={blank ? 0 : undefined}
       aria-label={blank ? `Review ${cell.label}` : undefined}
@@ -1283,21 +1333,21 @@ function WorkspaceReadOnlyCellRow({
       }}
     >
       <div style={styles.disclosureHeader}>
-        <aside style={styles.cellLeft}>
+        {!fieldHeadingExternal && <aside style={styles.cellLeft}>
           <div style={styles.cellLabel}>{cell.label}</div>
-        </aside>
+        </aside>}
         {!blank && <div style={styles.cellToolbar}>
           <button type="button" disabled={disabled} className={uiClass.btnSecondary} style={styles.smallButton} onClick={activate} aria-label={`Review ${cell.label}`}>Review</button>
         </div>}
       </div>
-      {!blank && <div style={{ padding: "0 12px 16px" }}>
+      {!blank && <div data-comparison-content={fieldHeadingExternal ? "" : undefined} style={{ padding: "0 12px 16px", ...(fieldHeadingExternal ? { gridRow: 3, minWidth: 0 } : {}) }}>
         {/* notes_cells HTML is sanitised before persistence by every write path;
             this read-only projection avoids constructing a TipTap instance. */}
         <div
           ref={contentRef}
           className="tiptap ProseMirror"
           data-testid="notes-readonly-content"
-          style={{ ...styles.workspaceReadonlySurface, gridColumn: "1 / -1", minHeight: 0, minWidth: 0, maxHeight: 440, overflow: "hidden", border: "none", padding: 0 }}
+          style={{ ...styles.workspaceReadonlySurface, gridColumn: "1 / -1", minHeight: 0, minWidth: 0, maxHeight: 440, overflow: "hidden" }}
           dangerouslySetInnerHTML={{ __html: cell.html }}
         />
       </div>}
@@ -1327,6 +1377,7 @@ function CellRow({
   runId,
   sheet,
   cell,
+  fieldHeadingExternal = false,
   theme,
   onSaveStatusChange,
   moveBusy,
@@ -1339,6 +1390,7 @@ function CellRow({
   runId: number;
   sheet: string;
   cell: NotesCell;
+  fieldHeadingExternal?: boolean;
   /** Resolved notes-table theme — Copy decorates the paste with it so the
    *  clipboard output matches the editor preview. */
   theme: ClipboardFormatOptions;
@@ -1797,7 +1849,7 @@ function CellRow({
       data-testid="notes-review-row"
       data-cell-row={cell.row}
       className="notes-review-row"
-      style={styles.workspaceCellRow}
+      style={{ ...styles.workspaceCellRow, ...(fieldHeadingExternal ? styles.comparisonRows : {}) }}
       // Focusing (click or keyboard-tab) any part of this row tells the
       // workspace which PDF pages the note came from, so the Source PDF pane
       // follows the note the way it follows a face figure. Capture phase means
@@ -1811,8 +1863,8 @@ function CellRow({
         reportCellPages(cell.source_pages, onActiveCellPages);
       }}
     >
-      <aside style={{ ...styles.editorDisclosureHeader, ...styles.cellLeft }}>
-        <div style={styles.cellLabel}>{cell.label}</div>
+      {(!fieldHeadingExternal || cell.invalid_target) && <aside style={{ ...styles.editorDisclosureHeader, ...styles.cellLeft }}>
+        {!fieldHeadingExternal && <div style={styles.cellLabel}>{cell.label}</div>}
         {cell.invalid_target && (
           <div
             style={{ ...ui.alertWarning, marginTop: pwc.space.sm, fontSize: 14 }}
@@ -1845,9 +1897,9 @@ function CellRow({
             />
           </div>
         )}
-      </aside>
+      </aside>}
 
-      <div style={{ ...styles.cellRight, padding: "0 12px 16px" }} ref={wrapperRef}>
+      <div data-comparison-body={fieldHeadingExternal ? "" : undefined} style={{ ...styles.cellRight, padding: "0 12px 16px", ...(fieldHeadingExternal ? styles.comparisonRows : {}) }} ref={wrapperRef}>
         <div style={styles.cellToolbar}>
           <div style={styles.cellToolbarSpacer} />
           <SaveStatusBadge status={status} />
@@ -1897,12 +1949,14 @@ function CellRow({
             Copy
           </button>
         </div>
-          {editable && editorFocused && editor && <NotesEditorToolbar editor={editor} />}
+          {editable && editorFocused && editor && <div style={fieldHeadingExternal ? { gridRow: 2 } : undefined}><NotesEditorToolbar editor={editor} /></div>}
         <div
+          data-comparison-content={fieldHeadingExternal ? "" : undefined}
           data-testid="notes-review-editor"
           data-editable={editable ? "true" : "false"}
           style={{
             ...styles.editorViewport,
+            ...(fieldHeadingExternal ? { gridRow: 3 } : {}),
             ...(editable ? styles.editorViewportEditable : styles.editorViewportReadonly),
           }}
         >
@@ -1921,6 +1975,7 @@ function CellRow({
 // ---------------------------------------------------------------------------
 
 function NumericCellRow(props: {
+  onCategoryResolved: (categorySaved?: boolean) => Promise<void>;
   onSaveStatusChange: (row: number, status: SaveStatus, category?: string) => void;
   onComparisonChange?: () => void;
   humanFigures?: Map<string, HumanFigureSlot> | null;
@@ -1941,12 +1996,13 @@ function NumericCellRow(props: {
     && Object.values(NUMERIC_VALUE_COLUMNS).some(({ period, entity_scope }) =>
       humanFigures.get(humanSlotKey(cell.concept_uuid!, period, entity_scope, ""))?.human_value != null);
   const categories = humanTotal
-    ? [...cell.categories, { dimension_key: "", dimensions: {}, label: "Total", values: cell.values ?? {}, evidence: null }]
+    ? [...cell.categories, { dimension_key: "", dimensions: {}, label: "Total", values: cell.values ?? {}, evidence: null, resolution_tokens: {} }]
     : cell.categories;
   return <>{categories.map((category) => (
     <NumericCategoryRow {...props} key={category.dimension_key} dimensionKey={category.dimension_key} cell={{
       ...cell, dimensions: category.dimensions, values: category.values,
       label: `${cell.label} — ${category.label}`, evidence: category.evidence,
+      resolution_tokens: category.resolution_tokens,
     }} />
   ))}</>;
 }
@@ -1962,6 +2018,7 @@ function NumericCategoryRow({
   gridTemplateColumns,
   gridMinWidth,
   dimensionKey,
+  onCategoryResolved,
   selected = false,
   onActivate,
 }: {
@@ -1975,6 +2032,7 @@ function NumericCategoryRow({
   gridTemplateColumns: string;
   gridMinWidth: number;
   dimensionKey: string;
+  onCategoryResolved: (categorySaved?: boolean) => Promise<void>;
   selected?: boolean;
   onActivate?: () => void;
 }) {
@@ -1995,6 +2053,16 @@ function NumericCategoryRow({
   const setColumnStatus = useCallback((key: string, value: SaveStatus) => {
     setColumnStatuses((previous) => ({ ...previous, [key]: value }));
   }, []);
+  useEffect(() => {
+    setDrafts((previous) => {
+      const next = { ...previous };
+      for (const key of columns) {
+        if (["dirty", "saving", "failed"].includes(columnStatuses[key] ?? "idle")) continue;
+        next[key] = values[key] == null ? "" : String(values[key]);
+      }
+      return columns.some((key) => previous[key] !== next[key]) ? next : previous;
+    });
+  }, [cell.values]);
   const categoryKey = cell.dimensions ? JSON.stringify(cell.dimensions) : undefined;
   useEffect(() => {
     onSaveStatusChange(cell.row, status, categoryKey);
@@ -2032,6 +2100,7 @@ function NumericCategoryRow({
           entity_scope,
           cell.dimensions,
         );
+        if (dimensionKey === "" && cell.category_options?.length) await onCategoryResolved();
         // Reflect the saved value locally so a re-blur doesn't re-send, and
         // normalise the draft to the canonical form ("(95)" → "-95") so the
         // user sees exactly what was stored.
@@ -2046,13 +2115,14 @@ function NumericCategoryRow({
         setColumnStatus(key, "failed");
       }
     },
-    [cell.concept_uuid, cell.dimensions, drafts, runId, values, setColumnStatus, onComparisonChange],
+    [cell.concept_uuid, cell.dimensions, cell.category_options, dimensionKey, drafts, runId, values, setColumnStatus, onComparisonChange, onCategoryResolved],
   );
 
   return (
     <div
       data-testid="notes-numeric-row"
       role="row"
+      aria-selected={selected}
       data-cell-row={cell.row}
       className="notes-review-row"
       style={{
@@ -2060,7 +2130,6 @@ function NumericCategoryRow({
         ...styles.numericTableRow,
         gridTemplateColumns,
         minWidth: gridMinWidth,
-        ...(selected ? styles.workspaceNumericRowSelected : {}),
       }}
       onFocusCapture={() => {
         onActivate?.();
@@ -2072,7 +2141,10 @@ function NumericCategoryRow({
       }}
     >
       <div role="rowheader" style={styles.cellLeft}>
-        <div style={styles.cellLabel}>{cell.label}</div>
+        <div style={{ ...styles.cellLabel, display: "flex", alignItems: "center", gap: 8 }}>
+          <span>{cell.label}</span>
+          {selected && <ChevronRight size={16} style={ui.reviewSelectionMarker} />}
+        </div>
         <SaveStatusBadge status={status} />
       </div>
       {columns.map((key) => (
@@ -2092,7 +2164,7 @@ function NumericCategoryRow({
                     ? drafts[key] ?? ""
                     : formatGroupedInput(drafts[key] ?? "")
                 }
-                disabled={!cell.concept_uuid || columnStatuses[key] === "saving"}
+                disabled={!cell.concept_uuid || columnStatuses[key] === "saving" || columnStatuses["category-resolution"] === "saving"}
                 onChange={(e) => {
                   // Keep the raw, comma-free form in the draft; the at-rest
                   // display re-adds separators on blur. parseNumericInput also
@@ -2128,6 +2200,14 @@ function NumericCategoryRow({
           </div>}
         </Fragment>
       ))}
+      {dimensionKey === "" && cell.category_options?.length && Object.values(cell.resolution_tokens ?? {}).some(Boolean) ? (
+        <div role="cell" aria-label="Category resolution" style={styles.numericSaveErrors}>
+          <NumericCategoryResolution runId={runId} cell={cell}
+            blocked={columns.some((key) => ["dirty", "saving", "failed"].includes(columnStatuses[key] ?? "idle"))}
+            onStatusChange={(next) => setColumnStatus("category-resolution", next)}
+            onResolved={async () => { await onCategoryResolved(true); onComparisonChange?.(); }} />
+        </div>
+      ) : null}
       {columns.some((key) => columnStatuses[key] === "failed") && (
         <div role="cell" aria-label="Save errors" aria-colspan={1 + columns.length * (humanFigures ? 2 : 1)}
           style={styles.numericSaveErrors}>
@@ -2145,6 +2225,72 @@ function NumericCategoryRow({
       )}
     </div>
   );
+}
+
+function NumericCategoryResolution({ runId, cell, blocked, onStatusChange, onResolved }: {
+  runId: number;
+  cell: NotesCell;
+  blocked: boolean;
+  onStatusChange: (status: SaveStatus) => void;
+  onResolved: () => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [slot, setSlot] = useState("");
+  const [option, setOption] = useState("");
+  const [evidence, setEvidence] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const options = cell.category_options ?? [];
+  const slots = Object.keys(cell.resolution_tokens ?? {}).filter((key) =>
+    NUMERIC_VALUE_COLUMNS[key] && cell.values?.[key] != null && cell.resolution_tokens?.[key]);
+  const change = () => { setError(null); onStatusChange("dirty"); };
+  const submit = async () => {
+    const category = options[Number(option)];
+    const token = cell.resolution_tokens?.[slot];
+    const column = NUMERIC_VALUE_COLUMNS[slot];
+    if (!cell.concept_uuid || option === "" || !category || !token || !column || !evidence.trim() || blocked) return;
+    setSaving(true); setError(null); onStatusChange("saving");
+    try {
+      await resolveNotesCategory(runId, cell.concept_uuid, {
+        dimensions: category.dimensions, period: column.period,
+        entity_scope: column.entity_scope, expected_token: token, evidence: evidence.trim(),
+      });
+      await onResolved();
+      onStatusChange("saved"); setOpen(false); setSlot(""); setOption(""); setEvidence("");
+    } catch (err) {
+      setError(userMessage(err)); onStatusChange("failed");
+    } finally { setSaving(false); }
+  };
+  const prefix = `category-${cell.concept_uuid}-${cell.row}`;
+  return <div style={{ display: "flex", flexDirection: "column", gap: 8, width: "100%", maxWidth: 560 }}>
+    {!open ? <button type="button" className={uiClass.btnGhost} disabled={blocked}
+      onClick={() => setOpen(true)}>Resolve category</button> : <>
+      <label htmlFor={`${prefix}-slot`}>Period and entity</label>
+      <select id={`${prefix}-slot`} value={slot} disabled={saving || blocked}
+        onChange={(event) => { setSlot(event.target.value); change(); }} style={{ ...styles.numericInput, textAlign: "left", height: 40 }}>
+        <option value="">Select one source value</option>
+        {slots.map((key) => <option key={key} value={key}>{NUMERIC_VALUE_COLUMNS[key].label} — {formatGroupedInput(String(cell.values?.[key]))}</option>)}
+      </select>
+      <label htmlFor={`${prefix}-option`}>Category</label>
+      <select id={`${prefix}-option`} value={option} disabled={saving || blocked}
+        onChange={(event) => { setOption(event.target.value); change(); }} style={{ ...styles.numericInput, textAlign: "left", height: 40 }}>
+        <option value="">Select a category</option>
+        {options.map((item, index) => <option key={JSON.stringify(item.dimensions)} value={index}>{item.label}</option>)}
+      </select>
+      <label htmlFor={`${prefix}-evidence`}>Source citation</label>
+      <input id={`${prefix}-evidence`} value={evidence} disabled={saving || blocked}
+        placeholder="PDF page and source description" style={{ ...styles.numericInput, textAlign: "left", height: 40 }}
+        onChange={(event) => { setEvidence(event.target.value); change(); }} />
+      {error && <span role="alert">{error}</span>}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+        <button type="button" className={uiClass.btnPrimary} disabled={saving || blocked || !slot || option === "" || !evidence.trim()}
+          onClick={submit}>{saving ? "Resolving…" : "Apply category"}</button>
+        <button type="button" className={uiClass.btnGhost} disabled={saving} onClick={() => {
+          setOpen(false); setSlot(""); setOption(""); setEvidence(""); setError(null); onStatusChange("idle");
+        }}>Cancel</button>
+      </div>
+    </>}
+  </div>;
 }
 
 // ---------------------------------------------------------------------------
@@ -2201,11 +2347,19 @@ const styles = {
     top: 116,
     height: "calc(100vh - 148px)",
     minHeight: 420,
-    overflowY: "auto" as const,
+    overflow: "hidden" as const,
     display: "flex",
     flexDirection: "column" as const,
     minWidth: 0,
     padding: `0 ${pwc.space.lg}px ${pwc.space.lg}px 0`,
+  } as React.CSSProperties,
+  noteRailBody: {
+    flex: 1,
+    minHeight: 0,
+    overflowY: "auto" as const,
+    scrollbarWidth: "thin" as const,
+    scrollbarGutter: "stable",
+    paddingRight: pwc.space.xs,
   } as React.CSSProperties,
   noteRailHeader: {
     display: "flex",
@@ -2227,11 +2381,11 @@ const styles = {
   noteRailSearch: {
     ...ui.input,
     width: "100%",
+    marginBottom: pwc.space.sm,
   } as React.CSSProperties,
   noteRailList: {
     minHeight: 0,
     marginTop: 7,
-    overflowY: "auto" as const,
     display: "flex",
     flexDirection: "column" as const,
     gap: 1,
@@ -2256,12 +2410,12 @@ const styles = {
     borderRadius: tokens.radius.control,
     background: "transparent",
     color: pwc.grey700,
+    fontWeight: pwc.weight.regular,
     textAlign: "left" as const,
     cursor: "pointer",
   } as React.CSSProperties,
   noteRailItemActive: {
-    background: pwc.grey100,
-    color: pwc.grey900,
+    ...ui.reviewSelection,
   } as React.CSSProperties,
   noteRailNumber: {
     fontFamily: pwc.fontBody,
@@ -2280,7 +2434,7 @@ const styles = {
     whiteSpace: "normal" as const,
     overflowWrap: "anywhere" as const,
     fontSize: 14,
-    fontWeight: 680,
+    fontWeight: "inherit",
   } as React.CSSProperties,
   noteRailDestination: {
     whiteSpace: "normal" as const,
@@ -2313,7 +2467,7 @@ const styles = {
   } as React.CSSProperties,
   subnoteButton: {
     display: "grid",
-    gridTemplateColumns: "minmax(34px, auto) minmax(0, 1fr)",
+    gridTemplateColumns: "minmax(34px, auto) minmax(0, 1fr) 16px",
     gap: 5,
     alignItems: "start",
     width: "100%",
@@ -2323,6 +2477,7 @@ const styles = {
     borderRadius: 5,
     background: "transparent",
     color: pwc.grey700,
+    fontWeight: pwc.weight.regular,
     textAlign: "left" as const,
     cursor: "pointer",
   } as React.CSSProperties,
@@ -2369,14 +2524,19 @@ const styles = {
     padding: `0 ${pwc.space.sm}px ${pwc.space.xs}px 35px`,
   } as React.CSSProperties,
   noteRailPlacementButton: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
     minHeight: 28,
     padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
     border: 0,
     borderRadius: pwc.radius.sm,
-    background: pwc.grey50,
+    background: "transparent",
     color: pwc.grey700,
     fontSize: 14,
     textAlign: "left" as const,
+    overflowWrap: "anywhere" as const,
     cursor: "pointer",
   } as React.CSSProperties,
   noteRailEmpty: {
@@ -2412,6 +2572,10 @@ const styles = {
     overflowX: "auto" as const,
   } as React.CSSProperties,
   workspaceSheetButton: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
     minHeight: 34,
     padding: `${pwc.space.sm}px ${pwc.space.md}px`,
     border: "none",
@@ -2419,7 +2583,7 @@ const styles = {
     background: "transparent",
     color: pwc.grey700,
     fontSize: 14,
-    fontWeight: 680,
+    fontWeight: pwc.weight.regular,
     whiteSpace: "normal" as const,
     overflowWrap: "anywhere" as const,
     textAlign: "left" as const,
@@ -2427,14 +2591,18 @@ const styles = {
     cursor: "pointer",
   } as React.CSSProperties,
   workspaceSheetButtonActive: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
     minHeight: 34,
     padding: `${pwc.space.sm}px ${pwc.space.md}px`,
     border: "none",
     borderRadius: pwc.radius.sm,
-    background: pwc.grey100,
+    background: "transparent",
     color: pwc.grey900,
     fontSize: 14,
-    fontWeight: 650,
+    fontWeight: pwc.weight.semibold,
     whiteSpace: "normal" as const,
     overflowWrap: "anywhere" as const,
     textAlign: "left" as const,
@@ -2522,16 +2690,14 @@ const styles = {
     margin: 0,
     minWidth: 0,
   } as React.CSSProperties,
-  // Full-width button so the whole row is clickable, not just the text.
-  // Grey header band makes the sheet boundary read as a section divider
-  // distinct from the flat white rows below it.
+  // Formatting retry actions stay on the same unfilled surface as the fields.
   sheetHeadingButton: {
     display: "flex",
     alignItems: "center",
     gap: 10,
     width: "100%",
     padding: "11px 14px",
-    background: pwc.grey100,
+    background: "transparent",
     border: "none",
     cursor: "pointer",
     fontFamily: "inherit",
@@ -2575,8 +2741,7 @@ const styles = {
     display: "flex",
     flexDirection: "column" as const,
     gap: 20,
-    padding: "12px 14px",
-    borderTop: `1px solid ${pwc.grey200}`,
+    padding: "0 0 12px",
   } as React.CSSProperties,
   numericTable: {
     overflowX: "auto" as const,
@@ -2607,6 +2772,15 @@ const styles = {
     gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
     gap: 12,
     alignItems: "stretch",
+    gridTemplateRows: "auto auto auto",
+    rowGap: 6,
+  } as React.CSSProperties,
+  comparisonRows: {
+    display: "grid",
+    minWidth: 0,
+    gridTemplateRows: "subgrid",
+    gridRow: "span 3",
+    gap: "inherit",
   } as React.CSSProperties,
   humanPairHeader: {
     display: "grid",
@@ -2628,6 +2802,8 @@ const styles = {
     maxHeight: 440,
     overflow: "auto" as const,
     overflowWrap: "anywhere" as const,
+    scrollbarWidth: "thin" as const,
+    overscrollBehavior: "contain" as const,
   } as React.CSSProperties,
   // Flat list rows separated by hairlines — not bordered cards. With the
   // sheet header carrying the visual weight, rows read as content nested
@@ -2641,30 +2817,25 @@ const styles = {
     background: pwc.white,
     scrollMarginTop: 64,
   } as React.CSSProperties,
-  workspaceNumericRowSelected: {
-    background: pwc.grey100,
-  } as React.CSSProperties,
   disclosureHeader: {
     display: "grid",
     gridTemplateColumns: "minmax(0, 1fr) auto",
     alignItems: "center",
     gap: 12,
     padding: "12px",
-    background: pwc.grey100,
-    borderBottom: `1px solid ${pwc.grey200}`,
+    background: "transparent",
   } as React.CSSProperties,
   editorDisclosureHeader: {
     padding: "12px",
-    background: pwc.grey100,
-    borderBottom: `1px solid ${pwc.grey200}`,
+    background: "transparent",
     minWidth: 0,
     overflow: "hidden",
   } as React.CSSProperties,
   workspaceReadonlySurface: {
     minHeight: 56,
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.sm,
+    padding: "8px 10px",
+    border: `1px solid ${pwc.grey300}`,
+    borderRadius: pwc.radius.md,
     color: pwc.grey900,
   } as React.CSSProperties,
   cellLeft: {
@@ -2735,6 +2906,7 @@ const styles = {
     overflowX: "hidden",
     overflowY: "auto",
     overscrollBehavior: "contain",
+    scrollbarWidth: "thin",
   } as React.CSSProperties,
   editorViewportEditable: {
     overflowX: "auto",
@@ -2786,6 +2958,7 @@ const styles = {
   } as React.CSSProperties,
   numericInput: {
     width: "100%",
+    height: 32,
     boxSizing: "border-box" as const,
     padding: "4px 8px",
     fontSize: 14,

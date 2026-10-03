@@ -9,6 +9,7 @@ mocked pipeline (no real LLM): the coordinator asserts it received run_id +
 db_path, and the audit DB ends up with a completed runs row + per-agent rows.
 """
 import sqlite3
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -40,7 +41,8 @@ def cli_env(tmp_path, monkeypatch):
     return out, str(pdf)
 
 
-def test_cli_run_agent_drives_canonical_pipeline(cli_env):
+@pytest.mark.parametrize("first_financial_statements", [False, True])
+def test_cli_run_agent_drives_canonical_pipeline(cli_env, first_financial_statements):
     out, pdf = cli_env
     stmts = {StatementType.SOFP, StatementType.SOPL}
 
@@ -50,6 +52,7 @@ def test_cli_run_agent_drives_canonical_pipeline(cli_env):
         # RunConfig. The bare-CLI path passed neither.
         assert config.run_id is not None, "CLI must thread run_id into RunConfig"
         assert config.db_path, "CLI must thread db_path into RunConfig"
+        assert config.first_financial_statements is first_financial_statements
         results = []
         for stmt in sorted(config.statements_to_run, key=lambda s: s.value):
             wb = openpyxl.Workbook()
@@ -66,7 +69,9 @@ def test_cli_run_agent_drives_canonical_pipeline(cli_env):
                     "error": None,
                 }})
             results.append(CoordAgentResult(
-                statement_type=stmt, variant=None, status="succeeded",
+                statement_type=stmt,
+                variant="CuNonCu" if stmt == StatementType.SOFP else "Function",
+                status="succeeded",
                 workbook_path=wbp,
             ))
         if event_queue is not None:
@@ -97,6 +102,7 @@ def test_cli_run_agent_drives_canonical_pipeline(cli_env):
         result = run.run_agent(
             pdf_path=pdf, model="test-model", output_dir=str(out),
             statements=stmts, denomination="thousands",
+            first_financial_statements=first_financial_statements,
         )
 
     assert result.success is True
@@ -112,6 +118,14 @@ def test_cli_run_agent_drives_canonical_pipeline(cli_env):
         runs = conn.execute("SELECT * FROM runs").fetchall()
         assert len(runs) == 1
         assert runs[0]["status"] == "completed"
+        saved_config = json.loads(runs[0]["run_config_json"])
+        assert saved_config["first_financial_statements"] is first_financial_statements
+        assert saved_config["variants"] == {"SOFP": "CuNonCu", "SOPL": "Function"}
+        from eval.human_file import run_filing_shape
+        assert run_filing_shape(conn, runs[0]["id"])["statements"] == {
+            "mfrs-company-sofp-cunoncu-v1": "SOFP",
+            "mfrs-company-sopl-function-v1": "SOPL",
+        }
         agents = conn.execute("SELECT * FROM run_agents").fetchall()
         assert len(agents) == 3
         assert any(

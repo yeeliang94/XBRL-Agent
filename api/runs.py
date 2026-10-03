@@ -15,6 +15,7 @@ through ``server.X`` at call time.
 import asyncio
 import json
 import logging
+from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 
@@ -23,6 +24,7 @@ from fastapi import APIRouter, HTTPException
 import server
 from server import RunConfigPatchRequest
 from usage_metrics import derive_thinking_tokens
+from cross_checks.framework import comparands_from_json
 
 logger = logging.getLogger("server")
 
@@ -333,6 +335,7 @@ async def get_run_detail_endpoint(run_id: int):
                 "message": c.message,
                 "target_sheet": c.target_sheet,
                 "target_row": c.target_row,
+                "comparands": [asdict(value) for value in comparands_from_json(c.comparands_json)],
             }
             for c in detail.cross_checks
         ],
@@ -679,4 +682,7 @@ async def recheck_endpoint(run_id: int):
             detail="No facts to re-check for this run (canonical mode off, or "
                    "no succeeded statements).",
         )
-    return {"run_id": run_id, "results": results}
+    return {"run_id": run_id, "results": [
+        {**result, "comparands": [asdict(value) for value in comparands_from_json(result.get("comparands_json"))]}
+        for result in results
+    ]}

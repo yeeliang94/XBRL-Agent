@@ -83,6 +83,7 @@ def _find_net_change_xlsx(ws, col: int, wb):
 
 
 class SOCFArticulationCheck:
+    applies_to_standard = frozenset({"mfrs", "mpers", "clbg"})
     name = "socf_articulation"
     required_statements = {StatementType.SOCF}
 

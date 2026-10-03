@@ -38,7 +38,7 @@ _OUTPUT = _REPO_ROOT / "mtool" / "known_templates.json"
 #                    marker rows, so detection reads them semantically.
 _CORPUS: list[tuple[str, str, str, str, str, str, str]] = []
 
-for _std, _dir in (("mfrs", "XBRL-template-MFRS"), ("mpers", "XBRL-template-MPERS")):
+for _std, _dir in (("mfrs", "XBRL-template-MFRS"), ("mpers", "XBRL-template-MPERS"), ("clbg", "XBRL-template-CLBG")):
     for _level in ("Company", "Group"):
         _folder = _REPO_ROOT / _dir / _level
         for _path in sorted(_folder.glob("*.xlsx")):

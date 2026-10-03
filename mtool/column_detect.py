@@ -21,8 +21,7 @@ rows, and we read them instead of guessing:
 * ``#ENDT#``          — each value column's period END date
 * ``#STDTENDTDATE#``  — the human period string
 * ``#UNITSCALE#``     — the unit the column is stated in (e.g. ``MYR'000``)
-* ``#DOM#``           — the columns are DIMENSION members (share classes,
-                        equity components), not periods
+* ``#DOM#``           — declared category members or consolidation entity scope
 
 So current-year vs prior-year is decided by comparing dates, not by which
 column comes first; category columns are resolved by taxonomy identity; and the
@@ -31,9 +30,8 @@ template's own declared unit is reported so a denomination mismatch is visible.
 **When there are no markers** (our own generated templates, and any workbook
 we've never seen) it falls back to the positional heuristic — but says so
 (``basis: "positional"``) and demands operator confirmation unless the
-workbook's fingerprint is one we have on file. Group layouts ALWAYS demand
-confirmation: mTool's Group column shape has not been observed, so there is
-nothing to corroborate a four-column guess against.
+workbook's fingerprint is one we have on file. Group columns require exact
+native consolidation scope and date markers or operator confirmation.
 
 The caller must honour ``requires_confirmation``; ``confidence`` alone is not
 the gate any more.
@@ -315,8 +313,25 @@ def _label_column_from_marker(cells: dict, rows: list[int]) -> str | None:
     return None
 
 
+def entity_scope_rows(cells: dict) -> dict[int, dict[str, str]]:
+    """Read native consolidation scope only alongside its declared axis."""
+    scopes = {}
+    for row in _marker_rows(cells).get(MARKER_DIMENSION, []):
+        if not any(re.search(
+            r"\.xsd#(?:ifrs-full|ifrs-smes)_ConsolidatedAndSeparateFinancialStatementsAxis(?:$|:)",
+            raw or "",
+        ) for _, raw in cells[row].values()):
+            continue
+        columns = {col: {"Consolidated": "Group", "Separate": "Company"}[raw]
+                   for col, (_, raw) in cells[row].items()
+                   if raw in {"Consolidated", "Separate"}}
+        if columns:
+            scopes[row] = columns
+    return scopes
+
+
 def category_domain_rows(cells: dict) -> list[int]:
-    """Return category markers, excluding mTool's restatement placeholder.
+    """Return category markers, excluding restatement and entity scope.
 
     FINCO 2.2 emits ``abc::abc`` beside a #DOM# whose displayed values are
     empty or ``Restated``. It is period metadata, not a category axis. Keep
@@ -324,7 +339,10 @@ def category_domain_rows(cells: dict) -> list[int]:
     The same rows must drive column detection and dimensional period blocks.
     """
     rows = []
+    scope_rows = entity_scope_rows(cells)
     for row in _marker_rows(cells).get(MARKER_DIMENSION, []):
+        if row in scope_rows:
+            continue
         values = {(text or "").strip() for _kind, text in cells[row].values()}
         if "abc::abc" in values and values <= {"", "#DOM#", "abc::abc", "Restated"}:
             continue
@@ -374,6 +392,7 @@ def _semantic_layout(cells: dict, roles: list[str]) -> dict[str, Any] | None:
     period_rows = markers.get(MARKER_PERIOD, [])
     unit_rows = markers.get(MARKER_UNIT_SCALE, [])
     dimensional = bool(category_domain_rows(cells))
+    scope_rows = entity_scope_rows(cells)
 
     # Period sheets need one consistent date per column across layout blocks.
     # Dimensional sheets resolve their separate period blocks in template_map.
@@ -420,7 +439,7 @@ def _semantic_layout(cells: dict, roles: list[str]) -> dict[str, Any] | None:
 
     wants_group = any(r.startswith("group_") or r.startswith("company_")
                       for r in roles)
-    if wants_group and not dimensional:
+    if wants_group and not dimensional and not scope_rows:
         # mTool's Group column shape has never been observed, so there is
         # nothing here to corroborate a Group/Company split against. Never
         # auto-proceed on a four-column shape (Step 10).
@@ -431,7 +450,23 @@ def _semantic_layout(cells: dict, roles: list[str]) -> dict[str, Any] | None:
             "we cannot tell from the template which columns are which — "
             "please confirm them")
 
-    if not dimensional and not wants_group:
+    if not dimensional and scope_rows:
+        by_column: dict[str, set[str]] = {}
+        for scopes in scope_rows.values():
+            for col, scope in scopes.items():
+                by_column.setdefault(col, set()).add(scope)
+        for role in roles:
+            scope = "Group" if role.startswith("group_") else "Company"
+            period = "prior_year" if role.endswith("prior_year") else "current_year"
+            matches = [col for col, p in period_of_col.items()
+                       if p == period and by_column.get(col) == {scope}]
+            if len(matches) == 1:
+                columns[role] = matches[0]
+            else:
+                confidence = "low"
+                requires_confirmation = True
+                notes.append(f"no unique declared entity/period column covers {role}")
+    if not dimensional and not wants_group and not scope_rows:
         for role in roles:
             match = [c for c, p in period_of_col.items() if p == role]
             if len(match) == 1:
@@ -473,6 +508,7 @@ def _semantic_layout(cells: dict, roles: list[str]) -> dict[str, Any] | None:
         "requires_confirmation": requires_confirmation,
         "basis": "semantic",
         "dimensional": dimensional,
+        "entity_scope_columns": scope_rows,
         "period_columns": {c: periods.get(c) for c in sorted(dates)},
         "declared_unit_scales": {c: parse_unit_scale(v)
                                  for c, v in sorted(unit_scales.items())},

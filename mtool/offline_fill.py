@@ -63,14 +63,36 @@ def resolve_sheet_name(source_sheet: str, cells_by_sheet: dict) -> str | None:
     exact = [s for s in cells_by_sheet if s.casefold() == source_sheet.casefold()]
     spec = _MPERS_SHEET_NAMES.get(source_sheet.casefold())
     candidates = list(exact)
+    if source_sheet.casefold() == 'sofp-sub-cunoncu':
+        for sheet, cells in cells_by_sheet.items():
+            if sheet.casefold() != 'sofp-sub' or sheet in candidates:
+                continue
+            raw_values = [raw or '' for row in cells.values() for _, raw in row.values()]
+            ids = {identifier for raw in raw_values for identifier in _TAXONOMY_ID.findall(raw)}
+            if ('ssmt-mfrs_DisclosureOnSubclassificationOfAssetsLiabilitiesAndEquityAbstract' in ids
+                and any('http://xbrl.ssm.com.my/role/ssm/rol_ssmt-fs-clbg_2022-12-31/ssmt-fs-clbg_2022-12-31_role-210100'
+                        in raw for raw in raw_values)):
+                candidates.append(sheet)
     if spec:
         name, marker = spec
         for sheet, cells in cells_by_sheet.items():
-            if sheet.casefold() != name.casefold() or sheet in candidates:
+            clbg_name = (source_sheet.casefold() == 'notes-relatedpartytran'
+                         and sheet.casefold() == 'notes-relatedpartytransactions')
+            if (sheet.casefold() != name.casefold() and not clbg_name) or sheet in candidates:
                 continue
             ids = {i for row in cells.values() for _, raw in row.values()
                    for i in _TAXONOMY_ID.findall(raw or '')}
-            if marker in ids:
+            clbg_related = (clbg_name
+                and {'ifrs-full_CategoriesOfRelatedPartiesAxis',
+                     'ssmt-mfrs_DisclosureOnRelatedPartyTransactionsAbstract'} <= ids
+                and any('http://xbrl.ssm.com.my/role/ssm/rol_ssmt-fs-clbg_2022-12-31/ssmt-fs-clbg_2022-12-31_role-640000'
+                        in (raw or '') for row in cells.values() for _, raw in row.values()))
+            clbg_policies = (source_sheet.casefold() == 'notes-summaryofaccpol'
+                and sheet.casefold() == 'notes-summaryofacc'
+                and 'ssmt_DisclosureOnSummaryOfMaterialAccountingPoliciesAbstract' in ids
+                and any('http://xbrl.ssm.com.my/role/ssm/rol_ssmt-fs-clbg_2022-12-31/ssmt-fs-clbg_2022-12-31_role-620000'
+                        in (raw or '') for row in cells.values() for _, raw in row.values()))
+            if (sheet.casefold() == name.casefold() and marker in ids) or clbg_related or clbg_policies:
                 candidates.append(sheet)
     return candidates[0] if len(candidates) == 1 else None
 

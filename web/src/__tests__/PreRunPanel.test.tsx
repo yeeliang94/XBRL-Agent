@@ -89,6 +89,32 @@ describe("PreRunPanel", () => {
     expect(screen.getByRole("button", { name: "RM '000" })).toHaveAttribute("aria-pressed", "true");
   });
 
+  test.each([false, true])("CLBG setup restricts filing scope and supported statements (saved=%s)", async (saved) => {
+    const onRun = vi.fn();
+    render(<PreRunPanel sessionId="clbg" getSettings={vi.fn().mockResolvedValue(mockSettings)}
+      initialConfig={saved ? { filing_standard: "clbg", filing_level: "group", first_financial_statements: true } : undefined}
+      onRun={onRun} />);
+    await screen.findByRole("button", { name: "CLBG" });
+    if (!saved) {
+      fireEvent.click(screen.getByRole("button", { name: "Group" }));
+      fireEvent.click(screen.getByRole("button", { name: "CLBG" }));
+    }
+    await waitFor(() => expect(screen.getByRole("button", { name: "Company" })).toHaveAttribute("aria-pressed", "true"));
+    expect(screen.getByRole("button", { name: "Group" })).toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: /income and expenditure/i })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /changes in funds/i })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /not prepared/i })).toBeDisabled();
+    expect(screen.queryByRole("checkbox", { name: /issued capital/i })).not.toBeInTheDocument();
+    startExtraction();
+    await waitFor(() => expect(onRun).toHaveBeenCalled());
+    const config = onRun.mock.calls[0][0];
+    expect(config.filing_standard).toBe("clbg");
+    expect(config.filing_level).toBe("company");
+    expect(config.statements).not.toContain("SOCI");
+    expect(config.notes_to_run).not.toContain("ISSUED_CAPITAL");
+    expect(config.first_financial_statements).toBe(saved);
+  });
+
   test("renders all major sections", async () => {
     const getSettings = vi.fn().mockResolvedValue(mockSettings);
     render(
@@ -119,6 +145,19 @@ describe("PreRunPanel", () => {
     expect(screen.queryByText(/leave a format blank/i)).toBeNull();
     expect(screen.queryByText(/repeats \(consistency\)/i)).toBeNull();
     expect(screen.queryByTestId("repeats-2")).toBeNull();
+  });
+
+  test("first statements selection is preserved and submitted as current period only", async () => {
+    const onRun = vi.fn();
+    render(<PreRunPanel sessionId="first-period" getSettings={vi.fn().mockResolvedValue(mockSettings)}
+      initialConfig={{ first_financial_statements: true }} onRun={onRun} />);
+    const periods = await screen.findByRole("combobox", { name: "Reporting periods" });
+    expect(periods).toHaveValue("first");
+    startExtraction();
+    expect(onRun).toHaveBeenLastCalledWith(expect.objectContaining({ first_financial_statements: true }));
+    fireEvent.change(periods, { target: { value: "comparative" } });
+    startExtraction();
+    expect(onRun).toHaveBeenLastCalledWith(expect.objectContaining({ first_financial_statements: false }));
   });
 
   test("collapsed setup disclosures retain their controlled region and use the reveal transition", async () => {

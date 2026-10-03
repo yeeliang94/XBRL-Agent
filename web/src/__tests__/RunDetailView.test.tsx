@@ -496,6 +496,10 @@ describe("RunDetailView", () => {
           message: "off by 10",
           target_sheet: "SOFP-CuNonCu",
           target_row: 30,
+          comparands: [
+            { label: "Total assets", sheet: "SOFP-CuNonCu", statement: "SOFP", role: "lhs", period: "CY", value: 100 },
+            { label: "Total assets", sheet: "SOFP-CuNonCu", statement: "SOFP", role: "lhs", period: "PY", value: 80 },
+          ],
         },
       ],
     });
@@ -529,7 +533,9 @@ describe("RunDetailView", () => {
       // Wait for the concept map to load, then click the failed check.
       clickRunTab(/cross-checks/i);
       const row = await screen.findByTestId("cross-check-row-sofp_balance");
-      fireEvent.click(row);
+      expect(within(row).getByRole("columnheader", { name: "Previous year" })).toBeInTheDocument();
+      expect(within(row).getByRole("cell", { name: /^80$/ })).toBeInTheDocument();
+      fireEvent.click(within(row).getByRole("button", { name: "Review figures" }));
       // The pane resolves the target's evidence ("Page 7") and shows page 7.
       const img = (await screen.findByTestId("pdf-page-image")) as HTMLImageElement;
       expect(img.getAttribute("src")).toBe("/api/runs/42/pdf/page/7.png");

@@ -258,6 +258,25 @@ export const ui = {
   paneDivider: {
     borderLeft: `1px solid ${tokens.color.border.subtle}`,
   } as CSSProperties,
+  reviewPaneHeader: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    minHeight: 44,
+    flexShrink: 0,
+    padding: `0 ${pwc.space.xs}px`,
+    background: tokens.surface.canvas,
+  } as CSSProperties,
+  reviewSelection: {
+    background: "transparent",
+    color: tokens.color.text.primary,
+    fontWeight: pwc.weight.semibold,
+  } as CSSProperties,
+  reviewSelectionMarker: {
+    flexShrink: 0,
+    color: tokens.color.text.primary,
+    alignSelf: "center",
+  } as CSSProperties,
   flatList: {
     borderTop: `1px solid ${tokens.color.border.subtle}`,
   } as CSSProperties,

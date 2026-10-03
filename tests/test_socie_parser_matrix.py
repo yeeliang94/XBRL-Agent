@@ -9,8 +9,8 @@ render targets that map the canonical block to every physical block.
 Four geometries are covered:
   * MFRS Company  — 23 component cols (B..X) × 2 period blocks
   * MFRS Group    — 23 component cols × 4 period/scope blocks
-  * MPERS Company — single value col (B=CY, C=PY) × 1 block
-  * MPERS Group   — single value col × 4 period/scope blocks
+  * MPERS Company — 14 component cols (B..O) × 2 period blocks
+  * MPERS Group   — 14 component cols × 4 period/scope blocks
 """
 from __future__ import annotations
 
@@ -107,7 +107,7 @@ def test_mfrs_company_formula_cell_keeps_edges() -> None:
     assert cell.edges, "formula cell should carry dependency edges"
 
 
-def test_mpers_company_single_value_column() -> None:
+def test_mpers_company_component_columns_and_stacked_periods() -> None:
     path = SOCIE_FIXTURES["mpers_company"]
     if not path.exists():
         pytest.skip("fixture missing")
@@ -117,13 +117,13 @@ def test_mpers_company_single_value_column() -> None:
         for n in tree.concepts
         if n.kind == "MATRIX_CELL"
     }
-    assert cols == {"B"}
-    # Period maps to a column (B=CY, C=PY) within the single block.
+    assert cols == set('BCDEFGHIJKLMNO')
     cell = next(n for n in tree.concepts if n.kind == "MATRIX_CELL")
-    assert cell.render_key.get("matrix_col_label") == "Value"
-    targets = {(t["period"], t["col"]) for t in cell.render_key["targets"]}
-    assert ("CY", "B") in targets
-    assert ("PY", "C") in targets
+    assert cell.render_key.get("matrix_col_label") == "Issued capital"
+    targets = {(t["period"], t["col"], t['row']) for t in cell.render_key["targets"]}
+    assert targets == {('CY', 'B', 6), ('PY', 'B', 30)}
+    assert cell.render_key['semantic_address']['dimensions'] == {
+        'ifrs-smes_ComponentsOfEquityAxis': 'ifrs-smes_IssuedCapitalMember'}
 
 
 def test_mpers_group_four_blocks_map_period_scope() -> None:
@@ -191,3 +191,38 @@ def test_to_json_round_trips_shape_and_matrix_col() -> None:
     mx = [c for c in payload["concepts"] if c["kind"] == "MATRIX_CELL"]
     assert mx and "matrix_col" in mx[0]["render_key"]
     assert "targets" in mx[0]["render_key"]
+
+
+def test_mpers_matrix_import_retires_historical_aggregate_identity(tmp_path) -> None:
+    """An old total at B6 must never become newly labelled issued capital."""
+    import json
+    import sqlite3
+
+    from concept_model.importer import import_template
+    from db.schema import init_db
+
+    old = cp.parse_template(str(_MPERS / "backup-originals/Group/09-SOCIE.xlsx"))
+    current = cp.parse_template(str(SOCIE_FIXTURES["mpers_group"]))
+    old_cell = next(c for c in old.concepts if c.kind == "MATRIX_CELL"
+                    and c.render_key.get("row") == 6 and c.render_key.get("matrix_col") == "B")
+    current_cell = next(c for c in current.concepts if c.kind == "MATRIX_CELL"
+                        and c.render_key.get("row") == 6 and c.render_key.get("matrix_col") == "B")
+    assert old.template_id == current.template_id
+    assert old_cell.concept_uuid != current_cell.concept_uuid
+    database = tmp_path / "concepts.db"
+    init_db(database)
+    for name, tree in [("old", old), ("current", current)]:
+        payload = tmp_path / f"{name}.json"
+        payload.write_text(json.dumps(tree.to_json()), encoding="utf-8")
+        import_template(database, payload)
+    with sqlite3.connect(database) as conn:
+        historical = conn.execute(
+            "SELECT is_current, retired_at FROM concept_nodes WHERE concept_uuid = ?",
+            (old_cell.concept_uuid,),
+        ).fetchone()
+        active = conn.execute(
+            "SELECT is_current FROM concept_nodes WHERE concept_uuid = ?",
+            (current_cell.concept_uuid,),
+        ).fetchone()
+    assert historical[0] == 0 and historical[1]
+    assert active == (1,)
