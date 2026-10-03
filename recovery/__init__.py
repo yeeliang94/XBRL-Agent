@@ -1,1 +1,1 @@
-"""Stage-level run resume (plan agent-efficiency Phase 4A)."""
+"""Create isolated redo drafts from retained run sources."""

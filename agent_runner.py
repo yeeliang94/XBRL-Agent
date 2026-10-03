@@ -485,13 +485,6 @@ async def run_agent_loop(
             logger.debug("per-turn telemetry settle skipped for %s", spec.agent_role)
         last_record_end = now
 
-    # Step 8 probe: label the history-processor rewrite log lines with this
-    # agent's role (contextvar; the processors run inside this task).
-    try:
-        from extraction.history_processors import current_agent_label
-        current_agent_label.set(str(spec.agent_role))
-    except Exception:  # noqa: BLE001 — logging label only
-        pass
     # Run-83 hardening (Phase 2 Step 4): publish the wall-clock envelope
     # onto deps so the in-band limit warner (limit_warner.py) can tell the
     # agent to wrap up BEFORE the hard cap fires — closing the deferred
@@ -742,21 +735,6 @@ async def run_agent_loop(
             }
             turn_records.append(record)
             last_record, last_record_end = record, node_end
-            # Step 8 probe (PLAN-extraction-harness-efficiency): the per-turn
-            # cache-read delta next to the prompt delta, on model-request
-            # turns. Read together with the `history_rewrite` lines from
-            # extraction/history_processors.py to see whether a compaction
-            # pass cost more cache value than it reclaimed.
-            if node_kind == "model_request":
-                from extraction.history_processors import probe_log_level
-                logger.log(
-                    probe_log_level(),
-                    "turn_cache %s turn=%d prompt_delta=%d cache_read_delta=%d "
-                    "cache_write_delta=%d cumulative_prompt=%d",
-                    spec.agent_role, iteration, d_prompt,
-                    max(cache_read_t - prev_cache_read, 0),
-                    max(cache_write_t - prev_cache_write, 0), prompt_t,
-                )
             prev_prompt, prev_completion = prompt_t, completion_t
             prev_thinking, prev_total = thinking_t, total
             prev_cache_read, prev_cache_write = cache_read_t, cache_write_t

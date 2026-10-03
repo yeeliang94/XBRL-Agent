@@ -283,7 +283,7 @@ def resolve_check_scope(
     """
     from pathlib import Path
     from statement_types import template_path as _tpl_path
-    from concept_model.parser import _derive_template_id
+    from concept_model.parser import derive_template_id
 
     scope = CheckScope()
     for statement_type, variant in pairs:
@@ -297,7 +297,7 @@ def resolve_check_scope(
             )
         except (ValueError, KeyError):
             continue
-        scope.template_ids[stmt] = _derive_template_id(Path(master))
+        scope.template_ids[stmt] = derive_template_id(Path(master))
         scope.statements_to_run.add(stmt)
         scope.variants[stmt] = variant
     return scope

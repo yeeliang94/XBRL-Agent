@@ -13,7 +13,7 @@ TEMPLATE = REPO / "XBRL-template-MFRS" / "Company" / "01-SOFP-CuNonCu.xlsx"
 
 def _seed(tmp_path: Path):
     from concept_model.importer import import_template
-    from concept_model.parser import _derive_template_id, parse_template
+    from concept_model.parser import derive_template_id, parse_template
     from db.schema import init_db
 
     db_path = tmp_path / "audit.db"
@@ -22,7 +22,7 @@ def _seed(tmp_path: Path):
     tree_path = tmp_path / "tree.json"
     tree_path.write_text(json.dumps(tree.to_json()), encoding="utf-8")
     import_template(db_path, tree_path)
-    template_id = _derive_template_id(TEMPLATE)
+    template_id = derive_template_id(TEMPLATE)
 
     conn = sqlite3.connect(db_path)
     run_id = conn.execute(

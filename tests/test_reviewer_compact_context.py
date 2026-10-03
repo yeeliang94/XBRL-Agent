@@ -7,10 +7,10 @@ Pins three contracts:
   replaces older page images with a text placeholder; the input list is
   never mutated (purity — the in-memory conversation and traces share these
   part objects).
-* Flag OFF (the default) ⇒ ``create_reviewer_agent`` registers NO
-  capabilities — the factory output is structurally identical to today.
-* Flag ON ⇒ exactly one ProcessHistory capability carrying the reviewer
-  stripper (never extraction's write-event-keyed one).
+* Flag OFF (the default) ⇒ ``create_reviewer_agent`` registers only
+  the limit warning processor.
+* Flag ON ⇒ adds a ProcessHistory capability carrying the reviewer
+  stripper before the limit warning (never extraction's write-event-keyed one).
 """
 
 import copy

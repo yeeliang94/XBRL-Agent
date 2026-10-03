@@ -4,7 +4,7 @@ agent-efficiency Phase 4A).
 New table only, no ALTER: a resume creates a child run linked to its
 immutable terminal parent, recording the parent's source hash (computed at
 resume time from the kept uploaded.pdf) and which statements were reused vs
-rerun. Inert unless XBRL_STAGE_RESUME is used.
+rerun. Web redo drafts retain this lineage after CLI resume retirement.
 """
 from __future__ import annotations
 

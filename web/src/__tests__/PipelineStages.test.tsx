@@ -88,18 +88,6 @@ describe("PipelineStages", () => {
     expect(screen.getByText("Review")).toHaveStyle({ fontWeight: "680" });
   });
 
-  test("keeps run-owned source transcription within the active extraction stage", () => {
-    render(
-      <PipelineStages
-        currentPhase={null}
-        pipelineStage="transcribing_source"
-        isRunning={true}
-        isComplete={false}
-      />,
-    );
-    expect(screen.getByText("Extract")).toHaveStyle({ fontWeight: "680" });
-  });
-
   test("marks setup confirmation as an explicit action after document mapping", () => {
     const { container } = render(
       <PipelineStages

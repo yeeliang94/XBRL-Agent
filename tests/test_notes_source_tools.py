@@ -81,11 +81,15 @@ def test_the_source_tools_are_absent_without_a_frozen_reading(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_the_source_tools_appear_with_a_frozen_reading(tmp_path, seeded):
+@pytest.mark.parametrize("input_kind", ["docx_html", "prepared_document"])
+async def test_the_source_tools_appear_with_a_frozen_reading(tmp_path, seeded, input_kind):
     from types import SimpleNamespace
     from pydantic_ai.models.test import TestModel
 
     db, run_id, gen = seeded
+    with repo.db_session(db) as conn:
+        conn.execute("UPDATE notes_source_generations SET input_kind=? WHERE id=?",
+                     (input_kind, gen))
     agent, deps = notes_agent.create_notes_agent(
         template_type=NotesTemplateType.CORP_INFO, pdf_path="/tmp/no.pdf",
         inventory=[], filing_level="company", model=TestModel(),
@@ -95,6 +99,7 @@ async def test_the_source_tools_appear_with_a_frozen_reading(tmp_path, seeded):
     names = _tool_names(agent)
     assert {"list_source_notes", "read_source_manifest",
             "view_source_blocks", "write_note_from_source"} <= names
+    assert "request_source_recheck" not in names
     assert deps.source_generation_id == gen
     functions = {name: tool.function for ts in agent.toolsets
                  for name, tool in getattr(ts, "tools", {}).items()}

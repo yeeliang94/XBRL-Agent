@@ -1,14 +1,8 @@
 import type { PdfSidecarData } from "./types";
 
 // ---------------------------------------------------------------------------
-// Plain-language wording for the ``pdf_sidecar`` SSE event
-// (docs/PLAN-pdf-source-sidecar.md).
-//
-// The server reports a machine reason (`no_notes_inventory`, `too_many_pages`,
-// …). The operator needs to know two things: did the notes agents get a
-// transcript of the scanned pages to copy from, and if not, why not. Kept
-// pure so the wording is unit-tested without rendering the page. Used by both
-// the live run page (ExtractPage) and the History run page (RunDetailView).
+// Plain-language notices for historical scanned-PDF transcripts in RunDetailView.
+// Unknown stored reasons remain visible so older outcomes never become blank.
 // ---------------------------------------------------------------------------
 
 export interface PdfSidecarNotice {
@@ -32,9 +26,7 @@ const SKIP_REASONS: Record<string, string> = {
     "No page produced a usable transcript.",
 };
 
-/** "used 56,760 tokens in / 13,976 out" — or "" when the server sent no usage.
- *  The toggle exists because the pass costs money, so the notice states what
- *  it actually consumed. */
+/** Historical token usage, or an empty string when no usage was recorded. */
 function usageSentence(usage: PdfSidecarData["usage"]): string {
   if (!usage) return "";
   if (usage.prompt_tokens == null && usage.completion_tokens == null && usage.thinking_tokens == null) {

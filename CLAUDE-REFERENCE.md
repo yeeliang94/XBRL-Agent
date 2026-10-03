@@ -45,6 +45,31 @@ mode if the proxy fails to start.
 
 ### Runtime settings and deployment environment
 
+Cache-probe logging and CLI stage resume (`--resume-from`) are removed,
+including their advanced settings. Token/cache usage telemetry, extraction
+history trimming, reviewer limit warnings, web redo drafts and the existing
+lineage schema remain. The retired cache-probe and stage-resume flags have no
+effect. Pinned by `tests/test_settings_api.py`, `tests/test_cli_scout_default.py`,
+`tests/test_history_api.py`, and `tests/test_run_restart.py`.
+
+Reviewer image-history compaction keeps the newest two image batches and
+replaces older images with page references and a re-view instruction. Notes
+reviewers always use it. Figures reviewers use it when
+`XBRL_REVIEWER_COMPACT_CONTEXT` is enabled (default off, available in Advanced
+Settings). Pinned by `tests/test_reviewer_compact_context.py` and
+`tests/test_notes_reviewer_self_verify.py`.
+
+The retired Scout-selected PDF transcription stage and its publishing helpers
+are removed. Its former `pdf_sidecar`, `pdf_notes_auto_format`, and
+`XBRL_PDF_SIDECAR_PAGE_CAP` settings are no longer advertised or saved. Older
+clients may send the two workflow fields without changing behavior. Applicable
+PDF notes formatting remains mandatory. Historical transcript notices and
+source provenance remain readable. `ingest/pdf_sidecar.py` still supplies the
+shared page transcriber used by verified document preparation; do not remove
+that live dependency. Pinned by `tests/test_settings_api.py`,
+`tests/test_pdf_sidecar_wiring.py`, `tests/test_preparation_integration.py`, and
+`tests/test_document_preparation.py`.
+
 Operator-managed settings are edited in the web Settings page and persisted
 atomically to `output/settings.json` (or `XBRL_SETTINGS_FILE`). The web and CLI
 reload that file before work starts. Environment variables and `.env` remain
@@ -96,7 +121,6 @@ SESSION_SECRET=                # REQUIRED in prod (startup fails without it); de
 # XBRL_TEMPLATE_SUMMARY_COMPACT=0  # read_template: one line per ROW (SOFP 80k→35k chars)
 # XBRL_TEMPLATE_IN_PROMPT=0        # face agents: template in the system prompt; read_template returns a pointer
 # XBRL_MAX_CONCURRENT_AGENTS=0     # cap on top-level agents running at once; 0 = unbounded
-# XBRL_CACHE_PROBE=0               # lift the per-turn cache / history-rewrite probe lines to INFO
 # XBRL_SCOUT_WALLCLOCK_S=300       # whole document-scan deadline; 0 disables
 # XBRL_SCOUT_MAX_TURNS=20          # Scout model responses; Settings caps this at 40
 # CLI: scout is ON by default (`--no-scout` to skip). Cost: run_agents.total_cost is
@@ -800,19 +824,18 @@ read as advisory only:
 
 All three additions degrade gracefully: empty `face_line_refs` /
 `subnotes` / context fields fall through to today's bare hint blocks.
-Scanned-PDF sidecar transcription may use inventory ranges to choose which
-pages to inspect, but those ranges never prove note completeness. If any
-requested page fails, no partial sidecar is published; notes agents fall back
-to direct PDF vision. The same Scout vision inventory emits sparse page
-rotation corrections only when the primary financial content clearly needs a
-90/180/270-degree clockwise turn; upright and uncertain pages are omitted and
-there is no confidence field. The sidecar retries transport/provider failures
-at the same orientation. A genuinely blank render is retained as an empty page
-without a provider call so it cannot invalidate an otherwise complete sidecar.
-Only an empty transcription from an ink-bearing page changes orientation: a
-hinted page falls back to unrotated and an unhinted page tries 90 degrees.
-Pinned by `tests/test_notes_discoverer_vision.py`, `tests/test_pdf_sidecar.py`, and
-`tests/test_pdf_sidecar_wiring.py`.
+The Scout-selected pre-extraction transcription stage is retired. Upload-time
+preparation still uses the shared page transcriber; historical transcript
+outcomes remain readable. Scout vision emits sparse page rotation corrections
+only when the primary financial content clearly needs a 90/180/270-degree
+clockwise turn; upright and uncertain pages are omitted and there is no
+confidence field. The shared transcriber retries transport/provider failures
+at the same orientation. A blank render is retained as an empty page without
+a provider call. Only an empty transcription from an ink-bearing page changes
+orientation: a hinted page falls back to unrotated and an unhinted page tries
+90 degrees. Pinned by `tests/test_notes_discoverer_vision.py`,
+`tests/test_pdf_sidecar.py`, `tests/test_pdf_sidecar_wiring.py`, and
+`tests/test_preparation_integration.py`.
 Face page hints join each face line's note number to that note's page range in
 the scout notes inventory (`coordinator.build_face_page_hints`), and the prompt
 lists those pages first; the statement-level `note_pages` stays available as a
@@ -1513,7 +1536,11 @@ request limit equal to the node cap, so the structured cap always fires first.
 
 The default is 60 nodes (about 30 model turns), raised from 40 on 2026-09-25
 after the trace audit showed agents stopping mid-task on long documents.
-`XBRL_MAX_AGENT_ITERATIONS` overrides it, clamped to 120. Any new face or
+`XBRL_MAX_AGENT_ITERATIONS` overrides it, clamped to 120. Settings exposes
+this value as extraction steps, using the same default, ceiling and environment
+parser as the runtime. API saves accept 1–120 and require a restart to apply.
+Pinned by `tests/test_settings_api.py` and
+`web/src/__tests__/settingsAdvanced.test.tsx`. Any new face or
 notes `agent.iter` call must pass `agent_usage_limits`. Pinned by
 `tests/test_max_agent_iterations_below_pydantic_cap.py`, which drives a
 looping agent past 50 requests and expects the structured cap.
@@ -1565,9 +1592,10 @@ Provider stream cleanup gets at most two further seconds; cancellation-resistant
 late opening is closed when it returns. `bound_inner_streams=False` exempts tool streams only
 so long workbook writes retain their existing behavior. Pinned by the before-
 and after-write stream-stall cases in `tests/test_notes_turn_timeout.py`.
-Ordinary notes retries retain an attempt-numbered conversation trace in addition
-to the latest conventional path. Failed attempts remain inspectable after a
-successful retry, pinned by `tests/test_notes_retry_budget.py`.
+Ordinary notes failures retain an attempt-numbered conversation trace in addition
+to the latest conventional path. Successful attempts write only the conventional
+trace; failed attempts remain inspectable after a successful retry, pinned by
+`tests/test_notes_retry_budget.py`.
 
 **Wall-clock cap on correction (2026-04-27):**
 `CORRECTION_WALLCLOCK_TIMEOUT = 300.0` in `server.py` is
@@ -1612,7 +1640,7 @@ Two new SSE event families surface the post-extraction silent dead
 zones (added 2026-04-27, Phases 5 & 6 of the same plan):
 
 - **`pipeline_stage`** — coordinator-level stage label, one of
-  `scouting | reading_source | transcribing_source | extracting | merging |
+  `scouting | reading_source | extracting | merging |
   cross_checking | reviewing | re_checking | reviewing_notes |
   formatting_notes | done`. Emitted at every phase boundary in
   `run_multi_agent_stream`. The frontend captures the latest stage
@@ -1621,8 +1649,8 @@ zones (added 2026-04-27, Phases 5 & 6 of the same plan):
   (the old `validating_notes` label is retained in the frontend
   `PipelineStage` union for older in-flight streams). Both must stay in
   sync — `web/src/lib/types.ts` + `web/src/pages/ExtractPage.tsx`. Pinned by
-  `tests/test_pipeline_stage_events.py`, `tests/test_pdf_sidecar_wiring.py`,
-  and `web/src/__tests__/PipelineStages.test.tsx`.
+  `tests/test_pipeline_stage_events.py` and
+  `web/src/__tests__/PipelineStages.test.tsx`.
 - **`cross_check_start` / `cross_check_result` / `cross_check_complete`**
   — per-pass progress for each cross-check run. ValidatorTab fills
   rows incrementally instead of waiting for `run_complete`. Two
@@ -1658,7 +1686,10 @@ fix in `_emit_stage`).
   list that reads as "nothing to warn about". Pinned by
   `tests/test_socf_section_placement.py`.
 - **Numeric-notes checker failures stay unresolved.** A failed footing
-  assessment emits an incomplete-assessment warning. Recheck and persisted
+  assessment emits an incomplete-assessment warning. Unsupported category axes
+  and conflicting facts also remain incomplete instead of silently dropping
+  dimensions or choosing one value. Pinned by `tests/test_notes_numeric_footing.py`.
+  Recheck and persisted
   refresh retain previous footing warnings until a successful assessment
   replaces them. Pinned by `tests/test_recheck_endpoint.py`.
 
@@ -2786,15 +2817,10 @@ the source revision; human edits, intervening revisions, shared source-note
 cells and changed source generations are refused. Workbook promotion, canonical
 placements and tombstones remain transactional. Pinning tests are in
 `tests/test_notes_write_serialization.py`.
-`request_source_recheck` recaptures one identified prepared-PDF block and checks
-it in a separate model request against the original page. It preserves block
-identity and geometry and publishes an inactive candidate generation. Activation
-is permitted only before any cells or placements exist, with unchanged parent
-generation and inherited exclusions in the same transaction. It never replaces
-source beneath concurrent extraction or human work. Native Word source is not
-recaptured. Pinning tests are in `tests/test_notes_source_repair.py`.
-Every attempted source-model stage retains its context, receipt or failure type
-and known usage in a source-recheck trace under the run output directory.
+Suspected capture errors use `report_source_gap` for human review. Extraction
+does not expose a recapture tool: an inactive correction cannot change the
+draft, and source cannot be replaced beneath concurrent writers or human work.
+Pinned by `tests/test_notes_source_tools.py`.
 Write order is never the accounting decision. Extraction receives the same
 actionable context, does not retry with unrelated blocks, and may finish with
 the conflict unresolved instead of tripping the silent-no-write failure. The

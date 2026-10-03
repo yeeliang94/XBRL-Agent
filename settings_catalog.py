@@ -26,6 +26,11 @@ import os
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from agent_tracing import (
+    DEFAULT_MAX_AGENT_ITERATIONS,
+    MAX_AGENT_ITERATIONS_CEILING,
+    resolve_max_iterations,
+)
 from runtime_settings import deployment_value
 
 
@@ -48,6 +53,8 @@ class AdvancedSetting:
 
     def parse_env(self, raw: Optional[str]) -> Any:
         """The value the pipeline reader would act on, for display."""
+        if self.key == "XBRL_MAX_AGENT_ITERATIONS":
+            return resolve_max_iterations(raw)
         if raw is None or raw.strip() == "":
             return self.default
         text = raw.strip()
@@ -121,10 +128,12 @@ _HOUSEKEEPING = "Diagnostics and housekeeping"
 ADVANCED_SETTINGS: tuple[AdvancedSetting, ...] = (
     # --- Time and turn limits -------------------------------------------
     AdvancedSetting(
-        "XBRL_MAX_AGENT_ITERATIONS", "Maximum turns per extraction agent",
-        "Model responses one statement agent may use before it stops. Capped "
-        "at 45 so the app's own limit fires before the framework's hidden 50.",
-        _LIMITS, "int", 40, minimum=1, maximum=45, restart=True,
+        "XBRL_MAX_AGENT_ITERATIONS", "Maximum steps per extraction agent",
+        "One step is a model response or a tool-execution stage. "
+        "60 steps allow roughly 30 model turns. Applies to statement and "
+        "notes extraction; reviewers have separate limits.",
+        _LIMITS, "int", DEFAULT_MAX_AGENT_ITERATIONS, minimum=1,
+        maximum=MAX_AGENT_ITERATIONS_CEILING, restart=True,
     ),
     AdvancedSetting(
         "XBRL_MAX_TOKENS_PER_AGENT", "Token budget per agent",
@@ -263,12 +272,6 @@ ADVANCED_SETTINGS: tuple[AdvancedSetting, ...] = (
         "How many rendered PDF pages are kept in memory.",
         _EFFICIENCY, "int", 64, minimum=1, maximum=4096, restart=True,
     ),
-    AdvancedSetting(
-        "XBRL_PDF_SIDECAR_PAGE_CAP", "PDF transcription page limit",
-        "Most pages one PDF transcription pass may read. Each page is a paid "
-        "call.",
-        _EFFICIENCY, "int", 80, minimum=1,
-    ),
     # --- AI provider compatibility ---------------------------------------
     AdvancedSetting(
         "XBRL_OPENAI_CACHE_OPTIONS", "Newer GPT-5.6 cache request format",
@@ -290,11 +293,6 @@ ADVANCED_SETTINGS: tuple[AdvancedSetting, ...] = (
         choices=("DEBUG", "INFO", "WARNING", "ERROR"), restart=True,
     ),
     AdvancedSetting(
-        "XBRL_CACHE_PROBE", "Log prompt-cache details",
-        "Writes prompt-cache measurements at normal log detail.",
-        _HOUSEKEEPING, "bool", False,
-    ),
-    AdvancedSetting(
         "XBRL_TRACE_RETENTION_DAYS", "Keep run traces for (days)",
         "Traces contain document and model content. 0 keeps them forever; use "
         "it only when another system deletes them.",
@@ -305,12 +303,6 @@ ADVANCED_SETTINGS: tuple[AdvancedSetting, ...] = (
         "How often an idle progress stream sends a heartbeat so network "
         "proxies do not close it.",
         _HOUSEKEEPING, "float", 25.0, minimum=1,
-    ),
-    AdvancedSetting(
-        "XBRL_STAGE_RESUME", "Resume failed runs from the command line",
-        "Lets the command-line resume tool relaunch a run from its last "
-        "completed stage. When off it only previews.",
-        _HOUSEKEEPING, "bool", False,
     ),
 )
 

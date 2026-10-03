@@ -64,3 +64,10 @@ def test_run_agent_delegates_scout_to_canonical_pipeline(tmp_path, monkeypatch):
                       statements={StatementType.SOFP}, use_scout=False)
     assert captured["cfg"].infopack is None
     assert captured["cfg"].use_scout is False
+
+
+def test_cli_rejects_retired_stage_resume(capsys):
+    with pytest.raises(SystemExit) as exc:
+        run.parse_cli_args(["--resume-from", "42"])
+    assert exc.value.code == 2
+    assert "unrecognized arguments: --resume-from" in capsys.readouterr().err
