@@ -10,7 +10,7 @@ so identity and abstract-detection stay consistent with the rest of the system:
 * :func:`tools.template_reader.read_template` — the same reader the agents see,
   so a row flagged ``is_abstract`` here is the same row the writer would refuse
   (gotcha #17);
-* :func:`concept_model.parser._derive_template_id` / ``_mint_uuid`` — so a prose
+* :func:`concept_model.parser.derive_template_id` / ``_mint_uuid`` — so a prose
   notes node gets the SAME template-scoped id scheme as a face concept
   (``{standard}-{level}-{slug}-v1`` + uuid5 of ``template_id::sheet::row::label``).
   Template-scoping is what stops the same prose row under MFRS/MPERS × Company/
@@ -25,7 +25,7 @@ from tools.template_reader import read_template
 # Reuse the face pipeline's id scheme so prose notes and face concepts mint
 # identities the same way (template-scoped uuid5). Private-but-stable helpers,
 # imported within the same package.
-from concept_model.parser import _derive_template_id, _mint_uuid
+from concept_model.parser import derive_template_id, _mint_uuid
 from concept_model.taxonomy_semantics import semantic_addresses_for
 
 
@@ -58,7 +58,7 @@ def parse_notes_template(
     doesn't have to re-derive it.
     """
     path = Path(xlsx_path)
-    template_id = _derive_template_id(path)
+    template_id = derive_template_id(path)
 
     nodes: list[NotesNode] = []
     addresses = semantic_addresses_for(str(path.resolve()))

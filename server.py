@@ -195,7 +195,7 @@ def _export_canonical_workbooks(
     import shutil
     from statement_types import template_path as _tpl_path
     from concept_model.exporter import export_run_to_xlsx
-    from concept_model.parser import _derive_template_id
+    from concept_model.parser import derive_template_id
 
     # Nothing canonical exists to render. The scratch workbook is the only
     # representation and the established zero-fact fallback is benign; avoid
@@ -227,7 +227,7 @@ def _export_canonical_workbooks(
             applied = export_run_to_xlsx(
                 db_path, run_id, canon_path,
                 filing_level=filing_level,
-                template_id=_derive_template_id(Path(master)),
+                template_id=derive_template_id(Path(master)),
                 reporting_period_cy=reporting_period_cy,
                 reporting_period_py=reporting_period_py,
                 carry_forward_row1_from=scratch_path,
@@ -3623,15 +3623,6 @@ def _notes_auto_review_enabled() -> bool:
     return os.environ.get("XBRL_NOTES_AUTO_REVIEW", "true").lower() == "true"
 
 
-def _pdf_notes_auto_format_enabled() -> bool:
-    """PDF note formatting is a standard stage, including for older settings.
-
-    Retain the capability getter for older clients. The former environment
-    toggle cannot bypass preparation of PDF notes for review.
-    """
-    return True
-
-
 def _should_auto_format_pdf_notes(
     session_dir: Path, *, merge_succeeded: bool, has_notes_result: bool,
 ) -> bool:
@@ -3643,7 +3634,6 @@ def _should_auto_format_pdf_notes(
     return bool(
         merge_succeeded
         and has_notes_result
-        and _pdf_notes_auto_format_enabled()
         and (session_dir / "uploaded.pdf").exists()
         and not (session_dir / "uploaded.docx").exists()
     )
@@ -3676,153 +3666,6 @@ def _notes_coverage_enabled() -> bool:
     rollback (Rollback Plan). Read fresh each call so a Settings toggle takes
     effect without a restart."""
     return os.environ.get("XBRL_NOTES_COVERAGE", "true").lower() == "true"
-
-
-def _pdf_sidecar_enabled() -> bool:
-    """Legacy capability: scans now use direct page reading, without a transcript.
-
-    Keep historical artifacts readable, but ignore old saved enable flags.
-    """
-    return False
-
-
-def _pdf_sidecar_page_cap() -> int:
-    """Most pages one sidecar pass may transcribe (each is a paid vision
-    call). 80 clears every sample document's notes section several times
-    over; override with ``XBRL_PDF_SIDECAR_PAGE_CAP``."""
-    try:
-        return max(1, int(os.environ.get("XBRL_PDF_SIDECAR_PAGE_CAP", "80")))
-    except ValueError:
-        return 80
-
-
-async def _maybe_build_pdf_sidecar(
-    pdf_path: str,
-    notes_to_run,
-    infopack,
-    model,
-    model_name: str,
-    on_start: Optional[Callable[[list[int]], None]] = None,
-    on_progress: Optional[Callable[[int, int, int, bool], None]] = None,
-) -> Optional[dict]:
-    """Build the transcribed sidecar for a scanned-PDF run (Phase 2 wiring).
-
-    Returns an SSE data dict describing what happened (built / skipped +
-    reason), or None when the pass simply doesn't apply (flag off, no notes,
-    text PDF, sidecar already present). Best-effort by contract: ANY exception
-    is caught and reported as a skip — the run proceeds sidecar-less exactly
-    as before the feature existed (same posture as ingest.docx_html).
-    """
-    try:
-        from ingest.pdf_sidecar import (
-            pdf_has_text_layer,
-            read_source_meta,
-            transcribe_pages,
-            write_pdf_sidecar,
-        )
-        from notes.source_snippets import has_source_html
-
-        if not _pdf_sidecar_enabled() or not notes_to_run:
-            return None
-        if has_source_html(pdf_path):
-            return None  # Word run — its extracted sidecar always wins
-        if pdf_has_text_layer(pdf_path):
-            return None  # digital PDF — out of scope (plan: scanned first)
-
-        inventory = getattr(infopack, "notes_inventory", None) or []
-        pages: set[int] = set()
-        note_page_ranges: dict[int, list[int]] = {}
-        for entry in inventory:
-            page_range = getattr(entry, "page_range", None)
-            if page_range and len(page_range) == 2:
-                entry_pages = list(
-                    range(int(page_range[0]), int(page_range[1]) + 1)
-                )
-                pages.update(entry_pages)
-                note_num = getattr(entry, "note_num", None)
-                if note_num is not None:
-                    note_page_ranges.setdefault(int(note_num), [])
-                    note_page_ranges[int(note_num)].extend(entry_pages)
-        if not pages:
-            # Never transcribe blind: without an inventory we don't know which
-            # pages are notes, and transcribing the whole document is spend
-            # without a consumer.
-            return {"status": "skipped", "reason": "no_notes_inventory"}
-        cap = _pdf_sidecar_page_cap()
-        if len(pages) > cap:
-            # Cost guard: each page is a paid vision call, so a degenerate
-            # inventory (a page_range spanning the whole document) must not
-            # fan out into hundreds of them. Skip loudly rather than
-            # truncate — a partial sidecar would silently miss notes.
-            return {"status": "skipped", "reason": "too_many_pages",
-                    "pages_requested": len(pages), "page_cap": cap}
-
-        ordered_pages = sorted(pages)
-        if on_start is not None:
-            on_start(ordered_pages)
-        progress_kwargs = (
-            {"on_progress": on_progress} if on_progress is not None else {}
-        )
-        result = await transcribe_pages(
-            pdf_path,
-            ordered_pages,
-            model,
-            rotation_corrections=(
-                getattr(infopack, "rotation_corrections", {}) or {}
-            ),
-            **progress_kwargs,
-        )
-        reasoning_summary = "\n\n".join(
-            f"Page {page}: {summary}"
-            for page, summary in sorted(result.reasoning_summaries.items())
-            if summary
-        )[:12_000]
-        model_calls = sorted(
-            result.model_calls,
-            key=lambda call: (
-                int(call.get("page", 0) or 0),
-                int(call.get("attempt", 0) or 0),
-            ),
-        )
-        out = write_pdf_sidecar(
-            pdf_path,
-            result,
-            model_name=model_name,
-            note_page_ranges={
-                note_num: sorted(set(note_pages))
-                for note_num, note_pages in note_page_ranges.items()
-            },
-        )
-        if out is None:
-            # Scout note ranges are advisory, so they cannot prove an
-            # apparently unaffected note is complete. Any failed requested
-            # page keeps the whole sidecar unpublished.
-            reason = ("transcription_incomplete" if result.failed_pages
-                      else "no_pages_transcribed")
-            return {"status": "skipped", "reason": reason,
-                    "failed_pages": result.failed_pages,
-                    "usage": result.usage,
-                    "model_calls": model_calls,
-                    "reasoning_summary": reasoning_summary}
-        meta = read_source_meta(pdf_path) or {}
-        return {
-            "status": "built",
-            "pages": len(meta.get("pages") or result.pages_html),
-            "partial": bool(meta.get("partial")),
-            "failed_pages": list(meta.get("failed_pages") or []),
-            "notes_available": len(meta.get("note_pages") or {}),
-            "usage": result.usage,
-            "model_calls": model_calls,
-            "reasoning_summary": reasoning_summary,
-        }
-    except Exception as exc:  # noqa: BLE001 — best-effort by contract
-        # Class name only: provider exceptions can carry endpoint/request
-        # detail that doesn't belong in a client-facing SSE payload (the
-        # connection-test pattern). Full detail stays in the server log.
-        logger.warning("pdf_sidecar pass failed; run proceeds without it",
-                       exc_info=True)
-        return {"status": "skipped",
-                "reason": f"error: {type(exc).__name__}"}
 
 
 # --------------------------------------------------------------------------
@@ -4155,14 +3998,7 @@ def _load_extended_settings() -> dict:
         "auto_review": _auto_review_enabled(),
         # Notes reviewer auto-trigger (docs/PLAN.md — Notes Reviewer). Default on.
         "notes_auto_review": _notes_auto_review_enabled(),
-        # PDF-only, style-safe notes formatter. Default off because it adds
-        # paid visual review calls per prose sheet.
-        "pdf_notes_auto_format": _pdf_notes_auto_format_enabled(),
-        # Notes coverage checklist (docs/PLAN-notes-coverage-and-routing.md). Default on.
         "notes_coverage": _notes_coverage_enabled(),
-        # Scanned-PDF transcribed source sidecar (docs/PLAN-pdf-source-sidecar.md).
-        # Default off — ships dark until the live validation gate passes.
-        "pdf_sidecar": _pdf_sidecar_enabled(),
         # Notes source-integrity rollout mode (gotcha #31). Default off; the
         # value is the enum's, so the form and the run path can't disagree.
         "notes_source_integrity": _notes_integrity_mode().value,
@@ -5626,7 +5462,6 @@ async def run_multi_agent_stream(
         # loop can find the row to finalize.
         run_agent_ids_by_notes: Dict[NotesTemplateType, int] = {}
         scout_run_agent_id: Optional[int] = None
-        source_preparation_run_agent_id: Optional[int] = None
         scout_model_name = (
             _configured_default_models().get("scout")
             or os.environ.get("SCOUT_MODEL", "").strip()
@@ -5684,7 +5519,7 @@ async def run_multi_agent_stream(
         })
         _RUN_EVENT_TYPES_SET = frozenset({
             "status", "error", "pipeline_stage", "scout_warnings",
-            "scale_conflict", "pdf_sidecar", "partial_merge",
+            "scale_conflict", "partial_merge",
             "cross_check_start", "cross_check_result",
             "cross_check_complete", "scout_complete",
             "run_complete",
@@ -6206,248 +6041,6 @@ async def run_multi_agent_stream(
                     exc_info=True,
                 )
 
-        # PLAN-pdf-source-sidecar Phase 2: scanned-PDF runs with notes get an
-        # LLM-transcribed source.html BEFORE extraction agents launch. This
-        # deliberately follows the pipeline-owned scout so it can use the
-        # freshest notes inventory and page guidance.
-        def _start_source_preparation(pages: list[int]) -> None:
-            """Make the paid scan-reading pass visible and auditable.
-
-            The callback fires only after the sidecar applicability and page
-            cap checks, so an inert digital-PDF run does not gain a phantom
-            worker row.
-            """
-            nonlocal source_preparation_run_agent_id
-            _emit_stage(
-                "transcribing_source",
-                message=f"Preparing {len(pages)} scanned note pages.",
-                completed=0,
-                total=len(pages),
-            )
-            if db_conn is None or run_id is None:
-                return
-            try:
-                source_preparation_run_agent_id = repo.create_run_agent(
-                    db_conn,
-                    run_id,
-                    statement_type="SOURCE_PREPARATION",
-                    variant=None,
-                    model=_model_id(model),
-                )
-                run_agent_ids_by_agent_id["source-preparation"] = (
-                    source_preparation_run_agent_id
-                )
-                db_conn.commit()
-            except Exception:
-                logger.warning(
-                    "Could not create SOURCE_PREPARATION audit row",
-                    exc_info=True,
-                )
-                try:
-                    db_conn.rollback()
-                except Exception:
-                    pass
-
-        sidecar_task = asyncio.create_task(_maybe_build_pdf_sidecar(
-            config.pdf_path,
-            notes_to_run,
-            infopack,
-            model,
-            model_name,
-            on_start=_start_source_preparation,
-            on_progress=lambda _page, completed, total, _ok: _emit_stage(
-                "transcribing_source",
-                message=(
-                    f"Reading scanned note pages: {completed} of {total} complete."
-                ),
-                completed=completed,
-                total=total,
-            ),
-        ))
-        async for event in _drain_while_running(sidecar_task):
-            persist_event(event)
-            if client_connected:
-                try:
-                    yield event
-                except (asyncio.CancelledError, GeneratorExit):
-                    client_connected = False
-        sidecar_event = await sidecar_task
-        if source_preparation_run_agent_id is not None and db_conn is not None:
-            try:
-                from pricing import estimate_cost as _estimate_sidecar_cost
-
-                sidecar_usage = (
-                    sidecar_event.get("usage", {})
-                    if isinstance(sidecar_event, dict) else {}
-                )
-                sidecar_prompt = int(
-                    sidecar_usage.get("prompt_tokens", sidecar_usage.get("in", 0))
-                    or 0
-                )
-                sidecar_completion = int(
-                    sidecar_usage.get(
-                        "completion_tokens", sidecar_usage.get("out", 0)
-                    ) or 0
-                )
-                sidecar_reasoning = int(
-                    sidecar_usage.get("thinking_tokens", 0) or 0
-                )
-                sidecar_total = int(
-                    sidecar_usage.get("total_tokens", 0)
-                    or sidecar_prompt + sidecar_completion + sidecar_reasoning
-                )
-                sidecar_built = bool(
-                    isinstance(sidecar_event, dict)
-                    and sidecar_event.get("status") == "built"
-                )
-                sidecar_model_calls = (
-                    sidecar_event.get("model_calls", [])
-                    if isinstance(sidecar_event, dict) else []
-                )
-                has_unavailable_call = any(
-                    call.get("usage_status") != "complete"
-                    for call in sidecar_model_calls
-                    if isinstance(call, dict)
-                )
-                repo.finish_run_agent(
-                    db_conn,
-                    source_preparation_run_agent_id,
-                    status=(
-                        "succeeded" if sidecar_built
-                        else "completed_with_errors"
-                    ),
-                    total_tokens=sidecar_total,
-                    total_cost=_estimate_sidecar_cost(
-                        sidecar_prompt,
-                        sidecar_completion,
-                        sidecar_reasoning,
-                        _model_id(model),
-                    ),
-                    prompt_tokens=sidecar_prompt,
-                    completion_tokens=sidecar_completion,
-                    reasoning_tokens=sidecar_reasoning,
-                    usage_status=(
-                        "complete"
-                        if sidecar_built and sidecar_total > 0
-                        and not has_unavailable_call
-                        else "partial" if sidecar_total > 0
-                        else "unavailable"
-                    ),
-                    error_type=(
-                        None if sidecar_built
-                        else "source_preparation_incomplete"
-                    ),
-                    error_message=(
-                        None
-                        if sidecar_built or not isinstance(sidecar_event, dict)
-                        else str(
-                            sidecar_event.get("reason")
-                            or "Source preparation incomplete"
-                        )
-                    ),
-                )
-                from model_settings import describe_model_runtime
-
-                sidecar_runtime = describe_model_runtime(
-                    model, role="source_preparation",
-                )
-                sidecar_turns = []
-                sidecar_cumulative_tokens = 0
-                for turn_index, call in enumerate(
-                    sidecar_event.get("model_calls", [])
-                    if isinstance(sidecar_event, dict) else [],
-                    start=1,
-                ):
-                    call_prompt = int(call.get("prompt_tokens", 0) or 0)
-                    call_completion = int(
-                        call.get("completion_tokens", 0) or 0
-                    )
-                    call_reasoning = int(
-                        call.get("thinking_tokens", 0) or 0
-                    )
-                    call_total = int(
-                        call.get("total_tokens", 0)
-                        or call_prompt + call_completion + call_reasoning
-                    )
-                    sidecar_cumulative_tokens += call_total
-                    sidecar_turns.append({
-                        "turn_index": turn_index,
-                        "node_kind": "model_request",
-                        "model": _model_id(model),
-                        "provider": sidecar_runtime.get("provider"),
-                        "transport": sidecar_runtime.get("transport"),
-                        "prompt_tokens": call_prompt,
-                        "completion_tokens": call_completion,
-                        "thinking_tokens": call_reasoning,
-                        "total_tokens": call_total,
-                        "cumulative_tokens": sidecar_cumulative_tokens,
-                        "cost_estimate": _estimate_sidecar_cost(
-                            call_prompt,
-                            call_completion,
-                            call_reasoning,
-                            _model_id(model),
-                        ),
-                        "status": (
-                            "failed" if call.get("error_type") else "succeeded"
-                        ),
-                        "usage_status": str(
-                            call.get("usage_status") or "unavailable"
-                        ),
-                    })
-                if sidecar_turns:
-                    repo.insert_agent_turns(
-                        db_conn,
-                        source_preparation_run_agent_id,
-                        sidecar_turns,
-                    )
-                db_conn.commit()
-            except Exception:
-                logger.warning(
-                    "Could not finalize SOURCE_PREPARATION audit row",
-                    exc_info=True,
-                )
-                try:
-                    db_conn.rollback()
-                except Exception:
-                    pass
-        sidecar_reasoning_summary = (
-            str(sidecar_event.get("reasoning_summary") or "")
-            if isinstance(sidecar_event, dict) else ""
-        )
-        if sidecar_reasoning_summary:
-            from agent_runner import reasoning_event_metadata
-
-            reasoning_event = {
-                "event": "thinking_end",
-                "data": {
-                    "agent_id": "source-preparation",
-                    "agent_role": "SOURCE_PREPARATION",
-                    "summary": sidecar_reasoning_summary,
-                    "full_length": len(sidecar_reasoning_summary),
-                    "duration_ms": 0,
-                    **reasoning_event_metadata(
-                        model, role="source_preparation",
-                    ),
-                },
-            }
-            persist_event(reasoning_event)
-            if client_connected:
-                try:
-                    yield reasoning_event
-                except (asyncio.CancelledError, GeneratorExit):
-                    client_connected = False
-        if sidecar_event is not None:
-            # Persist alongside the emit so the History run page can show the
-            # same notice after a reload (the live event is otherwise gone —
-            # the transcript caveat matters most when reviewing the workbook).
-            from ingest.pdf_sidecar import write_sidecar_outcome
-            write_sidecar_outcome(output_dir, sidecar_event)
-            if client_connected:
-                try:
-                    yield {"event": "pdf_sidecar", "data": sidecar_event}
-                except (asyncio.CancelledError, GeneratorExit):
-                    client_connected = False
-
         # Notes source integrity, plan Phases 3.5 / 4.3. Read the uploaded
         # Word file into a frozen manifest BEFORE any agent sees a template,
         # so the denominator is fixed before anything can influence it.
@@ -6777,7 +6370,7 @@ async def run_multi_agent_stream(
         # longer carry field payloads, so merging them produced an empty tab.
         # Always replace result.json — including with [] — so a reused output
         # directory cannot leak a prior run's figures.
-        from concept_model.parser import _derive_template_id
+        from concept_model.parser import derive_template_id
         from concept_model.preview import build_preview_fields, write_preview_result
         from statement_types import (
             FACTS_BEARING_AGENT_STATUSES,
@@ -6803,7 +6396,7 @@ async def run_multi_agent_stream(
                     exc_info=True,
                 )
                 continue
-            statements_by_template_id[_derive_template_id(master)] = (
+            statements_by_template_id[derive_template_id(master)] = (
                 agent_result.statement_type.value
             )
         try:

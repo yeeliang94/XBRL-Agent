@@ -16,7 +16,7 @@ import pytest
 from db.schema import init_db
 from concept_model.bootstrap import import_all_notes_templates
 from notes_types import NotesTemplateType, notes_template_path
-from concept_model.parser import _derive_template_id
+from concept_model.parser import derive_template_id
 
 
 _ISSUED_CAPITAL_TID = "mfrs-company-notes-issuedcapital-v1"

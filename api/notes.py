@@ -35,7 +35,7 @@ def _notes_template_index(standard: str, level: str) -> list[dict]:
     Skips templates that don't resolve for the (standard, level) pair.
     """
     from notes_types import NOTES_REGISTRY, notes_template_path
-    from concept_model.parser import _derive_template_id
+    from concept_model.parser import derive_template_id
 
     out: list[dict] = []
     for ttype, entry in NOTES_REGISTRY.items():
@@ -47,7 +47,7 @@ def _notes_template_index(standard: str, level: str) -> list[dict]:
             "template_type": ttype,
             "sheet": entry.sheet_name,
             "is_numeric": entry.is_numeric,
-            "template_id": _derive_template_id(path),
+            "template_id": derive_template_id(path),
         })
     return out
 

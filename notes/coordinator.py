@@ -245,10 +245,10 @@ async def _project_numeric_notes_facts(
     if not result.numeric_cells:
         return None
     from notes_types import notes_template_path
-    from concept_model.parser import _derive_template_id
+    from concept_model.parser import derive_template_id
     from concept_model.cell_resolver import project_writes
     try:
-        numeric_template_id = _derive_template_id(
+        numeric_template_id = derive_template_id(
             notes_template_path(
                 result.template_type,
                 level=config.filing_level,
@@ -701,6 +701,7 @@ async def _run_single_notes_agent(
         # a failure to a result), so the scaffold classifies + retries; on
         # success we build the succeeded NotesAgentResult here.
         captured: dict[str, Any] = {}
+        failed = True
         trace = Path(output_dir) / f"NOTES_{template_type.value}_conversation_trace.json"
         try:
             trace_before = trace.read_bytes() if trace.exists() else None
@@ -728,13 +729,14 @@ async def _run_single_notes_agent(
                 source_generation_id=source_generation_id,
                 attempt_usage_out=captured,
             )
+            failed = False
         finally:
             if captured:
                 attempt_usage.append(captured)
-            # Keep every attempt, while retaining the conventional latest path
-            # for existing trace readers and the Activity panel.
+            # Archive failures before a retry overwrites the latest trace.
+            # Successful attempts need only the conventional Activity path.
             try:
-                if trace.exists() and trace.read_bytes() != trace_before:
+                if failed and trace.exists() and trace.read_bytes() != trace_before:
                     shutil.copyfile(trace, trace.with_name(
                         f"NOTES_{template_type.value}_attempt{retry_index}_conversation_trace.json"))
             except OSError:

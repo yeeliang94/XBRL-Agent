@@ -27,7 +27,7 @@ CO_SOFP = REPO / "XBRL-template-MFRS" / "Company" / "01-SOFP-CuNonCu.xlsx"
 @pytest.fixture
 def canonical_env(tmp_path: Path):
     from db.schema import init_db
-    from concept_model.parser import parse_template, _derive_template_id
+    from concept_model.parser import parse_template, derive_template_id
     from concept_model.importer import import_template
 
     db_path = tmp_path / "xbrl.db"
@@ -36,7 +36,7 @@ def canonical_env(tmp_path: Path):
     jp = tmp_path / "tree.json"
     jp.write_text(json.dumps(tree.to_json(), sort_keys=True), encoding="utf-8")
     import_template(db_path, jp)
-    template_id = _derive_template_id(CO_SOFP)
+    template_id = derive_template_id(CO_SOFP)
 
     conn = sqlite3.connect(str(db_path))
     run_id = conn.execute(

@@ -1,10 +1,8 @@
 """Reviewer-specific history compaction — plan agent-efficiency Phase 1A.
 
-The reviewer registers NO history processors by default, so every page image
-it views is re-billed verbatim on every later model request. The Step 0.2
-inventory measured that as the dominant reviewer cost: 468 MB of page images
-introduced across 17 passes, re-billed to 916 MB (2.0x overall; up to 8.5x
-on heavy passes).
+Figures reviewers keep page images by default. Optional compaction avoids
+resending older images on every later model request. Notes reviewers always
+use this processor because they read many scanned pages.
 
 This module is deliberately NOT a copy of ``extraction/history_processors``.
 Extraction's stripper keys on a domain event (first successful write) and
@@ -21,9 +19,9 @@ face page against a note page in consecutive calls. The median pass makes
 exactly 2 view calls, so median passes see NO stripping — the saving lands
 on the heavy tail, which is where the waste is.
 
-Gated by ``XBRL_REVIEWER_COMPACT_CONTEXT`` (default OFF), read at agent
-creation in ``create_reviewer_agent``. Flag off ⇒ the agent factory output
-is byte-identical to today (pinned by test).
+Figures review is gated by ``XBRL_REVIEWER_COMPACT_CONTEXT`` (default OFF),
+read at agent creation in ``create_reviewer_agent``. The limit warning stays
+registered in both states. Notes review compacts independently of this flag.
 
 Purity contract (same as extraction's): never mutate the input messages —
 rebuild changed parts with ``dataclasses.replace`` on copied lists. The

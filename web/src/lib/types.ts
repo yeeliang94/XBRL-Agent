@@ -98,11 +98,7 @@ export type SSEEventType =
   //  - scout_warnings: completeness probe findings (server, pre-flight).
   //  - scale_conflict: scale-unit reconciliation conflict (coordinator).
   | "scout_warnings"
-  | "scale_conflict"
-  // docs/PLAN-pdf-source-sidecar.md: outcome of the pre-agent LLM
-  // transcription pass on a scanned PDF (built / skipped + reason).
-  // Run-level, advisory — the run proceeds either way.
-  | "pdf_sidecar";
+  | "scale_conflict";
 
 // Every multi-agent event carries these routing fields inside `data` (the
 // backend stamps them in agent_runner.build_agent_event). We keep them in `data`
@@ -144,8 +140,6 @@ interface SSEEventDataMap {
   // Scout-quality warnings (run-level; no agent_id — see SSEEventType).
   scout_warnings: ScoutWarningsData & AgentRouting;
   scale_conflict: ScaleConflictData & AgentRouting;
-  // Scanned-PDF source transcript outcome (run-level; no agent_id).
-  pdf_sidecar: PdfSidecarData & AgentRouting;
 }
 
 export type SSEEvent = {
@@ -285,9 +279,6 @@ export type PipelineStage =
   // agent sees a template (PLAN-notes-source-integrity-build Phase 4). Only
   // fires when the source-integrity mode is shadow or enforce.
   | "reading_source"
-  // Transcribing note pages from an image-only PDF into structure-only HTML
-  // before extraction agents start.
-  | "transcribing_source"
   | "extracting"
   | "merging"
   | "cross_checking"
@@ -363,12 +354,7 @@ export interface ScaleConflictData {
   message: string;
 }
 
-/** Payload of the ``pdf_sidecar`` SSE event (docs/PLAN-pdf-source-sidecar.md).
- *  Emitted once, before the notes agents launch, on scanned-PDF runs where
- *  the transcription setting is on. `status: "built"` carries the page count;
- *  `status: "skipped"` carries a machine reason (e.g. `no_notes_inventory`,
- *  `too_many_pages`, `transcription_incomplete`, `error: <ExceptionName>`).
- *  Mirrors `server._maybe_build_pdf_sidecar`. */
+/** Persisted outcome of the retired scanned-PDF transcript stage, used by run history. */
 export interface PdfSidecarData {
   status: "built" | "skipped";
   reason?: string;
@@ -672,12 +658,6 @@ export interface ExtendedSettingsResponse extends SettingsResponse {
   notes_coverage?: boolean;
   /** Whether per-entity advisory memory injects prior-year prompt hints (item 28). */
   entity_memory?: boolean;
-  /** Scanned-PDF transcribed source sidecar (docs/PLAN-pdf-source-sidecar.md).
-   *  Default off; admin-only because it adds paid vision calls per run. */
-  pdf_sidecar?: boolean;
-  /** Automatically standardise PDF prose notes after review. PDF-only and
-   *  default off because it adds a paid formatter pass per prose sheet. */
-  pdf_notes_auto_format?: boolean;
   /** Notes source-integrity rollout mode (gotcha #31). Default 'off'. */
   notes_source_integrity?: SourceIntegrityMode;
   /** Server-supplied vocabulary, so a new mode needs no frontend edit. */
@@ -1010,9 +990,7 @@ export interface RunDetailJson {
   // v8 telemetry rollup. Optional for back-compat with older payloads.
   telemetry_rollup?: TelemetryRollupJson;
   app_version?: string | null;
-  // docs/PLAN-pdf-source-sidecar.md: persisted outcome of the scanned-PDF
-  // transcription pass, so the run page shows the notice after a reload.
-  // Null/absent when the pass did not apply.
+  // Historical transcript outcome. New runs have no outcome file.
   pdf_sidecar?: PdfSidecarData | null;
 }
 

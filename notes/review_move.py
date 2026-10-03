@@ -161,7 +161,7 @@ def move_reviewed_note(
     expected_revision: int, destination_revision: int | None,
 ) -> None:
     """Move after active work is idle. Caller owns ``BEGIN IMMEDIATE``."""
-    _move_note(
+    move_note_in_transaction(
         conn,
         run_id=run_id,
         sheet=sheet,
@@ -180,7 +180,7 @@ def move_note_during_review(
     expected_revision: int, destination_revision: int | None,
 ) -> None:
     """Move inside the automatic reviewer's serialised write seam."""
-    _move_note(
+    move_note_in_transaction(
         conn,
         run_id=run_id,
         sheet=sheet,
@@ -193,14 +193,18 @@ def move_note_during_review(
     )
 
 
-def _move_note(
+def move_note_in_transaction(
     conn: sqlite3.Connection, *, run_id: int, sheet: str, row: int,
     destination_sheet: str, destination_row: int,
     expected_revision: int, destination_revision: int | None,
     require_idle: bool,
     actor: str = 'human',
 ) -> None:
-    """Relocate one cell and every canonical ledger in the caller's txn."""
+    """Relocate one cell and its ledgers. Caller owns ``BEGIN IMMEDIATE``.
+
+    Active extraction/review callers must serialize writes and enforce
+    their ownership checks before passing ``require_idle=False``.
+    """
     run = repo.fetch_run(conn, run_id)
     if run is None:
         raise LookupError("Run not found")

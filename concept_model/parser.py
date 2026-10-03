@@ -137,7 +137,7 @@ def parse_template(xlsx_path: str) -> ConceptTree:
     other template uses the linear LEAF/COMPUTED model.
     """
     path = Path(xlsx_path)
-    template_id = _derive_template_id(path)
+    template_id = derive_template_id(path)
 
     # SOCIE is a (row, col) matrix and doesn't fit the linear LEAF/
     # COMPUTED model.  Dispatch to the matrix parser instead.
@@ -428,7 +428,7 @@ def get_col_index(letter: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _derive_template_id(path: Path) -> str:
+def derive_template_id(path: Path) -> str:
     """Stable, human-readable id derived from the on-disk path.
 
     Format: ``{standard}-{level}-{slug}-v1`` so two templates with the
