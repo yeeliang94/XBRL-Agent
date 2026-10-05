@@ -96,6 +96,30 @@ COPY_REPLACEMENTS = (
 
 def refresh(text: str) -> tuple[str, list[str]]:
     changed: list[str] = []
+    cleanup_body = (PROMPTS / "notes_cleanup.md").read_text(encoding="utf-8").strip()
+    cleanup_section = (
+        '<section id="notes-cleanup"><h2>Final notes cleanup</h2>'
+        '<p>Separate deletion-only author after formatting. Canonical receipts retain original HTML, '
+        'source-page evidence and approved omissions; tables and disclosure content stay unchanged.</p>'
+        '<details><summary><span><code>notes_cleanup.md</code> (verbatim)</span><span class="meta">'
+        + str(len(cleanup_body.splitlines())) + ' lines</span></summary><pre>'
+        + html.escape(cleanup_body, quote=False) + '</pre></details></section>'
+    )
+    cleanup_pattern = re.compile(r'<section id="notes-cleanup">.*?</section>', re.S)
+    existing_cleanup = cleanup_pattern.search(text)
+    if existing_cleanup is None:
+        text = text.replace('</body>', cleanup_section + '\n</body>')
+        changed.append("notes cleanup")
+    elif existing_cleanup.group(0) != cleanup_section:
+        text = cleanup_pattern.sub(lambda _: cleanup_section, text)
+        changed.append("notes cleanup")
+    if 'Notes cleanup</td>' not in text:
+        formatter_row = '<tr><td><span class="tag t-rev">REVIEWER</span>Notes formatter'
+        cleanup_row = ('<tr><td><span class="tag t-rev">REVIEWER</span>Notes cleanup</td>'
+                       '<td>automatic final notes pass</td><td>—</td><td><code>notes_cleanup.md</code> + note blocks</td>'
+                       '<td><code>xbrl-notes-cleanup</code></td><td>page-banner and continuation-heading deletions only</td></tr>')
+        text = text.replace(formatter_row, cleanup_row + '\n' + formatter_row)
+        changed.append("notes cleanup matrix")
     scoped_body = (PROMPTS / "scoped_investigation.md").read_text(encoding="utf-8").strip()
     scoped_section = (
         '<section id="reviewer-scoped-investigation"><h2>Scoped figures investigation</h2>'

@@ -256,7 +256,10 @@ def _restore_lineage(conn, run_id: int, sheet: str, cells_list, prior) -> None:
                 except BlockSelectionError:
                     continue
                 if not verify_format_only(source_html, str(cell["html"])).ok:
-                    continue
+                    from notes.cleanup_repository import receipt_matches
+                    if not receipt_matches(conn, run_id, coord[0], coord[1],
+                                           generation_id, source_html, str(cell["html"])):
+                        continue
             conn.execute(
                 "UPDATE notes_cells SET source_generation_id = ?, "
                 "source_rendered_sha256 = ?, current_html_sha256 = ?, "

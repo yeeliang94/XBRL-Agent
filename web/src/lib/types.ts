@@ -292,6 +292,7 @@ export type PipelineStage =
   // label; kept here too so older in-flight streams still render.
   | "reviewing_notes"
   | "formatting_notes"
+  | "cleaning_notes"
   | "validating_notes"
   | "done";
 
