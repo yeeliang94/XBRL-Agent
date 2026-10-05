@@ -5,6 +5,7 @@ vi.mock("../lib/api", async () => {
   const actual = await vi.importActual<typeof import("../lib/api")>("../lib/api");
   return {
     ...actual,
+    getAgentInstructions: vi.fn(async () => ({ texts: { figures: "" }, scopes: { figures: "Figures extraction and review" }, revision: 0, max_length: 8000, updated_by: null, updated_at: null })),
     getSettings: vi.fn(async () => ({
       model: "openai.gpt-5.4",
       proxy_url: "https://proxy.example.com",
@@ -30,16 +31,29 @@ function tablist() {
 }
 
 describe("SettingsPage", () => {
+  test("clicking the active instructions tab keeps the unsaved-edit guard", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(<SettingsPage isAdmin />);
+    fireEvent.click(within(tablist()).getByRole("tab", { name: "Agent instructions" }));
+    const editor = await screen.findByLabelText("Additional instructions");
+    fireEvent.change(editor, { target: { value: "Keep my edit" } });
+    fireEvent.click(within(tablist()).getByRole("tab", { name: "Agent instructions" }));
+    fireEvent.click(within(tablist()).getByRole("tab", { name: "Account" }));
+    expect(confirm).toHaveBeenCalledWith("Discard unsaved guidance?");
+    expect(editor).toHaveValue("Keep my edit");
+    expect(within(tablist()).getByRole("tab", { name: "Agent instructions" })).toHaveAttribute("aria-selected", "true");
+    confirm.mockRestore();
+  });
   test("admin sees General, Account, and Users tabs", () => {
     render(<SettingsPage isAdmin={true} />);
     const tabs = within(tablist()).getAllByRole("tab");
-    expect(tabs.map((t) => t.textContent)).toEqual(["General", "Account", "Users"]);
+    expect(tabs.map((t) => t.textContent)).toEqual(["General", "Agent instructions", "Account", "Users"]);
   });
 
   test("non-admin does not see the Users tab", () => {
     render(<SettingsPage isAdmin={false} />);
     const tabs = within(tablist()).getAllByRole("tab");
-    expect(tabs.map((t) => t.textContent)).toEqual(["General", "Account"]);
+    expect(tabs.map((t) => t.textContent)).toEqual(["General", "Agent instructions", "Account"]);
     expect(within(tablist()).queryByText("Users")).toBeNull();
   });
 

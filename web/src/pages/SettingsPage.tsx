@@ -6,12 +6,14 @@ import { getSettings, updateSettings, testConnection } from "../lib/api";
 import { GeneralSettingsForm } from "../components/GeneralSettingsForm";
 import { AccountTab } from "../components/AccountTab";
 import { UsersTab } from "../components/UsersTab";
+import { AgentInstructionsPanel } from "../components/AgentInstructionsPanel";
 
 // ---------------------------------------------------------------------------
 // SettingsPage — the consolidated settings surface that replaces the gear's
-// settings modal. Three tabs (gotcha #7: inline styles; WAI-ARIA tabs pattern
+// settings modal. Settings tabs (gotcha #7: inline styles; WAI-ARIA tabs pattern
 // mirroring RunDetailView):
 //   General  — model / proxy / API key + run defaults (the old modal body)
+//   Agent instructions — shared content guidance and read-only prompt sources
 //   Account  — change my own password
 //   Users    — admin-only user management (hidden unless isAdmin)
 // Tab content is mounted lazily (only the active panel renders) so the Users
@@ -27,16 +29,25 @@ interface Props {
   currentEmail?: string;
 }
 
-type TabKey = "general" | "account" | "users";
+type TabKey = "general" | "instructions" | "account" | "users";
 
 export function SettingsPage({ isAdmin, currentEmail }: Props) {
   const tabs: { key: TabKey; label: string }[] = [
     { key: "general", label: "General" },
+    { key: "instructions", label: "Agent instructions" },
     { key: "account", label: "Account" },
     ...(isAdmin ? [{ key: "users" as const, label: "Users" }] : []),
   ];
 
   const [activeTab, setActiveTab] = useState<TabKey>("general");
+  const [instructionsDirty, setInstructionsDirty] = useState(false);
+  const changeTab = (key: TabKey) => {
+    if (key === activeTab) return true;
+    if (instructionsDirty && !window.confirm("Discard unsaved guidance?")) return false;
+    setInstructionsDirty(false);
+    setActiveTab(key);
+    return true;
+  };
 
   const tabBarRef = useRef<HTMLDivElement>(null);
   const onTabKeyDown = (e: React.KeyboardEvent, index: number) => {
@@ -47,7 +58,7 @@ export function SettingsPage({ isAdmin, currentEmail }: Props) {
     else if (e.key === "End") next = tabs.length - 1;
     else return;
     e.preventDefault();
-    setActiveTab(tabs[next].key);
+    if (!changeTab(tabs[next].key)) return;
     const btns = tabBarRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
     btns?.[next]?.focus();
   };
@@ -74,7 +85,7 @@ export function SettingsPage({ isAdmin, currentEmail }: Props) {
               className="pwc-tab"
               onPointerDown={(e) => e.currentTarget.setAttribute("data-pointer-focus", "true")}
               onBlur={(e) => e.currentTarget.removeAttribute("data-pointer-focus")}
-              onClick={() => setActiveTab(t.key)}
+              onClick={() => changeTab(t.key)}
               onKeyDown={(e) => {
                 e.currentTarget.removeAttribute("data-pointer-focus");
                 onTabKeyDown(e, i);
@@ -95,6 +106,12 @@ export function SettingsPage({ isAdmin, currentEmail }: Props) {
             testConnection={testConnection}
             isAdmin={isAdmin}
           />
+        </section>
+      )}
+
+      {activeTab === "instructions" && (
+        <section style={styles.section} role="tabpanel">
+          <AgentInstructionsPanel isAdmin={isAdmin} onDirtyChange={setInstructionsDirty} />
         </section>
       )}
 

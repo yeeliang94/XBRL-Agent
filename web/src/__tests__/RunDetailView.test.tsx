@@ -36,6 +36,18 @@ const sampleEvents: SSEEvent[] = [
   } as unknown as SSEEvent,
 ];
 
+test.each([
+  [null, "Guidance was not recorded for this run."],
+  [{ texts: { figures: "" }, revision: 0, updated_by: null, updated_at: null }, "No team guidance was applied."],
+  [{ texts: { figures: "Recorded classification guidance" }, revision: 1, updated_by: "Admin", updated_at: null }, "Recorded classification guidance"],
+] as const)("run overview shows recorded guidance without substituting current settings: %s", (snapshot, expected) => {
+  render(<RunDetailView detail={makeDetail({ agent_instructions: snapshot })} onDelete={() => {}} onDownload={() => {}} />);
+  const summary = screen.getByText("Team guidance used");
+  expect(summary.closest("details")).not.toHaveAttribute("open");
+  fireEvent.click(summary);
+  expect(screen.getByText(expected)).toBeVisible();
+});
+
 function makeAgent(overrides: Partial<RunAgentJson> = {}): RunAgentJson {
   return {
     id: 1,

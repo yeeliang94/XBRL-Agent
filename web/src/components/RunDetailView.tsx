@@ -1221,6 +1221,19 @@ export function RunDetailView({
               </button>
             </div>
           )}
+          {!isDraft && <details>
+            <summary style={styles.perfSummary}>Team guidance used</summary>
+            {detail.agent_instructions && <p style={styles.dim}>Recorded at run start. Each agent receives guidance for its scope.</p>}
+            {!detail.agent_instructions ? <p style={styles.dim}>Guidance was not recorded for this run.</p>
+              : Object.values(detail.agent_instructions.texts).every(text => !text.trim())
+                ? <p style={styles.dim}>No team guidance was applied.</p>
+                : Object.entries(detail.agent_instructions.texts).filter(([, text]) => text.trim()).map(([scope, text]) => (
+                  <div key={scope} style={{ marginTop: pwc.space.md }}>
+                    <strong>{({ all: "All extraction and review agents", figures: "Figures extraction and review", notes: "Notes extraction and review", figures_extraction: "Figures extraction only", figures_review: "Figures review only", notes_extraction: "Notes extraction only", notes_review: "Notes review only" } as Record<string, string>)[scope] ?? scope}</strong>
+                    <p style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxHeight: 320, overflow: "auto" }}>{text}</p>
+                  </div>
+                ))}
+          </details>}
           <details>
             <summary style={styles.perfSummary}>Run configuration</summary>
             <ConfigBlock config={detail.config} />

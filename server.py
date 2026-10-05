@@ -8775,6 +8775,7 @@ def mount_spa(app, dist_directory: Path) -> None:
 sys.modules.setdefault("server", sys.modules[__name__])
 
 from api.config_routes import router as _config_router
+from api.agent_instructions import router as _agent_instructions_router
 from api.uploads import router as _uploads_router
 from api.preparation import router as _preparation_router
 from api.run_control import router as _run_control_router
@@ -8789,6 +8790,7 @@ from api.human_file import router as _human_file_router
 from auth.routes import router as _auth_router
 
 app.include_router(_config_router)
+app.include_router(_agent_instructions_router)
 app.include_router(_uploads_router)
 app.include_router(_preparation_router)
 app.include_router(_run_control_router)

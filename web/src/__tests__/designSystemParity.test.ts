@@ -14,6 +14,15 @@ const designSystem = readReference("../../../docs/xbrl-design-system.html");
 const prototype = readReference("../../../docs/prototype-ui-overhaul.html");
 
 describe("XBRL design system is the production authority", () => {
+  test("keeps guidance contextual and long prompt sources behind a disclosure", () => {
+    expect(designSystem).toContain("Place shared team guidance in Settings, immediately after General");
+    expect(designSystem).toContain("View application instructions");
+    expect(designSystem).toContain("Team guidance used");
+    expect(designSystem).toContain("Preserve unsaved text on save failure or concurrent-edit conflict");
+    expect(designSystem).toContain("browser Back and Forward");
+    expect(designSystem).toContain("including after native fragment navigation, and before logout");
+    expect(designSystem).toContain("skip link preserves the editor without a discard prompt");
+  });
   test("declares the canonical production contract and Direction A", () => {
     expect(designSystem).toContain("CANONICAL PRODUCTION DESIGN SYSTEM");
     expect(designSystem).toContain("STATUS · PRODUCTION");
