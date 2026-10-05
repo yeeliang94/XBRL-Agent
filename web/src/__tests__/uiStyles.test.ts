@@ -74,6 +74,8 @@ describe("buttons — four roles, canonical geometry", () => {
   test("buttons and inputs use the 8px control radius", () => {
     expect(ui.buttonPrimary.borderRadius).toBe(8);
     expect(ui.input.borderRadius).toBe(8);
+    expect(ui.select).toMatchObject({ height: 44, minHeight: 44, fontSize: 14, borderRadius: 8, borderColor: pwc.grey300 });
+    expect(ui.checkbox).toMatchObject({ width: 18, height: 18, borderRadius: 4, margin: 0, flexShrink: 0, border: `1px solid ${pwc.grey300}`, background: pwc.white });
     expect(ui.alertInfo.borderRadius).toBe(8);
   });
 

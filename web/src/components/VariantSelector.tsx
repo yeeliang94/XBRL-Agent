@@ -1,3 +1,4 @@
+import { ui } from "../lib/uiStyles";
 import type {
   StatementType,
   VariantSelection,
@@ -52,32 +53,9 @@ const styles = {
     flexShrink: 0,
   } as React.CSSProperties,
   select: {
-    minHeight: 44,
+    ...ui.select,
     flex: 1,
     minWidth: 0,
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.md,
-    fontFamily: pwc.fontBody,
-    fontSize: 14,
-    color: pwc.grey900,
-    background: pwc.white,
-    outline: "none",
-    cursor: "pointer",
-  } as React.CSSProperties,
-  selectDisabled: {
-    minHeight: 44,
-    flex: 1,
-    minWidth: 0,
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
-    border: `1px solid ${pwc.grey100}`,
-    borderRadius: pwc.radius.md,
-    fontFamily: pwc.fontBody,
-    fontSize: 14,
-    color: pwc.grey300,
-    background: pwc.grey50,
-    outline: "none",
-    cursor: "not-allowed",
   } as React.CSSProperties,
   labelDisabled: {
     fontFamily: pwc.fontBody,
@@ -141,7 +119,7 @@ export function VariantSelector({
               onChange={(e) =>
                 onChange(stmt, { variant: e.target.value, confidence: null })
               }
-              style={isEnabled ? styles.select : styles.selectDisabled}
+              style={styles.select}
             >
               <option value="">Automatic scan</option>
               {variants.map((v) => (

@@ -294,8 +294,8 @@
     display: none !important;
   }
 
-  .notes-review-tab .notes-human-pair > [role="group"]::before {
-    content: "Human file";
+  .notes-review-tab .notes-human-pair > [role="group"]:not(.notes-human-extracted)::before {
+    content: "Human note";
     display: block;
     padding: 8px 12px 0;
     color: #454B50;
@@ -304,7 +304,7 @@
   }
 
   .notes-review-tab .notes-human-extracted::before {
-    content: "Extracted note";
+    content: "AI note";
     display: block;
     padding: 8px 12px;
     color: #454B50;
@@ -312,7 +312,7 @@
     font-weight: 650;
   }
 
-  .notes-review-tab .notes-human-pair > [role="group"] > div:first-child {
+  .notes-review-tab .notes-human-pair > [role="group"]:not(.notes-human-extracted) > div:first-child {
     min-height: 0 !important;
   }
 }

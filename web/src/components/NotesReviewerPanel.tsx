@@ -504,11 +504,7 @@ const styles = {
   } as const,
   modelLabel: { display: "flex", alignItems: "center" } as const,
   modelSelect: {
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.sm,
-    padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
-    fontFamily: pwc.fontBody,
-    fontSize: 13,
+    ...ui.select,
     minWidth: 180,
   } as const,
   h4: {

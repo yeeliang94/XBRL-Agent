@@ -1025,7 +1025,8 @@ describe("ConceptsPage", () => {
     render(<ConceptsPage runId={42} initialView="notes" />);
     await waitFor(() => screen.getByTestId("notes-review-row"));
     expect(screen.queryByTestId("notes-review-editor")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Review No-pages note" }));
+    // A filled field opens as a preview; clicking the preview selects it.
+    fireEvent.click(within(screen.getByTestId("notes-review-row")).getByTestId("notes-field-preview"));
     // Selecting a page-less note keeps manual PDF navigation available.
     await waitFor(() => screen.getByTestId("pdf-page-input"));
     expect(screen.queryByTestId("pdf-no-evidence")).toBeNull();

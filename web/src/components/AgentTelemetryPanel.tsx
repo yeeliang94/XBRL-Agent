@@ -562,10 +562,8 @@ const styles = {
     fontSize: 12,
   } as React.CSSProperties,
   tracePicker: {
-    ...ui.input,
+    ...ui.select,
     minWidth: 260,
-    fontFamily: pwc.fontMono,
-    fontSize: 12,
   } as React.CSSProperties,
   traceSummary: {
     padding: pwc.space.sm,

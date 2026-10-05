@@ -867,7 +867,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
       <div style={styles.fieldGroup}>
         <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, cursor: "pointer" }}>
           <input
-            type="checkbox"
+            type="checkbox" style={ui.checkbox}
             checked={autoReview}
             onChange={(e) => { setAutoReview(e.target.checked); setDirty(true); }}
             disabled={readOnly}
@@ -884,7 +884,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
       <div style={styles.fieldGroup}>
         <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, cursor: "pointer" }}>
           <input
-            type="checkbox"
+            type="checkbox" style={ui.checkbox}
             checked={notesAutoReview}
             onChange={(e) => { setNotesAutoReview(e.target.checked); setDirty(true); }}
             disabled={readOnly}
@@ -900,7 +900,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
       <div style={styles.fieldGroup}>
         <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, cursor: "pointer" }}>
           <input
-            type="checkbox"
+            type="checkbox" style={ui.checkbox}
             checked={notesCoverage}
             onChange={(e) => { setNotesCoverage(e.target.checked); setDirty(true); }}
             disabled={readOnly}
@@ -945,7 +945,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
       <div style={styles.fieldGroup}>
         <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, cursor: "pointer" }}>
           <input
-            type="checkbox"
+            type="checkbox" style={ui.checkbox}
             checked={entityMemory}
             onChange={(e) => { setEntityMemory(e.target.checked); setDirty(true); }}
             disabled={readOnly}

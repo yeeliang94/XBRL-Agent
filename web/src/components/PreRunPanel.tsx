@@ -1314,6 +1314,8 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
     !filingStandardTouchedRef.current && infopack?.detected_standard === filingStandard;
   const detectedDenomination = _detectedDenomination(infopack);
 
+  const preparationStarted = preparation != null && preparation.status !== "not_started";
+
   return (
     <div style={styles.container}>
       {/* Panel header: title on the left, the Advanced-settings toggle pinned
@@ -1328,7 +1330,9 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
         }}
       >
         <h2 style={styles.heading}>Filing setup</h2>
-        <button
+        {/* After document preparation starts, the scan preview is gone and
+            models come from Settings, so the toggle would open nothing useful. */}
+        {!preparationStarted && <button
           type="button"
           onClick={() => setShowAdvanced((v) => !v)}
           aria-expanded={showAdvanced}
@@ -1339,7 +1343,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
         >
           <DisclosureChevron open={showAdvanced} />
           Advanced
-        </button>
+        </button>}
       </div>
 
       <section style={styles.setupGroup} aria-label="Filing details">
@@ -1423,7 +1427,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
         </label>
         <select id="filing-reporting-periods" value={firstFinancialStatements ? "first" : "comparative"}
           onChange={(event) => setFirstFinancialStatements(event.target.value === "first")}
-          style={{ fontSize: 14, padding: 8, maxWidth: "100%" }}>
+          style={{ ...ui.select, maxWidth: "100%" }}>
           <option value="comparative">Current and prior periods</option>
           <option value="first">First statements after incorporation — current period only</option>
         </select>
@@ -1644,7 +1648,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
             availableModels={availableModels}
             onToggleStatement={handleToggleStatement}
             onModelChange={handleModelChange}
-            showModels={showAdvanced}
+            showModels={showAdvanced && !preparationStarted}
           />
         </div>
       </DisclosureSection>
@@ -1726,7 +1730,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           availableModels={availableModels}
           onToggleNote={handleToggleNote}
           onModelChange={handleNotesModelChange}
-          showModels={showAdvanced}
+          showModels={showAdvanced && !preparationStarted}
         />
         </div>
       </DisclosureSection>

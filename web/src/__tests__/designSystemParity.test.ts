@@ -34,7 +34,8 @@ describe("XBRL design system is the production authority", () => {
     expect(designSystem).toContain("plain bold field headings above white note content");
     expect(designSystem).toContain("Selected Notes items use bold black text and a small right-pointing chevron without a fill");
     expect(designSystem).toContain("Comparison pairs share one field heading and shared grid rows for actions, editing tools and content");
-    expect(designSystem).toContain("Keep prose fields collapsed by default in compact clickable rows");
+    expect(designSystem).toContain("Open prose fields that hold AI or human content by default as bordered read-only previews");
+    expect(designSystem).toContain("keep empty fields collapsed in compact clickable rows");
     expect(designSystem).toContain("Give human note blocks the same thin neutral border");
     expect(designSystem).toContain("do not repeat the checklist below the editor");
     expect(designSystem).toContain("without warning counts or repeated review banners");
@@ -84,6 +85,10 @@ describe("XBRL design system is the production authority", () => {
     expect(ui.readingText).toMatchObject({ fontSize: 14, lineHeight: 1.6, maxWidth: "70ch" });
     expect(designSystem).toContain("Spacing and reading rhythm");
     expect(designSystem).toContain("Forms, tables and dialogs");
+    expect(designSystem).toContain("Checked uses black fill with a white tick");
+    expect(designSystem).toContain("partially selected uses a white dash");
+    expect(designSystem).toContain("Selected options use bold black text and a small right-pointing chevron without a fill");
+    expect(designSystem).toContain("other browsers and touch devices retain the native picker");
     expect(designSystem).toContain("aligned current-year and previous-year columns");
     expect(designSystem).toContain("Show saved summaries without a year label when period detail is unavailable");
     expect(designSystem).not.toContain('aria-label="More actions"');
@@ -227,7 +232,7 @@ describe("Simplified template-oriented review", () => {
       "Offer Hide empty fields for the current worksheet",
       "Preserve level-three field headings and announce filing warnings and comparison markers as descriptions of the disclosure button",
       "Derive prose comparison markers and the Missed by AI filter from current extracted and human content",
-      "A comparison view offers Missed by AI",
+      "A comparison view offers an Only missed by AI checkbox",
       "Keep the active field open when changing views",
       "Include human-only numeric categories only for the worksheet’s applicable periods and entity scopes",
       "hide these headings when no pair is open",
@@ -259,7 +264,11 @@ describe("Simplified template-oriented review", () => {
   test("pins consistent run actions and human-file comparison placement", () => {
     expect(designSystem).toContain("Place Redo and Delete together at the end of Overview under Run actions");
     expect(designSystem).toContain("A human-file comparison header spans the full review workspace");
-    expect(designSystem).toContain("label the extracted and human columns once above an open comparison pair");
+    expect(designSystem).toContain("label the AI and human note columns once above the open fields");
+    expect(designSystem).toContain("The comparison header is one line");
+    expect(designSystem).toContain("Human values are read-only text without a field border");
+    expect(designSystem).toContain("A select is the same flat white field with one thin chevron");
+    expect(designSystem).toContain("align each pane title with its own content edge");
     expect(designSystem).toContain("Keep the worksheet rails visible at standard desktop widths");
     expect(designSystem).toContain("Name a single review issue instead of showing only its count");
   });

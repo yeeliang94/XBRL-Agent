@@ -40,7 +40,7 @@ export function MtoolSheetSelection({ sheets, selected, onChange }: Props) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: 10 }}>
         {sheets.map((sheet) => (
           <label key={sheet} style={{ display: "flex", gap: 8, alignItems: "flex-start", minWidth: 0, overflowWrap: "anywhere", cursor: "pointer" }}>
-            <input type="checkbox" checked={selected === null || selected.includes(sheet)}
+            <input type="checkbox" style={ui.checkbox} checked={selected === null || selected.includes(sheet)}
               onChange={(event) => onChange(event.target.checked
                 ? [...(selected ?? sheets), sheet]
                 : (selected ?? sheets).filter((item) => item !== sheet))} />
