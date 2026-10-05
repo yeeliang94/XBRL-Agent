@@ -433,6 +433,21 @@ describe("ExtractPage — render-gate regression guards", () => {
     expect(screen.getAllByText(`${label}: 2 of 3 sections complete`)).toHaveLength(2);
   });
 
+  test("no-op cleanup remains visibly complete after the run finishes", () => {
+    const message = "Notes cleanup complete: 0 banners or repeated headings removed.";
+    render(<ExtractPage {...makeProps({state: {
+      sessionId: "test", filename: "test.pdf", isRunning: false, isComplete: true, pipelineStage: "done",
+      agents: {sofp_0: createAgentState("sofp_0", "SOFP", "SOFP")}, agentTabOrder: ["sofp_0"],
+      activeTab: "notes-cleanup", notesInRun: ["CORP_INFO"],
+      events: [{event: "pipeline_stage", timestamp: 1,
+        data: {stage: "cleaning_notes", started_at: 1, completed: 0, total: 0, message}}],
+    }})} />);
+    const panel = within(screen.getByRole("tabpanel", {name: "Notes cleanup activity"}));
+    expect(panel.getByText("Complete")).toBeInTheDocument();
+    expect(panel.getByText(message)).toBeInTheDocument();
+    expect(panel.queryByText("Stopped")).toBeNull();
+  });
+
   test("unfinished cleanup remains visibly failed after the run finishes", () => {
     const message = "Notes cleanup did not finish. Saved notes are available for review.";
     render(<ExtractPage {...makeProps({state: {

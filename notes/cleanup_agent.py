@@ -13,7 +13,7 @@ from agent_tracing import save_messages_trace
 from db import repository as repo
 from model_settings import build_model_settings, configured_role_thinking_level, describe_model_runtime
 from notes.cleanup_patch import Patch, apply_patch, enumerate_blocks
-from notes.cleanup_repository import save_cleanup
+from notes.cleanup_repository import save_cleanup, source_evidence
 from pricing import estimate_cost_cache_adjusted
 from tools.pdf_viewer import count_pdf_pages, render_pages_to_png_bytes
 from usage_metrics import split_usage
@@ -42,7 +42,7 @@ def cleanup_cells(db_path, run_id, sheets):
             if receipt and receipt['after_html'] == row['html']:
                 continue
             if any(b['eligible'] for b in enumerate_blocks(row['html'])[2]):
-                cells[f"{row['sheet']}:{row['row']}"] = dict(row)
+                cells[f"{row['sheet']}:{row['row']}"] = source_evidence(conn, run_id, dict(row))
     return cells
 
 
@@ -79,6 +79,7 @@ async def propose_cleanup(*, cells, pdf_path, model, usage, output_dir):
                 ctx.deps.viewed.add(page)
         return result
     inputs = {cid: {'label':c['label'],'source_pages':json.loads(c['source_pages'] or '[]'),
+                    'source_block_pages': c.get('source_block_pages'),
                     'blocks':enumerate_blocks(c['html'])[2]} for cid,c in cells.items()}
     async with agent.iter(json.dumps(inputs),deps=deps,usage=usage,
                           usage_limits=UsageLimits(request_limit=MAX_CLEANUP_REQUESTS)) as run:
@@ -97,14 +98,16 @@ async def run_notes_cleanup(*, run_id: int, db_path: str, pdf_path: str, sheets,
                             model_name: str, model_factory: Callable, output_dir: str,
                             on_progress: Callable, timeout_s: float = 300):
     cells = cleanup_cells(db_path, run_id, sheets)
-    if not cells:
-        return {'ok':True,'changed_rows':0,'removed_blocks':0,'skipped_cells':[]}
     with repo.db_session(db_path) as conn:
         agent_id = repo.create_run_agent(conn,run_id,'NOTES_CLEANUP',model=model_name)
     usage = RunUsage()
     status, error = 'failed', None
     model = None
     try:
+        if not cells:
+            status = 'completed'
+            on_progress(0, 0, 0)
+            return {'ok':True,'changed_rows':0,'removed_blocks':0,'skipped_cells':[]}
         on_progress(0,len(cells),None)
         if not Path(pdf_path).is_file():
             raise ValueError('Original PDF unavailable for notes cleanup')

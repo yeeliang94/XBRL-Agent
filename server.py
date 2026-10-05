@@ -7818,7 +7818,7 @@ async def run_multi_agent_stream(
                     on_progress=lambda completed, total, removed: _emit_stage(
                         "cleaning_notes",
                         message=(f"Notes cleanup complete: {removed} banners or repeated headings removed."
-                                 if completed else f"Checking {total} note fields for page banners and repeated headings."),
+                                 if removed is not None else f"Checking {total} note fields for page banners and repeated headings."),
                         completed=completed, total=total,
                     ),
                 ))

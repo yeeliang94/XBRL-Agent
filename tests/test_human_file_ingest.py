@@ -135,7 +135,7 @@ def test_unaddressed_typed_row_is_unmatched_and_numeric_input_is_read(
             "WHERE n.concept_uuid = ? AND t.period = 'CY'", (facts[-1][0],),
         ).fetchone()
     wb = load_workbook(path)
-    wb["SOFP-CuNonCu"][f"B{header_row}"] = 77
+    wb["SOFP-CuNonCu"][f"B{header_row}"] = "=70+7" if input_value == "=1+1" else "77"
     wb["SOFP-CuNonCu"][f"B{formula_row}"] = input_value
     wb.save(path)
 
@@ -318,12 +318,23 @@ def test_cashflow_input_formulas_ignore_stale_caches_and_restore_screenshot_tota
 
 
 @pytest.mark.parametrize("historical_auto_variant", [False, True])
+@pytest.mark.parametrize("input_kind", ["number", "text", "formula", "empty"])
 def test_statement_filled_in_another_variant_is_not_compared(
-    sofp_db, tmp_path, historical_auto_variant,
+    sofp_db, tmp_path, historical_auto_variant, input_kind,
 ):
     import_template_file(sofp_db, tmp_path, "02-SOFP-OrderOfLiquidity.xlsx")
     source_run = add_run(sofp_db, sofp_config())
     path = filled_file(sofp_db, source_run, leaf_facts(sofp_db), tmp_path)
+    if input_kind != "number":
+        wb = load_workbook(path)
+        for sheet in wb:
+            for row in sheet:
+                for cell in row:
+                    if cell.data_type == "n" and cell.value is not None:
+                        cell.value = (None if input_kind == "empty" else
+                                      str(cell.value) if input_kind == "text" else f"={cell.value}+0")
+        wb.save(path)
+        wb.close()
     config = sofp_config(variant="OrderOfLiquidity")
     if historical_auto_variant:
         config["variants"] = {}
@@ -336,8 +347,10 @@ def test_statement_filled_in_another_variant_is_not_compared(
                 (run_id,),
             )
 
+    message = ("No figures or notes in this file match" if input_kind == "empty"
+               else r"different statement layout: SOFP \(CuNonCu\)")
     with sqlite3.connect(sofp_db) as conn, pytest.raises(
-        HumanFileError, match=r"different statement layout: SOFP \(CuNonCu\)"
+        HumanFileError, match=message
     ):
         read_human_file(conn, run_id, path, "units")
 

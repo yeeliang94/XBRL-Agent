@@ -3,9 +3,29 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import datetime, timezone
-from notes.cleanup_patch import Patch, apply_patch
+from notes.cleanup_patch import Patch, apply_patch, enumerate_blocks
 from notes.format_verify import verify_format_only
 from notes.lineage import content_sha256
+
+
+def source_evidence(conn, run_id, cell):
+    """Bind cleanup evidence to the cell's frozen, actively placed source parts."""
+    generation = cell.get('source_generation_id')
+    if generation is None:
+        return cell
+    pages = {}
+    for source in conn.execute(
+        'SELECT b.canonical_html,b.page FROM notes_source_blocks b '
+        'JOIN notes_block_placements p ON p.generation_id=b.generation_id AND p.block_id=b.block_id '
+        'WHERE p.run_id=? AND p.generation_id=? AND p.sheet=? AND p.row=? AND p.active=1',
+        (run_id, generation, cell['sheet'], cell['row']),
+    ):
+        if source['page'] is None:
+            continue
+        for block in enumerate_blocks(source['canonical_html'])[2]:
+            key = ' '.join(block['text'].split())
+            pages.setdefault(key, set()).add(source['page'])
+    return {**cell, 'source_block_pages': {text: sorted(values) for text, values in pages.items()}}
 
 
 def _receipt_steps(receipt):
@@ -28,12 +48,19 @@ def receipt_matches(conn, run_id, sheet, row, generation_id, source_html, curren
         return False
     try:
         cid = f'{sheet}:{row}'
+        current = conn.execute('SELECT * FROM notes_cells WHERE run_id=? AND sheet=? AND row=?',
+                               (run_id, sheet, row)).fetchone()
+        if not current:
+            return False
+        # Sheet persistence temporarily clears lineage before restoring it.
+        # Replay uses the generation being assessed, bound by source_html above.
+        evidence = source_evidence(conn, run_id, {**dict(current), 'source_generation_id': generation_id})
         replay = receipt['before_html']
         for step in _receipt_steps(receipt):
             if not verify_format_only(replay, step['before_html']).ok:
                 return False
             patch = Patch.model_validate(step['patch'])
-            replay = apply_patch({cid: {'html': step['before_html']}}, patch,
+            replay = apply_patch({cid: {**evidence, 'html': step['before_html']}}, patch,
                                  set(step['viewed_pages']))[cid]['html']
             if replay != step['after_html']:
                 return False
@@ -45,13 +72,14 @@ def receipt_matches(conn, run_id, sheet, row, generation_id, source_html, curren
 
 def save_cleanup(conn, *, run_id, cells, patch, viewed_pages, model):
     """Compare-and-swap each changed cell, retaining source and removal evidence."""
-    result = apply_patch(cells, patch, viewed_pages)
     changed = 0
     skipped = []
     now = datetime.now(timezone.utc).isoformat()
     with conn:
         if not conn.in_transaction:
             conn.execute("BEGIN IMMEDIATE")
+        cells = {cid: source_evidence(conn, run_id, cell) for cid, cell in cells.items()}
+        result = apply_patch(cells, patch, viewed_pages)
         for cid, cell in result.items():
             if not cell['removals']:
                 continue
@@ -103,7 +131,7 @@ def save_cleanup(conn, *, run_id, cells, patch, viewed_pages, model):
                 (run_id,before['sheet'],before['row']),
             ).fetchone()
             if snapshot:
-                clean_snapshot = apply_patch({cid:{'html':snapshot['html']}}, local_patch, viewed_pages)[cid]['html']
+                clean_snapshot = apply_patch({cid:{**before, 'html':snapshot['html']}}, local_patch, viewed_pages)[cid]['html']
                 conn.execute('UPDATE notes_format_snapshots SET html=? WHERE run_id=? AND sheet=? AND row=?',
                              (clean_snapshot,run_id,before['sheet'],before['row']))
             digest = content_sha256(cell['html'])

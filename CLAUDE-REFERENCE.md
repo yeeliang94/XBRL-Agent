@@ -1321,6 +1321,9 @@ Key invariants:
     deletions and viewed-page evidence. Original source blocks and placement ids
     remain intact. Invalid proposals receive output-validator feedback and at most
     two correction retries within the existing request and wall-clock limits.
+    Deletion evidence must match the exact frozen placed block's page, including
+    inherited ancestor headings. Legacy cells use their recorded source pages.
+    Blocks without page evidence remain intact; PDF viewing stays unrestricted.
     Later passes append replayable deletion steps to the original receipt;
     intervening formatting must preserve content before the chain can extend.
     Integrity accepts only replayable approved omissions against
@@ -1328,7 +1331,9 @@ Key invariants:
     the live HTML, revision and source generation under a transaction and preserve
     human edits. Formatter revert snapshots receive the same approved omissions
     so reverting style cannot reintroduce content. The UI shows `cleaning_notes`;
-    incomplete cleanup tips status and remains visibly failed. Pinned by
+    incomplete cleanup tips status and remains visibly failed.
+    Requested passes with no eligible cells still record completion and emit
+    zero-of-zero progress without constructing a model. Pinned by
     `tests/test_notes_cleanup.py`, `tests/test_notes_integrity_false_greens.py`,
     `tests/test_db_schema_v51.py`, `tests/test_pdf_notes_auto_format_wiring.py`,
     `tests/test_run_status.py` and `web/src/__tests__/ExtractPage.test.tsx`.
@@ -1966,7 +1971,10 @@ Load-bearing invariants:
   COMPUTED concepts and formula-backed matrix totals remain `calculated`; an input
   formula is a scored human value. Labels repeat within a sheet, so
   the old label reader merged concepts and lost values (plan Step 1). A typed
-  row no slot claims is listed as unmatched. On the share-capital and
+  row no slot claims is listed as unmatched. Unmatched reporting and alternate
+  layout detection also accept readable numeric text and supported input
+  formulas; unchanged template formulas and calculated totals do not establish
+  that another layout was filled. On the share-capital and
   related-party sheets, mTool's `Total` column carries no category member: it
   is read into the field's slot with no dimension, beside the category slots.
   Resolve each Total column within its dated period block. Ambiguous totals
