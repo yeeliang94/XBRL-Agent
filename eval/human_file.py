@@ -51,8 +51,10 @@ from mtool.offline_fill import (
     get_shared_strings,
     get_sheet_paths,
     inspect_footnotes,
+    is_locked_input,
     load_workbook_entries,
     read_footnote_rows,
+    protected_input_cells,
     resolve_sheet_name,
     split_ref,
 )
@@ -315,24 +317,45 @@ def _row_label(row_cells: dict, label_col: str | None) -> str:
                  if kind == "S" and text.strip() and ".xsd#" not in text), "")
 
 
-def _typed_rows(cells: dict, label_col: str | None) -> dict[int, dict]:
-    """Rows with a label and at least one typed number: ``{row: {label, values}}``."""
+def _typed_rows(cells: dict, label_col: str | None, formula_value=None) -> dict[int, dict]:
+    """Labelled rows with readable inputs, excluding template formula totals."""
     out: dict[int, dict] = {}
     for row_num, row_cells in cells.items():
         values = {}
-        for col, (kind, text) in row_cells.items():
-            if kind != "N":
+        for col, cell in row_cells.items():
+            if col == label_col:
                 continue
-            try:
-                values[col] = float(text)
-            except (TypeError, ValueError):
-                continue
+            value = _cell_number(cell)
+            if cell[0] == "F" and formula_value is not None:
+                value = formula_value(row_num, col)
+            if value is not None:
+                values[col] = value
         if not values:
             continue
         label = _row_label(row_cells, label_col)
         if label:
             out[row_num] = {"label": label, "values": values}
     return out
+
+
+def _template_formulas(statements, standard, level):
+    """Original template formulas are totals, not user-authored inputs."""
+    paths = set()
+    for (statement, variant), entry in VARIANTS.items():
+        if statement.value in statements.values() and entry.template_filename and standard in entry.applies_to_standard:
+            paths.add(template_path(statement, variant, level, standard))
+    for note, entry in NOTES_REGISTRY.items():
+        if entry.is_numeric and entry.sheet_name in statements.values():
+            paths.add(notes_template_path(note, level, standard))
+    formulas = {}
+    for path in paths:
+        _, entries, _ = load_workbook_entries(str(path))
+        for sheet, rows in calculation_cells(entries).items():
+            for row, cells in rows.items():
+                for col, (kind, text) in cells.items():
+                    if kind == 'F':
+                        formulas.setdefault((sheet, row, col), set()).add(text)
+    return formulas
 
 
 def _element_id(row_text: dict) -> str | None:
@@ -493,6 +516,34 @@ def read_human_file(conn: sqlite3.Connection, run_id: int, path: str | Path,
     category_rows: dict[tuple, tuple[dict, int]] = {}
     formula_cells = None
     formula_cache: dict = {}
+    protection = protected_input_cells(data, get_sheet_paths(data))
+    calculated_cells = set()
+    for write in ready['writes']:
+        if write.get('cell') and write['concept_uuid'] in totals | matrix_totals:
+            col, row = split_ref(write['cell'])
+            calculated_cells.add((write['sheet'], row, col))
+    template_formulas = None
+
+    def scan_formula(sheet, row, col):
+        nonlocal formula_cells, template_formulas
+        if (sheet, row, col) in calculated_cells or is_locked_input(protection, sheet, f'{col}{row}'):
+            return None
+        if formula_cells is None:
+            formula_cells = calculation_cells(data)
+        if template_formulas is None:
+            template_formulas = _template_formulas(statements, standard, level)
+        expression = formula_cells.get(sheet, {}).get(row, {}).get(col, (None, None))[1]
+        if expression in template_formulas.get((sheet, row, col), set()):
+            return None
+        try:
+            value = float(_calculated_value(formula_cells, sheet, f'{col}{row}', cache=formula_cache))
+            return value if math.isfinite(value) else None
+        except (ValueError, SyntaxError, ArithmeticError, RecursionError):
+            return None  # Unaddressed inputs are diagnostic, never guessed or scored.
+
+    def readable_rows(sheet, label_col):
+        return _typed_rows(cells_by_sheet.get(sheet, {}), label_col,
+                           lambda row, col: scan_formula(sheet, row, col))
 
     def add_fact(write: dict, row: int, col: str, dimension_key: str) -> None:
         nonlocal formula_cells
@@ -563,8 +614,7 @@ def read_human_file(conn: sqlite3.Connection, run_id: int, path: str | Path,
 
     sheets_by_template = _template_sheets(conn, statements)
     typed_by_sheet = {
-        sheet: _typed_rows(cells_by_sheet.get(sheet, {}),
-                           (detected.get(sheet) or {}).get("label_column"))
+        sheet: readable_rows(sheet, (detected.get(sheet) or {}).get("label_column"))
         for sheet in {s for ss in sheets_by_template.values() for s in ss}
     }
     for template_id, name in statements.items():
@@ -586,7 +636,7 @@ def read_human_file(conn: sqlite3.Connection, run_id: int, path: str | Path,
         others = _other_variant_templates(name, level, standard, template_id)
         filled_variant = next((
             variant for other_id, variant in others.items()
-            if any(_typed_rows(cells_by_sheet.get(sheet, {}), None)
+            if any(readable_rows(sheet, None)
                    for sheet in _template_sheets(conn, [other_id]).get(other_id, ()))
         ), None)
         result.not_compared.append({

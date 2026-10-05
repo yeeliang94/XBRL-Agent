@@ -8,7 +8,7 @@ def op(cell='x',block=0,text='COMPANY SDN. BHD.',reason='page_banner',retained=N
 
 def test_banner_removed_but_every_disclosure_style_and_table_survives():
     html='<h1>COMPANY SDN. BHD.</h1><h3>13. Inventories</h3><p><b>Cost RM1,000</b></p><table style="width:100%"><tr><td>2025</td><td>1,000</td></tr></table>'
-    result=apply_patch({'x':{'html':html}},Patch(inspected_cells=['x'],removals=[op()]),{1})['x']
+    result=apply_patch({'x':{'html':html, 'source_pages':'[1]'}},Patch(inspected_cells=['x'],removals=[op()]),{1})['x']
     assert result['html']=='<h3>13. Inventories</h3><p><b>Cost RM1,000</b></p><table style="width:100%"><tr><td>2025</td><td>1,000</td></tr></table>'
     assert result['original_html']==html
 
@@ -26,7 +26,7 @@ def test_invalid_targets_leave_original_untouched(bad):
 
 def test_continuation_with_different_heading_level_keeps_first_and_body():
     html="<h2>2.8 Income taxes</h2><p>Current tax.</p><h1>2.8 Income taxes (cont'd)</h1><p>Deferred tax.</p>"
-    result=apply_patch({'x':{'html':html}},Patch(inspected_cells=['x'],removals=[op(block=2,text="2.8 Income taxes (cont'd)",reason='continuation_heading',retained=0)]),{1})['x']['html']
+    result=apply_patch({'x':{'html':html, 'source_pages':'[1]'}},Patch(inspected_cells=['x'],removals=[op(block=2,text="2.8 Income taxes (cont'd)",reason='continuation_heading',retained=0)]),{1})['x']['html']
     assert result=='<h2>2.8 Income taxes</h2><p>Current tax.</p><p>Deferred tax.</p>'
 
 def test_first_standalone_continued_heading_cannot_be_deleted_as_repetition():
@@ -44,7 +44,7 @@ def test_noop_is_byte_exact_and_incomplete_review_is_rejected():
 
 def test_continuation_heading_captured_as_short_paragraph_and_unicode_spaces():
     html="<p>(a) As lessee</p><p>Disclosure body.</p><p>(a)\u3000As lessee (cont'd)</p>"
-    result=apply_patch({'x':{'html':html}},Patch(inspected_cells=['x'],removals=[op(block=2,text="(a) As lessee (cont'd)",reason='continuation_heading',retained=0)]),{1})['x']['html']
+    result=apply_patch({'x':{'html':html, 'source_pages':'[1]'}},Patch(inspected_cells=['x'],removals=[op(block=2,text="(a) As lessee (cont'd)",reason='continuation_heading',retained=0)]),{1})['x']['html']
     assert result=='<p>(a) As lessee</p><p>Disclosure body.</p>'
 
 
@@ -58,7 +58,7 @@ def test_persistence_keeps_newer_edits_and_updates_style_revert_snapshot(tmp_pat
         rid=repo.create_run(conn,'sample.pdf',session_id='s',output_dir=str(tmp_path))
         html='<h1>COMPANY SDN. BHD.</h1><p>Disclosure body.</p>'
         for row in [10,20]:
-            repo.upsert_notes_cell(conn,run_id=rid,sheet='Notes',row=row,label='Disclosure',html=html)
+            repo.upsert_notes_cell(conn,run_id=rid,sheet='Notes',row=row,label='Disclosure',html=html,source_pages=[1])
         cells={f'Notes:{r["row"]}':dict(r) for r in conn.execute('SELECT * FROM notes_cells WHERE run_id=?',(rid,))}
         conn.execute('INSERT INTO notes_format_snapshots(run_id,sheet,row,html) VALUES(?,?,?,?)',(rid,'Notes',10,html))
         conn.commit()
@@ -83,7 +83,7 @@ async def test_cleanup_lifecycle_records_success_failure_and_cancellation(tmp_pa
     pdf=tmp_path/'uploaded.pdf';pdf.write_bytes(b'%PDF')
     with repo.db_session(db) as conn:
         rid=repo.create_run(conn,'sample.pdf',session_id='s',output_dir=str(tmp_path))
-        repo.upsert_notes_cell(conn,run_id=rid,sheet='Notes',row=10,label='Note',html='<h1>COMPANY SDN. BHD.</h1><p>Disclosure.</p>')
+        repo.upsert_notes_cell(conn,run_id=rid,sheet='Notes',row=10,label='Note',html='<h1>COMPANY SDN. BHD.</h1><p>Disclosure.</p>',source_pages=[1])
     async def proposed(**kwargs):
         assert list(kwargs['cells'])==['Notes:10']
         return Patch(inspected_cells=['Notes:10'],removals=[op(cell='Notes:10')]),{1}
@@ -111,7 +111,7 @@ async def test_cleanup_lifecycle_records_success_failure_and_cancellation(tmp_pa
 
 def test_leaf_container_banner_does_not_remove_a_note_wrapper_or_its_table():
     html='<div class="note-section"><div>COMPANY SDN. BHD.</div><h3>Inventories</h3><p>Disclosure.</p><table><tr><td>1,000</td></tr></table></div>'
-    result=apply_patch({'x':{'html':html}},Patch(inspected_cells=['x'],removals=[op()]),{1})['x']['html']
+    result=apply_patch({'x':{'html':html, 'source_pages':'[1]'}},Patch(inspected_cells=['x'],removals=[op()]),{1})['x']['html']
     assert result=='<div class="note-section"><h3>Inventories</h3><p>Disclosure.</p><table><tr><td>1,000</td></tr></table></div>'
 
 
@@ -130,11 +130,12 @@ async def test_model_loop_returns_structured_assessment_and_saves_trace(tmp_path
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('bad,feedback', [
-    (op(cell='Notes:10', block=99), 'Protected or missing block'),
-    (op(cell='Notes:10', page=2), 'Unviewed source page'),
+@pytest.mark.parametrize('bad,feedback,pages', [
+    (op(cell='Notes:10', block=99), 'Protected or missing block', [1]),
+    (op(cell='Notes:10', page=2), 'Unviewed source page', [1]),
+    (op(cell='Notes:10', page=2), 'Source page does not support this block', [1, 2]),
 ])
-async def test_model_corrects_invalid_cleanup_with_validation_feedback(tmp_path, monkeypatch, bad, feedback):
+async def test_model_corrects_invalid_cleanup_with_validation_feedback(tmp_path, monkeypatch, bad, feedback, pages):
     from pydantic_ai.messages import ModelResponse, RetryPromptPart, ToolCallPart
     from pydantic_ai.models.function import FunctionModel
     from pydantic_ai.usage import RunUsage
@@ -148,7 +149,7 @@ async def test_model_corrects_invalid_cleanup_with_validation_feedback(tmp_path,
         nonlocal calls
         calls += 1
         if calls == 1:
-            return ModelResponse(parts=[ToolCallPart('view_pdf_pages', {'pages': [1]})])
+            return ModelResponse(parts=[ToolCallPart('view_pdf_pages', {'pages': pages})])
         if calls == 3:
             retries = [p for m in messages for p in m.parts if isinstance(p, RetryPromptPart)]
             assert retries and feedback in str(retries[-1].content)
@@ -165,3 +166,42 @@ async def test_model_corrects_invalid_cleanup_with_validation_feedback(tmp_path,
     assert calls == usage.requests == 3
     assert apply_patch(cells, patch, viewed)['Notes:10']['html'] == '<p>Disclosure.</p>'
     assert (tmp_path / 'NOTES_CLEANUP_conversation_trace.json').is_file()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('html,origin', [
+    ('<table><tr><td>Protected table.</td></tr></table>', 'legacy'),
+    ('<p>Human edit.</p>', 'human_modified'),
+])
+async def test_noop_cleanup_records_completion_without_calling_model(tmp_path, html, origin):
+    from db import repository as repo
+    from db.schema import init_db
+    from notes.cleanup_agent import run_notes_cleanup
+
+    db = tmp_path / 'noop.db'
+    init_db(db)
+    with repo.db_session(db) as conn:
+        rid = repo.create_run(conn, 'sample.pdf', session_id='s', output_dir=str(tmp_path))
+        repo.upsert_notes_cell(conn, run_id=rid, sheet='Notes', row=10, label='Note', html=html)
+        conn.execute('UPDATE notes_cells SET content_origin=? WHERE run_id=?', (origin, rid))
+    def forbidden_model():
+        pytest.fail('A no-op cleanup must not call the model')
+    progress = []
+    result = await run_notes_cleanup(
+        run_id=rid, db_path=str(db), pdf_path='missing.pdf', sheets=['Notes'],
+        model_name='test', model_factory=forbidden_model, output_dir=str(tmp_path),
+        on_progress=lambda *args: progress.append(args))
+    assert result['ok'] and result['changed_rows'] == result['removed_blocks'] == 0
+    assert progress == [(0, 0, 0)]
+    with repo.db_session(db) as conn:
+        assert conn.execute('SELECT status,turn_count FROM run_agents').fetchone()[:] == ('completed', 0)
+        assert conn.execute('SELECT html FROM notes_cells').fetchone()[0] == html
+
+
+def test_viewed_page_unrelated_to_deletion_does_not_authorize_content_loss():
+    cells = {'x': {'html': '<p>The Company has no contingent liabilities.</p><p>Other disclosure.</p>',
+                   'source_pages': '[7]', 'source_block_pages': {
+                       'The Company has no contingent liabilities.': [7], 'Other disclosure.': [8]}}}
+    patch = Patch(inspected_cells=['x'], removals=[op(text='The Company has no contingent liabilities.', page=8)])
+    with pytest.raises(ValueError, match='Source page does not support this block'):
+        apply_patch(cells, patch, {8})

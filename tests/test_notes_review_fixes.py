@@ -183,13 +183,18 @@ async def test_notes_agents_persisted_to_run_agents_and_events(
     try:
         agents = conn.execute(
             "SELECT statement_type, status, workbook_path FROM run_agents "
-            "WHERE statement_type LIKE 'NOTES_%'"
+            "WHERE statement_type = 'NOTES_CORP_INFO'"
         ).fetchall()
         assert len(agents) == 1, f"expected one notes agent row, got {list(map(dict, agents))}"
         row = dict(agents[0])
         assert row["statement_type"] == "NOTES_CORP_INFO"
         assert row["status"] == "succeeded"
         assert row["workbook_path"] == str(wb_path)
+        cleanup = conn.execute(
+            "SELECT status, turn_count FROM run_agents WHERE statement_type='NOTES_CLEANUP'"
+        ).fetchone()
+        assert tuple(cleanup) == ("completed", 0)
+        assert "Notes cleanup complete: 0 banners or repeated headings removed." in resp.text
 
         events = conn.execute(
             "SELECT ae.event_type FROM agent_events ae "

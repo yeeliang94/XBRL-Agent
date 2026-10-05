@@ -1,5 +1,6 @@
 """Deletion-only final notes cleanup; semantic classification belongs to the agent."""
 from __future__ import annotations
+import json
 import re
 from typing import Literal
 from bs4 import BeautifulSoup
@@ -62,6 +63,14 @@ def apply_patch(cells, patch, viewed):
                 raise ValueError('Stale text')
             if op.evidence_page not in viewed:
                 raise ValueError('Unviewed source page')
+            # Frozen placements bind exact source text to its page, including
+            # ancestor headings inherited from another page. Legacy cells have
+            # only their recorded cell-level source pages.
+            source_pages = (cell['source_block_pages'].get(' '.join(op.expected_text.split()), [])
+                            if 'source_block_pages' in cell
+                            else json.loads(cell.get('source_pages') or '[]'))
+            if op.evidence_page not in source_pages:
+                raise ValueError('Source page does not support this block')
             if op.reason == 'continuation_heading':
                 retained = op.retained_block
                 if (retained is None or not 0 <= retained < op.block or retained in removed

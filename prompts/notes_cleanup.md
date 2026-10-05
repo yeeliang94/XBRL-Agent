@@ -19,8 +19,11 @@ text alone is not a reason to delete. Do not remove a standalone substantive
 heading merely because it includes '(cont'd)' if its first occurrence is absent.
 
 Inspect source PDF pages before proposing deletions and cite a page actually
-viewed. Page hints are advisory: you may inspect any valid source page. A company
-banner inherited from an ancestor page may cite that ancestor page. For each
+viewed. Page hints are advisory: you may inspect any valid source page. Deletion
+evidence must be on a recorded source page for that exact block when
+source_block_pages is supplied, or a recorded cell source page for legacy cells.
+Keep blocks without recorded page evidence. A banner inherited from an ancestor
+page may cite that ancestor page only when recorded for that block. For each
 continuation deletion name the earlier retained block. For banners use null.
 When uncertain, keep the block. Return every inspected cell id in inspected_cells,
 including unchanged cells, and only the narrow deletions in the enforced schema.
