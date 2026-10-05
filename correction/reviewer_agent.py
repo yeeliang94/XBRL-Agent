@@ -1945,6 +1945,8 @@ def create_reviewer_agent(
     # names it).
     from tools.pdf_search import scanned_pdf_advisory
     system_prompt += scanned_pdf_advisory(deps.pdf_path)
+    from agent_instructions import guidance_for_run
+    system_prompt += guidance_for_run(db_path, run_id, "figures_review")
     # Temperature pinned to 1.0 — Gemini 3 through the enterprise proxy
     # requires it (mirrors extraction + notes agents). Phase 2: provider-correct
     # prompt caching of the static reviewer.md body + tool defs.

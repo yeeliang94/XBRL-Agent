@@ -212,6 +212,7 @@ async def get_run_detail_endpoint(run_id: int):
         "started_at": run.started_at,
         "ended_at": run.ended_at,
         "config": run.config,
+        "agent_instructions": run.agent_instructions,
         "filing_level": (run.config or {}).get("filing_level", "company"),
         "filing_standard": (run.config or {}).get("filing_standard", "mfrs"),
         # v10: sourced from the canonical `runs.orchestration` column,

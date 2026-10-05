@@ -72,6 +72,21 @@ def test_non_admin_is_403_on_every_route(env):
     assert _fetch(env, "user@firm.com").is_admin is False
 
 
+def test_guidance_is_readable_by_members_but_only_admins_can_save(env):
+    from agent_instructions import SCOPES
+    member = TestClient(server.app)
+    _login(member, "user@firm.com", "user-password")
+    assert member.get("/api/agent-instructions").status_code == 200
+    assert member.get("/api/agent-instructions/sources").status_code == 200
+    payload = {"texts": {key: "" for key in SCOPES}, "revision": 0}
+    assert member.put("/api/agent-instructions", json=payload).status_code == 403
+    admin = TestClient(server.app)
+    _login(admin, "admin@firm.com", "admin-password")
+    assert admin.put("/api/agent-instructions", json=payload).status_code == 200
+    assert member.get("/api/agent-instructions").json()["revision"] == 1
+    assert TestClient(server.app).get("/api/agent-instructions").status_code == 401
+
+
 # --- happy paths -----------------------------------------------------------
 
 def test_admin_can_list_without_hash(env):

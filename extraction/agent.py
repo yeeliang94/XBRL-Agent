@@ -1139,6 +1139,9 @@ def create_extraction_agent(
     from tools.pdf_search import scanned_pdf_advisory
     system_prompt += scanned_pdf_advisory(pdf_path, page_text_tool=True)
 
+    from agent_instructions import guidance_for_run
+    system_prompt += guidance_for_run(db_path, run_id, "figures_extraction")
+
     # Temperature is provider-aware (Phase 9, resolved inside
     # build_model_settings): Gemini stays 1.0 (CLAUDE.md gotcha #5 — Gemini 3
     # through the enterprise proxy requires T=1.0; lower values cause failures

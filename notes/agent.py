@@ -3271,6 +3271,9 @@ def create_notes_agent(
     from tools.pdf_search import scanned_pdf_advisory
     system_prompt += scanned_pdf_advisory(pdf_path)
 
+    from agent_instructions import guidance_for_run
+    system_prompt += guidance_for_run(db_path, run_id, "notes_extraction")
+
     # Pin temperature=1.0 ("Temperature Constraint" in CLAUDE.md). Phase 2:
     # provider-correct prompt caching of the static system prompt + tool defs.
     agent = Agent(

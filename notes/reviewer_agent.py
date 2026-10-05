@@ -1544,6 +1544,8 @@ def create_notes_reviewer_agent(
         for stable_id in sorted(deps.finding_keys_by_id):
             packet += f"\n- {stable_id}"
     system_prompt = f"{base_prompt}\n\n{packet}"
+    from agent_instructions import guidance_for_run
+    system_prompt += guidance_for_run(db_path, run_id, "notes_review")
 
     # The notes reviewer reads many scanned pages. Keep the newest two image
     # batches for cross-reference, strip older images before later requests,
