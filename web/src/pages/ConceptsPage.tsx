@@ -1850,7 +1850,7 @@ function ConceptMatrixGrid({
                     padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
                     textAlign: "right",
                     minWidth: 0,
-                    background: selected ? pwc.orange50 : "transparent",
+                    background: selected ? pwc.grey50 : "transparent",
                     cursor: cell ? "pointer" : "default",
                   }}
                 >
@@ -1866,12 +1866,9 @@ function ConceptMatrixGrid({
                       highlight={highlightEmpty}
                       compact
                     />
-                  ) : (
-                    <ReadOnlyValue
-                      value={cell?.values[period]}
-                      highlight={highlightEmpty}
-                    />
-                  )}
+                  ) : cell ? (
+                    <ReadOnlyValue value={cell.values[period]} />
+                  ) : null}
                 </div>
               );
             })}
@@ -1987,7 +1984,7 @@ function ConceptRowView({
         fontWeight: isAbstract ? pwc.weight.semibold : pwc.weight.regular,
         letterSpacing: isAbstract ? 0.4 : undefined,
         textTransform: isAbstract ? ("uppercase" as const) : undefined,
-        color: isAbstract ? pwc.grey700 : isComputed ? pwc.grey700 : pwc.grey900,
+        color: isAbstract ? pwc.grey700 : pwc.grey900,
         cursor: isAbstract ? "default" : "pointer",
         alignItems: "center",
       }}
@@ -2081,7 +2078,6 @@ function ConceptRowView({
             {isComputed ? (
               <ReadOnlyValue
                 value={cyValue}
-                highlight={cyIncompleteMandatory}
                 testId={
                   showPeriods
                     ? `readonly-value-${row.concept_uuid}-CY`
@@ -2102,7 +2098,6 @@ function ConceptRowView({
             ) : (
               <ReadOnlyValue
                 value={cyValue}
-                highlight={cyIncompleteMandatory}
                 testId={
                   showPeriods
                     ? `readonly-value-${row.concept_uuid}-CY`
@@ -2123,7 +2118,6 @@ function ConceptRowView({
               {isComputed ? (
                 <ReadOnlyValue
                   value={pyValue}
-                  highlight={pyIncompleteMandatory}
                   testId={`readonly-value-${row.concept_uuid}-PY`}
                 />
               ) : isEditable ? (
@@ -2140,7 +2134,6 @@ function ConceptRowView({
               ) : (
                 <ReadOnlyValue
                   value={pyValue}
-                  highlight={pyIncompleteMandatory}
                   testId={`readonly-value-${row.concept_uuid}-PY`}
                 />
               )}
@@ -2164,30 +2157,22 @@ function ConceptRowView({
 
 function ReadOnlyValue({
   value,
-  highlight = false,
   testId,
 }: {
   value: number | null | undefined;
-  highlight?: boolean;
   testId?: string;
 }) {
-  if (value == null) {
-    return (
-      <span
-        aria-hidden="true"
-        data-testid={testId}
-        style={
-          highlight ? styles.mandatoryEmptyValueBox : styles.emptyValueBox
-        }
-      />
-    );
-  }
-  // Render inside a box matching the editable input's footprint so computed
-  // totals line up with the data-entry fields above them (a faint grey fill +
-  // no caret signals "read-only, owned by the cascade").
+  // Keep numeric alignment without presenting a read-only value as an input.
   return (
-    <span data-testid={testId} style={styles.readonlyValueBox}>
-      {formatAccounting(value)}
+    <span
+      data-testid={testId}
+      title={value == null ? "Empty read-only value" : "Read-only value"}
+      style={{ ...styles.readonlyValue, color: value == null ? pwc.grey500 : pwc.grey900, fontSize: value == null ? 12 : 14 }}
+    >
+      {value == null ? <>
+        <span aria-hidden="true">—</span>
+        <span style={styles.visuallyHidden}>Empty read-only value</span>
+      </> : formatAccounting(value)}
     </span>
   );
 }
@@ -2493,7 +2478,7 @@ function EditableValueCell({
         data-testid={inputTestId}
         aria-label={ariaLabel}
         inputMode="decimal"
-        title={status === "saved" ? "Saved" : undefined}
+        title={status === "saved" ? "Saved — click to edit" : "Click to edit"}
         value={displayValue}
         onChange={(e) => {
           // Keep the raw (comma-free) form in `draft`; the display adds the
@@ -2944,27 +2929,8 @@ const styles = {
     fontFamily: pwc.fontBody,
     fontVariantNumeric: "tabular-nums",
   } as React.CSSProperties,
-  emptyValueBox: {
-    display: "inline-block",
-    width: "100%",
-    boxSizing: "border-box",
-    height: 32,
-    border: `1px solid ${pwc.grey300}`,
-    borderRadius: pwc.radius.md,
-    background: pwc.white,
-  } as React.CSSProperties,
-  mandatoryEmptyValueBox: {
-    display: "inline-block",
-    width: "100%",
-    boxSizing: "border-box",
-    height: 32,
-    border: `1px solid ${pwc.grey300}`,
-    borderRadius: pwc.radius.md,
-    background: pwc.orange50,
-  } as React.CSSProperties,
-  // Computed totals / non-editable values: same footprint as the editable
-  // input but with a read-only look (faint fill, muted border, no caret).
-  readonlyValueBox: {
+  // Align calculated and linked values with inputs, without a field boundary.
+  readonlyValue: {
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "flex-end",
@@ -2972,13 +2938,13 @@ const styles = {
     boxSizing: "border-box",
     minHeight: 32,
     padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.md,
-    background: pwc.grey50,
+    border: "none",
+    background: "transparent",
+    cursor: "default",
     fontFamily: pwc.fontBody,
     fontVariantNumeric: "tabular-nums",
     fontSize: 14,
-    color: pwc.grey800,
+    color: pwc.grey900,
   } as React.CSSProperties,
   stateCell: {
     display: "flex",

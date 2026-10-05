@@ -699,7 +699,13 @@ describe("ConceptsPage", () => {
     expect(mandatoryInput.style.backgroundColor).toBe("rgb(255, 245, 237)");
     expect(mandatoryInput.style.borderColor).toBe("rgb(254, 124, 57)");
     expect(optionalInput.style.backgroundColor).toBe("rgb(255, 255, 255)");
-    expect(mandatoryComputed.style.backgroundColor).toBe("rgb(255, 245, 237)");
+    expect(mandatoryComputed).toHaveStyle({ border: "none", background: "transparent" });
+    expect(mandatoryComputed).toHaveTextContent("—");
+    expect(mandatoryComputed).not.toHaveAttribute("aria-label");
+    expect(mandatoryComputed).toHaveAttribute("title", "Empty read-only value");
+    expect(within(mandatoryComputed).getByText("—")).toHaveAttribute("aria-hidden", "true");
+    expect(within(mandatoryComputed).getByText("Empty read-only value")).not.toHaveAttribute("aria-hidden");
+    expect(optionalInput).toHaveStyle({ border: "1px solid #CBD1D6" });
     expect(screen.queryByText(/pending input/i)).toBeNull();
     expect(screen.queryByText(/missing/i)).toBeNull();
   });
@@ -797,7 +803,9 @@ describe("ConceptsPage", () => {
     render(<ConceptsPage runId={7} />);
     await waitFor(() => screen.getByTestId("concept-matrix-grid"));
     expect(screen.queryByTestId("value-input-mx-11-B")).toBeNull();
-    expect(screen.getByTestId("matrix-cell-11-B").textContent).toMatch(/11/);
+    const value = within(screen.getByTestId("matrix-cell-11-B")).getByTitle("Read-only value");
+    expect(value).toHaveTextContent("11");
+    expect(value).toHaveStyle({ border: "none", background: "transparent" });
   });
 
   test("renders a matrix grid for shape=matrix templates", async () => {
@@ -1634,9 +1642,19 @@ describe("ConceptsPage", () => {
     await waitFor(() => screen.getByTestId("value-input-leaf-1"));
     expect(screen.queryByTestId("value-input-comp-1")).toBeNull();
     expect(screen.queryByTestId("value-input-abs-1")).toBeNull();
+    const total = screen.getByTestId("readonly-value-comp-1");
+    expect(total).toHaveTextContent("999");
+    expect(total).toHaveStyle({ border: "none", background: "transparent", cursor: "default" });
+    expect(total).toHaveAttribute("title", "Read-only value");
+    expect(screen.getByTestId("concept-row-comp-1")).toHaveStyle({ color: "#000000" });
+    expect(screen.getByTestId("value-input-leaf-1")).toHaveAttribute("title", "Click to edit");
   });
 
-  test("alias view-rows render with (linked) marker and stay read-only", async () => {
+  test.each([
+    [5_000_000, "5,000,000"],
+    [null, "—"],
+    [0, "0"],
+  ])("alias view-rows show %s as %s and stay read-only", async (value, displayed) => {
     // Cross-sheet rollup: a sub-sheet concept (e.g. *Total PPE) shares
     // its concept_uuid with a face-sheet row. The backend emits one
     // extra view-row per alias so the page mirrors the workbook.
@@ -1654,7 +1672,7 @@ describe("ConceptsPage", () => {
           render_row: 39,
           render_col: "B",
           template_id: "mfrs-company-sofp-cunoncu-v1",
-          value: 5_000_000.0,
+          value,
           value_status: "observed",
           children_status: "itemised",
           source: "cascade",
@@ -1673,7 +1691,7 @@ describe("ConceptsPage", () => {
           render_row: 8,
           render_col: "B",
           template_id: "mfrs-company-sofp-cunoncu-v1",
-          value: 5_000_000.0,
+          value,
           value_status: "observed",
           children_status: "itemised",
           source: "cascade",
@@ -1703,6 +1721,16 @@ describe("ConceptsPage", () => {
     // Neither view-row offers a value input — primary is COMPUTED,
     // alias is never editable.
     expect(screen.queryByTestId("value-input-ppe-1")).toBeNull();
+    for (const field of screen.getAllByTestId("readonly-value-ppe-1")) {
+      if (value == null) {
+        expect(within(field).getByText(displayed)).toHaveAttribute("aria-hidden", "true");
+        expect(within(field).getByText("Empty read-only value")).toHaveStyle({ position: "absolute", width: "1px", height: "1px" });
+      } else {
+        expect(field.textContent).toBe(displayed);
+        expect(within(field).queryByText("Empty read-only value")).toBeNull();
+      }
+      expect(field).toHaveStyle({ border: "none", background: "transparent", color: value == null ? "#6B7280" : "#000000", fontSize: value == null ? "12px" : "14px" });
+    }
   });
 
   test("initial auto-selection never scrolls; a conflict jump does (live-QA fix)", async () => {

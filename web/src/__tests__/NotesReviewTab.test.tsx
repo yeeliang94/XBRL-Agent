@@ -225,7 +225,7 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     expect(pages).toHaveBeenLastCalledWith([3]);
   });
 
-  test("keeps pane headings outside navigation scrolling and bounds long note previews", async () => {
+  test("keeps pane headings outside navigation scrolling and lets note content expand", async () => {
     mockFetchOnce(SAMPLE);
     render(<NotesReviewTab runId={42} />);
     await screen.findByRole("button", { name: "Review Corporate info" });
@@ -233,7 +233,9 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     selectFirstField();
     const selectedPreview = screen.getByTestId("notes-review-editor");
     expect(selectedPreview).toHaveAttribute("data-editable", "false");
-    expect(selectedPreview).toHaveStyle({ maxHeight: "440px", overflowY: "auto" });
+    expect(selectedPreview).toHaveStyle({ maxHeight: "none", overflow: "visible" });
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(selectedPreview.style.maxHeight).not.toBe("440px");
     const nav = screen.getByRole("navigation", { name: /notes sheet navigator/i });
     for (const button of within(nav).getAllByRole("button")) {
       expect(button).toHaveStyle({ whiteSpace: "normal", textAlign: "left" });
@@ -314,10 +316,10 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
       }],
     };
     mockFetchOnce(compared);
-    render(<NotesReviewTab runId={42} human={{
-      html: { "note-0": "<p>Human legal name</p>", "note-1": "<p>Human office</p>" },
+    render(<><style>{notesCss}</style><NotesReviewTab runId={42} human={{
+      html: { "note-0": '<p style="font-size:24pt;line-height:3;margin:40px 0">Human legal name</p>', "note-1": "<p>Human office</p>" },
       status: { "note-0": "agree", "note-1": "missed" },
-    }} />);
+    }} /></>);
     await screen.findByRole("button", { name: "Review Corporate info" });
     expect(screen.queryByTestId("notes-human-pair")).toBeNull();
     // Filled fields open as previews, so the column labels show once at once.
@@ -329,7 +331,9 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     for (const preview of previews) {
       expect(preview).toHaveClass("notes-human-pair");
       expect(within(preview).getByRole("group", { name: "AI note" })).toHaveClass("notes-human-extracted");
-      expect(within(preview).getByRole("group", { name: "Human note" })).toBeInTheDocument();
+      const humanPreview = within(preview).getByRole("group", { name: "Human note" });
+      expect(humanPreview.querySelector(".tiptap")).toHaveClass("notes-human-content");
+      expect(humanPreview.querySelector('[data-testid="notes-readonly-content"]')).toHaveStyle({ maxHeight: "none", overflow: "visible" });
     }
     expect(screen.getByText("Human office")).toBeVisible();
     expect(screen.getByRole("img", { name: "Missed by AI" })).toBeVisible();
@@ -345,6 +349,12 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     expect(within(humanCells[0]).queryByRole("img")).toBeNull();
     expect(humanCells).toHaveLength(1);
     expect(screen.getByText("Human legal name").parentElement).toHaveStyle({ borderColor: pwc.grey300 });
+    expect(screen.getByText("Human legal name").parentElement).toHaveClass("notes-human-content");
+    // Include the production stylesheet so a CSS height cap or scroll trap
+    // cannot pass merely because the inline style omits maxHeight.
+    const humanBody = screen.getByText("Human legal name").parentElement!;
+    expect(["", "none"]).toContain(getComputedStyle(humanBody).maxHeight);
+    expect(["", "visible"]).toContain(getComputedStyle(humanBody).overflowY);
     openField(screen.getByRole("button", { name: "Review Registered office" }));
     expect(screen.getAllByText("Registered office")).toHaveLength(1);
     expect(screen.getByTestId("notes-review-editor")).toHaveAttribute("data-editable", "false");

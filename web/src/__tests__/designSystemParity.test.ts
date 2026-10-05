@@ -242,7 +242,8 @@ describe("Simplified template-oriented review", () => {
       "meaningful destination subheadings, never technical sheet names",
       "immediately returns the PDF to the source note's cited page",
       "description columns receive priority and wrap",
-      "Long selected notes scroll vertically inside a bounded preview",
+      "Filled note previews and editors expand to their full content height without nested vertical scrolling",
+      "Human comparison notes use the same review typography, paragraph spacing and table padding as extracted notes",
       "Align mTool worksheets, Note content and Source PDF in one shared 44px heading band",
     ]) {
       expect(designSystem).toContain(requirement);
@@ -294,4 +295,14 @@ test("Figures keep routine provenance in Field details without implying verifica
     expect(reference).toContain("Routine value-origin labels appear only in Field details");
     expect(reference).toContain("Recorded values never imply verification");
   }
+});
+
+
+test("Figures distinguish editable inputs from plain read-only values", () => {
+  expect(designSystem).toContain("Editable figure values always retain a Grey 300 input border");
+  expect(designSystem).toContain("Calculated and linked values are plain read-only numbers with no border or field fill");
+  expect(designSystem).toContain("Empty read-only fields display a 12px em dash");
+  // JSDOM does not apply global CSS; pin against the rule that hid input borders.
+  const css = readReference("../index.css");
+  expect(css).not.toContain('.concept-tree-row[aria-selected="false"] input:not(:focus)');
 });
