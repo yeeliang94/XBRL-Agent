@@ -402,7 +402,7 @@ describe("appReducer", () => {
     let state = runningState();
     expect(state.pipelineStage).toBeNull();
 
-    const stages = ["extracting", "merging", "cross_checking", "correcting", "formatting_notes", "done"] as const;
+    const stages = ["extracting", "merging", "cross_checking", "correcting", "formatting_notes", "cleaning_notes", "done"] as const;
     for (const stage of stages) {
       state = appReducer(state, {
         type: "EVENT",

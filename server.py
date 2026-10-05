@@ -3821,6 +3821,7 @@ def _resolve_run_status(
     notes_integrity_unresolved: bool,
     open_notes_placement_conflicts: bool,
     notes_formatting_incomplete: bool,
+    notes_cleanup_incomplete: bool = False,
 ) -> str:
     """Return the terminal run status from observable pipeline outcomes."""
     if all_agents_ok and merge_success and correction_exhausted:
@@ -3846,7 +3847,7 @@ def _resolve_run_status(
     else:
         status = "completed"
 
-    if notes_formatting_incomplete and status == "completed":
+    if (notes_formatting_incomplete or notes_cleanup_incomplete) and status == "completed":
         return "completed_with_errors"
     return status
 
@@ -7794,6 +7795,78 @@ async def run_multi_agent_stream(
                         session_id, NOTES_FORMATTER_AGENT_ID,
                     )
 
+        # Content cleanup is a separate author after the style-only formatter.
+        # Its receipts preserve original HTML and exact source-backed omissions.
+        notes_cleanup_incomplete = False
+        if merge_result.success and notes_result is not None:
+            from notes_types import NOTES_REGISTRY as _CLEANUP_NOTES_REG
+            _cleanup_sheets = sorted({
+                _CLEANUP_NOTES_REG[r.template_type].sheet_name
+                for r in notes_result.agent_results
+                if r.workbook_path and not _CLEANUP_NOTES_REG[r.template_type].is_numeric
+            })
+            if _cleanup_sheets:
+                from notes.cleanup_agent import run_notes_cleanup
+                import task_registry
+                _cleanup_model_name = _notes_formatter_model_name() or model_name
+                _cleanup_task = asyncio.create_task(run_notes_cleanup(
+                    run_id=run_id, db_path=str(AUDIT_DB_PATH),
+                    pdf_path=str(session_dir / "uploaded.pdf"), sheets=_cleanup_sheets,
+                    model_name=_cleanup_model_name,
+                    model_factory=lambda: _create_proxy_model(_cleanup_model_name, proxy_url, api_key),
+                    output_dir=output_dir,
+                    on_progress=lambda completed, total, removed: _emit_stage(
+                        "cleaning_notes",
+                        message=(f"Notes cleanup complete: {removed} banners or repeated headings removed."
+                                 if completed else f"Checking {total} note fields for page banners and repeated headings."),
+                        completed=completed, total=total,
+                    ),
+                ))
+                task_registry.register(session_id, "NOTES_CLEANUP", _cleanup_task)
+                try:
+                    async for event in _drain_while_running(_cleanup_task):
+                        persist_event(event)
+                        if client_connected:
+                            try:
+                                yield event
+                            except (asyncio.CancelledError, GeneratorExit):
+                                client_connected = False
+                    _cleanup_outcome = await _cleanup_task
+                    notes_cleanup_incomplete = not _cleanup_outcome["ok"]
+                    if _cleanup_outcome.get("changed_rows"):
+                        try:
+                            await asyncio.to_thread(
+                                _refresh_merged_notes_workbook, run_id=run_id,
+                                db_path=str(AUDIT_DB_PATH), merged_workbook_path=merged_path,
+                                filing_level=run_config.filing_level,
+                            )
+                        except Exception:
+                            artifact_current = False
+                            logger.exception("Could not refresh workbook after notes cleanup for run %s", run_id)
+                            _enqueue_system_error({
+                                "type": "canonical_notes_refresh_degraded", "phase": "cleaning_notes",
+                                "message": "Cleaned notes are saved, but the merged workbook could not be refreshed.",
+                            })
+                except asyncio.CancelledError:
+                    if _safe_mark_finished(db_conn, run_id, "aborted"):
+                        terminal_status = "aborted"
+                    if client_connected:
+                        yield {"event": "error", "data": {
+                            "message": "Run cancelled during notes cleanup",
+                            "bucket": ERROR_BUCKET_FATAL,
+                        }}
+                    return
+                except Exception:
+                    notes_cleanup_incomplete = True
+                    logger.exception("Final notes cleanup failed for run %s; saved notes retained", run_id)
+                finally:
+                    task_registry.unregister(session_id, "NOTES_CLEANUP")
+                if notes_cleanup_incomplete:
+                    _enqueue_system_error({
+                        "type": "notes_cleanup_incomplete", "phase": "cleaning_notes",
+                        "message": "Notes cleanup did not finish. Saved notes are available for review.",
+                    })
+
         # Formatting finishes after the extraction drain. Deliver any final
         # stage/error events before the terminal event, including failures.
         while True:
@@ -8108,6 +8181,7 @@ async def run_multi_agent_stream(
             notes_integrity_unresolved=notes_integrity_unresolved,
             open_notes_placement_conflicts=open_notes_placement_conflicts,
             notes_formatting_incomplete=notes_formatting_incomplete,
+            notes_cleanup_incomplete=notes_cleanup_incomplete,
         )
         if _safe_mark_finished(db_conn, run_id, overall_status):
             terminal_status = overall_status
