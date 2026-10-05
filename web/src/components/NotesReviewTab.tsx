@@ -120,6 +120,72 @@ export interface HumanNotesView {
   status: Record<string, "agree" | "missed" | "ai_only">;
 }
 
+/** Use the same category union for filtering and rendering human comparisons. */
+function numericNoteCategories(cell: NotesCell, humanFigures: Map<string, HumanFigureSlot> | null) {
+  const categories: NonNullable<NotesCell["categories"]> = cell.categories?.length
+    ? [...cell.categories]
+    : [{ dimension_key: "", dimensions: cell.dimensions ?? {}, label: "Total", values: cell.values ?? {}, evidence: cell.evidence, resolution_tokens: cell.resolution_tokens }];
+  const columns = [...new Set([Object.keys(cell.values ?? {}), ...categories.map(({ values }) => Object.keys(values))].flat())];
+  const added = new Set<string>();
+  for (const slot of humanFigures?.values() ?? []) {
+    if (slot.concept_uuid !== cell.concept_uuid || slot.human_value == null) continue;
+    const keys = columns.filter((key) => {
+      const column = NUMERIC_VALUE_COLUMNS[key];
+      return column?.period === slot.period && column.entity_scope === slot.entity_scope;
+    });
+    if (!keys.length) continue;
+    let category = categories.find(({ dimension_key }) => dimension_key === slot.dimension_key);
+    if (!category) {
+      // Comparison dimension keys are canonical JSON from the server. Reuse
+      // that exact identity; never copy classification between scopes or years.
+      const dimensions: Record<string, string> = slot.dimension_key ? JSON.parse(slot.dimension_key) : {};
+      const option = cell.category_options?.find((candidate) =>
+        Object.keys(candidate.dimensions).length === Object.keys(dimensions).length
+        && Object.entries(dimensions).every(([axis, member]) => candidate.dimensions[axis] === member));
+      category = {
+        dimension_key: slot.dimension_key,
+        dimensions,
+        label: slot.dimension_key ? option?.label ?? Object.values(dimensions).map((member) =>
+          member.replace(/^[^_]*_/, "").replace(/Member$/, "").replace(/(?<=[a-z])(?=[A-Z])/g, " ")).join(", ") : "Total",
+        values: Object.fromEntries(columns.map((key) => [key, null])),
+        evidence: null,
+      };
+      categories.push(category);
+      added.add(slot.dimension_key);
+    }
+    if (added.has(slot.dimension_key)) {
+      for (const key of keys) category.values[key] = slot.ai_value;
+    }
+  }
+  return categories;
+}
+
+/** Presence is based on current content; zero is a filled numeric value. */
+function noteFieldPresence(cell: NotesCell, human: HumanNotesView | null, humanFigures: Map<string, HumanFigureSlot> | null) {
+  if (cell.kind !== "numeric") {
+    const aiFilled = !isBlankHtml(cell.html);
+    const humanFilled = Boolean(cell.node_uuid && !isBlankHtml(human?.html[cell.node_uuid]));
+    return { filled: aiFilled || humanFilled, missed: humanFilled && !aiFilled };
+  }
+  const categories = numericNoteCategories(cell, humanFigures);
+  const columns = [...new Set(categories.flatMap(({ values }) => Object.keys(values)))];
+  let filled = categories.some(({ values }) => Object.values(values).some((value) => value != null));
+  let missed = false;
+  for (const { dimension_key, values } of categories) {
+    for (const key of columns) {
+      const column = NUMERIC_VALUE_COLUMNS[key];
+      if (!column || !cell.concept_uuid) continue;
+      const slot = humanFigures?.get(humanSlotKey(cell.concept_uuid, column.period, column.entity_scope, dimension_key));
+      if (slot?.human_value != null) {
+        filled = true;
+        // The comparison contract excludes human zero / AI blank differences.
+        if (values[key] == null && slot.status === "missed") missed = true;
+      }
+    }
+  }
+  return { filled, missed };
+}
+
 interface SourceNotePlacement {
   sheet: string;
   row: number;
@@ -369,8 +435,16 @@ export function NotesReviewTab({
   // focusCell.key so re-clicking the same cell re-scrolls.
   const [selectedCellKey, setSelectedCellKey] = useState<string | null>(null);
   const [noteSearch, setNoteSearch] = useState("");
+  const [hideEmptyFields, setHideEmptyFields] = useState(false);
+  const [onlyMissedFields, setOnlyMissedFields] = useState(false);
+  const hasHumanComparison = Boolean(human || humanFigures);
+  useEffect(() => {
+    if (!hasHumanComparison) setOnlyMissedFields(false);
+  }, [hasHumanComparison]);
   useEffect(() => {
     if (!focusCell || saveBlocked || moveBusy) return;
+    setHideEmptyFields(false);
+    setOnlyMissedFields(false);
     setActive((a) => ({ sheet: focusCell.sheet, key: a.key + 1 }));
     setFocusRow(focusCell.row);
     setSelectedCellKey(`${focusCell.sheet}:${focusCell.row}`);
@@ -382,6 +456,8 @@ export function NotesReviewTab({
   useEffect(() => {
     setSelectedCellKey(null);
     setNoteSearch("");
+    setHideEmptyFields(false);
+    setOnlyMissedFields(false);
     setSelectedSourceNote(null);
     setSelectedSubnoteRef(null);
     setSourceNotes(null);
@@ -571,13 +647,6 @@ export function NotesReviewTab({
   );
 
   useEffect(() => {
-    if (selectedCellKey || selectedSourceNote != null || !activeSheet?.rows.length) return;
-    const first = activeSheet.rows[0];
-    setSelectedCellKey(`${activeSheet.sheet}:${first.row}`);
-    reportCellPages(first.source_pages, onActiveCellPages);
-  }, [activeSheet, selectedCellKey, selectedSourceNote, onActiveCellPages]);
-
-  useEffect(() => {
     if (!focusCell || sourceNotes == null || saveBlocked || moveBusy) return;
     const cellKey = `${focusCell.sheet}:${focusCell.row}`;
     setSelectedSourceNote((current) =>
@@ -592,6 +661,8 @@ export function NotesReviewTab({
     pages: number[] = sourceNotePages(note),
   ) => {
     if (saveBlocked || moveBusy) return;
+    setHideEmptyFields(false);
+    setOnlyMissedFields(false);
     setSelectedSourceNote(note.note_num);
     setSelectedSubnoteRef(subnoteRef);
     reportCellPages(pages, onActiveCellPages);
@@ -705,7 +776,7 @@ export function NotesReviewTab({
               {noteEntries.filter(({ cell, sheet }) => `${cell.label} ${sheet.sheet}`.toLowerCase().includes(noteSearch.trim().toLowerCase())).map(({ cell, sheet, key }) => (
                 <button key={key} type="button" disabled={saveBlocked || moveBusy} aria-current={activeCellKey === key ? "true" : undefined}
                   style={{ ...styles.workspaceSheetButton, ...(activeCellKey === key ? ui.reviewSelection : {}) }}
-                  onClick={() => { setActive((current) => ({ sheet: sheet.sheet, key: current.key + 1 })); setFocusRow(cell.row); handleWorkspaceCellActivate(sheet.sheet, cell.row); reportCellPages(cell.source_pages, onActiveCellPages); }}>
+                  onClick={() => { setHideEmptyFields(false); setOnlyMissedFields(false); setActive((current) => ({ sheet: sheet.sheet, key: current.key + 1 })); setFocusRow(cell.row); handleWorkspaceCellActivate(sheet.sheet, cell.row); reportCellPages(cell.source_pages, onActiveCellPages); }}>
                   <span style={{ minWidth: 0 }}>{cell.label}{isBlankHtml(cell.html) && cell.kind !== "numeric" ? " · Empty" : ""}</span>
                   {activeCellKey === key && <ChevronRight size={16} style={ui.reviewSelectionMarker} />}
                 </button>
@@ -865,8 +936,24 @@ export function NotesReviewTab({
           />
 
           <section style={styles.editorPane} aria-label="XBRL notes fields">
-            <div style={{ ...ui.reviewPaneHeader, position: "sticky", top: 116, zIndex: 2, marginBottom: pwc.space.lg }}>
+            {/* Cover the gap below the run tabs as note content scrolls behind the header. */}
+            <div style={{ ...ui.reviewPaneHeader, position: "sticky", top: 116, zIndex: 2, marginBottom: pwc.space.lg, boxShadow: `0 -${pwc.space.lg}px 0 ${pwc.white}`, flexWrap: "wrap", gap: pwc.space.sm }}>
               <h2 style={{ ...ui.sectionTitle, margin: 0 }}>Note content</h2>
+              <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: pwc.space.md }}>
+                <label style={{ display: "flex", alignItems: "center", gap: pwc.space.xs, fontSize: 13 }}>
+                  <input type="checkbox" checked={hideEmptyFields} disabled={saveBlocked || moveBusy}
+                    onChange={(event) => setHideEmptyFields(event.target.checked)} />
+                  Hide empty fields
+                </label>
+                {hasHumanComparison && <label style={{ display: "flex", alignItems: "center", gap: pwc.space.xs, fontSize: 13 }}>
+                  View
+                  <select style={{ ...ui.select, minHeight: 32, width: "auto" }} value={onlyMissedFields ? "missed" : "all"} disabled={saveBlocked || moveBusy}
+                    onChange={(event) => setOnlyMissedFields(event.target.value === "missed")}>
+                    <option value="all">All fields</option>
+                    <option value="missed">Missed by AI</option>
+                  </select>
+                </label>}
+              </div>
             </div>
             {loadError ? (
               categoryRefreshFailed ? <div role="alert" style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-start" }}>
@@ -896,9 +983,15 @@ export function NotesReviewTab({
                   onEditingChange={setEditing}
                   moveBusy={moveBusy}
                   attentionRows={null}
+                  hideEmptyFields={hideEmptyFields}
+                  onlyMissedFields={onlyMissedFields && hasHumanComparison}
+                  onShowAllFields={() => { setHideEmptyFields(false); setOnlyMissedFields(false); }}
                   onActiveCellPages={onActiveCellPages}
-                  selectedCellKey={activeCellKey}
+                  selectedCellKey={selectedCellKey}
                   onCellActivate={handleWorkspaceCellActivate}
+                  onCellCollapse={() => {
+                    if (!saveBlocked && !moveBusy) setSelectedCellKey(null);
+                  }}
                   human={human}
                   humanFigures={humanFigures}
                   onComparisonChange={onComparisonChange}
@@ -928,11 +1021,15 @@ function SheetSection({
   onEditingChange,
   moveBusy,
   attentionRows,
+  hideEmptyFields,
+  onlyMissedFields,
+  onShowAllFields,
   focusKey = 0,
   focusRow = null,
   onActiveCellPages,
   selectedCellKey = null,
   onCellActivate,
+  onCellCollapse,
   human = null,
   humanFigures = null,
   onComparisonChange,
@@ -949,6 +1046,9 @@ function SheetSection({
   onSaveBlocked: (blocked: boolean) => void;
   onEditingChange: (editing: boolean) => void;
   attentionRows: number[] | null;
+  hideEmptyFields: boolean;
+  onlyMissedFields: boolean;
+  onShowAllFields: () => void;
   moveBusy: boolean;
   /** Bumps on every source-note jump so re-selecting the same row scrolls. */
   focusKey?: number;
@@ -959,6 +1059,7 @@ function SheetSection({
   onActiveCellPages?: (pages: number[]) => void;
   selectedCellKey?: string | null;
   onCellActivate?: (sheet: string, row: number) => void;
+  onCellCollapse: () => void;
   human?: HumanNotesView | null;
   humanFigures?: Map<string, HumanFigureSlot> | null;
   onComparisonChange?: () => void;
@@ -1074,6 +1175,11 @@ function SheetSection({
   }, []);
 
   const canFormat = (sheet.kind ?? "prose") === "prose";
+  const visibleRows = sheet.rows.filter((cell) => {
+    if (cell.invalid_target || selectedCellKey === `${sheet.sheet}:${cell.row}`) return true;
+    const presence = noteFieldPresence(cell, human, humanFigures);
+    return (!hideEmptyFields || presence.filled) && (!onlyMissedFields || presence.missed);
+  }).filter((cell) => attentionRows == null || attentionRows.includes(cell.row) || cell.invalid_target);
   const numericColumns = Object.keys(NUMERIC_VALUE_COLUMNS).filter((key) =>
     sheet.rows.some((cell) => key in (cell.values ?? {}) || cell.categories?.some((category) => key in category.values)),
   );
@@ -1159,14 +1265,18 @@ function SheetSection({
               ))}
             </div>
           )}
-          {human && sheet.rows.some((cell) => cell.kind !== "numeric" && cell.node_uuid) && (
+          {human && visibleRows.some((cell) => cell.kind !== "numeric" && cell.node_uuid && selectedCellKey === `${sheet.sheet}:${cell.row}`) && (
             <div className="notes-human-pair-header" style={styles.humanPairHeader}>
               <span>Extracted note</span>
               <span>Human file</span>
             </div>
           )}
           {attentionRows?.length === 0 && <p role="status">No placed field issues in this sheet. Check the source inventory for unplaced or unresolved notes.</p>}
-          {sheet.rows.filter((cell) => attentionRows == null || attentionRows.includes(cell.row) || cell.invalid_target).map((cell) => {
+          {visibleRows.length === 0 && (hideEmptyFields || onlyMissedFields) && <div style={{ padding: pwc.space.md }}>
+            <p role="status" style={styles.dim}>No fields match this view.</p>
+            <button type="button" className={uiClass.btnGhost} onClick={onShowAllFields}>Show all fields</button>
+          </div>}
+          {visibleRows.map((cell) => {
             const row =
             // Numeric notes (sheets 13/14) carry multi-column values, not
             // HTML prose — they get value inputs wired to the facts API
@@ -1187,16 +1297,7 @@ function SheetSection({
                 selected={selectedCellKey === `${sheet.sheet}:${cell.row}`}
                 onActivate={() => onCellActivate?.(sheet.sheet, cell.row)}
               />
-            ) : selectedCellKey !== `${sheet.sheet}:${cell.row}` ? (
-              <WorkspaceReadOnlyCellRow
-                key={`${runId}:${sheet.sheet}:${cell.row}`}
-                cell={cell}
-                fieldHeadingExternal={Boolean(human && cell.node_uuid)}
-                disabled={hasPendingRowSave || moveBusy}
-                onActiveCellPages={hasPendingRowSave || moveBusy ? undefined : onActiveCellPages}
-                onActivate={() => onCellActivate?.(sheet.sheet, cell.row)}
-              />
-            ) : (
+            ) : selectedCellKey === `${sheet.sheet}:${cell.row}` ? (
               // Include `runId` in the CellRow key as well — belt-and-
               // braces after the parent sheet remount. Ensures TipTap
               // editor instances never carry state across a runId change.
@@ -1205,7 +1306,7 @@ function SheetSection({
                 runId={runId}
                 sheet={sheet.sheet}
                 cell={cell}
-                fieldHeadingExternal={Boolean(human && cell.node_uuid)}
+                comparison={Boolean(human && cell.node_uuid)}
                 theme={theme}
                 onSaveStatusChange={handleRowSaveStatus}
                 onCellSaved={onCellSaved}
@@ -1215,20 +1316,52 @@ function SheetSection({
                 onActiveCellPages={onActiveCellPages}
                 onActivate={() => onCellActivate?.(sheet.sheet, cell.row)}
               />
-            );
+            ) : null;
             const field = cell.node_uuid ?? null;
-            if (!human || cell.kind === "numeric" || !field) return row;
+            if (cell.kind === "numeric") return row;
+            const expanded = selectedCellKey === `${sheet.sheet}:${cell.row}`;
+            const compared = Boolean(human && field);
+            const humanFilled = Boolean(field && !isBlankHtml(human?.html[field]));
+            const aiFilled = !isBlankHtml(cell.html);
+            const humanStatus = compared
+              ? humanFilled && !aiFilled ? "missed" : aiFilled && !humanFilled ? "ai_only" : "agree"
+              : undefined;
+            const statusId = `note-field-status-${runId}-${encodeURIComponent(sheet.sheet)}-${cell.row}`;
+            const marker = !expanded && humanStatus && humanStatus !== "agree"
+              ? humanStatus === "missed" ? "Missed by AI" : "AI-only"
+              : null;
             // The human's note sits on the same grid row, so the pair takes
             // the height of the longer text and never drifts out of line.
             return (
-              <section key={`${runId}:${sheet.sheet}:${cell.row}:pair`} aria-label={cell.label}>
-                <h3 style={{ ...styles.cellLabel, margin: 0, padding: "12px" }}>{cell.label}</h3>
-                <div className="notes-human-pair" data-testid="notes-human-pair" style={styles.humanPair}>
-                <div className="notes-human-extracted" style={styles.comparisonRows}>{row}</div>
-                <HumanNoteCell html={human.html[field]} status={human.status[field]}
-                  blank={isBlankHtml(cell.html)}
-                  selected={selectedCellKey === `${sheet.sheet}:${cell.row}`} />
-                </div>
+              <section key={`${runId}:${sheet.sheet}:${cell.row}:pair`} aria-label={cell.label}
+                data-cell-row={cell.row} data-testid="notes-review-row">
+                <h3 style={{ ...styles.cellLabel, margin: 0 }}>
+                  <button type="button" aria-label={`Review ${cell.label}`} aria-expanded={expanded}
+                    aria-describedby={[cell.invalid_target ? `${statusId}-filing` : null, marker ? `${statusId}-comparison` : null].filter(Boolean).join(" ") || undefined}
+                    disabled={hasPendingRowSave || moveBusy}
+                    style={styles.fieldDisclosureButton}
+                    onClick={() => {
+                      if (expanded) onCellCollapse();
+                      else {
+                        onCellActivate?.(sheet.sheet, cell.row);
+                        reportCellPages(cell.source_pages, onActiveCellPages);
+                      }
+                    }}>
+                    <ChevronRight size={16} aria-hidden="true" style={{ flexShrink: 0, transform: expanded ? "rotate(90deg)" : undefined }} />
+                    <span style={styles.cellLabel}>{cell.label}</span>
+                    <span style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, marginLeft: "auto", fontWeight: 400 }}>
+                      {cell.invalid_target && <span id={`${statusId}-filing`} style={{ color: pwc.warning }}>Not a filing field</span>}
+                      {marker && <span role="img" aria-label={marker} style={{ color: pwc.warning }}>{humanStatus === "missed" ? "○" : "◇"}</span>}
+                    </span>
+                  </button>
+                </h3>
+                {marker && <span id={`${statusId}-comparison`} hidden>{marker}</span>}
+                {expanded && (compared && human && field ? <div className="notes-human-pair" data-testid="notes-human-pair" style={styles.humanPair}>
+                  <div className="notes-human-extracted" style={styles.comparisonRows}>{row}</div>
+                  <HumanNoteCell html={human.html[field]} status={humanStatus}
+                    blank={isBlankHtml(cell.html)}
+                    selected={true} />
+                </div> : row)}
               </section>
             );
           })}
@@ -1275,86 +1408,6 @@ function HumanNoteCell({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Lightweight workspace row — keeps every field visible without constructing
-// a TipTap editor for every prose slot. Selecting the row swaps in CellRow,
-// which owns editing, saving, and the full toolbar.
-// ---------------------------------------------------------------------------
-
-function WorkspaceReadOnlyCellRow({
-  cell,
-  fieldHeadingExternal = false,
-  disabled,
-  onActiveCellPages,
-  onActivate,
-}: {
-  cell: NotesCell;
-  fieldHeadingExternal?: boolean;
-  disabled: boolean;
-  onActiveCellPages?: (pages: number[]) => void;
-  onActivate: () => void;
-}) {
-  const contentRef = useRef<HTMLDivElement | null>(null);
-  const blank = isBlankHtml(cell.html);
-
-  // Numeric alignment is a render-time concern and must not be persisted in
-  // notes_cells. Apply the same shared tagger used by the selected TipTap
-  // editor so the lightweight browse view still matches clipboard output.
-  useEffect(() => {
-    if (contentRef.current) {
-      tagNumericCells(contentRef.current);
-      indentUnwrappedSubnote(contentRef.current);
-    }
-  }, [cell.html]);
-
-  const activate = () => {
-    if (disabled) return;
-    onActivate();
-    reportCellPages(cell.source_pages, onActiveCellPages);
-  };
-
-  return (
-    <div
-      data-testid="notes-review-row"
-      data-cell-row={cell.row}
-      className="notes-review-row"
-      style={{ ...styles.workspaceCellRow, ...(fieldHeadingExternal ? styles.comparisonRows : {}) }}
-      role={blank ? "button" : undefined}
-      tabIndex={blank ? 0 : undefined}
-      aria-label={blank ? `Review ${cell.label}` : undefined}
-      onMouseDown={(event) => {
-        if (!(event.target as HTMLElement).closest("button")) activate();
-      }}
-      onKeyDown={(event) => {
-        if (blank && (event.key === "Enter" || event.key === " ")) {
-          event.preventDefault();
-          activate();
-        }
-      }}
-    >
-      <div style={styles.disclosureHeader}>
-        {!fieldHeadingExternal && <aside style={styles.cellLeft}>
-          <div style={styles.cellLabel}>{cell.label}</div>
-        </aside>}
-        {!blank && <div style={styles.cellToolbar}>
-          <button type="button" disabled={disabled} className={uiClass.btnSecondary} style={styles.smallButton} onClick={activate} aria-label={`Review ${cell.label}`}>Review</button>
-        </div>}
-      </div>
-      {!blank && <div data-comparison-content={fieldHeadingExternal ? "" : undefined} style={{ padding: "0 12px 16px", ...(fieldHeadingExternal ? { gridRow: 3, minWidth: 0 } : {}) }}>
-        {/* notes_cells HTML is sanitised before persistence by every write path;
-            this read-only projection avoids constructing a TipTap instance. */}
-        <div
-          ref={contentRef}
-          className="tiptap ProseMirror"
-          data-testid="notes-readonly-content"
-          style={{ ...styles.workspaceReadonlySurface, gridColumn: "1 / -1", minHeight: 0, minWidth: 0, maxHeight: 440, overflow: "hidden" }}
-          dangerouslySetInnerHTML={{ __html: cell.html }}
-        />
-      </div>}
-    </div>
-  );
-}
-
 /** Report a focused cell's source PDF pages to the workspace. An empty list is
  *  significant: it clears evidence left behind by the previous selection. */
 function reportCellPages(
@@ -1377,7 +1430,7 @@ function CellRow({
   runId,
   sheet,
   cell,
-  fieldHeadingExternal = false,
+  comparison = false,
   theme,
   onSaveStatusChange,
   moveBusy,
@@ -1390,7 +1443,7 @@ function CellRow({
   runId: number;
   sheet: string;
   cell: NotesCell;
-  fieldHeadingExternal?: boolean;
+  comparison?: boolean;
   /** Resolved notes-table theme — Copy decorates the paste with it so the
    *  clipboard output matches the editor preview. */
   theme: ClipboardFormatOptions;
@@ -1846,10 +1899,9 @@ function CellRow({
 
   return (
     <div
-      data-testid="notes-review-row"
       data-cell-row={cell.row}
       className="notes-review-row"
-      style={{ ...styles.workspaceCellRow, ...(fieldHeadingExternal ? styles.comparisonRows : {}) }}
+      style={{ ...styles.workspaceCellRow, ...(comparison ? styles.comparisonRows : {}) }}
       // Focusing (click or keyboard-tab) any part of this row tells the
       // workspace which PDF pages the note came from, so the Source PDF pane
       // follows the note the way it follows a face figure. Capture phase means
@@ -1863,9 +1915,7 @@ function CellRow({
         reportCellPages(cell.source_pages, onActiveCellPages);
       }}
     >
-      {(!fieldHeadingExternal || cell.invalid_target) && <aside style={{ ...styles.editorDisclosureHeader, ...styles.cellLeft }}>
-        {!fieldHeadingExternal && <div style={styles.cellLabel}>{cell.label}</div>}
-        {cell.invalid_target && (
+      {cell.invalid_target && <aside style={{ ...styles.editorDisclosureHeader, ...styles.cellLeft }}>
           <div
             style={{ ...ui.alertWarning, marginTop: pwc.space.sm, fontSize: 14 }}
           >
@@ -1896,10 +1946,9 @@ function CellRow({
               }}
             />
           </div>
-        )}
       </aside>}
 
-      <div data-comparison-body={fieldHeadingExternal ? "" : undefined} style={{ ...styles.cellRight, padding: "0 12px 16px", ...(fieldHeadingExternal ? styles.comparisonRows : {}) }} ref={wrapperRef}>
+      <div data-comparison-body={comparison ? "" : undefined} style={{ ...styles.cellRight, padding: "0 12px 16px", ...(comparison ? styles.comparisonRows : {}) }} ref={wrapperRef}>
         <div style={styles.cellToolbar}>
           <div style={styles.cellToolbarSpacer} />
           <SaveStatusBadge status={status} />
@@ -1949,14 +1998,14 @@ function CellRow({
             Copy
           </button>
         </div>
-          {editable && editorFocused && editor && <div style={fieldHeadingExternal ? { gridRow: 2 } : undefined}><NotesEditorToolbar editor={editor} /></div>}
+          {editable && editorFocused && editor && <div style={comparison ? { gridRow: 2 } : undefined}><NotesEditorToolbar editor={editor} /></div>}
         <div
-          data-comparison-content={fieldHeadingExternal ? "" : undefined}
+          data-comparison-content={comparison ? "" : undefined}
           data-testid="notes-review-editor"
           data-editable={editable ? "true" : "false"}
           style={{
             ...styles.editorViewport,
-            ...(fieldHeadingExternal ? { gridRow: 3 } : {}),
+            ...(comparison ? { gridRow: 3 } : {}),
             ...(editable ? styles.editorViewportEditable : styles.editorViewportReadonly),
           }}
         >
@@ -1989,15 +2038,8 @@ function NumericCellRow(props: {
   onActivate?: () => void;
 }) {
   const { cell, humanFigures } = props;
-  if (!cell.categories?.length) return <NumericCategoryRow {...props} dimensionKey="" />;
-  // mTool's Total column is the field without a category. Show the human's
-  // total on its own row when the run has category values only.
-  const humanTotal = humanFigures && cell.concept_uuid && !cell.categories.some((c) => c.dimension_key === "")
-    && Object.values(NUMERIC_VALUE_COLUMNS).some(({ period, entity_scope }) =>
-      humanFigures.get(humanSlotKey(cell.concept_uuid!, period, entity_scope, ""))?.human_value != null);
-  const categories = humanTotal
-    ? [...cell.categories, { dimension_key: "", dimensions: {}, label: "Total", values: cell.values ?? {}, evidence: null, resolution_tokens: {} }]
-    : cell.categories;
+  const categories = useMemo(() => numericNoteCategories(cell, humanFigures ?? null), [cell, humanFigures]);
+  if (!cell.categories?.length && categories.length === 1 && categories[0].dimension_key === "") return <NumericCategoryRow {...props} dimensionKey="" />;
   return <>{categories.map((category) => (
     <NumericCategoryRow {...props} key={category.dimension_key} dimensionKey={category.dimension_key} cell={{
       ...cell, dimensions: category.dimensions, values: category.values,
@@ -2740,8 +2782,22 @@ const styles = {
   rowStack: {
     display: "flex",
     flexDirection: "column" as const,
-    gap: 20,
+    gap: 0,
     padding: "0 0 12px",
+  } as React.CSSProperties,
+  fieldDisclosureButton: {
+    display: "flex",
+    alignItems: "center",
+    gap: pwc.space.sm,
+    width: "100%",
+    minHeight: 40,
+    padding: "8px 12px",
+    border: 0,
+    borderBottom: `1px solid ${pwc.grey100}`,
+    background: pwc.white,
+    textAlign: "left" as const,
+    cursor: "pointer",
+    fontFamily: pwc.fontBody,
   } as React.CSSProperties,
   numericTable: {
     overflowX: "auto" as const,
@@ -2830,13 +2886,6 @@ const styles = {
     background: "transparent",
     minWidth: 0,
     overflow: "hidden",
-  } as React.CSSProperties,
-  workspaceReadonlySurface: {
-    minHeight: 56,
-    padding: "8px 10px",
-    border: `1px solid ${pwc.grey300}`,
-    borderRadius: pwc.radius.md,
-    color: pwc.grey900,
   } as React.CSSProperties,
   cellLeft: {
     minWidth: 0,
