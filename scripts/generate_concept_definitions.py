@@ -72,11 +72,6 @@ _DOCUMENTATION_ROLE = re.compile(r"/ReportingDocumentation$")
 # Concepts with no SSM documentation simply won't appear; the tool returns an
 # explicit no-match for them.
 _DOC_LINKBASES: dict[str, list[Path]] = {
-    "clbg": [
-        _REPO_ROOT / "SSMxT_2022v1.0/rep/ssm/ca-2016/fs/clbg/doc_en-ssmt-fs-clbg_2022-12-31.xml",
-        _REPO_ROOT / "SSMxT_2022v1.0/def/ic/cor-ca2016/ssmt-mfrs-cor/doc_ssmt-mfrs-cor_2022-12-31.xml",
-        _REPO_ROOT / "SSMxT_2022v1.0/def/ic/cor-ca2016/ssmt-cor/doc_ssmt-cor_2022-12-31.xml",
-    ],
     "mfrs": [
         _REPO_ROOT
         / "SSMxT_2022v1.0/rep/ssm/ca-2016/fs/mfrs/doc_en-ssmt-fs-mfrs_2022-12-31.xml",

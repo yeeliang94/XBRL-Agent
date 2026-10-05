@@ -265,7 +265,7 @@ function _seedFilingLevel(cfg: Record<string, unknown> | null | undefined): Fili
 
 function _seedFilingStandard(cfg: Record<string, unknown> | null | undefined): FilingStandard {
   const v = cfg?.filing_standard;
-  return v === "mpers" || v === "clbg" ? v : "mfrs";
+  return v === "mpers" ? v : "mfrs";
 }
 
 function _seedDenomination(cfg: Record<string, unknown> | null | undefined): Denomination {
@@ -594,6 +594,8 @@ function NotesInventoryEditor({
 }
 
 export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onConfigChange, isAdmin = false, preparation, waitForPreparation = false }: Props) {
+  const savedStandard = initialConfig?.filing_standard;
+  const unsupportedStandard = savedStandard != null && savedStandard !== "mfrs" && savedStandard !== "mpers";
   // Keep the default view focused on filing scope. Operators can collapse the
   // two selection lists once they have checked them, while model overrides
   // remain behind the advanced disclosure.
@@ -638,7 +640,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
     useState<NotesInventoryOverrides>(() => _seedNotesInventoryOverrides(initialConfig));
 
   const [filingLevel, setFilingLevel] = useState<FilingLevel>(
-    () => _seedFilingStandard(initialConfig) === "clbg" ? "company" : _seedFilingLevel(initialConfig),
+    () => _seedFilingLevel(initialConfig),
   );
   const [firstFinancialStatements, setFirstFinancialStatements] = useState(
     () => initialConfig?.first_financial_statements === true,
@@ -677,7 +679,6 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
   const handleFilingStandardChange = useCallback((next: FilingStandard) => {
     filingStandardTouchedRef.current = true;
     setFilingStandard(next);
-    if (next === "clbg") setFilingLevel("company");
   }, []);
 
   const [variantSelections, setVariantSelections] = useState(
@@ -838,10 +839,6 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
     });
   }, [filingStandard]);
 
-  useEffect(() => {
-    if (filingStandard === "clbg") setFilingLevel("company");
-  }, [filingStandard]);
-
   const handleToggleStatement = useCallback(
     (stmt: StatementType, enabled: boolean) => {
       setStatementsEnabled((prev) => ({ ...prev, [stmt]: enabled }));
@@ -897,7 +894,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       | undefined;
     if (
       !filingStandardTouchedRef.current
-      && (detected === "mfrs" || detected === "mpers" || detected === "clbg")
+      && (detected === "mfrs" || detected === "mpers")
     ) {
       setFilingStandard(detected);
     }
@@ -970,7 +967,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       // the server then rejects at run time.
       const effectiveStandard: FilingStandard =
         !filingStandardTouchedRef.current
-          && (detected === "mfrs" || detected === "mpers" || detected === "clbg")
+          && (detected === "mfrs" || detected === "mpers")
           ? detected
           : filingStandardRef.current;
 
@@ -1208,7 +1205,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
   // auto-save effect can re-use the exact same shape the user
   // would see if they clicked Run right now.
   const buildCurrentConfig = useCallback((): RunConfigPayload => {
-    const enabledStmts = STATEMENT_TYPES.filter((s) => statementsEnabled[s] && (filingStandard !== "clbg" || s !== "SOCI"));
+    const enabledStmts = STATEMENT_TYPES.filter((s) => statementsEnabled[s]);
     const variants: Record<string, string> = {};
     const models: Record<string, string> = {};
     for (const stmt of enabledStmts) {
@@ -1217,7 +1214,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       }
       models[stmt] = modelOverrides[stmt];
     }
-    const notes_to_run = NOTES_TEMPLATE_TYPES.filter((nt) => notesEnabled[nt] && (filingStandard !== "clbg" || nt !== "ISSUED_CAPITAL"));
+    const notes_to_run = NOTES_TEMPLATE_TYPES.filter((nt) => notesEnabled[nt]);
     const notes_models: Partial<Record<NotesTemplateType, string>> = {};
     for (const nt of notes_to_run) {
       notes_models[nt] = notesModelOverrides[nt];
@@ -1232,7 +1229,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       // prerequisite and never disables the pipeline-owned pass.
       use_scout: true,
       notes_inventory_overrides: notesInventoryOverrides,
-      filing_level: filingStandard === "clbg" ? "company" : filingLevel,
+      filing_level: filingLevel,
       first_financial_statements: firstFinancialStatements,
       filing_standard: filingStandard,
       denomination,
@@ -1261,7 +1258,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
   // debounce target in App.tsx's existing PATCH machinery.
   const skipFirstSaveRef = useRef(true);
   useEffect(() => {
-    if (!onConfigChange) return;
+    if (!onConfigChange || unsupportedStandard) return;
     if (loading) return; // don't auto-save before initialConfig is applied
     if (skipFirstSaveRef.current) {
       skipFirstSaveRef.current = false;
@@ -1276,7 +1273,16 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       }
     }, 500);
     return () => window.clearTimeout(handle);
-  }, [buildCurrentConfig, onConfigChange, loading]);
+  }, [buildCurrentConfig, onConfigChange, loading, unsupportedStandard]);
+
+  if (unsupportedStandard) {
+    return <div style={styles.container}>
+      <p role="alert" style={styles.errorText}>
+        {String(savedStandard).toUpperCase()} filings are no longer supported.
+        This saved run cannot be rerun or used to prepare a filing workbook.
+      </p>
+    </div>;
+  }
 
   if (loading) {
     return (
@@ -1294,8 +1300,8 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
     );
   }
 
-  const enabledStmts = STATEMENT_TYPES.filter((s) => statementsEnabled[s] && (filingStandard !== "clbg" || s !== "SOCI"));
-  const enabledNotes = NOTES_TEMPLATE_TYPES.filter((n) => notesEnabled[n] && (filingStandard !== "clbg" || n !== "ISSUED_CAPITAL"));
+  const enabledStmts = STATEMENT_TYPES.filter((s) => statementsEnabled[s]);
+  const enabledNotes = NOTES_TEMPLATE_TYPES.filter((n) => notesEnabled[n]);
   // PLAN §4 D.2: submitting with no notes selected still runs face-only
   // (current behaviour). Notes-only runs are also allowed so an operator
   // can refill just the notes sheets after an earlier face extraction.
@@ -1307,6 +1313,8 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
   const standardWasDetected =
     !filingStandardTouchedRef.current && infopack?.detected_standard === filingStandard;
   const detectedDenomination = _detectedDenomination(infopack);
+
+  const preparationStarted = preparation != null && preparation.status !== "not_started";
 
   return (
     <div style={styles.container}>
@@ -1322,7 +1330,9 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
         }}
       >
         <h2 style={styles.heading}>Filing setup</h2>
-        <button
+        {/* After document preparation starts, the scan preview is gone and
+            models come from Settings, so the toggle would open nothing useful. */}
+        {!preparationStarted && <button
           type="button"
           onClick={() => setShowAdvanced((v) => !v)}
           aria-expanded={showAdvanced}
@@ -1333,7 +1343,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
         >
           <DisclosureChevron open={showAdvanced} />
           Advanced
-        </button>
+        </button>}
       </div>
 
       <section style={styles.setupGroup} aria-label="Filing details">
@@ -1347,7 +1357,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           {standardWasDetected && <span style={styles.detectedBadge}>Detected</span>}
         </span>
         <div className="segmented-control-group" style={{ display: "inline-flex", alignSelf: "flex-start", border: `1px solid ${pwc.grey200}`, borderRadius: pwc.radius.md, overflow: "hidden" }}>
-          {(["mfrs", "mpers", "clbg"] as const).map((standard) => {
+          {(["mfrs", "mpers"] as const).map((standard) => {
             const active = filingStandard === standard;
             return (
               <button
@@ -1383,14 +1393,12 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
         <div className="segmented-control-group" style={{ display: "inline-flex", alignSelf: "flex-start", border: `1px solid ${pwc.grey200}`, borderRadius: pwc.radius.md, overflow: "hidden" }}>
           {(["company", "group"] as const).map((level) => {
             const active = filingLevel === level;
-            const unavailable = filingStandard === "clbg" && level === "group";
             return (
               <button
                 key={level}
                 type="button"
                 className="segmented-control-button"
                 aria-pressed={active}
-                disabled={unavailable}
                 onClick={() => setFilingLevel(level)}
                 style={{
                   fontFamily: pwc.fontHeading,
@@ -1403,8 +1411,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
                   borderRadius: 0,
                   background: active ? pwc.black : pwc.white,
                   color: active ? pwc.white : pwc.grey700,
-                  cursor: unavailable ? "default" : "pointer",
-                  opacity: unavailable ? 0.5 : 1,
+                  cursor: "pointer",
                 }}
               >
                 {level === "company" ? "Company" : "Group"}
@@ -1420,7 +1427,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
         </label>
         <select id="filing-reporting-periods" value={firstFinancialStatements ? "first" : "comparative"}
           onChange={(event) => setFirstFinancialStatements(event.target.value === "first")}
-          style={{ fontSize: 14, padding: 8, maxWidth: "100%" }}>
+          style={{ ...ui.select, maxWidth: "100%" }}>
           <option value="comparative">Current and prior periods</option>
           <option value="first">First statements after incorporation — current period only</option>
         </select>
@@ -1629,7 +1636,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
       <DisclosureSection
         id="statement-selection"
         title="Statements to extract"
-        summary={`${enabledStmts.length} of ${filingStandard === "clbg" ? 4 : STATEMENT_TYPES.length} selected`}
+        summary={`${enabledStmts.length} of ${STATEMENT_TYPES.length} selected`}
         open={showStatements}
         onToggle={() => setShowStatements((value) => !value)}
       >
@@ -1641,7 +1648,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
             availableModels={availableModels}
             onToggleStatement={handleToggleStatement}
             onModelChange={handleModelChange}
-            showModels={showAdvanced}
+            showModels={showAdvanced && !preparationStarted}
           />
         </div>
       </DisclosureSection>
@@ -1655,7 +1662,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           ? "No notes included"
           : preparation?.status === "succeeded"
             ? "All document notes included"
-            : `${enabledNotes.length} of ${filingStandard === "clbg" ? 4 : NOTES_TEMPLATE_TYPES.length} selected`}
+            : `${enabledNotes.length} of ${NOTES_TEMPLATE_TYPES.length} selected`}
         open={showNotes}
         onToggle={() => setShowNotes((value) => !value)}
       >
@@ -1712,9 +1719,8 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
         {preparation?.status === "succeeded" && enabledNotes.length > 0 && (
           <div style={styles.notesNudge} role="status">
             A notes run includes Corporate information, Accounting policies, and
-            List of notes to cover the full document. {filingStandard === "clbg"
-              ? "Related party numeric templates run when selected."
-              : "Issued capital and Related party numeric templates run when selected."}
+            List of notes to cover the full document. Issued capital and Related
+            party numeric templates run when selected.
           </div>
         )}
         <NotesRunConfig
@@ -1724,7 +1730,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           availableModels={availableModels}
           onToggleNote={handleToggleNote}
           onModelChange={handleNotesModelChange}
-          showModels={showAdvanced}
+          showModels={showAdvanced && !preparationStarted}
         />
         </div>
       </DisclosureSection>

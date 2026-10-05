@@ -871,8 +871,15 @@ export function RunDetailView({
     }
   }, [detail.id]);
 
+  const savedStandard = detail.filing_standard ?? detail.config?.filing_standard ?? "mfrs";
+  const unsupportedStandard = savedStandard !== "mfrs" && savedStandard !== "mpers";
+
   return (
     <div style={styles.container}>
+      {unsupportedStandard && <p role="alert" style={ui.alertError}>
+        {String(savedStandard).toUpperCase()} filings are no longer supported.
+        This saved run cannot be rerun or used to prepare a filing workbook.
+      </p>}
       <header style={reviewWorkspaceActive ? styles.reviewContextHeader : styles.header}>
         <div style={styles.headerText}>
           <h1 style={styles.filename}>
@@ -1245,7 +1252,7 @@ export function RunDetailView({
                 {onRestart && !isRunning && <button
                   type="button"
                   onClick={handleRestart}
-                  disabled={restartPending}
+                  disabled={restartPending || unsupportedStandard}
                   className={uiClass.btnQuiet}
                   style={ui.buttonQuiet}
                   title="Create a new editable run with the same document and settings"
@@ -1348,7 +1355,7 @@ export function RunDetailView({
               type="button"
               data-testid="recheck-btn"
               onClick={() => void handleRecheck()}
-              disabled={recheck.running}
+              disabled={recheck.running || unsupportedStandard}
               className={uiClass.btnSecondary}
               style={ui.buttonSecondary}
             >

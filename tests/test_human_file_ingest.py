@@ -45,7 +45,7 @@ def _typed(read) -> dict[tuple[str, str], float]:
             for f in read.facts if f["value"] is not None}
 
 
-@pytest.mark.parametrize('standard', ['mpers','clbg'])
+@pytest.mark.parametrize('standard', ['mpers'])
 def test_native_note_alias_keeps_category_identity_on_read(tmp_path, standard):
     """Category expansion must inspect the verified physical sheet before reading."""
     from concept_model.bootstrap import _import_one
@@ -53,27 +53,23 @@ def test_native_note_alias_keeps_category_identity_on_read(tmp_path, standard):
     from notes_types import NotesTemplateType, notes_template_path
     db = tmp_path/'categories.db'
     init_db(db)
-    note = NotesTemplateType.ISSUED_CAPITAL if standard == 'mpers' else NotesTemplateType.RELATED_PARTY
+    note = NotesTemplateType.ISSUED_CAPITAL
     tid = _import_one(db,notes_template_path(note,standard=standard),'company')
     run = add_run(db,{'filing_standard':standard,'filing_level':'company','denomination':'units',
                      'notes_to_run':[note.value]})
-    label = 'Number of shares issued and fully paid' if standard == 'mpers' else 'Donation income'
+    label = 'Number of shares issued and fully paid'
     with sqlite3.connect(db) as conn:
         uuid, primary = conn.execute('SELECT n.concept_uuid,sa.primary_concept FROM concept_nodes n '
             'JOIN concept_semantic_addresses sa USING(concept_uuid) WHERE n.template_id=? '
             "AND n.kind='LEAF' AND ltrim(n.canonical_label,'* ')=?",(tid,label)).fetchone()
     axis, member, table = (
-        ('ifrs-smes_ClassesOfShareCapitalAxis','ssmt-mpers_OrdinarySharesMember','ifrs-smes_DisclosureOfClassesOfShareCapitalTable')
-        if standard == 'mpers' else
-        ('ifrs-full_CategoriesOfRelatedPartiesAxis','ifrs-full_ParentMember','ifrs-full_DisclosureOfTransactionsBetweenRelatedPartiesTable'))
+        'ifrs-smes_ClassesOfShareCapitalAxis', 'ssmt-mpers_OrdinarySharesMember',
+        'ifrs-smes_DisclosureOfClassesOfShareCapitalTable')
     wb = Workbook(); ws = wb.active
-    ws.title = 'Notes-IssuedCap' if standard == 'mpers' else 'Notes-Relatedpartytransactions'
-    if standard == 'clbg':
-        ws['A1'] = 'http://xbrl.ssm.com.my/role/ssm/rol_ssmt-fs-clbg_2022-12-31/ssmt-fs-clbg_2022-12-31_role-640000'
-        ws['B1'] = 'native.xsd#ssmt-mfrs_DisclosureOnRelatedPartyTransactionsAbstract'
+    ws.title = 'Notes-IssuedCap'
     ws['E2'] = '::'.join('native.xsd#'+identifier for identifier in (table,axis,member))
     ws['B3'] = 'native.xsd#'+axis; ws['C3'] = '#DOM#'; ws['D3'] = '#PRIM#'
-    ws['E3'] = 'Ordinary shares' if standard == 'mpers' else 'Parent'
+    ws['E3'] = 'Ordinary shares'
     ws['C4'] = '#ENDT#'; ws['E4'] = '31/12/2026'
     ws['A7'] = 'native.xsd#'+primary; ws['D7'] = label; ws['E7'] = 123
     path = tmp_path/'native-note.xlsx'; wb.save(path); wb.close()

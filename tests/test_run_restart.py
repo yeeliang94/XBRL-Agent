@@ -282,6 +282,27 @@ def test_restart_rejects_a_running_parent(tmp_path, monkeypatch):
     assert "still running" in response.json()["detail"]
 
 
+def test_unsupported_saved_run_cannot_restart_or_prepare_workbook(tmp_path, monkeypatch):
+    client, parent_id, source_dir, db_path = _parent(tmp_path, monkeypatch)
+    with repo.db_session(db_path) as conn:
+        conn.execute("UPDATE runs SET run_config_json=? WHERE id=?",
+                     (json.dumps({"filing_standard": "clbg"}), parent_id))
+    before = set(source_dir.parent.iterdir())
+    response = client.post(f"/api/runs/{parent_id}/restart")
+    assert response.status_code == 409
+    assert "CLBG filings are no longer supported" in response.json()["detail"]
+    assert set(source_dir.parent.iterdir()) == before
+    download = client.get(f"/api/runs/{parent_id}/download/filled")
+    assert download.status_code == 409
+    assert "CLBG filings are no longer supported" in download.json()["detail"]
+    from api.mtool import _load_fillable_run
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as error:
+        _load_fillable_run(parent_id)
+    assert error.value.status_code == 409
+    assert "CLBG filings are no longer supported" in error.value.detail
+
+
 def test_parent_can_be_deleted_without_deleting_restarted_child(tmp_path, monkeypatch):
     client, parent_id, _source_dir, db_path = _parent(tmp_path, monkeypatch)
     monkeypatch.setattr(

@@ -22,7 +22,7 @@ Mapping from xlsx geometry to fact space:
 * SOFP additionally reads PY (col C / col E) — ``(PY, scope)``.
 * The SOCIE matrix's vertical blocks (group_cy / group_py / company_cy /
   company_py) map to the four ``(period, entity_scope)`` combinations; the Total
-  column (MFRS ``X`` / MPERS ``O`` / CLBG ``N``) is read by ``matrix_col``.
+  column (MFRS ``X`` / MPERS ``O``) is read by ``matrix_col``.
 
 Parity contract vs the xlsx path (proven by ``tests/test_verifier_shadow.py``):
 
@@ -61,7 +61,6 @@ from tools.verifier import (
     _normalize_label,
     _sofp_imbalance_feedback,
     _opening_restatement_mismatch,
-    _clbg_movement_mismatches,
 )
 
 
@@ -243,7 +242,7 @@ def _verify_sofp_facts(
     feedback_lines: list[str] = []
 
     ta = _find_total_uuid(nodes, "total assets", main)
-    el = _find_total_uuid(nodes, "total fund/equity and liabilities" if filing_standard == "clbg" else "total equity and liabilities", main)
+    el = _find_total_uuid(nodes, "total equity and liabilities", main)
 
     def _set(key: str, uuid: Optional[str], period: str, scope: str) -> None:
         if uuid is None:
@@ -475,7 +474,7 @@ def _verify_sopl_facts(
     pdf_values: Optional[dict[str, float]],
     filing_standard: str = "mfrs",
 ) -> VerificationResult:
-    sheet = _sheet_present(nodes, ["SOIE-Function", "SOIE-Nature"] if filing_standard == "clbg" else ["SOPL-Function", "SOPL-Nature"])
+    sheet = _sheet_present(nodes, ["SOPL-Function", "SOPL-Nature"])
     rows = _rows_on_sheet(nodes, sheet) if sheet else []
 
     computed_totals: dict[str, float] = {}
@@ -486,11 +485,9 @@ def _verify_sopl_facts(
     profit_loss_uuid = None
     total_profit_uuid = None
     last_profit_loss_uuid = None
-    from tools.verifier import _clbg_profit_rows
-    clbg_profit_rows = set(_clbg_profit_rows(sheet)) if filing_standard == "clbg" else set()
     for n in rows:
         norm = _normalize_label(str(n["label"]))
-        if norm == "profit (loss)" or n["row"] in clbg_profit_rows:
+        if norm == "profit (loss)":
             if profit_loss_uuid is None:
                 profit_loss_uuid = n["uuid"]
             last_profit_loss_uuid = n["uuid"]
@@ -688,12 +685,7 @@ def _verify_socie_facts(
     is_balanced = True
 
     is_sore = (variant or "").strip().lower() == "sore" or sheet.lower() == "sore"
-    if filing_standard == "clbg":
-        restated_label = "balance at beginning of period, restated"
-        total_label = "total changes in fund/equity"
-        closing_label = "balance at end of period"
-        pretty = tuple(f"'{label}'" for label in (restated_label, total_label, closing_label))
-    elif is_sore:
+    if is_sore:
         restated_label = "retained earnings at beginning of period, restated"
         total_label = "total increase (decrease) in retained earnings"
         closing_label = "retained earnings at end of period"
@@ -708,7 +700,7 @@ def _verify_socie_facts(
                   "'Total increase (decrease) in equity'",
                   "'Equity at end of period'")
 
-    total_col = "N" if filing_standard == "clbg" else socie_total_col(filing_standard)
+    total_col = socie_total_col(filing_standard)
     linear = is_sore and all(n["matrix_col"] is None for n in nodes)
 
     def value(row_label: str, period: str, scope: str, column: str = total_col) -> Optional[float]:
@@ -751,10 +743,9 @@ def _verify_socie_facts(
         blocks = [("cy", "CY", "Company"), ("py", "PY", "Company")]
 
     columns = [total_col]
-    if filing_standard in {"mpers", "clbg"} and not linear:
+    if filing_standard == "mpers" and not linear:
         from cross_checks.facts_util import socie_component_cols
-        columns = (list("BCDEFGHJM") if filing_standard == "clbg"
-                   else socie_component_cols(filing_standard)) + [total_col]
+        columns = socie_component_cols(filing_standard) + [total_col]
     for block_label, period, scope, column in (
         (label, period, scope, column) for label, period, scope in blocks for column in columns
     ):
@@ -762,29 +753,15 @@ def _verify_socie_facts(
         restated = value(restated_label, period, scope, column)
         increase = value(total_label, period, scope, column)
         closing = value(closing_label, period, scope, column)
-        if filing_standard in {"mpers", "clbg"}:
+        if filing_standard == "mpers":
             opening_label = restated_label.removesuffix(", restated")
             opening = value(opening_label, period, scope, column)
             adjustment = value("impact of changes in accounting policies", period, scope, column)
-            movement_values = []
-            if filing_standard == "clbg":
-                prior = value("other prior period adjustments", period, scope, column)
-                adjustment = ((adjustment or 0.0) + (prior or 0.0)
-                              if adjustment is not None or prior is not None else None)
-                movement_values = [value(row_label, period, scope, column) for row_label in (
-                    "total surplus (deficit)", "total other comprehensive surplus (deficit)",
-                    "total comprehensive surplus (deficit)", "total contributions by and distributions to owners",
-                )]
-            if all(v is None for v in (opening, adjustment, restated, increase, closing, *movement_values)):
+            if all(v is None for v in (opening, adjustment, restated, increase, closing)):
                 continue
-            if filing_standard == "clbg":
-                movement_mismatches = _clbg_movement_mismatches(label, *movement_values, increase)
-                if movement_mismatches:
-                    is_balanced = False
-                    mismatches.extend(movement_mismatches)
             opening_mismatch = _opening_restatement_mismatch(
                 label, opening, adjustment, restated,
-                "opening adjustments" if filing_standard == "clbg" else "accounting-policy adjustment",
+                "accounting-policy adjustment",
             )
             if opening_mismatch:
                 is_balanced = False

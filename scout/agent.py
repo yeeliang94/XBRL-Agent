@@ -538,7 +538,7 @@ def _check_variant_signals_impl(
     # original full-candidate scoring.
     variant = detect_variant_from_signals(
         st, page_text,
-        standard=standard if standard in ("mfrs", "mpers", "clbg") else None,
+        standard=standard if standard in ("mfrs", "mpers") else None,
     )
     return {
         "statement_type": statement_type_str,

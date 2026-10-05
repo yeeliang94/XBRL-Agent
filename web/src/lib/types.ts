@@ -582,12 +582,7 @@ export const STATEMENT_LABELS: Record<StatementType, string> = {
   SOCIE: "Statement of Changes in Equity",
 };
 
-export function statementLabel(statement: StatementType, standard: FilingStandard = "mfrs"): string {
-  if (standard === "clbg") {
-    if (statement === "SOPL") return "Statement of Income and Expenditure";
-    if (statement === "SOCIE") return "Statement of Changes in Funds";
-    if (statement === "SOCI") return "Comprehensive income — not prepared";
-  }
+export function statementLabel(statement: StatementType, _standard: FilingStandard = "mfrs"): string {
   return STATEMENT_LABELS[statement];
 }
 
@@ -675,7 +670,7 @@ export type FilingLevel = "company" | "group";
 
 /** Parallel to `FilingLevel` — which taxonomy the templates come from.
  *  Default is MFRS so every pre-existing caller keeps working. */
-export type FilingStandard = "mfrs" | "mpers" | "clbg";
+export type FilingStandard = "mfrs" | "mpers";
 
 /** Scout's auto-detected standard from TOC / front-matter text. The UI
  *  preselects the toggle from this; the user toggle always wins. */
@@ -700,13 +695,6 @@ export function variantsFor(
   statement: StatementType,
   standard: FilingStandard,
 ): string[] {
-  if (standard === "clbg") {
-    const clbgVariants: Record<StatementType, string[]> = {
-      SOFP: ["CuNonCu"], SOPL: ["Function", "Nature"], SOCI: ["NotPrepared"],
-      SOCF: ["Indirect"], SOCIE: ["Default"],
-    };
-    return clbgVariants[statement];
-  }
   if (statement === "SOCIE") {
     return standard === "mpers" ? ["Default", "SoRE"] : ["Default"];
   }

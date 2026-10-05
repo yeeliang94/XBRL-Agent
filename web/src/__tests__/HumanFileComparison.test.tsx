@@ -70,17 +70,21 @@ describe("figures view with a human file", () => {
     expect(within(cashRow).getByRole("textbox", { name: /current period/ })).toHaveStyle({ height: "32px" });
     expect(within(cashRow).queryByRole("img", { name: "Same as human" })).not.toBeInTheDocument();
     expect(within(cashRow).getByRole("img", { name: "AI-only" })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "Extracted CY" })).toBeVisible();
+    expect(screen.getByRole("columnheader", { name: "AI CY" })).toBeVisible();
     expect(screen.getByRole("columnheader", { name: "Human CY" })).toBeVisible();
     const ppeRow = screen.getByTestId("concept-row-ppe");
     expect(within(ppeRow).getByTestId("human-value-ppe-CY")).toHaveTextContent("250");
     expect(within(ppeRow).getByRole("img", { name: "Differs from human" })).toHaveTextContent("!");
-    // Tiles follow the endpoint's totals; the unmatched row is listed and excluded.
+    // The comparison denominator must visibly disclose excluded rows.
     const tiles = screen.getByTestId("human-comparison-tiles");
-    expect(tiles).toHaveTextContent("2 of 3 (67%)");
-    expect(tiles).toHaveTextContent("1 of 2 (50%)");
-    expect(tiles).toHaveTextContent("Excludes 1 human zero / AI blank slot");
-    expect(tiles).toHaveTextContent("1 unmatched row");
+    expect(tiles).toHaveTextContent("1 of 3 match");
+    expect(tiles).toHaveTextContent("1 differ");
+    expect(tiles).toHaveTextContent("1 missed by AI");
+    expect(tiles).toHaveTextContent("1 AI-only");
+    expect(tiles).toHaveAttribute("title", "Not counted: 1 human zero, 1 unmatched row");
+    expect(within(tiles).getByText("Not counted: 1 human zero, 1 unmatched row")).toBeVisible();
+    // Human values are read-only text, not boxed like editable inputs.
+    expect(within(cashRow).getByTestId("human-value-cash-CY")).not.toHaveStyle({ borderStyle: "solid" });
     // A human zero opposite an AI blank is shown without a marker.
     expect(within(screen.getByTestId("concept-row-zero")).getByTestId("human-value-zero-CY")).toHaveTextContent("0");
     expect(within(screen.getByTestId("concept-row-zero")).queryByRole("img")).not.toBeInTheDocument();

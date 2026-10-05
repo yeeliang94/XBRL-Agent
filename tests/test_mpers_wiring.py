@@ -526,6 +526,8 @@ def test_infopack_json_roundtrip_preserves_detected_standard() -> None:
         ("MPERS - Section 3 Statement of Retained Earnings", "mpers"),
         ("prepared in accordance with MFRS 101", "mfrs"),
         ("", "unknown"),
+        ("Company limited by guarantee", "unknown"),
+        ("Company limited by guarantee. MFRS financial statements.", "mfrs"),
         # Both frameworks mentioned an equal number of times → tie → unknown.
         ("MFRS 101 and MPERS", "unknown"),
     ],

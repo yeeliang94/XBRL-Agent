@@ -175,7 +175,6 @@ def _standard_and_level(path: Path) -> tuple[str, str] | None:
     lowered = [part.lower() for part in path.parts]
     standard = (
         "mpers" if any("xbrl-template-mpers" in part for part in lowered)
-        else "clbg" if any("xbrl-template-clbg" in part for part in lowered)
         else "mfrs" if any("xbrl-template-mfrs" in part for part in lowered)
         else None
     )
@@ -194,9 +193,6 @@ def _role_rows(standard: str, role: str) -> tuple[tuple[int, str, str, bool], ..
     """
     from scripts import generate_mpers_templates as taxonomy
 
-    if standard == "clbg":
-        from scripts.generate_clbg_templates import role_rows
-        return role_rows(role)
     root = Path(__file__).resolve().parent.parent
     tax_dir = root / "SSMxT_2022v1.0/rep/ssm/ca-2016/fs" / standard
     return tuple(taxonomy.walk_role_for_taxonomy(tax_dir, standard, role))
@@ -225,11 +221,7 @@ def _address(primary: str, dimensions: dict[str, str] | None = None) -> dict[str
 
 
 def _linear_addresses(path: Path, standard: str) -> dict[tuple[str, int, str | None], dict[str, Any]]:
-    if standard == "clbg":
-        from scripts.generate_clbg_templates import TEMPLATES
-        roles = tuple(item[1] for item in TEMPLATES.get(path.name, ()))
-    else:
-        roles = _ROLES_BY_FILE.get(path.name)
+    roles = _ROLES_BY_FILE.get(path.name)
     if not roles:
         return {}
     wb = openpyxl.load_workbook(path, read_only=True, data_only=False)
@@ -278,13 +270,6 @@ def _matrix_addresses(path: Path, standard: str, level: str) -> dict[tuple[str, 
     wb = openpyxl.load_workbook(path, read_only=True, data_only=False)
     try:
         ws = wb["SOCIE"] if "SOCIE" in wb.sheetnames else wb[wb.sheetnames[0]]
-        if standard == "clbg":
-            from scripts.generate_clbg_templates import FUND_AXIS, fund_components, fund_line_items
-            return {
-                (ws.title, row, openpyxl.utils.get_column_letter(col)): _address(primary, {FUND_AXIS: member})
-                for row, (_, primary, _, _) in enumerate(fund_line_items(), 6)
-                for col, (member, _, _) in enumerate(fund_components(), 2)
-            }
         taxonomy_rows = list(_role_rows(standard, "610000"))
 
         if standard == "mpers":

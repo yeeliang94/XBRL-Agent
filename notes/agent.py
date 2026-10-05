@@ -107,7 +107,7 @@ _TEMPLATE_PROMPT_FILES: dict[NotesTemplateType, str] = {
 # local to this module rather than hoisted into notes_types because the
 # prompt layer is the only place that treats an unknown standard as a
 # hard error — other layers (registry, writer) already reject upstream.
-_VALID_FILING_STANDARDS = ("mfrs", "mpers", "clbg")
+_VALID_FILING_STANDARDS = ("mfrs", "mpers")
 
 
 # Sheet-number maps per filing standard. Used by _render_sheet_map to emit
@@ -118,12 +118,6 @@ _VALID_FILING_STANDARDS = ("mfrs", "mpers", "clbg")
 # #105: this mapping was hardcoded to MFRS in _notes_base.md regardless of
 # the active standard.
 _SHEET_MAP_BY_STANDARD: dict[str, list[tuple[int, str, str]]] = {
-    "clbg": [
-        (10, "Corporate Information", "Notes-CI"),
-        (11, "Summary of Material Accounting Policies", "Notes-SummaryofAccPol"),
-        (12, "List of Notes", "Notes-Listofnotes"),
-        (14, "Related Party Transactions", "Notes-RelatedPartytran"),
-    ],
     "mfrs": [
         (10, "Corporate Information", "Notes-CI"),
         (11, "Summary of Material Accounting Policies", "Notes-SummaryofAccPol"),
@@ -151,10 +145,6 @@ _SHEET_MAP_BY_STANDARD: dict[str, list[tuple[int, str, str]]] = {
 # reasoning cites the correct sheet number. Keyed by lower-case topic
 # slug so prompt-side token substitution stays case-insensitive.
 _CROSS_SHEET_BY_STANDARD: dict[str, dict[str, int]] = {
-    "clbg": {
-        "corporate_information": 10, "accounting_policies": 11,
-        "list_of_notes": 12, "related_party": 14,
-    },
     "mfrs": {
         "corporate_information": 10,
         "accounting_policies": 11,
@@ -270,8 +260,6 @@ def _apply_cross_sheet_tokens(text: str, filing_standard: str) -> str:
     """
     mapping = _CROSS_SHEET_BY_STANDARD[filing_standard]
     out = text
-    if filing_standard == "clbg":
-        out = out.replace("{{CROSS_SHEET:issued_capital}}", "12 (CLBG has no issued-capital template; preserve any applicable fund disclosure in the list of notes)")
     for topic, sheet_num in mapping.items():
         out = out.replace(f"{{{{CROSS_SHEET:{topic}}}}}", str(sheet_num))
     return out

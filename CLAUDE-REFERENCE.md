@@ -1009,18 +1009,11 @@ Key invariants:
   Pinned by `tests/test_canonical_export.py`, `tests/test_socie_parser_matrix.py`,
   `tests/test_mtool_socie_input_totals.py` and `tests/test_verifier_shadow.py`.
   Undisclosed movement values contribute zero in balance verification. Required
-  opening/restated/closing balances remain required. CLBG comprehensive-surplus
-  and fund-change equations still reject a blank subtotal when its populated
-  source components imply a nonzero value. The real-template shadow tests cover
-  unchanged columns, absent OCI and missing movement subtotals in both paths.
-- **CLBG is an explicit filing family.** `XBRL-template-CLBG/Company/` is
-  generated from the CLBG SSM linkbases. SOPL routes to income and expenditure;
-  SOCIE routes to changes in fund. Fund dimensions are not equity dimensions.
-  CLBG has no standalone SOCI, issued-capital note, direct SOCF or liquidity-order
-  SOFP. Unsupported Group requests are rejected before extraction. The exact
-  fund checks are selected only for CLBG; MFRS retains its existing check list.
-  Pinned by `tests/test_clbg_filing.py`, `tests/test_verifier_shadow.py` and
-  `tests/test_mtool_filing_resolution.py`.
+  opening/restated/closing balances remain required. The real-template shadow
+  tests cover unchanged columns in both paths.
+- **Only MFRS and MPERS filings are supported.** New run and draft requests
+  reject other standards before extraction. Scout reports only MFRS, MPERS or
+  unknown. Pinned by `tests/test_phase6_mpers.py` and PreRunPanel tests.
 - **Template formatting parity with MFRS (2026-04-23):** the MPERS
   generator (`scripts/generate_mpers_templates.py`) now strips SSM
   ReportingLabel suffixes (`[text block]` / `[textblock]` /
@@ -1603,18 +1596,21 @@ trace; failed attempts remain inspectable after a successful retry, pinned by
 `tests/test_notes_retry_budget.py`.
 
 **Wall-clock cap on correction (2026-04-27):**
-`CORRECTION_WALLCLOCK_TIMEOUT = 300.0` in `server.py` is
+`CORRECTION_WALLCLOCK_TIMEOUT` in `server.py` is
 defence-in-depth on top of the dynamic turn cap and the 180s per-turn
 timeout. It catches the slow-LLM scenario where many quick-but-not-
-quick-enough turns add up past 5 minutes total without either of the
+quick-enough turns add up past the configured allowance without either of the
 finer-grained guards firing. Override via `XBRL_CORRECTION_WALLCLOCK_S`
 (positive seconds; 0 disables). `NOTES_VALIDATOR_WALLCLOCK_TIMEOUT`
 (legacy name) is the same defence for the notes-reviewer pass — the pass
-inherited the old validator's constants and pseudo-agent id when it
-replaced it (gotcha #22). Its default budget is 300 seconds through 25 open
-items, then 10 additional seconds per item, capped at 600 seconds. A positive
-operator override is fixed but still capped at 600 seconds; 0 selects that
-ceiling. The wall-clock guard stops new model thinking at the deadline while
+inherited the old validator's pseudo-agent id when it replaced it (gotcha #22).
+Both reviewers default to 600 seconds. Settings changes apply on the next pass
+without restarting. Notes review adds 20 seconds per independent initial item
+above ten, capped at 1200 seconds. The base, per-item increment and ceiling
+are editable in Settings; custom bases also receive the extra allowance.
+Zero selects the notes ceiling. `notes/reviewer_limits.py` owns the defaults;
+`tests/test_settings_api.py` and `tests/test_notes_reviewer_pipeline.py` pin them.
+The wall-clock guard stops new model thinking at the deadline while
 an already issued tool call may finish under its separate timeout.
 
 ### 19. Pipeline-stage + cross-check progress events
@@ -1930,10 +1926,10 @@ Load-bearing invariants:
 - Native Group consolidation markers define Company/Group scope independently
   of category axes. SOCIE destinations are constrained by exact component,
   period and scope. FirstTime exports use CY only; absent comparative sections
-  never receive invented writes. MPERS and CLBG full matrices carry their own
-  component axes; shared MFRS namespaces do not make a CLBG fund workbook MFRS.
+  never receive invented writes. MPERS full matrices carry their own component
+  axes. Shared MFRS namespaces do not make an unsupported CLBG fund workbook MFRS.
   Pinned by `tests/test_mtool_filing_resolution.py`,
-  `tests/test_mtool_socie_input_totals.py` and `tests/test_clbg_filing.py`.
+  `tests/test_mtool_socie_input_totals.py`.
 
 - **One file per finished run (schema v49).** `human_files`,
   `human_file_facts` and `human_file_notes` cascade on run delete. Attach,
@@ -2214,6 +2210,10 @@ Load-bearing invariants:
   they keep the reviewer pass incomplete until assessed. The reviewer skip gate
   uses `count_open_items` (detector families + unresolved rows + unassessed
   children) so suspected-gap-only and coarse-provenance-only runs still run.
+  Budgeting uses `count_review_work_items`: conflict-dependent integrity signals
+  and duplicate checklist/detector gaps do not count as independent initial work.
+  They remain in the context and are rechecked by `verify_findings` after repairs.
+  Pinned by `tests/test_notes_reviewer_tools.py`.
 - **Persistence + API.** Durable in `notes_coverage_rows` (schema v28) — one
   top-level row per note + per-sub-ref child rows + a `note_num = -1` banner
   sentinel (distinguishes `inventory_unavailable` from `pre_feature`).
@@ -2320,12 +2320,9 @@ Load-bearing invariants:
 - **Native destinations retain canonical identity.** The standalone
   patcher's `resolve_sheet_name` is shared by numeric detection/resolution and
   prose filling and human-file category expansion. Observed MPERS sheet-name
-  equivalents require the exact taxonomy marker. CLBG equivalents require both
-  the exact CLBG role URI and the corresponding taxonomy marker: related-party
-  transactions (role 640000), SOFP subclassification (210100), and material
-  accounting policies (620000). Shared MFRS namespace prefixes alone do not
-  establish CLBG identity. Ambiguous names and wrong-standard templates
-  remain blocked. Known filing-standard, Company/Group, or statement-family
+  equivalents require the exact taxonomy marker. Unsupported CLBG workbooks
+  are identified as a different family despite shared MFRS taxonomy prefixes.
+  Ambiguous names and wrong-standard templates remain blocked. Known filing-standard, Company/Group, or statement-family
   mismatches return a named 422 before numeric or notes writes; they are not
   partial-fill cases. Selection checks both canonical and resolved physical sheets.
   Resolve an exact opening/closing occurrence before testing writability.
@@ -2694,6 +2691,13 @@ enablement (Step 11) are operator/hardware gates, still open. Plan:
 docs/PLAN-word-input.md.
 
 ### 30. Repeat-run compatibility history
+
+Saved runs with a filing standard outside the current template registry remain
+readable history. They display an unsupported-standard notice and cannot be
+restarted, autosaved as another standard, or used to prepare a filing workbook.
+The guard precedes draft creation and source copying. Pinned by
+`tests/test_run_restart.py`, `tests/test_runs_patch_config.py`, and the
+`PreRunPanel` and `RunDetailView` frontend tests.
 
 Repeat-run launching and scoring were removed. New extraction requests always
 start one run, even when an older saved draft contains a `repeats` setting.

@@ -48,6 +48,29 @@ test.each([
   expect(screen.getByText(expected)).toBeVisible();
 });
 
+test("unsupported historical filings show a notice and disable redo and rechecks", async () => {
+  render(<RunDetailView detail={makeDetail({ filing_standard: undefined, config: { filing_standard: "clbg" } })}
+    onDelete={vi.fn()} onDownload={vi.fn()} onRestart={vi.fn()} />);
+  await waitFor(() => {
+    expect(screen.getByText(/CLBG filings are no longer supported/)).toBeVisible();
+    expect(screen.getByRole("button", { name: /redo/i })).toBeDisabled();
+  });
+  clickRunTab(/cross-checks/i);
+  expect(screen.getByRole("button", { name: "Rerun checks" })).toBeDisabled();
+});
+
+test("historical CLBG activity keeps income and fund labels", () => {
+  render(<RunDetailView detail={makeDetail({ filing_standard: undefined,
+    config: { filing_standard: "clbg" }, agents: [
+      makeAgent({ id: 1, statement_type: "SOPL", variant: "Nature" }),
+      makeAgent({ id: 2, statement_type: "SOCIE", variant: "Default" }),
+    ] })} onDelete={vi.fn()} onDownload={vi.fn()} />);
+  clickRunTab(/^activity$/i);
+  expect(screen.getAllByText("Income and expenditure")[0]).toBeVisible();
+  expect(screen.getByText("Changes in funds")).toBeVisible();
+  expect(screen.queryByText("Changes in equity")).toBeNull();
+});
+
 function makeAgent(overrides: Partial<RunAgentJson> = {}): RunAgentJson {
   return {
     id: 1,

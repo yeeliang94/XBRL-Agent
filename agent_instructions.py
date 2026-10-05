@@ -88,7 +88,7 @@ def instruction_sources() -> list[dict]:
     """Read shipped instruction components; no client-controlled file paths."""
     root = Path(__file__).resolve().parent / "prompts"
     groups = {
-        "Figures extraction": ["_base.md", "sofp.md", "sofp_orderofliquidity.md", "sofp_clbg.md", "sopl.md", "sopl_clbg.md", "soci.md", "socf.md", "socf_clbg.md", "socie.md", "socie_mpers.md", "socie_sore.md", "socie_clbg.md", "_group_overlay.md", "_group_socie_overlay.md", "_detail_extraction.md"],
+        "Figures extraction": ["_base.md", "sofp.md", "sofp_orderofliquidity.md", "sopl.md", "soci.md", "socf.md", "socie.md", "socie_mpers.md", "socie_sore.md", "_group_overlay.md", "_group_socie_overlay.md", "_detail_extraction.md"],
         "Figures review": ["reviewer.md", "spot_check.md", "scoped_investigation.md"],
         "Notes extraction": ["_notes_prepared.md", "_notes_base.md", "notes_corporate_info.md", "notes_accounting_policies.md", "notes_issued_capital.md", "notes_related_party.md", "notes_listofnotes.md"],
         "Notes review": ["notes_reviewer.md"],
@@ -115,7 +115,7 @@ def instruction_sources() -> list[dict]:
             if stem == key:
                 return labels[key]
             if stem.startswith(key + "_"):
-                suffix = {"mpers": "MPERS", "clbg": "CLBG", "sore": "Retained earnings", "orderofliquidity": "Order of liquidity"}[stem[len(key) + 1:]]
+                suffix = {"mpers": "MPERS", "sore": "Retained earnings", "orderofliquidity": "Order of liquidity"}[stem[len(key) + 1:]]
                 return f"{labels[key]} — {suffix}"
         return stem.removeprefix("notes_").replace("_", " ").capitalize()
 

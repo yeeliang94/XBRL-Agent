@@ -129,7 +129,6 @@ def test_historical_mpers_aggregate_exports_as_total(tmp_path, level, boundary):
 
 @pytest.mark.parametrize("relative", [
     "XBRL-template-MFRS/Company/14-Notes-RelatedParty.xlsx",
-    "XBRL-template-CLBG/Company/10-Notes-CorporateInfo.xlsx",
 ])
 @pytest.mark.parametrize("corrupt_physical_output", [False, True])
 def test_all_field_audit_reports_independent_numeric_and_html_readback(

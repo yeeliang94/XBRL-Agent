@@ -59,6 +59,17 @@ def _read_config(output_dir: Path, run_id: int) -> dict | None:
     return json.loads(raw) if raw else None
 
 
+def test_unsupported_draft_cannot_be_silently_changed_to_mfrs(draft_session):
+    client, run_id, output_dir = draft_session
+    with sqlite3.connect(output_dir / "xbrl_agent.db") as conn:
+        conn.execute("UPDATE runs SET run_config_json=? WHERE id=?",
+                     (json.dumps({"filing_standard": "clbg"}), run_id))
+    response = client.patch(f"/api/runs/{run_id}", json={"filing_standard": "mfrs"})
+    assert response.status_code == 409
+    assert "CLBG filings are no longer supported" in response.json()["detail"]
+    assert _read_config(output_dir, run_id)["filing_standard"] == "clbg"
+
+
 def test_patch_updates_run_config(draft_session):
     """A first PATCH writes the entire payload; a second PATCH merges."""
     client, run_id, output_dir = draft_session
