@@ -7,10 +7,11 @@ comparison can be recomputed from the run's current facts on every read.
 
 Figures are read by address, the inverse of the mTool fill: every fillable
 slot of the run's templates is resolved to its cell with
-``mtool.template_map.resolve_filing_doc`` and the cell is read. A typed number
-is the human's value. A formula cell, and any total the run computes, is
-stored as ``calculated``: the comparison derives the human's total from the
-human's own inputs and never scores it. Cached formula results are not read;
+``mtool.template_map.resolve_filing_doc`` and the cell is read. Typed numbers,
+unambiguous numeric text and supported input formulas are human values.
+Totals the run computes are stored as ``calculated``: the comparison derives
+the human's total from the human's own inputs and never scores it.
+Cached formula results are not read;
 a file the mTool fill patched carries stale ones. Label matching is not used:
 labels repeat within a sheet and silently merge concepts
 (docs/human-mtool-file-comparison-plan.md, Step 1).
@@ -27,6 +28,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import sqlite3
 import statistics
@@ -44,6 +46,8 @@ from mtool.column_detect import (
 )
 from mtool.exporter import _column_role
 from mtool.offline_fill import (
+    _calculated_value,
+    calculation_cells,
     get_shared_strings,
     get_sheet_paths,
     inspect_footnotes,
@@ -282,11 +286,21 @@ def _category_total_columns(cells: dict) -> dict[int, list[str]]:
 
 
 def _cell_number(cell) -> float | None:
-    """The typed number in a cell; formula results are never read."""
-    if not cell or cell[0] != "N":
+    """A finite number or unambiguous numeric text; never a formula cache."""
+    if not cell or cell[0] not in {"N", "S"}:
         return None
+    raw = str(cell[1] or "").strip()
+    if cell[0] == "S":
+        if raw.casefold() in {"-", "–", "—", "nil"}:
+            return 0.0
+        # Commas must be thousands separators; accounting parentheses are negative.
+        number = r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+"
+        if not re.fullmatch(rf"[+-]?(?:{number})|\((?:{number})\)", raw):
+            return None
+        raw = ("-" + raw[1:-1] if raw.startswith("(") else raw).replace(",", "")
     try:
-        return float(cell[1])
+        value = float(raw)
+        return value if math.isfinite(value) else None
     except (TypeError, ValueError):
         return None
 
@@ -448,6 +462,9 @@ def read_human_file(conn: sqlite3.Connection, run_id: int, path: str | Path,
         for write in writes
     }
     totals = {write["concept_uuid"] for write in writes if write["kind"] == "COMPUTED"}
+    matrix_totals = {r[0] for r in conn.execute(
+        "SELECT DISTINCT e.parent_uuid FROM concept_edges e JOIN concept_nodes n "
+        "ON n.concept_uuid=e.parent_uuid WHERE n.kind='MATRIX_CELL'")}
     sheets: dict[str, dict] = {}
     for write in writes:
         sheets.setdefault(write["sheet"], {"label_column": None, "columns": {}})[
@@ -474,16 +491,39 @@ def read_human_file(conn: sqlite3.Connection, run_id: int, path: str | Path,
     period_blocks = {sheet: _dimensional_period_blocks(cells_by_sheet.get(sheet, {}))
                      for sheet in _CATEGORY_AXIS_BY_SHEET}
     category_rows: dict[tuple, tuple[dict, int]] = {}
+    formula_cells = None
+    formula_cache: dict = {}
 
     def add_fact(write: dict, row: int, col: str, dimension_key: str) -> None:
+        nonlocal formula_cells
         sheet = write["sheet"]
         claimed[sheet].add((row, col))
         # Blank cells are kept (value None): they separate "the human left
         # this field empty" from "the human's file has no such field".
         cell = cells_by_sheet.get(sheet, {}).get(row, {}).get(col)
         unit_class, label = unit_by_concept[write["concept_uuid"]]
-        calculated = write["concept_uuid"] in totals or bool(cell and cell[0] == "F")
+        is_formula = bool(cell and cell[0] == "F")
+        calculated = (write["concept_uuid"] in totals
+                      or is_formula and write["concept_uuid"] in matrix_totals)
         value = _cell_number(cell)
+        if not calculated and is_formula:
+            if formula_cells is None:
+                formula_cells = calculation_cells(data)
+            try:
+                value = float(_calculated_value(
+                    formula_cells, sheet, f"{col}{row}", cache=formula_cache))
+                if not math.isfinite(value):
+                    raise ValueError("Non-finite formula result")
+            except (ValueError, SyntaxError, ArithmeticError, RecursionError) as exc:
+                raise HumanFileError(
+                    f"The input formula at {sheet}!{col}{row} cannot be calculated safely. "
+                    "In Excel, replace this formula with its numeric value using "
+                    "Paste Special → Values, then upload the file again.") from exc
+        elif (not calculated and cell and cell[0] in {"N", "S"}
+              and str(cell[1] or "").strip() and value is None):
+            raise HumanFileError(
+                f"The input at {sheet}!{col}{row} is not a readable number. "
+                "Convert it to a numeric value in Excel, then upload the file again.")
         if scale != 1 and unit_class is None and value is not None:
             if not calculated:
                 raise HumanFileError(
@@ -537,7 +577,7 @@ def read_human_file(conn: sqlite3.Connection, run_id: int, path: str | Path,
                 if loose:
                     unmatched.append({"kind": "figure", "sheet": sheet, "row": row,
                                       "label": info["label"], "values": loose})
-        # Compared only when the human typed an input value: mTool's own
+        # Compared only when the human provided an input value: mTool's own
         # totals show zero even on an empty statement.
         if any(f["value"] is not None and not f["calculated"] for f in facts):
             result.facts.extend(facts)

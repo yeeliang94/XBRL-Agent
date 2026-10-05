@@ -46,7 +46,8 @@ def _typed(read) -> dict[tuple[str, str], float]:
 
 
 @pytest.mark.parametrize('standard', ['mpers'])
-def test_native_note_alias_keeps_category_identity_on_read(tmp_path, standard):
+@pytest.mark.parametrize('input_value', [123, '=100+23', '123'])
+def test_native_note_alias_keeps_category_identity_on_read(tmp_path, standard, input_value):
     """Category expansion must inspect the verified physical sheet before reading."""
     from concept_model.bootstrap import _import_one
     from concept_model.dimensions import dimension_key
@@ -71,7 +72,7 @@ def test_native_note_alias_keeps_category_identity_on_read(tmp_path, standard):
     ws['B3'] = 'native.xsd#'+axis; ws['C3'] = '#DOM#'; ws['D3'] = '#PRIM#'
     ws['E3'] = 'Ordinary shares'
     ws['C4'] = '#ENDT#'; ws['E4'] = '31/12/2026'
-    ws['A7'] = 'native.xsd#'+primary; ws['D7'] = label; ws['E7'] = 123
+    ws['A7'] = 'native.xsd#'+primary; ws['D7'] = label; ws['E7'] = input_value
     path = tmp_path/'native-note.xlsx'; wb.save(path); wb.close()
     with sqlite3.connect(db) as conn:
         conn.row_factory = sqlite3.Row
@@ -80,6 +81,7 @@ def test_native_note_alias_keeps_category_identity_on_read(tmp_path, standard):
     assert len(values) == 1
     assert values[0]['value'] == 123
     assert values[0]['dimension_key'] == dimension_key({axis:member})
+    assert not values[0]['calculated']
 
 
 @pytest.mark.parametrize("historical_auto_variant", [False, True])
@@ -110,8 +112,12 @@ def test_round_trip_reads_every_filled_value_including_same_label_fields(
     assert read.summary["magnitude_warning"] is None
 
 
-def test_unaddressed_typed_row_is_unmatched_and_formula_cell_is_calculated(
-    sofp_db, tmp_path,
+@pytest.mark.parametrize("input_value,expected", [
+    ("=1+1", 2), (" (2,653,465.00) ", -2653465), ("+1,000.50", 1000.5), ("0", 0),
+    ("-", 0), ("—", 0), ("–", 0), (" Nil ", 0),
+])
+def test_unaddressed_typed_row_is_unmatched_and_numeric_input_is_read(
+    sofp_db, tmp_path, input_value, expected,
 ):
     run_id = add_run(sofp_db, sofp_config())
     facts = leaf_facts(sofp_db)
@@ -130,7 +136,7 @@ def test_unaddressed_typed_row_is_unmatched_and_formula_cell_is_calculated(
         ).fetchone()
     wb = load_workbook(path)
     wb["SOFP-CuNonCu"][f"B{header_row}"] = 77
-    wb["SOFP-CuNonCu"][f"B{formula_row}"] = "=1+1"
+    wb["SOFP-CuNonCu"][f"B{formula_row}"] = input_value
     wb.save(path)
 
     with sqlite3.connect(sofp_db) as conn:
@@ -138,14 +144,177 @@ def test_unaddressed_typed_row_is_unmatched_and_formula_cell_is_calculated(
 
     assert [(u["sheet"], u["row"], u["label"], u["values"]) for u in read.unmatched] == [
         ("SOFP-CuNonCu", header_row, header_label, {"B": 77.0})]
-    # The formula cell and the run's totals are calculated; no formula
-    # result is read, since a patched file carries stale cached values.
+    # A formula on an input is a human value, not a template total.
     calculated = {(f["concept_uuid"], f["period"]): f["value"]
                   for f in read.facts if f["calculated"]}
-    assert calculated[(formula_uuid, "CY")] is None
+    assert (formula_uuid, "CY") not in calculated
     assert set(calculated.values()) == {None}
-    assert (formula_uuid, "CY") not in _typed(read)
-    assert read.summary["typed_values"] == len(facts) - 1
+    assert _typed(read)[(formula_uuid, "CY")] == expected
+    assert read.summary["typed_values"] == len(facts)
+
+
+def _numeric_template_cases():
+    from statement_types import VARIANTS, template_path
+    from notes_types import NOTES_REGISTRY, notes_template_path
+
+    for standard in ("mfrs", "mpers"):
+        for level in ("company", "group"):
+            base = {"filing_standard": standard, "filing_level": level,
+                    "denomination": "units"}
+            for (statement, variant), entry in VARIANTS.items():
+                if entry.template_filename and standard in entry.applies_to_standard:
+                    path = template_path(statement, variant, level, standard)
+                    config = {**base, "statements": [statement.value],
+                              "variants": {statement.value: variant}}
+                    yield pytest.param(path, config, id=f"{standard}-{level}-{statement.value}-{variant}")
+            for note, entry in NOTES_REGISTRY.items():
+                if entry.is_numeric:
+                    yield pytest.param(notes_template_path(note, level, standard),
+                                       {**base, "notes_to_run": [note.value]},
+                                       id=f"{standard}-{level}-{note.value}")
+
+
+@pytest.mark.parametrize("template,config", list(_numeric_template_cases()))
+def test_numeric_inputs_round_trip_as_formulas_and_text_across_filing_shapes(
+    tmp_path, template, config,
+):
+    from concept_model.bootstrap import _import_one
+    from openpyxl.utils import get_column_letter
+    from mtool.offline_fill import fill_workbook
+
+    db = tmp_path / "audit.db"
+    init_db(db)
+    tid = _import_one(db, template, config["filing_level"])
+    run = add_run(db, config)
+    wb = load_workbook(template)
+    selected = []
+    counts = {}
+    with sqlite3.connect(db) as conn:
+        rows = conn.execute(
+            "SELECT t.concept_uuid,t.period,t.entity_scope,t.target_sheet,t.target_row,t.target_col "
+            "FROM concept_targets t JOIN concept_nodes n USING(concept_uuid) "
+            "LEFT JOIN concept_semantic_addresses sa USING(concept_uuid) "
+            "LEFT JOIN taxonomy_concepts tc ON tc.source_element_id=sa.primary_concept "
+            "WHERE n.template_id=? AND n.kind IN ('LEAF','MATRIX_CELL') "
+            "AND LOWER(COALESCE(tc.data_type,'')) NOT LIKE '%textblockitemtype' "
+            "AND NOT EXISTS (SELECT 1 FROM concept_edges e WHERE e.parent_uuid=n.concept_uuid) "
+            "ORDER BY t.target_sheet,t.target_row,t.target_col", (tid,)).fetchall()
+        for uuid, period, scope, sheet, row, col in rows:
+            group = (period, scope)
+            if counts.get(group, 0) >= 2:
+                continue
+            addr = f"{get_column_letter(col) if isinstance(col, int) else col}{row}"
+            if wb[sheet][addr].data_type == "f":
+                continue
+            selected.append((uuid, period, scope, sheet, addr, 1000 + len(selected)))
+            counts[group] = counts.get(group, 0) + 1
+        assert selected
+        conn.executemany(
+            "INSERT INTO run_concept_facts(run_id,concept_uuid,period,entity_scope,value,value_status,updated_at) "
+            "VALUES (?,?,?,?,?,'observed','t')",
+            [(run,u,p,s,v) for u,p,s,_,_,v in selected])
+    wb.close()
+    numeric = tmp_path / "numeric.xlsx"
+    report = fill_workbook(str(template), {"writes": [
+        {"sheet":s,"cell":a,"value":v} for _,_,_,s,a,v in selected]}, str(numeric), strict=True)
+    assert report["status"] == "ok"
+    for representation in ("numeric", "formula", "text"):
+        wb = load_workbook(numeric)
+        for _, _, _, sheet, addr, value in selected:
+            wb[sheet][addr] = (f"={value}-1+1" if representation == "formula"
+                               else str(value) if representation == "text" else value)
+        path = tmp_path / f"{representation}.xlsx"
+        wb.save(path)
+        wb.close()
+        with sqlite3.connect(db) as conn:
+            ingest_human_file(conn, run, path, filename=path.name, unit="units", uploaded_by=None)
+            comparison = load_comparison(conn, run)
+        slots = {(s["concept_uuid"],s["period"],s["entity_scope"]):s for s in comparison["figures"]["slots"]}
+        for uuid, period, scope, _, _, value in selected:
+            slot = slots[(uuid, period, scope)]
+            assert slot["human_value"] == value
+            assert slot["status"] == "agree"
+            assert not slot.get("calculated")
+
+
+@pytest.mark.parametrize("bad_value", [
+    "=IF(1,2,3)", "='[other.xlsx]Sheet1'!B2", "=1/0", "cycle", "text_operand", "1,23", "unreadable", "NaN",
+])
+def test_unreadable_input_refuses_replacement_without_losing_attached_file(sofp_db, tmp_path, bad_value):
+    run = add_run(sofp_db, sofp_config())
+    path = filled_file(sofp_db, run, leaf_facts(sofp_db), tmp_path)
+    with sqlite3.connect(sofp_db) as conn:
+        original = ingest_human_file(conn, run, path, filename="good.xlsx", unit="units", uploaded_by=None)
+        original_comparison = load_comparison(conn, run)
+        row = conn.execute("SELECT target_row FROM concept_targets WHERE concept_uuid=? AND period='CY'",
+                           (leaf_facts(sofp_db)[0][0],)).fetchone()[0]
+    wb = load_workbook(path)
+    wb["SOFP-CuNonCu"][f"B{row}"] = f"=B{row}" if bad_value == "cycle" else bad_value
+    if bad_value == "text_operand":
+        # SUM does not coerce text operands like direct arithmetic; never guess.
+        wb["SOFP-CuNonCu"][f"D{row}"] = "1,000"
+        wb["SOFP-CuNonCu"][f"B{row}"] = f"=SUM(D{row})"
+    wb.save(path)
+    wb.close()
+    with sqlite3.connect(sofp_db) as conn:
+        with pytest.raises(HumanFileError, match=rf"SOFP-CuNonCu.*B{row}"):
+            ingest_human_file(conn, run, path, filename="bad.xlsx", unit="units", uploaded_by=None)
+        assert load_human_file(conn, run) == original
+        assert load_comparison(conn, run) == original_comparison
+
+
+def test_cashflow_input_formulas_ignore_stale_caches_and_restore_screenshot_totals(tmp_path):
+    from mtool.offline_fill import fill_workbook, get_sheet_paths, load_workbook_entries, write_patched_zip
+
+    db = tmp_path / "audit.db"
+    init_db(db)
+    tid = import_template_file(db, tmp_path, "07-SOCF-Indirect.xlsx")
+    run = add_run(db, {"filing_standard":"mfrs", "filing_level":"company", "denomination":"units",
+                       "statements":["SOCF"], "variants":{"SOCF":"Indirect"}})
+    inputs = {"CY": {8:2278188,11:657526,22:84661,61:-2653465,62:-545466},
+              "PY": {8:2124781,22:300484,61:-510533,62:-278428}}
+    totals = {"CY": {57:742187,58:3020375,66:3198931,67:6219306},
+              "PY": {57:300484,58:2425265,66:788961,67:3214226}}
+    with sqlite3.connect(db) as conn:
+        nodes = dict(conn.execute("SELECT render_row,concept_uuid FROM concept_nodes WHERE template_id=?",(tid,)))
+        conn.executemany(
+            "INSERT INTO run_concept_facts(run_id,concept_uuid,period,entity_scope,value,value_status,updated_at) "
+            "VALUES (?,?,?,'Company',?,'observed','t')",
+            [(run,nodes[r],p,v) for p in inputs for r,v in (inputs[p]|totals[p]).items()])
+    from tests._human_file_fixture import TEMPLATES
+    path = tmp_path / "human.xlsx"
+    assert fill_workbook(str(TEMPLATES / "07-SOCF-Indirect.xlsx"), {"writes":[
+        {"sheet":"SOCF-Indirect","cell":f"{col}{r}","value":v}
+        for p,col in [("CY","B"),("PY","C")] for r,v in inputs[p].items()]},str(path),strict=True)["status"] == "ok"
+    wb = load_workbook(path)
+    source = wb["SOCF-Indirect"]
+    source["D1"] = 657526
+    source["D2"] = -2653465
+    source["D3"] = -545466
+    for row, source_row in [(11,1),(61,2),(62,3)]:
+        wb["SOCF-Indirect"][f"B{row}"] = f"='SOCF-Indirect'!$D${source_row}"
+    # A template total is still derived from inputs, even if its formula is unsupported.
+    wb["SOCF-Indirect"]["B57"] = "=IF(1,999,0)"
+    wb.save(path)
+    wb.close()
+    _, entries, _ = load_workbook_entries(str(path))
+    entry = get_sheet_paths(entries)["SOCF-Indirect"]
+    xml = entries[entry].decode("utf-8")
+    # Every cached result is deliberately wrong; none may drive the comparison.
+    xml = xml.replace("</f><v></v>", "</f><v>999</v>")
+    cached = tmp_path / "stale-caches.xlsx"
+    write_patched_zip(str(path), str(cached), {entry:xml.encode("utf-8")})
+    cached_wb = load_workbook(cached, data_only=True)
+    assert cached_wb["SOCF-Indirect"]["B11"].value == 999
+    cached_wb.close()
+    with sqlite3.connect(db) as conn:
+        ingest_human_file(conn,run,cached,filename=cached.name,unit="units",uploaded_by=None)
+        comparison = load_comparison(conn,run)
+    slots = {(s["concept_uuid"],s["period"]):s for s in comparison["figures"]["slots"]}
+    for p in inputs:
+        for row, value in (inputs[p]|totals[p]).items():
+            assert slots[(nodes[row],p)]["human_value"] == value
+            assert slots[(nodes[row],p)]["status"] == "agree"
 
 
 @pytest.mark.parametrize("historical_auto_variant", [False, True])
