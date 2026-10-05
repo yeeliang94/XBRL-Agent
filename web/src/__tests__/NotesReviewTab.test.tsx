@@ -170,13 +170,26 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     expect(screen.queryByRole("button", { name: "Review AI only" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Review Both filled" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Review Human only" }));
+    const activeEditor = screen.getByTestId("notes-review-editor");
     expect(screen.getByText("Missed text")).toBeVisible();
+    fireEvent.change(screen.getByRole("combobox", { name: "View" }), { target: { value: "all" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Hide empty fields" }));
+    expect(screen.getByTestId("notes-review-editor")).toBe(activeEditor);
+    fireEvent.change(screen.getByRole("combobox", { name: "View" }), { target: { value: "missed" } });
+    expect(screen.getByTestId("notes-review-editor")).toBe(activeEditor);
+
     // A saved correction must use live HTML, even before comparison status refreshes.
     mockFetchOnce({ sheets: [{ sheet: "Notes-CI", rows: [{ ...row, node_uuid: "human", label: "Human only" }] }] });
     rerender(<NotesReviewTab runId={43} human={human} />);
     await screen.findByRole("button", { name: "Review Human only" });
+    fireEvent.click(screen.getByRole("button", { name: "Review Human only" }));
+    const correctedEditor = screen.getByTestId("notes-review-editor");
     fireEvent.change(screen.getByRole("combobox", { name: "View" }), { target: { value: "missed" } });
+    expect(screen.getByTestId("notes-review-editor")).toBe(correctedEditor);
+    fireEvent.click(screen.getByRole("button", { name: "Review Human only" }));
     expect(screen.getByRole("status")).toHaveTextContent("No fields match this view.");
+    expect(screen.queryByText("Extracted note")).toBeNull();
+    expect(screen.queryByText("Human file")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Show all fields" }));
     expect(screen.getByRole("button", { name: "Review Human only" })).toBeVisible();
     expect(screen.queryByRole("img", { name: "Missed by AI" })).toBeNull();
@@ -298,6 +311,8 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     }} />);
     await screen.findByRole("button", { name: "Review Corporate info" });
     expect(screen.queryByTestId("notes-human-pair")).toBeNull();
+    expect(screen.queryByText("Extracted note")).toBeNull();
+    expect(screen.queryByText("Human file")).toBeNull();
     expect(screen.getByRole("img", { name: "Missed by AI" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Review Registered office" })).toHaveAccessibleDescription("Missed by AI");
     expect(screen.getByRole("heading", { level: 3, name: /Registered office/ })).toBeVisible();
@@ -315,6 +330,9 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     expect(screen.getAllByText("Registered office")).toHaveLength(1);
     expect(screen.getByTestId("notes-review-editor")).toHaveAttribute("data-editable", "false");
     expect(screen.getByText("Human office")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Review Registered office" }));
+    expect(screen.queryByText("Extracted note")).toBeNull();
+    expect(screen.queryByText("Human file")).toBeNull();
   });
 
   test("quarantined content is explained and can be removed accessibly", async () => {
@@ -1664,29 +1682,50 @@ const FULL_TEMPLATE: NotesCellsResponse = {
 };
 
 describe("NotesReviewTab — full-template projection (Phase 5)", () => {
-  test("field views retain numeric zero, categories and human-only values within the exact scope", async () => {
+  test.each([false, true])("field views retain human-only categories with AI categories present: %s", async (hasAiCategory) => {
+    const dimensions = { ClassAxis: "OrdinaryMember" };
+    const dimensionKey = JSON.stringify(dimensions);
     const row = FULL_TEMPLATE.sheets[1].rows[0];
     mockFetchOnce({ sheets: [{ ...FULL_TEMPLATE.sheets[1], rows: [
       { ...row, label: "Recorded zero", values: { cy: 0, py: null } },
-      { ...row, row: 7, concept_uuid: "human-only", label: "Human-only capital", values: { cy: null, py: null } },
+      { ...row, row: 7, concept_uuid: "human-only", label: "Human-only capital", values: { cy: null, py: null },
+        categories: hasAiCategory ? [{ dimension_key: JSON.stringify({ ClassAxis: "PreferenceMember" }), dimensions: { ClassAxis: "PreferenceMember" }, label: "Preference", values: { cy: 10, py: null }, evidence: null }] : [],
+        category_options: [{ dimensions, label: "Ordinary shares" }] },
       { ...row, row: 8, concept_uuid: "wrong-scope", label: "Empty company field", values: { cy: null, py: null } },
       { ...row, row: 9, concept_uuid: "category", label: "Categorised zero", values: { cy: null, py: null },
         categories: [{ dimension_key: "Ordinary", dimensions: { ClassAxis: "Ordinary" }, label: "Ordinary", values: { cy: 0, py: null }, evidence: null }] },
+      { ...row, row: 10, concept_uuid: "prior-only", label: "Current-period-only field", values: { cy: null } },
+      { ...row, row: 11, concept_uuid: "human-zero", label: "Human zero category", values: { cy: null } },
     ] }] });
     const humanFigures = new Map<string, HumanFigureSlot>([
-      [humanSlotKey("human-only", "CY", "Company"), { concept_uuid: "human-only", period: "CY", entity_scope: "Company", dimension_key: "", human_value: 5, ai_value: null, status: "missed" }],
-      [humanSlotKey("wrong-scope", "CY", "Group"), { concept_uuid: "wrong-scope", period: "CY", entity_scope: "Group", dimension_key: "", human_value: 99, ai_value: null, status: "missed" }],
+      [humanSlotKey("prior-only", "PY", "Company", dimensionKey), { concept_uuid: "prior-only", period: "PY", entity_scope: "Company", dimension_key: dimensionKey, human_value: 50, ai_value: null, status: "missed" }],
+      [humanSlotKey("human-zero", "CY", "Company", dimensionKey), { concept_uuid: "human-zero", period: "CY", entity_scope: "Company", dimension_key: dimensionKey, human_value: 0, ai_value: null, status: "zero_blank" }],
+      [humanSlotKey("human-only", "CY", "Company", dimensionKey), { concept_uuid: "human-only", period: "CY", entity_scope: "Company", dimension_key: dimensionKey, human_value: 5, ai_value: null, status: "missed" }],
+      [humanSlotKey("wrong-scope", "CY", "Group", dimensionKey), { concept_uuid: "wrong-scope", period: "CY", entity_scope: "Group", dimension_key: dimensionKey, human_value: 99, ai_value: null, status: "missed" }],
     ]);
     render(<NotesReviewTab runId={7} humanFigures={humanFigures} />);
     await screen.findByTestId("numeric-input-8-cy");
     fireEvent.click(screen.getByRole("checkbox", { name: "Hide empty fields" }));
     expect(screen.queryByTestId("numeric-input-8-cy")).toBeNull();
+    expect(screen.queryByTestId("numeric-input-10-cy")).toBeNull();
+    expect(screen.getByTestId(`numeric-human-11-${dimensionKey}-cy`)).toHaveTextContent("0");
     expect(screen.getByTestId("numeric-input-6-cy")).toHaveValue("0");
     expect(screen.getByTestId("numeric-input-9-cy")).toHaveValue("0");
-    expect(screen.getByTestId("numeric-human-7-base-cy")).toHaveTextContent("5");
+    expect(screen.getByTestId(`numeric-human-7-${dimensionKey}-cy`)).toHaveTextContent("5");
+    expect(screen.getByRole("rowheader", { name: /Human-only capital.*Ordinary shares/ })).toBeVisible();
     fireEvent.change(screen.getByRole("combobox", { name: "View" }), { target: { value: "missed" } });
-    expect(screen.getAllByTestId("notes-numeric-row")).toHaveLength(1);
-    expect(screen.getByTestId("notes-numeric-row")).toHaveTextContent("Human-only capital");
+    expect(screen.queryByTestId(`numeric-human-11-${dimensionKey}-cy`)).toBeNull();
+    expect(screen.getAllByTestId("notes-numeric-row").every((row) => row.textContent?.includes("Human-only capital"))).toBe(true);
+    expect(screen.getByTestId(`numeric-human-7-${dimensionKey}-cy`)).toHaveTextContent("5");
+    const categoryInput = screen.getByRole("textbox", { name: /Human-only capital.*Ordinary shares, Current year/ });
+    fireEvent.change(categoryInput, { target: { value: "5" } });
+    fireEvent.blur(categoryInput);
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith(
+      "/api/runs/7/facts/human-only", expect.objectContaining({ method: "PATCH" }),
+    ));
+    const patch = vi.mocked(globalThis.fetch).mock.calls.find(([, init]) => init?.method === "PATCH");
+    expect(JSON.parse(String(patch?.[1]?.body))).toMatchObject({ value: 5, period: "CY", entity_scope: "Company", dimensions });
+    await waitFor(() => expect(categoryInput).toHaveValue("5"));
   });
 
   test("numeric drafts and failed saves block preparation until every column is saved", async () => {

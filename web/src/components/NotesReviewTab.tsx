@@ -120,6 +120,46 @@ export interface HumanNotesView {
   status: Record<string, "agree" | "missed" | "ai_only">;
 }
 
+/** Use the same category union for filtering and rendering human comparisons. */
+function numericNoteCategories(cell: NotesCell, humanFigures: Map<string, HumanFigureSlot> | null) {
+  const categories: NonNullable<NotesCell["categories"]> = cell.categories?.length
+    ? [...cell.categories]
+    : [{ dimension_key: "", dimensions: cell.dimensions ?? {}, label: "Total", values: cell.values ?? {}, evidence: cell.evidence, resolution_tokens: cell.resolution_tokens }];
+  const columns = [...new Set([Object.keys(cell.values ?? {}), ...categories.map(({ values }) => Object.keys(values))].flat())];
+  const added = new Set<string>();
+  for (const slot of humanFigures?.values() ?? []) {
+    if (slot.concept_uuid !== cell.concept_uuid || slot.human_value == null) continue;
+    const keys = columns.filter((key) => {
+      const column = NUMERIC_VALUE_COLUMNS[key];
+      return column?.period === slot.period && column.entity_scope === slot.entity_scope;
+    });
+    if (!keys.length) continue;
+    let category = categories.find(({ dimension_key }) => dimension_key === slot.dimension_key);
+    if (!category) {
+      // Comparison dimension keys are canonical JSON from the server. Reuse
+      // that exact identity; never copy classification between scopes or years.
+      const dimensions: Record<string, string> = slot.dimension_key ? JSON.parse(slot.dimension_key) : {};
+      const option = cell.category_options?.find((candidate) =>
+        Object.keys(candidate.dimensions).length === Object.keys(dimensions).length
+        && Object.entries(dimensions).every(([axis, member]) => candidate.dimensions[axis] === member));
+      category = {
+        dimension_key: slot.dimension_key,
+        dimensions,
+        label: slot.dimension_key ? option?.label ?? Object.values(dimensions).map((member) =>
+          member.replace(/^[^_]*_/, "").replace(/Member$/, "").replace(/(?<=[a-z])(?=[A-Z])/g, " ")).join(", ") : "Total",
+        values: Object.fromEntries(columns.map((key) => [key, null])),
+        evidence: null,
+      };
+      categories.push(category);
+      added.add(slot.dimension_key);
+    }
+    if (added.has(slot.dimension_key)) {
+      for (const key of keys) category.values[key] = slot.ai_value;
+    }
+  }
+  return categories;
+}
+
 /** Presence is based on current content; zero is a filled numeric value. */
 function noteFieldPresence(cell: NotesCell, human: HumanNotesView | null, humanFigures: Map<string, HumanFigureSlot> | null) {
   if (cell.kind !== "numeric") {
@@ -127,7 +167,7 @@ function noteFieldPresence(cell: NotesCell, human: HumanNotesView | null, humanF
     const humanFilled = Boolean(cell.node_uuid && !isBlankHtml(human?.html[cell.node_uuid]));
     return { filled: aiFilled || humanFilled, missed: humanFilled && !aiFilled };
   }
-  const categories = [{ dimension_key: "", values: cell.values ?? {} }, ...(cell.categories ?? [])];
+  const categories = numericNoteCategories(cell, humanFigures);
   const columns = [...new Set(categories.flatMap(({ values }) => Object.keys(values)))];
   let filled = categories.some(({ values }) => Object.values(values).some((value) => value != null));
   let missed = false;
@@ -902,13 +942,13 @@ export function NotesReviewTab({
               <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: pwc.space.md }}>
                 <label style={{ display: "flex", alignItems: "center", gap: pwc.space.xs, fontSize: 13 }}>
                   <input type="checkbox" checked={hideEmptyFields} disabled={saveBlocked || moveBusy}
-                    onChange={(event) => { setSelectedCellKey(null); setHideEmptyFields(event.target.checked); }} />
+                    onChange={(event) => setHideEmptyFields(event.target.checked)} />
                   Hide empty fields
                 </label>
                 {hasHumanComparison && <label style={{ display: "flex", alignItems: "center", gap: pwc.space.xs, fontSize: 13 }}>
                   View
                   <select style={{ ...ui.select, minHeight: 32, width: "auto" }} value={onlyMissedFields ? "missed" : "all"} disabled={saveBlocked || moveBusy}
-                    onChange={(event) => { setSelectedCellKey(null); setOnlyMissedFields(event.target.value === "missed"); }}>
+                    onChange={(event) => setOnlyMissedFields(event.target.value === "missed")}>
                     <option value="all">All fields</option>
                     <option value="missed">Missed by AI</option>
                   </select>
@@ -1225,7 +1265,7 @@ function SheetSection({
               ))}
             </div>
           )}
-          {human && sheet.rows.some((cell) => cell.kind !== "numeric" && cell.node_uuid) && (
+          {human && visibleRows.some((cell) => cell.kind !== "numeric" && cell.node_uuid && selectedCellKey === `${sheet.sheet}:${cell.row}`) && (
             <div className="notes-human-pair-header" style={styles.humanPairHeader}>
               <span>Extracted note</span>
               <span>Human file</span>
@@ -1998,15 +2038,8 @@ function NumericCellRow(props: {
   onActivate?: () => void;
 }) {
   const { cell, humanFigures } = props;
-  if (!cell.categories?.length) return <NumericCategoryRow {...props} dimensionKey="" />;
-  // mTool's Total column is the field without a category. Show the human's
-  // total on its own row when the run has category values only.
-  const humanTotal = humanFigures && cell.concept_uuid && !cell.categories.some((c) => c.dimension_key === "")
-    && Object.values(NUMERIC_VALUE_COLUMNS).some(({ period, entity_scope }) =>
-      humanFigures.get(humanSlotKey(cell.concept_uuid!, period, entity_scope, ""))?.human_value != null);
-  const categories = humanTotal
-    ? [...cell.categories, { dimension_key: "", dimensions: {}, label: "Total", values: cell.values ?? {}, evidence: null, resolution_tokens: {} }]
-    : cell.categories;
+  const categories = useMemo(() => numericNoteCategories(cell, humanFigures ?? null), [cell, humanFigures]);
+  if (!cell.categories?.length && categories.length === 1 && categories[0].dimension_key === "") return <NumericCategoryRow {...props} dimensionKey="" />;
   return <>{categories.map((category) => (
     <NumericCategoryRow {...props} key={category.dimension_key} dimensionKey={category.dimension_key} cell={{
       ...cell, dimensions: category.dimensions, values: category.values,
