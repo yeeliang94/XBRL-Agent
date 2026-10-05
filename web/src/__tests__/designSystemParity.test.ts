@@ -229,6 +229,7 @@ describe("Simplified template-oriented review", () => {
   test("pins the minimal Notes review contract", () => {
     for (const requirement of [
       "Use the field heading as the disclosure control for populated and empty fields",
+      "Offer a keyboard-accessible Open editor action beside each populated field heading",
       "Offer Hide empty fields for the current worksheet",
       "Preserve level-three field headings and announce filing warnings and comparison markers as descriptions of the disclosure button",
       "Derive prose comparison markers and the Missed by AI filter from current extracted and human content",

@@ -53,7 +53,9 @@ const STATEMENT_SUBTITLES: Record<string, string> = {
  *  statement code isn't recognised (the raw id is already shown as the name). */
 export function templateSubtitle(templateId: string): string | null {
   const code = statementCode(templateId);
-  return code == null ? null : STATEMENT_SUBTITLES[code] ?? null;
+  return code == null ? null : statementCodeSubtitle(
+    code, templateId.startsWith("clbg-") ? "clbg" : undefined,
+  );
 }
 
 // Financial-statement reading order — the order the statements appear in an
@@ -78,7 +80,12 @@ export function templateSortKey(templateId: string): number {
 /** Plain-language subtitle for a BARE statement code ("SOFP" → "Balance
  *  sheet"), or null if unrecognised. Sibling of templateSubtitle for callers
  *  (the Activity tab) that hold the raw statement_type, not a template_id. */
-export function statementCodeSubtitle(code: string, _standard?: unknown): string | null {
+export function statementCodeSubtitle(code: string, standard?: unknown): string | null {
+  // Display compatibility for saved runs; CLBG is not an available filing type.
+  if (standard === "clbg") {
+    if (code.toUpperCase() === "SOPL") return "Income and expenditure";
+    if (code.toUpperCase() === "SOCIE") return "Changes in funds";
+  }
   return STATEMENT_SUBTITLES[code.toLowerCase()] ?? null;
 }
 

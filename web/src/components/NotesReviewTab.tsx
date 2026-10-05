@@ -1349,30 +1349,43 @@ function SheetSection({
             return (
               <section key={`${runId}:${sheet.sheet}:${cell.row}:pair`} aria-label={cell.label}
                 data-cell-row={cell.row} data-testid="notes-review-row">
-                <h3 style={{ ...styles.cellLabel, margin: 0 }}>
-                  <button type="button" aria-label={`Review ${cell.label}`} aria-expanded={expanded}
-                    aria-describedby={[cell.invalid_target ? `${statusId}-filing` : null, marker ? `${statusId}-comparison` : null].filter(Boolean).join(" ") || undefined}
+                <div style={{ display: "flex", alignItems: "center", gap: pwc.space.sm }}>
+                  <h3 style={{ ...styles.cellLabel, margin: 0, flex: 1, minWidth: 0 }}>
+                    <button type="button" aria-label={`Review ${cell.label}`} aria-expanded={expanded}
+                      aria-describedby={[cell.invalid_target ? `${statusId}-filing` : null, marker ? `${statusId}-comparison` : null].filter(Boolean).join(" ") || undefined}
+                      disabled={hasPendingRowSave || moveBusy}
+                      style={styles.fieldDisclosureButton}
+                      onClick={() => {
+                        if (expanded) {
+                          if (selected) onCellCollapse();
+                          setFieldOpen(cell, false);
+                        } else {
+                          // An empty field opens only while it is selected.
+                          if (fieldHasContent(cell)) setFieldOpen(cell, true);
+                          onCellActivate?.(sheet.sheet, cell.row);
+                          reportCellPages(cell.source_pages, onActiveCellPages);
+                        }
+                      }}>
+                      <ChevronRight size={16} aria-hidden="true" style={{ flexShrink: 0, transform: expanded ? "rotate(90deg)" : undefined }} />
+                      <span style={styles.cellLabel}>{cell.label}</span>
+                      <span style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, marginLeft: "auto", fontWeight: 400 }}>
+                        {cell.invalid_target && <span id={`${statusId}-filing`} style={{ color: pwc.warning }}>Not a filing field</span>}
+                        {marker && <span role="img" aria-label={marker} style={{ color: pwc.warning }}>{humanStatus === "missed" ? "○" : "◇"}</span>}
+                      </span>
+                    </button>
+                  </h3>
+                  {expanded && !selected && <button type="button"
+                    aria-label={`Open ${cell.label} editor`}
                     disabled={hasPendingRowSave || moveBusy}
-                    style={styles.fieldDisclosureButton}
+                    className={uiClass.btnQuiet}
+                    style={{ ...ui.buttonQuiet, ...ui.buttonSm, flexShrink: 0 }}
                     onClick={() => {
-                      if (expanded) {
-                        if (selected) onCellCollapse();
-                        setFieldOpen(cell, false);
-                      } else {
-                        // An empty field opens only while it is selected.
-                        if (fieldHasContent(cell)) setFieldOpen(cell, true);
-                        onCellActivate?.(sheet.sheet, cell.row);
-                        reportCellPages(cell.source_pages, onActiveCellPages);
-                      }
+                      onCellActivate?.(sheet.sheet, cell.row);
+                      reportCellPages(cell.source_pages, onActiveCellPages);
                     }}>
-                    <ChevronRight size={16} aria-hidden="true" style={{ flexShrink: 0, transform: expanded ? "rotate(90deg)" : undefined }} />
-                    <span style={styles.cellLabel}>{cell.label}</span>
-                    <span style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, marginLeft: "auto", fontWeight: 400 }}>
-                      {cell.invalid_target && <span id={`${statusId}-filing`} style={{ color: pwc.warning }}>Not a filing field</span>}
-                      {marker && <span role="img" aria-label={marker} style={{ color: pwc.warning }}>{humanStatus === "missed" ? "○" : "◇"}</span>}
-                    </span>
-                  </button>
-                </h3>
+                    Open editor
+                  </button>}
+                </div>
                 {marker && <span id={`${statusId}-comparison`} hidden>{marker}</span>}
                 {selected ? (compared && human && field ? <div className="notes-human-pair" data-testid="notes-human-pair" style={styles.humanPair}>
                   <div className="notes-human-extracted" style={styles.comparisonRows}>{row}</div>

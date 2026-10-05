@@ -679,6 +679,11 @@ async def recheck_endpoint(run_id: int):
         conn.close()
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
+    from statement_types import unsupported_filing_standard_message
+    unsupported = unsupported_filing_standard_message(
+        (run.config or {}).get("filing_standard", "mfrs"))
+    if unsupported:
+        raise HTTPException(status_code=409, detail=unsupported)
     results = await asyncio.to_thread(server._recheck_from_facts, run_id)
     if results is None:
         raise HTTPException(

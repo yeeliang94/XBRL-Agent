@@ -1355,7 +1355,7 @@ export function RunDetailView({
               type="button"
               data-testid="recheck-btn"
               onClick={() => void handleRecheck()}
-              disabled={recheck.running}
+              disabled={recheck.running || unsupportedStandard}
               className={uiClass.btnSecondary}
               style={ui.buttonSecondary}
             >
