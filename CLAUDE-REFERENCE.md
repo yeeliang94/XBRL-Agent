@@ -1596,18 +1596,21 @@ trace; failed attempts remain inspectable after a successful retry, pinned by
 `tests/test_notes_retry_budget.py`.
 
 **Wall-clock cap on correction (2026-04-27):**
-`CORRECTION_WALLCLOCK_TIMEOUT = 300.0` in `server.py` is
+`CORRECTION_WALLCLOCK_TIMEOUT` in `server.py` is
 defence-in-depth on top of the dynamic turn cap and the 180s per-turn
 timeout. It catches the slow-LLM scenario where many quick-but-not-
-quick-enough turns add up past 5 minutes total without either of the
+quick-enough turns add up past the configured allowance without either of the
 finer-grained guards firing. Override via `XBRL_CORRECTION_WALLCLOCK_S`
 (positive seconds; 0 disables). `NOTES_VALIDATOR_WALLCLOCK_TIMEOUT`
 (legacy name) is the same defence for the notes-reviewer pass — the pass
-inherited the old validator's constants and pseudo-agent id when it
-replaced it (gotcha #22). Its default budget is 300 seconds through 25 open
-items, then 10 additional seconds per item, capped at 600 seconds. A positive
-operator override is fixed but still capped at 600 seconds; 0 selects that
-ceiling. The wall-clock guard stops new model thinking at the deadline while
+inherited the old validator's pseudo-agent id when it replaced it (gotcha #22).
+Both reviewers default to 600 seconds. Settings changes apply on the next pass
+without restarting. Notes review adds 20 seconds per independent initial item
+above ten, capped at 1200 seconds. The base, per-item increment and ceiling
+are editable in Settings; custom bases also receive the extra allowance.
+Zero selects the notes ceiling. `notes/reviewer_limits.py` owns the defaults;
+`tests/test_settings_api.py` and `tests/test_notes_reviewer_pipeline.py` pin them.
+The wall-clock guard stops new model thinking at the deadline while
 an already issued tool call may finish under its separate timeout.
 
 ### 19. Pipeline-stage + cross-check progress events
@@ -2207,6 +2210,10 @@ Load-bearing invariants:
   they keep the reviewer pass incomplete until assessed. The reviewer skip gate
   uses `count_open_items` (detector families + unresolved rows + unassessed
   children) so suspected-gap-only and coarse-provenance-only runs still run.
+  Budgeting uses `count_review_work_items`: conflict-dependent integrity signals
+  and duplicate checklist/detector gaps do not count as independent initial work.
+  They remain in the context and are rechecked by `verify_findings` after repairs.
+  Pinned by `tests/test_notes_reviewer_tools.py`.
 - **Persistence + API.** Durable in `notes_coverage_rows` (schema v28) — one
   top-level row per note + per-sub-ref child rows + a `note_num = -1` banner
   sentinel (distinguishes `inventory_unavailable` from `pre_feature`).

@@ -32,6 +32,11 @@ from agent_tracing import (
     resolve_max_iterations,
 )
 from runtime_settings import deployment_value
+from notes.reviewer_limits import (
+    DEFAULT_REVIEWER_WALLCLOCK_S,
+    DEFAULT_NOTES_REVIEWER_EXTRA_S,
+    DEFAULT_NOTES_REVIEWER_MAX_S,
+)
 
 
 _TRUE = ("1", "true", "yes", "on")
@@ -148,12 +153,26 @@ ADVANCED_SETTINGS: tuple[AdvancedSetting, ...] = (
     AdvancedSetting(
         "XBRL_CORRECTION_WALLCLOCK_S", "Reviewer time limit (seconds)",
         "Longest the reviewer pass may run. 0 means no limit.",
-        _LIMITS, "float", 300.0, minimum=0, restart=True,
+        _LIMITS, "float", DEFAULT_REVIEWER_WALLCLOCK_S, minimum=0,
     ),
     AdvancedSetting(
-        "XBRL_NOTES_VALIDATOR_WALLCLOCK_S", "Notes reviewer time limit (seconds)",
-        "Default scales from 5 to 10 minutes with review size. A positive override sets a fixed limit up to 10 minutes; 0 uses the 10-minute limit.",
-        _LIMITS, "float", 300.0, minimum=0, restart=True,
+        "XBRL_NOTES_VALIDATOR_WALLCLOCK_S", "Notes reviewer base time (seconds)",
+        "Starts at 10 minutes for up to 10 independent review items. Extra time "
+        "is added for larger reviews, up to the maximum below. 0 uses that maximum. "
+        "Changes apply to the next review.",
+        _LIMITS, "float", DEFAULT_REVIEWER_WALLCLOCK_S, minimum=0,
+    ),
+    AdvancedSetting(
+        "XBRL_NOTES_REVIEWER_EXTRA_ITEM_S", "Notes reviewer extra time per item (seconds)",
+        "Adds 20 seconds per independent item above the first 10. "
+        "0 turns off the extra allowance. Changes apply to the next review.",
+        _LIMITS, "float", DEFAULT_NOTES_REVIEWER_EXTRA_S, minimum=0,
+    ),
+    AdvancedSetting(
+        "XBRL_NOTES_REVIEWER_MAX_WALLCLOCK_S", "Notes reviewer maximum time (seconds)",
+        "Longest the notes review may run, including extra time. "
+        "Defaults to 20 minutes. Changes apply to the next review.",
+        _LIMITS, "float", DEFAULT_NOTES_REVIEWER_MAX_S, minimum=1,
     ),
     AdvancedSetting(
         "XBRL_NOTES_FORMATTER_WALLCLOCK_S", "Notes formatter time limit (seconds)",

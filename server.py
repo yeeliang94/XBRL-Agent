@@ -1258,13 +1258,12 @@ NOTES_VALIDATOR_TURN_TIMEOUT: float = 180.0
 # the dynamic tool-turn cap (RUN-REVIEW P0-1, max 40 turns) and per-turn
 # timeout (180s above): the slow-LLM scenario where every turn takes
 # 100s but the agent never stalls would still loop for ~40 minutes
-# (40 × 100s) before any cap fires. 5 minutes is a comfortable bound
-# for "this is the legitimate work" while still being far short of
-# what the user perceives as "stuck".
+# (40 × 100s) before any cap fires. Reviewer defaults allow ten minutes;
+# notes review receives additional time for independent work, within a ceiling.
 #
 # Operators can tune via XBRL_CORRECTION_WALLCLOCK_S /
-# XBRL_NOTES_VALIDATOR_WALLCLOCK_S (positive ints, seconds). 0 or
-# negative disables the cap entirely.
+# XBRL_NOTES_VALIDATOR_WALLCLOCK_S in Settings (seconds). 0 disables the
+# figures deadline; notes review instead uses its configured maximum.
 def _resolve_wallclock(env_var: str, default: float) -> float:
     raw = os.environ.get(env_var, "")
     if not raw:
@@ -1381,20 +1380,16 @@ def _finish_reviewer_agent_row(
         conn, run_agent_id, result.get("turn_records") or [])
 
 
-CORRECTION_WALLCLOCK_TIMEOUT: float = _resolve_wallclock(
-    "XBRL_CORRECTION_WALLCLOCK_S", 300.0,
-)
-NOTES_VALIDATOR_WALLCLOCK_TIMEOUT: float = _resolve_wallclock(
-    "XBRL_NOTES_VALIDATOR_WALLCLOCK_S", 300.0,
-)
+from notes.reviewer_limits import DEFAULT_REVIEWER_WALLCLOCK_S
+
+
+CORRECTION_WALLCLOCK_TIMEOUT: float = DEFAULT_REVIEWER_WALLCLOCK_S
+NOTES_VALIDATOR_WALLCLOCK_TIMEOUT: float = DEFAULT_REVIEWER_WALLCLOCK_S
 
 
 def _notes_reviewer_wallclock_limit(configured: float, n_items: int) -> float:
-    """Scale the default review window, with a ten-minute ceiling."""
-    hard_cap = 600.0
-    if configured != 300.0:
-        return min(hard_cap, configured)  # An operator override is a fixed cap.
-    return min(hard_cap, configured + 10.0 * max(0, n_items - 25))
+    from notes.reviewer_limits import notes_reviewer_wallclock_limit
+    return notes_reviewer_wallclock_limit(configured, n_items)
 
 
 NOTES_FORMATTER_WALLCLOCK_TIMEOUT: float = _resolve_wallclock(
@@ -1776,9 +1771,9 @@ async def _run_reviewer_pass(
     turn_count = 0
     continuation_prior_usage = None
     continuation_prior_messages = []
-    _wallclock_cap = float(getattr(
+    _wallclock_cap = _resolve_wallclock("XBRL_CORRECTION_WALLCLOCK_S", float(getattr(
         _server_self, "CORRECTION_WALLCLOCK_TIMEOUT", CORRECTION_WALLCLOCK_TIMEOUT,
-    ))
+    )))
 
     # Item 17: the hand-rolled iteration loop (per-turn timeout + in-loop
     # wall-clock + call-tools turn cap + tool-event streaming) migrated onto
@@ -2503,11 +2498,12 @@ async def _run_notes_reviewer_pass(
 
     _deps_box["deps"] = deps
     outcome["context"] = _jsonsafe_reviewer_context(context)
-    from notes.reviewer_agent import count_open_items
+    from notes.reviewer_agent import count_open_items, count_review_work_items
     # count_open_items folds the coverage checklist's unresolved rows into the
     # gate, so a run whose only problem is a suspected numbering gap still runs
     # the reviewer (no detector family fires for that alone).
-    n_items = count_open_items(context)
+    n_open_items = count_open_items(context)
+    n_items = count_review_work_items(context)
 
     # Nothing flagged — skip the model entirely (latency + tokens). Emit a
     # status + success so the tab flips terminal instead of stranding. The
@@ -2516,7 +2512,7 @@ async def _run_notes_reviewer_pass(
     # cleared or repaired; a clean recompute supersedes those flags just as a
     # completed model-backed pass does. Source-capture flags are independent
     # preparation findings and deliberately survive.
-    if n_items == 0:
+    if n_open_items == 0:
         await _await_finalization_slot()
         try:
             from db import repository as _repo
@@ -2594,10 +2590,12 @@ async def _run_notes_reviewer_pass(
         "turns. Never fabricate prose; preserve valid content over a risky fix."
     )
 
-    _wallclock_cap = _notes_reviewer_wallclock_limit(float(getattr(
-        _server_self, "NOTES_VALIDATOR_WALLCLOCK_TIMEOUT",
-        NOTES_VALIDATOR_WALLCLOCK_TIMEOUT,
-    )), n_items)
+    base_wallclock = _resolve_wallclock(
+        "XBRL_NOTES_VALIDATOR_WALLCLOCK_S", float(getattr(
+            _server_self, "NOTES_VALIDATOR_WALLCLOCK_TIMEOUT",
+            NOTES_VALIDATOR_WALLCLOCK_TIMEOUT,
+        )))
+    _wallclock_cap = _notes_reviewer_wallclock_limit(base_wallclock, n_items)
 
     async def _loop_emit(event_type: str, data: dict) -> None:
         if event_type in ("tool_call", "tool_result", "token_update"):
