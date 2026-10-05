@@ -137,6 +137,23 @@ def test_sore_is_mpers_only_at_registry() -> None:
         template_path(StatementType.SOCIE, "SoRE", level="company", standard="mfrs")
 
 
+@pytest.mark.parametrize("standard", ["clbg", "unknown"])
+def test_unsupported_filing_standard_is_rejected(standard) -> None:
+    from pydantic import ValidationError
+    from server import RunConfigRequest, RunConfigPatchRequest
+    from statement_types import StatementType, template_path
+    from notes_types import NotesTemplateType, notes_template_path
+
+    with pytest.raises(ValidationError):
+        RunConfigRequest(statements=["SOFP"], filing_standard=standard)
+    with pytest.raises(ValidationError):
+        RunConfigPatchRequest(filing_standard=standard)
+    with pytest.raises(ValueError, match="Invalid filing standard"):
+        template_path(StatementType.SOFP, "CuNonCu", standard=standard)
+    with pytest.raises(ValueError, match="Invalid filing standard"):
+        notes_template_path(NotesTemplateType.CORP_INFO, standard=standard)
+
+
 # -- 6.4 / 6.5 — cross-check standard gating --------------------------
 
 

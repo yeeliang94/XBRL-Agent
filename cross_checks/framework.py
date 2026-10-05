@@ -214,7 +214,6 @@ def build_default_cross_checks(filing_standard: str = "mfrs") -> list:
     from cross_checks.sore_to_sofp_retained_earnings import (
         SoREToSOFPRetainedEarningsCheck,
     )
-    from cross_checks.clbg import clbg_checks
     return [
         SOFPBalanceCheck(),
         SOPLToSOCIEProfitCheck(),
@@ -225,7 +224,7 @@ def build_default_cross_checks(filing_standard: str = "mfrs") -> list:
         SOPLAttributionFootingCheck(),
         SOCIAttributionFootingCheck(),
         SoREToSOFPRetainedEarningsCheck(),
-    ] + (clbg_checks() if filing_standard == "clbg" else [])
+    ]
 
 
 @dataclass

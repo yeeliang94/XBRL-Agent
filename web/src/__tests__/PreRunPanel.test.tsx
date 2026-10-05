@@ -54,6 +54,17 @@ function startExtraction() {
   fireEvent.click(screen.getByRole("button", { name: /start extraction/i }));
 }
 
+test("unsupported saved filings cannot start or autosave as MFRS", async () => {
+  const onConfigChange = vi.fn();
+  render(<PreRunPanel sessionId="old-clbg" getSettings={vi.fn().mockResolvedValue(mockSettings)}
+    onRun={vi.fn()} onConfigChange={onConfigChange}
+    initialConfig={{ filing_standard: "clbg", statements: ["SOFP"] }} />);
+  expect(screen.getByRole("alert")).toHaveTextContent("CLBG filings are no longer supported");
+  await waitFor(() => expect(screen.queryByText("Loading settings...")).not.toBeInTheDocument());
+  expect(screen.queryByRole("button", { name: /start extraction/i })).not.toBeInTheDocument();
+  expect(onConfigChange).not.toHaveBeenCalled();
+});
+
 async function openAdvanced() {
   const toggle = await screen.findByTestId("advanced-toggle");
   if (toggle.getAttribute("aria-expanded") !== "true") {
@@ -83,36 +94,11 @@ describe("PreRunPanel", () => {
 
     expect(screen.getByRole("button", { name: "MFRS" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "MPERS" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.queryByRole("button", { name: "CLBG" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Company" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "Group" })).toHaveAttribute("aria-pressed", "false");
     await openAdvanced();
     expect(screen.getByRole("button", { name: "RM '000" })).toHaveAttribute("aria-pressed", "true");
-  });
-
-  test.each([false, true])("CLBG setup restricts filing scope and supported statements (saved=%s)", async (saved) => {
-    const onRun = vi.fn();
-    render(<PreRunPanel sessionId="clbg" getSettings={vi.fn().mockResolvedValue(mockSettings)}
-      initialConfig={saved ? { filing_standard: "clbg", filing_level: "group", first_financial_statements: true } : undefined}
-      onRun={onRun} />);
-    await screen.findByRole("button", { name: "CLBG" });
-    if (!saved) {
-      fireEvent.click(screen.getByRole("button", { name: "Group" }));
-      fireEvent.click(screen.getByRole("button", { name: "CLBG" }));
-    }
-    await waitFor(() => expect(screen.getByRole("button", { name: "Company" })).toHaveAttribute("aria-pressed", "true"));
-    expect(screen.getByRole("button", { name: "Group" })).toBeDisabled();
-    expect(screen.getByRole("checkbox", { name: /income and expenditure/i })).toBeChecked();
-    expect(screen.getByRole("checkbox", { name: /changes in funds/i })).toBeChecked();
-    expect(screen.getByRole("checkbox", { name: /not prepared/i })).toBeDisabled();
-    expect(screen.queryByRole("checkbox", { name: /issued capital/i })).not.toBeInTheDocument();
-    startExtraction();
-    await waitFor(() => expect(onRun).toHaveBeenCalled());
-    const config = onRun.mock.calls[0][0];
-    expect(config.filing_standard).toBe("clbg");
-    expect(config.filing_level).toBe("company");
-    expect(config.statements).not.toContain("SOCI");
-    expect(config.notes_to_run).not.toContain("ISSUED_CAPITAL");
-    expect(config.first_financial_statements).toBe(saved);
   });
 
   test("renders all major sections", async () => {

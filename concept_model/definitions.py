@@ -31,7 +31,7 @@ from notes.labels import normalize_label
 _THIS_DIR = Path(__file__).resolve().parent
 
 # Standards we ship an index for. Mirrors the generator's _DOC_LINKBASES keys.
-SUPPORTED_STANDARDS = ("mfrs", "mpers", "clbg")
+SUPPORTED_STANDARDS = ("mfrs", "mpers")
 
 # Score below which a candidate is considered "not really a match". Tuned so an
 # exact/substring label hit always clears it and unrelated noise does not.

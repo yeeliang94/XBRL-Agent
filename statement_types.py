@@ -15,7 +15,7 @@ from typing import Literal
 # Axis orthogonal to `filing_level`. MFRS remains the implicit default for
 # every pre-existing caller; MPERS templates live in a parallel directory
 # tree with the same filenames (except for the MPERS-only 10-SoRE.xlsx).
-FilingStandard = Literal["mfrs", "mpers", "clbg"]
+FilingStandard = Literal["mfrs", "mpers"]
 
 
 # The `run_agents.status` values for a statement whose extracted facts WERE
@@ -103,8 +103,17 @@ TEMPLATE_DIR = Path(__file__).resolve().parent / "XBRL-template-MFRS"
 TEMPLATE_DIRS: dict[str, Path] = {
     "mfrs": TEMPLATE_DIR,
     "mpers": Path(__file__).resolve().parent / "XBRL-template-MPERS",
-    "clbg": Path(__file__).resolve().parent / "XBRL-template-CLBG",
 }
+
+
+def unsupported_filing_standard_message(standard: object) -> str | None:
+    """Keep a saved unsupported filing from being silently reused."""
+    if isinstance(standard, str) and standard in TEMPLATE_DIRS:
+        return None
+    return (
+        f"{str(standard).upper()} filings are no longer supported. "
+        "This saved run cannot be rerun or used to prepare a filing workbook."
+    )
 
 
 # Starter registry. Detection signals are the minimal evidence a human would
@@ -215,20 +224,8 @@ def get_variant(statement: StatementType, variant_name: str) -> Variant:
 
 _VALID_LEVELS = ("company", "group")
 
-# CLBG uses the existing income and changes statement slots for income and
-# expenditure / changes in fund. Its taxonomy has no standalone SOCI, direct
-# cash flow, liquidity-order SOFP, retained-earnings or issued-capital template.
-_CLBG_VARIANTS = {
-    (StatementType.SOFP, "CuNonCu"),
-    (StatementType.SOPL, "Function"), (StatementType.SOPL, "Nature"),
-    (StatementType.SOCI, "NotPrepared"),
-    (StatementType.SOCF, "Indirect"), (StatementType.SOCIE, "Default"),
-}
-
 
 def variant_applies_to_standard(variant: Variant, standard: str) -> bool:
-    if standard == "clbg":
-        return (variant.statement, variant.name) in _CLBG_VARIANTS
     return standard in variant.applies_to_standard
 
 
@@ -256,8 +253,6 @@ def template_path(
             f"must be one of {tuple(TEMPLATE_DIRS)}"
         )
     v = get_variant(statement, variant_name)
-    if standard == "clbg" and level != "company":
-        raise ValueError("CLBG currently supports Company filings only")
     if not v.template_filename:
         raise ValueError(
             f"{statement.value}/{variant_name} has no template — "

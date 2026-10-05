@@ -58,7 +58,7 @@ def detect_variant_from_signals(
 
     Returns the best-matching variant name, or None if no signals matched.
     """
-    if standard in ("mfrs", "mpers", "clbg"):
+    if standard in ("mfrs", "mpers"):
         candidates = variants_for_standard(statement_type, standard)
     else:
         candidates = variants_for(statement_type)

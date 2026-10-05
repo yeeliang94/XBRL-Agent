@@ -68,7 +68,9 @@ def header_dimensions(text):
 
 def inventory(path):
     from concept_model.dimensions import numeric_category_catalog
-    standard = 'mpers' if '_MPERS_' in path.name else 'clbg' if '_CLBG_' in path.name else 'mfrs'
+    if '_CLBG_' in path.name:
+        raise ValueError('Unsupported filing standard: CLBG')
+    standard = 'mpers' if '_MPERS_' in path.name else 'mfrs'
     roots = numeric_category_catalog(standard, roots_only=True)
     _, sheets = raw_workbook(path)
     out = []
@@ -198,7 +200,9 @@ def run_workbook(source, output_dir, include_primary=False):
     from mtool.template_map import resolve_filing_doc
     from mtool.offline_fill import fill_workbook
     from notes_types import NotesTemplateType, notes_template_path
-    standard = 'mpers' if '_MPERS_' in source.name else 'clbg' if '_CLBG_' in source.name else 'mfrs'
+    if '_CLBG_' in source.name:
+        raise ValueError('Unsupported filing standard: CLBG')
+    standard = 'mpers' if '_MPERS_' in source.name else 'mfrs'
     level = 'group' if '_Group_' in source.name else 'company'
     first_time = '_FirstTime_' in source.name
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -217,13 +221,9 @@ def run_workbook(source, output_dir, include_primary=False):
                     'SOCF':'Direct' if 'SOCF-Direct' in source.name else 'Indirect',
                     'SOCIE':'SoRE' if '_SORE_' in source.name else 'Default'}
         for statement, variant in variants.items():
-            if standard == 'clbg' and statement == 'SOCI':
-                continue
             _import_one(db,template_path(StatementType(statement),variant,level,standard),level)
             statement_variants[statement] = variant
     for note in (NotesTemplateType.ISSUED_CAPITAL, NotesTemplateType.RELATED_PARTY):
-        if standard == 'clbg' and note == NotesTemplateType.ISSUED_CAPITAL:
-            continue
         _import_one(db, notes_template_path(note, level=level, standard=standard), level)
     roots = numeric_category_catalog(standard, roots_only=True)
     catalog = numeric_category_catalog(standard)
@@ -236,8 +236,7 @@ def run_workbook(source, output_dir, include_primary=False):
                 'denomination':'thousands' if '_RM000' in source.name else 'units',
                 'first_financial_statements':first_time,
                 'statements':list(statement_variants),'variants':statement_variants,
-                'notes_to_run':[n.value for n in (NotesTemplateType.ISSUED_CAPITAL, NotesTemplateType.RELATED_PARTY)
-                                if standard != 'clbg' or n != NotesTemplateType.ISSUED_CAPITAL]}))).lastrowid
+                'notes_to_run':[n.value for n in (NotesTemplateType.ISSUED_CAPITAL, NotesTemplateType.RELATED_PARTY)]}))).lastrowid
         conn.commit()
         nodes = list(conn.execute('SELECT n.*, sa.primary_concept FROM concept_nodes n '
                                   'JOIN concept_semantic_addresses sa ON sa.concept_uuid=n.concept_uuid '

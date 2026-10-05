@@ -38,7 +38,7 @@ from concept_model.filing_targets import persist_template_manifest
 
 logger = logging.getLogger(__name__)
 
-_STANDARDS = ("mfrs", "mpers", "clbg")
+_STANDARDS = ("mfrs", "mpers")
 _LEVELS = ("company", "group")
 
 

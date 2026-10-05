@@ -54,7 +54,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse, Response
 from starlette.background import BackgroundTask
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from utils.atomic_io import replace_with_retry
 
 # Suppress LiteLLM SSL warnings (enterprise firewall blocks GitHub pricing fetch)
@@ -3373,16 +3373,8 @@ class RunConfigRequest(BaseModel):
     # legacy rows) continue to resolve to the MFRS template tree without
     # changes. `"mpers"` routes through XBRL-template-MPERS/ and enables
     # the SoRE variant on SOCIE.
-    filing_standard: Literal["mfrs", "mpers", "clbg"] = "mfrs"
+    filing_standard: Literal["mfrs", "mpers"] = "mfrs"
 
-    @model_validator(mode="after")
-    def _validate_clbg_shape(self):
-        if self.filing_standard == "clbg":
-            if self.filing_level != "company":
-                raise ValueError("CLBG currently supports Company filings only")
-            if "ISSUED_CAPITAL" in self.notes_to_run:
-                raise ValueError("CLBG has no issued-capital notes template")
-        return self
     # Presentation denomination the user declares for the source statements.
     # The figures in MBRS statements are reported at a scale ("RM '000",
     # "RM mil", or actual RM); the agent transcribes figures verbatim and uses
@@ -3444,7 +3436,7 @@ class RunConfigPatchRequest(BaseModel):
     first_financial_statements: Optional[bool] = None
     notes_inventory_overrides: Optional["NotesInventoryOverrides"] = None
     filing_level: Optional[Literal["company", "group"]] = None
-    filing_standard: Optional[Literal["mfrs", "mpers", "clbg"]] = None
+    filing_standard: Optional[Literal["mfrs", "mpers"]] = None
     # Mirrors RunConfigRequest.denomination. Must be present here too, or a
     # debounced draft PATCH silently drops a non-default scale and the
     # draft-start path rebuilds the run at the "thousands" default — defeating

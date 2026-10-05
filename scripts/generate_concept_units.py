@@ -77,7 +77,6 @@ _TYPE_TO_UNIT_CLASS: dict[str, str] = {
 # Which concept-id prefixes belong to each filing standard. `ssmt` (the shared
 # SSM core) and the DEI prefixes are common to both.
 _STANDARD_PREFIXES: dict[str, tuple[str, ...]] = {
-    "clbg": ("ssmt-mfrs", "ssmt", "ifrs-full", "ssmt-dei", "ssmt-ee", "ssmt-dei-ee-mfrs"),
     "mfrs": ("ssmt-mfrs", "ssmt", "ifrs-full", "ssmt-dei", "ssmt-ee",
              "ssmt-dei-ee-mfrs"),
     "mpers": ("ssmt-mpers", "ssmt", "ifrs-smes", "ssmt-dei", "ssmt-ee",
@@ -240,7 +239,7 @@ def main() -> int:
     print(f"scanned {len(element_types)} element declarations, "
           f"{len(label_map)} labelled concepts")
 
-    for standard in ("mfrs", "mpers", "clbg"):
+    for standard in ("mfrs", "mpers"):
         index = build_index(standard, element_types, label_map)
         counts: dict[str, int] = defaultdict(int)
         for unit_class in index.values():

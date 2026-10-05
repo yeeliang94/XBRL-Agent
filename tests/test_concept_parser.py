@@ -281,7 +281,7 @@ def test_parses_every_live_template_without_error() -> None:
     skipped_matrix = 0
     for standard, level in (
         ("MFRS", "Company"), ("MFRS", "Group"),
-        ("MPERS", "Company"), ("MPERS", "Group"), ("CLBG", "Company"),
+        ("MPERS", "Company"), ("MPERS", "Group"),
     ):
         root = REPO_ROOT / f"XBRL-template-{standard}" / level
         assert root.is_dir(), f"supported template directory missing: {root}"

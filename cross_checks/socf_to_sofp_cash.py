@@ -59,7 +59,6 @@ class _Value:
 
 
 class SOCFToSOFPCashCheck:
-    applies_to_standard = frozenset({"mfrs", "mpers", "clbg"})
     name = "socf_to_sofp_cash"
     required_statements = {StatementType.SOCF, StatementType.SOFP}
 

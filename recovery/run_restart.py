@@ -127,6 +127,11 @@ def clone_run_as_draft(
         parent = repo.fetch_run(conn, parent_run_id)
     if parent is None:
         raise RunRestartError("Run not found")
+    from statement_types import unsupported_filing_standard_message
+    unsupported = unsupported_filing_standard_message(
+        (parent.config or {}).get("filing_standard", "mfrs"))
+    if unsupported:
+        raise RunRestartError(unsupported)
     if parent.status == "running":
         raise RunRestartError(
             "This run is still running. Wait for it to finish or abort it before redoing it."
