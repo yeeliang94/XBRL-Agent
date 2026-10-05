@@ -442,8 +442,6 @@ def derive_template_id(path: Path) -> str:
         low = part.lower()
         if "mpers" in low:
             standard = "mpers"
-        elif "clbg" in low:
-            standard = "clbg"
         if low == "group":
             level = "group"
         elif low == "company":
@@ -830,7 +828,6 @@ def _cli_all(pretty: bool) -> int:
     template_roots = [
         repo / "XBRL-template-MFRS",
         repo / "XBRL-template-MPERS",
-        repo / "XBRL-template-CLBG",
     ]
     skipped: list[tuple[Path, str]] = []
     ok = 0

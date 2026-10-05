@@ -88,9 +88,9 @@ const styles = {
   checkboxLabel: {
     display: "flex",
     alignItems: "center",
-    gap: pwc.space.xs,
+    gap: pwc.space.sm,
     fontFamily: pwc.fontBody,
-    fontSize: 13,
+    fontSize: 14,
     color: pwc.grey700,
     cursor: "pointer",
   } as React.CSSProperties,
@@ -375,7 +375,7 @@ export function UsersTab({ currentEmail }: UsersTabProps = {}) {
           </label>
           <label className="settings-users-checkbox" style={styles.checkboxLabel}>
             <input
-              type="checkbox"
+              type="checkbox" style={ui.checkbox}
               checked={newIsAdmin}
               onChange={(e) => setNewIsAdmin(e.target.checked)}
             />

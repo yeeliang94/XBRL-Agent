@@ -313,11 +313,10 @@ def build_parser():
                         help="Base output directory (default: output/ next to this script)")
     parser.add_argument("--level", default="company", choices=["company", "group"],
                         help="Filing level: company (standalone) or group (consolidated + company)")
-    parser.add_argument("--standard", default="mfrs", choices=["mfrs", "mpers", "clbg"],
+    parser.add_argument("--standard", default="mfrs", choices=["mfrs", "mpers"],
                         help="Filing standard: mfrs (default, routes to "
                              "XBRL-template-MFRS/) or mpers (routes to "
-                             "XBRL-template-MPERS/ and enables SoRE), or clbg "
-                             "(Company limited by guarantee).")
+                             "XBRL-template-MPERS/ and enables SoRE).")
     parser.add_argument("--denomination", default=None,
                         choices=["units", "thousands", "millions"],
                         help="Presentation scale the filer declares for the "

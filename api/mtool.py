@@ -222,6 +222,10 @@ def _load_fillable_run(run_id: int):
             detail="Wait for extraction to finish, or stop it before filling a template.",
         )
     config = run.config or {}
+    from statement_types import unsupported_filing_standard_message
+    unsupported = unsupported_filing_standard_message(config.get("filing_standard", "mfrs"))
+    if unsupported:
+        raise HTTPException(status_code=409, detail=unsupported)
     return (
         run,
         config.get("filing_standard", "mfrs"),

@@ -275,7 +275,7 @@ def test_category_resolution_refuses_unsafe_moves_without_partial_writes(unresol
 
 
 @pytest.mark.parametrize('standard,level', [('mfrs', 'group'), ('mpers', 'company'),
-                                           ('mpers', 'group'), ('clbg', 'company')])
+                                           ('mpers', 'group')])
 def test_category_resolution_uses_exact_run_family_and_scope(tmp_path, standard, level):
     import json
     from db.schema import init_db

@@ -173,6 +173,11 @@ async def download_filled_endpoint(run_id: int):
         conn.close()
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
+    from statement_types import unsupported_filing_standard_message
+    unsupported = unsupported_filing_standard_message(
+        (run.config or {}).get("filing_standard", "mfrs"))
+    if unsupported:
+        raise HTTPException(status_code=409, detail=unsupported)
     raise HTTPException(status_code=409, detail={
         "code": "mtool_template_required",
         "message": "Choose the mTool template to prepare your draft. Draft and filing now use the same workbook and value injection.",

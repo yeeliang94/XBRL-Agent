@@ -1,10 +1,10 @@
 """Notes registry bootstrap — Track A (prose) + Track B (numeric).
 
 PLAN-notes-template-registry Phase 2. import_all_notes_templates imports the 5
-notes templates across MFRS/MPERS Company/Group and CLBG Company:
-  * prose (CORP_INFO, ACC_POLICIES, LIST_OF_NOTES) → notes_nodes (15 templates);
+notes templates across {mfrs,mpers} × {company,group}:
+  * prose (CORP_INFO, ACC_POLICIES, LIST_OF_NOTES) → notes_nodes (12 templates);
   * numeric (ISSUED_CAPITAL, RELATED_PARTY) → concept_nodes + concept_targets
-    (9 templates), reusing the face pipeline; CLBG has no issued-capital note.
+    (8 templates), reusing the face pipeline.
 
 Pins: the prose/numeric split lands in the right tables, prose ids are
 template-scoped (no MFRS/MPERS × Company/Group collision), and re-import is
@@ -20,9 +20,9 @@ from db.schema import init_db
 from concept_model.bootstrap import import_all_notes_templates
 
 
-# CLBG Company adds three prose notes and one related-party numeric note.
-_PROSE_TEMPLATES = 3 * 2 * 2 + 3   # → notes_nodes
-_NUMERIC_TEMPLATES = 2 * 2 * 2 + 1  # → concept_nodes
+# 3 prose + 2 numeric note types, each across 2 standards × 2 levels.
+_PROSE_TEMPLATES = 3 * 2 * 2   # → notes_nodes
+_NUMERIC_TEMPLATES = 2 * 2 * 2  # → concept_nodes
 
 
 @pytest.fixture()
@@ -39,15 +39,9 @@ def _conn(db):
     return c
 
 
-def test_imports_all_supported_templates(imported_db):
+def test_imports_all_twenty_templates(imported_db):
     _db, ids = imported_db
-    assert len(ids) == _PROSE_TEMPLATES + _NUMERIC_TEMPLATES  # 24
-    assert {i for i in ids if i.startswith("clbg-")} == {
-        "clbg-company-notes-corporateinfo-v1",
-        "clbg-company-notes-accountingpolicies-v1",
-        "clbg-company-notes-listofnotes-v1",
-        "clbg-company-notes-relatedparty-v1",
-    }
+    assert len(ids) == _PROSE_TEMPLATES + _NUMERIC_TEMPLATES  # 20
 
 
 def test_prose_lands_in_notes_nodes_only(imported_db):
@@ -132,9 +126,10 @@ def test_prose_ids_are_template_scoped(imported_db):
             "WHERE sheet = 'Notes-CI' AND label = 'Corporate information'"
         ).fetchall()
         by_template = {r["template_id"]: r["node_uuid"] for r in rows}
-        # Four MFRS/MPERS families plus CLBG Company remain distinct.
-        assert len(by_template) == 5
-        assert len(set(by_template.values())) == 5
+        # Present in all four families (both standards × both levels).
+        assert len(by_template) == 4
+        # All four uuids are distinct.
+        assert len(set(by_template.values())) == 4
     finally:
         conn.close()
 
@@ -354,7 +349,7 @@ def test_manifest_repersist_clears_a_stale_note_quarantine(imported_db):
 @pytest.mark.parametrize(
     ("standard", "level"),
     [("mfrs", "company"), ("mfrs", "group"),
-     ("mpers", "company"), ("mpers", "group"), ("clbg", "company")],
+     ("mpers", "company"), ("mpers", "group")],
 )
 def test_runtime_semantic_coverage_accepts_each_filing_family(
     imported_db, standard, level,

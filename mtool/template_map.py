@@ -73,16 +73,13 @@ def index_workbook(data: dict) -> tuple[dict, dict]:
                             (sheet, int(row), col))
         # mTool 2.2 encodes the SOCIE all-components column as numeric 0
         # beside the table::axis::member headers, with the display label Total.
-        # It is the equity or CLBG fund total, not a missing source category. Require
+        # It is the equity total, not a missing source category. Require
         # the exact axis/table header and total marker together; never infer a
         # default from a blank column or position.
         for row, row_cells in cells.items():
             total_members = [f"{prefix}_EquityMember" for prefix in ('ifrs-full', 'ifrs-smes') if any(
                 {f"{prefix}_StatementOfChangesInEquityTable", f"{prefix}_ComponentsOfEquityAxis"}
                 <= set(_taxonomy_identifiers(raw or "")) for _, raw in row_cells.values())]
-            if any({'ssmt-mfrs_StatementOfChangesInFundTable', 'ssmt-mfrs_ComponentsOfFundAxis'}
-                   <= set(_taxonomy_identifiers(raw or "")) for _, raw in row_cells.values()):
-                total_members.append('ssmt-mfrs_FundsAndReservesMember')
             for prefix in ('ifrs-full', 'ifrs-smes'):
                 for table, axis, member in (
                     ('DisclosureOfClassesOfShareCapitalTable', 'ClassesOfShareCapitalAxis', 'ClassesOfShareCapitalMember'),

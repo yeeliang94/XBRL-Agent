@@ -645,9 +645,7 @@ def verify_totals(
                     if val_e is not None:
                         computed_totals["company_total_assets_py"] = val_e
 
-            elif label == _TOTAL_EQ_LIAB_LABEL or label == "total equity and liabilities" or (
-                filing_standard == "clbg" and label == "total fund/equity and liabilities"
-            ):
+            elif label == _TOTAL_EQ_LIAB_LABEL or label == "total equity and liabilities":
                 val_b = _get_cell_value(wb, ws, cell.row, 2, warnings=formula_warnings)
                 val_c = _get_cell_value(wb, ws, cell.row, 3, warnings=formula_warnings)
                 if val_b is not None:
@@ -815,15 +813,6 @@ def _normalize_label(label: str) -> str:
     return label.strip().lstrip("*").strip().lower()
 
 
-def _clbg_profit_rows(sheet: str) -> list[int]:
-    """Exact CLBG ProfitLoss occurrences; continuing-operations surplus is distinct."""
-    from scripts.generate_clbg_templates import role_rows
-    role = {"SOIE-Function": "310000", "SOIE-Nature": "320000"}.get(sheet)
-    if role is None:
-        return []
-    return [row for row, item in enumerate(role_rows(role), 3) if item[1] == "ifrs-full_ProfitLoss"]
-
-
 def _get_cell_value(
     wb: openpyxl.Workbook, ws, row: int, col: int,
     warnings: Optional[list[str]] = None,
@@ -897,14 +886,14 @@ def _collect_unfilled_mandatory(
     unfilled: list[str] = []
     is_socie_matrix = (
         statement_name == "SOCIE" and (
-            filing_standard == "mfrs" or ws.title == "SOCIE" and ws.max_column >= (14 if filing_standard == "clbg" else 15)
+            filing_standard == "mfrs" or ws.title == "SOCIE" and ws.max_column >= 15
         )
     )
     if is_socie_matrix:
         # Any component column with a value means the
         # row was entered — block boundaries don't matter because each
         # mandatory row only lives in one block.
-        cy_cols = list(range(2, {"mpers": 16, "clbg": 15}.get(filing_standard, 25)))
+        cy_cols = list(range(2, {"mpers": 16}.get(filing_standard, 25)))
     else:
         cy_cols = [c for c, _ in _cy_columns(filing_level)]
     for row in range(1, ws.max_row + 1):
@@ -1095,23 +1084,6 @@ def _opening_restatement_mismatch(
     return None
 
 
-def _clbg_movement_mismatches(
-    label: str, surplus: Optional[float], oci: Optional[float],
-    tci: Optional[float], contributions: Optional[float], changes: Optional[float],
-) -> list[str]:
-    mismatches = []
-    for name, actual, left, right in (
-        ("comprehensive surplus", tci, surplus, oci),
-        ("changes in fund/equity", changes, tci, contributions),
-    ):
-        # Undisclosed movements contribute zero. A blank subtotal with
-        # populated, nonzero components still fails this equation.
-        actual, left, right = (v if v is not None else 0.0 for v in (actual, left, right))
-        if abs(actual - left - right) > _balance_tolerance(actual, left, right):
-            mismatches.append(f"{label}: {name} ({actual}) != source components ({left}) + ({right}) = {left + right}")
-    return mismatches
-
-
 def _verify_socie(
     path: str,
     variant: str = "",
@@ -1144,12 +1116,7 @@ def _verify_socie(
     # and a legitimate SoRE extraction fails verification (peer-review).
     # The balance arithmetic is identical (closing = restated + increase).
     is_sore = (variant or "").strip().lower() == "sore" or ws.title.lower() == "sore"
-    if filing_standard == "clbg":
-        restated_label = "balance at beginning of period, restated"
-        total_label = "total changes in fund/equity"
-        closing_label = "balance at end of period"
-        pretty = tuple(f"'{label}'" for label in (restated_label, total_label, closing_label))
-    elif is_sore:
+    if is_sore:
         restated_label = "retained earnings at beginning of period, restated"
         total_label = "total increase (decrease) in retained earnings"
         closing_label = "retained earnings at end of period"
@@ -1190,7 +1157,7 @@ def _verify_socie(
     # SOCIE totals use MFRS X or MPERS O; SoRE keeps linear period columns.
     from cross_checks.util import socie_total_column
 
-    total_col = 2 if is_sore else 14 if filing_standard == "clbg" else socie_total_column(filing_standard)
+    total_col = 2 if is_sore else socie_total_column(filing_standard)
 
     if filing_level == "group":
         block_labels = ["group_cy", "group_py", "company_cy", "company_py"]
@@ -1209,10 +1176,9 @@ def _verify_socie(
             for i, (rest, inc, close) in enumerate(zip(restated_rows, total_inc_rows, closing_rows))
         ]
 
-    if filing_standard in {"mpers", "clbg"} and not linear:
+    if filing_standard == "mpers" and not linear:
         from cross_checks.util import socie_component_columns
-        columns = ([2, 3, 4, 5, 6, 7, 8, 10, 13] if filing_standard == "clbg"
-                   else socie_component_columns(filing_standard)) + [total_col]
+        columns = socie_component_columns(filing_standard) + [total_col]
         balance_cells = [
             (label if col == total_col else f"{label} [{openpyxl.utils.get_column_letter(col)}]", rest, inc, close, col)
             for label, rest, inc, close, _ in balance_cells for col in columns
@@ -1220,7 +1186,7 @@ def _verify_socie(
 
     def read_balance(row: int, column: int) -> Optional[float]:
         raw = ws.cell(row, column).value
-        if filing_standard in {"mpers", "clbg"} and isinstance(raw, str) and raw.startswith("="):
+        if filing_standard == "mpers" and isinstance(raw, str) and raw.startswith("="):
             from cross_checks.util import _formula_has_numeric_source
             if not _formula_has_numeric_source(wb, ws.title, raw):
                 return None
@@ -1230,7 +1196,7 @@ def _verify_socie(
         restated = read_balance(rest_r, column)
         increase = read_balance(inc_r, column)
         closing = read_balance(close_r, column)
-        if filing_standard in {"mpers", "clbg"}:
+        if filing_standard == "mpers":
             index = restated_rows.index(rest_r)
             opening_rows = label_rows.get(restated_label.removesuffix(", restated"), [])
             adjustment_rows = label_rows.get("impact of changes in accounting policies", [])
@@ -1238,26 +1204,11 @@ def _verify_socie(
                        if index < len(opening_rows) else None)
             adjustment = (read_balance(adjustment_rows[index], column)
                           if index < len(adjustment_rows) else None)
-            movement_values = []
-            if filing_standard == "clbg":
-                prior_rows = label_rows.get("other prior period adjustments", [])
-                prior = read_balance(prior_rows[index], column) if index < len(prior_rows) else None
-                adjustment = ((adjustment or 0.0) + (prior or 0.0)
-                              if adjustment is not None or prior is not None else None)
-                for row_label in ("total surplus (deficit)", "total other comprehensive surplus (deficit)",
-                                  "total comprehensive surplus (deficit)", "total contributions by and distributions to owners"):
-                    rows = label_rows.get(row_label, [])
-                    movement_values.append(read_balance(rows[index], column) if index < len(rows) else None)
-            if all(v is None for v in (opening, adjustment, restated, increase, closing, *movement_values)):
+            if all(v is None for v in (opening, adjustment, restated, increase, closing)):
                 continue
-            if filing_standard == "clbg":
-                movement_mismatches = _clbg_movement_mismatches(label, *movement_values, increase)
-                if movement_mismatches:
-                    is_balanced = False
-                    mismatches.extend(movement_mismatches)
             opening_mismatch = _opening_restatement_mismatch(
                 label, opening, adjustment, restated,
-                "opening adjustments" if filing_standard == "clbg" else "accounting-policy adjustment",
+                "accounting-policy adjustment",
             )
             if opening_mismatch:
                 is_balanced = False
@@ -1517,8 +1468,7 @@ def _verify_sopl(
 ) -> VerificationResult:
     wb = openpyxl.load_workbook(path, data_only=False)
 
-    sheet_names_to_try = (["SOIE-Function", "SOIE-Nature"] if filing_standard == "clbg"
-                          else ["SOPL-Function", "SOPL-Nature"])
+    sheet_names_to_try = ["SOPL-Function", "SOPL-Nature"]
     ws = None
     for sn in sheet_names_to_try:
         if sn in wb.sheetnames:
@@ -1539,12 +1489,11 @@ def _verify_sopl(
     profit_loss_row = None
     total_profit_row = None
     last_profit_loss_row = None  # track the last "profit (loss)" for Nature variant
-    clbg_profit_rows = set(_clbg_profit_rows(ws.title)) if filing_standard == "clbg" else set()
     for row in range(1, ws.max_row + 1):
         val = ws.cell(row=row, column=1).value
         if val:
             norm = _normalize_label(str(val))
-            if norm == "profit (loss)" or row in clbg_profit_rows:
+            if norm == "profit (loss)":
                 if profit_loss_row is None:
                     profit_loss_row = row
                 last_profit_loss_row = row

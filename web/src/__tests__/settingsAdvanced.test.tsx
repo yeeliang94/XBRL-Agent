@@ -4,6 +4,24 @@ import { GeneralSettingsForm } from "../components/GeneralSettingsForm";
 
 const ROWS = [
   {
+    key: "XBRL_NOTES_VALIDATOR_WALLCLOCK_S", label: "Notes reviewer base time (seconds)",
+    help: "Extra time is added for larger reviews.",
+    group: "Time and turn limits", kind: "float", default: 600, min: 0, max: null,
+    choices: [], restart: false, value: 600, fallback: 600, saved_here: false,
+  },
+  {
+    key: "XBRL_NOTES_REVIEWER_EXTRA_ITEM_S", label: "Notes reviewer extra time per item (seconds)",
+    help: "Adds time above the first 10 items.",
+    group: "Time and turn limits", kind: "float", default: 20, min: 0, max: null,
+    choices: [], restart: false, value: 20, fallback: 20, saved_here: false,
+  },
+  {
+    key: "XBRL_NOTES_REVIEWER_MAX_WALLCLOCK_S", label: "Notes reviewer maximum time (seconds)",
+    help: "Longest the notes review may run.",
+    group: "Time and turn limits", kind: "float", default: 1200, min: 1, max: null,
+    choices: [], restart: false, value: 1200, fallback: 1200, saved_here: false,
+  },
+  {
     key: "XBRL_MAX_CONCURRENT_AGENTS", label: "Agents running at once",
     help: "How many agents may call the AI service at the same time.",
     group: "Time and turn limits", kind: "int", default: 0, min: 0, max: null,
@@ -55,6 +73,15 @@ describe("Advanced settings", () => {
     const { saveSettings, getSettings } = renderForm();
     const agents = await screen.findByLabelText("Agents running at once");
     expect(agents).toHaveValue(3);
+    const base = screen.getByLabelText("Notes reviewer base time (seconds)");
+    const extra = screen.getByLabelText("Notes reviewer extra time per item (seconds)");
+    const maximum = screen.getByLabelText("Notes reviewer maximum time (seconds)");
+    expect(base).toHaveValue(600);
+    expect(extra).toHaveValue(20);
+    expect(maximum).toHaveValue(1200);
+    fireEvent.change(base, { target: { value: "720" } });
+    fireEvent.change(extra, { target: { value: "30" } });
+    fireEvent.change(maximum, { target: { value: "1500" } });
     const steps = screen.getByLabelText("Maximum steps per extraction agent");
     expect(steps).toHaveValue(60);
     fireEvent.change(steps, { target: { value: "120" } });
@@ -73,6 +100,9 @@ describe("Advanced settings", () => {
 
     await waitFor(() => expect(saveSettings).toHaveBeenCalled());
     expect(saveSettings.mock.calls[0][0].advanced_settings).toEqual({
+      XBRL_NOTES_VALIDATOR_WALLCLOCK_S: 720,
+      XBRL_NOTES_REVIEWER_EXTRA_ITEM_S: 30,
+      XBRL_NOTES_REVIEWER_MAX_WALLCLOCK_S: 1500,
       XBRL_MAX_CONCURRENT_AGENTS: 5,
       XBRL_MAX_AGENT_ITERATIONS: 120,
       XBRL_TEMPLATE_IN_PROMPT: null,
@@ -95,6 +125,7 @@ describe("Advanced settings", () => {
   test("is read-only for non-admins", async () => {
     renderForm(false);
     expect(await screen.findByLabelText("Agents running at once")).toBeDisabled();
+    expect(screen.getByLabelText("Notes reviewer base time (seconds)")).toBeDisabled();
     expect(screen.getByLabelText("Put the template in the agent's instructions")).toBeDisabled();
     expect(screen.queryByRole("button", { name: /Use default/ })).toBeNull();
   });

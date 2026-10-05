@@ -293,21 +293,9 @@ def test_category_note_zero_total_requires_exact_table_axis_and_total_label(tmp_
         assert ready['writes'][0]['cell'] == 'F6'
 
 
-@pytest.mark.parametrize('clbg_role', [True,False])
-def test_clbg_related_party_native_alias_requires_exact_role(clbg_role):
-    from mtool.offline_fill import resolve_sheet_name
-    cells = {'Notes-Relatedpartytransactions':{1:{'A':('S',
-        'http://xbrl.ssm.com.my/role/ssm/rol_ssmt-fs-clbg_2022-12-31/ssmt-fs-clbg_2022-12-31_role-640000'
-        if clbg_role else 'http://xbrl.ssm.com.my/role/ssm/rol_ssmt-fs-mfrs_2022-12-31/ssmt-fs-mfrs_2022-12-31_role-750000')},
-        2:{'B':('S','native.xsd#ssmt-mfrs_DisclosureOnRelatedPartyTransactionsAbstract'),
-           'E':('S','native.xsd#ifrs-full_CategoriesOfRelatedPartiesAxis')}}}
-    assert resolve_sheet_name('Notes-RelatedPartytran',cells) == ('Notes-Relatedpartytransactions' if clbg_role else None)
-
-
 @pytest.mark.parametrize('standard,pattern,minimum_inputs', [
     ('mfrs','mTool_MFRS_Company*NetOfTax*SOCIE_RM.xlsx',332),
     ('mpers','mTool_MPERS_Company*NetOfTax*Indirect*SOCIE_RM.xlsx',336),
-    ('clbg','mTool_CLBG_Company*.xlsx',96),
 ])
 def test_real_native_category_note_fields_round_trip_independent_xml(tmp_path, standard, pattern, minimum_inputs):
     """Every native category input retains independent raw-XML destination identity."""
@@ -325,25 +313,3 @@ def test_real_native_category_note_fields_round_trip_independent_xml(tmp_path, s
     assert not result['style_changes'] and not result['formula_changes']
     assert not result['reverse_issues'] and result['reverse_error'] is None, result
     assert all(n['outcome'] == 'rejected_as_designed' for n in result['negatives'])
-
-
-@pytest.mark.parametrize('clbg_role,exact_marker', [(True,True),(False,True),(True,False)])
-def test_clbg_sofp_sub_alias_requires_exact_role_and_marker(clbg_role, exact_marker):
-    from mtool.offline_fill import resolve_sheet_name
-    family = 'clbg' if clbg_role else 'mfrs'
-    cells = {'SOFP-Sub':{1:{'A':('S',
-        f'http://xbrl.ssm.com.my/role/ssm/rol_ssmt-fs-{family}_2022-12-31/ssmt-fs-{family}_2022-12-31_role-210100')},
-        10:{'A':('S','native.xsd#'+('ssmt-mfrs_DisclosureOnSubclassificationOfAssetsLiabilitiesAndEquityAbstract'
-                                   if exact_marker else 'ssmt-mfrs_DisclosureOnStatementOfFinancialPositionAbstract'))}}}
-    assert resolve_sheet_name('SOFP-Sub-CuNonCu',cells) == ('SOFP-Sub' if clbg_role and exact_marker else None)
-
-
-@pytest.mark.parametrize('clbg_role,exact_marker', [(True,True),(False,True),(True,False)])
-def test_clbg_accounting_policies_alias_requires_exact_role_and_marker(clbg_role, exact_marker):
-    from mtool.offline_fill import resolve_sheet_name
-    family = 'clbg' if clbg_role else 'mfrs'
-    cells = {'Notes-SummaryOfAcc':{1:{'A':('S',
-        f'http://xbrl.ssm.com.my/role/ssm/rol_ssmt-fs-{family}_2022-12-31/ssmt-fs-{family}_2022-12-31_role-620000')},
-        10:{'A':('S','native.xsd#'+('ssmt_DisclosureOnSummaryOfMaterialAccountingPoliciesAbstract'
-                                   if exact_marker else 'ssmt-mfrs_DisclosureOnRelatedPartyTransactionsAbstract'))}}}
-    assert resolve_sheet_name('Notes-SummaryOfAccPol',cells) == ('Notes-SummaryOfAcc' if clbg_role and exact_marker else None)

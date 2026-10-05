@@ -1,3 +1,4 @@
+import { ui } from "../lib/uiStyles";
 import type { NotesTemplateType, ModelEntry, FilingStandard } from "../lib/types";
 import { NOTES_TEMPLATE_TYPES, NOTES_TEMPLATE_LABELS } from "../lib/types";
 import { pwc } from "../lib/theme";
@@ -58,30 +59,9 @@ const styles = {
     cursor: "pointer",
   } as React.CSSProperties,
   select: {
-    minHeight: 44,
-    padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.md,
-    fontFamily: pwc.fontBody,
-    fontSize: 14,
-    color: pwc.grey900,
-    background: pwc.white,
-    outline: "none",
-    minWidth: 0,
+    ...ui.select,
     width: "100%",
-  } as React.CSSProperties,
-  selectDisabled: {
-    minHeight: 44,
-    padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
-    border: `1px solid ${pwc.grey100}`,
-    borderRadius: pwc.radius.md,
-    fontFamily: pwc.fontBody,
-    fontSize: 14,
-    color: pwc.grey700,
-    background: pwc.grey50,
-    outline: "none",
     minWidth: 0,
-    width: "100%",
   } as React.CSSProperties,
 };
 
@@ -92,19 +72,18 @@ export function NotesRunConfig({
   onToggleNote,
   onModelChange,
   showModels = true,
-  filingStandard = "mfrs",
 }: Props) {
   return (
     <table style={styles.table} role="group" aria-label="Notes templates">
       <tbody>
-        {NOTES_TEMPLATE_TYPES.filter((nt) => filingStandard !== "clbg" || nt !== "ISSUED_CAPITAL").map((nt) => {
+        {NOTES_TEMPLATE_TYPES.map((nt) => {
           const isEnabled = enabled[nt];
           return (
             <tr key={nt} style={styles.row}>
               <td style={styles.cell}>
                 <label style={isEnabled ? styles.label : styles.labelDisabled}>
                   <input
-                    type="checkbox"
+                    type="checkbox" style={ui.checkbox}
                     checked={isEnabled}
                     onChange={(e) => onToggleNote(nt, e.target.checked)}
                     aria-label={NOTES_TEMPLATE_LABELS[nt]}
@@ -119,7 +98,7 @@ export function NotesRunConfig({
                     value={modelOverrides[nt]}
                     disabled={!isEnabled}
                     onChange={(e) => onModelChange(nt, e.target.value)}
-                    style={isEnabled ? styles.select : styles.selectDisabled}
+                    style={styles.select}
                     aria-label={`Model for ${NOTES_TEMPLATE_LABELS[nt]}`}
                   >
                     {availableModels.map((m) => (

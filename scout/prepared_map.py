@@ -104,9 +104,7 @@ failed validation rather than inventing identifiers. No source rewriting or form
 When validation requests a repair, preserve correct statements and notes, but correct
 mistaken identities against the source. Repair the named error. Never erase the inventory or
 reclassify disclosures as metadata to satisfy a validator. A singleton relationship
-group adds no link and is unnecessary. detected_standard is lowercase mfrs/mpers/clbg/unknown.
-Use clbg only for a company limited by guarantee; its income and expenditure maps
-to SOPL, changes in fund maps to SOCIE, and standalone SOCI is NotPrepared.
+group adds no link and is unnecessary. detected_standard is lowercase mfrs/mpers/unknown.
 """
 
 

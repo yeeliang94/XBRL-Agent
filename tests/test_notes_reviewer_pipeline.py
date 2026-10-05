@@ -825,18 +825,25 @@ def test_reviewer_pass_times_out_on_stalled_turn(
     assert by_kind["complete"]["success"] is False
 
 
-def test_notes_reviewer_time_budget_scales_with_packet_but_stays_bounded():
+def test_notes_reviewer_time_budget_scales_with_packet_but_stays_bounded(monkeypatch):
     import server
 
+    monkeypatch.delenv("XBRL_NOTES_REVIEWER_MAX_WALLCLOCK_S", raising=False)
+    monkeypatch.delenv("XBRL_NOTES_REVIEWER_EXTRA_ITEM_S", raising=False)
     budget = server._notes_reviewer_wallclock_limit
-    assert budget(300.0, 25) == 300.0
-    assert budget(300.0, 45) == 500.0
-    assert budget(300.0, 55) == 600.0
-    assert budget(300.0, 200) == 600.0
-    assert budget(0.1, 74) == 0.1
-    assert budget(450.0, 74) == 450.0
-    assert budget(900.0, 74) == 600.0
-    assert budget(float("inf"), 74) == 600.0
+    assert budget(600.0, 10) == 600.0
+    assert budget(600.0, 13) == 660.0
+    assert budget(600.0, 25) == 900.0
+    assert budget(600.0, 40) == 1200.0
+    assert budget(600.0, 200) == 1200.0
+    assert budget(0.1, 1) == 0.1
+    assert budget(450.0, 13) == 510.0
+    assert budget(0.0, 74) == 1200.0
+    assert budget(float("inf"), 74) == 1200.0
+    monkeypatch.setenv("XBRL_NOTES_REVIEWER_MAX_WALLCLOCK_S", "900")
+    monkeypatch.setenv("XBRL_NOTES_REVIEWER_EXTRA_ITEM_S", "30")
+    assert budget(600.0, 13) == 690.0
+    assert budget(600.0, 200) == 900.0
 
 
 def test_reviewer_pass_skips_when_no_findings(db_path: Path, tmp_path):

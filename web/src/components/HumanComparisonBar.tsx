@@ -7,13 +7,13 @@ import { ConfirmDialog } from "./ConfirmDialog";
 
 // ---------------------------------------------------------------------------
 // HumanComparisonBar — one compact row above the Figures and Notes work
-// surface: the [ Human file | Source PDF ] switch (supplied by the page so it
-// matches the page's other segmented controls), flat stat tiles, and the
-// attached file with Replace / Remove beside it.
+// surface: the [ Human file | Source PDF ] switch, a one-line summary of the
+// comparison, and the attached file with Replace / Remove beside it.
 // ---------------------------------------------------------------------------
 
 export type ComparisonPane = "human" | "pdf";
 
+/** One summary fact, read as "<value> <label>", e.g. "14 differ". */
 export interface ComparisonTile {
   label: string;
   value: string;
@@ -26,7 +26,7 @@ interface Props {
   /** The pane switch, rendered first. */
   paneSwitch: React.ReactNode;
   tiles: ComparisonTile[];
-  /** e.g. "Excludes 3 unmatched rows"; omitted when nothing is excluded. */
+  /** e.g. "Not counted: 1 unmatched row"; omitted when nothing is excluded. */
   excludesNote?: string | null;
   onReplace?: () => void;
   onRemoved?: () => void;
@@ -44,36 +44,39 @@ export function HumanComparisonBar({
       <div style={styles.row}>
         {paneSwitch}
         {showDetails && (
-            <div className="human-comparison-file" style={styles.file} data-testid="human-file-header">
-              <span style={styles.fileName} title={file.filename}>{file.filename}</span>
-              <span style={ui.metadata}>
-                {[file.uploaded_by, new Date(file.uploaded_at).toLocaleDateString()].filter(Boolean).join(" · ")}
+          <p style={styles.summary} data-testid="human-comparison-tiles" title={excludesNote ?? undefined}>
+            {tiles.map((tile, index) => (
+              <span key={tile.label}>
+                {index > 0 && <span aria-hidden="true" style={styles.separator}>·</span>}
+                <strong style={styles.summaryValue}>{tile.value}</strong> {tile.label}
               </span>
-              {onReplace && (
-                <button type="button" className={uiClass.btnQuiet}
-                  style={{ ...ui.buttonQuiet, ...ui.buttonSm }} onClick={onReplace}>
-                  Replace
-                </button>
-              )}
+            ))}
+            {excludesNote && <span style={ui.metadata}>
+              <span aria-hidden="true" style={styles.separator}>·</span>
+              {excludesNote}
+            </span>}
+          </p>
+        )}
+        {showDetails && (
+          <div className="human-comparison-file" style={styles.file} data-testid="human-file-header">
+            <span style={styles.fileName}
+              title={[file.filename, file.uploaded_by, new Date(file.uploaded_at).toLocaleDateString()].filter(Boolean).join(" · ")}>
+              {file.filename}
+            </span>
+            {onReplace && (
               <button type="button" className={uiClass.btnQuiet}
-                data-testid="human-file-remove"
-                style={{ ...ui.buttonQuiet, ...ui.buttonSm }} onClick={() => setConfirmRemove(true)}>
-                Remove
+                style={{ ...ui.buttonQuiet, ...ui.buttonSm }} onClick={onReplace}>
+                Replace
               </button>
-            </div>
+            )}
+            <button type="button" className={uiClass.btnQuiet}
+              data-testid="human-file-remove"
+              style={{ ...ui.buttonQuiet, ...ui.buttonSm }} onClick={() => setConfirmRemove(true)}>
+              Remove
+            </button>
+          </div>
         )}
       </div>
-      {showDetails && (
-        <dl style={styles.tiles} data-testid="human-comparison-tiles">
-          {tiles.map((tile) => (
-            <div key={tile.label} style={styles.tile}>
-              <dt style={ui.microLabel}>{tile.label}</dt>
-              <dd style={styles.tileValue}>{tile.value}</dd>
-            </div>
-          ))}
-          {excludesNote && <div style={{ ...ui.metadata, alignSelf: "flex-end" }}>{excludesNote}</div>}
-        </dl>
-      )}
       {error && <div role="alert" style={ui.alertError}>{error}</div>}
       <ConfirmDialog
         isOpen={confirmRemove}
@@ -104,54 +107,48 @@ export function HumanComparisonBar({
 
 const styles = {
   bar: {
-    display: "flex",
-    flexDirection: "column",
-    gap: pwc.space.md,
     marginBottom: pwc.space.lg,
   } as React.CSSProperties,
   row: {
     display: "flex",
     alignItems: "center",
     flexWrap: "wrap",
-    gap: pwc.space.xl,
-    justifyContent: "space-between",
+    columnGap: pwc.space.lg,
+    rowGap: pwc.space.sm,
   } as React.CSSProperties,
-  tiles: {
-    display: "flex",
-    flexWrap: "wrap",
-    gap: pwc.space.xl,
+  summary: {
     margin: 0,
-  } as React.CSSProperties,
-  tile: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 2,
+    flex: "0 1 auto",
     minWidth: 0,
-  } as React.CSSProperties,
-  tileValue: {
-    margin: 0,
-    fontFamily: pwc.fontHeading,
-    fontSize: 16,
-    fontWeight: pwc.weight.semibold,
-    color: pwc.grey900,
+    fontFamily: pwc.fontBody,
+    fontSize: 14,
+    color: pwc.grey700,
     fontVariantNumeric: "tabular-nums",
+  } as React.CSSProperties,
+  summaryValue: {
+    color: pwc.grey900,
+    fontWeight: pwc.weight.semibold,
+  } as React.CSSProperties,
+  separator: {
+    margin: `0 ${pwc.space.sm}px`,
+    color: pwc.grey300,
   } as React.CSSProperties,
   file: {
     display: "flex",
     alignItems: "center",
-    flexWrap: "wrap",
-    gap: pwc.space.sm,
+    gap: pwc.space.xs,
     minWidth: 0,
-    flex: "1 1 320px",
-    justifyContent: "flex-end",
+    marginLeft: "auto",
   } as React.CSSProperties,
   fileName: {
     fontFamily: pwc.fontBody,
-    fontSize: 14,
-    fontWeight: pwc.weight.semibold,
-    color: pwc.grey900,
-    overflowWrap: "anywhere",
+    fontSize: 13,
+    color: pwc.grey700,
     minWidth: 0,
-    maxWidth: "100%",
+    maxWidth: 220,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    marginRight: pwc.space.xs,
   } as React.CSSProperties,
 };

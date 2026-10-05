@@ -1,3 +1,4 @@
+import { ui } from "../lib/uiStyles";
 import type { StatementType, ModelEntry, FilingStandard } from "../lib/types";
 import { STATEMENT_TYPES, statementLabel } from "../lib/types";
 import { pwc } from "../lib/theme";
@@ -66,30 +67,9 @@ const styles = {
     color: "inherit",
   } as React.CSSProperties,
   select: {
-    minHeight: 44,
-    padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.md,
-    fontFamily: pwc.fontBody,
-    fontSize: 14,
-    color: pwc.grey900,
-    background: pwc.white,
-    outline: "none",
-    minWidth: 0,
+    ...ui.select,
     width: "100%",
-  } as React.CSSProperties,
-  selectDisabled: {
-    minHeight: 44,
-    padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
-    border: `1px solid ${pwc.grey100}`,
-    borderRadius: pwc.radius.md,
-    fontFamily: pwc.fontBody,
-    fontSize: 14,
-    color: pwc.grey700,
-    background: pwc.grey50,
-    outline: "none",
     minWidth: 0,
-    width: "100%",
   } as React.CSSProperties,
 };
 
@@ -106,16 +86,14 @@ export function StatementRunConfig({
     <table style={styles.table}>
       <tbody>
         {STATEMENT_TYPES.map((stmt) => {
-          const unavailable = filingStandard === "clbg" && stmt === "SOCI";
-          const isEnabled = enabled[stmt] && !unavailable;
+          const isEnabled = enabled[stmt];
           return (
             <tr key={stmt} style={styles.row}>
               <td style={styles.cell}>
                 <label style={isEnabled ? styles.label : styles.labelDisabled}>
                   <input
-                    type="checkbox"
+                    type="checkbox" style={ui.checkbox}
                     checked={isEnabled}
-                    disabled={unavailable}
                     onChange={(e) => onToggleStatement(stmt, e.target.checked)}
                   />
                   <span style={styles.stmtCode}>{stmt}</span>
@@ -130,7 +108,7 @@ export function StatementRunConfig({
                     value={modelOverrides[stmt]}
                     disabled={!isEnabled}
                     onChange={(e) => onModelChange(stmt, e.target.value)}
-                    style={isEnabled ? styles.select : styles.selectDisabled}
+                    style={styles.select}
                   >
                     {availableModels.map((m) => (
                       <option key={m.id} value={m.id}>

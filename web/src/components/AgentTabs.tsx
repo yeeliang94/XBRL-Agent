@@ -3,6 +3,7 @@ import { pwc } from "../lib/theme";
 import type { AgentTabStatus, FilingStandard } from "../lib/types";
 import { NON_AGENT_TAB_IDS } from "../lib/agentTabKinds";
 import { workstreamStatusLabel } from "../lib/workstreamStatus";
+import { statementCodeSubtitle } from "../lib/sheetLabels";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -78,10 +79,10 @@ const WORKSTREAM_LABELS: Record<string, string> = {
   validator: "Cross-checks",
 };
 
-function workstreamLabel(agent: AgentTabState, filingStandard?: FilingStandard): string {
+function workstreamLabel(agent: AgentTabState, filingStandard?: unknown): string {
   if (filingStandard === "clbg") {
-    if (agent.role === "SOPL" || agent.agentId === "SOPL") return "Income and expenditure";
-    if (agent.role === "SOCIE" || agent.agentId === "SOCIE") return "Changes in funds";
+    const statement = [agent.agentId, agent.role].find((code) => code === "SOPL" || code === "SOCIE");
+    if (statement) return statementCodeSubtitle(statement, filingStandard) ?? agent.label;
   }
   return WORKSTREAM_LABELS[agent.agentId]
     ?? WORKSTREAM_LABELS[agent.role]
