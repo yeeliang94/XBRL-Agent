@@ -403,31 +403,66 @@ describe("ExtractPage — render-gate regression guards", () => {
     expect(screen.queryByText(/30ms/i)).toBeNull();
   });
 
-  test("surfaces notes formatting as live run activity", () => {
+  test.each([
+    {stage: "formatting_notes" as const, tab: "notes-formatting", label: "Notes formatting"},
+    {stage: "cleaning_notes" as const, tab: "notes-cleanup", label: "Notes cleanup"},
+  ])("surfaces $label as live run activity", ({stage, tab, label}) => {
     const notesAgent = createAgentState("notes:CORP_INFO", "CORP_INFO", "Notes 10: Corp Info");
     notesAgent.status = "complete";
     render(<ExtractPage {...makeProps({ state: {
       sessionId: "test-session",
       filename: "test.pdf",
       isRunning: true,
-      pipelineStage: "formatting_notes",
+      pipelineStage: stage,
       pipelineActivity: {
-        stage: "formatting_notes",
+        stage,
         started_at: 1,
-        message: "Formatting notes: 2 of 3 sections complete",
+        message: `${label}: 2 of 3 sections complete`,
         completed: 2,
         total: 3,
       },
-      activeTab: "notes-formatting",
+      activeTab: tab,
       agents: { "notes:CORP_INFO": notesAgent },
       agentTabOrder: ["notes:CORP_INFO"],
       notesInRun: ["CORP_INFO"],
     } })} />);
 
-    expect(screen.getByRole("tab", { name: /notes formatting/i })).toBeInTheDocument();
-    expect(screen.getByRole("tabpanel", { name: "Notes formatting activity" })).toBeInTheDocument();
-    expect(screen.getByRole("progressbar", { name: "Notes formatting progress" })).toHaveAttribute("aria-valuenow", "2");
-    expect(screen.getAllByText("Formatting notes: 2 of 3 sections complete")).toHaveLength(2);
+    expect(screen.getByRole("tab", { name: new RegExp(label, "i") })).toBeInTheDocument();
+    expect(screen.getByRole("tabpanel", { name: `${label} activity` })).toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: `${label} progress` })).toHaveAttribute("aria-valuenow", "2");
+    expect(screen.getAllByText(`${label}: 2 of 3 sections complete`)).toHaveLength(2);
+  });
+
+  test("no-op cleanup remains visibly complete after the run finishes", () => {
+    const message = "Notes cleanup complete: 0 banners or repeated headings removed.";
+    render(<ExtractPage {...makeProps({state: {
+      sessionId: "test", filename: "test.pdf", isRunning: false, isComplete: true, pipelineStage: "done",
+      agents: {sofp_0: createAgentState("sofp_0", "SOFP", "SOFP")}, agentTabOrder: ["sofp_0"],
+      activeTab: "notes-cleanup", notesInRun: ["CORP_INFO"],
+      events: [{event: "pipeline_stage", timestamp: 1,
+        data: {stage: "cleaning_notes", started_at: 1, completed: 0, total: 0, message}}],
+    }})} />);
+    const panel = within(screen.getByRole("tabpanel", {name: "Notes cleanup activity"}));
+    expect(panel.getByText("Complete")).toBeInTheDocument();
+    expect(panel.getByText(message)).toBeInTheDocument();
+    expect(panel.queryByText("Stopped")).toBeNull();
+  });
+
+  test("unfinished cleanup remains visibly failed after the run finishes", () => {
+    const message = "Notes cleanup did not finish. Saved notes are available for review.";
+    render(<ExtractPage {...makeProps({state: {
+      sessionId: "test", filename: "test.pdf", isRunning: false, isComplete: true, pipelineStage: "done",
+      agents: {sofp_0: createAgentState("sofp_0", "SOFP", "SOFP")}, agentTabOrder: ["sofp_0"],
+      activeTab: "notes-cleanup", notesInRun: ["CORP_INFO"],
+      events: [
+        {event: "pipeline_stage", timestamp: 1, data: {stage: "cleaning_notes", started_at: 1, completed: 0, total: 2}},
+        {event: "error", timestamp: 2, data: {type: "notes_cleanup_incomplete", message}},
+      ],
+    }})} />);
+    const panel = within(screen.getByRole("tabpanel", {name: "Notes cleanup activity"}));
+    expect(panel.getByText("Failed")).toBeInTheDocument();
+    expect(panel.getByText(message)).toBeInTheDocument();
+    expect(panel.queryByText("Notes cleanup complete")).toBeNull();
   });
 
   test.each(["partial", "failed", "skipped"])("%s formatting remains failed after the run finishes", (outcome) => {

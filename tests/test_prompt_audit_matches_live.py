@@ -170,3 +170,10 @@ def test_document_preparation_prompts_are_quoted_verbatim():
     match = re.search(r'<section id="document-preparation">.*?<pre>(.*?)</pre>', _AUDIT, re.S)
     assert match is not None
     assert html.unescape(match.group(1)) == expected
+
+
+def test_final_cleanup_is_documented_as_a_separate_deletion_only_agent():
+    assert "Notes cleanup" in _matrix_labels()
+    from notes.cleanup_agent import PROMPT_PATH
+    assert PROMPT_PATH.name == "notes_cleanup.md"
+    assert any(m.group("name") == PROMPT_PATH.name for m in _blocks())

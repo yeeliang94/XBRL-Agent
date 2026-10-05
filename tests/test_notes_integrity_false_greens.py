@@ -472,3 +472,116 @@ def test_prepared_note_prose_cannot_be_dismissed_as_page_furniture(run):
     result = _verdict(conn, run_id, gen)
     assert result.requires_review
     assert any("cannot be settled" in f.message for f in result.findings)
+
+
+def test_approved_banner_cleanup_cannot_conceal_later_content_loss(run):
+    from notes.cleanup_patch import Patch, Removal
+    from notes.cleanup_repository import save_cleanup
+    conn,rid,gen,_=run
+    conn.execute("UPDATE notes_source_generations SET input_kind='prepared_document' WHERE id=?",(gen,))
+    conn.execute("UPDATE notes_source_blocks SET canonical_html='<h1>COMPANY SDN. BHD.</h1>',block_kind='heading',page=1 WHERE generation_id=? AND block_id='b1'",(gen,))
+    _write(conn,rid,gen,['b1','b2'])
+    # An inherited heading retains its own source page even when cell hints
+    # only name the later disclosure page.
+    conn.execute("UPDATE notes_cells SET source_pages='[7]' WHERE run_id=?", (rid,))
+    cells={'Notes:10':dict(conn.execute('SELECT * FROM notes_cells WHERE run_id=?',(rid,)).fetchone())}
+    original_blocks=[tuple(r) for r in conn.execute('SELECT * FROM notes_source_blocks WHERE generation_id=?',(gen,))]
+    patch=Patch(inspected_cells=['Notes:10'],removals=[Removal(cell='Notes:10',block=0,expected_text='COMPANY SDN. BHD.',
+                reason='page_banner',evidence_page=1,justification='Printed company page banner above the note.')])
+    conn.commit()
+    save_cleanup(conn,run_id=rid,cells=cells,patch=patch,viewed_pages={1},model='test')
+    assert _verdict(conn,rid,gen).findings==[]
+    assert [tuple(r) for r in conn.execute('SELECT * FROM notes_source_blocks WHERE generation_id=?',(gen,))]==original_blocks
+    # Stored baseline hashes and an approved receipt cannot bless unrelated loss.
+    conn.execute("UPDATE notes_cells SET html='<p>missing disclosure</p>' WHERE run_id=?",(rid,))
+    assert any(f.check=='render_match' for f in _verdict(conn,rid,gen).findings)
+    # Tampering with only the saved after HTML does not bypass patch replay.
+    conn.execute("UPDATE notes_cleanup_receipts SET after_html='<p>missing disclosure</p>' WHERE run_id=?",(rid,))
+    assert any(f.check=='render_match' for f in _verdict(conn,rid,gen).findings)
+
+
+def test_unrelated_viewed_page_cannot_delete_disclosure_or_bless_receipt(run):
+    import json
+    from notes.cleanup_patch import Patch, Removal
+    from notes.cleanup_repository import save_cleanup
+
+    conn, rid, gen, _ = run
+    conn.execute("UPDATE notes_source_generations SET input_kind='prepared_document' WHERE id=?", (gen,))
+    conn.execute("UPDATE notes_source_blocks SET page=7 WHERE generation_id=? AND block_id='b1'", (gen,))
+    conn.execute("UPDATE notes_source_blocks SET page=8 WHERE generation_id=? AND block_id='b2'", (gen,))
+    _write(conn, rid, gen, ['b1', 'b2'])
+    cells = {'Notes:10': dict(conn.execute('SELECT * FROM notes_cells WHERE run_id=?', (rid,)).fetchone())}
+    conn.commit()
+    removal = Removal(cell='Notes:10', block=0, expected_text='one', reason='page_banner',
+                      evidence_page=8, justification='Claimed page banner on unrelated page.')
+    patch = Patch(inspected_cells=['Notes:10'], removals=[removal])
+    with pytest.raises(ValueError, match='Source page does not support this block'):
+        save_cleanup(conn, run_id=rid, cells=cells, patch=patch, viewed_pages={8}, model='test')
+    assert conn.execute('SELECT COUNT(*) FROM notes_cleanup_receipts').fetchone()[0] == 0
+    assert conn.execute('SELECT html FROM notes_cells WHERE run_id=?', (rid,)).fetchone()[0] == cells['Notes:10']['html']
+
+    removal.evidence_page = 7
+    save_cleanup(conn, run_id=rid, cells=cells, patch=patch, viewed_pages={7}, model='test')
+    assert _verdict(conn, rid, gen).findings == []
+    history = json.loads(conn.execute('SELECT patch_json FROM notes_cleanup_receipts').fetchone()[0])
+    history[0]['patch']['removals'][0]['evidence_page'] = 8
+    history[0]['viewed_pages'] = [8]
+    conn.execute('UPDATE notes_cleanup_receipts SET patch_json=?,viewed_pages_json=?', (json.dumps(history), '[8]'))
+    assert any(f.check == 'render_match' for f in _verdict(conn, rid, gen).findings)
+
+
+def test_sheet_persistence_keeps_approved_cleanup_lineage_after_style_change(run):
+    from notes.cleanup_patch import Patch, Removal
+    from notes.cleanup_repository import save_cleanup
+    from notes.persistence import persist_notes_cells
+    conn,rid,gen,db=run
+    conn.execute("UPDATE notes_source_generations SET input_kind='prepared_document' WHERE id=?",(gen,))
+    conn.execute("UPDATE notes_source_blocks SET canonical_html='<h1>COMPANY SDN. BHD.</h1>',block_kind='heading',page=1 WHERE generation_id=? AND block_id='b1'",(gen,))
+    _write(conn,rid,gen,['b1','b2'])
+    cells={'Notes:10':dict(conn.execute('SELECT * FROM notes_cells WHERE run_id=?',(rid,)).fetchone())}
+    conn.commit()
+    save_cleanup(conn,run_id=rid,cells=cells,patch=Patch(inspected_cells=['Notes:10'],removals=[Removal(cell='Notes:10',block=0,
+        expected_text='COMPANY SDN. BHD.',reason='page_banner',evidence_page=1,justification='Printed running company banner.')]),viewed_pages={1},model='test')
+    persist_notes_cells(db_path=str(db),run_id=rid,sheet_name='Notes',
+                       cells_written=[{'sheet':'Notes','row':10,'label':'L','html':'<p style="font-size:12px">two</p>'}])
+    assert conn.execute('SELECT source_generation_id FROM notes_cells WHERE run_id=?',(rid,)).fetchone()[0]==gen
+    assert _verdict(conn,rid,gen).findings==[]
+
+
+@pytest.mark.parametrize('legacy_first_pass', [False, True])
+def test_repeated_cleanup_retains_original_source_evidence_across_formatting(run, legacy_first_pass):
+    import json
+    from notes.cleanup_patch import Patch, Removal
+    from notes.cleanup_repository import save_cleanup
+    from notes.persistence import persist_notes_cells
+
+    conn, rid, gen, db = run
+    conn.execute("UPDATE notes_source_generations SET input_kind='prepared_document' WHERE id=?", (gen,))
+    original = '<h1>COMPANY SDN. BHD.</h1><h2>Notes to the financial statements</h2>'
+    conn.execute("UPDATE notes_source_blocks SET canonical_html=?,block_kind='heading',page=1 "
+                 "WHERE generation_id=? AND block_id='b1'", (original, gen))
+    _write(conn, rid, gen, ['b1', 'b2'])
+    conn.commit()
+
+    for text in ['COMPANY SDN. BHD.', 'Notes to the financial statements']:
+        cells = {'Notes:10': dict(conn.execute('SELECT * FROM notes_cells WHERE run_id=?', (rid,)).fetchone())}
+        patch = Patch(inspected_cells=['Notes:10'], removals=[Removal(
+            cell='Notes:10', block=0, expected_text=text, reason='page_banner',
+            evidence_page=1, justification='Printed running page banner.')])
+        save_cleanup(conn, run_id=rid, cells=cells, patch=patch, viewed_pages={1}, model='test')
+        assert _verdict(conn, rid, gen).findings == []
+        if text == 'COMPANY SDN. BHD.':
+            if legacy_first_pass:
+                history = conn.execute('SELECT patch_json FROM notes_cleanup_receipts WHERE run_id=?', (rid,)).fetchone()[0]
+                conn.execute('UPDATE notes_cleanup_receipts SET patch_json=? WHERE run_id=?',
+                             (json.dumps(json.loads(history)[0]['patch']), rid))
+                conn.commit()
+            persist_notes_cells(db_path=str(db), run_id=rid, sheet_name='Notes', cells_written=[{
+                'sheet': 'Notes', 'row': 10, 'label': 'L',
+                'html': '<h2 style="font-size:12px">Notes to the financial statements</h2><p>two</p>',
+            }])
+
+    receipt = conn.execute('SELECT before_html FROM notes_cleanup_receipts WHERE run_id=?', (rid,)).fetchone()
+    assert receipt[0].startswith(original)
+    conn.execute("UPDATE notes_cells SET html='<p>Lost disclosure.</p>' WHERE run_id=?", (rid,))
+    assert _verdict(conn, rid, gen).findings

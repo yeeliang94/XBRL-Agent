@@ -238,7 +238,7 @@ from pathlib import Path
 # typed figures by canonical fact key, and the human's notes by field. The
 # comparison with the run's current facts is computed on read, never stored.
 # v50 stores shared content guidance and a frozen per-run guidance snapshot.
-CURRENT_SCHEMA_VERSION = 50
+CURRENT_SCHEMA_VERSION = 51
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
@@ -1388,6 +1388,24 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         row         INTEGER NOT NULL,
         html        TEXT NOT NULL,
         created_at  TEXT NOT NULL DEFAULT '',
+        UNIQUE(run_id, sheet, row)
+    )
+    """,
+
+    # v51: deletion-only final notes cleanup receipts. Original source remains intact.
+    """
+    CREATE TABLE IF NOT EXISTS notes_cleanup_receipts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        sheet TEXT NOT NULL,
+        row INTEGER NOT NULL,
+        generation_id INTEGER,
+        before_html TEXT NOT NULL,
+        after_html TEXT NOT NULL,
+        patch_json TEXT NOT NULL,
+        viewed_pages_json TEXT NOT NULL,
+        model TEXT NOT NULL,
+        created_at TEXT NOT NULL,
         UNIQUE(run_id, sheet, row)
     )
     """,
@@ -3643,6 +3661,18 @@ def init_db(path: str | Path) -> None:
                     if "agent_instructions_json" not in columns:
                         conn.execute("ALTER TABLE runs ADD COLUMN agent_instructions_json TEXT")
                     conn.execute("UPDATE schema_version SET version = 50")
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        # v50 -> v51: cleanup evidence table created by the guarded statements above.
+        if current_version is not None and current_version < 51:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                latest = conn.execute("SELECT version FROM schema_version").fetchone()[0]
+                if latest < 51:
+                    conn.execute("UPDATE schema_version SET version = 51")
                 conn.commit()
             except Exception:
                 conn.rollback()

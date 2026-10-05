@@ -104,6 +104,12 @@ def build_input(
                     gen["input_kind"], r["source_render_version"])),
             ).html
             selection_matches = verify_format_only(selected_html, r["html"] or "").ok
+            if not selection_matches:
+                from notes.cleanup_repository import receipt_matches
+                selection_matches = receipt_matches(
+                    conn, run_id, r["sheet"], r["row"], generation_id,
+                    selected_html, r["html"] or "",
+                )
         except BlockSelectionError:
             selection_matches = False
 

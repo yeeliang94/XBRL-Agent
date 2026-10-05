@@ -1315,6 +1315,28 @@ Key invariants:
     tests remain readable; Word source HTML is unchanged.
     Every eligible unstyled/floor prose sheet uses the existing guarded claim,
     content/number/geometry verifier, CAS writes, snapshots and bounded formatter.
+  - **Final notes cleanup** is a separate content author after formatting, never
+    a formatter permission. It may delete source-backed page banners and repeated
+    continuation headings only. Canonical receipts retain before/after HTML,
+    deletions and viewed-page evidence. Original source blocks and placement ids
+    remain intact. Invalid proposals receive output-validator feedback and at most
+    two correction retries within the existing request and wall-clock limits.
+    Deletion evidence must match the exact frozen placed block's page, including
+    inherited ancestor headings. Legacy cells use their recorded source pages.
+    Blocks without page evidence remain intact; PDF viewing stays unrestricted.
+    Later passes append replayable deletion steps to the original receipt;
+    intervening formatting must preserve content before the chain can extend.
+    Integrity accepts only replayable approved omissions against
+    the current selection; other content loss remains unresolved. Writes check
+    the live HTML, revision and source generation under a transaction and preserve
+    human edits. Formatter revert snapshots receive the same approved omissions
+    so reverting style cannot reintroduce content. The UI shows `cleaning_notes`;
+    incomplete cleanup tips status and remains visibly failed.
+    Requested passes with no eligible cells still record completion and emit
+    zero-of-zero progress without constructing a model. Pinned by
+    `tests/test_notes_cleanup.py`, `tests/test_notes_integrity_false_greens.py`,
+    `tests/test_db_schema_v51.py`, `tests/test_pdf_notes_auto_format_wiring.py`,
+    `tests/test_run_status.py` and `web/src/__tests__/ExtractPage.test.tsx`.
     Stop All cancels the group. A sheet with more than
     `auto_format.FORMAT_ROWS_PER_PART` candidate cells is formatted as disjoint
     row groups that run concurrently under the one sheet claim and task row;
@@ -1939,11 +1961,20 @@ Load-bearing invariants:
 - **Read by address, never by label.** The reader lists every fillable slot of
   the run's exact template set and resolves each slot's cell with
   `mtool.template_map.resolve_filing_doc`, the resolver the mTool fill uses. It
-  reads typed numbers only; cached formula results are never read, because a
-  file the mTool fill patched carries stale ones. A formula cell, and every
-  COMPUTED concept, is stored `calculated`. Labels repeat within a sheet, so
+  reads finite numbers, unambiguous numeric text, and supported input formulas
+  evaluated from current workbook operands using the mTool arithmetic evaluator.
+  Cached formula results are never read, because a file the mTool fill patched
+  carries stale ones. Explicit dash (`-`, `–`, `—`) and case-insensitive `nil`
+  inputs mean zero; other unreadable populated inputs remain errors.
+  Unsupported input formulas and unreadable populated numeric
+  inputs refuse the upload with an exact cell address before replacing saved data.
+  COMPUTED concepts and formula-backed matrix totals remain `calculated`; an input
+  formula is a scored human value. Labels repeat within a sheet, so
   the old label reader merged concepts and lost values (plan Step 1). A typed
-  row no slot claims is listed as unmatched. On the share-capital and
+  row no slot claims is listed as unmatched. Unmatched reporting and alternate
+  layout detection also accept readable numeric text and supported input
+  formulas; unchanged template formulas and calculated totals do not establish
+  that another layout was filled. On the share-capital and
   related-party sheets, mTool's `Total` column carries no category member: it
   is read into the field's slot with no dimension, beside the category slots.
   Resolve each Total column within its dated period block. Ambiguous totals
@@ -1973,7 +2004,7 @@ Load-bearing invariants:
   `different_variant` or `not_in_file` statement drops the run's values; a
   `not_in_run` entry names a notes template the run did not extract, and a
   footnote on a statement figure is never recorded as one. A statement is
-  compared only when the human typed an input value. A human zero opposite an AI blank remains visible as
+  compared only when the human supplied a readable input value. A human zero opposite an AI blank remains visible as
   `zero_blank` but is excluded from the Found denominator and reported per scope;
   it is not treated as proof that the zero was a filing placeholder. Other
   human zeros remain in the comparison.
