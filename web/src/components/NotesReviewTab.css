@@ -77,9 +77,8 @@
   margin-left: 2em;
 }
 
-/* Keep large tables inside the review column. Browse mode is deliberately a
- * compact preview; selecting Edit restores horizontal scrolling and the full
- * cell contents. */
+/* Read-only tables wrap all content inside the review column. Editing retains
+ * horizontal access to explicit table widths without limiting note height. */
 .notes-review-tab [data-testid="notes-readonly-content"] table,
 .notes-review-tab [data-testid="notes-review-editor"][data-editable="false"] table {
   table-layout: fixed;
@@ -89,9 +88,8 @@
 
 .notes-review-tab [data-testid="notes-readonly-content"] :is(th, td),
 .notes-review-tab [data-testid="notes-review-editor"][data-editable="false"] :is(th, td) {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal !important;
+  overflow-wrap: anywhere;
 }
 
 /* Descriptions carry the meaning of a note table, so the first column gets
@@ -105,10 +103,8 @@
 }
 
 .notes-review-tab [data-testid="notes-review-editor"][data-editable="false"] {
-  max-height: 440px;
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  max-height: none;
+  overflow: visible;
 }
 
 .notes-review-tab [data-testid="notes-review-editor"][data-editable="true"] {
@@ -317,5 +313,53 @@
   }
 }
 
-/* Rows own their label/action grid. Overriding it to one column creates an
- * implicit second column for the action toolbar and breaks pane alignment. */
+/* Match imported mTool notes to the extracted note typography for comparison only. Keep their text, emphasis,
+ * table structure and saved HTML; override print spacing and widths in view. */
+.notes-review-tab .notes-human-content :is(p, span, th, td) {
+  font-family: inherit !important;
+  font-size: inherit !important;
+  line-height: 1.5 !important;
+  white-space: normal !important;
+  overflow-wrap: anywhere;
+}
+
+.notes-review-tab .notes-human-content p {
+  margin: 0 0 var(--nt-para-spacing, 8px) !important;
+  padding: 0 !important;
+  text-indent: 0 !important;
+}
+
+.notes-review-tab .notes-human-content p:last-child {
+  margin-bottom: 0 !important;
+}
+
+.notes-review-tab .notes-human-content :is(table, tr, th, td) {
+  height: auto !important;
+  min-height: 0 !important;
+}
+
+.notes-review-tab .notes-human-content table {
+  table-layout: auto;
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: var(--nt-para-spacing, 8px) 0 !important;
+}
+
+.notes-review-tab .notes-human-content :is(col, th, td),
+.notes-review-tab [data-testid="notes-readonly-content"] .notes-human-content :is(th, td):first-child {
+  width: auto !important;
+}
+
+.notes-review-tab .notes-human-content :is(th, td) {
+  padding: var(--nt-cell-padding, 4px 8px) !important;
+  font-size: var(--nt-cell-font-size, 13px) !important;
+}
+
+.notes-review-tab .notes-human-content :is(h1, h2, h3, h4, h5, h6) {
+  font-family: inherit !important;
+  font-size: var(--nt-heading-size, 15px) !important;
+  font-weight: var(--nt-heading-weight, 600) !important;
+  line-height: 1.5 !important;
+  margin: 12px 0 6px !important;
+  padding: 0 !important;
+}

@@ -1429,11 +1429,11 @@ function NotePreview({
   disabled: boolean;
   onOpen: () => void;
 }) {
-  const body = (content: string, emptyText: string) => isBlankHtml(content)
+  const body = (content: string, emptyText: string, human = false) => isBlankHtml(content)
     ? <p style={{ ...styles.dim, margin: 0, padding: "8px 0" }}>{emptyText}</p>
     : <div data-testid="notes-readonly-content" style={styles.editorViewportReadonly}>
         {/* Sanitised server-side with the notes whitelist (gotcha #16). */}
-        <div className="tiptap ProseMirror" dangerouslySetInnerHTML={{ __html: content }} />
+        <div className={`tiptap ProseMirror${human ? " notes-human-content" : ""}`} dangerouslySetInnerHTML={{ __html: content }} />
       </div>;
   return (
     <div data-testid="notes-field-preview"
@@ -1447,7 +1447,7 @@ function NotePreview({
           {body(html, "No AI content")}
         </div>
         <div role="group" aria-label="Human note">
-          {body(humanHtml, "Not in human file")}
+          {body(humanHtml, "Not in human file", true)}
         </div>
       </> : body(html, "No AI content")}
     </div>
@@ -1482,7 +1482,7 @@ function HumanNoteCell({
       <div data-comparison-content style={{ padding: "0 12px 16px", gridRow: 3, minWidth: 0 }}>
         {html ? (
           // Sanitised with the notes whitelist on upload (eval/human_file.py).
-          <div className="tiptap ProseMirror" style={{ ...styles.humanNoteBody, borderColor: pwc.grey300 }}
+          <div className="tiptap ProseMirror notes-human-content" style={{ ...styles.humanNoteBody, borderColor: pwc.grey300 }}
             dangerouslySetInnerHTML={{ __html: html }} />
         ) : (
           <p style={{ ...styles.dim, margin: 0 }}>Not in human file</p>
@@ -2947,14 +2947,10 @@ const styles = {
     minHeight: 44,
     padding: `0 ${pwc.space.md}px`,
   } as React.CSSProperties,
-  // Bounded like the AI's read-only preview; long notes scroll inside.
+  // Human notes grow with their content, just like the extracted notes.
   humanNoteBody: {
     minWidth: 0,
-    maxHeight: 440,
-    overflow: "auto" as const,
     overflowWrap: "anywhere" as const,
-    scrollbarWidth: "thin" as const,
-    overscrollBehavior: "contain" as const,
   } as React.CSSProperties,
   // Flat list rows separated by hairlines — not bordered cards. With the
   // sheet header carrying the visual weight, rows read as content nested
@@ -3046,11 +3042,8 @@ const styles = {
     maxWidth: "100%",
   } as React.CSSProperties,
   editorViewportReadonly: {
-    maxHeight: 440,
-    overflowX: "hidden",
-    overflowY: "auto",
-    overscrollBehavior: "contain",
-    scrollbarWidth: "thin",
+    maxHeight: "none",
+    overflow: "visible",
   } as React.CSSProperties,
   editorViewportEditable: {
     overflowX: "auto",
