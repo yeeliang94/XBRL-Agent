@@ -645,6 +645,35 @@ def _advanced(body: dict) -> dict:
     return {row["key"]: row for row in body["advanced_settings"]}
 
 
+def test_reviewer_time_settings_apply_to_next_review(tmp_path, monkeypatch):
+    _env(tmp_path, monkeypatch)
+    keys = {
+        "XBRL_CORRECTION_WALLCLOCK_S": 600,
+        "XBRL_NOTES_VALIDATOR_WALLCLOCK_S": 600,
+        "XBRL_NOTES_REVIEWER_EXTRA_ITEM_S": 20,
+        "XBRL_NOTES_REVIEWER_MAX_WALLCLOCK_S": 1200,
+    }
+    for key in keys:
+        monkeypatch.delenv(key, raising=False)
+    rows = _advanced(client.get("/api/settings").json())
+    for key, default in keys.items():
+        assert rows[key]["default"] == default
+        assert rows[key]["restart"] is False
+    updates = dict(zip(keys, [900, 720, 30, 1500]))
+    response = client.post("/api/settings", json={"advanced_settings": updates})
+    assert response.status_code == 200
+    rows = _advanced(client.get("/api/settings").json())
+    assert all(rows[key]["value"] == value for key, value in updates.items())
+    assert server._resolve_wallclock("XBRL_CORRECTION_WALLCLOCK_S", 600) == 900
+    base = server._resolve_wallclock("XBRL_NOTES_VALIDATOR_WALLCLOCK_S", 600)
+    assert server._notes_reviewer_wallclock_limit(base, 13) == 810
+    assert server._notes_reviewer_wallclock_limit(base, 100) == 1500
+    response = client.post("/api/settings", json={"advanced_settings": dict.fromkeys(keys)})
+    assert response.status_code == 200
+    base = server._resolve_wallclock("XBRL_NOTES_VALIDATOR_WALLCLOCK_S", 600)
+    assert server._notes_reviewer_wallclock_limit(base, 13) == 660
+
+
 def test_advanced_setting_saves_reaches_the_pipeline_and_resets(tmp_path, monkeypatch):
     env_file = _env(tmp_path, monkeypatch)
     env_file.write_text("XBRL_MAX_CONCURRENT_AGENTS=2\n", encoding="utf-8")

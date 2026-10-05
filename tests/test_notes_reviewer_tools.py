@@ -177,6 +177,43 @@ def test_source_packet_defers_findings_caused_by_open_placement_conflict():
     assert "Do not flag the same parts twice" in packet
     assert "p32-b1" in packet
     assert "source parts lack a decision" not in packet
+    assert ra.count_open_items(context) == 3
+    assert ra.count_review_work_items(context) == 2
+
+
+def test_prepared_reviewer_counts_independent_work_without_dropping_checks():
+    from notes.coverage_checklist import Checklist, CoverageRow, SubNoteState
+
+    blocks = [f"p17-b{i}" for i in range(1, 5)] + ["p32-b3", "p32-b4"]
+    context = {
+        "placement_conflicts": [
+            {"ref": "C1", "proposed_block_ids": blocks[:4]},
+            {"ref": "C2", "proposed_block_ids": blocks[4:]},
+        ],
+        "source_integrity_findings": [
+            {"block_ids": [bid]} for bid in blocks
+        ] + [{"block_ids": blocks[:4]}, {"block_ids": blocks[4:]}],
+        "policy_placements": [
+            {"row": row, "label": "policy", "preview": "source"}
+            for row in (9, 22, 27, 28, 32, 33, 42, 49, 57)
+        ],
+        "coverage_gaps": [12],
+        "coverage_checklist": Checklist(rows=[
+            CoverageRow(12, "Other receivables", "missing"),
+            CoverageRow(20, "Other note", "placed", subnotes=[
+                SubNoteState("(a)", "not_verified"),
+            ]),
+        ]),
+    }
+    assert ra.count_open_items(context) == 22
+    assert ra.count_review_work_items(context) == 13
+    packet = ra.build_notes_reviewer_packet(context)
+    assert "8 source-completeness finding(s) depend" in packet
+    assert "then call verify_findings" in packet
+    context["placement_conflicts"] = context["placement_conflicts"][1:]
+    assert ra.count_review_work_items(context) == 17
+    assert "[SOURCE COMPLETENESS]" in ra.build_notes_reviewer_packet(context)
+    assert ra.count_review_work_items({"coverage_gaps": [12]}) == 1
 
 
 def test_prepared_policy_placement_requires_grounded_current_verdict(db_path: Path) -> None:

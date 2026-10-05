@@ -639,6 +639,34 @@ def count_open_items(context: dict) -> int:
     return n
 
 
+def _partition_source_findings(context: dict) -> tuple[list[dict], list[dict]]:
+    blocked_ids = {
+        str(block_id)
+        for conflict in context.get("placement_conflicts") or []
+        for block_id in conflict.get("proposed_block_ids") or []
+    }
+    actionable, deferred = [], []
+    for finding in context.get("source_integrity_findings") or []:
+        ids = {str(block_id) for block_id in finding.get("block_ids") or []}
+        (deferred if ids and ids <= blocked_ids else actionable).append(finding)
+    return actionable, deferred
+
+
+def count_review_work_items(context: dict) -> int:
+    """Independent initial work, without changing the mandatory review gate.
+
+    Conflict-dependent integrity checks remain in the context for verification
+    after conflict resolution. A checklist row replaces the same detector gap.
+    """
+    _, deferred = _partition_source_findings(context)
+    n = count_open_items(context) - len(deferred)
+    checklist = context.get("coverage_checklist")
+    if checklist is not None:
+        unresolved = {row.note_num for row in checklist.unresolved_rows()}
+        n -= sum(note_num in unresolved for note_num in context.get("coverage_gaps") or [])
+    return n
+
+
 def build_notes_reviewer_packet(context: dict) -> str:
     """Render the dynamic findings block from the five detector families +
     the coverage checklist.
@@ -745,17 +773,7 @@ def build_notes_reviewer_packet(context: dict) -> str:
                 f"row {item['row']} {item['label']!r}: "
                 f"content starts {item['preview']!r}"
             ))
-    blocked_ids = {
-        str(block_id)
-        for conflict in context.get("placement_conflicts") or []
-        for block_id in (conflict.get("proposed_block_ids") or [])
-    }
-    actionable_source_findings = []
-    deferred_source_findings = []
-    for finding in context.get("source_integrity_findings") or []:
-        ids = {str(block_id) for block_id in finding.get("block_ids") or []}
-        (deferred_source_findings if ids and ids <= blocked_ids
-         else actionable_source_findings).append(finding)
+    actionable_source_findings, deferred_source_findings = _partition_source_findings(context)
     if deferred_source_findings:
         out.append(
             f"\n{len(deferred_source_findings)} source-completeness finding(s) "
