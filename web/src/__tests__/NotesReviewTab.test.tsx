@@ -508,12 +508,13 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     });
   });
 
-  test("opens filled fields as previews, keeps empty fields closed and mounts one editor", async () => {
+  test("opens filled previews with a focusable control, keeps empty fields closed and mounts one editor", async () => {
     mockFetchOnce({ sheets: [{ sheet: "Notes-CI", rows: [
       ...SAMPLE.sheets[0].rows,
       { ...SAMPLE.sheets[0].rows[1], row: 13, label: "Empty disclosure", html: "" },
     ] }] });
-    render(<NotesReviewTab runId={42} />);
+    const pages = vi.fn();
+    render(<NotesReviewTab runId={42} onActiveCellPages={pages} />);
     const review = await screen.findByRole("button", { name: "Review Registered office" });
     expect(review).toHaveAttribute("aria-expanded", "true");
     expect(review).toHaveStyle({ minHeight: "40px", padding: "8px 12px" });
@@ -521,9 +522,14 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     expect(screen.queryByTestId("notes-review-editor")).toBeNull();
     const empty = screen.getByRole("button", { name: "Review Empty disclosure" });
     expect(empty).toHaveAttribute("aria-expanded", "false");
-    openField(review);
+    const openEditor = screen.getByRole("button", { name: "Open Registered office editor" });
+    expect(openEditor).toHaveAttribute("type", "button");
+    openEditor.focus();
+    expect(openEditor).toHaveFocus();
+    fireEvent.click(openEditor);
     expect(review).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByTestId("notes-review-editor")).toHaveTextContent("Kuala Lumpur");
+    expect(pages).toHaveBeenCalledWith(SAMPLE.sheets[0].rows[0].source_pages);
     fireEvent.click(review);
     expect(review).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByTestId("notes-review-editor")).toBeNull();
@@ -936,9 +942,12 @@ describe("NotesReviewTab — edit + save (Step 10)", () => {
     const otherField = screen.getByRole("button", { name: "Review Registered office" });
     expect(currentField).toBeDisabled();
     expect(otherField).toBeDisabled();
+    const openOtherEditor = screen.getByRole("button", { name: "Open Registered office editor" });
+    expect(openOtherEditor).toBeDisabled();
     expect(screen.getByRole("checkbox", { name: "Hide empty fields" })).toBeDisabled();
     fireEvent.click(currentField);
     fireEvent.click(otherField);
+    fireEvent.click(openOtherEditor);
     fireEvent.click(screen.getAllByTestId("notes-field-preview")[0]);
     expect(currentField).toHaveAttribute("aria-expanded", "true");
     // The other filled field stays a read-only preview; no second editor opens.

@@ -94,6 +94,32 @@ def test_recheck_returns_results(client: TestClient):
         assert res["comparands"] == json.loads(res.get("comparands_json") or "[]")
 
 
+def test_unsupported_recheck_preserves_saved_check_results(client: TestClient):
+    import server as srv
+    from db import repository as repo
+
+    with sqlite3.connect(srv.AUDIT_DB_PATH) as conn:
+        conn.execute("UPDATE runs SET run_config_json=? WHERE id=?", (
+            json.dumps({"filing_standard": "clbg", "filing_level": "company"}),
+            client.run_id,
+        ))
+        repo.save_cross_check(conn, client.run_id, "sofp_balance", "failed",
+                              expected=100, actual=80, diff=20,
+                              message="Saved balance mismatch")
+        before = conn.execute("SELECT * FROM cross_checks WHERE run_id=?",
+                              (client.run_id,)).fetchall()
+
+    response = client.get(f"/api/runs/{client.run_id}/recheck")
+    assert response.status_code == 409
+    assert "CLBG filings are no longer supported" in response.json()["detail"]
+    # Internal refreshes also refuse the unsupported family, rather than
+    # replacing meaningful persisted results with pending checks.
+    assert srv._refresh_persisted_cross_checks(client.run_id) is False
+    with sqlite3.connect(srv.AUDIT_DB_PATH) as conn:
+        assert conn.execute("SELECT * FROM cross_checks WHERE run_id=?",
+                            (client.run_id,)).fetchall() == before
+
+
 def test_recheck_fact_based_does_not_rebuild_workbook(client: TestClient, monkeypatch):
     """Item 32 (32a/Step 1.3): with XBRL_FACT_BASED_CHECKS on, the recheck
     reads facts directly and must NOT rebuild a workbook. We trip-wire

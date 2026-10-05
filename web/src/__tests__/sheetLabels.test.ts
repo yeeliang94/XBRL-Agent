@@ -2,6 +2,7 @@ import { describe, test, expect } from "vitest";
 import {
   templateDisplayName,
   templateSubtitle,
+  statementCodeSubtitle,
   templateSortKey,
   notesSheetDisplayName,
   templatePickerLabel,
@@ -39,6 +40,10 @@ describe("templateSubtitle", () => {
     expect(templateSubtitle("mfrs-company-socie-v1")).toBe("Changes in equity");
     expect(templateSubtitle("mpers-group-sore-v1")).toBe("Retained earnings");
     expect(templateSubtitle("mfrs-company-socf-indirect-v1")).toBe("Cash flows");
+    expect(templateSubtitle("clbg-company-sopl-nature-v1")).toBe("Income and expenditure");
+    expect(templateSubtitle("clbg-company-socie-v1")).toBe("Changes in funds");
+    expect(statementCodeSubtitle("SOPL", "clbg")).toBe("Income and expenditure");
+    expect(statementCodeSubtitle("SOCIE", "clbg")).toBe("Changes in funds");
   });
 
   test("returns null for an unrecognised template", () => {

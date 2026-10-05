@@ -627,6 +627,9 @@ def _recheck_from_facts(run_id: int) -> Optional[list[dict]]:
         config = run.config or {}
         filing_level = config.get("filing_level", "company")
         filing_standard = config.get("filing_standard", "mfrs")
+        from statement_types import unsupported_filing_standard_message
+        if unsupported_filing_standard_message(filing_standard):
+            return None
 
         agent_results = []
         for a in agents:
