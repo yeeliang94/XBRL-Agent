@@ -48,15 +48,15 @@ test.each([400, 409, 500])("save failure %s preserves the user's text", async st
   if (status === 409) expect(screen.getByRole("button", { name: "Reload saved guidance" })).toBeInTheDocument();
 });
 
-test("cancelled scope switch keeps unsaved text", async () => {
-  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+test.each([false, true])("scope switch discards unsaved text only when confirmed: %s", async discard => {
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(discard);
   render(<AgentInstructionsPanel isAdmin onDirtyChange={vi.fn()} />);
   const editor = await screen.findByLabelText("Additional instructions");
   fireEvent.change(editor, { target: { value: "Keep this" } });
   fireEvent.change(screen.getByLabelText("Applies to"), { target: { value: "notes" } });
   await waitFor(() => expect(confirm).toHaveBeenCalled());
-  expect(screen.getByLabelText("Applies to")).toHaveValue("figures");
-  expect(editor).toHaveValue("Keep this");
+  expect(screen.getByLabelText("Applies to")).toHaveValue(discard ? "notes" : "figures");
+  expect(editor).toHaveValue(discard ? "" : "Keep this");
   confirm.mockRestore();
 });
 

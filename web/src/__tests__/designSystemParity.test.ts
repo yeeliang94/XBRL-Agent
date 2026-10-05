@@ -20,6 +20,7 @@ describe("XBRL design system is the production authority", () => {
     expect(designSystem).toContain("Team guidance used");
     expect(designSystem).toContain("Preserve unsaved text on save failure or concurrent-edit conflict");
     expect(designSystem).toContain("browser Back and Forward");
+    expect(designSystem).toContain("including after native fragment navigation, and before logout");
     expect(designSystem).toContain("skip link preserves the editor without a discard prompt");
   });
   test("declares the canonical production contract and Direction A", () => {

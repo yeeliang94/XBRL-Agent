@@ -30,7 +30,7 @@ import {
 } from "./lib/runTabs";
 import type { RunTabKey } from "./lib/runTabs";
 import "./index.css";
-import { initializeNavigationHistory, pushNavigationHistory } from "./lib/navigationHistory";
+import { confirmNavigationLeave, initializeNavigationHistory, pushNavigationHistory } from "./lib/navigationHistory";
 
 // ---------------------------------------------------------------------------
 // Inline styles using the XBRL focused-workspace tokens — only the app-chrome pieces (page/header/main)
@@ -340,6 +340,7 @@ export default function App() {
   }, [authStatus]);
 
   const handleLogout = useCallback(() => {
+    if (!confirmNavigationLeave()) return;
     apiLogout().finally(() => {
       setUser(null);
       setAuthStatus("anon");
