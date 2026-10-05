@@ -48,6 +48,15 @@ test.each([
   expect(screen.getByText(expected)).toBeVisible();
 });
 
+test("unsupported historical filings show a notice and disable redo", async () => {
+  render(<RunDetailView detail={makeDetail({ filing_standard: undefined, config: { filing_standard: "clbg" } })}
+    onDelete={vi.fn()} onDownload={vi.fn()} onRestart={vi.fn()} />);
+  await waitFor(() => {
+    expect(screen.getByText(/CLBG filings are no longer supported/)).toBeVisible();
+    expect(screen.getByRole("button", { name: /redo/i })).toBeDisabled();
+  });
+});
+
 function makeAgent(overrides: Partial<RunAgentJson> = {}): RunAgentJson {
   return {
     id: 1,

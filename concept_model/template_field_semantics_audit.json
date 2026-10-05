@@ -1,15 +1,9 @@
 {
   "manifest_version": "2022-v1-slot-semantics-3",
   "missing_required_mappings": [],
-  "numeric_slots": 10292,
-  "prose_slots": 815,
+  "numeric_slots": 9314,
+  "prose_slots": 688,
   "reviewed_exceptions": [
-    {
-      "code": "SOCIE_SECTION_HEADER_WITHOUT_TAXONOMY_SLOT",
-      "path": "XBRL-template-CLBG/Company/09-SOCIE.xlsx",
-      "row": 13,
-      "sheet": "SOCIE"
-    },
     {
       "code": "PRESENTATION_TITLE_WITHOUT_TAXONOMY_SLOT",
       "path": "XBRL-template-MFRS/Company/05-SOCI-BeforeTax.xlsx",
@@ -113,114 +107,6 @@
   ],
   "structural_writable_slots": [],
   "template_results": [
-    {
-      "filename": "01-SOFP-CuNonCu.xlsx",
-      "fingerprint": "21fd1a75ce1fb8edde4d554c6c8a671b693e57ae5a731b20ae83e12ffc3dee2c",
-      "manifest_version": "2022-v1-slot-semantics-3",
-      "mapped_writable_slots": 141,
-      "path": "XBRL-template-CLBG/Company/01-SOFP-CuNonCu.xlsx",
-      "semantic_coverage": "complete",
-      "slots": 272,
-      "template_id": "clbg-company-sofp-cunoncu-v1",
-      "worksheets": 2,
-      "writable_slots": 141
-    },
-    {
-      "filename": "03-SOPL-Function.xlsx",
-      "fingerprint": "7f665bf7ca4b46dddd18ede8b02291cf25d90d1383652a0f00c9be0b1610a44b",
-      "manifest_version": "2022-v1-slot-semantics-3",
-      "mapped_writable_slots": 89,
-      "path": "XBRL-template-CLBG/Company/03-SOPL-Function.xlsx",
-      "semantic_coverage": "complete",
-      "slots": 131,
-      "template_id": "clbg-company-sopl-function-v1",
-      "worksheets": 2,
-      "writable_slots": 89
-    },
-    {
-      "filename": "04-SOPL-Nature.xlsx",
-      "fingerprint": "9f137862aa6cd48b3115e6e9ef2749426be1afd351637d50d9f004700d42eb8b",
-      "manifest_version": "2022-v1-slot-semantics-3",
-      "mapped_writable_slots": 82,
-      "path": "XBRL-template-CLBG/Company/04-SOPL-Nature.xlsx",
-      "semantic_coverage": "complete",
-      "slots": 120,
-      "template_id": "clbg-company-sopl-nature-v1",
-      "worksheets": 2,
-      "writable_slots": 82
-    },
-    {
-      "filename": "07-SOCF-Indirect.xlsx",
-      "fingerprint": "2a3497b327c1598e3b2be693e895c8ae31abf9439e689a134ed89624936948aa",
-      "manifest_version": "2022-v1-slot-semantics-3",
-      "mapped_writable_slots": 54,
-      "path": "XBRL-template-CLBG/Company/07-SOCF-Indirect.xlsx",
-      "semantic_coverage": "complete",
-      "slots": 73,
-      "template_id": "clbg-company-socf-indirect-v1",
-      "worksheets": 1,
-      "writable_slots": 54
-    },
-    {
-      "filename": "09-SOCIE.xlsx",
-      "fingerprint": "3ffef544e71487058e3bc0699b4e6ee768151afd608bdd69c27c9d6df9708d83",
-      "manifest_version": "2022-v1-slot-semantics-3",
-      "mapped_writable_slots": 234,
-      "path": "XBRL-template-CLBG/Company/09-SOCIE.xlsx",
-      "semantic_coverage": "complete",
-      "slots": 365,
-      "template_id": "clbg-company-socie-v1",
-      "worksheets": 1,
-      "writable_slots": 234
-    },
-    {
-      "filename": "10-Notes-CorporateInfo.xlsx",
-      "fingerprint": "75cc7f48dd9b3f80691d75beebd60f2c7fb6d4d9fd24f1ffb99990e0500325e0",
-      "manifest_version": "2022-v1-slot-semantics-3",
-      "mapped_writable_slots": 4,
-      "path": "XBRL-template-CLBG/Company/10-Notes-CorporateInfo.xlsx",
-      "semantic_coverage": "complete",
-      "slots": 7,
-      "template_id": "clbg-company-notes-corporateinfo-v1",
-      "worksheets": 1,
-      "writable_slots": 4
-    },
-    {
-      "filename": "11-Notes-AccountingPolicies.xlsx",
-      "fingerprint": "95755121a5151fa4694a4d0d1f2ebf8826fb8a725668507a62bd53f6c66b278d",
-      "manifest_version": "2022-v1-slot-semantics-3",
-      "mapped_writable_slots": 46,
-      "path": "XBRL-template-CLBG/Company/11-Notes-AccountingPolicies.xlsx",
-      "semantic_coverage": "complete",
-      "slots": 47,
-      "template_id": "clbg-company-notes-accountingpolicies-v1",
-      "worksheets": 1,
-      "writable_slots": 46
-    },
-    {
-      "filename": "12-Notes-ListOfNotes.xlsx",
-      "fingerprint": "e0a6fc163cd6b0c87e77a96eaf7ff941e37555fed40513c1a47621c6cf315919",
-      "manifest_version": "2022-v1-slot-semantics-3",
-      "mapped_writable_slots": 72,
-      "path": "XBRL-template-CLBG/Company/12-Notes-ListOfNotes.xlsx",
-      "semantic_coverage": "complete",
-      "slots": 73,
-      "template_id": "clbg-company-notes-listofnotes-v1",
-      "worksheets": 1,
-      "writable_slots": 72
-    },
-    {
-      "filename": "14-Notes-RelatedParty.xlsx",
-      "fingerprint": "fcfb38ef7965f4cdd09dde5950cd2337e670e31042491e127c02279c1f850543",
-      "manifest_version": "2022-v1-slot-semantics-3",
-      "mapped_writable_slots": 13,
-      "path": "XBRL-template-CLBG/Company/14-Notes-RelatedParty.xlsx",
-      "semantic_coverage": "complete",
-      "slots": 17,
-      "template_id": "clbg-company-notes-relatedparty-v1",
-      "worksheets": 1,
-      "writable_slots": 13
-    },
     {
       "filename": "01-SOFP-CuNonCu.xlsx",
       "fingerprint": "68b05b667c23277cc33266f7a93e6cde7d0cec513773ea269fdadcc6240062ae",
@@ -918,7 +804,7 @@
       "writable_slots": 32
     }
   ],
-  "templates": 67,
+  "templates": 58,
   "unclassified_slots": 0,
-  "worksheets": 86
+  "worksheets": 74
 }

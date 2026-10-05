@@ -49,7 +49,7 @@ def physical_coordinates(target, standard: str, level: str):
         return [(target.sheet, target.row, "A", "CY", level.title())]
     if target.dimensions.get("period"):
         # Independently check the fixed physical matrix block contract.
-        start, stride = (6, 18) if standard == "clbg" else (6, 24)
+        start, stride = (6, 24)
         block = (target.row - start) // stride
         if block not in range(4 if level == "group" else 2):
             raise ValueError(f"Unrecognized matrix block row {target.row}")
@@ -271,7 +271,7 @@ def audit_templates(paths: list[Path], output: Path) -> dict:
                "declared_statuses": dict(Counter(s["status"] for s in slot_records)),
                "families": {standard: {"slots": sum(s["template_id"].startswith(standard + "-") for s in slot_records),
                                         "writable": sum(s["writable"] and s["template_id"].startswith(standard + "-") for s in slot_records)}
-                            for standard in ("mfrs", "mpers", "clbg")},
+                            for standard in ("mfrs", "mpers")},
                "physical_destinations": len(physical_records),
                "physical_statuses": dict(Counter(r["status"] for r in physical_records)),
                "calculation_validation": "not_run_unbalanced_mapping_sentinels",

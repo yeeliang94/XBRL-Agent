@@ -106,8 +106,7 @@ export function StatementRunConfig({
     <table style={styles.table}>
       <tbody>
         {STATEMENT_TYPES.map((stmt) => {
-          const unavailable = filingStandard === "clbg" && stmt === "SOCI";
-          const isEnabled = enabled[stmt] && !unavailable;
+          const isEnabled = enabled[stmt];
           return (
             <tr key={stmt} style={styles.row}>
               <td style={styles.cell}>
@@ -115,7 +114,6 @@ export function StatementRunConfig({
                   <input
                     type="checkbox"
                     checked={isEnabled}
-                    disabled={unavailable}
                     onChange={(e) => onToggleStatement(stmt, e.target.checked)}
                   />
                   <span style={styles.stmtCode}>{stmt}</span>

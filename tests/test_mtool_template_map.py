@@ -222,15 +222,28 @@ def _save_semantic_marker_workbook(
     wb.save(path)
 
 
-def test_inspection_identifies_native_standard_without_guessing_level(tmp_path: Path):
+@pytest.mark.parametrize("clbg", [False, True])
+def test_inspection_identifies_native_standard_without_guessing_level(tmp_path: Path, clbg):
     template = tmp_path / "native-mfrs.xlsx"
     _save_semantic_marker_workbook(template)
-    report = inspect_template(str(template), {
+    if clbg:
+        wb = load_workbook(template)
+        wb.active["A1"] = "native.xsd#ssmt-mfrs_FundBalance"
+        wb.save(template)
+        wb.close()
+    doc = {
         "meta": {"filing_standard": "mfrs", "filing_level": "company"},
         "writes": [], "sheets": {},
-    })
-    assert report["detected_filing_standard"] == "mfrs"
+    }
+    report = inspect_template(str(template), doc)
+    assert report["detected_filing_standard"] == ("clbg" if clbg else "mfrs")
     assert report["detected_filing_level"] is None
+    assert report["filing_family_match"] is (not clbg)
+    if clbg:
+        ready, coverage = resolve_filing_doc(str(template), doc)
+        assert ready["writes"] == []
+        assert coverage["status"] == "blocked"
+        assert coverage["unresolved_writes"][0]["reason_code"] == "template_filing_family_mismatch"
 
 
 def test_index_workbook_indexes_strict_taxonomy_fragments(tmp_path: Path):

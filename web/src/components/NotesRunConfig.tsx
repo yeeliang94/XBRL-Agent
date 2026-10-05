@@ -92,12 +92,11 @@ export function NotesRunConfig({
   onToggleNote,
   onModelChange,
   showModels = true,
-  filingStandard = "mfrs",
 }: Props) {
   return (
     <table style={styles.table} role="group" aria-label="Notes templates">
       <tbody>
-        {NOTES_TEMPLATE_TYPES.filter((nt) => filingStandard !== "clbg" || nt !== "ISSUED_CAPITAL").map((nt) => {
+        {NOTES_TEMPLATE_TYPES.map((nt) => {
           const isEnabled = enabled[nt];
           return (
             <tr key={nt} style={styles.row}>

@@ -2,16 +2,14 @@
  "03c8f2303c83e89edb3f2ce7c267bd00": {
   "examples": [
    "XBRL-template-MFRS\\Company\\11-Notes-AccountingPolicies.xlsx",
-   "XBRL-template-MPERS\\Company\\12-Notes-AccountingPolicies.xlsx",
-   "XBRL-template-CLBG\\Company\\11-Notes-AccountingPolicies.xlsx"
+   "XBRL-template-MPERS\\Company\\12-Notes-AccountingPolicies.xlsx"
   ],
   "filing_levels": [
    "company"
   ],
   "filing_standards": [
    "mfrs",
-   "mpers",
-   "clbg"
+   "mpers"
   ],
   "layout": "ours-A-labels-BC-values",
   "name": "11-Notes-AccountingPolicies",
@@ -21,16 +19,14 @@
  "0f9d835c49cf874790d158e981b71368": {
   "examples": [
    "XBRL-template-MFRS\\Company\\12-Notes-ListOfNotes.xlsx",
-   "XBRL-template-MPERS\\Company\\13-Notes-ListOfNotes.xlsx",
-   "XBRL-template-CLBG\\Company\\12-Notes-ListOfNotes.xlsx"
+   "XBRL-template-MPERS\\Company\\13-Notes-ListOfNotes.xlsx"
   ],
   "filing_levels": [
    "company"
   ],
   "filing_standards": [
    "mfrs",
-   "mpers",
-   "clbg"
+   "mpers"
   ],
   "layout": "ours-A-labels-BC-values",
   "name": "12-Notes-ListOfNotes",
@@ -91,16 +87,14 @@
  "1bb4767533ab0a4184671e806d8c3ff5": {
   "examples": [
    "XBRL-template-MFRS\\Company\\01-SOFP-CuNonCu.xlsx",
-   "XBRL-template-MPERS\\Company\\01-SOFP-CuNonCu.xlsx",
-   "XBRL-template-CLBG\\Company\\01-SOFP-CuNonCu.xlsx"
+   "XBRL-template-MPERS\\Company\\01-SOFP-CuNonCu.xlsx"
   ],
   "filing_levels": [
    "company"
   ],
   "filing_standards": [
    "mfrs",
-   "mpers",
-   "clbg"
+   "mpers"
   ],
   "layout": "ours-A-labels-BC-values",
   "name": "01-SOFP-CuNonCu",
@@ -161,16 +155,14 @@
  "396595e96d201e0892ea0ec275195dab": {
   "examples": [
    "XBRL-template-MFRS\\Company\\14-Notes-RelatedParty.xlsx",
-   "XBRL-template-MPERS\\Company\\15-Notes-RelatedParty.xlsx",
-   "XBRL-template-CLBG\\Company\\14-Notes-RelatedParty.xlsx"
+   "XBRL-template-MPERS\\Company\\15-Notes-RelatedParty.xlsx"
   ],
   "filing_levels": [
    "company"
   ],
   "filing_standards": [
    "mfrs",
-   "mpers",
-   "clbg"
+   "mpers"
   ],
   "layout": "ours-A-labels-BC-values",
   "name": "14-Notes-RelatedParty",
@@ -180,16 +172,14 @@
  "3e580551731f977694124957b3c883a7": {
   "examples": [
    "XBRL-template-MFRS\\Company\\10-Notes-CorporateInfo.xlsx",
-   "XBRL-template-MPERS\\Company\\11-Notes-CorporateInfo.xlsx",
-   "XBRL-template-CLBG\\Company\\10-Notes-CorporateInfo.xlsx"
+   "XBRL-template-MPERS\\Company\\11-Notes-CorporateInfo.xlsx"
   ],
   "filing_levels": [
    "company"
   ],
   "filing_standards": [
    "mfrs",
-   "mpers",
-   "clbg"
+   "mpers"
   ],
   "layout": "ours-A-labels-BC-values",
   "name": "10-Notes-CorporateInfo",
@@ -244,21 +234,6 @@
   ],
   "layout": "ours-A-labels-BC-values",
   "name": "03-SOPL-Function",
-  "source": "generated",
-  "vouched_by": "repo (generated from the SSM linkbase)"
- },
- "6ab80a4c020d46ad3db78d27f1e61f1e": {
-  "examples": [
-   "XBRL-template-CLBG\\Company\\09-SOCIE.xlsx"
-  ],
-  "filing_levels": [
-   "company"
-  ],
-  "filing_standards": [
-   "clbg"
-  ],
-  "layout": "ours-A-labels-BC-values",
-  "name": "09-SOCIE",
   "source": "generated",
   "vouched_by": "repo (generated from the SSM linkbase)"
  },
@@ -327,21 +302,6 @@
   ],
   "layout": "ours-A-labels-BC-values",
   "name": "05-SOCI-BeforeTax",
-  "source": "generated",
-  "vouched_by": "repo (generated from the SSM linkbase)"
- },
- "9064afb35047bc99506f3f3f26d484db": {
-  "examples": [
-   "XBRL-template-CLBG\\Company\\03-SOPL-Function.xlsx"
-  ],
-  "filing_levels": [
-   "company"
-  ],
-  "filing_standards": [
-   "clbg"
-  ],
-  "layout": "ours-A-labels-BC-values",
-  "name": "03-SOPL-Function",
   "source": "generated",
   "vouched_by": "repo (generated from the SSM linkbase)"
  },
@@ -480,34 +440,17 @@
  "d9d97b66c3689339cd018431bea1c518": {
   "examples": [
    "XBRL-template-MFRS\\Company\\07-SOCF-Indirect.xlsx",
-   "XBRL-template-MPERS\\Company\\07-SOCF-Indirect.xlsx",
-   "XBRL-template-CLBG\\Company\\07-SOCF-Indirect.xlsx"
+   "XBRL-template-MPERS\\Company\\07-SOCF-Indirect.xlsx"
   ],
   "filing_levels": [
    "company"
   ],
   "filing_standards": [
    "mfrs",
-   "mpers",
-   "clbg"
+   "mpers"
   ],
   "layout": "ours-A-labels-BC-values",
   "name": "07-SOCF-Indirect",
-  "source": "generated",
-  "vouched_by": "repo (generated from the SSM linkbase)"
- },
- "ea9e5006c878cef1a6f88a6c784cdd92": {
-  "examples": [
-   "XBRL-template-CLBG\\Company\\04-SOPL-Nature.xlsx"
-  ],
-  "filing_levels": [
-   "company"
-  ],
-  "filing_standards": [
-   "clbg"
-  ],
-  "layout": "ours-A-labels-BC-values",
-  "name": "04-SOPL-Nature",
   "source": "generated",
   "vouched_by": "repo (generated from the SSM linkbase)"
  },

@@ -78,11 +78,7 @@ const WORKSTREAM_LABELS: Record<string, string> = {
   validator: "Cross-checks",
 };
 
-function workstreamLabel(agent: AgentTabState, filingStandard?: FilingStandard): string {
-  if (filingStandard === "clbg") {
-    if (agent.role === "SOPL" || agent.agentId === "SOPL") return "Income and expenditure";
-    if (agent.role === "SOCIE" || agent.agentId === "SOCIE") return "Changes in funds";
-  }
+function workstreamLabel(agent: AgentTabState, _filingStandard?: FilingStandard): string {
   return WORKSTREAM_LABELS[agent.agentId]
     ?? WORKSTREAM_LABELS[agent.role]
     ?? agent.label;
