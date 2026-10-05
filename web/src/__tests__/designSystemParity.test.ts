@@ -25,7 +25,7 @@ describe("XBRL design system is the production authority", () => {
     expect(designSystem).toContain("plain bold field headings above white note content");
     expect(designSystem).toContain("Selected Notes items use bold black text and a small right-pointing chevron without a fill");
     expect(designSystem).toContain("Comparison pairs share one field heading and shared grid rows for actions, editing tools and content");
-    expect(designSystem).toContain("Give every extracted note block a thin Grey 300 border, including unselected previews");
+    expect(designSystem).toContain("Keep prose fields collapsed by default in compact clickable rows");
     expect(designSystem).toContain("Give human note blocks the same thin neutral border");
     expect(designSystem).toContain("do not repeat the checklist below the editor");
     expect(designSystem).toContain("without warning counts or repeated review banners");
@@ -214,7 +214,11 @@ describe("Direction A shell and responsive composition", () => {
 describe("Simplified template-oriented review", () => {
   test("pins the minimal Notes review contract", () => {
     for (const requirement of [
-      "Show Review only on populated fields produced or materially changed by automation",
+      "Use the field heading as the disclosure control for populated and empty fields",
+      "Offer Hide empty fields for the current worksheet",
+      "Preserve level-three field headings and announce filing warnings and comparison markers as descriptions of the disclosure button",
+      "Derive prose comparison markers and the Missed by AI filter from current extracted and human content",
+      "A comparison view offers Missed by AI",
       "Do not show evidence prose, appearance provenance, internal row numbers",
       "Appearance defaults belong in Settings",
       "meaningful destination subheadings, never technical sheet names",

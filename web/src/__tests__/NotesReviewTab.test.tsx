@@ -139,7 +139,7 @@ afterEach(() => {
 // user invokes; tests that already have an active field leave it unchanged.
 function selectFirstField() {
   if (screen.queryByRole("button", { name: /^edit$/i })) return;
-  const review = screen.queryAllByRole("button", { name: /^review$/i })[0];
+  const review = screen.queryAllByRole("button", { name: /^Review /i })[0];
   if (review) fireEvent.click(review);
 }
 
@@ -149,13 +149,66 @@ function selectSheet(name: RegExp) {
 }
 
 describe("NotesReviewTab — read-only render (Step 9)", () => {
+  test("hides only mutually empty fields and isolates human-filled AI gaps", async () => {
+    const row = SAMPLE.sheets[0].rows[0];
+    mockFetchOnce({ sheets: [{ sheet: "Notes-CI", rows: [
+      { ...row, label: "AI only", node_uuid: "ai" },
+      { ...row, row: 5, label: "Both filled", node_uuid: "both" },
+      { ...row, row: 6, label: "Human only", node_uuid: "human", html: "<p><br></p>" },
+      { ...row, row: 7, label: "Both blank", node_uuid: "blank", html: "<p>&nbsp;</p>" },
+    ] }] });
+    const human = { html: { both: "<p>Human text</p>", human: "<p>Missed text</p>", blank: "<p><br></p>" },
+      status: { human: "missed" as const, both: "agree" as const } };
+    const { rerender } = render(<NotesReviewTab runId={42} human={human} />);
+    await screen.findByRole("button", { name: "Review Both blank" });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Hide empty fields" }));
+    expect(screen.queryByRole("button", { name: "Review Both blank" })).toBeNull();
+    for (const label of ["AI only", "Both filled", "Human only"]) {
+      expect(screen.getByRole("button", { name: `Review ${label}` })).toBeVisible();
+    }
+    fireEvent.change(screen.getByRole("combobox", { name: "View" }), { target: { value: "missed" } });
+    expect(screen.queryByRole("button", { name: "Review AI only" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Review Both filled" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Review Human only" }));
+    expect(screen.getByText("Missed text")).toBeVisible();
+    // A saved correction must use live HTML, even before comparison status refreshes.
+    mockFetchOnce({ sheets: [{ sheet: "Notes-CI", rows: [{ ...row, node_uuid: "human", label: "Human only" }] }] });
+    rerender(<NotesReviewTab runId={43} human={human} />);
+    await screen.findByRole("button", { name: "Review Human only" });
+    fireEvent.change(screen.getByRole("combobox", { name: "View" }), { target: { value: "missed" } });
+    expect(screen.getByRole("status")).toHaveTextContent("No fields match this view.");
+    fireEvent.click(screen.getByRole("button", { name: "Show all fields" }));
+    expect(screen.getByRole("button", { name: "Review Human only" })).toBeVisible();
+    expect(screen.queryByRole("img", { name: "Missed by AI" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Review Human only" }));
+    expect(within(screen.getByTestId("notes-human-cell")).queryByRole("img")).toBeNull();
+    expect(screen.getByRole("checkbox", { name: "Hide empty fields" })).not.toBeChecked();
+  });
+
+  test("a search can reveal a hidden empty field without losing its source context", async () => {
+    mockFetchOnce({ sheets: [{ sheet: "Notes-CI", rows: [
+      SAMPLE.sheets[0].rows[0],
+      { ...SAMPLE.sheets[0].rows[1], label: "Empty target", html: "" },
+    ] }] });
+    const pages = vi.fn();
+    render(<NotesReviewTab runId={42} onActiveCellPages={pages} />);
+    await screen.findByRole("button", { name: "Review Empty target" });
+    expect(screen.queryByRole("combobox", { name: "View" })).toBeNull();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Hide empty fields" }));
+    expect(screen.queryByRole("button", { name: "Review Empty target" })).toBeNull();
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search all note fields" }), { target: { value: "Empty target" } });
+    fireEvent.click(within(screen.getByRole("navigation", { name: "Matching note fields" })).getByRole("button"));
+    expect(screen.getByRole("button", { name: "Review Empty target" })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("checkbox", { name: "Hide empty fields" })).not.toBeChecked();
+    expect(pages).toHaveBeenLastCalledWith([3]);
+  });
+
   test("keeps pane headings outside navigation scrolling and bounds long note previews", async () => {
     mockFetchOnce(SAMPLE);
     render(<NotesReviewTab runId={42} />);
-    const previews = await screen.findAllByTestId("notes-readonly-content");
-    for (const preview of previews) {
-      expect(preview).toHaveStyle({ maxHeight: "440px", overflow: "hidden" });
-    }
+    await screen.findByRole("button", { name: "Review Corporate info" });
+    expect(screen.queryByTestId("notes-review-editor")).toBeNull();
+    selectFirstField();
     const selectedPreview = screen.getByTestId("notes-review-editor");
     expect(selectedPreview).toHaveAttribute("data-editable", "false");
     expect(selectedPreview).toHaveStyle({ maxHeight: "440px", overflowY: "auto" });
@@ -169,7 +222,13 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     expect(scrollingList).toHaveStyle({ overflowY: "auto", minHeight: 0 });
     expect(scrollingList).toContainElement(nav);
     expect(scrollingList).not.toContainElement(screen.getByRole("heading", { name: "mTool worksheets" }));
-    expect(screen.getByRole("heading", { name: "Note content" })).toBeVisible();
+    const noteHeading = screen.getByRole("heading", { name: "Note content" });
+    expect(noteHeading).toBeVisible();
+    // The opaque header also covers the gap below the sticky run tabs.
+    expect(noteHeading.parentElement).toHaveStyle({
+      background: pwc.white,
+      boxShadow: `0 -${pwc.space.lg}px 0 ${pwc.white}`,
+    });
     expect(screen.getByText("Numbered source notes")).toHaveStyle({ fontSize: "16px" });
   });
   test("renders one active sheet at a time", async () => {
@@ -216,10 +275,10 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
       },
     ] }] });
     render(<><style>{notesCss}</style><NotesReviewTab runId={42} /></>);
+    fireEvent.click(await screen.findByRole("button", { name: "Review Registered office" }));
     const heading = await screen.findByText("2.10 Employee benefits");
     expect(getComputedStyle(heading).marginLeft).toBe("2em");
     expect(getComputedStyle(screen.getByText("Short term benefits.")).marginLeft).toBe("2em");
-    fireEvent.click(screen.getByRole("button", { name: "Review Registered office" }));
     expect(getComputedStyle(screen.getByText("2.10 Employee benefits")).marginLeft).toBe("2em");
     expect(getComputedStyle(screen.getByText("Short term benefits.")).marginLeft).toBe("2em");
   });
@@ -229,7 +288,7 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
       ...SAMPLE,
       sheets: [{
         ...SAMPLE.sheets[0],
-        rows: SAMPLE.sheets[0].rows.map((row, index) => ({ ...row, node_uuid: `note-${index}` })),
+        rows: SAMPLE.sheets[0].rows.map((row, index) => ({ ...row, node_uuid: `note-${index}`, html: index === 1 ? "" : row.html })),
       }],
     };
     mockFetchOnce(compared);
@@ -237,14 +296,20 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
       html: { "note-0": "<p>Human legal name</p>", "note-1": "<p>Human office</p>" },
       status: { "note-0": "agree", "note-1": "missed" },
     }} />);
-    expect(await screen.findAllByTestId("notes-human-pair")).toHaveLength(2);
+    await screen.findByRole("button", { name: "Review Corporate info" });
+    expect(screen.queryByTestId("notes-human-pair")).toBeNull();
+    expect(screen.getByRole("img", { name: "Missed by AI" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Review Registered office" })).toHaveAccessibleDescription("Missed by AI");
+    expect(screen.getByRole("heading", { level: 3, name: /Registered office/ })).toBeVisible();
+    selectFirstField();
+    expect(screen.getAllByTestId("notes-human-pair")).toHaveLength(1);
     expect(screen.getAllByText("Human file")).toHaveLength(1);
     expect(screen.getByText("Extracted note")).toBeInTheDocument();
     expect(screen.getAllByText("Corporate info")).toHaveLength(1);
     expect(screen.getAllByText("Registered office")).toHaveLength(1);
     const humanCells = screen.getAllByTestId("notes-human-cell");
     expect(within(humanCells[0]).queryByRole("img")).toBeNull();
-    expect(within(humanCells[1]).getByRole("img", { name: "Missed by AI" })).toBeVisible();
+    expect(humanCells).toHaveLength(1);
     expect(screen.getByText("Human legal name").parentElement).toHaveStyle({ borderColor: pwc.grey300 });
     fireEvent.click(screen.getByRole("button", { name: "Review Registered office" }));
     expect(screen.getAllByText("Registered office")).toHaveLength(1);
@@ -279,6 +344,7 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     selectFirstField();
 
     expect(screen.getByText("Financial reporting status")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Review Financial reporting status" })).toHaveAccessibleDescription("Not a filing field");
     expect(screen.getByRole("status")).toHaveTextContent(/not a filing field/i);
     expect(screen.getByRole("button", { name: "Edit" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: /remove quarantined content/i }));
@@ -311,7 +377,7 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     );
     expect(rows.length).toBeGreaterThan(0);
     // First cell in SAMPLE carries source_pages [3].
-    fireEvent.mouseDown(rows[0]);
+    fireEvent.mouseDown(screen.getByTestId("notes-review-editor"));
     expect(onActiveCellPages).toHaveBeenCalledWith([3]);
   });
 
@@ -350,7 +416,7 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
       '[data-testid="notes-review-row"]',
     );
     expect(row).not.toBeNull();
-    fireEvent.mouseDown(row!);
+    fireEvent.mouseDown(screen.getByTestId("notes-review-editor"));
     expect(onActiveCellPages).toHaveBeenCalledWith([]);
   });
 
@@ -394,11 +460,8 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     });
     render(<NotesReviewTab runId={42} />);
 
-    const previews = await screen.findAllByTestId("notes-readonly-content");
-    expect(previews.length).toBeGreaterThan(0);
-    for (const preview of previews) {
-      expect(preview).toHaveClass("tiptap", "ProseMirror");
-    }
+    fireEvent.click(await screen.findByRole("button", { name: "Review Source table" }));
+    expect(screen.getByTestId("notes-review-editor").querySelector(".tiptap")).toHaveClass("ProseMirror");
     expect(document.querySelector('table[data-source-styled="true"]')).toBeTruthy();
     await waitFor(() => {
       const numericCell = document.querySelector('table[data-source-styled="true"] tr:last-child td:last-child');
@@ -406,32 +469,31 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     });
   });
 
-  test("separates disclosure metadata from populated content and keeps empty fields compact", async () => {
+  test("keeps populated and empty fields collapsed and opens only the selected content", async () => {
     mockFetchOnce({ sheets: [{ sheet: "Notes-CI", rows: [
       ...SAMPLE.sheets[0].rows,
       { ...SAMPLE.sheets[0].rows[1], row: 13, label: "Empty disclosure", html: "" },
     ] }] });
     render(<NotesReviewTab runId={42} />);
     const review = await screen.findByRole("button", { name: "Review Registered office" });
-    const row = review.closest('[data-testid="notes-review-row"]') as HTMLElement;
-    expect(within(row).queryByText(/Disclosure field/)).toBeNull();
-    expect(within(row).queryByText("Note content")).toBeNull();
-    const content = within(row).getByTestId("notes-readonly-content");
-    expect(content).toHaveTextContent("Kuala Lumpur");
-    expect(content).not.toHaveTextContent("Registered office");
-    expect(content).toHaveStyle({ border: `1px solid ${pwc.grey300}`, padding: "8px 10px" });
-    const empty = screen.getByText("Empty disclosure", { exact: true }).closest('[data-testid="notes-review-row"]') as HTMLElement;
-    expect(empty).toHaveAttribute("role", "button");
-    expect(empty).toHaveAttribute("aria-label", "Review Empty disclosure");
-    expect(empty).toHaveAttribute("tabindex", "0");
-    expect(within(empty).queryByText("Empty")).toBeNull();
-    expect(within(empty).queryByTestId("notes-readonly-content")).not.toBeInTheDocument();
-    fireEvent.keyDown(empty, { key: "Enter" });
-    expect(await screen.findByRole("button", { name: /^Edit$/ })).toBeInTheDocument();
+    expect(review).toHaveAttribute("aria-expanded", "false");
+    expect(review).toHaveStyle({ minHeight: "40px", padding: "8px 12px" });
+    expect(screen.queryByText("Kuala Lumpur")).toBeNull();
+    expect(screen.queryByTestId("notes-review-editor")).toBeNull();
     fireEvent.click(review);
-    expect(await screen.findByRole("button", { name: /^Edit$/ })).toBeInTheDocument();
-    expect(screen.queryByText("Compare destination")).toBeNull();
-    expect(screen.queryByRole("heading", { level: 4 })).toBeNull();
+    expect(review).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByTestId("notes-review-editor")).toHaveTextContent("Kuala Lumpur");
+    fireEvent.click(review);
+    expect(review).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByTestId("notes-review-editor")).toBeNull();
+    const empty = screen.getByRole("button", { name: "Review Empty disclosure" });
+    fireEvent.click(empty);
+    expect(empty).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: /^Edit$/ })).toBeInTheDocument();
+    fireEvent.click(review);
+    expect(empty).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getAllByTestId("notes-review-editor")).toHaveLength(1);
+    expect(screen.getByTestId("notes-review-editor")).toHaveTextContent("Kuala Lumpur");
   });
 
   test.each(["not_reviewed", "inventory_unavailable"])("keeps %s coverage visible in the source inventory", async (banner) => {
@@ -491,7 +553,7 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     expect(screen.queryByRole("button", { name: "Next issue" })).toBeNull();
   });
 
-  test("selects the first legacy field when empty coverage resolves after notes", async () => {
+  test("keeps legacy fields collapsed when empty coverage resolves after notes", async () => {
     let resolveCoverage: (response: Response) => void = () => {};
     const coverage = new Promise<Response>((resolve) => {
       resolveCoverage = resolve;
@@ -520,7 +582,9 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
     }));
 
     await screen.findByText(/no source-note inventory is available/i);
-    expect(await screen.findByRole("button", { name: /^edit$/i })).toBeInTheDocument();
+    expect(screen.queryByTestId("notes-review-editor")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Review Corporate info" }));
+    expect(screen.getByRole("button", { name: /^edit$/i })).toBeInTheDocument();
   });
 
   test("shows empty state when no cells for run", async () => {
@@ -827,6 +891,16 @@ describe("NotesReviewTab — edit + save (Step 10)", () => {
     await waitFor(() => {
       expect(screen.getByText(/save failed/i)).toBeInTheDocument();
     });
+    const currentField = screen.getByRole("button", { name: "Review Corporate info" });
+    const otherField = screen.getByRole("button", { name: "Review Registered office" });
+    expect(currentField).toBeDisabled();
+    expect(otherField).toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: "Hide empty fields" })).toBeDisabled();
+    fireEvent.click(currentField);
+    fireEvent.click(otherField);
+    expect(currentField).toHaveAttribute("aria-expanded", "true");
+    expect(otherField).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByTestId("notes-review-editor")).toHaveTextContent("oversized");
   });
 
   // -------------------------------------------------------------------------
@@ -1148,7 +1222,8 @@ describe("NotesReviewTab — cross-run isolation (peer-review fix)", () => {
 
       nextResponse = mk("run-77");
       rerender(<NotesReviewTab runId={77} focusCell={null} />);
-      await screen.findByText("run-77");
+      await screen.findByRole("button", { name: "Review Registered office" });
+      expect(screen.queryByText("run-77")).toBeNull();
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
       expect(spy).not.toHaveBeenCalled();
@@ -1589,6 +1664,31 @@ const FULL_TEMPLATE: NotesCellsResponse = {
 };
 
 describe("NotesReviewTab — full-template projection (Phase 5)", () => {
+  test("field views retain numeric zero, categories and human-only values within the exact scope", async () => {
+    const row = FULL_TEMPLATE.sheets[1].rows[0];
+    mockFetchOnce({ sheets: [{ ...FULL_TEMPLATE.sheets[1], rows: [
+      { ...row, label: "Recorded zero", values: { cy: 0, py: null } },
+      { ...row, row: 7, concept_uuid: "human-only", label: "Human-only capital", values: { cy: null, py: null } },
+      { ...row, row: 8, concept_uuid: "wrong-scope", label: "Empty company field", values: { cy: null, py: null } },
+      { ...row, row: 9, concept_uuid: "category", label: "Categorised zero", values: { cy: null, py: null },
+        categories: [{ dimension_key: "Ordinary", dimensions: { ClassAxis: "Ordinary" }, label: "Ordinary", values: { cy: 0, py: null }, evidence: null }] },
+    ] }] });
+    const humanFigures = new Map<string, HumanFigureSlot>([
+      [humanSlotKey("human-only", "CY", "Company"), { concept_uuid: "human-only", period: "CY", entity_scope: "Company", dimension_key: "", human_value: 5, ai_value: null, status: "missed" }],
+      [humanSlotKey("wrong-scope", "CY", "Group"), { concept_uuid: "wrong-scope", period: "CY", entity_scope: "Group", dimension_key: "", human_value: 99, ai_value: null, status: "missed" }],
+    ]);
+    render(<NotesReviewTab runId={7} humanFigures={humanFigures} />);
+    await screen.findByTestId("numeric-input-8-cy");
+    fireEvent.click(screen.getByRole("checkbox", { name: "Hide empty fields" }));
+    expect(screen.queryByTestId("numeric-input-8-cy")).toBeNull();
+    expect(screen.getByTestId("numeric-input-6-cy")).toHaveValue("0");
+    expect(screen.getByTestId("numeric-input-9-cy")).toHaveValue("0");
+    expect(screen.getByTestId("numeric-human-7-base-cy")).toHaveTextContent("5");
+    fireEvent.change(screen.getByRole("combobox", { name: "View" }), { target: { value: "missed" } });
+    expect(screen.getAllByTestId("notes-numeric-row")).toHaveLength(1);
+    expect(screen.getByTestId("notes-numeric-row")).toHaveTextContent("Human-only capital");
+  });
+
   test("numeric drafts and failed saves block preparation until every column is saved", async () => {
     const blocked = vi.fn();
     let fail = true;
@@ -3054,7 +3154,7 @@ test("policy heading hierarchy and nested emphasis survive mounting the real edi
     html: "<h2>Material policies</h2><h4>Revenue</h4><ul><li>Services<ul><li><em>Earned</em> and <u>complete</u></li></ul></li></ul>",
   }] }] });
   const { container } = render(<NotesReviewTab runId={42} />);
-  await screen.findByText("Material policies");
+  await screen.findByRole("button", { name: "Review Corporate info" });
   selectFirstField();
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
   await waitFor(() => {
