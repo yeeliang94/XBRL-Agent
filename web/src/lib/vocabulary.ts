@@ -19,6 +19,7 @@ export const TERMS = {
   aiReview: "AI review",
   notesReview: "Notes review",
   notesFormatting: "Notes formatting",
+  notesCleanup: "Notes cleanup",
   // Run-detail tab names.
   figures: "Figures",
   activity: "Activity",
@@ -45,6 +46,7 @@ const PSEUDO_AGENT_LABELS: Record<string, string> = {
   SOURCE_PREPARATION: "Source preparation",
   CORRECTION: TERMS.aiReview,
   NOTES_VALIDATOR: TERMS.notesReview,
+  NOTES_CLEANUP: TERMS.notesCleanup,
   VALIDATOR: "Cross-checks",
 };
 

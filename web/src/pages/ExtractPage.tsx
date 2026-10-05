@@ -29,7 +29,7 @@ import { runStatusDisplay } from "../lib/runStatus";
 import { StatusIcon } from "../components/StatusIcon";
 import { semanticActivities } from "../lib/semanticActivity";
 import { isCompletedWorkstream, workstreamStatusLabel } from "../lib/workstreamStatus";
-import { notesFormattingActivity } from "../lib/notesFormattingActivity";
+import { notesFormattingActivity, notesCleanupActivity } from "../lib/notesFormattingActivity";
 
 // Re-export so existing callers / tests that imported NOTES_12_AGENT_ID
 // from ExtractPage keep working. The single source of truth lives in
@@ -58,6 +58,7 @@ function liveStageMessage(stage: AppState["pipelineStage"]): string {
     case "re_checking": return "Re-running cross-checks";
     case "reviewing_notes": return "Reviewing extracted notes";
     case "formatting_notes": return "Formatting notes";
+    case "cleaning_notes": return "Cleaning notes";
     case "validating_notes": return "Validating notes";
     case "done": return "Run complete";
     default: return "Extracting selected statements and notes";
@@ -145,9 +146,14 @@ export function ExtractPage({
     const enteredFormatting =
       state.pipelineStage === "formatting_notes"
       && previousPipelineStage.current !== "formatting_notes";
+    const enteredCleanup = state.pipelineStage === "cleaning_notes"
+      && previousPipelineStage.current !== "cleaning_notes";
     previousPipelineStage.current = state.pipelineStage;
     if (enteredFormatting) {
       dispatch({ type: "SET_ACTIVE_TAB", payload: "notes-formatting" });
+    }
+    if (enteredCleanup) {
+      dispatch({ type: "SET_ACTIVE_TAB", payload: "notes-cleanup" });
     }
   }, [dispatch, state.pipelineStage]);
 
@@ -286,13 +292,22 @@ export function ExtractPage({
           flag: null,
         } as AgentTabState;
       }
+      const cleanup = notesCleanupActivity(state);
+      if (cleanup) {
+        agents["notes-cleanup"] = {
+          agentId: "notes-cleanup", label: "Notes cleanup", role: "NOTES_CLEANUP",
+          status: cleanup.status, task: cleanup.message,
+          taskDetail: cleanup.progress?.total ? `${cleanup.progress.completed ?? 0} of ${cleanup.progress.total}` : null,
+          subLabel: null, flag: null,
+        };
+      }
       return agents;
     },
     [state.agents, state.pipelineStage, state.pipelineActivity, state.events, state.isRunning],
   );
   const agentTabsOrder = useMemo(() => {
-    if (!("notes-formatting" in agentTabsAgents)) return state.agentTabOrder;
-    return [...state.agentTabOrder.filter((id) => id !== "notes-formatting"), "notes-formatting"];
+    const finishing = ["notes-formatting", "notes-cleanup"].filter((id) => id in agentTabsAgents);
+    return [...state.agentTabOrder.filter((id) => !finishing.includes(id)), ...finishing];
   }, [agentTabsAgents, state.agentTabOrder]);
   const agentTabsSkeletons = useMemo(
     () =>
@@ -815,19 +830,21 @@ export function ActiveTabPanel({
       reasoningBlocks: aggregateReasoning,
     };
   }, [rawEvents, notes12SubId, showSubTabs, aggregateTimeline, aggregateReasoning]);
-  if (state.activeTab === "notes-formatting") {
-    const formatting = notesFormattingActivity(state);
+  if (state.activeTab === "notes-formatting" || state.activeTab === "notes-cleanup") {
+    const isCleanup = state.activeTab === "notes-cleanup";
+    const label = isCleanup ? "Notes cleanup" : "Notes formatting";
+    const formatting = isCleanup ? notesCleanupActivity(state) : notesFormattingActivity(state);
     if (!formatting) return null;
     const completed = formatting.progress?.completed ?? 0;
     const total = formatting.progress?.total ?? 0;
     const message = formatting.message;
     return (
-      <div role="tabpanel" aria-label="Notes formatting activity" style={styles.activityCardAttached}>
+      <div role="tabpanel" aria-label={`${label} activity`} style={styles.activityCardAttached}>
         <div style={styles.activityHeader}>
           <div style={styles.activityHeaderLeft}>
             <div>
               <div style={styles.activityEyebrow}>Current stage</div>
-              <div style={styles.activityTitle}>Notes formatting</div>
+              <div style={styles.activityTitle}>{label}</div>
             </div>
             <span style={styles.activeAgentStatus}>{workstreamStatusLabel(formatting.status)}</span>
           </div>
@@ -846,7 +863,7 @@ export function ActiveTabPanel({
           {total > 0 && (
             <div
               role="progressbar"
-              aria-label="Notes formatting progress"
+              aria-label={`${label} progress`}
               aria-valuemin={0}
               aria-valuemax={total}
               aria-valuenow={completed}

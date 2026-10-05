@@ -51,7 +51,8 @@ def test_pdf_auto_format_stage_is_after_notes_review_and_before_recalc():
     assert review_release != -1
     assert format_stage != -1
     assert recalc_stage != -1
-    assert review_release < format_stage < recalc_stage
+    cleanup_stage = source.find('"cleaning_notes"', format_stage)
+    assert review_release < format_stage < cleanup_stage < recalc_stage
 
 
 def test_pdf_auto_format_task_is_registered_and_always_unregistered():
@@ -71,3 +72,14 @@ def test_pdf_auto_format_task_is_registered_and_always_unregistered():
     assert finally_clause != -1
     assert unregister != -1
     assert "NOTES_FORMATTER_AGENT_ID" in block[unregister:]
+
+
+def test_final_cleanup_task_is_registered_and_released():
+    source = inspect.getsource(server.run_multi_agent_stream)
+    block = source[source.index('notes_cleanup_incomplete = False'):source.index('# Formatting finishes after') ]
+    assert 'task_registry.register(session_id, "NOTES_CLEANUP", _cleanup_task)' in block
+    assert 'task_registry.unregister(session_id, "NOTES_CLEANUP")' in block
+    assert 'except asyncio.CancelledError:' in block
+    assert '"notes_cleanup_incomplete"' in block
+    assert "_refresh_merged_notes_workbook" in block
+    assert "artifact_current = False" in block

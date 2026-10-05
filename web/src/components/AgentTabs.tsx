@@ -69,6 +69,7 @@ const NOTES_TAB_PREFIX = "notes:";
 const WORKSTREAM_LABELS: Record<string, string> = {
   scout: "Document preparation",
   "notes-formatting": "Notes formatting",
+  "notes-cleanup": "Notes cleanup",
   SOFP: "Statement of financial position",
   SOPL: "Profit or loss",
   SOCI: "Comprehensive income",
@@ -141,6 +142,7 @@ function AgentTabsImpl({
     const notesIds: string[] = [];
     let scoutId: string | null = null;
     let notesFormattingId: string | null = null;
+    let notesCleanupId: string | null = null;
     let validatorId: string | null = null;
     let notesValidatorId: string | null = null;
     let correctionId: string | null = null;
@@ -157,6 +159,7 @@ function AgentTabsImpl({
         // very disappearance we're fixing).
         if (id === "scout") scoutId = id;
         else if (id === "notes-formatting") notesFormattingId = id;
+        else if (id === "notes-cleanup") notesCleanupId = id;
         else if (id === "validator") validatorId = id;
         else if (id === "NOTES_VALIDATOR") notesValidatorId = id;
         else if (id === "CORRECTION") correctionId = id;
@@ -184,6 +187,7 @@ function AgentTabsImpl({
       ...(correctionId ? [correctionId] : []),
       ...(validatorId ? [validatorId] : []),
       ...(notesFormattingId ? [notesFormattingId] : []),
+      ...(notesCleanupId ? [notesCleanupId] : []),
     ];
   })();
 
@@ -193,12 +197,14 @@ function AgentTabsImpl({
   const notesActive: string[] = [];
   let scoutActive: string | null = null;
   let notesFormattingActive: string | null = null;
+  let notesCleanupActive: string | null = null;
   let validatorActive: string | null = null;
   let notesValidatorActive: string | null = null;
   let correctionActive: string | null = null;
   for (const id of gatedOrder) {
     if (id === "scout") scoutActive = id;
     else if (id === "notes-formatting") notesFormattingActive = id;
+    else if (id === "notes-cleanup") notesCleanupActive = id;
     else if (id === "validator") validatorActive = id;
     else if (id === "NOTES_VALIDATOR") notesValidatorActive = id;
     else if (id === "CORRECTION") correctionActive = id;
@@ -209,7 +215,7 @@ function AgentTabsImpl({
   const visibleNotesActive = notesActive;
   const visiblePreparation = [scoutActive]
     .filter((id): id is string => id != null);
-  const visibleChecks = [notesValidatorActive, correctionActive, validatorActive, notesFormattingActive]
+  const visibleChecks = [notesValidatorActive, correctionActive, validatorActive, notesFormattingActive, notesCleanupActive]
     .filter((id): id is string => id != null);
   const navigationOrder = [
     ...visiblePreparation,
@@ -341,6 +347,7 @@ function AgentTabsImpl({
             {correctionActive && renderTab(correctionActive)}
             {validatorActive && renderTab(validatorActive)}
             {notesFormattingActive && renderTab(notesFormattingActive)}
+            {notesCleanupActive && renderTab(notesCleanupActive)}
           </div>
         )}
       </div>
