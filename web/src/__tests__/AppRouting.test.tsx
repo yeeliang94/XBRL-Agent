@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, vi } from "vitest";
+import { describe, test, expect, beforeAll, beforeEach, vi } from "vitest";
 import { render, fireEvent, cleanup, act, screen, waitFor, within } from "@testing-library/react";
 
 // Stub out the settings/history API calls that App fires on mount so the
@@ -20,6 +20,10 @@ vi.mock("../lib/api", async () => {
       proxy_url: "",
       api_key_set: true,
       api_key_preview: "",
+    })),
+    getAgentInstructions: vi.fn(async () => ({
+      texts: { figures: "" }, scopes: { figures: "Figures extraction and review" },
+      revision: 0, max_length: 8000, updated_by: null, updated_at: null,
     })),
     getExtendedSettings: vi.fn(async () => ({
       model: "x",
@@ -57,6 +61,9 @@ vi.mock("../lib/api", async () => {
 // makes a network call in Phase 5, but for routing tests we only exercise
 // the extract view.
 describe("App routing", () => {
+  // Load the app as suite setup; a cold module transform is not routing work.
+  beforeAll(async () => { await import("../App"); });
+
   beforeEach(() => {
     window.history.replaceState({}, "", "/");
     window.sessionStorage.clear();
@@ -93,6 +100,33 @@ describe("App routing", () => {
 
     fireEvent.click(getByRole("link", { name: /work queue/i }));
     expect(window.location.pathname).toBe("/");
+  });
+
+  test("browser Back keeps unsaved guidance mounted until discard is confirmed", async () => {
+    const api = await import("../lib/api");
+    vi.mocked(api.getAuthMe).mockResolvedValueOnce({
+      email: "admin@localhost", display_name: "Admin", provider: "dev", is_admin: true,
+    });
+    const { default: App } = await import("../App");
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const { unmount } = render(<App />);
+    try {
+      fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+      const tabs = screen.getByRole("tablist", { name: "Settings sections" });
+      fireEvent.click(within(tabs).getByRole("tab", { name: "Agent instructions" }));
+      const editor = await screen.findByLabelText("Additional instructions");
+      fireEvent.change(editor, { target: { value: "Unsaved practice" } });
+      act(() => window.history.back());
+      await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(window.location.pathname).toBe("/settings"));
+      expect(screen.getByLabelText("Additional instructions")).toHaveValue("Unsaved practice");
+      confirm.mockReturnValue(true);
+      act(() => window.history.back());
+      await waitFor(() => expect(window.location.pathname).toBe("/"));
+      await waitFor(() => expect(screen.queryByLabelText("Additional instructions")).not.toBeInTheDocument());
+    } finally {
+      unmount(); confirm.mockRestore();
+    }
   });
 
   test("browser back (popstate) restores the extract view", async () => {

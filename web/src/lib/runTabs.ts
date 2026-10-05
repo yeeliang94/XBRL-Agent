@@ -1,3 +1,5 @@
+import { pushNavigationHistory } from "./navigationHistory";
+
 export type RunTabKey =
   | "overview"
   | "agents"
@@ -38,7 +40,7 @@ export function writeRunTabToUrl(key: RunTabKey): void {
   url.searchParams.set("tab", key);
   // Each visited section is a browser-history entry; repeated clicks are not.
   if (url.toString() !== window.location.href) {
-    window.history.pushState(window.history.state, "", url.toString());
+    pushNavigationHistory(window.history.state, "", url.toString());
   }
   announceRunTabChange(key);
 }

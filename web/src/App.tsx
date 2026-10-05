@@ -30,6 +30,7 @@ import {
 } from "./lib/runTabs";
 import type { RunTabKey } from "./lib/runTabs";
 import "./index.css";
+import { initializeNavigationHistory, pushNavigationHistory } from "./lib/navigationHistory";
 
 // ---------------------------------------------------------------------------
 // Inline styles using the XBRL focused-workspace tokens — only the app-chrome pieces (page/header/main)
@@ -205,6 +206,7 @@ const styles = {
 // ---------------------------------------------------------------------------
 
 export default function App() {
+  useEffect(initializeNavigationHistory, []);
   const [state, dispatch] = useReducer(appReducer, undefined, bootState);
   const [railCollapsed, setRailCollapsed] = useState<boolean>(() => {
     try {
@@ -404,7 +406,7 @@ export default function App() {
       expected = "/";
     }
     if (window.location.pathname !== expected) {
-      window.history.pushState(
+      pushNavigationHistory(
         {
           view: state.view,
           selectedRunId: state.selectedRunId,
@@ -710,7 +712,7 @@ export default function App() {
       landingMode={extractMode}
       onOpenNewExtraction={() => {
         setExtractMode("new");
-        window.history.pushState({}, "", "/#new-extraction");
+        pushNavigationHistory({}, "", "/#new-extraction");
         window.requestAnimationFrame(() => {
           document.getElementById("new-extraction")?.scrollIntoView({ block: "start" });
         });
@@ -836,7 +838,7 @@ export default function App() {
               }
               setExtractMode("new");
               handleReset();
-              window.history.pushState({}, "", "/#new-extraction");
+              pushNavigationHistory({}, "", "/#new-extraction");
               window.requestAnimationFrame(() => {
                 document.getElementById("new-extraction")?.scrollIntoView?.({ block: "start" });
               });
@@ -851,7 +853,7 @@ export default function App() {
                 dispatch({ type: "SET_SELECTED_RUN_ID", payload: null });
                 return;
               }
-              window.history.pushState({}, "", currentRunHref);
+              pushNavigationHistory({}, "", currentRunHref);
               announceRunTabChange("overview");
               dispatch({ type: "SET_VIEW", payload: "history" });
               dispatch({ type: "SET_SELECTED_RUN_ID", payload: filingRunId });
@@ -877,7 +879,7 @@ export default function App() {
               if (v === "extract" && !state.isRunning) {
                 setExtractMode("queue");
                 handleReset();
-                window.history.pushState({}, "", "/");
+                pushNavigationHistory({}, "", "/");
                 return;
               }
               dispatch({ type: "SET_VIEW", payload: v });

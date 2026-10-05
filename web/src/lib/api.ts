@@ -11,6 +11,8 @@ import type {
   AgentTraceJson,
   AgentTraceManifestJson,
   SourceIntegrityMode,
+  TeamGuidanceSettings,
+  InstructionSourceGroup,
 } from "./types";
 import type { ClipboardFormatOptions } from "./clipboardFormat";
 import { ApiError } from "./errors";
@@ -34,6 +36,13 @@ export async function apiFetch<T>(url: string, options?: RequestInit): Promise<T
   }
   return res.json();
 }
+
+export const getAgentInstructions = () => apiFetch<TeamGuidanceSettings>("/api/agent-instructions");
+export const saveAgentInstructions = (body: { texts: Record<string, string>; revision: number }) =>
+  apiFetch<TeamGuidanceSettings>("/api/agent-instructions", {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+export const getInstructionSources = () => apiFetch<InstructionSourceGroup[]>("/api/agent-instructions/sources");
 
 // ---------------------------------------------------------------------------
 // Auth (PLAN auth Phase 1.4). Session cookies are same-origin (the SPA is

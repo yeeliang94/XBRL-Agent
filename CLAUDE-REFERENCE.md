@@ -2036,12 +2036,25 @@ gotcha #11 (v18 `auth_users` / `auth_sessions`); the operational invariants:
   `_require_admin` (the hidden UI tab is NOT the boundary) and carry the same
   409 last-admin guard; `/api/auth/change-password` is self-service (re-auths
   with the current password). Frontend: the gear opens a consolidated **`/settings`
-  page** (`SettingsPage.tsx`, `AppView "settings"`) with three tabs — **General**
-  (the old model/proxy/run-defaults form, extracted into `GeneralSettingsForm`;
-  `SettingsModal` is now a thin wrapper around it), **Account** (change password),
+  page** (`SettingsPage.tsx`, `AppView "settings"`) with **General**
+  (the model/proxy/run-defaults form, extracted into `GeneralSettingsForm`;
+  `SettingsModal` is a thin wrapper around it),
+  **Agent instructions** (shared content guidance; readable by all signed-in users,
+  writable by administrators; captured at run start),
+  **Account** (change password),
   **Users** (admin-only). Pinned by `tests/test_admin_routes.py`,
   `test_change_password.py`, `test_auth_me_reports_admin.py`,
   `test_db_schema_v20.py`, and `web` `SettingsPage`/`AccountTab`/`UsersTab` tests.
+
+Shared supplemental guidance lives in `agent_instructions`, never local JSON
+settings. A dedicated `runs.agent_instructions_json` snapshot is captured in the
+run-start transaction and retained for review. New/redo runs capture current
+guidance; continuing and re-reviewing an existing run retain recorded guidance.
+Legacy runs with no snapshot use no shared guidance. Damaged snapshots are treated
+as unrecorded by both agent construction and run-detail reads. Scope is content roles only,
+excluding Scout, helper agents and formatters. Pinned by
+`tests/test_agent_instructions.py`, `tests/test_db_schema_v50.py`, `tests/test_admin_routes.py`, and
+`web/src/__tests__/AgentInstructionsPanel.test.tsx`.
 
 Pinned by `tests/test_auth_middleware.py`, `test_auth_password.py`,
 `test_auth_sessions.py`, `test_auth_lockout.py`,

@@ -969,6 +969,7 @@ export interface RunCrossCheckJson {
 }
 
 export interface RunDetailJson {
+  agent_instructions?: TeamGuidance | null;
   id: number;
   created_at: string;
   pdf_filename: string;
@@ -992,6 +993,23 @@ export interface RunDetailJson {
   app_version?: string | null;
   // Historical transcript outcome. New runs have no outcome file.
   pdf_sidecar?: PdfSidecarData | null;
+}
+
+export interface TeamGuidance {
+  texts: Record<string, string>;
+  revision: number;
+  updated_by: string | null;
+  updated_at: string | null;
+}
+
+export interface TeamGuidanceSettings extends TeamGuidance {
+  scopes: Record<string, string>;
+  max_length: number;
+}
+
+export interface InstructionSourceGroup {
+  role: string;
+  sources: { name: string; label?: string; text: string }[];
 }
 
 export interface RunIncidentJson {

@@ -23,7 +23,7 @@ def test_v48_database_gains_human_file_tables_and_keeps_runs(tmp_path):
     with sqlite3.connect(db) as conn:
         assert conn.execute(
             "SELECT version FROM schema_version"
-        ).fetchone()[0] == CURRENT_SCHEMA_VERSION == 49
+        ).fetchone()[0] == CURRENT_SCHEMA_VERSION
         assert conn.execute(
             "SELECT pdf_filename, status FROM runs"
         ).fetchall() == [("doc.pdf", "completed")]

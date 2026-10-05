@@ -237,13 +237,21 @@ from pathlib import Path
 # v49 stores one human-filled mTool file per run: the file record, the human's
 # typed figures by canonical fact key, and the human's notes by field. The
 # comparison with the run's current facts is computed on read, never stored.
-CURRENT_SCHEMA_VERSION = 49
+# v50 stores shared content guidance and a frozen per-run guidance snapshot.
+CURRENT_SCHEMA_VERSION = 50
 
 
 # Every CREATE is guarded with IF NOT EXISTS so init_db is safe to call
 # repeatedly. Foreign keys use ON DELETE CASCADE so deleting a run sweeps
 # up all dependent rows.
 _CREATE_STATEMENTS: tuple[str, ...] = (
+    """CREATE TABLE IF NOT EXISTS agent_instructions (
+        id INTEGER PRIMARY KEY CHECK(id=1),
+        texts_json TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        updated_by TEXT,
+        updated_at TEXT
+    )""",
     # Top-level run: one per user-initiated extraction (web UI or CLI).
     #
     # v2 fields (see CURRENT_SCHEMA_VERSION note above):
@@ -275,6 +283,7 @@ _CREATE_STATEMENTS: tuple[str, ...] = (
         output_dir            TEXT NOT NULL DEFAULT '',
         merged_workbook_path  TEXT,
         run_config_json       TEXT,
+        agent_instructions_json TEXT,
         scout_enabled         INTEGER NOT NULL DEFAULT 0,
         started_at            TEXT NOT NULL DEFAULT '',
         ended_at              TEXT,
@@ -3619,6 +3628,21 @@ def init_db(path: str | Path) -> None:
                 ).fetchone()[0]
                 if latest < 49:
                     conn.execute("UPDATE schema_version SET version = 49")
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        # v49 -> v50: freeze guidance separately from display-only run config.
+        if current_version is not None and current_version < 50:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                latest = conn.execute("SELECT version FROM schema_version").fetchone()[0]
+                if latest < 50:
+                    columns = {r[1] for r in conn.execute("PRAGMA table_info(runs)")}
+                    if "agent_instructions_json" not in columns:
+                        conn.execute("ALTER TABLE runs ADD COLUMN agent_instructions_json TEXT")
+                    conn.execute("UPDATE schema_version SET version = 50")
                 conn.commit()
             except Exception:
                 conn.rollback()

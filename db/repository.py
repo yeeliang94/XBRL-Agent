@@ -90,6 +90,7 @@ class Run:
     app_version: Optional[str] = None
     repeat_group_id: Optional[int] = None
     repeat_index: Optional[int] = None
+    agent_instructions: Optional[dict[str, Any]] = None
 
 
 @dataclass
@@ -390,7 +391,11 @@ def create_run(
             app_version,
         ),
     )
-    return int(cur.lastrowid)
+    run_id = int(cur.lastrowid)
+    if status != "draft":
+        from agent_instructions import capture_guidance
+        capture_guidance(conn, run_id)
+    return run_id
 
 
 def create_run_lineage(
@@ -473,13 +478,15 @@ def mark_draft_started(
         "WHERE id = ? AND status = 'draft'",
         (_now(), run_id),
     )
-    return cur.rowcount > 0
+    started = cur.rowcount > 0
+    if started:
+        from agent_instructions import capture_guidance
+        capture_guidance(conn, run_id)
+    return started
 
 
-def _parse_notes_table_style(raw: Any) -> Optional[dict[str, Any]]:
-    """Hydrate the runs.notes_table_style JSON blob to a dict (or None). A
-    corrupt blob degrades to None (inherit firm default) rather than crashing
-    the run-detail read."""
+def _parse_json_object(raw: Any) -> Optional[dict[str, Any]]:
+    """Hydrate a JSON object, returning None for a corrupt blob."""
     if not raw:
         return None
     try:
@@ -2617,6 +2624,8 @@ def _row_to_run(row: sqlite3.Row) -> Run:
     this in one place means the History code never has to know which
     column names are optional vs required.
     """
+    from agent_instructions import parse_guidance_snapshot
+
     # Some callers use non-Row connections; fall back to key lookups that
     # work for both sqlite3.Row and tuple/dict shapes.
     def _get(name: str, default=None):
@@ -2647,10 +2656,11 @@ def _row_to_run(row: sqlite3.Row) -> Run:
         started_at=_get("started_at", "") or "",
         ended_at=_get("ended_at"),
         orchestration=_get("orchestration", "split") or "split",
-        notes_table_style=_parse_notes_table_style(_get("notes_table_style")),
+        notes_table_style=_parse_json_object(_get("notes_table_style")),
         app_version=_get("app_version"),
         repeat_group_id=_get("repeat_group_id"),
         repeat_index=_get("repeat_index"),
+        agent_instructions=parse_guidance_snapshot(_get("agent_instructions_json")),
     )
 
 
