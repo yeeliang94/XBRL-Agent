@@ -100,7 +100,7 @@ export function AdvancedSettingsSection({ rows, edits, onEdit, readOnly }: Props
                   <label style={styles.checkboxLabel}>
                     <input
                       id={id}
-                      type="checkbox"
+                      type="checkbox" style={ui.checkbox}
                       checked={value === true}
                       disabled={readOnly}
                       onChange={(e) => onEdit(row.key, e.target.checked)}

@@ -368,9 +368,27 @@ export const ui = {
 
   select: {
     ...controlBase,
+    borderColor: pwc.grey300,
     height: 44,
     minHeight: 44,
     padding: `0 ${pwc.space.lg}px`,
+  } as CSSProperties,
+
+  // Native checkbox semantics; checked and disabled states live in index.css.
+  checkbox: {
+    appearance: "none",
+    width: 18,
+    height: 18,
+    flexShrink: 0,
+    margin: 0,
+    padding: 0,
+    border: `1px solid ${pwc.grey300}`,
+    borderRadius: 4,
+    background: pwc.white,
+    color: pwc.black,
+    display: "inline-grid",
+    placeContent: "center",
+    cursor: "pointer",
   } as CSSProperties,
 
   textarea: {

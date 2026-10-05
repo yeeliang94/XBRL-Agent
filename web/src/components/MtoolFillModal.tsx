@@ -1130,9 +1130,9 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
           <MtoolSheetSelection sheets={availableSheets} selected={selectedSheets} onChange={changeSheets} />
         )}
         {notesCount !== null && notesCount > 0 && (
-          <label style={{ ...styles.statLine, display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+          <label style={{ ...styles.statLine, display: "flex", alignItems: "center", gap: pwc.space.sm, fontSize: 14, marginBottom: 4 }}>
             <input
-              type="checkbox"
+              type="checkbox" style={ui.checkbox}
               checked={fillNotes}
               onChange={(e) => {
                 setFillNotes(e.target.checked);
@@ -1153,7 +1153,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
 
         {notesCount !== null && notesCount > 0 && fillNotes && (
           <label
-            style={{ ...styles.statLine, display: "flex", alignItems: "flex-start", gap: 6, marginBottom: pwc.space.md }}
+            style={{ ...styles.statLine, display: "flex", alignItems: "flex-start", gap: pwc.space.sm, fontSize: 14, marginBottom: pwc.space.md }}
           >
             <input
               type="checkbox"
@@ -1170,7 +1170,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                 }
               }}
               aria-label="Add missing note spots"
-              style={{ marginTop: 2 }}
+              style={{ ...ui.checkbox, marginTop: 2 }}
             />
             <span>
               Add missing note spots
@@ -1272,7 +1272,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                                 return next;
                               });
                             }}
-                            style={{ fontSize: 12, maxWidth: "100%" }}
+                            style={{ ...ui.select, maxWidth: "100%" }}
                           >
                             <option value="">Skip for now (not filled)</option>
                             {u.candidates!.map((cand, ci) => {
@@ -1288,9 +1288,9 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
                           </select>
                         )}
                         {suggestion && idx >= 0 && (
-                          <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                          <label style={{ display: "inline-flex", alignItems: "center", gap: pwc.space.sm, fontSize: 14 }}>
                             <input
-                              type="checkbox"
+                              type="checkbox" style={ui.checkbox}
                               checked={!!chosen}
                               aria-label={`Use the close match for “${u.label}”`}
                               onChange={(e) =>

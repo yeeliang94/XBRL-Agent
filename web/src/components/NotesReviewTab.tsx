@@ -940,18 +940,15 @@ export function NotesReviewTab({
             <div style={{ ...ui.reviewPaneHeader, position: "sticky", top: 116, zIndex: 2, marginBottom: pwc.space.lg, boxShadow: `0 -${pwc.space.lg}px 0 ${pwc.white}`, flexWrap: "wrap", gap: pwc.space.sm }}>
               <h2 style={{ ...ui.sectionTitle, margin: 0 }}>Note content</h2>
               <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: pwc.space.md }}>
-                <label style={{ display: "flex", alignItems: "center", gap: pwc.space.xs, fontSize: 13 }}>
-                  <input type="checkbox" checked={hideEmptyFields} disabled={saveBlocked || moveBusy}
+                <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, fontSize: 14 }}>
+                  <input type="checkbox" style={ui.checkbox} checked={hideEmptyFields} disabled={saveBlocked || moveBusy}
                     onChange={(event) => setHideEmptyFields(event.target.checked)} />
                   Hide empty fields
                 </label>
-                {hasHumanComparison && <label style={{ display: "flex", alignItems: "center", gap: pwc.space.xs, fontSize: 13 }}>
-                  View
-                  <select style={{ ...ui.select, minHeight: 32, width: "auto" }} value={onlyMissedFields ? "missed" : "all"} disabled={saveBlocked || moveBusy}
-                    onChange={(event) => setOnlyMissedFields(event.target.value === "missed")}>
-                    <option value="all">All fields</option>
-                    <option value="missed">Missed by AI</option>
-                  </select>
+                {hasHumanComparison && <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, fontSize: 14 }}>
+                  <input type="checkbox" style={ui.checkbox} checked={onlyMissedFields} disabled={saveBlocked || moveBusy}
+                    onChange={(event) => setOnlyMissedFields(event.target.checked)} />
+                  Only missed by AI
                 </label>}
               </div>
             </div>
@@ -1174,6 +1171,22 @@ function SheetSection({
     });
   }, []);
 
+  // Fields with content open by default as a read-only preview, so the
+  // reviewer sees at a glance which fields the AI (or the human) filled.
+  // Empty fields stay compact. A heading click flips one field away from its
+  // default; the set holds those flipped rows.
+  const [flippedRows, setFlippedRows] = useState<Set<number>>(() => new Set());
+  const fieldHasContent = (cell: NotesCell) => !isBlankHtml(cell.html)
+    || Boolean(human && cell.node_uuid && !isBlankHtml(human.html[cell.node_uuid]));
+  const isFieldOpen = (cell: NotesCell) => selectedCellKey === `${sheet.sheet}:${cell.row}`
+    || fieldHasContent(cell) !== flippedRows.has(cell.row);
+  const setFieldOpen = (cell: NotesCell, open: boolean) => setFlippedRows((prev) => {
+    const next = new Set(prev);
+    if (open === fieldHasContent(cell)) next.delete(cell.row);
+    else next.add(cell.row);
+    return next;
+  });
+
   const canFormat = (sheet.kind ?? "prose") === "prose";
   const visibleRows = sheet.rows.filter((cell) => {
     if (cell.invalid_target || selectedCellKey === `${sheet.sheet}:${cell.row}`) return true;
@@ -1259,16 +1272,16 @@ function SheetSection({
               <span role="columnheader">Line item</span>
               {numericColumns.map((key) => (
                 <Fragment key={key}>
-                  <span role="columnheader" style={styles.numericColumnHeader}>{humanFigures ? "Extracted " : ""}{NUMERIC_VALUE_COLUMNS[key].label}</span>
-                  {humanFigures && <span role="columnheader" style={styles.numericColumnHeader}>Human {NUMERIC_VALUE_COLUMNS[key].label}</span>}
+                  <span role="columnheader" style={styles.numericColumnHeader}>{humanFigures ? `AI ${NUMERIC_VALUE_COLUMNS[key].label.toLowerCase()}` : NUMERIC_VALUE_COLUMNS[key].label}</span>
+                  {humanFigures && <span role="columnheader" style={styles.numericColumnHeader}>Human {NUMERIC_VALUE_COLUMNS[key].label.toLowerCase()}</span>}
                 </Fragment>
               ))}
             </div>
           )}
-          {human && visibleRows.some((cell) => cell.kind !== "numeric" && cell.node_uuid && selectedCellKey === `${sheet.sheet}:${cell.row}`) && (
+          {human && visibleRows.some((cell) => cell.kind !== "numeric" && cell.node_uuid && isFieldOpen(cell)) && (
             <div className="notes-human-pair-header" style={styles.humanPairHeader}>
-              <span>Extracted note</span>
-              <span>Human file</span>
+              <span>AI note</span>
+              <span>Human note</span>
             </div>
           )}
           {attentionRows?.length === 0 && <p role="status">No placed field issues in this sheet. Check the source inventory for unplaced or unresolved notes.</p>}
@@ -1319,7 +1332,8 @@ function SheetSection({
             ) : null;
             const field = cell.node_uuid ?? null;
             if (cell.kind === "numeric") return row;
-            const expanded = selectedCellKey === `${sheet.sheet}:${cell.row}`;
+            const selected = selectedCellKey === `${sheet.sheet}:${cell.row}`;
+            const expanded = isFieldOpen(cell);
             const compared = Boolean(human && field);
             const humanFilled = Boolean(field && !isBlankHtml(human?.html[field]));
             const aiFilled = !isBlankHtml(cell.html);
@@ -1327,7 +1341,7 @@ function SheetSection({
               ? humanFilled && !aiFilled ? "missed" : aiFilled && !humanFilled ? "ai_only" : "agree"
               : undefined;
             const statusId = `note-field-status-${runId}-${encodeURIComponent(sheet.sheet)}-${cell.row}`;
-            const marker = !expanded && humanStatus && humanStatus !== "agree"
+            const marker = !selected && humanStatus && humanStatus !== "agree"
               ? humanStatus === "missed" ? "Missed by AI" : "AI-only"
               : null;
             // The human's note sits on the same grid row, so the pair takes
@@ -1341,8 +1355,12 @@ function SheetSection({
                     disabled={hasPendingRowSave || moveBusy}
                     style={styles.fieldDisclosureButton}
                     onClick={() => {
-                      if (expanded) onCellCollapse();
-                      else {
+                      if (expanded) {
+                        if (selected) onCellCollapse();
+                        setFieldOpen(cell, false);
+                      } else {
+                        // An empty field opens only while it is selected.
+                        if (fieldHasContent(cell)) setFieldOpen(cell, true);
                         onCellActivate?.(sheet.sheet, cell.row);
                         reportCellPages(cell.source_pages, onActiveCellPages);
                       }
@@ -1356,17 +1374,70 @@ function SheetSection({
                   </button>
                 </h3>
                 {marker && <span id={`${statusId}-comparison`} hidden>{marker}</span>}
-                {expanded && (compared && human && field ? <div className="notes-human-pair" data-testid="notes-human-pair" style={styles.humanPair}>
+                {selected ? (compared && human && field ? <div className="notes-human-pair" data-testid="notes-human-pair" style={styles.humanPair}>
                   <div className="notes-human-extracted" style={styles.comparisonRows}>{row}</div>
                   <HumanNoteCell html={human.html[field]} status={humanStatus}
                     blank={isBlankHtml(cell.html)}
                     selected={true} />
-                </div> : row)}
+                </div> : row) : expanded ? (
+                  <NotePreview
+                    label={cell.label}
+                    html={cell.html}
+                    humanHtml={compared && human && field ? human.html[field] ?? "" : null}
+                    disabled={hasPendingRowSave || moveBusy}
+                    onOpen={() => {
+                      onCellActivate?.(sheet.sheet, cell.row);
+                      reportCellPages(cell.source_pages, onActiveCellPages);
+                    }}
+                  />
+                ) : null}
               </section>
             );
           })}
       </div>
     </section>
+  );
+}
+
+/** An open field that is not being edited: the note as read-only content
+ *  (and the human's note beside it when comparing). Clicking it opens the
+ *  field's editor and its source page. */
+function NotePreview({
+  label,
+  html,
+  humanHtml,
+  disabled,
+  onOpen,
+}: {
+  label: string;
+  html: string;
+  /** null when there is no human comparison for this field. */
+  humanHtml: string | null;
+  disabled: boolean;
+  onOpen: () => void;
+}) {
+  const body = (content: string, emptyText: string) => isBlankHtml(content)
+    ? <p style={{ ...styles.dim, margin: 0, padding: "8px 0" }}>{emptyText}</p>
+    : <div data-testid="notes-readonly-content" style={styles.editorViewportReadonly}>
+        {/* Sanitised server-side with the notes whitelist (gotcha #16). */}
+        <div className="tiptap ProseMirror" dangerouslySetInnerHTML={{ __html: content }} />
+      </div>;
+  return (
+    <div data-testid="notes-field-preview"
+      className={humanHtml != null ? "notes-human-pair" : undefined}
+      title={disabled ? undefined : "Click to edit"}
+      aria-label={`${label} preview`}
+      onClick={() => { if (!disabled) onOpen(); }}
+      style={{ ...styles.notePreview, ...(humanHtml != null ? styles.notePreviewPair : null), cursor: disabled ? "default" : "pointer" }}>
+      {humanHtml != null ? <>
+        <div className="notes-human-extracted" role="group" aria-label="AI note">
+          {body(html, "No AI content")}
+        </div>
+        <div role="group" aria-label="Human note">
+          {body(humanHtml, "Not in human file")}
+        </div>
+      </> : body(html, "No AI content")}
+    </div>
   );
 }
 
@@ -2309,13 +2380,13 @@ function NumericCategoryResolution({ runId, cell, blocked, onStatusChange, onRes
       onClick={() => setOpen(true)}>Resolve category</button> : <>
       <label htmlFor={`${prefix}-slot`}>Period and entity</label>
       <select id={`${prefix}-slot`} value={slot} disabled={saving || blocked}
-        onChange={(event) => { setSlot(event.target.value); change(); }} style={{ ...styles.numericInput, textAlign: "left", height: 40 }}>
+        onChange={(event) => { setSlot(event.target.value); change(); }} style={{ ...ui.select, width: "100%" }}>
         <option value="">Select one source value</option>
         {slots.map((key) => <option key={key} value={key}>{NUMERIC_VALUE_COLUMNS[key].label} — {formatGroupedInput(String(cell.values?.[key]))}</option>)}
       </select>
       <label htmlFor={`${prefix}-option`}>Category</label>
       <select id={`${prefix}-option`} value={option} disabled={saving || blocked}
-        onChange={(event) => { setOption(event.target.value); change(); }} style={{ ...styles.numericInput, textAlign: "left", height: 40 }}>
+        onChange={(event) => { setOption(event.target.value); change(); }} style={{ ...ui.select, width: "100%" }}>
         <option value="">Select a category</option>
         {options.map((item, index) => <option key={JSON.stringify(item.dimensions)} value={index}>{item.label}</option>)}
       </select>
@@ -2837,6 +2908,17 @@ const styles = {
     gridTemplateRows: "subgrid",
     gridRow: "span 3",
     gap: "inherit",
+  } as React.CSSProperties,
+  notePreview: {
+    padding: `${pwc.space.sm}px 12px ${pwc.space.lg}px`,
+    borderBottom: `1px solid ${pwc.grey100}`,
+    minWidth: 0,
+  } as React.CSSProperties,
+  notePreviewPair: {
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+    gap: 12,
+    alignItems: "start",
   } as React.CSSProperties,
   humanPairHeader: {
     display: "grid",

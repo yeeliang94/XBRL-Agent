@@ -1763,8 +1763,10 @@ describe("Upload-owned preparation", () => {
     const props = { sessionId: "abc", getSettings: vi.fn().mockResolvedValue(mockSettings), onRun };
     const { rerender } = render(<PreRunPanel {...props}
       preparation={preparation()} />);
-    await openAdvanced();
-    const select = screen.getAllByRole<HTMLSelectElement>("combobox")
+    await screen.findByRole("heading", { name: "Filing setup" });
+    // Once preparation runs, the Advanced toggle is gone: it had nothing left to show.
+    expect(screen.queryByTestId("advanced-toggle")).toBeNull();
+    const select = (await screen.findAllByRole<HTMLSelectElement>("combobox"))
       .find((element) => element.querySelector("option[value='CuNonCu']"))!;
     fireEvent.change(select, { target: { value: "CuNonCu" } });
     fireEvent.change(select, { target: { value: variant } });
@@ -1811,7 +1813,7 @@ describe("Upload-owned preparation", () => {
         detected_standard: "mpers", statements: { SOFP: { variant_suggestion: "Default", confidence: "HIGH" } }, notes_inventory: [],
       } })} />);
     await waitFor(() => expect(screen.getByRole("button", { name: "MPERS" })).toHaveAttribute("aria-pressed", "true"));
-    await openAdvanced();
+    expect(screen.queryByTestId("advanced-toggle")).toBeNull();
     expect(screen.queryByRole("button", { name: /preview scan/i })).toBeNull();
     startExtraction();
     expect(onRun.mock.calls[0][0].infopack.detected_standard).toBe("mpers");

@@ -30,7 +30,6 @@ import {
   type ComparisonTile,
 } from "../components/HumanComparisonBar";
 import {
-  formatShare,
   getHumanComparison,
   humanSlotKey,
   HUMAN_STATUS_LABEL,
@@ -276,6 +275,14 @@ function displayConceptSource(row: ConceptRow): string {
   const evidencePages = parseEvidencePages(row.evidence);
   const pages = evidencePages.length ? evidencePages : parseEvidencePages(row.source);
   return pages.length ? `Page${pages.length === 1 ? "" : "s"} ${pages.join(", ")}` : "";
+}
+
+/** A comparison column header: "AI CY" / "Human CY". The full reporting
+ *  period ("CY (year ended …)") stays in the header's tooltip so the paired
+ *  columns stay narrow enough to read on one line. */
+function comparisonHeader(source: "AI" | "Human", periodLabel: string | null): string {
+  if (!periodLabel) return source === "AI" ? "AI value" : "Human value";
+  return `${source} ${periodLabel.split(" (")[0]}`;
 }
 
 function treeColumns(showPeriods: boolean, human = false): string {
@@ -929,32 +936,35 @@ export function ConceptsPage({
     );
   }
 
-  // Human-file stat tiles: figures follow the Company/Group switch; notes are
-  // placement only.
+  // Human-file summary: figures follow the Company/Group switch; notes are
+  // placement only. Exceptions are listed only when there are any.
   let comparisonTiles: ComparisonTile[] = [];
   let comparisonExcludes: string | null = null;
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
   if (comparison) {
     if (notesActive) {
       const t = comparison.notes.totals;
       comparisonTiles = [
-        { label: "Found", value: formatShare(t.both_filled, t.human_filled) },
-        { label: "AI-only", value: String(t.ai_only) },
+        { label: "placed", value: `${t.both_filled} of ${t.human_filled}` },
+        ...(t.human_filled > t.both_filled ? [{ label: "missed by AI", value: String(t.human_filled - t.both_filled) }] : []),
+        ...(t.ai_only > 0 ? [{ label: "AI-only", value: String(t.ai_only) }] : []),
       ];
       const unmatchedNotes = comparison.file.unmatched.filter((u) => u.kind === "note").length;
-      if (unmatchedNotes > 0) comparisonExcludes = `Excludes ${unmatchedNotes} unmatched note${unmatchedNotes === 1 ? "" : "s"}`;
+      if (unmatchedNotes > 0) comparisonExcludes = `Not counted: ${plural(unmatchedNotes, "unmatched note")}`;
     } else {
       const t = comparison.figures.totals[activeScope] ?? { human_filled: 0, both_filled: 0, same_value: 0, ai_only: 0, zero_blank_excluded: 0 };
       comparisonTiles = [
-        { label: "Found", value: formatShare(t.both_filled, t.human_filled) },
-        { label: "Same value", value: formatShare(t.same_value, t.both_filled) },
-        { label: "AI-only", value: String(t.ai_only) },
+        { label: "match", value: `${t.same_value} of ${t.human_filled}` },
+        ...(t.both_filled > t.same_value ? [{ label: "differ", value: String(t.both_filled - t.same_value) }] : []),
+        ...(t.human_filled > t.both_filled ? [{ label: "missed by AI", value: String(t.human_filled - t.both_filled) }] : []),
+        ...(t.ai_only > 0 ? [{ label: "AI-only", value: String(t.ai_only) }] : []),
       ];
       const n = comparison.figures.excluded.unmatched_rows;
       const exclusions = [
-        t.zero_blank_excluded > 0 ? `${t.zero_blank_excluded} human zero / AI blank slot${t.zero_blank_excluded === 1 ? "" : "s"}` : null,
-        n > 0 ? `${n} unmatched row${n === 1 ? "" : "s"}` : null,
+        t.zero_blank_excluded > 0 ? plural(t.zero_blank_excluded, "human zero") : null,
+        n > 0 ? plural(n, "unmatched row") : null,
       ].filter(Boolean);
-      if (exclusions.length > 0) comparisonExcludes = `Excludes ${exclusions.join(" and ")}`;
+      if (exclusions.length > 0) comparisonExcludes = `Not counted: ${exclusions.join(", ")}`;
     }
   }
   const activeNotCompared = !notesActive && humanActive && activeTemplate
@@ -983,6 +993,7 @@ export function ConceptsPage({
         title="Source PDF"
         testId="pdf"
         onHide={() => setPdfCollapsed(true)}
+        inset
       />
       {/* Source-PDF verification: the pane follows the selected concept's
           evidence pages so a reviewer can eyeball the figure against the
@@ -1167,7 +1178,8 @@ export function ConceptsPage({
                 ))}
               </select>
             </div>
-            <span style={styles.visibleRowCount} role="status" aria-live="polite">
+            {/* Announced for screen readers; visually the table itself shows the rows. */}
+            <span style={styles.visuallyHidden} role="status" aria-live="polite">
               {filtered.length} figure row{filtered.length === 1 ? "" : "s"} shown
             </span>
             {editedCount > 0 && (
@@ -1176,7 +1188,7 @@ export function ConceptsPage({
                 re-running extraction overwrites {editedCount === 1 ? "it" : "them"}
               </span>
             )}
-            <button type="button" style={ui.buttonGhost} disabled={figureIssueRows.length === 0}
+            <button type="button" style={{ ...ui.buttonGhost, marginLeft: "auto" }} disabled={figureIssueRows.length === 0}
               onClick={() => {
                 const current = figureIssueRows.findIndex((row) => row.concept_uuid === selectedConceptUuid);
                 const next = figureIssueRows[(current + 1) % figureIssueRows.length];
@@ -1407,13 +1419,17 @@ function ColumnHeader({
   title,
   testId,
   onHide,
+  inset = false,
 }: {
   title: string;
   testId: string;
   onHide: () => void;
+  /** Align the title with a padded pane body (the Source PDF card) so it sits
+   *  the same distance from the divider as the other pane titles. */
+  inset?: boolean;
 }) {
   return (
-    <div style={styles.columnHeader}>
+    <div style={inset ? { ...styles.columnHeader, paddingInline: pwc.space.lg } : styles.columnHeader}>
       <span style={styles.columnHeaderTitle}>{title}</span>
       <button
         type="button"
@@ -1544,10 +1560,15 @@ function ConceptTree({
             codename — plain-language rule (CLAUDE.md "talk like a product
             person"). Numeric column headers right-align over their figures. */}
         <div role="columnheader" style={styles.headerCell}>Line item</div>
-        <div role="columnheader" style={styles.headerCellNumeric}>{human ? "Extracted " : ""}{showPeriods ? cyLabel : "Value"}</div>
-        {human && <div role="columnheader" style={styles.headerCellNumeric}>Human {showPeriods ? cyLabel : "value"}</div>}
-        {showPeriods && <div role="columnheader" style={styles.headerCellNumeric}>{human ? "Extracted " : ""}{pyLabel}</div>}
-        {human && showPeriods && <div role="columnheader" style={styles.headerCellNumeric}>Human {pyLabel}</div>}
+        {human ? <>
+          <div role="columnheader" style={styles.headerCellNumeric} title={showPeriods ? cyLabel : undefined}>{comparisonHeader("AI", showPeriods ? cyLabel : null)}</div>
+          <div role="columnheader" style={styles.headerCellNumeric} title={showPeriods ? cyLabel : undefined}>{comparisonHeader("Human", showPeriods ? cyLabel : null)}</div>
+          {showPeriods && <div role="columnheader" style={styles.headerCellNumeric} title={pyLabel}>{comparisonHeader("AI", pyLabel)}</div>}
+          {showPeriods && <div role="columnheader" style={styles.headerCellNumeric} title={pyLabel}>{comparisonHeader("Human", pyLabel)}</div>}
+        </> : <>
+          <div role="columnheader" style={styles.headerCellNumeric}>{showPeriods ? cyLabel : "Value"}</div>
+          {showPeriods && <div role="columnheader" style={styles.headerCellNumeric}>{pyLabel}</div>}
+        </>}
 
       </div>
       {visibleRows.map((r) => (
@@ -1758,9 +1779,9 @@ function ConceptMatrixGrid({
             style={styles.matrixPeriodHeader}
             title={`${col} ${period}`}
           >
-            {isHuman
-              ? `Human ${showPeriods ? (period === "CY" ? cyLabel : pyLabel) : "value"}`
-              : `${human ? "Extracted " : ""}${showPeriods ? (period === "CY" ? cyLabel : pyLabel) : "Value"}`}
+            {human
+              ? comparisonHeader(isHuman ? "Human" : "AI", showPeriods ? (period === "CY" ? cyLabel : pyLabel) : null)
+              : showPeriods ? (period === "CY" ? cyLabel : pyLabel) : "Value"}
           </div>
         ))}
       </div>
@@ -2196,7 +2217,6 @@ function HumanValueCell({
     <span data-testid={testId} data-human-status={slot.status}
       style={{
         ...styles.humanCell,
-        ...(slot.calculated ? styles.humanTotal : null),
         ...(slot.status === "zero_blank" ? styles.humanQuiet : null),
       }}
       title={HUMAN_STATUS_LABEL[slot.status]}>
@@ -2732,12 +2752,6 @@ const styles = {
     color: tokens.color.text.primary,
     background: tokens.surface.sunken,
   } as React.CSSProperties,
-  visibleRowCount: {
-    color: pwc.grey700,
-    fontSize: 12,
-    marginLeft: "auto",
-    whiteSpace: "nowrap" as const,
-  } as React.CSSProperties,
   editedValuesSummary: {
     maxWidth: 280,
     color: pwc.grey700,
@@ -2802,19 +2816,13 @@ const styles = {
     boxSizing: "border-box" as const,
     minWidth: 0,
     minHeight: 32,
-    padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.md,
-    background: pwc.white,
+    // Read-only text, not a field: no border, so it never looks editable.
+    // The right padding matches the AI input's text inset so digits align.
+    padding: `${pwc.space.xs}px 9px ${pwc.space.xs}px ${pwc.space.xs}px`,
     fontFamily: pwc.fontBody,
     fontSize: 14,
     fontVariantNumeric: "tabular-nums",
     color: pwc.grey900,
-  } as React.CSSProperties,
-  // A human total mirrors the run's read-only total box.
-  humanTotal: {
-    background: pwc.grey50,
-    color: pwc.grey800,
   } as React.CSSProperties,
   humanQuiet: {
     color: pwc.grey500,

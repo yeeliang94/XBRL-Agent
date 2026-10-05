@@ -327,7 +327,7 @@ export function ClipboardFormatControls({
       <div style={{ ...styles.group, marginTop: pwc.space.md }}>
         <label style={{ ...styles.label, display: "flex", alignItems: "center", gap: pwc.space.sm }}>
           <input
-            type="checkbox"
+            type="checkbox" style={ui.checkbox}
             aria-label="Rule under header row"
             checked={value.headerRule === true}
             onChange={(e) =>
@@ -341,7 +341,7 @@ export function ClipboardFormatControls({
       <div style={{ ...styles.group, marginTop: pwc.space.md }}>
         <label style={{ ...styles.label, display: "flex", alignItems: "center", gap: pwc.space.sm }}>
           <input
-            type="checkbox"
+            type="checkbox" style={ui.checkbox}
             aria-label="Totals row double underline"
             checked={value.totalsDoubleUnderline === true}
             onChange={(e) =>
