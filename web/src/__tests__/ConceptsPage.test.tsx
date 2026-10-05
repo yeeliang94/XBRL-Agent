@@ -1,4 +1,3 @@
-import { pwc } from "../lib/theme";
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   render,
@@ -1025,8 +1024,9 @@ describe("ConceptsPage", () => {
     });
     render(<ConceptsPage runId={42} initialView="notes" />);
     await waitFor(() => screen.getByTestId("notes-review-row"));
-    // The compact workspace selects its first note immediately. A page-less
-    // note is still selected and keeps manual PDF navigation available.
+    expect(screen.queryByTestId("notes-review-editor")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Review No-pages note" }));
+    // Selecting a page-less note keeps manual PDF navigation available.
     await waitFor(() => screen.getByTestId("pdf-page-input"));
     expect(screen.queryByTestId("pdf-no-evidence")).toBeNull();
     expect(screen.queryByTestId("pdf-no-selection")).toBeNull();
@@ -1104,7 +1104,7 @@ describe("ConceptsPage", () => {
     expect(missing).toHaveAttribute("data-tooltip", "Placement needs review");
     expect(screen.getByText("3/4 placed")).toBeTruthy();
     expect(screen.getAllByTestId("notes-review-row")).toHaveLength(2);
-    expect(screen.getAllByTestId("notes-review-editor")).toHaveLength(1);
+    expect(screen.queryByTestId("notes-review-editor")).toBeNull();
     expect(screen.getByRole("navigation", { name: "Notes sheet navigator" })).toBeTruthy();
     expect(screen.getByRole("button", { name: /Sheet 10 — Corporate Information/i })).toBeTruthy();
     expect(screen.queryByTestId("notes-review-evidence")).toBeNull();
@@ -1121,16 +1121,9 @@ describe("ConceptsPage", () => {
     expect(screen.getAllByTestId("notes-review-editor")).toHaveLength(1);
     await waitFor(() => expect(screen.getByTestId("pdf-page-input")).toHaveValue("8"));
     fireEvent.click(screen.getByRole("button", { name: /Sheet 10 — Corporate Information/i }));
-    const unusedField = screen.getByText("Unused disclosure").closest(
-      '[data-testid="notes-review-row"]',
-    );
-    expect(unusedField).not.toBeNull();
-    fireEvent.mouseDown(unusedField!);
+    fireEvent.click(screen.getByRole("button", { name: "Review Unused disclosure" }));
     expect(screen.getAllByTestId("notes-review-editor")).toHaveLength(1);
-    expect(
-      screen.getByText("Unused disclosure").closest('[data-testid="notes-review-row"]'),
-    ).toHaveStyle({ background: pwc.white });
-    expect(screen.getByText("Unused disclosure").closest("aside")).toHaveStyle({ background: "transparent" });
+    expect(screen.getByRole("button", { name: "Review Unused disclosure" })).toHaveAttribute("aria-expanded", "true");
     expect(screen.queryAllByTestId(/^source-note-/).some(
       (note) => note.getAttribute("aria-current") === "true",
     )).toBe(false);
@@ -1152,7 +1145,7 @@ describe("ConceptsPage", () => {
       (row) => within(row).queryByText("Revenue policy") !== null,
     );
     expect(revenuePolicyRow).toBeTruthy();
-    fireEvent.mouseDown(revenuePolicyRow!);
+    fireEvent.mouseDown(within(revenuePolicyRow!).getByTestId("notes-review-editor"));
     expect(shared).toHaveAttribute("aria-current", "true");
 
     fireEvent.change(screen.getByRole("searchbox", { name: "Search all note fields" }), {
