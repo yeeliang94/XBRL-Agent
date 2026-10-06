@@ -181,6 +181,17 @@ def test_source_packet_defers_findings_caused_by_open_placement_conflict():
     assert ra.count_review_work_items(context) == 2
 
 
+def test_large_conflict_packet_preserves_destinations_and_read_action():
+    packet = ra.build_notes_reviewer_packet({"placement_conflicts": [{
+        "ref": "C1", "block_ids": [f"p22-b{i}-abcdef" for i in range(100)],
+        "source_notes": ["12"],
+        "existing": [{"sheet": _S12, "row": 49, "label": "Existing field"}],
+        "target": {"sheet": _S12, "row": 80, "label": "Proposed field"},
+    }]})
+    assert "Existing field" in packet and "Proposed field" in packet
+    assert "100" in packet and "read_source_manifest" in packet
+
+
 def test_prepared_reviewer_counts_independent_work_without_dropping_checks():
     from notes.coverage_checklist import Checklist, CoverageRow, SubNoteState
 
@@ -625,6 +636,72 @@ def test_field_conflict_cannot_be_answered_while_stranding_other_note(db_path: P
         flags = repo.fetch_notes_review_flags(conn, run_id)
     assert [(p["block_id"], p["row"]) for p in placements] == [("b12", 49)]
     assert flags[0]["status"] == "open"
+
+
+def test_refused_conflict_can_be_escalated_by_its_short_reference(db_path: Path):
+    from types import SimpleNamespace
+
+    run_id, _, _ = _field_conflict(db_path)
+    agent, deps, context = _agent(db_path, run_id, _scripted([]))
+    deps.viewed_pages.update({22, 23})
+    tools = {name: tool.function for ts in agent.toolsets
+             for name, tool in getattr(ts, "tools", {}).items()}
+    ctx = SimpleNamespace(deps=deps)
+    rejected = tools["resolve_placement_conflict"](
+        ctx, "C1", "keep_existing", [22, 23], "Cannot choose another field.")
+    assert rejected.startswith("rejected:")
+    assert "C1" in rejected and "raise_flag" in rejected
+    accepted = tools["raise_flag"](
+        ctx, "needs_human", "No supported alternative field", finding_id="C1",
+        source_pages=[22, 23], evidence="Both notes need this specific field.")
+    assert "sent to human review" in accepted
+    verified = tools["verify_findings"](ctx)
+    assert "sent to human review" in verified and "VERIFIED" not in verified
+    assert deps.flags[0]["finding_id"] == context["placement_conflicts"][0]["packet_finding_id"]
+
+
+def test_conflict_references_survive_resolution_of_another_conflict(db_path):
+    from types import SimpleNamespace
+
+    run_id, _, _ = _placement_conflict_reviewer(db_path)
+    agent, deps, context = _agent(db_path, run_id, _scripted([]))
+    deps.viewed_pages.add(22)
+    tools = {name: tool.function for ts in agent.toolsets
+             for name, tool in getattr(ts, "tools", {}).items()}
+    ctx = SimpleNamespace(deps=deps)
+    first, second = context["placement_conflicts"]
+    result = tools["resolve_placement_conflict"](
+        ctx, first["ref"], "keep_existing", [22], "The first field is correct.")
+    assert result.startswith("ok:")
+    pending = tools["verify_findings"](ctx)
+    assert f"still open: {second['ref']}" in pending
+    assert tools["raise_flag"](
+        ctx, "needs_human", "Other destination needs judgment", finding_id=second["ref"],
+        source_pages=[22], evidence="Two possible fields for the source disclosure.",
+    ).startswith("flagged and sent to human review")
+    assert deps.flags[-1]["finding_id"] == second["packet_finding_id"]
+
+
+@pytest.mark.parametrize("block_ids, prefix, recorded", [
+    ([], "rejected:", 0), (["b12"], "partial:", 0),
+    (["b12", "b13"], "partial:", 1), (["b13"], "ok:", 1),
+])
+def test_disposition_batch_reports_actual_work(db_path, block_ids, prefix, recorded):
+    from types import SimpleNamespace
+
+    run_id, generation, _ = _field_conflict(db_path)
+    agent, deps, _ = _agent(db_path, run_id, _scripted([]))
+    tool = next(ts.tools["record_block_dispositions"].function for ts in agent.toolsets
+                if "record_block_dispositions" in getattr(ts, "tools", {}))
+    result = tool(SimpleNamespace(deps=deps), block_ids, "routed")
+    assert result.startswith(prefix)
+    assert "retry" not in result
+    with repo.db_session(db_path) as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM notes_disposition_events WHERE generation_id=? "
+            "AND actor='notes_reviewer'", (generation,),
+        ).fetchone()[0]
+    assert count == recorded
 
 
 def test_distinct_notes_cannot_combine_in_specific_field(db_path: Path):

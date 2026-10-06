@@ -2795,6 +2795,17 @@ untrusted-source framing. Extraction and reviewer tools share this contract,
 pinned by `tests/test_notes_source_tools.py`. Successful source writes also
 trigger the existing post-write image compaction; rejected writes retain the
 evidence, pinned by `tests/test_history_processors.py`.
+Block reads select at most 40 deduplicated IDs. Character offsets continue only
+that batch; the response identifies the next batch of deferred IDs to submit with
+`offset=0`. Reviewer finding references are stable within one pass: `C` references
+identify placement conflicts and `F` references other original findings. Resolution,
+human escalation and verification use the same references while flags persist the
+original durable identities. Packet previews preserve destination coordinates and
+comparison values before bounded source descriptions. Disposition batches report
+`partial`, including zero accepted items, when any item is refused; empty input is
+rejected. Pinned by `tests/test_notes_reviewer_tools.py`,
+`tests/test_notes_reviewer_self_verify.py`, `tests/test_notes_source_tools.py`, and
+`tests/test_reviewer_agent.py`.
 Prepared-source prompts show live worksheet row numbers beside labels.
 `write_note_from_source` requires the chosen row's exact label, and the shared
 source writer rejects a mismatched row/label pair before writing or recording
