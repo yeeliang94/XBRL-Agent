@@ -129,6 +129,39 @@ def test_get_runs_applies_status_filter(api_env):
     assert body["runs"][0]["status"] == "failed"
 
 
+def test_document_groups_filter_before_pagination_and_surface_preparation(api_env):
+    client, db_path, out = api_env
+    draft_dir = out / "setup"
+    draft_dir.mkdir()
+    draft = _seed_run(db_path, session_id="setup", pdf_filename="setup.pdf",
+                      output_dir=str(draft_dir), status="draft")
+    (draft_dir / "preparation_status.json").write_text(json.dumps({
+        "status": "succeeded", "stage": "ready", "run_id": draft,
+    }))
+    running = _seed_run(db_path, session_id="running", pdf_filename="running.pdf",
+                        output_dir=str(out / "running"), status="running")
+    _seed_run(db_path, session_id="review", pdf_filename="review.pdf",
+              output_dir=str(out / "review"), status="correction_exhausted")
+    _seed_run(db_path, session_id="failed", pdf_filename="failed.pdf",
+              output_dir=str(out / "failed"), status="failed")
+    conn = sqlite3.connect(str(db_path))
+    repo.log_run_event(conn, running, "pipeline_stage", {"stage": "extracting"})
+    repo.log_run_event(conn, running, "pipeline_stage", {"stage": "formatting_notes"})
+    conn.commit()
+    conn.close()
+    body = client.get("/api/runs", params={"document_group": "progress", "limit": 1}).json()
+    assert body["total"] == 2
+    assert len(body["runs"]) == 1
+    body = client.get("/api/runs", params={"document_group": "progress"}).json()
+    by_id = {run["id"]: run for run in body["runs"]}
+    assert by_id[draft]["preparation"]["phase"] == "awaiting_confirmation"
+    assert by_id[running]["pipeline_stage"] == "formatting_notes"
+    body = client.get("/api/runs", params={"document_group": "history", "status": "failed"}).json()
+    assert body["total"] == 1
+    assert body["runs"][0]["pdf_filename"] == "failed.pdf"
+    assert client.get("/api/runs", params={"document_group": "invalid"}).status_code == 422
+
+
 def test_get_runs_applies_date_range(api_env):
     client, db_path, _ = api_env
     _seed_run(db_path, session_id="a", pdf_filename="old.pdf", output_dir="/tmp/a",

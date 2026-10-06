@@ -828,6 +828,8 @@ export interface RunSummaryJson {
   session_id: string;
   statements_run: string[];
   models_used: string[];
+  pipeline_stage?: PipelineStage | null;
+  preparation?: Pick<PreparationSnapshot, "status" | "phase" | "action_required"> | null;
   duration_seconds: number | null;
   scout_enabled: boolean;
   has_merged_workbook: boolean;
@@ -1027,6 +1029,7 @@ export interface RunEventJson {
 }
 
 export interface RunsFilterParams {
+  documentGroup?: "progress" | "history";
   q?: string;
   status?: string;
   model?: string;

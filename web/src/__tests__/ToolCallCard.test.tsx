@@ -296,17 +296,5 @@ describe("ToolCallCard", () => {
     expect(container.querySelector("[data-glyph='active']")).toBeTruthy();
   });
 
-  // --- Phase 2: animation on the active glyph only ---
 
-  test("Step 2.8 — active glyph has the pulse animation class; done glyph does not", () => {
-    const { container, rerender } = render(<ToolCallCard entry={activeEntry} />);
-    const activeGlyph = container.querySelector("[data-glyph='active']") as HTMLElement;
-    expect(activeGlyph).toBeTruthy();
-    expect(activeGlyph).toHaveClass("pwc-working-indicator");
-
-    rerender(<ToolCallCard entry={completedEntry} />);
-    const doneGlyph = container.querySelector("[data-glyph='done']") as HTMLElement;
-    expect(doneGlyph).toBeTruthy();
-    expect(doneGlyph).not.toHaveClass("pwc-working-indicator");
-  });
 });

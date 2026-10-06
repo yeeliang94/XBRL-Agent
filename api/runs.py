@@ -17,7 +17,7 @@ import json
 import logging
 from dataclasses import asdict
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException
 
@@ -82,6 +82,7 @@ def _agent_thinking_tokens(agent) -> int:
 async def list_runs_endpoint(
     q: Optional[str] = None,
     status: Optional[str] = None,
+    document_group: Optional[Literal["progress", "history"]] = None,
     model: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
@@ -105,6 +106,7 @@ async def list_runs_endpoint(
             conn,
             filename_substring=q,
             status=status,
+            document_group=document_group,
             model=model,
             date_from=date_from,
             date_to=date_to,
@@ -115,14 +117,28 @@ async def list_runs_endpoint(
             conn,
             filename_substring=q,
             status=status,
+            document_group=document_group,
             model=model,
             date_from=date_from,
             date_to=date_to,
         )
+        items = [server._run_summary_to_dict(summary) for summary in summaries]
+        # One batch query for the latest durable stage, independent of the
+        # browser's live stream. Pagination and counts use the same group.
+        if items:
+            stage_by_run = repo.fetch_latest_pipeline_stages(conn, [item["id"] for item in items])
+            from api.preparation import snapshot
+            for item in items:
+                item["pipeline_stage"] = stage_by_run.get(item["id"])
+                if item["status"] == "draft":
+                    preparation = snapshot(server.OUTPUT_DIR / item["session_id"])
+                    item["preparation"] = {key: preparation.get(key) for key in (
+                        "status", "phase", "action_required",
+                    )}
     finally:
         conn.close()
     return {
-        "runs": [server._run_summary_to_dict(s) for s in summaries],
+        "runs": items,
         "total": total,
         "limit": safe_limit,
         "offset": safe_offset,

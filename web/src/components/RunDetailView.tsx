@@ -1,3 +1,4 @@
+import { guardNavigationHistory } from "../lib/navigationHistory";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { pwc, tokens } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
@@ -10,7 +11,8 @@ import { errorGuidance } from "../lib/errorGuidance";
 import { StatusIcon } from "./StatusIcon";
 import type { RunStatusDisplay } from "../lib/runStatus";
 import type { RunDetailJson, RunAgentJson, CrossCheckResult } from "../lib/types";
-import { STATEMENT_LABELS } from "../lib/types";
+import { STATEMENT_LABELS, STATEMENT_TYPES, NOTES_TEMPLATE_TYPES } from "../lib/types";
+import { userMessage } from "../lib/errors";
 import { AgentTelemetryPanel } from "./AgentTelemetryPanel";
 import { ValidatorTab } from "./ValidatorTab";
 import { ReviewTab } from "./ReviewTab";
@@ -68,6 +70,7 @@ export interface RunDetailViewProps {
   onForceAbort?: (runId: number) => void;
   /** Clone this run into a new draft while retaining reusable source work. */
   onRestart?: (runId: number) => void | Promise<void>;
+  onRetryAgent?: (statementType: string) => Promise<void>;
   /** Gate the review link on canonical mode so legacy runs (which
    *  have no concept tree) don't link to an empty page — matches the TopNav
    *  / Results gating (peer-review F6). Defaults to false: hidden unless the
@@ -278,7 +281,7 @@ interface AgentSummary {
   sourceReference: string | null;
 }
 
-function AgentCard({ agent, summary, filingStandard }: { agent: RunAgentJson; summary: AgentSummary; filingStandard?: unknown }) {
+function AgentCard({ agent, summary, filingStandard, onRetry, retryPending }: { agent: RunAgentJson; summary: AgentSummary; filingStandard?: unknown; onRetry?: (statementType: string) => void; retryPending?: boolean }) {
   // Sheet-12 sub-tab selection — mirrors the live ExtractPage path so
   // replay looks identical to live once the operator picks a sub. null =
   // "All" (every sub-agent merged, same as pre-sub-tab behaviour).
@@ -342,6 +345,10 @@ function AgentCard({ agent, summary, filingStandard }: { agent: RunAgentJson; su
             <span style={styles.agentVariant}>({agent.variant})</span>
           )}
           {statusBadge(agentStatusDisplay(agent.status))}
+          {onRetry && ["failed", "cancelled", "aborted"].includes(agent.status) &&
+            ([...STATEMENT_TYPES, ...NOTES_TEMPLATE_TYPES.map((type) => `NOTES_${type}`)] as string[]).includes(agent.statement_type) &&
+            <button type="button" style={ui.buttonSecondary} disabled={retryPending}
+              onClick={() => onRetry(agent.statement_type)}>Retry {displayName}</button>}
           {agent.error_type && (
             // v17 (item 9): machine-readable failure class — lets an
             // operator see WHY a row failed without opening the trace.
@@ -422,7 +429,7 @@ function AgentCard({ agent, summary, filingStandard }: { agent: RunAgentJson; su
   );
 }
 
-function HistoricalAgentWorkspace({ agents, filingStandard }: { agents: RunAgentJson[]; filingStandard?: unknown }) {
+function HistoricalAgentWorkspace({ agents, filingStandard, onRetry, retryPending }: { agents: RunAgentJson[]; filingStandard?: unknown; onRetry?: (statementType: string) => void; retryPending?: boolean }) {
   const orderedAgents = useMemo(
     () => [...agents].sort((a, b) => agentActivityOrder(a) - agentActivityOrder(b)),
     [agents],
@@ -523,6 +530,8 @@ function HistoricalAgentWorkspace({ agents, filingStandard }: { agents: RunAgent
             key={selectedAgent.id}
             agent={selectedAgent}
             filingStandard={filingStandard}
+            onRetry={onRetry}
+            retryPending={retryPending}
             summary={summaries.get(selectedAgent.id) ?? { updates: [], sourceReference: null }}
           />
         )}
@@ -534,9 +543,12 @@ function HistoricalAgentWorkspace({ agents, filingStandard }: { agents: RunAgent
 // Tab identity for the run-detail surface. Review + Values are gated on
 // canonical mode (the reviewer diff + concept tree only exist there).
 export function RunDetailView({
-  detail, onDelete, onResumeDraft, onForceAbort, onRestart,
+  detail, onDelete, onResumeDraft, onForceAbort, onRestart, onRetryAgent,
   canonicalEnabled = false, initialTab = "overview",
 }: RunDetailViewProps) {
+  const [retryAgent, setRetryAgent] = useState<string | null>(null);
+  const [retryPending, setRetryPending] = useState(false);
+  const [retryError, setRetryError] = useState<string | null>(null);
   // Which tab is showing. Lazy content (Notes editor, Concepts workspace,
   // PDF panes) only mounts when its tab is active, so opening a run doesn't
   // spin up a dozen TipTap editors or fetch concept trees up front.
@@ -548,6 +560,9 @@ export function RunDetailView({
   // Switching tabs mirrors the choice into `?tab=` so reload / share / back
   // land on the same tab (R3). Kept separate from the App-level pathname sync.
   const [notesPreparationBlocked, setNotesPreparationBlocked] = useState(false);
+  useEffect(() => {
+    if (notesPreparationBlocked) return guardNavigationHistory(() => false);
+  }, [notesPreparationBlocked]);
   const selectTab = useCallback((key: RunTabKey) => {
     if (notesPreparationBlocked) return;
     setTab(key);
@@ -876,6 +891,20 @@ export function RunDetailView({
 
   return (
     <div style={styles.container}>
+      {retryError && <p role="alert" style={ui.alertError}>{retryError}</p>}
+      <ConfirmDialog isOpen={retryAgent != null} title="Retry extraction?"
+        message="This replaces extracted results and any edits for the selected statement or notes template."
+        confirmLabel="Retry extraction" onCancel={() => setRetryAgent(null)}
+        onConfirm={async () => {
+          if (!retryAgent || !onRetryAgent || retryPending) return;
+          const role = retryAgent;
+          setRetryAgent(null);
+          setRetryPending(true);
+          setRetryError(null);
+          try { await onRetryAgent(role); }
+          catch (error) { setRetryError(userMessage(error)); }
+          finally { setRetryPending(false); }
+        }} />
       {unsupportedStandard && <p role="alert" style={ui.alertError}>
         {String(savedStandard).toUpperCase()} filings are no longer supported.
         This saved run cannot be rerun or used to prepare a filing workbook.
@@ -1280,7 +1309,9 @@ export function RunDetailView({
           {detail.agents.length === 0 ? (
             <p style={styles.dim}>Nothing was recorded for this run yet.</p>
           ) : (
-            <HistoricalAgentWorkspace agents={detail.agents} filingStandard={detail.filing_standard ?? detail.config?.filing_standard} />
+            <HistoricalAgentWorkspace agents={detail.agents} filingStandard={detail.filing_standard ?? detail.config?.filing_standard}
+              onRetry={!isRunning && !isDraft && !unsupportedStandard && detail.config && onRetryAgent ? setRetryAgent : undefined}
+              retryPending={retryPending} />
           )}
           {/* Timing + AI-usage detail (the former Telemetry tab), tucked into a
               collapsed disclosure so the everyday view stays about what the AI

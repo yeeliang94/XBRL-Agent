@@ -71,35 +71,23 @@ describe("App routing", () => {
     cleanup();
   });
 
-  test("focused routes keep the rail expanded until the manual control is used", async () => {
+  test("document review uses one compact header and a document picker", async () => {
     window.history.replaceState({}, "", "/history/42?tab=figures");
     const { default: App } = await import("../App");
-    const { container } = render(<App />);
-
-    const collapse = await screen.findByRole("button", { name: "Collapse navigation" });
-    const shell = container.querySelector(".app-shell");
-    expect(shell).not.toHaveClass("app-shell--collapsed");
-
-    fireEvent.click(collapse);
-    expect(shell).toHaveClass("app-shell--collapsed");
-    expect(window.sessionStorage.getItem("xbrl-navigation-collapsed")).toBe("true");
-
-    fireEvent.click(screen.getByRole("link", { name: "Current run" }));
-    expect(shell).toHaveClass("app-shell--collapsed");
-
-    fireEvent.click(screen.getByRole("button", { name: "Expand navigation" }));
-    expect(shell).not.toHaveClass("app-shell--collapsed");
-    expect(window.sessionStorage.getItem("xbrl-navigation-collapsed")).toBe("false");
+    render(<App />);
+    expect(await screen.findByRole("combobox", { name: "Switch document" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Documents" })).toHaveAttribute("href", "/");
+    expect(screen.queryByRole("button", { name: "Collapse navigation" })).toBeNull();
   });
 
   test("clicking History pushes /history; Extract pushes /", async () => {
     const { default: App } = await import("../App");
     const { getByRole } = render(<App />);
 
-    fireEvent.click(getByRole("link", { name: /runs/i }));
+    fireEvent.click(getByRole("tab", { name: "History" }));
     expect(window.location.pathname).toBe("/history");
 
-    fireEvent.click(getByRole("link", { name: /work queue/i }));
+    fireEvent.click(getByRole("link", { name: "Documents" }));
     expect(window.location.pathname).toBe("/");
   });
 
@@ -169,10 +157,10 @@ describe("App routing", () => {
     const { getByRole } = render(<App />);
 
     // Go to history
-    fireEvent.click(getByRole("link", { name: /runs/i }));
+    fireEvent.click(getByRole("tab", { name: "History" }));
     expect(
-      getByRole("link", { name: /runs/i }).getAttribute("aria-current"),
-    ).toBe("page");
+      getByRole("tab", { name: "History" }).getAttribute("aria-selected"),
+    ).toBe("true");
 
     // Simulate the browser popping back to "/". jsdom does not automatically
     // fire popstate when we rewrite the URL, so dispatch it manually — this
@@ -184,8 +172,23 @@ describe("App routing", () => {
     });
 
     expect(
-      getByRole("link", { name: /work queue/i }).getAttribute("aria-current"),
+      getByRole("link", { name: "Documents" }).getAttribute("aria-current"),
     ).toBe("page");
+  });
+
+  test("Settings returns to the saved document and section even after refresh", async () => {
+    window.history.replaceState({}, "", "/history/42?tab=checks");
+    const { default: App } = await import("../App");
+    const first = render(<App />);
+    await screen.findByRole("tablist", { name: "Run detail sections" });
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    expect(window.location.pathname).toBe("/settings");
+    first.unmount();
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Back to document" }));
+    expect(window.location.pathname + window.location.search).toBe("/history/42?tab=checks");
+    const tabs = await screen.findByRole("tablist", { name: "Run detail sections" });
+    expect(within(tabs).getByRole("tab", { name: "Cross-checks" })).toHaveAttribute("aria-selected", "true");
   });
 
   test("initial /history URL boots into the history view", async () => {
@@ -193,8 +196,8 @@ describe("App routing", () => {
     const { default: App } = await import("../App");
     const { getByRole } = render(<App />);
     expect(
-      getByRole("link", { name: /runs/i }).getAttribute("aria-current"),
-    ).toBe("page");
+      getByRole("tab", { name: "History" }).getAttribute("aria-selected"),
+    ).toBe("true");
   });
 
   test("initial /history/42 URL survives mount (not rewritten to /history)", async () => {
@@ -227,7 +230,7 @@ describe("App routing", () => {
         screen.getByRole("tablist", { name: /run detail sections/i }),
       ).toBeInTheDocument();
 
-      fireEvent.click(screen.getByRole("link", { name: "Current run" }));
+      fireEvent.change(screen.getByRole("combobox", { name: "Switch document" }), { target: { value: "42" } });
 
       expect(await screen.findByTestId("run-detail-notes-review")).toBeInTheDocument();
       const tablist = await screen.findByRole("tablist", { name: /run detail sections/i });
@@ -249,9 +252,7 @@ describe("App routing", () => {
     render(<App />);
     const tabs = await screen.findByRole("tablist", { name: /run detail sections/i });
     expect(within(tabs).getByRole("tab", { name: "Cross-checks" })).toHaveAttribute("aria-selected", "true");
-    const currentRun = screen.getByRole("link", { name: "Current run" });
-    expect(currentRun).toHaveAttribute("href", "/history/42?tab=checks");
-    fireEvent.click(currentRun);
+    fireEvent.change(screen.getByRole("combobox", { name: "Switch document" }), { target: { value: "42" } });
     expect(window.location.search).toBe("?tab=checks");
     expect(within(screen.getByRole("tablist", { name: /run detail sections/i })).getByRole("tab", { name: "Cross-checks" })).toHaveAttribute("aria-selected", "true");
   });
@@ -272,19 +273,19 @@ describe("App routing", () => {
     await waitFor(() => expect(within(tabs).getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true"));
     act(() => window.history.forward());
     await waitFor(() => expect(within(tabs).getByRole("tab", { name: "Cross-checks" })).toHaveAttribute("aria-selected", "true"));
-    fireEvent.click(screen.getByRole("button", { name: "All runs" }));
+    fireEvent.click(screen.getByRole("button", { name: "Documents" }));
     expect(window.location.pathname).toBe("/history");
   });
 
   test("browser Back restores Work queue after opening New extraction", async () => {
     const { default: App } = await import("../App");
     render(<App />);
-    fireEvent.click(screen.getByRole("link", { name: "New extraction" }));
-    expect(screen.getByRole("heading", { name: "New extraction" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Add documents" }));
+    expect(screen.getByRole("heading", { name: "Add documents" })).toBeInTheDocument();
     act(() => window.history.back());
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Work queue" })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Documents" })).toBeInTheDocument());
     act(() => window.history.forward());
-    await waitFor(() => expect(screen.getByRole("heading", { name: "New extraction" })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Add documents" })).toBeInTheDocument());
   });
 
   test("notes review uses the full workspace width", async () => {
@@ -312,12 +313,12 @@ describe("App routing", () => {
     expect(window.location.pathname).toBe("/history/42");
 
     // Click Extract → URL must clear back to /.
-    fireEvent.click(getByRole("link", { name: /work queue/i }));
+    fireEvent.click(getByRole("link", { name: "Documents" }));
     await new Promise((r) => setTimeout(r, 0));
     expect(window.location.pathname).toBe("/");
 
     // Click History → URL must be the list (/history), not /history/42.
-    fireEvent.click(getByRole("link", { name: /runs/i }));
+    fireEvent.click(getByRole("tab", { name: "History" }));
     await new Promise((r) => setTimeout(r, 0));
     expect(window.location.pathname).toBe("/history");
   });
@@ -537,7 +538,7 @@ describe("App routing", () => {
     const { default: App } = await import("../App");
     render(<App />);
 
-    fireEvent.click(screen.getByRole("link", { name: /new extraction/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Add documents" }));
     const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
     const file = new File(["x"], "Z.pdf", { type: "application/pdf" });
     await act(async () => {
@@ -590,7 +591,7 @@ describe("App routing", () => {
     const { default: App } = await import("../App");
     const { getByRole } = render(<App />);
 
-    fireEvent.click(getByRole("link", { name: /new extraction/i }));
+    fireEvent.click(getByRole("button", { name: "Add documents" }));
     const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
     const file = new File(["x"], "Z.pdf", { type: "application/pdf" });
     await act(async () => {
@@ -605,10 +606,46 @@ describe("App routing", () => {
 
     // Click Extract → fresh, empty box: URL back to "/" and filename gone.
     await act(async () => {
-      fireEvent.click(getByRole("link", { name: /work queue/i }));
+      fireEvent.click(getByRole("link", { name: "Documents" }));
     });
     await new Promise((r) => setTimeout(r, 0));
     expect(window.location.pathname).toBe("/");
     expect(screen.queryByText("Z.pdf")).toBeNull();
   });
+  test("document switching and Settings preserve notes with pending or failed saves", async () => {
+    vi.resetModules();
+    vi.doMock("../lib/api", async () => ({
+      ...await vi.importActual<typeof import("../lib/api")>("../lib/api"),
+      getAuthMe: vi.fn(async () => ({ email: "dev@localhost", display_name: "Dev", provider: "dev" })),
+      fetchRuns: vi.fn(async () => ({ runs: [], total: 0 })),
+      fetchRunDetail: vi.fn(async () => ({ id: 42, session_id: "s", status: "completed", pdf_filename: "Notes.pdf", config: {}, agents: [], cross_checks: [] })),
+      getSettings: vi.fn(async () => ({ model: "x", proxy_url: "", api_key_set: true, api_key_preview: "" })),
+    }));
+    vi.doMock("../components/NotesReviewTab", async () => {
+      const { useEffect, useState } = await import("react");
+      return { NotesReviewTab: ({ onPreparationBlocked }: { onPreparationBlocked?: (blocked: boolean) => void }) => {
+        const [blocked, setBlocked] = useState(true);
+        useEffect(() => { onPreparationBlocked?.(blocked); return () => onPreparationBlocked?.(false); }, [blocked, onPreparationBlocked]);
+        return <button onClick={() => setBlocked(false)}>Resolve note save</button>;
+      } };
+    });
+    window.history.replaceState({}, "", "/history/42?tab=notes");
+    try {
+      const { default: App } = await import("../App");
+      const view = render(<App />);
+      await screen.findByRole("button", { name: "Resolve note save" });
+      fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+      expect(window.location.pathname).toBe("/history/42");
+      fireEvent.click(screen.getByRole("link", { name: "Documents" }));
+      expect(window.location.pathname).toBe("/history/42");
+      fireEvent.click(screen.getByRole("button", { name: "Resolve note save" }));
+      fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+      expect(window.location.pathname).toBe("/settings");
+      view.unmount();
+    } finally {
+      vi.doUnmock("../components/NotesReviewTab");
+      vi.resetModules();
+    }
+  });
+
 });

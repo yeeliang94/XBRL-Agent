@@ -30,13 +30,12 @@ describe("PipelineStages", () => {
     expect(checks.length).toBe(3); // preparation + confirmation + extraction
   });
 
-  test("marks active phase with pulsing orange dot", () => {
+  test("marks the active phase", () => {
     const { container } = render(
       <PipelineStages currentPhase="viewing_pdf" isRunning={true} isComplete={false} />,
     );
     const activeDot = container.querySelector("[data-testid='step-active']");
     expect(activeDot).toBeInTheDocument();
-    expect(activeDot).toHaveClass("pwc-working-indicator");
   });
 
   test("marks pending phases with grey circle", () => {

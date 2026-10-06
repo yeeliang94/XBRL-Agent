@@ -233,16 +233,6 @@ export const ui = {
     gridTemplateColumns: "220px minmax(0, 1fr)",
     background: tokens.surface.canvas,
   } as CSSProperties,
-  appRail: {
-    position: "sticky",
-    top: 0,
-    height: "100vh",
-    display: "flex",
-    flexDirection: "column",
-    background: tokens.surface.navigation,
-    padding: `20px 14px`,
-    zIndex: 30,
-  } as CSSProperties,
   appTopbar: {
     position: "sticky",
     top: 0,

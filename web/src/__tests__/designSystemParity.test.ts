@@ -147,7 +147,10 @@ describe("Direction A shell and responsive composition", () => {
   test("documents one persistent run navigation and explicit completion", () => {
     expect(designSystem).toContain("the retired pre-extraction transcript has no live tab");
     expect(designSystem).toContain("Historical transcript notices remain available in run Overview");
-    expect(designSystem).toContain("One Current run entry in the sidebar");
+    expect(designSystem).toContain("Documents is the single workspace destination");
+    expect(designSystem).toContain("without working glows or pulsing indicators");
+    expect(designSystem).toContain("including Confirm setup");
+    expect(designSystem).toContain("preserves the document and selected section through refresh");
     expect(designSystem).toContain("Browser Back and Forward retrace visited sections");
     expect(designSystem).toContain("Completion does not mean human review is finished");
     expect(designSystem).toContain("When tabs change, bring the new panel into view");

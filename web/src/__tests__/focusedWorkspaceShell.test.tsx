@@ -8,11 +8,7 @@ import { pwc, tokens } from "../lib/theme";
 const css = readFileSync("src/index.css", "utf8");
 
 describe("focused-workspace shell", () => {
-  test("shared primitives define the persistent rail and context bar", () => {
-    expect(ui.appShell.gridTemplateColumns).toBe("220px minmax(0, 1fr)");
-    expect(ui.appShell.background).toBe(tokens.surface.canvas);
-    expect(ui.appRail.background).toBe(tokens.surface.navigation);
-    expect(ui.appRail.height).toBe("100vh");
+  test("shared primitives define the compact context bar", () => {
     expect(ui.appTopbar.height).toBe(64);
     expect(ui.appTopbar.position).toBe("sticky");
     expect(tokens.surface.canvas).toBe(pwc.white);
@@ -21,16 +17,14 @@ describe("focused-workspace shell", () => {
 
   test("top-level destinations remain links with stable URLs and current state", () => {
     render(<TopNav view="extract" onViewChange={() => {}} />);
-    const queue = screen.getByRole("link", { name: "Work queue" });
+    const queue = screen.getByRole("link", { name: "Documents" });
     expect(queue).toHaveAttribute("href", "/");
     expect(queue).toHaveAttribute("aria-current", "page");
-    expect(screen.getByRole("link", { name: "Runs" })).toHaveAttribute("href", "/history");
+    expect(screen.queryByRole("link", { name: "Runs" })).toBeNull();
   });
 
   test("responsive rules retain navigation and move evidence below instead of hiding it", () => {
     expect(css).toContain("@media (max-width: 780px)");
-    expect(css).toContain("position: fixed !important");
-    expect(css).toContain("inset: auto 0 0 0 !important");
     expect(css).toContain(".review-workspace .review-source-column");
     expect(css).toContain("flex: 1 0 100% !important");
     const tabletBlock = css.slice(css.indexOf("@media (max-width: 1000px)"), css.indexOf("@media (max-width: 780px)"));
@@ -48,10 +42,6 @@ describe("focused-workspace shell", () => {
     expect(mobile).toContain(".concept-tree-row > .concept-tree-label");
     expect(mobile).toContain("position: sticky !important");
     expect(mobile).not.toContain(".notes-review-row {");
-    expect(mobile).toContain(".app-main-nav-label");
-    expect(mobile).toContain("clip-path: none");
-    expect(mobile).toContain("font-size: 12px !important");
-    expect(mobile).not.toContain(".app-main-nav-label {\n    display: none");
     expect(mobile).toContain(".review-workspace .review-menu-column > :first-child");
     expect(mobile).toContain("flex: 0 0 auto !important");
     expect(mobile).toContain("min-height: 44px !important");

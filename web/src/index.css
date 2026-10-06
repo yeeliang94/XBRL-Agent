@@ -287,13 +287,6 @@ h2 {
   50% { opacity: 0.4; transform: scale(0.85); }
 }
 
-/* Active tool-call glyph pulse — gentle opacity only, no scale so neighbouring
-   elements don't shift. Used by ToolCallCard's active state (Phase 2). */
-@keyframes glyph-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.45; }
-}
-
 /* Skeleton shimmer — a soft opacity breathe on placeholder bars while real
    content loads (Phase 7). Opacity-only so it costs nothing on slow laptops. */
 @keyframes skeleton-shimmer {
@@ -370,10 +363,6 @@ details[open] > .pwc-disclosure-content {
 }
 .pwc-dialog-enter {
   animation: dialog-in var(--motion-fast) var(--motion-standard) both;
-}
-.pwc-working-indicator {
-  animation: pulse-subtle 1.8s var(--motion-standard) infinite;
-  will-change: opacity;
 }
 .pwc-progress-fill {
   transform-origin: left center;
@@ -646,10 +635,7 @@ textarea:focus {
 }
 
 /* Inactive top-nav destination hover — quiet surface + readable text. */
-.app-main-nav-tab:hover:not([aria-current="page"]):not([aria-selected="true"]) {
-  background: rgba(255, 255, 255, 0.55);
-  color: #000000;
-}
+
 
 /* Canonical icon-only help. The accessible name remains on the control; this
    visual copy appears for both pointer hover and keyboard focus. */
@@ -688,87 +674,6 @@ textarea:focus {
   visibility: visible;
   transform: translate(-50%, 0);
   transition-delay: 0s;
-}
-
-/* Persistent workspace shell. The rail stays expanded unless the operator
-   uses its explicit toggle. Review routes never collapse it automatically. */
-.app-main-nav-tab {
-  position: relative;
-  transition: background var(--motion-fast) var(--motion-standard),
-    color var(--motion-fast) var(--motion-standard),
-    border-color var(--motion-fast) var(--motion-standard);
-}
-.app-shell--collapsed .app-rail-brand-label,
-.app-shell--collapsed .app-rail-section-label,
-.app-shell--collapsed .app-user-copy {
-  display: none;
-}
-.app-shell--collapsed .app-main-nav-label {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  clip-path: inset(50%);
-  border: 0;
-  white-space: nowrap;
-}
-.app-shell--collapsed .app-sidebar {
-  padding: 16px 8px !important;
-}
-.app-shell--collapsed .app-rail-brand {
-  justify-content: center;
-}
-.app-shell--collapsed .app-rail-brand-mark {
-  display: none;
-}
-.app-shell--collapsed .app-rail-toggle {
-  margin-left: 0 !important;
-}
-.app-shell--collapsed .app-main-nav-glyph {
-  display: inline-block;
-}
-.app-shell--collapsed .app-main-nav-tab {
-  justify-content: center !important;
-  padding-inline: 8px !important;
-}
-@media (min-width: 781px) {
-.app-shell--collapsed .app-main-nav-tab:hover .app-main-nav-label,
-.app-shell--collapsed .app-main-nav-tab:focus-visible .app-main-nav-label {
-  display: block !important;
-  position: absolute;
-  left: calc(100% + 8px);
-  top: 50%;
-  z-index: 90;
-  width: max-content;
-  max-width: 220px;
-  padding: 6px 8px;
-  border-radius: 6px;
-  background: #000000;
-  color: #FFFFFF;
-  font-size: 12px;
-  line-height: 1.35;
-  transform: translateY(-50%);
-  pointer-events: none;
-  width: max-content;
-  height: auto;
-  margin: 0;
-  overflow: visible;
-  clip: auto;
-  clip-path: none;
-  white-space: normal;
-}
-}
-.app-shell--collapsed .app-rail-footer {
-  justify-content: center;
-  padding-inline: 0 !important;
-}
-.app-shell--collapsed .app-main {
-  max-width: none !important;
-  padding-left: 28px !important;
-  padding-right: 28px !important;
 }
 
 /* Every native disclosure uses the same chevron as DisclosureChevron: the
@@ -969,79 +874,6 @@ details[open] > summary::before {
     grid-column: 2 / -1;
   }
 
-  .app-shell,
-  .app-shell--collapsed {
-    display: block !important;
-    padding-bottom: 72px;
-  }
-
-  .app-sidebar {
-    position: fixed !important;
-    inset: auto 0 0 0 !important;
-    width: 100% !important;
-    height: 64px !important;
-    padding: 6px 8px !important;
-    border: 0 !important;
-    border-top: 1px solid #DFE3E6 !important;
-    z-index: 80 !important;
-  }
-
-  .app-rail-brand,
-  .app-rail-section-label,
-  .app-rail-footer {
-    display: none !important;
-  }
-
-  .app-rail-nav {
-    overflow: hidden !important;
-  }
-
-  .app-main-nav {
-    flex-direction: row !important;
-    align-items: stretch !important;
-    gap: 2px !important;
-    width: 100% !important;
-    overflow-x: auto !important;
-    overscroll-behavior-inline: contain;
-  }
-
-  .app-main-nav-tab,
-  .app-shell--collapsed .app-main-nav-tab {
-    flex: 1 0 52px !important;
-    min-width: 52px !important;
-    min-height: 50px !important;
-    justify-content: center !important;
-    flex-direction: column !important;
-    gap: 3px !important;
-    padding: 0 !important;
-    border: 0 !important;
-    border-radius: 8px !important;
-    font-size: 0 !important;
-  }
-
-  .app-main-nav-glyph,
-  .app-shell--collapsed .app-main-nav-glyph {
-    display: inline-flex;
-  }
-
-  .app-main-nav-label,
-  .app-shell--collapsed .app-main-nav-label {
-    display: block !important;
-    position: static;
-    width: auto;
-    height: auto;
-    margin: 0;
-    padding: 0;
-    overflow: visible;
-    clip: auto;
-    clip-path: none;
-    border: 0;
-    font-size: 12px !important;
-    line-height: 1.2;
-    text-align: center;
-    white-space: normal;
-  }
-
   .app-topbar {
     height: 64px !important;
     padding-inline: 16px !important;
@@ -1229,7 +1061,6 @@ details[open] > summary::before {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .pwc-working-indicator,
   .pwc-status-change,
   .pwc-view-enter,
   .pwc-reveal,
@@ -1262,4 +1093,14 @@ details[open] > summary::before {
   .concept-tree-header:not([data-human]), .concept-tree-row:not([data-kind="ABSTRACT"]):not([data-human]) {
     grid-template-columns: minmax(85px, 1fr) repeat(2, minmax(70px, 90px)) !important;
   }
+}
+
+/* Document navigation uses a single shared column definition at every stage. */
+@media (max-width: 600px) {
+  .documents-topbar { padding: 12px 16px !important; gap: 12px !important; }
+  .documents-settings-label { display: none; }
+  .document-list-row { grid-template-columns: minmax(0, 1fr) 112px !important; gap: 12px !important; }
+  .document-list-row > :nth-child(2) { grid-row: 2; grid-column: 1 / -1; }
+  .document-list-row > :nth-child(3) { grid-column: 2; grid-row: 1; }
+  .document-list-row:first-child > :nth-child(2) { display: none; }
 }

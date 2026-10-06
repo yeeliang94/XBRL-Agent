@@ -9,7 +9,6 @@ import { fetchRunDetail, getResultJson, getExtendedSettings } from "../lib/api";
 import { PageHeader } from "../components/PageHeader";
 import { DocumentPreparation } from "../components/DocumentPreparation";
 import { UploadPanel } from "../components/UploadPanel";
-import { HomeHero } from "../components/HomeHero";
 import { PreRunPanel } from "../components/PreRunPanel";
 import { PipelineStages } from "../components/PipelineStages";
 import { AgentTimeline } from "../components/AgentTimeline";
@@ -68,8 +67,8 @@ function liveStageMessage(stage: AppState["pipelineStage"]): string {
 export interface ExtractPageProps {
   state: AppState;
   dispatch: React.Dispatch<AppAction>;
-  landingMode?: "queue" | "new";
   onOpenNewExtraction?: () => void;
+  handleUploadFiles?: (files: File[]) => Promise<void>;
   handleUpload: (file: File) => Promise<UploadResponseShape>;
   handleMultiRun: (config: RunConfigPayload) => void;
   handleAbortAll: () => Promise<void>;
@@ -84,13 +83,8 @@ export interface ExtractPageProps {
    *  keep working (the no-PATCH path is still valid for ad-hoc
    *  legacy `/` uploads where there's no run id to update). */
   handleConfigChange?: (config: RunConfigPayload) => void;
-  /** Homepage split hero (PLAN-homepage-redesign.md): navigation callbacks
-   *  for the home-base column. Optional so legacy/test callers that don't
-   *  wire them still mount — the column simply won't navigate. App supplies
-   *  the same dispatch actions History uses for these jumps. */
-  onResumeDraft?: (runId: number) => void;
+  /** Open the saved review surface after extraction. */
   onOpenRun?: (runId: number) => void;
-  onViewAllRuns?: () => void;
   /** Whether the current user is an admin — gates admin-only pre-run controls
    *  (per-agent model overrides) inside the Advanced disclosure. */
   isAdmin?: boolean;
@@ -112,18 +106,16 @@ function ElapsedTime({ startTime, running }: { startTime: number; running: boole
 export function ExtractPage({
   state,
   dispatch,
-  landingMode = "queue",
   onOpenNewExtraction,
   handleUpload,
+  handleUploadFiles,
   handleMultiRun,
   handleAbortAll,
   handleAbortAgent,
   handleRerunAgent,
   handleReset,
   handleConfigChange,
-  onResumeDraft,
   onOpenRun,
-  onViewAllRuns,
   isAdmin = false,
 }: ExtractPageProps) {
   const [preparationState, setPreparationState] = useState<{ sessionId: string; snapshot: PreparationSnapshot } | null>(null);
@@ -231,12 +223,10 @@ export function ExtractPage({
           },
         });
       })
-      .catch(() => {
-        // Non-existent run id or audit DB hiccup — clear the ref so the
-        // user can navigate away and back to retry. We do not surface a
-        // visible error here because /run/{garbage} also lands in this
-        // branch, and silently degrading to the bare extract page is
-        // gentler than a banner the user can't action.
+      .catch((error) => {
+        if (cancelled) return;
+        dispatch({ type: "EVENT", payload: { event: "error", data: { message: userMessage(error), traceback: "" }, timestamp: Date.now() / 1000 } });
+        // A failed document load stays visible; reopening retries it.
         rehydratedRunIdRef.current = null;
       });
     return () => {
@@ -244,7 +234,7 @@ export function ExtractPage({
       // A load cancelled before it finished (React StrictMode's dev
       // double-run, or a dependency change mid-fetch) must not count as
       // done — otherwise the re-run skips the fetch and "Resume setup"
-      // leaves the user on the Work queue.
+      // leaves the document setup unloaded.
       if (!settled && rehydratedRunIdRef.current === id) {
         rehydratedRunIdRef.current = null;
       }
@@ -374,38 +364,21 @@ export function ExtractPage({
     return () => window.clearTimeout(timer);
   }, [completedRunId, completionInteractionRunId, onOpenRun, showReviewHandoff]);
   const idle = state.sessionId == null && !state.isRunning;
-  const showQueue = idle && landingMode === "queue";
+
   const isResumedDraft = state.currentRunId != null && state.sessionId != null
     && !state.isRunning && !state.isComplete;
+  if (idle && state.currentRunId != null && !state.hasError) return <p role="status" style={ui.bodyText}>Loading document…</p>;
   return (
     <>
       <PageHeader
         eyebrow={state.isRunning || state.isComplete ? "Current filing" : undefined}
-        title={state.isRunning
+        title={state.hasError && !state.filename ? "Document unavailable" : state.isRunning
           ? state.filename ?? "Extraction in progress"
           : state.isComplete
             ? state.filename ?? "Extraction complete"
             : isResumedDraft
               ? "Continue setup"
-            : landingMode === "new"
-              ? "New extraction"
-              : "Work queue"}
-        actions={showQueue ? (
-          <button
-            type="button"
-            className={uiClass.btnPrimary}
-            style={ui.buttonPrimary}
-            onClick={() => {
-              onOpenNewExtraction?.();
-              const target = document.querySelector<HTMLElement>("[data-testid='drop-zone']");
-              const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-              target?.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "center" });
-              target?.focus({ preventScroll: true });
-            }}
-          >
-            New extraction
-          </button>
-        ) : undefined}
+            : "Add documents"}
       />
 
       {showReviewHandoff && (
@@ -442,26 +415,18 @@ export function ExtractPage({
         </section>
       )}
 
-      {/* Direction A keeps Work queue and New extraction as separate
-          destinations. UploadPanel stays mounted through upload and draft
-          setup; starting extraction replaces it with run progress. */}
-      <HomeHero
-        active={showQueue}
-        onResumeDraft={onResumeDraft ?? (() => {})}
-        onOpenRun={onOpenRun ?? (() => {})}
-        onViewAllRuns={onViewAllRuns ?? (() => {})}
-      >
-        {!state.isRunning && !state.isComplete && (!idle || landingMode === "new") && (
-          <div id="new-extraction">
-            <UploadPanel
-              onUpload={handleUpload}
-              isRunning={state.isRunning}
-              filename={state.filename}
-              startTime={state.runStartTime}
-            />
-          </div>
-        )}
-      </HomeHero>
+      {/* The upload surface stays mounted while a document is being set up. */}
+      {!state.isRunning && !state.isComplete && (
+        <div id="new-extraction">
+          <UploadPanel
+            onUpload={handleUpload}
+            onUploadFiles={handleUploadFiles}
+            isRunning={state.isRunning}
+            filename={state.filename}
+            startTime={state.runStartTime}
+          />
+        </div>
+      )}
 
       {state.sessionId && !state.isRunning && !state.isComplete && !state.hasError && (
         <DocumentPreparation key={state.sessionId} sessionId={state.sessionId} onSnapshot={acceptPreparation} />
@@ -742,7 +707,7 @@ export function ExtractPage({
         />
       )}
 
-      {/* New extraction button after completion */}
+      {/* Add documents button after completion */}
       {(state.isComplete || state.hasError) && (
         <button onClick={() => { handleReset(); onOpenNewExtraction?.(); }} style={styles.resetLink}>
           Start new extraction
