@@ -195,7 +195,7 @@ describe("App — live activity integration", () => {
     await act(async () => fireEvent.change(screen.getByLabelText("Upload document"), { target: { files } }));
     expect(api.uploadPdf).toHaveBeenCalledWith(files[0]);
     expect(api.uploadPdf).toHaveBeenCalledWith(files[1]);
-    expect(screen.getByRole("heading", { name: "Documents" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Work queue" })).toBeInTheDocument();
     expect(within(screen.getByRole("tablist", { name: "Document lists" })).getByRole("tab", { name: /In progress/ })).toHaveAttribute("aria-selected", "true");
   });
 
@@ -311,7 +311,7 @@ describe("App — live activity integration", () => {
     });
     expect(window.location.pathname).toMatch(/^\/(?:run|history)\/99$/);
     const staleEvent = captureOnEvent!;
-    fireEvent.click(screen.getByRole("link", { name: "Documents" }));
+    fireEvent.click(screen.getByRole("link", { name: "Work queue" }));
     fireEvent.click(screen.getByRole("button", { name: "Add documents" }));
     expect(window.location.pathname).toBe("/");
     act(() => staleEvent({ event: "run_complete", data: { success: true, overall_status: "completed", run_id: 99 }, timestamp: Date.now() / 1000 }));

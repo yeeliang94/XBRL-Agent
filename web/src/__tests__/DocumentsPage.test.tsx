@@ -1,8 +1,8 @@
-import { describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import { act, fireEvent, render, renderHook, screen, within } from "@testing-library/react";
 import { DocumentsPage, useDocuments } from "../pages/DocumentsPage";
-import { fetchRuns } from "../lib/api";
-vi.mock("../lib/api", () => ({ fetchRuns: vi.fn() }));
+import { fetchHomeStats, fetchRuns } from "../lib/api";
+vi.mock("../lib/api", () => ({ fetchRuns: vi.fn(), fetchHomeStats: vi.fn() }));
 import type { RunSummaryJson } from "../lib/types";
 
 const runs = [
@@ -13,6 +13,10 @@ const runs = [
 ] as RunSummaryJson[];
 
 describe("Documents workspace", () => {
+  beforeEach(() => {
+    vi.mocked(fetchHomeStats).mockResolvedValue({ drafts: 3, active: 1, completedThisMonth: 12, needsReview: 0 });
+    vi.mocked(fetchRuns).mockResolvedValue({ runs: [], total: 0, limit: 5, offset: 0 });
+  });
   test("slows idle polling, pauses hidden tabs, and refreshes on return", async () => {
     vi.useFakeTimers();
     vi.mocked(fetchRuns).mockResolvedValue({ runs: [], total: 0, limit: 50, offset: 0 });
@@ -37,7 +41,7 @@ describe("Documents workspace", () => {
       vi.useRealTimers();
     }
   });
-  test("shows truthful per-document stages and opens the selected document", () => {
+  test("shows truthful per-document stages and opens the selected document", async () => {
     const onOpen = vi.fn();
     const onSection = vi.fn();
     const onAdd = vi.fn();
@@ -57,5 +61,34 @@ describe("Documents workspace", () => {
     expect(onSection).toHaveBeenCalledWith("history");
     fireEvent.click(screen.getByRole("button", { name: "Add documents" }));
     expect(onAdd).toHaveBeenCalledOnce();
+    expect(screen.getByRole("heading", { name: "Work queue" })).toBeInTheDocument();
+    const summary = screen.getByRole("region", { name: "Queue summary" });
+    await within(summary).findByText("12");
+    expect(within(summary).getByText("In queue")).toBeInTheDocument();
+    expect(within(summary).getByText("Of these, not started")).toBeInTheDocument();
+    expect(within(summary).getByText("5")).toBeInTheDocument();
+    expect(within(summary).getByText("3")).toBeInTheDocument();
+  });
+  test("unavailable counts never imply zero and recent failed results stay visible and openable", async () => {
+    vi.mocked(fetchHomeStats).mockRejectedValue(new Error("Unavailable"));
+    const failed = { ...runs[3], status: "failed" as const };
+    const unknown = { ...failed, id: 7, pdf_filename: "Unknown.pdf", status: "future_status" };
+    vi.mocked(fetchRuns).mockResolvedValue({ runs: [failed, unknown], total: 2, limit: 5, offset: 0 });
+    const onOpen = vi.fn();
+    render(<DocumentsPage documents={{ runs, total: 4, error: null, loading: false, loadMore: vi.fn(), refresh: vi.fn() }}
+      section="progress" onOpen={onOpen} onSection={vi.fn()} onAdd={vi.fn()} />);
+    const summary = screen.getByRole("region", { name: "Queue summary" });
+    await within(summary).findByText("Summary counts unavailable.");
+    expect(within(summary).getAllByText("—")).toHaveLength(2);
+    expect(within(summary).queryByText("0")).toBeNull();
+    const recent = screen.getByRole("region", { name: "Recent results" });
+    expect(within(recent).getByText("Failed")).toBeInTheDocument();
+    expect(within(recent).getByText("Future status").parentElement?.querySelector('[data-status-icon="inactive"]')).not.toBeNull();
+    fireEvent.click(within(recent).getByRole("button", { name: "Failed.pdf" }));
+    expect(onOpen).toHaveBeenCalledWith(failed);
+    vi.mocked(fetchHomeStats).mockResolvedValue({ drafts: 3, active: 1, completedThisMonth: 12, needsReview: 0 });
+    fireEvent.click(within(summary).getByRole("button", { name: "Retry summary" }));
+    await within(summary).findByText("12");
+    expect(within(summary).queryByText("Summary counts unavailable.")).toBeNull();
   });
 });
