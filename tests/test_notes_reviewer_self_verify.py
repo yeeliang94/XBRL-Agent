@@ -408,7 +408,8 @@ def test_clear_tool_deletes_provenance_and_tool_is_registered(db_path: Path):
     assert (_S12, 49) in prov  # the other copy is untouched
 
 
-def test_grounded_flag_dispositions_exact_packet_finding(db_path: Path):
+@pytest.mark.parametrize("reference", ["exact", "F1"])
+def test_grounded_flag_dispositions_exact_packet_finding(db_path: Path, reference):
     run_id = _seed_run(db_path)
     persist_notes_review_inputs(
         db_path=str(db_path), run_id=run_id,
@@ -424,7 +425,8 @@ def test_grounded_flag_dispositions_exact_packet_finding(db_path: Path):
         [ToolCallPart(tool_name="view_pdf_pages", args={"pages": [1]})],
         [ToolCallPart(tool_name="raise_flag", args={
             "kind": "needs_human", "reason": "Both disclosures map here.",
-            "sheet": _S12, "row": 49, "finding_id": finding_id,
+            "sheet": _S12, "row": 49,
+            "finding_id": finding_id if reference == "exact" else reference,
             # Numeric strings are coerced by the typed PydanticAI tool boundary
             # before raise_flag runs; they must not weaken stored grounding.
             "source_pages": ["1"], "evidence": "page 1 shows both disclosures",

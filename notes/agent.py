@@ -2627,17 +2627,22 @@ def _view_source_blocks_impl(
                       if uncertain else "")
         parts.append(f"--- {bid} ({block['block_kind']}){provenance} ---\n"
                      f"{block['canonical_html'] or ''}")
-    if not parts:
-        return (
-            "None of those part ids exist in this run's source reading. Call "
-            "read_source_manifest first to see the real ids."
-        )
-    body = "\n".join(parts)
+    body = "\n".join(parts) if parts else (
+        "None of those part ids exist in this selected batch. Call "
+        "read_source_manifest first to see the real ids."
+    )
     notices = []
     if unknown:
         notices.append(f"[not found: {', '.join(unknown)}]")
     if len(unique_ids) > _SOURCE_BLOCKS_PER_CALL:
         notices.append(f"[only the first {_SOURCE_BLOCKS_PER_CALL} parts were returned]")
+        remaining = unique_ids[_SOURCE_BLOCKS_PER_CALL:]
+        notices.append(
+            f"[After completing any next_offset character pages, submit remaining block_ids "
+            f"with offset=0: {remaining[:_SOURCE_BLOCKS_PER_CALL]!r}. "
+            f"{len(remaining)} deferred ID(s); later batches use the remaining slice "
+            f"of your original deduplicated ID list. Offsets only continue the current batch.]"
+        )
     notice = "\n".join(notices) + "\n" if notices else ""
     return _source_response(body, f"{len(parts)} source part(s).", offset, notice)
 
@@ -3487,7 +3492,9 @@ def create_notes_agent(
             ctx: RunContext[NotesDeps], block_ids: List[str], offset: int = 0,
         ) -> str:
             """Read up to 40 source parts. If partial, repeat the same block_ids
-            with offset=next_offset to continue, including within a large part."""
+            with offset=next_offset to continue, including within a large part.
+            After those character pages, submit remaining block_ids as a new
+            batch with offset=0; character offsets do not reach later blocks."""
             return await asyncio.to_thread(
                 _view_source_blocks_impl, ctx.deps.db_path,
                 ctx.deps.source_generation_id, block_ids, offset,

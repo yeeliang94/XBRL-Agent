@@ -403,6 +403,27 @@ def test_too_many_block_ids_are_bounded_per_call(seeded):
     assert f"first {notes_agent._SOURCE_BLOCKS_PER_CALL} parts" in out
 
 
+@pytest.mark.parametrize("missing_first_batch", [False, True])
+def test_block_limit_returns_actionable_remaining_batch(seeded, missing_first_batch):
+    db, _, gen = seeded
+    ids = [f"part-{i}" for i in range(45)]
+    with repo.db_session(db) as conn:
+        srepo.write_blocks(conn, gen, [SourceBlock(
+            block_id=bid, block_kind="paragraph", reading_order=i + 10,
+            canonical_html=f"<p>Disclosure {i}</p>",
+        ) for i, bid in enumerate(ids) if not missing_first_batch or i >= 40])
+    first = notes_agent._view_source_blocks_impl(db, gen, ids)
+    assert "offset=0" in first and "remaining block_ids" in first
+    for bid in ids[40:]:
+        assert bid in first.split("remaining block_ids", 1)[1]
+    second = notes_agent._view_source_blocks_impl(db, gen, ids[40:], offset=0)
+    for bid in ids[:40]:
+        assert (f"--- {bid} " in first) == (not missing_first_batch)
+        assert f"--- {bid} " not in second
+    for bid in ids[40:]:
+        assert f"--- {bid} " in second and f"--- {bid} " not in first
+
+
 def test_block_read_warnings_appear_on_every_page(seeded, monkeypatch):
     import re
 
