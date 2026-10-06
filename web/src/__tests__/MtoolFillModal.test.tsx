@@ -58,6 +58,32 @@ describe("MtoolFillModal", () => {
     vi.unstubAllGlobals();
   });
 
+  test("changed appearance requires a refreshed preview before another fill", async () => {
+    let revision = "old", patches = 0;
+    mockFetch((url, init) => {
+      if (url.endsWith("/detect-columns")) return Response.json({ detected: {}, confidence: "high", requires_confirmation: false });
+      if (url.endsWith("/notes-preview")) return Response.json({ notes_output_revision: revision, notes_in_run: 1, will_fill_existing: [], will_create: [], unresolved: [], errors: [] });
+      if (url.endsWith("/patch")) {
+        patches += 1;
+        expect((init?.body as FormData).get("notes_output_revision")).toBe("old");
+        revision = "new";
+        return Response.json({ detail: { code: "notes_output_changed", notes_output_revision: "new", message: "Notes or appearance changed." } }, { status: 409 });
+      }
+      if (url.endsWith("/preflight")) return Response.json({ ok: true, blockers: [], warnings: [] });
+      if (url.endsWith("/mtool-notes-fill")) return Response.json({ meta: { counts: { notes: 1 }, notes_output_revision: "old" }, footnotes: [{ source_sheet: "Notes-CI" }] });
+      return Response.json(FILL_DOC);
+    });
+    render(<MtoolFillModal runId={42} open onClose={() => {}} />);
+    fireEvent.change(screen.getByLabelText("mTool template file"), { target: { files: [new File(["xlsx"], "notes.xlsx")] } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Fill" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Fill" }));
+    const refresh = await screen.findByRole("button", { name: "Refresh notes preview" });
+    expect(screen.getByRole("button", { name: "Fill" })).toBeDisabled();
+    fireEvent.click(refresh);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Fill" })).toBeEnabled());
+    expect(patches).toBe(1);
+  });
+
   test("selects sheets for detection, notes preview and fill, and clears stale results", async () => {
     const posts: { url: string; form: FormData }[] = [];
     mockFetch((url, init) => {

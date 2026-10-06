@@ -7,6 +7,7 @@ import { FileDropzone } from "./FileDropzone";
 
 interface Props {
   onUpload: (file: File) => Promise<UploadResponse>;
+  onUploadFiles?: (files: File[]) => Promise<void>;
   isRunning: boolean;
   filename: string | null;
   startTime: number | null;
@@ -95,7 +96,7 @@ const styles = {
   } as React.CSSProperties,
 };
 
-export function UploadPanel({ onUpload, isRunning, filename, startTime }: Props) {
+export function UploadPanel({ onUpload, onUploadFiles, isRunning, filename, startTime }: Props) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -130,6 +131,20 @@ export function UploadPanel({ onUpload, isRunning, filename, startTime }: Props)
     [onUpload],
   );
 
+  const handleFiles = async (files: File[]) => {
+    if (files.length === 1 || !onUploadFiles) return handleFile(files[0]);
+    const invalid = files.find((file) => !/\.(pdf|docx)$/i.test(file.name) || file.size > MAX_UPLOAD_BYTES);
+    if (invalid) {
+      setError(`${invalid.name}: choose PDF or Word documents up to ${MAX_UPLOAD_MB} MB each.`);
+      return;
+    }
+    setError(null);
+    setUploading(true);
+    try { await onUploadFiles(files); }
+    catch (e) { setError(userMessage(e)); }
+    finally { setUploading(false); }
+  };
+
   const disabled = isRunning || uploading;
 
   return (
@@ -137,11 +152,12 @@ export function UploadPanel({ onUpload, isRunning, filename, startTime }: Props)
       {!filename ? (
         <FileDropzone
           accept=".pdf,.docx"
-          label="Drop a PDF or Word document"
-          buttonLabel="Choose document"
+          label="Drop PDF or Word documents"
+          buttonLabel="Choose documents"
           inputLabel="Upload document"
           disabled={disabled}
           onFile={handleFile}
+          onFiles={onUploadFiles ? handleFiles : undefined}
         >
           <span style={styles.uploadHint}>
             or choose a file from your computer · up to {MAX_UPLOAD_MB} MB

@@ -1954,3 +1954,12 @@ describe("incomplete face statements", () => {
       .toBe(true);
   });
 });
+
+test("run diagnostics export belongs in Activity, including failed runs with no agents", () => {
+  window.history.replaceState(null, "", "/history/1?tab=overview");
+  render(<RunDetailView detail={makeDetail({ status: "failed", agents: [] })} onDelete={vi.fn()} />);
+  expect(screen.queryByRole("button", { name: "Export diagnostics" })).toBeNull();
+  clickRunTab(/^activity$/i);
+  expect(screen.getByRole("button", { name: "Export diagnostics" })).toBeEnabled();
+  expect(screen.getByText(/May contain financial content/)).toBeVisible();
+});

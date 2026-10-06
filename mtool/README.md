@@ -117,7 +117,7 @@ generated Review Copy Word/PDF output; that output verification is deferred.
 
 Prose notes are filled into mTool text-blocks with the styling you see in the
 app's Notes review panel, decorated on the way out by
-`mtool/notes_decorate.py` (the backend twin of the clipboard decorator). What
+`mtool/notes_decorate.py` (shared by review, Copy, and workbook preparation). What
 survives into the mTool text-block:
 
 | Formatting | Ports into mTool? |

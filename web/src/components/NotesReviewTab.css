@@ -117,7 +117,7 @@
 
 /* A block wrapper reduces the available line width for its whole sub-note,
  * so an enclosed 100%-width table stays within the indented section. Keep
- * this 2em offset aligned with clipboard.ts and notes_decorate.py. */
+ * this 2em offset aligned with mtool/notes_decorate.py. */
 .notes-review-tab div[data-note-section="1"] {
   margin-left: 2em;
 }
@@ -205,48 +205,13 @@
   text-align: right;
 }
 
-@media (max-width: 1000px) {
-  .notes-review-tab .notes-source-first-layout {
-    grid-template-columns: 220px minmax(0, 1fr) !important;
-  }
-
-  .notes-review-tab .notes-source-first-layout > [role="separator"] {
-    display: none !important;
-  }
-}
-
-@media (max-width: 780px) {
-  .notes-review-tab .notes-source-first-layout {
-    grid-template-columns: minmax(0, 1fr) !important;
-  }
-
-  .notes-review-tab .notes-source-first-layout > aside {
-    position: static !important;
-    height: 260px !important;
-    min-height: 0 !important;
-    padding-right: 0 !important;
-  }
-
-  .notes-review-tab .notes-source-first-layout > [role="separator"] {
-    display: none !important;
-  }
-
-  .notes-review-tab .notes-source-first-layout > section {
-    padding-left: 0 !important;
-  }
-}
-
 /* The app sidebar and PDF pane leave roughly 740px here on a 1440px desktop.
    Keep the worksheet rail beside the fields (design system: three persistent
    panes at standard desktop) with a narrower rail, and stack only when the
    fields column would drop below the prototype's 410px minimum. */
 @container notes-review (max-width: 900px) {
   .notes-review-tab .notes-source-first-layout {
-    grid-template-columns: 220px minmax(0, 1fr) !important;
-  }
-
-  .notes-review-tab .notes-source-first-layout > [role="separator"] {
-    display: none !important;
+    grid-template-columns: 220px 9px minmax(0, 1fr) !important;
   }
 }
 

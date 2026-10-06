@@ -1,18 +1,7 @@
-// Notes-table clipboard formatting options.
-//
-// The clipboard decorator (`clipboard.ts`) injects inline styles into a notes
-// cell's HTML at copy time so a paste into M-Tool / Word / Outlook keeps its
-// table borders, font, padding and spacing (the DB / sanitiser stay style-free
-// — gotcha #16). Those styles used to be hard-coded constants; this module
-// makes them user-configurable.
-//
-// This shape is now the **notes table style theme** (docs/PLAN-notes-table-theme.md):
-// one preset that drives BOTH the in-editor table preview (via CSS variables on
-// the notes root) AND the clipboard paste, so what you see equals what you
-// paste. It is sourced server-side as a firm-wide default (Settings) with an
-// optional per-run override; this module owns the shape, validation, and the
-// resolution order. (The legacy localStorage load/save below is retained for
-// back-compat but the firm default now lives on the server.)
+// Notes appearance options shared by Settings and the canonical notes editor.
+// Server-side theme resolution and output preparation drive read-only review,
+// Copy, and mTool filling. This module owns the frontend shape, validation, and
+// resolution order; historic localStorage helpers remain for compatibility.
 
 export type BorderStyle = "none" | "single" | "double";
 export type ListMarker = "disc" | "dash" | "decimal";

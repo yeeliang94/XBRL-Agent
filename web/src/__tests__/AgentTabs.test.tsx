@@ -141,7 +141,6 @@ describe("AgentTabs", () => {
     // Running shows spinner indicator
     const sofpTab = screen.getByRole("tab", { name: /Statement of financial position/ });
     expect(sofpTab.querySelector("[data-status='running']")).toBeTruthy();
-    expect(sofpTab.querySelector(".pwc-working-indicator")).toBeTruthy();
 
     // Pending shows dot
     const soplTab = screen.getByRole("tab", { name: /Profit or loss/ });

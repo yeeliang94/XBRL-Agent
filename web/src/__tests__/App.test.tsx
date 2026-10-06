@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, vi, afterEach } from "vitest";
-import { render, fireEvent, cleanup, act, screen, waitFor } from "@testing-library/react";
+import { render, fireEvent, cleanup, act, screen, waitFor, within } from "@testing-library/react";
 import type { SSEEvent, RunConfigPayload, PreparationSnapshot } from "../lib/types";
 import type { SSEFailureKind } from "../lib/sse";
 
@@ -117,7 +117,7 @@ describe("App — live activity integration", () => {
     render(<App />);
 
     // 1. Upload a PDF via the hidden file input.
-    fireEvent.click(screen.getByRole("link", { name: /new extraction/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Add documents" }));
     const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
     expect(fileInput).toBeTruthy();
     const file = new File(["dummy"], "FINCO.pdf", { type: "application/pdf" });
@@ -184,14 +184,29 @@ describe("App — live activity integration", () => {
     expect(screen.queryByText(/Chat Feed/i)).toBeNull();
   });
 
-  test("completion opens Overview and keeps the current filing destination", async () => {
+  test("batch upload creates both documents and returns to In progress", async () => {
+    const api = await import("../lib/api");
+    vi.mocked(api.uploadPdf).mockResolvedValueOnce({ session_id: "a", filename: "A.pdf", run_id: 701 });
+    vi.mocked(api.uploadPdf).mockResolvedValueOnce({ session_id: "b", filename: "B.pdf", run_id: 702 });
+    const { default: App } = await import("../App");
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Add documents" }));
+    const files = [new File(["a"], "A.pdf"), new File(["b"], "B.pdf")];
+    await act(async () => fireEvent.change(screen.getByLabelText("Upload document"), { target: { files } }));
+    expect(api.uploadPdf).toHaveBeenCalledWith(files[0]);
+    expect(api.uploadPdf).toHaveBeenCalledWith(files[1]);
+    expect(screen.getByRole("heading", { name: "Work queue" })).toBeInTheDocument();
+    expect(within(screen.getByRole("tablist", { name: "Document lists" })).getByRole("tab", { name: /In progress/ })).toHaveAttribute("aria-selected", "true");
+  });
+
+  test("start acknowledgement opens the durable document workspace", async () => {
     const { uploadPdf } = await import("../lib/api");
     vi.mocked(uploadPdf).mockResolvedValueOnce({
       session_id: "sess_1", filename: "FINCO.pdf", run_id: 321,
     });
     const { default: App } = await import("../App");
     render(<App />);
-    fireEvent.click(screen.getByRole("link", { name: /new extraction/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Add documents" }));
     const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
     await act(async () => {
       fireEvent.change(fileInput, {
@@ -207,20 +222,15 @@ describe("App — live activity integration", () => {
       data: { phase: "starting", message: "Starting", run_id: 321 },
       timestamp: Date.now() / 1000,
     }));
-    expect(screen.getByRole("link", { name: /Current run.*Working/ })).toHaveAttribute("href", "/run/321");
+    expect(screen.getByRole("combobox", { name: "Switch document" })).toHaveValue("321");
     act(() => captureOnEvent!({
       event: "run_complete",
       data: { success: true, overall_status: "completed", run_id: 321 },
       timestamp: Date.now() / 1000,
     }));
     await waitFor(() => expect(window.location.pathname).toBe("/history/321"));
-    const currentRun = screen.getByRole("link", { name: "Current run" });
-    expect(currentRun).toHaveAttribute("href", "/history/321?tab=overview");
-    expect(currentRun).toHaveAttribute("aria-current", "page");
-    const historyLength = window.history.length;
-    fireEvent.click(currentRun);
-    expect(window.location.pathname).toBe("/history/321");
-    expect(window.history.length).toBe(historyLength);
+    expect(screen.getByRole("combobox", { name: "Switch document" })).toHaveValue("321");
+
   });
 
   test("figures review uses the full workspace width with navigation expanded", async () => {
@@ -240,7 +250,7 @@ describe("App — live activity integration", () => {
     const { default: App } = await import("../App");
     render(<App />);
 
-    fireEvent.click(screen.getByRole("link", { name: /new extraction/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Add documents" }));
     const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
     await act(async () => {
       fireEvent.change(fileInput, {
@@ -274,11 +284,11 @@ describe("App — live activity integration", () => {
     expect(screen.queryByText("The connection to the run was lost.")).toBeNull();
   });
 
-  test("New extraction preserves the active run URL while work is streaming", async () => {
+  test("Documents navigation detaches monitoring and permits another upload while work continues", async () => {
     const { default: App } = await import("../App");
     render(<App />);
 
-    fireEvent.click(screen.getByRole("link", { name: /new extraction/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Add documents" }));
     const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
     await act(async () => {
       fireEvent.change(fileInput, {
@@ -300,11 +310,13 @@ describe("App — live activity integration", () => {
       });
     });
     expect(window.location.pathname).toMatch(/^\/(?:run|history)\/99$/);
-    const activeRunPath = window.location.pathname;
-
-    fireEvent.click(screen.getByRole("link", { name: /new extraction/i }));
-
-    await waitFor(() => expect(window.location.pathname).toBe(activeRunPath));
+    const staleEvent = captureOnEvent!;
+    fireEvent.click(screen.getByRole("link", { name: "Work queue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add documents" }));
+    expect(window.location.pathname).toBe("/");
+    act(() => staleEvent({ event: "run_complete", data: { success: true, overall_status: "completed", run_id: 99 }, timestamp: Date.now() / 1000 }));
+    expect(window.location.pathname).toBe("/");
+    expect(screen.getByRole("heading", { name: "Add documents" })).toBeInTheDocument();
   });
 
   // ---------------------------------------------------------------------------
@@ -363,7 +375,7 @@ describe("App — live activity integration", () => {
     render(<App />);
 
     // Upload to land us on /run/99 with a session+filename.
-    fireEvent.click(screen.getByRole("link", { name: /new extraction/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Add documents" }));
     const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
     const file = new File(["x"], "FINCO.pdf", { type: "application/pdf" });
     await act(async () => {

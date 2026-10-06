@@ -1559,6 +1559,7 @@ async def _run_reviewer_pass(
     )
     from correction.reviewer_agent import (
         create_reviewer_agent, compute_reviewer_turn_cap,
+        reviewer_verification_issue,
     )
     from concept_model.versioning import ensure_snapshot
 
@@ -1866,7 +1867,9 @@ async def _run_reviewer_pass(
                 )
                 max_turns += focused_cap
                 outcome["max_turns"] = max_turns
-                focused_agent, deps = create_reviewer_agent(
+                # Baseline verification can read workbooks; keep it off the event loop.
+                focused_agent, deps = await _asyncio.to_thread(
+                    create_reviewer_agent,
                     model=model, db_path=db_path, run_id=run_id,
                     filing_level=filing_level, filing_standard=filing_standard,
                     pdf_path=pdf_path, investigation_handoff=handoff_items,
@@ -1968,12 +1971,17 @@ async def _run_reviewer_pass(
         outcome["writes_performed"] = deps.writes_performed
         outcome["flags_raised"] = deps.flags_raised
         outcome["turns_used"] = turn_count
-        if outcome.get("handoff_items") and deps.writes_performed > deps.verified_write_count:
+        verification_issue = reviewer_verification_issue(
+            deps, allow_unresolved=any(
+                result["status"] == "unresolved" for result in deps.investigation_resolutions
+            ),
+        ) if outcome.get("handoff_items") else None
+        if verification_issue:
             outcome["error"] = "reviewer_unverified_writes"
             outcome["review_stage"] = "investigation_incomplete"
             await _emit("error", {
                 "type": "reviewer_unverified_writes",
-                "message": "AI review changed figures without completing verification.",
+                "message": f"AI review changes remain incomplete: {verification_issue}.",
             })
         if spot_mode is not None and not outcome.get("handoff_items"):
             outcome["review_stage"] = "triage_clean"

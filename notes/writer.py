@@ -409,7 +409,7 @@ def _style_cell_html(
 
 
 # Marks a table whose styling came verbatim from the uploaded Word document.
-# Every renderer (review page CSS, mTool decorator, clipboard decorator) treats
+# Every renderer (editor CSS and shared backend output preparation) treats
 # a marked table's border set as COMPLETE and contributes none of its own.
 SOURCE_STYLED_ATTR = "data-source-styled"
 

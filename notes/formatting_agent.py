@@ -32,7 +32,7 @@ from notes.format_patch import (
     apply_sheet_patch,
 )
 from notes.format_schema import SheetFormatPatch, patch_to_dict
-from notes.table_theme import firm_theme
+from notes.table_theme import firm_theme, resolve_run_theme
 from model_settings import build_model_settings, describe_model_runtime
 
 _THINKING_WARNED: set[str] = set()
@@ -997,7 +997,7 @@ def _resolve_notes_table_theme(db_path: str, run_id: int) -> dict[str, Any]:
             run = repo.fetch_run(conn, run_id)
         override = getattr(run, "notes_table_style", None) if run else None
         if isinstance(override, dict) and override:
-            return override
+            return resolve_run_theme(override)
     except Exception:  # noqa: BLE001 — theme is advisory; never fail the pass
         logger.warning(
             "could not read run notes_table_style run=%s", run_id, exc_info=True,

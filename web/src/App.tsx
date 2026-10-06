@@ -1,5 +1,5 @@
 import { useReducer, useCallback, useState, useRef, useEffect } from "react";
-import type { RunConfigPayload, NotesTemplateType } from "./lib/types";
+import type { RunConfigPayload, NotesTemplateType, RunSummaryJson } from "./lib/types";
 import { NOTES_TEMPLATE_TYPES, STATEMENT_TYPES } from "./lib/types";
 import { pwc, tokens } from "./lib/theme";
 import { ui, uiClass } from "./lib/uiStyles";
@@ -19,12 +19,13 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { TopNav } from "./components/TopNav";
 import { SuccessToast } from "./components/SuccessToast";
 import { Icon, SettingsIcon } from "./components/icons";
-import { ChevronRight, LeftPanelClose, LeftPanelOpen, Logout } from "./components/iconGlyphs";
+import { ArrowBack, Description, LeftPanelClose, LeftPanelOpen, Logout } from "./components/iconGlyphs";
+import { DocumentsPage, useDocuments } from "./pages/DocumentsPage";
+import { DocumentSwitcher } from "./components/DocumentSwitcher";
 import { HistoryPage } from "./pages/HistoryPage";
 import { ExtractPage } from "./pages/ExtractPage";
 import { ConceptsPage } from "./pages/ConceptsPage";
 import {
-  announceRunTabChange,
   readRunTabFromUrl,
   RUN_TAB_CHANGE_EVENT,
 } from "./lib/runTabs";
@@ -38,34 +39,6 @@ import { confirmNavigationLeave, initializeNavigationHistory, pushNavigationHist
 // ---------------------------------------------------------------------------
 
 const styles = {
-  page: {
-    ...ui.appShell,
-  } as const,
-  rail: {
-    ...ui.appRail,
-  } as const,
-  railBrand: {
-    display: "flex",
-    alignItems: "center",
-    gap: 10,
-    padding: "2px 8px 24px",
-  } as const,
-  railToggle: {
-    ...ui.buttonQuiet,
-    width: 32,
-    minWidth: 32,
-    minHeight: 32,
-    padding: 0,
-    marginLeft: "auto",
-    borderRadius: tokens.radius.control,
-    color: tokens.color.icon.rest,
-  } as const,
-  brandMark: {
-    width: 27,
-    height: 27,
-    color: pwc.orange500,
-    flexShrink: 0,
-  } as const,
   headerTitle: {
     fontFamily: pwc.fontHeading,
     // Brand wordmark at semibold — the design system sets titles, headings
@@ -77,69 +50,8 @@ const styles = {
     color: pwc.black,
     margin: 0,
   } as const,
-  railSectionLabel: {
-    padding: "16px 10px 7px",
-    fontFamily: pwc.fontBody,
-    fontSize: 12,
-    fontWeight: pwc.weight.semibold,
-    color: tokens.color.text.muted,
-  } as const,
-  railNav: {
-    flex: 1,
-    minHeight: 0,
-    overflowY: "auto" as const,
-  } as const,
-  railFooter: {
-    marginTop: "auto",
-    padding: "14px 8px 0",
-    display: "flex",
-    alignItems: "center",
-    gap: 9,
-    minWidth: 0,
-  } as const,
-  avatar: {
-    width: 30,
-    height: 30,
-    display: "grid",
-    placeItems: "center",
-    flex: "0 0 auto",
-    borderRadius: "50%",
-    background: pwc.black,
-    color: pwc.white,
-    fontFamily: pwc.fontBody,
-    fontSize: 12,
-    fontWeight: pwc.weight.semibold,
-  } as const,
-  userCopy: {
-    minWidth: 0,
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: 2,
-  } as const,
-  workspace: {
-    minWidth: 0,
-    background: tokens.surface.canvas,
-  } as const,
   topbar: {
     ...ui.appTopbar,
-  } as const,
-  context: {
-    minWidth: 0,
-  } as const,
-  breadcrumb: {
-    display: "flex",
-    alignItems: "center",
-    gap: pwc.space.sm,
-    fontFamily: pwc.fontBody,
-    fontSize: 13,
-    color: tokens.color.text.secondary,
-  } as const,
-  contextTitle: {
-    color: pwc.black,
-    fontWeight: pwc.weight.medium,
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap" as const,
   } as const,
   settingsButton: {
     ...ui.buttonQuiet,
@@ -150,31 +62,10 @@ const styles = {
     alignItems: "center",
     gap: pwc.space.md,
   } as const,
-  userEmail: {
-    fontFamily: pwc.fontBody,
-    fontSize: 12,
-    fontWeight: pwc.weight.medium,
-    color: pwc.black,
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap" as const,
-  } as const,
   logoutButton: {
     ...ui.buttonGhost,
     ...ui.buttonSm,
     color: tokens.color.text.secondary,
-  } as const,
-  // Standard page mode (design-system Layouts) — the shell owns the
-  // route-level width.
-  main: {
-    maxWidth: 1500,
-    margin: "0 auto",
-    padding: `${pwc.space.xxl}px ${tokens.space.pageGutter}px 110px`,
-    display: "flex",
-    flexDirection: "column" as const,
-    // 32px between major stacked blocks gives the airier section rhythm the
-    // design language calls for (was 24px).
-    gap: tokens.space.section,
   } as const,
   // The concepts review workspace is a 3-column side-by-side surface that
   // genuinely benefits from the full viewport — the max-width cap left wide
@@ -208,25 +99,16 @@ const styles = {
 export default function App() {
   useEffect(initializeNavigationHistory, []);
   const [state, dispatch] = useReducer(appReducer, undefined, bootState);
-  const [railCollapsed, setRailCollapsed] = useState<boolean>(() => {
-    try {
-      return window.sessionStorage.getItem("xbrl-navigation-collapsed") === "true";
-    } catch {
-      return false;
-    }
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try { return window.localStorage.getItem("xbrl-sidebar-collapsed") === "true"; }
+    catch { return false; }
   });
-  const toggleRail = useCallback(() => {
-    setRailCollapsed((current) => {
-      const next = !current;
-      try {
-        window.sessionStorage.setItem("xbrl-navigation-collapsed", String(next));
-      } catch {
-        // Session storage can be unavailable in locked-down browsers. The
-        // explicit control still works for the current render.
-      }
-      return next;
-    });
-  }, []);
+  const toggleSidebar = () => {
+    const next = !sidebarCollapsed;
+    setSidebarCollapsed(next);
+    try { window.localStorage.setItem("xbrl-sidebar-collapsed", String(next)); }
+    catch { /* Navigation remains usable when storage is unavailable. */ }
+  };
   const [extractMode, setExtractMode] = useState<"queue" | "new">(
     () => window.location.hash === "#new-extraction" ? "new" : "queue",
   );
@@ -347,6 +229,17 @@ export default function App() {
     });
   }, []);
 
+  const documents = useDocuments(authStatus !== "anon");
+  const [returnPath, setReturnPath] = useState(() => {
+    try { return window.sessionStorage.getItem("xbrl-document-return") || "/"; }
+    catch { return "/"; }
+  });
+  const streamGeneration = useRef(0);
+  const [documentName, setDocumentName] = useState<{ id: number; pdf_filename: string } | null>(null);
+  const documentLoaded = useCallback((document: { id: number; pdf_filename: string }) => {
+    setDocumentName((current) => current?.id === document.id && current.pdf_filename === document.pdf_filename ? current : document);
+  }, []);
+
   // Hold the SSE controller so we can abort it on reset/unmount.
   // Without this, an in-flight stream would keep dispatching stale events
   // after the user starts a new run or closes the page.
@@ -419,6 +312,13 @@ export default function App() {
     }
   }, [state.view, state.selectedRunId, state.currentRunId]);
 
+  useEffect(() => {
+    if (state.view === "settings" || (state.view === "concepts" && state.selectedRunId == null)) return;
+    const path = window.location.pathname + window.location.search + window.location.hash;
+    setReturnPath(path);
+    try { window.sessionStorage.setItem("xbrl-document-return", path); } catch { /* storage is optional */ }
+  }, [state.view, state.currentRunId, state.selectedRunId, runTab, extractMode]);
+
   // Reflect the selected run in the browser tab title so a user with
   // multiple Template tabs open can tell them apart without switching.
   useEffect(() => {
@@ -438,6 +338,11 @@ export default function App() {
       // and popstate agree on how a URL maps to state — including the
       // "any /history/<garbage> still lands on the list" forgiveness path.
       const route = parseRouteFromPath(window.location.pathname);
+      if (route.currentRunId !== stateRef.current.currentRunId && route.view !== "settings") {
+        streamGeneration.current += 1;
+        sseControllerRef.current?.abort();
+        dispatch({ type: "RESET" });
+      }
       setExtractMode(window.location.hash === "#new-extraction" ? "new" : "queue");
       dispatch({ type: "SET_VIEW", payload: route.view });
       dispatch({ type: "SET_SELECTED_RUN_ID", payload: route.selectedRunId });
@@ -450,13 +355,75 @@ export default function App() {
   const handleReset = useCallback(() => {
     // Abort any active stream before clearing state, so the old run
     // can't race in events after the user has moved on.
+    streamGeneration.current += 1;
     sseControllerRef.current?.abort();
     sseControllerRef.current = null;
     dispatch({ type: "RESET" });
   }, []);
 
+  const showDocuments = (section: "progress" | "history" = "progress") => {
+    if (!confirmNavigationLeave()) return;
+    handleReset();
+    setExtractMode("queue");
+    const destination = section === "history" ? "/history" : "/";
+    if (window.location.pathname + window.location.search + window.location.hash !== destination) pushNavigationHistory({}, "", destination);
+    dispatch({ type: "SET_VIEW", payload: section === "history" ? "history" : "extract" });
+    documents.refresh();
+  };
+  const openDocument = (run: Pick<RunSummaryJson, "id" | "status">) => {
+    if (!confirmNavigationLeave()) return;
+    if (run.id === stateRef.current.currentRunId && stateRef.current.sessionId) {
+      dispatch({ type: "SET_VIEW", payload: "extract" });
+      return;
+    }
+    handleReset();
+    dispatch({ type: "SET_VIEW", payload: run.status === "draft" ? "extract" : "history" });
+    dispatch({ type: run.status === "draft" ? "SET_CURRENT_RUN_ID" : "SET_SELECTED_RUN_ID", payload: run.id });
+    setRunTab("overview");
+  };
+  const addDocuments = () => {
+    if (!confirmNavigationLeave()) return;
+    handleReset();
+    setExtractMode("new");
+    pushNavigationHistory({}, "", "/#new-extraction");
+  };
+  const restoreDocument = () => {
+    if (!confirmNavigationLeave()) return;
+    const target = /^\/(?:run\/\d+|history(?:\/\d+)?|concepts\/\d+)?(?:[?#].*)?$/.test(returnPath) ? returnPath : "/";
+    const route = parseRouteFromPath(target.split(/[?#]/)[0]);
+    pushNavigationHistory({}, "", target);
+    setRunTab(readRunTabFromUrl() ?? "overview");
+    setExtractMode(target.includes("#new-extraction") ? "new" : "queue");
+    dispatch({ type: "SET_VIEW", payload: route.view });
+    dispatch({ type: "SET_SELECTED_RUN_ID", payload: route.selectedRunId });
+    dispatch({ type: "SET_CURRENT_RUN_ID", payload: route.currentRunId });
+  };
+  const handleUploadFiles = async (files: File[]) => {
+    const generation = streamGeneration.current;
+    // Upload at most two files at once; each has its own durable preparation job.
+    const remaining = [...files];
+    const errors: string[] = [];
+    await Promise.all([0, 1].map(async () => {
+      while (remaining.length) {
+        const file = remaining.shift()!;
+        try { await uploadPdf(file); }
+        catch (error) { errors.push(`${file.name}: ${error instanceof Error ? error.message : "Upload failed"}`); }
+      }
+    }));
+    documents.refresh();
+    if (errors.length) throw new Error(errors.join("\n"));
+    if (generation === streamGeneration.current && stateRef.current.view === "extract") showDocuments();
+  };
+
   const handleUpload = useCallback(async (file: File) => {
+    const generation = streamGeneration.current;
     const result = await uploadPdf(file);
+    if (generation !== streamGeneration.current) return result;
+    if (stateRef.current.view === "settings" && result.run_id != null) {
+      const path = `/run/${result.run_id}`;
+      setReturnPath(path);
+      try { window.sessionStorage.setItem("xbrl-document-return", path); } catch { /* optional */ }
+    }
     dispatch({
       type: "UPLOADED",
       payload: {
@@ -487,6 +454,8 @@ export default function App() {
       // The backend deliberately continues and persists a run after its SSE
       // client disconnects. Move to the durable detail view, whose running-run
       // polling resumes monitoring without issuing a second extraction.
+      streamGeneration.current += 1;
+      dispatch({ type: "RESET" });
       dispatch({ type: "SET_VIEW", payload: "history" });
       dispatch({ type: "SET_SELECTED_RUN_ID", payload: runId });
       dispatch({ type: "SET_CURRENT_RUN_ID", payload: null });
@@ -505,22 +474,41 @@ export default function App() {
     });
   }, []);
 
+  const acceptRunEvent = useCallback((generation: number, event: import("./lib/types").SSEEvent) => {
+    if (generation !== streamGeneration.current) return;
+    dispatch({ type: "EVENT", payload: event });
+    if (event.event === "status" && typeof event.data.run_id === "number") {
+      // The start acknowledgement follows the durable audit write. From here
+      // every document uses the same saved detail/polling surface. Detaching
+      // this monitor does not stop the server-owned job.
+      streamGeneration.current += 1;
+      sseControllerRef.current?.abort();
+      sseControllerRef.current = null;
+      dispatch({ type: "RESET" });
+      dispatch({ type: "SET_VIEW", payload: "history" });
+      dispatch({ type: "SET_SELECTED_RUN_ID", payload: event.data.run_id });
+      dispatch({ type: "SET_CURRENT_RUN_ID", payload: null });
+      documents.refresh();
+    }
+  }, [documents.refresh]);
+
   // Shared plumbing for handleMultiRun + handleRerunAgent. Both flows dispatch
   // every incoming event to the reducer. Transport loss reattaches to the
   // durable run when possible; only pre-start failures become fatal UI errors.
   // Returns the AbortController for the caller to stash.
   const startSSERun = useCallback(
     (sessionId: string, config: RunConfigPayload, endpointPath?: string) => {
+      const generation = streamGeneration.current;
       return createMultiAgentSSE(
         sessionId,
         config,
-        (event) => dispatch({ type: "EVENT", payload: event }),
+        (event) => acceptRunEvent(generation, event),
         () => {},
-        handleStreamTransportError,
+        (error, kind) => { if (generation === streamGeneration.current) handleStreamTransportError(error, kind); },
         endpointPath,
       );
     },
-    [handleStreamTransportError],
+    [handleStreamTransportError, acceptRunEvent],
   );
 
   // Multi-agent run: receives a RunConfigPayload from PreRunPanel.
@@ -554,6 +542,7 @@ export default function App() {
 
   const handleMultiRun = useCallback(async (config: RunConfigPayload) => {
     if (!state.sessionId) return;
+    const generation = streamGeneration.current;
     sseControllerRef.current?.abort();
     dispatch({
       type: "RUN_STARTED",
@@ -574,6 +563,7 @@ export default function App() {
       try {
         await patchRunConfig(state.currentRunId, config);
       } catch (e) {
+        if (generation !== streamGeneration.current) return;
         const message = e instanceof Error ? e.message : "Failed to save run config";
         dispatch({
           type: "EVENT",
@@ -585,11 +575,12 @@ export default function App() {
         });
         return;
       }
+      if (generation !== streamGeneration.current) return;
       sseControllerRef.current = createMultiAgentSSEByRunId(
         state.currentRunId,
-        (event) => dispatch({ type: "EVENT", payload: event }),
+        (event) => acceptRunEvent(generation, event),
         () => {},
-        handleStreamTransportError,
+        (error, kind) => { if (generation === streamGeneration.current) handleStreamTransportError(error, kind); },
       );
     } else {
       sseControllerRef.current = startSSERun(state.sessionId, config);
@@ -599,6 +590,7 @@ export default function App() {
     state.currentRunId,
     startSSERun,
     handleStreamTransportError,
+    acceptRunEvent,
   ]);
 
   // Abort all running agents
@@ -700,7 +692,7 @@ export default function App() {
     return <LoginPage onAuthenticated={checkAuth} />;
   }
 
-  // Settings is a utility surface opened from the header, not a signal that
+  // Settings is a utility surface opened from the sidebar, not a signal that
   // the operator abandoned the uploaded draft. Keep the extract workspace in
   // one stable React tree position while Settings is open so component-owned
   // work such as the optional preview scan is not cancelled by an unmount.
@@ -710,7 +702,6 @@ export default function App() {
     <ExtractPage
       state={state}
       dispatch={dispatch}
-      landingMode={extractMode}
       onOpenNewExtraction={() => {
         setExtractMode("new");
         pushNavigationHistory({}, "", "/#new-extraction");
@@ -720,314 +711,107 @@ export default function App() {
       }}
       isAdmin={Boolean(user?.is_admin)}
       handleUpload={handleUpload}
+      handleUploadFiles={handleUploadFiles}
       handleMultiRun={handleMultiRun}
       handleAbortAll={handleAbortAll}
       handleAbortAgent={handleAbortAgent}
       handleRerunAgent={handleRerunAgent}
       handleReset={handleReset}
       handleConfigChange={handleDraftConfigChange}
-      // Homepage home-base navigation. Drafts resume at /run/{id}
-      // (same as History's draft click); finished runs open in
-      // History's detail; "View all" jumps to the History list.
-      onResumeDraft={(id) => {
-        dispatch({ type: "SET_VIEW", payload: "extract" });
-        dispatch({ type: "SET_SELECTED_RUN_ID", payload: null });
-        dispatch({ type: "SET_CURRENT_RUN_ID", payload: id });
-      }}
       onOpenRun={(id) => {
         dispatch({ type: "SET_VIEW", payload: "history" });
         dispatch({ type: "SET_SELECTED_RUN_ID", payload: id });
-      }}
-      onViewAllRuns={() => {
-        dispatch({ type: "SET_VIEW", payload: "history" });
-        dispatch({ type: "SET_SELECTED_RUN_ID", payload: null });
       }}
     />
   );
   const keepExtractWorkspaceMounted =
     state.view === "extract"
     || (state.view === "settings" && state.sessionId != null);
-  const navigationView =
-    state.view === "concepts" && state.selectedRunId != null
-      ? "history"
-      : state.view;
-  const contextLabel = state.view === "extract"
-    ? state.currentRunId != null && state.filename
-      ? state.filename
-      : extractMode === "new" ? "New extraction" : "Work queue"
-    : state.view === "history" || (state.view === "concepts" && state.selectedRunId != null)
-      ? state.selectedRunId != null ? "Current filing" : "Runs"
-      : state.view === "concepts"
-        ? "Field labels"
-        : "Settings";
-  const reviewFocused = state.selectedRunId != null &&
-    (runTab === "notes" || runTab === "values");
-  const viewingSavedRun = state.selectedRunId != null &&
-    (state.view === "history" || state.view === "concepts");
-  const filingRunId = viewingSavedRun ? state.selectedRunId : state.currentRunId;
-  const currentRunIsLive = !viewingSavedRun && state.currentRunId != null &&
-    state.sessionId != null && !state.isComplete;
-  const currentRunHref = viewingSavedRun
-    ? `/history/${filingRunId}?tab=${runTab}`
-    : state.view === "extract" || currentRunIsLive
-    ? `/run/${filingRunId}`
-    : `/history/${filingRunId}?tab=overview`;
-
+  const documentId = state.view === "extract" ? state.currentRunId : state.selectedRunId;
+  const reviewFocused = state.selectedRunId != null && (runTab === "notes" || runTab === "values");
+  const documentList = (state.view === "extract" && state.currentRunId == null && !state.sessionId && extractMode === "queue")
+    || (state.view === "history" && state.selectedRunId == null);
+  const currentFilename = documentName?.id === documentId ? documentName.pdf_filename
+    : state.sessionRunId === documentId ? state.filename
+    : documents.runs.find((run) => run.id === documentId)?.pdf_filename;
+  const contextLabel = state.view === "settings" ? "Settings"
+    : state.view === "concepts" && documentId == null ? "Field labels"
+    : documentId != null ? "Current filing"
+    : state.view === "history" ? "History"
+    : extractMode === "new" ? "Add documents" : "Workspace";
   return (
-    <div
-      className={`app-shell${railCollapsed ? " app-shell--collapsed" : ""}`}
-      style={{ ...styles.page, ...(railCollapsed ? { gridTemplateColumns: "72px minmax(0, 1fr)" } : {}) }}
-    >
-      {/* Keyboard users can jump past the header + nav straight to the page
-          content. Visually hidden until focused (index.css .skip-link). */}
-      <a href="#main-content" className="skip-link">
-        Skip to main content
-      </a>
-      <aside className="app-sidebar" style={styles.rail} aria-label="Workspace navigation">
-        <div className="app-rail-brand" style={styles.railBrand}>
-          <svg
-            className="app-rail-mark"
-            style={styles.brandMark}
-            viewBox="0 0 100 100"
-            fill="none"
-            aria-hidden="true"
-          >
-            <path
-              d="M12 78 L40 22 L52 50 L66 30 L88 78"
-              stroke="currentColor"
-              strokeWidth="11"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
+    <div className={`app-shell${sidebarCollapsed ? " app-shell--collapsed" : ""}`}
+      style={{ ...ui.appShell, ...(sidebarCollapsed ? { gridTemplateColumns: "72px minmax(0, 1fr)" } : {}) }}>
+      <a href="#main-content" className="skip-link">Skip to main content</a>
+      <aside className="app-sidebar" aria-label="Workspace navigation" style={ui.appSidebar}>
+        <div className="app-rail-brand" style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 8px", minHeight: 28 }}>
+          <svg viewBox="0 0 100 100" fill="none" aria-hidden="true" style={{ width: 28, height: 28, flexShrink: 0, color: pwc.orange500 }}>
+            <path d="M12 78 L40 22 L52 50 L66 30 L88 78" stroke="currentColor" strokeWidth="11" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
-          <span className="app-rail-brand-label" style={styles.headerTitle}>XBRL Agent</span>
-          <button
-            type="button"
-            className={`${uiClass.btnQuiet} app-rail-toggle`}
-            style={styles.railToggle}
-            onClick={toggleRail}
-            aria-label={railCollapsed ? "Expand navigation" : "Collapse navigation"}
-            aria-expanded={!railCollapsed}
-            aria-controls="app-primary-navigation"
-            title={railCollapsed ? "Expand navigation" : "Collapse navigation"}
-          >
-            <Icon glyph={railCollapsed ? LeftPanelOpen : LeftPanelClose} size={20} />
+          <span className="app-navigation-label" style={styles.headerTitle}>XBRL Agent</span>
+        </div>
+        <TopNav view={state.view} extractMode={extractMode} hasDocument={documentId != null}
+          onAdd={addDocuments} onViewChange={(view) => showDocuments(view === "history" ? "history" : "progress")} />
+        {documentId != null && state.view !== "settings" && <div className="app-current-document" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <span className="app-navigation-label" style={{ ...ui.metadata, padding: "0 10px" }}>Current filing</span>
+          <span aria-current="page" data-tooltip={currentFilename || `Document ${documentId}`} aria-label={currentFilename || `Document ${documentId}`}
+            style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px", borderRadius: pwc.radius.md, background: pwc.white, minWidth: 0 }}>
+            <Icon glyph={Description} size={20} color={pwc.orange500} />
+            <span className="app-navigation-label" style={{ fontSize: 13, overflowWrap: "anywhere", minWidth: 0 }}>{currentFilename || `Document ${documentId}`}</span>
+          </span>
+        </div>}
+        <div className="app-rail-footer" style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: "auto" }}>
+          <button type="button" aria-label="Settings" data-tooltip="Settings"
+            aria-current={state.view === "settings" ? "page" : undefined}
+            style={{ ...styles.settingsButton, justifyContent: "flex-start", gap: 10, minHeight: 44, padding: "0 10px", background: state.view === "settings" ? pwc.white : "transparent" }}
+            className={`${uiClass.btnSubtle} app-navigation-link`}
+            onClick={() => { if (confirmNavigationLeave()) dispatch({ type: "SET_VIEW", payload: "settings" }); }}>
+            <SettingsIcon /><span className="app-navigation-label">Settings</span>
           </button>
-        </div>
-        <div id="app-primary-navigation" className="app-rail-nav" style={styles.railNav}>
-          <TopNav
-            // The `concepts` view with a run id is the unified run page (a
-            // History activity reached via "Review values" / the /concepts
-            // alias), so highlight History — not Template. "Template" stays
-            // highlighted only for the bare concept landing (no run id).
-            view={navigationView}
-            extractMode={extractMode}
-            currentRunId={filingRunId}
-            currentRunHref={currentRunHref}
-            currentRunActive={viewingSavedRun || (state.view === "extract" && filingRunId != null)}
-            currentRunStatus={currentRunIsLive && state.isRunning ? "Working" : undefined}
-            showConcepts={canonicalEnabled}
-            isAdmin={Boolean(user?.is_admin)}
-            onNewExtraction={() => {
-              // Read the mirrored state at click time. The navigation callback
-              // can otherwise retain the render that preceded RUN_STARTED
-              // while the stream is already active.
-              if (stateRef.current.isRunning) {
-                // A second upload cannot start while this stream owns the
-                // session. Preserve the active monitoring surface and URL.
-                return;
-              }
-              setExtractMode("new");
-              handleReset();
-              pushNavigationHistory({}, "", "/#new-extraction");
-              window.requestAnimationFrame(() => {
-                document.getElementById("new-extraction")?.scrollIntoView?.({ block: "start" });
-              });
-            }}
-            onOpenCurrentFiling={() => {
-              if (filingRunId == null) return;
-              // Clicking the current destination must not swap a live stream
-              // for a different overview, or reset a reviewer's selected tab.
-              if (viewingSavedRun || state.view === "extract") return;
-              if (currentRunIsLive) {
-                dispatch({ type: "SET_VIEW", payload: "extract" });
-                dispatch({ type: "SET_SELECTED_RUN_ID", payload: null });
-                return;
-              }
-              pushNavigationHistory({}, "", currentRunHref);
-              announceRunTabChange("overview");
-              dispatch({ type: "SET_VIEW", payload: "history" });
-              dispatch({ type: "SET_SELECTED_RUN_ID", payload: filingRunId });
-            }}
-            onViewChange={(v) => {
-              // Tabs are "go to the top of that section" — clicking
-              // History from anywhere must show the list, not the last
-              // run the user was viewing. Without this clear,
-              // selectedRunId leaks across tab switches and the URL
-              // effect routes back to /history/<id> when the user next
-              // clicks History. Popstate still dispatches its own
-              // SET_SELECTED_RUN_ID so browser Back/Forward still
-              // restore a deep-linked run correctly.
-              //
-              // "Extract" is the top of its own section: a fresh, empty
-              // upload box. A bare SET_VIEW would leave currentRunId +
-              // sessionId + the completed-run state intact, so the page
-              // re-showed the *last run* instead of an empty box. Reuse
-              // the full reset (also clears the /run/<id> URL + aborts any
-              // stale stream). Guarded on isRunning so clicking Extract
-              // while a run is still streaming surfaces it instead of
-              // killing it.
-              if (v === "extract" && !state.isRunning) {
-                setExtractMode("queue");
-                handleReset();
-                pushNavigationHistory({}, "", "/");
-                return;
-              }
-              dispatch({ type: "SET_VIEW", payload: v });
-              dispatch({ type: "SET_SELECTED_RUN_ID", payload: null });
-            }}
-          />
-        </div>
-        <div className="app-rail-footer" style={styles.railFooter}>
-          {user && (
-            <>
-              <span style={styles.avatar} aria-hidden="true">
-                {user.email.slice(0, 2).toUpperCase()}
-              </span>
-              <span className="app-user-copy" style={styles.userCopy}>
-                <span className="app-user-email" style={styles.userEmail}>{user.email}</span>
-                <span style={styles.breadcrumb}>{user.is_admin ? "Administrator" : "User"}</span>
-              </span>
-            </>
-          )}
+          <button type="button" className={`${uiClass.btnQuiet} app-rail-toggle app-navigation-link`}
+            aria-label={sidebarCollapsed ? "Expand navigation" : "Collapse navigation"}
+            data-tooltip={sidebarCollapsed ? "Expand navigation" : "Collapse navigation"}
+            aria-expanded={!sidebarCollapsed} aria-controls="app-primary-navigation" onClick={toggleSidebar}
+            style={{ ...ui.buttonQuiet, justifyContent: "flex-start", gap: 10, minHeight: 44, padding: "0 10px" }}>
+            <Icon glyph={sidebarCollapsed ? LeftPanelOpen : LeftPanelClose} size={20} />
+            <span className="app-navigation-label">{sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}</span>
+          </button>
+          {user && <div className="app-user" style={{ display: "flex", alignItems: "center", gap: 10, borderTop: `1px solid ${pwc.grey200}`, padding: "16px 8px 0", marginTop: 8 }}>
+            <span aria-hidden="true" style={{ display: "grid", placeItems: "center", width: 30, height: 30, flexShrink: 0, borderRadius: "50%", background: pwc.grey100, fontSize: 12 }}>{(user.display_name || user.email).slice(0, 2).toUpperCase()}</span>
+            <div className="app-navigation-label" style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 13, overflowWrap: "anywhere" }}>{user.display_name || user.email}</div>
+              <div style={ui.metadata}>{user.is_admin ? "Administrator" : "User"}</div>
+            </div>
+          </div>}
         </div>
       </aside>
-
-      <div className="app-workspace" style={styles.workspace}>
-        <header className="app-topbar" style={styles.topbar}>
-          <div style={styles.context}>
-            <span style={styles.breadcrumb}>
-              <span className="app-breadcrumb-root">Workspace</span>
-              <span className="app-breadcrumb-root" aria-hidden="true" style={{ color: tokens.color.icon.rest, lineHeight: 0 }}><ChevronRight size={16} /></span>
-              <strong className="app-context-title" style={styles.contextTitle} title={state.filename ?? contextLabel}>
-                {reviewFocused && state.filename ? state.filename : contextLabel}
-              </strong>
-            </span>
-          </div>
-          <div className="app-header-right" style={styles.headerRight}>
-          {user?.provider !== "dev" && (
-            <button
-              onClick={handleLogout}
-              style={styles.logoutButton}
-              className={uiClass.btnGhost}
-              aria-label="Log out"
-              title="Log out"
-            >
-              <Icon glyph={Logout} size={20} color={tokens.color.icon.rest} />
-              <span>Log out</span>
-            </button>
-          )}
-          <button
-            onClick={() => {
-              dispatch({ type: "SET_VIEW", payload: "settings" });
-              dispatch({ type: "SET_SELECTED_RUN_ID", payload: null });
-            }}
-            style={styles.settingsButton}
-            className={uiClass.btnSubtle}
-            aria-label="Settings"
-          >
-            <SettingsIcon />
-            <span>Settings</span>
-          </button>
-          </div>
-        </header>
-
-      <main
-        id="main-content"
-        tabIndex={-1}
-        className="app-main"
-        style={
-          // Review and Template workspaces need the full available width for
-          // their side-by-side panes. History and ordinary content pages keep
-          // their readable centred width.
-          reviewFocused || state.view === "concepts"
-            ? styles.mainFull
-            : state.view === "history"
-              ? styles.mainHistory
-              : styles.main
-        }
-      >
-        {state.view === "settings" && (
-          // Consolidated settings page (replaces the gear's settings modal):
-          // General · Account · Users. The Users tab is admin-gated (and the
-          // server enforces it independently).
-          <SettingsPage isAdmin={Boolean(user?.is_admin)} currentEmail={user?.email} />
-        )}
-        {keepExtractWorkspaceMounted && (
-          <div
-            aria-hidden={state.view === "settings" ? true : undefined}
-            style={{ display: state.view === "extract" ? "contents" : "none" }}
-          >
-            {extractWorkspace}
-          </div>
-        )}
-        {state.view !== "settings" && state.view !== "extract" && (
-          state.view === "concepts" ? (
-          // `/concepts/{id}` is now an alias that opens the unified run page
-          // on the Values tab (the standalone full-page Concepts surface was
-          // folded into the tabbed run detail — see
-          // docs/PLAN-run-page-and-telemetry.md). The bare Template landing
-          // (no run id) still shows the ConceptsPage empty/select state.
-          state.selectedRunId != null ? (
-            <HistoryPage
-              canonicalEnabled={canonicalEnabled}
-              selectedId={state.selectedRunId}
-              initialRunTab="values"
-              onSelectRun={(id) => {
-                // Back from a /concepts/{id} run page (id === null) should
-                // land on the History list, not the empty Template landing —
-                // the run page belongs to History. Switch the view so the
-                // user ends up where the nav already says they are.
-                if (id == null) {
-                  dispatch({ type: "SET_VIEW", payload: "history" });
-                }
-                dispatch({ type: "SET_SELECTED_RUN_ID", payload: id });
-              }}
-              onResumeDraft={(id) => {
-                dispatch({ type: "SET_VIEW", payload: "extract" });
-                dispatch({ type: "SET_SELECTED_RUN_ID", payload: null });
-                dispatch({ type: "SET_CURRENT_RUN_ID", payload: id });
-              }}
-            />
-          ) : (
-            <ConceptsPage runId={state.selectedRunId} />
-          )
-        ) : (
-          <HistoryPage
-            canonicalEnabled={canonicalEnabled}
-            selectedId={state.selectedRunId}
-            onSelectRun={(id) =>
-              dispatch({ type: "SET_SELECTED_RUN_ID", payload: id })
-            }
-            onResumeDraft={(id) => {
-              // PLAN-persistent-draft-uploads.md: drafts in History
-              // navigate to /run/{id} instead of opening the inline
-              // detail. Switching the view + setting currentRunId
-              // triggers the URL effect to push the shareable URL.
-              dispatch({ type: "SET_VIEW", payload: "extract" });
-              dispatch({ type: "SET_SELECTED_RUN_ID", payload: null });
-              dispatch({ type: "SET_CURRENT_RUN_ID", payload: id });
-            }}
-          />
-        ))}
+      <div className="app-workspace" style={{ minWidth: 0 }}>
+      <header className="app-topbar" style={{ ...styles.topbar, zIndex: 30, borderBottom: `1px solid ${pwc.grey200}`, height: 64 }}>
+        {state.view !== "settings" && documentId != null ? <DocumentSwitcher runs={documents.runs} runId={documentId} filename={currentFilename}
+          onSelect={openDocument} onBack={() => showDocuments(state.view === "history" && !documents.runs.some((run) => run.id === documentId) ? "history" : "progress")} />
+          : <span style={ui.metadata}>{contextLabel}</span>}
+        <div style={{ ...styles.headerRight, marginLeft: "auto" }}>
+          {user?.provider !== "dev" && <button type="button" aria-label="Log out" data-tooltip="Log out" onClick={handleLogout} style={styles.logoutButton}><Icon glyph={Logout} size={20} /></button>}
+        </div>
+      </header>
+      <main id="main-content" tabIndex={-1} className="app-main" style={reviewFocused || state.view === "concepts" ? styles.mainFull : styles.mainHistory}>
+        {(state.view === "settings" || (state.view === "concepts" && state.selectedRunId == null)) &&
+          <button type="button" style={{ ...ui.buttonGhost, alignSelf: "flex-start" }} onClick={restoreDocument}><ArrowBack size={20} />Back to {returnPath.match(/\/(?:run|history|concepts)\/\d+/) ? "document" : "work queue"}</button>}
+        {state.view === "settings" && <SettingsPage isAdmin={Boolean(user?.is_admin)} currentEmail={user?.email}
+          onFieldLabels={canonicalEnabled ? () => { if (!confirmNavigationLeave()) return; dispatch({ type: "SET_VIEW", payload: "concepts" }); dispatch({ type: "SET_SELECTED_RUN_ID", payload: null }); } : undefined} />}
+        {documentList && <DocumentsPage documents={documents} section={state.view === "history" ? "history" : "progress"}
+          onSection={showDocuments} onAdd={addDocuments} onOpen={openDocument} />}
+        {keepExtractWorkspaceMounted && !documentList && <div aria-hidden={state.view === "settings" ? true : undefined}
+          style={{ display: state.view === "extract" ? "contents" : "none" }}>{extractWorkspace}</div>}
+        {state.view === "concepts" && state.selectedRunId == null && <ConceptsPage runId={null} />}
+        {state.view !== "settings" && state.view !== "extract" && state.selectedRunId != null &&
+          <HistoryPage key={state.selectedRunId} canonicalEnabled={canonicalEnabled} selectedId={state.selectedRunId}
+            initialRunTab={state.view === "concepts" ? "values" : "overview"} hideDetailBack onDocumentLoaded={documentLoaded}
+            onSelectRun={(id) => { if (id == null) showDocuments("history"); else openDocument({ id, status: "running" }); }}
+            onResumeDraft={(id) => openDocument({ id, status: "draft" })} />}
       </main>
-
-      {/* Phase 9: Run-complete success toast — top-right, auto-dismiss 4 s */}
-      <SuccessToast
-        toast={state.toast}
-        onDismiss={() => dispatch({ type: "DISMISS_TOAST" })}
-      />
       </div>
+      <SuccessToast toast={state.toast} onDismiss={() => dispatch({ type: "DISMISS_TOAST" })} />
     </div>
   );
 }

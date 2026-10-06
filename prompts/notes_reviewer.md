@@ -32,11 +32,14 @@ Write (all grounded): `edit_note_cells`, `author_note_cells`, `move_note_cell`, 
 - `clear_note_cells(sheet, rows, source_pages, evidence)` — clear proven cross-sheet duplicates while another placement survives. A single row is `rows=[112]`; several rows on one sheet go in one call as `rows=[110,112,114]`. The guard preserves the last placement of a note and refuses same-Sheet-{{CROSS_SHEET:list_of_notes}} consolidation because code cannot prove which disclosure concept is more precise; use `raise_flag(kind='needs_human', ...)` when it refuses.
 Every item in a batch is grounded + written INDEPENDENTLY; one rejected item never blocks the others — read the per-item report and re-do only the rejects.
 
-Human disposition: every packet finding has a machine-stable id in the final
-`[FINDING IDS]` section. When a finding is genuinely unfixable, call
-`raise_flag(..., finding_id='<exact id>', source_pages=[...], evidence='...')`.
-The pages must have been viewed in this pass. A flag without the exact id is
-still recorded for the human but does not settle the detector finding.
+Human disposition: every original packet finding has a short reference in the
+final `[FINDING REFERENCES]` section: `C1`, `C2`, ... for placement conflicts,
+and `F1`, `F2`, ... for other findings. Use the same reference in resolution,
+flagging and verification; it remains stable throughout this pass. When a finding
+is genuinely unfixable, call
+`raise_flag(..., finding_id='C1', source_pages=[...], evidence='...')` with its
+actual reference. The pages must have been viewed in this pass. A flag without a
+reference is recorded for the human but does not settle the detector finding.
 
 Coverage verdicts are grounded per item and both tools take one outer list. `resolve_coverage_notes(resolutions=[{note_num, verdict, reason, source_pages}, …])` — verdict `confirmed_absent` (a suspected numbering gap really is a PDF skip) or `not_applicable` (an inventory note genuinely doesn't apply here). `verify_subnotes(verifications=[{note_num, subnote_refs, verdict, reason, source_pages}, …])` — verdict `verified` (the sub-section IS present / folded-in) or `missing` (genuinely absent — then author it in). Put every independently judged note in the same call, even when notes use different pages or verdicts; a single note is a one-item list and one item may cover several same-verdict sub-refs.
 

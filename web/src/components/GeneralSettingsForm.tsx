@@ -11,11 +11,6 @@ import { ui, uiClass } from "../lib/uiStyles";
 import { STATUS_SYMBOLS } from "../lib/runStatus";
 import { StatusIcon } from "./StatusIcon";
 import {
-  parseThemeOptions,
-  type ClipboardFormatOptions,
-} from "../lib/clipboardFormat";
-import { ClipboardFormatControls } from "./ClipboardFormatControls";
-import {
   AdvancedSettingsSection,
   advancedEditError,
   type AdvancedEditValue,
@@ -32,8 +27,8 @@ import {
 // ---------------------------------------------------------------------------
 
 interface Props {
-  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; notes_auto_review?: boolean; notes_coverage?: boolean; tolerance_rm?: number; entity_memory?: boolean; notes_source_integrity?: SourceIntegrityMode; notes_source_integrity_choices?: string[]; default_models?: Record<string, string>; default_model_overrides?: Record<string, string>; local_override_keys?: string[]; thinking_levels?: Record<string, string>; thinking_level_choices?: string[]; thinking_level_choices_by_model?: Record<string, string[]>; reasoning_summary?: string; reasoning_summary_choices?: string[]; notes_table_style?: Partial<ClipboardFormatOptions>; available_models?: ModelEntry[]; advanced_settings?: AdvancedSetting[] }>;
-  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; default_models: Record<string, string>; reset_keys: string[]; auto_review: boolean; notes_auto_review: boolean; notes_coverage: boolean; entity_memory: boolean; notes_source_integrity: SourceIntegrityMode; tolerance_rm: number; scout_wallclock_seconds: number; scout_max_turns: number; thinking_levels: Record<string, string>; reasoning_summary: string; notes_table_style: ClipboardFormatOptions; advanced_settings: Record<string, AdvancedEditValue> }>) => Promise<{ status: string }>;
+  getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; notes_auto_review?: boolean; notes_coverage?: boolean; tolerance_rm?: number; entity_memory?: boolean; notes_source_integrity?: SourceIntegrityMode; notes_source_integrity_choices?: string[]; default_models?: Record<string, string>; default_model_overrides?: Record<string, string>; local_override_keys?: string[]; thinking_levels?: Record<string, string>; thinking_level_choices?: string[]; thinking_level_choices_by_model?: Record<string, string[]>; reasoning_summary?: string; reasoning_summary_choices?: string[]; available_models?: ModelEntry[]; advanced_settings?: AdvancedSetting[] }>;
+  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; default_models: Record<string, string>; reset_keys: string[]; auto_review: boolean; notes_auto_review: boolean; notes_coverage: boolean; entity_memory: boolean; notes_source_integrity: SourceIntegrityMode; tolerance_rm: number; scout_wallclock_seconds: number; scout_max_turns: number; thinking_levels: Record<string, string>; reasoning_summary: string; advanced_settings: Record<string, AdvancedEditValue> }>) => Promise<{ status: string }>;
   testConnection: (body: Partial<{ proxy_url: string; api_key: string; model: string }>) => Promise<{ status: string; model?: string; latency_ms?: number; message?: string }>;
   // When provided, a Cancel button is shown (used by the modal wrapper). The
   // page host omits it — there's nothing to cancel out of.
@@ -229,39 +224,6 @@ const styles = {
   sectionDescription: {
     ...ui.supportingText,
     margin: `${pwc.space.xs}px 0 0`,
-  } as React.CSSProperties,
-  // The auto-saving section uses one quiet surface and neutral boundary.
-  autoSaveCard: {
-    marginBottom: pwc.space.xl,
-    padding: pwc.space.lg,
-    background: pwc.grey100,
-    border: "none",
-    borderRadius: 0,
-  } as React.CSSProperties,
-  autoSaveHeader: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: pwc.space.sm,
-  } as React.CSSProperties,
-  autoSaveChip: {
-    fontFamily: pwc.fontBody,
-    fontSize: 12,
-    fontWeight: pwc.weight.medium,
-    color: pwc.successText,
-  } as React.CSSProperties,
-  notesPreview: {
-    maxWidth: 360,
-    margin: `${pwc.space.lg}px 0`,
-    padding: pwc.space.md,
-    background: pwc.white,
-    border: `1px solid ${pwc.grey200}`,
-  } as React.CSSProperties,
-  previewCell: {
-    padding: `${pwc.space.xs}px ${pwc.space.sm}px`,
-    border: `1px solid ${pwc.grey300}`,
-    fontFamily: pwc.fontBody,
-    color: pwc.grey900,
   } as React.CSSProperties,
   loadError: {
     fontFamily: pwc.fontBody,
@@ -1050,19 +1012,6 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
       </div>
       </details>
 
-      <SettingsSectionHeading
-        title="Notes appearance"
-        description="Optional shared defaults for font, spacing and unspecified table styles. Saved formatting on a note takes precedence."
-      />
-      {/* Notes table style — the firm-wide default theme for notes tables
-          (docs/PLAN-notes-table-theme.md). Server-side (shared by everyone),
-          persisted via /api/settings; it auto-saves on change, independent of
-          the form's main Save button below. */}
-      <details>
-        <summary style={styles.label}>Default notes appearance (advanced)</summary>
-        <NotesPasteFormatSection getSettings={getSettings} saveSettings={saveSettings} />
-      </details>
-
       {advancedRows.length > 0 && (
         <>
           <SettingsSectionHeading
@@ -1156,178 +1105,6 @@ function SettingsSectionHeading({ title, description }: { title: string; descrip
     <div style={styles.sectionHeading}>
       <h3 style={styles.sectionTitle}>{title}</h3>
       <p style={styles.sectionDescription}>{description}</p>
-    </div>
-  );
-}
-
-// Firm-wide notes-table style theme (docs/PLAN-notes-table-theme.md). Unlike
-// the old per-browser localStorage paste format, this is the SHARED firm
-// default stored server-side (the local runtime settings file via the API) — so the whole firm
-// inherits one house style for both the editor preview and the clipboard paste.
-// It auto-saves on every change (its own POST), independent of the form's main
-// Save button.
-function NotesPasteFormatSection({
-  getSettings,
-  saveSettings,
-}: Pick<Props, "getSettings" | "saveSettings">) {
-  const [fmt, setFmt] = useState<ClipboardFormatOptions>(() =>
-    parseThemeOptions(null),
-  );
-  const [saveError, setSaveError] = useState<string | null>(null);
-  // Transient "Saved" confirmation so the auto-save is VISIBLE — otherwise the
-  // user can't tell this section persists on change while the rest of the form
-  // waits for the Save button (the "mixed save model" confusion, C4).
-  const [justSaved, setJustSaved] = useState(false);
-  const [savingAppearance, setSavingAppearance] = useState(false);
-  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Last value the SERVER confirmed — restored if a save fails so the UI never
-  // shows (or copies) an unsaved theme that a refresh would silently revert
-  // (peer-review MEDIUM #5).
-  const lastSavedRef = useRef<ClipboardFormatOptions>(parseThemeOptions(null));
-  // Debounce so a number input being typed ("1" on the way to "12") doesn't
-  // fire a save per keystroke — the unclamped interim "1" would 400, and
-  // rapid saves can land out of order (peer-review HIGH #2).
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Seed from the server firm default on mount.
-  useEffect(() => {
-    let cancelled = false;
-    getSettings()
-      .then((s) => {
-        if (!cancelled) {
-          const seeded = parseThemeOptions(s.notes_table_style);
-          setFmt(seeded);
-          lastSavedRef.current = seeded;
-        }
-      })
-      .catch(() => {
-        /* leave the built-in default showing; the save path surfaces errors */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [getSettings]);
-
-  const update = useCallback(
-    (next: ClipboardFormatOptions) => {
-      setFmt(next); // optimistic — keep the input controlled + preview live
-      setSavingAppearance(true);
-      if (saveTimer.current) clearTimeout(saveTimer.current);
-      saveTimer.current = setTimeout(() => {
-        // Clamp/validate BEFORE sending so an interim out-of-range value never
-        // reaches (and is rejected by) the server.
-        const clean = parseThemeOptions(next);
-        saveSettings({ notes_table_style: clean })
-          .then(() => {
-            lastSavedRef.current = clean;
-            setSaveError(null);
-            setSavingAppearance(false);
-            // Flash a brief "Saved" so the auto-save is legible.
-            setJustSaved(true);
-            if (savedTimer.current) clearTimeout(savedTimer.current);
-            savedTimer.current = setTimeout(() => setJustSaved(false), 2000);
-          })
-          .catch(() => {
-            setSavingAppearance(false);
-            setSaveError("Couldn't save the table style — check your connection.");
-            setFmt(lastSavedRef.current); // revert to the last confirmed value
-          });
-      }, 500);
-    },
-    [saveSettings],
-  );
-
-  // Clear pending timers on unmount so a late setState (the "Saved" flash or a
-  // still-pending debounced save) can't fire against an unmounted section
-  // (peer-review LOW). Refs, so this runs once.
-  useEffect(() => {
-    return () => {
-      if (savedTimer.current) clearTimeout(savedTimer.current);
-      if (saveTimer.current) clearTimeout(saveTimer.current);
-    };
-  }, []);
-
-  // Cell edges derived from the theme, exactly as the editor/clipboard derive
-  // them: no grid when borderStyle is "none"; the header rule (when on) is a
-  // bottom edge on <th> only.
-  const previewGrid =
-    fmt.borderStyle === "none"
-      ? undefined
-      : `${fmt.borderStyle === "double" ? 3 : 1}px ${
-          fmt.borderStyle === "double" ? "double" : "solid"
-        } ${fmt.borderColor || pwc.grey300}`;
-  const previewBodyCell: React.CSSProperties = {
-    ...styles.previewCell,
-    border: previewGrid ?? "none",
-  };
-  const previewHeaderCell: React.CSSProperties = {
-    ...previewBodyCell,
-    fontWeight: fmt.headerBold === false ? 400 : 600,
-    ...(fmt.headerRule
-      ? { borderBottom: `1px solid ${fmt.borderColor || "#999"}` }
-      : {}),
-  };
-
-  return (
-    // Card + left rule visually mark this section as the one that AUTO-SAVES,
-    // so it's clearly distinct from the Save-button-gated fields around it (C4).
-    <div style={styles.autoSaveCard}>
-      <div style={styles.autoSaveHeader}>
-        <label style={styles.label}>Notes table style</label>
-        <span
-          style={{
-            ...styles.autoSaveChip,
-            visibility: savingAppearance || justSaved ? "visible" : "hidden",
-          }}
-          role="status"
-          aria-live="polite"
-        >
-          {savingAppearance ? "Saving…" : "Saved"}
-        </span>
-      </div>
-      <p style={styles.helperText}>
-        Shared defaults for the review display, copying and mTool preparation.
-        Saved formatting on individual notes takes precedence. A run with its own
-        defaults keeps them. Changes here save automatically and affect runs
-        that use the shared defaults. mTool compatibility conversions still apply
-        when preparing the workbook; native widths and borders may look different.
-      </p>
-      {saveError && (
-        <p style={{ ...styles.helperText, color: pwc.error ?? "#b00020" }} role="alert">
-          {saveError}
-        </p>
-      )}
-      {/* The preview must show what SAVING produces, not a fixed grid: it is the
-        * only place an operator sees the theme before committing it. It used to
-        * hard-code a 1px cell border, so the ruled house default (no grid, one
-        * rule under the header) previewed as boxed — the opposite of the output.
-        * Border resolution mirrors themeToCssVars + notes_decorate._header_extra. */}
-      <div style={styles.notesPreview} aria-label="Notes table style preview">
-        <table
-          style={{
-            width: "100%",
-            borderCollapse: "collapse",
-            fontSize: `${fmt.fontSizePt}pt`,
-            border: fmt.borderStyle === "none"
-              ? "none"
-              : `${fmt.borderStyle === "double" ? 3 : 1}px ${fmt.borderStyle === "double" ? "double" : "solid"} ${fmt.borderColor || pwc.grey300}`,
-          }}
-        >
-          <thead>
-            <tr style={{ background: fmt.headerFill === "transparent" ? pwc.white : (fmt.headerFill || pwc.grey100) }}>
-              <th style={previewHeaderCell}>Revenue</th>
-              <th style={{ ...previewHeaderCell, textAlign: "right" }}>2025</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td style={previewBodyCell}>Contract income</td>
-              <td style={{ ...previewBodyCell, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>1,250,000</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <ClipboardFormatControls value={fmt} onChange={update} idPrefix="settings-fmt" />
     </div>
   );
 }

@@ -23,8 +23,8 @@ What this module owns:
   copy expands merged cells into ordinary blank continuation cells because the
   installed TX27 editor cannot resize or recolour tables containing a merge.
   Words and numbers stay in their original cells. The copy is run through
-  :func:`mtool.notes_decorate.decorate_notes_html` — the backend port of the
-  clipboard decorator — so mTool's TX27 text-block editor renders borders,
+  :func:`mtool.notes_decorate.decorate_notes_html` — the shared
+  destination decorator — so mTool's TX27 text-block editor renders borders,
   fills, fonts and numeric alignment instead of flat text. This is the SAME
   styling the manual "Copy → paste into mTool" workflow has always applied;
   the automated path previously skipped it and lost all formatting. Wrapping in
@@ -56,6 +56,34 @@ def notes_source_sheets(db_path: str | Path, run_id: int) -> set[str]:
         ) if row[0]}
     finally:
         conn.close()
+
+
+class NotesOutputContentError(ValueError):
+    """Destination formatting was refused to preserve canonical note content."""
+
+
+def prepare_note_output(
+    html: str, style: NotesTableStyle = DEFAULT_STYLE, *, decorate: bool = True,
+) -> dict[str, Any]:
+    """One preparation contract for review, clipboard and workbook output.
+
+    Pure preparation: never persist transport markup back into canonical notes.
+    The exact wrapped-payload limit and content guard also apply to previews.
+    """
+    output, tier, destyled, grid_dropped = _resolve_note_html(html, style, decorate)
+    expected = editable_mtool_structure(html) if decorate and tier != "oversize" else html
+    checked = without_transport_breaks(output) if decorate else output
+    if content_structure(expected) != content_structure(checked):
+        raise NotesOutputContentError(
+            "Notes formatting was refused because it would change content or structure. Saved notes are unchanged."
+        )
+    revision = hashlib.sha256(json.dumps(
+        [html, output, tier, destyled, grid_dropped], ensure_ascii=False,
+    ).encode("utf-8")).hexdigest()
+    return {
+        "html": output, "tier": tier, "revision": revision,
+        "source_styling_dropped": destyled, "white_grid_dropped": grid_dropped,
+    }
 
 
 def build_notes_fill_doc(
@@ -168,13 +196,14 @@ def build_notes_fill_doc(
         # for native editing — see the module docstring.
         # `decorate=False` keeps the raw HTML (the "no styling" diagnostic
         # toggle on the fill endpoint, plus tests / debug).
-        out_html, tier, destyled, grid_dropped = _resolve_note_html(
-            r["html"], style, decorate)
-        expected_html = (editable_mtool_structure(r["html"] or "")
-                         if decorate and tier != "oversize" else r["html"] or "")
-        checked_html = without_transport_breaks(out_html) if decorate else out_html
-        if content_structure(expected_html) != content_structure(checked_html):
-            raise ValueError(f"MBRS formatting changed source content or structure at {r['sheet']} row {r['row']}.")
+        try:
+            prepared = prepare_note_output(r["html"] or "", style, decorate=decorate)
+        except NotesOutputContentError as exc:
+            raise NotesOutputContentError(
+                f"{exc} Note: {r['sheet']} row {r['row']}."
+            ) from exc
+        out_html, tier = prepared["html"], prepared["tier"]
+        destyled, grid_dropped = prepared["source_styling_dropped"], prepared["white_grid_dropped"]
         if tier == "compact":
             formatting_compacted += 1
         elif tier == "lite":
@@ -256,6 +285,11 @@ def build_notes_fill_doc(
             "white_grid_dropped": white_grid_dropped,
         },
     }
+    # Includes saved content and prepared styling, before template placement or
+    # sheet selection. A reviewed preparation becomes stale when either changes.
+    meta["notes_output_revision"] = hashlib.sha256(json.dumps(
+        [notes_revision, footnotes], sort_keys=True, ensure_ascii=False,
+    ).encode("utf-8")).hexdigest()
     return {"meta": meta, "footnotes": footnotes, "strict": strict}
 
 

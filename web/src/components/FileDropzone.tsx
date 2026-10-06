@@ -22,6 +22,7 @@ interface Props {
   buttonLabel?: string;
   disabled?: boolean;
   onFile: (file: File) => void;
+  onFiles?: (files: File[]) => void;
   /** Accessible label for the hidden input. */
   inputLabel?: string;
   testId?: string;
@@ -35,6 +36,7 @@ export function FileDropzone({
   buttonLabel = "Choose file",
   disabled = false,
   onFile,
+  onFiles,
   inputLabel = "Choose file",
   testId = "drop-zone",
   children,
@@ -46,11 +48,12 @@ export function FileDropzone({
   const handleChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
-      if (file) onFile(file);
+      if (onFiles && e.target.files?.length) onFiles(Array.from(e.target.files));
+      else if (file) onFile(file);
       // Reset so re-choosing the SAME file still fires onChange.
       e.target.value = "";
     },
-    [onFile],
+    [onFile, onFiles],
   );
 
   const handleDrop = useCallback(
@@ -60,9 +63,10 @@ export function FileDropzone({
       setIsDragging(false);
       if (disabled) return;
       const file = e.dataTransfer.files[0];
-      if (file) onFile(file);
+      if (onFiles && e.dataTransfer.files.length) onFiles(Array.from(e.dataTransfer.files));
+      else if (file) onFile(file);
     },
-    [onFile, disabled],
+    [onFile, onFiles, disabled],
   );
 
   return (
@@ -112,6 +116,7 @@ export function FileDropzone({
         ref={inputRef}
         type="file"
         accept={accept}
+        multiple={Boolean(onFiles)}
         onChange={handleChange}
         disabled={disabled}
         style={{ display: "none" }}

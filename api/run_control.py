@@ -31,6 +31,15 @@ logger = logging.getLogger("server")
 router = APIRouter()
 
 
+async def _reserved_run_stream(session_id, agen):
+    """The background job owns its reservation, including after detachment."""
+    try:
+        async for event in agen:
+            yield event
+    finally:
+        server.active_runs.discard(session_id)
+
+
 @router.post("/api/runs/{run_id}/restart")
 async def restart_run_endpoint(run_id: int):
     """Create an isolated editable draft that redoes a prior run.
@@ -151,12 +160,11 @@ async def run_multi_extraction(session_id: str, body: RunConfigRequest, request:
                     model_name=model_name,
                 )
                 async for frame in server.sse_stream_with_keepalive(
-                    agen, auth_session_id=auth_session_id
+                    _reserved_run_stream(session_id, agen), auth_session_id=auth_session_id
                 ):
                     yield frame
             finally:
                 reset_correlation_id(correlation_token)
-                server.active_runs.discard(session_id)
 
         return StreamingResponse(
             event_stream(),
@@ -322,12 +330,11 @@ async def start_run_endpoint(run_id: int, request: Request):
                     existing_run_id=run_id,
                 )
                 async for frame in server.sse_stream_with_keepalive(
-                    agen, auth_session_id=auth_session_id
+                    _reserved_run_stream(session_id, agen), auth_session_id=auth_session_id
                 ):
                     yield frame
             finally:
                 reset_correlation_id(correlation_token)
-                server.active_runs.discard(session_id)
 
         return StreamingResponse(
             event_stream(),
@@ -517,13 +524,14 @@ async def rerun_agent(session_id: str, body: RunConfigRequest, request: Request)
             proxy_url=proxy_url,
             model_name=model_name,
         )
+        frames = server.sse_stream_with_keepalive(
+            _reserved_run_stream(session_id, agen), auth_session_id=auth_session_id
+        )
         try:
-            async for frame in server.sse_stream_with_keepalive(
-                agen, auth_session_id=auth_session_id
-            ):
+            async for frame in frames:
                 yield frame
         finally:
-            server.active_runs.discard(session_id)
+            await frames.aclose()
 
     return StreamingResponse(
         event_stream(),
