@@ -80,6 +80,20 @@ writer → sanitizer → notes_cells → review/validated formatting
        → notes_exporter → notes_decorate → offline_fill → report + workbook
 ```
 
+Appearance defaults live in `notes/table_theme.py`. Settings saves sparse server
+changes; Reset to house style removes them and follows future coded defaults.
+Source and manually saved note formatting remain intact. Older run overrides
+can be cleared through Use Settings appearance in notes review. Settings Reset
+never clears those run overrides or note content.
+
+Read-only extracted notes show exporter-prepared HTML. The editor continues to
+use canonical HTML. Loading or failed previews show an identified saved-content
+fallback. Reduced styling, lost source styling, white-grid fallback and oversize
+content are visible beside the affected note. Copy refuses changed revisions;
+draft preparation rejects outdated notes-output revisions. Native mTool still
+owns wrapping, widths and pagination, so the browser preview verifies prepared
+content and supported formatting rather than exact native page layout.
+
 1. Review the canonical note and resolve its intended destination. Use **Fill
    mTool template** with a fresh template for the correct filing family. Keep
    destination ambiguities visible; do not guess a row or reuse a test's `fn_1`.
@@ -88,8 +102,10 @@ writer → sanitizer → notes_cells → review/validated formatting
    Use the existing application theme resolution: run override over firm default.
    A bare `NotesTableStyle()` is the legacy default, not the configured house theme.
 3. `mtool/notes_decorate.py::decorate_notes_html` adds mTool transport styling.
-    The manual-copy counterpart is `web/src/lib/clipboard.ts`. Keep white-border,
-    legacy-width and double-border substitutions in these decorators; never write
+    Read-only review and Copy consume `prepare_note_output` from the canonical
+    exporter, including its exact size-tier decisions. Copy writes this prepared
+    HTML verbatim through `web/src/lib/clipboard.ts`. Keep white-border,
+    legacy-width and double-border substitutions in the backend decorator; never write
     their output back into canonical notes. Do not decorate an already decorated
     payload a second time. The mTool-bound paths expand merged cells into ordinary
     cells so the installed TX27 editor can resize columns and change cell fills.

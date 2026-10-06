@@ -51,6 +51,32 @@ def notes_db(tmp_path: Path):
     return db, run_id
 
 
+def test_review_output_is_export_payload_without_mutating_source(notes_db, monkeypatch):
+    import server
+    from fastapi.testclient import TestClient
+    from api.mtool import _resolve_notes_style
+    from db import repository as repo
+    db, run_id = notes_db
+    monkeypatch.setattr(server, 'AUDIT_DB_PATH', db)
+    html = '<table><tr><td>Description</td><td>2025 RM</td></tr><tr><td>Total</td><td style="border-bottom:3px double black">24,000</td></tr></table>'
+    _add_note(db, run_id, 'Notes-Listofnotes', 17, 'PPE', html)
+    client = TestClient(server.app)
+    response = client.get(f'/api/runs/{run_id}/notes-output', params={'sheet': 'Notes-Listofnotes', 'row': 17})
+    assert response.status_code == 200
+    with repo.db_session(db) as conn:
+        run = repo.fetch_run(conn, run_id)
+    output = response.json()
+    doc = build_notes_fill_doc(db, run_id, style=_resolve_notes_style(run))
+    assert output['html'] == doc['footnotes'][0]['html']
+    assert output['source_html'] == html
+    assert 'double' not in output['html']
+    assert '3px solid' in output['html']
+    assert output['tier'] == 'full'
+    assert client.get(f'/api/runs/{run_id}/notes-output', params={'sheet': 'Notes-CI', 'row': 999}).status_code == 404
+    with sqlite3.connect(db) as conn:
+        assert conn.execute('SELECT html FROM notes_cells WHERE run_id=?', (run_id,)).fetchone()[0] == html
+
+
 def test_notes_become_footnote_writes(notes_db):
     db, run_id = notes_db
     _add_note(db, run_id, "Notes-Listofnotes", 17,
@@ -546,13 +572,33 @@ def test_destyled_note_is_reported_in_the_fill_doc(notes_db):
     assert "source_styling_dropped" not in small
 
 
-def test_export_refuses_content_loss_in_destination_decoration(notes_db, monkeypatch):
+@pytest.mark.parametrize('surface', ['export', 'note_preview', 'appearance_preview'])
+def test_export_refuses_content_loss_in_destination_decoration(notes_db, monkeypatch, surface):
     db, run = notes_db
     _add_note(db, run, "Notes-CI", 12, "Corporate information", "<h3>Heading</h3><p>Full text.</p>")
     monkeypatch.setattr("mtool.notes_exporter._resolve_note_html",
                         lambda *args: ("<h3>Heading</h3>", "full", False, False))
-    with pytest.raises(ValueError, match="content or structure"):
-        build_notes_fill_doc(db, run)
+    if surface == 'export':
+        with pytest.raises(ValueError, match="content or structure.*Notes-CI row 12"):
+            build_notes_fill_doc(db, run)
+    else:
+        import server
+        from fastapi.testclient import TestClient
+        monkeypatch.setattr(server, 'AUDIT_DB_PATH', db)
+        client = TestClient(server.app, raise_server_exceptions=False)
+        if surface == 'note_preview':
+            response = client.get(f'/api/runs/{run}/notes-output', params={'sheet': 'Notes-CI', 'row': 12})
+        else:
+            response = client.post('/api/notes-appearance/preview', json={'style': {}})
+        assert response.status_code == 500
+        detail = response.json()['detail']
+        assert 'formatting was refused' in detail
+        assert 'content or structure' in detail
+        assert 'Saved notes are unchanged' in detail
+        if surface == 'note_preview':
+            assert 'Notes-CI row 12' in detail
+    with sqlite3.connect(db) as conn:
+        assert conn.execute('SELECT html FROM notes_cells WHERE run_id=?', (run,)).fetchone()[0] == '<h3>Heading</h3><p>Full text.</p>'
 
 
 def test_export_refuses_changed_merged_table_geometry(notes_db, monkeypatch):

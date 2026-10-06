@@ -7,6 +7,7 @@ import { GeneralSettingsForm } from "../components/GeneralSettingsForm";
 import { AccountTab } from "../components/AccountTab";
 import { UsersTab } from "../components/UsersTab";
 import { AgentInstructionsPanel } from "../components/AgentInstructionsPanel";
+import { NotesAppearanceSettings } from "../components/NotesAppearanceSettings";
 
 // ---------------------------------------------------------------------------
 // SettingsPage — the consolidated settings surface that replaces the gear's
@@ -27,22 +28,26 @@ interface Props {
   // Signed-in admin's email — used by UsersTab to hide self-destructive
   // actions on the admin's own row (UX-QA #13).
   currentEmail?: string;
+  onFieldLabels?: () => void;
 }
 
-type TabKey = "general" | "instructions" | "account" | "users";
+type TabKey = "general" | "instructions" | "notes" | "account" | "users";
 
-export function SettingsPage({ isAdmin, currentEmail }: Props) {
+export function SettingsPage({ isAdmin, currentEmail, onFieldLabels }: Props) {
   const tabs: { key: TabKey; label: string }[] = [
     { key: "general", label: "General" },
     { key: "instructions", label: "Agent instructions" },
+    { key: "notes", label: "Notes appearance" },
     { key: "account", label: "Account" },
     ...(isAdmin ? [{ key: "users" as const, label: "Users" }] : []),
   ];
 
   const [activeTab, setActiveTab] = useState<TabKey>("general");
   const [instructionsDirty, setInstructionsDirty] = useState(false);
+  const [notesBusy, setNotesBusy] = useState(false);
   const changeTab = (key: TabKey) => {
     if (key === activeTab) return true;
+    if (notesBusy) return false;
     if (instructionsDirty && !window.confirm("Discard unsaved guidance?")) return false;
     setInstructionsDirty(false);
     setActiveTab(key);
@@ -66,6 +71,7 @@ export function SettingsPage({ isAdmin, currentEmail }: Props) {
   return (
     <div className="responsive-page settings-page" style={styles.container}>
       <PageHeader title="Settings" />
+      {isAdmin && onFieldLabels && <button type="button" style={{ ...ui.buttonGhost, alignSelf: "flex-start" }} onClick={onFieldLabels}>Field labels</button>}
 
       <div
         ref={tabBarRef}
@@ -79,8 +85,11 @@ export function SettingsPage({ isAdmin, currentEmail }: Props) {
             <button
               key={t.key}
               type="button"
+              id={`settings-tab-${t.key}`}
+              aria-controls={`settings-panel-${t.key}`}
               role="tab"
               aria-selected={active}
+              disabled={notesBusy && !active}
               tabIndex={active ? 0 : -1}
               className="pwc-tab"
               onPointerDown={(e) => e.currentTarget.setAttribute("data-pointer-focus", "true")}
@@ -99,7 +108,7 @@ export function SettingsPage({ isAdmin, currentEmail }: Props) {
       </div>
 
       {activeTab === "general" && (
-        <section className="pwc-view-enter" style={styles.section} role="tabpanel">
+        <section className="pwc-view-enter" style={styles.section} id="settings-panel-general" aria-labelledby="settings-tab-general" role="tabpanel">
           <GeneralSettingsForm
             getSettings={getSettings}
             saveSettings={updateSettings}
@@ -109,20 +118,26 @@ export function SettingsPage({ isAdmin, currentEmail }: Props) {
         </section>
       )}
 
+      {activeTab === "notes" && (
+        <section style={styles.section} id="settings-panel-notes" aria-labelledby="settings-tab-notes" role="tabpanel">
+          <NotesAppearanceSettings onBusyChange={setNotesBusy} />
+        </section>
+      )}
+
       {activeTab === "instructions" && (
-        <section style={styles.section} role="tabpanel">
+        <section style={styles.section} id="settings-panel-instructions" aria-labelledby="settings-tab-instructions" role="tabpanel">
           <AgentInstructionsPanel isAdmin={isAdmin} onDirtyChange={setInstructionsDirty} />
         </section>
       )}
 
       {activeTab === "account" && (
-        <section className="pwc-view-enter" style={styles.section} role="tabpanel">
+        <section className="pwc-view-enter" style={styles.section} id="settings-panel-account" aria-labelledby="settings-tab-account" role="tabpanel">
           <AccountTab />
         </section>
       )}
 
       {activeTab === "users" && isAdmin && (
-        <section className="pwc-view-enter" style={styles.section} role="tabpanel">
+        <section className="pwc-view-enter" style={styles.section} id="settings-panel-users" aria-labelledby="settings-tab-users" role="tabpanel">
           <UsersTab currentEmail={currentEmail} />
         </section>
       )}

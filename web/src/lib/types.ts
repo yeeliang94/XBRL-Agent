@@ -1,3 +1,5 @@
+import type { ClipboardFormatOptions } from "./clipboardFormat";
+
 export type PreparationPhase =
   | "pending"
   | "preparing_pages"
@@ -51,6 +53,9 @@ export interface SettingsResponse {
   scout_wallclock_seconds?: number;
   /** Maximum model responses the scout may request (1-40). */
   scout_max_turns?: number;
+  notes_table_style?: Partial<ClipboardFormatOptions>;
+  notes_house_style?: Partial<ClipboardFormatOptions>;
+  notes_appearance_overrides?: Partial<ClipboardFormatOptions>;
 }
 
 export type EventPhase =

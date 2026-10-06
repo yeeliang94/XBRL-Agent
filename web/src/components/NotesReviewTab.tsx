@@ -67,7 +67,11 @@ import {
   type NotesFormatStatus,
   type NotesSheet,
 } from "../lib/notesCells";
-import { copyHtmlAsRichText } from "../lib/clipboard";
+import { copyPreparedHtmlAsRichText } from "../lib/clipboard";
+import { apiFetch } from "../lib/api";
+import { fetchNoteOutput } from "../lib/notesOutput";
+import { PreparedNotesHtml } from "./PreparedNotesHtml";
+import { useNoteOutput } from "./useNoteOutput";
 import { tagNumericCells } from "../lib/tableAlign";
 import { formatGroupedInput } from "../lib/numberFormat";
 import { notesFormatErrorMessage } from "../lib/vocabulary";
@@ -392,6 +396,8 @@ export function NotesReviewTab({
   // drives BOTH the editor preview (CSS vars on the root) AND the clipboard
   // Copy, so they match.
   const [firmTheme, setFirmTheme] = useState<Partial<ClipboardFormatOptions>>({});
+  const [themeBusy, setThemeBusy] = useState(false);
+  const [themeError, setThemeError] = useState<string | null>(null);
   const [runTheme, setRunTheme] = useState<Partial<ClipboardFormatOptions> | null>(
     null,
   );
@@ -718,8 +724,8 @@ export function NotesReviewTab({
   }, [sourceNotes, saveBlocked, moveBusy]);
 
   useEffect(() => {
-    onPreparationBlocked?.(saveBlocked || moveBusy);
-  }, [onPreparationBlocked, saveBlocked, moveBusy]);
+    onPreparationBlocked?.(saveBlocked || moveBusy || themeBusy);
+  }, [onPreparationBlocked, saveBlocked, moveBusy, themeBusy]);
   useEffect(() => () => onPreparationBlocked?.(false), [onPreparationBlocked]);
 
   return (
@@ -728,6 +734,19 @@ export function NotesReviewTab({
         data-testid="notes-source-first-workspace"
         style={{ ...styles.root, ...themeVars }}
       >
+        {runTheme && Object.keys(runTheme).length > 0 && <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", fontSize: 13 }}>
+          <span>This run uses saved appearance.</span>
+          <button type="button" className={uiClass.btnQuiet} style={ui.buttonQuiet} disabled={saveBlocked || moveBusy || themeBusy}
+            onClick={async () => {
+              setThemeBusy(true); setThemeError(null);
+              try {
+                await apiFetch(`/api/runs/${runId}/notes_table_style`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ notes_table_style: null }) });
+                setRunTheme(null);
+              } catch (e) { setThemeError(userMessage(e)); }
+              finally { setThemeBusy(false); }
+            }}>{themeBusy ? "Resetting…" : "Use Settings appearance"}</button>
+        </div>}
+        {themeError && <p role="alert">{themeError}</p>}
         <div
           className="notes-source-first-layout"
           style={{
@@ -1394,6 +1413,7 @@ function SheetSection({
                     selected={true} />
                 </div> : row) : expanded ? (
                   <NotePreview
+                    runId={runId} sheet={sheet.sheet} row={cell.row} theme={theme}
                     label={cell.label}
                     html={cell.html}
                     humanHtml={compared && human && field ? human.html[field] ?? "" : null}
@@ -1416,12 +1436,14 @@ function SheetSection({
  *  (and the human's note beside it when comparing). Clicking it opens the
  *  field's editor and its source page. */
 function NotePreview({
+  runId, sheet, row, theme,
   label,
   html,
   humanHtml,
   disabled,
   onOpen,
 }: {
+  runId: number; sheet: string; row: number; theme: ClipboardFormatOptions;
   label: string;
   html: string;
   /** null when there is no human comparison for this field. */
@@ -1429,11 +1451,17 @@ function NotePreview({
   disabled: boolean;
   onOpen: () => void;
 }) {
+  const prepared = useNoteOutput(runId, sheet, row, html, JSON.stringify(theme));
   const body = (content: string, emptyText: string, human = false) => isBlankHtml(content)
     ? <p style={{ ...styles.dim, margin: 0, padding: "8px 0" }}>{emptyText}</p>
     : <div data-testid="notes-readonly-content" style={styles.editorViewportReadonly}>
         {/* Sanitised server-side with the notes whitelist (gotcha #16). */}
-        <div className={`tiptap ProseMirror${human ? " notes-human-content" : ""}`} dangerouslySetInnerHTML={{ __html: content }} />
+        {!human && prepared.output ? <PreparedNotesHtml output={prepared.output} /> : <>
+          {!human && <p role="status" style={styles.dim}>{prepared.error ? "Output preview unavailable. Showing saved content." : "Preparing output preview…"}</p>}
+          <div className={`tiptap ProseMirror${human ? " notes-human-content" : ""}`} dangerouslySetInnerHTML={{ __html: content }} />
+          {!human && prepared.error && <button type="button" className={uiClass.btnQuiet} style={ui.buttonQuiet}
+            onClick={(event) => { event.stopPropagation(); prepared.retry(); }}>Retry preview</button>}
+        </>}
       </div>;
   return (
     <div data-testid="notes-field-preview"
@@ -1546,6 +1574,9 @@ function CellRow({
   const [editorFocused, setEditorFocused] = useState(false);
   const [status, setStatus] = useState<SaveStatus>("idle");
   const [copiedAt, setCopiedAt] = useState<number | null>(null);
+  const prepared = useNoteOutput(runId, sheet, cell.row, cell.html, JSON.stringify(theme));
+  const [copyError, setCopyError] = useState<string | null>(null);
+  const [copying, setCopying] = useState(false);
   // The API's warning strings are deliberately developer-facing (and verbose
   // after a Word/Excel paste), so never render them verbatim. A compact,
   // human-readable signal is enough to explain why a saved edit looks a little
@@ -1954,10 +1985,26 @@ function CellRow({
   // table theme (per-run override ?? firm default), so the clipboard output
   // matches the on-screen preview exactly (docs/PLAN-notes-table-theme.md).
   const handleCopy = useCallback(async () => {
-    const html = editor?.getHTML() ?? cell.html;
-    const ok = await copyHtmlAsRichText(html, theme);
-    if (ok) setCopiedAt(Date.now());
-  }, [editor, cell.html, theme]);
+    if (status === "dirty" || status === "saving" || status === "failed") return;
+    setCopyError(null); setCopying(true);
+    try {
+      if (!prepared.output) {
+        throw new Error(prepared.error
+          ? "Output preview unavailable. Retry the preview before copying."
+          : "Preview still loading. Wait for it before copying.");
+      }
+      const output = await fetchNoteOutput(runId, sheet, cell.row);
+      if (output.source_html !== cell.html) throw new Error("The note changed. Refresh before copying.");
+      if (output.revision !== prepared.output.revision) {
+        prepared.retry();
+        throw new Error("Output changed. Review the refreshed preview, then copy again.");
+      }
+      if (output.tier === "oversize") throw new Error("Split this note before copying it into mTool.");
+      if (!await copyPreparedHtmlAsRichText(output.html, cell.html)) throw new Error("Copy failed. Try again.");
+      setCopiedAt(Date.now());
+    } catch (e) { setCopyError(userMessage(e)); }
+    finally { setCopying(false); }
+  }, [runId, sheet, cell.row, cell.html, status, prepared.output, prepared.error, prepared.retry]);
 
   const handleRemoveInvalid = useCallback(async () => {
     setRemoveBusy(true);
@@ -2076,10 +2123,10 @@ function CellRow({
             type="button"
             className={uiClass.btnSecondary} style={styles.smallButton}
             onClick={handleCopy}
-            title="Copies using your Notes paste format defaults in Settings"
+            disabled={copying || status === "dirty" || status === "saving" || status === "failed"}
           >
             <ContentCopy size={20} />
-            Copy
+            {copying ? "Copying…" : "Copy"}
           </button>
         </div>
           {editable && editorFocused && editor && <div style={comparison ? { gridRow: 2 } : undefined}><NotesEditorToolbar editor={editor} /></div>}
@@ -2093,7 +2140,12 @@ function CellRow({
             ...(editable ? styles.editorViewportEditable : styles.editorViewportReadonly),
           }}
         >
-          <EditorContent editor={editor} />
+          {copyError && <p role="alert">{copyError}</p>}
+          {!editable && status !== "dirty" && status !== "saving" && status !== "failed" && prepared.output ? <PreparedNotesHtml output={prepared.output} /> : <>
+            {!editable && !isBlankHtml(cell.html) && <p role="status" style={styles.dim}>{prepared.error ? "Output preview unavailable. Showing saved content." : "Preparing output preview…"}</p>}
+            <EditorContent editor={editor} />
+            {!editable && prepared.error && <button type="button" className={uiClass.btnQuiet} style={ui.buttonQuiet} onClick={prepared.retry}>Retry preview</button>}
+          </>}
         </div>
       </div>
     </div>

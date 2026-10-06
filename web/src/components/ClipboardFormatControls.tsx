@@ -1,424 +1,98 @@
-// Reusable controls for the notes-table style theme knobs (border style +
-// colour, header fill, font size, cell padding, paragraph spacing). Used by the
-// "Notes table style" section in General settings (firm default) and the
-// per-run picker on the Notes tab. The same preset drives BOTH the editor
-// preview and the clipboard paste (docs/PLAN-notes-table-theme.md).
-//
-// Inline styles only (gotcha #7).
+import type { CSSProperties, ReactNode } from "react";
+import { pwc } from "../lib/theme";
+import { ui, uiClass } from "../lib/uiStyles";
+import type { BorderStyle, ClipboardFormatOptions, ListMarker } from "../lib/clipboardFormat";
 
-import { pwc, tokens } from "../lib/theme";
-import { ui } from "../lib/uiStyles";
-import type {
-  BorderStyle,
-  ClipboardFormatOptions,
-  ListMarker,
-} from "../lib/clipboardFormat";
+type Field = keyof ClipboardFormatOptions;
 
-// Border-colour swatches mirror the editor's per-cell border palette
-// (NotesEditorToolbar BORDER_COLOURS) so the firm default reads from the same
-// vocabulary. "Default" (undefined) means each surface keeps its historic
-// grid colour (editor grey / clipboard #999).
-const BORDER_SWATCHES: ReadonlyArray<{ label: string; color?: string }> = [
-  { label: "Default" }, // undefined → surface default
-  { label: "Black", color: "#000000" },
-  { label: "Grey", color: "#c9c9c9" },
-  { label: "Orange", color: "#fd5108" },
-  { label: "Blue", color: "#185fa5" },
-];
-
-// Header-fill swatches. "Default" keeps the historic grey header; "None" stores
-// an explicit `transparent` so the header reads as un-filled on both surfaces.
-const HEADER_SWATCHES: ReadonlyArray<{ label: string; color?: string }> = [
-  { label: "Default" },
-  { label: "None", color: "transparent" },
-  { label: "Grey", color: "#f4f4f4" },
-  { label: "Light blue", color: "#e6eef6" },
-];
-
-const styles = {
-  group: {
-    display: "flex",
-    flexDirection: "column",
-    gap: pwc.space.sm,
-    marginBottom: pwc.space.md,
-  } as React.CSSProperties,
-  label: {
-    ...ui.fieldLabel,
-  } as React.CSSProperties,
-  control: {
-    ...ui.select,
-  } as React.CSSProperties,
-  row: {
-    display: "flex",
-    gap: pwc.space.md,
-    alignItems: "flex-end",
-    flexWrap: "wrap" as const,
-  } as React.CSSProperties,
-  numberField: {
-    display: "flex",
-    flexDirection: "column",
-    gap: pwc.space.sm,
-  } as React.CSSProperties,
-  numberInput: {
-    width: 88,
-  } as React.CSSProperties,
-  swatchRow: {
-    display: "flex",
-    gap: pwc.space.sm,
-    flexWrap: "wrap" as const,
-    alignItems: "center",
-  } as React.CSSProperties,
-  swatch: {
-    minWidth: 34,
-    height: 34,
-    padding: "0 8px",
-    borderRadius: tokens.radius.control,
-    border: `1px solid ${pwc.grey300}`,
-    cursor: "pointer",
-    fontSize: 13,
-    lineHeight: 1,
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    color: pwc.grey700,
-    background: "#fff",
-  } as React.CSSProperties,
-};
-
-export function ClipboardFormatControls({
-  value,
-  onChange,
-  idPrefix = "fmt",
-}: {
+export function ClipboardFormatControls({ value, onChange, idPrefix = "fmt", house, overrides, onReset, disabled = false }: {
   value: ClipboardFormatOptions;
   onChange: (next: ClipboardFormatOptions) => void;
   idPrefix?: string;
+  house?: ClipboardFormatOptions;
+  overrides?: Partial<ClipboardFormatOptions>;
+  onReset?: (field: Field) => void;
+  disabled?: boolean;
 }) {
-  // Helper: emit a new options object with one field replaced. Keeps the
-  // caller's onChange the single update path (it persists / stores).
-  const patch = (partial: Partial<ClipboardFormatOptions>) =>
-    onChange({ ...value, ...partial });
-
-  // Parse a numeric field WITHOUT clamping, so mid-edit values (clearing the
-  // field to retype, or typing "1" on the way to "12") aren't fought — a
-  // per-keystroke clamp would snap "1" up to the min before "12" registers.
-  // Range enforcement happens on blur (`clampField`); `loadGlobalFormat` also
-  // re-validates anything that reaches storage, so the unclamped interim is
-  // never persisted out of range. Falls back to the current value when the
-  // field is cleared / non-numeric so the input stays controlled.
-  const num = (raw: string, current: number) => {
-    const n = Number(raw);
-    if (raw.trim() === "" || !Number.isFinite(n)) return current;
-    return n;
+  const patch = (partial: Partial<ClipboardFormatOptions>) => onChange({ ...value, ...partial });
+  const field = (key: Field, label: string, control: ReactNode, suffix = "") => {
+    const custom = overrides && Object.prototype.hasOwnProperty.call(overrides, key);
+    const houseValue = house?.[key];
+    const defaultLabel = Array.isArray(houseValue) ? houseValue.join(" × ") : String(houseValue ?? "Default");
+    return <div style={styles.field} key={`${key}${suffix}`}>
+      <div style={styles.labelRow}>
+        <label style={ui.fieldLabel} htmlFor={`${idPrefix}-${key}${suffix}`}>{label}</label>
+        {custom && onReset && <button type="button" className={uiClass.btnQuiet}
+          style={{ ...ui.buttonQuiet, ...ui.buttonSm, padding: "0 4px", flexShrink: 0 }} disabled={disabled}
+          aria-label={`Reset ${label}`} data-tooltip={`Restore ${defaultLabel}`} onClick={() => onReset(key)}>Reset</button>}
+      </div>
+      {control}
+      <span style={styles.origin}>{custom ? "Custom" : ""}</span>
+    </div>;
   };
-
-  // Clamp one field into [min, max] on blur — the single point where the
-  // typed value is finalised.
-  const clampField = (current: number, min: number, max: number) =>
-    Math.min(max, Math.max(min, current));
-
-  // Render a row of colour swatches for one theme field. `current` is the
-  // field's value (undefined = "Default"); clicking a swatch patches that one
-  // field. A swatch with no colour patches the field to undefined so the
-  // surface falls back to its historic look.
-  const swatchGroup = (
-    fieldLabel: string,
-    field: "borderColor" | "headerFill",
-    current: string | undefined,
-    swatches: ReadonlyArray<{ label: string; color?: string }>,
-  ) => (
-    <div style={styles.group}>
-      <label style={styles.label}>{fieldLabel}</label>
-      <div style={styles.swatchRow} role="group" aria-label={fieldLabel}>
-        {swatches.map((sw) => {
-          const selected = (current ?? undefined) === (sw.color ?? undefined);
-          // A real colour shows as the button background; "Default"/"None"
-          // (no paintable colour) show their label text instead.
-          const showsColor = sw.color && sw.color !== "transparent";
-          return (
-            <button
-              key={sw.label}
-              type="button"
-              aria-label={`${fieldLabel}: ${sw.label}`}
-              data-tooltip={`${fieldLabel}: ${sw.label}`}
-              data-color-swatch={showsColor ? "true" : "false"}
-              className="settings-format-swatch"
-              aria-pressed={selected}
-              onClick={() => patch({ [field]: sw.color } as Partial<ClipboardFormatOptions>)}
-              style={{
-                ...styles.swatch,
-                ...(showsColor ? { background: sw.color } : null),
-                ...(selected && !showsColor
-                  ? { background: pwc.grey50, color: pwc.grey900, fontWeight: pwc.weight.semibold }
-                  : null),
-                color: showsColor
-                  ? (sw.color === "#000000" || sw.color === "#185fa5" ? pwc.white : pwc.grey900)
-                  : undefined,
-                outline: "none",
-              }}
-            >
-              {selected ? `✓${showsColor ? "" : ` ${sw.label}`}` : showsColor ? " " : sw.label}
-            </button>
-          );
-        })}
-      </div>
+  const number = (key: "fontSizePt" | "paragraphSpacingPx" | "headingSizePt", label: string, min: number, max: number) => field(key, label,
+    <input id={`${idPrefix}-${key}`} aria-label={label} type="number" inputMode="numeric" style={styles.input}
+      value={value[key] ?? ""} min={min} max={max} disabled={disabled}
+      onChange={(e) => {
+        const raw = e.target.value;
+        if (!raw.trim() && key === "headingSizePt") { patch({ [key]: undefined }); return; }
+        const n = Number(raw);
+        if (raw.trim() && Number.isFinite(n)) patch({ [key]: n });
+      }}
+      onBlur={() => { const n = value[key]; if (n !== undefined) patch({ [key]: Math.min(max, Math.max(min, n)) }); }} />);
+  const padding = (index: 0 | 1, label: string) => field("cellPaddingPx", label,
+    <input id={`${idPrefix}-cellPaddingPx-${index}`} aria-label={label} type="number" inputMode="numeric"
+      style={styles.input} value={value.cellPaddingPx[index]} min={0} max={32} disabled={disabled}
+      onChange={(e) => {
+        const n = Number(e.target.value);
+        if (!e.target.value.trim() || !Number.isFinite(n)) return;
+        const next: [number, number] = [...value.cellPaddingPx]; next[index] = n;
+        patch({ cellPaddingPx: next });
+      }} onBlur={() => {
+        const next: [number, number] = [...value.cellPaddingPx];
+        next[index] = Math.min(32, Math.max(0, next[index])); patch({ cellPaddingPx: next });
+      }} />, `-${index}`);
+  const select = (key: Field, label: string, selected: string, options: Array<[string, string]>, change: (value: string) => void) => field(key, label,
+    <select id={`${idPrefix}-${key}`} aria-label={label} value={selected} disabled={disabled} style={styles.select}
+      onChange={(e) => change(e.target.value)}>
+      {options.map(([v, text]) => <option key={v} value={v}>{text}</option>)}
+    </select>);
+  const colorOptions = (current: string | undefined, options: Array<[string, string]>): Array<[string, string]> =>
+    current && !options.some(([v]) => v === current) ? [...options, [current, current]] : options;
+  return <fieldset disabled={disabled} style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}>
+    <h3 style={styles.heading}>Text and spacing</h3>
+    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12, gap: 16 }}><span>Font</span><span>Arial</span></div>
+    <div style={styles.grid}>
+      {number("fontSizePt", "Font size (pt)", 6, 24)}
+      {number("paragraphSpacingPx", "Paragraph gap (px)", 0, 48)}
+      {padding(0, "Vertical padding (px)")}
+      {padding(1, "Horizontal padding (px)")}
     </div>
-  );
-
-  return (
-    <div>
-      <div style={styles.group}>
-        <label style={styles.label} htmlFor={`${idPrefix}-border`}>
-          Table border
-        </label>
-        <select
-          id={`${idPrefix}-border`}
-          aria-label="Table border style"
-          style={{ ...styles.control, maxWidth: 220 }}
-          value={value.borderStyle}
-          onChange={(e) =>
-            patch({ borderStyle: e.target.value as BorderStyle })
-          }
-        >
-          <option value="single">Single line</option>
-          <option value="double">Double line</option>
-          <option value="none">No border</option>
-        </select>
-      </div>
-
-      {swatchGroup("Border colour", "borderColor", value.borderColor, BORDER_SWATCHES)}
-      {swatchGroup("Header fill", "headerFill", value.headerFill, HEADER_SWATCHES)}
-
-      <div style={styles.row}>
-        <div style={styles.numberField}>
-          <label style={styles.label} htmlFor={`${idPrefix}-font`}>
-            Font size (pt)
-          </label>
-          <input
-            id={`${idPrefix}-font`}
-            type="number"
-            inputMode="numeric"
-            aria-label="Font size in points"
-            style={{ ...styles.control, ...styles.numberInput }}
-            value={value.fontSizePt}
-            min={6}
-            max={24}
-            onChange={(e) =>
-              patch({ fontSizePt: num(e.target.value, value.fontSizePt) })
-            }
-            onBlur={() =>
-              patch({ fontSizePt: clampField(value.fontSizePt, 6, 24) })
-            }
-          />
-        </div>
-
-        <div style={styles.numberField}>
-          <label style={styles.label} htmlFor={`${idPrefix}-para`}>
-            Paragraph spacing (px)
-          </label>
-          <input
-            id={`${idPrefix}-para`}
-            type="number"
-            inputMode="numeric"
-            aria-label="Paragraph spacing in pixels"
-            style={{ ...styles.control, ...styles.numberInput }}
-            value={value.paragraphSpacingPx}
-            min={0}
-            max={48}
-            onChange={(e) =>
-              patch({
-                paragraphSpacingPx: num(
-                  e.target.value,
-                  value.paragraphSpacingPx,
-                ),
-              })
-            }
-            onBlur={() =>
-              patch({
-                paragraphSpacingPx: clampField(value.paragraphSpacingPx, 0, 48),
-              })
-            }
-          />
-        </div>
-      </div>
-
-      <div style={{ ...styles.row, marginTop: pwc.space.md }}>
-        <div style={styles.numberField}>
-          <label style={styles.label} htmlFor={`${idPrefix}-headsize`}>
-            Heading size (pt)
-          </label>
-          {/* Optional field: empty = "Default" (each surface keeps its
-              historic heading size). Cleared input patches to undefined. */}
-          <input
-            id={`${idPrefix}-headsize`}
-            type="number"
-            inputMode="numeric"
-            aria-label="Heading size in points"
-            placeholder="Default"
-            style={{ ...styles.control, ...styles.numberInput }}
-            value={value.headingSizePt ?? ""}
-            min={6}
-            max={24}
-            onChange={(e) => {
-              const raw = e.target.value.trim();
-              if (raw === "") {
-                patch({ headingSizePt: undefined });
-                return;
-              }
-              const n = Number(raw);
-              if (Number.isFinite(n)) patch({ headingSizePt: n });
-            }}
-            onBlur={() =>
-              value.headingSizePt !== undefined &&
-              patch({ headingSizePt: clampField(value.headingSizePt, 6, 24) })
-            }
-          />
-        </div>
-
-        <div style={styles.numberField}>
-          <label style={styles.label} htmlFor={`${idPrefix}-headweight`}>
-            Heading weight
-          </label>
-          <select
-            id={`${idPrefix}-headweight`}
-            aria-label="Heading weight"
-            style={{ ...styles.control, maxWidth: 160 }}
-            value={value.headingWeight ?? ""}
-            onChange={(e) =>
-              patch({
-                headingWeight:
-                  e.target.value === "" ? undefined : Number(e.target.value),
-              })
-            }
-          >
-            <option value="">Default (semi-bold)</option>
-            <option value="400">Normal</option>
-            <option value="600">Semi-bold</option>
-            <option value="700">Bold</option>
-          </select>
-        </div>
-
-        <div style={styles.numberField}>
-          <label style={styles.label} htmlFor={`${idPrefix}-listmarker`}>
-            Bullet marker
-          </label>
-          <select
-            id={`${idPrefix}-listmarker`}
-            aria-label="Bullet list marker"
-            style={{ ...styles.control, maxWidth: 160 }}
-            value={value.listMarker ?? ""}
-            onChange={(e) =>
-              patch({
-                listMarker:
-                  e.target.value === ""
-                    ? undefined
-                    : (e.target.value as ListMarker),
-              })
-            }
-          >
-            <option value="">Default (disc)</option>
-            <option value="disc">Disc •</option>
-            <option value="dash">Dash –</option>
-            <option value="decimal">Numbered</option>
-          </select>
-        </div>
-      </div>
-
-      <div style={{ ...styles.group, marginTop: pwc.space.md }}>
-        <label style={{ ...styles.label, display: "flex", alignItems: "center", gap: pwc.space.sm }}>
-          <input
-            type="checkbox" style={ui.checkbox}
-            aria-label="Rule under header row"
-            checked={value.headerRule === true}
-            onChange={(e) =>
-              patch({ headerRule: e.target.checked ? true : undefined })
-            }
-          />
-          Rule under header row
-        </label>
-      </div>
-
-      <div style={{ ...styles.group, marginTop: pwc.space.md }}>
-        <label style={{ ...styles.label, display: "flex", alignItems: "center", gap: pwc.space.sm }}>
-          <input
-            type="checkbox" style={ui.checkbox}
-            aria-label="Totals row double underline"
-            checked={value.totalsDoubleUnderline === true}
-            onChange={(e) =>
-              patch({
-                totalsDoubleUnderline: e.target.checked ? true : undefined,
-              })
-            }
-          />
-          Totals row double underline
-        </label>
-      </div>
-
-      <div style={{ ...styles.row, marginTop: pwc.space.md }}>
-        <div style={styles.numberField}>
-          <label style={styles.label} htmlFor={`${idPrefix}-padv`}>
-            Cell padding — vertical (px)
-          </label>
-          <input
-            id={`${idPrefix}-padv`}
-            type="number"
-            inputMode="numeric"
-            aria-label="Cell padding vertical in pixels"
-            style={{ ...styles.control, ...styles.numberInput }}
-            value={value.cellPaddingPx[0]}
-            min={0}
-            max={32}
-            onChange={(e) =>
-              patch({
-                cellPaddingPx: [
-                  num(e.target.value, value.cellPaddingPx[0]),
-                  value.cellPaddingPx[1],
-                ],
-              })
-            }
-            onBlur={() =>
-              patch({
-                cellPaddingPx: [
-                  clampField(value.cellPaddingPx[0], 0, 32),
-                  value.cellPaddingPx[1],
-                ],
-              })
-            }
-          />
-        </div>
-
-        <div style={styles.numberField}>
-          <label style={styles.label} htmlFor={`${idPrefix}-padh`}>
-            Cell padding — horizontal (px)
-          </label>
-          <input
-            id={`${idPrefix}-padh`}
-            type="number"
-            inputMode="numeric"
-            aria-label="Cell padding horizontal in pixels"
-            style={{ ...styles.control, ...styles.numberInput }}
-            value={value.cellPaddingPx[1]}
-            min={0}
-            max={32}
-            onChange={(e) =>
-              patch({
-                cellPaddingPx: [
-                  value.cellPaddingPx[0],
-                  num(e.target.value, value.cellPaddingPx[1]),
-                ],
-              })
-            }
-            onBlur={() =>
-              patch({
-                cellPaddingPx: [
-                  value.cellPaddingPx[0],
-                  clampField(value.cellPaddingPx[1], 0, 32),
-                ],
-              })
-            }
-          />
-        </div>
-      </div>
+    <h3 style={styles.heading}>Tables</h3>
+    <div style={styles.grid}>
+      {select("borderStyle", "Table border", value.borderStyle, [["single", "Single line"], ["double", "Thick single line"], ["none", "No border"]], (v) => patch({ borderStyle: v as BorderStyle }))}
+      {select("headerBold", "Header emphasis", value.headerBold === false ? "false" : "true", [["true", "Bold"], ["false", "Regular"]], (v) => patch({ headerBold: v === "true" }))}
     </div>
-  );
+    <details style={{ marginTop: 8 }}><summary style={{ ...ui.fieldLabel, cursor: "pointer", padding: "8px 0" }}>Advanced formatting</summary>
+      <div style={{ ...styles.grid, marginTop: 8 }}>
+        {select("borderColor", "Border colour", value.borderColor ?? "", colorOptions(value.borderColor, [["", "Default"], ["#000000", "Black"], ["#c9c9c9", "Grey"], ["#fd5108", "Orange"], ["#185fa5", "Blue"]]), (v) => patch({ borderColor: v || undefined }))}
+        {select("headerFill", "Header fill", value.headerFill ?? "", colorOptions(value.headerFill, [["", "Default"], ["transparent", "None"], ["#f4f4f4", "Grey"], ["#e6eef6", "Light blue"]]), (v) => patch({ headerFill: v || undefined }))}
+        {number("headingSizePt", "Heading size (pt)", 6, 24)}
+        {select("headingWeight", "Heading weight", String(value.headingWeight ?? ""), [["", "Default"], ["400", "Regular"], ["600", "Semi-bold"], ["700", "Bold"]], (v) => patch({ headingWeight: v ? Number(v) : undefined }))}
+        {select("listMarker", "Bullet marker", value.listMarker ?? "", [["", "Default"], ["disc", "Disc"], ["dash", "Dash"], ["decimal", "Numbered"]], (v) => patch({ listMarker: v ? v as ListMarker : undefined }))}
+        {select("headerRule", "Rule under header", String(value.headerRule ?? false), [["false", "Off"], ["true", "On"]], (v) => patch({ headerRule: v === "true" }))}
+        {select("totalsDoubleUnderline", "Automatic totals rule", String(value.totalsDoubleUnderline ?? false), [["false", "Off"], ["true", "Thick single line"]], (v) => patch({ totalsDoubleUnderline: v === "true" }))}
+      </div>
+    </details>
+  </fieldset>;
 }
+
+const styles: Record<string, CSSProperties> = {
+  grid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 170px), 1fr))", columnGap: 16, rowGap: 8 },
+  field: { display: "flex", flexDirection: "column", gap: 8, minWidth: 0 },
+  labelRow: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, minHeight: 44 },
+  input: { ...ui.input, width: "100%", minWidth: 0 },
+  select: { ...ui.select, width: "100%", minWidth: 0 },
+  origin: { height: 20, fontSize: 13, color: pwc.grey700 },
+  heading: { fontSize: 14, fontWeight: pwc.weight.semibold, margin: "0 0 12px", color: pwc.grey900 },
+};

@@ -203,6 +203,8 @@ export async function updateSettings(
     // Firm-wide notes-table style theme (docs/PLAN-notes-table-theme.md).
     // The server validates + cleans it before persisting.
     notes_table_style: ClipboardFormatOptions;
+    notes_appearance_overrides: Partial<{ [K in keyof ClipboardFormatOptions]: ClipboardFormatOptions[K] | null }>;
+    notes_appearance_reset: boolean;
   }>,
 ): Promise<{ status: string }> {
   return apiFetch<{ status: string }>("/api/settings", {

@@ -414,7 +414,7 @@ is the single cascade point); shared component primitives in
 `web/src/index.css` global classes or `NotesReviewTab.css`. Many frontend
 tests assert exact RGB values derived from `theme.ts` tokens — change a token
 and its pinning test in the same commit. Clipboard styling
-(`web/src/lib/clipboard.ts`) is intentionally NOT tokenised (gotcha #16).
+(`mtool/notes_decorate.py`) is intentionally NOT tokenised (gotcha #16).
 
 **Clarity-first composition is load-bearing.** The normal interface answers
 three questions within five seconds: where am I, what needs attention, and what
@@ -1159,7 +1159,7 @@ lock-step across FOUR surfaces or preview ≠ paste ≠ filing:
 without it a human edit strips the marker and the grid returns on first save),
 `web/src/lib/cellFormatting.ts::StyledTable` (TipTap drops unknown attrs on
 round-trip), `NotesReviewTab.css` (`border: 0`, so per-cell inline borders still
-win), `mtool/notes_decorate.py` + `web/src/lib/clipboard.ts` (border-family
+win), `mtool/notes_decorate.py` (border-family
 declarations dropped from the cell base). The house totals double-underline is
 suppressed on these tables too — the source carries its own. Verified in real
 Chrome (specificity vs `.is-totals-num` is not reproducible in jsdom). Pinned by
@@ -1367,59 +1367,63 @@ Key invariants:
   sub-section labels MUST be preserved verbatim by the agent as
   `<p><strong>…</strong></p>` — don't let the writer-owned-heading rule
   over-generalise and flatten them. Pinned by `tests/test_notes_prompt_phase1.py`.
-- **Clipboard decoration:** `web/src/lib/clipboard.ts::decorateHtmlForClipboard`
-  injects inline `style=` (border, padding, right-align for numeric cells matched
-  by `_NUMERIC_CELL_RE`) at copy time only — the DB stays style-free, because
-  external CSS doesn't travel with a paste into M-Tool / Word / Outlook. It's
-  option-driven (`ClipboardFormatOptions`); **the defaults (`DEFAULT_FORMAT_OPTIONS`)
-  reproduce the old hard-coded STYLING byte-for-byte** — same border/padding/
-  font/alignment declarations; keep that equivalence when editing. Two
-  deliberate additions ride on top of it and are NOT part of the historic
-  bytes: the run-76 TX-dialect pass (legacy `width` attrs on unsized numeric
-  tables, white borders on source-styled / border-none tables — block below)
-  and, on themed copies only, the theme's own knobs. Pinned by
-  `web/src/__tests__/clipboard.test.ts`.
-- **Notes-table style THEME (docs/PLAN-notes-table-theme.md):**
-  `ClipboardFormatOptions` was promoted to a full table theme that is the shared,
-  server-side firm default (`XBRL_NOTES_TABLE_STYLE` via `/api/settings`). ONE
-  resolved theme (`resolveTheme(runOverride, firmDefault)`) drives BOTH the editor
-  (as `--nt-*` CSS vars) and the clipboard, so preview == paste. A per-run override
-  lives on `runs.notes_table_style` (v22, editable post-run via the Notes-tab
-  picker) and is a full SNAPSHOT, not a partial diff. Per-cell manual styles win
-  over the theme; "Reset cell to theme" (`resetCellToTheme`) re-inherits it. A
-  totals row's double underline (`border-bottom: 3px double`) is saved document
-  formatting, and Copy reads the resolved theme at click time.
-  **The SHIPPED firm default is `notes/table_theme.py::HOUSE_NOTES_TABLE_STYLE`,
-  resolved ONLY through `firm_theme()`** (2026-07-20, chosen by the product
-  owner) — `server._notes_table_style` and
-  `formatting_agent._resolve_notes_table_theme` both delegate there. They used
-  to each parse the env var, and the formatter's copy still fell back to `{}`
-  after the house default landed, so the agent reasoned about a boxed grey grid
-  over a ruled display and would "correct" formatting that was already right.
-  A new consumer must resolve through `firm_theme()`, never re-read the env var.
-  The shipped default matches the operator's chosen test appearance on fresh
-  installations: a single grid, 11pt Arial, 5×5px cell padding, transparent
-  bold headers, and 16px paragraph/table spacing. No local theme setting is
-  required. It has no inferred header rule, and totals underlines remain MANUAL
-  (the old auto-detect matched the word "total" in rows that were not totals).
-  Source-styled Word tables keep their own borders. Two DISTINCT layers, do not
-  conflate them: `NotesTableStyle()` /
-  `DEFAULT_FORMAT_OPTIONS` still mean "no theme configured at all" and keep the
-  historic boxed STYLING (a dozen pinning tests rely on that; the run-76
-  TX-dialect attrs below layer on top for every theme, so the full output is
-  no longer literally byte-identical); `_notes_table_style()` returns the HOUSE style when the setting is
-  unset. An explicit `{}` is the operator's escape hatch back to the historic
-  look, so rollback is a Settings change, not a code revert. `headerRule` moves
-  in lock-step across `mtool/notes_decorate.py`, `clipboard.ts`,
-  `themeToCssVars`, `NotesReviewTab.css` and `api/config_routes.py` — and a
-  source-styled table suppresses it (verbatim block above), since that table
-  carries the source's own rules.
+- **Clipboard output:** `web/src/lib/clipboard.ts::copyPreparedHtmlAsRichText`
+  copies server-prepared HTML verbatim through the Clipboard API or the legacy
+  browser fallback. It derives plain text from the canonical source. Styling,
+  numeric alignment and mTool transport markup are owned by the backend
+  exporter; no frontend decorator remains. Pinned by
+  `web/src/__tests__/clipboard.test.ts` and `NotesReviewTab.test.tsx`.
+- **Notes appearance and house defaults:** `notes/table_theme.py` owns the coded
+  `HOUSE_NOTES_TABLE_STYLE`. New Settings edits persist only explicit fields in
+  `XBRL_NOTES_APPEARANCE_OVERRIDES`; `firm_theme()` merges them over fresh house
+  defaults. Reset persists an empty overlay, masking old deployment or local
+  snapshots and restoring inheritance rather than saving today's defaults.
+  Legacy `XBRL_NOTES_TABLE_STYLE` remains unchanged until edited or reset; its
+  implicit historic values are retained on the first sparse edit. Explicit old
+  `{}` still selects the historic 10pt/4×8px/8px baseline. Do not change
+  `NotesTableStyle()` or `DEFAULT_FORMAT_OPTIONS` compatibility defaults.
+  `LEGACY_NOTES_TABLE_STYLE` supplies the backend compatibility baseline for
+  snapshot migration and the decorator; frontend compatibility values stay
+  pinned by `clipboardFormat.test.ts`.
+  Legacy `notes_table_style` saves are rejected with HTTP 400 once an appearance
+  overlay exists, including an empty reset overlay, or when the request also
+  supplies the new appearance fields. The error directs clients to the new API;
+  a successful settings response must not silently ignore an appearance save.
+  `resolve_run_theme()` merges saved run fields over the firm profile, matching
+  frontend `resolveTheme`. Existing run overrides remain visible as an exception
+  with a contextual Use Settings appearance action. Settings Reset clears only
+  installation overrides; it never changes canonical note HTML or run overrides.
+  The shipped house uses single borders, 11pt Arial, 5×5px padding, transparent
+  bold headers and a 10px paragraph gap. Source/manual styles retain their
+  established precedence; inferred totals rules remain off.
+
+  **Prepared output is shared:** `mtool/notes_exporter.py::prepare_note_output`
+  owns the decorator, exact wrapped-cell size ladder and content guard. The
+  authenticated per-note `/api/runs/{id}/notes-output` endpoint and fixed-sample
+  `/api/notes-appearance/preview` use this helper. Read-only extracted notes render
+  that HTML in `.notes-output-preview`; do not apply TipTap review CSS to it.
+  TipTap edits canonical HTML only. Transport breaks, expanded merges and white
+  borders never enter the canonical editor or store. Loading or failed output
+  previews identify the saved-content fallback and offer retry.
+  Copy validates the current source and prepared-output revision, then writes
+  prepared HTML through `copyPreparedHtmlAsRichText` without redecorating it.
+  Copy distinguishes loading, failed preview and changed output; each blocks
+  clipboard writes until the current preview can be reviewed. Content-guard
+  failures retain sheet/row context on export and saved-note preview, and the
+  shared mTool error handler returns a readable refusal without changing notes.
+  Whole-run preparation carries
+  `notes_output_revision`; public UI submissions include it, and a changed
+  content/appearance revision stops draft preparation with HTTP 409. The fill
+  receipt still identifies the actual written canonical revision and workbook.
+  Pinned by `tests/test_settings_api.py`, `test_run_notes_table_style.py`,
+  `test_mtool_notes_exporter.py`, `test_mtool_routes.py`, and the SettingsPage,
+  NotesAppearanceSettings, NotesReviewTab, clipboard and clipboardFormat web tests.
+
   **mTool/TX renders SILENCE differently from a browser (run-76, 2026-07-20):**
   in the TX editor an UNDECLARED cell boundary shows the default grey grid, and
   CSS widths are ignored — there is no "no line", only "visible line" or "line
   painted white", and no CSS page fit, only the legacy `width` ATTRIBUTE. So the
-  two mTool-bound decorators (`mtool/notes_decorate.py` + `clipboard.ts`, twins
-  — keep in step) must (a) spell out every intended-invisible edge as explicit
+  backend decorator (`mtool/notes_decorate.py`) must (a) spell out every intended-invisible edge as explicit
   white (`_fill_undeclared_borders_white`, the absent-edge twin of the proven
   hidden→white translation) for source-styled tables and `borderStyle: "none"`
   themes, and (b) fit unsized tables to the page via `width="100%"` +
@@ -1433,8 +1437,8 @@ Key invariants:
   neighbouring cell declares is NOT painted white (`_neighbor_declared_sides`;
   a same-width white tie wins by position under border-collapse and would
   erase a source underline / the header rule; spans disable the suppression).
-  Four identical invisible edges serialize as one `border` shorthand in both
-  decorators (and formatter-authored four-edge clears use the same canonical
+  Four identical invisible edges serialize as one `border` shorthand in the
+  decorator (and formatter-authored four-edge clears use the same canonical
   shorthand); expanding one cleared cell into four white longhands recreated
   the Doc 2 size failure. Partial/mixed edges remain per-side. The white grid
   costs bytes against Excel's 32,767-char cell cap and lands on exactly the
@@ -1446,8 +1450,8 @@ Key invariants:
   tier than the pre-run-76 ladder gave it. `strip_inline_styles` (the destyle
   rescue rung) also drops the `data-source-styled` marker — with the styles
   gone its "borders are the whole truth" premise is false and it would force
-  a pointless re-paint. The DB and the review page stay silent — this is
-  strictly an mTool-dialect translation at decorate time. Pinned by
+  a pointless re-paint. The canonical DB and editor stay silent; prepared read-only output
+  exposes the mTool-dialect translation at decorate time. Pinned by
   `tests/test_settings_api.py`, `test_run_notes_table_style.py`,
   `test_mtool_notes_exporter.py` (ladder + no-regression pin), and the
   `clipboardFormat`/`clipboard`/`cellFormatting`/`NotesReviewTab` web tests.
@@ -1458,7 +1462,7 @@ Key invariants:
   compatibility substitution, not a claim of native double-border support.
   It covers source, manual, theme and totals borders; canonical HTML and the
   review editor retain double intent. Text underline is separate and unchanged.
-  The decorators remain twins. Native thick-border persistence was verified
+  Review and Copy consume the backend-prepared markup. Native thick-border persistence was verified
   in MPERS/MFRS injection and clipboard save/reopen cases on 2026-09-17;
   generated Review Copy Word/PDF fidelity remains deferred. Exact widths are
   not preserved. See [the agent guide](docs/MTOOL-NOTES-AUTHORING.md) for the
