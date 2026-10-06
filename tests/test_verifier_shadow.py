@@ -374,6 +374,52 @@ def test_statement_verify_e2e_parity(tmp_path, monkeypatch, standard, fixture, s
         f"{stmt.value}: fact mandatory scan must be ⊇ xlsx scan")
 
 
+@pytest.mark.parametrize("standard", ["mfrs", "mpers"])
+@pytest.mark.parametrize("owners_py", [None, 0, -50, "no_py"])
+def test_company_soci_comparative_owners_verifier_parity(tmp_path, monkeypatch, standard, owners_py):
+    """Missing comparative owners blocks saving; absent comparatives stay valid."""
+    fixture = REPO / f"XBRL-template-{standard.upper()}" / "Company" / "06-SOCI-NetOfTax.xlsx"
+    db = tmp_path / "soci.db"
+    init_db(db)
+    tree = parse_template(str(fixture))
+    manifest = tmp_path / "tree.json"
+    manifest.write_text(json.dumps(tree.to_json()), encoding="utf-8")
+    tid = import_template(db, manifest)
+    import_company_targets(db, tid)
+    with sqlite3.connect(db) as conn:
+        run_id = conn.execute(
+            "INSERT INTO runs(created_at,pdf_filename,status) VALUES ('2026-10-06','test.pdf','running')"
+        ).lastrowid
+        _seed_all_data_facts(conn, run_id, tid, value=0.0)
+        if owners_py == "no_py":
+            conn.execute("DELETE FROM run_concept_facts WHERE run_id=? AND period='PY'", (run_id,))
+        elif owners_py is None:
+            conn.execute(
+                "DELETE FROM run_concept_facts WHERE run_id=? AND period='PY' AND concept_uuid IN "
+                "(SELECT concept_uuid FROM concept_nodes WHERE canonical_label LIKE '%attributable to owners of parent%')",
+                (run_id,),
+            )
+        else:
+            conn.execute(
+                "UPDATE run_concept_facts SET value=? WHERE run_id=? AND period='PY' AND concept_uuid IN "
+                "(SELECT concept_uuid FROM concept_nodes WHERE ltrim(canonical_label, '* ')='Profit (loss)' "
+                "OR canonical_label LIKE '%attributable to owners of parent%')",
+                (owners_py, run_id),
+            )
+    recompute_after_turn(db, run_id)
+    work = tmp_path / "filled.xlsx"
+    shutil.copyfile(fixture, work)
+    export_run_to_xlsx(db, run_id, str(work), template_id=tid)
+    monkeypatch.setenv("XBRL_FACT_BASED_VERIFY", "0")
+    xlsx = verify_statement(str(work), StatementType.SOCI)
+    monkeypatch.setenv("XBRL_FACT_BASED_VERIFY", "1")
+    facts = verify_statement(str(work), StatementType.SOCI, db_path=str(db), run_id=run_id, template_id=tid)
+    assert facts.is_balanced is (owners_py is not None), facts.mismatches
+    _assert_verify_parity(xlsx, facts)
+    if owners_py is None:
+        assert any("PY: Company comprehensive-income owners attribution is missing" in m for m in facts.mismatches)
+
+
 @pytest.mark.parametrize("standard,level,filename,variant,defect", [
     (standard, level, filename, variant, defect)
     for standard, level, filename, variant in [

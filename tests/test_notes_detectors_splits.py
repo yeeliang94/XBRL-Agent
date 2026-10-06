@@ -220,6 +220,7 @@ _MINIMAL_FINDING_BY_FAMILY = {
                      "missing_subnote_refs": ["3.2"], "all_subnote_refs": ["3.1", "3.2"]},
     "topline_splits": _split_finding(),
     "title_issues": {"sheet": S12, "row": 49, "row_label": "X"},
+    "mandatory_fields": {"sheet": S11, "row": 4, "label": "*Required disclosure"},
 }
 
 

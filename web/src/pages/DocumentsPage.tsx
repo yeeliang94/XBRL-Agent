@@ -60,7 +60,7 @@ export function useDocuments(enabled: boolean) {
     loadMore: () => setPages((value) => value + 1) };
 }
 
-function stage(run: RunSummaryJson): string {
+export function documentStageLabel(run: Pick<RunSummaryJson, "status" | "preparation" | "pipeline_stage">): string {
   if (run.status === "draft") {
     const prep = run.preparation;
     if (prep?.status === "failed") return "Preparation failed";
@@ -163,7 +163,7 @@ export function DocumentsPage({ documents, section, onSection, onAdd, onOpen }: 
               <div role="cell" style={{ minWidth: 0 }}><button type="button" onClick={() => onOpen(run)} style={{ ...ui.buttonQuiet, padding: 0, minHeight: 0, maxWidth: "100%", justifyContent: "flex-start", textAlign: "left", whiteSpace: "normal", overflowWrap: "anywhere" }}>{run.pdf_filename}</button>
                 <div style={{ ...ui.metadata, marginTop: 8 }}>{run.status === "draft" ? "Setup" : `${(run.filing_standard || "mfrs").toUpperCase()} · ${run.filing_level === "group" ? "Group" : "Company"}`}</div>
               </div>
-              <span role="cell" style={{ paddingTop: 2, color: run.preparation?.action_required ? pwc.errorText : pwc.black }}>{stage(run)}</span>
+              <span role="cell" style={{ paddingTop: 2, color: run.preparation?.action_required ? pwc.errorText : pwc.black }}>{documentStageLabel(run)}</span>
               <div role="cell"><button type="button" style={{ ...ui.buttonGhost, width: "100%", justifyContent: "flex-start", padding: 0 }} onClick={() => onOpen(run)}>{run.status === "draft" ? "Open setup" : "Open"}</button></div>
             </div>)}
           </div>}

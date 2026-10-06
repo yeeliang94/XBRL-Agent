@@ -400,6 +400,13 @@ async def run_notes_extraction(
                 generation and generation["input_kind"] == INPUT_KIND_PREPARED
             )
 
+    if prepared_source:
+        # The dedicated related-party prose must exist before a List worker
+        # can claim a cross-sheet skip. Register its task before the dependent.
+        ordered = [t for t in ordered if t != NotesTemplateType.LIST_OF_NOTES] + [
+            t for t in ordered if t == NotesTemplateType.LIST_OF_NOTES
+        ]
+
     tasks: dict[NotesTemplateType, asyncio.Task] = {}
     for index, template_type in enumerate(ordered):
         agent_id = f"notes:{template_type.value}"
@@ -458,6 +465,7 @@ async def run_notes_extraction(
             predecessors = [
                 tasks[t] for t in (
                     NotesTemplateType.CORP_INFO, NotesTemplateType.ACC_POLICIES,
+                    NotesTemplateType.RELATED_PARTY,
                 ) if t in tasks
             ]
         gated_runner = (

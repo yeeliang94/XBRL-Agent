@@ -199,8 +199,19 @@ describe("App — live activity integration", () => {
     expect(within(screen.getByRole("tablist", { name: "Document lists" })).getByRole("tab", { name: /In progress/ })).toHaveAttribute("aria-selected", "true");
   });
 
-  test("start acknowledgement opens the durable document workspace", async () => {
-    const { uploadPdf } = await import("../lib/api");
+  test("starting and reopening a running document shows its activity with review tabs", async () => {
+    const { uploadPdf, fetchRuns, fetchRunDetail } = await import("../lib/api");
+    vi.mocked(fetchRuns).mockImplementation(async (filters) => ({
+      runs: filters?.documentGroup === "progress" ? [{
+        id: 321, pdf_filename: "FINCO.pdf", status: "running",
+        session_id: "sess_1", created_at: "2026-08-25T00:00:00Z",
+      } as import("../lib/types").RunSummaryJson, {
+        id: 322, pdf_filename: "SECOND.pdf", status: "draft",
+        session_id: "sess_2", created_at: "2026-08-25T00:00:00Z",
+        preparation: { status: "working", phase: "building_map" },
+      } as import("../lib/types").RunSummaryJson] : [],
+      total: filters?.documentGroup === "progress" ? 2 : 0, limit: 50, offset: 0,
+    }));
     vi.mocked(uploadPdf).mockResolvedValueOnce({
       session_id: "sess_1", filename: "FINCO.pdf", run_id: 321,
     });
@@ -222,14 +233,37 @@ describe("App — live activity integration", () => {
       data: { phase: "starting", message: "Starting", run_id: 321 },
       timestamp: Date.now() / 1000,
     }));
-    expect(screen.getByRole("combobox", { name: "Switch document" })).toHaveValue("321");
-    act(() => captureOnEvent!({
-      event: "run_complete",
-      data: { success: true, overall_status: "completed", run_id: 321 },
-      timestamp: Date.now() / 1000,
-    }));
-    await waitFor(() => expect(window.location.pathname).toBe("/history/321"));
-    expect(screen.getByRole("combobox", { name: "Switch document" })).toHaveValue("321");
+    expect(screen.getByRole("button", { name: "Open FINCO.pdf" })).toHaveAttribute("aria-current", "page");
+    expect(screen.queryByRole("combobox", { name: "Switch document" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "All runs" })).toBeNull();
+    const sidebar = screen.getByRole("navigation", { name: "In-progress documents" });
+    expect(within(sidebar).getByRole("button", { name: "Open SECOND.pdf" })).toHaveTextContent("Mapping document");
+    const tabs = await screen.findByRole("tablist", { name: "Run detail sections" });
+    expect(within(tabs).getByRole("tab", { name: "Activity" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("run-detail-agents")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back to document" }));
+    const returnedTabs = await screen.findByRole("tablist", { name: "Run detail sections" });
+    expect(within(returnedTabs).getByRole("tab", { name: "Activity" })).toHaveAttribute("aria-selected", "true");
+    fireEvent.click(screen.getByRole("link", { name: "Work queue" }));
+    const queue = await screen.findByRole("table", { name: "Documents in progress" });
+    fireEvent.click(within(queue).getByRole("button", { name: "FINCO.pdf" }));
+    const reopenedTabs = await screen.findByRole("tablist", { name: "Run detail sections" });
+    expect(within(reopenedTabs).getByRole("tab", { name: "Activity" })).toHaveAttribute("aria-selected", "true");
+    expect(within(reopenedTabs).getByRole("tab", { name: "Overview" })).toBeEnabled();
+    expect(screen.getByTestId("run-detail-agents")).toBeInTheDocument();
+    vi.mocked(fetchRunDetail).mockResolvedValueOnce({
+      id: 322, session_id: "sess_2", pdf_filename: "SECOND.pdf", status: "draft",
+      created_at: "2026-08-25T00:00:00Z", output_dir: "", merged_workbook_path: null,
+      scout_enabled: false, started_at: null, ended_at: null, config: {}, agents: [], cross_checks: [],
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Open SECOND.pdf" }));
+    expect(window.location.pathname).toBe("/run/322");
+    await screen.findByRole("heading", { name: "Continue setup" });
+    fireEvent.click(screen.getByRole("button", { name: "Open FINCO.pdf" }));
+    const switchedTabs = await screen.findByRole("tablist", { name: "Run detail sections" });
+    expect(within(switchedTabs).getByRole("tab", { name: "Activity" })).toHaveAttribute("aria-selected", "true");
+    vi.mocked(fetchRuns).mockResolvedValue({ runs: [], total: 0, limit: 50, offset: 0 });
 
   });
 

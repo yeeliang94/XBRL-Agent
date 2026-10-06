@@ -27,8 +27,8 @@ section. Simpler layout.
    SOPL bottom line exactly.
 4. For each OCI item disclosed, map to the correct category and enter the value.
 5. For BeforeTax variant: also fill the tax-on-OCI rows at the bottom.
-6. If the entity has NO OCI items (common for simple companies), only the Profit/(loss)
-   row needs to be filled. All OCI rows stay blank (formula subtotals will be zero).
+6. If the entity has NO OCI items (common for simple companies), fill the Profit/(loss)
+   row and the required Company attribution described below. All OCI rows stay blank (formula subtotals will be zero).
 
 === CRITICAL RULES ===
 
@@ -41,4 +41,12 @@ section. Simpler layout.
 - For BeforeTax: enter gross OCI amounts AND the tax effect separately. Do not net them.
 - For NetOfTax: enter amounts already net of tax. No separate tax rows.
 - Many entities have zero OCI — this is normal. Do not fabricate OCI items.
-- Attributable splits (owners of parent vs NCI) only apply to group accounts.
+- On Company filings, assign the full total comprehensive income to the live
+  owners-attribution leaf for CY and PY independently, even when the source
+  prints no separate attribution split. Cite the Company statement and explain
+  that the full Company TCI belongs to its owners. Leave NCI blank when it is
+  not disclosed; do not fabricate a zero or an NCI allocation.
+- On Group filings, use the source-disclosed owners/NCI split for each entity
+  scope. Never copy a Group split into Company columns or infer a Group split.
+- Verify both TCI totals agree. Blank Company attribution is incomplete, not
+  evidence that the attribution check is inapplicable.

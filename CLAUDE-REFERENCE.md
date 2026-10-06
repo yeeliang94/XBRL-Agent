@@ -672,6 +672,13 @@ Each run has one `filing_level` (`"company"` or `"group"`, default
   (phrase-by-phrase assertions do not catch this — `test_socie_prompt_mpers.py`
   passed throughout).
 
+Company SOCI requires its complete CY/PY comprehensive income in the owners
+attribution leaf even when no split is printed. Undisclosed NCI stays blank.
+Both facts and workbook verification flag missing Company owners; attribution
+cross-checks also fail for missing Company SOCI attribution. Group splits remain
+source-supported and scope-specific. Pinned by `tests/test_attribution_footing.py`,
+`tests/test_verifier.py` and `tests/test_verifier_shadow.py`.
+
 On Group filings, verifier + cross-checks run twice (Group cols, then Company
 cols) and report separately. Root-level template xlsx files no longer exist —
 all templates live in `Company/` or `Group/`.
@@ -1064,7 +1071,11 @@ Key invariants:
   (not a full statement rewrite) may instead be code-injected in
   `render_prompt` gated on `std_key == "mpers"` — e.g. the MPERS SOPL
   revenue-bucket note (`_MPERS_SOPL_REVENUE_NOTE`) appended only on MPERS
-  SOPL so `sopl.md` stays coarse and its pinning test is unaffected. Pinned
+  SOPL. MFRS receives `_MFRS_SOPL_REVENUE_NOTE` with its actual services label.
+  SOPL permits complete source-disclosed components only when they reconcile
+  exactly per period and entity scope; otherwise record the face total once
+  with an unresolved classification summary. Pinned by
+  `tests/test_sopl_coarse_posture.py` and
   by `tests/test_extraction_hardening_prompts.py`.
 - **SOCIE / SoRE dividend sign (2026-04-25):** entered as POSITIVE
   magnitudes because every SOCIE/SoRE template's `*Total increase
@@ -1512,10 +1523,13 @@ catch-all "balancing amount" plugs):
 - **No-residual-plug rule in `prompts/_base.md`, `prompts/sopl.md`, and
   `prompts/reviewer.md`**: catch-all rows ("Other …",
   "Miscellaneous …", "Administrative expenses") are for genuinely coarse
-  entity disclosures only. Agents must NEVER plug a residual into them
+  entity disclosures or source-disclosed classes without a suitable dedicated
+  field. Agents must NEVER plug a residual into them
   to balance verify_totals or run_cross_checks. If the breakdown can't
-  reconcile, leaf rows stay empty and the run finishes with a flagged
-  imbalance — that is correct behaviour.
+  reconcile, never invent a remainder. SOFP leaves unresolved breakdowns flagged;
+  SOPL retains the face total once in its supported broad leaf and reports the
+  incomplete breakdown. Reconciled SOPL components replace the coarse total;
+  the total and components must never be added together.
 - **A missing line is not zero.** The model-facing `write_facts` tool requires
   `zero_basis="printed_zero"` for a numeric zero, with source evidence of the
   printed zero or dash. Without that receipt the whole call is refused before
@@ -2829,6 +2843,17 @@ semantics only when the block text exactly matches the reconciled source-note
 title; source wording and emphasis remain intact. Pinned by
 `tests/test_notes_source_write.py`, `tests/test_notes_reviewer_tools.py`,
 `tests/test_prepared_source_manifest.py`, and `tests/test_filing_target_registry.py`.
+Required policy disclosure fields are checked from the run's exact live family,
+independently of populated cells, for requested policies and prepared notes runs.
+A blank or heading-only required field enters the reviewer packet and verification
+as `mandatory_field`; it cannot silently skip review. Source-supported overview
+content fills it without repeating every policy, or a grounded human flag records
+the missing disclosure. Complete Basis of Preparation, policy changes and standards
+subsections in mixed policy notes route by the active standard's specific fields;
+MPERS has a basis policy field and MFRS uses the List-of-Notes basis disclosure
+field when no suitable policy field exists. Pinned by
+`tests/test_notes_agent_factory.py` and `tests/test_notes_reviewer_tools.py`.
+
 Source-built disclosures may begin with prose when the source has no title;
 the reviewer may transfer complete frozen source sections from a mixed cell to
 an empty leaf by rebuilding both cells in one transaction. A failed transfer
@@ -2847,8 +2872,8 @@ derives cell page references from the blocks it actually placed so formatting
 does not depend on optional model-supplied page metadata.
 Standalone blank drafts require a nonempty assigned inventory whose every note
 has a reported source gap; one gap cannot account for other unwritten notes.
-On prepared runs, Corporate Information and Accounting Policies finish before
-List-of-Notes fan-out so its cross-sheet skip receipts can be checked against
+On prepared runs, Corporate Information, Accounting Policies and requested
+Related Party extraction finish before List-of-Notes fan-out so its cross-sheet skip receipts can be checked against
 live source placements. A batch receipt is rejected with the unplaced section
 IDs when any assigned note still has unsettled source parts; a skip claim alone
 cannot close those gaps. An individual-part write names the rest of its smallest
@@ -2875,9 +2900,9 @@ required. Pinned by `tests/test_prepared_source_manifest.py`.
 Legacy generations retain their existing rollout modes below.
 Prepared Issued Capital and Related Party agents also expose source writes for
 canonical taxonomy text-block slots only. Structured numeric values still use
-the numeric path with empty prose. Their complete narrative may also appear in
-List-of-Notes under the explicit `numeric_note_prose` purpose; a third destination
-is not approved by that purpose. Reviewer packets recompute source integrity and
+the numeric path with empty prose. Only Issued Capital narrative may also appear in List-of-Notes under the
+explicit `numeric_note_prose` purpose. Related-party prose belongs only in the
+dedicated text-block slot; the source writer rejects its duplicate List placement. Reviewer packets recompute source integrity and
 expose bounded list/manifest/content tools, including stable unnumbered note IDs,
 so source-only gaps trigger review and verification can confirm the repair.
 Pinned by `tests/test_prepared_numeric_prose.py` and
@@ -2955,7 +2980,7 @@ conflict tips the run to `completed_with_errors` and blocks mTool preflight; it
 is never deleted as a stale generic reviewer flag. Reviewer relinks carry the
 observed content revision. Heading context may repeat across policy destinations;
 substantive duplicate content still requires explicit approval. The Issued
-Capital / Related Party narrative route is the one approved two-destination
+Capital narrative route is the one approved two-destination
 exception: its taxonomy text-block and the List-of-Notes field, never a third
 row. Routed and
 structured-consumed prose requires live placement, including policy-route

@@ -25,14 +25,13 @@ def _flat(name: str) -> str:
 
 # --- Concern 1: intentional cross-sheet dual placements ----------------------
 
-def test_notes_base_intentional_dual_placements():
+def test_notes_base_preserves_capital_dual_placement_and_related_party_single_placement():
     flat = _flat("_notes_base.md")
-    assert "intentional dual placements" in flat
+    assert "same prose in exactly two" in flat
     assert "share capital" in flat
     assert "issued capital" in flat and "list of notes" in flat
-    assert "same prose" in flat
-    assert "related-party transactions" in flat
-    assert "same disclosure content may appear in both places" in flat
+    assert "related-party disclosures belong only in the dedicated" in flat
+    assert "do not repeat that prose in list of notes" in flat
 
 
 # --- Concern #1: no invented wording / no invented Total (notes only) --------
@@ -98,10 +97,10 @@ def test_mpers_note_does_not_touch_other_statements():
     assert "MPERS REVENUE BUCKET" not in prompt
 
 
-def test_sopl_md_stays_coarse_after_injection():
-    # The injection is code-side; sopl.md itself must remain unchanged-coarse.
+def test_sopl_md_keeps_reconciliation_policy_independent_of_standard_addenda():
+    # Classification addenda must not replace the shared reconciliation rule.
     flat = _flat("sopl.md")
-    assert "coarse" in flat
+    assert "complete disclosed components reconcile exactly" in flat
     assert "MPERS REVENUE BUCKET".lower() not in flat
 
 
@@ -228,14 +227,11 @@ def test_listofnotes_forbids_distribution_across_fields():
     assert "catch-all is preferable to fragmenting" in flat
 
 
-def test_listofnotes_keeps_related_party_dual_placement():
-    # No dedicated related-party row exists on the MFRS or MPERS List of
-    # Notes template, so the complete note uses the catch-all while the
-    # dedicated Related Party Transactions sheet carries its second copy.
+def test_listofnotes_routes_related_party_to_dedicated_placement():
     flat = _flat("notes_listofnotes.md")
-    assert "related-party note is an intentional dual placement" in flat
-    assert "use the catch-all when no specific row exists" in flat
-    assert "related party transactions is not a valid skip" in flat
+    assert "related-party disclosures belong only in the dedicated" in flat
+    assert "never claim coverage without the dedicated placement" in flat
+    assert "intentional dual placement" not in flat
 
 
 def test_accounting_policies_multi_topic_paragraph_goes_to_one_row():

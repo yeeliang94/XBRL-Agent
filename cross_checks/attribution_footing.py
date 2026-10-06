@@ -20,12 +20,11 @@ no check is added for it. SOCIE's closing equity is likewise computed-from-cells
 and already reconciled to SOFP cross-statement (``socie_to_sofp_equity``), so it
 gets no internal check here either.
 
-The verifier already runs these identities at extraction time, but (a) only on
-group filings, (b) with guards that silently skip when an attribution row isn't
-found, and (c) without firing the reviewer. These cross-checks close all three:
-they self-gate to ``not_applicable`` when the attribution side isn't disclosed
-(the cascade writes no fact for an all-blank computed total), so they never
-false-fail a company filing that simply doesn't split the attribution.
+SOCI Company filings require the full comprehensive income in the owners leaf,
+even without a printed split. Missing attribution fails rather than self-gating.
+Group scopes and SOPL retain the source-disclosed split gate: absent attribution
+is not_applicable, while explicit zero is checked against income. Extraction
+verification and both cross-check paths enforce the same Company SOCI rule.
 
 Both ``run`` (xlsx) and ``run_facts`` (facts, default-on) paths, group
 dual-pass, magnitude-scaled tolerance — same contract as every other check.
@@ -101,15 +100,26 @@ class _AttributionFootingBase:
         return True
 
     def _eval_scope(self, income, attribution, inc_row, attr_row, sheet,
-                    tolerance, label, period, *, is_company: bool) -> dict:
+                    tolerance, label, period, *, is_company: bool, require_attribution: bool = False) -> dict:
         """Evaluate ONE entity scope. Returns a dict carrying the verdict
         (passed / failed / not_applicable), a message part, comparands, and the
         numeric anchor fields. ``not_applicable`` when this scope's attribution
-        isn't disclosed — so it never false-fails a scope that simply doesn't
+        isn't disclosed and not required — so it never false-fails a scope that simply doesn't
         split the attribution (e.g. a group's Company column on a wholly-owned
         parent)."""
         stmt_val = self._stmt.value
         suffix = " [company]" if is_company else ""
+        if income is not None and attribution is None and require_attribution:
+            return {
+                "verdict": "failed",
+                "msg": f"{label}: Company {self._noun} attribution is missing",
+                "comparands": [Comparand(
+                    label=self._income_label, sheet=sheet, value=income,
+                    role="lhs", statement=stmt_val, row=inc_row, period=period,
+                )],
+                "expected": income, "actual": None, "diff": None,
+                "sheet": sheet, "row": attr_row,
+            }
         if income is None or attribution is None:
             return {
                 "verdict": "not_applicable",
@@ -209,7 +219,8 @@ class _AttributionFootingBase:
                 attribution = None
             evals.append(self._eval_scope(
                 income, attribution, inc_row, attr_row, sheet, tolerance,
-                label, period, is_company=is_company))
+                label, period, is_company=is_company,
+                require_attribution=self._stmt == StatementType.SOCI and filing_level == "company"))
         wb.close()
         return self._combine(evals, tolerance)
 
@@ -257,7 +268,8 @@ class _AttributionFootingBase:
             sheet = attribution.sheet or income.sheet or self._stmt.value
             evals.append(self._eval_scope(
                 income.value, attribution.value, income.row, attribution.row,
-                sheet, tolerance, label, period, is_company=is_company))
+                sheet, tolerance, label, period, is_company=is_company,
+                require_attribution=self._stmt == StatementType.SOCI and ctx.filing_level == "company"))
         return self._combine(evals, tolerance)
 
     def _read_attribution_facts(self, ctx, period, scope):
@@ -298,6 +310,8 @@ class SOCIAttributionFootingCheck(_AttributionFootingBase):
     _attribution_label = "total comprehensive income"
     _noun = "total comprehensive income"
     _attribution_leaf_labels = (
+        "total comprehensive income, attributable to owners of parent",
+        "total comprehensive income, attributable to non-controlling interests",
         "comprehensive income, attributable to owners of parent",
         "comprehensive income, attributable to non-controlling interests",
     )

@@ -3,10 +3,8 @@
 Sheet: `Notes-Listofnotes`. The full template has {{TEMPLATE_ROW_COUNT}}
 rows, each a canonical "Disclosure of …" label covering a single topic
 (e.g. "Disclosure of revenue", "Disclosure of property, plant and
-equipment", "Disclosure of capital management"). A related-party note is an
-intentional dual placement: keep the complete note in one List-of-Notes field
-(use the catch-all when no specific row exists), even though the dedicated
-Related Party Transactions sheet also reproduces it. The exact row set depends
+equipment", "Disclosure of capital management"). Related-party disclosures belong only in the dedicated Related Party
+Transactions sheet, including its prose text-block field. The exact row set depends
 on the active filing standard. **If a row-label catalog
 block (titled `TEMPLATE ROW LABELS`) appears later in this prompt, use
 ONLY the labels in that block.** If no catalog block is present (the
@@ -78,8 +76,9 @@ Entry shapes:
   complete list of valid skip reasons: the note is the Summary of
   Accounting Policies (belongs on Sheet {{CROSS_SHEET:accounting_policies}});
   or Corporate Information (belongs on Sheet
-  {{CROSS_SHEET:corporate_information}}). Related Party Transactions is NOT a
-  valid skip: write the complete note here as its intentional second placement.
+  {{CROSS_SHEET:corporate_information}}); or Related Party Transactions (belongs
+  on Sheet {{CROSS_SHEET:related_party}}, including its prose field). Never claim
+  coverage without the dedicated placement.
   A real disclosure note that simply fits no specific Sheet-12 row is **never** skipped
   — it goes to the catch-all row (step 3). The catch-all is the sink, not a bin:
   "no row fits" means catch-all, not skip.
@@ -126,8 +125,12 @@ Note 1, 2, 3, or elsewhere depending on the filing):
   when…", "Deferred tax is provided for using the liability method…" —
   not specific amounts or reconciliations for the current year.
 
-If a PDF note in your batch is that policies note (or one of its
-sub-sections), SKIP it entirely — do not emit any payload. Even if a
+Inspect a mixed policies note by complete subsection. Basis of Preparation,
+changes in accounting policies and standards disclosures use their specific
+live fields; do not skip them merely because they occur inside the policies
+note. Use the dedicated MPERS basis policy field when suitable; otherwise use
+this sheet's basis disclosure field. Only policy-only content is skipped to
+Accounting Policies. Preserve whole subsections and avoid duplicate prose. Even if a
 policy sub-section's topic matches a row on this sheet like
 "Disclosure of fair value measurement" or "Disclosure of income tax
 expense", the real disclosure for that topic lives in a separate,
@@ -172,6 +175,11 @@ only a balance with no breakdown or explanation, that balance belongs
 on the face statement, not here — skip the row.
 
 === MATCHING RULES ===
+
+- A trade-and-other-payables note belongs in "Disclosure of trade and other
+  payables" when that is its main subject. Use "Disclosure of accrued expenses
+  and other liabilities" only for a distinct accruals/liabilities disclosure.
+  One accrued-expense component does not change the subject of the whole note.
 
 - Prefer a specific label over the generic catch-all whenever plausible.
 - Copy the complete target label verbatim from the seeded catalog or
@@ -222,3 +230,14 @@ Your inventory entry lists a stated page range, but real disclosures
 sometimes run off that range. If you reach the last page and content
 clearly continues (no next-note header visible), view one or two more
 pages before deciding where the note actually ends.
+
+=== COMPLETE SUBSECTION ROUTING EXCEPTION ===
+
+The whole-note rule has these exceptions: complete Basis of Preparation,
+changes in policies and standards disclosures within a mixed policies note
+use the most specific live field in the active standard. Use the dedicated basis policy field when the active policies catalog has
+one; otherwise use the List-of-Notes basis disclosure field. Related-party subsections belong on
+the dedicated Related Party template. Do not duplicate source content, split
+sentences or fragment tables. Preserve each complete subsection and the
+remaining siblings. A cross-sheet skip requires a real destination placement;
+an unavailable destination stays unresolved for human review.

@@ -161,3 +161,26 @@ def test_notes_deps_filled_filename_uses_template_prefix(tmp_path: Path):
     # Filename convention mirrors extraction agent: NOTES_ISSUED_CAPITAL_filled.xlsx
     assert deps.filled_filename.endswith(".xlsx")
     assert "ISSUED_CAPITAL" in deps.filled_filename
+
+@pytest.mark.parametrize("standard", ["mfrs", "mpers"])
+@pytest.mark.parametrize("level", ["company", "group"])
+@pytest.mark.parametrize("prepared", [False, True])
+def test_effective_notes_prompts_preserve_required_routing(standard, level, prepared):
+    policy = render_notes_prompt(
+        NotesTemplateType.ACC_POLICIES, level, [], filing_standard=standard,
+        prepared_source_required=prepared,
+    )
+    flat = " ".join(policy.split())
+    assert "not just a title" in flat or "not a title alone" in flat
+    assert "Basis of Preparation" in policy
+    assert f"Filing standard: {standard.upper()}" in policy
+    assert "active policies catalog" in policy
+    assert "source introduction" in flat or "source-supported introductory" in flat
+    listing = render_notes_prompt(
+        NotesTemplateType.LIST_OF_NOTES, level, [], filing_standard=standard,
+        prepared_source_required=prepared,
+    )
+    flat = " ".join(listing.split())
+    assert "disclosure of trade and other payables" in flat.lower()
+    assert "Do not repeat" in flat
+    assert "related-party dual placement" not in flat

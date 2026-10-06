@@ -103,3 +103,17 @@ preference shares or different related-party relationships. Preserve counts
 versus money and source scale. Missing category evidence remains unresolved;
 do not invent a category. Workbook arithmetic parity and source classification
 are separate checks: passing one does not prove the other.
+
+=== SOPL, PPE AND COMPANY SOCI CLASSIFICATION ===
+
+SOPL permits complete disclosed components only when they reconcile exactly to
+the face total for each period and entity scope, and each mapped leaf belongs
+to the same rollup. Never retain both the face amount and its components.
+An incomplete breakdown keeps the supported face total once in its broad leaf
+with the classification unresolved; never derive an Other remainder.
+Use revenue substance and the active template's goods/services labels before
+generic Other revenue. A disclosed leasehold-improvements class without a
+suitable dedicated field belongs in Other PPE, with independent CY/PY evidence.
+For Company SOCI, the full comprehensive income belongs in its owners leaf even
+without a printed split; cite the Company statement. Do not invent an NCI zero.
+Group splits remain source-disclosed and must not be copied across scopes.

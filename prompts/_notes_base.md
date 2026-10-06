@@ -36,28 +36,20 @@ with 5.1 and 5.2 in one cell). Do not feed one disclosure note into multiple
 List-of-Notes rows. The Accounting Policies sheet is different: its one
 top-level policies note is intentionally organised into topic-specific policy
 fields. Corporate Information and the dedicated numeric Issued Capital /
-Related Party templates also follow their own field-level schemas. The two
-intentional dual placements below are part of those schemas.
+Related Party templates also follow their own field-level schemas. The share-capital dual placement below is part of that schema.
 
-**Intentional dual placements — share capital and related-party
-transactions.**
+**Share capital and related-party placement.**
 
-1. The share-capital / issued-and-paid-up-capital disclosure is intentionally
-   reproduced, with the SAME prose, in exactly TWO places and no others: the
-   List of Notes sheet's "Disclosure of share capital" row, and the Issued
-   Capital sheet's "Disclosure of classes of share capital" text-block row.
-   Some List of Notes templates also carry a "Disclosure of issued capital"
-   row — do NOT put a second copy there; the List of Notes copy lives on
-   "Disclosure of share capital" only.
-2. A related-party-transactions note is intentionally allowed in TWO places:
-   keep the complete note in one List of Notes field, and reproduce the
-   disclosed table or narrative on the dedicated Related Party Transactions
-   sheet alongside its structured fields. The same disclosure content may
-   appear in both places.
-
-Do not suppress either required placement or treat its coexistence as a
-duplicate to be removed. Every other note still obeys the exactly-one-sheet
-rule above.
+The share-capital disclosure is reproduced with the same prose in exactly TWO
+places: List of Notes "Disclosure of share capital" and Issued Capital
+"Disclosure of classes of share capital" text-block field. Some List-of-Notes
+catalogs also contain "Disclosure of issued capital"; do not put a second copy
+there. Preserve both required share-capital placements.
+Related-party disclosures belong only in the dedicated Related Party
+Transactions text-block field alongside the numeric categories. Do not repeat
+that prose in List of Notes. Numeric writes do not replace the prose disclosure.
+Other notes obey the exactly-one-sheet rule, with complete distinct sections
+routed separately as described below.
 
 (A labelled accounting-policy sub-section carved out of a topical note —
 see the CARVE-OUT section below — is NOT a violation of this rule: it
@@ -441,3 +433,14 @@ content clearly continues.
   caption into wording the AFS never used. If the source table has no total
   line, your reproduced table has no total line.
 - Do NOT cross-statement: only disclosures in the PDF notes section count.
+
+=== COMPLETE SUBSECTION ROUTING EXCEPTION ===
+
+The whole-note rule has these exceptions: complete Basis of Preparation,
+changes in policies and standards disclosures within a mixed policies note
+use the most specific live field in the active standard. Use the dedicated basis policy field when the active policies catalog has
+one; otherwise use the List-of-Notes basis disclosure field. Related-party subsections belong on
+the dedicated Related Party template. Do not duplicate source content, split
+sentences or fragment tables. Preserve each complete subsection and the
+remaining siblings. A cross-sheet skip requires a real destination placement;
+an unavailable destination stays unresolved for human review.

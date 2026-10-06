@@ -380,7 +380,7 @@ export function HistoryPage({ documentGroup, refreshKey, onDocumentLoaded, hideH
           isLoading={isDetailLoading}
           error={detailError}
           canonicalEnabled={canonicalEnabled}
-          initialTab={initialRunTab}
+          initialTab={initialRunTab ?? (detail?.status === "running" ? "agents" : "overview")}
           onBack={() => {
             // Always clear selection directly — window.history.back()
             // is *not* a safe shortcut, because history.length > 1

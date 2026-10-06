@@ -71,8 +71,8 @@ Do not submit an unclassified numeric payload or describe it as completed.
    from the TEMPLATE ROW LABELS list as `chosen_row_label`. This prose
    payload needs its own `evidence`
    + `parent_note` like any other. Only do this when the PDF actually
-   shows a table; if the note is plain prose with no schedule, skip the
-   reproduction. The numeric grid above still fills exactly as before —
+   shows a table; if the note is plain prose with no schedule, reproduce its narrative
+   in this same text-block field. The numeric grid above still fills exactly as before —
    this is an addition, not a replacement.
 6. Before calling `write_notes`, check that every numeric payload has its
    category and source evidence. Resolve missing categories now; do not leave
