@@ -675,7 +675,8 @@ Each run has one `filing_level` (`"company"` or `"group"`, default
 Company SOCI requires its complete CY/PY comprehensive income in the owners
 attribution leaf even when no split is printed. Undisclosed NCI stays blank.
 Both facts and workbook verification flag missing Company owners; attribution
-cross-checks also fail for missing Company SOCI attribution. Group splits remain
+cross-checks also fail for a missing Company SOCI owners leaf; an NCI value
+does not satisfy that requirement. Group splits remain
 source-supported and scope-specific. Pinned by `tests/test_attribution_footing.py`,
 `tests/test_verifier.py` and `tests/test_verifier_shadow.py`.
 

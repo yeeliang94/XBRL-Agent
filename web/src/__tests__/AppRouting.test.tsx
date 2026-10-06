@@ -108,26 +108,27 @@ describe("App routing", () => {
     cleanup();
   });
 
-  test("sidebar caps documents at three, keeps the open run visible and sends View all to the queue", async () => {
+  test.each([1, 3, 8])("sidebar caps documents at three and keeps View all visible with %i queued documents", async count => {
     const api = await import("../lib/api");
-    const runs = Array.from({ length: 8 }, (_, index) => ({
+    const runs = Array.from({ length: count }, (_, index) => ({
       id: 50 + index, status: "running", pdf_filename: `Filing ${index + 1}.pdf`,
     } as import("../lib/types").RunSummaryJson));
-    vi.mocked(api.fetchRuns).mockResolvedValue({ runs, total: 8, limit: 50, offset: 0 });
+    vi.mocked(api.fetchRuns).mockResolvedValue({ runs, total: count, limit: 50, offset: 0 });
     window.history.replaceState({}, "", "/history/42?tab=checks");
     try {
       const { default: App } = await import("../App");
       render(<App />);
       const sidebar = screen.getByRole("navigation", { name: "In-progress documents" });
-      await waitFor(() => expect(within(sidebar).getAllByRole("button", { name: /^Open / })).toHaveLength(3));
+      await waitFor(() => expect(within(sidebar).getAllByRole("button", { name: /^Open / })).toHaveLength(Math.min(count + 1, 3)));
       expect(within(sidebar).getByRole("button", { name: "Open Document 42" })).toHaveAttribute("aria-current", "page");
       expect(within(sidebar).getByRole("button", { name: "Open Filing 1.pdf" })).toBeInTheDocument();
       expect(within(sidebar).queryByRole("button", { name: "Open Filing 3.pdf" })).toBeNull();
       fireEvent.click(within(sidebar).getByRole("button", { name: "View all documents" }));
       expect(window.location.pathname).toBe("/");
       const queue = await screen.findByRole("table", { name: "Documents in progress" });
-      expect(within(queue).getByRole("button", { name: "Filing 8.pdf" })).toBeInTheDocument();
-      expect(within(sidebar).getAllByRole("button", { name: /^Open / })).toHaveLength(3);
+      expect(within(queue).getByRole("button", { name: `Filing ${count}.pdf` })).toBeInTheDocument();
+      expect(within(sidebar).getAllByRole("button", { name: /^Open / })).toHaveLength(Math.min(count, 3));
+      expect(within(sidebar).getByRole("button", { name: "View all documents" })).toBeVisible();
     } finally {
       cleanup();
       vi.mocked(api.fetchRuns).mockResolvedValue({ runs: [], total: 0, limit: 50, offset: 0 });
