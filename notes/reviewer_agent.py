@@ -135,6 +135,7 @@ READ_CELLS_MAX_ROWS = 10
 FINDING_FAMILIES: tuple[str, ...] = (
     "duplicates", "overlap_candidates", "coverage_gaps",
     "row_collisions", "subnote_gaps", "topline_splits", "title_issues",
+    "mandatory_fields",
 )
 
 # Leading run of <h3> heading blocks — preserved verbatim across an edit so the
@@ -763,6 +764,19 @@ def build_notes_reviewer_packet(context: dict) -> str:
                             "source note number or stable source id for the full block list."
                         )
             out.append(_review_source_line(f"source_notes={conflict.get('source_notes') or []}"))
+    if context.get("mandatory_fields"):
+        out.append(
+            "\n[MANDATORY POLICY DISCLOSURES] These required fields have no "
+            "substantive content. Inspect the source introduction/overview and "
+            "place its complete supported section in the named field. A title "
+            "alone does not satisfy it. Do not duplicate the whole policies "
+            "note or invent text. If unsupported, raise a grounded needs_human "
+            "flag using the finding reference."
+        )
+        for item in context["mandatory_fields"]:
+            out.append(_review_source_line(
+                f"{item['sheet']} row {item['row']} {item['label']!r}"
+            ))
     if policy_placements:
         out.append(
             "\n[POLICY DESTINATION ACCURACY] Check EVERY source-linked accounting "
@@ -1011,6 +1025,7 @@ def _build_context(
     reviewer_added_notes: Optional[set] = None,
     skip_receipts: Optional[list] = None,
     section_verdicts: Optional[dict[int, dict]] = None,
+    filing_standard: str = "mfrs", filing_level: str = "company",
 ) -> dict:
     """Run all five detectors + build the holistic coverage checklist from the
     durable DB inputs.
@@ -1073,6 +1088,41 @@ def _build_context(
             if generation and generation["input_kind"] == INPUT_KIND_PREPARED
             else []
         )
+        # Required slots are inspected from the live family, independently of
+        # populated cells. A heading alone is not a policy disclosure.
+        run = repo.fetch_run(conn, run_id)
+        config = run.config if run else None
+        policies_requested = bool(
+            generation and generation["input_kind"] == INPUT_KIND_PREPARED
+            or any(c["sheet"] == POLICIES_SHEET for c in cells)
+            or "ACC_POLICIES" in (config or {}).get("notes_to_run", [])
+        )
+        mandatory_fields = []
+        if policies_requested:
+            from notes.html_to_text import html_to_excel_text
+            by_row = {c["row"]: c for c in cells if c["sheet"] == POLICIES_SHEET}
+            nodes = repo.list_notes_node_rows(
+                conn, sheet=POLICIES_SHEET,
+                template_prefix=f"{filing_standard}-{filing_level}-",
+            )
+            overall_labels = {
+                "disclosure of material accounting policy information",
+                "disclosure of significant accounting policies",
+            }
+            for node in nodes:
+                label = node["label"] or ""
+                if node["kind"] != "LEAF" or not (
+                    label.startswith("*")
+                    or label.lstrip("*").strip().lower() in overall_labels
+                ):
+                    continue
+                body = re.sub(r"<h[1-6]\b[^>]*>.*?</h[1-6]>", "",
+                              by_row.get(node["row"], {}).get("html", ""),
+                              flags=re.IGNORECASE | re.DOTALL)
+                if not html_to_excel_text(body).strip():
+                    mandatory_fields.append({
+                        "sheet": POLICIES_SHEET, "row": node["row"], "label": label,
+                    })
         source_findings = []
         placement_conflicts = []
         for flag in repo.fetch_notes_review_flags(conn, run_id):
@@ -1181,6 +1231,7 @@ def _build_context(
         "source_integrity_findings": source_findings,
         "placement_conflicts": placement_conflicts,
         "policy_placements": policy_placements,
+        "mandatory_fields": mandatory_fields,
     }
 
 
@@ -1222,6 +1273,8 @@ def finding_keys(context: dict) -> set:
             (o.get("sheet_11") or {}).get("row"),
             (o.get("sheet_12") or {}).get("row"),
         ))
+    for item in context.get("mandatory_fields") or []:
+        keys.add(("mandatory_field", item["sheet"], item["row"]))
     for t in context.get("title_issues") or []:
         keys.add(("title", t.get("sheet"), t.get("row")))
     return keys
@@ -1367,6 +1420,7 @@ def recompute_notes_findings(deps: "NotesReviewerDeps") -> dict:
         reviewer_added_notes=deps.authored_note_nums,
         skip_receipts=deps.skip_receipts,
         section_verdicts=deps.section_placement_verdicts,
+        filing_standard=deps.filing_standard, filing_level=deps.filing_level,
     )
 
 
@@ -1507,6 +1561,7 @@ def create_notes_reviewer_agent(
         # sidecar-only (backfill found nothing) needs the on-disk fallback.
         sidecar_paths=None if deps.db_provenance_present else sidecar_paths,
         skip_receipts=deps.skip_receipts,
+        filing_standard=filing_standard, filing_level=filing_level,
     )
     deps.suspected_gap_note_nums = {
         row.note_num

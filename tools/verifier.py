@@ -1638,6 +1638,7 @@ def _verify_soci(
     pl_row = None
     total_oci_row = None
     total_ci_rows = []
+    owners_row = None
 
     for row in range(1, ws.max_row + 1):
         val = ws.cell(row=row, column=1).value
@@ -1649,6 +1650,11 @@ def _verify_soci(
                 total_oci_row = row
             elif norm == "total comprehensive income":
                 total_ci_rows.append(row)
+            elif norm in (
+                "comprehensive income, attributable to owners of parent",
+                "total comprehensive income, attributable to owners of parent",
+            ):
+                owners_row = row
 
     # Fail closed: require at least P&L and one Total CI row
     if not pl_row or not total_ci_rows:
@@ -1707,6 +1713,19 @@ def _verify_soci(
                 mismatches.append(
                     f"{pfx}Total CI ({ci_main}) != attribution total ({ci_attr})"
                 )
+
+    if filing_level == "company" and total_ci_rows:
+        from cross_checks.util import find_value_in_block
+        for period, col in (("CY", 2), ("PY", 3)):
+            if period == "PY" and find_value_in_block(
+                ws, "total comprehensive income", col=col,
+                start_row=total_ci_rows[0], end_row=total_ci_rows[0], wb=wb,
+                blank_formula_as_none=True,
+            ) is None:
+                continue
+            if not owners_row or ws.cell(owners_row, col).value is None:
+                is_balanced = False
+                mismatches.append(f"{period}: Company comprehensive-income owners attribution is missing.")
 
     for w in dict.fromkeys(formula_warnings):
         mismatches.append(f"Formula warning: {w}")

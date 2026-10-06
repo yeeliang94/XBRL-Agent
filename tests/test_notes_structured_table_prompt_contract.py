@@ -60,6 +60,9 @@ def test_related_party_prompt_requires_table_reproduction() -> None:
     # The cross-standard text-block row label.
     assert "disclosure of transactions between related parties" in body
     assert "addition, not a replacement" in body
+    assert "if the source includes a table, reproduce it verbatim" in body
+    assert "if the note has no table, reproduce its narrative in this same payload" in body
+    assert "only do this when the pdf actually shows a table" not in body
 
 
 def test_related_party_prompt_forbids_subtraction_only_residuals() -> None:

@@ -23,6 +23,7 @@ from typing import Optional
 from notes import integrity, lineage
 from notes import source_repository as srepo
 from notes.source_models import INPUT_KIND_PREPARED, IntegrityMode, SourceBlock, SourceNote
+from notes.source_write import APPROVED_DUPLICATE_PROSE_SHEETS
 from notes.writer import CELL_CHAR_LIMIT
 
 
@@ -123,11 +124,10 @@ def build_input(
             selection_matches_content=selection_matches,
         ))
 
-    # The numeric-sheet narrative deliberately repeats the corresponding
+    # Only Issued Capital narrative deliberately repeats the corresponding
     # complete List-of-Notes prose. Permit only that exact two-destination
     # shape, backed by the source writer's explicit purpose receipt.
     approved = set(approved_duplicate_block_ids)
-    numeric_prose_sheets = {"Notes-Issuedcapital", "Notes-RelatedPartytran"}
     for event in conn.execute(
         "SELECT DISTINCT block_id FROM notes_disposition_events WHERE run_id=? "
         "AND generation_id=? AND reason_code='APPROVED_DUPLICATE_ROUTE'",
@@ -136,7 +136,7 @@ def build_input(
         bid = event["block_id"]
         coords = [coord for coord in placements.get(bid, []) if coord in live_cells]
         sheets = {coord[0] for coord in coords}
-        if len(coords) == 2 and "Notes-Listofnotes" in sheets and sheets & numeric_prose_sheets:
+        if len(coords) == 2 and "Notes-Listofnotes" in sheets and sheets & APPROVED_DUPLICATE_PROSE_SHEETS:
             approved.add(bid)
     return integrity.IntegrityInput(
         blocks=blocks, notes=notes, usages=usages, cells=cells,

@@ -20,8 +20,7 @@ import { TopNav } from "./components/TopNav";
 import { SuccessToast } from "./components/SuccessToast";
 import { Icon, SettingsIcon } from "./components/icons";
 import { ArrowBack, Description, LeftPanelClose, LeftPanelOpen, Logout } from "./components/iconGlyphs";
-import { DocumentsPage, useDocuments } from "./pages/DocumentsPage";
-import { DocumentSwitcher } from "./components/DocumentSwitcher";
+import { DocumentsPage, useDocuments, documentStageLabel } from "./pages/DocumentsPage";
 import { HistoryPage } from "./pages/HistoryPage";
 import { ExtractPage } from "./pages/ExtractPage";
 import { ConceptsPage } from "./pages/ConceptsPage";
@@ -37,6 +36,8 @@ import { confirmNavigationLeave, initializeNavigationHistory, pushNavigationHist
 // Inline styles using the XBRL focused-workspace tokens — only the app-chrome pieces (page/header/main)
 // live here. ExtractPage-scoped styles live next to ExtractPage.
 // ---------------------------------------------------------------------------
+
+const SIDEBAR_DOCUMENT_LIMIT = 3;
 
 const styles = {
   headerTitle: {
@@ -371,6 +372,7 @@ export default function App() {
     documents.refresh();
   };
   const openDocument = (run: Pick<RunSummaryJson, "id" | "status">) => {
+    if (run.id === stateRef.current.selectedRunId && (stateRef.current.view === "history" || stateRef.current.view === "concepts")) return;
     if (!confirmNavigationLeave()) return;
     if (run.id === stateRef.current.currentRunId && stateRef.current.sessionId) {
       dispatch({ type: "SET_VIEW", payload: "extract" });
@@ -734,6 +736,12 @@ export default function App() {
   const currentFilename = documentName?.id === documentId ? documentName.pdf_filename
     : state.sessionRunId === documentId ? state.filename
     : documents.runs.find((run) => run.id === documentId)?.pdf_filename;
+  const selectedDocument = documentId == null ? null
+    : documents.runs.find((run) => run.id === documentId)
+      ?? { id: documentId, pdf_filename: currentFilename || `Document ${documentId}`, status: state.view === "extract" ? "draft" : "running", preparation: undefined };
+  const sidebarDocuments = (selectedDocument
+    ? [selectedDocument, ...documents.runs.filter((run) => run.id !== documentId)]
+    : documents.runs).slice(0, SIDEBAR_DOCUMENT_LIMIT);
   const contextLabel = state.view === "settings" ? "Settings"
     : state.view === "concepts" && documentId == null ? "Field labels"
     : documentId != null ? "Current filing"
@@ -743,7 +751,7 @@ export default function App() {
     <div className={`app-shell${sidebarCollapsed ? " app-shell--collapsed" : ""}`}
       style={{ ...ui.appShell, ...(sidebarCollapsed ? { gridTemplateColumns: "72px minmax(0, 1fr)" } : {}) }}>
       <a href="#main-content" className="skip-link">Skip to main content</a>
-      <aside className="app-sidebar" aria-label="Workspace navigation" style={ui.appSidebar}>
+      <aside className="app-sidebar" aria-label="Workspace navigation" style={{ ...ui.appSidebar, maxHeight: "100dvh" }}>
         <div className="app-rail-brand" style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 8px", minHeight: 28 }}>
           <svg viewBox="0 0 100 100" fill="none" aria-hidden="true" style={{ width: 28, height: 28, flexShrink: 0, color: pwc.orange500 }}>
             <path d="M12 78 L40 22 L52 50 L66 30 L88 78" stroke="currentColor" strokeWidth="11" strokeLinecap="round" strokeLinejoin="round" />
@@ -752,14 +760,26 @@ export default function App() {
         </div>
         <TopNav view={state.view} extractMode={extractMode} hasDocument={documentId != null}
           onAdd={addDocuments} onViewChange={(view) => showDocuments(view === "history" ? "history" : "progress")} />
-        {documentId != null && state.view !== "settings" && <div className="app-current-document" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <span className="app-navigation-label" style={{ ...ui.metadata, padding: "0 10px" }}>Current filing</span>
-          <span aria-current="page" data-tooltip={currentFilename || `Document ${documentId}`} aria-label={currentFilename || `Document ${documentId}`}
-            style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px", borderRadius: pwc.radius.md, background: pwc.white, minWidth: 0 }}>
-            <Icon glyph={Description} size={20} color={pwc.orange500} />
-            <span className="app-navigation-label" style={{ fontSize: 13, overflowWrap: "anywhere", minWidth: 0 }}>{currentFilename || `Document ${documentId}`}</span>
-          </span>
-        </div>}
+        <nav className="app-document-navigation" aria-label="In-progress documents" style={{ display: "flex", flexDirection: "column", gap: 8, minHeight: 0 }}>
+          {(documents.runs.length > 0 || documentId != null) && <span className="app-navigation-label" style={{ ...ui.metadata, padding: "0 10px" }}>Documents</span>}
+          <div className="app-document-list" style={{ display: "flex", flexDirection: "column", gap: 4, minHeight: 0, overflowY: "auto" }}>
+          {sidebarDocuments.map((run) => <button key={run.id} type="button"
+            aria-current={documentId === run.id && state.view !== "settings" ? "page" : undefined}
+            aria-label={`Open ${run.pdf_filename}`} title={run.pdf_filename} data-tooltip={run.pdf_filename}
+            onClick={() => openDocument(run)}
+            className={`${uiClass.btnQuiet} app-navigation-link`}
+            style={{ ...ui.buttonQuiet, display: "flex", alignItems: "center", justifyContent: "flex-start", gap: 8, padding: 4, fontSize: 13, fontWeight: documentId === run.id ? 600 : 400, flexShrink: 0, minWidth: 0, textAlign: "left", whiteSpace: "normal", background: documentId === run.id && state.view !== "settings" ? pwc.white : "transparent" }}>
+            <Icon glyph={Description} size={20} color={documentId === run.id ? pwc.orange500 : pwc.grey700} />
+            <span className="app-navigation-label" style={{ minWidth: 0, overflowWrap: "anywhere" }}>
+              <span style={{ display: "-webkit-box", WebkitBoxOrient: "vertical", WebkitLineClamp: 2, overflow: "hidden" }}>{run.pdf_filename}</span>
+              {documents.runs.some((item) => item.id === run.id) && <span style={{ ...ui.metadata, display: "block", marginTop: 2 }}>
+                {documentStageLabel(run)}
+              </span>}
+            </span>
+          </button>)}
+          </div>
+          <button type="button" className="app-navigation-link" aria-label="View all documents" title="View all documents" style={{ ...ui.buttonQuiet, flexShrink: 0 }} onClick={() => showDocuments()}>View all<span className="app-navigation-label"> documents</span></button>
+        </nav>
         <div className="app-rail-footer" style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: "auto" }}>
           <button type="button" aria-label="Settings" data-tooltip="Settings"
             aria-current={state.view === "settings" ? "page" : undefined}
@@ -787,9 +807,7 @@ export default function App() {
       </aside>
       <div className="app-workspace" style={{ minWidth: 0 }}>
       <header className="app-topbar" style={{ ...styles.topbar, zIndex: 30, borderBottom: `1px solid ${pwc.grey200}`, height: 64 }}>
-        {state.view !== "settings" && documentId != null ? <DocumentSwitcher runs={documents.runs} runId={documentId} filename={currentFilename}
-          onSelect={openDocument} onBack={() => showDocuments(state.view === "history" && !documents.runs.some((run) => run.id === documentId) ? "history" : "progress")} />
-          : <span style={ui.metadata}>{contextLabel}</span>}
+        <span style={ui.metadata}>{contextLabel}</span>
         <div style={{ ...styles.headerRight, marginLeft: "auto" }}>
           {user?.provider !== "dev" && <button type="button" aria-label="Log out" data-tooltip="Log out" onClick={handleLogout} style={styles.logoutButton}><Icon glyph={Logout} size={20} /></button>}
         </div>
@@ -806,7 +824,7 @@ export default function App() {
         {state.view === "concepts" && state.selectedRunId == null && <ConceptsPage runId={null} />}
         {state.view !== "settings" && state.view !== "extract" && state.selectedRunId != null &&
           <HistoryPage key={state.selectedRunId} canonicalEnabled={canonicalEnabled} selectedId={state.selectedRunId}
-            initialRunTab={state.view === "concepts" ? "values" : "overview"} hideDetailBack onDocumentLoaded={documentLoaded}
+            initialRunTab={state.view === "concepts" ? "values" : undefined} hideDetailBack onDocumentLoaded={documentLoaded}
             onSelectRun={(id) => { if (id == null) showDocuments("history"); else openDocument({ id, status: "running" }); }}
             onResumeDraft={(id) => openDocument({ id, status: "draft" })} />}
       </main>

@@ -301,9 +301,8 @@ def resolve_target(
     return node
 
 
-_NUMERIC_NOTE_PROSE_SHEETS = frozenset({
+APPROVED_DUPLICATE_PROSE_SHEETS = frozenset({
     "Notes-Issuedcapital",
-    "Notes-RelatedPartytran",
 })
 _LIST_OF_NOTES_SHEET = "Notes-Listofnotes"
 _CATCH_ALL_LABEL = "Disclosure of other notes to accounts"
@@ -338,7 +337,7 @@ def _approved_numeric_duplicate(
 ) -> bool:
     """Whether the proposed duplicate is the one approved two-slot route.
 
-    Complete Issued Capital and Related Party prose may appear once in their
+    Complete Issued Capital prose may appear once in its
     taxonomy text-block slot and once in List of Notes. No third destination
     is approved. When the numeric slot was written first, its disposition
     events are the durable approval receipt used by the later List write.
@@ -350,7 +349,7 @@ def _approved_numeric_duplicate(
     sheets = {sheet for sheet, _row in coords}
     if _LIST_OF_NOTES_SHEET not in sheets:
         return False
-    numeric_sheets = sheets & _NUMERIC_NOTE_PROSE_SHEETS
+    numeric_sheets = sheets & APPROVED_DUPLICATE_PROSE_SHEETS
     if len(numeric_sheets) != 1 or sheets - numeric_sheets != {_LIST_OF_NOTES_SHEET}:
         return False
     if numeric_note_prose:

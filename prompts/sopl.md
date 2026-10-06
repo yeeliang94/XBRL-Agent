@@ -23,78 +23,59 @@ the Nature face is NOT self-contained — these rollups apply to both variants.)
 value onto a formula cell: `write_facts()` refuses it and the formula would
 overwrite you anyway.
 
-=== STRATEGY: THE FACE STATEMENT IS THE TRUTH; STAY COARSE ===
+=== STRATEGY: FACE TOTALS WITH RECONCILED DISCLOSED COMPONENTS ===
 
-SOPL uses a dedicated face-first workflow. For SOPL revenue/expense lines, do
-NOT follow note references to fill component rows — record the face figure
-coarsely as described below. Do NOT go hunting through the notes for revenue/expense
-breakdowns. In real Malaysian filings the income-statement notes are usually
-incomplete and lump the remainder into "Others", so trying to decompose
-comprehensively makes you loop and over-bucket. What we file is the face
-statement's own figures.
+SOPL uses a dedicated face-first workflow. The face figure is the control total.
+Read the face page and its referenced revenue/expense notes once. Use complete,
+source-disclosed breakdowns when they reconcile to the face figure; do not keep
+searching for missing components or derive a remainder.
 
-1. Call `read_template()` to see which cells are data-entry vs. formula, and
-   `view_pdf_pages()` on the income-statement / profit-or-loss face page. You
-   do NOT need to open the detailed revenue/expense note pages.
-
-2. For every face line that is a NORMAL data-entry cell — Selling &
-   distribution, Administrative expenses, Research & development, Finance
-   costs, Share of profit of associates/JVs, Tax expense, Zakat, discontinued
-   operations, the attribution split (owners / non-controlling interests),
-   EPS, and on the Nature variant the raw-materials / depreciation /
-   inventory-movement lines — write the face figure exactly as printed. One
-   number, taken as-is. If the entity discloses operating expenses by
-   function, write each to its matching face row; if it discloses a single
-   aggregate, write that to the one face row the entity used. Do not split
-   further and do not sweep anything.
-
-3. For each face line that is a FORMULA pulling from the Analysis sub-sheet
-   (the handful listed above): the value still has to enter through the
-   sub-sheet for the face formula to resolve. Write the SINGLE face figure
-   into that section's broadest catch-all leaf — the "Other …" /
-   "Miscellaneous …" row that `read_template()` shows is summed into the
-   section's total. Use the face page as the evidence/source.
-   - Do this **even if the financials show a breakdown.** We intentionally do
-     NOT split SOPL revenue/expenses into the granular sub-sheet fields.
-   - The exact label of the catch-all leaf differs between MFRS/MPERS and
-     Function/Nature (e.g. "Other revenue", "Other cost of sales", the
-     section's "Other/Miscellaneous … income" row, the section's "Other …
-     employee …" expense row, "Other miscellaneous expenses", "Other finance
-     income"). Read it off the
-     template — pick the section's most generic "Other/Miscellaneous" leaf —
-     rather than assuming a fixed name or row number.
-
-4. Call `write_facts()` with all mappings, then `verify_totals()` to report
-   status, then `save_result()` when complete.
-
-This keeps you to a single pass: read the face, write the face, finish. No
-note-diving, no reconciliation loop.
-
-=== THIS IS COARSE RECORDING, NOT PLUGGING ===
-
-Writing the real, page-cited face figure into an "Other …" catch-all leaf is
-legitimate coarse recording — the entity's own income statement is the source
-and the number is genuine. That is NOT the banned behaviour. The INTEGRITY
-RULE in the system prompt still holds in full: you must NEVER invent a
-"balancing", "residual", or "unanalysed" figure and write it to a catch-all
-row to force `verify_totals()` to pass. The line is simple — a coarse face
-figure is a real disclosed number you are recording at a coarse grain; a plug
-is a number you made up to close a gap. Never plug.
+1. Call `read_template()` and view the profit-or-loss face page. Identify the
+   writable leaves and the formula rollups for the active standard and variant.
+2. For directly writable face lines, write the face figure as-is. Do not add
+   the same amount to Analysis leaves unless the live formula requires them.
+3. For formula-driven Revenue, Cost of sales, Other income, Employee benefits
+   expense, Other expenses and Finance income, inspect the referenced note.
+   Evaluate each period and entity scope independently: CY and PY, and Group
+   and Company when applicable. Use `calculator` to check that the complete
+   disclosed components reconcile exactly in the source presentation scale.
+   Split only when every component has source evidence and a suitable writable
+   destination contributing to that same face rollup. Map interest, royalties,
+   salaries and defined-contribution expenses to their matching leaves.
+   A source-disclosed Other component is valid; a subtraction-only residual is not.
+4. If a breakdown is incomplete, inconsistent, absent or cannot be mapped
+   without invention, do not split. Record the whole face figure once in the
+   best supported broad leaf, normally the section's catch-all leaf. Cite the
+   face page and report the unresolved breakdown/classification in `save_result`.
+   Never retain the full face amount alongside its components. If revising a
+   coarse write into components, clear the earlier coarse leaf with value=None and source evidence so the rollup
+   does not double-count. Read live labels rather than assuming row numbers.
+5. Revenue classification follows disclosed revenue substance. For a coarse
+   revenue amount, inspect principal activities and choose the matching goods
+   or services leaf in the live template. Mixed revenue requires a reconciled
+   disclosed breakdown; do not allocate it by guessing from principal activity.
+6. Call `write_facts()` with grounded mappings, `verify_totals()`, then
+   `save_result()`. A mismatch stays visible; never invent a balancing figure.
 
 === WORKED EXAMPLES ===
 
-**Coarse revenue (the normal case):** The face shows Revenue RM9,000,000 and
-the revenue note breaks it into goods RM5m / services RM3m / fees RM1m. Do
-NOT split. Write RM9,000,000 to the Analysis sub-sheet's "Other revenue" leaf,
-evidence = the income-statement page. The face Revenue formula then reads
-9,000,000.
+**Reconciled other income:** CY interest income 45,431 equals face Other income
+45,431: use the interest-income leaf. PY interest 36,646 plus disclosed Others
+8,353 equals 44,999: use interest and the matching Other income leaf. Cite the
+face and note pages for each period. Do not also write 44,999 as a coarse total.
 
-**Coarse expenses:** The face shows Other expenses RM2,400,000. Write
-RM2,400,000 to the section's "Other miscellaneous expenses" leaf, cited to the
-face page. Do not go looking for the expense-breakdown note.
+**Incomplete breakdown:** Face Other expenses is 2,400,000 but the note discloses
+only 1,900,000 of components. Record 2,400,000 once in the section's broad leaf,
+report the incomplete breakdown, and never invent the missing 500,000.
 
-**Directly-writable line:** The face shows Administrative expenses
-RM1,200,000 — write 1,200,000 straight to that face cell as a positive value.
+**Directly writable line:** Administrative expenses 1,200,000 is written
+straight to that face cell as a positive value.
+
+=== NO-RESIDUAL-PLUG RULE ===
+
+A cited face figure, or a disclosed class with no suitable dedicated leaf, may
+use an Other row. NEVER invent a balancing, residual or unanalysed amount to
+make `verify_totals()` pass. No arithmetic-only catch-all allocations.
 
 === CRITICAL RULES ===
 
@@ -107,7 +88,7 @@ RM1,200,000 — write 1,200,000 straight to that face cell as a positive value.
   live template formula explicitly requires the opposite.
 - The main-sheet Revenue / Cost of sales / Other income / Other expenses /
   Finance income lines are formulas — enter their values through the Analysis
-  sub-sheet's catch-all leaf as described above, never onto the face cell.
+  sub-sheet's supported leaves as described above, never onto the face cell.
 - "Income" or "Income and Expenditure" in non-profit entities maps to
   Revenue/Expenses.
 - Tax expense of zero should still be entered as 0 (not left blank) if disclosed.

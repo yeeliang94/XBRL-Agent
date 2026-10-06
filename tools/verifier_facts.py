@@ -583,6 +583,7 @@ def _verify_soci_facts(
     diagnostics: list[str] = []
     is_balanced = True
 
+    owners_uuid = None
     pl_uuid = None
     total_oci_uuid = None
     total_ci_uuids: list[str] = []
@@ -594,6 +595,11 @@ def _verify_soci_facts(
             total_oci_uuid = n["uuid"]
         elif norm == "total comprehensive income":
             total_ci_uuids.append(n["uuid"])
+        elif norm in (
+            "comprehensive income, attributable to owners of parent",
+            "total comprehensive income, attributable to owners of parent",
+        ):
+            owners_uuid = n["uuid"]
 
     if not pl_uuid or not total_ci_uuids:
         missing = []
@@ -649,6 +655,16 @@ def _verify_soci_facts(
                 mismatches.append(
                     f"{pfx}Total CI ({ci_main}) != attribution total ({ci_attr})"
                 )
+
+    if filing_level == "company":
+        for period in ("CY", "PY"):
+            if period == "PY" and _fact_value(
+                facts, total_ci_uuids[0], period, "Company",
+            ) is None:
+                continue
+            if not owners_uuid or _fact_value(facts, owners_uuid, period, "Company") is None:
+                is_balanced = False
+                mismatches.append(f"{period}: Company comprehensive-income owners attribution is missing.")
 
     return VerificationResult(
         is_balanced=is_balanced,

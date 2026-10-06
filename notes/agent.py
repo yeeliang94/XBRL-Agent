@@ -176,7 +176,7 @@ def _render_sheet_map(filing_standard: str) -> str:
         "",
         (
             "Each notes sheet maps to a distinct MBRS XBRL concept, and "
-            "contents must not overlap except for the required capital and related-party dual placement. Know which sheet is "
+            "contents must not overlap except for the required capital dual placement. Know which sheet is "
             "yours before you copy any content."
         ),
         "",
@@ -3809,9 +3809,10 @@ def create_notes_agent(
               - {"note_num": <int>, "action": "skipped",
                 "reason": "<one sentence>"}
                 ONLY for a note that belongs on a DIFFERENT sheet
-                (Accounting Policies or Corporate Information). Related Party
-                Transactions is an intentional dual placement and is NOT a
-                valid skip. A real disclosure note that simply fits no specific
+                (Accounting Policies, Corporate Information or Related Party
+                Transactions). Related Party Transactions belongs only on its
+                dedicated sheet, including the prose field. A skip requires
+                a live placement there. A real disclosure note that simply fits no specific
                 Sheet-12 row is NEVER skipped — it goes to the catch-all row.
                 "No row fits" means catch-all.
 
