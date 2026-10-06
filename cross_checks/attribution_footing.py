@@ -112,7 +112,7 @@ class _AttributionFootingBase:
         if income is not None and attribution is None and require_attribution:
             return {
                 "verdict": "failed",
-                "msg": f"{label}: Company {self._noun} attribution is missing",
+                "msg": f"{label}: Company {self._noun} owners attribution is missing",
                 "comparands": [Comparand(
                     label=self._income_label, sheet=sheet, value=income,
                     role="lhs", statement=stmt_val, row=inc_row, period=period,
@@ -204,6 +204,7 @@ class _AttributionFootingBase:
                 message=f"No {self._stmt.value} sheet found in workbook")
         sheet = ws.title
         evals = []
+        require_owners = self._stmt == StatementType.SOCI and filing_level == "company"
         for _scope, col, label, is_company, period in self._scopes(filing_level):
             income = find_value_by_label(
                 ws, self._income_label, col=col, wb=wb,
@@ -211,29 +212,32 @@ class _AttributionFootingBase:
             )
             inc_row = find_label_row(ws, self._income_label)
             attribution, attr_row = self._read_attribution_xlsx(ws, col, wb)
-            # Gate: if no attribution leaf cell carries a value, the split isn't
-            # disclosed — drop the (formula-zero) total so we report
-            # not_applicable instead of false-failing (parity with the facts
-            # path's None for an all-blank computed total).
-            if attribution is not None and not self._attribution_present_xlsx(ws, col):
+            # Undisclosed splits drop the formula-zero total. Company SOCI
+            # specifically requires owners; NCI alone cannot satisfy it.
+            if attribution is not None and not self._attribution_present_xlsx(
+                ws, col, owners_only=require_owners,
+            ):
                 attribution = None
             evals.append(self._eval_scope(
                 income, attribution, inc_row, attr_row, sheet, tolerance,
                 label, period, is_company=is_company,
-                require_attribution=self._stmt == StatementType.SOCI and filing_level == "company"))
+                require_attribution=require_owners))
         wb.close()
         return self._combine(evals, tolerance)
 
-    def _attribution_present_xlsx(self, ws, col: int) -> bool:
+    def _attribution_present_xlsx(self, ws, col: int, *, owners_only: bool = False) -> bool:
         """True when at least one attribution leaf cell in ``col`` carries a
         NUMERIC value — including an explicit 0. An explicit zero is a disclosed
         split (the agent said "this component is zero"), so it must be validated
         against the income total, not skipped: a 0 attribution while income is
         non-zero is a real mismatch. Only a truly BLANK cell (None) is "not
         disclosed" — mirrors the facts path, where not_disclosed reads as None
-        but an explicit_zero leaf makes the cascade write a real 0 total."""
+        but an explicit_zero leaf makes the cascade write a real 0 total.
+        Company SOCI uses owners_only so NCI cannot substitute for owners.
+        """
         targets = {lbl.strip().lstrip("*").strip().lower()
-                   for lbl in self._attribution_leaf_labels}
+                   for lbl in self._attribution_leaf_labels
+                   if not owners_only or "owners of parent" in lbl}
         for r in range(1, ws.max_row + 1):
             v = ws.cell(r, 1).value
             if v is None:
@@ -259,17 +263,24 @@ class _AttributionFootingBase:
 
     # --- facts path --------------------------------------------------------
     def run_facts(self, ctx, tolerance: float) -> CrossCheckResult:
-        from cross_checks.facts_util import read_labelled_value
+        from cross_checks.facts_util import LabelledValue, read_labelled_value, read_labelled_value_last
         evals = []
+        require_owners = self._stmt == StatementType.SOCI and ctx.filing_level == "company"
         for entity_scope, _col, label, is_company, period in self._scopes(ctx.filing_level):
             income = read_labelled_value(
                 ctx, self._stmt, self._income_label, period, entity_scope)
             attribution = self._read_attribution_facts(ctx, period, entity_scope)
+            if require_owners and not any(
+                read_labelled_value_last(ctx, self._stmt, owner_label, period, entity_scope).value is not None
+                for owner_label in self._attribution_leaf_labels
+                if "owners of parent" in owner_label
+            ):
+                attribution = LabelledValue(None, attribution.sheet, attribution.row)
             sheet = attribution.sheet or income.sheet or self._stmt.value
             evals.append(self._eval_scope(
                 income.value, attribution.value, income.row, attribution.row,
                 sheet, tolerance, label, period, is_company=is_company,
-                require_attribution=self._stmt == StatementType.SOCI and ctx.filing_level == "company"))
+                require_attribution=require_owners))
         return self._combine(evals, tolerance)
 
     def _read_attribution_facts(self, ctx, period, scope):

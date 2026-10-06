@@ -742,7 +742,6 @@ export default function App() {
   const sidebarDocuments = (selectedDocument
     ? [selectedDocument, ...documents.runs.filter((run) => run.id !== documentId)]
     : documents.runs).slice(0, SIDEBAR_DOCUMENT_LIMIT);
-  const visibleProgressCount = sidebarDocuments.filter((run) => documents.runs.some((item) => item.id === run.id)).length;
   const contextLabel = state.view === "settings" ? "Settings"
     : state.view === "concepts" && documentId == null ? "Field labels"
     : documentId != null ? "Current filing"
@@ -779,7 +778,7 @@ export default function App() {
             </span>
           </button>)}
           </div>
-          {visibleProgressCount < documents.total && <button type="button" className="app-navigation-link" aria-label="View all documents" title="View all documents" style={{ ...ui.buttonQuiet, flexShrink: 0 }} onClick={() => showDocuments()}>View all<span className="app-navigation-label"> documents</span></button>}
+          <button type="button" className="app-navigation-link" aria-label="View all documents" title="View all documents" style={{ ...ui.buttonQuiet, flexShrink: 0 }} onClick={() => showDocuments()}>View all<span className="app-navigation-label"> documents</span></button>
         </nav>
         <div className="app-rail-footer" style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: "auto" }}>
           <button type="button" aria-label="Settings" data-tooltip="Settings"
