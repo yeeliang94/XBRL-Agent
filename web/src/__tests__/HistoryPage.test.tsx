@@ -18,6 +18,8 @@ import { HistoryPage } from "../pages/HistoryPage";
 import * as api from "../lib/api";
 import { ApiError } from "../lib/errors";
 import type { RunSummaryJson } from "../lib/types";
+import { createMultiAgentSSE } from "../lib/sse";
+vi.mock("../lib/sse", () => ({ createMultiAgentSSE: vi.fn() }));
 
 const fetchRuns = vi.mocked(api.fetchRuns);
 
@@ -35,6 +37,73 @@ const baseRun = {
 };
 
 describe("HistoryPage", () => {
+  test.each(["SOFP", "NOTES_ACC_POLICIES"])("confirms retry scope for %s from saved Activity with the original filing settings", async (statementType) => {
+    window.history.replaceState({}, "", "/history/77?tab=agents");
+    fetchRuns.mockResolvedValue({ runs: [], total: 0, limit: 50, offset: 0 });
+    vi.mocked(api.fetchRunDetail).mockResolvedValue({
+      id: 77, created_at: "2026-04-10T00:00:00Z", pdf_filename: "FAILED.pdf",
+      status: "completed_with_errors", session_id: "sess-77", output_dir: "/tmp/out/sess-77",
+      merged_workbook_path: null, scout_enabled: false, started_at: "2026-04-10T00:00:00Z",
+      ended_at: "2026-04-10T00:01:00Z", filing_standard: "mpers", filing_level: "group",
+      config: { statements: ["SOFP", "SOPL"], notes_to_run: ["ACC_POLICIES", "CORP_INFO"],
+        variants: { SOFP: "CuNonCu" }, models: { SOFP: "saved-model" },
+        notes_models: { ACC_POLICIES: "saved-notes-model" }, denomination: "millions", infopack: { source: "saved" }, use_scout: true },
+      agents: [{ id: 1, statement_type: statementType, variant: null, model: "saved-model", status: "failed",
+        started_at: "2026-04-10T00:00:00Z", ended_at: "2026-04-10T00:01:00Z",
+        workbook_path: null, total_tokens: 0, total_cost: 0, events: [] }], cross_checks: [],
+    });
+    const abort = vi.fn();
+    vi.mocked(createMultiAgentSSE).mockReturnValue({ abort } as unknown as AbortController);
+    const onSelectRun = vi.fn();
+    render(<HistoryPage selectedId={77} onSelectRun={onSelectRun} />);
+    fireEvent.click(await screen.findByRole("button", { name: /^Retry / }));
+    const dialog = screen.getByRole("dialog");
+    if (statementType.startsWith("NOTES_")) {
+      expect(dialog).toHaveTextContent("Corporate Information, Accounting Policies and List of Notes");
+      expect(dialog).toHaveTextContent("every retried template");
+    } else {
+      expect(dialog).toHaveTextContent("selected statement");
+      expect(dialog).not.toHaveTextContent("Corporate Information");
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Retry extraction" }));
+    const calls = vi.mocked(createMultiAgentSSE).mock.calls;
+    const call = calls[calls.length - 1];
+    expect(call[0]).toBe("sess-77");
+    expect(call[1]).toMatchObject({
+      statements: statementType === "SOFP" ? ["SOFP"] : [],
+      notes_to_run: statementType === "SOFP" ? [] : ["ACC_POLICIES"],
+      filing_standard: "mpers", filing_level: "group", denomination: "millions", use_scout: false,
+      variants: { SOFP: "CuNonCu" }, models: { SOFP: "saved-model" },
+      notes_models: { ACC_POLICIES: "saved-notes-model" }, infopack: { source: "saved" },
+    });
+    expect(call[5]).toBe("/api/rerun/sess-77");
+    expect(screen.getByRole("button", { name: /^Retry / })).toBeDisabled();
+    await act(async () => { call[4]("Extraction still running.", "request"); });
+    expect(screen.getByText("Extraction still running.")).toHaveAttribute("role", "alert");
+    fireEvent.click(screen.getByRole("button", { name: /^Retry / }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry extraction" }));
+    const retry = calls[calls.length - 1];
+    await act(async () => { retry[2]({ event: "status", data: { run_id: 78, phase: "starting", message: "Starting" }, timestamp: 1 }); });
+    expect(onSelectRun).toHaveBeenCalledWith(78);
+    expect(abort).toHaveBeenCalled();
+    window.history.replaceState({}, "", "/");
+  });
+
+  test("progress refresh retains all loaded History pages", async () => {
+    fetchRuns.mockResolvedValueOnce({ runs: Array.from({ length: 50 }, (_, i) => ({ ...baseRun, id: i + 1 })), total: 80, limit: 50, offset: 0 });
+    const view = render(<HistoryPage refreshKey="running" />);
+    await screen.findByRole("button", { name: /load more/i });
+    fetchRuns.mockResolvedValueOnce({ runs: [{ ...baseRun, id: 51, pdf_filename: "SECOND-PAGE.pdf" }], total: 80, limit: 50, offset: 50 });
+    fireEvent.click(await screen.findByRole("button", { name: /load more/i }));
+    await screen.findByText("SECOND-PAGE.pdf");
+    fetchRuns.mockImplementation(async (params) => ({
+      runs: params?.offset === 50 ? [{ ...baseRun, id: 51, pdf_filename: "SECOND-PAGE.pdf" }] : Array.from({ length: 50 }, (_, i) => ({ ...baseRun, id: i + 1 })),
+      total: 80, limit: 50, offset: params?.offset ?? 0,
+    }));
+    view.rerender(<HistoryPage refreshKey="finished" />);
+    await waitFor(() => expect(fetchRuns).toHaveBeenCalledTimes(4));
+    expect(screen.getByText("SECOND-PAGE.pdf")).toBeVisible();
+  });
   beforeEach(() => {
     fetchRuns.mockReset();
     vi.mocked(api.fetchRunDetail).mockReset();
@@ -571,7 +640,7 @@ describe("HistoryPage", () => {
     // in the list view, so its presence proves the page mounted.
     await waitFor(() => {
       expect(
-        screen.getByRole("button", { name: /all runs/i }),
+        screen.getByRole("button", { name: "Documents" }),
       ).toBeInTheDocument();
     });
   });
@@ -728,7 +797,7 @@ describe("HistoryPage", () => {
     render(<HistoryPage selectedId={77} onSelectRun={() => {}} />);
     await waitFor(() => {
       expect(
-        screen.getByRole("button", { name: /all runs/i }),
+        screen.getByRole("button", { name: "Documents" }),
       ).toBeInTheDocument();
     });
     // OTHER.pdf is an OTHER row; when the detail page is up, the list
@@ -773,10 +842,10 @@ describe("HistoryPage", () => {
     render(<HistoryPage selectedId={77} onSelectRun={onSelectRun} />);
     await waitFor(() =>
       expect(
-        screen.getByRole("button", { name: /all runs/i }),
+        screen.getByRole("button", { name: "Documents" }),
       ).toBeInTheDocument(),
     );
-    fireEvent.click(screen.getByRole("button", { name: /all runs/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Documents" }));
     expect(onSelectRun).toHaveBeenCalledWith(null);
     expect(backSpy).not.toHaveBeenCalled();
   });
@@ -807,10 +876,10 @@ describe("HistoryPage", () => {
     render(<HistoryPage selectedId={77} onSelectRun={onSelectRun} />);
     await waitFor(() =>
       expect(
-        screen.getByRole("button", { name: /all runs/i }),
+        screen.getByRole("button", { name: "Documents" }),
       ).toBeInTheDocument(),
     );
-    fireEvent.click(screen.getByRole("button", { name: /all runs/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Documents" }));
     expect(onSelectRun).toHaveBeenCalledWith(null);
   });
 

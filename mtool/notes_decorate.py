@@ -1,26 +1,13 @@
 """Render-decoration for notes HTML on its way into an mTool text-block.
 
-Backend twin of `web/src/lib/clipboard.ts::decorateHtmlForClipboard` (+ the
-numeric-cell rule in `web/src/lib/tableAlign.ts`). Both exist for the SAME
-reason: our `notes_cells` HTML is style-free (the sanitiser strips authoring
-styling — gotcha #16), and a paste/fill target that can't see the app's scoped
-CSS therefore renders bare `<table>`/`<strong>` with no borders, fill, padding,
-font, or numeric right-alignment.
+The canonical exporter prepares this markup for read-only review, Copy, and
+mTool workbook filling. Clipboard code copies the result without decorating it.
+Canonical note HTML retains its source/manual styles; this module adds destination
+fonts, borders, spacing, alignment, and TX27 transport markup only to output.
 
-mTool's text-block editor (TX Text Control, ``TX27_HTM``) is exactly such a
-target. The manual "Copy → paste into mTool" workflow has rendered correctly for
-months precisely BECAUSE the clipboard path injects these inline styles first.
-The automated mTool-fill path read the DB HTML verbatim and so lost the
-formatting — this module closes that gap by applying the same decoration in
-:func:`mtool.notes_exporter.build_notes_fill_doc`.
-
-Kept deliberately in lock-step with `clipboard.ts` — the DEFAULT options here
-mirror `DEFAULT_FORMAT_OPTIONS` and reproduce the styling that shipped (and was
-mTool-render-proven) before the theme feature. If you change one side, change
-the other and re-check both fixture suites. ONE deliberate divergence: the
-``compact`` tier below is mTool-only (it exists to fit Excel's 32,767-char
-cell limit, which the clipboard payload never faces) — clipboard.ts stays on
-the verbose per-cell form. See docs/PLAN-mtool-compact-decoration.md.
+The legacy defaults use notes.table_theme.LEGACY_NOTES_TABLE_STYLE and preserve
+the established unconfigured appearance. Header/theme options remain optional.
+The review editor uses its own scoped CSS while editing canonical notes.
 
 Uses BeautifulSoup (already a backend dependency via the sanitiser). NOT
 imported by ``offline_fill.py`` — that file stays stdlib-only + repo-import-free
@@ -33,6 +20,7 @@ import re
 from dataclasses import dataclass, field
 
 from bs4 import BeautifulSoup, Tag
+from notes.table_theme import LEGACY_NOTES_TABLE_STYLE
 
 # --- numeric-cell rule (port of tableAlign.ts) ------------------------------
 # Accountant-style: thousands-separated (`1,595`), parenthesised negatives
@@ -73,7 +61,7 @@ def _amount_columns(table: Tag) -> set[int]:
     return columns
 
 
-# --- format options (port of clipboardFormat.ts DEFAULT_FORMAT_OPTIONS) -----
+# --- format options (legacy baseline plus optional theme fields) ------------
 @dataclass(frozen=True)
 class NotesTableStyle:
     """The subset of the notes-table theme the decorator consumes. Defaults
@@ -87,17 +75,17 @@ class NotesTableStyle:
     ``totals_double_underline`` the accountant totals-row convention. ALL
     default to None/False so an un-customised theme emits byte-for-byte the
     historic output (the pinning tests depend on that)."""
-    border_style: str = "single"           # none | single | double
-    font_size_pt: int = 10
-    cell_padding_px: tuple[int, int] = (4, 8)   # (vertical, horizontal)
-    paragraph_spacing_px: int = 8
+    border_style: str = LEGACY_NOTES_TABLE_STYLE["borderStyle"]
+    font_size_pt: int = LEGACY_NOTES_TABLE_STYLE["fontSizePt"]
+    cell_padding_px: tuple[int, int] = tuple(LEGACY_NOTES_TABLE_STYLE["cellPaddingPx"])
+    paragraph_spacing_px: int = LEGACY_NOTES_TABLE_STYLE["paragraphSpacingPx"]
     border_color: str | None = None
     header_fill: str | None = None
     header_bold: bool | None = None
     heading_size_pt: int | None = None     # None → headings use font_size_pt
     heading_weight: int | None = None      # None → historic 600
     list_marker: str | None = None         # None | disc | dash | decimal
-    totals_double_underline: bool = False
+    totals_double_underline: bool = LEGACY_NOTES_TABLE_STYLE["totalsDoubleUnderline"]
     # Accountant "ruled" look: a single horizontal rule under the header row,
     # with no cell grid (`border_style="none"`). Printed financial statements
     # are ruled, not boxed — and it is what a Word source produces, so a
@@ -223,7 +211,7 @@ def _table_inherited_css(o: NotesTableStyle, lite: bool = False) -> str:
 
 
 def _header_extra(o: NotesTableStyle) -> str:
-    fill = o.header_fill or "#f3f4f6"
+    fill = o.header_fill or LEGACY_NOTES_TABLE_STYLE["headerFill"]
     # `<th>` is bold by default in most targets; header_bold=False must emit an
     # explicit 400 to override. None (un-themed) keeps the historic 600.
     weight = " font-weight: 400;" if o.header_bold is False else " font-weight: 600;"
@@ -855,7 +843,7 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
     decorated fragment (wrapped in a font-bearing ``<div>`` so bare
     ``<strong>`` / loose text inherit the face). Pure — does not mutate input.
 
-    Mirrors ``decorateHtmlForClipboard``: table borders/width, per-cell
+    Adds table borders/width, per-cell
     padding/font/border + numeric right-alignment, header fill/bold, paragraph
     and heading spacing. Persisted per-cell styles (a user's manual WYSIWYG
     borders/fills) always win over the decorator defaults.

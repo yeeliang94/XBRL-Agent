@@ -17,6 +17,7 @@ import { ArrowBack } from "./iconGlyphs";
 // ---------------------------------------------------------------------------
 
 export interface RunDetailPageProps {
+  hideBack?: boolean;
   detail: RunDetailJson | null;
   isLoading: boolean;
   error: string | null;
@@ -31,6 +32,7 @@ export interface RunDetailPageProps {
   onForceAbort?: (runId: number) => void;
   /** Clone a finished run into a fresh editable draft. */
   onRestart?: (runId: number) => void | Promise<void>;
+  onRetryAgent?: RunDetailViewProps["onRetryAgent"];
   /** Forwarded to RunDetailView to gate the "View Concepts" link on
    *  canonical mode (peer-review F6). */
   canonicalEnabled?: boolean;
@@ -40,6 +42,7 @@ export interface RunDetailPageProps {
 }
 
 export function RunDetailPage({
+  hideBack = false,
   detail,
   isLoading,
   error,
@@ -49,26 +52,27 @@ export function RunDetailPage({
   onResumeDraft,
   onForceAbort,
   onRestart,
+  onRetryAgent,
   canonicalEnabled = false,
   initialTab,
 }: RunDetailPageProps) {
   return (
     <div style={styles.root}>
-      <header style={styles.topBar}>
+      {!hideBack && <header style={styles.topBar}>
         <button
           type="button"
           onClick={onBack}
           className={uiClass.btnGhost}
           style={styles.backButton}
-          aria-label="All runs"
+          aria-label="Documents"
         >
           <ArrowBack size={20} />
-          All runs
+          Documents
         </button>
         {/* The run number is NOT repeated here — the detail view's kicker
             ("RUN {id}") already names the run, and two copies of the same
             label an inch apart read as clutter (run-168 design critique). */}
-      </header>
+      </header>}
 
       {isLoading && <p style={styles.state}>Loading run details…</p>}
 
@@ -84,6 +88,7 @@ export function RunDetailPage({
           onResumeDraft={onResumeDraft}
           onForceAbort={onForceAbort}
           onRestart={onRestart}
+          onRetryAgent={onRetryAgent}
           canonicalEnabled={canonicalEnabled}
           initialTab={initialTab}
         />

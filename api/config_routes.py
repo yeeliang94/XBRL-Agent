@@ -124,16 +124,25 @@ def _valid_theme_color(value) -> bool:
     )
 
 
-def _validate_notes_table_style(raw) -> dict:
+def _validate_notes_table_style(raw, *, sparse: bool = False) -> dict:
     """Validate + clean an incoming theme object. Returns the cleaned dict (only
     known, in-range keys) or raises HTTPException(400) on a malformed field.
-    Unknown keys are dropped so the persisted shape stays auditable."""
+    Legacy snapshots drop unknown keys. Sparse edits reject unknown keys and
+    allow null to reset a field to the house default."""
     if not isinstance(raw, dict):
         raise HTTPException(
             status_code=400, detail="notes_table_style must be an object."
         )
+    unknown = set(raw)
+    if sparse:
+        raw = {key: value for key, value in raw.items() if value is not None}
+
+    def supplied(key: str) -> bool:
+        unknown.discard(key)
+        return key in raw
+
     cleaned: dict = {}
-    if "borderStyle" in raw:
+    if supplied("borderStyle"):
         if raw["borderStyle"] not in _BORDER_STYLES:
             raise HTTPException(
                 status_code=400,
@@ -148,7 +157,7 @@ def _validate_notes_table_style(raw) -> dict:
         ("headingSizePt", 6, 24),
         ("headingWeight", 400, 800),
     ):
-        if key in raw:
+        if supplied(key):
             v = raw[key]
             if not isinstance(v, (int, float)) or isinstance(v, bool) or not (lo <= v <= hi):
                 raise HTTPException(
@@ -156,7 +165,7 @@ def _validate_notes_table_style(raw) -> dict:
                     detail=f"notes_table_style.{key} must be a number in [{lo}, {hi}].",
                 )
             cleaned[key] = v
-    if "cellPaddingPx" in raw:
+    if supplied("cellPaddingPx"):
         pad = raw["cellPaddingPx"]
         if (
             not isinstance(pad, list)
@@ -172,41 +181,43 @@ def _validate_notes_table_style(raw) -> dict:
             )
         cleaned["cellPaddingPx"] = pad
     for color_key in ("borderColor", "headerFill"):
-        if color_key in raw and raw[color_key] is not None:
+        if supplied(color_key) and raw[color_key] is not None:
             if not _valid_theme_color(raw[color_key]):
                 raise HTTPException(
                     status_code=400,
                     detail=f"notes_table_style.{color_key} must be a hex colour or 'transparent'.",
                 )
             cleaned[color_key] = raw[color_key].strip().lower()
-    if "headerBold" in raw:
+    if supplied("headerBold"):
         if not isinstance(raw["headerBold"], bool):
             raise HTTPException(
                 status_code=400,
                 detail="notes_table_style.headerBold must be a boolean.",
             )
         cleaned["headerBold"] = raw["headerBold"]
-    if "headerRule" in raw:
+    if supplied("headerRule"):
         if not isinstance(raw["headerRule"], bool):
             raise HTTPException(
                 status_code=400,
                 detail="notes_table_style.headerRule must be a boolean.",
             )
         cleaned["headerRule"] = raw["headerRule"]
-    if "listMarker" in raw and raw["listMarker"] is not None:
+    if supplied("listMarker") and raw["listMarker"] is not None:
         if raw["listMarker"] not in _LIST_MARKERS:
             raise HTTPException(
                 status_code=400,
                 detail=f"notes_table_style.listMarker must be one of {sorted(_LIST_MARKERS)}.",
             )
         cleaned["listMarker"] = raw["listMarker"]
-    if "totalsDoubleUnderline" in raw:
+    if supplied("totalsDoubleUnderline"):
         if not isinstance(raw["totalsDoubleUnderline"], bool):
             raise HTTPException(
                 status_code=400,
                 detail="notes_table_style.totalsDoubleUnderline must be a boolean.",
             )
         cleaned["totalsDoubleUnderline"] = raw["totalsDoubleUnderline"]
+    if sparse and unknown:
+        raise HTTPException(status_code=400, detail="Unknown notes appearance field.")
     return cleaned
 
 
@@ -260,6 +271,7 @@ async def get_settings():
 
     extended = server._load_extended_settings()
     locally_saved = read_runtime_settings(server.SETTINGS_FILE)
+    from notes.table_theme import appearance_overrides, house_style
     return {
         # Backward-compatible fields
         "model": os.environ.get("TEST_MODEL", _DEFAULT_MODEL_ID),
@@ -290,6 +302,8 @@ async def get_settings():
         # the Settings page from settings_catalog.ADVANCED_SETTINGS.
         "advanced_settings": settings_catalog.describe(locally_saved),
         **extended,
+        "notes_house_style": house_style(),
+        "notes_appearance_overrides": appearance_overrides(),
     }
 
 
@@ -543,9 +557,37 @@ async def update_settings(body: dict, request: Request):
     # Firm-wide notes-table style theme (docs/PLAN-notes-table-theme.md). Stored
     # as a JSON object, like XBRL_DEFAULT_MODELS. Validated/cleaned first so a
     # tampered payload can't land broken CSS in local settings.
+    from notes.table_theme import appearance_overrides, OVERRIDES_ENV_VAR
     if "notes_table_style" in body:
+        server._reload_runtime_settings()
+        if OVERRIDES_ENV_VAR in os.environ or {
+            "notes_appearance_reset", "notes_appearance_overrides",
+        }.intersection(body):
+            raise HTTPException(
+                status_code=400,
+                detail="notes_table_style can no longer be saved after appearance overrides are configured. Use notes_appearance_overrides or notes_appearance_reset instead.",
+            )
         cleaned = _validate_notes_table_style(body["notes_table_style"])
         updates["XBRL_NOTES_TABLE_STYLE"] = json.dumps(cleaned)
+
+    # Sparse field edits preserve inheritance from the code-owned house style.
+    # An empty new overlay intentionally masks legacy .env/snapshot styles.
+    if "notes_appearance_reset" in body:
+        if body["notes_appearance_reset"] is not True:
+            raise HTTPException(status_code=400, detail="notes_appearance_reset must be true.")
+        updates[OVERRIDES_ENV_VAR] = "{}"
+    if "notes_appearance_overrides" in body:
+        raw = body["notes_appearance_overrides"]
+        if not isinstance(raw, dict):
+            raise HTTPException(status_code=400, detail="notes_appearance_overrides must be an object.")
+        cleaned = _validate_notes_table_style(raw, sparse=True)
+        server._reload_runtime_settings()
+        overrides = {} if body.get("notes_appearance_reset") else appearance_overrides()
+        for key, value in raw.items():
+            if value is None:
+                overrides.pop(key, None)
+        overrides.update(cleaned)
+        updates[OVERRIDES_ENV_VAR] = json.dumps(overrides)
 
     persist_runtime_settings(server.SETTINGS_FILE, updates)
     server._reload_runtime_settings()

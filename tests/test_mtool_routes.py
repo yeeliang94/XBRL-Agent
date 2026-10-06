@@ -1068,6 +1068,27 @@ def test_notes_preview_reports_plan_and_slot_count(client):
     assert plan["unresolved"] or plan["errors"]
 
 
+@pytest.mark.parametrize("change", ["content", "appearance"])
+def test_fill_refuses_changed_notes_output_revision(client, monkeypatch, change):
+    tc, db, _ = client
+    run_id = _make_run(db)
+    _seed_distinct_leaves(db, run_id)
+    _add_note(db, run_id, "Notes-CI", 12, "Corporate information", "<p>Acme</p>")
+    revision = tc.get(f"/api/runs/{run_id}/mtool-notes-fill").json()["meta"]["notes_output_revision"]
+    if change == "content":
+        with sqlite3.connect(db) as conn:
+            conn.execute("UPDATE notes_cells SET html='<p>Updated Acme</p>' WHERE run_id=?", (run_id,))
+    else:
+        monkeypatch.setenv("XBRL_NOTES_APPEARANCE_OVERRIDES", '{"fontSizePt": 20}')
+    sheet = tc.get(f"/api/runs/{run_id}/mtool-fill").json()["meta"]["sheets_covered"][0]
+    cmap = {sheet: {"label_column": "A", "columns": {"current_year": "B"}}}
+    response = tc.post(f"/api/runs/{run_id}/mtool-fill/patch", files=_upload_our_template(),
+                       data={"column_map": json.dumps(cmap), "notes_output_revision": revision})
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "notes_output_changed"
+    assert "artifact_id" not in response.json()
+
+
 def test_notes_preview_honours_notes_styling(client, monkeypatch):
     """The dry-run plan's counts must reflect the styling the operator chose —
     a "no styling" preview reaches the exporter as decorate=False so it can't

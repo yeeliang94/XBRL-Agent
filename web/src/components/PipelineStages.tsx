@@ -221,7 +221,7 @@ export function PipelineStages({
                 </div>
               )}
               {status === "active" && (
-                <div data-testid="step-active" className="pwc-working-indicator" style={styles.activeCircle} />
+                <div data-testid="step-active" style={styles.activeCircle} />
               )}
               {status === "action" && (
                 <div data-testid="step-action" style={styles.actionCircle} />

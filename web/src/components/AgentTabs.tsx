@@ -99,7 +99,7 @@ function StatusBadge({ status }: { status: AgentTabStatus }) {
   return (
     <span
       data-status={status}
-      className={`pwc-status-change${status === "running" ? " pwc-working-indicator" : ""}`}
+      className="pwc-status-change"
       style={spec.wrapper}
       aria-label={spec.label}
     >

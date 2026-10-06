@@ -409,7 +409,7 @@ def _triage_then_flag(messages, info: AgentInfo) -> ModelResponse:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("check_status", ["passed", "warning"])
 async def test_spot_check_runs_on_clean_run(tmp_path, monkeypatch, check_status):
-    """Triage hands a specific anomaly to a fresh, verified investigation."""
+    """A scoped change requires a passing check, not only advisory warnings."""
     from server import _run_reviewer_pass
     import correction.reviewer_agent as reviewer_agent
 
@@ -419,8 +419,15 @@ async def test_spot_check_runs_on_clean_run(tmp_path, monkeypatch, check_status)
 
     db, run_id = _seed(tmp_path)
     queue: asyncio.Queue = asyncio.Queue()
+    def model(messages, info):
+        if check_status == "warning" and any(
+            p.part_kind == "tool-return" and p.tool_name == "complete_scoped_investigation"
+            and str(p.content).startswith("rejected:") for m in messages for p in m.parts
+        ):
+            return ModelResponse(parts=[TextPart("The change remains unverified.")])
+        return _triage_then_fix(messages, info)
     outcome = await _run_reviewer_pass(
-        failed_checks=[], conflicts=[], model=FunctionModel(_triage_then_fix),
+        failed_checks=[], conflicts=[], model=FunctionModel(model),
         filing_level="company", event_queue=queue, db_path=db, run_id=run_id,
         spot_check="light")
 
@@ -428,10 +435,13 @@ async def test_spot_check_runs_on_clean_run(tmp_path, monkeypatch, check_status)
     # The outcome records clean-run triage separately from the scoped pass.
     assert outcome["spot_check"] == "light"
     assert outcome["writes_performed"] == 1
-    assert outcome["error"] is None
-    assert outcome["review_stage"] == "investigation_complete"
+    assert outcome["error"] == (None if check_status == "passed" else "reviewer_unverified_writes")
+    assert outcome["review_stage"] == ("investigation_complete" if check_status == "passed" else "investigation_incomplete")
     assert outcome["handoff_items"][0]["concept_uuid"] == LEAF1
-    assert outcome["investigation_resolutions"][0]["status"] == "fixed_and_verified"
+    if check_status == "passed":
+        assert outcome["investigation_resolutions"][0]["status"] == "fixed_and_verified"
+    else:
+        assert outcome["investigation_resolutions"] == []
     phases = [event["data"].get("phase") for event in list(queue._queue)]
     assert "triage_handoff" in phases and "investigation_started" in phases
     conn = sqlite3.connect(str(db))
@@ -494,6 +504,112 @@ async def test_scoped_unresolved_item_needs_review(tmp_path):
     assert outcome["flags_raised"] == 1
     assert outcome["error"] == "reviewer_investigation_unresolved"
     assert outcome["review_stage"] == "investigation_unresolved"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("all_unresolved,verification", [
+    (False, "mixed"), (False, "unchanged"), (False, "warnings"), (True, "mixed"), (True, "pending"),
+    (True, "new_failure"), (True, "stale"), (True, "error"), (True, "missing_target"),
+])
+async def test_scoped_writes_and_human_work_finish_without_false_clean(
+    tmp_path, monkeypatch, all_unresolved, verification,
+):
+    from server import _run_reviewer_pass
+    import correction.reviewer_agent as ra
+
+    db, run_id = _seed(tmp_path)
+
+    def checks(*args, **kwargs):
+        import threading
+        assert threading.current_thread() is not threading.main_thread()
+        with sqlite3.connect(str(db)) as conn:
+            cash = conn.execute(
+                "SELECT value FROM run_concept_facts WHERE run_id=? AND concept_uuid=?",
+                (run_id, LEAF1),
+            ).fetchone()[0]
+        if cash == 120 and verification == "error":
+            raise RuntimeError("verification unavailable")
+        results = [CrossCheckResult(name="cash", status="passed" if cash == 120 and verification != "unchanged" else "failed"),
+                   CrossCheckResult(name="ambiguous", status="failed", message="Human review needed")]
+        if cash == 120 and verification == "pending":
+            results = [CrossCheckResult(name="cash", status="pending")]
+        if cash == 120 and verification == "new_failure":
+            results.append(CrossCheckResult(name="new_balance", status="failed"))
+        if cash == 120 and verification == "missing_target":
+            results = [CrossCheckResult(name="ambiguous", status="failed")]
+        if verification == "warnings":
+            results = [CrossCheckResult(name="advisory", status="warning")]
+        return results
+
+    monkeypatch.setattr(ra, "run_verification_checks", checks)
+    rejected_closures = []
+
+    def model(messages, info):
+        text = " ".join(str(getattr(p, "content", "")) for m in messages for p in m.parts)
+        if "SCOPED INVESTIGATION HANDOFF" not in text:
+            return ModelResponse(parts=[ToolCallPart(tool_name="request_scoped_investigation", args={
+                "items": [{"summary": "Correct cash", "pdf_page": 12, "concept_uuid": LEAF1},
+                          {"summary": "Ambiguous receivable", "pdf_page": 13, "concept_uuid": LEAF2}],
+            })])
+        names = [p.tool_name for m in messages for p in m.parts if p.part_kind == "tool-return"]
+        rejected = [p.content for m in messages for p in m.parts
+                    if p.part_kind == "tool-return" and p.tool_name == "complete_scoped_investigation"
+                    and str(p.content).startswith("rejected:")]
+        if rejected and verification in {"unchanged", "warnings"}:
+            rejected_closures[:] = rejected
+            if names.count("raise_flag") < 2:
+                return ModelResponse(parts=[ToolCallPart(tool_name="raise_flag", args={
+                    "kind": "stuck", "reason": "Cash check still fails",
+                    "concept_uuid": LEAF1, "pdf_page": 12,
+                })])
+        if "apply_fixes" not in names:
+            return ModelResponse(parts=[ToolCallPart(tool_name="apply_fixes", args={"fixes": [{
+                "concept_uuid": LEAF1, "value": 120, "reason": "PDF cash 120",
+                "evidence": "page 12: Cash 120",
+            }]})])
+        if "verify_fixes" not in names:
+            return ModelResponse(parts=[ToolCallPart(tool_name="verify_fixes", args={})])
+        if verification == "stale" and names.count("apply_fixes") == 1:
+            return ModelResponse(parts=[ToolCallPart(tool_name="apply_fixes", args={"fixes": [{
+                "concept_uuid": LEAF1, "value": 121, "reason": "Later source correction",
+                "evidence": "page 12: Cash 121",
+            }]})])
+        if "raise_flag" not in names:
+            flags = [ToolCallPart(tool_name="raise_flag", args={
+                "kind": "stuck", "reason": "Ambiguous source", "concept_uuid": LEAF2, "pdf_page": 13,
+            })]
+            if all_unresolved:
+                flags.append(ToolCallPart(tool_name="raise_flag", args={
+                    "kind": "stuck", "reason": "Fix still needs human judgment",
+                    "concept_uuid": LEAF1, "pdf_page": 12,
+                }))
+            return ModelResponse(parts=flags)
+        return ModelResponse(parts=[ToolCallPart(tool_name="complete_scoped_investigation", args={
+            "results": [{"item_index": 1, "status": "unresolved" if all_unresolved or rejected else "fixed_and_verified",
+                         "pdf_page": 12, "reason": "Cash checked against PDF"},
+                        {"item_index": 2, "status": "unresolved", "pdf_page": 13,
+                         "reason": "Human judgment required"}],
+        })])
+
+    queue = asyncio.Queue()
+    outcome = await _run_reviewer_pass(
+        failed_checks=[], conflicts=[], model=FunctionModel(model), filing_level="company",
+        event_queue=queue, db_path=db, run_id=run_id, spot_check="light",
+    )
+    assert outcome["writes_performed"] == (2 if verification == "stale" else 1)
+    assert len(outcome["investigation_resolutions"]) == 2
+    if verification in {"unchanged", "warnings"}:
+        assert rejected_closures
+        assert all(r["status"] == "unresolved" for r in outcome["investigation_resolutions"])
+    assert outcome["error"] == ("reviewer_investigation_unresolved" if verification in {"mixed", "unchanged", "warnings"}
+                                else "reviewer_unverified_writes")
+    assert outcome["review_stage"] == ("investigation_unresolved" if verification in {"mixed", "unchanged", "warnings"}
+                                       else "investigation_incomplete")
+    with sqlite3.connect(str(db)) as conn:
+        assert conn.execute("SELECT value FROM run_concept_facts WHERE run_id=? AND concept_uuid=?",
+                            (run_id, LEAF1)).fetchone()[0] == (121 if verification == "stale" else 120)
+    final = [event["data"] for event in queue._queue if event["event"] == "complete"][-1]
+    assert final["success"] is False
 
 
 @pytest.mark.asyncio

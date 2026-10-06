@@ -179,9 +179,9 @@ in `CLAUDE-REFERENCE.md` before changing the surrounding subsystem.
   `data-source-styled="true"` contract. Prose stays style-free. Keep the
   sanitizer, TipTap schema, review CSS, mTool decorator, and clipboard behavior
   synchronized.
-- `mtool/notes_decorate.py` and `web/src/lib/clipboard.ts` are behavioral twins
-  at decorate/copy time. TX-specific white borders and legacy widths stay in
-  those decorators.
+- `mtool/notes_exporter.py::prepare_note_output` owns review, Copy, and mTool
+  output preparation. Clipboard code copies that HTML verbatim. TX-specific
+  white borders and legacy widths stay in `mtool/notes_decorate.py`.
 - Source-integrity assessment that is incomplete is unresolved, never clean.
   Read `tests/test_notes_integrity_false_greens.py` before changing this area.
 - `mtool/offline_fill.py` stays standard-library-only and remains the one

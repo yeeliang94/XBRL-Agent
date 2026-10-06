@@ -1,3 +1,5 @@
+import type { ClipboardFormatOptions } from "./clipboardFormat";
+
 export type PreparationPhase =
   | "pending"
   | "preparing_pages"
@@ -51,6 +53,9 @@ export interface SettingsResponse {
   scout_wallclock_seconds?: number;
   /** Maximum model responses the scout may request (1-40). */
   scout_max_turns?: number;
+  notes_table_style?: Partial<ClipboardFormatOptions>;
+  notes_house_style?: Partial<ClipboardFormatOptions>;
+  notes_appearance_overrides?: Partial<ClipboardFormatOptions>;
 }
 
 export type EventPhase =
@@ -823,6 +828,8 @@ export interface RunSummaryJson {
   session_id: string;
   statements_run: string[];
   models_used: string[];
+  pipeline_stage?: PipelineStage | null;
+  preparation?: Pick<PreparationSnapshot, "status" | "phase" | "action_required"> | null;
   duration_seconds: number | null;
   scout_enabled: boolean;
   has_merged_workbook: boolean;
@@ -1022,6 +1029,7 @@ export interface RunEventJson {
 }
 
 export interface RunsFilterParams {
+  documentGroup?: "progress" | "history";
   q?: string;
   status?: string;
   model?: string;

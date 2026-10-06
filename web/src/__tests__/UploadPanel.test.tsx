@@ -59,7 +59,7 @@ describe("UploadPanel — P1 enhancements", () => {
         startTime={null}
       />,
     );
-    const button = screen.getByText("Choose document");
+    const button = screen.getByText("Choose documents");
     // Focused-workspace primary action is pure black, not brand orange.
     expect(button.style.backgroundColor).toBe("rgb(0, 0, 0)");
   });

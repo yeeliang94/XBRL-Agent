@@ -178,3 +178,81 @@ def test_disconnect_spawns_pinned_drain_that_finishes_the_run():
     assert first.startswith("event: progress")
     assert finalized["done"] is True, "disconnected run must still finalize"
     assert server._DRAIN_TASKS == set(), "drain ref released after completion"
+
+
+def test_disconnected_documents_keep_separate_reservations_until_completion(monkeypatch):
+    from api.run_control import _reserved_run_stream
+    active = set(["document-a", "document-b"])
+    monkeypatch.setattr(server, "active_runs", active)
+
+    async def run():
+        finish = asyncio.Event()
+        finalized = []
+
+        async def job(name):
+            try:
+                yield {"event": "status", "data": {"run_id": name}}
+                await finish.wait()
+                yield {"event": "run_complete", "data": {}}
+            finally:
+                finalized.append(name)
+
+        wrappers = [server.sse_stream_with_keepalive(
+            _reserved_run_stream(name, job(name)), auth_session_id=None,
+        ) for name in sorted(active)]
+        for wrapper in wrappers:
+            await wrapper.__anext__()
+            await wrapper.aclose()
+        assert active == {"document-a", "document-b"}
+        finish.set()
+        while server._DRAIN_TASKS:
+            await asyncio.gather(*list(server._DRAIN_TASKS))
+            await asyncio.sleep(0)
+        assert sorted(finalized) == ["document-a", "document-b"]
+        assert active == set()
+
+    asyncio.run(run())
+
+
+def test_disconnected_retry_keeps_reservation_until_completion(tmp_path, monkeypatch):
+    from api.run_control import rerun_agent
+    from fastapi import HTTPException
+    from starlette.requests import Request
+
+    session_id = "retry-document"
+    directory = tmp_path / session_id
+    directory.mkdir()
+    (directory / "uploaded.pdf").touch()
+    monkeypatch.setattr(server, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(server, "active_runs", set())
+    monkeypatch.setattr(server, "_reload_runtime_settings", lambda: None)
+    monkeypatch.setattr(server, "_resolve_api_key", lambda: "test-key")
+    monkeypatch.setattr(server, "_auth_session_id_from_request", lambda _: None)
+
+    async def run():
+        finish = asyncio.Event()
+
+        async def job(**kwargs):
+            yield {"event": "status", "data": {"run_id": 1}}
+            await finish.wait()
+            yield {"event": "run_complete", "data": {}}
+
+        monkeypatch.setattr(server, "run_multi_agent_stream", job)
+        request = Request({"type": "http", "headers": []})
+        config = server.RunConfigRequest(statements=["SOFP"])
+        response = await rerun_agent(session_id, config, request)
+        await response.body_iterator.__anext__()
+        await response.body_iterator.aclose()
+        try:
+            assert session_id in server.active_runs
+            with pytest.raises(HTTPException) as exc:
+                await rerun_agent(session_id, config, request)
+            assert exc.value.status_code == 409
+        finally:
+            finish.set()
+            while server._DRAIN_TASKS:
+                await asyncio.gather(*list(server._DRAIN_TASKS))
+                await asyncio.sleep(0)
+        assert session_id not in server.active_runs
+
+    asyncio.run(run())

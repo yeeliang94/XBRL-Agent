@@ -28,6 +28,18 @@ describe("FileDropzone", () => {
     expect(onFile.mock.calls[0][0].name).toBe("doc.pdf");
   });
 
+  test.each(["chooser", "drop"])("passes all selected documents through %s", (source) => {
+    const onFiles = vi.fn();
+    const onFile = vi.fn();
+    render(<FileDropzone accept=".pdf,.docx" label="Documents" onFile={onFile} onFiles={onFiles} />);
+    const files = [makeFile("first.pdf"), makeFile("second.docx")];
+    expect(screen.getByLabelText("Choose file")).toHaveAttribute("multiple");
+    if (source === "chooser") fireEvent.change(screen.getByLabelText("Choose file"), { target: { files } });
+    else fireEvent.drop(screen.getByRole("button"), { dataTransfer: { files } });
+    expect(onFiles).toHaveBeenCalledWith(files);
+    expect(onFile).not.toHaveBeenCalled();
+  });
+
   test("disabled blocks drop and the button", () => {
     const onFile = vi.fn();
     render(<FileDropzone accept=".pdf" label="Drop" onFile={onFile} disabled testId="dz" />);

@@ -37,6 +37,27 @@ export async function apiFetch<T>(url: string, options?: RequestInit): Promise<T
   return res.json();
 }
 
+/** Download the support snapshot with visible errors and session-expiry handling. */
+export async function exportRunDiagnostics(runId: number): Promise<void> {
+  const res = await fetch(`/api/runs/${runId}/diagnostics`);
+  if (!res.ok) {
+    if (res.status === 401) window.dispatchEvent(new CustomEvent("auth:unauthorized"));
+    let body: unknown = null;
+    try { body = await res.json(); } catch { /* no JSON body */ }
+    throw ApiError.fromResponse(res.status, body);
+  }
+  const url = URL.createObjectURL(await res.blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `run-${runId}-diagnostics.zip`;
+  document.body.appendChild(link);
+  try { link.click(); } finally {
+    link.remove();
+    // Let the browser start reading the download before releasing its URL.
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+}
+
 export const getAgentInstructions = () => apiFetch<TeamGuidanceSettings>("/api/agent-instructions");
 export const saveAgentInstructions = (body: { texts: Record<string, string>; revision: number }) =>
   apiFetch<TeamGuidanceSettings>("/api/agent-instructions", {
@@ -203,6 +224,8 @@ export async function updateSettings(
     // Firm-wide notes-table style theme (docs/PLAN-notes-table-theme.md).
     // The server validates + cleans it before persisting.
     notes_table_style: ClipboardFormatOptions;
+    notes_appearance_overrides: Partial<{ [K in keyof ClipboardFormatOptions]: ClipboardFormatOptions[K] | null }>;
+    notes_appearance_reset: boolean;
   }>,
 ): Promise<{ status: string }> {
   return apiFetch<{ status: string }>("/api/settings", {
@@ -255,6 +278,7 @@ export async function abortAgent(sessionId: string, agentId: string): Promise<{ 
  *  dropped so the URL reads cleanly and the backend never sees `q=`. */
 function buildRunsQuery(params: RunsFilterParams): string {
   const qs = new URLSearchParams();
+  if (params.documentGroup) qs.set("document_group", params.documentGroup);
   if (params.q) qs.set("q", params.q);
   if (params.status) qs.set("status", params.status);
   if (params.model) qs.set("model", params.model);

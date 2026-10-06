@@ -104,8 +104,11 @@ def _prompt_data(value: object, max_chars: int = 12_000) -> str:
         indent = " " * min(len(line) - len(line.lstrip()), 8)
         cleaned_lines.append(
             indent + sanitize_source_scalar(line.lstrip(), 1_000)
+            + (" [truncated]" if len(line.lstrip()) > 1_000 else "")
         )
-    cleaned = "\n".join(cleaned_lines)[:max_chars]
+    cleaned = "\n".join(cleaned_lines)
+    if len(cleaned) > max_chars:
+        cleaned = cleaned[:max_chars] + "\n[truncated; read the relevant facts or source for full details]"
     return f"<<<SOURCE_DATA>>>\n{cleaned}\n<<<END_SOURCE_DATA>>>"
 
 
@@ -1185,7 +1188,49 @@ class ReviewerDeps:
     triage_only: bool = False
     investigation_items: list[dict[str, Any]] = field(default_factory=list)
     investigation_resolutions: list[dict[str, Any]] = field(default_factory=list)
-    verified_write_count: int = 0
+    last_verification: Optional["ReviewerVerification"] = None
+
+
+@dataclass
+class ReviewerVerification:
+    """Run-level check evidence for one version of the reviewer's writes.
+
+    This records evaluation, not an inferred association between handoff items
+    and checks. Human-review outcomes remain distinct from a clean filing.
+    """
+    writes_performed: int
+    results: list
+    original_failed_names: set
+
+    def with_status(self, status: str) -> list:
+        return [r for r in self.results if getattr(r, "status", None) == status]
+
+    def completion_issue(self, *, allow_unresolved: bool) -> Optional[str]:
+        passed = {r.name for r in self.with_status("passed")}
+        failed = {r.name for r in self.with_status("failed")}
+        warnings = self.with_status("warning")
+        if not passed and not failed and not warnings:
+            return "verification evaluated no checks; the changes remain unverified"
+        if failed - self.original_failed_names:
+            return "verification found a NEW failure; revise the change or report it unresolved"
+        confirmed = passed | (failed if allow_unresolved else set())
+        if self.original_failed_names - confirmed:
+            return "targeted checks are unresolved or were not re-evaluated to a PASS"
+        if failed and not allow_unresolved:
+            return "checks still fail; resolve them or record human-review outcomes"
+        if not passed and not allow_unresolved:
+            return "no check passed; the changes remain unverified"
+        return None
+
+
+def reviewer_verification_issue(deps: ReviewerDeps, *, allow_unresolved: bool) -> Optional[str]:
+    """One completion decision used by the tool and the server."""
+    if not deps.writes_performed:
+        return None
+    snapshot = deps.last_verification
+    if snapshot is None or snapshot.writes_performed != deps.writes_performed:
+        return "verify all current writes before closing a fixed item"
+    return snapshot.completion_issue(allow_unresolved=allow_unresolved)
 
 
 class ReviewerInvestigationItem(BaseModel):
@@ -1562,9 +1607,8 @@ def _format_review_packet(
                 if g.get("row"):
                     where += f" row {g.get('row')}"
                 lines.append(_prompt_data(
-                    f"    · [{g.get('role')}] {g.get('label')} "
-                    f"({g.get('statement') or where}, {g.get('period') or 'CY'}) = {g.get('value')} "
-                    f"@ {where}"
+                    f"    · [{g.get('role')}] {g.get('period') or 'CY'} = {g.get('value')} "
+                    f"@ {where}; {g.get('statement') or where}; label={g.get('label')}"
                 ))
             # Phase 4: inline the pre-computed cascade trace for this check's
             # target, so the reviewer doesn't spend turns rediscovering it.
@@ -1756,9 +1800,10 @@ def _format_verification(results: list, original_failed_names: set) -> str:
     run (run 58). The verifier must fail SAFE, never green, when it evaluated
     nothing.
     """
-    failed = [r for r in results if getattr(r, "status", None) == "failed"]
-    passed = [r for r in results if getattr(r, "status", None) == "passed"]
-    warnings = [r for r in results if getattr(r, "status", None) == "warning"]
+    snapshot = ReviewerVerification(0, results, original_failed_names or set())
+    failed = snapshot.with_status("failed")
+    passed = snapshot.with_status("passed")
+    warnings = snapshot.with_status("warning")
     original = original_failed_names or set()
 
     lines: list[str] = []
@@ -1894,6 +1939,20 @@ def create_reviewer_agent(
         triage_only=bool(spot_check_mode),
         investigation_items=list(investigation_handoff or []),
     )
+    if investigation_handoff:
+        # Triage can identify anomalies on a nominally clean run. Capture the
+        # actual pre-write checks so an existing failure is not called NEW.
+        try:
+            initial_checks = run_verification_checks(
+                deps.db_path, deps.run_id, filing_level=deps.filing_level,
+                filing_standard=deps.filing_standard, scope=deps.verify_scope,
+            )
+            deps.original_failed_names.update(
+                r.name for r in initial_checks if getattr(r, "status", None) == "failed"
+            )
+        except Exception:
+            logger.warning("Could not establish reviewer check baseline for run %s", run_id,
+                           exc_info=True)
     # Run-83 hardening (Phase 2 review fix): the shared limit warner's
     # default guidance names a "terminal save/summary tool" — the face and
     # notes agents have one, the reviewer does NOT (its pass ends with a
@@ -2219,7 +2278,13 @@ def create_reviewer_agent(
         ctx: RunContext[ReviewerDeps],
         results: List[ReviewerInvestigationResolution],
     ) -> str:
-        """Close every handed-off item with a PDF-grounded outcome."""
+        """Close every handed-off item with a PDF-grounded outcome.
+
+        Checks verify the current run, not individual items. Ground item
+        conclusions in the PDF. Unproven work may be recorded as unresolved
+        even after writes; human review or incomplete verification remains
+        visible and is never a clean filing.
+        """
         if ctx.deps.triage_only or not ctx.deps.investigation_items:
             return "rejected: no scoped investigation is active"
         expected = set(range(1, len(ctx.deps.investigation_items) + 1))
@@ -2227,12 +2292,23 @@ def create_reviewer_agent(
             return "rejected: report exactly one result for every handoff item"
         if any(r.pdf_page < 1 or not r.reason.strip() for r in results):
             return "rejected: each result needs a PDF page and reason"
-        if any(r.status == "fixed_and_verified" for r in results):
-            if not ctx.deps.writes_performed or ctx.deps.verified_write_count != ctx.deps.writes_performed:
-                return "rejected: verify all writes before closing a fixed item"
-        elif ctx.deps.writes_performed:
-            return "rejected: report a fixed item for verified writes"
         unresolved_count = sum(r.status == "unresolved" for r in results)
+        claims_fixed = any(r.status == "fixed_and_verified" for r in results)
+        if claims_fixed and not ctx.deps.writes_performed:
+            return "rejected: no write was applied; use verified_clean or unresolved"
+        if claims_fixed or not unresolved_count:
+            issue = reviewer_verification_issue(ctx.deps, allow_unresolved=bool(unresolved_count))
+            if (issue is None and claims_fixed
+                    and not ctx.deps.last_verification.with_status("passed")):
+                issue = "no check passed; record unproven fixes unresolved"
+            if (issue is None and claims_fixed and ctx.deps.original_failed_names
+                    and not any(r.name in ctx.deps.original_failed_names
+                                for r in ctx.deps.last_verification.with_status("passed"))):
+                issue = "no originally failing check now passes; record unproven fixes unresolved"
+            if issue:
+                return (f"rejected: {issue}. If verification cannot establish the fix, "
+                        "record the affected item(s) unresolved with human flags; "
+                        "the pass will remain incomplete.")
         if unresolved_count > ctx.deps.flags_raised:
             return "rejected: raise a human flag for each unresolved item"
         ctx.deps.investigation_resolutions = [r.model_dump() for r in results]
@@ -2377,6 +2453,8 @@ def create_reviewer_agent(
         Do not declare yourself done while a failure you can fix — or any
         failure your edits caused — remains.
         """
+        ctx.deps.last_verification = None
+        writes_at_start = ctx.deps.writes_performed
         try:
             results = run_verification_checks(
                 ctx.deps.db_path, ctx.deps.run_id,
@@ -2394,9 +2472,9 @@ def create_reviewer_agent(
                 f"investigating from the facts and the PDF; rely on your "
                 f"cascade traces to judge whether the fix holds."
             )
-        verdict = _format_verification(results, ctx.deps.original_failed_names)
-        if verdict.startswith(("✓ VERIFIED:", "✓ No cross-check is failing")):
-            ctx.deps.verified_write_count = ctx.deps.writes_performed
-        return verdict
+        ctx.deps.last_verification = ReviewerVerification(
+            writes_at_start, results, set(ctx.deps.original_failed_names),
+        )
+        return _format_verification(results, ctx.deps.original_failed_names)
 
     return agent, deps

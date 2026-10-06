@@ -233,15 +233,19 @@ export const ui = {
     gridTemplateColumns: "220px minmax(0, 1fr)",
     background: tokens.surface.canvas,
   } as CSSProperties,
-  appRail: {
+  appSidebar: {
+    containerType: "inline-size",
+    containerName: "app-navigation",
     position: "sticky",
     top: 0,
-    height: "100vh",
+    minHeight: "100dvh",
+    alignSelf: "start",
     display: "flex",
     flexDirection: "column",
+    gap: pwc.space.xl,
+    padding: `${pwc.space.xl}px ${pwc.space.md}px ${pwc.space.lg}px`,
     background: tokens.surface.navigation,
-    padding: `20px 14px`,
-    zIndex: 30,
+    borderRight: `1px solid ${tokens.color.border.subtle}`,
   } as CSSProperties,
   appTopbar: {
     position: "sticky",

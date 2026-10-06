@@ -9,6 +9,75 @@ from server import app
 client = TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def isolate_appearance_overlay(monkeypatch):
+    # Runtime persistence mutates os.environ; register the new key with the
+    # fixture so tests cannot inherit a previous test's saved overlay.
+    monkeypatch.setenv("XBRL_NOTES_APPEARANCE_OVERRIDES", "{}")
+    monkeypatch.delenv("XBRL_NOTES_APPEARANCE_OVERRIDES")
+
+
+def test_sparse_appearance_inherits_code_updates_and_reset_masks_legacy(monkeypatch):
+    import notes.table_theme as theme
+    monkeypatch.delenv(theme.OVERRIDES_ENV_VAR, raising=False)
+    monkeypatch.delenv(theme.ENV_VAR, raising=False)
+    response = client.post('/api/settings', json={
+        'notes_appearance_overrides': {'fontSizePt': 12},
+    })
+    assert response.status_code == 200
+    assert client.get('/api/settings').json()['notes_appearance_overrides'] == {'fontSizePt': 12}
+    rejected = client.post('/api/settings', json={'notes_table_style': {'fontSizePt': 20}})
+    assert rejected.status_code == 400
+    assert 'notes_appearance_overrides' in rejected.json()['detail']
+    assert theme.firm_theme()['fontSizePt'] == 12
+    monkeypatch.setitem(theme.HOUSE_NOTES_TABLE_STYLE, 'paragraphSpacingPx', 14)
+    assert theme.firm_theme()['paragraphSpacingPx'] == 14
+    assert theme.firm_theme()['fontSizePt'] == 12
+    monkeypatch.setenv(theme.ENV_VAR, '{"fontSizePt": 20}')
+    assert client.post('/api/settings', json={'notes_appearance_reset': True}).status_code == 200
+    settings = client.get('/api/settings').json()
+    assert settings['notes_appearance_overrides'] == {}
+    assert settings['notes_table_style'] == settings['notes_house_style']
+    rejected = client.post('/api/settings', json={'notes_table_style': {'fontSizePt': 20}})
+    assert rejected.status_code == 400
+    assert client.get('/api/settings').json()['notes_table_style'] == settings['notes_house_style']
+    monkeypatch.setitem(theme.HOUSE_NOTES_TABLE_STYLE, 'fontSizePt', 13)
+    assert theme.firm_theme()['fontSizePt'] == 13
+
+
+def test_sparse_appearance_preserves_legacy_and_resets_one_field(monkeypatch):
+    import notes.table_theme as theme
+    monkeypatch.delenv(theme.OVERRIDES_ENV_VAR, raising=False)
+    monkeypatch.setenv(theme.ENV_VAR, '{}')
+    assert client.post('/api/settings', json={'notes_appearance_overrides': {'borderStyle': 'none'}}).status_code == 200
+    settings = client.get('/api/settings').json()
+    assert settings['notes_table_style']['fontSizePt'] == 10
+    assert settings['notes_table_style']['headerFill'] == '#f3f4f6'
+    assert client.post('/api/settings', json={'notes_appearance_overrides': {'fontSizePt': None}}).status_code == 200
+    settings = client.get('/api/settings').json()
+    assert settings['notes_table_style']['fontSizePt'] == theme.house_style()['fontSizePt']
+    assert settings['notes_table_style']['borderStyle'] == 'none'
+
+
+@pytest.mark.parametrize('patch', [{'fontSizePt': 100}, {'unknown': None}, {'headerBold': 'yes'}])
+def test_sparse_appearance_rejects_invalid_patch(patch):
+    assert client.post('/api/settings', json={'notes_appearance_overrides': patch}).status_code == 400
+
+
+@pytest.mark.parametrize('appearance', [
+    {'notes_appearance_reset': True},
+    {'notes_appearance_overrides': {'fontSizePt': 12}},
+])
+def test_legacy_appearance_save_cannot_be_combined_with_new_settings(appearance):
+    before = client.get('/api/settings').json()['notes_table_style']
+    response = client.post('/api/settings', json={
+        'notes_table_style': {'fontSizePt': 20}, **appearance,
+    })
+    assert response.status_code == 400
+    assert 'notes_appearance_overrides' in response.json()['detail']
+    assert client.get('/api/settings').json()['notes_table_style'] == before
+
+
 def test_get_settings_default(tmp_path, monkeypatch):
     """Returns defaults when neither local settings nor .env exists."""
     env_file = tmp_path / ".env"

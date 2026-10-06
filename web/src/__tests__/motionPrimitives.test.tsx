@@ -35,7 +35,6 @@ describe("motion tokens", () => {
     expect(css).toContain(`--motion-standard: ${pwc.motion.easing}`);
     expect(css).toContain(`--motion-emphasized: ${pwc.motion.easingEmphasized}`);
     expect(css).toContain("prefers-reduced-motion: reduce");
-    expect(css).toContain(".pwc-working-indicator");
     expect(css).toContain(".pwc-view-enter");
     expect(css).toContain(".pwc-disclosure-content");
     expect(css).toContain("transform:");

@@ -284,7 +284,6 @@ function ToolCallCardImpl({ entry }: Props) {
         <div style={styles.headerLeft}>
           <span
             data-glyph={glyphState}
-            className={glyphState === "active" ? "pwc-working-indicator" : undefined}
             style={glyphStyleFor(glyphState)}
           />
           <span style={styles.toolName}>{humanToolName(entry.tool_name)}</span>

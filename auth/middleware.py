@@ -42,8 +42,11 @@ def is_guarded(path: str) -> bool:
 
 def counts_as_activity(path: str, method: str = "GET") -> bool:
     """Whether a request to this path should bump the sliding-window timer."""
-    if method.upper() in {"GET", "HEAD"} and path.startswith("/api/preparation/"):
-        return False
+    if method.upper() in {"GET", "HEAD"}:
+        if path.startswith("/api/preparation/"):
+            return False
+        if path == "/api/runs" or (path.startswith("/api/runs/") and path.removeprefix("/api/runs/").isdigit()):
+            return False
     return not any(path.endswith(s) for s in _NON_ACTIVITY_SUFFIXES)
 
 

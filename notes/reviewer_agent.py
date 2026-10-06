@@ -204,6 +204,7 @@ class NotesReviewerDeps:
         # never be dispositioned away.
         self.dispositioned_finding_keys: set = set()
         self.finding_keys_by_id: dict[str, tuple] = {}
+        self.finding_refs: dict[tuple, str] = {}
         # Durable extraction-time placement proposals keyed by the packet id
         # shown to this reviewer. Each entry retains the original flag id so a
         # grounded keep/move decision can close exactly that conflict.
@@ -607,6 +608,7 @@ def _review_source_line(value: object) -> str:
     return (
         "  • <<<SOURCE_DATA>>>"
         + sanitize_source_scalar(str(value), 800)
+        + (" [truncated; read the source for full details]" if len(str(value)) > 800 else "")
         + "<<<END_SOURCE_DATA>>>"
     )
 
@@ -740,23 +742,27 @@ def build_notes_reviewer_packet(context: dict) -> str:
             if conflict.get("match_kind") == "same_field":
                 out.append(_review_source_line(
                     f"conflict={conflict.get('ref')}; FIELD CONFLICT "
-                    f"at {field}; already there: "
-                    f"{conflict.get('existing_notes') or []} blocks="
-                    f"{conflict.get('block_ids') or []}; proposed: "
-                    f"{conflict.get('source_notes') or []} blocks="
-                    f"{conflict.get('proposed_block_ids') or []}"
+                    f"at {field}"
                 ))
-                continue
-            existing = ", ".join(
-                f"{item['sheet']} row {item['row']} {item.get('label', '')!r}"
-                for item in conflict.get("existing") or []
-            )
-            out.append(_review_source_line(
-                f"conflict={conflict.get('ref')}; blocks="
-                f"{conflict.get('block_ids') or []}; source_notes="
-                f"{conflict.get('source_notes') or []}; existing={existing}; "
-                f"proposed={field}"
-            ))
+                out.append(_review_source_line(f"already there: {conflict.get('existing_notes') or []}"))
+            else:
+                out.append(_review_source_line(f"conflict={conflict.get('ref')}; proposed={field}"))
+                for item in conflict.get("existing") or []:
+                    out.append(_review_source_line(
+                        f"existing={item['sheet']} row {item['row']} {item.get('label', '')!r}"
+                    ))
+            for name in ("block_ids", "proposed_block_ids"):
+                ids = conflict.get(name) or []
+                if ids:
+                    out.append(_review_source_line(
+                        f"{name}: {len(ids)} part(s); preview={ids[:4]}"
+                    ))
+                    if len(ids) > 4:
+                        out.append(
+                            "  Block preview shortened. Use read_source_manifest with the "
+                            "source note number or stable source id for the full block list."
+                        )
+            out.append(_review_source_line(f"source_notes={conflict.get('source_notes') or []}"))
     if policy_placements:
         out.append(
             "\n[POLICY DESTINATION ACCURACY] Check EVERY source-linked accounting "
@@ -1281,6 +1287,15 @@ def finding_id(key: tuple) -> str:
     return json.dumps(key, ensure_ascii=True, separators=(",", ":"))
 
 
+def _finding_reference_summary(key: tuple) -> str:
+    """Describe an action reference without exposing nested machine identities."""
+    if key[0] == "source_placement":
+        return "placement conflict (destinations and source notes listed above)"
+    if key[0] == "source_integrity":
+        return f"source_integrity check={key[1]}; {len(key[2])} block(s); preview={list(key[2][:4])}"
+    return str(key)
+
+
 def _backfill_sidecar_provenance(
     run_id: int, db_path: str, sidecar_paths: List[str],
 ) -> bool:
@@ -1383,6 +1398,7 @@ def format_notes_verification(
     context: dict,
     original_keys: set,
     dispositioned_keys: Optional[set] = None,
+    finding_refs: Optional[dict] = None,
 ) -> str:
     """Render resolved, human-dispositioned, open, and introduced findings."""
     current = finding_keys(context)
@@ -1419,7 +1435,9 @@ def format_notes_verification(
             f"flag if genuinely unfixable:"
         )
         for k in sorted(remaining, key=lambda x: tuple(str(p) for p in x)):
-            lines.append(f"  - still open: {k}")
+            reference = (finding_refs or {}).get(k)
+            lines.append(f"  - still open: {reference}: {_finding_reference_summary(k)}"
+                         if reference else f"  - still open: {k}")
     if introduced:
         lines.append(
             f"⚠ {len(introduced)} NEW finding(s) your edits INTRODUCED — a fix "
@@ -1512,6 +1530,14 @@ def create_notes_reviewer_agent(
         conflict["packet_finding_id"]: conflict
         for conflict in context.get("placement_conflicts") or []
     }
+    deps.finding_refs = {
+        deps.finding_keys_by_id[packet_id]: conflict["ref"]
+        for packet_id, conflict in deps.placement_conflicts_by_id.items()
+    }
+    other_keys = sorted(deps.original_finding_keys - deps.finding_refs.keys(), key=finding_id)
+    for index, key in enumerate(other_keys, 1):
+        deps.finding_refs[key] = f"F{index}"
+    deps.finding_keys_by_id.update({ref: key for key, ref in deps.finding_refs.items()})
 
     # The reviewer prompt and its packet both used to hardcode the MFRS slot
     # numbers (Sheets 10-14). MPERS puts the same notes at 11-15, so an MPERS
@@ -1556,11 +1582,11 @@ def create_notes_reviewer_agent(
     )
     if deps.finding_keys_by_id:
         packet += (
-            "\n\n[FINDING IDS — use the exact id when raise_flag settles an "
+            "\n\n[FINDING REFERENCES — use this short reference when raise_flag settles an "
             "unfixable packet finding]"
         )
-        for stable_id in sorted(deps.finding_keys_by_id):
-            packet += f"\n- {stable_id}"
+        for key, ref in deps.finding_refs.items():
+            packet += "\n" + _review_source_line(f"{ref}: {_finding_reference_summary(key)}")
     system_prompt = f"{base_prompt}\n\n{packet}"
     from agent_instructions import guidance_for_run
     system_prompt += guidance_for_run(db_path, run_id, "notes_review")
@@ -1864,6 +1890,8 @@ def create_notes_reviewer_agent(
         gen_id = _active_generation_id(ctx)
         if gen_id is None:
             return "rejected: this run has no frozen source reading."
+        if not block_ids:
+            return "rejected: block_ids is required (pass a non-empty list)."
         try:
             target = _D(disposition)
         except ValueError:
@@ -1900,7 +1928,8 @@ def create_notes_reviewer_agent(
                         done += 1
                     except ValueError as exc:
                         failed.append(f"{bid}: {exc}")
-        summary = f"ok: recorded {done} part(s) as {disposition}"
+        summary = (f"partial: {done} applied, {len(failed)} rejected"
+                   if failed else f"ok: recorded {done} part(s) as {disposition}")
         return summary + ("\n" + "\n".join(failed) if failed else "")
 
     if deps.source_generation_id is not None:
@@ -1929,7 +1958,9 @@ def create_notes_reviewer_agent(
         @agent.tool
         def view_source_blocks(ctx: RunContext[NotesReviewerDeps], block_ids: List[str], offset: int = 0) -> str:
             """Read up to 40 source parts. If partial, repeat the same block_ids
-            with offset=next_offset to continue, including within a large part."""
+            with offset=next_offset to continue, including within a large part.
+            After those character pages, submit remaining block_ids as a new
+            batch with offset=0; character offsets do not reach later blocks."""
             from notes.agent import _view_source_blocks_impl
             return _view_source_blocks_impl(ctx.deps.db_path, ctx.deps.source_generation_id, block_ids, offset)
 
@@ -2005,11 +2036,14 @@ def create_notes_reviewer_agent(
             )
         decision = decision.strip().lower()
         if conflict.get("match_kind") == "same_field":
-            return _resolve_field_conflict(
+            result = _resolve_field_conflict(
                 ctx, conflict, finding_id=finding_id, decision=decision,
                 source_pages=source_pages, evidence=evidence,
                 other_row=other_row, other_sheet=other_sheet,
             )
+            if result.startswith("rejected:"):
+                result += f" If no supported decision is possible, raise_flag with finding_id={conflict['ref']} and grounded pages/evidence."
+            return result
         if decision not in {"keep_existing", "move_to_proposed"}:
             return (
                 "rejected: decision must be keep_existing or move_to_proposed."
@@ -2028,7 +2062,8 @@ def create_notes_reviewer_agent(
         if len(existing) != 1:
             return (
                 "rejected: this conflict has multiple existing destinations; "
-                "send it to human review instead of choosing one automatically."
+                f"raise_flag with finding_id={conflict['ref']} and grounded "
+                "pages/evidence instead of choosing one automatically."
             )
         from notes.review_move import resolve_source_placement_conflict
 
@@ -2159,8 +2194,8 @@ def create_notes_reviewer_agent(
         """Record a flag and disposition one exact grounded packet finding.
 
         A flag without ``finding_id`` is retained for the human but does not
-        make a detector finding terminal. A supplied id must be copied from the
-        packet and grounded in pages already viewed during this pass.
+        make a detector finding terminal. Use the packet's C1/F1 reference or
+        exact packet ID, grounded in pages already viewed during this pass.
         """
         kind_norm = kind.strip().lower()
         if kind_norm not in ("stuck", "disputes_prior", "needs_human"):
@@ -2170,7 +2205,13 @@ def create_notes_reviewer_agent(
         if finding_id:
             disposition_key = ctx.deps.finding_keys_by_id.get(finding_id)
             if disposition_key is None:
-                return "rejected: finding_id is not an exact packet finding id."
+                packet_id, conflict = _lookup_placement_conflict(ctx.deps, finding_id)
+                if conflict is not None:
+                    disposition_key = ctx.deps.finding_keys_by_id[packet_id]
+            if disposition_key is None:
+                return "rejected: finding_id is not a packet reference or exact packet finding id."
+            # Persist the durable identity, never a pass-local reference.
+            finding_id = json.dumps(disposition_key, ensure_ascii=True, separators=(",", ":"))
             if not evidence.strip():
                 return (
                     "rejected: evidence is required to disposition a packet "
@@ -2233,6 +2274,7 @@ def create_notes_reviewer_agent(
             context,
             ctx.deps.original_finding_keys,
             ctx.deps.dispositioned_finding_keys,
+            ctx.deps.finding_refs,
         )
         pending = unverified_policy_placements(ctx.deps)
         if pending:

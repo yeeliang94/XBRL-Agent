@@ -69,10 +69,10 @@ describe("ExtractPage — render-gate regression guards", () => {
     expect(screen.queryByText("Page hints are incomplete.")).toBeNull();
   });
 
-  test("idle work queue exposes a local New extraction action", () => {
+  test("new extraction shows the upload control", () => {
     render(<ExtractPage {...makeProps()} />);
-    expect(screen.getByRole("heading", { name: "Work queue" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "New extraction" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Add documents" })).toBeInTheDocument();
+    expect(screen.getByTestId("drop-zone")).toBeInTheDocument();
   });
 
   test("a resumed draft is headed as setup rather than Work queue", () => {
