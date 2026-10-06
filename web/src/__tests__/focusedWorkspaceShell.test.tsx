@@ -6,6 +6,7 @@ import { ui } from "../lib/uiStyles";
 import { pwc, tokens } from "../lib/theme";
 
 const css = readFileSync("src/index.css", "utf8");
+const notesCss = readFileSync("src/components/NotesReviewTab.css", "utf8");
 
 describe("focused-workspace shell", () => {
   test("shared primitives define the compact context bar", () => {
@@ -17,7 +18,7 @@ describe("focused-workspace shell", () => {
 
   test("top-level destinations remain links with stable URLs and current state", () => {
     render(<TopNav view="extract" onViewChange={() => {}} />);
-    const queue = screen.getByRole("link", { name: "Documents" });
+    const queue = screen.getByRole("link", { name: "Work queue" });
     expect(queue).toHaveAttribute("href", "/");
     expect(queue).toHaveAttribute("aria-current", "page");
     expect(screen.queryByRole("link", { name: "Runs" })).toBeNull();
@@ -30,6 +31,12 @@ describe("focused-workspace shell", () => {
     const tabletBlock = css.slice(css.indexOf("@media (max-width: 1000px)"), css.indexOf("@media (max-width: 780px)"));
     expect(tabletBlock).toContain("display: block !important");
     expect(tabletBlock).not.toContain(".review-source-column,\n  .review-workspace .review-resize-handle");
+    // JSDOM cannot evaluate container queries. Pin the explicit divider-width
+    // contract here; browser QA checks actual visibility across the breakpoints.
+    const narrowNotes = notesCss.slice(notesCss.indexOf("@container notes-review (max-width: 900px)"), notesCss.indexOf("@container notes-review (max-width: 640px)"));
+    expect(narrowNotes).toContain("220px 9px minmax(0, 1fr)");
+    expect(narrowNotes).not.toContain("display: none");
+    expect(tabletBlock).not.toContain(".review-workspace .review-resize-handle {");
   });
 
   test("mobile navigation keeps sticky identifiers without overriding the note action grid", () => {

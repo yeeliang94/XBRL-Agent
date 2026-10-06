@@ -19,7 +19,7 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { TopNav } from "./components/TopNav";
 import { SuccessToast } from "./components/SuccessToast";
 import { Icon, SettingsIcon } from "./components/icons";
-import { ArrowBack, Logout } from "./components/iconGlyphs";
+import { ArrowBack, Description, LeftPanelClose, LeftPanelOpen, Logout } from "./components/iconGlyphs";
 import { DocumentsPage, useDocuments } from "./pages/DocumentsPage";
 import { DocumentSwitcher } from "./components/DocumentSwitcher";
 import { HistoryPage } from "./pages/HistoryPage";
@@ -99,6 +99,16 @@ const styles = {
 export default function App() {
   useEffect(initializeNavigationHistory, []);
   const [state, dispatch] = useReducer(appReducer, undefined, bootState);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try { return window.localStorage.getItem("xbrl-sidebar-collapsed") === "true"; }
+    catch { return false; }
+  });
+  const toggleSidebar = () => {
+    const next = !sidebarCollapsed;
+    setSidebarCollapsed(next);
+    try { window.localStorage.setItem("xbrl-sidebar-collapsed", String(next)); }
+    catch { /* Navigation remains usable when storage is unavailable. */ }
+  };
   const [extractMode, setExtractMode] = useState<"queue" | "new">(
     () => window.location.hash === "#new-extraction" ? "new" : "queue",
   );
@@ -682,7 +692,7 @@ export default function App() {
     return <LoginPage onAuthenticated={checkAuth} />;
   }
 
-  // Settings is a utility surface opened from the header, not a signal that
+  // Settings is a utility surface opened from the sidebar, not a signal that
   // the operator abandoned the uploaded draft. Keep the extract workspace in
   // one stable React tree position while Settings is open so component-owned
   // work such as the optional preview scan is not cancelled by an unmount.
@@ -721,27 +731,74 @@ export default function App() {
   const reviewFocused = state.selectedRunId != null && (runTab === "notes" || runTab === "values");
   const documentList = (state.view === "extract" && state.currentRunId == null && !state.sessionId && extractMode === "queue")
     || (state.view === "history" && state.selectedRunId == null);
+  const currentFilename = documentName?.id === documentId ? documentName.pdf_filename
+    : state.sessionRunId === documentId ? state.filename
+    : documents.runs.find((run) => run.id === documentId)?.pdf_filename;
+  const contextLabel = state.view === "settings" ? "Settings"
+    : state.view === "concepts" && documentId == null ? "Field labels"
+    : documentId != null ? "Current filing"
+    : state.view === "history" ? "History"
+    : extractMode === "new" ? "Add documents" : "Workspace";
   return (
-    <div className="documents-app-shell" style={{ minHeight: "100vh", background: pwc.white }}>
+    <div className={`app-shell${sidebarCollapsed ? " app-shell--collapsed" : ""}`}
+      style={{ ...ui.appShell, ...(sidebarCollapsed ? { gridTemplateColumns: "72px minmax(0, 1fr)" } : {}) }}>
       <a href="#main-content" className="skip-link">Skip to main content</a>
-      <header className="documents-topbar" style={{ ...styles.topbar, position: "sticky", top: 0, zIndex: 30, gap: 24 }}>
-        <span style={styles.headerTitle}>XBRL Agent</span>
-        <TopNav view={state.view} onViewChange={() => showDocuments()} />
-        <div style={{ ...styles.headerRight, marginLeft: "auto" }}>
-          <button type="button" aria-label="Settings" style={styles.settingsButton} className={uiClass.btnSubtle}
+      <aside className="app-sidebar" aria-label="Workspace navigation" style={ui.appSidebar}>
+        <div className="app-rail-brand" style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 8px", minHeight: 28 }}>
+          <svg viewBox="0 0 100 100" fill="none" aria-hidden="true" style={{ width: 28, height: 28, flexShrink: 0, color: pwc.orange500 }}>
+            <path d="M12 78 L40 22 L52 50 L66 30 L88 78" stroke="currentColor" strokeWidth="11" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <span className="app-navigation-label" style={styles.headerTitle}>XBRL Agent</span>
+        </div>
+        <TopNav view={state.view} extractMode={extractMode} hasDocument={documentId != null}
+          onAdd={addDocuments} onViewChange={(view) => showDocuments(view === "history" ? "history" : "progress")} />
+        {documentId != null && state.view !== "settings" && <div className="app-current-document" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <span className="app-navigation-label" style={{ ...ui.metadata, padding: "0 10px" }}>Current filing</span>
+          <span aria-current="page" data-tooltip={currentFilename || `Document ${documentId}`} aria-label={currentFilename || `Document ${documentId}`}
+            style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px", borderRadius: pwc.radius.md, background: pwc.white, minWidth: 0 }}>
+            <Icon glyph={Description} size={20} color={pwc.orange500} />
+            <span className="app-navigation-label" style={{ fontSize: 13, overflowWrap: "anywhere", minWidth: 0 }}>{currentFilename || `Document ${documentId}`}</span>
+          </span>
+        </div>}
+        <div className="app-rail-footer" style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: "auto" }}>
+          <button type="button" aria-label="Settings" data-tooltip="Settings"
+            aria-current={state.view === "settings" ? "page" : undefined}
+            style={{ ...styles.settingsButton, justifyContent: "flex-start", gap: 10, minHeight: 44, padding: "0 10px", background: state.view === "settings" ? pwc.white : "transparent" }}
+            className={`${uiClass.btnSubtle} app-navigation-link`}
             onClick={() => { if (confirmNavigationLeave()) dispatch({ type: "SET_VIEW", payload: "settings" }); }}>
-            <SettingsIcon /><span className="documents-settings-label">Settings</span>
+            <SettingsIcon /><span className="app-navigation-label">Settings</span>
           </button>
-          {user?.provider !== "dev" && <button type="button" aria-label="Log out" title="Log out" onClick={handleLogout} style={styles.logoutButton}><Icon glyph={Logout} size={20} /></button>}
+          <button type="button" className={`${uiClass.btnQuiet} app-rail-toggle app-navigation-link`}
+            aria-label={sidebarCollapsed ? "Expand navigation" : "Collapse navigation"}
+            data-tooltip={sidebarCollapsed ? "Expand navigation" : "Collapse navigation"}
+            aria-expanded={!sidebarCollapsed} aria-controls="app-primary-navigation" onClick={toggleSidebar}
+            style={{ ...ui.buttonQuiet, justifyContent: "flex-start", gap: 10, minHeight: 44, padding: "0 10px" }}>
+            <Icon glyph={sidebarCollapsed ? LeftPanelOpen : LeftPanelClose} size={20} />
+            <span className="app-navigation-label">{sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}</span>
+          </button>
+          {user && <div className="app-user" style={{ display: "flex", alignItems: "center", gap: 10, borderTop: `1px solid ${pwc.grey200}`, padding: "16px 8px 0", marginTop: 8 }}>
+            <span aria-hidden="true" style={{ display: "grid", placeItems: "center", width: 30, height: 30, flexShrink: 0, borderRadius: "50%", background: pwc.grey100, fontSize: 12 }}>{(user.display_name || user.email).slice(0, 2).toUpperCase()}</span>
+            <div className="app-navigation-label" style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 13, overflowWrap: "anywhere" }}>{user.display_name || user.email}</div>
+              <div style={ui.metadata}>{user.is_admin ? "Administrator" : "User"}</div>
+            </div>
+          </div>}
+        </div>
+      </aside>
+      <div className="app-workspace" style={{ minWidth: 0 }}>
+      <header className="app-topbar" style={{ ...styles.topbar, zIndex: 30, borderBottom: `1px solid ${pwc.grey200}`, height: 64 }}>
+        {state.view !== "settings" && documentId != null ? <DocumentSwitcher runs={documents.runs} runId={documentId} filename={currentFilename}
+          onSelect={openDocument} onBack={() => showDocuments(state.view === "history" && !documents.runs.some((run) => run.id === documentId) ? "history" : "progress")} />
+          : <span style={ui.metadata}>{contextLabel}</span>}
+        <div style={{ ...styles.headerRight, marginLeft: "auto" }}>
+          {user?.provider !== "dev" && <button type="button" aria-label="Log out" data-tooltip="Log out" onClick={handleLogout} style={styles.logoutButton}><Icon glyph={Logout} size={20} /></button>}
         </div>
       </header>
       <main id="main-content" tabIndex={-1} className="app-main" style={reviewFocused || state.view === "concepts" ? styles.mainFull : styles.mainHistory}>
         {(state.view === "settings" || (state.view === "concepts" && state.selectedRunId == null)) &&
-          <button type="button" style={{ ...ui.buttonGhost, alignSelf: "flex-start" }} onClick={restoreDocument}><ArrowBack size={20} />Back to {returnPath.match(/\/(?:run|history|concepts)\/\d+/) ? "document" : "Documents"}</button>}
+          <button type="button" style={{ ...ui.buttonGhost, alignSelf: "flex-start" }} onClick={restoreDocument}><ArrowBack size={20} />Back to {returnPath.match(/\/(?:run|history|concepts)\/\d+/) ? "document" : "work queue"}</button>}
         {state.view === "settings" && <SettingsPage isAdmin={Boolean(user?.is_admin)} currentEmail={user?.email}
           onFieldLabels={canonicalEnabled ? () => { if (!confirmNavigationLeave()) return; dispatch({ type: "SET_VIEW", payload: "concepts" }); dispatch({ type: "SET_SELECTED_RUN_ID", payload: null }); } : undefined} />}
-        {state.view !== "settings" && documentId != null && <DocumentSwitcher runs={documents.runs} runId={documentId} filename={documentName?.id === documentId ? documentName.pdf_filename : state.sessionRunId === documentId ? state.filename : null}
-          onSelect={openDocument} onBack={() => showDocuments(state.view === "history" && !documents.runs.some((run) => run.id === documentId) ? "history" : "progress")} />}
         {documentList && <DocumentsPage documents={documents} section={state.view === "history" ? "history" : "progress"}
           onSection={showDocuments} onAdd={addDocuments} onOpen={openDocument} />}
         {keepExtractWorkspaceMounted && !documentList && <div aria-hidden={state.view === "settings" ? true : undefined}
@@ -753,6 +810,7 @@ export default function App() {
             onSelectRun={(id) => { if (id == null) showDocuments("history"); else openDocument({ id, status: "running" }); }}
             onResumeDraft={(id) => openDocument({ id, status: "draft" })} />}
       </main>
+      </div>
       <SuccessToast toast={state.toast} onDismiss={() => dispatch({ type: "DISMISS_TOAST" })} />
     </div>
   );

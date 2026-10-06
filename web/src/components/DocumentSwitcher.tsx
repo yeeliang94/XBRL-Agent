@@ -10,8 +10,8 @@ export function DocumentSwitcher({ runs, runId, filename, onSelect, onBack }: {
   onSelect: (run: RunSummaryJson) => void;
   onBack: () => void;
 }) {
-  return <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 16 }}>
-    <button type="button" style={ui.buttonGhost} onClick={onBack}><ArrowBack size={20} />Documents</button>
+  return <div className="app-document-switcher" style={{ display: "flex", minWidth: 0, flex: 1, alignItems: "center", gap: 16 }}>
+    <button type="button" aria-label="All runs" data-tooltip="All runs" style={{ ...ui.buttonGhost, flexShrink: 0 }} onClick={onBack}><ArrowBack size={20} /><span className="app-document-back-label">All runs</span></button>
     <select aria-label="Switch document" value={runId}
       style={{ ...ui.input, width: "auto", minWidth: 0, maxWidth: "100%", flex: "0 1 420px", fontFamily: pwc.fontBody }}
       onChange={(event) => {

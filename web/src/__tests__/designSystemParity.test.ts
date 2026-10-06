@@ -147,7 +147,11 @@ describe("Direction A shell and responsive composition", () => {
   test("documents one persistent run navigation and explicit completion", () => {
     expect(designSystem).toContain("the retired pre-extraction transcript has no live tab");
     expect(designSystem).toContain("Historical transcript notices remain available in run Overview");
-    expect(designSystem).toContain("Documents is the single workspace destination");
+    expect(designSystem).toContain("Work queue is the home workspace");
+    expect(designSystem).toContain("Remember the collapse choice across refreshes");
+    expect(designSystem).toContain("Collapsing navigation must not remount the current workspace");
+    expect(designSystem).toContain("Missing summary data displays a dash");
+    expect(designSystem).toContain("Of these, not started identifies the draft subset of that same queue");
     expect(designSystem).toContain("without working glows or pulsing indicators");
     expect(designSystem).toContain("including Confirm setup");
     expect(designSystem).toContain("preserves the document and selected section through refresh");
@@ -207,6 +211,7 @@ describe("Direction A shell and responsive composition", () => {
   test("pins the worksheet-oriented Notes review composition", () => {
     expect(designSystem).toContain("mTool worksheet navigation with the source note inventory");
     expect(designSystem).toContain("one-pixel visible Grey 100 rule");
+    expect(designSystem).toContain("hide it only when those panes stack");
     expect(designSystem).toContain("mount one rich-text editor for the selected field");
     expect(designSystem).toContain("PDF controls remain in one sticky toolbar");
     expect(prototype).toContain(".notes-three-pane { display: grid; grid-template-columns: 240px 9px minmax(410px, 1fr) 9px minmax(330px, 35%)");
@@ -216,6 +221,7 @@ describe("Direction A shell and responsive composition", () => {
   });
 
   test("pins the concise operator activity stream contract", () => {
+    expect(designSystem).toContain("Activity provides an Export diagnostics button for the selected run");
     expect(designSystem).toContain("one flat chronological <em>Live activity</em> stream of operator-facing milestones");
     expect(designSystem).toContain("no event cards, navigation buttons or nested activity panels");
     expect(designSystem).toContain("Follow new updates only while the operator remains at the bottom");

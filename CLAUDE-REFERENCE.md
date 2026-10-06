@@ -453,6 +453,15 @@ overflow, repeated selection, missing source, narrow layout, and all loading,
 complete, empty, and failed states. Update the design guide and
 `web/src/__tests__/designSystemParity.test.ts` when the shared contract changes.
 
+Sidebar collapse is presentation-only: preserve the selected document, review
+section and mounted content. Sidebar navigation uses the same unsaved-change
+guard as document switching; leaving monitoring does not stop background runs.
+Queue summaries show unavailable data explicitly rather than implying zero.
+The design guide owns shell composition. Pinned by `web/src/__tests__/AppRouting.test.tsx`,
+`web/src/__tests__/App.test.tsx`, `web/src/__tests__/TopNav.test.tsx`,
+`web/src/__tests__/DocumentsPage.test.tsx`, and
+`web/src/__tests__/focusedWorkspaceShell.test.tsx`.
+
 **Run-detail is one tabbed surface** (`RunDetailView.tsx`): Overview · Agents ·
 Notes · Cross-checks · Telemetry · Review · Values (Review + Values gated on
 canonical mode; Review is the reviewer-pass diff/flags tab — see gotcha #21).
