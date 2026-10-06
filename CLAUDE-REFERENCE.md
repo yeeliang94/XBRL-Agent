@@ -1608,7 +1608,9 @@ inconclusive verification or newly introduced failures leave changed figures
 `investigation_incomplete`. Human flags remain counted rather than linked to
 individual handoff items. When baseline checks failed, a `fixed_and_verified`
 claim requires at least one originally failing check to pass in the latest
-verification. All-unresolved outcomes do not require that improvement. Baseline
+verification. Every verified-fix claim requires a passing check; warnings alone
+cannot verify changed figures. All-unresolved outcomes may retain warning-only
+verification for human review. Baseline
 setup runs off the server event loop. Pinned by
 `tests/test_reviewer_pipeline.py::test_scoped_writes_and_human_work_finish_without_false_clean`.
 

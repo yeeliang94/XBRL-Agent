@@ -1218,6 +1218,8 @@ class ReviewerVerification:
             return "targeted checks are unresolved or were not re-evaluated to a PASS"
         if failed and not allow_unresolved:
             return "checks still fail; resolve them or record human-review outcomes"
+        if not passed and not allow_unresolved:
+            return "no check passed; the changes remain unverified"
         return None
 
 
@@ -2296,6 +2298,9 @@ def create_reviewer_agent(
             return "rejected: no write was applied; use verified_clean or unresolved"
         if claims_fixed or not unresolved_count:
             issue = reviewer_verification_issue(ctx.deps, allow_unresolved=bool(unresolved_count))
+            if (issue is None and claims_fixed
+                    and not ctx.deps.last_verification.with_status("passed")):
+                issue = "no check passed; record unproven fixes unresolved"
             if (issue is None and claims_fixed and ctx.deps.original_failed_names
                     and not any(r.name in ctx.deps.original_failed_names
                                 for r in ctx.deps.last_verification.with_status("passed"))):
