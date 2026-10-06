@@ -1590,6 +1590,19 @@ reports successful review. The old `XBRL_SPOT_CHECK` toggle and
 `XBRL_SPOT_CHECK_MODE` depth setting are inert and absent from Settings.
 Pinned by `tests/test_reviewer_pipeline.py` and `tests/test_settings_api.py`.
 
+Scoped reviewer completion uses the latest structured check results tied to the
+writes evaluated, shared by the completion tool and server. Checks are run-level
+evidence, not a deterministic link to handoff items. Verified fixes and explicit
+unresolved items may coexist; all-unresolved outcomes may also retain writes.
+Such outcomes remain `investigation_unresolved`, never clean. Missing, stale,
+inconclusive verification or newly introduced failures leave changed figures
+`investigation_incomplete`. Human flags remain counted rather than linked to
+individual handoff items. When baseline checks failed, a `fixed_and_verified`
+claim requires at least one originally failing check to pass in the latest
+verification. All-unresolved outcomes do not require that improvement. Baseline
+setup runs off the server event loop. Pinned by
+`tests/test_reviewer_pipeline.py::test_scoped_writes_and_human_work_finish_without_false_clean`.
+
 **Wall-clock deadline behaviour (run-83 hardening, 2026-08-05):** the
 cap in `agent_runner.run_agent_loop` stops NEW MODEL THINKING only — a
 CALL-TOOLS node the model already issued executes past the deadline

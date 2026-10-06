@@ -149,6 +149,17 @@ def test_long_untrusted_check_message_cannot_truncate_trusted_scope_routing():
     assert "entity_scope='Group'" in packet
 
 
+def test_long_comparand_label_preserves_value_and_location():
+    from correction.reviewer_agent import _format_review_packet
+
+    packet = _format_review_packet([{
+        "name": "balance", "comparands": [{"role": "lhs", "label": "long " * 300,
+        "value": 987654321, "sheet": "SOFP", "row": 37, "period": "PY"}],
+    }], [], None)
+    assert "987654321" in packet and "SOFP row 37" in packet and "PY" in packet
+    assert "truncated" in packet
+
+
 def test_prompt_inlines_cascade_trace_for_failing_target(seeded):
     """Phase 4: render_reviewer_prompt resolves the failing check's target down
     to its children and inlines the trace, so the reviewer doesn't spend turns
