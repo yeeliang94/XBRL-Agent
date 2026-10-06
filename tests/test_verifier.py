@@ -701,3 +701,32 @@ def test_verify_statement_attaches_magnitude_warnings(tmp_path):
     ])
     r = verify_statement(str(path), StatementType.SOFP, filing_level="company")
     assert any("Revenue" in w for w in r.magnitude_warnings)
+
+@pytest.mark.parametrize("owners", [None, 0, -627539])
+@pytest.mark.parametrize("period", ["CY", "PY"])
+def test_company_soci_requires_owners_attribution_even_for_zero_income(tmp_path, owners, period):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "SOCI-NetOfTax"
+    ws.append(["Profit (loss)", 0 if owners is None else owners])
+    ws.append(["Total other comprehensive income", "=0"])
+    ws.append(["Total comprehensive income", "=B1+B2"])
+    ws.append(["Total comprehensive income, attributable to owners of parent", owners])
+    ws.append(["Total comprehensive income, attributable to non-controlling interests", None])
+    ws.append(["Total comprehensive income", "=B4+B5"])
+    if period == "PY":
+        ws["B1"] = ws["B4"] = 0
+        ws["C1"] = 0 if owners is None else owners
+        ws["C2"] = "=0"
+        ws["C3"] = "=C1+C2"
+        ws["C4"] = owners
+        ws["C6"] = "=C4+C5"
+    path = tmp_path / "soci.xlsx"
+    wb.save(path)
+    result = verify_statement(str(path), StatementType.SOCI)
+    from cross_checks.attribution_footing import SOCIAttributionFootingCheck
+    footing = SOCIAttributionFootingCheck().run({StatementType.SOCI: str(path)}, tolerance=1.0)
+    assert footing.status == ("passed" if owners is not None else "failed")
+    assert result.is_balanced == (owners is not None)
+    if owners is None:
+        assert any("owners attribution is missing" in m for m in result.mismatches)

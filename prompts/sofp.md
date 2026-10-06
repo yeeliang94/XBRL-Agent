@@ -125,8 +125,11 @@ Catch-all rows on the SOFP-Sub PPE, intangibles, and investments sub-blocks
 — specifically `Other property, plant and equipment`, `Other intangible
 assets`, `Other investment property`, `Other investments in subsidiaries`,
 `Other investments in associates`, and `Other investments in joint
-ventures` — exist for entities whose disclosure is genuinely coarse, NOT
-as a balancing mechanism.
+ventures` — exist for entities whose disclosure is genuinely coarse or for a disclosed
+asset class with no suitable dedicated category, NOT as a balancing mechanism.
+A disclosed leasehold-improvements class may use Other property, plant and
+equipment when the live template has no suitable dedicated class. Cite its
+net carrying amount separately for each period; do not invent a remainder.
 
 NEVER plug a residual into these rows to make the sub-sheet `*Total …`
 match a face-sheet PPE / intangibles total. If the AFS note itself uses
@@ -147,8 +150,8 @@ This dedicated-row rule applies PER PERIOD, independently for CY and PY.
 Read the note's CY column and PY column separately and fill the dedicated
 row for BOTH years. A class that is zero in one year can still be non-zero
 in the other — NEVER zero a dedicated class row in one year just because it
-is zero in the other, and NEVER let a class the note shows as non-zero in a
-given year flow into the residual `Other …` bucket for that year. Because
+is zero in the other, and NEVER let a non-zero class with a suitable dedicated
+row flow into the residual `Other …` bucket for that year. Because
 the sub-sheet total ties regardless of how the classes are split, a
 misallocation here is INVISIBLE to `verify_totals` — only your careful
 per-year reading prevents it. (Failure to avoid: a PPE note shows `Motor
@@ -213,10 +216,11 @@ PPE detail:
   property, plant and equipment` as a landing row.
 - "Capital work-in-progress" / "Assets under construction" →
   `Construction in progress / Asset work-in progress`.
-- "Renovations and improvements" → if there's no dedicated row,
-  prefer `Office equipment, fixture and fittings` over `Other
-  property, plant and equipment` when the renovations are part of
-  the office fit-out.
+- "Leasehold improvements" / "Renovations and improvements" → use the
+  suitable dedicated class if one exists. Otherwise use `Other property,
+  plant and equipment` for the separately disclosed class. Do not classify
+  improvements as office equipment merely because they are an office fit-out.
+  If two classes look plausible, use `lookup_definitions` before choosing.
 
 Cash:
 - "Fixed deposits with licensed banks" → `Deposits placed with licensed

@@ -35,19 +35,40 @@ Routing:
 - Accounting Policies: select complete topic-specific policy subsections. Keep
   supporting measurement, depreciation and useful-life paragraphs with the parent
   topic. A subsection explicitly labelled Material/Significant Accounting Policy
-  belongs here even when embedded in a disclosure note.
+  belongs here even when embedded in a disclosure note. For a mixed policies
+  note, route complete Basis of Preparation, changes in policies and standards
+  disclosures to their specific live fields. Use a dedicated basis-of-
+  preparation policy field when the active policies catalog has one; otherwise
+  use the List-of-Notes basis disclosure field. Do not bury these sections
+  in Other Policies or skip the whole mixed note. Preserve complete sections,
+  not individual sentences, and never duplicate the same source blocks.
+  Inspect every mandatory `*` field independently of topic-specific writes.
+  The material/significant accounting-policy disclosure field needs substantive
+  source content, not a title alone. Place the source introduction/overview
+  there when supported; never duplicate the full policy note into it. If absent,
+  report the exact unfilled field and reason in save_result for human review.
 - List of Notes: keep each complete top-level disclosure in one field. Choose the
   best specific label; use the supplied catch-all if none fits the whole note.
   Distinct notes may share the catch-all field: write each note separately from
   its own source sections, even if another note is already there. The writer
   preserves the earlier note and replaces only a later revision of the same
-  source note. Do not split internal topics across rows. Exclude only explicitly labelled
+  source note. Complete distinct subsections for Basis of Preparation, policy
+  changes and standards disclosures may route to their specific live fields.
+  A trade-and-other-payables note uses Disclosure of trade and other payables;
+  an accrual line alone does not make the whole note an accrued-expenses
+  disclosure. Preserve whole subsections and their non-policy siblings.
+  Otherwise do not split internal topics across rows. Exclude only explicitly labelled
   material/significant policy subsections routed to Accounting Policies, and
   notes belonging wholly to Corporate Information or Accounting Policies.
 - Share-capital prose intentionally appears in the List of Notes share-capital
-  field and the Issued Capital text-block field. Related-party prose intentionally
-  appears in List of Notes and the Related Party text-block field. Numeric writes
-  do not replace either required prose placement. Avoid other duplicate content.
+  field and the Issued Capital text-block field. Related-party prose
+  belongs only in the Related Party text-block field alongside its numeric
+  categories. Do not repeat it in List of Notes. A complete related-party
+  subsection in another note may route there while its non-related-party
+  siblings remain intact in their own field. A List-of-Notes skip requires an
+  actual live dedicated placement; if that template was not requested, report
+  the unresolved destination rather than claim coverage. Numeric writes do not
+  replace required prose. Avoid other duplicate content.
 
 For Issued Capital and Related Party numeric rows only, use write_notes with
 numeric_values and empty content. Copy the exact chosen_row_label and include
@@ -84,6 +105,8 @@ once accepted; the batch coordinator saves the result. A cross-sheet skip is acc
 when every captured part of that note has a live placement. If the receipt
 names unplaced sections, put their complete disclosure content in the best
 List-of-Notes field and resubmit; use the catch-all when no specific field fits.
+Related-party prose is an exception: its missing dedicated placement remains
+unresolved; never copy it into List of Notes to make the receipt pass.
 Do not call report_source_gap for a routing choice when the source is readable.
 Other templates call save_result after
 their writes. Do not add tasks, formatting passes or approval steps.

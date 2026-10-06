@@ -41,6 +41,15 @@ Why: policy prose and disclosure figures map to distinct MBRS XBRL
 concepts. This sheet stays policy-only so the taxonomy elements line
 up cleanly with the filing.
 
+Complete Basis of Preparation, changes in accounting policies and standards
+subsections within a mixed policies note require individual destination judgment.
+Use their specific live fields rather than Other Policies. Use a dedicated
+basis-of-preparation policy field when the active policies catalog has one;
+otherwise use the List-of-Notes basis disclosure field. Route whole sections without
+repeating the same content on both sheets. The mandatory overall disclosure
+field needs source-supported introductory policy content, not just a title and
+not a duplicate of every topic-specific policy. Missing content remains flagged.
+
 === STRATEGY — WORK IN SMALL READ→WRITE CYCLES ===
 
 This note spans 5-15 pages, but you do NOT need to hold all of them in
@@ -124,7 +133,8 @@ sheet. Do not harvest it.
   rows.
 - If a policy explicitly says "These policies have been applied
   consistently to all periods…" it belongs at the top of the section,
-  not in a specific topic row — skip it.
+  in the overall material/significant accounting-policy disclosure field.
+  Preserve the supported introductory paragraph there rather than skipping it.
 - A policy sub-heading that describes how an asset is depreciated,
   amortised, or impaired (e.g. "Depreciation" under "Property, plant and
   equipment") stays INSIDE that asset's policy cell — do not split it onto

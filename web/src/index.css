@@ -1102,7 +1102,6 @@ details[open] > summary::before {
   .app-navigation-link { justify-content: center !important; padding: 0 !important; }
   .app-rail-brand { padding: 0 !important; justify-content: center; }
   .app-user { padding-left: 0 !important; padding-right: 0 !important; justify-content: center; }
-  .app-current-document > [aria-current] { justify-content: center; }
 }
 .app-sidebar [data-tooltip]::after { left: 0; transform: translate(0, 2px); }
 .app-sidebar [data-tooltip]:hover::after,
@@ -1118,12 +1117,14 @@ details[open] > summary::before {
   .app-sidebar .app-rail-brand { width: 100%; padding: 0 !important; justify-content: flex-start; }
   .app-sidebar .app-primary-navigation { flex-direction: row !important; flex-wrap: wrap; flex: 1; }
   .app-sidebar .app-navigation-link { padding: 0 8px !important; justify-content: flex-start !important; font-size: 13px !important; }
+  .app-sidebar .app-document-navigation { width: 100%; flex-direction: row !important; flex-wrap: wrap; overflow: visible !important; }
+  .app-document-navigation > .app-navigation-label { width: 100%; }
+  .app-document-list { width: 100%; flex-direction: row !important; flex-wrap: wrap; overflow: visible !important; }
+  .app-document-navigation .app-navigation-link { max-width: 100%; }
   .app-sidebar .app-rail-footer { margin: 0 !important; }
   .app-sidebar [data-tooltip]::after { display: none; }
-  .app-rail-toggle, .app-user, .app-current-document { display: none !important; }
+  .app-rail-toggle, .app-user { display: none !important; }
   .app-topbar { padding: 0 16px !important; }
-  .app-document-back-label { display: none; }
-  .app-document-switcher { gap: 8px !important; }
   .queue-summary { gap: 16px !important; }
   .queue-recent-row { align-items: flex-start !important; flex-wrap: wrap; gap: 12px !important; }
 }

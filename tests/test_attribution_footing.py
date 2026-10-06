@@ -88,19 +88,19 @@ def _descendant_leaf(conn, uuid):
     return None
 
 
-def _seed(conn, run_id, uuid, value):
+def _seed(conn, run_id, uuid, value, period="CY"):
     conn.execute(
         "INSERT OR REPLACE INTO run_concept_facts(run_id, concept_uuid, period, "
         "entity_scope, value, value_status, source, updated_at) "
-        "VALUES (?, ?, 'CY', 'Company', ?, 'observed', 'pdf', '2026-06-21Z')",
-        (run_id, uuid, value),
+        "VALUES (?, ?, ?, 'Company', ?, 'observed', 'pdf', '2026-06-21Z')",
+        (run_id, uuid, period, value),
     )
 
 
-def _val(conn, run_id, uuid):
+def _val(conn, run_id, uuid, period="CY"):
     r = conn.execute(
         "SELECT value FROM run_concept_facts WHERE run_id = ? AND concept_uuid = ? "
-        "AND period = 'CY' AND entity_scope = 'Company'", (run_id, uuid),
+        "AND period = ? AND entity_scope = 'Company'", (run_id, uuid, period),
     ).fetchone()
     return r[0] if r else None
 
@@ -123,7 +123,9 @@ def _setup(tmp_path, case):
 
 @pytest.mark.parametrize("case_key", ["sopl", "soci"])
 @pytest.mark.parametrize("articulates", [True, False])
-def test_attribution_footing_catches_mismatch(tmp_path, case_key, articulates):
+@pytest.mark.parametrize("attribution_source", ["owners", "nci"])
+@pytest.mark.parametrize("period", ["CY", "PY"])
+def test_attribution_footing_catches_mismatch(tmp_path, case_key, articulates, attribution_source, period):
     case = CASES[case_key]
     db, run_id, tid, conn = _setup(tmp_path, case)
 
@@ -136,13 +138,19 @@ def test_attribution_footing_catches_mismatch(tmp_path, case_key, articulates):
     # Seed one income leaf, cascade to compute the income-side total, then set
     # the owners attribution leaf to match it (articulates) or miss by a clear
     # gap (does not).
-    _seed(conn, run_id, income_leaf, 1000.0)
+    _seed(conn, run_id, income_leaf, 1000.0, period)
+    if period == "PY":
+        _seed(conn, run_id, income_leaf, 1000.0)
+        _seed(conn, run_id, owners, 1000.0)
     conn.commit()
     recompute_after_turn(str(db), run_id)
-    p = _val(conn, run_id, income_uuid)
+    p = _val(conn, run_id, income_uuid, period)
     assert p is not None
 
-    _seed(conn, run_id, owners, p if articulates else p + 50.0)
+    attribution_leaf = owners if attribution_source == "owners" else _leaf_like(
+        conn, tid, case["owners_label"].replace("owners of parent", "non-controlling interests"))
+    assert attribution_leaf
+    _seed(conn, run_id, attribution_leaf, p if articulates else p + 50.0, period)
     conn.commit()
     recompute_after_turn(str(db), run_id)
 
@@ -150,8 +158,16 @@ def test_attribution_footing_catches_mismatch(tmp_path, case_key, articulates):
         conn=conn, run_id=run_id, template_ids={case["stmt"]: tid},
         filing_level="company", filing_standard="mfrs")
     result = case["check"]().run_facts(ctx, tolerance=1.0)
+    from concept_model.exporter import export_run_to_xlsx
+    import shutil
+    workbook = tmp_path / "filled.xlsx"
+    shutil.copyfile(case["fixture"], workbook)
+    export_run_to_xlsx(db, run_id, str(workbook), template_id=tid)
+    workbook_result = case["check"]().run({case["stmt"]: str(workbook)}, tolerance=1.0)
     conn.close()
-    assert result.status == ("passed" if articulates else "failed"), result.message
+    expected = "passed" if articulates and (case_key != "soci" or attribution_source == "owners") else "failed"
+    assert result.status == expected, result.message
+    assert workbook_result.status == expected, workbook_result.message
 
 
 @pytest.mark.parametrize("case_key", ["sopl", "soci"])
@@ -169,8 +185,13 @@ def test_attribution_footing_not_applicable_when_undisclosed(tmp_path, case_key)
         conn=conn, run_id=run_id, template_ids={case["stmt"]: tid},
         filing_level="company", filing_standard="mfrs")
     result = case["check"]().run_facts(ctx, tolerance=1.0)
+    if case_key == "soci":
+        from tools.verifier_facts import verify_statement_facts
+        verification = verify_statement_facts(conn, run_id, tid, StatementType.SOCI)
+        assert not verification.is_balanced
+        assert any("owners attribution is missing" in m for m in verification.mismatches)
     conn.close()
-    assert result.status == "not_applicable", result.message
+    assert result.status == ("failed" if case_key == "soci" else "not_applicable"), result.message
 
 
 def test_attribution_footing_checks_registered():

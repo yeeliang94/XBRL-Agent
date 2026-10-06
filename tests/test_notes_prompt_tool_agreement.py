@@ -104,10 +104,9 @@ def test_batch_coverage_tool_matches_the_never_skip_contract(tmp_path):
     assert "don't fit any Sheet-12 row or belong on" not in flat_desc
     assert "NEVER skipped" in flat_desc
     assert "catch-all" in flat_desc
-    assert "(Accounting Policies or Corporate Information)" in flat_desc
+    assert "(Accounting Policies, Corporate Information or Related Party Transactions)" in flat_desc
     assert (
-        "Related Party Transactions is an intentional dual placement and is "
-        "NOT a valid skip"
+        "Related Party Transactions belongs only on its dedicated sheet"
     ) in flat_desc
 
 

@@ -61,18 +61,18 @@ Do not submit an unclassified numeric payload or describe it as completed.
    blank unless the source prints that component as its own line. Do not infer
    "Other key management personnel" (or any other catch-all row) merely so the
    template adds back to the printed total.
-5. **ALSO reproduce the disclosed table.** In addition to the numeric
-   rows above, emit ONE prose `NotesPayload` whose `content` is the
-   related-party transactions table reproduced verbatim as an HTML
+5. **ALSO reproduce the disclosed table, when present, and narrative.** In addition to the numeric
+   rows above, emit ONE prose `NotesPayload` containing the related-party
+   disclosure. If the source includes a table, reproduce it verbatim as an HTML
    `<table>` (follow the SCHEDULES VS PROSE and CELL FORMAT rules in
    the base prompt — `<th>` header row, `<td>` body cells, accountant
-   formatting preserved). Target it at the `Disclosure of transactions
+   formatting preserved), together with its disclosed narrative. If the note
+   has no table, reproduce its narrative in this same payload.
+   Target it at the `Disclosure of transactions
    between related parties` text-block row — copy that label verbatim
    from the TEMPLATE ROW LABELS list as `chosen_row_label`. This prose
    payload needs its own `evidence`
-   + `parent_note` like any other. Only do this when the PDF actually
-   shows a table; if the note is plain prose with no schedule, skip the
-   reproduction. The numeric grid above still fills exactly as before —
+   + `parent_note` like any other. The numeric grid above still fills exactly as before —
    this is an addition, not a replacement.
 6. Before calling `write_notes`, check that every numeric payload has its
    category and source evidence. Resolve missing categories now; do not leave

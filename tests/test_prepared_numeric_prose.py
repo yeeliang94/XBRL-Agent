@@ -81,12 +81,13 @@ def test_source_disclosure_and_numeric_facts_use_distinct_slots(tmp_path, standa
     assert "<strong>emphasis</strong>" in deps.cells_written[0]["html"]
 
 
-def test_numeric_prose_duplicate_is_explicit_and_limited_to_list_of_notes(tmp_path):
+@pytest.mark.parametrize("kind", [NotesTemplateType.ISSUED_CAPITAL, NotesTemplateType.RELATED_PARTY])
+def test_numeric_prose_duplicate_is_explicit_and_limited_to_list_of_notes(tmp_path, kind):
     from notes.integrity_runner import build_input
     from notes.integrity import check_approved_duplicates
     db = tmp_path / "audit.sqlite"
     init_db(db)
-    template = notes_template_path(NotesTemplateType.ISSUED_CAPITAL)
+    template = notes_template_path(kind)
     tree = parse_template(str(template))
     manifest = tmp_path / "template.json"
     manifest.write_text(json.dumps(tree.to_json()))
@@ -98,7 +99,16 @@ def test_numeric_prose_duplicate_is_explicit_and_limited_to_list_of_notes(tmp_pa
         srepo.write_blocks(conn, gen, [SourceBlock("a", "paragraph", 1, "<p>Full prose.</p>")])
         srepo.activate_generation(conn, gen)
         source_write.write_cell_from_blocks(conn, run_id=run, generation_id=gen,
-            sheet="Notes-Issuedcapital", row=4, block_ids=["a"], template_prefix="mfrs-company-")
+            sheet=NOTES_REGISTRY[kind].sheet_name, row=4, block_ids=["a"], template_prefix="mfrs-company-")
+        if kind == NotesTemplateType.RELATED_PARTY:
+            with pytest.raises(source_write.SourcePlacementConflict):
+                source_write.write_cell_from_blocks(conn, run_id=run, generation_id=gen,
+                    sheet="Notes-Listofnotes", row=20, block_ids=["a"])
+            assert not conn.execute(
+                "SELECT 1 FROM notes_cells WHERE run_id=? AND sheet='Notes-Listofnotes'",
+                (run,),
+            ).fetchone()
+            return
         source_write.write_cell_from_blocks(conn, run_id=run, generation_id=gen,
             sheet="Notes-Listofnotes", row=20, block_ids=["a"])
         assert check_approved_duplicates(build_input(conn, run, gen)) == []

@@ -99,3 +99,20 @@ A fix isn't done because you called a tool — it's done when the finding is gon
 - If a packet finding is **still open**, keep working it (or `raise_flag` if it is genuinely unfixable). Don't leave a fixable finding on the table.
 - If `verify_findings()` reports a **NEW** finding — one your edits introduced — then a fix made the result worse. Reconsider the edit, restore content if needed, or raise a grounded human-review flag. Never end a pass having introduced a finding.
 - You do NOT have to reach zero findings — an honest, grounded flag is a valid ending. But a finding you *caused* is never acceptable.
+
+=== REQUIRED FIELDS AND ROUTING ===
+
+Inspect the mandatory-field findings even when no populated cell points to
+that field. A required overall policy disclosure needs substantive source
+content; a heading alone is incomplete. Find the source-supported introduction
+or overview, and place it without copying the entire policy note again. If the
+source has no suitable content, raise a grounded needs_human flag for that
+finding. Do not invent text to clear the check.
+Check complete Basis of Preparation, policy changes and standards subsections
+against their specific fields in the active standard. Use a dedicated basis policy
+field when the active policies catalog has one; otherwise use the List-of-Notes
+basis disclosure field. Preserve complete sections and their siblings.
+Related-party prose belongs only on the dedicated Related Party template.
+Do not remove the only surviving disclosure; flag a required move involving
+that numeric template for human review. A trade-and-other-payables disclosure
+uses its matching field unless the whole disclosure is actually about accruals.

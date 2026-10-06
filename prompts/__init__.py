@@ -76,15 +76,11 @@ def render_prompt(
     # Substitute variant name into the statement prompt
     statement_prompt = statement_prompt.replace("{{VARIANT}}", variant)
 
-    # MPERS-only advisory: the MPERS SOPL Analysis sub-sheet exposes THREE
-    # distinct "other revenue" leaves; the coarse-recording default ("pick the
-    # section's most generic Other leaf") sends every entity to the generic
-    # "Other revenue" row, which is rarely correct. Append a note (MPERS SOPL
-    # only) steering the bucket choice by principal activity. Injected here —
-    # not in sopl.md — so it never renders on MFRS and the "sopl.md is coarse"
-    # pinning test is unaffected.
-    if statement_type == StatementType.SOPL and std_key == "mpers":
-        statement_prompt = statement_prompt + "\n\n" + _MPERS_SOPL_REVENUE_NOTE
+    # Revenue destination guidance must match the active standard's labels.
+    if statement_type == StatementType.SOPL:
+        statement_prompt += "\n\n" + (
+            _MPERS_SOPL_REVENUE_NOTE if std_key == "mpers" else _MFRS_SOPL_REVENUE_NOTE
+        )
 
     # Build navigation section based on page hints
     if page_hints:
@@ -193,6 +189,17 @@ def render_prompt(
     return "\n\n".join(parts)
 
 
+_MFRS_SOPL_REVENUE_NOTE = """=== MFRS REVENUE CLASSIFICATION ===
+
+For a service business, use the live services revenue leaf, such as
+"Revenue from rendering of other services". For goods, use the suitable
+sale-of-goods leaf. Inspect the principal activity disclosure when the face
+label is generic. Use lookup_definitions when plausible categories compete.
+Reserve generic Other revenue for revenue with no suitable specific class.
+Use disclosed reconciled components for mixed goods/services revenue; never
+invent a split from principal activity alone.
+"""
+
 # MPERS SOPL revenue-bucket advisory (injected by render_prompt for SOPL on
 # MPERS filings only). The MPERS SOPL Analysis sub-sheet has three "other
 # revenue" leaves that all roll up into *Total revenue; the generic one is a
@@ -223,7 +230,11 @@ Note 1) and/or the Directors' Report. If you are unsure which bucket fits,
 run search_pdf_text(["principal activity"]) and read that note before
 writing. Reserve the generic "Other revenue" leaf only for revenue that is
 genuinely neither goods nor services (e.g. a pure investment-holding
-entity)."""
+entity).
+Use disclosed reconciled components for mixed goods/services revenue; never
+invent a split from principal activity alone. The components must reconcile
+exactly to the face total for each period and entity scope.
+"""
 
 
 def _load_prompt(filename: str) -> str:

@@ -108,14 +108,54 @@ describe("App routing", () => {
     cleanup();
   });
 
+  test.each([1, 3, 8])("sidebar caps documents at three and keeps View all visible with %i queued documents", async count => {
+    const api = await import("../lib/api");
+    const runs = Array.from({ length: count }, (_, index) => ({
+      id: 50 + index, status: "running", pdf_filename: `Filing ${index + 1}.pdf`,
+    } as import("../lib/types").RunSummaryJson));
+    vi.mocked(api.fetchRuns).mockResolvedValue({ runs, total: count, limit: 50, offset: 0 });
+    window.history.replaceState({}, "", "/history/42?tab=checks");
+    try {
+      const { default: App } = await import("../App");
+      render(<App />);
+      const sidebar = screen.getByRole("navigation", { name: "In-progress documents" });
+      await waitFor(() => expect(within(sidebar).getAllByRole("button", { name: /^Open / })).toHaveLength(Math.min(count + 1, 3)));
+      expect(within(sidebar).getByRole("button", { name: "Open Document 42" })).toHaveAttribute("aria-current", "page");
+      expect(within(sidebar).getByRole("button", { name: "Open Filing 1.pdf" })).toBeInTheDocument();
+      expect(within(sidebar).queryByRole("button", { name: "Open Filing 3.pdf" })).toBeNull();
+      fireEvent.click(within(sidebar).getByRole("button", { name: "View all documents" }));
+      expect(window.location.pathname).toBe("/");
+      const queue = await screen.findByRole("table", { name: "Documents in progress" });
+      expect(within(queue).getByRole("button", { name: `Filing ${count}.pdf` })).toBeInTheDocument();
+      expect(within(sidebar).getAllByRole("button", { name: /^Open / })).toHaveLength(Math.min(count, 3));
+      expect(within(sidebar).getByRole("button", { name: "View all documents" })).toBeVisible();
+    } finally {
+      cleanup();
+      vi.mocked(api.fetchRuns).mockResolvedValue({ runs: [], total: 0, limit: 50, offset: 0 });
+    }
+  });
+
   test("document review retains its section when navigation collapses and remembers the choice", async () => {
     window.history.replaceState({}, "", "/history/42?tab=values");
     const { default: App } = await import("../App");
     render(<App />);
-    expect(await screen.findByRole("combobox", { name: "Switch document" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Open Document 42" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Work queue" })).toHaveAttribute("href", "/");
     const sections = await screen.findByRole("tablist", { name: "Run detail sections" });
     expect(within(sections).getByRole("tab", { name: "Figures" })).toHaveAttribute("aria-selected", "true");
+    const { guardNavigationHistory } = await import("../lib/navigationHistory");
+    const leave = vi.fn(() => false);
+    const unguard = guardNavigationHistory(leave);
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "Open Document 42" }));
+      expect(leave).not.toHaveBeenCalled();
+      expect(window.location.pathname + window.location.search).toBe("/history/42?tab=values");
+      fireEvent.click(screen.getByRole("link", { name: "Work queue" }));
+      expect(leave).toHaveBeenCalledOnce();
+      expect(window.location.pathname).toBe("/history/42");
+    } finally {
+      unguard();
+    }
     fireEvent.click(screen.getByRole("button", { name: "Collapse navigation" }));
     expect(screen.getByRole("button", { name: "Expand navigation" })).toHaveAttribute("aria-expanded", "false");
     expect(window.location.pathname + window.location.search).toBe("/history/42?tab=values");
@@ -278,7 +318,7 @@ describe("App routing", () => {
         screen.getByRole("tablist", { name: /run detail sections/i }),
       ).toBeInTheDocument();
 
-      fireEvent.change(screen.getByRole("combobox", { name: "Switch document" }), { target: { value: "42" } });
+      fireEvent.click(screen.getByRole("button", { name: "Open Document 42" }));
 
       expect(await screen.findByTestId("run-detail-notes-review")).toBeInTheDocument();
       const tablist = await screen.findByRole("tablist", { name: /run detail sections/i });
@@ -300,7 +340,7 @@ describe("App routing", () => {
     render(<App />);
     const tabs = await screen.findByRole("tablist", { name: /run detail sections/i });
     expect(within(tabs).getByRole("tab", { name: "Cross-checks" })).toHaveAttribute("aria-selected", "true");
-    fireEvent.change(screen.getByRole("combobox", { name: "Switch document" }), { target: { value: "42" } });
+    fireEvent.click(screen.getByRole("button", { name: "Open Document 42" }));
     expect(window.location.search).toBe("?tab=checks");
     expect(within(screen.getByRole("tablist", { name: /run detail sections/i })).getByRole("tab", { name: "Cross-checks" })).toHaveAttribute("aria-selected", "true");
   });
@@ -321,7 +361,7 @@ describe("App routing", () => {
     await waitFor(() => expect(within(tabs).getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true"));
     act(() => window.history.forward());
     await waitFor(() => expect(within(tabs).getByRole("tab", { name: "Cross-checks" })).toHaveAttribute("aria-selected", "true"));
-    fireEvent.click(screen.getByRole("button", { name: "All runs" }));
+    fireEvent.click(screen.getByRole("link", { name: "History" }));
     expect(window.location.pathname).toBe("/history");
   });
 
