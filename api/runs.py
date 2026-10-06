@@ -31,6 +31,39 @@ logger = logging.getLogger("server")
 router = APIRouter()
 
 
+@router.get("/api/runs/{run_id}/diagnostics")
+def export_run_diagnostics(run_id: int):
+    """Download a run-scoped snapshot without modifying any saved artifacts."""
+    from fastapi.responses import StreamingResponse
+    from starlette.background import BackgroundTask
+    from db import repository as repo
+    from observability.diagnostics import build_diagnostics_bundle
+
+    conn = server._open_audit_conn()
+    try:
+        detail = repo.get_run_detail(conn, run_id)
+        if detail is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        usage = repo.fetch_model_usage_rollup(conn, run_id)
+    finally:
+        conn.close()
+    bundle = build_diagnostics_bundle(detail, usage, server.OUTPUT_DIR)
+
+    def chunks():
+        try:
+            while chunk := bundle.read(64 * 1024):
+                yield chunk
+        finally:
+            bundle.close()
+
+    return StreamingResponse(
+        chunks(), media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="run-{run_id}-diagnostics.zip"',
+                 "Cache-Control": "no-store"},
+        background=BackgroundTask(bundle.close),
+    )
+
+
 def _read_pdf_sidecar_outcome(output_dir: Optional[str]) -> Optional[dict]:
     """The persisted scanned-PDF transcript outcome, or None. Never raises."""
     try:

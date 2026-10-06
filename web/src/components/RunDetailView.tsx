@@ -14,6 +14,7 @@ import type { RunDetailJson, RunAgentJson, CrossCheckResult } from "../lib/types
 import { STATEMENT_LABELS, STATEMENT_TYPES, NOTES_TEMPLATE_TYPES } from "../lib/types";
 import { userMessage } from "../lib/errors";
 import { AgentTelemetryPanel } from "./AgentTelemetryPanel";
+import { DiagnosticsExport } from "./DiagnosticsExport";
 import { ValidatorTab } from "./ValidatorTab";
 import { ReviewTab } from "./ReviewTab";
 import { MtoolFillModal } from "./MtoolFillModal";
@@ -1306,6 +1307,7 @@ export function RunDetailView({
 
       {activeTab === "agents" && (
         <section style={styles.section} role="tabpanel" data-testid="run-detail-agents">
+          <DiagnosticsExport key={detail.id} runId={detail.id} />
           {detail.agents.length === 0 ? (
             <p style={styles.dim}>Nothing was recorded for this run yet.</p>
           ) : (
