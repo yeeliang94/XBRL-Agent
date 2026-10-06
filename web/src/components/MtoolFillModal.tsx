@@ -111,6 +111,7 @@ interface UnresolvedNote {
 
 // Dry-run notes diagnostic (POST /mtool-fill/notes-preview).
 interface NotesPreview {
+  notes_output_revision?: string;
   notes_in_run: number;
   template_fn_slots: number;
   create_missing_notes: boolean;
@@ -502,6 +503,8 @@ function detectedToColumnMap(
 export function MtoolFillModal({ runId, open, onClose }: Props) {
   const replacementInputRef = useRef<HTMLInputElement>(null);
   const [meta, setMeta] = useState<FillMeta | null>(null);
+  const [notesStale, setNotesStale] = useState(false);
+  const [notesRevision, setNotesRevision] = useState<string | null>(null);
   const [notesCount, setNotesCount] = useState<number | null>(null);
   const [fillNotes, setFillNotes] = useState(true);
   // Default ON: a template freshly exported from mTool has no note spots
@@ -601,6 +604,8 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
     setReadinessErr(null);
     setMeta(null);
     setNotesCount(null);
+    setNotesRevision(null);
+    setNotesStale(false);
     setNotesSheets([]);
     setSelectedSheets(null);
     // This modal stays MOUNTED between sessions, so any choice not reset here
@@ -656,6 +661,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
       })
       .then((doc) => { if (current()) {
         setNotesCount(doc?.meta?.counts?.notes ?? null);
+        setNotesRevision(doc?.meta?.notes_output_revision ?? null);
         setNotesSheets(Array.from(new Set<string>((doc?.footnotes ?? [])
           .map((note: { source_sheet?: string }) => note.source_sheet)
           .filter((sheet: unknown): sheet is string => typeof sheet === "string"))));
@@ -704,6 +710,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
       form.append("fill_notes", fillNotes ? "true" : "false");
       form.append("create_missing_notes", createMissingNotes ? "true" : "false");
       if (fillNotes) form.append("notes_styling", "styled");
+      if (fillNotes && notesRevision) form.append("notes_output_revision", notesRevision);
       if (columnMap) form.append("column_map", JSON.stringify(columnMap));
       const targets = fillNotes ? notesTargetsPayload() : null;
       if (targets) form.append("notes_targets", targets);
@@ -716,6 +723,11 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
         const body = await resp.json().catch(() => ({}));
         if (!current()) return;
         const detail = body?.detail;
+        if (detail?.code === "notes_output_changed") {
+          setNotesStale(true);
+          setPreview(null);
+          throw new Error(detail.message);
+        }
         // Low-confidence / unconfirmed auto-detection: the server hands back
         // its best guess in detail.detected. Seed the editor so the user can
         // confirm + retry. This is a guided next step, not a failure.
@@ -762,6 +774,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
   };
 
   const requestSubmit = () => {
+    if (fillNotes && notesStale) return;
     if (detectBusy) {
       setFillQueued(true);
       return;
@@ -855,6 +868,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
         Array.isArray(candidate.errors)
       ) {
         setPreview(candidate as NotesPreview);
+        if (candidate.notes_output_revision) { setNotesRevision(candidate.notes_output_revision); setNotesStale(false); }
       } else {
         throw new Error("Notes preview returned an invalid response.");
       }
@@ -1113,7 +1127,10 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
         )}
 
         {patchErr && (
-          <div role="alert" style={ui.alertError}>Fill failed: {patchErr}</div>
+          <div role="alert" style={ui.alertError}>Fill failed: {patchErr}
+            {notesStale && <button type="button" className={uiClass.btnSecondary} style={{ ...ui.buttonSecondary, marginLeft: 12 }}
+              disabled={busy || previewBusy} onClick={() => void runPreview()}>Refresh notes preview</button>}
+          </div>
         )}
         {busy && <div role="status" style={ui.alertInfo}>Preparing your template…</div>}
         {readinessErr && <p role="status" style={styles.statLine}>Run checks are unavailable: {readinessErr} You can still fill the template; checks are repeated when you fill.</p>}
@@ -1615,7 +1632,7 @@ export function MtoolFillModal({ runId, open, onClose }: Props) {
             ref={fillButtonRef}
             aria-label={report ? "Change options" : "Fill"}
             onClick={report ? () => setReport(null) : requestSubmit}
-            disabled={!file || busy || downloading || fillQueued || selectedSheets?.length === 0 || templateSettings?.filing_family_match === false}
+            disabled={!file || busy || downloading || fillQueued || (fillNotes && notesStale) || selectedSheets?.length === 0 || templateSettings?.filing_family_match === false}
             className={report ? uiClass.btnSecondary : uiClass.btnPrimary}
             style={report ? ui.buttonSecondary : ui.buttonPrimary}
           >

@@ -47,7 +47,7 @@ from mtool.column_detect import (
 from mtool.exporter import build_fill_doc
 from mtool.template_map import inspect_template, resolve_filing_doc
 from mtool.notes_decorate import NotesTableStyle
-from mtool.notes_exporter import build_notes_fill_doc, build_notes_snapshot, notes_source_sheets
+from mtool.notes_exporter import NotesOutputContentError, build_notes_fill_doc, build_notes_snapshot, notes_source_sheets, prepare_note_output
 from mtool.offline_fill import (
     fill_footnotes, fill_workbook, validate_input, validate_notes_input)
 from mtool.preflight import evaluate_preflight, written_keys_from_doc
@@ -104,7 +104,8 @@ class MtoolRoute(APIRoute):
                         "mtool_request_failed", str(exc.detail), exc.__cause__ or exc)
                 raise
             except Exception as exc:
-                message = "We couldn't finish this mTool request. Try again. If it happens again, share the support reference."
+                message = (str(exc) if isinstance(exc, NotesOutputContentError) else
+                           "We couldn't finish this mTool request. Try again. If it happens again, share the support reference.")
                 logger.exception("mTool request failed",
                                  extra={"run_id": run_id, "request_id": request_id,
                                         "error_code": "mtool_request_failed"})
@@ -240,7 +241,8 @@ def _resolve_notes_style(run) -> NotesTableStyle:
     else the firm-wide default (``XBRL_NOTES_TABLE_STYLE``), else the historic
     baseline. Mirrors the frontend ``resolveTheme`` precedence so the mTool
     paste matches the in-app editor preview and the manual Copy → paste."""
-    theme = getattr(run, "notes_table_style", None) or server._notes_table_style()
+    from notes.table_theme import resolve_run_theme
+    theme = resolve_run_theme(getattr(run, "notes_table_style", None))
     return NotesTableStyle.from_theme(theme)
 
 
@@ -348,6 +350,47 @@ def get_mtool_notes_fill_doc(run_id: int):
     run, *_ = _load_fillable_run(run_id)  # gate: 404/409 like the numeric doc
     return JSONResponse(build_notes_fill_doc(
         server.AUDIT_DB_PATH, run_id, style=_resolve_notes_style(run)))
+
+
+@router.get("/api/runs/{run_id}/notes-output")
+def get_note_output(run_id: int, sheet: str, row: int):
+    """Preview a saved canonical note using the exact export preparation."""
+    from db import repository as repo
+    with repo.db_session(server.AUDIT_DB_PATH) as conn:
+        run = repo.fetch_run(conn, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found.")
+        cell = conn.execute(
+            "SELECT html, updated_at, content_revision FROM notes_cells "
+            "WHERE run_id = ? AND sheet = ? AND row = ?", (run_id, sheet, row),
+        ).fetchone()
+    if cell is None:
+        raise HTTPException(status_code=404, detail="Saved note not found.")
+    try:
+        prepared = prepare_note_output(cell["html"] or "", _resolve_notes_style(run))
+    except NotesOutputContentError as exc:
+        raise NotesOutputContentError(f"{exc} Note: {sheet} row {row}.") from exc
+    return {**prepared, "source_html": cell["html"] or "", "content_revision": cell["content_revision"]}
+
+
+@router.post("/api/notes-appearance/preview")
+def preview_notes_appearance(body: dict):
+    """Prepare a fixed sample; no model calls or settings/content writes."""
+    from api.config_routes import _validate_notes_table_style
+    from notes.table_theme import house_style
+    style = _validate_notes_table_style(body.get("style", {}))
+    sample = (
+        "<h3>7. Property, plant and equipment</h3>"
+        "<p>Movements in the carrying amounts are as follows:</p>"
+        "<table><tr><th>Description</th><th>2026<br>RM</th><th>2025<br>RM</th></tr>"
+        "<tr><td>Equipment</td><td>24,000</td><td>20,000</td></tr>"
+        "<tr><td>Furniture</td><td>6,000</td><td>5,000</td></tr>"
+        "<tr><td><strong>Total</strong></td>"
+        "<td style=\"border-bottom:3px double #000000\"><strong>30,000</strong></td>"
+        "<td style=\"border-bottom:3px double #000000\"><strong>25,000</strong></td></tr></table>"
+        "<p>The assets are used in the company's operations.</p>"
+    )
+    return prepare_note_output(sample, NotesTableStyle.from_theme({**house_style(), **style}))
 
 
 # --------------------------------------------------------------- artifacts
@@ -472,6 +515,7 @@ def patch_mtool_template(
     create_missing_notes: bool = Form(default=True),
     notes_targets: str | None = Form(default=None),
     notes_styling: str = Form(default="styled"),
+    notes_output_revision: str | None = Form(default=None),
     acknowledge_preflight: str | None = Form(default=None),
 ):
     """Patch an uploaded empty mTool template from the run's facts.
@@ -709,6 +753,12 @@ def patch_mtool_template(
                     server.AUDIT_DB_PATH, run_id,
                     style=_resolve_notes_style(run),
                     decorate=notes_decorate)
+                if notes_output_revision and notes_output_revision != notes_doc["meta"]["notes_output_revision"]:
+                    raise HTTPException(status_code=409, detail={
+                        "code": "notes_output_changed",
+                        "message": "Notes or appearance changed. Refresh the notes preview before preparing the draft.",
+                        "notes_output_revision": notes_doc["meta"]["notes_output_revision"],
+                    })
                 notes_doc = scope_notes(notes_doc, selection)
                 if not doc["writes"] and not notes_doc["footnotes"]:
                     raise HTTPException(status_code=422, detail="Run has no fillable facts or enabled notes in the selected sheets.")
@@ -1067,6 +1117,7 @@ def preview_mtool_notes(
     notes_doc = build_notes_fill_doc(
         server.AUDIT_DB_PATH, run_id, style=_resolve_notes_style(run),
         decorate=_resolve_notes_decorate(notes_styling))
+    output_revision = notes_doc["meta"]["notes_output_revision"]
     selection = None
     if selected_sheets is not None:
         _, selection = _select_sheets_or_422(
@@ -1104,6 +1155,7 @@ def preview_mtool_notes(
         existing_slots = len(_parse_template_or_422(
             "footnote inspection", inspect_footnotes, data)["targets"])
         base = {
+            "notes_output_revision": output_revision,
             "notes_in_run": len(notes_doc["footnotes"]),
             "template_fn_slots": existing_slots,
             "create_missing_notes": create_missing_notes,

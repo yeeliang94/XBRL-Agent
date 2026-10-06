@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+from copy import deepcopy
 from typing import Any
 
 # The firm's shipped house style. Fresh installations use the chosen appearance
@@ -37,11 +38,48 @@ HOUSE_NOTES_TABLE_STYLE: dict[str, Any] = {
 }
 
 ENV_VAR = "XBRL_NOTES_TABLE_STYLE"
+OVERRIDES_ENV_VAR = "XBRL_NOTES_APPEARANCE_OVERRIDES"
+
+# Compatibility baseline for legacy snapshots and unconfigured decorators.
+LEGACY_NOTES_TABLE_STYLE: dict[str, Any] = {
+    "borderStyle": "single", "fontSizePt": 10,
+    "cellPaddingPx": [4, 8], "paragraphSpacingPx": 8,
+    "headerFill": "#f3f4f6", "headerBold": True,
+    "headerRule": False, "totalsDoubleUnderline": False,
+}
 
 
 def house_style() -> dict[str, Any]:
     """A fresh copy of the house style, so a caller can't mutate the constant."""
-    return dict(HOUSE_NOTES_TABLE_STYLE)
+    return deepcopy(HOUSE_NOTES_TABLE_STYLE)
+
+
+def appearance_overrides() -> dict[str, Any]:
+    """Explicit installation overrides, including preserved legacy snapshots.
+
+    The new sparse setting takes precedence even when empty. This makes Reset
+    follow code updates without reviving an old deployment/.env theme.
+    """
+    raw = os.environ.get(OVERRIDES_ENV_VAR)
+    legacy = raw is None and bool(os.environ.get(ENV_VAR))
+    if raw is None:
+        raw = os.environ.get(ENV_VAR, "")
+    try:
+        value = json.loads(raw or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    if not isinstance(value, dict):
+        return {}
+    if legacy:
+        # Preserve implicit historic values when an older snapshot is first
+        # edited through the sparse API. Reset deliberately removes this layer.
+        return {**deepcopy(LEGACY_NOTES_TABLE_STYLE), **value}
+    return value
+
+
+def resolve_run_theme(override: dict | None) -> dict[str, Any]:
+    """Resolve partial run styles identically for preview, formatter and fill."""
+    return {**firm_theme(), **(override or {})}
 
 
 def firm_theme() -> dict[str, Any]:
@@ -53,6 +91,8 @@ def firm_theme() -> dict[str, Any]:
     rather than to ``{}``, so a typo in ``.env`` can't silently swap the firm's
     appearance for the historic one.
     """
+    if OVERRIDES_ENV_VAR in os.environ:
+        return {**house_style(), **appearance_overrides()}
     raw = os.environ.get(ENV_VAR, "")
     if not raw:
         return house_style()

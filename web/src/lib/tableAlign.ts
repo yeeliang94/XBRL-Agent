@@ -1,8 +1,8 @@
 // Shared numeric-cell detection for table alignment.
 //
 // Two surfaces decide whether a notes-table cell belongs to an amount column
-// and should therefore be right-aligned: the clipboard decorator (inline styles, for
-// the M-Tool / Word paste — see clipboard.ts) and the in-app review editor
+// and should therefore be right-aligned: the backend decorator (inline styles, for
+// the M-Tool / Word paste — see mtool/notes_decorate.py) and the in-app review editor
 // (a CSS class, see NotesReviewTab). Keeping the heuristic here means both
 // agree on what counts as numeric and where the row-label column sits, so
 // the preview and the paste line up.
@@ -76,7 +76,7 @@ export function shouldRightAlignTableCell(
 }
 
 /** Does the cell OWN its border through a persisted inline style? Mirrors the
- *  clipboard/mTool merge rule (`_styleFamily` in clipboard.ts /
+ *  clipboard/mTool merge rule (`_style_family` in
  *  notes_decorate.py): any `border` / `border-*` declaration means the cell
  *  decides its whole border family, and theme additions — the totals rule
  *  included — must stand down. Without this the preview could draw a totals

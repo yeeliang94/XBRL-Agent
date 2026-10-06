@@ -394,7 +394,7 @@ describe("NotesReviewTab — read-only render (Step 9)", () => {
 
     expect(screen.getByText("Financial reporting status")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Review Financial reporting status" })).toHaveAccessibleDescription("Not a filing field");
-    expect(screen.getByRole("status")).toHaveTextContent(/not a filing field/i);
+    expect(screen.getByText(/Not a filing field\. Copy it/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Edit" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: /remove quarantined content/i }));
     expect(screen.getByRole("dialog", { name: /remove quarantined content/i })).toBeTruthy();
@@ -1338,6 +1338,56 @@ describe("NotesReviewTab — cross-run isolation (peer-review fix)", () => {
 describe("NotesReviewTab — copy button (Step 11)", () => {
   beforeEach(() => {
     mockFetchOnce(SAMPLE);
+    const ordinary = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input, init) => {
+      if (String(input).includes("/notes-output?")) return new Response(JSON.stringify({
+        html: '<p style="font-family:Arial">Legal name: <strong>ACME</strong></p>',
+        source_html: SAMPLE.sheets[0].rows[0].html, tier: "full", revision: "output-1",
+        source_styling_dropped: false, white_grid_dropped: false,
+      }), { headers: { "Content-Type": "application/json" } });
+      return ordinary(input, init);
+    });
+  });
+
+  test.each([
+    ["loading", "Preview still loading. Wait for it before copying."],
+    ["failed", "Output preview unavailable. Retry the preview before copying."],
+    ["changed", "Output changed. Review the refreshed preview, then copy again."],
+  ])("Copy explains a %s preview without writing to the clipboard", async (state, message) => {
+    const write = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true, writable: true, value: { write, writeText: vi.fn() },
+    });
+    const ordinary = globalThis.fetch;
+    let copying = false;
+    globalThis.fetch = vi.fn(async (input, init) => {
+      if (String(input).includes("/notes-output?")) {
+        if (state === "loading") return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+        });
+        if (state === "failed") return new Response(JSON.stringify({ detail: "Preview failed" }), { status: 500 });
+        if (copying) return new Response(JSON.stringify({
+          html: SAMPLE.sheets[0].rows[0].html,
+          source_html: SAMPLE.sheets[0].rows[0].html, tier: "full", revision: "output-2",
+          source_styling_dropped: false, white_grid_dropped: false,
+        }), { headers: { "Content-Type": "application/json" } });
+      }
+      return ordinary(input, init);
+    });
+    render(<NotesReviewTab runId={42} />);
+    await screen.findByText("Corporate info");
+    selectFirstField();
+    const editor = screen.getByTestId("notes-review-editor");
+    if (state === "changed") {
+      await waitFor(() => expect(editor.querySelector('[data-output-revision="output-1"]')).not.toBeNull());
+    } else if (state === "failed") {
+      await within(editor).findByRole("button", { name: "Retry preview" });
+    }
+    copying = true;
+    fireEvent.click(screen.getByRole("button", { name: /^copy$/i }));
+    expect(await within(editor).findByRole("alert")).toHaveTextContent(message);
+    expect(write).not.toHaveBeenCalled();
+    expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
   });
 
   test("copy button invokes copy helper with cell html", async () => {
@@ -1354,6 +1404,7 @@ describe("NotesReviewTab — copy button (Step 11)", () => {
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
     selectFirstField();
+    await waitFor(() => expect(screen.getByTestId("notes-review-editor").querySelector('[data-output-revision="output-1"]')).not.toBeNull());
     expect(screen.getByText("Corporate info")).toBeInTheDocument();
     const copyButtons = screen.getAllByRole("button", { name: /copy/i });
     fireEvent.click(copyButtons[0]);
@@ -1362,6 +1413,12 @@ describe("NotesReviewTab — copy button (Step 11)", () => {
     // HTML.
     const items = (write.mock.calls[0] as unknown[])[0] as unknown[];
     expect(items.length).toBeGreaterThan(0);
+    const blob = (items[0] as { items: Record<string, Blob> }).items["text/html"];
+    const copied = await new Promise<string>((resolve) => {
+      const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.readAsText(blob);
+    });
+    expect(copied).toBe('<p style="font-family:Arial">Legal name: <strong>ACME</strong></p>');
+
   });
 
   test("copy button shows copied confirmation briefly", async () => {
@@ -1378,6 +1435,7 @@ describe("NotesReviewTab — copy button (Step 11)", () => {
       expect(screen.getAllByTestId("sheet-title").length).toBeGreaterThan(0),
     );
     selectFirstField();
+    await waitFor(() => expect(screen.getByTestId("notes-review-editor").querySelector('[data-output-revision="output-1"]')).not.toBeNull());
     expect(screen.getByText("Corporate info")).toBeInTheDocument();
     fireEvent.click(screen.getAllByRole("button", { name: /copy/i })[0]);
     await waitFor(() => {

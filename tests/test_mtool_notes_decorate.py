@@ -1,6 +1,6 @@
-"""Tests for mtool/notes_decorate.py — the backend port of the (mTool-render-
-proven) clipboard decorator. Mirrors web/src/__tests__/clipboard.test.ts so the
-Python fill path and the TS copy path stay in lock-step (gotcha #16 sibling).
+"""Destination decoration shared by read-only review, Copy, and mTool fill.
+
+Clipboard tests cover verbatim transport; this suite owns formatting behavior.
 """
 import re
 import pytest
@@ -11,7 +11,7 @@ from mtool.notes_decorate import (
     should_right_align_cell)
 
 
-# --- mTool double-border fallback (parity with clipboard.ts) ---------------
+# --- mTool double-border fallback (shared review, Copy and fill output) ---------------
 @pytest.mark.parametrize("mode", [{}, {"compact": True}, {"lite": True}, {"fill_white_grid": False}])
 def test_double_border_fallback_preserves_content_and_other_edges(mode):
     html = ('<p><u>Text underline</u></p><table data-source-styled="true" '

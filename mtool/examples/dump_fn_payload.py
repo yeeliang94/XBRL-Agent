@@ -3,7 +3,7 @@
 
 Formatting fidelity is already handled: the notes fill path DECORATES the
 style-free DB HTML with inline styles before writing it (mtool/notes_decorate.py,
-the backend port of the render-proven clipboard decorator), so mTool's TX27
+the shared destination decorator for review, Copy, and workbook output), so mTool's TX27
 editor renders borders/fills/font/alignment. This tool is only needed if some
 SPECIFIC decorated construct still renders wrong in mTool — then dump how mTool
 itself stores that same construct natively and compare, to see which exact

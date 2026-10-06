@@ -47,13 +47,13 @@ describe("SettingsPage", () => {
   test("admin sees General, Account, and Users tabs", () => {
     render(<SettingsPage isAdmin={true} />);
     const tabs = within(tablist()).getAllByRole("tab");
-    expect(tabs.map((t) => t.textContent)).toEqual(["General", "Agent instructions", "Account", "Users"]);
+    expect(tabs.map((t) => t.textContent)).toEqual(["General", "Agent instructions", "Notes appearance", "Account", "Users"]);
   });
 
   test("non-admin does not see the Users tab", () => {
     render(<SettingsPage isAdmin={false} />);
     const tabs = within(tablist()).getAllByRole("tab");
-    expect(tabs.map((t) => t.textContent)).toEqual(["General", "Agent instructions", "Account"]);
+    expect(tabs.map((t) => t.textContent)).toEqual(["General", "Agent instructions", "Notes appearance", "Account"]);
     expect(within(tablist()).queryByText("Users")).toBeNull();
   });
 

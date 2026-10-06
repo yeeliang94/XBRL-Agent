@@ -208,16 +208,11 @@ def test_the_preflight_is_advisory_and_never_blocks(client_run):
 
 
 def test_the_preflight_reads_the_exporter_rather_than_decorating_anything():
-    """Step 9.1 — do not move mtool/notes_decorate.py or clipboard.ts unless
-    required, and they move together when they do (gotcha #16).
-
-    The preflight reads what the exporter already produced. It must not call a
-    decorator itself: a second decoration path is exactly how the mTool paste
-    and the clipboard paste drift apart.
+    """The preflight reads what the canonical exporter already produced.
+    A second decoration path could make its preview differ from Copy and fill.
     """
     src = Path("notes/export_preflight.py").read_text(encoding="utf-8")
-    for fn in ("decorate_notes_html", "decorateHtmlForClipboard",
-               "_fill_undeclared_borders_white", "_fit_table_width"):
+    for fn in ("decorate_notes_html", "_fill_undeclared_borders_white", "_fit_table_width"):
         assert fn not in src, f"{fn} is a decorator entry point"
 
 

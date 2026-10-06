@@ -117,7 +117,7 @@
 
 /* A block wrapper reduces the available line width for its whole sub-note,
  * so an enclosed 100%-width table stays within the indented section. Keep
- * this 2em offset aligned with clipboard.ts and notes_decorate.py. */
+ * this 2em offset aligned with mtool/notes_decorate.py. */
 .notes-review-tab div[data-note-section="1"] {
   margin-left: 2em;
 }

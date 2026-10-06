@@ -620,6 +620,21 @@ textarea:focus {
   opacity: 0.82;
 }
 
+@media (max-width: 760px) {
+  .notes-appearance-layout {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+
+/* Prepared output retains exporter styling; only containment is browser-owned. */
+.notes-output-preview table {
+  max-width: 100%;
+}
+.notes-output-preview td,
+.notes-output-preview th {
+  overflow-wrap: anywhere;
+}
+
 .settings-users-table-wrap {
   max-width: 100%;
   overflow-x: auto;
