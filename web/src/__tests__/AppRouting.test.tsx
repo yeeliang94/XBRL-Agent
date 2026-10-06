@@ -26,6 +26,7 @@ vi.mock("../lib/api", async () => {
       revision: 0, max_length: 8000, updated_by: null, updated_at: null,
     })),
     logout: vi.fn(async () => {}),
+    updateSettings: vi.fn(async () => ({ status: "ok" })),
     getExtendedSettings: vi.fn(async () => ({
       model: "x",
       proxy_url: "",
@@ -62,6 +63,41 @@ vi.mock("../lib/api", async () => {
 // makes a network call in Phase 5, but for routing tests we only exercise
 // the extract view.
 describe("App routing", () => {
+  test("appearance saves block leaving Settings and reloading until confirmed", async () => {
+    const api = await import("../lib/api");
+    const output = await import("../lib/notesOutput");
+    const preview = vi.spyOn(output, "previewNotesAppearance").mockResolvedValue({
+      html: "<p>Sample</p>", tier: "full", revision: "sample",
+      source_styling_dropped: false, white_grid_dropped: false,
+    });
+    let finishSave!: (value: { status: string }) => void;
+    vi.mocked(api.updateSettings).mockImplementationOnce(() => new Promise(resolve => { finishSave = resolve; }));
+    window.history.replaceState({}, "", "/settings");
+    try {
+      const { default: App } = await import("../App");
+      render(<App />);
+      fireEvent.click(within(await screen.findByRole("tablist", { name: "Settings sections" })).getByRole("tab", { name: "Notes appearance" }));
+      fireEvent.change(await screen.findByLabelText("Font size (pt)"), { target: { value: "12" } });
+      fireEvent.click(screen.getByRole("link", { name: "Work queue" }));
+      expect(window.location.pathname).toBe("/settings");
+      const unload = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(unload);
+      expect(unload.defaultPrevented).toBe(true);
+      await waitFor(() => expect(api.updateSettings).toHaveBeenCalledWith({ notes_appearance_overrides: { fontSizePt: 12 } }));
+      fireEvent.click(screen.getByRole("link", { name: "Work queue" }));
+      expect(window.location.pathname).toBe("/settings");
+      await act(async () => finishSave({ status: "ok" }));
+      await screen.findByText("Changes save automatically");
+      const savedUnload = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(savedUnload);
+      expect(savedUnload.defaultPrevented).toBe(false);
+      fireEvent.click(screen.getByRole("link", { name: "Work queue" }));
+      expect(window.location.pathname).toBe("/");
+    } finally {
+      cleanup();
+      preview.mockRestore();
+    }
+  });
   // Load the app as suite setup; a cold module transform is not routing work.
   beforeAll(async () => { await import("../App"); });
 

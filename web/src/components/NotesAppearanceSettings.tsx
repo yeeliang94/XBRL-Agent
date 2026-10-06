@@ -3,6 +3,7 @@ import { getSettings, updateSettings } from "../lib/api";
 import { parseThemeOptions, type ClipboardFormatOptions } from "../lib/clipboardFormat";
 import { previewNotesAppearance, type PreparedNoteOutput } from "../lib/notesOutput";
 import { userMessage } from "../lib/errors";
+import { guardNavigationHistory } from "../lib/navigationHistory";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { ClipboardFormatControls } from "./ClipboardFormatControls";
@@ -38,6 +39,16 @@ export function NotesAppearanceSettings({ onBusyChange }: { onBusyChange?: (busy
   }, []);
   useEffect(() => { onBusyChange?.(phase === "pending" || phase === "saving"); }, [phase, onBusyChange]);
   useEffect(() => () => onBusyChange?.(false), [onBusyChange]);
+  useEffect(() => {
+    if (phase !== "pending" && phase !== "saving") return;
+    const unguard = guardNavigationHistory(() => false);
+    const unload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", unload);
+    return () => {
+      unguard();
+      window.removeEventListener("beforeunload", unload);
+    };
+  }, [phase]);
 
   useEffect(() => {
     if (!fmt) return;
