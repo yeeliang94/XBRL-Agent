@@ -257,6 +257,7 @@ export async function abortAgent(sessionId: string, agentId: string): Promise<{ 
  *  dropped so the URL reads cleanly and the backend never sees `q=`. */
 function buildRunsQuery(params: RunsFilterParams): string {
   const qs = new URLSearchParams();
+  if (params.documentGroup) qs.set("document_group", params.documentGroup);
   if (params.q) qs.set("q", params.q);
   if (params.status) qs.set("status", params.status);
   if (params.model) qs.set("model", params.model);

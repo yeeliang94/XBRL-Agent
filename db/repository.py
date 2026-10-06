@@ -2829,6 +2829,27 @@ def fetch_events(conn: sqlite3.Connection, run_agent_id: int) -> list[AgentEvent
     ]
 
 
+def fetch_latest_pipeline_stages(conn: sqlite3.Connection, run_ids: list[int]) -> dict[int, str]:
+    """Latest durable stage for each requested run, using one batch query."""
+    if not run_ids:
+        return {}
+    placeholders = ",".join("?" for _ in run_ids)
+    rows = conn.execute(
+        "SELECT run_id, payload_json FROM run_events WHERE id IN ("
+        "SELECT MAX(id) FROM run_events WHERE event_type='pipeline_stage' "
+        f"AND run_id IN ({placeholders}) GROUP BY run_id)", run_ids,
+    ).fetchall()
+    stages = {}
+    for row in rows:
+        try:
+            stage = json.loads(row[1] or "{}").get("stage")
+        except (ValueError, AttributeError):
+            continue
+        if isinstance(stage, str):
+            stages[row[0]] = stage
+    return stages
+
+
 def fetch_run_events(conn: sqlite3.Connection, run_id: int) -> list[RunEvent]:
     rows = conn.execute(
         "SELECT * FROM run_events WHERE run_id = ? ORDER BY id", (run_id,)
@@ -2916,6 +2937,7 @@ def list_runs(
     *,
     filename_substring: Optional[str] = None,
     status: Optional[str] = None,
+    document_group: Optional[str] = None,
     model: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
@@ -2940,6 +2962,10 @@ def list_runs(
     if filename_substring:
         clauses.append("LOWER(r.pdf_filename) LIKE ? ESCAPE '\\'")
         params.append(f"%{_escape_like(filename_substring.lower())}%")
+    if document_group == "progress":
+        clauses.append("r.status IN ('draft', 'running')")
+    elif document_group == "history":
+        clauses.append("r.status NOT IN ('draft', 'running')")
     if status:
         clauses.append("r.status = ?")
         params.append(status)
@@ -3035,6 +3061,7 @@ def count_runs(
     *,
     filename_substring: Optional[str] = None,
     status: Optional[str] = None,
+    document_group: Optional[str] = None,
     model: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
@@ -3047,6 +3074,10 @@ def count_runs(
     if filename_substring:
         clauses.append("LOWER(r.pdf_filename) LIKE ? ESCAPE '\\'")
         params.append(f"%{_escape_like(filename_substring.lower())}%")
+    if document_group == "progress":
+        clauses.append("r.status IN ('draft', 'running')")
+    elif document_group == "history":
+        clauses.append("r.status NOT IN ('draft', 'running')")
     if status:
         clauses.append("r.status = ?")
         params.append(status)

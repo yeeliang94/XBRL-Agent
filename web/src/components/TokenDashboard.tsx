@@ -127,7 +127,7 @@ export function TokenDashboard({ tokens, isRunning, embedded = false }: Props) {
         <div style={styles.costSection}>
           <div style={styles.costLabel}>
             Est. Cost
-            {isRunning && <span className="pwc-working-indicator" style={styles.pulsingDot} />}
+            {isRunning && <span style={styles.pulsingDot} />}
           </div>
           <AnimatedNumber
             value={tokens.cost_estimate}

@@ -8,7 +8,8 @@ import { HistoryList } from "../components/HistoryList";
 import { RunDetailPage } from "../components/RunDetailPage";
 import type { RunTabKey } from "../components/RunDetailView";
 import { fetchRuns, fetchRunDetail, deleteRun, forceAbortRun, restartRun } from "../lib/api";
-import type { RunDetailJson, RunSummaryJson, RunsFilterParams } from "../lib/types";
+import type { RunDetailJson, RunSummaryJson, RunsFilterParams, RunConfigPayload, StatementType, NotesTemplateType } from "../lib/types";
+import { createMultiAgentSSE } from "../lib/sse";
 import { TERMS } from "../lib/vocabulary";
 
 // ---------------------------------------------------------------------------
@@ -40,6 +41,11 @@ export interface HistoryPageProps {
   /** Which run's full-page detail is open, or null for the list view.
    *  Supplied by App when the URL is driving state; omitted for legacy
    *  callers that let HistoryPage manage its own selection internally. */
+  documentGroup?: "history";
+  hideHeader?: boolean;
+  hideDetailBack?: boolean;
+  refreshKey?: string;
+  onDocumentLoaded?: (document: Pick<RunDetailJson, "id" | "pdf_filename">) => void;
   selectedId?: number | null;
   /** Called when the user clicks a row (id) or Back (null). Paired with
    *  `selectedId` — both are either provided together (controlled mode)
@@ -57,7 +63,7 @@ export interface HistoryPageProps {
   initialRunTab?: RunTabKey;
 }
 
-export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeDraft, canonicalEnabled = false, initialRunTab }: HistoryPageProps = {}) {
+export function HistoryPage({ documentGroup, refreshKey, onDocumentLoaded, hideHeader = false, hideDetailBack = false, selectedId: selectedIdProp, onSelectRun, onResumeDraft, canonicalEnabled = false, initialRunTab }: HistoryPageProps = {}) {
   const [filters, setFilters] = useState<RunsFilterParams>({});
   const [runs, setRuns] = useState<RunSummaryJson[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -93,6 +99,42 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
   const [detail, setDetail] = useState<RunDetailJson | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
+  const retryController = useRef<AbortController | null>(null);
+  useEffect(() => () => retryController.current?.abort(), []);
+
+  const handleRetryAgent = (statementType: string): Promise<void> => {
+    if (!detail?.config || !detail.session_id) return Promise.reject(new Error("Saved extraction settings are unavailable."));
+    const isNotes = statementType.startsWith("NOTES_");
+    const role = isNotes ? statementType.slice(6) : statementType;
+    const saved = detail.config as unknown as RunConfigPayload;
+    const config: RunConfigPayload = {
+      ...saved,
+      filing_standard: detail.filing_standard ?? saved.filing_standard ?? "mfrs",
+      filing_level: detail.filing_level ?? saved.filing_level ?? "company",
+      statements: isNotes ? [] : [role as StatementType],
+      notes_to_run: isNotes ? [role as NotesTemplateType] : [],
+      use_scout: false,
+    };
+    return new Promise((resolve, reject) => {
+      let acknowledged = false;
+      retryController.current = createMultiAgentSSE(detail.session_id, config, (event) => {
+        if (event.event === "status" && typeof event.data.run_id === "number") {
+          acknowledged = true;
+          retryController.current?.abort();
+          setSelectedId(event.data.run_id);
+          resolve();
+        } else if (event.event === "error" && !acknowledged) {
+          reject(new Error(String(event.data.message || "Retry could not start.")));
+        }
+      }, () => {
+        if (!acknowledged) reject(new Error("Retry ended before its saved run was available."));
+      }, (message) => reject(new Error(message)), `/api/rerun/${detail.session_id}`);
+    });
+  };
+
+  useEffect(() => {
+    if (detail && detail.id === selectedId) onDocumentLoaded?.(detail);
+  }, [detail, selectedId, onDocumentLoaded]);
 
   // `refetchKey` is bumped after destructive operations (delete) to force a
   // fresh list load without touching the filter state.
@@ -102,7 +144,7 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
   // effect below replaces (not appends) `runs` whenever filtersKey changes.
   // Serializing filters into a key keeps the effect dependency stable
   // across re-renders that don't actually mutate filter values.
-  const filtersKey = JSON.stringify(filters);
+  const filtersKey = JSON.stringify({ ...filters, documentGroup });
 
   // Mirror of `filtersKey` accessible from callbacks that outlive a render.
   // `handleLoadMore` uses this to detect that filters have changed during
@@ -110,6 +152,9 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
   // load-more append would contaminate the newly-filtered list with rows
   // from the previous filter set.
   const filtersKeyRef = useRef(filtersKey);
+  const loadedCountRef = useRef(0);
+  loadedCountRef.current = runs.length;
+  const listRequestRef = useRef<{ filtersKey: string; refetchKey: number } | null>(null);
   useEffect(() => {
     filtersKeyRef.current = filtersKey;
   }, [filtersKey]);
@@ -121,14 +166,26 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
   // a newer result.
   useEffect(() => {
     let cancelled = false;
-    setIsLoading(true);
+    const refreshOnly = listRequestRef.current?.filtersKey === filtersKey
+      && listRequestRef.current.refetchKey === refetchKey;
+    const wantedRows = refreshOnly ? Math.max(PAGE_SIZE, loadedCountRef.current) : PAGE_SIZE;
+    listRequestRef.current = { filtersKey, refetchKey };
+    if (!refreshOnly) setIsLoading(true);
     setError(null);
     // Filter/refetch change implicitly retries pagination from page one,
     // so any lingering Load more error from the previous filter set is
     // no longer relevant — clear it so the user doesn't see a stale
     // banner under fresh results.
     setLoadMoreError(null);
-    fetchRuns({ ...filters, limit: PAGE_SIZE, offset: 0 })
+    const fetchVisiblePages = async () => {
+      const res = await fetchRuns({ ...filters, documentGroup, limit: PAGE_SIZE, offset: 0 });
+      for (let offset = PAGE_SIZE; offset < wantedRows && offset < res.total && !cancelled; offset += PAGE_SIZE) {
+        const next = await fetchRuns({ ...filters, documentGroup, limit: PAGE_SIZE, offset });
+        res.runs.push(...next.runs);
+      }
+      return res;
+    };
+    fetchVisiblePages()
       .then((res) => {
         if (cancelled) return;
         setRuns(res.runs);
@@ -137,9 +194,12 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
       .catch((err: unknown) => {
         if (cancelled) return;
         const msg = userMessage(err);
-        setError(msg);
-        setRuns([]);
-        setTotal(0);
+        if (refreshOnly) setLoadMoreError(msg);
+        else setError(msg);
+        if (!refreshOnly) {
+          setRuns([]);
+          setTotal(0);
+        }
       })
       .finally(() => {
         if (!cancelled) setIsLoading(false);
@@ -147,7 +207,7 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
     return () => {
       cancelled = true;
     };
-  }, [filtersKey, refetchKey]);
+  }, [filtersKey, refetchKey, refreshKey]);
 
   // Append the next page. Uses the current `runs.length` as the offset so
   // we naturally chain pages without tracking a separate page counter.
@@ -162,7 +222,7 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
     setLoadMoreError(null);
     try {
       const nextOffset = runs.length;
-      const res = await fetchRuns({ ...filters, limit: PAGE_SIZE, offset: nextOffset });
+      const res = await fetchRuns({ ...filters, documentGroup, limit: PAGE_SIZE, offset: nextOffset });
       // Filters changed mid-flight → the first-page effect has already
       // replaced `runs`, so appending these rows would corrupt the view.
       // The first-page effect owns the fresh list; drop this response.
@@ -182,7 +242,7 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
     } finally {
       setIsLoadingMore(false);
     }
-  }, [runs.length, filters]);
+  }, [runs.length, filters, documentGroup]);
 
   // Fetch detail whenever `selectedId` changes. Running runs self-schedule one
   // follow-up at a time so a dropped live stream can resume from durable state
@@ -315,6 +375,7 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
     return (
       <div style={styles.detailContainer}>
         <RunDetailPage
+          hideBack={hideDetailBack}
           detail={detail}
           isLoading={isDetailLoading}
           error={detailError}
@@ -336,6 +397,7 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
           onResumeDraft={onResumeDraft}
           onForceAbort={handleForceAbort}
           onRestart={handleRestart}
+          onRetryAgent={handleRetryAgent}
         />
       </div>
     );
@@ -343,7 +405,7 @@ export function HistoryPage({ selectedId: selectedIdProp, onSelectRun, onResumeD
 
   return (
     <div style={styles.container}>
-      <PageHeader title={TERMS.runs} />
+      {!hideHeader && <PageHeader title={TERMS.runs} />}
       <HistoryFilters value={filters} onChange={setFilters} />
       {!isLoading && !error && (
         // A plain result count so the list isn't an unbounded wall of rows
