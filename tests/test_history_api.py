@@ -797,3 +797,98 @@ def test_detail_includes_filing_standard(api_env):
     )
     body = client.get(f"/api/runs/{run_id}").json()
     assert body["filing_standard"] == "mpers"
+
+
+@pytest.mark.parametrize("status", ["completed", "failed", "cancelled", "running", "draft"])
+def test_diagnostics_zip_is_run_scoped_and_redacted(api_env, monkeypatch, status):
+    """The shared ZIP preserves useful traces and logs without exporting other runs or credentials."""
+    from io import BytesIO
+    from zipfile import ZipFile
+
+    client, db_path, out = api_env
+    run_dir = out / "support"
+    run_dir.mkdir()
+    run_id = _seed_run(db_path, session_id="support", pdf_filename="source.pdf",
+                       output_dir=str(run_dir), status=status,
+                       config={"api_key": "private-config-key", "max_tokens": 1200},
+                       agent_models=[("SOFP", "test-model")])
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-private-environment-key")
+    trace = {"messages": [{"content": "financial figure 123; sk-private-environment-key"}],
+             "total_tokens": 123, "authorization": "Bearer private-header-key"}
+    for name in ("SOFP_conversation_trace.json", "NOTES_LIST_OF_NOTES_sub0_retry1_conversation_trace.json",
+                 "notes_format_Notes_conversation_trace.json", "notes12_failures.json"):
+        (run_dir / name).write_text(json.dumps(trace))
+    for name in ("source.pdf", "filled.xlsx", ".env", "settings.json"):
+        (run_dir / name).write_text("excluded-content")
+    outside = out / "other_conversation_trace.json"
+    outside.write_text('{"content": "other-run-secret"}')
+    (run_dir / "escape_conversation_trace.json").symlink_to(outside)
+    log = out / "application.jsonl"
+    log.write_text("\n".join(json.dumps(row) for row in [
+        {"run_id": run_id, "message": "run failure; password=private-password"},
+        {"run_id": 999, "session_id": "support", "message": "other-run-secret"},
+        {"session_id": "support", "message": "session-only-secret"},
+    ]))
+    Path(str(log) + ".1").write_text(json.dumps({"run_id": run_id, "session_id": "support", "message": "earlier log"}))
+    monkeypatch.setenv("XBRL_APP_LOG_PATH", str(log))
+    response = client.get(f"/api/runs/{run_id}/diagnostics")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/zip"
+    assert f"run-{run_id}-diagnostics.zip" in response.headers["content-disposition"]
+    assert response.headers["cache-control"] == "no-store"
+    with ZipFile(BytesIO(response.content)) as archive:
+        assert {"run.json", "usage.json", "environment.json", "manifest.json", "README.txt", "application_logs.json"} <= set(archive.namelist())
+        assert not any(name.endswith((".pdf", ".xlsx")) for name in archive.namelist())
+        exported = "\n".join(archive.read(name).decode() for name in archive.namelist())
+        for secret in ("private-config-key", "sk-private-environment-key", "private-header-key", "private-password", "other-run-secret", "session-only-secret", "excluded-content"):
+            assert secret not in exported
+        assert "financial figure 123" in exported
+        assert "earlier log" in exported
+        assert json.loads(archive.read("run.json"))["run"]["config"]["max_tokens"] == 1200
+        assert json.loads(archive.read("traces/SOFP_conversation_trace.json"))["total_tokens"] == 123
+        assert any(item["reason"] == "Unsafe diagnostic path" for item in json.loads(archive.read("manifest.json"))["unavailable"])
+    assert json.loads((run_dir / "SOFP_conversation_trace.json").read_text()) == trace
+
+
+def test_diagnostics_zip_reports_missing_and_incomplete_files(api_env, monkeypatch):
+    from io import BytesIO
+    from zipfile import ZipFile
+    client, db_path, out = api_env
+    monkeypatch.delenv("XBRL_APP_LOG_PATH", raising=False)
+    run_dir = out / "partial"
+    run_dir.mkdir()
+    (run_dir / "SOFP_conversation_trace.json").write_text('{"unfinished":')
+    run_id = _seed_run(db_path, session_id="partial", pdf_filename="source.pdf", output_dir=str(run_dir))
+    with ZipFile(BytesIO(client.get(f"/api/runs/{run_id}/diagnostics").content)) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+        assert {item["file"] for item in manifest["unavailable"]} == {"traces/SOFP_conversation_trace.json", "application_logs.json"}
+        assert "run.json" in archive.namelist()
+    assert client.get("/api/runs/9999/diagnostics").status_code == 404
+
+
+def test_diagnostics_zip_does_not_read_output_outside_root(api_env, tmp_path):
+    from io import BytesIO
+    from zipfile import ZipFile
+    client, db_path, _ = api_env
+    (tmp_path / "SOFP_conversation_trace.json").write_text('{"content": "outside-root"}')
+    run_id = _seed_run(db_path, session_id="bad-path", pdf_filename="source.pdf", output_dir=str(tmp_path))
+    with ZipFile(BytesIO(client.get(f"/api/runs/{run_id}/diagnostics").content)) as archive:
+        assert not any(name.startswith("traces/") for name in archive.namelist())
+        assert any(item["file"] == "traces/" for item in json.loads(archive.read("manifest.json"))["unavailable"])
+
+
+def test_diagnostics_zip_marks_oversized_traces_without_truncating_them(api_env, monkeypatch):
+    from io import BytesIO
+    from zipfile import ZipFile
+    import observability.diagnostics as diagnostics
+    client, db_path, out = api_env
+    monkeypatch.setattr(diagnostics, "_MAX_FILE_BYTES", 4096)
+    run_dir = out / "large"
+    run_dir.mkdir()
+    (run_dir / "SOFP_conversation_trace.json").write_text(json.dumps({"content": "x" * 4096}))
+    run_id = _seed_run(db_path, session_id="large", pdf_filename="source.pdf", output_dir=str(run_dir))
+    with ZipFile(BytesIO(client.get(f"/api/runs/{run_id}/diagnostics").content)) as archive:
+        assert "traces/SOFP_conversation_trace.json" not in archive.namelist()
+        assert any(item["file"] == "traces/SOFP_conversation_trace.json" and "oversized" in item["reason"]
+                   for item in json.loads(archive.read("manifest.json"))["unavailable"])
+        assert json.loads(archive.read("run.json"))["run"]["id"] == run_id

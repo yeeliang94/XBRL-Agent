@@ -36,7 +36,7 @@ def client(tmp_path, monkeypatch):
 
 
 def test_guarded_routes_401_without_session(client):
-    for path in ("/api/config", "/api/settings", "/api/runs"):
+    for path in ("/api/config", "/api/settings", "/api/runs", "/api/runs/1/diagnostics"):
         r = client.get(path)
         assert r.status_code == 401, f"{path} should require a session"
 

@@ -37,6 +37,27 @@ export async function apiFetch<T>(url: string, options?: RequestInit): Promise<T
   return res.json();
 }
 
+/** Download the support snapshot with visible errors and session-expiry handling. */
+export async function exportRunDiagnostics(runId: number): Promise<void> {
+  const res = await fetch(`/api/runs/${runId}/diagnostics`);
+  if (!res.ok) {
+    if (res.status === 401) window.dispatchEvent(new CustomEvent("auth:unauthorized"));
+    let body: unknown = null;
+    try { body = await res.json(); } catch { /* no JSON body */ }
+    throw ApiError.fromResponse(res.status, body);
+  }
+  const url = URL.createObjectURL(await res.blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `run-${runId}-diagnostics.zip`;
+  document.body.appendChild(link);
+  try { link.click(); } finally {
+    link.remove();
+    // Let the browser start reading the download before releasing its URL.
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+}
+
 export const getAgentInstructions = () => apiFetch<TeamGuidanceSettings>("/api/agent-instructions");
 export const saveAgentInstructions = (body: { texts: Record<string, string>; revision: number }) =>
   apiFetch<TeamGuidanceSettings>("/api/agent-instructions", {
