@@ -894,7 +894,9 @@ export function RunDetailView({
     <div style={styles.container}>
       {retryError && <p role="alert" style={ui.alertError}>{retryError}</p>}
       <ConfirmDialog isOpen={retryAgent != null} title="Retry extraction?"
-        message="This replaces extracted results and any edits for the selected statement or notes template."
+        message={retryAgent?.startsWith("NOTES_")
+          ? "This replaces extracted results and any edits for the selected notes template. For prepared documents, it also reruns Corporate Information, Accounting Policies and List of Notes, replacing results and edits in every retried template."
+          : "This replaces extracted results and any edits for the selected statement."}
         confirmLabel="Retry extraction" onCancel={() => setRetryAgent(null)}
         onConfirm={async () => {
           if (!retryAgent || !onRetryAgent || retryPending) return;
