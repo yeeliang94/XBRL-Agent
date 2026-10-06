@@ -155,6 +155,8 @@ describe("Direction A shell and responsive composition", () => {
     expect(designSystem).toContain("without working glows or pulsing indicators");
     expect(designSystem).toContain("including Confirm setup");
     expect(designSystem).toContain("preserves the document and selected section through refresh");
+    expect(designSystem).toContain("block leaving Settings or reloading while an appearance save is pending or saving");
+    expect(designSystem).toContain("prepared documents also rerun Corporate Information, Accounting Policies and List of Notes and replace edits in every retried template");
     expect(designSystem).toContain("Browser Back and Forward retrace visited sections");
     expect(designSystem).toContain("Completion does not mean human review is finished");
     expect(designSystem).toContain("When tabs change, bring the new panel into view");

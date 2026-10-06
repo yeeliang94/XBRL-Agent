@@ -37,7 +37,7 @@ const baseRun = {
 };
 
 describe("HistoryPage", () => {
-  test.each(["SOFP", "NOTES_ACC_POLICIES"])("retries only %s from saved Activity with the original filing settings", async (statementType) => {
+  test.each(["SOFP", "NOTES_ACC_POLICIES"])("confirms retry scope for %s from saved Activity with the original filing settings", async (statementType) => {
     window.history.replaceState({}, "", "/history/77?tab=agents");
     fetchRuns.mockResolvedValue({ runs: [], total: 0, limit: 50, offset: 0 });
     vi.mocked(api.fetchRunDetail).mockResolvedValue({
@@ -57,6 +57,14 @@ describe("HistoryPage", () => {
     const onSelectRun = vi.fn();
     render(<HistoryPage selectedId={77} onSelectRun={onSelectRun} />);
     fireEvent.click(await screen.findByRole("button", { name: /^Retry / }));
+    const dialog = screen.getByRole("dialog");
+    if (statementType.startsWith("NOTES_")) {
+      expect(dialog).toHaveTextContent("Corporate Information, Accounting Policies and List of Notes");
+      expect(dialog).toHaveTextContent("every retried template");
+    } else {
+      expect(dialog).toHaveTextContent("selected statement");
+      expect(dialog).not.toHaveTextContent("Corporate Information");
+    }
     fireEvent.click(screen.getByRole("button", { name: "Retry extraction" }));
     const calls = vi.mocked(createMultiAgentSSE).mock.calls;
     const call = calls[calls.length - 1];
