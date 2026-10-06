@@ -83,7 +83,7 @@ async def test_prepared_list_agent_waits_for_other_prose_placements(tmp_path: Pa
         srepo.activate_generation(conn, generation)
     config = _make_config(tmp_path, [
         NotesTemplateType.CORP_INFO, NotesTemplateType.ACC_POLICIES,
-        NotesTemplateType.LIST_OF_NOTES,
+        NotesTemplateType.LIST_OF_NOTES, NotesTemplateType.RELATED_PARTY,
     ])
     config.audit_db_path = str(db)
     config.run_id = run_id
@@ -101,7 +101,8 @@ async def test_prepared_list_agent_waits_for_other_prose_placements(tmp_path: Pa
         return NotesAgentResult(template_type=template, status="succeeded")
 
     async def fake_list(**_kwargs):
-        assert finished == {NotesTemplateType.CORP_INFO, NotesTemplateType.ACC_POLICIES}
+        assert finished == {NotesTemplateType.CORP_INFO, NotesTemplateType.ACC_POLICIES,
+                            NotesTemplateType.RELATED_PARTY}
         return NotesAgentResult(template_type=NotesTemplateType.LIST_OF_NOTES,
                                 status="succeeded")
 

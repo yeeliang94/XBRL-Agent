@@ -40,3 +40,11 @@ def test_prompt_keeps_existing_no_residual_plug_rule():
     p = _sofp_prompt()
     assert "NO-RESIDUAL-PLUG RULE" in p
     assert "Other property, plant and equipment" in p
+
+def test_unmatched_disclosed_improvements_are_not_residual_plugs():
+    prompt = _sofp_prompt()
+    assert '"Leasehold improvements"' in prompt
+    assert "Otherwise use `Other property," in prompt
+    assert "separately disclosed class" in prompt
+    assert "office equipment merely because" in prompt
+    assert "NEVER plug a residual" in prompt

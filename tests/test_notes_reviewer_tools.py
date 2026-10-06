@@ -1364,3 +1364,45 @@ def test_source_destinations_returns_complete_json_for_long_labels(db_path):
     funcs = {name: tool.function for ts in agent.toolsets for name, tool in getattr(ts, "tools", {}).items()}
     output = funcs["list_source_destinations"](SimpleNamespace(deps=deps), _S12)
     assert len(json.loads(output)) == 90
+
+@pytest.mark.parametrize("standard, label", [
+    ("mfrs", "*Disclosure of material accounting policy information"),
+    ("mpers", "Disclosure of significant accounting policies"),
+])
+@pytest.mark.parametrize("level", ["company", "group"])
+@pytest.mark.parametrize("body, missing", [("", True), ("<h3>Accounting policies</h3>", True),
+    ("<h3>Accounting policies</h3><p>These policies apply consistently.</p>", False)])
+def test_required_policy_disclosure_is_checked_without_populated_slot(
+    db_path, standard, label, level, body, missing,
+):
+    with repo.db_session(db_path) as conn:
+        run_id = repo.create_run(conn, "x.pdf", config={"notes_to_run": ["ACC_POLICIES"]})
+        conn.execute(
+            "INSERT INTO notes_nodes(node_uuid,template_id,sheet,row,label,kind,slot_role) "
+            "VALUES (?,?,?,4,?,'LEAF','INPUT')",
+            ("required-policy", f"{standard}-{level}-notes-policies-v1", ra.POLICIES_SHEET, label),
+        )
+        # A mandatory slot in another family must never affect this run.
+        conn.execute(
+            "INSERT INTO notes_nodes(node_uuid,template_id,sheet,row,label,kind,slot_role) "
+            "VALUES ('foreign','foreign-company-policies',?,5,'*Foreign field','LEAF','INPUT')",
+            (ra.POLICIES_SHEET,),
+        )
+        if body:
+            repo.upsert_notes_cell(conn, run_id=run_id, sheet=ra.POLICIES_SHEET,
+                                   row=4, label=label, html=body)
+    agent, deps, context = ra.create_notes_reviewer_agent(
+        run_id=run_id, db_path=str(db_path), pdf_path="/tmp/x.pdf",
+        filing_level=level, filing_standard=standard, model=_scripted([]),
+        output_dir=str(db_path.parent),
+    )
+    assert context["mandatory_fields"] == ([{"sheet": ra.POLICIES_SHEET,
+        "row": 4, "label": label}] if missing else [])
+    if missing:
+        assert ra.count_open_items(context) > 0
+        assert "MANDATORY POLICY DISCLOSURES" in ra.build_notes_reviewer_packet(context)
+        assert ("mandatory_field", ra.POLICIES_SHEET, 4) in ra.finding_keys(context)
+        with repo.db_session(db_path) as conn:
+            repo.upsert_notes_cell(conn, run_id=run_id, sheet=ra.POLICIES_SHEET,
+                row=4, label=label, html="<p>Source-supported policy overview.</p>")
+        assert ra.recompute_notes_findings(deps)["mandatory_fields"] == []

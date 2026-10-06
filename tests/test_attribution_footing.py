@@ -169,8 +169,13 @@ def test_attribution_footing_not_applicable_when_undisclosed(tmp_path, case_key)
         conn=conn, run_id=run_id, template_ids={case["stmt"]: tid},
         filing_level="company", filing_standard="mfrs")
     result = case["check"]().run_facts(ctx, tolerance=1.0)
+    if case_key == "soci":
+        from tools.verifier_facts import verify_statement_facts
+        verification = verify_statement_facts(conn, run_id, tid, StatementType.SOCI)
+        assert not verification.is_balanced
+        assert any("owners attribution is missing" in m for m in verification.mismatches)
     conn.close()
-    assert result.status == "not_applicable", result.message
+    assert result.status == ("failed" if case_key == "soci" else "not_applicable"), result.message
 
 
 def test_attribution_footing_checks_registered():
