@@ -162,8 +162,12 @@ def run_agent(
     from db.schema import init_db
     init_db(server.AUDIT_DB_PATH)
     try:
-        from concept_model.bootstrap import import_all_face_templates
+        from concept_model.bootstrap import (
+            import_all_face_templates,
+            import_all_notes_templates,
+        )
         import_all_face_templates(server.AUDIT_DB_PATH)
+        import_all_notes_templates(server.AUDIT_DB_PATH)
         server._CANONICAL_BOOTSTRAP_OK = True
     except Exception as exc:  # noqa: BLE001 — surfaced as a failed run below
         server._CANONICAL_BOOTSTRAP_OK = False

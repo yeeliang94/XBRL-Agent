@@ -1834,7 +1834,8 @@ def create_notes_reviewer_agent(
         text is rebuilt from the document, in document order. The rest of a
         part-named table is pulled in automatically. In the List-of-Notes
         catch-all field, a separate call for one source note retains other
-        notes already in that field."""
+        notes already in that field. View the supporting PDF pages first and
+        pass those page numbers as source_pages."""
         from notes import source_write
 
         gen_id = _active_generation_id(ctx)
@@ -1843,13 +1844,23 @@ def create_notes_reviewer_agent(
                 "rejected: this run has no frozen source reading, so there "
                 "are no parts to link to. Use edit_note_cells instead."
             )
+        kind, message = classify_notes_fix_guard(
+            action="relink", source_pages=source_pages,
+            viewed_pages=ctx.deps.viewed_pages,
+        )
+        if kind is not None:
+            return message or "rejected: view the supporting PDF pages first."
         with ctx.deps.io_lock:
             _ensure_snapshot(ctx)
             try:
                 with repo.db_session(ctx.deps.db_path) as conn:
-                    existing = _read_cell(
-                        ctx.deps.db_path, ctx.deps.run_id, sheet, row
-                    ) or {}
+                    conn.execute("BEGIN IMMEDIATE")
+                    current = conn.execute(
+                        "SELECT label,content_revision FROM notes_cells "
+                        "WHERE run_id=? AND sheet=? AND row=?",
+                        (ctx.deps.run_id, sheet, row),
+                    ).fetchone()
+                    existing = dict(current) if current else {}
                     outcome = source_write.write_cell_from_blocks(
                         conn, run_id=ctx.deps.run_id, generation_id=gen_id,
                         sheet=sheet, row=row, block_ids=block_ids,
@@ -2012,7 +2023,8 @@ def create_notes_reviewer_agent(
 
         @agent.tool
         def view_source_blocks(ctx: RunContext[NotesReviewerDeps], block_ids: List[str], offset: int = 0) -> str:
-            """Read up to 40 source parts. If partial, repeat the same block_ids
+            """Read named blocks or complete sections, up to 40 parts per batch.
+            If partial, repeat the same block_ids
             with offset=next_offset to continue, including within a large part.
             After those character pages, submit remaining block_ids as a new
             batch with offset=0; character offsets do not reach later blocks."""

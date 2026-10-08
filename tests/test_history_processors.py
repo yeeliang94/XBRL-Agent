@@ -155,11 +155,12 @@ def test_write_facts_is_a_write_boundary():
     ("conflict recorded for review: source parts already placed", 3),
     ("ok: Notes row 112 built from 0 source part(s), 0 characters", 3),
 ])
+@pytest.mark.parametrize("tool_name", ["write_note_from_source", "write_assigned_note"])
 @pytest.mark.usefixtures("no_page_budget")
-def test_source_write_compacts_only_after_committed_content(content, remaining):
+def test_source_write_compacts_only_after_committed_content(content, remaining, tool_name):
     messages = [
         _image_batch_msg("view_pdf_pages", [1, 2]),
-        _failed_write_msg("write_note_from_source", content),
+        _failed_write_msg(tool_name, content),
         _image_batch_msg("view_pdf_pages", [3]),
     ]
     out = strip_stale_images(messages)
