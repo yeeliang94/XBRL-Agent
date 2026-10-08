@@ -177,6 +177,49 @@ def test_source_projection_failure_rolls_back_cell_and_lineage(
         assert srepo.active_placements(conn, generation_id) == []
 
 
+def test_standalone_source_conflict_retains_first_write_and_records_proposal(tmp_path):
+    kind = NotesTemplateType.CORP_INFO
+    template = notes_template_path(kind, level="company")
+    sheet = NOTES_REGISTRY[kind].sheet_name
+    db = tmp_path / "audit.sqlite"
+    init_db(db)
+    template_id, nodes = parse_notes_template(str(template), sheet)
+    import_notes_template(db, template_id, nodes)
+    persist_template_manifest(db, template)
+    with repo.db_session(db) as conn:
+        run_id = repo.create_run(conn, "source.pdf", session_id="s", output_dir=str(tmp_path))
+        gen = srepo.begin_generation(conn, run_id, input_kind="prepared_document")
+        srepo.write_blocks(conn, gen, [SourceBlock(
+            "b1", "paragraph", 1, "<p>Source disclosure.</p>", page=1, source_note_id="n1",
+        )])
+        srepo.write_notes(conn, gen, [SourceNote("n1", "1", "Disclosure", ["b1"])])
+        srepo.activate_generation(conn, gen)
+    agent, deps = notes_agent.create_notes_agent(
+        template_type=kind, pdf_path=str(tmp_path / "source.pdf"), inventory=[],
+        filing_level="company", model=TestModel(), output_dir=str(tmp_path),
+        run_id=run_id, db_path=str(db), source_generation_id=gen,
+    )
+    rows = sorted((n.row, n.label) for n in nodes if n.kind == "LEAF")[:2]
+    write = _tool(agent, "write_note_from_source")
+    ctx = SimpleNamespace(deps=deps)
+    first = asyncio.run(write(ctx, sheet=sheet, row=rows[0][0], target_label=rows[0][1],
+                             block_ids=["b1"], source_pages=[1]))
+    assert first.startswith("ok:")
+    before = Path(deps.filled_path).read_bytes()
+    second = asyncio.run(write(ctx, sheet=sheet, row=rows[1][0], target_label=rows[1][1],
+                              block_ids=["b1"], source_pages=[1]))
+    assert second.startswith("conflict recorded for review:")
+    assert Path(deps.filled_path).read_bytes() == before
+    assert deps.source_placement_conflict_notes == {1}
+    with repo.db_session(db) as conn:
+        flags = repo.fetch_notes_review_flags(conn, run_id)
+        assert len(flags) == 1 and flags[0]["finding_id"].startswith('["source_placement",')
+        assert flags[0]["source_pages"] == [1]
+        cells = repo.list_notes_cells_for_run(conn, run_id)
+        assert [cell.row for cell in cells] == [rows[0][0]]
+        assert {p["row"] for p in srepo.active_placements(conn, gen)} == {rows[0][0]}
+
+
 def test_source_catch_all_sections_survive_subagent_aggregation(tmp_path):
     kind = NotesTemplateType.LIST_OF_NOTES
     template = notes_template_path(kind, level="company")

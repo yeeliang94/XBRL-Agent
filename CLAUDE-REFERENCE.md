@@ -912,6 +912,17 @@ Key invariants:
   the `parent_note` contract to `write_notes` and names the source tool's
   smaller schema explicitly. Pinned by `tests/test_notes_writer_source_built.py`
   and `tests/test_notes_source_prompt.py`.
+- **Assigned whole-note placement keeps source identity in the application.**
+  Assigned Sheet-12 workers may use `read_assigned_note` and
+  `write_assigned_note` for a complete note belonging in one disclosure field.
+  The worker chooses an exact unique live field label; the application supplies
+  sheet, row and frozen block identities. A managed write requires contiguous
+  complete reading, validates the assigned batch and active run/generation,
+  and uses the existing source writer for lineage, placement conflicts and
+  serialized projection. The worker reads the complete assigned note before
+  deciding between whole-note and mixed-section placement. Mixed notes retain
+  explicit section routing. Canonical IDs remain in persistence and audit. Pinned by
+  `tests/test_notes_source_tools.py` and `tests/test_history_processors.py`.
 - **Retry budget:** every notes agent and Sheet-12 sub-agent retried at most
   once. Exhaustion writes `notes_<TEMPLATE>_failures.json` /
   `notes12_failures.json` / `notes12_unmatched.json` side-logs.
@@ -1785,6 +1796,11 @@ Phase 1.1): the legacy direct-xlsx pipeline, the `XBRL_CANONICAL_MODE` opt-out,
 there is **no fallback** — if the startup concept-tree bootstrap fails, a run
 fails fast (`_CANONICAL_BOOTSTRAP_OK is False` → `_fail_run`). Fix the bootstrap
 (check logs, restart) rather than looking for an opt-out that no longer exists.
+
+CLI and web startup import both face concepts and canonical notes destinations
+before marking bootstrap successful. A notes import failure is a bootstrap
+failure, not an empty notes catalogue that extraction may silently use. Pinned
+by `tests/test_cli_canonical_pipeline.py`.
 
 **Template re-import lifecycle (schema v46).** Template IDs remain stable
 across startup imports, but row moves and label changes mint new concept UUIDs.
@@ -2832,6 +2848,16 @@ comparison values before bounded source descriptions. Disposition batches report
 rejected. Pinned by `tests/test_notes_reviewer_tools.py`,
 `tests/test_notes_reviewer_self_verify.py`, `tests/test_notes_source_tools.py`, and
 `tests/test_reviewer_agent.py`.
+Section selections work in both block reads and source writes. An omitted
+`section:` prefix is accepted only when the remaining identity exactly matches
+a derived section; existing block identities take precedence. Nested section
+listings show parent titles, and reviewer history compaction includes old section
+listings while retaining section and legacy DOCX block locators. Reviewer relinks require supporting PDF pages
+viewed in the current pass, and read the destination within the write transaction.
+Standalone extraction conflicts use the same durable conflict recording as
+Sheet-12 sink writes. Pinned by `tests/test_notes_source_tools.py`,
+`tests/test_notes_reviewer_history.py`, `tests/test_notes_reviewer_tools.py`, and
+`tests/test_notes_write_serialization.py`.
 Prepared-source prompts show live worksheet row numbers beside labels.
 `write_note_from_source` requires the chosen row's exact label, and the shared
 source writer rejects a mismatched row/label pair before writing or recording
@@ -2879,7 +2905,12 @@ live source placements. A batch receipt is rejected with the unplaced section
 IDs when any assigned note still has unsettled source parts; a skip claim alone
 cannot close those gaps. An individual-part write names the rest of its smallest
 source section in the tool result so an intentional split stays visible to the
-agent. Reviewer source relinks refuse to orphan parts formerly
+agent. Source-built sections on distinct fields retain each other in the
+Sheet-12 payload sink; an authored whole-note reroute still replaces its prior
+field. A multi-field receipt requires current canonical source placements for
+complete sections, every live destination on this sheet, and unchanged source
+content. The assigned-source coverage check must still pass.
+Reviewer source relinks refuse to orphan parts formerly
 placed in the target cell. Repeated undecided-part findings are grouped by source
 note in the reviewer packet, while each block retains its separate integrity
 finding and identity. Pinned by `tests/test_notes_coordinator.py`,

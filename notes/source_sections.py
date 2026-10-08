@@ -26,6 +26,7 @@ class SourceSection:
     title: str
     block_ids: list[str] = field(default_factory=list)
     pages: set[int] = field(default_factory=set)
+    parent_title: str = ""
 
 
 def sections_for_note(
@@ -96,7 +97,10 @@ def sections_for_note(
             section_counts[section_id] = section_counts.get(section_id, 0) + 1
             unique_id = (section_id if section_counts[section_id] == 1
                          else f"{section_id}:{section_counts[section_id]}")
-            section = SourceSection(unique_id, source_note_id, heading)
+            section = SourceSection(
+                unique_id, source_note_id, heading,
+                parent_title=" > ".join(parent.title for _, parent, _ in active),
+            )
             sections.append(section)
             tag = BeautifulSoup(block.canonical_html or "", "html.parser").find(
                 re.compile(r"^h[1-6]$")
@@ -117,7 +121,7 @@ def expand_section_ids(
     blocks: Sequence[SourceBlock], notes: Sequence[dict], selected: Sequence[str],
 ) -> list[str]:
     """Expand section IDs into source pieces, retaining explicit piece IDs."""
-    if not any(value.startswith("section:") for value in selected):
+    if not any(":" in value for value in selected):
         return list(selected)
     sections = {
         section.section_id: section
@@ -128,11 +132,14 @@ def expand_section_ids(
         )
     }
     expanded: list[str] = []
+    block_ids = {block.block_id for block in blocks}
     for value in selected:
-        if not value.startswith("section:"):
+        if value in block_ids:
             expanded.append(value)
-        elif value in sections:
-            expanded.extend(sections[value].block_ids)
-        else:
+        elif (section := sections.get(value) or sections.get(f"section:{value}")):
+            expanded.extend(section.block_ids)
+        elif value.startswith("section:") or ":" in value:
             raise ValueError(f"unknown source section {value!r}; list this note's sections again")
+        else:
+            expanded.append(value)
     return list(dict.fromkeys(expanded))
