@@ -34,7 +34,7 @@ from ingest.pdf_sidecar import (
 from notes._rate_limit import RATE_LIMIT_MAX_RETRIES, compute_backoff_delay, is_rate_limit_error
 from utils.atomic_io import replace_with_retry
 
-CONTRACT_VERSION = 13
+CONTRACT_VERSION = 14
 # Capture, verify and repair rounds per page. The third round runs only while
 # specific table findings remain and the previous repair changed the page.
 _MAX_PREPARATION_ROUNDS = 3
@@ -791,6 +791,8 @@ def _write_checkpoint_with_evidence(path: Path, checkpoint: dict) -> None:
             attempts[index] = {"stage": attempt["stage"],
                                "view_rotation": attempt.get("view_rotation"),
                                "evidence_file": str(evidence.relative_to(path.parent))}
+            if "batch_response" in attempt:
+                attempts[index]["batch"] = True
     # Evidence is durable before its reference becomes resumable progress.
     _atomic_text(path, json.dumps(checkpoint, ensure_ascii=False))
 
@@ -1018,21 +1020,23 @@ async def prepare_document(
                 receipt = await asyncio.wait_for(call, page_timeout_s)
             record.update(usage=receipt.get("usage", {}), status="succeeded")
             if stage in {"capturing", "verifying"}:
-                # Diagnostics only: a malformed batch is left to the batcher's
-                # single-page fallback and is never attributed to every page.
-                batched = "pages" in context
-                page_receipts = receipt.get("pages") if batched else [receipt]
-                for page_context in context["pages"] if batched else [context]:
-                    number = page_context["page"]
-                    response = next((r for r in page_receipts if isinstance(r, dict) and (
-                        not batched or (type(r.get("page")) is int and r["page"] == number))), None
-                    ) if isinstance(page_receipts, list) else None
-                    if response is not None:
-                        checkpoint.setdefault("page_attempts", {}).setdefault(str(number), []).append({
-                            "stage": stage, "view_rotation": page_context.get("view_rotation"),
-                            "html": page_context.get("html", response.get("html", "")),
-                            "verification" if stage == "verifying" else "capture": json.loads(json.dumps(response)),
-                        })
+                if "pages" in context:
+                    # Retain the entire response, including malformed, duplicate
+                    # and foreign receipts. Shared attempts hash to one evidence
+                    # file; only the batcher decides which captures are valid.
+                    attempt = json.loads(json.dumps({
+                        "stage": stage, "page_contexts": context["pages"],
+                        "batch_response": receipt,
+                    }))
+                    for page_context in context["pages"]:
+                        checkpoint.setdefault("page_attempts", {}).setdefault(
+                            str(page_context["page"]), []).append(attempt)
+                else:
+                    checkpoint.setdefault("page_attempts", {}).setdefault(str(context["page"]), []).append({
+                        "stage": stage, "view_rotation": context.get("view_rotation"),
+                        "html": context.get("html", receipt.get("html", "")),
+                        "verification" if stage == "verifying" else "capture": json.loads(json.dumps(receipt)),
+                    })
             return receipt
         except BaseException as exc:
             record["error_type"] = type(exc).__name__

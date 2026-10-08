@@ -3082,6 +3082,10 @@ response, candidate HTML and rotation are durably retained before interpretation
 including rejected candidates. Checkpoint page attempts reference atomic,
 content-addressed JSON evidence files beside the checkpoint; complete receipts
 are preserved without repeatedly embedding them in progress snapshots.
+Batched attempts share one evidence file containing the complete response and
+requested page contexts, including duplicate, foreign-page and malformed
+receipts. These diagnostic records do not certify a page capture; the batcher
+validates ownership and retries rejected pages independently.
 Prose-only pages need no table evidence for a positive or omitted table verdict.
 A negative verdict stays unresolved because it can identify an omitted source table. Distinct
 financial entries retain separate rows; legitimate wrapped and spanning cells
