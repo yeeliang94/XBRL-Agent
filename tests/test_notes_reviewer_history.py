@@ -1,5 +1,6 @@
 """Old notes reads can be reloaded without carrying their full text forever."""
 import copy
+import pytest
 
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, ToolReturnPart
 
@@ -12,12 +13,14 @@ def _returned(name: str, content: str, index: int):
     )])
 
 
-def test_compacts_old_source_reads_and_preserves_re_read_locators():
+@pytest.mark.parametrize("tool_name", ["read_source_manifest", "list_source_sections"])
+def test_compacts_old_source_reads_and_preserves_re_read_locators(tool_name):
     messages = []
     for index in range(5):
         messages.append(_returned(
-            "read_source_manifest",
-            f"Note {index + 1} has parts.\np12-b{index}-abc123 " + "source wording " * 500,
+            tool_name,
+            f"Note {index + 1} has parts.\np12-b{index}-abc123 "
+            f"section:note-12:12.1:{index + 1} b00001 " + "source wording " * 500,
             index,
         ))
         messages.append(ModelResponse(parts=[TextPart("next")]))
@@ -29,6 +32,8 @@ def test_compacts_old_source_reads_and_preserves_re_read_locators():
     assert result is not messages
     oldest = result[0].parts[0].content
     assert "p12-b0-abc123" in oldest
+    assert "section:note-12:12.1:1" in oldest
+    assert "b00001" in oldest
     assert "Re-read" in oldest
     assert "source wording " not in oldest
     # The newest source reads and every write acknowledgement remain verbatim.

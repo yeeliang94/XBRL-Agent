@@ -1154,7 +1154,7 @@ def test_prepared_missing_unnumbered_source_triggers_review_and_can_be_relinked(
     with repo.db_session(db_path) as conn:
         gen = srepo.begin_generation(conn, run_id, input_kind="prepared_document")
         srepo.write_blocks(conn, gen, [SourceBlock("u1", "paragraph", 1,
-            "<p>Unnumbered disclosure.</p>", source_note_id="unumbered-disclosure", owner_kind=OwnerKind.NOTE)])
+            "<p>Unnumbered disclosure.</p>", source_note_id="unumbered-disclosure", owner_kind=OwnerKind.NOTE, page=1)])
         srepo.write_notes(conn, gen, [SourceNote("unumbered-disclosure", "", "Disclosure", ["u1"])])
         srepo.activate_generation(conn, gen)
     agent, deps, context = _agent(db_path, run_id, _scripted([]))
@@ -1175,6 +1175,14 @@ def test_prepared_missing_unnumbered_source_triggers_review_and_can_be_relinked(
         body = lambda text: text.split("<<<SOURCE>>>\n", 1)[1].split("\n<<<END_SOURCE>>>", 1)[0]
         assert body(tail) == body(full)[5:]
     result = funcs["relink_note_cell"](ctx, sheet=_S12, row=50, block_ids=["u1"])
+    assert "rejected: ungrounded" in result
+    assert _cells(db_path, run_id) == {}
+    result = funcs["relink_note_cell"](ctx, sheet=_S12, row=50, block_ids=["u1"], source_pages=[1])
+    assert "rejected: ungrounded" in result
+    assert _cells(db_path, run_id) == {}
+    funcs["view_pdf_pages"](ctx, [1])
+    result = funcs["relink_note_cell"](ctx, sheet=_S12, row=50, block_ids=["u1"],
+                                      source_pages=[1], evidence="Confirmed disclosure and field.")
     assert result.startswith("ok:")
     rejected = funcs["record_block_dispositions"](ctx, ["u1"], "structured_consumed")
     assert "already placed" in rejected

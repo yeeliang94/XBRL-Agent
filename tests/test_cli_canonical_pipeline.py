@@ -22,6 +22,7 @@ from statement_types import StatementType
 from coordinator import AgentResult as CoordAgentResult, CoordinatorResult
 from cross_checks.framework import CrossCheckResult
 from scout.infopack import Infopack, StatementPageRef
+from concept_model.facts_api import FactWrite, write_fact
 
 
 @pytest.fixture
@@ -30,6 +31,7 @@ def cli_env(tmp_path, monkeypatch):
     out.mkdir(parents=True)
     monkeypatch.setattr(server, "OUTPUT_DIR", out)
     monkeypatch.setattr(server, "AUDIT_DB_PATH", out / "xbrl_agent.db")
+    monkeypatch.setattr(server, "_CANONICAL_BOOTSTRAP_OK", None)
     monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
     monkeypatch.setenv("TEST_MODEL", "test-model")
     monkeypatch.setenv("LLM_PROXY_URL", "")
@@ -54,6 +56,23 @@ def test_cli_run_agent_drives_canonical_pipeline(cli_env, first_financial_statem
         assert config.run_id is not None, "CLI must thread run_id into RunConfig"
         assert config.db_path, "CLI must thread db_path into RunConfig"
         assert config.first_financial_statements is first_financial_statements
+        # CLI startup must register prose note destinations as well as face
+        # concepts. Exercise a real canonical write, rather than only checking
+        # that the bootstrap helper was called.
+        with sqlite3.connect(config.db_path) as conn:
+            note = conn.execute(
+                "SELECT node_uuid, sheet, row, label FROM notes_nodes "
+                "WHERE template_id LIKE 'mfrs-company-%' "
+                "AND sheet = 'Notes-SummaryofAccPol' "
+                "AND kind = 'LEAF' AND slot_role = 'INPUT' "
+                "ORDER BY row LIMIT 1"
+            ).fetchone()
+        assert note is not None, "CLI must bootstrap canonical notes targets"
+        write_fact(config.db_path, config.run_id, FactWrite(
+            sheet=note[1], row=note[2], label=note[3],
+            html="<p>Source accounting policy.</p>",
+            evidence="page 3: synthetic accounting policy", actor="agent",
+        ))
         results = []
         for stmt in sorted(config.statements_to_run, key=lambda s: s.value):
             wb = openpyxl.Workbook()
@@ -138,5 +157,30 @@ def test_cli_run_agent_drives_canonical_pipeline(cli_env, first_financial_statem
             and agent["status"] == "succeeded"
             for agent in agents
         )
+        saved_note = conn.execute(
+            "SELECT c.concept_uuid, c.html, n.node_uuid FROM notes_cells c "
+            "JOIN notes_nodes n ON n.node_uuid = c.concept_uuid "
+            "WHERE c.run_id = ?", (runs[0]["id"],),
+        ).fetchone()
+        assert saved_note is not None
+        assert saved_note["concept_uuid"] == saved_note["node_uuid"]
+        assert saved_note["html"] == "<p>Source accounting policy.</p>"
     finally:
         conn.close()
+
+
+def test_cli_notes_bootstrap_failure_ends_run_before_extraction(cli_env):
+    out, pdf = cli_env
+    with patch("concept_model.bootstrap.import_all_face_templates", return_value=[]), \
+         patch("concept_model.bootstrap.import_all_notes_templates",
+               side_effect=RuntimeError("notes import failed")), \
+         patch("coordinator.run_extraction") as extract:
+        result = run.run_agent(
+            pdf_path=pdf, model="test-model", output_dir=str(out),
+            statements={StatementType.SOFP}, use_scout=False,
+        )
+    assert result.success is False
+    extract.assert_not_called()
+    with sqlite3.connect(out / "xbrl_agent.db") as conn:
+        runs = conn.execute("SELECT status FROM runs").fetchall()
+    assert runs == [("failed",)]

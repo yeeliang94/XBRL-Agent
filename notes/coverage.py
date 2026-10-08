@@ -23,7 +23,8 @@ Every Sheet-12 sub-agent is handed a batch of N notes from scout's
 inventory. Before finishing, the sub-agent must submit a CoverageReceipt
 — one entry per batch note, either:
 
-- `"written"` with the single row label where the complete note landed, or
+- `"written"` with the single row label where the complete note landed (or
+  validated complete source subsections in multiple fields), or
 - `"skipped"` with a one-sentence reason (e.g. "belongs on Sheet 10",
   "no Sheet-12 row fits this disclosure").
 
@@ -136,6 +137,7 @@ class CoverageReceipt:
         self,
         batch_note_nums: list[int],
         written_row_labels: Union[set[str], dict[int, set[str]]],
+        source_backed_split_note_nums: set[int] | None = None,
     ) -> list[str]:
         """Return a list of structural error messages (empty = valid).
 
@@ -207,12 +209,20 @@ class CoverageReceipt:
             # strings here: the sink preserves requested label spellings, and
             # several fuzzy spellings may resolve to one template row. The
             # write guard enforces one-field routing against resolved rows.
-            if len(entry.row_labels) != 1:
+            source_split = entry.note_num in (source_backed_split_note_nums or set())
+            if len(entry.row_labels) != 1 and not source_split:
                 errors.append(
                     f"Note {entry.note_num}: a complete top-level note must land "
                     f"in exactly one List-of-Notes field, but the receipt lists "
                     f"{len(entry.row_labels)} row labels. Choose one row from "
                     f"the note's top-level heading and put the full note there."
+                )
+            if source_split and {
+                _normalize_label(label) for label in entry.row_labels
+            } != per_note_sink.get(entry.note_num, set()):
+                errors.append(
+                    f"Note {entry.note_num}: list every live destination of its "
+                    "complete source sections in the coverage receipt."
                 )
             for label in entry.row_labels:
                 normalized = _normalize_label(label)

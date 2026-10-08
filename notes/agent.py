@@ -1013,6 +1013,9 @@ class NotesDeps:
     # variable so the tool validator has the authoritative batch list
     # for comparison against the agent's receipt.
     batch_note_nums: Optional[list[int]] = None
+    # Contiguous source characters actually returned by read_assigned_note.
+    # Bound to this generation; tail-first reads cannot certify a complete note.
+    assigned_source_read_prefixes: dict[tuple[int, int], int] = field(default_factory=dict)
     # Set by `submit_batch_coverage` after the agent submits a valid
     # receipt. The sub-coordinator reads it back after agent.iter()
     # finishes to build the aggregated coverage warnings + side-log.
@@ -1764,8 +1767,9 @@ def _sub_agent_sink_write(
     entries = _ensure_label_index(deps)
     accepted, rejections = resolve_payload_labels(entries, payloads)
 
-    # One top-level disclosure note owns exactly one List-of-Notes field. The
-    # prompt states this rule, but enforcing it here prevents a model from
+    # Authored top-level disclosures own one List-of-Notes field. Complete
+    # source sections may retain distinct fields; their canonical ledger is
+    # checked at receipt time. Enforcing the authored rule prevents a model from
     # successfully submitting the old "one peer topic per row" shape anyway.
     # Multiple payloads for the SAME resolved row remain valid: a long note may
     # be authored in chunks and the final writer combines those chunks.
@@ -1784,6 +1788,7 @@ def _sub_agent_sink_write(
     split_note_nums = {
         note_num for note_num, rows in accepted_rows_by_note.items()
         if len(rows) > 1
+        and not all(p.source_built for p in accepted if p.note_num == note_num)
     }
     routing_rejections: list[str] = []
     if split_note_nums:
@@ -1903,7 +1908,7 @@ def _sub_agent_sink_write(
         for e in deps.payload_sink:
             e_resolved = _resolve_row(entries, e.chosen_row_label)
             same_row = e_resolved is not None and e_resolved[0] == p_row
-            # A later one-field write for the same assigned note is a routing
+            # A later authored one-field write for the same assigned note is a routing
             # correction. Replace every earlier row for that note so the agent
             # can recover after choosing the wrong destination on a prior turn.
             # The prompt/tool response requires this replacement payload to be
@@ -1912,6 +1917,7 @@ def _sub_agent_sink_write(
             if (
                 p.note_num is not None and e.note_num is not None
                 and int(p.note_num) == int(e.note_num) and not same_row
+                and not (p.source_built and e.source_built)
             ):
                 rerouted_note_nums.add(int(p.note_num))
                 continue
@@ -2039,75 +2045,6 @@ def _submit_coverage_entries_impl(deps: "NotesDeps", entries: Any) -> str:
     return _submit_coverage_receipt_impl(deps, receipt)
 
 
-def _prepared_batch_source_errors(deps: "NotesDeps") -> list[str]:
-    """A cross-sheet skip is valid only when its frozen source is accounted for."""
-    if not deps.db_path or deps.source_generation_id is None:
-        return []
-    from db import repository as repo
-    from notes import integrity, integrity_runner, source_repository as srepo
-    from notes.source_models import INPUT_KIND_PREPARED
-    from notes.source_sections import sections_for_note
-    from notes.source_write import PLACEMENT_CONFLICT_FINDING_PREFIX
-
-    with repo.db_session(deps.db_path) as conn:
-        generation = srepo.fetch_generation(conn, deps.source_generation_id)
-        if generation is None or generation["input_kind"] != INPUT_KIND_PREPARED:
-            return []
-        conflicted_parts: set[str] = set()
-        for flag in conn.execute(
-            "SELECT evidence FROM notes_review_flags WHERE run_id=? AND status='open' "
-            "AND substr(finding_id, 1, ?) = ?",
-            (deps.run_id, len(PLACEMENT_CONFLICT_FINDING_PREFIX),
-             PLACEMENT_CONFLICT_FINDING_PREFIX),
-        ):
-            try:
-                conflict = json.loads(flag["evidence"] or "{}")
-            except (TypeError, ValueError):
-                continue
-            if (isinstance(conflict, dict)
-                    and conflict.get("generation_id") == deps.source_generation_id):
-                conflicted_parts.update(conflict.get("block_ids") or [])
-                conflicted_parts.update(conflict.get("proposed_block_ids") or [])
-        snapshot = integrity_runner.build_input(
-            conn, deps.run_id, deps.source_generation_id,
-        )
-    by_number = {str(note.top_note_num): note for note in snapshot.notes}
-    errors = []
-    for finding in integrity.check_prose_note_coverage(snapshot):
-        try:
-            number = int(finding.note_num or "")
-        except ValueError:
-            continue
-        if (number not in deps.batch_note_nums
-                or number in deps.source_gap_notes):
-            continue
-        note = by_number.get(str(number))
-        if note is None:
-            continue
-        missing = set(finding.block_ids) - conflicted_parts
-        if not missing:
-            continue
-        sections = sections_for_note(
-            snapshot.blocks, note.source_note_id, str(number), note.title,
-        )
-        names = [section.section_id for section in sections
-                 if missing.intersection(section.block_ids)]
-        preview = ", ".join(names[:5])
-        if len(names) > 5:
-            preview += f", and {len(names) - 5} more"
-        part_preview = ", ".join(sorted(missing)[:5])
-        if len(missing) > 5:
-            part_preview += f", and {len(missing) - 5} more"
-        errors.append(
-            f"Note {number} has {len(missing)} source part(s) still unplaced "
-            f"in {preview} (block IDs: {part_preview}). "
-            "Place the complete disclosure sections on this "
-            "sheet, or ensure the other sheet has placed them before claiming "
-            "a cross-sheet skip."
-        )
-    return errors
-
-
 def _submit_coverage_receipt_impl(
     deps: "NotesDeps", receipt: CoverageReceipt,
 ) -> str:
@@ -2150,6 +2087,15 @@ def _submit_coverage_receipt_impl(
             flat |= labels
         sink_labels = flat
 
+    from notes.assigned_source import assess_batch_source
+    rows_by_label: dict[str, int] = {}
+    if deps.db_path and deps.source_generation_id is not None and deps.payload_sink:
+        entries = _ensure_label_index(deps)
+        for label in {p.chosen_row_label for p in deps.payload_sink}:
+            resolved = _resolve_row(entries, label)
+            if resolved is not None:
+                rows_by_label[label] = resolved[0]
+    split_notes, source_errors = assess_batch_source(deps, rows_by_label)
     errors = receipt.validate(
         batch_note_nums=[
             n for n in deps.batch_note_nums
@@ -2157,8 +2103,9 @@ def _submit_coverage_receipt_impl(
             and n not in deps.source_placement_conflict_notes
         ],
         written_row_labels=sink_labels,
+        source_backed_split_note_nums=split_notes,
     )
-    errors.extend(_prepared_batch_source_errors(deps))
+    errors.extend(source_errors)
     if errors:
         # Numbered bullet list so the model can address each error on
         # its retry without losing track of which one it's fixing. Close
@@ -2591,9 +2538,10 @@ def _list_source_sections_impl(
             note["title"] or "",
         ):
             pages = ", ".join(str(page) for page in sorted(section.pages))
+            parent = f"  [under {section.parent_title[:160]}]" if section.parent_title else ""
             lines.append(
                 f"  {section.section_id}  {section.title[:100]}  "
-                f"[{len(section.block_ids)} source parts; PDF pp. {pages}]"
+                f"[{len(section.block_ids)} source parts; PDF pp. {pages}]{parent}"
             )
     return _source_response(
         "\n".join(lines), f"{len(lines)} complete section(s) for note {note_num}.", offset,
@@ -2609,24 +2557,30 @@ def _view_source_blocks_impl(
 
     if not db_path or generation_id is None:
         return "No frozen source reading is available for this run."
-    unique_ids = list(dict.fromkeys(block_ids))
-    wanted = unique_ids[:_SOURCE_BLOCKS_PER_CALL]
     with repo.db_session(db_path) as conn:
-        by_id = {
-            b["block_id"]: b for b in srepo.fetch_blocks(conn, generation_id)
-        }
+        from notes.source_sections import expand_section_ids
+        from notes.source_write import load_blocks
+        available = load_blocks(conn, generation_id)
+        try:
+            unique_ids = list(dict.fromkeys(expand_section_ids(
+                available, srepo.fetch_notes(conn, generation_id), block_ids,
+            )))
+        except ValueError as exc:
+            return f"rejected: {exc}"
+        by_id = {b.block_id: b for b in available}
+    wanted = unique_ids[:_SOURCE_BLOCKS_PER_CALL]
     unknown = [b for b in wanted if b not in by_id]
     parts = []
     for bid in wanted:
         if bid not in by_id:
             continue
         block = by_id[bid]
-        locator = json.loads(block["locator_json"] or "{}")
+        locator = block.locator or {}
         uncertain = locator.get("capture_uncertain") or locator.get("capture_method") == "reconstructed"
         provenance = (" [best-effort reconstruction; original wording is uncertain; use captured content]"
                       if uncertain else "")
-        parts.append(f"--- {bid} ({block['block_kind']}){provenance} ---\n"
-                     f"{block['canonical_html'] or ''}")
+        parts.append(f"--- {bid} ({block.block_kind}){provenance} ---\n"
+                     f"{block.canonical_html or ''}")
     body = "\n".join(parts) if parts else (
         "None of those part ids exist in this selected batch. Call "
         "read_source_manifest first to see the real ids."
@@ -2670,23 +2624,26 @@ def _write_from_source_impl(
     except source_write.SourcePlacementConflict as exc:
         # The rejected write rolled back. Persist the competing proposal in a
         # fresh transaction so it survives into the reviewer packet.
-        with repo.db_session(deps.db_path) as conn:
-            source_write.record_placement_conflict(
-                conn,
-                run_id=deps.run_id,
-                conflict=exc,
-                source_pages=source_pages,
-            )
-        deps.source_placement_conflict_notes.update(exc.note_numbers)
-        deps.placement_conflicts_recorded = (
-            getattr(deps, "placement_conflicts_recorded", 0) + 1
-        )
-        diagnostic = str(exc)
-        if diagnostic not in deps.write_skip_errors:
-            deps.write_skip_errors.append(diagnostic)
-        return f"conflict recorded for review: {diagnostic}"
+        return _record_source_placement_conflict(deps, exc, source_pages)
     except source_write.SourceWriteError as exc:
         return f"rejected: {exc}"
+
+
+def _record_source_placement_conflict(deps: "NotesDeps", conflict, source_pages: List[int]) -> str:
+    """Retain a rejected proposal after its source-write transaction rolls back."""
+    from db import repository as repo
+    from notes import source_write
+
+    with repo.db_session(deps.db_path) as conn:
+        source_write.record_placement_conflict(
+            conn, run_id=deps.run_id, conflict=conflict, source_pages=source_pages,
+        )
+    deps.source_placement_conflict_notes.update(conflict.note_numbers)
+    deps.placement_conflicts_recorded = getattr(deps, "placement_conflicts_recorded", 0) + 1
+    diagnostic = str(conflict)
+    if diagnostic not in deps.write_skip_errors:
+        deps.write_skip_errors.append(diagnostic)
+    return f"conflict recorded for review: {diagnostic}"
 
 
 def _write_from_source_in_connection(
@@ -3012,6 +2969,8 @@ def _write_source_and_project_impl(
                                          if (c['sheet'], c['row']) != (sheet, move_from)]
             _merge_writer_result(deps, result)
             return committed_message, result
+    except source_write.SourcePlacementConflict as exc:
+        return _record_source_placement_conflict(deps, exc, source_pages)
     except source_write.SourceWriteError as exc:
         return f"rejected: {exc}"
     except Exception as exc:  # noqa: BLE001 - preserve a retryable tool result
@@ -3256,6 +3215,31 @@ def create_notes_agent(
         denomination=deps.denomination,
         prepared_source_required=deps.prepared_source_required,
     )
+    managed_assigned_source = (
+        template_type == NotesTemplateType.LIST_OF_NOTES
+        and deps.batch_note_nums is not None
+        and source_generation_id is not None and bool(db_path)
+    )
+    if managed_assigned_source:
+        system_prompt += (
+            "\n=== ASSIGNED WHOLE-NOTE PLACEMENT ===\n"
+            "First read each assigned note with read_assigned_note(note_num), "
+            "continuing every partial read with next_offset. Judge whole-note "
+            "or complete-subsection routing from the full captured content "
+            "and live field labels. When the whole note belongs in one field, call "
+            "write_assigned_note(note_num, destination_label), copying the "
+            "exact live label. The application supplies source IDs and row "
+            "coordinates; do not discover or copy them for this whole-note path. "
+            "When distinct complete subsections need separate routing or "
+            "some parts belong elsewhere, use list_source_sections, "
+            "view_source_blocks and write_note_from_source instead. Do not "
+            "use a whole-note write to repeat parts already routed elsewhere. "
+            "To fix your own wrong destination, use move_own_source_cell; "
+            "read_template supplies its source and destination rows and exact label. "
+            "A stale assigned-source response ends this pass: report the "
+            "source change rather than reusing old selections. Conflicts "
+            "remain for grounded review; continue other assigned notes.\n"
+        )
     # Fix B (2026-06-20): notes agents expose the same search_pdf_text tool, so
     # on a fully-scanned PDF they'd waste a turn on a guaranteed-empty search —
     # and notes fan out to many agents (incl. the Sheet-12 sub-agents), so the
@@ -3491,7 +3475,8 @@ def create_notes_agent(
         async def view_source_blocks(
             ctx: RunContext[NotesDeps], block_ids: List[str], offset: int = 0,
         ) -> str:
-            """Read up to 40 source parts. If partial, repeat the same block_ids
+            """Read named blocks or complete sections, up to 40 parts per batch.
+            If partial, repeat the same block_ids
             with offset=next_offset to continue, including within a large part.
             After those character pages, submit remaining block_ids as a new
             batch with offset=0; character offsets do not reach later blocks."""
@@ -3553,6 +3538,86 @@ def create_notes_agent(
             # `persist_notes_cells` rewrite is a no-op rather than a clobber.
             written = await _emit_payload_through_writer(ctx, [payload])
             return f"{message}\n{written}" if written else message
+
+        if managed_assigned_source:
+            @agent.tool
+            async def read_assigned_note(
+                ctx: RunContext[NotesDeps], note_num: int, offset: int = 0,
+            ) -> str:
+                """Read the full captured content of a note in your assigned batch.
+
+                Use this before choosing one destination for a whole note. No
+                source identifiers need copying. If partial, repeat the same
+                note_num with offset=next_offset until the content is complete.
+                Use section tools when the note requires separate routing.
+                """
+                from notes.assigned_source import assigned_note_content
+                from notes.source_write import SourceWriteError
+                try:
+                    label, body = await asyncio.to_thread(
+                        assigned_note_content, ctx.deps, note_num,
+                    )
+                except SourceWriteError as exc:
+                    return f"rejected: {exc}"
+                result = _source_response(body, label, offset)
+                if body and 0 <= offset < len(body):
+                    key = (ctx.deps.source_generation_id, note_num)
+                    with ctx.deps.io_lock:
+                        prefix = ctx.deps.assigned_source_read_prefixes.get(key, 0)
+                        if offset <= prefix:
+                            ctx.deps.assigned_source_read_prefixes[key] = max(
+                                prefix, min(offset + SOURCE_TOOL_RESPONSE_CAP, len(body)),
+                            )
+                return result
+
+            @agent.tool
+            async def write_assigned_note(
+                ctx: RunContext[NotesDeps], note_num: int, destination_label: str,
+            ) -> str:
+                """Place one complete assigned note in its chosen live field.
+
+                Read the complete note with read_assigned_note first, including
+                all character continuations; a partial read cannot authorize it.
+                Copy destination_label exactly from this filing's template.
+                The application supplies the complete captured source and row;
+                you judge the accounting destination. Do not use this for a
+                mixed note that needs section routing. To correct your own wrong
+                destination, use move_own_source_cell with rows from read_template.
+                A placement conflict is recorded for review; do not substitute
+                another destination.
+                """
+                from notes.assigned_source import assigned_note_content, assigned_note_target
+                from notes.source_write import SourceWriteError
+                try:
+                    _, body = await asyncio.to_thread(
+                        assigned_note_content, ctx.deps, note_num,
+                    )
+                    key = (ctx.deps.source_generation_id, note_num)
+                    with ctx.deps.io_lock:
+                        prefix = ctx.deps.assigned_source_read_prefixes.get(key, 0)
+                    if not body or prefix < len(body):
+                        return (
+                            "rejected: read the complete assigned note before "
+                            "choosing its destination. Call read_assigned_note "
+                            "from offset=0 and continue every returned next_offset."
+                        )
+                    row, label, block_ids = await asyncio.to_thread(
+                        assigned_note_target, ctx.deps, note_num, destination_label,
+                    )
+                except SourceWriteError as exc:
+                    return f"rejected: {exc}"
+                result = await write_note_from_source(
+                    ctx, ctx.deps.sheet_name, row, label, block_ids,
+                    evidence=f"Complete captured Note {note_num}; chosen destination: {label}.",
+                )
+                if not result.startswith("ok:"):
+                    return result
+                result_lines = result.splitlines()
+                lines = [line for line in result_lines[1:]
+                         if not line.startswith("saved source parts:")
+                         and not line.startswith("destination:")]
+                return (f"{result_lines[0]}\nPlaced complete Note {note_num} in {label}.\n"
+                        + "\n".join(lines)).rstrip()
 
         @agent.tool
         async def move_own_source_cell(ctx: RunContext[NotesDeps], source_row: int,
@@ -3804,8 +3869,11 @@ def create_notes_agent(
             Each entry is:
 
               - {"note_num": <int>, "action": "written",
-                 "row_labels": ["<one template label>"]}
-                for a note you wrote complete to exactly one field.
+                 "row_labels": ["<template label>"]}
+                for a whole note in one field. Complete source-backed mixed
+                subsections may list their separate live destination labels;
+                every substantive part must be accounted for. Authored prose
+                remains one complete top-level note in exactly one field.
               - {"note_num": <int>, "action": "skipped",
                 "reason": "<one sentence>"}
                 ONLY for a note that belongs on a DIFFERENT sheet
