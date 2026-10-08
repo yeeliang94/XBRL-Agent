@@ -3033,6 +3033,50 @@ Prepared manifests reject unresolved ownership, broken links, unassessed pages
 and disagreement with Scout. Nonconsecutive note numbers are valid after that
 validated reconciliation. Source structure and emphasis capture precedes
 extraction; later MBRS formatting remains style-only.
+PDF preparation verifies source-to-candidate relationships for each table
+section: periods, exact column headings and units, and every label/amount row
+and subtotal. Separate-year or maturity sections retain their own headings.
+The receipt records source and candidate relationships, agreement or
+uncertainty, and precise repair instructions. A demonstrated mismatch, or a
+row whose occupied column count differs from its table
+(`_table_shape_issues`, deterministic; single-cell heading or label rows are
+exempt; a label followed only by blank cells is also exempt when the
+complete independent assessment and table relationships confirm source
+agreement without uncertainties. Missing evidence or a demonstrated mismatch
+keeps that row subject to repair. A lone amount or dash is never exempt),
+overrides a positive Boolean verdict and triggers focused repair.
+Table shape checks bound cell spans and cumulative row width to
+`_MAX_TABLE_SPAN` before allocating occupied columns. Oversized geometry becomes
+a repair finding and remains unresolved if it survives repair; source HTML is
+not silently truncated. A third round
+runs only while specific table findings remain and the last repair changed the
+page; each re-check receives the previous findings. A finding that survives is
+published as named best-effort uncertainty, never verified, because a checker
+mismatch is a judgement that can be wrong and must not discard the document.
+Missing or uncertain relationship evidence becomes best-effort source
+uncertainty, never a clean verification result. A page-content failure lets
+independent pages finish and stay resumable, and so does invalid model output
+for one page (`UnexpectedModelBehavior`). An exhausted provider retry
+(`TranscriptionRetryExhausted`) or any other provider/transport error stops
+remaining pages at once, including errors that `transcribe_pages` would
+otherwise report only as a failed page. A page join is accepted on `verified`
+and `complete` with no stated uncertainty (`_JOIN_ACCEPTANCE_KEYS`); the join
+prompt does not define `readable`, whose omitted default had marked confirmed
+joins and both neighbouring pages uncertain (run 346: 21 of 27 uncertain pages). Each capture and verification
+response, candidate HTML and rotation are durably retained before interpretation,
+including rejected candidates. Checkpoint page attempts reference atomic,
+content-addressed JSON evidence files beside the checkpoint; complete receipts
+are preserved without repeatedly embedding them in progress snapshots.
+Prose-only pages need no table evidence for a positive or omitted table verdict.
+A negative verdict stays unresolved because it can identify an omitted source table. Distinct
+financial entries retain separate rows; legitimate wrapped and spanning cells
+remain valid. Capture preserves genuine text emphasis; graphical table rules
+belong to the border formatter. Preparation contract identity invalidates older
+captures. Pinned by the table repair, disputed-mismatch publication, third-round,
+shape-check, evidence retention and multiline cases in
+`tests/test_document_preparation.py`, and the bounded-timeout and malformed-batch
+cases in `tests/test_document_preparation_batching.py`. Offline tests establish enforcement,
+not live model accuracy.
 Prepared page receipts must cover the original PDF page count, not just their
 own list length. Incomplete assessments remain failures even when text is
 unreadable. Any dark ink, including short disclosures, goes through capture.
