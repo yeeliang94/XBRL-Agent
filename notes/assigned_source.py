@@ -230,7 +230,14 @@ def _source_backed_split_notes(conn, deps: "NotesDeps", snapshot: "IntegrityInpu
         if not atoms:
             continue
         for atom in atoms:
-            atom_targets = [locations.get(bid, set()) for bid in atom]
+            # Approved capital prose may also live in its numeric template.
+            # Its List-of-Notes placement still must keep this section intact.
+            atom_targets = [
+                {coord for coord in locations.get(bid, set()) if coord[0] == deps.sheet_name}
+                if bid in snapshot.approved_duplicate_block_ids
+                else locations.get(bid, set())
+                for bid in atom
+            ]
             if (not all(len(coords) == 1 for coords in atom_targets)
                     or len(set.union(*atom_targets)) != 1):
                 valid = False
