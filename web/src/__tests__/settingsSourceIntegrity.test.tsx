@@ -36,9 +36,12 @@ describe("Automatic source preservation", () => {
     renderForm({ notes_source_integrity: mode });
     expect(await screen.findByText(/PDF and Word documents are prepared automatically/)).toBeTruthy();
     expect(screen.queryByLabelText(/Word source handling mode/i)).toBeNull();
-    fireEvent.click(await screen.findByLabelText(/Reuse prior-year hints for repeat entities/i));
+    expect(screen.queryByLabelText(/Reuse prior-year hints/i)).toBeNull();
+    expect(screen.getByText(/Prepared documents with notes are checked automatically/)).toBeTruthy();
+    fireEvent.click(await screen.findByLabelText(/Automatically review extracted notes/i));
     fireEvent.click(screen.getByRole("button", { name: /save shared settings/i }));
     await waitFor(() => expect(saveSpy).toHaveBeenCalled());
     expect(saveSpy.mock.calls[0][0]).not.toHaveProperty("notes_source_integrity");
+    expect(saveSpy.mock.calls[0][0]).not.toHaveProperty("entity_memory");
   });
 });

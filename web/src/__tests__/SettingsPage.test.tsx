@@ -22,6 +22,7 @@ vi.mock("../lib/api", async () => {
   };
 });
 
+import { getSettings, updateSettings } from "../lib/api";
 import { SettingsPage } from "../pages/SettingsPage";
 
 beforeEach(() => vi.clearAllMocks());
@@ -47,13 +48,13 @@ describe("SettingsPage", () => {
   test("admin sees General, Account, and Users tabs", () => {
     render(<SettingsPage isAdmin={true} />);
     const tabs = within(tablist()).getAllByRole("tab");
-    expect(tabs.map((t) => t.textContent)).toEqual(["General", "Agent instructions", "Notes appearance", "Account", "Users"]);
+    expect(tabs.map((t) => t.textContent)).toEqual(["General", "Agent instructions", "Extraction", "Advanced", "Notes appearance", "Account", "Users"]);
   });
 
   test("non-admin does not see the Users tab", () => {
     render(<SettingsPage isAdmin={false} />);
     const tabs = within(tablist()).getAllByRole("tab");
-    expect(tabs.map((t) => t.textContent)).toEqual(["General", "Agent instructions", "Notes appearance", "Account"]);
+    expect(tabs.map((t) => t.textContent)).toEqual(["General", "Agent instructions", "Extraction", "Advanced", "Notes appearance", "Account"]);
     expect(within(tablist()).queryByText("Users")).toBeNull();
   });
 
@@ -86,31 +87,33 @@ describe("SettingsPage", () => {
 
   test("the Model field is a picker of known models, not free text (D4)", async () => {
     render(<SettingsPage isAdmin={true} />);
+    fireEvent.click(within(tablist()).getByRole("tab", { name: "Extraction" }));
     // The field starts as a text input and flips to a <select> once the
     // async settings load supplies available_models.
     await waitFor(() => {
       expect((screen.getByLabelText("Model") as HTMLElement).tagName).toBe("SELECT");
     });
     const modelSelect = screen.getByLabelText("Model") as HTMLSelectElement;
-    expect(within(modelSelect).getByText(/GPT-5\.4 \(openai\.gpt-5\.4\)/)).toBeTruthy();
-    expect(within(modelSelect).getByText(/Gemini 3 Pro \(gemini-3-pro\)/)).toBeTruthy();
+    expect(within(modelSelect).getByText(/GPT-5\.4/)).toBeTruthy();
+    expect(within(modelSelect).getByText(/Gemini 3 Pro/)).toBeTruthy();
     expect(modelSelect.value).toBe("openai.gpt-5.4");
   });
 
-  test("ArrowRight moves selection along the tablist", () => {
+  test("ArrowDown moves selection along the sidebar", () => {
     render(<SettingsPage isAdmin={true} />);
     const tabs = within(tablist()).getAllByRole("tab");
     tabs[0].focus();
-    fireEvent.keyDown(tabs[0], { key: "ArrowRight" });
+    fireEvent.keyDown(tabs[0], { key: "ArrowDown" });
     expect(tabs[1].getAttribute("aria-selected")).toBe("true");
   });
 
-  test("uses Form mode (840px) with one page-level h1 (CS5)", () => {
+  test("uses Standard mode with one page-level h1 (CS5)", () => {
     render(<SettingsPage isAdmin={false} />);
     const h1 = screen.getByRole("heading", { level: 1, name: "Settings" });
     expect(h1).toBeInTheDocument();
     const container = document.querySelector(".settings-page") as HTMLElement;
-    expect(container.style.maxWidth).toBe("840px");
+    expect(tablist()).toHaveAttribute("aria-orientation", "vertical");
+    expect(container.style.maxWidth).toBe("1500px");
   });
 
   test("active tab uses dark text and a quiet surface without an indicator line (CS5)", () => {
@@ -132,8 +135,72 @@ describe("SettingsPage", () => {
     expect(account).not.toHaveAttribute("data-pointer-focus");
   });
 
+  test("shared edits survive section changes and save together", async () => {
+    render(<SettingsPage isAdmin />);
+    await screen.findByDisplayValue("https://proxy.example.com");
+    fireEvent.click(within(tablist()).getByRole("tab", { name: "Extraction" }));
+    fireEvent.change(screen.getByLabelText("Maximum turns"), { target: { value: "25" } });
+    fireEvent.click(within(tablist()).getByRole("tab", { name: "Advanced" }));
+    expect(screen.getByRole("heading", { name: "Automatic review" })).toBeVisible();
+    expect(screen.getByLabelText("Maximum turns")).not.toBeVisible();
+    fireEvent.change(screen.getByLabelText("Cross-check tolerance (RM)"), { target: { value: "2" } });
+    fireEvent.click(within(tablist()).getByRole("tab", { name: "Extraction" }));
+    expect(screen.getByLabelText("Maximum turns")).toHaveValue(25);
+    fireEvent.click(screen.getByRole("button", { name: "Save shared settings" }));
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ scout_max_turns: 25, tolerance_rm: 2 })));
+  });
+
+  test("reset requires confirmation, cancels safely, and reloads defaults", async () => {
+    render(<SettingsPage isAdmin />);
+    await screen.findByDisplayValue("https://proxy.example.com");
+    fireEvent.click(screen.getByRole("button", { name: "Reset settings to defaults" }));
+    const dialog = screen.getByRole("dialog", { name: "Reset shared settings?" });
+    expect(dialog).toHaveTextContent("GPT-6 Luna");
+    expect(dialog).toHaveTextContent("600 seconds and 40 turns");
+    expect(dialog).toHaveTextContent("for everyone");
+    expect(dialog).toHaveTextContent("The legacy source-check mode, service address");
+    expect(dialog).toHaveTextContent("service address, access key, team instructions, accounts and existing runs are kept");
+    expect(updateSettings).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(updateSettings).not.toHaveBeenCalled();
+    const original = await getSettings();
+    vi.mocked(getSettings).mockResolvedValueOnce({ ...original, scout_max_turns: 40, model: "openai.global.gpt-6-luna" });
+    fireEvent.click(screen.getByRole("button", { name: "Reset settings to defaults" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reset settings" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const body = vi.mocked(updateSettings).mock.calls[0][0];
+    expect(body).toEqual({ reset_shared_defaults: true });
+    fireEvent.click(within(tablist()).getByRole("tab", { name: "Extraction" }));
+    expect(screen.getByLabelText("Model")).toHaveValue("openai.global.gpt-6-luna");
+    expect(screen.getByLabelText("Maximum turns")).toHaveValue(40);
+  });
+
+  test("a failed reset keeps edits and offers another attempt without claiming success", async () => {
+    vi.mocked(updateSettings).mockRejectedValueOnce(new Error("Reset unavailable"));
+    render(<SettingsPage isAdmin />);
+    await screen.findByDisplayValue("https://proxy.example.com");
+    fireEvent.click(within(tablist()).getByRole("tab", { name: "Extraction" }));
+    fireEvent.change(screen.getByLabelText("Maximum turns"), { target: { value: "27" } });
+    fireEvent.click(within(tablist()).getByRole("tab", { name: "General" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reset settings to defaults" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reset settings" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Reset unavailable");
+    expect(screen.queryByText("Saved", { exact: true })).toBeNull();
+    expect(screen.getByRole("button", { name: "Reset settings to defaults" })).toBeEnabled();
+    fireEvent.click(within(tablist()).getByRole("tab", { name: "Extraction" }));
+    expect(screen.getByLabelText("Maximum turns")).toHaveValue(27);
+  });
+
+  test("non-admin cannot reset shared settings", async () => {
+    render(<SettingsPage isAdmin={false} />);
+    await screen.findByDisplayValue("https://proxy.example.com");
+    expect(screen.queryByRole("button", { name: "Reset settings to defaults" })).toBeNull();
+  });
+
   test("source preservation needs no settings selector", async () => {
     render(<SettingsPage isAdmin={true} />);
+    fireEvent.click(within(tablist()).getByRole("tab", { name: "Extraction" }));
     expect(await screen.findByText(/PDF and Word documents are prepared automatically/)).toBeInTheDocument();
     expect(screen.queryByLabelText("Word source handling mode")).toBeNull();
   });

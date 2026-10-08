@@ -101,8 +101,8 @@ LLM_PROXY_API_KEY=             # proxy auth key; start.sh sets the local-dev mas
 GOOGLE_API_KEY=                # real Google key; also the proxy auth key on Windows (no LLM_PROXY_API_KEY there)
 
 # Model defaults
-TEST_MODEL=openai.global.gpt-5.6-luna
-SCOUT_MODEL=openai.global.gpt-5.6-luna  # legacy fallback; Settings → Document scan wins
+TEST_MODEL=openai.global.gpt-6-luna
+SCOUT_MODEL=openai.global.gpt-6-luna  # legacy fallback; Settings → Document scan wins
 
 # Auth (gotcha #24). AUTH_MODE unset = real email+password login; AUTH_MODE=dev
 # auto-sessions as dev@localhost (CI / offline only; refuses to boot on Azure).
@@ -121,8 +121,8 @@ SESSION_SECRET=                # REQUIRED in prod (startup fails without it); de
 # XBRL_TEMPLATE_SUMMARY_COMPACT=0  # read_template: one line per ROW (SOFP 80k→35k chars)
 # XBRL_TEMPLATE_IN_PROMPT=0        # face agents: template in the system prompt; read_template returns a pointer
 # XBRL_MAX_CONCURRENT_AGENTS=0     # cap on top-level agents running at once; 0 = unbounded
-# XBRL_SCOUT_WALLCLOCK_S=300       # whole document-scan deadline; 0 disables
-# XBRL_SCOUT_MAX_TURNS=20          # Scout model responses; Settings caps this at 40
+# XBRL_SCOUT_WALLCLOCK_S=600       # whole document-scan deadline; 0 disables
+# XBRL_SCOUT_MAX_TURNS=40          # Scout model responses; Settings caps this at 40
 # CLI: scout is ON by default (`--no-scout` to skip). Cost: run_agents.total_cost is
 # still the PRE-CACHE estimate; `scripts/report_run_economics.py` prints the
 # cache-adjusted figure beside it (pricing.estimate_cost_cache_adjusted).
@@ -767,8 +767,8 @@ outcomes even while the parent run remains a draft. Pinned by
 `web/src/__tests__/DocumentPreparation.test.tsx`.
 
 The Settings page exposes the Scout's whole-run deadline and model-turn cap as
-`XBRL_SCOUT_WALLCLOCK_S` (default 300 seconds; 0 disables) and
-`XBRL_SCOUT_MAX_TURNS` (default 20; maximum 40). Both are resolved at the start
+`XBRL_SCOUT_WALLCLOCK_S` (default 600 seconds; 0 disables) and
+`XBRL_SCOUT_MAX_TURNS` (default 40; maximum 40). Both are resolved at the start
 of every new Scout run, so a saved change applies without a server restart.
 The maximum remains below PydanticAI's 50-request ceiling (gotcha #18).
 
@@ -3028,20 +3028,16 @@ a template, agents return block ids instead of prose, and ordinary code builds
 the cell and counts what was used. Plan:
 docs/PLAN-notes-source-integrity-build.md. Schema is gotcha #11 (v35/v36).
 
-**Operator-settable from Settings since 2026-08-04** (`notes_source_integrity`
-on `/api/settings` + `/api/config`, "Word source handling" in the General tab).
-All three modes are offered — `shadow` only earns its keep as a step towards
-`enforce`. The POST validates against `IntegrityMode` and 400s an unknown value
-**because `integrity_mode()` fails CLOSED to `off`**: an unvalidated write would
-read as saved in the form and silently do nothing on the next run. The picker's
-vocabulary is served (`notes_source_integrity_choices`) and the picker BUILDS
-its options from it — a mode the frontend doesn't know must still render (as
-its raw value) and, above all, survive a save. Hardcoding the three modes made
-a future one display as `off` and then be written back as `off` on the next
-save of any unrelated setting, silently downgrading the backend's real mode
-(peer review, 2026-08-04). `SourceIntegrityMode` is therefore a plain string,
-not a union. Pinned by `tests/test_settings_api.py` and
-`web/src/__tests__/settingsSourceIntegrity.test.tsx`.
+**Current Settings contract.** The legacy rollout mode is available through
+`notes_source_integrity` on `/api/settings` and `/api/config`; the POST validates
+against `IntegrityMode` and rejects unknown values. The ordinary Settings form
+shows source-integrity information without a mode selector. Unrelated saves and
+the shared-defaults reset preserve the legacy mode. Prepared-document runs
+force `IntegrityMode.ENFORCE` independently of that setting; prepared notes
+are checked automatically and incomplete assessments remain unresolved.
+Pinned by `tests/test_settings_api.py`, `tests/test_preparation_integration.py`,
+`web/src/__tests__/settingsSourceIntegrity.test.tsx`, and
+`web/src/__tests__/SettingsPage.test.tsx`.
 
 **Prompt activation (2026-08-06) — the tools are now TAUGHT.** Phases 1–10
 built the block tools, renderer and checks, but no prompt ever mentioned them:

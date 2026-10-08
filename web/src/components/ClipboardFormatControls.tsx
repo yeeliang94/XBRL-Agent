@@ -14,6 +14,11 @@ export function ClipboardFormatControls({ value, onChange, idPrefix = "fmt", hou
   onReset?: (field: Field) => void;
   disabled?: boolean;
 }) {
+  const fillPresets: Array<[string, string]> = [["transparent", "No fill"], ["#f4f4f4", "Light grey"], ["#e6eef6", "Light blue"]];
+  const fill = value.headerFill ?? "transparent";
+  const isCustomFill = !fillPresets.some(([colour]) => colour === fill);
+  const pickerColour = /^#[0-9a-f]{6}$/i.test(fill) ? fill : /^#[0-9a-f]{3}$/i.test(fill)
+    ? "#" + fill.slice(1).split("").map((c) => c + c).join("") : "#e8edf2";
   const patch = (partial: Partial<ClipboardFormatOptions>) => onChange({ ...value, ...partial });
   const field = (key: Field, label: string, control: ReactNode, suffix = "") => {
     const custom = overrides && Object.prototype.hasOwnProperty.call(overrides, key);
@@ -71,12 +76,21 @@ export function ClipboardFormatControls({ value, onChange, idPrefix = "fmt", hou
     <h3 style={styles.heading}>Tables</h3>
     <div style={styles.grid}>
       {select("borderStyle", "Table border", value.borderStyle, [["single", "Single line"], ["double", "Thick single line"], ["none", "No border"]], (v) => patch({ borderStyle: v as BorderStyle }))}
+      {select("headerFill", "Header fill", isCustomFill ? "custom" : fill, [...fillPresets, ["custom", "Custom colour"]], (v) => {
+        patch({ headerFill: v === "custom" ? pickerColour : v });
+      })}
+      <div style={styles.field}>
+        <div style={styles.labelRow}><label style={ui.fieldLabel} htmlFor={`${idPrefix}-header-fill-colour`}>Custom fill colour</label></div>
+        <input id={`${idPrefix}-header-fill-colour`} type="color" value={pickerColour}
+          disabled={disabled || !isCustomFill} style={styles.input}
+          onInput={(e) => patch({ headerFill: e.currentTarget.value })} />
+        <span style={styles.origin}>{isCustomFill ? "" : "Choose Custom colour to use the picker."}</span>
+      </div>
       {select("headerBold", "Header emphasis", value.headerBold === false ? "false" : "true", [["true", "Bold"], ["false", "Regular"]], (v) => patch({ headerBold: v === "true" }))}
     </div>
     <details style={{ marginTop: 8 }}><summary style={{ ...ui.fieldLabel, cursor: "pointer", padding: "8px 0" }}>Advanced formatting</summary>
       <div style={{ ...styles.grid, marginTop: 8 }}>
         {select("borderColor", "Border colour", value.borderColor ?? "", colorOptions(value.borderColor, [["", "Default"], ["#000000", "Black"], ["#c9c9c9", "Grey"], ["#fd5108", "Orange"], ["#185fa5", "Blue"]]), (v) => patch({ borderColor: v || undefined }))}
-        {select("headerFill", "Header fill", value.headerFill ?? "", colorOptions(value.headerFill, [["", "Default"], ["transparent", "None"], ["#f4f4f4", "Grey"], ["#e6eef6", "Light blue"]]), (v) => patch({ headerFill: v || undefined }))}
         {number("headingSizePt", "Heading size (pt)", 6, 24)}
         {select("headingWeight", "Heading weight", String(value.headingWeight ?? ""), [["", "Default"], ["400", "Regular"], ["600", "Semi-bold"], ["700", "Bold"]], (v) => patch({ headingWeight: v ? Number(v) : undefined }))}
         {select("listMarker", "Bullet marker", value.listMarker ?? "", [["", "Default"], ["disc", "Disc"], ["dash", "Dash"], ["decimal", "Numbered"]], (v) => patch({ listMarker: v ? v as ListMarker : undefined }))}
@@ -93,6 +107,6 @@ const styles: Record<string, CSSProperties> = {
   labelRow: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, minHeight: 44 },
   input: { ...ui.input, width: "100%", minWidth: 0 },
   select: { ...ui.select, width: "100%", minWidth: 0 },
-  origin: { height: 20, fontSize: 13, color: pwc.grey700 },
+  origin: { minHeight: 20, fontSize: 13, color: pwc.grey700 },
   heading: { fontSize: 14, fontWeight: pwc.weight.semibold, margin: "0 0 12px", color: pwc.grey900 },
 };

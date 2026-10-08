@@ -278,9 +278,9 @@ def test_face_prompt_omits_prior_block_when_absent():
 # --- settings toggle -------------------------------------------------------
 
 
-def test_entity_memory_enabled_default_on(monkeypatch):
+def test_entity_memory_disabled_default(monkeypatch):
     monkeypatch.delenv("XBRL_ENTITY_MEMORY", raising=False)
-    assert em.entity_memory_enabled() is True
+    assert em.entity_memory_enabled() is False
 
 
 def test_entity_memory_disabled_when_false(monkeypatch):

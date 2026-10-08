@@ -7335,6 +7335,64 @@ async def run_multi_agent_stream(
                             except (asyncio.CancelledError, GeneratorExit):
                                 client_connected = False
                     correction_outcome = await correction_task
+                    # Settle the reviewer before re-export, notes formatting or
+                    # cleanup. Its saved status must agree with its finished feed.
+                    if correction_run_agent_id is not None and db_conn is not None:
+                        try:
+                            if correction_outcome.get("error"):
+                                status = "failed"
+                            else:
+                                status = "completed"
+                            # RUN-REVIEW P2-3: even when correction failed,
+                            # whatever turns it ran are real spend; persist
+                            # the captured totals (defaulted 0/0 if unset).
+                            _co = correction_outcome or {}
+                            repo.finish_run_agent(
+                                db_conn, correction_run_agent_id,
+                                status=status,
+                                workbook_path=None,
+                                total_tokens=int(_co.get("total_tokens", 0)),
+                                total_cost=float(_co.get("total_cost", 0.0)),
+                                # Run-168 QA fix: turn/tool-call rollups used
+                                # to be omitted here, so the Activity row read
+                                # "0 turns · 0 tool calls" beside real tokens.
+                                prompt_tokens=int(_co.get("prompt_tokens", 0)),
+                                completion_tokens=int(
+                                    _co.get("completion_tokens", 0)),
+                                reasoning_tokens=int(
+                                    _co.get("thinking_tokens", 0)),
+                                turn_count=int(_co.get("turns_used", 0)),
+                                tool_call_count=int(
+                                    _co.get("tool_call_count", 0)),
+                                # Step 0.1 companion fix: cache rollups were
+                                # silently 0 for every CORRECTION row.
+                                cache_read_tokens=int(
+                                    _co.get("cache_read_tokens", 0)),
+                                cache_write_tokens=int(
+                                    _co.get("cache_write_tokens", 0)),
+                                # v17 (item 9): classify the reviewer outcome.
+                                error_type=_error_type_for_outcome(
+                                    _co.get("error")),
+                            )
+                            # Plan agent-efficiency Step 0.1: the reviewer used to
+                            # collect per-turn rows and discard them — only the
+                            # rollups landed, so the CORRECTION agent had no
+                            # node_kind breakdown to measure. Same advisory
+                            # contract as the extraction/notes sites: inside this
+                            # try so a telemetry write can never fault the run.
+                            # NOTES_VALIDATOR follows the same persistence contract
+                            # inside its lifecycle. The formatter remains non-agent work.
+                            repo.insert_agent_turns(
+                                db_conn, correction_run_agent_id,
+                                _co.get("turn_records") or [],
+                            )
+                            db_conn.commit()
+                        except Exception:
+                            logger.warning(
+                                "Failed to finalize CORRECTION run_agent row",
+                                exc_info=True,
+                            )
+
                 except asyncio.CancelledError:
                     # User hit Stop All during the reviewer. Mirror the proven
                     # coordinator-cancel path (return cleanly, never re-raise):
@@ -7920,72 +7978,11 @@ async def run_multi_agent_stream(
                     exc_info=True,
                 )
 
-        # Persist the face reviewer and cross-check results. Extraction rows
+        # Persist final cross-check results. Extraction and reviewer rows
         # were finalized after merging; each notes-review lifecycle finalizes
         # its own row, including later source-repair attempts.
         if db_conn is not None and run_id is not None:
             try:
-                # Peer-review C1: finalise pseudo-agent rows so History
-                # doesn't show them stuck at the initial "running" status.
-                # `finish_run_agent` is safe to call even if events were
-                # persisted live — it just updates the terminal status.
-                if correction_run_agent_id is not None:
-                    try:
-                        if correction_outcome is None:
-                            status = "pending"
-                        elif correction_outcome.get("error"):
-                            status = "failed"
-                        else:
-                            status = "completed"
-                        # RUN-REVIEW P2-3: even when correction failed,
-                        # whatever turns it ran are real spend; persist
-                        # the captured totals (defaulted 0/0 if unset).
-                        _co = correction_outcome or {}
-                        repo.finish_run_agent(
-                            db_conn, correction_run_agent_id,
-                            status=status,
-                            workbook_path=None,
-                            total_tokens=int(_co.get("total_tokens", 0)),
-                            total_cost=float(_co.get("total_cost", 0.0)),
-                            # Run-168 QA fix: turn/tool-call rollups used
-                            # to be omitted here, so the Activity row read
-                            # "0 turns · 0 tool calls" beside real tokens.
-                            prompt_tokens=int(_co.get("prompt_tokens", 0)),
-                            completion_tokens=int(
-                                _co.get("completion_tokens", 0)),
-                            reasoning_tokens=int(
-                                _co.get("thinking_tokens", 0)),
-                            turn_count=int(_co.get("turns_used", 0)),
-                            tool_call_count=int(
-                                _co.get("tool_call_count", 0)),
-                            # Step 0.1 companion fix: cache rollups were
-                            # silently 0 for every CORRECTION row.
-                            cache_read_tokens=int(
-                                _co.get("cache_read_tokens", 0)),
-                            cache_write_tokens=int(
-                                _co.get("cache_write_tokens", 0)),
-                            # v17 (item 9): classify the reviewer outcome.
-                            error_type=_error_type_for_outcome(
-                                _co.get("error")),
-                        )
-                        # Plan agent-efficiency Step 0.1: the reviewer used to
-                        # collect per-turn rows and discard them — only the
-                        # rollups landed, so the CORRECTION agent had no
-                        # node_kind breakdown to measure. Same advisory
-                        # contract as the extraction/notes sites: inside this
-                        # try so a telemetry write can never fault the run.
-                        # NOTES_VALIDATOR follows the same persistence contract
-                        # inside its lifecycle. The formatter remains non-agent work.
-                        repo.insert_agent_turns(
-                            db_conn, correction_run_agent_id,
-                            _co.get("turn_records") or [],
-                        )
-                    except Exception:
-                        logger.warning(
-                            "Failed to finalize CORRECTION run_agent row",
-                            exc_info=True,
-                        )
-
                 # Persist cross-check results — the post-reviewer state, which
                 # REPLACES the initial-pass rows written before the reviewer
                 # launched. Appending here would leave the run carrying both

@@ -850,7 +850,8 @@ def test_diagnostics_zip_is_run_scoped_and_redacted(api_env, monkeypatch, status
     assert json.loads((run_dir / "SOFP_conversation_trace.json").read_text()) == trace
 
 
-def test_diagnostics_zip_reports_missing_and_incomplete_files(api_env, monkeypatch):
+@pytest.mark.parametrize("with_output", [True, False])
+def test_diagnostics_zip_reports_missing_and_incomplete_files(api_env, monkeypatch, with_output):
     from io import BytesIO
     from zipfile import ZipFile
     client, db_path, out = api_env
@@ -858,10 +859,10 @@ def test_diagnostics_zip_reports_missing_and_incomplete_files(api_env, monkeypat
     run_dir = out / "partial"
     run_dir.mkdir()
     (run_dir / "SOFP_conversation_trace.json").write_text('{"unfinished":')
-    run_id = _seed_run(db_path, session_id="partial", pdf_filename="source.pdf", output_dir=str(run_dir))
+    run_id = _seed_run(db_path, session_id="partial", pdf_filename="source.pdf", output_dir=str(run_dir) if with_output else "", status="failed")
     with ZipFile(BytesIO(client.get(f"/api/runs/{run_id}/diagnostics").content)) as archive:
         manifest = json.loads(archive.read("manifest.json"))
-        assert {item["file"] for item in manifest["unavailable"]} == {"traces/SOFP_conversation_trace.json", "application_logs.json"}
+        assert {item["file"] for item in manifest["unavailable"]} == {"traces/SOFP_conversation_trace.json" if with_output else "traces/", "application_logs.json"}
         assert "run.json" in archive.namelist()
     assert client.get("/api/runs/9999/diagnostics").status_code == 404
 

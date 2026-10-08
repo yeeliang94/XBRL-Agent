@@ -169,7 +169,7 @@ describe("SettingsModal — P3 enhancements", () => {
     expect(screen.getByText(/access key for your organisation/)).toBeInTheDocument();
     // Model helper (the field is a text input here since this mock returns no
     // available_models; D4 shows a picker when models are present).
-    expect(screen.getByText(/which ai model runs the extraction/i)).toBeInTheDocument();
+    expect(screen.getByText(/The default model for new runs/i)).toBeInTheDocument();
   });
 
   test("save blocks invalid values even when user never blurred (e.g., types then hits Enter)", async () => {
@@ -208,33 +208,14 @@ describe("SettingsModal — P3 enhancements", () => {
     expect(testConnection).not.toHaveBeenCalled();
   });
 
-  test("entity memory toggle defaults to ON when entity_memory is absent from settings", async () => {
-    // Older backends omit the field; `s.entity_memory !== false` must read as on.
-    renderModal(); // defaultSettings carries no entity_memory key
-    await waitFor(() =>
-      expect(screen.getByLabelText("Reuse prior-year hints for repeat entities")).toBeInTheDocument());
-    expect(screen.getByLabelText("Reuse prior-year hints for repeat entities")).toBeChecked();
-  });
-
-  test("entity memory toggle reflects an explicit entity_memory:false from settings", async () => {
-    renderModal({ entity_memory: false });
-    await waitFor(() =>
-      expect(screen.getByLabelText("Reuse prior-year hints for repeat entities")).toBeInTheDocument());
-    expect(screen.getByLabelText("Reuse prior-year hints for repeat entities")).not.toBeChecked();
-  });
-
-  test("toggling entity memory off sends entity_memory:false in the save body", async () => {
-    const { saveSettings } = renderModal();
-    await waitFor(() =>
-      expect(screen.getByLabelText("Reuse prior-year hints for repeat entities")).toBeInTheDocument());
-
-    fireEvent.click(screen.getByLabelText("Reuse prior-year hints for repeat entities"));
+  test.each([undefined, true, false])("prior hints have no control and unrelated saves preserve them (saved: %s)", async (entity_memory) => {
+    const { saveSettings } = renderModal({ entity_memory });
+    const review = await screen.findByLabelText("Automatically run the reviewer after extraction");
+    expect(screen.queryByLabelText("Reuse prior-year hints for repeat entities")).toBeNull();
+    fireEvent.click(review);
     fireEvent.click(screen.getByRole("button", { name: /save/i }));
-
     await waitFor(() => expect(saveSettings).toHaveBeenCalled());
-    expect(saveSettings).toHaveBeenCalledWith(
-      expect.objectContaining({ entity_memory: false }),
-    );
+    expect(vi.mocked(saveSettings).mock.calls[0][0]).not.toHaveProperty("entity_memory");
   });
 
   test("auto review toggle defaults to ON when auto_review is absent from settings", async () => {

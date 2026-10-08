@@ -73,7 +73,7 @@ describe("thinking level in Settings", () => {
 
   test("per-role model defaults are editable and submitted", async () => {
     fireEvent.click(await screen.findByRole("button", {
-      name: /customize role-specific models/i,
+      name: /customize models by task/i,
     }));
     const scout = await screen.findByLabelText(/Default model for Scout/i);
     expect((scout as HTMLSelectElement).value).toBe(
@@ -90,12 +90,12 @@ describe("thinking level in Settings", () => {
     );
   });
 
-  test("one action migrates every role to GPT-5.6 Luna and enables summaries", async () => {
+  test("one action migrates every role to GPT-6 Luna and enables summaries", async () => {
     fireEvent.click(await screen.findByRole("button", {
-      name: /use gpt-5\.6 luna for every role/i,
+      name: /use gpt-6 luna for every role/i,
     }));
     const body = await save();
-    expect(body.model).toBe("openai.global.gpt-5.6-luna");
+    expect(body.model).toBe("openai.global.gpt-6-luna");
     expect(body.reasoning_summary).toBe("auto");
     const overrides = body.default_models as Record<string, string>;
     expect(overrides.scout).toBe("");
@@ -105,7 +105,7 @@ describe("thinking level in Settings", () => {
 
   test("a role can return to following the global model", async () => {
     fireEvent.click(await screen.findByRole("button", {
-      name: /customize role-specific models/i,
+      name: /customize models by task/i,
     }));
     const scout = await screen.findByLabelText(/Default model for Scout/i);
     fireEvent.change(scout, { target: { value: "" } });
@@ -143,7 +143,7 @@ describe("thinking level in Settings", () => {
     const section = select.closest("details");
     expect(section).not.toBeNull();
     expect(section).not.toHaveAttribute("open");
-    expect(section!.querySelector("summary")).toHaveTextContent("AI reasoning (advanced)");
+    expect(section!.querySelector("summary")).toHaveTextContent("AI reasoning");
   });
 
   test("choosing a level actually submits it", async () => {

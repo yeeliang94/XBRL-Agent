@@ -211,6 +211,7 @@ export async function updateSettings(
     // the same helper instead of re-implementing the fetch.
     default_models: Record<string, string>;
     reset_keys: string[];
+    reset_shared_defaults: boolean;
     tolerance_rm: number;
     scout_wallclock_seconds: number;
     scout_max_turns: number;

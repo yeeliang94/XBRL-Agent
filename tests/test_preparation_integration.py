@@ -190,6 +190,7 @@ def test_legacy_repeats_setting_starts_one_run(document, pipeline):
 def test_prepared_notes_cannot_finish_clean_when_integrity_assessment_raises(document, pipeline, monkeypatch, assessment_fails):
     directory, db, _ = document
     client, _, _, _ = pipeline
+    monkeypatch.setenv("XBRL_NOTES_SOURCE_INTEGRITY", "off")
     assess = Mock(side_effect=RuntimeError("synthetic integrity failure")) if assessment_fails else Mock(return_value={"tips_status": False, "requires_review": False, "missing_block_ids": []})
     monkeypatch.setattr(server, "_run_notes_integrity_check", assess)
     response = client.post(f"/api/run/{directory.name}", json={
@@ -199,6 +200,8 @@ def test_prepared_notes_cannot_finish_clean_when_integrity_assessment_raises(doc
     })
     assert response.status_code == 200
     assert assess.called, response.text[-2000:]
+    from notes.source_models import IntegrityMode
+    assert assess.call_args.args[2] is IntegrityMode.ENFORCE
     conn = sqlite3.connect(db)
     status = conn.execute("SELECT status FROM runs ORDER BY id DESC LIMIT 1").fetchone()[0]
     conn.close()
