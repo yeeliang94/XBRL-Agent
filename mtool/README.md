@@ -123,7 +123,7 @@ survives into the mTool text-block:
 | Formatting | Ports into mTool? |
 |---|---|
 | Indentation (`margin-left`) | ✅ Yes |
-| Borders — including ones the AI formatter removed | Double table borders become thick solid strokes; removed borders are painted **white**. Exact shared-edge appearance is not guaranteed. |
+| Borders — including ones the AI formatter removed | Default single borders and converted double table borders use 0.75px solid strokes; removed borders are painted **white**. Exact shared-edge appearance is not guaranteed. |
 | Cell alignment you set explicitly (e.g. an "RM" caption) | ✅ Yes |
 | Fills / shading | ✅ Yes |
 | Bold / italic / underline | ✅ Yes |

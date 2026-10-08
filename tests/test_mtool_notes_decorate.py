@@ -13,9 +13,10 @@ from mtool.notes_decorate import (
 
 # --- mTool double-border fallback (shared review, Copy and fill output) ---------------
 @pytest.mark.parametrize("mode", [{}, {"compact": True}, {"lite": True}, {"fill_white_grid": False}])
-def test_double_border_fallback_preserves_content_and_other_edges(mode):
-    html = ('<p><u>Text underline</u></p><table data-source-styled="true" '
-            'style="border:1pt double #123456"><tr><td colspan="2" '
+@pytest.mark.parametrize("table_width", ["0", "1pt", "6px", "thin", "medium", "thick"])
+def test_double_border_fallback_preserves_content_and_other_edges(mode, table_width):
+    html = (f'<p><u>Text underline</u></p><table data-source-styled="true" '
+            f'style="border:{table_width} double #123456"><tr><td colspan="2" '
             'style="border-width:1px 2px 4pt 1px; border-style:double hidden double solid; '
             'border-color:rgb(12, 34, 56)">Total 3190</td></tr></table>')
     out = decorate_notes_html(html, **mode)
@@ -24,11 +25,11 @@ def test_double_border_fallback_preserves_content_and_other_edges(mode):
     assert cell.get_text() == "Total 3190"
     assert cell["colspan"] == "2"
     assert soup.u.get_text() == "Text underline"
-    assert "border-top: 3px solid rgb(12, 34, 56)" in cell["style"]
-    assert "border-bottom: 4pt solid rgb(12, 34, 56)" in cell["style"]
-    assert "border-right: 1px solid #ffffff" in cell["style"]
+    assert "border-top: 0.75px solid rgb(12, 34, 56)" in cell["style"]
+    assert "border-bottom: 0.75px solid rgb(12, 34, 56)" in cell["style"]
+    assert "border-right: 0.75px solid #ffffff" in cell["style"]
     assert "border-left: 1px solid rgb(12, 34, 56)" in cell["style"]
-    assert "border-top: 3px solid #123456" in soup.table["style"]
+    assert "border-top: 0.75px solid #123456" in soup.table["style"]
     assert "double" in html
     assert "double" not in out
 
@@ -72,9 +73,10 @@ def test_house_spacing_separates_paragraphs_and_adjacent_tables():
         html, NotesTableStyle.from_theme(house_style())), "html.parser")
     prose = [p for p in out.find_all("p") if p.get("data-mtool-spacer") != "1"]
     assert len(prose) == 2
-    assert all("margin: 0 0 10px 0" in p["style"] for p in prose)
+    assert all("margin: 0 0 3px 0" in p["style"] for p in prose)
     assert len(out.select('p[data-mtool-spacer="1"]')) == 3
-    assert all("margin: 10px 0" in t["style"] for t in out.find_all("table"))
+    assert all("margin: 3px 0" in t["style"] for t in out.find_all("table"))
+    assert all("padding: 3px 3px" in cell["style"] for cell in out.find_all(["td", "th"]))
     header = out.find("th", string="2024 RM'000")
     assert header is not None and "text-align: right" in header["style"]
     group = out.find("th", string="Group")
@@ -165,7 +167,7 @@ def test_table_gets_borders_font_and_legacy_attrs():
     assert re.search(r'<table[^>]*style="[^"]*border-collapse: collapse', out)
     assert re.search(r'<table[^>]*border="1"', out)
     assert re.search(r'<table[^>]*cellpadding="4"', out)
-    assert re.search(r'<td[^>]*style="[^"]*border: 1px solid', out)
+    assert re.search(r'<td[^>]*style="[^"]*border: 0.75px solid', out)
     assert re.search(r'<td[^>]*style="[^"]*padding: 4px 8px', out)
     # Font is HOISTED to the table (inheritable) rather than repeated on every
     # cell — the Step-3 size hoist. Cells no longer carry font-family.
@@ -201,8 +203,8 @@ def test_persisted_cell_style_wins_over_decorator_defaults():
         '</tr></tbody></table>')
     assert "color: red" in out
     assert "2px solid #000" in out
-    # decorator's own 1px border must NOT be appended (cell owns the family)
-    assert "1px solid #999" not in out
+    # decorator's own 0.75px border must NOT be appended (cell owns the family)
+    assert "0.75px solid #999" not in out
 
 
 # --- hidden-border → white translation (mTool TX accommodation) -------------
@@ -217,8 +219,8 @@ def test_formatter_cleared_border_becomes_white_not_hidden():
     out = decorate_notes_html(
         f'<table><tbody><tr><td style="{cleared}">x</td></tr></tbody></table>')
     assert "hidden" not in out
-    assert out.lower().count("1px solid #ffffff") == 1
-    assert "border: 1px solid #ffffff" in out.lower()
+    assert out.lower().count("0.75px solid #ffffff") == 1
+    assert "border: 0.75px solid #ffffff" in out.lower()
 
 
 def test_border_none_becomes_white():
@@ -227,7 +229,7 @@ def test_border_none_becomes_white():
         '<td style="border: none">x</td>'
         '</tr></tbody></table>')
     assert "border: none" not in out
-    assert "1px solid #ffffff" in out.lower()
+    assert "0.75px solid #ffffff" in out.lower()
 
 
 def test_default_grey_grid_is_not_whited_out():
@@ -235,8 +237,8 @@ def test_default_grey_grid_is_not_whited_out():
     # white-out only touches borders explicitly set to hidden/none.
     out = decorate_notes_html(
         "<table><tbody><tr><td>x</td></tr></tbody></table>")
-    assert "1px solid #999" in out
-    assert "1px solid #ffffff" not in out.lower()
+    assert "0.75px solid #999" in out
+    assert "0.75px solid #ffffff" not in out.lower()
 
 
 def test_real_border_is_preserved_not_whited_out():
@@ -244,8 +246,8 @@ def test_real_border_is_preserved_not_whited_out():
         '<table><tbody><tr>'
         '<td style="border-bottom: 3px double #000000">x</td>'
         '</tr></tbody></table>')
-    assert "3px solid #000000" in out
-    assert "1px solid #ffffff" not in out.lower()
+    assert "0.75px solid #000000" in out
+    assert "0.75px solid #ffffff" not in out.lower()
 
 
 def test_grouped_border_style_hidden_becomes_white():
@@ -257,8 +259,8 @@ def test_grouped_border_style_hidden_becomes_white():
         '<td style="border-width: 1px; border-style: hidden; border-color: #000000">x</td>'
         '</tr></tbody></table>')
     assert "hidden" not in out
-    assert out.lower().count("1px solid #ffffff") == 1
-    assert "border: 1px solid #ffffff" in out.lower()
+    assert out.lower().count("0.75px solid #ffffff") == 1
+    assert "border: 0.75px solid #ffffff" in out.lower()
 
 
 def test_mixed_grouped_border_style_whites_only_hidden_sides():
@@ -272,7 +274,7 @@ def test_mixed_grouped_border_style_whites_only_hidden_sides():
     assert "hidden" not in out
     assert "border-top: 1px solid #000000" in out
     assert "border-bottom: 1px solid #000000" in out
-    assert out.lower().count("1px solid #ffffff") == 2
+    assert out.lower().count("0.75px solid #ffffff") == 2
 
 
 def test_border_collapse_survives_whiteout():
@@ -284,7 +286,7 @@ def test_border_collapse_survives_whiteout():
         '</tr></tbody></table>')
     assert "border-collapse: collapse" in out
     assert "border-radius: 4px" in out
-    assert "1px solid #ffffff" in out.lower()
+    assert "0.75px solid #ffffff" in out.lower()
 
 
 # --- options ----------------------------------------------------------------
@@ -297,8 +299,8 @@ def test_no_border_option_paints_white_grid_and_keeps_padding():
         "<table><tbody><tr><td>x</td></tr></tbody></table>",
         NotesTableStyle(border_style="none"))
     assert not re.search(r'<table[^>]*border="1"', out)
-    assert "border: 1px solid #ffffff" in out       # explicit white, not silence
-    assert "border: 1px solid #999" not in out      # and no visible grid
+    assert "border: 0.75px solid #ffffff" in out       # explicit white, not silence
+    assert "border: 0.75px solid #999" not in out      # and no visible grid
     assert re.search(r'<td[^>]*style="[^"]*padding: 4px 8px', out)
 
 
@@ -306,7 +308,7 @@ def test_themed_border_colour_and_double_rule():
     out = decorate_notes_html(
         "<table><tbody><tr><td>x</td></tr></tbody></table>",
         NotesTableStyle(border_style="double", border_color="#1F3864"))
-    assert "3px solid #1f3864" in out.lower()
+    assert "0.75px solid #1f3864" in out.lower()
 
 
 def test_lite_tier_keeps_formatting_drops_cosmetics():
@@ -314,7 +316,7 @@ def test_lite_tier_keeps_formatting_drops_cosmetics():
     full = decorate_notes_html(html)
     lite = decorate_notes_html(html, lite=True)
     # lite keeps the formatting a reader notices...
-    assert "border: 1px solid" in lite
+    assert "border: 0.75px solid" in lite
     assert "text-align: right" in lite
     assert "font-family: Arial" in lite
     # ...but drops the cosmetic-only props, so it is strictly smaller.
@@ -342,7 +344,7 @@ def test_inheritable_props_hoisted_to_table_not_repeated_per_cell():
     assert not re.search(r'<td[^>]*style="[^"]*overflow-wrap', out)
     # cells keep the non-inheritable props
     assert re.search(r'<td[^>]*style="[^"]*vertical-align: top', out)
-    assert re.search(r'<td[^>]*style="[^"]*border: 1px solid', out)
+    assert re.search(r'<td[^>]*style="[^"]*border: 0.75px solid', out)
 
 
 def test_size_hoist_lets_a_previously_flat_table_fit_full():
@@ -407,7 +409,7 @@ def test_from_theme_drives_decorated_output():
         "<table><tbody><tr><td>x</td></tr></tbody></table>",
         NotesTableStyle.from_theme({"borderStyle": "double",
                                     "borderColor": "#1F3864"}))
-    assert "3px solid #1f3864" in out.lower()
+    assert "0.75px solid #1f3864" in out.lower()
 
 
 # --- prose theme fields (house style item 1) --------------------------------
@@ -454,14 +456,14 @@ def test_totals_double_underline_targets_amount_cells_only():
         "<tr><td>Revenue</td><td>10,000</td></tr>"
         "<tr><td>Total</td><td>19,500</td></tr>"
         "</tbody></table>", style)
-    # The total row's amount cell carries the thick solid replacement…
+    # The total row's amount cell carries the thin solid replacement…
     assert re.search(
-        r'<td[^>]*style="[^"]*border-bottom: 3px solid #000000[^"]*"[^>]*>19,500<', out)
+        r'<td[^>]*style="[^"]*border-bottom: 0.75px solid #000000[^"]*"[^>]*>19,500<', out)
     # …but its label cell and the non-total row do not.
     assert not re.search(
-        r'<td[^>]*style="[^"]*3px solid[^"]*"[^>]*>Total<', out)
+        r'<td[^>]*style="[^"]*border-bottom: 0.75px solid #000000[^"]*"[^>]*>Total<', out)
     assert not re.search(
-        r'<td[^>]*style="[^"]*3px solid[^"]*"[^>]*>10,000<', out)
+        r'<td[^>]*style="[^"]*border-bottom: 0.75px solid #000000[^"]*"[^>]*>10,000<', out)
 
 
 def test_totals_rule_respects_persisted_cell_border():
@@ -508,18 +510,18 @@ def test_from_theme_prose_fields_default_to_unset():
 
 
 # --- compact tier (mTool-only; docs/PLAN-mtool-compact-decoration.md) --------
-def test_compact_body_cells_carry_no_style_at_all():
+def test_compact_body_cells_keep_default_border_without_padding():
     """The whole point of the tier: a plain left-aligned body cell rides on
     the table's legacy attrs + renderer defaults and gets ZERO per-cell style."""
     out = decorate_notes_html(
         "<table><tbody><tr><td>Land</td><td>1,595</td></tr></tbody></table>",
         compact=True)
-    # The label cell has no style attribute at all.
-    assert re.search(r'<td(?![^>]*style=)[^>]*>Land</td>', out)
-    # The numeric cell carries ONLY the right-alignment.
-    assert re.search(r'<td[^>]*style="text-align: right;"[^>]*>1,595<', out)
+    # The label cell carries only the explicit default border.
+    assert re.search(r'<td[^>]*style="border: 0.75px solid #999; "[^>]*>Land</td>', out)
+    # The numeric cell also carries right-alignment.
+    assert re.search(r'<td[^>]*style="border: 0.75px solid #999; text-align: right;"[^>]*>1,595<', out)
     # No per-cell boilerplate anywhere.
-    assert "border: 1px solid" not in out
+    assert "border: 0.75px solid" in out
     assert not re.search(r'<td[^>]*style="[^"]*padding', out)
     assert "vertical-align: top" not in out
 
@@ -556,9 +558,9 @@ def test_compact_totals_rule_still_lands_on_amount_cells():
         "</tbody></table>",
         NotesTableStyle(totals_double_underline=True), compact=True)
     assert re.search(
-        r'<td[^>]*style="[^"]*border-bottom: 3px solid #000000[^"]*"[^>]*>19,500<',
+        r'<td[^>]*style="[^"]*border-bottom: 0.75px solid #000000[^"]*"[^>]*>19,500<',
         out)
-    assert not re.search(r'<td[^>]*style="[^"]*3px solid[^"]*"[^>]*>10,000<', out)
+    assert not re.search(r'<td[^>]*style="[^"]*border-bottom: 0.75px solid #000000[^"]*"[^>]*>10,000<', out)
 
 
 def test_compact_skips_table_with_user_owned_cell_border():
@@ -571,7 +573,7 @@ def test_compact_skips_table_with_user_owned_cell_border():
         '</tr></tbody></table>', compact=True)
     assert "2px solid #000" in out                      # user style survives
     # Sibling cell got the full per-cell treatment, not the compact one.
-    assert re.search(r'<td[^>]*style="[^"]*border: 1px solid #999', out)
+    assert re.search(r'<td[^>]*style="[^"]*border: 0.75px solid #999', out)
     assert re.search(r'<td[^>]*style="[^"]*padding: 4px 8px', out)
 
 
@@ -581,7 +583,7 @@ def test_compact_skips_table_with_user_owned_cell_fill():
         '<td style="background-color: #ffff00">A</td><td>1,000</td>'
         '</tr></tbody></table>', compact=True)
     assert "background-color: #ffff00" in out           # user fill survives
-    assert re.search(r'<td[^>]*style="[^"]*border: 1px solid #999', out)
+    assert re.search(r'<td[^>]*style="[^"]*border: 0.75px solid #999', out)
 
 
 def test_compact_only_compacts_the_eligible_sibling_table():
@@ -592,8 +594,8 @@ def test_compact_only_compacts_the_eligible_sibling_table():
         '</tr></tbody></table>'
         '<table><tbody><tr><td>Plain</td><td>1,000</td></tr></tbody></table>',
         compact=True)
-    # The plain table's cells are compact (bare label cell)…
-    assert re.search(r'<td(?![^>]*style=)[^>]*>Plain</td>', out)
+    # The plain table keeps its thin grid without padding boilerplate.
+    assert re.search(r'<td[^>]*style="border: 0.75px solid #999; "[^>]*>Plain</td>', out)
     # …while the user-styled table's sibling decoration is the full form.
     assert "2px solid #000" in out
 
@@ -617,11 +619,12 @@ def test_compact_whiteout_still_runs_on_cleared_borders():
         '<table><tbody><tr><td style="border: none">x</td></tr></tbody></table>',
         compact=True)
     assert "border: none" not in out
-    assert "1px solid #ffffff" in out.lower()
+    assert "0.75px solid #ffffff" in out.lower()
 
 
-def test_compact_is_dramatically_smaller_than_full_and_same_text():
+def test_compact_fits_when_full_exceeds_cell_limit_and_preserves_text():
     from bs4 import BeautifulSoup
+    from mtool.offline_fill import EXCEL_CELL_CHAR_LIMIT, wrap_footnote_html
     html = ("<table><tbody>"
             + "".join("<tr><td>Item</td>"
                       + "".join("<td>1,234</td>" for _ in range(5)) + "</tr>"
@@ -629,7 +632,8 @@ def test_compact_is_dramatically_smaller_than_full_and_same_text():
             + "</tbody></table>")
     full = decorate_notes_html(html)
     compact = decorate_notes_html(html, compact=True)
-    assert len(compact) < len(full) / 2               # the size win is real
+    assert len(wrap_footnote_html(full)) > EXCEL_CELL_CHAR_LIMIT
+    assert len(wrap_footnote_html(compact)) <= EXCEL_CELL_CHAR_LIMIT
     # Content is untouched — identical rendered text.
     assert (BeautifulSoup(compact, "html.parser").get_text()
             == BeautifulSoup(full, "html.parser").get_text())
@@ -698,7 +702,7 @@ def test_source_styled_borderless_cell_gains_no_theme_border():
     invisible edges are spelled out as WHITE (TX draws its default grid on
     undeclared boundaries), so assert no VISIBLE border rather than none."""
     out = decorate_notes_html(_SOURCE_STYLED_BORDERLESS, NotesTableStyle())
-    assert "border: 1px solid #ffffff" in out
+    assert "border: 0.75px solid #ffffff" in out
     assert not re.search(r"border[^:]*: [^;\"]*solid (?!#ffffff)", out)
     assert 'border="1"' not in out
     # The theme's non-border contributions still apply.
@@ -729,7 +733,7 @@ def test_unmarked_table_still_gets_the_full_house_grid():
     out = decorate_notes_html(
         "<table><tr><td>1,595</td></tr></table>", NotesTableStyle()
     )
-    assert "border: 1px solid" in out or 'border="1"' in out
+    assert "border: 0.75px solid" in out or 'border="1"' in out
 
 
 # --- Firm house style: accountant "ruled", not boxed (2026-07-20) ------------
@@ -742,19 +746,19 @@ def test_header_rule_draws_one_line_and_no_cell_grid():
     out = decorate_notes_html(
         html, NotesTableStyle(border_style="none", header_rule=True)
     )
-    assert "border-bottom: 1px solid #999" in out
+    assert "border-bottom: 0.75px solid #999" in out
     # The rule is the ONLY visible line; every other edge is explicit white
     # (undeclared edges surface as TX's default grey grid — run 76). Per-side
     # longhands here, not the shorthand: the th owns its rule, and the td
     # under it leaves its TOP silent so the white can't contest the rule on
     # the shared edge (neighbour suppression).
-    assert "1px solid #ffffff" in out
+    assert "0.75px solid #ffffff" in out
     th = out[out.index("<th"):out.index("</th>")]
     td = out[out.index("<td"):out.index("</td>")]
-    assert "border-top: 1px solid #ffffff" in th      # header's other edges white
+    assert "border-top: 0.75px solid #ffffff" in th      # header's other edges white
     assert "border-top" not in td                      # shared edge: rule wins
-    assert "border-bottom: 1px solid #ffffff" in td
-    assert "border: 1px solid #999" not in out
+    assert "border-bottom: 0.75px solid #ffffff" in td
+    assert "border: 0.75px solid #999" not in out
     assert 'border="1"' not in out          # no legacy attr either
 
 
@@ -764,7 +768,7 @@ def test_header_rule_honours_the_theme_border_colour():
         NotesTableStyle(border_style="none", header_rule=True,
                         border_color="#333333"),
     )
-    assert "border-bottom: 1px solid #333333" in out
+    assert "border-bottom: 0.75px solid #333333" in out
 
 
 def test_header_rule_defaults_off_so_untouched_themes_are_unchanged():
@@ -798,12 +802,12 @@ def test_source_styled_table_does_not_get_the_house_header_rule():
     # Only invisible (white) edges on the header — the house rule must not
     # reach it, and undeclared edges are spelled out white for TX (run 76).
     assert "#999" not in th
-    assert "border: 1px solid #ffffff" in th
+    assert "border: 0.75px solid #ffffff" in th
     assert "<u>Country</u>" in th
     # The neutral default also leaves an ordinary header without a visible rule.
     plain = decorate_notes_html(html.replace(' data-source-styled="true"', ''),
                                 house)
-    assert "border-bottom: 1px solid #999" not in plain
+    assert "border-bottom: 0.75px solid #999" not in plain
 
 
 def test_border_strip_preserves_border_collapse():
@@ -884,10 +888,10 @@ def test_native_editable_merges_handle_bad_spans_and_hide_inner_borders():
     assert [[c.get_text() for c in row.find_all("td")] for row in rows] == [
         ["Heading", "", "Next"], ["", "", "Last"]]
     cells = [[c.get("style", "") for c in row.find_all("td")] for row in rows]
-    assert "border-right: 1px solid #ffffff" in cells[0][0]
-    assert "border-bottom: 1px solid #ffffff" in cells[0][0]
-    assert "border-left: 1px solid #ffffff" in cells[0][1]
-    assert "border-top: 1px solid #ffffff" in cells[1][0]
+    assert "border-right: 0.75px solid #ffffff" in cells[0][0]
+    assert "border-bottom: 0.75px solid #ffffff" in cells[0][0]
+    assert "border-left: 0.75px solid #ffffff" in cells[0][1]
+    assert "border-top: 0.75px solid #ffffff" in cells[1][0]
     assert "border: 2px solid #123456" in cells[1][1]
 
 
@@ -980,7 +984,7 @@ def test_nested_plain_table_not_painted_by_source_styled_outer():
     out = decorate_notes_html(html, NotesTableStyle())
     inner = out[out.index("<table", out.index("<table") + 1):]
     inner_td = inner[inner.index("<td"):inner.index("</td>")]
-    assert "border: 1px solid #999" in inner_td   # theme grid intact
+    assert "border: 0.75px solid #999" in inner_td   # theme grid intact
     assert "#ffffff" not in inner_td
 
 
@@ -1002,8 +1006,8 @@ def test_white_fill_skips_edge_declared_by_neighbour():
     assert "border-bottom: 1px solid #000000" in top_cell   # source rule kept
     assert "border-top" not in bottom_cell                  # shared edge silent
     # The rest of both cells' edges are still painted white.
-    assert "border-left: 1px solid #ffffff" in bottom_cell
-    assert "border-bottom: 1px solid #ffffff" in bottom_cell
+    assert "border-left: 0.75px solid #ffffff" in bottom_cell
+    assert "border-bottom: 0.75px solid #ffffff" in bottom_cell
 
 
 def test_white_fill_paints_all_edges_when_spans_make_adjacency_ambiguous():
@@ -1015,7 +1019,7 @@ def test_white_fill_paints_all_edges_when_spans_make_adjacency_ambiguous():
     out = decorate_notes_html(html, NotesTableStyle())
     cells = re.findall(r"<td[^>]*>", out)
     # The body cells get the full white shorthand — no suppression attempted.
-    assert all("border: 1px solid #ffffff" in c for c in cells[1:])
+    assert all("border: 0.75px solid #ffffff" in c for c in cells[1:])
 
 
 # --- destyle retry: the marker goes with the styles --------------------------

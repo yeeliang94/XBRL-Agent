@@ -5,7 +5,7 @@ const SOURCE = "<h3>Revenue</h3><p>Services.</p><table><tr><td>Fees</td><td>1,59
 const PREPARED = '<div style="font-family:Arial;font-size:11pt"><h3>Revenue</h3>' +
   '<p>Services.</p><p data-mtool-spacer="1">&nbsp;</p>' +
   '<table width="100%"><tbody><tr><td style="border:1px solid #ffffff">Fees</td>' +
-  '<td style="text-align:right;border-bottom:3px solid #000000">1,595</td></tr></tbody></table></div>';
+  '<td style="text-align:right;border-bottom:0.75px solid #000000">1,595</td></tr></tbody></table></div>';
 
 function readBlob(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {

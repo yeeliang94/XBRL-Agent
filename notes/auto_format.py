@@ -16,7 +16,9 @@ from typing import Any
 from pydantic_ai.exceptions import UsageLimitExceeded
 
 from db import repository as repo
-from notes.formatting_agent import formatter_cell_is_candidate, run_notes_formatter
+from notes.formatting_agent import (
+    formatter_cell_is_candidate, list_formatter_cells_for_run, run_notes_formatter,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +31,7 @@ def candidate_sheets(
     """Return requested sheets with at least one unstyled prose cell."""
     requested = set(requested_sheets)
     with repo.db_session(db_path) as conn:
-        cells = repo.list_notes_cells_for_run(conn, run_id)
+        cells = list_formatter_cells_for_run(conn, run_id)
     return sorted({
         c.sheet for c in cells
         if c.sheet in requested
@@ -54,7 +56,7 @@ def _row_groups(db_path: str, run_id: int, sheet: str) -> list[list[int]]:
     """Split a sheet's formatter candidates into ordered row groups."""
     with repo.db_session(db_path) as conn:
         rows = sorted(
-            c.row for c in repo.list_notes_cells_for_run(conn, run_id)
+            c.row for c in list_formatter_cells_for_run(conn, run_id)
             if c.sheet == sheet
             and formatter_cell_is_candidate(c, PDF_FORMAT_CANDIDATE_SOURCES)
         )

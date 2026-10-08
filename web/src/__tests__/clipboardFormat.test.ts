@@ -130,7 +130,7 @@ describe("clipboardFormat — theme colour fields (notes table theme)", () => {
     // The un-customised theme must reproduce the editor's previous fixed values
     // so an un-themed install looks unchanged.
     const vars = themeToCssVars(DEFAULT_FORMAT_OPTIONS);
-    expect(vars["--nt-grid-border"]).toBe("1px solid #c9c9c9");
+    expect(vars["--nt-grid-border"]).toBe("0.75px solid #c9c9c9");
     expect(vars["--nt-cell-padding"]).toBe("4px 8px");
     expect(vars["--nt-cell-font-size"]).toBe("13px"); // 10pt → 13px
     expect(vars["--nt-header-fill"]).toBe("#f4f4f4");
@@ -244,7 +244,7 @@ describe("clipboardFormat — prose theme fields (house style item 1)", () => {
 describe("headerRule", () => {
   test("themeToCssVars sets --nt-header-rule only when the rule is on", () => {
     const vars = themeToCssVars({ ...DEFAULT_FORMAT_OPTIONS, headerRule: true });
-    expect(vars["--nt-header-rule"]).toBe("1px solid #999");
+    expect(vars["--nt-header-rule"]).toBe("0.75px solid #999");
   });
 
   test("themeToCssVars omits the var when off, so the editor is unchanged", () => {
@@ -259,7 +259,7 @@ describe("headerRule", () => {
       headerRule: true,
       borderColor: "#185fa5",
     });
-    expect(vars["--nt-header-rule"]).toBe("1px solid #185fa5");
+    expect(vars["--nt-header-rule"]).toBe("0.75px solid #185fa5");
   });
 
   test("parsing keeps a boolean and drops a malformed value", () => {

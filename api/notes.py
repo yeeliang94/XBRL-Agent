@@ -176,7 +176,7 @@ def _numeric_sheet_rows(
         if f["evidence"] and f["evidence"] not in category["evidence"]:
             category["evidence"].append(f["evidence"])
 
-    from concept_model.filing_targets import resolve_writable_html_target
+    from concept_model.filing_targets import resolve_writable_html_target, html_cell_identity_valid
     from concept_model.dimensions import numeric_category_catalog
     from concept_model.facts_api import category_resolution_token
     from db.repository import decode_source_pages
@@ -212,10 +212,8 @@ def _numeric_sheet_rows(
         )
         html_cell = html_cells.get(n["row"])
         if html_target is not None:
-            identity_mismatch = bool(
-                html_cell is not None
-                and html_cell["concept_uuid"] != html_target["concept_uuid"]
-            )
+            identity_mismatch = bool(html_cell is not None and not html_cell_identity_valid(
+                html_target, html_cell["concept_uuid"]))
             rows.append({
                 "row": n["row"],
                 "label": (
@@ -658,6 +656,7 @@ async def patch_notes_cell_endpoint(
 async def remove_invalid_notes_cell(run_id: int, sheet: str, row: int):
     """Remove quarantined legacy content after an explicit operator choice."""
     from db import repository as repo
+    from concept_model.filing_targets import resolve_writable_html_target, html_cell_identity_valid
 
     conn = server._open_audit_conn()
     try:
@@ -682,24 +681,17 @@ async def remove_invalid_notes_cell(run_id: int, sheet: str, row: int):
              if entry["sheet"] == sheet),
             None,
         )
-        writable = False
-        node = None
+        target = None
         if template is not None:
-            from concept_model.filing_targets import resolve_writable_html_target
-
             target = resolve_writable_html_target(
                 conn,
                 family_prefix=f"{str(standard).lower()}-{str(level).lower()}-",
                 sheet=sheet,
                 row=row,
             )
-            if target is not None:
-                node = {"node_uuid": target["concept_uuid"]}
-                writable = True
-        identity_valid = bool(
-            writable and node is not None and existing["concept_uuid"] == node["node_uuid"]
-        )
-        if identity_valid and not existing["invalid_target"]:
+        identity_valid = html_cell_identity_valid(
+            target, existing["concept_uuid"], existing["invalid_target"])
+        if identity_valid:
             conn.rollback()
             raise HTTPException(
                 status_code=409,

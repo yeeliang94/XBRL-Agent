@@ -27,7 +27,7 @@ from typing import List, Literal, Optional, Union
 from pydantic import BaseModel, Field
 
 # `format_patch.BORDER_WIDTHS` / `BORDER_STYLES` / `TEXT_ALIGN` / `SIDES`.
-BorderWidth = Literal["1px", "2px", "3px"]
+BorderWidth = Literal["0.75px", "1px", "2px", "3px"]
 BorderStyle = Literal["solid", "double", "dashed", "dotted", "hidden"]
 Side = Literal["top", "right", "bottom", "left"]
 TextAlign = Literal["left", "center", "right", "justify"]
@@ -36,7 +36,7 @@ TargetRange = Literal["all", "table", "header", "total_rows", "numeric_cells"]
 
 class BorderSpec(BaseModel):
     """One edge. `_border_value` also accepts the bare string "hidden"."""
-    width: BorderWidth = "1px"
+    width: BorderWidth = "0.75px"
     style: BorderStyle = "solid"
     color: str = Field(
         default="#000000",

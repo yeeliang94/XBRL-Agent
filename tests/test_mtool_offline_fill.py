@@ -1896,7 +1896,8 @@ def test_compact_stress_probe_builds_large_under_limit_payload(
     out = tmp_path / "compact-stress.xlsx"
     report = make_compact_stress_workbook(
         footnote_template, out, "fn_14",
-        rows=100, cols=6, acknowledged=True,
+        # Explicit fractional grid widths add markup; 70 rows stay near the cap.
+        rows=70, cols=6, acknowledged=True,
     )
     payload = report["payloads"][0]
     assert 20_000 < payload["stored_chars"] < 32_767

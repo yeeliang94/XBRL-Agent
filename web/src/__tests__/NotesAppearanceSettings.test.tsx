@@ -10,7 +10,7 @@ vi.mock("../lib/api", () => ({ getSettings: vi.fn(), updateSettings: vi.fn() }))
 vi.mock("../lib/notesOutput", async () => ({
   ...await vi.importActual("../lib/notesOutput"), previewNotesAppearance: vi.fn(),
 }));
-const house: ClipboardFormatOptions = { borderStyle: "single", fontSizePt: 11, cellPaddingPx: [5, 5], paragraphSpacingPx: 10, headerBold: true, headerFill: "transparent", headerRule: false, totalsDoubleUnderline: false };
+const house: ClipboardFormatOptions = { borderStyle: "none", fontSizePt: 11, cellPaddingPx: [3, 3], paragraphSpacingPx: 3, headerBold: true, headerFill: "transparent", headerRule: false, totalsDoubleUnderline: false };
 let custom: Partial<ClipboardFormatOptions>;
 beforeEach(() => {
   vi.clearAllMocks(); custom = {};
@@ -32,6 +32,13 @@ describe("Notes appearance", () => {
     expect(await screen.findByText("Prepared mTool sample")).toBeInTheDocument();
     expect(screen.getByLabelText("Table border").style.height).toBe(`${ui.select.height}px`);
     expect(screen.getByLabelText("Font size (pt)").style.height).toBe(`${ui.input.height}px`);
+    expect(screen.getByLabelText("Font size (pt)")).toHaveValue(11);
+    expect(screen.getByLabelText("Paragraph gap (px)")).toHaveValue(3);
+    expect(screen.getByLabelText("Vertical padding (px)")).toHaveValue(3);
+    expect(screen.getByLabelText("Horizontal padding (px)")).toHaveValue(3);
+    expect(screen.getByLabelText("Table border")).toHaveValue("none");
+    expect(screen.getByLabelText("Header fill")).toHaveValue("transparent");
+    expect(screen.getByLabelText("Header emphasis")).toHaveValue("true");
     expect(screen.queryByText("Custom")).toBeNull();
     expect(screen.getByText("Formatting applied before export").closest("details")).not.toHaveAttribute("open");
   });
@@ -71,20 +78,21 @@ describe("Notes appearance", () => {
     await waitFor(() => expect(screen.getByLabelText("Font size (pt)")).toHaveValue(24));
   });
   test("field reset removes its override and whole reset removes all overrides", async () => {
-    custom = { fontSizePt: 12, borderStyle: "none" };
+    custom = { fontSizePt: 12, borderStyle: "single" };
     render(<NotesAppearanceSettings />);
     fireEvent.click(await screen.findByRole("button", { name: "Reset Font size (pt)" }));
     await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({ notes_appearance_overrides: { fontSizePt: null } }));
     await waitFor(() => expect(screen.getByLabelText("Font size (pt)")).toHaveValue(11));
-    expect(screen.getByLabelText("Table border")).toHaveValue("none");
+    expect(screen.getByLabelText("Table border")).toHaveValue("single");
     fireEvent.click(screen.getByRole("button", { name: "Reset to house style" }));
     expect(updateSettings).not.toHaveBeenCalledWith({ notes_appearance_reset: true });
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(screen.getByLabelText("Table border")).toHaveValue("none");
+    expect(screen.getByLabelText("Table border")).toHaveValue("single");
     fireEvent.click(screen.getByRole("button", { name: "Reset to house style" }));
     fireEvent.click(screen.getByRole("button", { name: "Reset appearance" }));
     await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({ notes_appearance_reset: true }));
     await waitFor(() => expect(screen.queryByText("Custom")).toBeNull());
+    expect(screen.getByLabelText("Table border")).toHaveValue("none");
   });
   test("reset confirmation waits for an appearance save already in progress", async () => {
     let finishSave!: (value: { status: string }) => void;
@@ -112,8 +120,8 @@ describe("Notes appearance", () => {
   test("failed save restores confirmed settings and reports failure", async () => {
     vi.mocked(updateSettings).mockRejectedValue(new Error("Save unavailable"));
     render(<NotesAppearanceSettings />);
-    fireEvent.change(await screen.findByLabelText("Table border"), { target: { value: "none" } });
+    fireEvent.change(await screen.findByLabelText("Table border"), { target: { value: "single" } });
     expect(await screen.findByRole("alert")).toHaveTextContent("Save unavailable");
-    expect(screen.getByLabelText("Table border")).toHaveValue("single");
+    expect(screen.getByLabelText("Table border")).toHaveValue("none");
   });
 });

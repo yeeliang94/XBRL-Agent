@@ -17,6 +17,8 @@ def test_prompt_instructs_amount_column_header_and_figure_alignment():
     prompt = (Path(__file__).resolve().parents[1]
               / "prompts" / "notes_formatter.md").read_text(encoding="utf-8")
     assert "currency-caption cell" in prompt
+    assert "actual row label and amounts" in prompt
+    assert "a subtotal rule belongs to its subtotal row" in prompt
     assert "RM'000" in prompt
     assert "text_align" in prompt
     assert 'Right-align all amount-column headers and figures with `text_align: "right"`' in prompt
@@ -54,7 +56,8 @@ def test_formatter_request_budget_stays_below_pydantic_cap(monkeypatch):
         importlib.reload(fa)
 
 
-def test_applies_one_coloured_top_border_to_one_cell():
+@pytest.mark.parametrize("width", [None, "0.75px", "1px"])
+def test_applies_one_coloured_top_border_to_one_cell(width):
     html = "<table><tr><td>A</td><td>1</td></tr></table>"
     patch = {
         "cells": [{
@@ -63,14 +66,18 @@ def test_applies_one_coloured_top_border_to_one_cell():
                 "target": {"table": 0, "cell": {"r": 1, "c": 2}},
                 "style": {
                     "border_top": {
-                        "width": "1px", "style": "solid", "color": "#666666",
+                        **({"width": width} if width else {}),
+                        "style": "solid", "color": "#666666",
                     },
                 },
             }],
         }],
     }
     out = apply_sheet_patch({1: html}, patch)
-    assert "border-top: 1px solid #666666" in out.rows[1]
+    from notes.format_schema import BorderSpec
+    expected_width = width or "0.75px"
+    assert BorderSpec(**({"width": width} if width else {})).width == expected_width
+    assert f"border-top: {expected_width} solid #666666" in out.rows[1]
     assert "A" in out.rows[1] and ">1<" in out.rows[1]
 
 
@@ -496,7 +503,7 @@ def formatter_db(tmp_path):
 
 
 async def _run_formatter_with_fake_agent(
-    monkeypatch, formatter_db, fake_agent, *, style_sources=None,
+    monkeypatch, formatter_db, fake_agent, *, style_sources=None, sheet=_SHEET,
 ):
     from pathlib import Path
 
@@ -509,10 +516,55 @@ async def _run_formatter_with_fake_agent(
     )
     return await fa.run_notes_formatter(
         run_id=run_id, db_path=str(db_path), pdf_path=pdf_path,
-        sheet=_SHEET, model="fake-model",
+        sheet=sheet, model="fake-model",
         output_dir=str(Path(pdf_path).parent),
         style_sources=style_sources,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("include_numeric", [False, True])
+async def test_mixed_sheet_formatter_writes_and_snapshots_only_html(
+    monkeypatch, formatter_db, include_numeric,
+):
+    from db import repository as repo
+    from concept_model.filing_targets import persist_template_manifest, targets_for_template
+    from notes_types import NotesTemplateType, notes_template_path
+
+    db_path, _, run_id = formatter_db
+    path = notes_template_path(NotesTemplateType.RELATED_PARTY, "company", "mfrs")
+    persist_template_manifest(db_path, path)
+    _, targets = targets_for_template(path)
+    target = next(t for t in targets if t.writable and t.value_kind == "html")
+    numeric = next(t for t in targets if t.writable and t.value_kind != "html" and t.row != target.row)
+    with repo.db_session(db_path) as conn:
+        for row, uuid in [(target.row, target.canonical_target_id), (numeric.row, numeric.canonical_target_id)]:
+            repo.upsert_notes_cell(conn, run_id=run_id, sheet=target.sheet, row=row,
+                label="Disclosure", concept_uuid=uuid, html=_TABLE_HTML, source_pages=[3])
+    with repo.db_session(db_path) as conn:
+        queries = []
+        conn.set_trace_callback(queries.append)
+        eligible = repo.list_formatter_cells_for_run(conn, run_id)
+        conn.set_trace_callback(None)
+        assert {cell.row for cell in eligible if cell.sheet == target.sheet} == {target.row}
+        # One manifest scan protects selection cost as mixed-sheet cells grow.
+        assert sum("FROM template_slots" in query for query in queries) == 1
+    operation = {"target": {"table": 0, "range": "numeric_cells"}, "style": {"text_align": "right"}}
+    patch = {"sheet": target.sheet, "cells": [{"row": target.row, "operations": [operation]}]}
+    if include_numeric:
+        patch["cells"].append({"row": numeric.row, "operations": [operation]})
+    fake = _FakeAgent([json.dumps(patch), json.dumps({"sheet": target.sheet, "cells": []})])
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake, sheet=target.sheet)
+    assert result["changed_rows"] == 1
+    assert result["ok"] is (not include_numeric)
+    if include_numeric:
+        assert result["failed_rows"] == [numeric.row]
+    with repo.db_session(db_path) as conn:
+        saved = {c.row: c.html for c in repo.list_notes_cells_for_run(conn, run_id) if c.sheet == target.sheet}
+        assert "text-align: right" in saved[target.row]
+        assert saved[numeric.row] == _TABLE_HTML
+        snapshots = repo.fetch_notes_format_snapshots(conn, run_id, target.sheet)
+        assert set(snapshots) == {target.row}
 
 
 @pytest.mark.asyncio
@@ -921,7 +973,8 @@ async def test_formatter_result_carries_token_fields(monkeypatch, formatter_db):
 
 
 @pytest.mark.asyncio
-async def test_formatter_skips_row_edited_during_pass(monkeypatch, formatter_db):
+@pytest.mark.parametrize("invalidate_target", [False, True])
+async def test_formatter_skips_row_edited_during_pass(monkeypatch, formatter_db, invalidate_target):
     """A user PATCH landing between launch snapshot and final write wins —
     the formatter skips the row instead of writing stale-but-styled HTML."""
     from db import repository as repo
@@ -931,12 +984,16 @@ async def test_formatter_skips_row_edited_during_pass(monkeypatch, formatter_db)
     def edit_mid_pass(call_number: int) -> None:
         if call_number == 1:  # while the initial model request runs
             with repo.db_session(db_path) as conn:
-                repo.upsert_notes_cell(
-                    conn, run_id=run_id, sheet=_SHEET, row=112,
-                    label="Disclosure of other notes",
-                    html="<p>user edited</p>",
-                    evidence="Page 3", source_pages=[3],
-                )
+                if invalidate_target:
+                    conn.execute("UPDATE notes_cells SET invalid_target = 1 WHERE run_id = ? AND row = 112",
+                                 (run_id,))
+                else:
+                    repo.upsert_notes_cell(
+                        conn, run_id=run_id, sheet=_SHEET, row=112,
+                        label="Disclosure of other notes",
+                        html="<p>user edited</p>",
+                        evidence="Page 3", source_pages=[3],
+                    )
 
     fake = _FakeAgent([_GOOD_PATCH], on_call=edit_mid_pass)
     result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake)
@@ -947,7 +1004,7 @@ async def test_formatter_skips_row_edited_during_pass(monkeypatch, formatter_db)
     with repo.db_session(db_path) as conn:
         cells = repo.list_notes_cells_for_run(conn, run_id)
         snapshot = repo.fetch_notes_format_snapshots(conn, run_id, _SHEET)
-    assert cells[0].html == "<p>user edited</p>"
+    assert cells[0].html == (_TABLE_HTML if invalidate_target else "<p>user edited</p>")
     # Snapshots cover only rows actually WRITTEN — a fully-skipped pass
     # leaves no snapshot (nothing to revert).
     assert snapshot == {}

@@ -29,7 +29,7 @@ STYLE_TO_CSS = {
     "border_bottom": "border-bottom",
     "border_left": "border-left",
 }
-BORDER_WIDTHS = {"1px", "2px", "3px"}
+BORDER_WIDTHS = {"0.75px", "1px", "2px", "3px"}
 BORDER_STYLES = {"solid", "double", "dashed", "dotted", "hidden"}
 TEXT_ALIGN = {"left", "center", "right", "justify"}
 THEME_COLOURS = {
@@ -507,7 +507,7 @@ def _border_value(value: Any) -> str:
         return "1px hidden #000000"
     if not isinstance(value, dict):
         raise FormatPatchError("border value must be object or 'hidden'")
-    width = value.get("width", "1px")
+    width = value.get("width", "0.75px")
     style = value.get("style", "solid")
     colour = _colour(value.get("color", "#000000"))
     if width not in BORDER_WIDTHS:

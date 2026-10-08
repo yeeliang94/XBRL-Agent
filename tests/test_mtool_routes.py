@@ -783,8 +783,8 @@ def test_notes_fill_doc_honours_per_run_theme(client):
         conn.close()
     doc = tc.get(f"/api/runs/{run_id}/mtool-notes-fill").json()
     html = doc["footnotes"][0]["html"].lower()
-    assert "3px solid #1f3864" in html  # native double-border substitute
-    assert "1px solid #999" not in html
+    assert "0.75px solid #1f3864" in html  # native double-border substitute
+    assert "0.75px solid #999" not in html
 
 
 def test_notes_fill_doc_falls_back_to_firm_default_theme(client, monkeypatch):
@@ -797,7 +797,7 @@ def test_notes_fill_doc_falls_back_to_firm_default_theme(client, monkeypatch):
     monkeypatch.setenv("XBRL_NOTES_TABLE_STYLE",
                        '{"borderColor": "#abcdef"}')
     doc = tc.get(f"/api/runs/{run_id}/mtool-notes-fill").json()
-    assert "1px solid #abcdef" in doc["footnotes"][0]["html"].lower()
+    assert "0.75px solid #abcdef" in doc["footnotes"][0]["html"].lower()
 
 
 def test_patch_fill_notes_off_omits_notes_block(client):

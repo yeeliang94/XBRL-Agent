@@ -374,44 +374,45 @@ def resolve_writable_html_target(
     contain exactly one matching slot for a physical coordinate before callers
     may write it.
     """
+    return writable_html_targets(conn, family_prefix=family_prefix,
+                                 template_id=template_id, sheet=sheet, row=row).get((sheet, int(row)))
+
+
+def html_cell_identity_valid(target: dict | None, concept_uuid: str | None,
+                             invalid_target: bool = False) -> bool:
+    """Use canonical identity and quarantine status for every HTML consumer."""
+    return bool(target is not None and not invalid_target
+                and concept_uuid == target["concept_uuid"])
+
+
+def writable_html_targets(conn: sqlite3.Connection, *, family_prefix: str | None = None,
+                          template_id: str | None = None, sheet: str | None = None,
+                          row: int | None = None) -> dict[tuple[str, int], dict]:
+    """Resolve writable HTML coordinates in one query; omit ambiguous slots."""
     if (family_prefix is None) == (template_id is None):
         raise ValueError("Pass exactly one of family_prefix or template_id.")
-    template_predicate = (
-        "ts.template_id = ?" if template_id is not None
-        else "ts.template_id LIKE ?"
-    )
-    if template_id is not None:
-        template_selector = template_id
-    else:
-        assert family_prefix is not None
-        template_selector = family_prefix + "%"
+    predicates = ["ts.template_id = ?" if template_id is not None else "ts.template_id LIKE ?"]
+    values = [template_id if template_id is not None else family_prefix + "%"]
+    if sheet is not None:
+        predicates.append("ts.sheet = ?")
+        values.append(sheet)
+    if row is not None:
+        predicates.append("ts.row = ?")
+        values.append(int(row))
     matches = conn.execute(
-        f"""
-        SELECT ts.template_id,
-               ts.canonical_target_id AS concept_uuid,
-               ts.label
+        f"""SELECT ts.template_id, ts.canonical_target_id, ts.label, ts.sheet, ts.row
         FROM template_slots ts
-        LEFT JOIN taxonomy_concepts tc
-          ON tc.source_element_id = ts.taxonomy_element_id
-        WHERE {template_predicate}
-          AND ts.sheet = ? AND ts.row = ? AND ts.col = 'B'
-          AND ts.validation_status = 'writable'
-          AND ts.slot_role = 'INPUT'
-          AND (
-            ts.value_kind = 'html'
-            OR LOWER(COALESCE(tc.data_type, '')) LIKE '%textblockitemtype'
-          )
-        """,
-        (template_selector, sheet, int(row)),
-    ).fetchall()
-    if len(matches) != 1:
-        return None
-    match = matches[0]
-    return {
-        "template_id": match[0],
-        "concept_uuid": match[1],
-        "label": match[2],
-    }
+        LEFT JOIN taxonomy_concepts tc ON tc.source_element_id = ts.taxonomy_element_id
+        WHERE {' AND '.join(predicates)} AND ts.col = 'B'
+          AND ts.validation_status = 'writable' AND ts.slot_role = 'INPUT'
+          AND (ts.value_kind = 'html'
+               OR LOWER(COALESCE(tc.data_type, '')) LIKE '%textblockitemtype')""", values).fetchall()
+    grouped = {}
+    for match in matches:
+        grouped.setdefault((match[3], match[4]), []).append(match)
+    return {coordinate: {"template_id": rows[0][0], "concept_uuid": rows[0][1], "label": rows[0][2]}
+            for coordinate, rows in grouped.items() if len(rows) == 1}
+
 
 
 def persist_template_manifest(db_path: str | Path, path_value: str | Path) -> int:
