@@ -1,6 +1,14 @@
 import type { CSSProperties } from "react";
 import { pwc, tokens, component } from "./theme";
 
+export const activityWorkspaceStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "minmax(0, 1.1fr) minmax(0, 1fr)",
+  gap: "clamp(28px, 3vw, 48px)",
+  alignItems: "start",
+  minWidth: 0,
+};
+
 // Shared inline component primitives, modelled on
 // docs/xbrl-design-system.html and Direction A of the UI prototype.
 // The app intentionally avoids Tailwind / className styling for Windows

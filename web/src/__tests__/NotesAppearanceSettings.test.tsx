@@ -46,6 +46,19 @@ describe("Notes appearance", () => {
     expect(busy).toHaveBeenCalledWith(true);
     expect(screen.getByRole("button", { name: "Reset Font size (pt)" })).toBeInTheDocument();
   });
+  test("custom header colour saves and reaches the prepared preview", async () => {
+    render(<NotesAppearanceSettings />);
+    const fill = await screen.findByLabelText("Header fill");
+    expect(screen.getByLabelText("Custom fill colour")).toBeDisabled();
+    fireEvent.change(fill, { target: { value: "custom" } });
+    const picker = screen.getByLabelText("Custom fill colour");
+    expect(picker).toBeEnabled();
+    fireEvent.input(picker, { target: { value: "#dbeafe" } });
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({ notes_appearance_overrides: { headerFill: "#dbeafe" } }));
+    await waitFor(() => expect(previewNotesAppearance).toHaveBeenLastCalledWith(expect.objectContaining({ headerFill: "#dbeafe" }), expect.any(AbortSignal)));
+    fireEvent.change(fill, { target: { value: "transparent" } });
+    await waitFor(() => expect(updateSettings).toHaveBeenLastCalledWith({ notes_appearance_overrides: { headerFill: "transparent" } }));
+  });
   test("clamps numeric values before saving", async () => {
     render(<NotesAppearanceSettings />);
     fireEvent.change(await screen.findByLabelText("Font size (pt)"), { target: { value: "99" } });
@@ -60,6 +73,11 @@ describe("Notes appearance", () => {
     await waitFor(() => expect(screen.getByLabelText("Font size (pt)")).toHaveValue(11));
     expect(screen.getByLabelText("Table border")).toHaveValue("none");
     fireEvent.click(screen.getByRole("button", { name: "Reset to house style" }));
+    expect(updateSettings).not.toHaveBeenCalledWith({ notes_appearance_reset: true });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByLabelText("Table border")).toHaveValue("none");
+    fireEvent.click(screen.getByRole("button", { name: "Reset to house style" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reset appearance" }));
     await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({ notes_appearance_reset: true }));
     await waitFor(() => expect(screen.queryByText("Custom")).toBeNull());
   });

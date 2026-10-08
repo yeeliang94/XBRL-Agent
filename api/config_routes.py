@@ -87,6 +87,7 @@ _ADMIN_ONLY_SETTINGS_KEYS = frozenset({
     "entity_memory",
     "tolerance_rm",
     "reset_keys",
+    "reset_shared_defaults",
     "advanced_settings",
 })
 
@@ -326,6 +327,33 @@ async def update_settings(body: dict, request: Request):
             denied = auth_routes._require_admin(conn, request)
         if denied is not None:
             return denied
+
+    if "reset_shared_defaults" in body:
+        if body["reset_shared_defaults"] is not True or len(body) != 1:
+            raise HTTPException(status_code=400, detail="reset_shared_defaults must be true and sent on its own.")
+        from notes.table_theme import OVERRIDES_ENV_VAR
+        from scout.limits import DEFAULT_SCOUT_WALLCLOCK_S, DEFAULT_SCOUT_MAX_TURNS
+        # Store the product defaults explicitly: removing overrides would revive
+        # older .env defaults, including a legacy dedicated Scout model.
+        updates = {
+            "TEST_MODEL": _DEFAULT_MODEL_ID,
+            "SCOUT_MODEL": "",
+            "XBRL_DEFAULT_MODELS": "{}",
+            "XBRL_THINKING_LEVELS": "{}",
+            "XBRL_REASONING_SUMMARY": "auto",
+            "XBRL_SCOUT_WALLCLOCK_S": str(DEFAULT_SCOUT_WALLCLOCK_S),
+            "XBRL_SCOUT_MAX_TURNS": str(DEFAULT_SCOUT_MAX_TURNS),
+            "XBRL_ENTITY_MEMORY": "false",
+            "XBRL_AUTO_REVIEW": "true",
+            "XBRL_NOTES_AUTO_REVIEW": "true",
+            "XBRL_NOTES_COVERAGE": "true",
+            "XBRL_TOLERANCE_RM": "1",
+            OVERRIDES_ENV_VAR: "{}",
+        }
+        updates.update({row.key: row.to_env(row.default) for row in settings_catalog.ADVANCED_SETTINGS})
+        persist_runtime_settings(server.SETTINGS_FILE, updates)
+        server._reload_runtime_settings()
+        return {"status": "ok"}
 
     # Accept legacy workflow fields without changing the fixed PDF workflow.
     # Older clients may round-trip either polarity from saved preferences.

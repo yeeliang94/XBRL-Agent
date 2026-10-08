@@ -254,7 +254,7 @@ function TerminalRow({ event }: { event: TerminalEvent }) {
                 aria-hidden="true"
                 style={{ ...styles.terminalDot, background: pwc.success, boxShadow: `0 0 0 3px ${pwc.successBg}` }}
               />
-              <span style={styles.terminalLabel}>Run finished</span>
+              <span style={styles.terminalLabel}>{event.event === "run_complete" ? "Run finished" : "Workstream finished"}</span>
             </div>
             <span style={{ ...ui.status, flexShrink: 0 }}>
               <StatusIcon symbol={hasWarnings ? STATUS_SYMBOLS.attention : STATUS_SYMBOLS.success} />
@@ -298,7 +298,7 @@ function TerminalRow({ event }: { event: TerminalEvent }) {
               aria-hidden="true"
               style={{ ...styles.terminalDot, background: display.accent }}
             />
-            <span style={styles.terminalLabel}>Run finished</span>
+            <span style={styles.terminalLabel}>{event.event === "run_complete" ? "Run finished" : "Workstream finished"}</span>
           </div>
           <span style={{ ...ui.status, flexShrink: 0 }}>
             <StatusIcon symbol={display.symbol} />

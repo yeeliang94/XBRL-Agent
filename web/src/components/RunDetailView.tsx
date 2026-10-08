@@ -22,6 +22,11 @@ import { HumanFileDialog } from "./HumanFileDialog";
 import { getHumanFile, type HumanFileRecord } from "../lib/humanFile";
 import type { Denomination } from "../lib/types";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { AgentWorkspace } from "./AgentWorkspace";
+import { notesFormattingActivity, notesCleanupActivity } from "../lib/notesFormattingActivity";
+import { ActivityStream } from "./ActivityStream";
+import type { AgentTabState } from "./AgentTabs";
+import type { AgentTabStatus } from "../lib/types";
 import { AgentTimeline } from "./AgentTimeline";
 import { NotesSubTabBar } from "./NotesSubTabBar";
 import { TabPanelFade } from "./TabPanelFade";
@@ -247,6 +252,8 @@ function agentSemanticUpdates(agent: RunAgentJson): string[] {
     if (event.event === "status" && event.data.message) {
       if (unfinished && /:\s*complete\.?$/i.test(event.data.message)) continue;
       updates.push(operatorMessage(event.data.message));
+    } else if (event.event === "pipeline_stage" && event.data.message) {
+      updates.push(event.data.message);
     } else if (event.event === "error" && event.data.message) {
       updates.push(operatorMessage(event.data.message));
     } else if (event.event === "complete" && event.data.success && !unfinished) {
@@ -314,24 +321,23 @@ function AgentCard({ agent, summary, filingStandard, onRetry, retryPending }: { 
   // full event list. Memoised on the same keys as the filter so switching
   // subs is the only trigger that rebuilds the timeline.
   const { events, toolTimeline, reasoningBlocks } = useMemo(() => {
-    if (!technicalOpen) return { events: [], toolTimeline: [], reasoningBlocks: [] };
     if (showSubTabs && notes12SubId !== null) {
       const filtered = filterEventsBySubAgent(agent.events, notes12SubId);
       return {
         events: filtered,
         toolTimeline: buildToolTimeline(filtered),
-        reasoningBlocks: buildReasoningTimeline(filtered),
+        reasoningBlocks: technicalOpen ? buildReasoningTimeline(filtered) : [],
       };
     }
     return {
       events: agent.events,
       toolTimeline: buildToolTimeline(agent.events),
-      reasoningBlocks: buildReasoningTimeline(agent.events),
+      reasoningBlocks: technicalOpen ? buildReasoningTimeline(agent.events) : [],
     };
   }, [agent.events, notes12SubId, showSubTabs, technicalOpen]);
 
   return (
-    <article data-testid="run-detail-agent" className="pwc-view-enter" style={styles.agentDetail}>
+    <article role="tabpanel" data-testid="run-detail-agent" className="pwc-view-enter" style={styles.agentDetail}>
       <div style={styles.agentHeaderButton}>
         <div style={styles.agentTitleRow}>
           <span style={styles.agentStatement}>{displayName}</span>
@@ -376,17 +382,10 @@ function AgentCard({ agent, summary, filingStandard, onRetry, retryPending }: { 
           <span>{agent.error_message}</span>
         </div>
       )}
-      {updates.length > 1 && (
-        <div style={styles.agentRecentUpdates}>
-          <h4 style={styles.agentDetailLabel}>Recent updates</h4>
-          {updates.slice(1).map((update, index) => (
-            <div key={`${update}:${index}`} style={styles.agentRecentUpdate}>
-              <span aria-hidden="true" style={styles.agentUpdateDot} />
-              <span>{update}</span>
-            </div>
-          ))}
-        </div>
-      )}
+      {showSubTabs && <NotesSubTabBar subAgents={subAgents} activeSubId={notes12SubId} onSelect={setNotes12SubId} />}
+      <ActivityStream events={events} toolTimeline={toolTimeline} reasoningBlocks={[]}
+        isRunning={agent.status === "running"} status={savedAgentStatus(agent.status)}
+        recorded={agent.status !== "running"} streamKey={`${agent.id}:${notes12SubId ?? "all"}`} />
       <details
         style={styles.agentTechnicalDetails}
         open={technicalOpen}
@@ -411,13 +410,6 @@ function AgentCard({ agent, summary, filingStandard, onRetry, retryPending }: { 
               {agent.total_cost != null ? ` · ${formatCost(agent.total_cost)}` : ""}
             </span>
           </div>
-          {showSubTabs && (
-            <NotesSubTabBar
-              subAgents={subAgents}
-              activeSubId={notes12SubId}
-              onSelect={setNotes12SubId}
-            />
-          )}
           <AgentTimeline
             events={events}
             toolTimeline={toolTimeline}
@@ -430,114 +422,85 @@ function AgentCard({ agent, summary, filingStandard, onRetry, retryPending }: { 
   );
 }
 
-function HistoricalAgentWorkspace({ agents, filingStandard, onRetry, retryPending }: { agents: RunAgentJson[]; filingStandard?: unknown; onRetry?: (statementType: string) => void; retryPending?: boolean }) {
-  const orderedAgents = useMemo(
-    () => [...agents].sort((a, b) => agentActivityOrder(a) - agentActivityOrder(b)),
-    [agents],
-  );
-  const [filter, setFilter] = useState<"all" | "current" | "finished">("all");
-  const [selectedId, setSelectedId] = useState<number | null>(orderedAgents[0]?.id ?? null);
-  const visibleAgents = orderedAgents.filter((agent) => {
-    if (filter === "all") return true;
-    const finished = [
-      "succeeded",
-      "complete",
-      "completed_with_errors",
-      "failed",
-      "cancelled",
-      "skipped",
-    ].includes(agent.status);
-    return filter === "finished" ? finished : !finished;
-  });
-  const visibleKey = visibleAgents.map((agent) => agent.id).join(":");
-  const selectedAgent = visibleAgents.find((agent) => agent.id === selectedId) ?? visibleAgents[0] ?? null;
-  const summaries = useMemo(() => {
-    const next = new Map<number, AgentSummary>();
-    for (const agent of orderedAgents) {
-      next.set(agent.id, {
-        updates: agentSemanticUpdates(agent),
-        sourceReference: agentSourceReference(agent),
-      });
+function savedAgentStatus(status: string): AgentTabStatus {
+  if (["succeeded", "completed", "complete", "completed_with_errors"].includes(status)) return "complete";
+  if (["cancelled", "aborted"].includes(status)) return "cancelled";
+  if (status === "running" || status === "failed" || status === "skipped") return status;
+  return "pending";
+}
+
+function observedStageAgents(detail: RunDetailJson): RunAgentJson[] {
+  // Only observed stages become workstreams; a terminal parent alone never
+  // invents success. Normalize the durable envelope at this boundary.
+  const events: RunAgentJson["events"] = [];
+  for (const event of detail.run_events ?? []) {
+    const stage = event.data.stage;
+    if (event.event === "pipeline_stage" && (stage === "formatting_notes" || stage === "cleaning_notes" || stage === "done")) {
+      events.push({ event: "pipeline_stage", timestamp: event.timestamp, data: {
+        stage, started_at: event.timestamp,
+        message: typeof event.data.message === "string" ? event.data.message : undefined,
+        completed: typeof event.data.completed === "number" ? event.data.completed : undefined,
+        total: typeof event.data.total === "number" ? event.data.total : undefined,
+      } });
+    } else if (event.event === "error" && typeof event.data.message === "string") {
+      events.push({ event: "error", timestamp: event.timestamp, data: {
+        message: event.data.message, type: typeof event.data.type === "string" ? event.data.type : undefined,
+      } });
     }
-    return next;
+  }
+  const stages = events.filter((event) => event.event === "pipeline_stage");
+  const latest = stages[stages.length - 1]?.data;
+  const state = { events, pipelineStage: latest?.stage ?? null,
+    pipelineActivity: latest ?? null, isRunning: detail.status === "running" };
+  const result: RunAgentJson[] = [];
+  for (const [index, type, stage, outcome] of [
+    [-1, "NOTES_FORMATTING", "formatting_notes", notesFormattingActivity(state)],
+    [-2, "NOTES_CLEANUP", "cleaning_notes", notesCleanupActivity(state)],
+  ] as const) {
+    if (!outcome || detail.agents.some((agent) => agent.statement_type === type)) continue;
+    result.push({ id: index, statement_type: type, variant: null, model: null,
+      status: outcome.status === "complete" ? "completed" : outcome.status,
+      started_at: null, ended_at: null, workbook_path: null, total_tokens: null, total_cost: null,
+      events: events.filter((event) => (event.event === "pipeline_stage" && event.data.stage === stage)
+        || (event.event === "error" && event.data.type === (type === "NOTES_FORMATTING" ? "notes_formatting_incomplete" : "notes_cleanup_incomplete"))),
+      error_message: outcome.status === "failed" ? outcome.message : null,
+    });
+  }
+  return result;
+}
+
+function SavedAgentWorkspace({ detail, filingStandard, onRetry, retryPending }: { detail: RunDetailJson; filingStandard?: unknown; onRetry?: (statementType: string) => void; retryPending?: boolean }) {
+  const orderedAgents = useMemo(
+    () => [...detail.agents, ...observedStageAgents(detail)].sort((a, b) => agentActivityOrder(a) - agentActivityOrder(b)),
+    [detail],
+  );
+  const [selectedId, setSelectedId] = useState("");
+  const navigation = useMemo(() => {
+    const tabs: Record<string, AgentTabState> = {};
+    for (const agent of orderedAgents) {
+      const update = agentSemanticUpdates(agent)[0];
+      const source = agentSourceReference(agent);
+      const unfinished = ["failed", "cancelled", "aborted"].includes(agent.status);
+      const task = unfinished && update ? update : source
+        ?? (update && update !== "Finished its assigned work" ? update : formatAgentDuration(agent));
+      tabs[String(agent.id)] = {
+        agentId: String(agent.id), label: agentDisplayName(agent),
+        role: agent.statement_type, status: savedAgentStatus(agent.status),
+        task, taskDetail: unfinished && task !== source ? source : null,
+        flag: agent.status === "completed_with_errors" ? "Review the unresolved findings" : null,
+      };
+    }
+    return tabs;
   }, [orderedAgents]);
-
-  useEffect(() => {
-    if (selectedAgent && selectedAgent.id !== selectedId) setSelectedId(selectedAgent.id);
-  }, [selectedAgent, selectedId, visibleKey]);
-
+  const selectedAgent = orderedAgents.find((agent) => String(agent.id) === selectedId) ?? orderedAgents[0];
   return (
-    <div className="historical-agent-workspace" style={styles.historicalAgentWorkspace}>
-      <section style={styles.historicalAgentRoster} aria-label="Recorded agents">
-        <div style={styles.historicalAgentRosterHeader}>
-          <div>
-            <h3 style={styles.sectionHeading}>Agents</h3>
-          </div>
-          <div role="group" aria-label="Filter recorded agents" style={styles.agentFilters}>
-            {(["current", "all", "finished"] as const).map((value) => (
-              <button
-                key={value}
-                type="button"
-                aria-pressed={filter === value}
-                onClick={() => setFilter(value)}
-                style={{ ...styles.agentFilterButton, ...(filter === value ? styles.agentFilterButtonActive : {}) }}
-              >
-                {value.charAt(0).toUpperCase() + value.slice(1)}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div style={styles.historicalAgentList} data-testid="run-detail-agent-list">
-          {visibleAgents.map((agent) => {
-            const selected = agent.id === selectedAgent?.id;
-            const summary = summaries.get(agent.id);
-            const status = agentStatusDisplay(agent.status);
-            const update = summary?.updates[0] ?? status.label;
-            const hasDistinctUpdate = update !== status.label && update !== "Finished its assigned work";
-            const subtitle = statementCodeSubtitle(agent.statement_type, filingStandard)
-              ?? (agent.statement_type === "SCOUT" ? "Document preparation" : null);
-            return (
-              <button
-                key={agent.id}
-                type="button"
-                data-testid="run-detail-agent-row"
-                aria-pressed={selected}
-                onClick={() => setSelectedId(agent.id)}
-                className="historical-agent-row"
-                style={{ ...styles.historicalAgentRow, ...(selected ? styles.historicalAgentRowActive : {}) }}
-              >
-                <StatusIcon symbol={status.symbol} />
-                <span style={styles.historicalAgentIdentity}>
-                  <strong>{agentDisplayName(agent)}</strong>
-                  {subtitle && <span>{subtitle}</span>}
-                </span>
-                <span style={styles.historicalAgentTask}>
-                  <strong>{hasDistinctUpdate ? update : summary?.sourceReference ?? formatAgentDuration(agent)}</strong>
-                  {hasDistinctUpdate && <span>{summary?.sourceReference ?? formatAgentDuration(agent)}</span>}
-                </span>
-                <span style={styles.historicalAgentState}>{status.label}</span>
-              </button>
-            );
-          })}
-          {visibleAgents.length === 0 && <p style={styles.dim}>No agents match this filter.</p>}
-        </div>
-      </section>
-      <aside style={styles.historicalAgentDetailPane}>
-        <span role="status" aria-live="polite" aria-atomic="true" style={styles.visuallyHidden}>
-          {selectedAgent ? `Selected ${agentDisplayName(selectedAgent)} activity.` : "No agent selected."}
-        </span>
-        {selectedAgent && (
-          <AgentCard
-            key={selectedAgent.id}
-            agent={selectedAgent}
-            filingStandard={filingStandard}
-            onRetry={onRetry}
-            retryPending={retryPending}
-            summary={summaries.get(selectedAgent.id) ?? { updates: [], sourceReference: null }}
-          />
-        )}
-      </aside>
-    </div>
+    <AgentWorkspace agents={navigation} tabOrder={orderedAgents.map((agent) => String(agent.id))}
+      filingStandard={filingStandard as RunDetailJson["filing_standard"]}
+      activeTab={selectedAgent ? String(selectedAgent.id) : ""} onTabClick={setSelectedId}>
+      {selectedAgent && <AgentCard key={selectedAgent.id} agent={selectedAgent}
+        filingStandard={filingStandard} onRetry={onRetry} retryPending={retryPending}
+        summary={{ updates: agentSemanticUpdates(selectedAgent), sourceReference: agentSourceReference(selectedAgent) }} />}
+    </AgentWorkspace>
   );
 }
 
@@ -1234,7 +1197,7 @@ export function RunDetailView({
             />
           </div>
           {isRunning && (
-            <LiveRunSummary agents={detail.agents ?? []} onViewActivity={() => selectTab("agents")} />
+            <LiveRunSummary agents={[...detail.agents, ...observedStageAgents(detail)]} onViewActivity={() => selectTab("agents")} />
           )}
           {(detail.status === "completed" || detail.status === "completed_with_errors" || detail.status === "correction_exhausted") && canonicalEnabled &&
             hasFigureStatements && (
@@ -1310,10 +1273,10 @@ export function RunDetailView({
       {activeTab === "agents" && (
         <section style={styles.section} role="tabpanel" data-testid="run-detail-agents">
           <DiagnosticsExport key={detail.id} runId={detail.id} />
-          {detail.agents.length === 0 ? (
+          {detail.agents.length === 0 && observedStageAgents(detail).length === 0 ? (
             <p style={styles.dim}>Nothing was recorded for this run yet.</p>
           ) : (
-            <HistoricalAgentWorkspace agents={detail.agents} filingStandard={detail.filing_standard ?? detail.config?.filing_standard}
+            <SavedAgentWorkspace key={detail.id} detail={detail} filingStandard={detail.filing_standard ?? detail.config?.filing_standard}
               onRetry={!isRunning && !isDraft && !unsupportedStandard && detail.config && onRetryAgent ? setRetryAgent : undefined}
               retryPending={retryPending} />
           )}
@@ -1789,107 +1752,6 @@ const styles = {
     margin: 0,
     color: pwc.grey900,
   } as React.CSSProperties,
-  historicalAgentWorkspace: {
-    display: "grid",
-    gridTemplateColumns: "minmax(520px, 1.35fr) minmax(300px, 0.72fr)",
-    gap: pwc.space.xxl,
-    alignItems: "start",
-    minWidth: 0,
-  } as React.CSSProperties,
-  historicalAgentRoster: {
-    minWidth: 0,
-  } as React.CSSProperties,
-  historicalAgentRosterHeader: {
-    minHeight: 42,
-    display: "flex",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-    gap: pwc.space.md,
-  } as React.CSSProperties,
-  agentRosterHint: {
-    margin: "3px 0 0",
-    color: pwc.grey700,
-    fontSize: 12,
-  } as React.CSSProperties,
-  agentFilters: {
-    display: "flex",
-    gap: 3,
-  } as React.CSSProperties,
-  agentFilterButton: {
-    minHeight: 30,
-    padding: "0 9px",
-    border: 0,
-    borderRadius: pwc.radius.sm,
-    background: "transparent",
-    color: pwc.grey700,
-    fontFamily: pwc.fontBody,
-    fontSize: 14,
-    cursor: "pointer",
-  } as React.CSSProperties,
-  agentFilterButtonActive: {
-    background: pwc.grey50,
-    color: pwc.black,
-    fontWeight: pwc.weight.medium,
-  } as React.CSSProperties,
-  historicalAgentList: {
-    display: "grid",
-    gap: 2,
-    marginTop: 7,
-  } as React.CSSProperties,
-  historicalAgentRow: {
-    width: "100%",
-    minHeight: 58,
-    padding: "8px 9px",
-    border: 0,
-    borderRadius: pwc.radius.md,
-    background: "transparent",
-    display: "grid",
-    gridTemplateColumns: "20px minmax(180px, 36%) minmax(0, 1fr) 100px",
-    gap: 11,
-    alignItems: "center",
-    textAlign: "left",
-    cursor: "pointer",
-    color: pwc.black,
-    fontFamily: pwc.fontBody,
-    fontSize: 14,
-  } as React.CSSProperties,
-  historicalAgentRowActive: {
-    background: pwc.grey50,
-  } as React.CSSProperties,
-  historicalAgentIdentity: {
-    minWidth: 0,
-    display: "grid",
-    gap: 2,
-  } as React.CSSProperties,
-  historicalAgentTask: {
-    minWidth: 0,
-    display: "grid",
-    gap: 2,
-  } as React.CSSProperties,
-  historicalAgentState: {
-    color: pwc.grey700,
-    fontSize: 12,
-    textAlign: "right" as const,
-    whiteSpace: "nowrap",
-  } as React.CSSProperties,
-  historicalAgentDetailPane: {
-    position: "sticky",
-    top: 86,
-    minWidth: 0,
-    paddingLeft: pwc.space.xxl,
-    borderLeft: `1px solid ${pwc.grey100}`,
-  } as React.CSSProperties,
-  visuallyHidden: {
-    position: "absolute",
-    width: 1,
-    height: 1,
-    padding: 0,
-    margin: -1,
-    overflow: "hidden",
-    clip: "rect(0, 0, 0, 0)",
-    whiteSpace: "nowrap",
-    border: 0,
-  } as React.CSSProperties,
   perfDetails: {
     marginTop: pwc.space.lg,
     borderTop: `1px solid ${pwc.grey200}`,
@@ -1963,31 +1825,6 @@ const styles = {
     lineHeight: 1.55,
     whiteSpace: "pre-wrap" as const,
     overflowWrap: "anywhere" as const,
-  } as React.CSSProperties,
-  agentRecentUpdates: {
-    display: "grid",
-    gap: 9,
-  } as React.CSSProperties,
-  agentDetailLabel: {
-    margin: 0,
-    color: pwc.grey700,
-    fontSize: 12,
-    fontWeight: pwc.weight.semibold,
-  } as React.CSSProperties,
-  agentRecentUpdate: {
-    display: "grid",
-    gridTemplateColumns: "8px minmax(0, 1fr)",
-    gap: 8,
-    alignItems: "start",
-    color: pwc.black,
-    fontSize: 14,
-  } as React.CSSProperties,
-  agentUpdateDot: {
-    width: 5,
-    height: 5,
-    marginTop: 6,
-    borderRadius: "50%",
-    background: pwc.grey400,
   } as React.CSSProperties,
   agentTechnicalDetails: {
     borderTop: `1px solid ${pwc.grey100}`,

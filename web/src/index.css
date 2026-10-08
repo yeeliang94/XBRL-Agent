@@ -610,6 +610,9 @@ textarea:focus {
 }
 
 @media (max-width: 760px) {
+  .settings-section-layout { grid-template-columns: minmax(0, 1fr) !important; gap: 24px !important; }
+  .settings-section-layout > [role="tablist"] { flex-direction: row !important; flex-wrap: wrap; }
+  .settings-section-layout > [role="tablist"] > button { width: auto !important; }
   .notes-appearance-layout {
     grid-template-columns: minmax(0, 1fr) !important;
   }
@@ -808,18 +811,6 @@ details[open] > summary::before {
 }
 
 @media (max-width: 1000px) {
-  .historical-agent-workspace {
-    grid-template-columns: minmax(0, 1fr) !important;
-  }
-
-  .historical-agent-workspace > aside {
-    position: static !important;
-    padding-top: 24px !important;
-    padding-left: 0 !important;
-    border-top: 1px solid #EEEFF1 !important;
-    border-left: 0 !important;
-  }
-
   .review-workspace {
     display: flex !important;
     flex-wrap: wrap !important;

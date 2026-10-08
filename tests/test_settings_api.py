@@ -91,17 +91,17 @@ def test_get_settings_default(tmp_path, monkeypatch):
     resp = client.get("/api/settings")
     assert resp.status_code == 200
     data = resp.json()
-    assert data["model"] == "openai.global.gpt-5.6-luna"
+    assert data["model"] == "openai.global.gpt-6-luna"
     assert data["reasoning_summary"] == "auto"
     assert data["api_key_set"] is False
     assert "proxy_url" in data
 
 
-def test_default_model_is_gpt_5_6_luna_for_every_agent_role(tmp_path, monkeypatch):
+def test_default_model_is_gpt_6_luna_for_every_agent_role(tmp_path, monkeypatch):
     """When TEST_MODEL and XBRL_DEFAULT_MODELS are unset, every agent role
-    (scout + 5 statement types) resolves to GPT-5.6 Luna.
+    (scout + 5 statement types) resolves to GPT-6 Luna.
 
-    Pins the decision that GPT-5.4 is the global default across platforms
+    Pins the decision that GPT-6 Luna is the global default across platforms
     (Mac direct + Windows proxy). If someone reverts the settings/server
     default back to a Gemini id, this test catches it before a run goes
     out with the wrong model.
@@ -115,9 +115,9 @@ def test_default_model_is_gpt_5_6_luna_for_every_agent_role(tmp_path, monkeypatc
 
     defaults = _load_extended_settings()["default_models"]
     for role in _AGENT_ROLES:
-        assert defaults[role] == "openai.global.gpt-5.6-luna", (
+        assert defaults[role] == "openai.global.gpt-6-luna", (
             f"Agent role {role!r} defaulted to {defaults[role]!r}, "
-            f"expected 'openai.global.gpt-5.6-luna'."
+            f"expected 'openai.global.gpt-6-luna'."
         )
 
 
@@ -219,8 +219,8 @@ def test_scout_limits_round_trip_and_apply_without_restart(tmp_path, monkeypatch
     monkeypatch.delenv("XBRL_SCOUT_MAX_TURNS", raising=False)
 
     defaults = client.get("/api/settings").json()
-    assert defaults["scout_wallclock_seconds"] == 300
-    assert defaults["scout_max_turns"] == 20
+    assert defaults["scout_wallclock_seconds"] == 600
+    assert defaults["scout_max_turns"] == 40
 
     response = client.post(
         "/api/settings",
@@ -437,7 +437,7 @@ def test_house_notes_table_style_matches_shipped_test_appearance(monkeypatch):
     import server
     monkeypatch.delenv("XBRL_NOTES_TABLE_STYLE", raising=False)
     style = server._notes_table_style()
-    assert style["borderStyle"] == "single"
+    assert style["borderStyle"] == "none"
     assert style["headerRule"] is False
     assert style["headerBold"] is True
     assert style["headerFill"] == "transparent"
@@ -465,7 +465,7 @@ def test_house_style_callers_cannot_mutate_the_shared_constant(monkeypatch):
     import server
     monkeypatch.delenv("XBRL_NOTES_TABLE_STYLE", raising=False)
     server._notes_table_style()["borderStyle"] = "double"
-    assert server.HOUSE_NOTES_TABLE_STYLE["borderStyle"] == "single"
+    assert server.HOUSE_NOTES_TABLE_STYLE["borderStyle"] == "none"
 
 
 
@@ -860,3 +860,52 @@ def test_every_advanced_setting_is_read_by_product_code():
     )
     unread = [s.key for s in ADVANCED_SETTINGS if f'"{s.key}"' not in source]
     assert unread == []
+
+
+def test_shared_reset_restores_application_defaults_not_old_deployment(tmp_path, monkeypatch):
+    """Confirmed reset restores the agreed defaults without losing connection or guidance."""
+    from runtime_settings import update_settings, read_settings
+    monkeypatch.setattr(server, "ENV_FILE", tmp_path / ".env")
+    monkeypatch.setattr(server, "SETTINGS_FILE", tmp_path / "settings.json")
+    monkeypatch.setenv("TEST_MODEL", "old-deployment-model")
+    monkeypatch.setenv("SCOUT_MODEL", "old-scout-model")
+    monkeypatch.setenv("XBRL_NOTES_SOURCE_INTEGRITY", "shadow")
+    monkeypatch.setenv("XBRL_SCOUT_WALLCLOCK_S", "300")
+    monkeypatch.setenv("XBRL_SCOUT_MAX_TURNS", "20")
+    monkeypatch.setenv("XBRL_ENTITY_MEMORY", "true")
+    monkeypatch.setenv("XBRL_DEFAULT_MODELS", '{"reviewer":"old-review-model"}')
+    monkeypatch.setenv("XBRL_MAX_CONCURRENT_AGENTS", "2")
+    update_settings(server.SETTINGS_FILE, {
+        "GOOGLE_API_KEY": "test-secret-keep", "LLM_PROXY_URL": "https://service.example.com",
+        "XBRL_TEAM_GUIDANCE": "keep guidance", "XBRL_NOTES_APPEARANCE_OVERRIDES": '{"headerFill":"#abcdef","borderStyle":"single"}',
+    })
+    assert client.post("/api/settings", json={"reset_shared_defaults": True}).status_code == 200
+    settings = client.get("/api/settings").json()
+    assert settings["model"] == "openai.global.gpt-6-luna"
+    assert settings["scout_wallclock_seconds"] == 600
+    assert settings["scout_max_turns"] == 40
+    assert settings["entity_memory"] is False
+    assert settings["notes_source_integrity"] == "shadow"
+    assert settings["default_model_overrides"] == {}
+    assert all(value == "openai.global.gpt-6-luna" for value in settings["default_models"].values())
+    assert settings["thinking_levels"] == {}
+    assert settings["reasoning_summary"] == "auto"
+    assert settings["auto_review"] and settings["notes_auto_review"] and settings["notes_coverage"]
+    assert settings["tolerance_rm"] == 1
+    assert settings["notes_table_style"]["borderStyle"] == "none"
+    assert settings["notes_table_style"]["headerFill"] == "transparent"
+    assert settings["notes_appearance_overrides"] == {}
+    assert all(row["value"] == row["default"] for row in settings["advanced_settings"])
+    saved = read_settings(server.SETTINGS_FILE)
+    assert saved["GOOGLE_API_KEY"] == "test-secret-keep"
+    assert saved["LLM_PROXY_URL"] == "https://service.example.com"
+    assert saved["XBRL_TEAM_GUIDANCE"] == "keep guidance"
+    assert saved["SCOUT_MODEL"] == ""
+
+
+@pytest.mark.parametrize("body", [{"reset_shared_defaults": False}, {"reset_shared_defaults": 1}, {"reset_shared_defaults": True, "model": "other"}])
+def test_shared_reset_rejects_ambiguous_request_without_writes(body):
+    from runtime_settings import read_settings
+    before = read_settings(server.SETTINGS_FILE)
+    assert client.post("/api/settings", json=body).status_code == 400
+    assert read_settings(server.SETTINGS_FILE) == before

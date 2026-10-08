@@ -3,7 +3,7 @@ import { pwc } from "../lib/theme";
 import { ui } from "../lib/uiStyles";
 import { PageHeader } from "../components/PageHeader";
 import { getSettings, updateSettings, testConnection } from "../lib/api";
-import { GeneralSettingsForm } from "../components/GeneralSettingsForm";
+import { type SharedSettingsSection, GeneralSettingsForm } from "../components/GeneralSettingsForm";
 import { AccountTab } from "../components/AccountTab";
 import { UsersTab } from "../components/UsersTab";
 import { AgentInstructionsPanel } from "../components/AgentInstructionsPanel";
@@ -31,12 +31,14 @@ interface Props {
   onFieldLabels?: () => void;
 }
 
-type TabKey = "general" | "instructions" | "notes" | "account" | "users";
+type TabKey = SharedSettingsSection | "instructions" | "notes" | "account" | "users";
 
 export function SettingsPage({ isAdmin, currentEmail, onFieldLabels }: Props) {
   const tabs: { key: TabKey; label: string }[] = [
     { key: "general", label: "General" },
     { key: "instructions", label: "Agent instructions" },
+    { key: "extraction", label: "Extraction" },
+    { key: "advanced", label: "Advanced" },
     { key: "notes", label: "Notes appearance" },
     { key: "account", label: "Account" },
     ...(isAdmin ? [{ key: "users" as const, label: "Users" }] : []),
@@ -44,10 +46,17 @@ export function SettingsPage({ isAdmin, currentEmail, onFieldLabels }: Props) {
 
   const [activeTab, setActiveTab] = useState<TabKey>("general");
   const [instructionsDirty, setInstructionsDirty] = useState(false);
+  const [sharedDirty, setSharedDirty] = useState(false);
+  const [sharedBusy, setSharedBusy] = useState(false);
+  const sharedTab = (key: TabKey): key is SharedSettingsSection => ["general", "extraction", "advanced"].includes(key);
   const [notesBusy, setNotesBusy] = useState(false);
   const changeTab = (key: TabKey) => {
     if (key === activeTab) return true;
-    if (notesBusy) return false;
+    if (notesBusy || sharedBusy) return false;
+    if (sharedDirty && sharedTab(activeTab) && !sharedTab(key)) {
+      if (!window.confirm("Discard unsaved settings?")) return false;
+      setSharedDirty(false);
+    }
     if (instructionsDirty && !window.confirm("Discard unsaved guidance?")) return false;
     setInstructionsDirty(false);
     setActiveTab(key);
@@ -57,8 +66,8 @@ export function SettingsPage({ isAdmin, currentEmail, onFieldLabels }: Props) {
   const tabBarRef = useRef<HTMLDivElement>(null);
   const onTabKeyDown = (e: React.KeyboardEvent, index: number) => {
     let next = index;
-    if (e.key === "ArrowRight") next = (index + 1) % tabs.length;
-    else if (e.key === "ArrowLeft") next = (index - 1 + tabs.length) % tabs.length;
+    if (e.key === "ArrowRight" || e.key === "ArrowDown") next = (index + 1) % tabs.length;
+    else if (e.key === "ArrowLeft" || e.key === "ArrowUp") next = (index - 1 + tabs.length) % tabs.length;
     else if (e.key === "Home") next = 0;
     else if (e.key === "End") next = tabs.length - 1;
     else return;
@@ -73,11 +82,13 @@ export function SettingsPage({ isAdmin, currentEmail, onFieldLabels }: Props) {
       <PageHeader title="Settings" />
       {isAdmin && onFieldLabels && <button type="button" style={{ ...ui.buttonGhost, alignSelf: "flex-start" }} onClick={onFieldLabels}>Field labels</button>}
 
+      <div className="settings-section-layout" style={styles.layout}>
       <div
         ref={tabBarRef}
         style={styles.tabBar}
         role="tablist"
         aria-label="Settings sections"
+        aria-orientation="vertical"
       >
         {tabs.map((t, i) => {
           const active = t.key === activeTab;
@@ -89,7 +100,7 @@ export function SettingsPage({ isAdmin, currentEmail, onFieldLabels }: Props) {
               aria-controls={`settings-panel-${t.key}`}
               role="tab"
               aria-selected={active}
-              disabled={notesBusy && !active}
+              disabled={(notesBusy || sharedBusy) && !active}
               tabIndex={active ? 0 : -1}
               className="pwc-tab"
               onPointerDown={(e) => e.currentTarget.setAttribute("data-pointer-focus", "true")}
@@ -107,13 +118,17 @@ export function SettingsPage({ isAdmin, currentEmail, onFieldLabels }: Props) {
         })}
       </div>
 
-      {activeTab === "general" && (
-        <section className="pwc-view-enter" style={styles.section} id="settings-panel-general" aria-labelledby="settings-tab-general" role="tabpanel">
+      <div style={{ minWidth: 0 }}>
+      {sharedTab(activeTab) && (
+        <section className="pwc-view-enter" style={styles.section} id={`settings-panel-${activeTab}`} aria-labelledby={`settings-tab-${activeTab}`} role="tabpanel">
           <GeneralSettingsForm
             getSettings={getSettings}
             saveSettings={updateSettings}
             testConnection={testConnection}
             isAdmin={isAdmin}
+            section={activeTab}
+            onDirtyChange={setSharedDirty}
+            onBusyChange={setSharedBusy}
           />
         </section>
       )}
@@ -141,27 +156,35 @@ export function SettingsPage({ isAdmin, currentEmail, onFieldLabels }: Props) {
           <UsersTab currentEmail={currentEmail} />
         </section>
       )}
+      </div>
+      </div>
     </div>
   );
 }
 
 const styles = {
-  // Form mode (design-system Layouts): 840px, matching the other pages'
-  // task-based widths instead of a bespoke 640 cap.
+  // Standard page width leaves room for the section rail and aligned controls.
   container: {
-    ...ui.pageForm,
+    ...ui.pageStandard,
     display: "flex",
     flexDirection: "column" as const,
     gap: pwc.space.xl,
   } as React.CSSProperties,
+  layout: { display: "grid", gridTemplateColumns: "190px minmax(0, 1fr)", gap: 32, alignItems: "start" } as React.CSSProperties,
   tabBar: {
-    ...ui.tabBar,
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 4,
+    minWidth: 0,
   } as React.CSSProperties,
   // Shared surface-tab geometry; active = dark text + quiet fill.
-  tab: ui.tab,
+  tab: { ...ui.tab, textAlign: "left", justifyContent: "flex-start", width: "100%" } as React.CSSProperties,
   tabActive: {
     ...ui.tab,
     ...ui.tabActive,
+    textAlign: "left",
+    justifyContent: "flex-start",
+    width: "100%",
   } as React.CSSProperties,
   section: {} as React.CSSProperties,
 };

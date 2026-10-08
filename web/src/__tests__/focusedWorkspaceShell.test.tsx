@@ -54,11 +54,12 @@ describe("focused-workspace shell", () => {
     expect(mobile).toContain("min-height: 44px !important");
   });
 
-  test("completed Activity uses the responsive roster-detail composition", () => {
-    expect(css).toContain(".historical-agent-workspace");
-    const tablet = css.slice(css.indexOf("@media (max-width: 1000px)"), css.indexOf("@media (max-width: 780px)"));
+  test("running and saved Activity share the responsive grouped composition", () => {
+    expect(css).not.toContain(".historical-agent-workspace");
+    const tablet = css.slice(css.indexOf("@media (max-width: 1100px)"), css.indexOf("@media (max-width: 1000px)"));
+    expect(tablet).toContain(".multi-agent-workspace");
     expect(tablet).toContain("grid-template-columns: minmax(0, 1fr) !important");
-    expect(tablet).toContain("border-top: 1px solid #EEEFF1 !important");
+    expect(tablet).toContain("border-top: 1px solid #DFE3E6 !important");
   });
 
   test("icon-only help appears on hover and keyboard focus with shared motion", () => {

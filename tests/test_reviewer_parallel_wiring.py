@@ -102,6 +102,14 @@ def test_live_pipeline_reviewers_are_in_flight_together(tmp_path, monkeypatch):
         conn = sqlite3.connect(str(server.AUDIT_DB_PATH), timeout=0.05)
         conn.execute("PRAGMA busy_timeout = 50")
         try:
+            # The review is finished while downstream notes work is still
+            # active. History must agree with the review's terminal feed.
+            review = conn.execute(
+                "SELECT status, ended_at FROM run_agents WHERE run_id = ? "
+                "AND statement_type = 'CORRECTION'", (kwargs["run_id"],),
+            ).fetchone()
+            assert review[0] == "completed"
+            assert review[1]
             repo.insert_notes_review_flag(
                 conn,
                 run_id=kwargs["run_id"],
