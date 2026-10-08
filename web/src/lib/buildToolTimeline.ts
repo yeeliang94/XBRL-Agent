@@ -32,12 +32,9 @@ export function isScoutTimelineEvent(evt: { event: string }): boolean {
 /**
  * Walk an event stream and pull out the Sheet-12 sub-agent batch metadata.
  *
- * The live reducer (agentReducer) populates `AgentState.subAgentBatchRanges`
- * from `status` events carrying phase="started" + batch_note_range +
- * batch_page_range + sub_agent_id. History replay doesn't use that reducer,
- * so this helper gives the RunDetailView the same list by inspecting the
- * persisted events directly. Keeping the derivation pure also means unit
- * tests can lock the live/replay equivalence contract in one place.
+ * Recorded sub-agent IDs are sufficient for selection. Batch note/page
+ * ranges enrich the labels when present; missing ranges stay unavailable.
+ * Namespaced tool-call IDs retain identity when start metadata was lost.
  *
  * Order = first-seen sub_agent_id (matches live behaviour). Retries that
  * re-emit the same sub_agent_id replace the prior entry so the ranges
@@ -45,8 +42,8 @@ export function isScoutTimelineEvent(evt: { event: string }): boolean {
  */
 export interface DerivedSubAgentRange {
   subAgentId: string;
-  notes: [number, number];
-  pages: [number, number];
+  notes: [number, number] | null;
+  pages: [number, number] | null;
 }
 
 export function deriveSubAgentRangesFromEvents(
@@ -55,19 +52,25 @@ export function deriveSubAgentRangesFromEvents(
   const byId = new Map<string, DerivedSubAgentRange>();
   const order: string[] = [];
   for (const evt of events) {
-    if (evt.event !== "status") continue;
     const d = evt.data as unknown as Record<string, unknown>;
-    if (d.phase !== "started") continue;
-    if (!Array.isArray(d.batch_note_range) || !Array.isArray(d.batch_page_range)) continue;
-    const noteRange = d.batch_note_range as number[];
-    const pageRange = d.batch_page_range as number[];
-    if (noteRange.length !== 2 || pageRange.length !== 2) continue;
-    const subId = typeof d.sub_agent_id === "string" ? d.sub_agent_id : "unknown";
-    if (!byId.has(subId)) order.push(subId);
+    // A recorded sub-agent remains selectable even when its start/ranges
+    // were not persisted. Tool IDs carry the same explicit routing identity.
+    const subId = typeof d.sub_agent_id === "string" && d.sub_agent_id
+      ? d.sub_agent_id
+      : typeof d.tool_call_id === "string"
+        ? /^(notes:LIST_OF_NOTES:sub\d+):/.exec(d.tool_call_id)?.[1]
+        : undefined;
+    if (!subId) continue;
+    const previous = byId.get(subId);
+    if (!previous) order.push(subId);
+    const range = (value: unknown): [number, number] | null =>
+      Array.isArray(value) && value.length === 2
+        && value.every((item) => typeof item === "number" && Number.isFinite(item) && item > 0)
+        ? [value[0], value[1]] : null;
     byId.set(subId, {
       subAgentId: subId,
-      notes: [noteRange[0], noteRange[1]],
-      pages: [pageRange[0], pageRange[1]],
+      notes: range(d.batch_note_range) ?? previous?.notes ?? null,
+      pages: range(d.batch_page_range) ?? previous?.pages ?? null,
     });
   }
   return order.map((id) => byId.get(id)!).filter(Boolean);

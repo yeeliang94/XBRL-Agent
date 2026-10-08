@@ -36,6 +36,12 @@ describe("XBRL design system is the production authority", () => {
     expect(designSystem).toContain("require confirmation that names the shared scope");
     expect(designSystem).toContain("preserve the connection, access key, team guidance, accounts and existing runs");
   });
+  test("keeps saved activity completion and sub-agent identity truthful", () => {
+    expect(designSystem).toContain("Saved Activity uses recorded parent completion events when agent rows still report running");
+    expect(designSystem).toContain("final database failures and cancellations remain authoritative");
+    expect(designSystem).toContain("Recorded List of Notes sub-agent identities stay selectable");
+    expect(designSystem).toContain("Never invent missing ranges");
+  });
   test("declares the canonical production contract and Direction A", () => {
     expect(designSystem).toContain("CANONICAL PRODUCTION DESIGN SYSTEM");
     expect(designSystem).toContain("STATUS · PRODUCTION");
