@@ -48,6 +48,8 @@ import { statementCodeSubtitle, statementCodeOrder } from "../lib/sheetLabels";
 import { describePdfSidecar } from "../lib/pdfSidecar";
 import {
   readRunTabFromUrl,
+  replaceRunTabInUrl,
+  announceRunTabChange,
   RUN_TAB_CHANGE_EVENT,
   writeRunTabToUrl,
 } from "../lib/runTabs";
@@ -554,9 +556,7 @@ export function RunDetailView({
   // Back/forward across tabs: re-read the query so the visible tab follows.
   useEffect(() => {
     const restoreVisibleTab = () => {
-      const url = new URL(window.location.href);
-      url.searchParams.set("tab", tab);
-      window.history.replaceState(window.history.state, "", url);
+      replaceRunTabInUrl(tab);
     };
     const onPop = () => {
       if (notesPreparationBlocked) {
@@ -763,13 +763,21 @@ export function RunDetailView({
   ];
   const availableTabs = isDraft
     ? tabs.filter((item) => item.key === "overview")
-    : tabs;
+    : isRunning
+      ? tabs.filter((item) => item.key === "overview" || item.key === "agents")
+      : tabs;
 
   // Clamp to a renderable tab. `initialTab="values"` (the /concepts/{id}
   // alias) can point at a tab that isn't available when canonical mode is off
   // or still loading — without this, no tab is active and no panel renders,
   // leaving a blank page below the tab bar (peer-review [6]).
-  const activeTab: RunTabKey = availableTabs.some((t) => t.key === tab) ? tab : "overview";
+  const activeTab: RunTabKey = availableTabs.some((t) => t.key === tab) ? tab : isRunning ? "agents" : "overview";
+  useEffect(() => {
+    if (!isRunning || tab === activeTab) return;
+    setTab(activeTab);
+    replaceRunTabInUrl(activeTab);
+    announceRunTabChange(activeTab);
+  }, [activeTab, isRunning, tab]);
   const reviewWorkspaceActive = activeTab === "values" || activeTab === "notes";
   const rollup = detail.telemetry_rollup;
   const sidecarNotice = detail.pdf_sidecar ? describePdfSidecar(detail.pdf_sidecar) : null;

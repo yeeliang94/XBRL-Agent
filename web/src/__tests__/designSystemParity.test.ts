@@ -242,6 +242,8 @@ describe("Direction A shell and responsive composition", () => {
   });
 
   test("pins the concise operator activity stream contract", () => {
+    expect(designSystem).toContain("Opening a running document defaults to Activity and exposes only Overview and Activity");
+    expect(designSystem).toContain("Restore the review tabs after completion, failure or stopping");
     expect(designSystem).toContain("Activity provides an Export diagnostics button for the selected run");
     expect(designSystem).toContain("Running and saved runs share one grouped navigator and selected activity pane");
     expect(designSystem).toContain("even when no agents started or no output folder exists");
