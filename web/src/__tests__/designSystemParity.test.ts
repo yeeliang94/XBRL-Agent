@@ -36,6 +36,12 @@ describe("XBRL design system is the production authority", () => {
     expect(designSystem).toContain("require confirmation that names the shared scope");
     expect(designSystem).toContain("preserve the connection, access key, team guidance, accounts and existing runs");
   });
+  test("keeps saved activity completion and sub-agent identity truthful", () => {
+    expect(designSystem).toContain("Saved Activity uses recorded parent completion events when agent rows still report running");
+    expect(designSystem).toContain("final database failures and cancellations remain authoritative");
+    expect(designSystem).toContain("Recorded List of Notes sub-agent identities stay selectable");
+    expect(designSystem).toContain("Never invent missing ranges");
+  });
   test("declares the canonical production contract and Direction A", () => {
     expect(designSystem).toContain("CANONICAL PRODUCTION DESIGN SYSTEM");
     expect(designSystem).toContain("STATUS · PRODUCTION");
@@ -236,6 +242,8 @@ describe("Direction A shell and responsive composition", () => {
   });
 
   test("pins the concise operator activity stream contract", () => {
+    expect(designSystem).toContain("Opening a running document defaults to Activity and exposes only Overview and Activity");
+    expect(designSystem).toContain("Restore the review tabs after completion, failure or stopping");
     expect(designSystem).toContain("Activity provides an Export diagnostics button for the selected run");
     expect(designSystem).toContain("Running and saved runs share one grouped navigator and selected activity pane");
     expect(designSystem).toContain("even when no agents started or no output folder exists");

@@ -48,6 +48,8 @@ import { statementCodeSubtitle, statementCodeOrder } from "../lib/sheetLabels";
 import { describePdfSidecar } from "../lib/pdfSidecar";
 import {
   readRunTabFromUrl,
+  replaceRunTabInUrl,
+  announceRunTabChange,
   RUN_TAB_CHANGE_EVENT,
   writeRunTabToUrl,
 } from "../lib/runTabs";
@@ -422,6 +424,23 @@ function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, re
   );
 }
 
+function recordedAgentStatus(agent: RunAgentJson): string {
+  // Final database outcomes remain authoritative, particularly failures
+  // recorded after a model reported success. Running rows can lag the feed
+  // until the other extraction agents finish.
+  if (!["running", "pending"].includes(agent.status)) return agent.status;
+  for (let index = agent.events.length - 1; index >= 0; index -= 1) {
+    const event = agent.events[index];
+    const data = event.data as unknown as Record<string, unknown>;
+    if (data.sub_agent_id) continue;
+    if (event.event === "status" && data.phase === "started") break;
+    if (event.event !== "complete") continue;
+    if (data.success === true) return "succeeded";
+    if (data.success === false) return data.error === "Cancelled by user" ? "cancelled" : "failed";
+  }
+  return agent.status;
+}
+
 function savedAgentStatus(status: string): AgentTabStatus {
   if (["succeeded", "completed", "complete", "completed_with_errors"].includes(status)) return "complete";
   if (["cancelled", "aborted"].includes(status)) return "cancelled";
@@ -472,7 +491,8 @@ function observedStageAgents(detail: RunDetailJson): RunAgentJson[] {
 function SavedAgentWorkspace({ detail, filingStandard, onRetry, retryPending }: { detail: RunDetailJson; filingStandard?: unknown; onRetry?: (statementType: string) => void; retryPending?: boolean }) {
   const panelId = useId();
   const orderedAgents = useMemo(
-    () => [...detail.agents, ...observedStageAgents(detail)].sort((a, b) => agentActivityOrder(a) - agentActivityOrder(b)),
+    () => [...detail.agents.map((agent) => ({ ...agent, status: recordedAgentStatus(agent) })), ...observedStageAgents(detail)]
+      .sort((a, b) => agentActivityOrder(a) - agentActivityOrder(b)),
     [detail],
   );
   const [selectedId, setSelectedId] = useState("");
@@ -536,9 +556,7 @@ export function RunDetailView({
   // Back/forward across tabs: re-read the query so the visible tab follows.
   useEffect(() => {
     const restoreVisibleTab = () => {
-      const url = new URL(window.location.href);
-      url.searchParams.set("tab", tab);
-      window.history.replaceState(window.history.state, "", url);
+      replaceRunTabInUrl(tab);
     };
     const onPop = () => {
       if (notesPreparationBlocked) {
@@ -745,13 +763,21 @@ export function RunDetailView({
   ];
   const availableTabs = isDraft
     ? tabs.filter((item) => item.key === "overview")
-    : tabs;
+    : isRunning
+      ? tabs.filter((item) => item.key === "overview" || item.key === "agents")
+      : tabs;
 
   // Clamp to a renderable tab. `initialTab="values"` (the /concepts/{id}
   // alias) can point at a tab that isn't available when canonical mode is off
   // or still loading — without this, no tab is active and no panel renders,
   // leaving a blank page below the tab bar (peer-review [6]).
-  const activeTab: RunTabKey = availableTabs.some((t) => t.key === tab) ? tab : "overview";
+  const activeTab: RunTabKey = availableTabs.some((t) => t.key === tab) ? tab : isRunning ? "agents" : "overview";
+  useEffect(() => {
+    if (!isRunning || tab === activeTab) return;
+    setTab(activeTab);
+    replaceRunTabInUrl(activeTab);
+    announceRunTabChange(activeTab);
+  }, [activeTab, isRunning, tab]);
   const reviewWorkspaceActive = activeTab === "values" || activeTab === "notes";
   const rollup = detail.telemetry_rollup;
   const sidecarNotice = detail.pdf_sidecar ? describePdfSidecar(detail.pdf_sidecar) : null;

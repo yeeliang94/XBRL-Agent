@@ -156,6 +156,30 @@ describe("RunDetailView", () => {
     vi.restoreAllMocks();
   });
 
+  test.each(["values", "notes", "checks", "review"] as const)("running runs hide review sections and redirect the %s link to Activity", (key) => {
+    window.history.replaceState(null, "", `/history/42?tab=${key}`);
+    const historyLength = window.history.length;
+    const detail = makeDetail({ status: "running" });
+    const { rerender } = render(<RunDetailView detail={detail} canonicalEnabled onDelete={vi.fn()} />);
+    const tabs = screen.getByRole("tablist", { name: "Run detail sections" });
+    expect(within(tabs).getAllByRole("tab").map((item) => item.textContent)).toEqual(["Overview", "Activity"]);
+    expect(within(tabs).getByRole("tab", { name: "Activity" })).toHaveAttribute("aria-selected", "true");
+    expect(window.location.search).toBe("?tab=agents");
+    expect(window.history.length).toBe(historyLength);
+    expect(screen.getByRole("button", { name: "Export diagnostics" })).toBeEnabled();
+    rerender(<RunDetailView detail={{ ...detail, status: "completed" }} canonicalEnabled onDelete={vi.fn()} />);
+    expect(within(tabs).getAllByRole("tab").map((item) => item.textContent)).toEqual(["Overview", "Figures", "Notes", "Cross-checks", "Activity", "AI review"]);
+    expect(within(tabs).getByRole("tab", { name: "Activity" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  test.each(["completed_with_errors", "failed", "aborted"])("terminal %s runs retain access to partial results and diagnostics", (status) => {
+    render(<RunDetailView detail={makeDetail({ status })} canonicalEnabled onDelete={vi.fn()} />);
+    const tabs = screen.getByRole("tablist", { name: "Run detail sections" });
+    expect(within(tabs).getAllByRole("tab")).toHaveLength(6);
+    clickRunTab(/^activity$/i);
+    expect(screen.getByRole("button", { name: "Export diagnostics" })).toBeEnabled();
+  });
+
   test("run-detail tab wrappers are presentational so the tablist owns its tabs", () => {
     render(<RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />);
     const tablist = screen.getByRole("tablist", { name: /run detail sections/i });
@@ -744,6 +768,42 @@ describe("RunDetailView", () => {
     expect(agentsSection.textContent).not.toContain("GoogleModel(");
   });
 
+  test.each(["running", "completed"])("saved Activity uses the recorded completion while the run is %s", (status) => {
+    render(<RunDetailView detail={makeDetail({ status, agents: [makeAgent({
+      statement_type: "SOCI", status: "running", ended_at: null,
+      events: [{ event: "complete", data: { success: true }, timestamp: 1 } as SSEEvent],
+    })] })} onDelete={() => {}} />);
+    clickRunTab(/^activity$/i);
+    expect(activityRows()[0]).toHaveTextContent("Complete");
+    expect(activityRows()[0]).not.toHaveTextContent("Working");
+    expect(screen.getByText("Finished its assigned work")).toBeVisible();
+    expect(screen.queryByText("Live activity")).toBeNull();
+  });
+
+  test.each([
+    [{ success: false, error: "Extraction failed" }, "Failed"],
+    [{ success: false, error: "Cancelled by user" }, "Stopped"],
+    [{ success: true, sub_agent_id: "notes:LIST_OF_NOTES:sub0" }, "Working"],
+  ])("saved Activity respects the terminal event's scope and outcome (%s)", (data, label) => {
+    render(<RunDetailView detail={makeDetail({ status: "running", agents: [makeAgent({
+      statement_type: "NOTES_LIST_OF_NOTES", status: "running", ended_at: null,
+      events: [{ event: "complete", data, timestamp: 1 } as SSEEvent],
+    })] })} onDelete={() => {}} />);
+    clickRunTab(/^activity$/i);
+    expect(activityRows()[0]).toHaveTextContent(label);
+  });
+
+  test("a new recorded attempt keeps the workstream running after an older completion", () => {
+    render(<RunDetailView detail={makeDetail({ status: "running", agents: [makeAgent({
+      status: "running", events: [
+        { event: "complete", data: { success: true }, timestamp: 1 } as SSEEvent,
+        { event: "status", data: { phase: "started", message: "Retrying extraction" }, timestamp: 2 } as SSEEvent,
+      ],
+    })] })} onDelete={() => {}} />);
+    clickRunTab(/^activity$/i);
+    expect(activityRows()[0]).toHaveTextContent("Working");
+  });
+
   test("uses a roster and focused detail while keeping technical events on demand", () => {
     render(
       <RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />,
@@ -948,7 +1008,7 @@ describe("RunDetailView", () => {
     expect(within(panel).queryByText(/^Notes$/)).toBeNull();
   });
 
-  test("Notes-12 replay renders sub-tab bar derived from persisted events + filters", () => {
+  test.each(["full", "missing ranges", "missing pages", "missing starts", "tool IDs only"])("Notes-12 replay renders and filters recorded sub-agents (%s)", (metadata) => {
     // Live path gets sub-agent ranges from the reducer; replay must derive
     // them from the persisted `started` status events carrying
     // batch_note_range + batch_page_range + sub_agent_id. This locks the
@@ -997,13 +1057,20 @@ describe("RunDetailView", () => {
         timestamp: 4,
       } as unknown as SSEEvent,
     ];
+    const recordedEvents = note12Events.filter((event) => !["missing starts", "tool IDs only"].includes(metadata) || event.event !== "status").map((event) => {
+      const data = { ...event.data } as Record<string, unknown>;
+      if (metadata === "missing ranges") { delete data.batch_note_range; delete data.batch_page_range; }
+      if (metadata === "missing pages") data.batch_page_range = [];
+      if (metadata === "tool IDs only") delete data.sub_agent_id;
+      return { ...event, data } as unknown as SSEEvent;
+    });
     const detail = makeDetail({
       agents: [
         makeAgent({
           id: 9,
           statement_type: "NOTES_LIST_OF_NOTES",
           variant: null,
-          events: note12Events,
+          events: recordedEvents,
         }),
       ],
     });
@@ -1020,6 +1087,8 @@ describe("RunDetailView", () => {
     const tabs = within(subTablist).getAllByRole("tab");
     expect(tabs).toHaveLength(3);
     expect(tabs[0]).toHaveTextContent(/all/i);
+    if (metadata !== "full") expect(tabs[1]).toHaveAttribute("title", expect.stringContaining("Page range unavailable"));
+    if (metadata === "missing pages") expect(tabs[1]).toHaveTextContent("Notes 1-3");
 
     // All view shows both sub-agents' tool rows.
     expect(screen.getByText(/locating table of contents/i)).toBeInTheDocument();
