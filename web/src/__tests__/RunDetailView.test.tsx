@@ -12,6 +12,10 @@ function clickRunTab(name: RegExp) {
   fireEvent.click(within(tablist).getByRole("tab", { name }));
 }
 
+function activityRows() {
+  return within(screen.getByRole("tablist", { name: "Run workstreams" })).getAllByRole("tab");
+}
+
 // A tool_call / tool_result pair used across the fixture so each agent
 // renders a non-empty timeline.
 const sampleEvents: SSEEvent[] = [
@@ -200,7 +204,7 @@ describe("RunDetailView", () => {
     });
     render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
     clickRunTab(/^activity$/i);
-    const list = screen.getByTestId("run-detail-agent-list");
+    const list = screen.getByRole("tablist", { name: "Run workstreams" });
     // Summed compute, not the identical 5m 58s window.
     expect(within(list).getByText("2m 00s")).toBeTruthy();
     expect(within(list).getByText("15s")).toBeTruthy();
@@ -223,7 +227,7 @@ describe("RunDetailView", () => {
     render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
     clickRunTab(/^activity$/i);
     expect(
-      within(screen.getByTestId("run-detail-agent-list")).getByText("45s"),
+      within(screen.getByRole("tablist", { name: "Run workstreams" })).getByText("45s"),
     ).toBeTruthy();
   });
 
@@ -350,9 +354,8 @@ describe("RunDetailView", () => {
       />,
     );
     clickRunTab(/activity/i);
-    const failedRow = screen
-      .getAllByTestId("run-detail-agent-row")
-      .find((row) => row.textContent?.includes("SOPL"));
+    const failedRow = activityRows()
+      .find((row) => row.textContent?.includes("Profit or loss"));
     expect(failedRow).toBeTruthy();
     fireEvent.click(failedRow!);
     const badges = screen.getAllByTestId("agent-error-type");
@@ -369,7 +372,7 @@ describe("RunDetailView", () => {
       agents: [makeAgent({ status: "failed", error_type: "provider_rejected" })],
     })} onDownload={vi.fn()} onDelete={vi.fn()} />);
     clickRunTab(/activity/i);
-    fireEvent.click(screen.getByTestId("run-detail-agent-row"));
+    fireEvent.click(activityRows()[0]);
     expect(screen.getByTestId("agent-error-type")).toHaveTextContent(
       "Model provider rejected the request",
     );
@@ -393,7 +396,7 @@ describe("RunDetailView", () => {
     );
 
     clickRunTab(/activity/i);
-    fireEvent.click(screen.getByTestId("run-detail-agent-row"));
+    fireEvent.click(activityRows()[0]);
     expect(screen.getByTestId("agent-error-message")).toHaveTextContent(refusal);
   });
 
@@ -437,7 +440,7 @@ describe("RunDetailView", () => {
       ],
     })] })} onDelete={() => {}} />);
     clickRunTab(/^activity$/i);
-    expect(screen.getByTestId("run-detail-agent-row")).toHaveTextContent("26 sub-note references unverified");
+    expect(activityRows()[0]).toHaveTextContent("26 sub-note references unverified");
     expect(screen.queryByText("notes_reviewer_subnotes_unverified")).toBeNull();
     expect(screen.getByTestId("run-detail-agent")).toHaveTextContent("The notes reviewer left 26 sub-note references unverified");
   });
@@ -746,7 +749,12 @@ describe("RunDetailView", () => {
       <RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />,
     );
     clickRunTab(/^activity$/i);
-    expect(screen.getAllByTestId("run-detail-agent-row")).toHaveLength(2);
+    expect(activityRows()).toHaveLength(2);
+    const selected = activityRows()[0];
+    const panel = screen.getByTestId("run-detail-agent");
+    expect(selected).toHaveAttribute("aria-controls", panel.id);
+    expect(panel).toHaveAttribute("aria-labelledby", selected.id);
+    expect(panel).toHaveAccessibleName();
     expect(screen.getAllByTestId("run-detail-agent")).toHaveLength(1);
     const technicalActivity = screen.getByText("Technical activity").closest("details");
     expect(technicalActivity).not.toHaveAttribute("open");
@@ -754,7 +762,12 @@ describe("RunDetailView", () => {
     fireEvent.click(screen.getByText("Technical activity"));
     expect(technicalActivity).toHaveAttribute("open");
     expect(within(technicalActivity!).getByTestId("tool-card")).toBeInTheDocument();
-    fireEvent.click(screen.getAllByTestId("run-detail-agent-row")[1]);
+    fireEvent.click(activityRows()[1]);
+    const nextTab = activityRows()[1];
+    const nextPanel = screen.getByTestId("run-detail-agent");
+    expect(nextTab).toHaveAttribute("aria-controls", nextPanel.id);
+    expect(nextPanel).toHaveAttribute("aria-labelledby", nextTab.id);
+    expect(nextPanel).toHaveAccessibleName();
     expect(screen.getAllByTestId("run-detail-agent")).toHaveLength(1);
   });
 
@@ -784,26 +797,27 @@ describe("RunDetailView", () => {
     expect(screen.queryByText("Source pages 14–3")).toBeNull();
   });
 
-  test("completed-with-errors agents stay in Finished rather than Current", () => {
-    render(
-      <RunDetailView
-        detail={makeDetail({
-          agents: [
-            makeAgent({ id: 1, status: "completed_with_errors" }),
-            makeAgent({ id: 2, statement_type: "SOPL", status: "running" }),
-          ],
-        })}
-        onDelete={() => {}}
-        onDownload={() => {}}
-      />,
-    );
+  test("groups extraction and review while showing terminal attention beside active cleanup", () => {
+    render(<RunDetailView detail={makeDetail({ status: "running", agents: [
+      makeAgent({ id: 1, statement_type: "SOFP", status: "succeeded" }),
+      makeAgent({ id: 2, statement_type: "NOTES_ACC_POLICIES", status: "succeeded" }),
+      makeAgent({ id: 3, statement_type: "CORRECTION", status: "completed_with_errors" }),
+      makeAgent({ id: 4, statement_type: "NOTES_CLEANUP", status: "running" }),
+    ] })} onDelete={() => {}} />);
     clickRunTab(/^activity$/i);
-    fireEvent.click(screen.getByRole("button", { name: "Current" }));
-    expect(screen.getAllByTestId("run-detail-agent-row")).toHaveLength(1);
-    expect(screen.getByTestId("run-detail-agent-list")).toHaveTextContent("SOPL");
-    fireEvent.click(screen.getByRole("button", { name: "Finished" }));
-    expect(screen.getAllByTestId("run-detail-agent-row")).toHaveLength(1);
-    expect(screen.getByTestId("run-detail-agent-list")).toHaveTextContent("SOFP");
+    const workstreams = screen.getByRole("tablist", { name: "Run workstreams" });
+    expect(within(workstreams).getByText("Financial statements")).toBeVisible();
+    expect(within(workstreams).getByText("Notes")).toBeVisible();
+    expect(within(workstreams).getByText("Run checks")).toBeVisible();
+    const review = within(workstreams).getByRole("tab", { name: /AI review/ });
+    expect(review).toHaveTextContent("Needs review");
+    expect(review).not.toHaveTextContent("Working");
+    expect(within(workstreams).getByRole("tab", { name: /Notes cleanup/ })).toHaveTextContent("Working");
+    fireEvent.click(review);
+    expect(screen.getByRole("region", { name: "Recorded activity" })).toBeVisible();
+    fireEvent.keyDown(review, { key: "ArrowDown" });
+    expect(within(workstreams).getByRole("tab", { name: /Notes cleanup/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("region", { name: "Live activity" })).toBeVisible();
   });
 
   test("agent with no events shows an empty timeline", () => {
@@ -823,6 +837,28 @@ describe("RunDetailView", () => {
     // "running", so the copy reflects no recorded activity rather than the
     // misleading "waiting for the agent to start" placeholder (issue 5).
     expect(screen.getByText(/No timeline activity was recorded/i)).toBeInTheDocument();
+  });
+
+  test("saved Activity retains observed formatting and cleanup outcomes through polling", () => {
+    const detail = makeDetail({ status: "running", agents: [
+      makeAgent({ statement_type: "CORRECTION", status: "completed" }),
+    ], run_events: [
+      { event: "pipeline_stage", data: { stage: "formatting_notes", message: "Formatting 4 note sections." }, timestamp: 1 },
+      { event: "pipeline_stage", data: { stage: "cleaning_notes", completed: 1, total: 4, message: "Checking notes: 1 of 4 fields." }, timestamp: 2 },
+    ] });
+    const { rerender } = render(<RunDetailView detail={detail} onDelete={vi.fn()} />);
+    clickRunTab(/^activity$/i);
+    const workstreams = screen.getByRole("tablist", { name: "Run workstreams" });
+    expect(within(workstreams).getByRole("tab", { name: /AI review/ })).toHaveTextContent("Complete");
+    expect(within(workstreams).getByRole("tab", { name: /Notes formatting/ })).toHaveTextContent("Complete");
+    fireEvent.click(within(workstreams).getByRole("tab", { name: /Notes cleanup/ }));
+    expect(within(screen.getByRole("list", { name: "Activity updates" })).getByText("Checking notes: 1 of 4 fields.")).toBeVisible();
+    rerender(<RunDetailView detail={{ ...detail, status: "completed_with_errors", run_events: [
+      ...detail.run_events!, { event: "error", data: { type: "notes_cleanup_incomplete", message: "Notes cleanup did not finish." }, timestamp: 3 },
+    ] }} onDelete={vi.fn()} />);
+    expect(within(workstreams).getByRole("tab", { name: /Notes cleanup/ })).toHaveAttribute("aria-selected", "true");
+    expect(within(workstreams).getByRole("tab", { name: /Notes cleanup/ })).toHaveTextContent("Failed");
+    expect(screen.getByRole("region", { name: "Recorded activity" })).toBeVisible();
   });
 
   // Phase 9.3: legacy runs have no config AND (often) no agents. The
@@ -864,7 +900,7 @@ describe("RunDetailView", () => {
     });
     render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
     clickRunTab(/^activity$/i);
-    const agentList = screen.getByTestId("run-detail-agent-list");
+    const agentList = screen.getByRole("tablist", { name: "Run workstreams" });
     expect(within(agentList).getByText("Notes 10: Corp Info")).toBeTruthy();
     expect(within(agentList).getByText("Notes 12: List of Notes")).toBeTruthy();
     // Ensure the raw enum isn't leaking through anywhere.
@@ -1040,7 +1076,7 @@ describe("RunDetailView", () => {
       <RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />,
     );
     clickRunTab(/^activity$/i);
-    expect(within(screen.getByTestId("run-detail-agent-list")).getByText("AI review")).toBeTruthy();
+    expect(within(screen.getByRole("tablist", { name: "Run workstreams" })).getByText("AI review")).toBeTruthy();
   });
 
   test("history_detail_renders_notes_validator_agent", () => {
@@ -1061,7 +1097,7 @@ describe("RunDetailView", () => {
       <RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />,
     );
     clickRunTab(/^activity$/i);
-    expect(within(screen.getByTestId("run-detail-agent-list")).getByText("Notes review")).toBeTruthy();
+    expect(within(screen.getByRole("tablist", { name: "Run workstreams" })).getByText("Notes review")).toBeTruthy();
   });
 
   test("Telemetry tab renders per-turn metrics from the agent payload", () => {
@@ -1791,13 +1827,13 @@ describe("RunDetailView", () => {
     });
     render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
     clickRunTab(/activity/i);
-    const rows = screen.getAllByTestId("run-detail-agent-row");
+    const rows = activityRows();
     const order = rows.map((row) => row.textContent);
     // Document scan first, then face statements in reading order (SOCF last).
-    expect(order[0]).toMatch(/document scan/i);
-    expect(order[1]).toMatch(/SOFP/);
-    expect(order[2]).toMatch(/SOPL/);
-    expect(order[3]).toMatch(/SOCF/);
+    expect(order[0]).toMatch(/document preparation/i);
+    expect(order[1]).toMatch(/Statement of financial position/);
+    expect(order[2]).toMatch(/Profit or loss/);
+    expect(order[3]).toMatch(/Cash flows/);
   });
 
   test("Activity gives source preparation a plain-language label", () => {
@@ -1807,7 +1843,7 @@ describe("RunDetailView", () => {
     render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
     clickRunTab(/activity/i);
 
-    const row = screen.getByTestId("run-detail-agent-row");
+    const row = activityRows()[0];
     expect(row).toHaveTextContent("Source preparation");
     expect(row).not.toHaveTextContent("SOURCE_PREPARATION");
   });
@@ -1955,11 +1991,41 @@ describe("incomplete face statements", () => {
   });
 });
 
-test("run diagnostics export belongs in Activity, including failed runs with no agents", () => {
-  window.history.replaceState(null, "", "/history/1?tab=overview");
-  render(<RunDetailView detail={makeDetail({ status: "failed", agents: [] })} onDelete={vi.fn()} />);
-  expect(screen.queryByRole("button", { name: "Export diagnostics" })).toBeNull();
-  clickRunTab(/^activity$/i);
-  expect(screen.getByRole("button", { name: "Export diagnostics" })).toBeEnabled();
-  expect(screen.getByText(/May contain financial content/)).toBeVisible();
+test("failed runs without agents or output can export diagnostics and retry a failed download", async () => {
+  let exportRequests = 0;
+  const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+    if (url !== "/api/runs/42/diagnostics") return new Response("null", { headers: { "Content-Type": "application/json" } });
+    exportRequests += 1;
+    return exportRequests === 1
+      ? new Response(JSON.stringify({ detail: "Export could not be prepared." }), { status: 500 })
+      : new Response("zip", { headers: { "Content-Type": "application/zip" } });
+  });
+  const createUrl = vi.fn(() => "blob:diagnostics");
+  const previousCreate = URL.createObjectURL;
+  const previousRevoke = URL.revokeObjectURL;
+  URL.createObjectURL = createUrl;
+  URL.revokeObjectURL = vi.fn();
+  const save = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+  try {
+    window.history.replaceState(null, "", "/history/1?tab=overview");
+    render(<RunDetailView detail={makeDetail({ status: "failed", agents: [], output_dir: "", merged_workbook_path: null })} onDelete={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: "Export diagnostics" })).toBeNull();
+    clickRunTab(/^activity$/i);
+    expect(screen.getByRole("button", { name: "Export diagnostics" })).toBeEnabled();
+    expect(screen.getByText(/May contain financial content/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Export diagnostics" }));
+    const activity = screen.getByTestId("run-detail-agents");
+    await waitFor(() => expect(within(activity).getByRole("alert")).toBeVisible());
+    expect(screen.getByRole("button", { name: "Export diagnostics" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Export diagnostics" }));
+    await waitFor(() => expect(save).toHaveBeenCalledOnce());
+    expect(exportRequests).toBe(2);
+    expect(within(activity).queryByRole("alert")).toBeNull();
+  } finally {
+    cleanup();
+    fetchMock.mockRestore();
+    save.mockRestore();
+    URL.createObjectURL = previousCreate;
+    URL.revokeObjectURL = previousRevoke;
+  }
 });

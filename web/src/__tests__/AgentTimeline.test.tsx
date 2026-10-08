@@ -121,7 +121,7 @@ describe("AgentTimeline", () => {
       { event: "complete", data: { success: true }, timestamp: 1 },
     ] as unknown as SSEEvent[];
     render(<AgentTimeline events={events} toolTimeline={[]} isRunning={false} />);
-    expect(screen.getByText(/Run finished/i)).toBeInTheDocument();
+    expect(screen.getByText(/Workstream finished/i)).toBeInTheDocument();
     expect(screen.getByText(/^Complete$/)).toBeInTheDocument();
   });
 

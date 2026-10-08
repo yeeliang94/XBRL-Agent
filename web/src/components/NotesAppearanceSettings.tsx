@@ -7,12 +7,14 @@ import { guardNavigationHistory } from "../lib/navigationHistory";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { ClipboardFormatControls } from "./ClipboardFormatControls";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { PreparedNotesHtml } from "./PreparedNotesHtml";
 
 type Field = keyof ClipboardFormatOptions;
 type Patch = Partial<{ [K in Field]: ClipboardFormatOptions[K] | null }>;
 
 export function NotesAppearanceSettings({ onBusyChange }: { onBusyChange?: (busy: boolean) => void }) {
+  const [resetOpen, setResetOpen] = useState(false);
   const [house, setHouse] = useState<ClipboardFormatOptions | null>(null);
   const [fmt, setFmt] = useState<ClipboardFormatOptions | null>(null);
   const [overrides, setOverrides] = useState<Partial<ClipboardFormatOptions>>({});
@@ -107,18 +109,21 @@ export function NotesAppearanceSettings({ onBusyChange }: { onBusyChange?: (busy
   const resetAll = () => {
     if (!house || phase === "saving") return;
     if (timer.current) clearTimeout(timer.current);
-    pending.current = {}; setFmt(house); setOverrides({}); void save({}, true);
+    pending.current = {}; setResetOpen(false); setFmt(house); setOverrides({}); void save({}, true);
   };
 
   return <section aria-label="Notes appearance">
+    <ConfirmDialog isOpen={resetOpen} title="Reset notes appearance?"
+      message="Restore the shared house style, including no table borders or header fill. This removes all shared appearance overrides. Existing run overrides are kept."
+      confirmLabel="Reset appearance" busy={phase === "saving"} busyLabel="Saving…" onConfirm={resetAll} onCancel={() => setResetOpen(false)} />
     <div style={{ ...ui.sectionHeader, alignItems: "center" }}>
       <h2 style={{ fontSize: 16, margin: 0, fontWeight: pwc.weight.semibold }}>Notes appearance</h2>
       <button type="button" className={uiClass.btnSecondary} style={ui.buttonSecondary}
-        disabled={!house || phase === "saving"} onClick={resetAll}>Reset to house style</button>
+        disabled={!house || phase === "saving"} onClick={() => setResetOpen(true)}>Reset to house style</button>
     </div>
     {error && <p role="alert" style={{ color: pwc.error }}>{error}</p>}
     {!fmt || !house ? <p role="status">{error ? "Appearance settings could not be loaded." : "Loading appearance…"}</p> : <>
-      <div className="notes-appearance-layout" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 32, alignItems: "start" }}>
+      <div className="notes-appearance-layout" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 320px), 1fr))", gap: 32, alignItems: "start" }}>
         <ClipboardFormatControls value={fmt} house={house} overrides={overrides} onChange={update} onReset={resetField}
           idPrefix="settings-notes" disabled={phase === "saving"} />
         <div style={{ minWidth: 0 }}><h3 style={{ fontSize: 14, fontWeight: pwc.weight.semibold, margin: "0 0 12px", minHeight: 21 }}>mTool notes preview</h3>

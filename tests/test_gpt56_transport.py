@@ -57,8 +57,8 @@ class _FakeResponses:
 _FakeResponses.__name__ = "OpenAIResponsesModel"
 
 
-def test_product_default_is_gpt56_luna():
-    assert DEFAULT_MODEL_ID == "openai.global.gpt-5.6-luna"
+def test_product_default_is_gpt6_luna():
+    assert DEFAULT_MODEL_ID == "openai.global.gpt-6-luna"
 
 
 # ---------------------------------------------------------------------------

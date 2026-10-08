@@ -10,6 +10,7 @@ interface Props {
   isRunning: boolean;
   status?: AgentTabStatus;
   streamKey: string;
+  recorded?: boolean;
 }
 
 interface UpdateProps {
@@ -55,6 +56,7 @@ export function ActivityStream({
   isRunning,
   status,
   streamKey,
+  recorded = false,
 }: Props) {
   const items = useMemo(
     () => buildActivitySentences(events, toolTimeline, status).reverse(),
@@ -87,7 +89,7 @@ export function ActivityStream({
   }, []);
 
   return (
-    <section aria-label="Live activity" style={styles.root}>
+    <section aria-label={recorded ? "Recorded activity" : "Live activity"} style={styles.root}>
       <span
         role="status"
         aria-label="Current agent activity"
@@ -96,7 +98,7 @@ export function ActivityStream({
       >
         {announcement}
       </span>
-      <div style={styles.heading}>Live activity</div>
+      <div style={styles.heading}>{recorded ? "Recorded activity" : "Live activity"}</div>
       <ol
         ref={scrollRef}
         className="agent-scroll"
@@ -106,7 +108,7 @@ export function ActivityStream({
         style={styles.feed}
       >
         {items.length === 0 ? (
-          <li data-testid="activity-empty" style={styles.empty}>Waiting for the next update…</li>
+          <li data-testid="activity-empty" style={styles.empty}>{recorded ? "No activity was recorded for this workstream." : "Waiting for the next update…"}</li>
         ) : items.map((item, index) => (
             <ActivityUpdate
               key={item.id}

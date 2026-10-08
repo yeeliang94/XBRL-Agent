@@ -15,7 +15,7 @@ import { AgentTimeline } from "../components/AgentTimeline";
 import { ActivityStream } from "../components/ActivityStream";
 import { TokenDashboard } from "../components/TokenDashboard";
 import { ResultsView } from "../components/ResultsView";
-import { AgentTabs } from "../components/AgentTabs";
+import { AgentWorkspace } from "../components/AgentWorkspace";
 import type { AgentTabState } from "../components/AgentTabs";
 import { ValidatorTab } from "../components/ValidatorTab";
 import { NotesSubTabBar } from "../components/NotesSubTabBar";
@@ -557,8 +557,7 @@ export function ExtractPage({
           placeholder when events are still empty, so the empty state is
           graceful. */}
       {showActivity && (state.isRunning || state.agentTabOrder.length > 0) && (
-        <div className="multi-agent-workspace" style={styles.activitySection}>
-          <AgentTabs
+          <AgentWorkspace
             filingStandard={state.lastRunConfig?.filing_standard}
             agents={agentTabsAgents}
             tabOrder={agentTabsOrder}
@@ -574,14 +573,13 @@ export function ExtractPage({
             // PLAN §4 Phase D.3: notes gate mirrors the face gate.
             notesInRun={state.notesInRun}
             notesSkeletons={notesSkeletonLabels}
-          />
-
+          >
           <ActiveTabPanel
             state={state}
             onAbortAgent={handleAbortAgent}
             onRerunAgent={handleRerunAgent}
           />
-        </div>
+          </AgentWorkspace>
       )}
 
       {/* Legacy: agent feed without tabs (single-agent mode) */}
@@ -1130,16 +1128,6 @@ const styles = {
     borderLeft: "4px solid transparent",
     borderRight: "4px solid transparent",
     borderTop: `5px solid ${pwc.grey700}`,
-  } as const,
-  activitySection: {
-    display: "grid",
-    gridTemplateColumns: "minmax(560px, 1.42fr) minmax(320px, 0.78fr)",
-    gap: "clamp(28px, 3vw, 48px)",
-    alignItems: "start",
-    background: "transparent",
-    border: "none",
-    borderRadius: 0,
-    overflow: "visible" as const,
   } as const,
   activityCardAttached: {
     position: "sticky",

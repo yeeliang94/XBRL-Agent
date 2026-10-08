@@ -54,7 +54,7 @@ describe("Scout limits in Settings", () => {
     renderForm();
     await screen.findByLabelText(/Wall-clock timeout/i);
     expect(screen.getByText(/Enter 0 to remove the overall Scout deadline/i)).toBeTruthy();
-    expect(screen.getByText(/safe maximum is 40/i)).toBeTruthy();
+    expect(screen.getByText(/Allow 1–40 turns/i)).toBeTruthy();
   });
 
   test("keeps an unsafe turn value visible and blocks the save", async () => {

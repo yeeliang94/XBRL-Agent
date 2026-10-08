@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
+import { guardNavigationHistory } from "../lib/navigationHistory";
 import { userMessage } from "../lib/errors";
 import type {
   AdvancedSetting,
@@ -9,6 +10,7 @@ import type {
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { STATUS_SYMBOLS } from "../lib/runStatus";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { StatusIcon } from "./StatusIcon";
 import {
   AdvancedSettingsSection,
@@ -26,9 +28,14 @@ import {
 // supplies the API helpers and an optional Cancel handler.
 // ---------------------------------------------------------------------------
 
+export type SharedSettingsSection = "general" | "extraction" | "advanced";
+
 interface Props {
+  section?: SharedSettingsSection;
+  onDirtyChange?: (dirty: boolean) => void;
+  onBusyChange?: (busy: boolean) => void;
   getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; notes_auto_review?: boolean; notes_coverage?: boolean; tolerance_rm?: number; entity_memory?: boolean; notes_source_integrity?: SourceIntegrityMode; notes_source_integrity_choices?: string[]; default_models?: Record<string, string>; default_model_overrides?: Record<string, string>; local_override_keys?: string[]; thinking_levels?: Record<string, string>; thinking_level_choices?: string[]; thinking_level_choices_by_model?: Record<string, string[]>; reasoning_summary?: string; reasoning_summary_choices?: string[]; available_models?: ModelEntry[]; advanced_settings?: AdvancedSetting[] }>;
-  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; default_models: Record<string, string>; reset_keys: string[]; auto_review: boolean; notes_auto_review: boolean; notes_coverage: boolean; entity_memory: boolean; notes_source_integrity: SourceIntegrityMode; tolerance_rm: number; scout_wallclock_seconds: number; scout_max_turns: number; thinking_levels: Record<string, string>; reasoning_summary: string; advanced_settings: Record<string, AdvancedEditValue> }>) => Promise<{ status: string }>;
+  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; default_models: Record<string, string>; reset_keys: string[]; reset_shared_defaults: boolean; notes_appearance_reset: boolean; auto_review: boolean; notes_auto_review: boolean; notes_coverage: boolean; entity_memory: boolean; notes_source_integrity: SourceIntegrityMode; tolerance_rm: number; scout_wallclock_seconds: number; scout_max_turns: number; thinking_levels: Record<string, string>; reasoning_summary: string; advanced_settings: Record<string, AdvancedEditValue> }>) => Promise<{ status: string }>;
   testConnection: (body: Partial<{ proxy_url: string; api_key: string; model: string }>) => Promise<{ status: string; model?: string; latency_ms?: number; message?: string }>;
   // When provided, a Cancel button is shown (used by the modal wrapper). The
   // page host omits it — there's nothing to cancel out of.
@@ -96,7 +103,7 @@ const THINKING_ROLES: { key: string; label: string; hint: string }[] = [
   { key: "RELATED_PARTY", label: "Notes: related party", hint: "" },
 ];
 
-const GPT56_LUNA_MODEL = "openai.global.gpt-5.6-luna";
+const GPT6_LUNA_MODEL = "openai.global.gpt-6-luna";
 const SUMMARY_VISIBILITY_FALLBACK = ["off", "auto", "concise", "detailed"];
 
 const styles = {
@@ -195,12 +202,14 @@ const styles = {
     fontSize: 13,
     color: pwc.grey700,
   } as React.CSSProperties,
+  fieldGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: pwc.space.xl } as React.CSSProperties,
   thinkingRow: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))",
+    alignItems: "start",
     gap: pwc.space.sm,
     padding: "5px 0",
+    flexWrap: "wrap" as const,
   } as React.CSSProperties,
   thinkingRoleLabel: {
     display: "flex",
@@ -212,10 +221,9 @@ const styles = {
     fontSize: 12, color: pwc.grey700,
   } as React.CSSProperties,
   sectionHeading: {
-    marginTop: pwc.space.xxl,
+    marginTop: 0,
     marginBottom: pwc.space.lg,
     paddingTop: pwc.space.lg,
-    borderTop: `1px solid ${pwc.grey200}`,
   } as React.CSSProperties,
   sectionTitle: {
     ...ui.sectionTitle,
@@ -233,10 +241,14 @@ const styles = {
   } as React.CSSProperties,
 };
 
-export function GeneralSettingsForm({ getSettings, saveSettings, testConnection, onCancel, isAdmin = true }: Props) {
+export function GeneralSettingsForm({ getSettings, saveSettings, testConnection, onCancel, isAdmin = true, section, onDirtyChange, onBusyChange }: Props) {
   // Non-admins get a read-only view of the AI plumbing; the server enforces
   // the same boundary (api/config_routes.py), the UI just makes it clear.
   const readOnly = !isAdmin;
+  const [loaded, setLoaded] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [resetOpen, setResetOpen] = useState(false);
+  const shown = (key: SharedSettingsSection) => !section || section === key;
   const [model, setModel] = useState("");
   // Known models from config/models.json (same source the run-config pickers
   // use). When present, the model field is a dropdown instead of typo-prone
@@ -251,9 +263,8 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
   const [notesCoverage, setNotesCoverage] = useState(true);
   const [toleranceRm, setToleranceRm] = useState<number | "">(1);
   const [scoutWallclockSeconds, setScoutWallclockSeconds] =
-    useState<number | "">(300);
-  const [scoutMaxTurns, setScoutMaxTurns] = useState<number | "">(20);
-  // Per-entity advisory memory toggle (item 28). Default on.
+    useState<number | "">(600);
+  const [scoutMaxTurns, setScoutMaxTurns] = useState<number | "">(40);
   // Per-role thinking level. An absent role sends nothing, which is what
   // every agent did before this setting existed.
   const [thinkingLevels, setThinkingLevels] =
@@ -272,7 +283,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
   // so the picker must narrow to what the selected model accepts.
   const [levelChoicesByModel, setLevelChoicesByModel] =
     useState<Record<string, string[]>>({});
-  const [entityMemory, setEntityMemory] = useState(true);
+
   // Former env-only switches and limits, described by the server. Only edited
   // keys are sent; `null` returns a key to the deployment value or default.
   const [advancedRows, setAdvancedRows] = useState<AdvancedSetting[]>([]);
@@ -304,13 +315,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
     };
   }, []);
 
-  // Load current settings once on mount (the host decides when to mount us —
-  // the modal mounts on open, the page mounts when the General tab activates).
-  useEffect(() => {
-    let cancelled = false;
-    getSettings()
-      .then((s) => {
-        if (cancelled) return;
+  const applySettings = useCallback((s: Awaited<ReturnType<Props["getSettings"]>>) => {
         setModel(s.model);
         setProxyUrl(s.proxy_url);
         setApiKeyPreview(s.api_key_preview);
@@ -323,10 +328,10 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         setScoutWallclockSeconds(
           typeof s.scout_wallclock_seconds === "number"
             ? s.scout_wallclock_seconds
-            : 300,
+            : 600,
         );
         setScoutMaxTurns(
-          typeof s.scout_max_turns === "number" ? s.scout_max_turns : 20,
+          typeof s.scout_max_turns === "number" ? s.scout_max_turns : 40,
         );
         setThinkingLevels(s.thinking_levels || {});
         const summaryChoices =
@@ -343,17 +348,51 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         setLocalOverrideKeys(new Set(s.local_override_keys || []));
         setLevelChoices(s.thinking_level_choices || []);
         setLevelChoicesByModel(s.thinking_level_choices_by_model || {});
-        setEntityMemory(s.entity_memory !== false);
         if (Array.isArray(s.available_models)) setAvailableModels(s.available_models);
         setAdvancedRows(Array.isArray(s.advanced_settings) ? s.advanced_settings : []);
         setAdvancedEdits({});
         setDirty(false);
-      })
-      .catch((e) => {
-        if (!cancelled) setLoadError(userMessage(e));
-      });
+        setLoaded(true);
+        setRoleModelUpdates({});
+        setErrors({ proxyUrl: null, apiKey: null, model: null });
+        setTestResult(null);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    getSettings().then((s) => {
+      if (!cancelled) applySettings(s);
+    }).catch((e) => {
+      if (!cancelled) setLoadError(userMessage(e));
+    }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [getSettings]);
+  }, [getSettings, applySettings]);
+  useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
+  useEffect(() => { onBusyChange?.(saving || testing); }, [saving, testing, onBusyChange]);
+  useEffect(() => () => onBusyChange?.(false), [onBusyChange]);
+
+  useEffect(() => {
+    if (!dirty && !saving && !testing) return;
+    const unguard = guardNavigationHistory(() => !saving && !testing && window.confirm("Discard unsaved settings?"));
+    const unload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", unload);
+    return () => { unguard(); window.removeEventListener("beforeunload", unload); };
+  }, [dirty, saving, testing]);
+
+  const handleReset = async () => {
+    setSaving(true);
+    setLoadError(null);
+    setSaved(false);
+    try {
+      await saveSettings({ reset_shared_defaults: true });
+      applySettings(await getSettings());
+      setSaved(true);
+      setResetOpen(false);
+    } catch (e) {
+      setLoadError(userMessage(e));
+      setResetOpen(false);
+    } finally { setSaving(false); }
+  };
 
   // --- Blur validation (updates displayed errors) ---
   const validateField = useCallback(
@@ -366,7 +405,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
 
   // --- Save ---
   const handleSave = useCallback(async () => {
-    if (!dirty) return;
+    if (!dirty || saving || testing || !loaded) return;
     if (toleranceRm === "") {
       setLoadError("Enter a cross-check tolerance of 0 or more before saving.");
       return;
@@ -415,7 +454,6 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         tolerance_rm: toleranceRm,
         scout_wallclock_seconds: scoutWallclockSeconds,
         scout_max_turns: scoutMaxTurns,
-        entity_memory: entityMemory,
         // Send EVERY role, with "" for the ones set back to the provider
         // default. The server clears only the keys it is given, so omitting a
         // cleared role would leave its old level active — and omitting the
@@ -452,10 +490,10 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
     } finally {
       setSaving(false);
     }
-  }, [dirty, model, proxyUrl, apiKey, roleModelUpdates, autoReview, notesAutoReview, notesCoverage, toleranceRm, scoutWallclockSeconds, scoutMaxTurns, entityMemory, thinkingLevels, reasoningSummary, advancedRows, advancedEdits, getSettings, saveSettings]);
+  }, [dirty, saving, testing, loaded, model, proxyUrl, apiKey, roleModelUpdates, autoReview, notesAutoReview, notesCoverage, toleranceRm, scoutWallclockSeconds, scoutMaxTurns, thinkingLevels, reasoningSummary, advancedRows, advancedEdits, getSettings, saveSettings]);
 
-  const handleUseGpt56ForEveryRole = useCallback(() => {
-    setModel(GPT56_LUNA_MODEL);
+  const handleUseGpt6ForEveryRole = useCallback(() => {
+    setModel(GPT6_LUNA_MODEL);
     setDefaultModels({});
     setRoleModelUpdates(Object.fromEntries(
       THINKING_ROLES.map(({ key }) => [key, ""]),
@@ -524,7 +562,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
   }, [model, proxyUrl, apiKey, testConnection]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === "Enter") {
+    if (e.key === "Enter" && (e.target as HTMLElement).tagName === "INPUT") {
       e.preventDefault();
       // handleSave does its own validation, so it's safe to call even
       // if the displayed `errors` state is stale.
@@ -534,13 +572,16 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
 
   return (
     <div onKeyDown={handleKeyDown}>
-      {loadError && <p style={styles.loadError}>{loadError}</p>}
+      {loadError && <p role="alert" style={styles.loadError}>{loadError}</p>}
 
       {readOnly && <p role="note" style={ui.bodyText}>These settings are managed by your administrator.</p>}
 
+      {loading && <p role="status">Loading settings…</p>}
+      <fieldset disabled={loading || saving || testing} style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}>
+      <div hidden={!shown("general")}>
       <SettingsSectionHeading
         title="Service connection"
-        description="Advanced shared configuration. Changes affect everyone and future runs."
+        description="Connect the application to your organisation’s AI service. These settings are shared by everyone."
       />
       {/* Proxy URL */}
       <div style={styles.fieldGroup}>
@@ -591,7 +632,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
 
       {/* API Key */}
       <div style={styles.fieldGroup}>
-        <label style={styles.label}>
+        <label style={styles.label} htmlFor="ai-service-api-key">
           API Key
           {apiKeyPreview && (
             <span style={styles.labelExtra}>(current: {apiKeyPreview})</span>
@@ -636,10 +677,15 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         )}
       </div>
 
+      </div>
+      <div hidden={!shown("extraction")}>
+      <SettingsSectionHeading title="Extraction"
+        description="Choose models for extraction and review. PDF and Word documents are prepared automatically after upload, including scanned-page text capture and source checks." />
       <SettingsSectionHeading
-        title="Extraction behaviour"
+        title="Default models"
         description="Choose the model used when a new extraction starts. Existing runs are unchanged."
       />
+      <div style={styles.fieldGrid}>
       {/* Model — a picker of known models (config/models.json) instead of a
           typo-prone free-text field (D4). Falls back to a text input when the
           model list isn't available. */}
@@ -660,7 +706,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
             )}
             {availableModels.map((m) => (
               <option key={m.id} value={m.id}>
-                {m.display_name} ({m.id})
+                {m.display_name || m.id}
               </option>
             ))}
           </select>
@@ -686,7 +732,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
           <p style={styles.errorText}>{errors.model}</p>
         ) : (
           <p style={styles.helperText}>
-            Which AI model runs the extraction. Ask your team if unsure.
+            The default model for new runs. Role-specific choices below take priority; you can also choose models during run setup.
           </p>
         )}
         {localOverrideKeys.has("model") && (
@@ -702,10 +748,26 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
       </div>
 
       <div style={styles.fieldGroup}>
-        <label style={styles.label}>Model by pipeline role</label>
+        <label style={styles.label} htmlFor="settings-scout-model">Document scan model</label>
+        <select id="settings-scout-model" aria-label="Default model for Scout" value={defaultModels.scout || ""}
+          disabled={readOnly} style={{ ...ui.select, width: "100%" }}
+          onChange={(e) => {
+            setDefaultModels((prev) => ({ ...prev, scout: e.target.value }));
+            setRoleModelUpdates((prev) => ({ ...prev, scout: e.target.value }));
+            setDirty(true);
+          }}>
+          <option value="">Follow default model</option>
+          {defaultModels.scout && !availableModels.some((m) => m.id === defaultModels.scout) && <option value={defaultModels.scout}>{defaultModels.scout} (custom)</option>}
+          {availableModels.map((m) => <option key={m.id} value={m.id}>{m.display_name || m.id}</option>)}
+        </select>
+        <p style={styles.helperText}>Scout locates statements and notes. Its page hints help the extraction agents.</p>
+      </div>
+      </div>
+
+      <div style={styles.fieldGroup}>
+        <label style={styles.label}>Models by task</label>
         <p style={styles.helperText}>
-          Most runs use the model above. Open this only when a pipeline role
-          needs a different default.
+          Choose a different model for document scanning, a statement, notes, or review. A role set to Follow default model uses the Model above.
         </p>
         <button
           type="button"
@@ -714,19 +776,19 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
           onClick={() => setShowRoleModels((open) => !open)}
           style={{ ...ui.buttonSecondary, ...ui.buttonSm, alignSelf: "flex-start" }}
         >
-          {showRoleModels ? "Hide role-specific models" : "Customize role-specific models"}
+          {showRoleModels ? "Hide models by task" : "Customize models by task"}
         </button>
         <button
           type="button"
-          onClick={handleUseGpt56ForEveryRole}
+          onClick={handleUseGpt6ForEveryRole}
           disabled={readOnly}
           style={{ ...ui.buttonSecondary, ...ui.buttonSm, alignSelf: "flex-start", marginLeft: pwc.space.sm }}
         >
-          Use GPT-5.6 Luna for every role
+          Use GPT-6 Luna for every role
         </button>
         {showRoleModels && (
           <div id="role-model-defaults">
-            {THINKING_ROLES.map(({ key, label }) => {
+            {THINKING_ROLES.filter(({ key }) => key !== "scout").map(({ key, label }) => {
               const selected = defaultModels[key] || "";
               return (
                 <div key={`model-${key}`} style={styles.thinkingRow}>
@@ -740,9 +802,9 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
                       setRoleModelUpdates((prev) => ({ ...prev, [key]: e.target.value }));
                       setDirty(true);
                     }}
-                    style={{ ...ui.select, width: 260 }}
+                    style={{ ...ui.select, width: "100%", minWidth: 0 }}
                   >
-                    <option value="">Follow global model ({model})</option>
+                    <option value="">Follow default model ({model})</option>
                     {selected && !availableModels.some((m) => m.id === selected) && (
                       <option value={selected}>{selected} (custom)</option>
                     )}
@@ -757,172 +819,6 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         )}
       </div>
 
-      <SettingsSectionHeading
-        title="Scout limits"
-        description="Set how long the document scan may run before extraction continues without its page hints."
-      />
-      <div style={{ display: "flex", flexWrap: "wrap", gap: pwc.space.xl }}>
-        <div style={{ ...styles.fieldGroup, flex: "1 1 220px" }}>
-          <label style={styles.label} htmlFor="scout-wallclock-seconds">
-            Wall-clock timeout (seconds)
-          </label>
-          <input
-            id="scout-wallclock-seconds"
-            type="number"
-            min={0}
-            step={1}
-            value={scoutWallclockSeconds}
-            disabled={readOnly}
-            onChange={(e) => {
-              if (e.target.value === "") {
-                setScoutWallclockSeconds("");
-              } else {
-                const next = Number(e.target.value);
-                if (Number.isFinite(next)) setScoutWallclockSeconds(next);
-              }
-              setDirty(true);
-            }}
-            style={{ ...ui.input, width: "100%", maxWidth: 240 }}
-          />
-          <p style={styles.helperText}>
-            Default: 300 seconds. Increase this for long or scanned filings.
-            Enter 0 to remove the overall Scout deadline; the per-turn timeout
-            still applies.
-          </p>
-        </div>
-
-        <div style={{ ...styles.fieldGroup, flex: "1 1 220px" }}>
-          <label style={styles.label} htmlFor="scout-max-turns">
-            Maximum turns
-          </label>
-          <input
-            id="scout-max-turns"
-            type="number"
-            min={1}
-            max={40}
-            step={1}
-            value={scoutMaxTurns}
-            disabled={readOnly}
-            onChange={(e) => {
-              if (e.target.value === "") {
-                setScoutMaxTurns("");
-              } else {
-                const next = Number(e.target.value);
-                if (Number.isFinite(next)) setScoutMaxTurns(next);
-              }
-              setDirty(true);
-            }}
-            style={{ ...ui.input, width: "100%", maxWidth: 240 }}
-          />
-          <p style={styles.helperText}>
-            Default: 20 model responses. The safe maximum is 40 so Scout stops
-            before the model framework&apos;s internal 50-request limit.
-          </p>
-        </div>
-      </div>
-
-      <SettingsSectionHeading
-        title="Review behaviour"
-        description="These defaults apply to future runs and can increase processing time and usage."
-      />
-      {/* Reviewer auto-trigger toggle */}
-      <div style={styles.fieldGroup}>
-        <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, cursor: "pointer" }}>
-          <input
-            type="checkbox" style={ui.checkbox}
-            checked={autoReview}
-            onChange={(e) => { setAutoReview(e.target.checked); setDirty(true); }}
-            disabled={readOnly}
-            aria-label="Automatically run the reviewer after extraction"
-          />
-          <span style={styles.label}>Automatically run the reviewer after extraction</span>
-        </label>
-        <p style={styles.helperText}>
-          When off, runs with failed cross-checks finish without the reviewer;
-          you can still trigger it manually from a run's Review tab.
-        </p>
-      </div>
-
-      <div style={styles.fieldGroup}>
-        <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, cursor: "pointer" }}>
-          <input
-            type="checkbox" style={ui.checkbox}
-            checked={notesAutoReview}
-            onChange={(e) => { setNotesAutoReview(e.target.checked); setDirty(true); }}
-            disabled={readOnly}
-            aria-label="Automatically review extracted notes"
-          />
-          <span style={styles.label}>Automatically review extracted notes</span>
-        </label>
-        <p style={styles.helperText}>
-          Checks prose notes after extraction and applies grounded corrections.
-        </p>
-      </div>
-
-      <div style={styles.fieldGroup}>
-        <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, cursor: "pointer" }}>
-          <input
-            type="checkbox" style={ui.checkbox}
-            checked={notesCoverage}
-            onChange={(e) => { setNotesCoverage(e.target.checked); setDirty(true); }}
-            disabled={readOnly}
-            aria-label="Check notes coverage against the document inventory"
-          />
-          <span style={styles.label}>Check notes coverage against the document inventory</span>
-        </label>
-      </div>
-
-      <div style={styles.fieldGroup}>
-        <label style={styles.label} htmlFor="cross-check-tolerance">Cross-check tolerance (RM)</label>
-        <input
-          id="cross-check-tolerance"
-          type="number"
-          min={0}
-          step="0.01"
-          value={toleranceRm}
-          disabled={readOnly}
-          onChange={(e) => {
-            if (e.target.value === "") {
-              setToleranceRm("");
-            } else {
-              const next = Number(e.target.value);
-              if (Number.isFinite(next) && next >= 0) setToleranceRm(next);
-            }
-            setDirty(true);
-          }}
-          style={{ ...ui.input, width: 180 }}
-        />
-      </div>
-
-
-      <SettingsSectionHeading
-        title="PDF notes preparation"
-        description="PDF and Word documents are prepared automatically after upload, including orientation, source structure and emphasis capture, and content checks. MBRS formatting follows extraction and review."
-      />
-      <SettingsSectionHeading
-        title="Prior-year assistance"
-        description="Controls whether future runs receive advisory context from the same entity's earlier filings."
-      />
-      {/* Per-entity advisory memory toggle (item 28) */}
-      <div style={styles.fieldGroup}>
-        <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, cursor: "pointer" }}>
-          <input
-            type="checkbox" style={ui.checkbox}
-            checked={entityMemory}
-            onChange={(e) => { setEntityMemory(e.target.checked); setDirty(true); }}
-            disabled={readOnly}
-            aria-label="Reuse prior-year hints for repeat entities"
-          />
-          <span style={styles.label}>Reuse prior-year hints for repeat entities</span>
-        </label>
-        <p style={styles.helperText}>
-          When a company has been processed before, last year&apos;s format,
-          scale (e.g. RM &apos;000), and page positions are shown to the AI as
-          hints to double-check against this year&apos;s PDF. Turn this off if
-          two different companies share a name.
-        </p>
-      </div>
-
       {/* Thinking level, per agent role. Never set before this — every model
           ran at its provider default. An empty selection sends nothing, which
           keeps that behaviour, so the control is additive rather than a
@@ -932,7 +828,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
       {/* Per-role reasoning controls are rarely changed; keep them closed so
           the page leads with the settings people actually adjust. */}
       <details style={styles.fieldGroup}>
-        <summary style={styles.label}>AI reasoning (advanced)</summary>
+        <summary style={styles.label}>AI reasoning</summary>
       <div style={styles.fieldGroup}>
         <label style={styles.label}>Thinking level</label>
         <p style={styles.helperText}>
@@ -965,7 +861,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
                 setThinkingLevels(next);
                 setDirty(true);
               }}
-              style={{ ...ui.select, width: 190 }}
+              style={{ ...ui.select, width: "100%", minWidth: 0 }}
             >
               <option value="">Provider default</option>
               {renderedChoices.map((lvl) => (
@@ -997,7 +893,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
             setReasoningSummary(e.target.value);
             setDirty(true);
           }}
-          style={{ ...ui.select, width: 260 }}
+          style={{ ...ui.select, width: "100%", minWidth: 0 }}
         >
           {reasoningSummaryChoices.map((choice) => (
             <option key={choice} value={choice}>
@@ -1012,11 +908,157 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
       </div>
       </details>
 
+      <SettingsSectionHeading
+        title="Scout limits"
+        description="Set how long the document scan may run before extraction continues without its page hints."
+      />
+      <div style={styles.fieldGrid}>
+        <div style={styles.fieldGroup}>
+          <label style={styles.label} htmlFor="scout-wallclock-seconds">
+            Wall-clock timeout (seconds)
+          </label>
+          <input
+            id="scout-wallclock-seconds"
+            type="number"
+            min={0}
+            step={1}
+            value={scoutWallclockSeconds}
+            disabled={readOnly}
+            onChange={(e) => {
+              if (e.target.value === "") {
+                setScoutWallclockSeconds("");
+              } else {
+                const next = Number(e.target.value);
+                if (Number.isFinite(next)) setScoutWallclockSeconds(next);
+              }
+              setDirty(true);
+            }}
+            style={{ ...ui.input, width: "100%" }}
+          />
+          <p style={styles.helperText}>
+            Default: 600 seconds. Increase this for long or scanned filings.
+            Enter 0 to remove the overall Scout deadline; the per-turn timeout
+            still applies.
+          </p>
+        </div>
+
+        <div style={styles.fieldGroup}>
+          <label style={styles.label} htmlFor="scout-max-turns">
+            Maximum turns
+          </label>
+          <input
+            id="scout-max-turns"
+            type="number"
+            min={1}
+            max={40}
+            step={1}
+            value={scoutMaxTurns}
+            disabled={readOnly}
+            onChange={(e) => {
+              if (e.target.value === "") {
+                setScoutMaxTurns("");
+              } else {
+                const next = Number(e.target.value);
+                if (Number.isFinite(next)) setScoutMaxTurns(next);
+              }
+              setDirty(true);
+            }}
+            style={{ ...ui.input, width: "100%" }}
+          />
+          <p style={styles.helperText}>
+            Default: 40 turns. One turn is an AI response during the document scan. Allow 1–40 turns; increase the limit if the scan stops before locating the statements.
+          </p>
+        </div>
+      </div>
+
+      </div>
+      <div hidden={!shown("advanced")}>
+      <SettingsSectionHeading
+        title="Automatic review"
+        description="These defaults apply to future runs and can increase processing time and usage."
+      />
+      {/* Reviewer auto-trigger toggle */}
+      <div style={styles.fieldGroup}>
+        <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, cursor: "pointer" }}>
+          <input
+            type="checkbox" style={ui.checkbox}
+            checked={autoReview}
+            onChange={(e) => { setAutoReview(e.target.checked); setDirty(true); }}
+            disabled={readOnly}
+            aria-label="Automatically run the reviewer after extraction"
+          />
+          <span style={styles.label}>Automatically run the reviewer after extraction</span>
+        </label>
+        <p style={styles.helperText}>
+          When off, runs with failed cross-checks finish without the reviewer;
+          you can still start a review from the run’s AI review tab.
+        </p>
+      </div>
+
+      <div style={styles.fieldGroup}>
+        <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, cursor: "pointer" }}>
+          <input
+            type="checkbox" style={ui.checkbox}
+            checked={notesAutoReview}
+            onChange={(e) => { setNotesAutoReview(e.target.checked); setDirty(true); }}
+            disabled={readOnly}
+            aria-label="Automatically review extracted notes"
+          />
+          <span style={styles.label}>Automatically review extracted notes</span>
+        </label>
+        <p style={styles.helperText}>
+          Checks prose notes after extraction and applies grounded corrections.
+        </p>
+      </div>
+
+      <div style={styles.fieldGroup}>
+        <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, cursor: "pointer" }}>
+          <input
+            type="checkbox" style={ui.checkbox}
+            checked={notesCoverage}
+            onChange={(e) => { setNotesCoverage(e.target.checked); setDirty(true); }}
+            disabled={readOnly}
+            aria-label="Check notes coverage against the document inventory"
+          />
+          <span style={styles.label}>Check notes coverage against the document inventory</span>
+        </label>
+        <p style={styles.helperText}>Compares the source note inventory with extracted notes to identify missing or misplaced content.</p>
+      </div>
+
+      <SettingsSectionHeading title="Notes source integrity"
+        description="Prepared documents with notes are checked automatically for missing, duplicated or altered source content, regardless of the legacy source-check mode. Incomplete checks remain unresolved." />
+
+      <div style={styles.fieldGroup}>
+        <label style={styles.label} htmlFor="cross-check-tolerance">Cross-check tolerance (RM)</label>
+        <input
+          id="cross-check-tolerance"
+          type="number"
+          min={0}
+          step="0.01"
+          value={toleranceRm}
+          disabled={readOnly}
+          onChange={(e) => {
+            if (e.target.value === "") {
+              setToleranceRm("");
+            } else {
+              const next = Number(e.target.value);
+              if (Number.isFinite(next) && next >= 0) setToleranceRm(next);
+            }
+            setDirty(true);
+          }}
+          style={{ ...ui.input, width: 180 }}
+        />
+        <p style={styles.helperText}>Differences within this amount are accepted by numerical cross-checks. Use 0 to flag every difference.</p>
+      </div>
+
+
+      </div>
+      <div hidden={!shown("advanced")}>
       {advancedRows.length > 0 && (
         <>
           <SettingsSectionHeading
             title="Advanced settings"
-            description="Feature switches and limits that used to live only in each machine's environment file. Saved values apply to everyone on this server and override the environment file."
+            description="Optional feature switches and processing limits. Each control explains its effect; settings marked for restart take effect after the server restarts."
           />
           <details>
             <summary style={styles.label}>Show advanced settings</summary>
@@ -1032,6 +1074,20 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
           </details>
         </>
       )}
+
+      </div>
+      </fieldset>
+      {shown("general") && !readOnly && (
+        <div style={{ marginTop: pwc.space.xl }}>
+          <h3 style={styles.sectionTitle}>Restore defaults</h3>
+          <p style={styles.helperText}>Restore GPT-6 Luna for all tasks, Scout 600 seconds / 40 turns, and notes tables with no borders or fill. Prior-run hints are disabled.</p>
+          <button type="button" style={ui.buttonSecondary} disabled={!loaded || loading || saving || testing} onClick={() => setResetOpen(true)}>Reset settings to defaults</button>
+        </div>
+      )}
+      <ConfirmDialog isOpen={resetOpen} title="Reset shared settings?"
+        message="This immediately restores shared defaults for everyone: GPT-6 Luna for all tasks, Scout 600 seconds and 40 turns, no notes table borders or header fill, and prior-run hints disabled. Reasoning, review options and advanced settings also return to application defaults. Unsaved settings edits will be discarded. The legacy source-check mode, service address, access key, team instructions, accounts and existing runs are kept. Some advanced settings need a server restart."
+        confirmLabel="Reset settings" busyLabel="Resetting…" busy={saving}
+        onConfirm={() => void handleReset()} onCancel={() => setResetOpen(false)} />
 
       {/* Test-connection result — shown above the action row (which holds the
           Test Connection button itself, admin-only). */}
@@ -1057,10 +1113,10 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
           hidden (a Cancel is still offered when the modal host provides one). */}
       {(!readOnly || onCancel) && (
         <div style={styles.actions}>
-          {!readOnly ? (
+          {!readOnly && shown("general") ? (
             <button
               onClick={handleTestConnection}
-              disabled={testing}
+              disabled={loading || saving || testing}
               className={uiClass.btnSecondary}
               style={styles.testButton}
             >
@@ -1086,7 +1142,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
             {!readOnly && (
               <button
                 onClick={handleSave}
-                disabled={saving || hasErrors || !dirty}
+                disabled={loading || saving || testing || hasErrors || !dirty}
                 className={uiClass.btnPrimary}
                 style={styles.saveButton}
               >
