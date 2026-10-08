@@ -66,6 +66,451 @@ def _tool_names(agent) -> set[str]:
     return names
 
 
+@pytest.fixture()
+def assigned_agent(tmp_path, seeded):
+    """One Sheet-12 worker with a real live label and a frozen assigned note."""
+    from pydantic_ai.models.test import TestModel
+    db, run_id, gen = seeded
+    with repo.db_session(db) as conn:
+        conn.execute("UPDATE notes_source_generations SET input_kind='prepared_document' WHERE id=?", (gen,))
+        conn.execute(
+            "INSERT INTO notes_nodes(node_uuid,template_id,sheet,row,label,kind) "
+            "VALUES ('managed-target','mfrs-company-notes-list-v1',"
+            "'Notes-Listofnotes',140,'Disclosure of trade and other receivables','LEAF')"
+        )
+    agent, deps = notes_agent.create_notes_agent(
+        template_type=NotesTemplateType.LIST_OF_NOTES, pdf_path="synthetic.pdf",
+        inventory=[], filing_level="company", model=TestModel(), output_dir=str(tmp_path),
+        run_id=run_id, db_path=db, source_generation_id=gen, batch_note_nums=[5],
+    )
+    deps.payload_sink = []
+    tools = {name: tool for ts in agent.toolsets
+             for name, tool in getattr(ts, "tools", {}).items()}
+    return deps, tools
+
+
+def test_managed_whole_note_tools_expose_only_meaningful_choices(assigned_agent):
+    deps, tools = assigned_agent
+    read_schema = tools["read_assigned_note"].function_schema.json_schema
+    write_schema = tools["write_assigned_note"].function_schema.json_schema
+    assert set(read_schema["properties"]) == {"note_num", "offset"}
+    assert set(write_schema["properties"]) == {"note_num", "destination_label"}
+    assert "write_note_from_source" in tools  # Mixed notes retain section routing.
+
+
+@pytest.mark.asyncio
+async def test_assigned_note_read_is_complete_bounded_and_has_no_copyable_ids(assigned_agent, monkeypatch):
+    from types import SimpleNamespace
+    deps, tools = assigned_agent
+    ctx = SimpleNamespace(deps=deps)
+    read = tools["read_assigned_note"].function
+    full = await read(ctx, 5)
+    body = lambda text: text.split("<<<SOURCE>>>\n", 1)[1].split("\n<<<END_SOURCE>>>", 1)[0]
+    assert "UNTRUSTED" in full
+    assert "<h3>5. Receivables</h3>" in full and "<p>Stated at cost.</p>" in full
+    assert "b1" not in full and "b2" not in full and "b3" not in full
+    monkeypatch.setattr(notes_agent, "SOURCE_TOOL_RESPONSE_CAP", 40)
+    offset, chunks = 0, []
+    while True:
+        response = await read(ctx, 5, offset)
+        assert len(body(response)) <= 40
+        chunks.append(body(response))
+        if "next_offset=" not in response:
+            break
+        offset = int(response.split("next_offset=", 1)[1].split(".", 1)[0])
+    assert "".join(chunks) == body(full)
+    assert "Invalid offset" in await read(ctx, 5, -1)
+
+
+@pytest.mark.asyncio
+async def test_managed_whole_note_persists_same_canonical_content_as_source_write(assigned_agent):
+    from types import SimpleNamespace
+    deps, tools = assigned_agent
+    ctx = SimpleNamespace(deps=deps)
+    direct = tools["write_note_from_source"].function
+    managed = tools["write_assigned_note"].function
+    label = "Disclosure of trade and other receivables"
+    await tools["read_assigned_note"].function(ctx, 5)
+    assert (await direct(ctx, deps.sheet_name, 140, label, ["b1", "b2"])).startswith("ok:")
+    with repo.db_session(deps.db_path) as conn:
+        before = conn.execute("SELECT html,concept_uuid,source_pages,content_origin FROM notes_cells WHERE run_id=?", (deps.run_id,)).fetchone()
+        before = tuple(before)
+        assert before[3] == "source_exact"
+    result = await managed(ctx, 5, label)
+    assert result.startswith("ok:") and "Placed complete Note 5" in result
+    assert "saved source parts" not in result and "b1" not in result and "b2" not in result
+    with repo.db_session(deps.db_path) as conn:
+        after = conn.execute("SELECT html,concept_uuid,source_pages,content_origin FROM notes_cells WHERE run_id=?", (deps.run_id,)).fetchone()
+        assert tuple(after) == before
+        assert {p["block_id"] for p in srepo.active_placements(conn, deps.source_generation_id)} == {"b1", "b2"}
+    assert len(deps.payload_sink) == 1
+    assert deps.payload_sink[0].source_built and deps.payload_sink[0].note_num == 5
+    # A Sheet-12 worker retains payloads; its coordinator projects the workbook.
+    assert deps.payload_sink[0].content == before[0]
+
+    # A worker corrects its own whole-note destination by moving the canonical
+    # cell, rather than proposing a duplicate placement through another write.
+    corrected_label = "Disclosure of deferred income"
+    with repo.db_session(deps.db_path) as conn:
+        conn.execute("INSERT INTO notes_nodes(node_uuid,template_id,sheet,row,label,kind) "
+                     "VALUES ('corrected-target','mfrs-company-notes-list-v1',"
+                     "'Notes-Listofnotes',32,?,'LEAF')", (corrected_label,))
+        conn.execute("INSERT INTO template_slots("
+                     "target_id,canonical_target_id,template_id,sheet,row,col,label,"
+                     "slot_role,value_kind,mapping_source,manifest_version,"
+                     "workbook_fingerprint,validation_status) "
+                     "VALUES ('corrected-target','corrected-target','mfrs-company-notes-list-v1',"
+                     "'Notes-Listofnotes',32,'B',?,'INPUT','html','test','test-v1','fixture','writable')",
+                     (corrected_label,))
+    deps.coverage_receipt = object()
+    moved = await tools["move_own_source_cell"].function(
+        ctx, 140, 32, corrected_label, "Correct my original destination after reading the note.",
+    )
+    assert moved.startswith("Moved")
+    assert deps.coverage_receipt is None
+    assert [payload.chosen_row_label for payload in deps.payload_sink] == [corrected_label]
+    with repo.db_session(deps.db_path) as conn:
+        cells = conn.execute("SELECT row,html FROM notes_cells WHERE run_id=?", (deps.run_id,)).fetchall()
+        assert [(cell["row"], cell["html"]) for cell in cells] == [(32, before[0])]
+        assert {p["row"] for p in srepo.active_placements(conn, deps.source_generation_id)} == {32}
+        assert repo.fetch_notes_review_flags(conn, deps.run_id) == []
+    receipt = [{"note_num": 5, "action": "written", "row_labels": [corrected_label]}]
+    assert "accepted" in notes_agent._submit_coverage_entries_impl(deps, receipt)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["unassigned", "missing_note", "ambiguous_note", "duplicate_label", "unknown_label", "stale", "foreign_run"])
+async def test_managed_whole_note_rejects_invalid_context_without_writing(assigned_agent, failure):
+    from types import SimpleNamespace
+    deps, tools = assigned_agent
+    note_num, label = 5, "Disclosure of trade and other receivables"
+    if failure == "unassigned":
+        note_num = 6
+    elif failure == "missing_note":
+        deps.batch_note_nums.append(7)
+        note_num = 7
+    elif failure == "foreign_run":
+        deps.run_id += 100
+    elif failure == "unknown_label":
+        label = "Receivables"
+    else:
+        with repo.db_session(deps.db_path) as conn:
+            if failure == "stale":
+                conn.execute("UPDATE notes_source_generations SET status='superseded' WHERE id=?", (deps.source_generation_id,))
+            elif failure == "duplicate_label":
+                conn.execute("INSERT INTO notes_nodes(node_uuid,template_id,sheet,row,label,kind) VALUES ('duplicate-target','mfrs-company-notes-list-v1','Notes-Listofnotes',141,?,'LEAF')", (label,))
+            elif failure == "ambiguous_note":
+                conn.execute("UPDATE notes_source_notes SET top_note_num='5' WHERE generation_id=? AND source_note_id='n6'", (deps.source_generation_id,))
+    ctx = SimpleNamespace(deps=deps)
+    await tools["read_assigned_note"].function(ctx, note_num)
+    response = await tools["write_assigned_note"].function(ctx, note_num, label)
+    assert response.startswith("rejected:")
+    if failure in {"unassigned", "missing_note", "ambiguous_note", "stale", "foreign_run"}:
+        assert (await tools["read_assigned_note"].function(ctx, note_num)).startswith("rejected:")
+    assert not deps.payload_sink and not deps.wrote_once
+    with repo.db_session(deps.db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM notes_cells").fetchone()[0] == 0
+
+
+@pytest.mark.asyncio
+async def test_assigned_note_preserves_capture_uncertainty(assigned_agent):
+    from types import SimpleNamespace
+    deps, tools = assigned_agent
+    with repo.db_session(deps.db_path) as conn:
+        conn.execute("UPDATE notes_source_blocks SET locator_json=? WHERE generation_id=? AND block_id='b2'", ('{"capture_uncertain":true}', deps.source_generation_id))
+    ctx = SimpleNamespace(deps=deps)
+    assert "original wording is uncertain" in await tools["read_assigned_note"].function(ctx, 5)
+    assert (await tools["write_assigned_note"].function(ctx, 5, "Disclosure of trade and other receivables")).startswith("ok:")
+    with repo.db_session(deps.db_path) as conn:
+        assert conn.execute("SELECT content_origin FROM notes_cells WHERE run_id=?", (deps.run_id,)).fetchone()[0] == "vision_transcribed"
+
+
+@pytest.mark.asyncio
+async def test_assigned_note_conflict_uses_existing_durable_review_path(assigned_agent):
+    from types import SimpleNamespace
+    deps, tools = assigned_agent
+    ctx = SimpleNamespace(deps=deps)
+    await tools["read_assigned_note"].function(ctx, 5)
+    first = await tools["write_assigned_note"].function(ctx, 5, "Disclosure of trade and other receivables")
+    assert first.startswith("ok:")
+    with repo.db_session(deps.db_path) as conn:
+        conn.execute("INSERT INTO notes_nodes(node_uuid,template_id,sheet,row,label,kind) VALUES ('other-managed-target','mfrs-company-notes-list-v1','Notes-Listofnotes',32,'Disclosure of deferred income','LEAF')")
+    conflict = await tools["write_assigned_note"].function(ctx, 5, "Disclosure of deferred income")
+    assert conflict.startswith("conflict recorded for review:")
+    with repo.db_session(deps.db_path) as conn:
+        assert len(repo.fetch_notes_review_flags(conn, deps.run_id)) == 1
+        assert [row["row"] for row in conn.execute("SELECT row FROM notes_cells WHERE run_id=?", (deps.run_id,))] == [140]
+    assert len(deps.payload_sink) == 1
+
+
+@pytest.mark.asyncio
+async def test_assigned_whole_note_requires_contiguous_complete_read(assigned_agent, monkeypatch):
+    from types import SimpleNamespace
+    deps, tools = assigned_agent
+    ctx = SimpleNamespace(deps=deps)
+    read = tools["read_assigned_note"].function
+    write = tools["write_assigned_note"].function
+    label = "Disclosure of trade and other receivables"
+    assert (await write(ctx, 5, label)).startswith("rejected: read the complete")
+    monkeypatch.setattr(notes_agent, "SOURCE_TOOL_RESPONSE_CAP", 40)
+    # Invalid or tail-first reads do not account for omitted earlier content.
+    assert "Invalid offset" in await read(ctx, 5, -1)
+    await read(ctx, 5, 80)
+    assert (await write(ctx, 5, label)).startswith("rejected: read the complete")
+    response = await read(ctx, 5)
+    assert (await write(ctx, 5, label)).startswith("rejected: read the complete")
+    while "next_offset=" in response:
+        offset = int(response.split("next_offset=", 1)[1].split(".", 1)[0])
+        response = await read(ctx, 5, offset)
+    assert (await write(ctx, 5, label)).startswith("ok:")
+
+
+@pytest.mark.parametrize("template,batch,source", [
+    (NotesTemplateType.LIST_OF_NOTES, None, True),
+    (NotesTemplateType.LIST_OF_NOTES, [5], False),
+    (NotesTemplateType.CORP_INFO, [5], True),
+])
+def test_managed_source_tools_are_only_registered_for_assigned_source_batches(tmp_path, seeded, template, batch, source):
+    from pydantic_ai.models.test import TestModel
+    db, run_id, gen = seeded
+    agent, _ = notes_agent.create_notes_agent(
+        template_type=template, pdf_path="synthetic.pdf", inventory=[], filing_level="company",
+        model=TestModel(), output_dir=str(tmp_path), run_id=run_id, db_path=db,
+        source_generation_id=gen if source else None, batch_note_nums=batch,
+    )
+    assert {"read_assigned_note", "write_assigned_note"}.isdisjoint(_tool_names(agent))
+
+
+def _seed_mixed_source_sections(deps):
+    """Complete source sections sharing only their verified parent heading."""
+    blocks = [SourceBlock("b1", "heading", 0, "<h2>5 Basis of preparation</h2>", source_note_id="n5")]
+    targets = [
+        (133, "Disclosure of statement of compliance", "Statement of compliance", "The statements comply with MFRS."),
+        (10, "Disclosure of basis of preparation of financial statements", "Basis of measurement", "Historical cost and going concern; liabilities exceed assets by RM60,606,000."),
+        (31, "Disclosure of critical accounting estimates and judgements", "Estimates and judgements", "Estimates are reviewed on an ongoing basis."),
+    ]
+    with repo.db_session(deps.db_path) as conn:
+        for index, (row, label, title, prose) in enumerate(targets, 1):
+            heading = f"s{index}-heading"
+            blocks.extend([
+                SourceBlock(heading, "heading", index * 2 - 1, f"<h3>5.{index} {title}</h3>", source_note_id="n5", locator={"heading_ancestor_ids": ["b1"]}),
+                SourceBlock(f"s{index}-body", "paragraph", index * 2, f"<p>{prose}</p>", source_note_id="n5", locator={"heading_ancestor_ids": ["b1", heading]}),
+            ])
+            conn.execute("INSERT INTO notes_nodes(node_uuid,template_id,sheet,row,label,kind) VALUES (?,'mfrs-company-notes-list-v1','Notes-Listofnotes',?,?,'LEAF')", (f"mixed-{row}", row, label))
+        # Retire the fixture's old paragraph; preserve the other source note.
+        conn.execute("DELETE FROM notes_source_blocks WHERE generation_id=? AND block_id='b2'", (deps.source_generation_id,))
+        srepo.write_blocks(conn, deps.source_generation_id, blocks)
+    return targets, blocks
+
+
+@pytest.mark.asyncio
+async def test_complete_source_sections_retain_all_fields_and_accept_full_receipt(assigned_agent):
+    from types import SimpleNamespace
+    deps, tools = assigned_agent
+    targets, blocks = _seed_mixed_source_sections(deps)
+    ctx = SimpleNamespace(deps=deps)
+    write = tools["write_note_from_source"].function
+    for index, (row, label, _, _) in enumerate(targets, 1):
+        result = await write(ctx, deps.sheet_name, row, label, [f"section:n5:5.{index}"])
+        assert result.startswith("ok:") and "Re-routed" not in result
+        if index == 2:
+            partial = [{"note_num": 5, "action": "written", "row_labels": [item[1] for item in targets[:2]]}]
+            assert "still unplaced" in notes_agent._submit_coverage_entries_impl(deps, partial)
+    receipt = [{"note_num": 5, "action": "written", "row_labels": [item[1] for item in targets]}]
+    assert "accepted" in notes_agent._submit_coverage_entries_impl(deps, receipt)
+    assert len(deps.payload_sink) == 3
+    assert {payload.chosen_row_label for payload in deps.payload_sink} == {item[1] for item in targets}
+    assert "60,606,000" in next(payload.content for payload in deps.payload_sink if "Historical cost" in payload.content)
+    with repo.db_session(deps.db_path) as conn:
+        assert {row[0] for row in conn.execute("SELECT row FROM notes_cells WHERE run_id=?", (deps.run_id,))} == {10, 31, 133}
+        assert {p["block_id"] for p in srepo.active_placements(conn, deps.source_generation_id)} == {b.block_id for b in blocks}
+    # Same-field revision still replaces that section without erasing siblings.
+    assert (await write(ctx, deps.sheet_name, targets[1][0], targets[1][1], ["section:n5:5.2"])).startswith("ok:")
+    assert len(deps.payload_sink) == 3
+    assert "accepted" in notes_agent._submit_coverage_entries_impl(deps, receipt)
+    missing_label = [{"note_num": 5, "action": "written", "row_labels": [targets[0][1]]}]
+    assert "list every live destination" in notes_agent._submit_coverage_entries_impl(deps, missing_label)
+
+
+@pytest.mark.asyncio
+async def test_moving_one_source_section_preserves_siblings_in_workbook(assigned_agent, tmp_path):
+    from types import SimpleNamespace
+    from openpyxl import load_workbook
+    from notes.writer import write_notes_workbook
+
+    deps, tools = assigned_agent
+    targets, _ = _seed_mixed_source_sections(deps)
+    ctx = SimpleNamespace(deps=deps)
+    for index, (row, label, _, _) in enumerate(targets, 1):
+        result = await tools["write_note_from_source"].function(
+            ctx, deps.sheet_name, row, label, [f"section:n5:5.{index}"],
+        )
+        assert result.startswith("ok:")
+    destination_label = "Disclosure of trade and other receivables"
+    with repo.db_session(deps.db_path) as conn:
+        conn.execute("INSERT INTO template_slots("
+                     "target_id,canonical_target_id,template_id,sheet,row,col,label,"
+                     "slot_role,value_kind,mapping_source,manifest_version,"
+                     "workbook_fingerprint,validation_status) "
+                     "VALUES ('managed-target','managed-target','mfrs-company-notes-list-v1',"
+                     "'Notes-Listofnotes',140,'B',?,'INPUT','html','test','test-v1','fixture','writable')",
+                     (destination_label,))
+    deps.coverage_receipt = object()
+    moved = await tools["move_own_source_cell"].function(
+        ctx, targets[1][0], 140, destination_label, "Correct the measurement section destination.",
+    )
+    assert moved.startswith("Moved")
+    expected_labels = [targets[0][1], destination_label, targets[2][1]]
+    assert {p.chosen_row_label for p in deps.payload_sink} == set(expected_labels)
+    assert deps.coverage_receipt is None
+    incomplete = [{"note_num": 5, "action": "written", "row_labels": [destination_label]}]
+    assert "rejected" in notes_agent._submit_coverage_entries_impl(deps, incomplete)
+    complete = [{"note_num": 5, "action": "written", "row_labels": expected_labels}]
+    assert "accepted" in notes_agent._submit_coverage_entries_impl(deps, complete)
+    with repo.db_session(deps.db_path) as conn:
+        assert {cell[0] for cell in conn.execute("SELECT row FROM notes_cells WHERE run_id=?", (deps.run_id,))} == {133, 140, 31}
+        assert {p["row"] for p in srepo.active_placements(conn, deps.source_generation_id)} == {133, 140, 31}
+    output = tmp_path / "moved-sections.xlsx"
+    written = write_notes_workbook(deps.template_path, deps.payload_sink, str(output),
+                                   deps.filing_level, deps.sheet_name)
+    assert written.success and written.rows_written == 3
+    workbook = load_workbook(output)
+    try:
+        sheet = workbook[deps.sheet_name]
+        for row, text in [(133, targets[0][3]), (140, targets[1][3]), (31, targets[2][3])]:
+            assert text in sheet.cell(row, 2).value
+        assert not sheet.cell(targets[1][0], 2).value
+    finally:
+        workbook.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["approved", "no_approval", "third_destination"])
+async def test_split_receipt_honors_only_approved_capital_duplicate(assigned_agent, route):
+    from types import SimpleNamespace
+    from notes import source_write
+
+    deps, tools = assigned_agent
+    targets, _ = _seed_mixed_source_sections(deps)
+    ctx = SimpleNamespace(deps=deps)
+    for index, (row, label, _, _) in enumerate(targets, 1):
+        assert (await tools["write_note_from_source"].function(
+            ctx, deps.sheet_name, row, label, [f"section:n5:5.{index}"],
+        )).startswith("ok:")
+    with repo.db_session(deps.db_path) as conn:
+        conn.execute("INSERT INTO template_slots("
+                     "target_id,canonical_target_id,template_id,sheet,row,col,label,"
+                     "slot_role,value_kind,mapping_source,manifest_version,"
+                     "workbook_fingerprint,validation_status) "
+                     "VALUES ('capital-prose','capital-prose','mfrs-company-notes-capital-v1',"
+                     "'Notes-Issuedcapital',4,'B','Issued capital disclosure','INPUT','html',"
+                     "'test','test-v1','fixture','writable')")
+        source_write.write_cell_from_blocks(
+            conn, run_id=deps.run_id, generation_id=deps.source_generation_id,
+            sheet="Notes-Issuedcapital", row=4, block_ids=["s1-heading", "s1-body"],
+            template_prefix="mfrs-company-",
+        )
+        if route == "no_approval":
+            conn.execute("DELETE FROM notes_disposition_events WHERE generation_id=? "
+                         "AND reason_code='APPROVED_DUPLICATE_ROUTE'", (deps.source_generation_id,))
+        elif route == "third_destination":
+            repo.upsert_notes_cell(conn, run_id=deps.run_id, sheet=deps.sheet_name,
+                                   row=140, label="Disclosure of trade and other receivables",
+                                   html=conn.execute("SELECT html FROM notes_cells WHERE run_id=? "
+                                                     "AND sheet='Notes-Issuedcapital' AND row=4",
+                                                     (deps.run_id,)).fetchone()["html"])
+            srepo.set_cell_placements(conn, deps.run_id, deps.source_generation_id,
+                                      deps.sheet_name, 140, ["s1-heading", "s1-body"])
+    receipt = [{"note_num": 5, "action": "written", "row_labels": [item[1] for item in targets]}]
+    result = notes_agent._submit_coverage_entries_impl(deps, receipt)
+    assert ("accepted" if route == "approved" else "rejected") in result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("damage", ["missing_placements", "changed_content", "foreign_cell_generation", "stale_source"])
+async def test_source_multi_field_receipt_requires_current_matching_canonical_placements(assigned_agent, damage):
+    from types import SimpleNamespace
+    deps, tools = assigned_agent
+    targets, _ = _seed_mixed_source_sections(deps)
+    ctx = SimpleNamespace(deps=deps)
+    for index, (row, label, _, _) in enumerate(targets, 1):
+        assert (await tools["write_note_from_source"].function(ctx, deps.sheet_name, row, label, [f"section:n5:5.{index}"])).startswith("ok:")
+    with repo.db_session(deps.db_path) as conn:
+        if damage == "missing_placements":
+            conn.execute("UPDATE notes_block_placements SET active=0 WHERE generation_id=?", (deps.source_generation_id,))
+        elif damage == "changed_content":
+            conn.execute("UPDATE notes_cells SET html='<p>Changed by a human</p>',content_revision=content_revision+1 WHERE run_id=? AND row=10", (deps.run_id,))
+        elif damage == "foreign_cell_generation":
+            conn.execute("UPDATE notes_cells SET source_generation_id=NULL WHERE run_id=? AND row=10", (deps.run_id,))
+        elif damage == "stale_source":
+            conn.execute("UPDATE notes_source_generations SET status='superseded' WHERE id=?", (deps.source_generation_id,))
+    receipt = [{"note_num": 5, "action": "written", "row_labels": [item[1] for item in targets]}]
+    assert "rejected" in notes_agent._submit_coverage_entries_impl(deps, receipt)
+    assert deps.coverage_receipt is None
+
+
+@pytest.mark.asyncio
+async def test_source_multi_field_receipt_rejects_fragments_within_one_section(assigned_agent):
+    from types import SimpleNamespace
+    deps, tools = assigned_agent
+    targets, _ = _seed_mixed_source_sections(deps)
+    with repo.db_session(deps.db_path) as conn:
+        conn.execute("DELETE FROM notes_source_blocks WHERE generation_id=? AND block_id!='b1'", (deps.source_generation_id,))
+        srepo.write_blocks(conn, deps.source_generation_id, [
+            SourceBlock("b1", "heading", 0, "<h2>5 Basis of preparation</h2>", source_note_id="n5"),
+            SourceBlock("heading", "heading", 1, "<h3>5.1 Measurement</h3>", source_note_id="n5", locator={"heading_ancestor_ids": ["b1"]}),
+            SourceBlock("first", "paragraph", 2, "<p>First part.</p>", source_note_id="n5", locator={"heading_ancestor_ids": ["b1", "heading"]}),
+            SourceBlock("second", "paragraph", 3, "<p>Second part.</p>", source_note_id="n5", locator={"heading_ancestor_ids": ["b1", "heading"]}),
+        ])
+    ctx = SimpleNamespace(deps=deps)
+    for block, (row, label, _, _) in zip(["first", "second"], targets[:2]):
+        assert (await tools["write_note_from_source"].function(ctx, deps.sheet_name, row, label, [block])).startswith("ok:")
+    receipt = [{"note_num": 5, "action": "written", "row_labels": [item[1] for item in targets[:2]]}]
+    assert "exactly one List-of-Notes field" in notes_agent._submit_coverage_entries_impl(deps, receipt)
+
+
+@pytest.mark.asyncio
+async def test_source_nested_sections_preserve_parent_intro_and_complete_children(assigned_agent):
+    from types import SimpleNamespace
+    deps, tools = assigned_agent
+    targets, _ = _seed_mixed_source_sections(deps)
+    blocks = [
+        SourceBlock("root", "heading", 0, "<h2>5 Basis of preparation</h2>", source_note_id="n5"),
+        SourceBlock("parent", "heading", 1, "<h3>5.1 Basis overview</h3>", source_note_id="n5", locator={"heading_ancestor_ids": ["root"]}),
+        SourceBlock("intro", "paragraph", 2, "<p>Complete basis overview introduction.</p>", source_note_id="n5", locator={"heading_ancestor_ids": ["root", "parent"]}),
+        SourceBlock("child1", "heading", 3, "<h4>5.1.1 Measurement</h4>", source_note_id="n5", locator={"heading_ancestor_ids": ["root", "parent"]}),
+        SourceBlock("child1body", "paragraph", 4, "<p>Complete measurement disclosure.</p>", source_note_id="n5", locator={"heading_ancestor_ids": ["root", "parent", "child1"]}),
+        SourceBlock("child2", "heading", 5, "<h4>5.1.2 Estimates</h4>", source_note_id="n5", locator={"heading_ancestor_ids": ["root", "parent"]}),
+        SourceBlock("child2body", "paragraph", 6, "<p>Complete estimates disclosure.</p>", source_note_id="n5", locator={"heading_ancestor_ids": ["root", "parent", "child2"]}),
+    ]
+    with repo.db_session(deps.db_path) as conn:
+        srepo.write_blocks(conn, deps.source_generation_id, blocks)
+    ctx = SimpleNamespace(deps=deps)
+    for selected, (row, label, _, _) in zip(["intro", "section:n5:5.1.1", "section:n5:5.1.2"], targets):
+        assert (await tools["write_note_from_source"].function(ctx, deps.sheet_name, row, label, [selected])).startswith("ok:")
+    receipt = [{"note_num": 5, "action": "written", "row_labels": [item[1] for item in targets]}]
+    assert "accepted" in notes_agent._submit_coverage_entries_impl(deps, receipt)
+    assert len(deps.payload_sink) == 3
+    assert any("Complete basis overview introduction." in payload.content for payload in deps.payload_sink)
+    with repo.db_session(deps.db_path) as conn:
+        assert {p["block_id"] for p in srepo.active_placements(conn, deps.source_generation_id)} == {block.block_id for block in blocks}
+
+
+@pytest.mark.asyncio
+async def test_source_multi_field_receipt_cannot_omit_another_live_destination(assigned_agent):
+    from types import SimpleNamespace
+    deps, tools = assigned_agent
+    targets, _ = _seed_mixed_source_sections(deps)
+    ctx = SimpleNamespace(deps=deps)
+    for index, (row, label, _, _) in enumerate(targets, 1):
+        assert (await tools["write_note_from_source"].function(ctx, deps.sheet_name, row, label, [f"section:n5:5.{index}"])).startswith("ok:")
+    # A stale sink view must not certify only two of three live destinations.
+    deps.payload_sink[:] = [p for p in deps.payload_sink if p.chosen_row_label != targets[2][1]]
+    receipt = [{"note_num": 5, "action": "written", "row_labels": [item[1] for item in targets[:2]]}]
+    assert "rejected" in notes_agent._submit_coverage_entries_impl(deps, receipt)
+    assert deps.coverage_receipt is None
+
+
 def test_the_source_tools_are_absent_without_a_frozen_reading(tmp_path):
     """An `off`-mode run must see exactly the agent it saw before."""
     from pydantic_ai.models.test import TestModel
@@ -208,6 +653,12 @@ def test_section_listing_gives_one_complete_choice_for_a_simple_note(seeded):
     db, _run_id, gen = seeded
     out = notes_agent._list_source_sections_impl(db, gen, 5)
     assert "section:n5:root" in out
+    for selection in ("section:n5:root", "n5:root"):
+        viewed = notes_agent._view_source_blocks_impl(db, gen, [selection])
+        assert "5. Receivables" in viewed and "Stated at cost." in viewed
+    assert "unknown source section" in notes_agent._view_source_blocks_impl(
+        db, gen, ["n5:missing"],
+    )
     assert "2 source parts" in out
     assert "b2" not in out
 
@@ -248,10 +699,16 @@ def test_repeated_lettered_sections_keep_distinct_source_pieces():
     ]
     assert expand_section_ids(blocks, notes, [sections[0].section_id]) == ["a1", "first"]
     assert expand_section_ids(blocks, notes, [sections[2].section_id]) == ["a2", "last"]
+    assert expand_section_ids(blocks, notes, ["n5:a:2"]) == ["a2", "last"]
+    # Exact existing block identities win over optional-prefix section recovery.
+    collision = SourceBlock("n5:a", "paragraph", 5, "<p>Exact block.</p>")
+    assert expand_section_ids([*blocks, collision], notes, ["n5:a"]) == ["n5:a"]
+    with pytest.raises(ValueError, match="unknown source section"):
+        expand_section_ids(blocks, notes, ["n5:missing"])
 
 
-def test_parent_sections_include_nested_numbered_and_roman_disclosures():
-    from notes.source_sections import expand_section_ids
+def test_parent_sections_include_nested_numbered_and_roman_disclosures(seeded):
+    from notes.source_sections import expand_section_ids, sections_for_note
 
     numbered = [
         SourceBlock("parent", "heading", 1, "<h3>3.1 Basis of preparation</h3>", source_note_id="n3"),
@@ -273,13 +730,28 @@ def test_parent_sections_include_nested_numbered_and_roman_disclosures():
                     locator={"heading_ancestor_ids": ["a"]}),
         SourceBlock("lessor", "paragraph", 5, "<p>Lease income.</p>", source_note_id="n3"),
         SourceBlock("b", "heading", 6, "<h3>(b) Revenue</h3>", source_note_id="n3"),
+        SourceBlock("bi", "heading", 7, "<h4>(i) Recognition</h4>", source_note_id="n3",
+                    locator={"heading_ancestor_ids": ["b"]}),
     ]
     assert expand_section_ids(lettered, notes, ["section:n3:a"]) == ["a", "i", "lessee", "ii", "lessor"]
     assert expand_section_ids(lettered, notes, ["section:n3:i"]) == ["i", "lessee"]
     assert expand_section_ids(lettered, notes, ["section:n3:ii"]) == ["ii", "lessor"]
+    sections = sections_for_note(lettered, "n3", "3", "Policies")
+    assert next(s for s in sections if s.section_id == "section:n3:i").parent_title == "(a) Leases"
+    assert next(s for s in sections if s.section_id == "section:n3:i:2").parent_title == "(b) Revenue"
+    db, _, gen = seeded
+    with repo.db_session(db) as conn:
+        srepo.write_blocks(conn, gen, lettered)
+        srepo.write_notes(conn, gen, [SourceNote("n3", "3", "Policies")])
+    listing = notes_agent._list_source_sections_impl(db, gen, 3)
+    first = next(line for line in listing.splitlines() if "section:n3:i " in line)
+    second = next(line for line in listing.splitlines() if "section:n3:i:2 " in line)
+    assert "under (a) Leases" in first
+    assert "under (b) Revenue" in second
 
 
-def test_section_id_reaches_sheet12_payload_builder_as_source_pieces(seeded):
+@pytest.mark.parametrize("selection", ["section:n5:root", "n5:root"])
+def test_section_id_reaches_sheet12_payload_builder_as_source_pieces(seeded, selection):
     from types import SimpleNamespace
 
     db, run_id, gen = seeded
@@ -294,7 +766,7 @@ def test_section_id_reaches_sheet12_payload_builder_as_source_pieces(seeded):
             filing_level="company", sheet_name="Notes-Listofnotes",
         )
         message, payload = notes_agent._write_from_source_in_connection(
-            conn, deps, "Notes-Listofnotes", 140, ["section:n5:root"],
+            conn, deps, "Notes-Listofnotes", 140, [selection],
             [1], "source page 1", None,
             target_label="Disclosure of receivables",
         )

@@ -21,9 +21,11 @@ from extraction.history_processors import (
 )
 
 _READ_TOOLS = frozenset({
-    "read_source_manifest", "view_source_blocks", "read_note_cells",
+    "read_source_manifest", "list_source_sections", "view_source_blocks", "read_note_cells",
 })
 _SOURCE_ID = re.compile(r"\bp\d+-b\d+-[A-Za-z0-9]+\b")
+_SECTION_ID = re.compile(r"\bsection:[A-Za-z0-9_-]+(?::[A-Za-z0-9_.-]+)+")
+_LEGACY_BLOCK_ID = re.compile(r"\bb\d{5}\b")
 _NOTE = re.compile(r"\bNote\s+\d+(?:\.\d+)?\b", re.I)
 _ROW = re.compile(r"\brow\s+\d+\b", re.I)
 
@@ -50,7 +52,8 @@ def compact_stale_notes_reads(messages: list[ModelMessage]) -> list[ModelMessage
                 or len(body) < 2000):
             continue
         locators = list(dict.fromkeys(
-            [*_NOTE.findall(body), *_ROW.findall(body), *_SOURCE_ID.findall(body)]
+            [*_NOTE.findall(body), *_ROW.findall(body), *_SECTION_ID.findall(body),
+             *_SOURCE_ID.findall(body), *_LEGACY_BLOCK_ID.findall(body)]
         ))[:100]
         first_line = body.strip().splitlines()[0][:160] if body.strip() else ""
         breadcrumb = (
