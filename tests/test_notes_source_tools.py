@@ -333,6 +333,100 @@ async def test_complete_source_sections_retain_all_fields_and_accept_full_receip
 
 
 @pytest.mark.asyncio
+async def test_moving_one_source_section_preserves_siblings_in_workbook(assigned_agent, tmp_path):
+    from types import SimpleNamespace
+    from openpyxl import load_workbook
+    from notes.writer import write_notes_workbook
+
+    deps, tools = assigned_agent
+    targets, _ = _seed_mixed_source_sections(deps)
+    ctx = SimpleNamespace(deps=deps)
+    for index, (row, label, _, _) in enumerate(targets, 1):
+        result = await tools["write_note_from_source"].function(
+            ctx, deps.sheet_name, row, label, [f"section:n5:5.{index}"],
+        )
+        assert result.startswith("ok:")
+    destination_label = "Disclosure of trade and other receivables"
+    with repo.db_session(deps.db_path) as conn:
+        conn.execute("INSERT INTO template_slots("
+                     "target_id,canonical_target_id,template_id,sheet,row,col,label,"
+                     "slot_role,value_kind,mapping_source,manifest_version,"
+                     "workbook_fingerprint,validation_status) "
+                     "VALUES ('managed-target','managed-target','mfrs-company-notes-list-v1',"
+                     "'Notes-Listofnotes',140,'B',?,'INPUT','html','test','test-v1','fixture','writable')",
+                     (destination_label,))
+    deps.coverage_receipt = object()
+    moved = await tools["move_own_source_cell"].function(
+        ctx, targets[1][0], 140, destination_label, "Correct the measurement section destination.",
+    )
+    assert moved.startswith("Moved")
+    expected_labels = [targets[0][1], destination_label, targets[2][1]]
+    assert {p.chosen_row_label for p in deps.payload_sink} == set(expected_labels)
+    assert deps.coverage_receipt is None
+    incomplete = [{"note_num": 5, "action": "written", "row_labels": [destination_label]}]
+    assert "rejected" in notes_agent._submit_coverage_entries_impl(deps, incomplete)
+    complete = [{"note_num": 5, "action": "written", "row_labels": expected_labels}]
+    assert "accepted" in notes_agent._submit_coverage_entries_impl(deps, complete)
+    with repo.db_session(deps.db_path) as conn:
+        assert {cell[0] for cell in conn.execute("SELECT row FROM notes_cells WHERE run_id=?", (deps.run_id,))} == {133, 140, 31}
+        assert {p["row"] for p in srepo.active_placements(conn, deps.source_generation_id)} == {133, 140, 31}
+    output = tmp_path / "moved-sections.xlsx"
+    written = write_notes_workbook(deps.template_path, deps.payload_sink, str(output),
+                                   deps.filing_level, deps.sheet_name)
+    assert written.success and written.rows_written == 3
+    workbook = load_workbook(output)
+    try:
+        sheet = workbook[deps.sheet_name]
+        for row, text in [(133, targets[0][3]), (140, targets[1][3]), (31, targets[2][3])]:
+            assert text in sheet.cell(row, 2).value
+        assert not sheet.cell(targets[1][0], 2).value
+    finally:
+        workbook.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["approved", "no_approval", "third_destination"])
+async def test_split_receipt_honors_only_approved_capital_duplicate(assigned_agent, route):
+    from types import SimpleNamespace
+    from notes import source_write
+
+    deps, tools = assigned_agent
+    targets, _ = _seed_mixed_source_sections(deps)
+    ctx = SimpleNamespace(deps=deps)
+    for index, (row, label, _, _) in enumerate(targets, 1):
+        assert (await tools["write_note_from_source"].function(
+            ctx, deps.sheet_name, row, label, [f"section:n5:5.{index}"],
+        )).startswith("ok:")
+    with repo.db_session(deps.db_path) as conn:
+        conn.execute("INSERT INTO template_slots("
+                     "target_id,canonical_target_id,template_id,sheet,row,col,label,"
+                     "slot_role,value_kind,mapping_source,manifest_version,"
+                     "workbook_fingerprint,validation_status) "
+                     "VALUES ('capital-prose','capital-prose','mfrs-company-notes-capital-v1',"
+                     "'Notes-Issuedcapital',4,'B','Issued capital disclosure','INPUT','html',"
+                     "'test','test-v1','fixture','writable')")
+        source_write.write_cell_from_blocks(
+            conn, run_id=deps.run_id, generation_id=deps.source_generation_id,
+            sheet="Notes-Issuedcapital", row=4, block_ids=["s1-heading", "s1-body"],
+            template_prefix="mfrs-company-",
+        )
+        if route == "no_approval":
+            conn.execute("DELETE FROM notes_disposition_events WHERE generation_id=? "
+                         "AND reason_code='APPROVED_DUPLICATE_ROUTE'", (deps.source_generation_id,))
+        elif route == "third_destination":
+            repo.upsert_notes_cell(conn, run_id=deps.run_id, sheet=deps.sheet_name,
+                                   row=140, label="Disclosure of trade and other receivables",
+                                   html=conn.execute("SELECT html FROM notes_cells WHERE run_id=? "
+                                                     "AND sheet='Notes-Issuedcapital' AND row=4",
+                                                     (deps.run_id,)).fetchone()["html"])
+            srepo.set_cell_placements(conn, deps.run_id, deps.source_generation_id,
+                                      deps.sheet_name, 140, ["s1-heading", "s1-body"])
+    receipt = [{"note_num": 5, "action": "written", "row_labels": [item[1] for item in targets]}]
+    result = notes_agent._submit_coverage_entries_impl(deps, receipt)
+    assert ("accepted" if route == "approved" else "rejected") in result
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("damage", ["missing_placements", "changed_content", "foreign_cell_generation", "stale_source"])
 async def test_source_multi_field_receipt_requires_current_matching_canonical_placements(assigned_agent, damage):
     from types import SimpleNamespace

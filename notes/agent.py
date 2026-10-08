@@ -2813,7 +2813,12 @@ def _move_own_source_impl(
                         conn, deps, deps.sheet_name, destination_row, ids, [],
                         evidence, None, target_label=target_label,
                     )
-                    next_sink = [p for p in deps.payload_sink if p.source_note_id != payload.source_note_id]
+                    entries = _ensure_label_index(deps)
+                    next_sink = []
+                    for existing in deps.payload_sink:
+                        resolved = _resolve_row(entries, existing.chosen_row_label)
+                        if resolved is None or resolved[0] != source_row:
+                            next_sink.append(existing)
                     next_sink.append(payload)
                     revision = _source_revision(conn, deps, destination_row)
                 # Publish memory state only after the database commit succeeds.
