@@ -1,5 +1,5 @@
 import { guardNavigationHistory } from "../lib/navigationHistory";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useId } from "react";
 import { pwc, tokens } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { PdfSourcePane } from "./PdfSourcePane";
@@ -289,7 +289,7 @@ interface AgentSummary {
   sourceReference: string | null;
 }
 
-function AgentCard({ agent, summary, filingStandard, onRetry, retryPending }: { agent: RunAgentJson; summary: AgentSummary; filingStandard?: unknown; onRetry?: (statementType: string) => void; retryPending?: boolean }) {
+function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, retryPending }: { panelId: string; tabId: string; agent: RunAgentJson; summary: AgentSummary; filingStandard?: unknown; onRetry?: (statementType: string) => void; retryPending?: boolean }) {
   // Sheet-12 sub-tab selection — mirrors the live ExtractPage path so
   // replay looks identical to live once the operator picks a sub. null =
   // "All" (every sub-agent merged, same as pre-sub-tab behaviour).
@@ -337,7 +337,7 @@ function AgentCard({ agent, summary, filingStandard, onRetry, retryPending }: { 
   }, [agent.events, notes12SubId, showSubTabs, technicalOpen]);
 
   return (
-    <article role="tabpanel" data-testid="run-detail-agent" className="pwc-view-enter" style={styles.agentDetail}>
+    <article role="tabpanel" id={panelId} aria-labelledby={tabId} data-testid="run-detail-agent" className="pwc-view-enter" style={styles.agentDetail}>
       <div style={styles.agentHeaderButton}>
         <div style={styles.agentTitleRow}>
           <span style={styles.agentStatement}>{displayName}</span>
@@ -470,6 +470,7 @@ function observedStageAgents(detail: RunDetailJson): RunAgentJson[] {
 }
 
 function SavedAgentWorkspace({ detail, filingStandard, onRetry, retryPending }: { detail: RunDetailJson; filingStandard?: unknown; onRetry?: (statementType: string) => void; retryPending?: boolean }) {
+  const panelId = useId();
   const orderedAgents = useMemo(
     () => [...detail.agents, ...observedStageAgents(detail)].sort((a, b) => agentActivityOrder(a) - agentActivityOrder(b)),
     [detail],
@@ -494,10 +495,10 @@ function SavedAgentWorkspace({ detail, filingStandard, onRetry, retryPending }: 
   }, [orderedAgents]);
   const selectedAgent = orderedAgents.find((agent) => String(agent.id) === selectedId) ?? orderedAgents[0];
   return (
-    <AgentWorkspace agents={navigation} tabOrder={orderedAgents.map((agent) => String(agent.id))}
+    <AgentWorkspace panelId={panelId} agents={navigation} tabOrder={orderedAgents.map((agent) => String(agent.id))}
       filingStandard={filingStandard as RunDetailJson["filing_standard"]}
       activeTab={selectedAgent ? String(selectedAgent.id) : ""} onTabClick={setSelectedId}>
-      {selectedAgent && <AgentCard key={selectedAgent.id} agent={selectedAgent}
+      {selectedAgent && <AgentCard key={selectedAgent.id} panelId={panelId} tabId={`${panelId}-tab-${selectedAgent.id}`} agent={selectedAgent}
         filingStandard={filingStandard} onRetry={onRetry} retryPending={retryPending}
         summary={{ updates: agentSemanticUpdates(selectedAgent), sourceReference: agentSourceReference(selectedAgent) }} />}
     </AgentWorkspace>

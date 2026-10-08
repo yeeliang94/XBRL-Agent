@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { NotesAppearanceSettings } from "../components/NotesAppearanceSettings";
 import { getSettings, updateSettings } from "../lib/api";
 import { previewNotesAppearance } from "../lib/notesOutput";
@@ -46,13 +46,18 @@ describe("Notes appearance", () => {
     expect(busy).toHaveBeenCalledWith(true);
     expect(screen.getByRole("button", { name: "Reset Font size (pt)" })).toBeInTheDocument();
   });
-  test("custom header colour saves and reaches the prepared preview", async () => {
+  test.each(["transparent", "#f4f4f4", "#e6eef6"])("custom header colour from %s saves and reaches the prepared preview", async (headerFill) => {
+    custom = { headerFill };
     render(<NotesAppearanceSettings />);
     const fill = await screen.findByLabelText("Header fill");
     expect(screen.getByLabelText("Custom fill colour")).toBeDisabled();
     fireEvent.change(fill, { target: { value: "custom" } });
     const picker = screen.getByLabelText("Custom fill colour");
     expect(picker).toBeEnabled();
+    expect(fill).toHaveValue("custom");
+    fireEvent.input(picker, { target: { value: "#f4f4f4" } });
+    expect(picker).toBeEnabled();
+    expect(fill).toHaveValue("custom");
     fireEvent.input(picker, { target: { value: "#dbeafe" } });
     await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({ notes_appearance_overrides: { headerFill: "#dbeafe" } }));
     await waitFor(() => expect(previewNotesAppearance).toHaveBeenLastCalledWith(expect.objectContaining({ headerFill: "#dbeafe" }), expect.any(AbortSignal)));
@@ -80,6 +85,29 @@ describe("Notes appearance", () => {
     fireEvent.click(screen.getByRole("button", { name: "Reset appearance" }));
     await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({ notes_appearance_reset: true }));
     await waitFor(() => expect(screen.queryByText("Custom")).toBeNull());
+  });
+  test("reset confirmation waits for an appearance save already in progress", async () => {
+    let finishSave!: (value: { status: string }) => void;
+    vi.mocked(updateSettings).mockImplementationOnce(() => new Promise((resolve) => { finishSave = resolve; }));
+    render(<NotesAppearanceSettings />);
+    const font = await screen.findByLabelText("Font size (pt)");
+    vi.useFakeTimers();
+    try {
+      fireEvent.change(font, { target: { value: "12" } });
+      fireEvent.click(screen.getByRole("button", { name: "Reset to house style" }));
+      const dialog = screen.getByRole("dialog", { name: "Reset notes appearance?" });
+      await act(() => vi.advanceTimersByTimeAsync(500));
+      const busyButton = within(dialog).getByRole("button", { name: "Saving…" });
+      expect(busyButton).toBeDisabled();
+      fireEvent.click(busyButton);
+      expect(updateSettings).toHaveBeenCalledTimes(1);
+      await act(async () => { finishSave({ status: "ok" }); });
+      const reset = within(dialog).getByRole("button", { name: "Reset appearance" });
+      expect(reset).toBeEnabled();
+      await act(async () => { fireEvent.click(reset); });
+      expect(updateSettings).toHaveBeenLastCalledWith({ notes_appearance_reset: true });
+      expect(screen.queryByRole("dialog")).toBeNull();
+    } finally { vi.useRealTimers(); }
   });
   test("failed save restores confirmed settings and reports failure", async () => {
     vi.mocked(updateSettings).mockRejectedValue(new Error("Save unavailable"));

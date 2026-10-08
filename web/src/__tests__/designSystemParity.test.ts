@@ -29,6 +29,9 @@ describe("XBRL design system is the production authority", () => {
     expect(designSystem).toContain("Unrelated saves preserve configured prior-run hints");
     expect(designSystem).toContain("Prepared documents with notes always enforce source-integrity checks");
     expect(designSystem).toContain("Preserve the legacy source-check mode and name it in the reset confirmation");
+    expect(designSystem).toContain("Notes appearance keeps Custom colour selected when its colour matches a preset");
+    expect(designSystem).toContain("Disable reset confirmation while an appearance save is in progress");
+    expect(designSystem).toContain("saved workstream tabs name and control their selected panel through matching ARIA references");
     expect(designSystem).toContain("Keep unsaved shared edits");
     expect(designSystem).toContain("require confirmation that names the shared scope");
     expect(designSystem).toContain("preserve the connection, access key, team guidance, accounts and existing runs");

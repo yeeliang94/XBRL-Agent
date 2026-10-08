@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from "react";
+import { useState, type CSSProperties, type ReactNode } from "react";
 import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import type { BorderStyle, ClipboardFormatOptions, ListMarker } from "../lib/clipboardFormat";
@@ -16,7 +16,8 @@ export function ClipboardFormatControls({ value, onChange, idPrefix = "fmt", hou
 }) {
   const fillPresets: Array<[string, string]> = [["transparent", "No fill"], ["#f4f4f4", "Light grey"], ["#e6eef6", "Light blue"]];
   const fill = value.headerFill ?? "transparent";
-  const isCustomFill = !fillPresets.some(([colour]) => colour === fill);
+  const [customFill, setCustomFill] = useState<string | null>(null);
+  const isCustomFill = customFill === fill || !fillPresets.some(([colour]) => colour === fill);
   const pickerColour = /^#[0-9a-f]{6}$/i.test(fill) ? fill : /^#[0-9a-f]{3}$/i.test(fill)
     ? "#" + fill.slice(1).split("").map((c) => c + c).join("") : "#e8edf2";
   const patch = (partial: Partial<ClipboardFormatOptions>) => onChange({ ...value, ...partial });
@@ -29,7 +30,7 @@ export function ClipboardFormatControls({ value, onChange, idPrefix = "fmt", hou
         <label style={ui.fieldLabel} htmlFor={`${idPrefix}-${key}${suffix}`}>{label}</label>
         {custom && onReset && <button type="button" className={uiClass.btnQuiet}
           style={{ ...ui.buttonQuiet, ...ui.buttonSm, padding: "0 4px", flexShrink: 0 }} disabled={disabled}
-          aria-label={`Reset ${label}`} data-tooltip={`Restore ${defaultLabel}`} onClick={() => onReset(key)}>Reset</button>}
+          aria-label={`Reset ${label}`} data-tooltip={`Restore ${defaultLabel}`} onClick={() => { if (key === "headerFill") setCustomFill(null); onReset(key); }}>Reset</button>}
       </div>
       {control}
       <span style={styles.origin}>{custom ? "Custom" : ""}</span>
@@ -77,13 +78,14 @@ export function ClipboardFormatControls({ value, onChange, idPrefix = "fmt", hou
     <div style={styles.grid}>
       {select("borderStyle", "Table border", value.borderStyle, [["single", "Single line"], ["double", "Thick single line"], ["none", "No border"]], (v) => patch({ borderStyle: v as BorderStyle }))}
       {select("headerFill", "Header fill", isCustomFill ? "custom" : fill, [...fillPresets, ["custom", "Custom colour"]], (v) => {
+        setCustomFill(v === "custom" ? pickerColour : null);
         patch({ headerFill: v === "custom" ? pickerColour : v });
       })}
       <div style={styles.field}>
         <div style={styles.labelRow}><label style={ui.fieldLabel} htmlFor={`${idPrefix}-header-fill-colour`}>Custom fill colour</label></div>
         <input id={`${idPrefix}-header-fill-colour`} type="color" value={pickerColour}
           disabled={disabled || !isCustomFill} style={styles.input}
-          onInput={(e) => patch({ headerFill: e.currentTarget.value })} />
+          onInput={(e) => { setCustomFill(e.currentTarget.value); patch({ headerFill: e.currentTarget.value }); }} />
         <span style={styles.origin}>{isCustomFill ? "" : "Choose Custom colour to use the picker."}</span>
       </div>
       {select("headerBold", "Header emphasis", value.headerBold === false ? "false" : "true", [["true", "Bold"], ["false", "Regular"]], (v) => patch({ headerBold: v === "true" }))}

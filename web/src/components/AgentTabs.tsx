@@ -35,6 +35,7 @@ export interface AgentTabsProps {
   filingStandard?: FilingStandard;
   tabOrder: string[];          // ordered agent IDs for active tabs
   activeTab: string;
+  panelId?: string;
   onTabClick: (agentId: string) => void;
   skeletonTabs?: string[];     // labels for face statements not yet started (greyed-out)
   // Phase 8: gate statement tabs so pre-run state doesn't flash all 5
@@ -132,6 +133,7 @@ function AgentTabsImpl({
   filingStandard,
   tabOrder,
   activeTab,
+  panelId,
   onTabClick,
   skeletonTabs,
   statementsInRun,
@@ -193,6 +195,8 @@ function AgentTabsImpl({
         ref={(node) => { tabRefs.current[agentId] = node; }}
         data-agent-label={agent.label}
         role="tab"
+        id={panelId ? `${panelId}-tab-${agentId}` : undefined}
+        aria-controls={panelId}
         aria-selected={isActive}
         tabIndex={isActive ? 0 : -1}
         onClick={() => onTabClick(agentId)}

@@ -115,7 +115,7 @@ export function NotesAppearanceSettings({ onBusyChange }: { onBusyChange?: (busy
   return <section aria-label="Notes appearance">
     <ConfirmDialog isOpen={resetOpen} title="Reset notes appearance?"
       message="Restore the shared house style, including no table borders or header fill. This removes all shared appearance overrides. Existing run overrides are kept."
-      confirmLabel="Reset appearance" onConfirm={resetAll} onCancel={() => setResetOpen(false)} />
+      confirmLabel="Reset appearance" busy={phase === "saving"} busyLabel="Saving…" onConfirm={resetAll} onCancel={() => setResetOpen(false)} />
     <div style={{ ...ui.sectionHeader, alignItems: "center" }}>
       <h2 style={{ fontSize: 16, margin: 0, fontWeight: pwc.weight.semibold }}>Notes appearance</h2>
       <button type="button" className={uiClass.btnSecondary} style={ui.buttonSecondary}
