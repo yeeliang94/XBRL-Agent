@@ -422,6 +422,23 @@ function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, re
   );
 }
 
+function recordedAgentStatus(agent: RunAgentJson): string {
+  // Final database outcomes remain authoritative, particularly failures
+  // recorded after a model reported success. Running rows can lag the feed
+  // until the other extraction agents finish.
+  if (!["running", "pending"].includes(agent.status)) return agent.status;
+  for (let index = agent.events.length - 1; index >= 0; index -= 1) {
+    const event = agent.events[index];
+    const data = event.data as unknown as Record<string, unknown>;
+    if (data.sub_agent_id) continue;
+    if (event.event === "status" && data.phase === "started") break;
+    if (event.event !== "complete") continue;
+    if (data.success === true) return "succeeded";
+    if (data.success === false) return data.error === "Cancelled by user" ? "cancelled" : "failed";
+  }
+  return agent.status;
+}
+
 function savedAgentStatus(status: string): AgentTabStatus {
   if (["succeeded", "completed", "complete", "completed_with_errors"].includes(status)) return "complete";
   if (["cancelled", "aborted"].includes(status)) return "cancelled";
@@ -472,7 +489,8 @@ function observedStageAgents(detail: RunDetailJson): RunAgentJson[] {
 function SavedAgentWorkspace({ detail, filingStandard, onRetry, retryPending }: { detail: RunDetailJson; filingStandard?: unknown; onRetry?: (statementType: string) => void; retryPending?: boolean }) {
   const panelId = useId();
   const orderedAgents = useMemo(
-    () => [...detail.agents, ...observedStageAgents(detail)].sort((a, b) => agentActivityOrder(a) - agentActivityOrder(b)),
+    () => [...detail.agents.map((agent) => ({ ...agent, status: recordedAgentStatus(agent) })), ...observedStageAgents(detail)]
+      .sort((a, b) => agentActivityOrder(a) - agentActivityOrder(b)),
     [detail],
   );
   const [selectedId, setSelectedId] = useState("");

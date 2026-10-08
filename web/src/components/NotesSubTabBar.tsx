@@ -11,8 +11,8 @@ import { pwc } from "./../lib/theme";
 
 export interface NotesSubAgentRange {
   subAgentId: string;            // stable id, e.g. "notes:LIST_OF_NOTES:sub0"
-  notes: [number, number];       // inclusive note-number range
-  pages: [number, number];       // inclusive PDF page range
+  notes: [number, number] | null;       // inclusive note-number range
+  pages: [number, number] | null;       // inclusive PDF page range
 }
 
 export interface NotesSubTabBarProps {
@@ -50,10 +50,10 @@ export function NotesSubTabBar({
         // Full page span is exposed via title/tooltip so the chip stays
         // narrow enough to fit 5 across without wrapping.
         const labelNum = idx + 1;
-        const noteRange = s.notes[0] === s.notes[1]
+        const noteRange = !s.notes ? "Note range unavailable" : s.notes[0] === s.notes[1]
           ? `Note ${s.notes[0]}`
           : `Notes ${s.notes[0]}-${s.notes[1]}`;
-        const pageRange = s.pages[0] === s.pages[1]
+        const pageRange = !s.pages ? "Page range unavailable" : s.pages[0] === s.pages[1]
           ? `p ${s.pages[0]}`
           : `pp ${s.pages[0]}-${s.pages[1]}`;
         return (
@@ -67,7 +67,7 @@ export function NotesSubTabBar({
             className="notes-subtab"
             style={chipStyle(active)}
           >
-            Sub {labelNum} · {noteRange}
+            Sub {labelNum}{s.notes ? ` · ${noteRange}` : ""}
           </button>
         );
       })}
