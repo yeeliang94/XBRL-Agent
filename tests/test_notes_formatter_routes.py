@@ -109,13 +109,38 @@ def test_notes_reviewer_launch_refused_while_formatter_running(formatter_client)
     assert "formatter" in r.json()["detail"]
 
 
-def test_notes_formatter_rejects_numeric_sheet(formatter_client):
+def test_notes_formatter_rejects_numeric_sheet_without_html(formatter_client):
     client, run_id, _server = formatter_client
     r = client.post(
         f"/api/runs/{run_id}/notes-format",
         json={"sheet": "Notes-Issuedcapital"},
     )
     assert r.status_code == 422
+
+
+@pytest.mark.parametrize("sheet", ["Notes-Issuedcapital", "Notes-RelatedPartytran"])
+def test_notes_formatter_accepts_canonical_html_on_mixed_sheet(formatter_client, monkeypatch, sheet):
+    from concept_model.filing_targets import resolve_writable_html_target
+    import notes.formatting_agent as fa
+
+    client, run_id, server_module = formatter_client
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        target = resolve_writable_html_target(conn, family_prefix="mfrs-company-", sheet=sheet, row=4)
+        assert target is not None
+        repo.upsert_notes_cell(conn, run_id=run_id, sheet=sheet, row=4,
+            label=target["label"], concept_uuid=target["concept_uuid"],
+            html="<p>Disclosure</p>", source_pages=[1], style_source="unstyled")
+    calls = []
+
+    async def formatter(**kwargs):
+        calls.append(kwargs)
+        return {"ok": True, "changed_rows": 1}
+
+    monkeypatch.setattr(fa, "run_notes_formatter", formatter)
+    response = client.post(f"/api/runs/{run_id}/notes-format", json={"sheet": sheet})
+    assert response.status_code == 200
+    assert _poll_done(client, run_id, sheet)["changed_rows"] == 1
+    assert calls[0]["sheet"] == sheet
 
 
 def test_notes_formatter_reports_already_running(formatter_client):

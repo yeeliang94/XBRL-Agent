@@ -3081,6 +3081,37 @@ describe("NotesReviewTab — AI formatter", () => {
     expect(screen.queryByTestId("notes-format-button")).toBeNull();
   });
 
+  test.each([false, true])("mixed-sheet HTML supports formatting retry; invalid target: %s", async (invalid) => {
+    const mixed = {
+      ...FULL_TEMPLATE.sheets[1],
+      rows: [...FULL_TEMPLATE.sheets[1].rows, {
+        row: 4, label: "Capital disclosure", kind: "prose" as const,
+        html: "<p>Disclosure text</p>", evidence: "Page 3", source_pages: [3],
+        updated_at: "", invalid_target: invalid,
+      }],
+    };
+    let launched = false;
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const body = url.includes("/notes-format/status")
+        ? { status: "done", sheet: mixed.sheet, error: "Formatting incomplete", error_type: "validation_failed" }
+        : url.includes("/notes-format")
+          ? (launched = true, { status: "running", sheet: mixed.sheet })
+          : { sheets: [mixed] };
+      return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch;
+    render(<NotesReviewTab runId={42} />);
+    await screen.findByText("Capital disclosure");
+    if (invalid) {
+      expect(screen.queryByRole("button", { name: /Retry formatting/ })).toBeNull();
+    } else {
+      const retry = await screen.findByRole("button", { name: /Retry formatting/ });
+      fireEvent.click(retry);
+      await waitFor(() => expect(launched).toBe(true));
+      expect(await screen.findByTestId("notes-format-button")).toBeDisabled();
+    }
+  });
+
   test("an already-formatted sheet explains the result without offering another retry", async () => {
     routedFetch({
       status: (url) =>

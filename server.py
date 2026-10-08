@@ -7758,7 +7758,6 @@ async def run_multi_agent_stream(
                 _FORMAT_NOTES_REG[r.template_type].sheet_name
                 for r in notes_result.agent_results
                 if r.workbook_path
-                and not _FORMAT_NOTES_REG[r.template_type].is_numeric
             })
             if _format_sheets:
                 _emit_stage(

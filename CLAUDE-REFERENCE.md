@@ -1307,8 +1307,18 @@ Key invariants:
     patch from `invalid_patch_fallback` after a rejected target;
     `notes_formatter` ∈ `_AGENT_ROLES`. The output has no model-authored
     confidence score and there is no routine second AI self-check. Deterministic
-    validation owns safety. Numeric sheets (13/14) are excluded (422). Pinned by
-    `tests/test_notes_format_patch.py`, `test_notes_formatter_routes.py`,
+    validation owns safety. Mixed numeric sheets permit formatting only for
+    filled, valid canonical HTML disclosure slots resolved within the run's
+    exact filing family. Structured numeric rows and mismatched identities are
+    excluded from selection, patch targets and snapshots; eligibility is checked
+    again under the write transaction. A mixed sheet with no eligible filled
+    disclosure returns 422. Automatic grouping and manual retry share that
+    selection through `db.repository.list_formatter_cells_for_run`, which bulk
+    resolves the manifest once per selection. API quarantine decisions and formatter
+    eligibility use the shared canonical HTML identity check. Pinned by
+    `tests/test_notes_auto_format.py`,
+    `tests/test_notes_formatter_routes.py`,
+    `tests/test_notes_format_patch.py`,
     `test_db_schema_v26.py`/`_v27.py`.
     Manual retry accepts `unstyled`/`floor` cells and older cells with no
     style provenance; automatic PDF formatting uses only `unstyled`/`floor`.

@@ -71,6 +71,9 @@ def formatter_cell_is_candidate(cell: Any, style_sources: Optional[set[str | Non
         style_sources is None or cell.style_source in style_sources
     )
 
+
+list_formatter_cells_for_run = repo.list_formatter_cells_for_run
+
 _PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "notes_formatter.md"
 
 _STRUCTURED_OUTPUT_INSTRUCTION = """\
@@ -425,7 +428,7 @@ async def _run_notes_formatter_impl(
 
     with repo.db_session(db_path) as conn:
         filled_cells = [
-            c for c in repo.list_notes_cells_for_run(conn, run_id)
+            c for c in list_formatter_cells_for_run(conn, run_id)
             if c.sheet == sheet and formatter_cell_is_candidate(c, None)
             and (rows is None or c.row in rows)
         ]
@@ -627,7 +630,13 @@ async def _run_notes_formatter_impl(
         # below commit as one atomic unit (WAL + busy_timeout make concurrent
         # writers wait, not fail).
         conn.execute("BEGIN IMMEDIATE")
+        eligible_rows = {
+            c.row for c in list_formatter_cells_for_run(conn, run_id) if c.sheet == sheet
+        }
         for row, html in sorted(applied.rows.items()):
+            if row not in eligible_rows:
+                skipped_rows.append(row)
+                continue
             if html == rows_for_patch[row]:
                 continue
             # Statement-atomic compare-and-swap (`WHERE html = ?`): only

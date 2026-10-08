@@ -42,6 +42,9 @@ Hard rules:
   use `cols` on a row target (or a `cell` target) for a rule that spans some
   columns. A bare `total_rows` / `rows` target styles EVERY cell in the row;
   use it only when the PDF's rule genuinely runs across the full row.
+  Map the visible rule to the actual row label and amounts before choosing a
+  patch row index. Year and currency headers receive a rule only when the PDF
+  visibly places one there; a subtotal rule belongs to its subtotal row.
 - Right-align all amount-column headers and figures with `text_align: "right"`.
   This includes column names, year/period headers, and every currency-caption cell
   ("RM", "RM'000") above or beside the amounts. Apply this consistently even when
