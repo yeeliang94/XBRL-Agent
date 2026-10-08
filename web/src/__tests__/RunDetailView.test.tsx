@@ -750,6 +750,11 @@ describe("RunDetailView", () => {
     );
     clickRunTab(/^activity$/i);
     expect(activityRows()).toHaveLength(2);
+    const selected = activityRows()[0];
+    const panel = screen.getByTestId("run-detail-agent");
+    expect(selected).toHaveAttribute("aria-controls", panel.id);
+    expect(panel).toHaveAttribute("aria-labelledby", selected.id);
+    expect(panel).toHaveAccessibleName();
     expect(screen.getAllByTestId("run-detail-agent")).toHaveLength(1);
     const technicalActivity = screen.getByText("Technical activity").closest("details");
     expect(technicalActivity).not.toHaveAttribute("open");
@@ -758,6 +763,11 @@ describe("RunDetailView", () => {
     expect(technicalActivity).toHaveAttribute("open");
     expect(within(technicalActivity!).getByTestId("tool-card")).toBeInTheDocument();
     fireEvent.click(activityRows()[1]);
+    const nextTab = activityRows()[1];
+    const nextPanel = screen.getByTestId("run-detail-agent");
+    expect(nextTab).toHaveAttribute("aria-controls", nextPanel.id);
+    expect(nextPanel).toHaveAttribute("aria-labelledby", nextTab.id);
+    expect(nextPanel).toHaveAccessibleName();
     expect(screen.getAllByTestId("run-detail-agent")).toHaveLength(1);
   });
 
