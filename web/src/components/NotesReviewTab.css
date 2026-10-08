@@ -127,10 +127,9 @@
   /* Driven by the notes-table style theme (docs/PLAN-notes-table-theme.md): the
    * `--nt-*` custom properties are set from the resolved theme on the
    * `.notes-review-tab` root, so the editor preview matches the clipboard paste.
-   * The fallbacks below are the historic defaults — so an un-themed install (or
-   * a render before the vars are set) looks exactly as it did before. A per-cell
+   * The fallback grid uses the same 0.75px default as prepared output. A per-cell
    * inline `style=` still wins over these rules (manual overrides preserved). */
-  border: var(--nt-grid-border, 1px solid #CBD1D6); /* grey300 */
+  border: var(--nt-grid-border, 0.75px solid #CBD1D6); /* grey300 */
   padding: var(--nt-cell-padding, 4px 8px);
   text-align: left;
   vertical-align: top;
@@ -165,7 +164,7 @@
  * A per-cell inline style still wins (inline > class rule). */
 .notes-review-tab .tiptap td.is-totals-num,
 .notes-review-tab .tiptap th.is-totals-num {
-  border-bottom: var(--nt-totals-border, var(--nt-grid-border, 1px solid #CBD1D6));
+  border-bottom: var(--nt-totals-border, var(--nt-grid-border, 0.75px solid #CBD1D6));
 }
 
 /* ProseMirror tags every cell in a drag (multi-cell) selection with the
@@ -193,7 +192,7 @@
    * un-themed editor renders exactly as before. A per-cell inline border still
    * wins, and a source-styled table's `border: 0` (above) still suppresses it —
    * that table carries the source's own rules. */
-  border-bottom: var(--nt-header-rule, var(--nt-grid-border, 1px solid #CBD1D6));
+  border-bottom: var(--nt-header-rule, var(--nt-grid-border, 0.75px solid #CBD1D6));
 }
 
 /* Numeric value cells right-align so the review preview matches the

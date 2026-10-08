@@ -1149,7 +1149,7 @@ When a parent and sub-note are saved as adjacent `h3` headings without a
 section wrapper, the sub-note heading and following blocks receive a 2em
 display/export indent until the next top-level note heading. Peer notes in a
 combined catch-all field remain aligned. The review view applies this without
-rewriting the saved HTML. The shipped notes paragraph gap is 10px across review, copy and mTool.
+rewriting the saved HTML. The shipped notes paragraph gap is 3px across review, copy and mTool.
 The writer moves a `sub_note` heading inside a wrapper only when that wrapper
 is the whole body; peer sections and loose introductory text keep the heading
 above them. Rendered-length truncation enters a marked section and keeps its
@@ -1425,8 +1425,8 @@ Key invariants:
   frontend `resolveTheme`. Existing run overrides remain visible as an exception
   with a contextual Use Settings appearance action. Settings Reset clears only
   installation overrides; it never changes canonical note HTML or run overrides.
-  The shipped house uses single borders, 11pt Arial, 5×5px padding, transparent
-  bold headers and a 10px paragraph gap. Source/manual styles retain their
+  The shipped house uses no table borders, 11pt Arial, 3×3px padding, transparent
+  bold headers and a 3px paragraph gap. Source/manual styles retain their
   established precedence; inferred totals rules remain off.
 
   **Prepared output is shared:** `mtool/notes_exporter.py::prepare_note_output`
@@ -1489,12 +1489,17 @@ Key invariants:
   `clipboardFormat`/`clipboard`/`cellFormatting`/`NotesReviewTab` web tests.
 
   **Double table-border fallback (2026-09-17):** at mTool export and clipboard
-  decoration only, double edges become solid strokes at least 3px (2.25pt)
-  thick, retaining colour and larger declared widths. This is the requested
+  decoration only, double edges become 0.75px solid strokes, retaining colour and sides
+  while replacing the declared double-border width. Default single grid, header
+  and transport white borders also use 0.75px; editor actions and formatter
+  border specs default to 0.75px too. Explicit ordinary solid widths remain.
+  Compact output retains explicit per-cell grid widths because the legacy
+  border attribute cannot express 0.75px. This adds markup and can move very
+  large notes to a reduced-style tier; the existing size notices remain authoritative. This is the requested
   compatibility substitution, not a claim of native double-border support.
   It covers source, manual, theme and totals borders; canonical HTML and the
   review editor retain double intent. Text underline is separate and unchanged.
-  Review and Copy consume the backend-prepared markup. Native thick-border persistence was verified
+  Review and Copy consume the backend-prepared markup. The earlier native thick-border persistence was verified
   in MPERS/MFRS injection and clipboard save/reopen cases on 2026-09-17;
   generated Review Copy Word/PDF fidelity remains deferred. Exact widths are
   not preserved. See [the agent guide](docs/MTOOL-NOTES-AUTHORING.md) for the

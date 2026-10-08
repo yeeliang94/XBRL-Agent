@@ -172,7 +172,7 @@ def _border_css(o: NotesTableStyle) -> str:
     color = o.border_color or "#999"
     if o.border_style == "double":
         return f"border: 3px double {color}; "
-    return f"border: 1px solid {color}; "
+    return f"border: 0.75px solid {color}; "
 
 
 def _table_style(gap: int, keep_width: bool = False) -> str:
@@ -219,7 +219,7 @@ def _header_extra(o: NotesTableStyle) -> str:
     # rather than in `_border_css` because it is a header-row property, not a
     # per-cell grid — `border_style` stays "none" and the legacy `border="1"`
     # attribute stays suppressed.
-    rule = (f" border-bottom: 1px solid {o.border_color or '#999'};"
+    rule = (f" border-bottom: 0.75px solid {o.border_color or '#999'};"
             if o.header_rule else "")
     return f" background: {fill};{weight}{rule}"
 
@@ -369,7 +369,7 @@ _BORDER_LINE_PROPS = frozenset((
     "border", "border-width", "border-style", "border-color",
     "border-top", "border-right", "border-bottom", "border-left"))
 _INVISIBLE_BORDER_TOKENS = frozenset(("hidden", "none"))
-_WHITE_BORDER = "1px solid #ffffff"
+_WHITE_BORDER = "0.75px solid #ffffff"
 _SIDE_ORDER = ("top", "right", "bottom", "left")
 
 
@@ -496,9 +496,9 @@ def _whiteout_hidden_borders(el: Tag) -> None:
 
 
 def _solid_double_borders(el: Tag) -> None:
-    """Translate double table edges to solid strokes of at least 3px.
+    """Translate every double table edge to a 0.75px solid stroke.
 
-    Transport only; canonical HTML retains double. Twin: _solidDoubleBorders.
+    Transport only; canonical HTML retains double. Preserve colour and other edges.
     """
     existing = el.get("style") or ""
     parsed = _parse_decls(existing)
@@ -512,18 +512,10 @@ def _solid_double_borders(el: Tag) -> None:
             continue
         tokens = _split_css_tokens(value)
         if any(t.lower() == "double" for t in tokens):
-            width, kept = "3px", []
-            for token in tokens:
-                match = re.fullmatch(r"(\d+(?:\.\d+)?)(px|pt)", token, re.I)
-                if match:
-                    pixels = float(match[1]) * (4 / 3 if match[2].lower() == "pt" else 1)
-                    if pixels > 3:
-                        width = token
-                elif token.lower() == "thick":
-                    width = "thick"
-                elif token.lower() not in {"double", "thin", "medium"}:
-                    kept.append(token)
-            value = " ".join([width, "solid", *kept])
+            kept = [token for token in tokens
+                    if not re.fullmatch(r"\d+(?:\.\d+)?(?:px|pt)", token, re.I)
+                    and token.lower() not in {"double", "0", "thin", "medium", "thick"}]
+            value = " ".join(["0.75px", "solid", *kept])
         out.append(f"border-{side}: {value}")
     el["style"] = "; ".join(out)
 
@@ -766,13 +758,13 @@ def _paint_merge_inner_edges(cell: Tag, across: int, down: int,
                              colspan: int, rowspan: int) -> None:
     inner = []
     if across:
-        inner.append("border-left: 1px solid #ffffff")
+        inner.append("border-left: 0.75px solid #ffffff")
     if across < colspan - 1:
-        inner.append("border-right: 1px solid #ffffff")
+        inner.append("border-right: 0.75px solid #ffffff")
     if down:
-        inner.append("border-top: 1px solid #ffffff")
+        inner.append("border-top: 0.75px solid #ffffff")
     if down < rowspan - 1:
-        inner.append("border-bottom: 1px solid #ffffff")
+        inner.append("border-bottom: 0.75px solid #ffffff")
     if inner:
         cell["style"] = "; ".join(filter(None, [cell.get("style", ""), *inner]))
 
@@ -858,9 +850,9 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
 
     ``compact`` (mTool-only — clipboard.ts deliberately does NOT mirror it,
     docs/PLAN-mtool-compact-decoration.md) drops the repeated per-cell
-    boilerplate entirely and lets the table-level legacy attributes
-    (``border="1" cellpadding="4"``) carry the grid + padding, writing
-    per-cell styles only where a cell differs from renderer defaults:
+    padding/layout boilerplate and lets the legacy ``cellpadding="4"``
+    attribute carry padding. Every cell retains its explicit grid width;
+    other per-cell styles are written only where renderer defaults differ:
     numeric right-alignment, header fill/weight + explicit alignment
     (``<th>`` defaults to CENTER, so it can't be omitted), and the themed
     totals rule. Two table shapes are NOT compacted and keep the full
@@ -933,8 +925,8 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
                 table["cellpadding"] = "4"
             if not table.has_attr("cellspacing"):
                 table["cellspacing"] = "0"
-            # Compact eligibility: the table attrs above carry grid + padding,
-            # so per-cell boilerplate can be skipped — but only when no cell
+            # Compact eligibility: table attrs carry padding; explicit grid
+            # widths remain while other per-cell boilerplate can be skipped — but only when no cell
             # owns its own fill either (a user-filled cell means the user is
             # styling cells deliberately; keep the full proven form there).
             if compact and not any(
@@ -989,15 +981,16 @@ def decorate_notes_html(html: str, style: NotesTableStyle = DEFAULT_STYLE,
             align = " text-align: right;" if numeric else " text-align: left;"
             extra = _TOTALS_RULE if totals_row and numeric else ""
             if row_compact:
-                # Compact: renderer defaults + table attrs carry everything a
-                # left-aligned body cell needs, so it gets NO style at all.
-                # Only the differences are written per cell.
+                # Keep explicit grid widths: the legacy border="1" attribute
+                # cannot express the default 0.75px line. Omit padding and
+                # other boilerplate, but retain the same borders as full output.
+                addition = _border_css(style)
                 if cell.name == "th":
-                    addition = _header_extra(style).lstrip() + align + extra
+                    addition += _header_extra(style).lstrip() + align + extra
                 elif numeric:
-                    addition = "text-align: right;" + extra
+                    addition += "text-align: right;" + extra
                 else:
-                    addition = extra.lstrip()
+                    addition += extra.lstrip()
                 addition = _themed(addition)
                 if addition:
                     _merge_cell_style(cell, addition)

@@ -59,7 +59,7 @@ export type BorderSide = "Top" | "Right" | "Bottom" | "Left";
  *  Colour is overridable via the Format bar's border-colour swatch. */
 export const DEFAULT_BORDER_COLOR = "#000000";
 export function gridBorderValue(color: string = DEFAULT_BORDER_COLOR): string {
-  return `1px solid ${color.toLowerCase()}`;
+  return `0.75px solid ${color.toLowerCase()}`;
 }
 /** Accountant-style total underline. It is persisted on the selected cells,
  * so the review view and every rich clipboard target see the same rule. */

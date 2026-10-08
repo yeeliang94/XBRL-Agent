@@ -14,6 +14,8 @@ the DB (docs/PRD-notes-wysiwyg-formatting.md). These tests pin:
 """
 from __future__ import annotations
 
+import pytest
+
 from notes.html_sanitize import ALLOWED_CSS_PROPERTIES, sanitize_notes_html
 
 
@@ -101,11 +103,12 @@ def test_background_color_survives_on_td() -> None:
     assert "background-color: #eee" in out.lower()
 
 
-def test_per_side_border_survives_on_td() -> None:
+@pytest.mark.parametrize("width", ["0.75px", "1px"])
+def test_per_side_border_survives_on_td(width) -> None:
     out = _clean(
-        '<table><tr><td style="border-bottom: 1px solid #000">x</td></tr></table>'
+        f'<table><tr><td style="border-bottom: {width} solid #000">x</td></tr></table>'
     )
-    assert "border-bottom: 1px solid #000" in out.lower()
+    assert f"border-bottom: {width} solid #000" in out.lower()
 
 
 def test_hidden_border_survives_on_td() -> None:

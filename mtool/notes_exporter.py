@@ -347,9 +347,9 @@ def _resolve_note_html(
     Ladder — CONTENT is never lost to formatting:
       * ``full``    — decorated HTML fits Excel's cell limit.
       * ``compact`` — full is over, but the compact decoration (table-level
-        attrs carry the grid/padding; per-cell styles only where cells differ
-        — same visible formatting, ~1/3 the characters) fits. Roughly triples
-        the fully-styled table ceiling (docs/PLAN-mtool-compact-decoration.md).
+        attrs carry padding; cells retain explicit borders and styles where
+        they differ from defaults — same visible formatting, fewer characters)
+        fits.
       * ``lite``    — compact is over too, but a lighter decoration (cosmetic
         props dropped, borders/font/alignment kept) fits.
       * *(white-grid fallback)* — the run-76 white grid
