@@ -76,7 +76,7 @@ export function ClipboardFormatControls({ value, onChange, idPrefix = "fmt", hou
     </div>
     <h3 style={styles.heading}>Tables</h3>
     <div style={styles.grid}>
-      {select("borderStyle", "Table border", value.borderStyle, [["single", "Single line"], ["double", "Thick single line"], ["none", "No border"]], (v) => patch({ borderStyle: v as BorderStyle }))}
+      {select("borderStyle", "Table border", value.borderStyle, [["single", "Single line"], ["double", "Double (exports as single line)"], ["none", "No border"]], (v) => patch({ borderStyle: v as BorderStyle }))}
       {select("headerFill", "Header fill", isCustomFill ? "custom" : fill, [...fillPresets, ["custom", "Custom colour"]], (v) => {
         setCustomFill(v === "custom" ? pickerColour : null);
         patch({ headerFill: v === "custom" ? pickerColour : v });
@@ -97,7 +97,7 @@ export function ClipboardFormatControls({ value, onChange, idPrefix = "fmt", hou
         {select("headingWeight", "Heading weight", String(value.headingWeight ?? ""), [["", "Default"], ["400", "Regular"], ["600", "Semi-bold"], ["700", "Bold"]], (v) => patch({ headingWeight: v ? Number(v) : undefined }))}
         {select("listMarker", "Bullet marker", value.listMarker ?? "", [["", "Default"], ["disc", "Disc"], ["dash", "Dash"], ["decimal", "Numbered"]], (v) => patch({ listMarker: v ? v as ListMarker : undefined }))}
         {select("headerRule", "Rule under header", String(value.headerRule ?? false), [["false", "Off"], ["true", "On"]], (v) => patch({ headerRule: v === "true" }))}
-        {select("totalsDoubleUnderline", "Automatic totals rule", String(value.totalsDoubleUnderline ?? false), [["false", "Off"], ["true", "Thick single line"]], (v) => patch({ totalsDoubleUnderline: v === "true" }))}
+        {select("totalsDoubleUnderline", "Automatic totals rule", String(value.totalsDoubleUnderline ?? false), [["false", "Off"], ["true", "Single line"]], (v) => patch({ totalsDoubleUnderline: v === "true" }))}
       </div>
     </details>
   </fieldset>;

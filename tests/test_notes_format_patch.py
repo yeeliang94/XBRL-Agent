@@ -54,7 +54,8 @@ def test_formatter_request_budget_stays_below_pydantic_cap(monkeypatch):
         importlib.reload(fa)
 
 
-def test_applies_one_coloured_top_border_to_one_cell():
+@pytest.mark.parametrize("width", [None, "0.75px", "1px"])
+def test_applies_one_coloured_top_border_to_one_cell(width):
     html = "<table><tr><td>A</td><td>1</td></tr></table>"
     patch = {
         "cells": [{
@@ -63,14 +64,18 @@ def test_applies_one_coloured_top_border_to_one_cell():
                 "target": {"table": 0, "cell": {"r": 1, "c": 2}},
                 "style": {
                     "border_top": {
-                        "width": "1px", "style": "solid", "color": "#666666",
+                        **({"width": width} if width else {}),
+                        "style": "solid", "color": "#666666",
                     },
                 },
             }],
         }],
     }
     out = apply_sheet_patch({1: html}, patch)
-    assert "border-top: 1px solid #666666" in out.rows[1]
+    from notes.format_schema import BorderSpec
+    expected_width = width or "0.75px"
+    assert BorderSpec(**({"width": width} if width else {})).width == expected_width
+    assert f"border-top: {expected_width} solid #666666" in out.rows[1]
     assert "A" in out.rows[1] and ">1<" in out.rows[1]
 
 

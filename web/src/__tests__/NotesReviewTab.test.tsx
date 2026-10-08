@@ -2427,7 +2427,7 @@ describe("NotesReviewTab — table format bar", () => {
       (patches[patches.length - 1][1] as RequestInit).body as string,
     );
     expect(body.html.toLowerCase()).toMatch(
-      /border-top:\s*1px solid (?:#ffffff|rgb\(255, 255, 255\))/,
+      /border-top:\s*0\.75px solid (?:#ffffff|rgb\(255, 255, 255\))/,
     );
     expect(body.html.toLowerCase()).not.toContain("#c9c9c9");
     vi.useRealTimers();
@@ -2487,7 +2487,7 @@ describe("NotesReviewTab — table format bar", () => {
     await vi.advanceTimersByTimeAsync(1600);
 
     const html = lastPatchHtml();
-    expect(html).toMatch(/border-top:\s*1px solid (?:#000000|rgb\(0, 0, 0\))/);
+    expect(html).toMatch(/border-top:\s*0\.75px solid (?:#000000|rgb\(0, 0, 0\))/);
     expect(html).not.toContain("border-bottom");
     expect(html).not.toContain("border-left");
     expect(html).not.toContain("border-right");
@@ -2502,7 +2502,7 @@ describe("NotesReviewTab — table format bar", () => {
     // First click paints the top edge…
     fireEvent.click(screen.getByRole("button", { name: "Border Top" }));
     await vi.advanceTimersByTimeAsync(1600);
-    expect(lastPatchHtml()).toMatch(/border-top:\s*1px solid (?:#000000|rgb\(0, 0, 0\))/);
+    expect(lastPatchHtml()).toMatch(/border-top:\s*0\.75px solid (?:#000000|rgb\(0, 0, 0\))/);
 
     // …re-clicking it with the same colour selected removes it (toggle-off).
     fireEvent.click(screen.getByRole("button", { name: "Border Top" }));

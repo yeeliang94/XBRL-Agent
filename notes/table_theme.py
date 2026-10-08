@@ -32,8 +32,8 @@ HOUSE_NOTES_TABLE_STYLE: dict[str, Any] = {
     "headerBold": True,
     "headerFill": "transparent",
     "fontSizePt": 11,
-    "cellPaddingPx": [5, 5],
-    "paragraphSpacingPx": 10,
+    "cellPaddingPx": [3, 3],
+    "paragraphSpacingPx": 3,
     "totalsDoubleUnderline": False,
 }
 

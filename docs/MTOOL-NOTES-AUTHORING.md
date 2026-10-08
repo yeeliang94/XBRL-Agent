@@ -134,8 +134,8 @@ The normal workflow does not require any local experiment scripts or browser har
 
 | Feature | Agent guidance and accepted limit |
 | --- | --- |
-| Double table borders | Preserve double intent in canonical HTML. At export/copy, decorators replace it with solid strokes at least 3px (2.25pt), preserving colour and larger declared widths. This is an intentional substitute, not native double-border support. |
-| Ordinary solid borders | Keep their intended sides and colours. Native serialization can change units or rounding; an ordinary 1px rule saved as 1pt in the tested editor. |
+| Double table borders | Preserve double intent in canonical HTML. At export/copy, decorators replace it with 0.75px solid strokes, preserving colour and sides while replacing any declared double-border width. This is an intentional substitute, not native double-border support. |
+| Ordinary solid borders | Default single lines use 0.75px. Keep explicitly authored ordinary solid widths, sides and colours. Native serialization can change units or rounding; an ordinary 1px rule saved as 1pt in the tested editor. |
 | Blank edges | Decorators use white borders where needed to suppress native grey lines. This is visually blank on a white page, not a promise of transparency over coloured backgrounds. |
 | Shared edges and merged cells | Canonical notes retain their spans. mTool-bound copies expand spans for native editability; the text stays in the first cell and blank continuation cells may change wrapping or internal lines. Review those tables before filing. |
 | Table and column widths | Treat widths as preferences, not exact native geometry. A requested 450pt table expanded to 481.95pt; later saves changed some widths again. Do not compensate with guessed offsets. |

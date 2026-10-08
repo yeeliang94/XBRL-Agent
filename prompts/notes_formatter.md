@@ -128,7 +128,8 @@ Targets:
 
 Style keys:
 - border_top, border_right, border_bottom, border_left:
-  {"width": "1px", "style": "solid", "color": "#000000"}
+  {"width": "0.75px", "style": "solid", "color": "#000000"}
+  Use 0.75px as the default single-line width.
 - clear_border: ["top", "right", "bottom", "left"]
 - fill: "#f2f2f2" or "header_fill" (a shaded fill) or "transparent" (clear an
   existing fill that the PDF does not have)

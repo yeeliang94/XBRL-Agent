@@ -195,7 +195,7 @@ export function themeToCssVars(theme: ClipboardFormatOptions): Record<string, st
       ? "none"
       : theme.borderStyle === "double"
         ? `3px double ${gridColor}`
-        : `1px solid ${gridColor}`;
+        : `0.75px solid ${gridColor}`;
   // pt → px for the on-screen preview. The default 10pt rounds to 13px, exactly
   // the editor's historic font size, so the default is unchanged.
   const fontPx = Math.round(theme.fontSizePt * 1.3333);
@@ -237,7 +237,7 @@ export function themeToCssVars(theme: ClipboardFormatOptions): Record<string, st
   // the variable is only SET when the convention is on, so the stylesheet's
   // fallback keeps an un-themed editor byte-identical to before.
   if (theme.headerRule === true) {
-    vars["--nt-header-rule"] = `1px solid ${theme.borderColor ?? "#999"}`;
+    vars["--nt-header-rule"] = `0.75px solid ${theme.borderColor ?? "#999"}`;
   }
   return vars;
 }
