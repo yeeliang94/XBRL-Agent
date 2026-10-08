@@ -134,7 +134,7 @@ export function NotesAppearanceSettings({ onBusyChange }: { onBusyChange?: (busy
       </div>
       <details style={{ marginTop: 24 }}><summary style={{ ...ui.fieldLabel, cursor: "pointer", padding: "8px 0" }}>Formatting applied before export</summary>
         <ul style={{ margin: "8px 0", paddingLeft: 20, fontSize: 14 }}>
-          <li>Amount headers and figures align right.</li><li>Double borders become thick single lines.</li>
+          <li>Amount headers and figures align right.</li><li>Default single lines and converted double borders use 0.75px.</li>
           <li>Unsized tables fit the page. Merged cells expand for native editing.</li>
           <li>Blank edges and paragraph breaks use mTool-compatible formatting.</li>
           <li>Notes that exceed Excel’s limit show reduced styling or a size warning before export.</li>

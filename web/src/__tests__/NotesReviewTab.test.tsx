@@ -2427,7 +2427,7 @@ describe("NotesReviewTab — table format bar", () => {
       (patches[patches.length - 1][1] as RequestInit).body as string,
     );
     expect(body.html.toLowerCase()).toMatch(
-      /border-top:\s*1px solid (?:#ffffff|rgb\(255, 255, 255\))/,
+      /border-top:\s*0\.75px solid (?:#ffffff|rgb\(255, 255, 255\))/,
     );
     expect(body.html.toLowerCase()).not.toContain("#c9c9c9");
     vi.useRealTimers();
@@ -2487,7 +2487,7 @@ describe("NotesReviewTab — table format bar", () => {
     await vi.advanceTimersByTimeAsync(1600);
 
     const html = lastPatchHtml();
-    expect(html).toMatch(/border-top:\s*1px solid (?:#000000|rgb\(0, 0, 0\))/);
+    expect(html).toMatch(/border-top:\s*0\.75px solid (?:#000000|rgb\(0, 0, 0\))/);
     expect(html).not.toContain("border-bottom");
     expect(html).not.toContain("border-left");
     expect(html).not.toContain("border-right");
@@ -2502,7 +2502,7 @@ describe("NotesReviewTab — table format bar", () => {
     // First click paints the top edge…
     fireEvent.click(screen.getByRole("button", { name: "Border Top" }));
     await vi.advanceTimersByTimeAsync(1600);
-    expect(lastPatchHtml()).toMatch(/border-top:\s*1px solid (?:#000000|rgb\(0, 0, 0\))/);
+    expect(lastPatchHtml()).toMatch(/border-top:\s*0\.75px solid (?:#000000|rgb\(0, 0, 0\))/);
 
     // …re-clicking it with the same colour selected removes it (toggle-off).
     fireEvent.click(screen.getByRole("button", { name: "Border Top" }));
@@ -3079,6 +3079,37 @@ describe("NotesReviewTab — AI formatter", () => {
     await waitFor(() => expect(screen.queryByTestId("notes-format-button")).toBeNull());
     expect(screen.queryByTestId("notes-format-summary")).toBeNull();
     expect(screen.queryByTestId("notes-format-button")).toBeNull();
+  });
+
+  test.each([false, true])("mixed-sheet HTML supports formatting retry; invalid target: %s", async (invalid) => {
+    const mixed = {
+      ...FULL_TEMPLATE.sheets[1],
+      rows: [...FULL_TEMPLATE.sheets[1].rows, {
+        row: 4, label: "Capital disclosure", kind: "prose" as const,
+        html: "<p>Disclosure text</p>", evidence: "Page 3", source_pages: [3],
+        updated_at: "", invalid_target: invalid,
+      }],
+    };
+    let launched = false;
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const body = url.includes("/notes-format/status")
+        ? { status: "done", sheet: mixed.sheet, error: "Formatting incomplete", error_type: "validation_failed" }
+        : url.includes("/notes-format")
+          ? (launched = true, { status: "running", sheet: mixed.sheet })
+          : { sheets: [mixed] };
+      return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch;
+    render(<NotesReviewTab runId={42} />);
+    await screen.findByText("Capital disclosure");
+    if (invalid) {
+      expect(screen.queryByRole("button", { name: /Retry formatting/ })).toBeNull();
+    } else {
+      const retry = await screen.findByRole("button", { name: /Retry formatting/ });
+      fireEvent.click(retry);
+      await waitFor(() => expect(launched).toBe(true));
+      expect(await screen.findByTestId("notes-format-button")).toBeDisabled();
+    }
   });
 
   test("an already-formatted sheet explains the result without offering another retry", async () => {

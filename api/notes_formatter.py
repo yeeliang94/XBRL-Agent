@@ -68,10 +68,17 @@ async def launch_notes_formatter(run_id: int, body: _NotesFormatLaunch):
                 detail=f"Unknown notes sheet {body.sheet!r} for this run.",
             )
         if template["is_numeric"]:
-            raise HTTPException(
-                status_code=422,
-                detail="Numeric notes sheets are not supported by the formatter.",
+            from notes.formatting_agent import (
+                formatter_cell_is_candidate, list_formatter_cells_for_run,
             )
+            if not any(
+                c.sheet == body.sheet and formatter_cell_is_candidate(c, None)
+                for c in list_formatter_cells_for_run(conn, run_id)
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail="No filled canonical HTML disclosures are available on this sheet.",
+                )
     finally:
         conn.close()
 

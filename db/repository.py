@@ -1369,6 +1369,25 @@ def list_notes_cells_for_run(
     return cells
 
 
+
+def list_formatter_cells_for_run(conn: sqlite3.Connection, run_id: int) -> list[NotesCell]:
+    """Return eligible HTML cells without one manifest query per numeric cell."""
+    from concept_model.filing_targets import writable_html_targets, html_cell_identity_valid
+    from notes_types import NOTES_REGISTRY
+
+    cells = list_notes_cells_for_run(conn, run_id)
+    run = fetch_run(conn, run_id)
+    config = run.config if run and run.config else {}
+    family = f"{config.get('filing_standard', 'mfrs').lower()}-{config.get('filing_level', 'company').lower()}-"
+    targets = writable_html_targets(conn, family_prefix=family)
+    numeric_sheets = {entry.sheet_name for entry in NOTES_REGISTRY.values() if entry.is_numeric}
+    identities = {row[0]: (row[1], row[2]) for row in conn.execute(
+        "SELECT id, concept_uuid, invalid_target FROM notes_cells WHERE run_id = ?", (run_id,))}
+    return [cell for cell in cells if cell.id in identities and not identities[cell.id][1]
+            and (cell.sheet not in numeric_sheets or html_cell_identity_valid(
+                targets.get((cell.sheet, cell.row)), identities[cell.id][0]))]
+
+
 def decode_source_pages(raw: Optional[str]) -> list[int]:
     """Decode a `notes_cells.source_pages` JSON blob into a clean `list[int]`.
 

@@ -38,6 +38,41 @@ def test_candidate_sheets_include_plain_pdf_cells_only(auto_format_db):
     ) == ["Notes-CI"]
 
 
+@pytest.mark.parametrize("standard", ["mfrs", "mpers"])
+@pytest.mark.parametrize("level", ["company", "group"])
+@pytest.mark.parametrize("template_type", ["ISSUED_CAPITAL", "RELATED_PARTY"])
+def test_mixed_sheet_candidates_use_exact_family_html_slots(auto_format_db, standard, level, template_type):
+    from concept_model.filing_targets import persist_template_manifest, targets_for_template
+    from notes.formatting_agent import list_formatter_cells_for_run
+    from notes_types import NotesTemplateType, notes_template_path
+
+    db_path, _, tmp_path = auto_format_db
+    path = notes_template_path(NotesTemplateType(template_type), level, standard)
+    persist_template_manifest(db_path, path)
+    _, targets = targets_for_template(path)
+    target = next(t for t in targets if t.writable and t.value_kind == "html")
+    numeric = next(t for t in targets if t.writable and t.value_kind != "html" and t.row != target.row)
+    with repo.db_session(db_path) as conn:
+        run_id = repo.create_run(conn, "mixed.pdf", output_dir=str(tmp_path),
+            config={"filing_standard": standard, "filing_level": level})
+        for row, uuid in [(target.row, target.canonical_target_id), (numeric.row, numeric.canonical_target_id)]:
+            repo.upsert_notes_cell(conn, run_id=run_id, sheet=target.sheet, row=row,
+                concept_uuid=uuid, label="Disclosure", html="<p>Saved HTML</p>",
+                source_pages=[1], style_source="unstyled")
+        assert [c.row for c in list_formatter_cells_for_run(conn, run_id)] == [target.row]
+    assert candidate_sheets(db_path, run_id, [target.sheet]) == [target.sheet]
+    assert auto_format._row_groups(db_path, run_id, target.sheet) == [[target.row]]
+
+    with repo.db_session(db_path) as conn:
+        conn.execute("UPDATE notes_cells SET concept_uuid = 'wrong-family' WHERE run_id = ? AND row = ?",
+                     (run_id, target.row))
+    assert candidate_sheets(db_path, run_id, [target.sheet]) == []
+    with repo.db_session(db_path) as conn:
+        conn.execute("UPDATE notes_cells SET concept_uuid = ?, invalid_target = 1 WHERE run_id = ? AND row = ?",
+                     (target.canonical_target_id, run_id, target.row))
+    assert candidate_sheets(db_path, run_id, [target.sheet]) == []
+
+
 @pytest.mark.asyncio
 async def test_auto_format_scopes_and_persists_the_manual_task_shape(auto_format_db):
     db_path, run_id, tmp_path = auto_format_db

@@ -70,7 +70,7 @@ def test_review_output_is_export_payload_without_mutating_source(notes_db, monke
     assert output['html'] == doc['footnotes'][0]['html']
     assert output['source_html'] == html
     assert 'double' not in output['html']
-    assert '3px solid' in output['html']
+    assert '0.75px solid' in output['html']
     assert output['tier'] == 'full'
     assert client.get(f'/api/runs/{run_id}/notes-output', params={'sheet': 'Notes-CI', 'row': 999}).status_code == 404
     with sqlite3.connect(db) as conn:
@@ -198,7 +198,7 @@ def test_html_is_render_decorated_by_default(notes_db):
     doc = build_notes_fill_doc(db, run_id)
     html = doc["footnotes"][0]["html"]
     assert "font-family: Arial" in html          # face injected
-    assert "border: 1px solid" in html           # cell grid
+    assert "border: 0.75px solid" in html           # cell grid
     assert "text-align: right" in html           # numeric cell aligned
     # still valid fill-notes input after decoration
     assert validate_notes_input(doc) == []
@@ -218,7 +218,7 @@ def test_subnote_indent_and_house_spacing_reach_the_mtool_fill_doc(notes_db):
     assert "margin: 12px" not in heading_style
     body_style = soup.find("p", string="Short term benefits.")["style"]
     assert "margin-left: 2em" in body_style
-    assert "margin-bottom: 10px" in body_style
+    assert "margin-bottom: 3px" in body_style
     assert "margin: 0 0" not in body_style
     assert validate_notes_input(doc) == []
     with sqlite3.connect(db) as conn:
@@ -260,7 +260,7 @@ def _wide_table(n_rows: int, n_cols: int = 10, user_style: bool = False) -> str:
 
 def test_big_note_degrades_to_compact_tier(notes_db):
     """Full decoration over the limit but the compact decoration fits: the
-    note keeps its VISIBLE formatting (table grid via the legacy attrs,
+    note keeps its VISIBLE formatting (explicit 0.75px table grid,
     numeric right-alignment) with per-cell boilerplate dropped."""
     db, run_id = notes_db
     _add_note(db, run_id, "Notes-Listofnotes", 17, "Movement table",
@@ -271,7 +271,8 @@ def test_big_note_degrades_to_compact_tier(notes_db):
     assert "formatting_dropped" not in fn
     assert 'border="1"' in fn["html"]                 # table-level grid KEPT
     assert "text-align: right" in fn["html"]          # numeric alignment KEPT
-    assert "border: 1px solid" not in fn["html"]      # per-cell boilerplate gone
+    assert "border: 0.75px solid" in fn["html"]          # thin grid KEPT
+    assert "padding:" not in fn["html"]              # padding boilerplate gone
     assert doc["meta"]["counts"]["formatting_compacted"] == 1
     from mtool.offline_fill import EXCEL_CELL_CHAR_LIMIT, wrap_footnote_html
     assert len(wrap_footnote_html(fn["html"])) <= EXCEL_CELL_CHAR_LIMIT
@@ -289,7 +290,7 @@ def test_near_limit_note_degrades_to_lite_tier(notes_db):
     fn = doc["footnotes"][0]
     assert fn.get("format_tier") == "lite"
     assert "formatting_dropped" not in fn
-    assert "border: 1px solid" in fn["html"]          # formatting KEPT
+    assert "border: 0.75px solid" in fn["html"]          # formatting KEPT
     assert "vertical-align: top" not in fn["html"]    # cosmetics dropped
     assert doc["meta"]["counts"]["formatting_reduced"] == 1
     from mtool.offline_fill import EXCEL_CELL_CHAR_LIMIT, wrap_footnote_html
@@ -334,7 +335,7 @@ def test_normal_note_stays_decorated(notes_db):
     doc = build_notes_fill_doc(db, run_id)
     fn = doc["footnotes"][0]
     assert "format_tier" not in fn
-    assert "border: 1px solid" in fn["html"]          # full decoration applied
+    assert "border: 0.75px solid" in fn["html"]          # full decoration applied
     assert doc["meta"]["counts"]["formatting_dropped"] == 0
     assert doc["meta"]["counts"]["formatting_reduced"] == 0
 
@@ -641,4 +642,4 @@ def test_formatter_cleared_large_table_keeps_styling_with_compact_white_border()
     assert tier == "full"
     assert len(wrap_footnote_html(html)) <= EXCEL_CELL_CHAR_LIMIT
     assert "hidden" not in html
-    assert html.count("border: 1px solid #ffffff") == 105
+    assert html.count("border: 0.75px solid #ffffff") == 105

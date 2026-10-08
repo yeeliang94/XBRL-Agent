@@ -85,7 +85,7 @@ describe("buildCellStyle", () => {
   });
 
   it("gridBorderValue lowercases the colour", () => {
-    expect(gridBorderValue("#ABCDEF")).toBe("1px solid #abcdef");
+    expect(gridBorderValue("#ABCDEF")).toBe("0.75px solid #abcdef");
   });
 });
 
@@ -174,7 +174,7 @@ describe("borderValuesEqual — toggle-off comparison (hex ↔ rgb)", () => {
     // The side-button toggle must see them as the same border to undo it.
     expect(borderValuesEqual("1px solid #000000", "1px solid rgb(0, 0, 0)")).toBe(true);
     expect(borderValuesEqual("1px hidden #000000", "1px hidden rgb(0, 0, 0)")).toBe(true);
-    expect(gridBorderValue("#abcdef")).toBe("1px solid #abcdef");
+    expect(gridBorderValue("#abcdef")).toBe("0.75px solid #abcdef");
     expect(borderValuesEqual("1px solid #abcdef", "1px solid rgb(171, 205, 239)")).toBe(true);
   });
 
@@ -326,8 +326,8 @@ describe("styled cell extension round-trip (real editor)", () => {
     applyCellBorderAll(editor, gridBorderValue("#000000"));
     const attrs = firstCellAttrs(editor);
     expect(attrs.backgroundColor).toBe("#f4f4f4"); // lowercased
-    expect(attrs.borderTop).toBe("1px solid #000000");
-    expect(attrs.borderLeft).toBe("1px solid #000000");
+    expect(attrs.borderTop).toBe("0.75px solid #000000");
+    expect(attrs.borderLeft).toBe("0.75px solid #000000");
     editor.destroy();
   });
 
@@ -479,10 +479,10 @@ describe("styled cell extension round-trip (real editor)", () => {
     applyCellBorderAll(editor, gridBorderValue("#ffffff"));
     applyCellBorderSide(editor, "Top", gridBorderValue("#000000"));
     const attrs = firstCellAttrs(editor);
-    expect(attrs.borderTop).toBe("1px solid #000000");
-    expect(attrs.borderRight).toBe("1px solid #ffffff");
-    expect(attrs.borderBottom).toBe("1px solid #ffffff");
-    expect(attrs.borderLeft).toBe("1px solid #ffffff");
+    expect(attrs.borderTop).toBe("0.75px solid #000000");
+    expect(attrs.borderRight).toBe("0.75px solid #ffffff");
+    expect(attrs.borderBottom).toBe("0.75px solid #ffffff");
+    expect(attrs.borderLeft).toBe("0.75px solid #ffffff");
     editor.destroy();
   });
 
@@ -500,7 +500,7 @@ describe("styled cell extension round-trip (real editor)", () => {
     applyCellBorderSide(editor, "Right", BORDER_HIDDEN);
     const attrs = firstCellAttrs(editor);
     expect(attrs.borderRight).toBe("1px hidden #000000");
-    expect(attrs.borderTop).toBe("1px solid #ffffff"); // untouched
+    expect(attrs.borderTop).toBe("0.75px solid #ffffff"); // untouched
     expect(buildCellStyle(attrs)).toContain("border-right: 1px hidden #000000");
     editor.destroy();
   });
@@ -513,7 +513,7 @@ describe("styled cell extension round-trip (real editor)", () => {
       "<table><tbody><tr><td>x</td></tr></tbody></table>",
     );
     applyCellBorderSide(editor, "Left", gridBorderValue("#000000"));
-    expect(firstCellAttrs(editor).borderLeft).toBe("1px solid #000000");
+    expect(firstCellAttrs(editor).borderLeft).toBe("0.75px solid #000000");
     applyCellBorderSide(editor, "Left", null); // toggle-off
     const attrs = firstCellAttrs(editor);
     expect(attrs.borderLeft).toBeNull();
@@ -743,13 +743,13 @@ describe("styled cell extension round-trip (real editor)", () => {
     // before the toolbar click is delivered.
     editor.commands.setTextSelection(cellPositions[0] + 1);
     applyCellBorderSide(editor, "Top", gridBorderValue("#000000"));
-    expect(sideValues(editor)).toEqual(["1px solid #000000", null]);
+    expect(sideValues(editor)).toEqual(["0.75px solid #000000", null]);
 
     restoreSelection(editor, captured);
     applyCellBorderSide(editor, "Top", gridBorderValue("#000000"));
     expect(sideValues(editor)).toEqual([
-      "1px solid #000000",
-      "1px solid #000000",
+      "0.75px solid #000000",
+      "0.75px solid #000000",
     ]);
 
     restoreSelection(editor, captured);

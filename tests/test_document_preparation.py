@@ -40,9 +40,15 @@ def caller(*, fail_verify=False, rotation=0, link=False):
     async def call(stage, images, context):
         calls.append((stage, context))
         result = {"complete": True, "readable": True, "verified": True,
-                  "rotation": rotation, "links": []}
+                  "rotation": rotation, "links": [], "table_structure_verified": True}
         if stage == "capturing":
             result["html"] = f'<h2>Note</h2><p><strong>Text {context["page"]}</strong></p>'
+        if stage == "verifying" and "<table" in context.get("html", ""):
+            result["table_relationships"] = [{
+                "source_relationship": "Fixture table labels, periods and amounts",
+                "candidate_relationship": "Fixture table labels, periods and amounts",
+                "matches": True, "repair_instruction": "",
+            }]
         if stage == "verifying" and fail_verify:
             result["verified"] = False
         if stage == "joining" and link:
@@ -652,6 +658,255 @@ def test_localized_repair_receives_previous_html_and_exact_verifier_issues(tmp_p
     assert repaired in prepared.source_html_path.read_text()
 
 
+@pytest.mark.parametrize("verdict", [False, None])
+def test_unverified_table_repairs_even_when_general_verdict_is_positive(tmp_path, verdict):
+    path = pdf(tmp_path, 1)
+    base, _ = caller()
+    collapsed = '<table><tr><td>Tax<br/>Adjustment</td><td>629,934<br/>(72,509)</td></tr></table>'
+    repaired = '<table><tr><td>Tax</td><td>629,934</td></tr><tr><td>Adjustment</td><td>(72,509)</td></tr></table>'
+    captures = 0
+
+    async def table(stage, images, context):
+        nonlocal captures
+        result = await base(stage, images, context)
+        if stage == "capturing":
+            captures += 1
+            if captures == 2:
+                assert context["previous_html"] == collapsed
+                assert context["issues"]
+            result["html"] = collapsed if captures == 1 else repaired
+        if stage == "verifying":
+            result["table_structure_verified"] = verdict if captures == 1 else True
+            result["table_relationships"] = [{
+                "source_relationship": "Tax and adjustment occupy separate label/amount rows",
+                "candidate_relationship": "Separate rows" if captures == 2 else "Stacked entries",
+                "matches": captures == 2,
+                "repair_instruction": "Separate tax and adjustment rows" if captures == 1 else "",
+            }]
+        return result
+
+    prepared = asyncio.run(prepare_document(path, None, model_name="fake", _caller=table))
+    assert captures == 2
+    assert prepared.pages[0]["table_structure_verified"] is True
+    assert prepared.pages[0]["verified"] is True
+    assert repaired in prepared.source_html_path.read_text()
+    assert collapsed not in prepared.source_html_path.read_text()
+
+
+@pytest.mark.parametrize("verdict,html", [
+    (False, '<table><tr><td>Realised<br>Unrealised</td><td>(612)<br>(103)</td></tr></table>'),
+    (None, '<table><tr><td>Realised<br>Unrealised</td><td>(612)<br>(103)</td></tr></table>'),
+    (False, '<p>Realised Unrealised (612) (103)</p>'),
+])
+def test_disputed_table_mismatch_publishes_named_uncertainty_and_retains_evidence(tmp_path, verdict, html):
+    path = pdf(tmp_path, 1)
+    base, _ = caller()
+    captures = 0
+
+    async def table(stage, images, context):
+        nonlocal captures
+        result = await base(stage, images, context)
+        if stage == "capturing":
+            captures += 1
+            result["html"] = html
+        if stage == "verifying":
+            result["table_structure_verified"] = verdict
+            result["table_relationships"] = [{
+                "source_relationship": "Realised and unrealised occupy separate rows",
+                "candidate_relationship": "Both entries combined",
+                "matches": False, "repair_instruction": "Restore separate rows",
+            }]
+        return result
+
+    prepared = asyncio.run(prepare_document(path, None, model_name="fake", _caller=table))
+    # The repair left the page unchanged, so a third round would be waste.
+    assert captures == 2
+    page = prepared.pages[0]
+    assert page["verified"] is False
+    assert page["capture_status"] == "best_effort"
+    assert any("Restore separate rows" in u["reason"] for u in page["uncertainties"])
+    assert all(block["locator"]["capture_uncertain"] for block in page["blocks"])
+    assert json.loads(prepared.metadata_path.read_text())["content_verified"] is False
+    checkpoint = json.loads(next(tmp_path.glob("preparation-checkpoint-*.json")).read_text())
+    attempts = checkpoint["page_attempts"]["1"]
+    assert len(attempts) == 4
+    assert all("html" not in attempt and "verification" not in attempt for attempt in attempts)
+    evidence = json.loads((tmp_path / attempts[-1]["evidence_file"]).read_text())
+    assert evidence["html"]
+    assert evidence["verification"]["table_relationships"][0]["matches"] is False
+    assert attempts[0]["evidence_file"] == attempts[2]["evidence_file"]
+
+
+def test_changed_repair_gets_third_round_with_previous_findings(tmp_path):
+    path = pdf(tmp_path, 1)
+    base, _ = caller()
+    pages = [
+        "<table><tr><th></th><th>2024</th><th>2023</th></tr><tr><td>Deferred</td><td>13,949</td></tr></table>",
+        "<table><tr><th></th><th>2024</th><th>2023</th></tr><tr><td>Deferred</td><td>13,949</td><td></td></tr></table>",
+        "<table><tr><th></th><th>2024</th><th>2023</th></tr><tr><td>Deferred</td><td>-</td><td>13,949</td></tr></table>",
+    ]
+    captures, verifications = 0, []
+
+    async def table(stage, images, context):
+        nonlocal captures
+        result = await base(stage, images, context)
+        if stage == "capturing":
+            captures += 1
+            result["html"] = pages[captures - 1]
+            if captures > 1:
+                assert context["previous_html"] == pages[captures - 2]
+        if stage == "verifying":
+            verifications.append(context)
+            correct = context["html"] == pages[2]
+            result["table_relationships"] = [{
+                "source_relationship": "Deferred: 2024 -, 2023 13,949",
+                "candidate_relationship": "Deferred: 2024 -, 2023 13,949" if correct else "Deferred: 2024 13,949",
+                "matches": correct, "repair_instruction": "" if correct else "Place 13,949 under 2023",
+            }]
+        return result
+
+    prepared = asyncio.run(prepare_document(path, None, model_name="fake", _caller=table))
+    assert captures == 3
+    assert prepared.pages[0]["verified"] is True
+    assert verifications[0]["previous_findings"] == []
+    assert any("occupies 2 columns" in finding for finding in verifications[1]["previous_findings"])
+    assert "Place 13,949 under 2023" in verifications[2]["previous_findings"]
+    assert pages[2] in prepared.source_html_path.read_text()
+
+
+@pytest.mark.parametrize("html,flagged", [
+    ("<table><tr><th></th><th>2024</th><th>2023</th></tr><tr><td>Tax</td><td>13,949</td></tr></table>", True),
+    ("<table><tr><th>2024</th><th>2023</th></tr><tr><td>Profit</td><td>5</td><td>2,195</td></tr></table>", True),
+    ("<table><tr><th></th><th>2024</th><th>2023</th></tr><tr><td>Tax</td><td>1</td><td>2</td></tr><tr><td>13,949</td></tr></table>", True),
+    ('<table><tr><th colspan="2">Year<br/>RM</th></tr><tr><td rowspan="2">Wrapped</td><td>10</td></tr><tr><td>20</td></tr></table>', False),
+    ("<table><tr><th></th><th>RM</th></tr><tr><th>As at 31 December 2023</th></tr><tr><td>Payable</td><td>1</td></tr></table>", False),
+    ("<table><tr><td>A</td><td><table><tr><td>x</td><td>y</td><td>z</td></tr></table></td></tr><tr><td>B</td><td>2</td></tr></table>", False),
+    ('<table><tr><td colspan="1000">Heading</td></tr></table>', False),
+    ('<table><tr><td rowspan="1000">Label</td></tr></table>', False),
+    ('<table><tr><td colspan="1001">Heading</td></tr></table>', True),
+    ('<table><tr><td rowspan="1001">Label</td></tr></table>', True),
+    ('<table><tr><td colspan="1000000">Heading</td></tr></table>', True),
+    ('<table><tr><td rowspan="1000000">Label</td></tr></table>', True),
+    ('<table><tr><td colspan="600">A</td><td colspan="600">B</td></tr></table>', True),
+    ('<table><tr><td colspan="1000" rowspan="2">A</td></tr><tr><td>B</td></tr></table>', True),
+])
+def test_table_shape_check_flags_shifted_amount_rows_and_oversized_geometry(html, flagged):
+    from ingest.document_preparation import _table_shape_issues
+    assert bool(_table_shape_issues(html)) is flagged
+
+
+@pytest.mark.parametrize("evidence,label,agreed", [
+    ("agrees", "Non-current", True),
+    ("missing", "Non-current", False),
+    ("mismatch", "Non-current", False),
+    ("uncertain", "Non-current", False),
+    ("agrees", "13,949", False),
+    ("agrees", "—", False),
+])
+def test_blank_padded_section_heading_requires_source_agreement(tmp_path, evidence, label, agreed):
+    path = pdf(tmp_path, 1)
+    base, calls = caller()
+    html = ("<table><tr><th>Description</th><th>2024</th><th>2023</th></tr>"
+            f"<tr><td>{label}</td><td></td></tr>"
+            "<tr><td>Assets</td><td>10</td><td>20</td></tr></table>")
+
+    async def table(stage, images, context):
+        result = await base(stage, images, context)
+        if stage == "capturing":
+            result["html"] = html
+        if stage == "verifying":
+            result["table_relationships"] = [] if evidence == "missing" else [{
+                "source_relationship": f"Source row {label} has blank continuation cells; Assets has 10 and 20",
+                "candidate_relationship": f"Candidate row {label} has blank continuation cells; Assets has 10 and 20",
+                "matches": evidence != "mismatch",
+                "repair_instruction": "Restore the source heading geometry" if evidence == "mismatch" else "",
+            }]
+            if evidence == "uncertain":
+                result["uncertainties"] = [{"reason": "Heading geometry is faint"}]
+        return result
+
+    prepared = asyncio.run(prepare_document(path, None, model_name="fake", _caller=table))
+    assert prepared.pages[0]["verified"] is agreed
+    assert sum(stage == "capturing" for stage, _ in calls) == (1 if agreed else 2)
+    assert (prepared.pages[0]["capture_status"] == "verified") is agreed
+    assert html in prepared.source_html_path.read_text()
+    if not agreed:
+        assert prepared.pages[0]["uncertainties"]
+
+
+@pytest.mark.parametrize("verdict", [False, None, True])
+@pytest.mark.parametrize("has_tables", [False, True])
+def test_table_verdict_without_relationship_evidence(tmp_path, verdict, has_tables):
+    path = pdf(tmp_path, 1)
+    base, _ = caller()
+    html = ("<table><tr><td>Other payable</td><td>1,993,877</td></tr></table>"
+            if has_tables else "<p>Accounting policy disclosure</p>")
+    async def table(stage, images, context):
+        result = await base(stage, images, context)
+        if stage == "capturing":
+            result["html"] = html
+        if stage == "verifying":
+            result.update(table_structure_verified=verdict, table_relationships=[])
+        return result
+    prepared = asyncio.run(prepare_document(path, None, model_name="fake", _caller=table))
+    page = prepared.pages[0]
+    expected_verified = not has_tables and verdict is not False
+    assert page["verified"] is expected_verified
+    assert page["capture_status"] == ("verified" if expected_verified else "best_effort")
+    assert bool(page.get("uncertainties")) is (not expected_verified)
+    assert all(bool(block["locator"].get("capture_uncertain")) is (not expected_verified)
+               for block in page["blocks"])
+    metadata = json.loads(prepared.metadata_path.read_text())
+    assert metadata["content_verified"] is expected_verified
+    assert html in prepared.source_html_path.read_text()
+
+
+def test_positive_verdict_cannot_certify_wrong_year_header_relationship(tmp_path):
+    path = pdf(tmp_path, 2)
+    base, _ = caller()
+    async def table(stage, images, context):
+        result = await base(stage, images, context)
+        if stage == "capturing" and context["page"] == 1:
+            result["html"] = "<table><tr><th>Total</th></tr><tr><td>1,993,877</td></tr></table>"
+            if context["best_effort"]:
+                assert context["table_relationships"][0]["repair_instruction"] == "Restore the separate 2023 maturity heading"
+        if stage == "verifying" and context["page"] == 1:
+            result["table_relationships"] = [{
+                "source_relationship": "2023 Other payable 1,993,877: On demand or within one year RM",
+                "candidate_relationship": "2023 Other payable 1,993,877: 2024 Total RM",
+                "matches": False, "repair_instruction": "Restore the separate 2023 maturity heading",
+            }]
+        return result
+    prepared = asyncio.run(prepare_document(path, None, model_name="fake", _caller=table))
+    first, second = prepared.pages
+    assert first["verified"] is False
+    assert any("Restore the separate 2023 maturity heading" in u["reason"] for u in first["uncertainties"])
+    assert second["verified"] is True
+
+
+def test_verified_multiline_table_preserves_best_effort_wording(tmp_path):
+    path = pdf(tmp_path, 1)
+    base, _ = caller()
+    html = '<table><tr><th colspan="2">Year<br/>RM</th></tr><tr><td rowspan="2">Wrapped<br/>label</td><td>10</td></tr><tr><td>20</td></tr></table>'
+
+    async def table(stage, images, context):
+        result = await base(stage, images, context)
+        if stage == "capturing":
+            result["html"] = html
+        if stage == "verifying":
+            result.update(verified=False, table_structure_verified=True,
+                          table_relationships=[{"source_relationship": "Wrapped label spans two rows, amounts 10 and 20",
+                                                "candidate_relationship": "Wrapped label spans two rows, amounts 10 and 20",
+                                                "matches": True, "repair_instruction": ""}],
+                          uncertainties=[{"reason": "Faint label reconstructed"}])
+        return result
+
+    prepared = asyncio.run(prepare_document(path, None, model_name="fake", _caller=table))
+    assert prepared.pages[0]["capture_status"] == "best_effort"
+    assert prepared.pages[0]["table_structure_verified"] is True
+    assert html in prepared.source_html_path.read_text()
+
+
 def test_verifier_presentation_allowances_keep_text_and_table_structure_mandatory():
     from ingest.document_preparation import _PROMPTS
     prompt = _PROMPTS["verifying"]
@@ -771,6 +1026,22 @@ def test_boundary_explicit_uncertainty_wins_over_positive_booleans(tmp_path):
     prepared = asyncio.run(prepare_document(path, None, model_name="fake", _caller=uncertain))
     assert all(p["verified"] is False for p in prepared.pages)
     assert all(b["locator"]["capture_uncertain"] for b in prepared.blocks)
+
+
+def test_confirmed_join_without_readability_answer_is_verified_without_recheck(tmp_path):
+    # The join stage does not judge glyph readability; an omitted `readable`
+    # must not mark both pages uncertain or trigger a second join request.
+    path = pdf(tmp_path)
+    base, calls = caller()
+    async def join(stage, images, context):
+        result = await base(stage, images, context)
+        if stage == "joining":
+            result.pop("readable")
+        return result
+    prepared = asyncio.run(prepare_document(path, None, model_name="fake", _caller=join))
+    assert all(p["verified"] is True for p in prepared.pages)
+    assert not any(b["locator"].get("capture_uncertain") for b in prepared.blocks)
+    assert sum(stage == "joining" for stage, _ in calls) == 1
 
 
 def test_ownership_explicit_uncertainty_updates_blocks_and_sidecar(tmp_path):
@@ -1253,7 +1524,8 @@ async def test_interrupted_retry_persists_completed_response_usage(tmp_path, sto
         with pytest.raises(asyncio.CancelledError):
             await worker
     else:
-        with pytest.raises(PreparationError, match="preparation did not finish"):
+        # The exhausted request is reported as such, not as a content failure.
+        with pytest.raises(PreparationError, match="timed out after retry"):
             await asyncio.wait_for(worker, 3)
     checkpoint = json.loads(next(tmp_path.glob("preparation-checkpoint-*.json")).read_text())
     calls = checkpoint["calls"]

@@ -1149,7 +1149,7 @@ When a parent and sub-note are saved as adjacent `h3` headings without a
 section wrapper, the sub-note heading and following blocks receive a 2em
 display/export indent until the next top-level note heading. Peer notes in a
 combined catch-all field remain aligned. The review view applies this without
-rewriting the saved HTML. The shipped notes paragraph gap is 10px across review, copy and mTool.
+rewriting the saved HTML. The shipped notes paragraph gap is 3px across review, copy and mTool.
 The writer moves a `sub_note` heading inside a wrapper only when that wrapper
 is the whole body; peer sections and loose introductory text keep the heading
 above them. Rendered-length truncation enters a marked section and keeps its
@@ -1307,8 +1307,18 @@ Key invariants:
     patch from `invalid_patch_fallback` after a rejected target;
     `notes_formatter` ∈ `_AGENT_ROLES`. The output has no model-authored
     confidence score and there is no routine second AI self-check. Deterministic
-    validation owns safety. Numeric sheets (13/14) are excluded (422). Pinned by
-    `tests/test_notes_format_patch.py`, `test_notes_formatter_routes.py`,
+    validation owns safety. Mixed numeric sheets permit formatting only for
+    filled, valid canonical HTML disclosure slots resolved within the run's
+    exact filing family. Structured numeric rows and mismatched identities are
+    excluded from selection, patch targets and snapshots; eligibility is checked
+    again under the write transaction. A mixed sheet with no eligible filled
+    disclosure returns 422. Automatic grouping and manual retry share that
+    selection through `db.repository.list_formatter_cells_for_run`, which bulk
+    resolves the manifest once per selection. API quarantine decisions and formatter
+    eligibility use the shared canonical HTML identity check. Pinned by
+    `tests/test_notes_auto_format.py`,
+    `tests/test_notes_formatter_routes.py`,
+    `tests/test_notes_format_patch.py`,
     `test_db_schema_v26.py`/`_v27.py`.
     Manual retry accepts `unstyled`/`floor` cells and older cells with no
     style provenance; automatic PDF formatting uses only `unstyled`/`floor`.
@@ -1425,8 +1435,8 @@ Key invariants:
   frontend `resolveTheme`. Existing run overrides remain visible as an exception
   with a contextual Use Settings appearance action. Settings Reset clears only
   installation overrides; it never changes canonical note HTML or run overrides.
-  The shipped house uses single borders, 11pt Arial, 5×5px padding, transparent
-  bold headers and a 10px paragraph gap. Source/manual styles retain their
+  The shipped house uses no table borders, 11pt Arial, 3×3px padding, transparent
+  bold headers and a 3px paragraph gap. Source/manual styles retain their
   established precedence; inferred totals rules remain off.
 
   **Prepared output is shared:** `mtool/notes_exporter.py::prepare_note_output`
@@ -1489,12 +1499,17 @@ Key invariants:
   `clipboardFormat`/`clipboard`/`cellFormatting`/`NotesReviewTab` web tests.
 
   **Double table-border fallback (2026-09-17):** at mTool export and clipboard
-  decoration only, double edges become solid strokes at least 3px (2.25pt)
-  thick, retaining colour and larger declared widths. This is the requested
+  decoration only, double edges become 0.75px solid strokes, retaining colour and sides
+  while replacing the declared double-border width. Default single grid, header
+  and transport white borders also use 0.75px; editor actions and formatter
+  border specs default to 0.75px too. Explicit ordinary solid widths remain.
+  Compact output retains explicit per-cell grid widths because the legacy
+  border attribute cannot express 0.75px. This adds markup and can move very
+  large notes to a reduced-style tier; the existing size notices remain authoritative. This is the requested
   compatibility substitution, not a claim of native double-border support.
   It covers source, manual, theme and totals borders; canonical HTML and the
   review editor retain double intent. Text underline is separate and unchanged.
-  Review and Copy consume the backend-prepared markup. Native thick-border persistence was verified
+  Review and Copy consume the backend-prepared markup. The earlier native thick-border persistence was verified
   in MPERS/MFRS injection and clipboard save/reopen cases on 2026-09-17;
   generated Review Copy Word/PDF fidelity remains deferred. Exact widths are
   not preserved. See [the agent guide](docs/MTOOL-NOTES-AUTHORING.md) for the
@@ -3033,6 +3048,54 @@ Prepared manifests reject unresolved ownership, broken links, unassessed pages
 and disagreement with Scout. Nonconsecutive note numbers are valid after that
 validated reconciliation. Source structure and emphasis capture precedes
 extraction; later MBRS formatting remains style-only.
+PDF preparation verifies source-to-candidate relationships for each table
+section: periods, exact column headings and units, and every label/amount row
+and subtotal. Separate-year or maturity sections retain their own headings.
+The receipt records source and candidate relationships, agreement or
+uncertainty, and precise repair instructions. A demonstrated mismatch, or a
+row whose occupied column count differs from its table
+(`_table_shape_issues`, deterministic; single-cell heading or label rows are
+exempt; a label followed only by blank cells is also exempt when the
+complete independent assessment and table relationships confirm source
+agreement without uncertainties. Missing evidence or a demonstrated mismatch
+keeps that row subject to repair. A lone amount or dash is never exempt),
+overrides a positive Boolean verdict and triggers focused repair.
+Table shape checks bound cell spans and cumulative row width to
+`_MAX_TABLE_SPAN` before allocating occupied columns. Oversized geometry becomes
+a repair finding and remains unresolved if it survives repair; source HTML is
+not silently truncated. A third round
+runs only while specific table findings remain and the last repair changed the
+page; each re-check receives the previous findings. A finding that survives is
+published as named best-effort uncertainty, never verified, because a checker
+mismatch is a judgement that can be wrong and must not discard the document.
+Missing or uncertain relationship evidence becomes best-effort source
+uncertainty, never a clean verification result. A page-content failure lets
+independent pages finish and stay resumable, and so does invalid model output
+for one page (`UnexpectedModelBehavior`). An exhausted provider retry
+(`TranscriptionRetryExhausted`) or any other provider/transport error stops
+remaining pages at once, including errors that `transcribe_pages` would
+otherwise report only as a failed page. A page join is accepted on `verified`
+and `complete` with no stated uncertainty (`_JOIN_ACCEPTANCE_KEYS`); the join
+prompt does not define `readable`, whose omitted default had marked confirmed
+joins and both neighbouring pages uncertain (run 346: 21 of 27 uncertain pages). Each capture and verification
+response, candidate HTML and rotation are durably retained before interpretation,
+including rejected candidates. Checkpoint page attempts reference atomic,
+content-addressed JSON evidence files beside the checkpoint; complete receipts
+are preserved without repeatedly embedding them in progress snapshots.
+Batched attempts share one evidence file containing the complete response and
+requested page contexts, including duplicate, foreign-page and malformed
+receipts. These diagnostic records do not certify a page capture; the batcher
+validates ownership and retries rejected pages independently.
+Prose-only pages need no table evidence for a positive or omitted table verdict.
+A negative verdict stays unresolved because it can identify an omitted source table. Distinct
+financial entries retain separate rows; legitimate wrapped and spanning cells
+remain valid. Capture preserves genuine text emphasis; graphical table rules
+belong to the border formatter. Preparation contract identity invalidates older
+captures. Pinned by the table repair, disputed-mismatch publication, third-round,
+shape-check, evidence retention and multiline cases in
+`tests/test_document_preparation.py`, and the bounded-timeout and malformed-batch
+cases in `tests/test_document_preparation_batching.py`. Offline tests establish enforcement,
+not live model accuracy.
 Prepared page receipts must cover the original PDF page count, not just their
 own list length. Incomplete assessments remain failures even when text is
 unreadable. Any dark ink, including short disclosures, goes through capture.

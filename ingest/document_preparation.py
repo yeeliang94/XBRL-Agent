@@ -34,7 +34,15 @@ from ingest.pdf_sidecar import (
 from notes._rate_limit import RATE_LIMIT_MAX_RETRIES, compute_backoff_delay, is_rate_limit_error
 from utils.atomic_io import replace_with_retry
 
-CONTRACT_VERSION = 7
+CONTRACT_VERSION = 14
+# Capture, verify and repair rounds per page. The third round runs only while
+# specific table findings remain and the previous repair changed the page.
+_MAX_PREPARATION_ROUNDS = 3
+# The join stage judges relationships, not glyphs, and its prompt never defines
+# `readable`; the schema defaults it to False when omitted. Requiring it marked
+# confirmed joins and both neighbouring pages uncertain without any stated
+# doubt. Explicit uncertainties or verified=false still mark a join unresolved.
+_JOIN_ACCEPTANCE_KEYS = ("verified", "complete")
 PREPARATION_NAME = "preparation.json"
 # A process-wide ceiling across documents and background event loops. Local
 # per-document concurrency cannot exceed this shared request limit.
@@ -170,12 +178,21 @@ class SourceUncertainty(BaseModel):
     reconstructed_text: str = ""
 
 
+class TableRelationship(BaseModel):
+    source_relationship: str = Field(description="Read from the source image: table section, period, column headings and label/amount relationships.")
+    candidate_relationship: str = Field(description="Corresponding relationships actually present in the supplied HTML; state missing content explicitly.")
+    matches: bool | None = Field(default=None, description="True for agreement, false for a demonstrated mismatch, null for uncertain assessment.")
+    repair_instruction: str = Field(default="", description="Specific source-supported correction for a mismatch, preserving unaffected content.")
+
+
 class PreparationReceipt(BaseModel):
     complete: bool = False
     readable: bool = False
     rotation: int = 0
     html: str = ""
     verified: bool = False
+    table_structure_verified: bool | None = None
+    table_relationships: list[TableRelationship] = Field(default_factory=list)
     # Each link identifies blocks by their stable IDs supplied in context.
     links: list[dict[str, str]] = Field(default_factory=list)
     issues: list[str] = Field(default_factory=list)
@@ -378,8 +395,19 @@ _PROMPTS = {
         "Apart from the permitted page-furniture and non-text exclusions, "
         "transcribe every visible word, sign, number, list item, caption and "
         "footnote verbatim into html. Preserve h1-h6 hierarchy, paragraphs, "
-        "nested lists, strong/em/u emphasis, tables and rowspan/colspan. No "
-        "CSS or scripts. Do not summarize, normalize spelling or hyphenation, "
+        "nested lists, strong/em/u emphasis, tables and rowspan/colspan. "
+        "Represent each distinct financial entry and subtotal with its own tr, "
+        "keeping its label and corresponding amounts in that row. Use br only "
+        "for wrapping within one entry or header; retain legitimate spanning "
+        "cells and nested tables. Give each period or section its own applicable "
+        "column headings. When adjacent source sections have different column "
+        "sets, capture them as separate tables, each with its own headings and "
+        "label/amount rows. Keep a single maturity amount under its sole source "
+        "heading rather than under a preceding section's Total column. "
+        "Capture genuine text emphasis with strong/em/u; "
+        "leave graphical table rules for the later border formatter rather than "
+        "encoding them as text underlines. "
+        "No CSS or scripts. Do not summarize, normalize spelling or hyphenation, "
         "or invent note ownership. Preserve partial "
         "paragraphs/tables at page edges. Set complete/readable true only for "
         "a fully assessed transcription. In best_effort mode choose the most "
@@ -389,7 +417,13 @@ _PROMPTS = {
         "If previous_html is supplied, use it as the "
         "repair baseline: correct the exact reported issues against the source "
         "images and preserve all unaffected wording, punctuation, headings, "
-        "emphasis and table structure. Do not retranscribe or restyle unaffected "
+        "emphasis and table structure. Use table_relationships to repair the "
+        "reported source/candidate mismatch; splitting the affected table is "
+        "permitted when needed to restore different sections' column headings. "
+        "For a reported row/column misalignment, compare the row with the source and "
+        "place each amount and printed dash under its source heading; do not pad cells "
+        "merely to equalize the count. "
+        "Do not retranscribe or restyle unaffected "
         "content. Change additional content only when the source establishes "
         "another specific defect, and report that correction in issues. Return "
         "the complete corrected page HTML, not a patch or a summary."
@@ -412,8 +446,28 @@ _PROMPTS = {
         "solely because HTML cannot reproduce the source's line wrapping or "
         "graphical positioning. Names, inter-word spaces, spelling, apostrophes "
         "and other punctuation still must match the source exactly. "
-        "Set verified true only if all wording and structure agree. complete "
-        "means the independent assessment is finished, even when readable or "
+        "Set verified true only if all wording and structure agree. "
+        "For each source table section, first inventory its period, exact column "
+        "headings (including units), and label/amount relationships from the image. "
+        "Then record the corresponding candidate relationships in table_relationships. "
+        "Use one concise entry per section, covering all rows; create a separate "
+        "entry for each mismatch with a specific repair_instruction. Sections with "
+        "different years or maturity headings need separate entries even if adjacent. "
+        "An amount under Total does not preserve an amount under On demand or "
+        "within one year, even when the number itself is unchanged. Check every "
+        "financial entry and subtotal, including blank-label subtotals. Distinct "
+        "entries stacked with br in one row are a mismatch; legitimate wrapped "
+        "labels, headers, spanning cells and nested tables are valid. "
+        "Set matches false only for a demonstrated source/candidate discrepancy, "
+        "null when uncertain. Set table_structure_verified true only after these "
+        "relationships agree, false for confirmed discrepancies, null for uncertainty. "
+        "Uncertain wording alone does not make table relationships false. "
+        "Check that graphical table rules have not become u text emphasis. "
+        "previous_findings lists problems reported for an earlier candidate of this page. "
+        "Confirm each against the source and the current candidate: report one that remains "
+        "as a mismatch or issue, and do not repeat one that is resolved. Still assess the "
+        "whole page independently. "
+        "complete means the independent assessment is finished, even when readable or "
         "verified is false. List precise issues and uncertainty regions for "
         "bounded repair. Never certify from candidate alone or certify guessed words."
         " Independently assess continues_from_previous/continues_to_next: false "
@@ -693,6 +747,114 @@ def _record_uncertainty(page: dict, uncertainties: list[dict]) -> None:
         )
 
 
+# Accountant-style amount or nil dash, as in mtool/notes_decorate.py.
+_AMOUNT_CELL_RE = re.compile(r"^\(?\s*-?\s*[\d,]+(?:\.\d+)?\s*\)?$|^[-—–]+$")
+# Bound model-authored geometry before allocating occupied columns. The same
+# ceiling applies to spans and cumulative row width, including carried cells.
+_MAX_TABLE_SPAN = 1000
+
+
+
+def _is_systemic_preparation_error(error: BaseException) -> bool:
+    from pydantic_ai.exceptions import UnexpectedModelBehavior
+    return isinstance(error, TranscriptionRetryExhausted) or not isinstance(
+        error, (PreparationError, UnexpectedModelBehavior))
+
+
+def _table_verdict_unverified(*, has_tables: bool, verdict: bool | None,
+                              relationships: list[dict]) -> bool:
+    # A negative verdict may identify a source table missing from the HTML.
+    # Neither a routine positive verdict nor an omitted verdict needs table
+    # evidence on a prose-only page.
+    if not has_tables and not relationships:
+        return verdict is False
+    return verdict is not True or not relationships or any(
+        relationship.get("matches") is not True
+        or not relationship.get("source_relationship", "").strip()
+        or not relationship.get("candidate_relationship", "").strip()
+        for relationship in relationships
+    )
+
+
+def _write_checkpoint_with_evidence(path: Path, checkpoint: dict) -> None:
+    directory = path.with_suffix(".evidence")
+    for attempts in checkpoint.get("page_attempts", {}).values():
+        for index, attempt in enumerate(attempts):
+            if "evidence_file" in attempt:
+                continue
+            payload = json.dumps(attempt, ensure_ascii=False, sort_keys=True)
+            digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+            directory.mkdir(exist_ok=True)
+            evidence = directory / (digest + ".json")
+            if not evidence.exists():
+                _atomic_text(evidence, payload)
+            attempts[index] = {"stage": attempt["stage"],
+                               "view_rotation": attempt.get("view_rotation"),
+                               "evidence_file": str(evidence.relative_to(path.parent))}
+            if "batch_response" in attempt:
+                attempts[index]["batch"] = True
+    # Evidence is durable before its reference becomes resumable progress.
+    _atomic_text(path, json.dumps(checkpoint, ensure_ascii=False))
+
+
+def _table_shape_issues(html: str, *, allow_blank_label_rows: bool = False) -> list[str]:
+    """Report table rows whose occupied column count differs from their table.
+
+    A missing or extra cell shifts amounts under the wrong heading while every
+    word and number survives, which a model checker can overlook. Rowspan and
+    colspan count as occupied columns. A single-cell row is a section heading or
+    label line, not a shifted amount row. Blank-padded label rows are exempt
+    only when the caller supplies independently verified source agreement.
+    This flags a defect for repair; it
+    cannot confirm that a padded row is correct.
+    """
+    issues = []
+    for table_number, table in enumerate(BeautifulSoup(html, "html.parser").find_all("table"), 1):
+        rows, carried = [], {}
+        for tr in table.find_all("tr"):
+            if tr.find_parent("table") is not table:
+                continue
+            cells = tr.find_all(["td", "th"], recursive=False)
+            occupied = set(carried)
+            carried = {column: remaining - 1 for column, remaining in carried.items() if remaining > 1}
+            column = 0
+            for cell in cells:
+                while column in occupied:
+                    column += 1
+                try:
+                    span = max(1, int(cell.get("colspan") or 1))
+                    rowspan = max(1, int(cell.get("rowspan") or 1))
+                except ValueError:
+                    span = rowspan = 1
+                if span > _MAX_TABLE_SPAN or rowspan > _MAX_TABLE_SPAN or column + span > _MAX_TABLE_SPAN:
+                    return [*issues, (
+                        f"Table {table_number}: cell spans or row width exceed the supported limit of "
+                        f"{_MAX_TABLE_SPAN}; restore the source-supported table geometry."
+                    )]
+                for spanned in range(column, column + span):
+                    occupied.add(spanned)
+                    if rowspan > 1:
+                        carried[spanned] = rowspan - 1
+                column += span
+            if cells:
+                texts = [" ".join(cell.get_text(" ").split()) for cell in cells]
+                label = next((text for text in texts if text), "(blank label)")
+                # Source-confirmed headings can have blank continuation cells.
+                # Amount rows and rows without source agreement remain checked.
+                blank_label_row = (allow_blank_label_rows and bool(texts[0])
+                                   and not any(texts[1:]))
+                heading_line = (len(cells) == 1 or blank_label_row) and not _AMOUNT_CELL_RE.match(label)
+                rows.append((heading_line, len(occupied), label[:60]))
+        width = max((columns for _, columns, _ in rows), default=0)
+        for heading_line, columns, label in rows:
+            if width > 1 and not heading_line and columns != width:
+                issues.append(
+                    f"Table {table_number}: row '{label}' occupies {columns} columns but the table has "
+                    f"{width}; place each amount under its source column heading."
+                )
+    return issues
+
+
 def _list_paragraph_sequence(left: dict, right: dict) -> bool:
     """A model-linked list/paragraph sequence is related, not text-merged.
 
@@ -802,8 +964,10 @@ async def prepare_document(
             # Freeze JSON before dispatch: concurrent page tasks mutate the
             # shared checkpoint. Serial writes cannot publish an older snapshot.
             revision_to_save = checkpoint_revision
-            content = json.dumps(checkpoint, ensure_ascii=False)
-            await asyncio.to_thread(_atomic_text, checkpoint_path, content)
+            snapshot = json.loads(json.dumps(checkpoint, ensure_ascii=False))
+            await asyncio.to_thread(_write_checkpoint_with_evidence, checkpoint_path, snapshot)
+            for page, attempts in snapshot.get("page_attempts", {}).items():
+                checkpoint["page_attempts"][page][:len(attempts)] = attempts
             saved_checkpoint_revision = revision_to_save
 
     async def save_checkpoint():
@@ -855,6 +1019,24 @@ async def prepare_document(
                         _request_model(model, stage, images, context, usage_out=record["usage"]))
                 receipt = await asyncio.wait_for(call, page_timeout_s)
             record.update(usage=receipt.get("usage", {}), status="succeeded")
+            if stage in {"capturing", "verifying"}:
+                if "pages" in context:
+                    # Retain the entire response, including malformed, duplicate
+                    # and foreign receipts. Shared attempts hash to one evidence
+                    # file; only the batcher decides which captures are valid.
+                    attempt = json.loads(json.dumps({
+                        "stage": stage, "page_contexts": context["pages"],
+                        "batch_response": receipt,
+                    }))
+                    for page_context in context["pages"]:
+                        checkpoint.setdefault("page_attempts", {}).setdefault(
+                            str(page_context["page"]), []).append(attempt)
+                else:
+                    checkpoint.setdefault("page_attempts", {}).setdefault(str(context["page"]), []).append({
+                        "stage": stage, "view_rotation": context.get("view_rotation"),
+                        "html": context.get("html", receipt.get("html", "")),
+                        "verification" if stage == "verifying" else "capture": json.loads(json.dumps(receipt)),
+                    })
             return receipt
         except BaseException as exc:
             record["error_type"] = type(exc).__name__
@@ -930,20 +1112,34 @@ async def prepare_document(
                 noise_regions: list[dict] = []
                 previous_html = ""
                 capture_uncertainties: list[dict] = []
-                for repair in range(2):
+                table_relationships: list[dict] = []
+                previous_findings: list[str] = []
+                previous_round_html = None
+                # transcribe_pages reports failed pages without their cause;
+                # keep a systemic request failure (exhausted retries or an
+                # unexpected provider error) so it is not mistaken for a
+                # page-content failure and peer pages stop.
+                systemic_error: BaseException | None = None
+                for repair in range(_MAX_PREPARATION_ROUNDS):
                     progress("capturing", f"{'Rechecking' if repair else 'Reading'} page {number}", captured)
                     async def capture(page_no, image):
-                        nonlocal capture_attempt, focused_images, issues, noise_regions, capture_uncertainties, rotation, capture_edges
+                        nonlocal capture_attempt, focused_images, issues, noise_regions, capture_uncertainties, rotation, capture_edges, systemic_error
                         capture_attempt += 1
                         if (repair or capture_attempt > 1) and not focused_images:
                             focused_images = await focused(page_no, rotation)
                         image = await render(page_no, rotation)
-                        response = await request("capturing", [image, *focused_images], {
-                            "page": page_no, "scope": "single supplied page only", "issues": issues,
-                            "view_rotation": rotation, "metadata_rotation": info["metadata_rotation"],
-                            "previous_html": previous_html, "best_effort": bool(repair or capture_attempt > 1),
-                            "focused_views": ["top-left", "top-right", "bottom-left", "bottom-right"] if focused_images else [],
-                        })
+                        try:
+                            response = await request("capturing", [image, *focused_images], {
+                                "page": page_no, "scope": "single supplied page only", "issues": issues,
+                                "view_rotation": rotation, "metadata_rotation": info["metadata_rotation"],
+                                "previous_html": previous_html, "best_effort": bool(repair or capture_attempt > 1),
+                                "table_relationships": table_relationships,
+                                "focused_views": ["top-left", "top-right", "bottom-left", "bottom-right"] if focused_images else [],
+                            })
+                        except Exception as exc:
+                            systemic_error = exc if _is_systemic_preparation_error(exc) else None
+                            raise
+                        systemic_error = None
                         chosen_rotation = response.get("rotation", rotation)
                         if type(chosen_rotation) is int and chosen_rotation in {0, 90, 180, 270}:
                             if chosen_rotation != rotation:
@@ -977,6 +1173,8 @@ async def prepare_document(
                         allow_empty_pages=True, rendered_pages={number: await render(number, rotation)},
                     )
                     if transcription.failed_pages:
+                        if systemic_error is not None:
+                            raise systemic_error
                         raise PreparationError(f"Page {number} preparation did not finish. Retry document preparation.")
                     html = transcription.pages_html[number]
                     previous_html = html
@@ -991,12 +1189,46 @@ async def prepare_document(
                     png = await render(number, rotation)
                     check = await request("verifying", [png, *focused_images], {
                         "page": number, "html": html, "scope": "single supplied page only",
+                        "view_rotation": rotation,
                         "best_effort": bool(repair),
+                        "previous_findings": previous_findings,
                         "candidate_non_text_regions": noise_regions,
                         "instruction": "Independently inspect the candidate exclusions. Routine page furniture, graphical signatures, scanner noise and administrative stamps may remain only in original-image evidence. Keep substantive disclosure text, note headings, statement titles, units and footnotes; the PDF index need not equal its printed folio.",
                     })
                     confirmed = all(check.get(k) is True for k in ("verified", "complete", "readable"))
+                    has_tables = BeautifulSoup(html, "html.parser").find("table") is not None
+                    table_structure_verified = check.get("table_structure_verified")
+                    table_relationships = check.get("table_relationships") or []
+                    mismatches = [relationship for relationship in table_relationships
+                                  if relationship.get("matches") is False
+                                  and relationship.get("source_relationship", "").strip()
+                                  and relationship.get("candidate_relationship", "").strip()]
+                    table_structure_unverified = _table_verdict_unverified(
+                        has_tables=has_tables, verdict=table_structure_verified,
+                        relationships=table_relationships,
+                    )
+                    # Specific, repairable table findings: model-demonstrated
+                    # mismatches plus deterministic row/column misalignment.
+                    specific_findings = [
+                        relationship.get("repair_instruction") or
+                        f"Source: {relationship['source_relationship']}; candidate: {relationship['candidate_relationship']}"
+                        for relationship in mismatches
+                    ] + _table_shape_issues(
+                        html, allow_blank_label_rows=(confirmed and not check.get("uncertainties")
+                            and not table_structure_unverified),
+                    )
+                    table_findings = list(specific_findings)
+                    if specific_findings or table_structure_unverified:
+                        confirmed = False
+                        if not table_findings:
+                            table_findings.append(
+                                "Table relationships remain uncertain. Inspect each source section's "
+                                "year, headings, labels and amounts; retain unresolved evidence."
+                            )
+                        check["issues"] = [*(check.get("issues") or []), *table_findings]
                     candidate_item = {**info, "rotation": rotation, "html": html, "verified": confirmed,
+                            "table_structure_verified": table_structure_verified,
+                            "table_relationships": table_relationships,
                             "assessment_complete": True, "capture_status": "verified" if confirmed else "best_effort",
                             "blocks": _blocks(html, number, revision),
                             "edge_assessments": {key: {
@@ -1016,12 +1248,32 @@ async def prepare_document(
                                                 + (check.get("uncertainties") or []))
                         break
                     issues = check.get("issues") or ["Independent assessment could not confirm the reading."]
-                    if repair == 1:
+                    # One focused repair for any unconfirmed reading. A further
+                    # round only when specific table findings remain and the
+                    # last repair changed the page; an unchanged repair means
+                    # the reader disputes the finding, so another round is waste.
+                    final_round = repair == _MAX_PREPARATION_ROUNDS - 1 or (
+                        repair >= 1 and not (specific_findings and html != previous_round_html)
+                    )
+                    previous_findings, previous_round_html = list(issues), html
+                    if final_round:
                         if check.get("complete") is not True:
                             raise PreparationError(f"Page {number} assessment did not complete.")
+                        # A table finding that survives repair is published as
+                        # named source uncertainty, never as a verified reading.
+                        # A checker's mismatch is a judgement that can be wrong;
+                        # one disputed page must not discard the whole document.
                         item = candidate_item
-                        _record_uncertainty(item, capture_uncertainties + orientation_uncertainties
-                                            + _uncertainties(check, "Best-effort reading remains uncertain."))
+                        other_issues = [issue for issue in check.get("issues") or [] if issue not in table_findings]
+                        general = check.get("uncertainties") or (
+                            _uncertainties({"issues": other_issues}, "Best-effort reading remains uncertain.")
+                            if other_issues or not table_findings else [])
+                        _record_uncertainty(item, capture_uncertainties + orientation_uncertainties + general + [
+                            {"reason": f"Table relationship unresolved after repair: {finding}",
+                             "bbox": [], "observed_text": "", "reconstructed_text": ""}
+                            for finding in table_findings
+                        ])
+                        break
             checked += 1
             verified += int(item.get("verified") is True)
             checkpoint["pages"][str(number)] = item
@@ -1061,7 +1313,7 @@ async def prepare_document(
                        "page_uncertainties": previous.get("uncertainties", []) + current.get("uncertainties", [])}
             check = await request("joining", images, context)
             errors = _boundary_link_errors(previous, current, check)
-            if not all(check.get(k) is True for k in ("verified", "complete", "readable")) or errors:
+            if not all(check.get(k) is True for k in _JOIN_ACCEPTANCE_KEYS) or errors:
                 progress("joining", f"Rechecking the continuation at page {current['page']}")
                 context.update(issues=check.get("issues", []) + errors, earlier_blocks=previous["blocks"],
                                previous_blocks=previous["blocks"], next_blocks=current["blocks"],
@@ -1096,7 +1348,22 @@ async def prepare_document(
         boundary_tasks = [asyncio.create_task(join_when_ready(index)) for index in range(1, len(tasks))]
         all_tasks = tasks + boundary_tasks
         try:
-            results = await asyncio.gather(*all_tasks)
+            # A page-content failure lets independent pages finish so their
+            # checkpoints remain reusable on retry. Exhausted provider retries
+            # and unexpected errors are systemic: stop the remaining pages now.
+            pending, deferred = set(all_tasks), None
+            while pending:
+                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_EXCEPTION)
+                for task in done:
+                    error = task.exception()
+                    if error is None:
+                        continue
+                    if _is_systemic_preparation_error(error):
+                        raise error
+                    deferred = deferred or error
+            if deferred is not None:
+                raise deferred
+            results = [task.result() for task in all_tasks]
             pages = results[:len(tasks)]
             boundary_results = [result for result in results[len(tasks):] if result is not None]
         finally:
@@ -1112,7 +1379,7 @@ async def prepare_document(
         for previous, current, check in boundary_results:
             if check.get("complete") is not True:
                 raise PreparationError(f"Page {current['page']} boundary assessment did not complete.")
-            boundary_verified = all(check.get(k) is True for k in ("verified", "complete", "readable")) and not check.get("uncertainties")
+            boundary_verified = all(check.get(k) is True for k in _JOIN_ACCEPTANCE_KEYS) and not check.get("uncertainties")
             if not boundary_verified:
                 uncertainties = _uncertainties(check, "Cross-page relationship is a best-effort interpretation.")
                 _record_uncertainty(previous, uncertainties)

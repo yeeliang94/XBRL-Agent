@@ -1084,6 +1084,9 @@ function SheetSection({
   const [formatError, setFormatError] = useState<string | null>(null);
   const [formatRequestPending, setFormatRequestPending] = useState(false);
   const [rowSaveStatuses, setRowSaveStatuses] = useState<Record<string, SaveStatus>>({});
+  const canFormat = (sheet.kind ?? "prose") === "prose" || sheet.rows.some(
+    (cell) => cell.kind === "prose" && !cell.invalid_target && !isBlankHtml(cell.html),
+  );
   // Which model the AI formatter runs on. Seeds from the configured
   // notes_formatter default; empty falls through to the server's fallback
   // (the run's extraction model — api/notes_formatter.py).
@@ -1115,7 +1118,7 @@ function SheetSection({
   // a still-running task resumes the "Formatting..." indicator + polling below,
   // and a finished one shows its summary instead of a stale idle button.
   useEffect(() => {
-    if ((sheet.kind ?? "prose") !== "prose") return;
+    if (!canFormat) return;
     let cancelled = false;
     fetchNotesFormatStatus(runId, sheet.sheet)
       .then((state) => {
@@ -1128,7 +1131,7 @@ function SheetSection({
     return () => {
       cancelled = true;
     };
-  }, [runId, sheet.sheet, sheet.kind]);
+  }, [runId, sheet.sheet, canFormat]);
 
   useEffect(() => {
     if (formatStatus?.status !== "running") return;
@@ -1206,7 +1209,6 @@ function SheetSection({
     return next;
   });
 
-  const canFormat = (sheet.kind ?? "prose") === "prose";
   const visibleRows = sheet.rows.filter((cell) => {
     if (cell.invalid_target || selectedCellKey === `${sheet.sheet}:${cell.row}`) return true;
     const presence = noteFieldPresence(cell, human, humanFigures);

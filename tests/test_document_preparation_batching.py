@@ -105,7 +105,7 @@ def test_wrong_page_capture_is_repaired_by_independent_verification(tmp_path):
 
 @pytest.mark.parametrize("defect", ["missing", "duplicate", "invalid", "foreign"])
 def test_bad_capture_receipt_retries_only_affected_page(tmp_path, defect):
-    singles = []
+    singles, batch_responses = [], []
     async def call(name, images, context):
         result = response(context)
         if name == "capturing" and "pages" in context:
@@ -113,12 +113,13 @@ def test_bad_capture_receipt_retries_only_affected_page(tmp_path, defect):
             if defect == "missing":
                 result["pages"] = [good]
             elif defect == "duplicate":
-                result["pages"] = [good, bad, bad]
+                result["pages"] = [good, bad, {**bad, "html": "<p>Rejected duplicate content</p>"}]
             elif defect == "foreign":
                 result["pages"] = [good, receipt(99)]
             else:
                 bad["non_text_regions"] = [{"reason": "scanner_noise", "bbox": [0, 0, 900, 900]}]
                 result["pages"] = [good, bad]
+            batch_responses.append(result)
         elif name == "capturing":
             singles.append(context["page"])
         return result
@@ -126,9 +127,19 @@ def test_bad_capture_receipt_retries_only_affected_page(tmp_path, defect):
     prepared = run(source(tmp_path, 2), call)
     assert singles == [2]
     assert all(page["verified"] for page in prepared.pages)
+    checkpoint = json.loads(next(tmp_path.glob("preparation-checkpoint-*.json")).read_text())
+    batch_attempts = [attempts[0] for attempts in checkpoint["page_attempts"].values()]
+    assert all(attempt["batch"] for attempt in batch_attempts)
+    assert len({attempt["evidence_file"] for attempt in batch_attempts}) == 1
+    evidence = json.loads((tmp_path / batch_attempts[0]["evidence_file"]).read_text())
+    assert evidence["batch_response"] == batch_responses[0]
+    assert sorted(page["page"] for page in evidence["page_contexts"]) == [1, 2]
+    assert "capture" not in evidence
+    # Rejected payloads remain diagnostic; single-page fallback owns the output.
+    assert [page["html"] for page in prepared.pages] == ["<p>Content 1</p>", "<p>Content 2</p>"]
 
 
-@pytest.mark.parametrize("failure", ["timeout", "malformed", "provider"])
+@pytest.mark.parametrize("failure", ["timeout", "malformed", "null", "provider"])
 def test_failed_batch_falls_back_to_single_pages(tmp_path, failure):
     batches, singles = [], []
     async def call(stage, images, context):
@@ -139,7 +150,7 @@ def test_failed_batch_falls_back_to_single_pages(tmp_path, failure):
                     raise TimeoutError("offline timeout")
                 if failure == "provider":
                     raise RuntimeError("offline provider error")
-                return {"pages": "truncated"}
+                return {"pages": None if failure == "null" else "truncated"}
             singles.append(context["page"])
         return response(context)
 
@@ -147,6 +158,21 @@ def test_failed_batch_falls_back_to_single_pages(tmp_path, failure):
     assert sorted(singles) == [1, 2]
     assert len(batches) == (2 if failure == "timeout" else 1)
     assert len(prepared.pages) == 2
+    if failure in {"malformed", "null"}:
+        # The malformed batch is diagnosed as delivered, not as a failed call,
+        # and its complete evidence is distinct from each accepted capture.
+        checkpoint = json.loads(next(tmp_path.glob("preparation-checkpoint-*.json")).read_text())
+        batch_record = next(r for r in checkpoint["calls"] if r.get("pages"))
+        assert batch_record["status"] == "succeeded" and "error_type" not in batch_record
+        for attempts in checkpoint["page_attempts"].values():
+            assert [a["stage"] for a in attempts] == ["capturing", "capturing", "verifying"]
+            assert attempts[0]["batch"] is True
+            assert not attempts[1].get("batch")
+        references = {attempts[0]["evidence_file"] for attempts in checkpoint["page_attempts"].values()}
+        assert len(references) == 1
+        evidence = json.loads((tmp_path / references.pop()).read_text())
+        assert evidence["batch_response"] == {"pages": None if failure == "null" else "truncated"}
+        assert "capture" not in evidence
 
 
 def test_blank_and_resumed_pages_do_not_wait_for_partners(tmp_path, monkeypatch):
@@ -314,15 +340,21 @@ def test_persistent_incomplete_page_never_activates_document(tmp_path, failed_st
     assert not (tmp_path / "preparation.json").exists()
 
 
-def test_exhausted_batch_and_single_timeouts_are_bounded(tmp_path):
+@pytest.mark.parametrize("failure", ["timeout", "provider"])
+@pytest.mark.parametrize("count", [2, 6])
+def test_exhausted_batch_and_single_timeouts_are_bounded(tmp_path, count, failure):
+    # Exhausted retries and unexpected provider errors are systemic: remaining
+    # pages stop instead of each exhausting its own retries.
     budget = preparation.RequestBudget(1)
     calls = []
     async def call(stage, images, context):
         calls.append(context)
+        if failure == "provider":
+            raise RuntimeError("offline provider error")
         raise TimeoutError("offline persistent timeout")
 
-    with pytest.raises(preparation.PreparationError):
-        run(source(tmp_path, 2), call, concurrency=1, _budget=budget)
+    with pytest.raises(preparation.PreparationError if failure == "timeout" else RuntimeError):
+        run(source(tmp_path, count), call, concurrency=1, _budget=budget)
     assert len(calls) <= 6
     assert budget._active == 0 and not budget._waiting
     assert not (tmp_path / "preparation.json").exists()
