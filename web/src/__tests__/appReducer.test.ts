@@ -758,7 +758,7 @@ describe("appReducer", () => {
         timestamp: 1,
       } as SSEEvent,
     });
-    expect(state.agents.scout.label).toBe("Document scan");
+    expect(state.agents.scout.label).toBe("Document preparation");
     expect(state.agents.scout.status).toBe("running");
 
     state = appReducer(state, {

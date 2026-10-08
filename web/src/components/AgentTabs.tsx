@@ -35,6 +35,7 @@ export interface AgentTabsProps {
   filingStandard?: FilingStandard;
   tabOrder: string[];          // ordered agent IDs for active tabs
   activeTab: string;
+  panelId?: string;
   onTabClick: (agentId: string) => void;
   skeletonTabs?: string[];     // labels for face statements not yet started (greyed-out)
   // Phase 8: gate statement tabs so pre-run state doesn't flash all 5
@@ -68,6 +69,11 @@ const NOTES_TAB_PREFIX = "notes:";
 
 const WORKSTREAM_LABELS: Record<string, string> = {
   scout: "Document preparation",
+  SCOUT: "Document preparation",
+  SOURCE_PREPARATION: "Source preparation",
+  VALIDATOR: "Cross-checks",
+  NOTES_FORMATTING: "Notes formatting",
+  NOTES_CLEANUP: "Notes cleanup",
   "notes-formatting": "Notes formatting",
   "notes-cleanup": "Notes cleanup",
   SOFP: "Statement of financial position",
@@ -88,6 +94,16 @@ function workstreamLabel(agent: AgentTabState, filingStandard?: unknown): string
   return WORKSTREAM_LABELS[agent.agentId]
     ?? WORKSTREAM_LABELS[agent.role]
     ?? agent.label;
+}
+
+const WORKSTREAM_KINDS: Record<string, string> = {
+  SCOUT: "scout", SOURCE_PREPARATION: "scout", VALIDATOR: "validator",
+  NOTES_FORMATTING: "notes-formatting", NOTES_CLEANUP: "notes-cleanup",
+};
+
+function workstreamKind(agent: AgentTabState): string {
+  return WORKSTREAM_KINDS[agent.role]
+    ?? (SPECIAL_TAB_IDS.has(agent.role) ? agent.role : agent.agentId);
 }
 
 // ---------------------------------------------------------------------------
@@ -117,6 +133,7 @@ function AgentTabsImpl({
   filingStandard,
   tabOrder,
   activeTab,
+  panelId,
   onTabClick,
   skeletonTabs,
   statementsInRun,
@@ -137,94 +154,29 @@ function AgentTabsImpl({
   //
   // Ordering: document preparation first, then statements, notes and checks.
   // The visible navigator groups those buckets vertically.
-  const gatedOrder = (() => {
-    const statementIds: string[] = [];
-    const notesIds: string[] = [];
-    let scoutId: string | null = null;
-    let notesFormattingId: string | null = null;
-    let notesCleanupId: string | null = null;
-    let validatorId: string | null = null;
-    let notesValidatorId: string | null = null;
-    let correctionId: string | null = null;
-    for (const id of tabOrder) {
-      const agent = agents[id];
-      if (!agent) continue;
-      if (SPECIAL_TAB_IDS.has(id)) {
-        // scout and validator ride their own lifecycle — always shown.
-        // NOTES_VALIDATOR joins them (peer-review F1) so its skip-emit
-        // actually has a visible selector in the run-checks group.
-        // CORRECTION (the reviewer pass) is the same shape — it must be
-        // bucketed explicitly here, else it'd hit this branch, match no
-        // `id === …` case, and fall through `continue` into nowhere (the
-        // very disappearance we're fixing).
-        if (id === "scout") scoutId = id;
-        else if (id === "notes-formatting") notesFormattingId = id;
-        else if (id === "notes-cleanup") notesCleanupId = id;
-        else if (id === "validator") validatorId = id;
-        else if (id === "NOTES_VALIDATOR") notesValidatorId = id;
-        else if (id === "CORRECTION") correctionId = id;
-        continue;
-      }
-      if (id.startsWith(NOTES_TAB_PREFIX)) {
-        // Notes tabs — gated by notesInRun unless prop is undefined.
-        if (notesInRun === undefined || notesInRun.includes(agent.role)) {
-          notesIds.push(id);
-        }
-        continue;
-      }
-      // Statement tabs — gated by statementsInRun unless prop is undefined.
-      if (statementsInRun === undefined || statementsInRun.includes(agent.role)) {
-        statementIds.push(id);
-      }
+  const visiblePreparation: string[] = [];
+  const visibleStatementActive: string[] = [];
+  const visibleNotesActive: string[] = [];
+  const visibleChecks: string[] = [];
+  for (const id of tabOrder) {
+    const agent = agents[id];
+    if (!agent) continue;
+    const kind = workstreamKind(agent);
+    if (kind === "scout") {
+      visiblePreparation.push(id);
+    } else if (SPECIAL_TAB_IDS.has(kind) || agent.role === "SYSTEM") {
+      visibleChecks.push(id);
+    } else if (id.startsWith(NOTES_TAB_PREFIX) || agent.role.startsWith("NOTES_")) {
+      if (notesInRun === undefined || notesInRun.includes(agent.role)) visibleNotesActive.push(id);
+    } else if (statementsInRun === undefined || statementsInRun.includes(agent.role)) {
+      visibleStatementActive.push(id);
     }
-    return [
-      ...(scoutId ? [scoutId] : []),
-      ...statementIds,
-      ...notesIds,
-      ...(notesValidatorId ? [notesValidatorId] : []),
-      // Reviewer sits just before Cross-checks (validator) — it runs right
-      // after the cross-check pass, so this mirrors the run timeline.
-      ...(correctionId ? [correctionId] : []),
-      ...(validatorId ? [validatorId] : []),
-      ...(notesFormattingId ? [notesFormattingId] : []),
-      ...(notesCleanupId ? [notesCleanupId] : []),
-    ];
-  })();
-
-  // Split gatedOrder into purpose-led buckets so queued workstreams stay
-  // adjacent to active work of the same type.
-  const statementActive: string[] = [];
-  const notesActive: string[] = [];
-  let scoutActive: string | null = null;
-  let notesFormattingActive: string | null = null;
-  let notesCleanupActive: string | null = null;
-  let validatorActive: string | null = null;
-  let notesValidatorActive: string | null = null;
-  let correctionActive: string | null = null;
-  for (const id of gatedOrder) {
-    if (id === "scout") scoutActive = id;
-    else if (id === "notes-formatting") notesFormattingActive = id;
-    else if (id === "notes-cleanup") notesCleanupActive = id;
-    else if (id === "validator") validatorActive = id;
-    else if (id === "NOTES_VALIDATOR") notesValidatorActive = id;
-    else if (id === "CORRECTION") correctionActive = id;
-    else if (id.startsWith(NOTES_TAB_PREFIX)) notesActive.push(id);
-    else statementActive.push(id);
   }
-  const visibleStatementActive = statementActive;
-  const visibleNotesActive = notesActive;
-  const visiblePreparation = [scoutActive]
-    .filter((id): id is string => id != null);
-  const visibleChecks = [notesValidatorActive, correctionActive, validatorActive, notesFormattingActive, notesCleanupActive]
-    .filter((id): id is string => id != null);
-  const navigationOrder = [
-    ...visiblePreparation,
-    ...visibleStatementActive,
-    ...visibleNotesActive,
-    ...visibleChecks,
-  ];
-  const focusableTab = navigationOrder.includes(activeTab) ? activeTab : navigationOrder[0];
+  const checksOrder = ["NOTES_VALIDATOR", "CORRECTION", "validator", "notes-formatting", "notes-cleanup"];
+  visibleChecks.sort((a, b) => checksOrder.indexOf(workstreamKind(agents[a])) - checksOrder.indexOf(workstreamKind(agents[b])));
+  const navigationOrder = [...visiblePreparation, ...visibleStatementActive, ...visibleNotesActive, ...visibleChecks];
   const navigationKey = navigationOrder.join("\u0000");
+  const focusableTab = navigationOrder.includes(activeTab) ? activeTab : navigationOrder[0];
 
   useEffect(() => {
     if (focusableTab && focusableTab !== activeTab) onTabClick(focusableTab);
@@ -243,6 +195,8 @@ function AgentTabsImpl({
         ref={(node) => { tabRefs.current[agentId] = node; }}
         data-agent-label={agent.label}
         role="tab"
+        id={panelId ? `${panelId}-tab-${agentId}` : undefined}
+        aria-controls={panelId}
         aria-selected={isActive}
         tabIndex={isActive ? 0 : -1}
         onClick={() => onTabClick(agentId)}
@@ -343,11 +297,7 @@ function AgentTabsImpl({
         {visibleChecks.length > 0 && (
           <div role="presentation" data-bucket="run-checks" style={styles.tabGroup}>
             <div role="presentation" style={styles.groupLabel}>Run checks</div>
-            {notesValidatorActive && renderTab(notesValidatorActive)}
-            {correctionActive && renderTab(correctionActive)}
-            {validatorActive && renderTab(validatorActive)}
-            {notesFormattingActive && renderTab(notesFormattingActive)}
-            {notesCleanupActive && renderTab(notesCleanupActive)}
+            {visibleChecks.map(renderTab)}
           </div>
         )}
       </div>

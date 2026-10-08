@@ -21,13 +21,13 @@ from typing import Any
 # The firm's shipped house style. Fresh installations use the chosen appearance
 # without a machine-specific XBRL_NOTES_TABLE_STYLE setting.
 #
-# The single grid is the firm's chosen baseline for PDF tables. Source-styled
+# Borderless tables are the firm's chosen baseline for PDF tables. Source-styled
 # Word tables still carry their own borders and suppress the theme grid.
 # Totals underlines stay MANUAL: the auto-detect matched the word "total" in row
 # text and invented rules on rows that weren't totals (the reason the old
 # house-style floor was removed, 2026-07-07).
 HOUSE_NOTES_TABLE_STYLE: dict[str, Any] = {
-    "borderStyle": "single",
+    "borderStyle": "none",
     "headerRule": False,
     "headerBold": True,
     "headerFill": "transparent",

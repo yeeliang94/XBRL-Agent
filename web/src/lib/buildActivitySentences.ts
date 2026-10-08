@@ -88,7 +88,10 @@ export function buildActivitySentences(
   for (const event of events) {
     let text: string | null = null;
     let active = false;
-    if (event.event === "status" && event.data.message) {
+    if (event.event === "pipeline_stage" && event.data.message) {
+      text = statusSentence(event.data.message);
+      active = true;
+    } else if (event.event === "status" && event.data.message) {
       if (failed && /:\s*complete\.?$/i.test(event.data.message)) continue;
       if (failed && failureCodes.has(event.data.message)) continue;
       text = statusSentence(event.data.message);

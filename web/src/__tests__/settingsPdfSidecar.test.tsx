@@ -48,7 +48,7 @@ afterEach(() => cleanup());
 describe("Simplified PDF preparation", () => {
   test("explains the automatic workflow without legacy toggles", async () => {
     renderForm({ pdf_sidecar: true, pdf_notes_auto_format: false });
-    expect(await screen.findByText("PDF notes preparation")).toBeTruthy();
+    expect(await screen.findByText(/scanned-page text capture and source checks/)).toBeTruthy();
     expect(screen.queryByLabelText(/Transcribe scanned PDF/i)).toBeNull();
     expect(screen.queryByLabelText(/Automatically format PDF/i)).toBeNull();
     expect(screen.getByText(/PDF and Word documents are prepared automatically/i)).toBeTruthy();

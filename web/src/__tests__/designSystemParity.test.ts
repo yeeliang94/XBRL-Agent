@@ -23,6 +23,19 @@ describe("XBRL design system is the production authority", () => {
     expect(designSystem).toContain("including after native fragment navigation, and before logout");
     expect(designSystem).toContain("skip link preserves the editor without a discard prompt");
   });
+  test("groups shared settings and requires a scoped reset confirmation", () => {
+    expect(designSystem).toContain("Prior-run hints are disabled by the application defaults");
+    expect(designSystem).toContain("automatic review, tolerance, source-integrity information and optional feature switches in Advanced");
+    expect(designSystem).toContain("Unrelated saves preserve configured prior-run hints");
+    expect(designSystem).toContain("Prepared documents with notes always enforce source-integrity checks");
+    expect(designSystem).toContain("Preserve the legacy source-check mode and name it in the reset confirmation");
+    expect(designSystem).toContain("Notes appearance keeps Custom colour selected when its colour matches a preset");
+    expect(designSystem).toContain("Disable reset confirmation while an appearance save is in progress");
+    expect(designSystem).toContain("saved workstream tabs name and control their selected panel through matching ARIA references");
+    expect(designSystem).toContain("Keep unsaved shared edits");
+    expect(designSystem).toContain("require confirmation that names the shared scope");
+    expect(designSystem).toContain("preserve the connection, access key, team guidance, accounts and existing runs");
+  });
   test("declares the canonical production contract and Direction A", () => {
     expect(designSystem).toContain("CANONICAL PRODUCTION DESIGN SYSTEM");
     expect(designSystem).toContain("STATUS · PRODUCTION");
@@ -224,7 +237,9 @@ describe("Direction A shell and responsive composition", () => {
 
   test("pins the concise operator activity stream contract", () => {
     expect(designSystem).toContain("Activity provides an Export diagnostics button for the selected run");
-    expect(designSystem).toContain("one flat chronological <em>Live activity</em> stream of operator-facing milestones");
+    expect(designSystem).toContain("Running and saved runs share one grouped navigator and selected activity pane");
+    expect(designSystem).toContain("even when no agents started or no output folder exists");
+    expect(designSystem).toContain("one flat chronological <em>Live activity</em> stream (or <em>Recorded activity</em> for settled workstreams)");
     expect(designSystem).toContain("no event cards, navigation buttons or nested activity panels");
     expect(designSystem).toContain("Follow new updates only while the operator remains at the bottom");
     expect(designSystem).toContain("Keep tool operations, provider reasoning, tokens and request metadata in closed technical diagnostics");

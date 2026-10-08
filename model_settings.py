@@ -49,9 +49,9 @@ _ROLE_LEVEL_WARNED: set[str] = set()
 
 # One product default for every model-backed pipeline role. Saved operator
 # settings still win, but a fresh install (or a cleared role override) now
-# follows the GPT-5.6 Luna migration instead of falling back to GPT-5.4 in
+# follows GPT-6 Luna rather than an older model in
 # whichever call site happened to construct the agent.
-DEFAULT_MODEL_ID = "openai.global.gpt-5.6-luna"
+DEFAULT_MODEL_ID = "openai.global.gpt-6-luna"
 
 # OpenAI exposes a readable reasoning *summary*, not its private chain of
 # thought. ``auto`` lets the provider choose the supported summary style and

@@ -15,7 +15,7 @@ Design constraints (from the plan):
   PDF" because entity-name collisions and year-over-year changes are real.
 - **No new tables (v1).** Matching reads existing ``runs`` rows plus the
   on-disk ``infopack.json`` each run persists in its output dir.
-- **Opt-outable.** Gated by ``XBRL_ENTITY_MEMORY`` (default on), mirroring
+- **Opt-outable.** Gated by ``XBRL_ENTITY_MEMORY`` (default off), mirroring
   ``server._auto_review_enabled``'s resolver semantics.
 """
 from __future__ import annotations
@@ -43,8 +43,8 @@ _SUFFIX_WORDS = {
 
 
 def entity_memory_enabled() -> bool:
-    """True unless ``XBRL_ENTITY_MEMORY`` is explicitly set to a false-y value."""
-    return os.environ.get("XBRL_ENTITY_MEMORY", "true").lower() == "true"
+    """Optional prior-run hints, disabled unless explicitly enabled."""
+    return os.environ.get("XBRL_ENTITY_MEMORY", "false").lower() == "true"
 
 
 def normalize_entity_name(name: Optional[str]) -> str:

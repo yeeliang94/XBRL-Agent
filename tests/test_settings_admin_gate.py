@@ -94,3 +94,10 @@ def test_non_admin_cannot_write_advanced_settings(env):
         "advanced_settings": {"XBRL_MAX_CONCURRENT_AGENTS": 1},
     })
     assert r.status_code == 403
+
+
+def test_non_admin_cannot_reset_shared_defaults(env):
+    client = TestClient(server.app)
+    _login(client, "user@firm.com", "user-password")
+    r = client.post("/api/settings", json={"reset_shared_defaults": True})
+    assert r.status_code == 403
