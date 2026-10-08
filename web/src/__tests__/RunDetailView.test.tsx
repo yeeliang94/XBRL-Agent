@@ -156,6 +156,30 @@ describe("RunDetailView", () => {
     vi.restoreAllMocks();
   });
 
+  test.each(["values", "notes", "checks", "review"] as const)("running runs hide review sections and redirect the %s link to Activity", (key) => {
+    window.history.replaceState(null, "", `/history/42?tab=${key}`);
+    const historyLength = window.history.length;
+    const detail = makeDetail({ status: "running" });
+    const { rerender } = render(<RunDetailView detail={detail} canonicalEnabled onDelete={vi.fn()} />);
+    const tabs = screen.getByRole("tablist", { name: "Run detail sections" });
+    expect(within(tabs).getAllByRole("tab").map((item) => item.textContent)).toEqual(["Overview", "Activity"]);
+    expect(within(tabs).getByRole("tab", { name: "Activity" })).toHaveAttribute("aria-selected", "true");
+    expect(window.location.search).toBe("?tab=agents");
+    expect(window.history.length).toBe(historyLength);
+    expect(screen.getByRole("button", { name: "Export diagnostics" })).toBeEnabled();
+    rerender(<RunDetailView detail={{ ...detail, status: "completed" }} canonicalEnabled onDelete={vi.fn()} />);
+    expect(within(tabs).getAllByRole("tab").map((item) => item.textContent)).toEqual(["Overview", "Figures", "Notes", "Cross-checks", "Activity", "AI review"]);
+    expect(within(tabs).getByRole("tab", { name: "Activity" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  test.each(["completed_with_errors", "failed", "aborted"])("terminal %s runs retain access to partial results and diagnostics", (status) => {
+    render(<RunDetailView detail={makeDetail({ status })} canonicalEnabled onDelete={vi.fn()} />);
+    const tabs = screen.getByRole("tablist", { name: "Run detail sections" });
+    expect(within(tabs).getAllByRole("tab")).toHaveLength(6);
+    clickRunTab(/^activity$/i);
+    expect(screen.getByRole("button", { name: "Export diagnostics" })).toBeEnabled();
+  });
+
   test("run-detail tab wrappers are presentational so the tablist owns its tabs", () => {
     render(<RunDetailView detail={makeDetail()} onDelete={() => {}} onDownload={() => {}} />);
     const tablist = screen.getByRole("tablist", { name: /run detail sections/i });

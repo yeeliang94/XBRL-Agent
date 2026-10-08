@@ -34,6 +34,14 @@ export function announceRunTabChange(key: RunTabKey): void {
   window.dispatchEvent(new CustomEvent<RunTabKey>(RUN_TAB_CHANGE_EVENT, { detail: key }));
 }
 
+/** Correct the visible section without adding a browser Back step. */
+export function replaceRunTabInUrl(key: RunTabKey): void {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  url.searchParams.set("tab", key);
+  window.history.replaceState(window.history.state, "", url);
+}
+
 export function writeRunTabToUrl(key: RunTabKey): void {
   if (typeof window === "undefined") return;
   const url = new URL(window.location.href);
