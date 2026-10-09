@@ -32,6 +32,7 @@ describe("XBRL design system is the production authority", () => {
     expect(designSystem).toContain("Notes appearance keeps Custom colour selected when its colour matches a preset");
     expect(designSystem).toContain("Disable reset confirmation while an appearance save is in progress");
     expect(designSystem).toContain("saved workstream tabs name and control their selected panel through matching ARIA references");
+    expect(designSystem).toContain("wrapping navigation on narrow screens, including the Field labels action");
     expect(designSystem).toContain("Keep unsaved shared edits");
     expect(designSystem).toContain("require confirmation that names the shared scope");
     expect(designSystem).toContain("preserve the connection, access key, team guidance, accounts and existing runs");
@@ -203,6 +204,7 @@ describe("Direction A shell and responsive composition", () => {
     ]) {
       expect(designSystem).toContain(requirement);
     }
+    expect(designSystem).toContain("stack statement format labels above readable full-width dropdowns");
     expect(prototype).toContain("@media (max-width: 1100px)");
     expect(prototype).toContain("@media (max-width: 780px)");
   });

@@ -612,8 +612,11 @@ textarea:focus {
 
 @media (max-width: 760px) {
   .settings-section-layout { grid-template-columns: minmax(0, 1fr) !important; gap: 24px !important; }
-  .settings-section-layout > [role="tablist"] { flex-direction: row !important; flex-wrap: wrap; }
-  .settings-section-layout > [role="tablist"] > button { width: auto !important; }
+  .settings-section-rail { flex-direction: row !important; flex-wrap: wrap; }
+  .settings-section-rail > [role="tablist"] { flex-direction: row !important; flex-wrap: wrap; }
+  .settings-section-rail button { width: auto !important; }
+  .statement-format-row { display: grid !important; grid-template-columns: minmax(0, 1fr) 16px; }
+  .statement-format-label { grid-column: 1 / -1; width: auto !important; }
   .notes-appearance-layout {
     grid-template-columns: minmax(0, 1fr) !important;
   }
