@@ -172,7 +172,7 @@ describe("AgentTabs", () => {
     );
 
     expect(screen.queryByRole("group", { name: "Filter workstreams" })).toBeNull();
-    expect(screen.getByText("Run activity")).toBeInTheDocument();
+    expect(screen.queryByText("Run activity")).toBeNull();
     expect(screen.queryByText("1 of 7 complete")).toBeNull();
     expect(onTabClick).not.toHaveBeenCalled();
   });

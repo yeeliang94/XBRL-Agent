@@ -2155,15 +2155,15 @@ test("failed runs without agents or output can export diagnostics and retry a fa
     expect(screen.queryByRole("button", { name: "Export diagnostics" })).toBeNull();
     clickRunTab(/^activity$/i);
     expect(screen.getByRole("button", { name: "Export diagnostics" })).toBeEnabled();
-    expect(screen.getByText(/May contain financial content/)).toBeVisible();
+    // The privacy note is the button's hover text rather than a sentence.
+    expect(screen.getByRole("button", { name: "Export diagnostics" })).toHaveAttribute("title", expect.stringMatching(/May contain financial content/));
     fireEvent.click(screen.getByRole("button", { name: "Export diagnostics" }));
-    const activity = screen.getByTestId("run-detail-agents");
-    await waitFor(() => expect(within(activity).getByRole("alert")).toBeVisible());
+    await waitFor(() => expect(screen.getByTestId("diagnostics-error")).toBeVisible());
     expect(screen.getByRole("button", { name: "Export diagnostics" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Export diagnostics" }));
     await waitFor(() => expect(save).toHaveBeenCalledOnce());
     expect(exportRequests).toBe(2);
-    expect(within(activity).queryByRole("alert")).toBeNull();
+    expect(screen.queryByTestId("diagnostics-error")).toBeNull();
   } finally {
     cleanup();
     fetchMock.mockRestore();
