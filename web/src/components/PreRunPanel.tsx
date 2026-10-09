@@ -152,7 +152,6 @@ const styles = {
   } as React.CSSProperties,
   runButton: {
     ...ui.buttonPrimary,
-    ...ui.buttonLg,
     alignSelf: "flex-end" as const,
   } as React.CSSProperties,
   loadingText: {

@@ -427,7 +427,7 @@ export function ExtractPage({
 
       {/* The upload surface stays mounted while a document is being set up. */}
       {!state.isRunning && !state.isComplete && (
-        <div id="new-extraction">
+        <div id="new-extraction" style={state.filename ? { display: "none" } : undefined}>
           <UploadPanel
             onUpload={handleUpload}
             onUploadFiles={handleUploadFiles}
@@ -1170,12 +1170,13 @@ const styles = {
   // powers `rerunBtn`. Spread base + variant inline at use sites.
   toolbarBtnBase: {
     fontFamily: pwc.fontHeading,
-    fontSize: 12,
+    fontSize: 14,
     fontWeight: 500,
-    borderRadius: pwc.radius.sm,
-    padding: `2px ${pwc.space.sm}px`,
+    borderRadius: pwc.radius.md,
+    minHeight: 40,
+    padding: "0 12px",
     cursor: "pointer",
-    lineHeight: 1.4,
+    lineHeight: 1.2,
   } as const,
   destructiveBtn: {
     color: pwc.error,

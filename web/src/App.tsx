@@ -21,6 +21,7 @@ import { SuccessToast } from "./components/SuccessToast";
 import { Icon, SettingsIcon } from "./components/icons";
 import { ArrowBack, ArrowForward, LeftPanelClose, LeftPanelOpen, Logout } from "./components/iconGlyphs";
 import { StatusIcon } from "./components/StatusIcon";
+import { STATUS_SYMBOLS } from "./lib/runStatus";
 import { DocumentsPage, useDocuments, documentStageLabel, documentStageSymbol } from "./pages/DocumentsPage";
 import { HistoryPage } from "./pages/HistoryPage";
 import { ExtractPage } from "./pages/ExtractPage";
@@ -770,7 +771,9 @@ export default function App() {
               className={`${uiClass.btnQuiet} app-navigation-link`}
               style={{ ...ui.navLink, ...(active ? ui.navLinkActive : {}), flexShrink: 0, minWidth: 0 }}>
               <span style={{ display: "inline-flex", width: 20, justifyContent: "center", flexShrink: 0 }}>
-                <StatusIcon symbol={documentStageSymbol(run)} size={18} />
+                {/* A placeholder entry (not in the polled list) has no known
+                    stage, so it shows the neutral icon rather than a spinner. */}
+                <StatusIcon symbol={stage ? documentStageSymbol(run) : STATUS_SYMBOLS.inactive} size={18} />
               </span>
               <span className="app-navigation-label" style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{run.pdf_filename}</span>
             </button>;
