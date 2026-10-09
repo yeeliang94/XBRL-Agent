@@ -52,8 +52,6 @@ const styles = {
     flexDirection: "column" as const,
     gap: 0,
     padding: 0,
-    overflowY: "auto" as const,
-    maxHeight: 500,
   } as React.CSSProperties,
   empty: {
     padding: `${pwc.space.xxl}px ${pwc.space.lg}px`,

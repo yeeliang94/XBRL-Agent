@@ -294,11 +294,12 @@ describe("ExtractPage — render-gate regression guards", () => {
     expect(screen.getByRole("tabpanel", { name: /SOFP activity/i })).toBeInTheDocument();
     expect(screen.getByText("Selected extraction · 0/2 complete")).toBeInTheDocument();
     expect(screen.queryByText(/leave this page/i)).toBeNull();
-    const usage = container.querySelector("details") as HTMLDetailsElement;
-    expect(usage.open).toBe(false);
-    expect(usage.querySelector("summary")?.textContent).toContain("Technical usage details");
-    expect(usage.querySelector("summary")?.textContent).toContain("$0.0123");
-    expect(usage.querySelector("summary [aria-hidden='true']")).toBeInTheDocument();
+    // One activity panel: usage sits behind its Technical detail checkbox
+    // instead of a second disclosure below the stream.
+    expect(container.querySelector("details")).toBeNull();
+    expect(screen.queryByTestId("activity-technical")).toBeNull();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Technical detail" }));
+    expect(screen.getByTestId("activity-technical")).toHaveTextContent("$0.0123");
   });
 
   test("run startup names the wait without claiming to be finalising", () => {

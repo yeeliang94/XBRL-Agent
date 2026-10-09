@@ -9,6 +9,7 @@ import type { ConceptRow } from "../pages/ConceptsPage";
 import { runStatusDisplay, agentStatusDisplay, STATUS_SYMBOLS } from "../lib/runStatus";
 import { errorGuidance } from "../lib/errorGuidance";
 import { StatusIcon } from "./StatusIcon";
+import { ArrowForward } from "./iconGlyphs";
 import type { RunStatusDisplay } from "../lib/runStatus";
 import type { RunDetailJson, RunAgentJson, CrossCheckResult } from "../lib/types";
 import { STATEMENT_LABELS, STATEMENT_TYPES, NOTES_TEMPLATE_TYPES } from "../lib/types";
@@ -386,10 +387,12 @@ function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, re
           <span>{formatAgentDuration(agent)}</span>
         </div>
       </div>
-      <div style={styles.agentSummary}>
-        <strong>{agent.status === "cancelled" || agent.status === "aborted" ? "Workstream stopped" : updates[0] ?? agentStatusDisplay(agent.status).label}</strong>
-        {(sourceReference || agent.statement_type !== "NOTES_FORMATTING") && <span>{sourceReference ?? "No source page was recorded for this activity."}</span>}
-      </div>
+      {/* Only what the status badge doesn't already say: the latest update
+          and its source pages, when recorded. */}
+      {(updates[0] || sourceReference || agent.status === "cancelled" || agent.status === "aborted") && <div style={styles.agentSummary}>
+        {(updates[0] || agent.status === "cancelled" || agent.status === "aborted") && <span>{agent.status === "cancelled" || agent.status === "aborted" ? "Workstream stopped" : updates[0]}</span>}
+        {sourceReference && <span>{sourceReference}</span>}
+      </div>}
       {agent.error_message && (agent.statement_type !== "CORRECTION" || agent.error_message !== updates[0]) && (
         <div data-testid="agent-error-message" style={styles.agentErrorMessage}>
           <strong>Terminal detail</strong>
@@ -410,21 +413,9 @@ function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, re
       {showSubTabs && <NotesSubTabBar subAgents={subAgents} activeSubId={notes12SubId} onSelect={setNotes12SubId} />}
       <ActivityStream events={events} toolTimeline={toolTimeline} reasoningBlocks={[]}
         isRunning={agent.status === "running"} status={savedAgentStatus(agent.status)}
-        recorded={agent.status !== "running"} streamKey={`${agent.id}:${notes12SubId ?? "all"}`} />
-      <details
-        style={styles.agentTechnicalDetails}
-        open={technicalOpen}
-      >
-        <summary
-          style={styles.perfSummary}
-          onClick={(event) => {
-            event.preventDefault();
-            setTechnicalOpen((open) => !open);
-          }}
-        >
-          Technical activity
-        </summary>
-        {technicalOpen ? <div style={styles.agentBody}>
+        recorded={agent.status !== "running"} streamKey={`${agent.id}:${notes12SubId ?? "all"}`}
+        onTechnicalChange={setTechnicalOpen}
+        technical={technicalOpen ? <div style={styles.agentBody}>
           <div style={styles.agentMetaRow}>
             <span>{displayModelId(agent.model)}</span>
             {agent.token_breakdown && (
@@ -441,8 +432,7 @@ function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, re
             reasoningBlocks={reasoningBlocks}
             isRunning={false}
           />
-        </div> : null}
-      </details>
+        </div> : <span />} />
     </article>
   );
 }
@@ -699,7 +689,6 @@ export function RunDetailView({
   // A flagged workbook remains available to expert users for investigation,
   // but the action is explicitly a draft download and confirms the filing
   // risk at action time. This is not persistent review sign-off.
-  const [confirmDraftDownload, setConfirmDraftDownload] = useState(false);
   const [restartPending, setRestartPending] = useState(false);
   const [notesAuditOpen, setNotesAuditOpen] = useState(false);
   const [crossChecks, setCrossChecks] = useState<RunDetailJson["cross_checks"]>(
@@ -997,7 +986,7 @@ export function RunDetailView({
         {String(savedStandard).toUpperCase()} filings are no longer supported.
         This saved run cannot be rerun or used to prepare a filing workbook.
       </p>}
-      <header style={reviewWorkspaceActive ? styles.reviewContextHeader : styles.header}>
+      <header style={styles.header}>
         <div style={styles.headerText}>
           <h1 style={styles.filename}>
             {detail.pdf_filename}
@@ -1025,7 +1014,7 @@ export function RunDetailView({
           ) : null}
           {!isDraft && <button
             type="button"
-            onClick={() => isInvestigationOutcome ? setConfirmDraftDownload(true) : setMtoolOpen(true)}
+            onClick={() => setMtoolOpen(true)}
             disabled={!canFillMtool || notesPreparationBlocked}
             className={isInvestigationOutcome ? uiClass.btnSecondary : uiClass.btnPrimary}
             style={isInvestigationOutcome ? ui.buttonSecondary : ui.buttonPrimary}
@@ -1184,7 +1173,13 @@ export function RunDetailView({
       )}
 
 
-      <MtoolFillModal runId={detail.id} open={mtoolOpen} onClose={() => setMtoolOpen(false)} />
+      <MtoolFillModal runId={detail.id} open={mtoolOpen} onClose={() => setMtoolOpen(false)}
+        notice={!isInvestigationOutcome ? undefined
+          : isFailed || isAborted
+            ? "This run did not finish normally. The draft uses the saved figures and is for investigation only, not for filing."
+            : failingChecks.length > 0
+              ? `${failingChecks.length} check${failingChecks.length === 1 ? " is" : "s are"} unresolved. The draft is for review and is not ready to file.`
+              : "This run has items that need review. The draft is not ready to file."} />
       <HumanFileDialog
         runId={detail.id}
         open={humanDialogOpen}
@@ -1197,28 +1192,6 @@ export function RunDetailView({
         }}
       />
 
-      <ConfirmDialog
-        isOpen={confirmDraftDownload}
-        title={isFailed || isAborted ? "Prepare investigation draft?" : "Prepare mTool draft for review?"}
-        message={
-          <>
-            {isFailed || isAborted ? (
-              <>This run did not finish normally. Next, choose an mTool template to fill with the saved figures. The resulting draft is for investigation only; it is not ready to file.</>
-            ) : (
-              failingChecks.length > 0
-                ? <>This run has <strong>{failingChecks.length} unresolved check{failingChecks.length === 1 ? "" : "s"}</strong>. Next, choose an mTool template to prepare a draft for review; it is not ready to file.</>
-                : <>This run finished with items that need review. Next, choose an mTool template to prepare a draft for review; it is not ready to file.</>
-            )}
-          </>
-        }
-        confirmLabel="Choose mTool template"
-        danger={false}
-        onConfirm={() => {
-          setConfirmDraftDownload(false);
-          setMtoolOpen(true);
-        }}
-        onCancel={() => setConfirmDraftDownload(false)}
-      />
 
       <ConfirmDialog
         isOpen={confirmAbort}
@@ -1325,23 +1298,24 @@ export function RunDetailView({
             hasFigureStatements && (
             <div style={styles.verificationPrompt}>
               <span>Verify extracted figures against the source PDF before filing.</span>
-              <button type="button" onClick={() => selectTab("values")} className={uiClass.btnSecondary} style={{ ...ui.buttonSecondary, ...ui.buttonSm }}>
-                Review figures
+              <button type="button" onClick={() => selectTab("values")} className={uiClass.btnQuiet} style={{ ...ui.buttonQuiet, marginRight: -15 }}>
+                Review figures<ArrowForward size={16} />
               </button>
             </div>
           )}
           {reviewItemCount > 0 && (
             <div style={styles.itemsToCheck} data-testid="items-to-check">
               <span style={styles.itemToCheck}>
+                <StatusIcon symbol={STATUS_SYMBOLS.attention} />
                 {reviewItemMessage}
               </span>
               <button
                 type="button"
                 onClick={() => selectTab(issueTab)}
-                className={uiClass.btnSecondary}
-                style={{ ...ui.buttonSecondary, ...ui.buttonSm }}
+                className={uiClass.btnQuiet}
+                style={{ ...ui.buttonQuiet, marginRight: -15 }}
               >
-                {issueTab === "checks" ? "View cross-checks" : "View activity"}
+                {issueTab === "checks" ? "View cross-checks" : "View activity"}<ArrowForward size={16} />
               </button>
             </div>
           )}
@@ -1364,14 +1338,13 @@ export function RunDetailView({
           </details>
           {!isDraft && (
             <section aria-label="Run actions" style={styles.runActions}>
-              <span style={ui.fieldLabel}>Run actions</span>
               <div style={styles.runActionButtons}>
                 {onRestart && !isRunning && <button
                   type="button"
                   onClick={handleRestart}
                   disabled={restartPending || unsupportedStandard}
-                  className={uiClass.btnQuiet}
-                  style={ui.buttonQuiet}
+                  className={uiClass.btnSecondary}
+                  style={ui.buttonSecondary}
                   title="Create a new editable run with the same document and settings"
                 >
                   {restartPending ? "Creating redo…" : "Redo run"}
@@ -1469,7 +1442,7 @@ export function RunDetailView({
         <section style={styles.section} role="tabpanel">
           <div style={styles.recheckBar}>
             <span data-testid="recheck-summary" role="status" aria-live="polite" style={styles.recheckSummary}>
-              {recheck.summary}
+              {recheck.summary || crossCheckOutcome(crossChecks)}
             </span>
             <button
               type="button"
@@ -1581,6 +1554,16 @@ function LiveRunSummary({ agents, onViewActivity }: { agents: RunAgentJson[]; on
   );
 }
 
+/** One plain-language line for the cross-check outcome, e.g. "1 failed · 4 passed". */
+function crossCheckOutcome(checks: RunDetailJson["cross_checks"]): string {
+  const counts: [string, number][] = [
+    ["failed", checks.filter((row) => row.status === "failed").length],
+    ["passed", checks.filter((row) => row.status === "passed").length],
+    ["blocked", checks.filter((row) => row.status === "blocked").length],
+  ];
+  return counts.filter(([, n]) => n > 0).map(([label, n]) => `${n} ${label}`).join(" · ");
+}
+
 function MetricTile({
   label,
   value,
@@ -1596,10 +1579,10 @@ function MetricTile({
     tone === "success" ? pwc.successText : tone === "warning" ? pwc.warningText : undefined;
   return (
     <div style={styles.metricTile}>
+      <div style={styles.metricLabel}>{label}</div>
       <div style={{ ...styles.metricValue, ...(secondary ? styles.metricValueSecondary : {}), ...(accent ? { color: accent } : {}) }}>
         {value}
       </div>
-      <div style={styles.metricLabel}>{label}</div>
     </div>
   );
 }
@@ -1621,33 +1604,29 @@ const styles = {
     overflowX: "auto" as const,
     maxWidth: "100%",
   } as React.CSSProperties,
+  // Outcome on the left, the one action on the right, above the checks.
   recheckBar: {
     display: "flex",
-    justifyContent: "flex-end",
+    justifyContent: "space-between",
     alignItems: "center",
     gap: pwc.space.md,
     minHeight: 40,
   } as React.CSSProperties,
   recheckSummary: {
-    color: pwc.grey700,
-    fontSize: 12,
+    color: pwc.grey900,
+    fontSize: 14,
   } as React.CSSProperties,
+  // One header geometry on every run tab so the title and the tab bar never
+  // move when the reviewer switches sections.
   header: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "flex-end",
-    gap: pwc.space.lg,
-    flexWrap: "wrap" as const,
-    paddingBottom: pwc.space.lg,
-    borderBottom: "none",
-  } as React.CSSProperties,
-  reviewContextHeader: {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
     gap: pwc.space.lg,
     flexWrap: "wrap" as const,
     minHeight: 44,
+    paddingBottom: pwc.space.sm,
+    borderBottom: "none",
   } as React.CSSProperties,
   headerText: {
     minWidth: 0,
@@ -1746,7 +1725,7 @@ const styles = {
     flexWrap: "wrap" as const,
     gap: pwc.space.md,
     marginTop: pwc.space.xl,
-    paddingTop: pwc.space.md,
+    paddingTop: pwc.space.xl,
     borderTop: `1px solid ${pwc.grey100}`,
   } as React.CSSProperties,
   runActionButtons: {
@@ -1794,32 +1773,28 @@ const styles = {
   } as React.CSSProperties,
   metricStrip: {
     display: "flex",
-    gap: pwc.space.md,
+    gap: pwc.space.xxxl,
     flexWrap: "wrap" as const,
-    marginBottom: pwc.space.md,
+    marginBottom: pwc.space.lg,
   } as React.CSSProperties,
+  // Label above value, matching the work-queue counts.
   metricTile: {
-    ...ui.statTile,
     display: "flex",
     flexDirection: "column" as const,
-    gap: 2,
+    gap: pwc.space.xs,
+    minWidth: 0,
   } as React.CSSProperties,
   metricValue: {
-    fontFamily: pwc.fontHeading,
+    fontFamily: pwc.fontBody,
     fontSize: 16,
     fontWeight: pwc.weight.regular,
     color: pwc.grey900,
     fontVariantNumeric: "tabular-nums" as const,
   } as React.CSSProperties,
-  metricValueSecondary: {
-    fontFamily: pwc.fontBody,
-    fontSize: 14,
-    fontWeight: pwc.weight.regular,
-    color: pwc.grey700,
-  } as React.CSSProperties,
+  metricValueSecondary: {} as React.CSSProperties,
   metricLabel: {
     fontFamily: pwc.fontBody,
-    fontSize: 12,
+    fontSize: 13,
     color: pwc.grey700,
   } as React.CSSProperties,
   section: {
@@ -1884,9 +1859,8 @@ const styles = {
     alignItems: "center",
     justifyContent: "space-between",
     gap: pwc.space.md,
-    borderTop: `1px solid ${pwc.grey100}`,
+    minHeight: 48,
     borderBottom: `1px solid ${pwc.grey100}`,
-    padding: `${pwc.space.md}px 0`,
   } as React.CSSProperties,
   itemsToCheckBody: {
     display: "grid",
@@ -1895,16 +1869,20 @@ const styles = {
   } as React.CSSProperties,
   itemToCheck: {
     margin: 0,
-    color: pwc.grey700,
+    color: pwc.grey900,
     fontFamily: pwc.fontBody,
     fontSize: 14,
+    display: "inline-flex",
+    alignItems: "center",
+    gap: pwc.space.sm,
   } as React.CSSProperties,
   perfSummary: {
     cursor: "pointer",
+    minHeight: 40,
     fontFamily: pwc.fontHeading,
     fontSize: 14,
     fontWeight: pwc.weight.medium,
-    color: pwc.grey700,
+    color: pwc.grey900,
   } as React.CSSProperties,
   agentDetail: {
     display: "flex",
@@ -2031,10 +2009,12 @@ const styles = {
     justifyContent: "space-between",
     gap: pwc.space.md,
     flexWrap: "wrap" as const,
-    marginTop: pwc.space.lg,
+    minHeight: 48,
+    borderTop: `1px solid ${pwc.grey100}`,
+    borderBottom: `1px solid ${pwc.grey100}`,
     fontFamily: pwc.fontBody,
     fontSize: 14,
-    color: pwc.grey700,
+    color: pwc.grey900,
   } as React.CSSProperties,
   agentTokens: {
     marginLeft: "auto",

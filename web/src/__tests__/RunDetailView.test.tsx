@@ -529,7 +529,7 @@ describe("RunDetailView", () => {
     clickRunTab(/^activity$/i);
     const detail = screen.getByTestId("run-detail-agent");
     expect(within(detail).queryByText(/2 turns/)).toBeNull();
-    fireEvent.click(within(detail).getByText("Technical activity"));
+    fireEvent.click(within(detail).getByRole("checkbox", { name: "Technical detail" }));
     expect(within(detail).getByText(/2 turns/)).toBeInTheDocument();
   });
 
@@ -894,12 +894,11 @@ describe("RunDetailView", () => {
     expect(panel).toHaveAttribute("aria-labelledby", selected.id);
     expect(panel).toHaveAccessibleName();
     expect(screen.getAllByTestId("run-detail-agent")).toHaveLength(1);
-    const technicalActivity = screen.getByText("Technical activity").closest("details");
-    expect(technicalActivity).not.toHaveAttribute("open");
-    expect(within(technicalActivity!).queryByTestId("tool-card")).toBeNull();
-    fireEvent.click(screen.getByText("Technical activity"));
-    expect(technicalActivity).toHaveAttribute("open");
-    expect(within(technicalActivity!).getByTestId("tool-card")).toBeInTheDocument();
+    // One panel: the plain stream by default, tool cards behind the checkbox.
+    expect(screen.queryByTestId("tool-card")).toBeNull();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Technical detail" }));
+    expect(within(screen.getByTestId("activity-technical")).getByTestId("tool-card")).toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Activity updates" })).toBeNull();
     fireEvent.click(activityRows()[1]);
     const nextTab = activityRows()[1];
     const nextPanel = screen.getByTestId("run-detail-agent");
@@ -969,7 +968,7 @@ describe("RunDetailView", () => {
       />,
     );
     clickRunTab(/^activity$/i);
-    fireEvent.click(screen.getByText("Technical activity"));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Technical detail" }));
     // AgentTimeline's own empty-state copy — proves the timeline is
     // mounted even when the event list is empty. History runs aren't
     // "running", so the copy reflects no recorded activity rather than the
@@ -1157,7 +1156,7 @@ describe("RunDetailView", () => {
       <RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />,
     );
     clickRunTab(/^activity$/i);
-    fireEvent.click(screen.getByText("Technical activity"));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Technical detail" }));
 
     // Sub-tab bar appears: "All" chip + one chip per sub-agent (2). Scope to
     // the Sheet-12 sub-tab bar so the run-detail top tabs aren't counted.
@@ -1197,7 +1196,7 @@ describe("RunDetailView", () => {
       <RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />,
     );
     clickRunTab(/^activity$/i);
-    fireEvent.click(screen.getByText("Technical activity"));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Technical detail" }));
 
     // No sub-tab bar rendered for this agent.
     expect(screen.queryByRole("tablist", { name: /sheet-12/i })).not.toBeInTheDocument();
@@ -1853,10 +1852,9 @@ describe("RunDetailView", () => {
     expect(screen.queryByText(/partial workbook was preserved/i)).toBeNull();
     expect(screen.getByText(/Saved figures may be incomplete/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Prepare investigation draft" }));
-    const confirmation = screen.getByRole("dialog");
-    expect(confirmation).toHaveTextContent("choose an mTool template to fill with the saved figures");
-    fireEvent.click(within(confirmation).getByRole("button", { name: "Choose mTool template" }));
-    expect(screen.getByRole("dialog", { name: "Prepare mTool draft" })).toBeInTheDocument();
+    // One dialog: the explanation sits at the top of the preparation dialog.
+    const dialog = screen.getByRole("dialog", { name: "Prepare mTool draft" });
+    expect(within(dialog).getByRole("note")).toHaveTextContent("for investigation only");
   });
 
   test("flagged run confirms before downloading an investigation draft", () => {
@@ -1869,11 +1867,9 @@ describe("RunDetailView", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /prepare mtool draft/i }));
-    expect(screen.getByRole("dialog").textContent).toMatch(/not ready to file/i);
+    const dialog = screen.getByRole("dialog", { name: "Prepare mTool draft" });
+    expect(within(dialog).getByRole("note").textContent).toMatch(/not ready to file/i);
     expect(onDownload).not.toHaveBeenCalled();
-    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /^choose mtool template$/i }));
-    expect(onDownload).not.toHaveBeenCalled();
-    expect(screen.getByRole("dialog", { name: "Prepare mTool draft" })).toBeTruthy();
   });
 
   test("clean completed run shows no warning banner and primary workbook preparation", () => {

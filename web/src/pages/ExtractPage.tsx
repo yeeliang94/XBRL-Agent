@@ -602,20 +602,6 @@ export function ExtractPage({
         />
       )}
 
-      {showActivity && (state.isRunning || state.tokens) && (
-        <details style={styles.usageDisclosure}>
-          <summary style={styles.usageSummary}>
-            Technical usage details
-            <span style={styles.usageSummaryEnd}>
-              <span style={styles.usageSummaryValue}>
-                {state.tokens ? `$${state.tokens.cost_estimate.toFixed(4)}` : "Not available yet"}
-              </span>
-              <span aria-hidden="true" style={styles.usageChevron} />
-            </span>
-          </summary>
-          <TokenDashboard tokens={state.tokens} isRunning={state.isRunning} embedded />
-        </details>
-      )}
 
       {!state.isRunning && scaleConflicts.map((message) => (
         <p key={message} role="status" style={styles.partialMergeMessage}>
@@ -999,6 +985,17 @@ export function ActiveTabPanel({
         isRunning={running}
         status={activeAgent?.status}
         streamKey={`${state.activeTab ?? "run"}:${notes12SubId ?? "all"}`}
+        technical={
+          <>
+            <AgentTimeline events={events} toolTimeline={toolTimeline}
+              reasoningBlocks={reasoningBlocks} isRunning={running} />
+            {(state.isRunning || state.tokens) && (
+              <div style={{ marginTop: pwc.space.lg }}>
+                <TokenDashboard tokens={state.tokens} isRunning={state.isRunning} embedded />
+              </div>
+            )}
+          </>
+        }
       />
     </div>
   );
@@ -1103,45 +1100,9 @@ const styles = {
     color: pwc.grey500,
     whiteSpace: "nowrap" as const,
   } as const,
-  usageDisclosure: {
-    marginTop: pwc.space.lg,
-    borderTop: `1px solid ${pwc.grey200}`,
-  } as const,
-  usageSummary: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: pwc.space.md,
-    paddingTop: pwc.space.md,
-    cursor: "pointer",
-    fontFamily: pwc.fontHeading,
-    fontSize: 13,
-    fontWeight: pwc.weight.medium,
-    color: pwc.grey700,
-  } as const,
-  usageSummaryValue: {
-    fontFamily: pwc.fontBody,
-    fontVariantNumeric: "tabular-nums",
-    fontSize: 12,
-    fontWeight: pwc.weight.regular,
-    color: pwc.grey900,
-  } as const,
-  usageSummaryEnd: {
-    marginLeft: "auto",
-    display: "flex",
-    alignItems: "center",
-    gap: pwc.space.sm,
-  } as const,
-  usageChevron: {
-    width: 0,
-    height: 0,
-    borderLeft: "4px solid transparent",
-    borderRight: "4px solid transparent",
-    borderTop: `5px solid ${pwc.grey700}`,
-  } as const,
+  // Not sticky: the activity list grows with the page, and a pinned panel
+  // taller than the window would hide its newest updates.
   activityCardAttached: {
-    position: "sticky",
-    top: 88,
     background: "transparent",
     border: "none",
     borderLeft: `1px solid ${pwc.grey100}`,
