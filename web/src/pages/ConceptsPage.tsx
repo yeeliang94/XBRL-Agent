@@ -1138,7 +1138,7 @@ export function ConceptsPage({
           )))}
         </nav>
       </aside>}
-      <section aria-label="Review results" style={styles.resultsCol}>
+      <section aria-label="Review results" style={{ ...styles.resultsCol, ...(!notesActive && !railFolded ? styles.resultsColDivided : {}) }}>
         {loadError && (
           <div style={styles.errorBanner}>
             Failed to load concepts: {loadError}
@@ -2601,6 +2601,12 @@ const styles = {
     display: "flex",
     flexDirection: "column" as const,
     paddingRight: pwc.space.lg,
+  } as React.CSSProperties,
+  // Same one-pixel Grey 100 rule as the Source PDF divider, so both edges of
+  // the figures table look alike.
+  resultsColDivided: {
+    borderLeft: `1px solid ${pwc.grey100}`,
+    paddingLeft: pwc.space.lg,
   } as React.CSSProperties,
   // Every review column opens with a header band of this height, so the
   // column titles and the Rows filter share one line and the search box,
