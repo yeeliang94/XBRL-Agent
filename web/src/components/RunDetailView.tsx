@@ -6,11 +6,10 @@ import { PdfSourcePane } from "./PdfSourcePane";
 import { parseEvidencePages } from "../lib/evidencePages";
 import { ConceptsPage } from "../pages/ConceptsPage";
 import type { ConceptRow } from "../pages/ConceptsPage";
-import { runStatusDisplay, agentStatusDisplay, STATUS_SYMBOLS } from "../lib/runStatus";
+import { agentStatusDisplay, STATUS_SYMBOLS } from "../lib/runStatus";
 import { errorGuidance } from "../lib/errorGuidance";
 import { StatusIcon } from "./StatusIcon";
 import { ArrowForward } from "./iconGlyphs";
-import type { RunStatusDisplay } from "../lib/runStatus";
 import type { RunDetailJson, RunAgentJson, CrossCheckResult } from "../lib/types";
 import { STATEMENT_LABELS, STATEMENT_TYPES, NOTES_TEMPLATE_TYPES } from "../lib/types";
 import { userMessage } from "../lib/errors";
@@ -27,6 +26,7 @@ import { AgentWorkspace } from "./AgentWorkspace";
 import { notesFormattingActivity, notesCleanupActivity, notesIntegrityActivity } from "../lib/notesFormattingActivity";
 import { ActivityStream } from "./ActivityStream";
 import type { AgentTabState } from "./AgentTabs";
+import { workstreamTitle } from "./AgentTabs";
 import type { AgentTabStatus } from "../lib/types";
 import { AgentTimeline } from "./AgentTimeline";
 import { NotesSubTabBar } from "./NotesSubTabBar";
@@ -45,7 +45,7 @@ import { notesTabLabel } from "../lib/appReducer";
 import { formatAccounting, formatCost } from "../lib/numberFormat";
 import { denominationLabel, pseudoAgentLabel, variantLabel, crossCheckFailureLabel } from "../lib/vocabulary";
 import { isNotes12StatementType } from "../lib/notes";
-import { statementCodeSubtitle, statementCodeOrder, notesSheetDisplayName } from "../lib/sheetLabels";
+import { statementCodeOrder, notesSheetDisplayName } from "../lib/sheetLabels";
 import { describePdfSidecar } from "../lib/pdfSidecar";
 import {
   readRunTabFromUrl,
@@ -90,17 +90,6 @@ export interface RunDetailViewProps {
   initialTab?: RunTabKey;
 }
 
-/** Render a monochrome status label from a precomputed display. Caller picks
- *  runStatusDisplay vs agentStatusDisplay so the right vocabulary is used
- *  in each context (run-level vs per-agent enums differ slightly). */
-function statusBadge(display: RunStatusDisplay) {
-  return (
-    <span style={ui.status}>
-      <StatusIcon symbol={display.symbol} />
-      {display.label}
-    </span>
-  );
-}
 
 /** Render a nested config key/value section in a compact form. */
 function ConfigBlock({
@@ -359,18 +348,9 @@ function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, re
     <article role="tabpanel" id={panelId} aria-labelledby={tabId} data-testid="run-detail-agent" className="pwc-view-enter" style={styles.agentDetail}>
       <div style={styles.agentHeaderButton}>
         <div style={styles.agentTitleRow}>
-          <span style={styles.agentStatement}>{displayName}</span>
-          {/* Plain-English gloss for face-statement codes (UX-QA #12/legend) —
-              "SOFP" alone assumes the reader speaks MBRS shorthand. */}
-          {statementCodeSubtitle(agent.statement_type, filingStandard) && (
-            <span style={styles.agentSubtitle}>
-              {statementCodeSubtitle(agent.statement_type, filingStandard)}
-            </span>
-          )}
-          {agent.variant && (
-            <span style={styles.agentVariant}>({agent.variant})</span>
-          )}
-          {statusBadge(agentStatusDisplay(agent.status))}
+          {/* Same plain-language title as the workstream list; no statement
+              codes or format keys. */}
+          <span style={styles.agentStatement}>{workstreamTitle(agent.statement_type, filingStandard) ?? displayName}</span>
           {onRetry && ["failed", "cancelled", "aborted"].includes(agent.status) &&
             ([...STATEMENT_TYPES, ...NOTES_TEMPLATE_TYPES.map((type) => `NOTES_${type}`)] as string[]).includes(agent.statement_type) &&
             <button type="button" style={ui.buttonSecondary} disabled={retryPending}
@@ -387,21 +367,17 @@ function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, re
             </span>
           )}
         </div>
-        <div style={styles.agentMetaRow}>
-          <span>{formatAgentDuration(agent)}</span>
-        </div>
       </div>
       {/* Only what the status badge doesn't already say: the latest update
           and its source pages, when recorded. */}
-      {(updates[0] || sourceReference || agent.status === "cancelled" || agent.status === "aborted") && <div style={styles.agentSummary}>
-        {(updates[0] || agent.status === "cancelled" || agent.status === "aborted") && <span>{agent.status === "cancelled" || agent.status === "aborted" ? "Workstream stopped" : updates[0]}</span>}
-        {sourceReference && <span>{sourceReference}</span>}
+      {((updates[0] && updates[0] !== "Finished its assigned work") || agent.status === "cancelled" || agent.status === "aborted") && <div style={styles.agentSummary}>
+        <span>{agent.status === "cancelled" || agent.status === "aborted" ? "Workstream stopped" : updates[0]}</span>
       </div>}
       {/* A failure's reason stays visible; for a workstream that finished,
           the recorded detail is technical and sits behind Technical detail. */}
       {showErrorDetail && agentEnded && (
         <div data-testid="agent-error-message" style={styles.agentErrorMessage}>
-          <strong>What went wrong</strong>
+          <span style={styles.agentErrorLabel}>What went wrong</span>
           <span>{agent.error_message}</span>
         </div>
       )}
@@ -422,22 +398,23 @@ function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, re
         recorded={agent.status !== "running"} streamKey={`${agent.id}:${notes12SubId ?? "all"}`}
         onTechnicalChange={setTechnicalOpen}
         technical={technicalOpen ? <div style={styles.agentBody}>
+          <div style={styles.agentMetaRow}>
+            {[
+              formatAgentDuration(agent),
+              sourceReference,
+              displayModelId(agent.model),
+              agent.token_breakdown ? `${agent.token_breakdown.turn_count} turns` : null,
+              agent.token_breakdown ? `${agent.token_breakdown.tool_call_count} tool calls` : null,
+              agent.total_tokens != null ? `${agent.total_tokens.toLocaleString()} tokens` : null,
+              agent.total_cost != null ? formatCost(agent.total_cost) : null,
+            ].filter(Boolean).join(" · ")}
+          </div>
           {showErrorDetail && !agentEnded && (
             <div data-testid="agent-error-message" style={styles.agentErrorMessage}>
-              <strong>Recorded detail</strong>
+              <span style={styles.agentErrorLabel}>Recorded detail</span>
               <span>{agent.error_message}</span>
             </div>
           )}
-          <div style={styles.agentMetaRow}>
-            <span>{displayModelId(agent.model)}</span>
-            {agent.token_breakdown && (
-              <span>{agent.token_breakdown.turn_count} turns · {agent.token_breakdown.tool_call_count} tool calls</span>
-            )}
-            <span style={styles.agentTokens}>
-              {agent.total_tokens != null ? `${agent.total_tokens.toLocaleString()} tokens` : "— tokens"}
-              {agent.total_cost != null ? ` · ${formatCost(agent.total_cost)}` : ""}
-            </span>
-          </div>
           <AgentTimeline
             events={events}
             toolTimeline={toolTimeline}
@@ -1004,7 +981,6 @@ export function RunDetailView({
             {detail.pdf_filename}
           </h1>
           <div style={styles.metaRow}>
-            {statusBadge(runStatusDisplay(detail.status))}
             {!reviewWorkspaceActive && isLegacy && (
               <span style={styles.legacyBadge}
                 title="Some configuration and performance details were not recorded for this older run.">
@@ -1930,14 +1906,13 @@ const styles = {
     fontSize: 14,
     lineHeight: 1.55,
   } as React.CSSProperties,
+  // Plain text under a small label, separated by a divider — no grey box.
   agentErrorMessage: {
     display: "grid",
     gap: 4,
-    padding: `${pwc.space.sm}px ${pwc.space.md}px`,
+    padding: "10px 0",
     color: pwc.grey900,
-    background: pwc.grey50,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.sm,
+    borderTop: `1px solid ${pwc.grey100}`,
     fontSize: 14,
     lineHeight: 1.55,
     whiteSpace: "pre-wrap" as const,
@@ -1981,12 +1956,19 @@ const styles = {
   // Proportional, not monospace (UX-QA #12): the model · turns · duration meta
   // read as a debug log in mono. Numbers here are incidental, not a table to
   // align, so the body font is friendlier for the accountant/PM audience.
+  agentErrorLabel: {
+    fontSize: 13,
+    fontWeight: pwc.weight.medium,
+    color: pwc.grey700,
+  } as React.CSSProperties,
   agentMetaRow: {
     display: "flex",
     alignItems: "center",
+    flexWrap: "wrap" as const,
     gap: pwc.space.md,
+    paddingBottom: pwc.space.sm,
     fontFamily: pwc.fontBody,
-    fontSize: 12,
+    fontSize: 13,
     color: pwc.grey700,
   } as React.CSSProperties,
   liveSummary: {
@@ -2032,9 +2014,6 @@ const styles = {
     fontFamily: pwc.fontBody,
     fontSize: 14,
     color: pwc.grey900,
-  } as React.CSSProperties,
-  agentTokens: {
-    marginLeft: "auto",
   } as React.CSSProperties,
   legacyBadge: {
     ...ui.metadata,

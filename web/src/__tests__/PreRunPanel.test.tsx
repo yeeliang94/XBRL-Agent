@@ -166,11 +166,12 @@ describe("PreRunPanel", () => {
       />,
     );
 
+    // Open sections show just their title; the summary appears when folded.
     const statementToggle = await screen.findByRole("button", {
-      name: /statements to extract 5 of 5 selected/i,
+      name: /^statements to extract$/i,
     });
     const notesToggle = screen.getByRole("button", {
-      name: /notes templates 5 of 5 selected/i,
+      name: /^notes templates$/i,
     });
 
     expect(statementToggle).toHaveAttribute("aria-expanded", "true");
@@ -178,6 +179,7 @@ describe("PreRunPanel", () => {
 
     fireEvent.click(statementToggle);
     expect(statementToggle).toHaveAttribute("aria-expanded", "false");
+    expect(statementToggle).toHaveTextContent("5 of 5 selected");
     expect(screen.queryByRole("region", { name: /statements to extract/i })).not.toBeInTheDocument();
 
     fireEvent.click(notesToggle);
@@ -1648,9 +1650,9 @@ describe("Upload-owned preparation", () => {
       } })} />);
     await screen.findByRole("button", { name: /start extraction/i });
     // Once prepared, the notes list starts folded behind its summary.
+    expect(screen.getByText("All document notes included")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /notes templates/i }));
     fireEvent.click(screen.getByRole("checkbox", { name: /corporate information \(note 10\)/i }));
-    expect(screen.getByText("All document notes included")).toBeInTheDocument();
   });
 
   test("preserves a legacy saved denomination without selection metadata", async () => {

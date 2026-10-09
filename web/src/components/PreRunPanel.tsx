@@ -111,10 +111,11 @@ const styles = {
   disclosureButton: {
     display: "flex",
     alignItems: "center",
-    justifyContent: "space-between",
-    gap: pwc.space.md,
+    justifyContent: "flex-start",
+    gap: pwc.space.sm,
     width: "100%",
-    padding: `0 0 ${pwc.space.sm}px`,
+    minHeight: 40,
+    padding: 0,
     background: "transparent",
     border: "none",
     cursor: "pointer",
@@ -221,11 +222,9 @@ function DisclosureSection({
         aria-controls={id}
         style={styles.disclosureButton}
       >
+        <span style={styles.disclosureTitle}>{title}</span>
         <DisclosureChevron open={open} />
-        <span style={{ display: "flex", flexDirection: "column", gap: pwc.space.xs, flex: 1, textAlign: "left" }}>
-          <span style={styles.disclosureTitle}>{title}</span>
-          <span style={styles.disclosureSummary}>{summary}</span>
-        </span>
+        {!open && <span style={styles.disclosureSummary}>{summary}</span>}
       </button>
       <div
         id={id}
