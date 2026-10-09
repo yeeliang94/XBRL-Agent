@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { pwc, tokens } from "../lib/theme";
+import { pwc } from "../lib/theme";
 import { ui, uiClass } from "../lib/uiStyles";
 import { STATUS_SYMBOLS } from "../lib/runStatus";
 import { StatusIcon } from "./StatusIcon";
@@ -396,7 +396,6 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
       <section aria-label="AI review outcome" style={styles.outcomeCard}>
         <div style={styles.headerRow}>
           <div>
-            <div style={styles.outcomeEyebrow}>AI review outcome</div>
             <h2 style={styles.outcomeTitle}>
               {data.has_reviewer_version ? "Review completed" : "Original extraction retained"}
             </h2>
@@ -407,14 +406,15 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
               </span>
             ) : (
               <span style={styles.dim} data-testid="no-reviewer-version">
-                The reviewer made no supported changes to the extracted figures.
+                No figures changed.
               </span>
             )}
           </div>
           {data.has_reviewer_version && (
             <button
               type="button"
-              style={styles.revertBtn}
+              className={uiClass.btnSecondary}
+              style={ui.buttonSecondary}
               onClick={() => setConfirmRevert(true)}
               disabled={busy !== null}
             >
@@ -422,34 +422,18 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
             </button>
           )}
         </div>
-        <div style={styles.impactGrid}>
-          <div style={styles.impactItem}>
-            <strong style={styles.impactValue}>{impactLabel(reviewerDiff.length, "source correction")}</strong>
-            <span style={styles.impactHelp}>Figures changed by the AI reviewer</span>
-          </div>
-          <div style={styles.impactItem}>
-            <strong style={styles.impactValue}>{impactLabel(userDiff.length, "human edit")}</strong>
-            <span style={styles.impactHelp}>Figures changed in the review workspace</span>
-          </div>
-          <div style={styles.impactItem}>
-            <strong style={styles.impactValue}>{impactLabel(cascadeDiff.length, "recalculated total")}</strong>
-            <span style={styles.impactHelp}>Formula-driven follow-on updates</span>
-          </div>
-          <div style={styles.impactItem}>
-            <strong style={openFlags.length > 0 ? styles.impactAttention : styles.impactValue}>
-              {openFlags.length > 0
-                ? impactLabel(openFlags.length, "decision needed", "decisions needed")
-                : "All reviewer decisions resolved"}
-            </strong>
-            <span style={styles.impactHelp}>Items still requiring human judgement</span>
-          </div>
-          {otherDiff.length > 0 && (
-            <div style={styles.impactItem}>
-              <strong style={styles.impactValue}>{impactLabel(otherDiff.length, "other change")}</strong>
-              <span style={styles.impactHelp}>Changes with no reviewer or user attribution</span>
-            </div>
-          )}
-        </div>
+        {/* One line: only the counts that are not zero, plus open decisions. */}
+        <p style={styles.impactLine}>
+          {[
+            reviewerDiff.length > 0 && <span key="reviewer">{impactLabel(reviewerDiff.length, "source correction")}</span>,
+            userDiff.length > 0 && <span key="user">{impactLabel(userDiff.length, "human edit")}</span>,
+            cascadeDiff.length > 0 && <span key="cascade">{impactLabel(cascadeDiff.length, "recalculated total")}</span>,
+            otherDiff.length > 0 && <span key="other">{impactLabel(otherDiff.length, "other change")}</span>,
+            openFlags.length > 0
+              ? <span key="flags" style={styles.impactAttention}><StatusIcon symbol={STATUS_SYMBOLS.attention} />{impactLabel(openFlags.length, "decision needed", "decisions needed")}</span>
+              : data.flags.length > 0 && <span key="flags">All reviewer decisions resolved</span>,
+          ].filter(Boolean).flatMap((item, index) => index === 0 ? [item] : [<span key={`sep-${index}`} aria-hidden="true"> · </span>, item])}
+        </p>
       </section>
 
       <ConfirmDialog
@@ -537,25 +521,19 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
           {data.flags.map((f) => (
             <div key={f.id} style={styles.flagCard} data-testid={`flag-${f.id}`}>
               <div style={styles.flagHead}>
-                <span
-                  style={f.category === "disputes_prior" ? styles.disputeChip : styles.stuckChip}
-                >
-                  <span
-                    aria-hidden="true"
-                    style={ui.badgeDot(
-                      f.category === "disputes_prior" ? pwc.error : pwc.warning,
-                    )}
-                  />
-                  {flagKindLabel(f.category)}
+                <span style={ui.status}>
+                  <StatusIcon symbol={f.status === "open" ? STATUS_SYMBOLS.attention : STATUS_SYMBOLS.success} />
+                  {f.status === "open" ? flagKindLabel(f.category) : humanize(f.status)}
                 </span>
-                <span style={styles.dim}>{f.status === "open" ? "Needs your decision" : humanize(f.status)}</span>
                 {f.target_sheet && f.target_row != null && onSelectTarget && (
                   <button
                     type="button"
-                    style={styles.linkBtn}
+                    className={uiClass.btnQuiet}
+                    style={{ ...ui.buttonQuiet, marginLeft: "auto", marginRight: -15 }}
+                    title={`${f.target_sheet} row ${f.target_row}`}
                     onClick={() => onSelectTarget(f.target_sheet as string, f.target_row as number)}
                   >
-                    {f.target_sheet} row {f.target_row}
+                    Open in Figures
                   </button>
                 )}
               </div>
@@ -584,7 +562,8 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
                   />
                   <button
                     type="button"
-                    style={styles.smallBtn}
+                    className={uiClass.btnPrimary}
+                    style={ui.buttonPrimary}
                     onClick={() => answerFlag(f.id)}
                     disabled={!(answers[f.id] || "").trim()}
                   >
@@ -599,15 +578,12 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
       )}
 
       {/* Guidance + re-review */}
-      <section style={styles.rerunDetails}>
-        <h3 style={styles.rerunSummary}>Run AI review again</h3>
+      <details style={styles.rerunDetails}>
+        <summary style={styles.rerunSummary}>Run AI review again</summary>
         <div style={styles.rerunBody}>
-          <p style={{ ...styles.dim, margin: `0 0 ${pwc.space.md}px` }}>
-            Recheck open issues against the PDF and optionally give the reviewer extra guidance.
-          </p>
           <textarea
             style={styles.guidanceBox}
-            placeholder="Optional guidance for the next pass (e.g. 'the PPE note is on page 44')…"
+            placeholder="Guidance (optional), e.g. the PPE note is on page 44"
             value={guidance}
             onChange={(e) => setGuidance(e.target.value)}
             aria-label="Re-review guidance"
@@ -638,7 +614,7 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
               onClick={reReview}
               disabled={busy !== null}
             >
-              {busy === "review" ? "Reviewing…" : "Run AI review again"}
+              {busy === "review" ? "Reviewing…" : "Run again"}
             </button>
           </div>
           {busy === "review" && (
@@ -648,7 +624,7 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
             </p>
           )}
         </div>
-      </section>
+      </details>
     </div>
   );
 }
@@ -656,18 +632,20 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
 const styles = {
   dim: { color: pwc.grey500, fontSize: 14 },
   error: { color: pwc.errorText, fontSize: 14 },
+  // Flat: no bordered card around the outcome.
   outcomeCard: {
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.md,
-    padding: pwc.space.lg,
-    background: pwc.white,
+    paddingBottom: pwc.space.lg,
+    borderBottom: `1px solid ${pwc.grey100}`,
   } as const,
-  outcomeEyebrow: {
-    fontFamily: pwc.fontHeading,
-    fontSize: 12,
-    fontWeight: 500,
-    color: tokens.color.text.secondary,
-    marginBottom: 2,
+  impactLine: {
+    margin: `${pwc.space.md}px 0 0`,
+    fontFamily: pwc.fontBody,
+    fontSize: 14,
+    color: pwc.grey900,
+    display: "flex",
+    flexWrap: "wrap" as const,
+    alignItems: "center",
+    gap: 4,
   } as const,
   outcomeTitle: {
     fontFamily: pwc.fontHeading,
@@ -677,35 +655,11 @@ const styles = {
     color: pwc.grey900,
     margin: `0 0 ${pwc.space.xs}px`,
   } as const,
-  impactGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-    gap: pwc.space.sm,
-    marginTop: pwc.space.lg,
-    paddingTop: pwc.space.md,
-    borderTop: `1px solid ${pwc.grey100}`,
-  } as const,
-  impactItem: {
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: 2,
-  } as const,
-  impactValue: {
-    fontFamily: pwc.fontHeading,
-    fontSize: 14,
-    fontWeight: 400,
-    color: pwc.grey900,
-  } as const,
   impactAttention: {
-    fontFamily: pwc.fontHeading,
-    fontSize: 14,
-    fontWeight: 500,
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
     color: pwc.warningText,
-  } as const,
-  impactHelp: {
-    fontFamily: pwc.fontBody,
-    fontSize: 14,
-    color: pwc.grey500,
   } as const,
   notice: {
     ...ui.alertInfo,
@@ -796,24 +750,14 @@ const styles = {
   } as const,
   flagStack: { display: "flex", flexDirection: "column" as const, gap: pwc.space.sm },
   flagCard: {
-    border: "none",
-    borderRadius: 0,
-    padding: pwc.space.md,
-    background: pwc.grey50,
+    padding: `${pwc.space.md}px 0`,
+    borderBottom: `1px solid ${pwc.grey100}`,
   } as const,
   flagHead: {
     display: "flex",
     alignItems: "center",
     gap: pwc.space.sm,
     marginBottom: pwc.space.xs,
-  } as const,
-  stuckChip: {
-    ...ui.badge,
-    borderColor: pwc.warning,
-  } as const,
-  disputeChip: {
-    ...ui.badge,
-    borderColor: pwc.error,
   } as const,
   flagReason: { color: pwc.grey800, fontSize: 14, margin: `${pwc.space.xs}px 0` },
   cascadeDetails: {
@@ -846,13 +790,8 @@ const styles = {
   answerGiven: { color: pwc.successText, fontSize: 14, margin: 0 },
   answerRow: { display: "flex", gap: pwc.space.sm, alignItems: "flex-start" },
   answerBox: {
+    ...ui.textarea,
     flex: 1,
-    minHeight: 48,
-    border: `1px solid ${pwc.grey200}`,
-    borderRadius: pwc.radius.sm,
-    padding: pwc.space.sm,
-    fontFamily: pwc.fontBody,
-    fontSize: 14,
   } as const,
   guidanceBox: {
     ...ui.textarea,
@@ -860,12 +799,14 @@ const styles = {
     marginBottom: pwc.space.lg,
   } as const,
   rerunDetails: {
-    marginTop: pwc.space.xxl,
-    borderTop: `1px solid ${pwc.grey200}`,
-    paddingTop: pwc.space.xl,
+    marginTop: pwc.space.xl,
   } as const,
   rerunSummary: {
-    ...ui.sectionTitle,
+    fontFamily: pwc.fontHeading,
+    fontSize: 14,
+    fontWeight: pwc.weight.medium,
+    color: pwc.grey900,
+    minHeight: 40,
   } as const,
   rerunBody: {
     paddingTop: pwc.space.sm,
@@ -876,21 +817,5 @@ const styles = {
   // PLAN-design-qa-fixes.md C1).
   reviewBtn: {
     ...ui.buttonSecondary,
-    minHeight: 44,
-  } as const,
-  revertBtn: {
-    background: "#fff",
-    color: pwc.errorText,
-    border: `1px solid ${pwc.errorBorder}`,
-    borderRadius: pwc.radius.md,
-    padding: `${pwc.space.xs}px ${pwc.space.md}px`,
-    fontWeight: 500,
-    cursor: "pointer",
-  } as const,
-  smallBtn: {
-    ...ui.buttonSecondary,
-    borderRadius: pwc.radius.sm,
-    padding: `${pwc.space.xs}px ${pwc.space.md}px`,
-    fontSize: 14,
   } as const,
 };

@@ -92,7 +92,6 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
 
   return (
     <div style={embedded ? styles.embeddedContainer : styles.container}>
-      {!embedded && <h3 style={styles.heading}>Cross-check results</h3>}
       {partial && (
         <p style={{ fontFamily: pwc.fontBody, fontSize: 14, color: pwc.warningText, margin: `0 0 ${pwc.space.md}px 0` }}>
           Group filing: cross-checks currently validate consolidated (Group) figures only. Standalone (Company) columns are not yet checked.
@@ -112,7 +111,7 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
               <div style={styles.checkHeader}>
                 <h4 style={styles.checkTitle}><span title={check.name}>{label}</span></h4>
                 <span style={ui.status}><StatusIcon symbol={display.symbol} />{display.label}</span>
-                {target && <button type="button" style={{ ...ui.buttonQuiet, ...ui.buttonSm }} onClick={() => onSelectTarget!(check.target_sheet!, check.target_row!)}>Review figures</button>}
+                {target && <button type="button" className="pwc-btn-quiet" style={{ ...ui.buttonQuiet, marginRight: -15 }} onClick={() => onSelectTarget!(check.target_sheet!, check.target_row!)}>Review figures</button>}
               </div>
               {hasValues ? (
                 <div role="region" aria-label={`${label} compared figures`} tabIndex={0} style={styles.tableRegion}>
@@ -169,25 +168,13 @@ export function ValidatorTab({ crossChecks, partial, onSelectTarget, embedded = 
 // ---------------------------------------------------------------------------
 
 const styles = {
+  // Flat: checks are separated by dividers, never cards inside a panel.
   container: {
     overflowX: "auto",
-    background: pwc.white,
-    borderRadius: `0 0 ${pwc.radius.md}px ${pwc.radius.md}px`,
-    border: `1px solid ${pwc.grey200}`,
-    borderTop: "none",
-    boxShadow: pwc.shadow.card,
-    padding: pwc.space.lg,
   } as React.CSSProperties,
   // Embedded: no card chrome (the host CollapsiblePanel provides it).
   embeddedContainer: {
     overflowX: "auto",
-  } as React.CSSProperties,
-  heading: {
-    fontFamily: pwc.fontHeading,
-    fontSize: 16,
-    fontWeight: pwc.weight.medium,
-    color: pwc.grey900,
-    margin: `0 0 ${pwc.space.md}px 0`,
   } as React.CSSProperties,
   table: {
     width: "100%",
@@ -197,18 +184,18 @@ const styles = {
     fontSize: 14,
     fontFamily: pwc.fontBody,
   } as React.CSSProperties,
-  checkList: { display: "grid", gap: pwc.space.lg, minWidth: 0 } as React.CSSProperties,
-  check: { border: `1px solid ${pwc.grey200}`, borderRadius: pwc.radius.md, overflow: "hidden", minWidth: 0 } as React.CSSProperties,
-  checkHeader: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: pwc.space.md, padding: pwc.space.md, background: pwc.grey50 } as React.CSSProperties,
-  checkTitle: { flex: "1 1 300px", fontFamily: pwc.fontHeading, fontSize: 14, fontWeight: pwc.weight.semibold, margin: 0, overflowWrap: "anywhere" } as React.CSSProperties,
+  checkList: { display: "grid", gap: 0, minWidth: 0, borderTop: `1px solid ${pwc.grey200}` } as React.CSSProperties,
+  check: { borderBottom: `1px solid ${pwc.grey200}`, padding: `${pwc.space.sm}px 0 ${pwc.space.lg}px`, minWidth: 0 } as React.CSSProperties,
+  checkHeader: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: pwc.space.md, minHeight: 48 } as React.CSSProperties,
+  checkTitle: { flex: "1 1 300px", fontFamily: pwc.fontHeading, fontSize: 14, fontWeight: pwc.weight.medium, margin: 0, overflowWrap: "anywhere" } as React.CSSProperties,
   tableRegion: { overflowX: "auto", maxWidth: "100%" } as React.CSSProperties,
-  figureLabel: { textAlign: "left", fontWeight: pwc.weight.regular, padding: `${pwc.space.sm}px ${pwc.space.md}px`, borderBottom: `1px solid ${pwc.grey100}`, overflowWrap: "anywhere" } as React.CSSProperties,
+  figureLabel: { textAlign: "left", fontWeight: pwc.weight.regular, padding: `${pwc.space.sm}px ${pwc.space.md}px ${pwc.space.sm}px 0`, borderBottom: `1px solid ${pwc.grey100}`, overflowWrap: "anywhere" } as React.CSSProperties,
   sourceLabel: { color: pwc.grey700, fontSize: 12, marginTop: pwc.space.xs } as React.CSSProperties,
   number: { ...ui.numeric, padding: `${pwc.space.sm}px ${pwc.space.md}px`, borderBottom: `1px solid ${pwc.grey100}`, whiteSpace: "nowrap" } as React.CSSProperties,
-  checkFooter: { display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: pwc.space.sm, padding: pwc.space.md, fontSize: 13 } as React.CSSProperties,
-  note: { color: pwc.grey700, fontSize: 13, margin: pwc.space.md } as React.CSSProperties,
+  checkFooter: { display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: pwc.space.sm, paddingTop: pwc.space.md, fontSize: 13 } as React.CSSProperties,
+  note: { color: pwc.grey700, fontSize: 13, margin: 0 } as React.CSSProperties,
   footerNote: { color: pwc.grey700 } as React.CSSProperties,
-  technicalDetails: { padding: `0 ${pwc.space.md}px ${pwc.space.md}px`, fontSize: 13, color: pwc.grey700, overflowWrap: "anywhere" } as React.CSSProperties,
+  technicalDetails: { paddingTop: pwc.space.sm, fontSize: 13, color: pwc.grey700, overflowWrap: "anywhere" } as React.CSSProperties,
   detailText: { margin: `${pwc.space.sm}px 0 0`, lineHeight: 1.5, overflowWrap: "anywhere" } as React.CSSProperties,
   // Sentence-case headers (design-system Tables), compact density.
   th: {

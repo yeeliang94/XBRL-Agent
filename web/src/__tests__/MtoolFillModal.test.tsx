@@ -522,9 +522,11 @@ describe("MtoolFillModal", () => {
     });
     // The error is surfaced (not hidden behind a clean-looking plan).
     await waitFor(() =>
-      expect(screen.getByText(/would stop the notes from landing/i)).toBeTruthy()
+      expect(screen.getByText(/stops the notes from being filled/i)).toBeTruthy()
     );
-    expect(screen.getByText(/no \+FootnoteTexts sheet/i)).toBeTruthy();
+    // The workbook fault is explained as an action, not an internal part name.
+    expect(screen.getByText(/no space for written notes/i)).toBeTruthy();
+    expect(screen.queryByText(/FootnoteTexts/i)).toBeNull();
   });
 
   test("does not blame sheet scoping when a note is too large for Excel", async () => {

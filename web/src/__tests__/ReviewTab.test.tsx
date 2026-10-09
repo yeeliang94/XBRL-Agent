@@ -142,7 +142,8 @@ describe("ReviewTab", () => {
     expect(screen.getByText("1 source correction")).toBeInTheDocument();
     expect(screen.getByText("1 human edit")).toBeInTheDocument();
     expect(screen.getByText("1 recalculated total")).toBeInTheDocument();
-    expect(screen.getByText(/all reviewer decisions resolved/i)).toBeInTheDocument();
+    // With no reviewer decisions at all, the summary adds no decision status.
+    expect(screen.queryByText(/all reviewer decisions resolved/i)).toBeNull();
     expect(screen.getByRole("heading", { name: /what the ai changed/i })).toBeInTheDocument();
     const directChanges = screen.getByTestId("review-direct-changes");
     expect(within(directChanges).getByText("Cash")).toBeInTheDocument();
@@ -167,7 +168,7 @@ describe("ReviewTab", () => {
     fireEvent.change(screen.getByLabelText("Re-review guidance"), {
       target: { value: "look at page 44" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /run ai review again/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^run again$/i }));
 
     await waitFor(() => {
       expect(posts.some((p) => p.url === "/api/runs/7/re-review")).toBe(true);
@@ -188,7 +189,7 @@ describe("ReviewTab", () => {
     fireEvent.change(screen.getByLabelText("Reviewer model"), {
       target: { value: "openai.gpt-5.4" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /run ai review again/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^run again$/i }));
     await waitFor(() => {
       const post = posts.find((p) => p.url === "/api/runs/7/re-review");
       expect(post && JSON.parse(post.init!.body as string).model).toBe("openai.gpt-5.4");
@@ -200,7 +201,7 @@ describe("ReviewTab", () => {
     mockApi(posts, { ok: true, invoked: false, writes_performed: 0, flags_raised: 0 });
     render(<ReviewTab runId={7} />);
     await waitFor(() => screen.getByTestId("review-tab"));
-    fireEvent.click(screen.getByRole("button", { name: /run ai review again/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^run again$/i }));
     await waitFor(() => {
       expect(screen.getByTestId("review-notice").textContent)
         .toMatch(/no failing cross-checks or open conflicts/i);
@@ -229,7 +230,7 @@ describe("ReviewTab", () => {
     mockApi(posts, { ok: true, invoked: true, writes_performed: 2, flags_raised: 0, export_stale: true });
     render(<ReviewTab runId={7} />);
     await waitFor(() => screen.getByTestId("review-tab"));
-    fireEvent.click(screen.getByRole("button", { name: /run ai review again/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^run again$/i }));
     await waitFor(() => {
       expect(screen.getByTestId("review-warning").textContent).toMatch(/stale/i);
     });
@@ -243,7 +244,7 @@ describe("ReviewTab", () => {
     mockApi(posts, { ok: true, invoked: true, writes_performed: 2, flags_raised: 0, cascade_error: "RuntimeError: boom" });
     render(<ReviewTab runId={7} />);
     await waitFor(() => screen.getByTestId("review-tab"));
-    fireEvent.click(screen.getByRole("button", { name: /run ai review again/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^run again$/i }));
     await waitFor(() => {
       expect(screen.getByTestId("review-warning").textContent)
         .toMatch(/totals could not be recomputed after the review/i);
@@ -260,7 +261,7 @@ describe("ReviewTab", () => {
     });
     render(<ReviewTab runId={7} />);
     await waitFor(() => screen.getByTestId("review-tab"));
-    fireEvent.click(screen.getByRole("button", { name: /run ai review again/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^run again$/i }));
     await waitFor(() => {
       const text = screen.getByTestId("review-warning").textContent ?? "";
       expect(text).toMatch(/totals could not be recomputed after the review/i);
@@ -327,7 +328,7 @@ describe("ReviewTab", () => {
     );
     render(<ReviewTab runId={7} />);
     await waitFor(() => screen.getByTestId("review-tab"));
-    fireEvent.click(screen.getByRole("button", { name: /run ai review again/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^run again$/i }));
     await waitFor(() => {
       expect(screen.getByRole("alert").textContent).toMatch(/snapshot failed/i);
     });
