@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sqlite3
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -816,6 +816,7 @@ def test_automatic_notes_formatting_is_visible_and_controls_completion(
         return result
 
     monkeypatch.setattr(notes.auto_format, "run_pdf_auto_format", format_notes)
+    monkeypatch.setattr("server._run_notes_reviewer_pass", AsyncMock(return_value={}))
     monkeypatch.setenv("XBRL_PDF_NOTES_AUTO_FORMAT", "false")
     with patch("server._create_proxy_model", return_value="fake-model"), \
          patch("coordinator.run_extraction", side_effect=_happy_coordinator(agent_results)), \

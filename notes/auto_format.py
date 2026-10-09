@@ -124,6 +124,10 @@ def merge_part_results(parts: list[dict[str, Any]]) -> dict[str, Any]:
     visual_reviews = [p["visual_review"] for p in active if "visual_review" in p]
     if visual_reviews:
         merged["visual_reviews"] = visual_reviews
+    merged["verified_rows"] = {
+        row: identity for part in parts
+        for row, identity in (part.get("verified_rows") or {}).items()
+    }
     if failures:
         merged["error_type"] = failures[0].get("error_type")
         merged["error"] = "; ".join(
@@ -144,8 +148,12 @@ def merge_part_results(parts: list[dict[str, Any]]) -> dict[str, Any]:
 def _persist_outcome(
     db_path: str, run_id: int, sheet: str, model_name: str,
     result: dict[str, Any],
+    previous_result: dict[str, Any] | None = None,
 ) -> None:
+    from notes.visual_review import current_verification_cells, retain_other_verification_receipts
     with repo.db_session(db_path) as conn:
+        result = retain_other_verification_receipts(previous_result or {}, result,
+            active_rows=current_verification_cells(conn, run_id, sheet))
         repo.upsert_notes_format_task(
             conn, run_id, sheet, "done", model=model_name,
             summary=result.get("summary"),
@@ -203,8 +211,10 @@ async def run_pdf_auto_format(
             return await coro
 
     async def one(sheet: str) -> tuple[str, dict[str, Any]]:
+        previous = None
         try:
             with repo.db_session(db_path) as conn:
+                previous = repo.fetch_notes_format_task(conn, run_id, sheet)
                 claim = repo.claim_notes_format_task_guarded(
                     conn, run_id, sheet, model=model_name,
                 )
@@ -284,7 +294,7 @@ async def run_pdf_auto_format(
             raise
         except Exception as exc:  # noqa: BLE001 — advisory pass, per-sheet isolation
             result = _failure_result(exc, timeout_s, run_id, sheet)
-        _persist_outcome(db_path, run_id, sheet, model_name, result)
+        _persist_outcome(db_path, run_id, sheet, model_name, result, (previous or {}).get("result"))
         return sheet, result
 
     completed = 0

@@ -125,6 +125,14 @@ def test_issued_capital_catalog_keeps_unit_bearing_section_paths() -> None:
         set(allowed) if allowed is not None else None,
     )
 
+    from pydantic_ai.models.test import TestModel
+    agent, deps = create_notes_agent(
+        template_type=NotesTemplateType.ISSUED_CAPITAL, pdf_path="unused.pdf",
+        inventory=[], filing_level="company", filing_standard="mfrs", model=TestModel(),
+    )
+    seeded = "\n".join(agent._system_prompts)
+    assert rendered in seeded  # Must be present even if the model skips read_template.
+    assert deps.template_fields
     assert "Common section path: Notes - Issued capital" in rendered
     assert (
         "row  11: Shares issued and fully paid > "

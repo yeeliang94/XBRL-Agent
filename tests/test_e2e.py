@@ -192,8 +192,11 @@ def test_full_extraction_mocked(full_pipeline_env):
     assert len(runs) == 1
     assert runs[0]["status"] == "completed"
 
-    agents_db = conn.execute("SELECT * FROM run_agents ORDER BY id").fetchall()
+    agents_db = conn.execute("SELECT * FROM run_agents WHERE statement_type NOT IN ('CORRECTION', 'NOTES_VALIDATOR') ORDER BY id").fetchall()
     assert len(agents_db) == 5
+    reviews = conn.execute("SELECT statement_type, status, ended_at FROM run_agents WHERE statement_type IN ('CORRECTION', 'NOTES_VALIDATOR')").fetchall()
+    assert {row["statement_type"] for row in reviews} == {"CORRECTION", "NOTES_VALIDATOR"}
+    assert all(row["status"] == "skipped" and row["ended_at"] for row in reviews)
 
     checks_db = conn.execute("SELECT * FROM cross_checks ORDER BY id").fetchall()
     assert len(checks_db) == 5
@@ -343,7 +346,8 @@ def test_group_filing_e2e_mocked(full_pipeline_env):
     conn.close()
 
 
-def test_clean_run_always_fires_triage(full_pipeline_env, monkeypatch):
+@pytest.mark.parametrize("notes_tieout_failed", [False, True])
+def test_clean_run_always_fires_triage(full_pipeline_env, monkeypatch, notes_tieout_failed):
     """A clean run with facts launches review triage even with obsolete
     settings present.
 
@@ -372,6 +376,11 @@ def test_clean_run_always_fires_triage(full_pipeline_env, monkeypatch):
     fake_checks = [CrossCheckResult(name="sofp_balance", status="passed",
                                     expected=1.0, actual=1.0, diff=0.0,
                                     tolerance=1.0, message="OK")]
+    if notes_tieout_failed:
+        fake_checks.append(CrossCheckResult(
+            name="Notes↔face tie-out: test", status="failed", expected=1.0,
+            actual=2.0, diff=1.0, tolerance=0.0, message="Notes do not match figures",
+        ))
 
     run_config = {
         "statements": [s.value for s in all_statements],
@@ -404,11 +413,17 @@ def test_clean_run_always_fires_triage(full_pipeline_env, monkeypatch):
         if isinstance(e.get("data"), dict)
         and e["data"].get("agent_role") == "CORRECTION"
     ]
-    assert correction_events, "clean run must launch reviewer triage"
     # And the reviewing stage was emitted at the boundary.
     stages = [e["data"].get("stage") for e in events
               if e["event"] == "pipeline_stage" and isinstance(e.get("data"), dict)]
-    assert "reviewing" in stages
+    if notes_tieout_failed:
+        assert correction_events and all(e["data"].get("phase") == "skipped" for e in correction_events)
+        assert "reviewing" not in stages
+        terminal = next(e["data"] for e in events if e["event"] == "run_complete")
+        assert any(check["status"] == "failed" for check in terminal["cross_checks"])
+    else:
+        assert correction_events, "clean run must launch reviewer triage"
+        assert "reviewing" in stages
 
     # Peer-review HIGH (2026-06-21): the reviewer's own guard finds no real
     # facts, so the spot-check fails with `no_extracted_facts_to_review` and its CORRECTION

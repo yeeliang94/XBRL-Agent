@@ -73,6 +73,8 @@ const WORKSTREAM_LABELS: Record<string, string> = {
   SOURCE_PREPARATION: "Source preparation",
   VALIDATOR: "Cross-checks",
   NOTES_FORMATTING: "Notes formatting",
+  NOTES_INTEGRITY: "Notes completeness",
+  "notes-integrity": "Notes completeness",
   NOTES_CLEANUP: "Notes cleanup",
   "notes-formatting": "Notes formatting",
   "notes-cleanup": "Notes cleanup",
@@ -98,7 +100,7 @@ function workstreamLabel(agent: AgentTabState, filingStandard?: unknown): string
 
 const WORKSTREAM_KINDS: Record<string, string> = {
   SCOUT: "scout", SOURCE_PREPARATION: "scout", VALIDATOR: "validator",
-  NOTES_FORMATTING: "notes-formatting", NOTES_CLEANUP: "notes-cleanup",
+  NOTES_FORMATTING: "notes-formatting", NOTES_CLEANUP: "notes-cleanup", NOTES_INTEGRITY: "notes-integrity",
 };
 
 function workstreamKind(agent: AgentTabState): string {
@@ -172,7 +174,7 @@ function AgentTabsImpl({
       visibleStatementActive.push(id);
     }
   }
-  const checksOrder = ["NOTES_VALIDATOR", "CORRECTION", "validator", "notes-formatting", "notes-cleanup"];
+  const checksOrder = ["NOTES_VALIDATOR", "CORRECTION", "validator", "notes-cleanup", "notes-integrity", "notes-formatting"];
   visibleChecks.sort((a, b) => checksOrder.indexOf(workstreamKind(agents[a])) - checksOrder.indexOf(workstreamKind(agents[b])));
   const navigationOrder = [...visiblePreparation, ...visibleStatementActive, ...visibleNotesActive, ...visibleChecks];
   const navigationKey = navigationOrder.join("\u0000");

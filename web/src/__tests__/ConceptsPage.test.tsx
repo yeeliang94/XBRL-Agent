@@ -200,6 +200,8 @@ describe("ConceptsPage", () => {
     // First header renders; the identical consecutive one is collapsed away.
     expect(screen.getByTestId("concept-row-cf-1")).toBeTruthy();
     expect(screen.queryByTestId("concept-row-cf-2")).toBeNull();
+    expect(screen.getByText("Cash-flow calculation notes")).toBeVisible();
+    expect(screen.getByText(/Check the payment’s source evidence and final cash totals/)).toBeInTheDocument();
   });
 
   test("hides the internal 'cascade' provenance tag from the source column", async () => {

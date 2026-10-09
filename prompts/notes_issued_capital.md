@@ -60,6 +60,8 @@ shares and AMOUNT columns.
   "Shares issued during financial year" instead.
 - If the company didn't issue / repurchase shares during the year the
   opening and closing balances will be equal — fill both rows.
-- Rows starting with `*` are calculation rows in some templates — they
-  may be safe to write to, but the writer refuses to overwrite formula
-  cells so any true formula row will be skipped with a warning.
+- Use the writable fields supplied by `read_template`. A leading `*` is not
+  permission to write a heading or formula. When heading and leaf labels repeat,
+  target the writable leaf in its full hierarchy. The numeric writer rejects
+  headings and formulas; never treat a scratch-workbook write as proof that the
+  value was saved to the filing data.

@@ -35,7 +35,7 @@ interface Props {
   onDirtyChange?: (dirty: boolean) => void;
   onBusyChange?: (busy: boolean) => void;
   getSettings: () => Promise<SettingsResponse & { auto_review?: boolean; notes_auto_review?: boolean; notes_coverage?: boolean; tolerance_rm?: number; entity_memory?: boolean; notes_source_integrity?: SourceIntegrityMode; notes_source_integrity_choices?: string[]; default_models?: Record<string, string>; default_model_overrides?: Record<string, string>; local_override_keys?: string[]; thinking_levels?: Record<string, string>; thinking_level_choices?: string[]; thinking_level_choices_by_model?: Record<string, string[]>; reasoning_summary?: string; reasoning_summary_choices?: string[]; available_models?: ModelEntry[]; advanced_settings?: AdvancedSetting[] }>;
-  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; default_models: Record<string, string>; reset_keys: string[]; reset_shared_defaults: boolean; notes_appearance_reset: boolean; auto_review: boolean; notes_auto_review: boolean; notes_coverage: boolean; entity_memory: boolean; notes_source_integrity: SourceIntegrityMode; tolerance_rm: number; scout_wallclock_seconds: number; scout_max_turns: number; thinking_levels: Record<string, string>; reasoning_summary: string; advanced_settings: Record<string, AdvancedEditValue> }>) => Promise<{ status: string }>;
+  saveSettings: (body: Partial<{ api_key: string; model: string; proxy_url: string; default_models: Record<string, string>; reset_keys: string[]; reset_shared_defaults: boolean; notes_appearance_reset: boolean; notes_coverage: boolean; entity_memory: boolean; notes_source_integrity: SourceIntegrityMode; tolerance_rm: number; scout_wallclock_seconds: number; scout_max_turns: number; thinking_levels: Record<string, string>; reasoning_summary: string; advanced_settings: Record<string, AdvancedEditValue> }>) => Promise<{ status: string }>;
   testConnection: (body: Partial<{ proxy_url: string; api_key: string; model: string }>) => Promise<{ status: string; model?: string; latency_ms?: number; message?: string }>;
   // When provided, a Cancel button is shown (used by the modal wrapper). The
   // page host omits it — there's nothing to cancel out of.
@@ -257,9 +257,6 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
   const [proxyUrl, setProxyUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [apiKeyPreview, setApiKeyPreview] = useState("");
-  // Reviewer auto-trigger toggle (docs/Archive/PLAN-reviewer-agent.md). Default on.
-  const [autoReview, setAutoReview] = useState(true);
-  const [notesAutoReview, setNotesAutoReview] = useState(true);
   const [notesCoverage, setNotesCoverage] = useState(true);
   const [toleranceRm, setToleranceRm] = useState<number | "">(1);
   const [scoutWallclockSeconds, setScoutWallclockSeconds] =
@@ -321,8 +318,6 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         setApiKeyPreview(s.api_key_preview);
         setApiKey("");
         // Default to on when the field is absent (older backend).
-        setAutoReview(s.auto_review !== false);
-        setNotesAutoReview(s.notes_auto_review !== false);
         setNotesCoverage(s.notes_coverage !== false);
         setToleranceRm(typeof s.tolerance_rm === "number" ? s.tolerance_rm : 1);
         setScoutWallclockSeconds(
@@ -448,8 +443,6 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         ...(Object.keys(roleModelUpdates).length > 0
           ? { default_models: roleModelUpdates }
           : {}),
-        auto_review: autoReview,
-        notes_auto_review: notesAutoReview,
         notes_coverage: notesCoverage,
         tolerance_rm: toleranceRm,
         scout_wallclock_seconds: scoutWallclockSeconds,
@@ -490,7 +483,7 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
     } finally {
       setSaving(false);
     }
-  }, [dirty, saving, testing, loaded, model, proxyUrl, apiKey, roleModelUpdates, autoReview, notesAutoReview, notesCoverage, toleranceRm, scoutWallclockSeconds, scoutMaxTurns, thinkingLevels, reasoningSummary, advancedRows, advancedEdits, getSettings, saveSettings]);
+  }, [dirty, saving, testing, loaded, model, proxyUrl, apiKey, roleModelUpdates, notesCoverage, toleranceRm, scoutWallclockSeconds, scoutMaxTurns, thinkingLevels, reasoningSummary, advancedRows, advancedEdits, getSettings, saveSettings]);
 
   const handleUseGpt6ForEveryRole = useCallback(() => {
     setModel(GPT6_LUNA_MODEL);
@@ -977,39 +970,11 @@ export function GeneralSettingsForm({ getSettings, saveSettings, testConnection,
         title="Automatic review"
         description="These defaults apply to future runs and can increase processing time and usage."
       />
-      {/* Reviewer auto-trigger toggle */}
-      <div style={styles.fieldGroup}>
-        <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, cursor: "pointer" }}>
-          <input
-            type="checkbox" style={ui.checkbox}
-            checked={autoReview}
-            onChange={(e) => { setAutoReview(e.target.checked); setDirty(true); }}
-            disabled={readOnly}
-            aria-label="Automatically run the reviewer after extraction"
-          />
-          <span style={styles.label}>Automatically run the reviewer after extraction</span>
-        </label>
-        <p style={styles.helperText}>
-          When off, runs with failed cross-checks finish without the reviewer;
-          you can still start a review from the run’s AI review tab.
-        </p>
-      </div>
-
-      <div style={styles.fieldGroup}>
-        <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, cursor: "pointer" }}>
-          <input
-            type="checkbox" style={ui.checkbox}
-            checked={notesAutoReview}
-            onChange={(e) => { setNotesAutoReview(e.target.checked); setDirty(true); }}
-            disabled={readOnly}
-            aria-label="Automatically review extracted notes"
-          />
-          <span style={styles.label}>Automatically review extracted notes</span>
-        </label>
-        <p style={styles.helperText}>
-          Checks prose notes after extraction and applies grounded corrections.
-        </p>
-      </div>
+      <p style={styles.helperText}>
+        Figures and prose notes are reviewed automatically after extraction.
+        Reviews use the source PDF and may increase processing time and usage.
+        A review with no applicable content shows its reason in Activity.
+      </p>
 
       <div style={styles.fieldGroup}>
         <label style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, cursor: "pointer" }}>

@@ -406,6 +406,7 @@ describe("ExtractPage — render-gate regression guards", () => {
   test.each([
     {stage: "formatting_notes" as const, tab: "notes-formatting", label: "Notes formatting"},
     {stage: "cleaning_notes" as const, tab: "notes-cleanup", label: "Notes cleanup"},
+    {stage: "checking_notes" as const, tab: "notes-integrity", label: "Notes completeness"},
   ])("surfaces $label as live run activity", ({stage, tab, label}) => {
     const notesAgent = createAgentState("notes:CORP_INFO", "CORP_INFO", "Notes 10: Corp Info");
     notesAgent.status = "complete";
@@ -430,7 +431,7 @@ describe("ExtractPage — render-gate regression guards", () => {
     expect(screen.getByRole("tab", { name: new RegExp(label, "i") })).toBeInTheDocument();
     expect(screen.getByRole("tabpanel", { name: `${label} activity` })).toBeInTheDocument();
     expect(screen.getByRole("progressbar", { name: `${label} progress` })).toHaveAttribute("aria-valuenow", "2");
-    expect(screen.getAllByText(`${label}: 2 of 3 sections complete`)).toHaveLength(2);
+    expect(within(screen.getByRole("tabpanel", { name: `${label} activity` })).getByText(`${label}: 2 of 3 sections complete`)).toBeInTheDocument();
   });
 
   test("no-op cleanup remains visibly complete after the run finishes", () => {

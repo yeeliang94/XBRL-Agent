@@ -198,7 +198,7 @@ async def test_disconnect_after_agent_complete_still_finalizes_run(session_env):
     conn = _open_db(db_path)
     try:
         runs = [dict(r) for r in conn.execute("SELECT * FROM runs").fetchall()]
-        agents = [dict(r) for r in conn.execute("SELECT * FROM run_agents").fetchall()]
+        agents = [dict(r) for r in conn.execute("SELECT * FROM run_agents WHERE statement_type='SOFP'").fetchall()]
     finally:
         conn.close()
 

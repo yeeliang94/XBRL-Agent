@@ -143,3 +143,27 @@ Style keys:
 - padding: "4px 8px" (a table cell's inner spacing)
 - space_before / space_after: "6px" (a paragraph's spacing above / below)
 - table_width: "100%" (only with target {"table": 0, "range": "table"})
+
+
+Before emitting rule operations, map each source opening balance, movement,
+subtotal and closing balance to the coordinate manifest using the row's text
+and both year amounts. Coordinates count direct HTML cells, not visual PDF
+columns. A merged heading is one cell. Do not move a rule to the next heading
+or to a movement row because it visually sits near that text in the scan.
+
+A standalone year such as “2024” in the description column is a row label,
+not an amount or amount-column header. Keep it left-aligned. Use explicit
+amount-column targets instead of `numeric_cells` when that range would also
+select year markers or numeric labels in the description column.
+
+Judge the final prepared output: mTool compatibility preparation converts
+`double` borders to thin single borders. For one thick source stroke, author
+one solid border of the observed width; never use `double` to simulate thickness.
+A short amount-cell rule beside a merged heading remains on that amount cell.
+Do not add a matching full-width rule to the merged heading.
+
+
+Tables use collapsed borders: an amount cell's bottom border and the cell below's
+top border represent the same physical edge. The backend mirrors fully shared
+edges. Before clearing a reported top edge, check whether it is the valid
+subtotal underline of the preceding row; clearing either side clears that edge.

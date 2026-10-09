@@ -502,7 +502,8 @@ async def test_scoped_unresolved_item_needs_review(tmp_path):
 
     assert outcome["investigation_resolutions"][0]["status"] == "unresolved"
     assert outcome["flags_raised"] == 1
-    assert outcome["error"] == "reviewer_investigation_unresolved"
+    assert outcome["error"] is None
+    assert outcome["needs_review"] is True
     assert outcome["review_stage"] == "investigation_unresolved"
 
 
@@ -601,7 +602,7 @@ async def test_scoped_writes_and_human_work_finish_without_false_clean(
     if verification in {"unchanged", "warnings"}:
         assert rejected_closures
         assert all(r["status"] == "unresolved" for r in outcome["investigation_resolutions"])
-    assert outcome["error"] == ("reviewer_investigation_unresolved" if verification in {"mixed", "unchanged", "warnings"}
+    assert outcome["error"] == (None if verification in {"mixed", "unchanged", "warnings"}
                                 else "reviewer_unverified_writes")
     assert outcome["review_stage"] == ("investigation_unresolved" if verification in {"mixed", "unchanged", "warnings"}
                                        else "investigation_incomplete")
@@ -609,7 +610,7 @@ async def test_scoped_writes_and_human_work_finish_without_false_clean(
         assert conn.execute("SELECT value FROM run_concept_facts WHERE run_id=? AND concept_uuid=?",
                             (run_id, LEAF1)).fetchone()[0] == (121 if verification == "stale" else 120)
     final = [event["data"] for event in queue._queue if event["event"] == "complete"][-1]
-    assert final["success"] is False
+    assert final["success"] is (verification in {"mixed", "unchanged", "warnings"})
 
 
 @pytest.mark.asyncio

@@ -666,3 +666,24 @@ def test_writer_headings_count_toward_truncation_budget(tmp_path: Path):
     assert len(written) <= CELL_CHAR_LIMIT
     assert "truncated" in written.lower()
     wb.close()
+
+
+def test_repeated_numeric_writes_keep_original_template_leaf_guard(tmp_path):
+    tpl = notes_template_path(NotesTemplateType.ISSUED_CAPITAL, level="company", standard="mfrs")
+    out = tmp_path / 'issued.xlsx'
+    payload = NotesPayload(chosen_row_label='Number of shares issued and fully paid',
+                           numeric_values={'company_cy': 2077740, 'company_py': 2077740},
+                           evidence='p26', source_pages=[26], content='',
+                           parent_note={'number': '13', 'title': 'Issued capital'})
+    for source in (str(tpl), str(out)):
+        result = write_notes_workbook(source, [payload], str(out), 'company',
+                                      'Notes-Issuedcapital', filing_template_path=str(tpl))
+        assert result.success, result.errors
+        assert {c['row'] for c in result.numeric_cells} == {8}
+    wb = openpyxl.load_workbook(out)
+    try:
+        ws = wb['Notes-Issuedcapital']
+        assert ws['B7'].value is None and ws['C7'].value is None
+        assert ws['B8'].value == 2077740 and ws['C8'].value == 2077740
+    finally:
+        wb.close()

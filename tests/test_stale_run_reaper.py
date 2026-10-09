@@ -156,8 +156,8 @@ def test_terminal_and_draft_runs_are_untouched(conn):
 
 
 def test_startup_mode_reaps_all_orphaned_running_rows(conn):
-    # At startup EVERY running row is orphaned (no stream can have started yet),
-    # so the _lifespan call passes max_age_hours=0 to reap all of them —
+    # Unowned rows are orphaned at startup, so the _lifespan call passes
+    # max_age_hours=0 to recover them immediately —
     # including a row that started seconds ago. This closes the
     # crash-then-immediate-restart gap where a young orphan would survive a 6h
     # threshold forever (peer review).
@@ -184,3 +184,44 @@ def test_custom_age_threshold_is_honoured(conn):
     assert conn.execute(
         "SELECT status FROM runs WHERE id = ?", (run_id,)
     ).fetchone()["status"] == "aborted"
+
+
+def test_startup_preserves_live_process_owner_and_its_formatter(conn):
+    from db.run_ownership import claim, release
+    run_id = _make_run(conn, status='running', started_at=_iso(datetime.now(timezone.utc)-timedelta(minutes=1)))
+    repo.claim_notes_format_task(conn, run_id, 'Notes-Listofnotes')
+    conn.commit()
+    claim(conn, run_id)
+    try:
+        assert repo.reconcile_stale_runs(conn, max_age_hours=0) == 0
+        assert repo.reconcile_stale_notes_format_tasks(conn) == 0
+        assert conn.execute('SELECT status FROM runs WHERE id=?', (run_id,)).fetchone()[0] == 'running'
+    finally:
+        release(conn, run_id)
+    assert repo.reconcile_stale_runs(conn, max_age_hours=0) == 1
+    assert repo.reconcile_stale_notes_format_tasks(conn) == 1
+
+
+def test_crashed_owner_releases_os_lock_for_immediate_recovery(conn):
+    import subprocess
+    import sys
+    from db.run_ownership import is_live
+    run_id = _make_run(conn, status='running', started_at=_iso(datetime.now(timezone.utc)-timedelta(seconds=1)))
+    database = conn.execute('PRAGMA database_list').fetchone()[2]
+    # Ownership probes must release their lock so another process can start.
+    assert not is_live(conn, run_id)
+    assert not is_live(conn, run_id)
+    code = ('import sqlite3,sys; from db.run_ownership import claim; '
+            'c=sqlite3.connect(sys.argv[1]); claim(c,int(sys.argv[2])); '
+            'print("owned",flush=True); sys.stdin.read()')
+    process = subprocess.Popen([sys.executable, '-c', code, database, str(run_id)],
+                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    try:
+        assert process.stdout.readline().strip() == 'owned'
+        assert is_live(conn, run_id)
+        assert repo.reconcile_stale_runs(conn, max_age_hours=0) == 0
+    finally:
+        process.kill()
+        process.wait(timeout=10)
+    assert not is_live(conn, run_id)
+    assert repo.reconcile_stale_runs(conn, max_age_hours=0) == 1

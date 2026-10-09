@@ -1,4 +1,4 @@
-"""Final page-furniture cleanup after formatting, before canonical notes export."""
+"""Finalize note content before source-integrity repair and appearance checking."""
 from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field

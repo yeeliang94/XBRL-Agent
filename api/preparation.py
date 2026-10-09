@@ -100,7 +100,8 @@ def snapshot(directory: Path) -> dict:
     with _lock:
         result = _read(directory)
         worker = _workers.get(_key(directory))
-        if result.get("status") in _ACTIVE and not (worker and worker.is_alive()):
+        if (result.get("status") in _ACTIVE and not (worker and worker.is_alive())
+                and not _live_extraction_owner(result)):
             result.update(status="failed", action_required="retry",
                           message="Document preparation was interrupted. Retry to resume.",
                           error="preparation_interrupted", updated_at=time.time())
@@ -115,9 +116,26 @@ def snapshot(directory: Path) -> dict:
         return _with_workflow_state(result)
 
 
+def _live_extraction_owner(state: dict) -> bool:
+    """A CLI owner has no web preparation thread in this process."""
+    if not state.get("run_id"):
+        return False
+    from db.run_ownership import is_live
+    try:
+        conn = _connection(server.AUDIT_DB_PATH)
+        try:
+            return is_live(conn, state["run_id"])
+        finally:
+            conn.close()
+    except Exception:
+        logger.warning("Could not check preparation process ownership", exc_info=True)
+        # An unavailable ownership check cannot prove interruption.
+        return True
+
+
 def _finish_interrupted_audit(directory: Path, state: dict) -> None:
     """Draft parents are not covered by extraction's stale-run reaper."""
-    if not state.get("run_id"):
+    if not state.get("run_id") or _live_extraction_owner(state):
         return
     from db import repository as repo
     try:

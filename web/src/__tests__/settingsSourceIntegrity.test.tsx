@@ -38,7 +38,8 @@ describe("Automatic source preservation", () => {
     expect(screen.queryByLabelText(/Word source handling mode/i)).toBeNull();
     expect(screen.queryByLabelText(/Reuse prior-year hints/i)).toBeNull();
     expect(screen.getByText(/Prepared documents with notes are checked automatically/)).toBeTruthy();
-    fireEvent.click(await screen.findByLabelText(/Automatically review extracted notes/i));
+    expect(screen.queryByLabelText(/Automatically review extracted notes/i)).toBeNull();
+    fireEvent.change(screen.getByLabelText("AI service address"), { target: { value: "https://service.example.com" } });
     fireEvent.click(screen.getByRole("button", { name: /save shared settings/i }));
     await waitFor(() => expect(saveSpy).toHaveBeenCalled());
     expect(saveSpy.mock.calls[0][0]).not.toHaveProperty("notes_source_integrity");

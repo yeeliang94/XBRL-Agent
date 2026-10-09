@@ -113,6 +113,7 @@ def write_notes_workbook(
     output_path: str,
     filing_level: str,
     sheet_name: str,
+    *, filing_template_path: Optional[str] = None,
 ) -> NotesWriteResult:
     """Write NotesPayload entries to the given sheet of a notes template.
 
@@ -144,7 +145,7 @@ def write_notes_workbook(
 
     ws = wb[sheet_name]
     from concept_model.filing_targets import writable_rows
-    allowed_rows = writable_rows(template_path, sheet_name)
+    allowed_rows = writable_rows(filing_template_path or template_path, sheet_name)
     label_index = _build_label_index(ws, writable_rows=allowed_rows)
 
     # Concatenate duplicate labels so Sheet-12 "Disclosure of other notes"

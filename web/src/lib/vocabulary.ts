@@ -48,7 +48,8 @@ const PSEUDO_AGENT_LABELS: Record<string, string> = {
   NOTES_VALIDATOR: TERMS.notesReview,
   NOTES_CLEANUP: TERMS.notesCleanup,
   NOTES_FORMATTING: "Notes formatting",
-  SYSTEM: "Run setup",
+  NOTES_INTEGRITY: "Notes completeness",
+  SYSTEM: "Run diagnostics",
   VALIDATOR: "Cross-checks",
 };
 
@@ -220,6 +221,7 @@ export function notesFormatErrorMessage(
   rawError: string | null | undefined,
   outcome?: { changed_rows?: number; summary?: string | null; failed_rows?: number[] },
 ): string {
+  if (errorType === "verification_stale") return "Formatting needs rechecking after changes.";
   if ((outcome?.changed_rows ?? 0) > 0) {
     const details = outcome?.summary || (
       `Formatting saved for ${outcome?.changed_rows} row(s). ` +

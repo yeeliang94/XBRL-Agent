@@ -117,9 +117,12 @@ def test_start_reserves_session_before_the_draft_flip(draft_with_config):
     reserved_at_flip: dict[str, bool] = {}
     real_flip = repo.mark_draft_started
 
-    def _recording_flip(conn, rid):
+    def _recording_flip(conn, rid, **kwargs):
         reserved_at_flip["value"] = session_id in server.active_runs
-        return real_flip(conn, rid)
+        flipped = real_flip(conn, rid, **kwargs)
+        from db.run_ownership import is_live
+        reserved_at_flip["owned"] = is_live(conn, rid)
+        return flipped
 
     async def quiet_coordinator(config, infopack=None, event_queue=None, session_id=None, **_kwargs):
         if event_queue is not None:
@@ -136,6 +139,13 @@ def test_start_reserves_session_before_the_draft_flip(draft_with_config):
     assert resp.status_code == 200
     assert reserved_at_flip.get("value") is True, \
         "session must be reserved in active_runs before the flip"
+    assert reserved_at_flip["owned"] is True
+    from db.run_ownership import is_live
+    conn = _open_db(db_path)
+    try:
+        assert not is_live(conn, run_id)
+    finally:
+        conn.close()
 
 
 def test_start_rejected_on_non_draft(draft_with_config):

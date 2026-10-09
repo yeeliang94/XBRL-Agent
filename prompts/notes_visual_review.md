@@ -36,3 +36,21 @@ differences. Source-visible accounting rules must still have correct targets.
 Assess the prepared output HTML, including any size-tier degradation.
 You report findings only. You cannot rewrite content, table structure, geometry
 or note placement. This check does not certify native Word or mTool rendering.
+
+
+For every correction finding, identify the table index, direct HTML row/cell
+coordinates, row label and affected edge. Check the row label and both year
+amounts against the same source row before deciding where a rule belongs.
+A standalone year in the description column is a left-aligned row label.
+When a prior finding and your source interpretation disagree, zoom the cited
+source region before judging; if the edge remains ambiguous, mark unresolved.
+Assess only the current candidate. Do not repeat an earlier finding that the
+current prepared HTML has already corrected.
+
+
+Prepared tables use collapsed borders. The bottom border of one row and the
+top border of the adjacent row describe ONE physical shared edge. Matching
+mirrored declarations are not two strokes, and a subtotal underline is not an
+extra rule merely because it is also recorded as the next row's top border.
+Compare the physical edge's width, extent and position relative to both row
+labels. When correcting it, preserve the valid underline on the other side.
