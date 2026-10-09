@@ -168,7 +168,7 @@ def test_running_status_exposes_visual_phase(formatter_client):
     assert response.json()["summary"] == "Rechecking corrected notes against the source PDF…"
 
 
-@pytest.mark.parametrize("change", ["content", "source_pages", "appearance"])
+@pytest.mark.parametrize("change", ["content", "source_pages", "appearance", "added"])
 def test_formatter_status_invalidates_changed_verified_output(formatter_client, change):
     import json
     from notes.visual_review import note_verification_identity
@@ -188,7 +188,10 @@ def test_formatter_status_invalidates_changed_verified_output(formatter_client, 
     url = f"/api/runs/{run_id}/notes-format/status"
     assert client.get(url, params={"sheet": sheet}).json()["result"]["ok"]
     with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
-        if change == "appearance":
+        if change == "added":
+            repo.upsert_notes_cell(conn, run_id=run_id, sheet=sheet, row=113,
+                label="New disclosure", html=html, source_pages=[3])
+        elif change == "appearance":
             conn.execute("UPDATE runs SET notes_table_style=? WHERE id=?",
                 (json.dumps({"borderStyle": "all", "borderColor": "#ff0000"}), run_id))
         else:
@@ -197,12 +200,13 @@ def test_formatter_status_invalidates_changed_verified_output(formatter_client, 
                 source_pages=[4] if change == "source_pages" else None)
     status = client.get(url, params={"sheet": sheet}).json()
     assert status["error_type"] == "verification_stale"
-    assert status["failed_rows"] == [112]
+    assert status["failed_rows"] == ([113] if change == "added" else [112])
     assert not status["result"]["ok"]
     assert "Recheck" in status["error"]
 
 
-def test_retry_checks_stale_and_unfinished_notes_and_keeps_other_receipts(formatter_client, monkeypatch):
+@pytest.mark.parametrize("retry_case", ["changed", "failed_recheck", "cleared", "empty_paragraph", "deleted"])
+def test_retry_checks_stale_and_unfinished_notes_and_keeps_other_receipts(formatter_client, monkeypatch, retry_case):
     from notes.visual_review import note_verification_identity
     from notes.formatting_agent import _resolve_notes_table_theme
     from mtool.notes_decorate import NotesTableStyle
@@ -218,19 +222,45 @@ def test_retry_checks_stale_and_unfinished_notes_and_keeps_other_receipts(format
                 style_source="unstyled" if row == 113 else "formatter")
         repo.upsert_notes_format_task(conn, run_id, sheet, "done",
             result={"ok": True, "verified_rows": {112: receipt, 114: receipt}})
-        repo.upsert_notes_cell(conn, run_id=run_id, sheet=sheet, row=112,
-            label="Disclosure", html="<p>Edited disclosure</p>")
+        if retry_case == "deleted":
+            conn.execute("DELETE FROM notes_cells WHERE run_id=? AND sheet=? AND row=112", (run_id, sheet))
+        else:
+            repo.upsert_notes_cell(conn, run_id=run_id, sheet=sheet, row=112,
+                label="Disclosure", html="<p>&nbsp;<br></p>" if retry_case == "empty_paragraph"
+                else "" if retry_case == "cleared" else "<p>Edited disclosure</p>")
+    attempts = 0
     async def fake_formatter(**kwargs):
-        assert kwargs["rows"] == [112, 113]
+        nonlocal attempts
+        attempts += 1
+        expected = [112] if attempts == 2 else [113] if retry_case in {"cleared", "empty_paragraph", "deleted"} else [112, 113]
+        assert kwargs["rows"] == expected
         with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
             receipts = {cell.row: note_verification_identity(cell.html, style, cell.source_pages)
                 for cell in repo.list_formatter_cells_for_run(conn, run_id) if cell.row in kwargs["rows"]}
+        if retry_case == "failed_recheck" and attempts == 1:
+            receipts.pop(112)
+            return {"ok": False, "verified_rows": receipts, "failed_rows": [112],
+                    "error_type": "visual_review_failed", "error": "Row 112 remains unresolved."}
         return {"ok": True, "verified_rows": receipts, "changed_rows": 0}
     monkeypatch.setattr("notes.formatting_agent.run_notes_formatter", fake_formatter)
+    if retry_case in {"cleared", "empty_paragraph", "deleted"}:
+        # The removed field needs no check; only the new filled row does.
+        status = client.get(f"/api/runs/{run_id}/notes-format/status", params={"sheet": sheet}).json()
+        assert status["failed_rows"] == [113]
+        assert "112" not in status["result"]["verified_rows"]
     assert client.post(f"/api/runs/{run_id}/notes-format", json={"sheet": sheet}).status_code == 200
     status = _poll_done(client, run_id, sheet)
+    if retry_case == "failed_recheck":
+        assert not status["result"]["ok"]
+        assert status["failed_rows"] == [112]
+        assert "112" not in status["result"]["verified_rows"]
+        assert client.post(f"/api/runs/{run_id}/notes-format", json={"sheet": sheet}).status_code == 200
+        status = _poll_done(client, run_id, sheet)
     assert status["result"]["ok"]
-    assert set(status["result"]["verified_rows"]) == {"112", "113", "114"}
+    expected_receipts = {"113", "114"} if retry_case in {"cleared", "empty_paragraph", "deleted"} else {"112", "113", "114"}
+    assert set(status["result"]["verified_rows"]) == expected_receipts
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        assert set(repo.fetch_notes_format_task(conn, run_id, sheet)["result"]["verified_rows"]) == expected_receipts
 
 
 def test_notes_formatter_reports_already_formatted_sheet(formatter_client):

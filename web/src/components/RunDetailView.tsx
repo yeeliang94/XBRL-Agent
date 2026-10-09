@@ -523,6 +523,33 @@ function observedStageAgents(detail: RunDetailJson): RunAgentJson[] {
   return result;
 }
 
+function latestFormattingCalls(calls: RunAgentJson[]): RunAgentJson[] {
+  const latest = new Map<string, { sheet: string; call: RunAgentJson }>();
+  const ordered = [...calls].sort((a, b) =>
+    (Date.parse(a.started_at ?? "") || 0) - (Date.parse(b.started_at ?? "") || 0) || a.id - b.id);
+  for (const call of ordered) {
+    const variant = call.variant?.replace(/^notes_format_/i, "").toLowerCase();
+    const part = variant?.match(/^(.*)_part(\d+)$/);
+    const sheet = part?.[1] ?? variant ?? `call:${call.id}`;
+    // A whole-sheet retry replaces all older parts on that sheet. A part
+    // replaces only its own earlier attempt; other sheets remain independent.
+    if (!part) {
+      for (const [key, previous] of latest) {
+        if (previous.sheet === sheet) latest.delete(key);
+      }
+    }
+    latest.set(part ? `${sheet}:part${part[2]}` : sheet, { sheet, call });
+  }
+  return [...latest.values()].map(({ call }) => call);
+}
+
+function formattingCallsStatus(calls: RunAgentJson[]): string {
+  if (calls.some((call) => call.status === "running")) return "running";
+  if (calls.some((call) => call.status === "failed")) return "failed";
+  if (calls.some((call) => ["cancelled", "aborted"].includes(call.status))) return "cancelled";
+  return calls.every((call) => ["completed", "succeeded"].includes(call.status)) ? "completed" : "pending";
+}
+
 function SavedAgentWorkspace({ detail, filingStandard, onRetry, retryPending }: { detail: RunDetailJson; filingStandard?: unknown; onRetry?: (statementType: string) => void; retryPending?: boolean }) {
   const panelId = useId();
   const orderedAgents = useMemo(
@@ -532,21 +559,25 @@ function SavedAgentWorkspace({ detail, filingStandard, onRetry, retryPending }: 
       const formatting = observed.find((agent) => agent.statement_type === "NOTES_FORMATTING");
       const terminal = formatting ? [...formatting.events].reverse().find((event) => event.event === "pipeline_stage" && event.data.status) : undefined;
       const laterCalls = terminal ? calls.filter((call) => Date.parse(call.started_at ?? "") > (terminal.timestamp ?? 0) * 1000) : [];
-      const laterIssue = laterCalls.find((call) => call.status === "failed")
-        ?? laterCalls.find((call) => call.status === "running")
-        ?? laterCalls.find((call) => ["cancelled", "aborted"].includes(call.status));
-      if (formatting && laterIssue) {
-        formatting.status = laterIssue.status;
-        formatting.error_message = laterIssue.error_message;
-        formatting.events = [...formatting.events, { event: "status", timestamp: Date.parse(laterIssue.started_at ?? "") / 1000,
-          data: { phase: laterIssue.status === "running" ? "started" : "complete", message: laterIssue.status === "failed" ? "A later formatting pass failed. Review the formatting calls." : laterIssue.status === "running" ? "A later formatting pass is working." : "A later formatting pass stopped." } }];
+      const currentCalls = latestFormattingCalls(calls);
+      const currentStatus = formattingCallsStatus(currentCalls);
+      const failedCall = currentCalls.find((call) => call.status === "failed");
+      const latestStarted = currentCalls.reduce((latest, call) => Math.max(latest, Date.parse(call.started_at ?? "") || 0), 0);
+      const message = currentStatus === "failed" ? "A current formatting pass failed. Review the formatting calls."
+        : currentStatus === "running" ? "A formatting retry is working."
+        : currentStatus === "completed" ? "Formatting retries finished."
+        : "A formatting retry stopped.";
+      const currentEvent: RunAgentJson["events"][number] = { event: "status", timestamp: latestStarted / 1000,
+        data: { phase: currentStatus === "running" ? "started" : "complete", message } };
+      if (formatting && laterCalls.length) {
+        formatting.status = currentStatus;
+        formatting.error_message = failedCall?.error_message ?? null;
+        formatting.events = [...formatting.events, currentEvent];
       }
-      if (calls.length && !observed.some((agent) => agent.statement_type === "NOTES_FORMATTING")) {
-        const status = calls.some((agent) => agent.status === "failed") ? "failed"
-          : calls.some((agent) => agent.status === "running") ? "running"
-          : calls.some((agent) => ["cancelled", "aborted"].includes(agent.status)) ? "cancelled"
-          : calls.every((agent) => ["completed", "succeeded"].includes(agent.status)) ? "completed" : "pending";
-        observed.push({ ...calls[0], id: -1, variant: null, status, events: calls.flatMap((agent) => agent.events) });
+      if (calls.length && !formatting) {
+        observed.push({ ...calls[0], id: -1, variant: null, status: currentStatus,
+          error_type: failedCall?.error_type ?? null, error_message: failedCall?.error_message ?? null,
+          events: [...calls.flatMap((agent) => agent.events), currentEvent] });
       }
       return [...detail.agents.filter((agent) => agent.statement_type !== "NOTES_FORMATTING").map((agent) => {
         const status = recordedAgentStatus(agent);

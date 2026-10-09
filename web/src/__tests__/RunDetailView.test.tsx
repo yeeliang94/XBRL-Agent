@@ -33,6 +33,43 @@ test.each(["failed", "succeeded"])("formatter calls share one workstream and ret
   cleanup();
 });
 
+test.each([false, true])("formatting retries replace older failures with current working and success states (stage: %s)", (hasStage) => {
+  window.history.replaceState({}, "", "/");
+  const failure = makeAgent({ id: 11, statement_type: "NOTES_FORMATTING", status: "failed",
+    variant: "notes_format_Notes-Listofnotes_part0", started_at: "2026-04-10T09:32:00Z", error_message: "Old formatting failure" });
+  const events: RunDetailJson["run_events"] = hasStage ? [{ event: "pipeline_stage", data: {
+    stage: "formatting_notes", status: "failed", message: "Formatting failed." },
+    timestamp: Date.parse("2026-04-10T09:31:00Z") / 1000 }] : [];
+  const renderDetail = (agents: RunAgentJson[]) => <RunDetailView detail={makeDetail({ agents, run_events: events })}
+    onDelete={() => {}} onDownload={() => {}} />;
+  const { rerender } = render(renderDetail([failure]));
+  clickRunTab(/^activity$/i);
+  const formattingTab = () => within(screen.getByRole("tablist", { name: "Run workstreams" }))
+    .getByRole("tab", { name: /Notes formatting/ });
+  expect(formattingTab()).toHaveTextContent("Failed");
+  const retry = makeAgent({ id: 12, statement_type: "NOTES_FORMATTING", status: "running",
+    variant: "Notes-Listofnotes", started_at: "2026-04-10T09:33:00Z", ended_at: null });
+  rerender(renderDetail([retry, failure])); // Response order must not determine currentness.
+  expect(formattingTab()).toHaveTextContent("Working");
+  rerender(renderDetail([{ ...retry, status: "completed" }, failure]));
+  expect(formattingTab()).toHaveTextContent("Complete");
+  fireEvent.click(formattingTab());
+  fireEvent.click(screen.getByText("Formatting calls"));
+  expect(screen.getByText(/Old formatting failure/)).toBeVisible();
+});
+
+test.each(["Notes-Issuedcapital", "notes_format_Notes-Listofnotes_part1"])("a successful part retry retains another current failure on %s", (otherVariant) => {
+  window.history.replaceState({}, "", "/");
+  render(<RunDetailView detail={makeDetail({ agents: [
+    makeAgent({ id: 11, statement_type: "NOTES_FORMATTING", status: "failed", variant: "notes_format_Notes-Listofnotes_part0" }),
+    makeAgent({ id: 12, statement_type: "NOTES_FORMATTING", status: "failed", variant: otherVariant }),
+    makeAgent({ id: 13, statement_type: "NOTES_FORMATTING", status: "completed", variant: "notes_format_Notes-Listofnotes_part0", started_at: "2026-04-10T09:33:00Z" }),
+  ], run_events: [] })} onDelete={() => {}} onDownload={() => {}} />);
+  clickRunTab(/^activity$/i);
+  expect(within(screen.getByRole("tablist", { name: "Run workstreams" }))
+    .getByRole("tab", { name: /Notes formatting/ })).toHaveTextContent("Failed");
+});
+
 test("recorded human escalation is needs review while real reviewer failures stay failed", () => {
   window.history.replaceState({}, "", "/");
   render(<RunDetailView detail={makeDetail({ agents: [makeAgent({
