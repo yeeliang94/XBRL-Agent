@@ -115,6 +115,23 @@
   box-shadow: none;
 }
 
+/* Wide schedules retain readable columns inside their own preview region.
+ * These display rules never enter saved, copied or exported note HTML. */
+.notes-review-tab .notes-wide-table-preview {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.notes-review-tab table[data-wide-preview="true"] {
+  min-width: 840px;
+}
+
+.notes-review-tab table[data-wide-preview="true"] th,
+.notes-review-tab table[data-wide-preview="true"] td {
+  overflow-wrap: normal !important;
+  word-break: normal;
+}
+
 /* A block wrapper reduces the available line width for its whole sub-note,
  * so an enclosed 100%-width table stays within the indented section. Keep
  * this 2em offset aligned with mtool/notes_decorate.py. */

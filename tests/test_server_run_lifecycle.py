@@ -465,7 +465,7 @@ def test_effective_model_stored_per_agent_not_only_overrides(session_env, clean_
     conn = _open_db(db_path)
     try:
         agents = conn.execute(
-            "SELECT statement_type, model FROM run_agents ORDER BY statement_type"
+            "SELECT statement_type, model FROM run_agents WHERE statement_type IN ('SOFP','SOPL') ORDER BY statement_type"
         ).fetchall()
     finally:
         conn.close()
@@ -544,7 +544,7 @@ def test_persisted_model_uses_model_name_attr_not_class_repr(session_env):
     conn = _open_db(db_path)
     try:
         agents = conn.execute(
-            "SELECT statement_type, model FROM run_agents ORDER BY statement_type"
+            "SELECT statement_type, model FROM run_agents WHERE statement_type IN ('SOFP','SOPL') ORDER BY statement_type"
         ).fetchall()
     finally:
         conn.close()

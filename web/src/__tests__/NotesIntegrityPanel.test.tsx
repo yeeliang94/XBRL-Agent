@@ -16,6 +16,16 @@ import { NotesIntegrityPanel } from "../components/NotesIntegrityPanel";
 
 const originalFetch = globalThis.fetch;
 
+test("complete placement still names pages with uncertain source text", async () => {
+  mockGet({ ...PAYLOAD, input_kind: "prepared_document",
+    notes: [{ ...PAYLOAD.notes[0], items: [{ ...ITEM, block_id: "uncertain", page: 14, resolved: true, disposition: "included" }] }],
+    summary: { ...PAYLOAD.summary, unresolved: 0, notes_needing_review: 0, requires_review: false },
+    findings: [{ check: "source_uncertainty", severity: "warning", message: "Source capture uncertain", block_ids: ["uncertain"] }],
+  });
+  render(<NotesIntegrityPanel runId={7} />);
+  expect(await screen.findByText(/Source text needs checking on PDF page 14/)).toBeVisible();
+});
+
 beforeEach(() => {
   globalThis.fetch = vi.fn();
 });

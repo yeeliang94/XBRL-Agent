@@ -16,6 +16,18 @@ function makeAgentStates(): Record<string, AgentTabState> {
 }
 
 describe("AgentTabs", () => {
+  test("final notes activities follow content, completeness, then appearance order", () => {
+    const agents: Record<string, AgentTabState> = {
+      formatting: {agentId: "formatting", role: "NOTES_FORMATTING", label: "Notes formatting", status: "failed"},
+      integrity: {agentId: "integrity", role: "NOTES_INTEGRITY", label: "Notes completeness", status: "complete"},
+      cleanup: {agentId: "cleanup", role: "NOTES_CLEANUP", label: "Notes cleanup", status: "complete"},
+    };
+    render(<AgentTabs agents={agents} tabOrder={Object.keys(agents)} activeTab="formatting" onTabClick={() => {}} />);
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs[0]).toHaveTextContent("Notes cleanup");
+    expect(tabs[1]).toHaveTextContent("Notes completeness");
+    expect(tabs[2]).toHaveTextContent("Notes formatting");
+  });
   test("renders all tabs", () => {
     const agents = makeAgentStates();
     render(

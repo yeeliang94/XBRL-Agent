@@ -18,6 +18,7 @@ export const NON_AGENT_TAB_IDS: ReadonlySet<string> = new Set([
   "scout",
   "notes-formatting",
   "notes-cleanup",
+  "notes-integrity",
   "validator",
   "NOTES_VALIDATOR",
   // CORRECTION = the reviewer pass. A real pseudo-agent that runs after

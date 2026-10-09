@@ -2,19 +2,6 @@ import { describe, test, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { GeneralSettingsForm } from "../components/GeneralSettingsForm";
 
-/**
- * The scanned-PDF transcript toggle (docs/PLAN-pdf-source-sidecar.md) in
- * Settings.
- *
- * Until this control existed the feature could only be enabled by editing
- * .env or POSTing /api/settings by hand. Tested at the submit layer, like the
- * Word-source picker: a checkbox that shows the right state but sends nothing
- * still says "Saved".
- *
- * Its default is OFF — the opposite of the other run toggles — because the
- * pass adds a paid vision call per notes page.
- */
-
 const SETTINGS = {
   model: "openai.gpt-5.4",
   proxy_url: "",
@@ -55,7 +42,8 @@ describe("Simplified PDF preparation", () => {
   });
   test("saving another setting does not submit retired workflow flags", async () => {
     renderForm({ pdf_sidecar: true, pdf_notes_auto_format: false });
-    fireEvent.click(await screen.findByLabelText(/Automatically run the reviewer after extraction/i));
+    await screen.findByText(/PDF and Word documents are prepared automatically/);
+    fireEvent.change(screen.getByLabelText("AI service address"), { target: { value: "https://service.example.com" } });
     fireEvent.click(screen.getByRole("button", { name: /^save shared settings$/i }));
     await waitFor(() => expect(saveSpy).toHaveBeenCalled());
     expect(saveSpy.mock.calls[0][0]).not.toHaveProperty("pdf_sidecar");

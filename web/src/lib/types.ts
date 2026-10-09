@@ -59,6 +59,7 @@ export interface SettingsResponse {
 }
 
 export type EventPhase =
+  | "skipped"
   | "starting"           // Multi-agent run initializing
   | "scouting"           // Scout analyzing PDF structure
   | "started"            // Notes agent / sub-agent first status event
@@ -298,11 +299,12 @@ export type PipelineStage =
   | "reviewing_notes"
   | "formatting_notes"
   | "cleaning_notes"
+  | "checking_notes"
   | "validating_notes"
   | "done";
 
 export interface PipelineStageData {
-  status?: PreparationSnapshot["status"];
+  status?: PreparationSnapshot["status"] | "skipped";
   captured?: number;
   /** Independent assessments completed, including best-effort source readings. */
   checked?: number;

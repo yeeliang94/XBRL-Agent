@@ -51,8 +51,11 @@ def test_pdf_auto_format_stage_is_after_notes_review_and_before_recalc():
     assert review_release != -1
     assert format_stage != -1
     assert recalc_stage != -1
-    cleanup_stage = source.find('"cleaning_notes"', format_stage)
-    assert review_release < format_stage < cleanup_stage < recalc_stage
+    cleanup_stage = source.find('"cleaning_notes"', review_release)
+    integrity_check = source.find("_run_notes_integrity_check,", cleanup_stage)
+    integrity_repair = source.find("_retry_missing_source_blocks,", integrity_check)
+    assert review_release < cleanup_stage < integrity_check < integrity_repair < format_stage < recalc_stage
+    assert source.find("_retry_missing_source_blocks,", format_stage) == -1
 
 
 def test_pdf_auto_format_task_is_registered_and_always_unregistered():

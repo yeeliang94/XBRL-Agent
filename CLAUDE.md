@@ -23,9 +23,10 @@ the task.
 | When the task changes… | Read these detailed invariants |
 |---|---|
 | Model construction, provider routing, reasoning, caching, retries, telemetry, or agent loops | 2, 2a, 5, 6, 18 |
-| Templates, taxonomy, formula generation, statement variants, filing standard, or filing level | 3, 4, 12, 15, 17, 21 |
+| Templates, taxonomy, formula generation, statement variants, filing standard, or filing level | 3, 4, 12, 15, 17, 21, 23 |
+| Reporting-period shape, first financial statements, or requested/resolved variant persistence | 12, 21, 23 |
 | Run orchestration, persistence, cancellation, progress events, cross-checks, or workbook writes | 9–11, 18–22, 25 |
-| Scout behavior, extraction prompts, page access, or source-document context | 1, 12–15, 17, 29 |
+| Scout behavior, document preparation, extraction prompts, page access, or source-document context | 1, 12–15, 17, 29, 31 |
 | Notes extraction, HTML, review, formatting, coverage, source lineage, or source integrity | 13, 14, 16, 22, 27, 29, 31 |
 | mTool export, clipboard decoration, filing readiness, or receipts | 16, 21, 28 |
 | Frontend layout, navigation, content hierarchy, simplification, styles, accessibility, or shared design tokens | 7, 16, 19, 21, 27, 28, 30 |

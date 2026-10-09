@@ -252,7 +252,8 @@ def test_numeric_facts_overlay_writes_edited_value(tmp_path):
 # Step 9 — coordinator capture wiring (writer manifest → run_concept_facts)
 # ---------------------------------------------------------------------------
 
-def test_coordinator_projects_numeric_cells_to_facts(tmp_path):
+@pytest.mark.parametrize("abstract", [False, True])
+def test_coordinator_projects_numeric_cells_to_facts(tmp_path, abstract):
     """The coordinator's numeric-capture helper resolves a writer
     ``numeric_cells`` manifest into ``run_concept_facts`` — the wiring between
     the writer and ``project_writes`` that the per-template e2e never isolates.
@@ -321,9 +322,17 @@ def test_coordinator_projects_numeric_cells_to_facts(tmp_path):
         }],
     )
 
+    if abstract:
+        result.numeric_cells[0]["row"] = 7
     projection = asyncio.run(_project_numeric_notes_facts(config, result))
     assert projection is not None
+    if abstract:
+        assert projection.has_gaps
+        assert result.status == "failed"
+        assert result.error_type == "canonical_projection_gap"
+        return
     assert projection.projected == 1
+    assert result.status == "succeeded"
 
     conn = sqlite3.connect(str(db))
     try:

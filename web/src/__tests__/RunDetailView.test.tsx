@@ -16,6 +16,82 @@ function activityRows() {
   return within(screen.getByRole("tablist", { name: "Run workstreams" })).getAllByRole("tab");
 }
 
+test.each(["failed", "succeeded"])("formatter calls share one workstream and retain per-call telemetry after %s", (status) => {
+  window.history.replaceState({}, "", "/");
+  render(<RunDetailView detail={makeDetail({ agents: [
+    makeAgent({ id: 11, statement_type: "NOTES_FORMATTING", status: "completed", variant: "Notes-Issuedcapital" }),
+    makeAgent({ id: 12, statement_type: "NOTES_FORMATTING", status: "failed", variant: "Notes-ListOfNotes" }),
+  ], run_events: [
+    { event: "pipeline_stage", data: { stage: "formatting_notes", status, message: "Formatting pass finished." }, timestamp: 1 },
+  ] })} onDelete={() => {}} onDownload={() => {}} />);
+  clickRunTab(/^activity$/i);
+  const tabs = screen.getByRole("tablist", { name: "Run workstreams" });
+  expect(within(tabs).getAllByRole("tab", { name: /Notes formatting/ })).toHaveLength(1);
+  fireEvent.click(within(tabs).getByRole("tab", { name: /Notes formatting/ }));
+  expect(within(tabs).getByRole("tab", { name: /Notes formatting/ })).toHaveTextContent("Failed");
+  expect(screen.getByText("Formatting calls")).toBeVisible();
+  cleanup();
+});
+
+test.each([false, true])("formatting retries replace older failures with current working and success states (stage: %s)", (hasStage) => {
+  window.history.replaceState({}, "", "/");
+  const failure = makeAgent({ id: 11, statement_type: "NOTES_FORMATTING", status: "failed",
+    variant: "notes_format_Notes-Listofnotes_part0", started_at: "2026-04-10T09:32:00Z", error_message: "Old formatting failure" });
+  const events: RunDetailJson["run_events"] = hasStage ? [{ event: "pipeline_stage", data: {
+    stage: "formatting_notes", status: "failed", message: "Formatting failed." },
+    timestamp: Date.parse("2026-04-10T09:31:00Z") / 1000 }] : [];
+  const renderDetail = (agents: RunAgentJson[]) => <RunDetailView detail={makeDetail({ agents, run_events: events })}
+    onDelete={() => {}} onDownload={() => {}} />;
+  const { rerender } = render(renderDetail([failure]));
+  clickRunTab(/^activity$/i);
+  const formattingTab = () => within(screen.getByRole("tablist", { name: "Run workstreams" }))
+    .getByRole("tab", { name: /Notes formatting/ });
+  expect(formattingTab()).toHaveTextContent("Failed");
+  const retry = makeAgent({ id: 12, statement_type: "NOTES_FORMATTING", status: "running",
+    variant: "Notes-Listofnotes", started_at: "2026-04-10T09:33:00Z", ended_at: null });
+  rerender(renderDetail([retry, failure])); // Response order must not determine currentness.
+  expect(formattingTab()).toHaveTextContent("Working");
+  rerender(renderDetail([{ ...retry, status: "completed" }, failure]));
+  expect(formattingTab()).toHaveTextContent("Complete");
+  fireEvent.click(formattingTab());
+  fireEvent.click(screen.getByText("Formatting calls"));
+  expect(screen.getByText(/Old formatting failure/)).toBeVisible();
+});
+
+test.each(["Notes-Issuedcapital", "notes_format_Notes-Listofnotes_part1"])("a successful part retry retains another current failure on %s", (otherVariant) => {
+  window.history.replaceState({}, "", "/");
+  render(<RunDetailView detail={makeDetail({ agents: [
+    makeAgent({ id: 11, statement_type: "NOTES_FORMATTING", status: "failed", variant: "notes_format_Notes-Listofnotes_part0" }),
+    makeAgent({ id: 12, statement_type: "NOTES_FORMATTING", status: "failed", variant: otherVariant }),
+    makeAgent({ id: 13, statement_type: "NOTES_FORMATTING", status: "completed", variant: "notes_format_Notes-Listofnotes_part0", started_at: "2026-04-10T09:33:00Z" }),
+  ], run_events: [] })} onDelete={() => {}} onDownload={() => {}} />);
+  clickRunTab(/^activity$/i);
+  expect(within(screen.getByRole("tablist", { name: "Run workstreams" }))
+    .getByRole("tab", { name: /Notes formatting/ })).toHaveTextContent("Failed");
+});
+
+test("recorded human escalation is needs review while real reviewer failures stay failed", () => {
+  window.history.replaceState({}, "", "/");
+  render(<RunDetailView detail={makeDetail({ agents: [makeAgent({
+    statement_type: "CORRECTION", status: "failed", error_type: "tool_exception",
+    events: [{ event: "complete", data: { success: false, error: "reviewer_investigation_unresolved" }, timestamp: 1 } as SSEEvent],
+  })] })} onDelete={() => {}} onDownload={() => {}} />);
+  clickRunTab(/^activity$/i);
+  const tab = within(screen.getByRole("tablist", { name: "Run workstreams" })).getByRole("tab", { name: /AI review/ });
+  expect(tab).toHaveTextContent("Needs review");
+  expect(screen.queryByTestId("agent-error-type")).toBeNull();
+  cleanup();
+  window.history.replaceState({}, "", "/");
+  render(<RunDetailView detail={makeDetail({ agents: [makeAgent({
+    statement_type: "CORRECTION", status: "failed", error_type: "tool_exception",
+    events: [{ event: "complete", data: { success: false, error: "reviewer_exception" }, timestamp: 1 } as SSEEvent],
+  })] })} onDelete={() => {}} onDownload={() => {}} />);
+  clickRunTab(/^activity$/i);
+  expect(within(screen.getByRole("tablist", { name: "Run workstreams" })).getByRole("tab", { name: /AI review/ })).toHaveTextContent("Failed");
+  expect(screen.getByTestId("agent-error-type")).toBeVisible();
+  cleanup();
+});
+
 // A tool_call / tool_result pair used across the fixture so each agent
 // renders a non-empty timeline.
 const sampleEvents: SSEEvent[] = [
@@ -142,7 +218,6 @@ function makeDetail(overrides: Partial<RunDetailJson> = {}): RunDetailJson {
   };
 }
 
-describe("RunDetailView", () => {
   beforeEach(() => {
     // jsdom does not implement HTMLDialogElement.showModal, used by <dialog>.
     // Stub confirm() so tests can drive the confirm flow without the dialog.
@@ -155,6 +230,9 @@ describe("RunDetailView", () => {
     cleanup();
     vi.restoreAllMocks();
   });
+
+describe("RunDetailView", () => {
+
 
   test.each(["values", "notes", "checks", "review"] as const)("running runs hide review sections and redirect the %s link to Activity", (key) => {
     window.history.replaceState(null, "", `/history/42?tab=${key}`);

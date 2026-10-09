@@ -348,6 +348,7 @@ def create_run(
     status: str = "running",
     orchestration: str = "split",
     app_version: Optional[str] = None,
+    owned: bool = False,
 ) -> int:
     """Insert a new run row and return its id.
 
@@ -395,6 +396,9 @@ def create_run(
     if status != "draft":
         from agent_instructions import capture_guidance
         capture_guidance(conn, run_id)
+    if owned and status == "running":
+        from db.run_ownership import claim
+        claim(conn, run_id)
     return run_id
 
 
@@ -464,6 +468,7 @@ def update_run_status(conn: sqlite3.Connection, run_id: int, status: str) -> Non
 def mark_draft_started(
     conn: sqlite3.Connection,
     run_id: int,
+    *, owned: bool = False,
 ) -> bool:
     """Flip a draft row to status='running' and stamp `started_at` now.
 
@@ -482,6 +487,9 @@ def mark_draft_started(
     if started:
         from agent_instructions import capture_guidance
         capture_guidance(conn, run_id)
+        if owned:
+            from db.run_ownership import claim
+            claim(conn, run_id)
     return started
 
 
@@ -1287,7 +1295,7 @@ def upsert_notes_cell(
     now = _now()
     pages_json = json.dumps(list(source_pages)) if source_pages else None
     existing = conn.execute(
-        "SELECT id, concept_uuid, style_source FROM notes_cells "
+        "SELECT id, concept_uuid, style_source, html, source_pages FROM notes_cells "
         "WHERE run_id = ? AND sheet = ? AND row = ?",
         (run_id, sheet, row),
     ).fetchone()
@@ -1307,6 +1315,10 @@ def upsert_notes_cell(
         # (e.g. the reviewer's edit/author path, which doesn't run the styling
         # sidecar) — same "don't silently downgrade" rule as concept_uuid.
         style = style_source if style_source is not None else existing[2]
+        if source_pages is None:
+            pages_json = existing[4]
+        if html != existing[3] and style == "formatter":
+            style = "unstyled"
         # v37: bump the monotonic revision on every write. The optimistic
         # version check keyed on `updated_at`, which has one-second precision,
         # so two writes inside the same second shared a token and neither was
@@ -1383,6 +1395,18 @@ def list_formatter_cells_for_run(conn: sqlite3.Connection, run_id: int) -> list[
     numeric_sheets = {entry.sheet_name for entry in NOTES_REGISTRY.values() if entry.is_numeric}
     identities = {row[0]: (row[1], row[2]) for row in conn.execute(
         "SELECT id, concept_uuid, invalid_target FROM notes_cells WHERE run_id = ?", (run_id,))}
+    # Recover omitted page records only from this cell's active frozen placements.
+    placed_pages: dict[tuple[str, int, int], set[int]] = {}
+    for sheet, row, generation, page in conn.execute(
+        "SELECT p.sheet,p.row,p.generation_id,b.page FROM notes_block_placements p "
+        "JOIN notes_source_blocks b ON b.generation_id=p.generation_id AND b.block_id=p.block_id "
+        "WHERE p.run_id=? AND p.active=1 AND b.page IS NOT NULL", (run_id,),
+    ):
+        placed_pages.setdefault((sheet, row, generation), set()).add(page)
+    for cell in cells:
+        if not cell.source_pages and cell.source_generation_id is not None:
+            cell.source_pages = sorted(placed_pages.get(
+                (cell.sheet, cell.row, cell.source_generation_id), set()))
     return [cell for cell in cells if cell.id in identities and not identities[cell.id][1]
             and (cell.sheet not in numeric_sheets or html_cell_identity_valid(
                 targets.get((cell.sheet, cell.row)), identities[cell.id][0]))]
@@ -1865,11 +1889,20 @@ def fetch_notes_review_task(
             "outcome": outcome, "error": row["error"]}
 
 
+def _live_run_task_exclusion(conn: sqlite3.Connection) -> tuple[str, list[int]]:
+    """Keep child tasks owned by another live extraction out of recovery."""
+    from db.run_ownership import protected_runs
+    protected = protected_runs(conn)
+    exclusion = " AND run_id NOT IN (" + ",".join("?" for _ in protected) + ")" if protected else ""
+    return exclusion, protected
+
+
 def reconcile_stale_notes_review_tasks(conn: sqlite3.Connection) -> int:
     """Retire notes re-reviews orphaned by a process restart (mirrors
     :func:`reconcile_stale_review_tasks`). Also close the paid reviewer audit
     row created by a manual re-review before retiring its durable task. Returns
     the number of task rows reconciled."""
+    exclusion, protected = _live_run_task_exclusion(conn)
     now = _now()
     outcome_json = json.dumps({
         "ok": False, "invoked": False,
@@ -1881,13 +1914,13 @@ def reconcile_stale_notes_review_tasks(conn: sqlite3.Connection) -> int:
         "error_type = COALESCE(error_type, 'tool_exception') "
         "WHERE status = 'running' AND statement_type = 'NOTES_VALIDATOR' "
         "AND run_id IN (SELECT run_id FROM notes_review_tasks "
-        "WHERE status = 'running')",
-        (now,),
+        "WHERE status = 'running')" + exclusion,
+        (now, *protected),
     )
     cur = conn.execute(
         "UPDATE notes_review_tasks SET status = 'done', outcome = ?, "
-        "error = 'restarted', updated_at = ? WHERE status = 'running'",
-        (outcome_json, now),
+        "error = 'restarted', updated_at = ? WHERE status = 'running'" + exclusion,
+        (outcome_json, now, *protected),
     )
     return int(cur.rowcount)
 
@@ -1953,10 +1986,11 @@ def finish_notes_integrity_task(
 def reconcile_stale_notes_integrity_tasks(conn: sqlite3.Connection) -> int:
     """Retire remediations orphaned by a process restart. Without this a crash
     mid-remediation locks the run's slot forever."""
+    exclusion, protected = _live_run_task_exclusion(conn)
     cur = conn.execute(
         "UPDATE notes_integrity_tasks SET status = 'done', "
-        "outcome = 'restarted', ended_at = ? WHERE status = 'running'",
-        (_now(),),
+        "outcome = 'restarted', ended_at = ? WHERE status = 'running'" + exclusion,
+        (_now(), *protected),
     )
     return int(cur.rowcount)
 
@@ -2193,6 +2227,7 @@ def any_notes_format_task_running(
 
 def reconcile_stale_notes_format_tasks(conn: sqlite3.Connection) -> int:
     """Retire notes formatter tasks orphaned by a process restart."""
+    exclusion, protected = _live_run_task_exclusion(conn)
     now = _now()
     result_json = json.dumps({
         "ok": False,
@@ -2203,8 +2238,8 @@ def reconcile_stale_notes_format_tasks(conn: sqlite3.Connection) -> int:
         "UPDATE notes_format_tasks SET status = 'done', result_json = ?, "
         "error = 'restarted', error_type = 'restarted', "
         "summary = 'Formatter interrupted by server restart.', "
-        "updated_at = ? WHERE status = 'running'",
-        (result_json, now),
+        "updated_at = ? WHERE status = 'running'" + exclusion,
+        (result_json, now, *protected),
     )
     return int(cur.rowcount)
 
@@ -2561,7 +2596,7 @@ def reconcile_stale_runs(conn: sqlite3.Connection, max_age_hours: float = 6.0) -
     `runs` row is left `status='running'` forever. On the History page such a
     row shows Download/Delete disabled and no live indicator — a dead-end the
     user can't escape. This mirrors `reconcile_stale_review_tasks`: at startup,
-    flip every `running` run older than ``max_age_hours`` to a terminal
+    flip unowned `running` runs older than ``max_age_hours`` to a terminal
     ``aborted`` so gotcha #10's "no row stuck non-terminal" contract holds
     across restarts. A row with a blank ``started_at`` (definitionally broken —
     run-start always stamps it) is reaped regardless of age.
@@ -2570,7 +2605,8 @@ def reconcile_stale_runs(conn: sqlite3.Connection, max_age_hours: float = 6.0) -
     terminal run event in the same caller-owned transaction. A genuinely fresh
     `running` row (started within the window) is left alone so a very recent
     restart during an in-flight run doesn't kill live work. Returns rows
-    reconciled. Called once at startup, before any request served.
+    reconciled. OS-held ownership also protects a live CLI or web process
+    sharing the database, regardless of age. Called once at startup.
     """
     now = _now()
     cutoff = (
@@ -2584,6 +2620,9 @@ def reconcile_stale_runs(conn: sqlite3.Connection, max_age_hours: float = 6.0) -
     reconciled: list[int] = []
     for row in rows:
         run_id = int(row[0])
+        from db.run_ownership import is_live
+        if is_live(conn, run_id):
+            continue
         cur = conn.execute(
             "UPDATE runs SET status = 'aborted', ended_at = ? "
             "WHERE id = ? AND status = 'running'",
@@ -2617,6 +2656,7 @@ def reconcile_stale_review_tasks(conn: sqlite3.Connection) -> int:
     poll resolves and the user can relaunch. Returns rows reconciled.
     Called once at startup, before any request is served.
     """
+    exclusion, protected = _live_run_task_exclusion(conn)
     now = _now()
     outcome_json = json.dumps({
         "ok": False,
@@ -2626,8 +2666,8 @@ def reconcile_stale_review_tasks(conn: sqlite3.Connection) -> int:
     })
     cur = conn.execute(
         "UPDATE run_review_tasks SET status = 'done', outcome_json = ?, "
-        "updated_at = ? WHERE status = 'running'",
-        (outcome_json, now),
+        "updated_at = ? WHERE status = 'running'" + exclusion,
+        (outcome_json, now, *protected),
     )
     return int(cur.rowcount)
 

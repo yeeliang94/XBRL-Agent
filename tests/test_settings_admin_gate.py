@@ -58,7 +58,7 @@ def test_unauthenticated_ai_plumbing_write_is_401(env):
 def test_admin_can_write_ai_plumbing(env):
     client = TestClient(server.app)
     _login(client, "admin@firm.com", "admin-password")
-    r = client.post("/api/settings", json={"auto_review": False})
+    r = client.post("/api/settings", json={"notes_coverage": False})
     assert r.status_code == 200
 
 
@@ -67,7 +67,7 @@ def test_non_admin_can_write_cosmetic_only(env):
     client = TestClient(server.app)
     _login(client, "user@firm.com", "user-password")
     r = client.post("/api/settings", json={
-        "notes_table_style": {"headerFill": "#f4f4f4"},
+        "notes_appearance_overrides": {"headerFill": "#f4f4f4"},
     })
     assert r.status_code == 200
 

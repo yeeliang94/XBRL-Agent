@@ -265,7 +265,7 @@ async def re_review(run_id: int, body: Optional[dict] = None):
         try:
             conn = server._open_audit_conn()
             try:
-                status = "failed" if outcome.get("error") else "completed"
+                status = "failed" if outcome.get("error") else "completed_with_errors" if outcome.get("needs_review") else "completed"
                 repo.finish_run_agent(
                     conn, agent_id, status=status, workbook_path=None,
                     total_tokens=int(outcome.get("total_tokens", 0) or 0),
@@ -288,6 +288,7 @@ async def re_review(run_id: int, body: Optional[dict] = None):
                     # v17 (item 9): classify the manual re-review outcome.
                     error_type=server._error_type_for_outcome(
                         outcome.get("error")),
+                    error_message="AI review completed; a source question needs your review." if outcome.get("needs_review") else outcome.get("error"),
                 )
                 # Plan agent-efficiency Step 0.1: persist the per-turn rows.
                 # REPLACE, not append — re-review reuses the existing

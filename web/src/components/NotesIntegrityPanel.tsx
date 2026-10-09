@@ -70,7 +70,7 @@ interface Payload {
     notes_needing_review: number;
     requires_review: boolean;
   } | null;
-  findings: { check: string; severity: string; message: string }[];
+  findings: { check: string; severity: string; message: string; block_ids?: string[] }[];
 }
 
 interface Props {
@@ -240,6 +240,10 @@ export function NotesIntegrityPanel({ runId }: Props) {
   const s = data.summary;
   const byPage = data.input_kind !== "docx_html";
   const openChecks = data.findings.filter((f) => f.severity === "unresolved").length;
+  const uncertainIds = new Set(data.findings.filter((finding) => finding.check === "source_uncertainty")
+    .flatMap((finding) => finding.block_ids ?? []));
+  const uncertainPages = [...new Set(data.notes.flatMap((note) => note.items)
+    .filter((item) => uncertainIds.has(item.block_id) && item.page != null).map((item) => item.page!))].sort((a, b) => a - b);
 
   return (
     <div style={styles.panel}>
@@ -263,6 +267,11 @@ export function NotesIntegrityPanel({ runId }: Props) {
           ` ${openChecks} source check${openChecks === 1 ? "" : "s"} still ${openChecks === 1 ? "needs" : "need"} review.`}
         {data.mode === "shadow" && " Recorded only — this run's result was not changed by it."}
       </p>
+
+      {uncertainIds.size > 0 && <p role="status" style={styles.summary}>
+        Source text needs checking{uncertainPages.length ? ` on PDF page${uncertainPages.length === 1 ? "" : "s"} ${uncertainPages.join(", ")}` : ""}.
+        {" "}All parts being placed does not confirm that unclear source text was read correctly.
+      </p>}
 
       {data.findings.length > 0 && (
         <ul style={styles.findings} data-testid="notes-integrity-findings">

@@ -52,6 +52,7 @@ def test_the_audit_actually_quotes_something():
     """A regex that silently matches nothing would make every test below
     vacuously pass."""
     assert len(_blocks()) >= 4
+    assert "notes_formatter.md" in {block.group("name") for block in _blocks()}
 
 
 @pytest.mark.parametrize("name", [m.group("name") for m in _VERBATIM.finditer(_AUDIT)])

@@ -756,7 +756,8 @@ def test_re_review_picks_up_stored_failed_crosscheck(client, monkeypatch):
     assert done["invoked"] is True
 
 
-def test_re_review_passes_model_override(client, monkeypatch):
+@pytest.mark.parametrize("needs_review", [False, True])
+def test_re_review_passes_model_override(client, monkeypatch, needs_review):
     """The Review-tab model picker sends `model`; the endpoint must build the
     reviewer with it and echo it back."""
     tc, db, run_id, srv = client
@@ -768,7 +769,7 @@ def test_re_review_passes_model_override(client, monkeypatch):
         return object()
 
     async def _noop_pass(**kwargs):
-        return {"invoked": True, "writes_performed": 0, "flags_raised": 0, "error": None}
+        return {"invoked": True, "writes_performed": 0, "flags_raised": int(needs_review), "error": None, "needs_review": needs_review}
 
     monkeypatch.setattr(srv, "_create_proxy_model", _fake_create)
     monkeypatch.setattr(srv, "_recheck_from_facts", lambda rid: [])
@@ -779,6 +780,11 @@ def test_re_review_passes_model_override(client, monkeypatch):
     assert r.json()["model"] == "google.gemini-3"
     _await_rereview(tc, run_id)
     assert captured["model"] == "google.gemini-3"
+    with sqlite3.connect(str(db)) as conn:
+        row = conn.execute("SELECT status, error_type, error_message FROM run_agents WHERE run_id=? AND statement_type='CORRECTION'", (run_id,)).fetchone()
+    assert row[0] == ("completed_with_errors" if needs_review else "completed")
+    assert row[1] is None
+    assert bool(row[2]) is needs_review
 
 
 def test_re_review_reports_ok_false_on_reviewer_error(client, monkeypatch):

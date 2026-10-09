@@ -73,7 +73,11 @@ Routing:
 For Issued Capital and Related Party numeric rows only, use write_notes with
 numeric_values and empty content. Copy the exact chosen_row_label and include
 source_pages, evidence citing PDF pages, and parent_note with the printed number
-and title. Use the category identifiers supplied below; keep periods and entity
+and title. The exact heading shape is `"parent_note": {"number": "13", "title": "Share capital"}`:
+both values are strings, including a numeric-looking note number. Use `title`,
+not `name`, and use the printed heading instead of this example. This heading
+object is required even when content is empty and only numeric_values are written.
+Use the category identifiers supplied below; keep periods and entity
 scopes separate. For Group filings, numeric_values keys group_cy, group_py, company_cy and
 company_py map to columns B, C, D and E respectively. Never copy a Group amount
 into Company columns or vice versa; omit undisclosed scopes. Company filings use

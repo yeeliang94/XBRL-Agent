@@ -28,7 +28,7 @@ import { runStatusDisplay } from "../lib/runStatus";
 import { StatusIcon } from "../components/StatusIcon";
 import { semanticActivities } from "../lib/semanticActivity";
 import { isCompletedWorkstream, workstreamStatusLabel } from "../lib/workstreamStatus";
-import { notesFormattingActivity, notesCleanupActivity } from "../lib/notesFormattingActivity";
+import { notesFormattingActivity, notesCleanupActivity, notesIntegrityActivity } from "../lib/notesFormattingActivity";
 
 // Re-export so existing callers / tests that imported NOTES_12_AGENT_ID
 // from ExtractPage keep working. The single source of truth lives in
@@ -57,7 +57,8 @@ function liveStageMessage(stage: AppState["pipelineStage"]): string {
     case "re_checking": return "Re-running cross-checks";
     case "reviewing_notes": return "Reviewing extracted notes";
     case "formatting_notes": return "Formatting notes";
-    case "cleaning_notes": return "Cleaning notes";
+    case "cleaning_notes": return "Finalizing note content";
+    case "checking_notes": return "Checking notes completeness";
     case "validating_notes": return "Validating notes";
     case "done": return "Run complete";
     default: return "Extracting selected statements and notes";
@@ -140,10 +141,13 @@ export function ExtractPage({
       && previousPipelineStage.current !== "formatting_notes";
     const enteredCleanup = state.pipelineStage === "cleaning_notes"
       && previousPipelineStage.current !== "cleaning_notes";
+    const enteredIntegrity = state.pipelineStage === "checking_notes"
+      && previousPipelineStage.current !== "checking_notes";
     previousPipelineStage.current = state.pipelineStage;
     if (enteredFormatting) {
       dispatch({ type: "SET_ACTIVE_TAB", payload: "notes-formatting" });
     }
+    if (enteredIntegrity) dispatch({ type: "SET_ACTIVE_TAB", payload: "notes-integrity" });
     if (enteredCleanup) {
       dispatch({ type: "SET_ACTIVE_TAB", payload: "notes-cleanup" });
     }
@@ -291,12 +295,19 @@ export function ExtractPage({
           subLabel: null, flag: null,
         };
       }
+      const integrity = notesIntegrityActivity(state);
+      if (integrity) {
+        agents["notes-integrity"] = {
+          agentId: "notes-integrity", label: "Notes completeness", role: "NOTES_INTEGRITY",
+          status: integrity.status, task: integrity.message, subLabel: null, flag: null,
+        };
+      }
       return agents;
     },
     [state.agents, state.pipelineStage, state.pipelineActivity, state.events, state.isRunning],
   );
   const agentTabsOrder = useMemo(() => {
-    const finishing = ["notes-formatting", "notes-cleanup"].filter((id) => id in agentTabsAgents);
+    const finishing = ["notes-cleanup", "notes-integrity", "notes-formatting"].filter((id) => id in agentTabsAgents);
     return [...state.agentTabOrder.filter((id) => !finishing.includes(id)), ...finishing];
   }, [agentTabsAgents, state.agentTabOrder]);
   const agentTabsSkeletons = useMemo(
@@ -793,10 +804,10 @@ export function ActiveTabPanel({
       reasoningBlocks: aggregateReasoning,
     };
   }, [rawEvents, notes12SubId, showSubTabs, aggregateTimeline, aggregateReasoning]);
-  if (state.activeTab === "notes-formatting" || state.activeTab === "notes-cleanup") {
+  if (state.activeTab === "notes-formatting" || state.activeTab === "notes-cleanup" || state.activeTab === "notes-integrity") {
     const isCleanup = state.activeTab === "notes-cleanup";
-    const label = isCleanup ? "Notes cleanup" : "Notes formatting";
-    const formatting = isCleanup ? notesCleanupActivity(state) : notesFormattingActivity(state);
+    const label = state.activeTab === "notes-integrity" ? "Notes completeness" : isCleanup ? "Notes cleanup" : "Notes formatting";
+    const formatting = state.activeTab === "notes-integrity" ? notesIntegrityActivity(state) : isCleanup ? notesCleanupActivity(state) : notesFormattingActivity(state);
     if (!formatting) return null;
     const completed = formatting.progress?.completed ?? 0;
     const total = formatting.progress?.total ?? 0;
