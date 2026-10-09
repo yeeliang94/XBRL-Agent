@@ -82,19 +82,37 @@ def note_verification_identity(html: str, style, source_pages: list[int], source
     }
 
 
-def stale_verified_rows(conn, run_id: int, sheet: str, result: dict) -> list[int]:
-    """Later edits, source changes and output-setting changes invalidate a receipt."""
+def current_verification_cells(conn, run_id: int, sheet: str) -> dict:
+    """Only filled, valid canonical disclosure fields need appearance evidence."""
     from db import repository as repo
+    from notes.formatting_agent import formatter_cell_is_candidate
+
+    return {c.row: c for c in repo.list_formatter_cells_for_run(conn, run_id)
+            if c.sheet == sheet and formatter_cell_is_candidate(c, None)
+            and BeautifulSoup(c.html, "html.parser").get_text().strip()}
+
+
+def stale_verified_rows(conn, run_id: int, sheet: str, result: dict, *, cells=None) -> list[int]:
+    """Later edits, source changes and output-setting changes invalidate a receipt."""
     from mtool.notes_decorate import NotesTableStyle
-    from notes.formatting_agent import _resolve_notes_table_theme
+    from notes.formatting_agent import _resolve_notes_table_theme, formatter_cell_is_candidate
+    from notes.auto_format import PDF_FORMAT_CANDIDATE_SOURCES
 
     receipts = result.get("verified_rows") or {}
     style = NotesTableStyle.from_theme(_resolve_notes_table_theme("", run_id, conn=conn))
-    cells = {c.row: c for c in repo.list_formatter_cells_for_run(conn, run_id) if c.sheet == sheet}
+    if cells is None:
+        cells = current_verification_cells(conn, run_id, sheet)
     stale = []
-    for raw_row, receipt in receipts.items():
-        row = int(raw_row)
-        cell = cells.get(row)
+    for row, cell in cells.items():
+        receipt = receipts.get(str(row), receipts.get(row))
+        if receipt is None:
+            # Legacy tasks without receipts keep their existing eligibility.
+            # A receipt-aware pass cannot certify a newly filled PDF field.
+            if result.get("ok") is True and "verified_rows" in result and formatter_cell_is_candidate(
+                cell, PDF_FORMAT_CANDIDATE_SOURCES | {None, "formatter"},
+            ):
+                stale.append(row)
+            continue
         try:
             current = note_verification_identity(cell.html, style, cell.source_pages, cell.source_generation_id) if cell else None
         except ValueError:
@@ -104,12 +122,14 @@ def stale_verified_rows(conn, run_id: int, sheet: str, result: dict) -> list[int
     return sorted(stale)
 
 
-def retain_other_verification_receipts(previous: dict, current: dict) -> dict:
+def retain_other_verification_receipts(previous: dict, current: dict, *, active_rows=None) -> dict:
     """A targeted retry replaces its own decisions and keeps unrelated evidence."""
     receipts = {str(row): identity for row, identity in (previous.get("verified_rows") or {}).items()}
     for row in [*(current.get("failed_rows") or []), *(current.get("skipped_rows") or [])]:
         receipts.pop(str(row), None)
     receipts.update({str(row): identity for row, identity in (current.get("verified_rows") or {}).items()})
+    if active_rows is not None:
+        receipts = {row: identity for row, identity in receipts.items() if int(row) in active_rows}
     return {**current, "verified_rows": receipts}
 
 

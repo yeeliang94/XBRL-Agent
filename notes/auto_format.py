@@ -150,9 +150,10 @@ def _persist_outcome(
     result: dict[str, Any],
     previous_result: dict[str, Any] | None = None,
 ) -> None:
-    from notes.visual_review import retain_other_verification_receipts
-    result = retain_other_verification_receipts(previous_result or {}, result)
+    from notes.visual_review import current_verification_cells, retain_other_verification_receipts
     with repo.db_session(db_path) as conn:
+        result = retain_other_verification_receipts(previous_result or {}, result,
+            active_rows=current_verification_cells(conn, run_id, sheet))
         repo.upsert_notes_format_task(
             conn, run_id, sheet, "done", model=model_name,
             summary=result.get("summary"),

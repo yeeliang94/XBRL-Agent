@@ -56,13 +56,19 @@ async def launch_notes_formatter(run_id: int, body: _NotesFormatLaunch):
         # reviewer launch.)
         config = run.config or {}
         previous = repo.fetch_notes_format_task(conn, run_id, body.sheet)
-        from notes.visual_review import stale_verified_rows
-        retry_rows = stale_verified_rows(conn, run_id, body.sheet, (previous or {}).get("result") or {})
+        from notes.visual_review import current_verification_cells, stale_verified_rows
+        cells = current_verification_cells(conn, run_id, body.sheet)
+        previous_result = (previous or {}).get("result") or {}
+        retry_rows = sorted((set(stale_verified_rows(conn, run_id, body.sheet, previous_result, cells=cells))
+            | set(previous_result.get("failed_rows") or [])
+            | set(previous_result.get("skipped_rows") or [])) & cells.keys())
         if retry_rows:
             from notes.formatting_agent import formatter_cell_is_candidate
             retry_rows = sorted(set(retry_rows) | {
-                cell.row for cell in repo.list_formatter_cells_for_run(conn, run_id)
-                if cell.sheet == body.sheet and formatter_cell_is_candidate(cell, PDF_FORMAT_CANDIDATE_SOURCES | {None})
+                cell.row for cell in cells.values()
+                if formatter_cell_is_candidate(cell, PDF_FORMAT_CANDIDATE_SOURCES | {None})
+                and str(cell.row) not in (previous_result.get("verified_rows") or {})
+                and cell.row not in (previous_result.get("verified_rows") or {})
             })
         standard = config.get("filing_standard", "mfrs")
         level = config.get("filing_level", "company")
@@ -165,7 +171,7 @@ async def launch_notes_formatter(run_id: int, body: _NotesFormatLaunch):
             run_id=run_id, db_path=str(server.AUDIT_DB_PATH),
             pdf_path=pdf_path, sheet=body.sheet, model=model,
             output_dir=run.output_dir or "",
-            style_sources=PDF_FORMAT_CANDIDATE_SOURCES | {None} | ({"formatter"} if retry_rows else set()),
+            style_sources=None if retry_rows else PDF_FORMAT_CANDIDATE_SOURCES | {None},
             rows=retry_rows or None,
             on_phase=on_phase,
         )
@@ -208,9 +214,10 @@ async def launch_notes_formatter(run_id: int, body: _NotesFormatLaunch):
             }
         try:
             tc = server._open_audit_conn()
-            from notes.visual_review import retain_other_verification_receipts
-            result = retain_other_verification_receipts((previous or {}).get("result") or {}, result)
             try:
+                from notes.visual_review import current_verification_cells, retain_other_verification_receipts
+                result = retain_other_verification_receipts((previous or {}).get("result") or {}, result,
+                    active_rows=current_verification_cells(tc, run_id, body.sheet))
                 repo.upsert_notes_format_task(
                     tc, run_id, body.sheet, "done", model=model_name,
                     summary=result.get("summary"),
@@ -257,8 +264,13 @@ async def notes_formatter_status(run_id: int, sheet: str):
             raise HTTPException(status_code=404, detail="Run not found")
         state = repo.fetch_notes_format_task(conn, run_id, sheet)
         if state and state.get("status") != "running":
-            from notes.visual_review import stale_verified_rows
-            stale = stale_verified_rows(conn, run_id, sheet, state.get("result") or {})
+            from notes.visual_review import current_verification_cells, retain_other_verification_receipts, stale_verified_rows
+            cells = current_verification_cells(conn, run_id, sheet)
+            result = state.get("result") or {}
+            if "verified_rows" in result:
+                result = retain_other_verification_receipts({}, result, active_rows=cells)
+                state["result"] = result
+            stale = stale_verified_rows(conn, run_id, sheet, result, cells=cells)
             if stale:
                 state["result"] = {**(state.get("result") or {}), "ok": False,
                     "stale_rows": stale, "failed_rows": sorted(set(stale) | set((state.get("result") or {}).get("failed_rows") or [])),

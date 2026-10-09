@@ -1359,7 +1359,10 @@ Key invariants:
     Successful per-note receipts in task result JSON bind canonical HTML, prepared
     output, source pages and source generation. Status reads detect later edits,
     reviewer writes, source changes and output-setting changes; stale notes expose
-    a targeted retry. Targeted retries preserve unrelated verification receipts.
+    a targeted retry. Failed and skipped rechecks remain retryable, including already
+    formatted fields. Newly filled eligible PDF fields without receipts are unchecked.
+    Cleared or deleted fields lose their receipts. Targeted retries preserve
+    unrelated verification receipts for remaining filled canonical fields.
     Omitted page lists preserve existing evidence; missing legacy lists can recover
     only from the cell's exact active source placements. A note without evidence
     stays unresolved without blocking other selected notes. Pinned by
