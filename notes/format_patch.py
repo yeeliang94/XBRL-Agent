@@ -13,7 +13,7 @@ from typing import Any, Iterable, Optional
 
 from bs4 import BeautifulSoup, NavigableString, Tag
 
-from notes.format_verify import verify_format_only
+from notes.format_verify import table_rows as _table_rows, verify_format_only
 from notes.html_sanitize import sanitize_notes_html
 # Single-source the Phase-4 padding/spacing grammars from the sanitiser (the
 # authoritative gate; every patch is re-sanitised after apply) so the op
@@ -191,23 +191,6 @@ def _apply_operations(html: str, operations: list[dict[str, Any]]) -> str:
     return str(soup)
 
 
-def _table_rows(table: Tag) -> list[Tag]:
-    """Ordered <tr> list of a table, flattening thead/tbody/tfoot (matches
-    `format_verify._table_signature`)."""
-    rows: list[Tag] = []
-    for child in table.children:
-        if not isinstance(child, Tag):
-            continue
-        if child.name == "tr":
-            rows.append(child)
-        elif child.name in {"thead", "tbody", "tfoot"}:
-            rows.extend(
-                row for row in child.find_all("tr", recursive=False)
-                if isinstance(row, Tag)
-            )
-    return rows
-
-
 def _build_grid(
     table: Tag,
 ) -> tuple[dict[tuple[int, int], Tag], dict[int, list[tuple[int, int]]]]:
@@ -340,25 +323,28 @@ def _resolve_target(soup: BeautifulSoup, target: dict[str, Any]) -> Iterable[Tag
     table = tables[table_index]
 
     if target.get("range") == "all":
-        yield from table.find_all(["th", "td"])
+        for tr in _table_rows(table):
+            yield from tr.find_all(["th", "td"], recursive=False)
         return
     if target.get("range") == "table":
         yield table
         return
     if target.get("range") == "header":
-        first = table.find("tr")
+        rows = _table_rows(table)
+        first = rows[0] if rows else None
         if first:
             yield from first.find_all(["th", "td"], recursive=False)
         return
     if target.get("range") == "total_rows":
         cols = _cols_filter(target)
-        for tr in table.find_all("tr"):
+        for tr in _table_rows(table):
             text = tr.get_text(" ", strip=True).lower()
             if "total" in text:
                 yield from _row_cells(tr, cols)
         return
     if target.get("range") == "numeric_cells":
-        for cell in table.find_all(["th", "td"]):
+        for cell in (cell for tr in _table_rows(table)
+                     for cell in tr.find_all(["th", "td"], recursive=False)):
             if _looks_numeric(cell.get_text(" ", strip=True)):
                 yield cell
         return
@@ -370,7 +356,7 @@ def _resolve_target(soup: BeautifulSoup, target: dict[str, Any]) -> Iterable[Tag
         c = cell.get("c")
         if not isinstance(r, int) or not isinstance(c, int) or r < 1 or c < 1:
             raise FormatPatchError("target.cell r/c must be 1-based integers")
-        rows = table.find_all("tr")
+        rows = _table_rows(table)
         if r > len(rows):
             return
         cells = rows[r - 1].find_all(["th", "td"], recursive=False)
@@ -383,7 +369,7 @@ def _resolve_target(soup: BeautifulSoup, target: dict[str, Any]) -> Iterable[Tag
         if not isinstance(rows, list) or not all(isinstance(x, int) for x in rows):
             raise FormatPatchError("target.rows must be a list of 1-based row numbers")
         cols = _cols_filter(target)
-        all_rows = table.find_all("tr")
+        all_rows = _table_rows(table)
         for r in rows:
             if 1 <= r <= len(all_rows):
                 yield from _row_cells(all_rows[r - 1], cols)

@@ -38,23 +38,26 @@ def _numbers(html: str) -> list[str]:
     return _NUM_RE.findall(_normal_text(html))
 
 
+def table_rows(table: Tag) -> list[Tag]:
+    """Rows owned by this table, in the formatter's coordinate order."""
+    rows: list[Tag] = []
+    for child in table.children:
+        if not isinstance(child, Tag):
+            continue
+        if child.name == "tr":
+            rows.append(child)
+        elif child.name in {"thead", "tbody", "tfoot"}:
+            rows.extend(child.find_all("tr", recursive=False))
+    return rows
+
+
 def _table_signature(html: str) -> list[list[list[tuple[int, int]]]]:
     """Return table geometry only: tables → rows → cells → (rowspan,colspan)."""
     soup = BeautifulSoup(html or "", "html.parser")
     out: list[list[list[tuple[int, int]]]] = []
     for table in soup.find_all("table"):
         table_sig: list[list[tuple[int, int]]] = []
-        rows: list[Tag] = []
-        for child in table.children:
-            if not isinstance(child, Tag):
-                continue
-            if child.name == "tr":
-                rows.append(child)
-            elif child.name in {"thead", "tbody", "tfoot"}:
-                rows.extend(
-                    row for row in child.find_all("tr", recursive=False)
-                    if isinstance(row, Tag)
-                )
+        rows = table_rows(table)
         for tr in rows:
             row_sig: list[tuple[int, int]] = []
             for cell in tr.find_all(["th", "td"], recursive=False):
@@ -107,6 +110,13 @@ def verify_format_only(before_html: str, after_html: str) -> VerificationResult:
     after_text = _normal_text(after_html)
     before_hash = hashlib.sha256(before_text.encode("utf-8")).hexdigest()
     after_hash = hashlib.sha256(after_text.encode("utf-8")).hexdigest()
+    for html in (before_html, after_html):
+        soup = BeautifulSoup(html or "", "html.parser")
+        for table in soup.find_all("table"):
+            owned_rows = {id(tr) for tr in table_rows(table)}
+            if any(tr.find_parent("table") is table and id(tr) not in owned_rows
+                   for tr in table.find_all("tr")):
+                return VerificationResult(False, "malformed table row nesting", before_hash, after_hash)
     if before_text != after_text:
         return VerificationResult(
             False, "rendered text changed", before_hash, after_hash,

@@ -103,6 +103,11 @@ describe("denominationLabel", () => {
 });
 
 describe("notesFormatErrorMessage", () => {
+  test("unverified table appearance remains a review exception", () => {
+    expect(notesFormatErrorMessage("visual_review_failed", "row 112: bad edge")).toContain(
+      "Table appearance could not be verified against the source PDF",
+    );
+  });
   test("explains when no unfinished notes remain", () => {
     expect(notesFormatErrorMessage("no_unfinished_rows", "internal detail")).toMatch(
       /no unfinished notes.*already formatted/i,

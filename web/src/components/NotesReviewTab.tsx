@@ -1282,7 +1282,7 @@ function SheetSection({
           role="status"
           data-testid="notes-format-running-banner"
         >
-          Formatting notes…
+          {formatStatus?.summary || "Formatting notes…"}
         </div>
       )}
       <div style={numericColumns.length ? styles.numericTable : styles.rowStack}

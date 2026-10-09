@@ -80,6 +80,7 @@ async def test_auto_format_scopes_and_persists_the_manual_task_shape(auto_format
 
     async def fake_formatter(**kwargs):
         calls.append(kwargs)
+        kwargs["on_phase"]("Checking formatted notes against the source PDF…")
         return {
             "ok": True, "summary": "Standardised against the PDF.",
             "confidence": 0.91, "changed_rows": 1,
@@ -87,12 +88,14 @@ async def test_auto_format_scopes_and_persists_the_manual_task_shape(auto_format
         }
 
     progress = []
+    phases = []
     result = await run_pdf_auto_format(
         run_id=run_id, db_path=db_path,
         pdf_path=str(tmp_path / "uploaded.pdf"),
         sheets=["Notes-CI", "Notes-Listofnotes"], model_name="model-a",
         model_factory=object, output_dir=str(tmp_path), timeout_s=30,
         formatter=fake_formatter,
+        on_phase=lambda sheet, message: phases.append((sheet, message)),
         on_progress=lambda completed, total, sheet: progress.append(
             (completed, total, sheet)
         ),
@@ -103,6 +106,7 @@ async def test_auto_format_scopes_and_persists_the_manual_task_shape(auto_format
     assert [call["sheet"] for call in calls] == ["Notes-CI"]
     assert calls[0]["style_sources"] == {"unstyled", "floor"}
     assert progress == [(0, 1, None), (1, 1, "Notes-CI")]
+    assert phases == [("Notes-CI", "Checking formatted notes against the source PDF…")]
     with repo.db_session(db_path) as conn:
         task = repo.fetch_notes_format_task(conn, run_id, "Notes-CI")
     assert task["status"] == "done"
@@ -288,7 +292,10 @@ async def test_large_sheet_is_formatted_in_concurrent_row_groups(auto_format_db)
             return {"ok": False, "error_type": "model_error", "error": "boom",
                     "prompt_tokens": 5}
         return {"ok": True, "changed_rows": len(kwargs["rows"]),
-                "summary": "Aligned amounts.", "prompt_tokens": 10}
+                "summary": "Aligned amounts.", "prompt_tokens": 10,
+                "visual_review": {"tables": [], "evidence": {
+                    row: {"html_sha256": f"reviewed-{row}"} for row in kwargs["rows"]
+                }}}
 
     result = await run_pdf_auto_format(
         run_id=run_id, db_path=db_path, pdf_path=str(tmp_path / "uploaded.pdf"),
@@ -304,6 +311,9 @@ async def test_large_sheet_is_formatted_in_concurrent_row_groups(auto_format_db)
     assert task["changed_rows"] == 2 * auto_format.FORMAT_ROWS_PER_PART
     assert task["error_type"] == "model_error"
     assert task["prompt_tokens"] == 25
+    evidence = {row: value for review in task["result"]["visual_reviews"]
+                for row, value in review["evidence"].items()}
+    assert sorted(map(int, evidence)) == rows[:-1]
 
 
 @pytest.mark.asyncio

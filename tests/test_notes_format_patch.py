@@ -504,6 +504,7 @@ def formatter_db(tmp_path):
 
 async def _run_formatter_with_fake_agent(
     monkeypatch, formatter_db, fake_agent, *, style_sources=None, sheet=_SHEET,
+    visual_check=None,
 ):
     from pathlib import Path
 
@@ -514,12 +515,188 @@ async def _run_formatter_with_fake_agent(
         fa, "create_notes_formatter_agent",
         lambda **_kw: (fake_agent, None),
     )
+    import notes.visual_review as vr
+    async def passed(**kwargs):
+        return {}, {"tables": [], "evidence": {}}
+    monkeypatch.setattr(vr, "check_visual_rows", visual_check or passed)
     return await fa.run_notes_formatter(
         run_id=run_id, db_path=str(db_path), pdf_path=pdf_path,
         sheet=sheet, model="fake-model",
         output_dir=str(Path(pdf_path).parent),
         style_sources=style_sources,
     )
+
+
+@pytest.mark.asyncio
+async def test_visual_failure_is_corrected_once_before_saving(monkeypatch, formatter_db):
+    from db import repository as repo
+    checks = []
+    async def check(**kwargs):
+        checks.append(kwargs)
+        if len(checks) == 1:
+            return {112: "Closing balance needs a bottom rule."}, {"tables": [
+                {"row": 112, "table": 0, "status": "needs_correction"},
+            ]}
+        assert "border-bottom" in kwargs["rows"][112]
+        assert kwargs["usage"] is checks[0]["usage"]
+        assert kwargs["limits"] is checks[0]["limits"]
+        return {}, {"tables": [{"row": 112, "table": 0, "status": "pass"}]}
+    correction = {"sheet": _SHEET, "cells": [{"row": 112, "operations": [{
+        "target": {"table": 0, "rows": [1], "cols": [2]},
+        "style": {"border_bottom": {"style": "double", "width": "3px"}},
+    }]}], "format_summary": "Closing rule corrected."}
+    fake = _FakeAgent([_GOOD_PATCH, json.dumps(correction)])
+    result = await _run_formatter_with_fake_agent(
+        monkeypatch, formatter_db, fake, visual_check=check,
+    )
+    assert result["ok"] and result["changed_rows"] == 1
+    assert fake.calls == 2 and len(checks) == 2
+    assert "correction_patch" in result["visual_review"]
+    db, _, run_id = formatter_db
+    with repo.db_session(db) as conn:
+        assert "border-bottom" in repo.list_notes_cells_for_run(conn, run_id)[0].html
+
+
+@pytest.mark.asyncio
+async def test_failed_visual_recheck_saves_only_unrelated_passed_note(monkeypatch, formatter_db):
+    from db import repository as repo
+    db, _, run_id = formatter_db
+    with repo.db_session(db) as conn:
+        repo.upsert_notes_cell(conn, run_id=run_id, sheet=_SHEET, row=113,
+                               label="Other", html=_TABLE_HTML, source_pages=[3])
+    good = json.loads(_GOOD_PATCH)
+    patch = {**good, "cells": [*good["cells"], {**good["cells"][0], "row": 113}]}
+    calls = []
+    async def check(**kwargs):
+        calls.append(set(kwargs["rows"]))
+        return {112: "Comparative closing rule still missing."}, {"tables": [
+            {"row": 112, "table": 0, "status": "needs_correction"},
+        ]}
+    fake = _FakeAgent([json.dumps(patch), json.dumps({"sheet": _SHEET, "cells": []})])
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake, visual_check=check)
+    assert not result["ok"] and result["changed_rows"] == 1
+    assert result["error_type"] == "visual_review_failed"
+    assert result["failed_rows"] == [112]
+    assert calls == [{112, 113}, {112}]
+    assert fake.calls == 2  # no third correction
+    with repo.db_session(db) as conn:
+        cells = {c.row: c for c in repo.list_notes_cells_for_run(conn, run_id)}
+        assert cells[112].html == _TABLE_HTML
+        assert cells[113].html != _TABLE_HTML
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["formatter_full", "initial_check", "correction", "recheck"])
+async def test_visual_budgets_preserve_verified_rows(monkeypatch, formatter_db, stage):
+    """Budget exhaustion never discards a different row's completed review."""
+    from db import repository as repo
+    from notes import formatting_agent as fa
+    from notes import visual_review as vr
+    from pydantic_ai.exceptions import UsageLimitExceeded
+
+    db, _, run_id = formatter_db
+    with repo.db_session(db) as conn:
+        repo.upsert_notes_cell(conn, run_id=run_id, sheet=_SHEET, row=113,
+                               label="Other", html=_TABLE_HTML, source_pages=[3])
+    good = json.loads(_GOOD_PATCH)
+    patch = {**good, "cells": [*good["cells"], {**good["cells"][0], "row": 113}]}
+    formatter_usages = []
+
+    class BudgetAgent(_FakeAgent):
+        async def run(self, prompt, **kwargs):
+            usage = kwargs["usage"]
+            formatter_usages.append(usage)
+            if usage.requests >= kwargs["usage_limits"].request_limit:
+                raise UsageLimitExceeded("Formatter budget exhausted")
+            usage.requests += fa.MAX_FORMATTER_REQUESTS if stage in {"formatter_full", "correction"} else 1
+            usage.input_tokens += 10
+            return await super().run(prompt, **kwargs)
+
+    checks = []
+    async def check(**kwargs):
+        checks.append(kwargs)
+        assert kwargs["usage"] is not formatter_usages[0]
+        assert kwargs["limits"].request_limit == vr.MAX_VISUAL_REVIEW_REQUESTS < 50
+        kwargs["usage"].input_tokens += 20
+        if len(checks) == 1:
+            assert kwargs["usage"].requests == 0
+            kwargs["usage"].requests = vr.MAX_VISUAL_REVIEW_REQUESTS
+            if stage == "formatter_full":
+                return {}, {"tables": []}
+            if stage == "initial_check":
+                return {row: "Visual checking reached its request budget." for row in kwargs["rows"]}, {
+                    "tables": [], "error_type": "turn_budget",
+                }
+            return {112: "Closing balance needs a bottom rule."}, {"tables": [
+                {"row": 112, "table": 0, "status": "needs_correction"},
+            ]}
+        assert kwargs["usage"] is checks[0]["usage"]
+        assert kwargs["limits"] is checks[0]["limits"]
+        return {112: "Visual checking reached its request budget."}, {
+            "tables": [], "error_type": "turn_budget",
+        }
+
+    fake = BudgetAgent([json.dumps(patch), json.dumps({"sheet": _SHEET, "cells": []})])
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake, visual_check=check)
+    expected_saved = {112, 113} if stage == "formatter_full" else set() if stage == "initial_check" else {113}
+    assert result["changed_rows"] == len(expected_saved)
+    assert result["ok"] is (stage == "formatter_full")
+    assert result["prompt_tokens"] == fake.calls * 10 + len(checks) * 20
+    if stage != "formatter_full":
+        assert result["error_type"] == "visual_review_failed"
+        assert set(result["failed_rows"]) == {112, 113} - expected_saved
+        assert "request budget" in result["row_errors"][112]
+    if stage in {"correction", "recheck"}:
+        assert "Closing balance" in result["row_errors"][112]
+    with repo.db_session(db) as conn:
+        saved = {c.row for c in repo.list_notes_cells_for_run(conn, run_id) if c.html != _TABLE_HTML}
+        assert saved == expected_saved
+        assert set(repo.fetch_notes_format_snapshots(conn, run_id, _SHEET)) == expected_saved
+
+
+@pytest.mark.asyncio
+async def test_noop_proposal_requires_visual_evidence(monkeypatch, formatter_db):
+    async def unavailable(**kwargs):
+        assert kwargs["rows"][112] == _TABLE_HTML
+        return {112: "Visual renderer unavailable."}, {"tables": []}
+    fake = _FakeAgent([json.dumps({"sheet": _SHEET, "cells": []})])
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake, visual_check=unavailable)
+    assert result["error_type"] == "visual_review_failed"
+    assert result["changed_rows"] == 0 and result["failed_rows"] == [112]
+    assert fake.calls == 1  # no paid correction for missing evidence
+
+
+@pytest.mark.asyncio
+async def test_noop_visual_decision_does_not_certify_concurrent_edit(monkeypatch, formatter_db):
+    from db import repository as repo
+    db, _, run_id = formatter_db
+    async def edited_during_check(**kwargs):
+        with repo.db_session(db) as conn:
+            conn.execute("UPDATE notes_cells SET html = ? WHERE run_id = ? AND row = 112",
+                         ("<p>Human edited this note during review.</p>", run_id))
+        return {}, {"tables": []}
+    fake = _FakeAgent([json.dumps({"sheet": _SHEET, "cells": []})])
+    result = await _run_formatter_with_fake_agent(
+        monkeypatch, formatter_db, fake, visual_check=edited_during_check,
+    )
+    assert result["changed_rows"] == 0 and result["skipped_rows"] == [112]
+    assert "edited during formatting" in result["summary"]
+
+
+@pytest.mark.asyncio
+async def test_visual_correction_cannot_target_another_note(monkeypatch, formatter_db, caplog):
+    async def check(**kwargs):
+        return {112: "Wrong rule."}, {"tables": [
+            {"row": 112, "table": 0, "status": "needs_correction"},
+        ]}
+    good = json.loads(_GOOD_PATCH)
+    correction = {**good, "cells": [{**good["cells"][0], "row": 999}]}
+    fake = _FakeAgent([_GOOD_PATCH, json.dumps(correction)])
+    result = await _run_formatter_with_fake_agent(monkeypatch, formatter_db, fake, visual_check=check)
+    assert not result["ok"] and result["changed_rows"] == 0
+    assert result["failed_rows"] == [112]
+    assert "Visual correction rejected" in caplog.text
+    assert "unreviewed row" in result["visual_review"]["correction_error"]
 
 
 @pytest.mark.asyncio
@@ -1221,3 +1398,27 @@ def test_format_verification_allows_wrappers_and_added_emphasis():
     after = ('<div><h3 style="margin-top: 8px">Revenue</h3>\n'
              '<p><strong>Recognise <span><em>earned</em></span> revenue.</strong></p></div>')
     assert verify_format_only(before, after).ok
+
+
+def test_row_coordinates_skip_rows_in_nested_tables():
+    from bs4 import BeautifulSoup
+    from notes.formatting_agent import _table_geometry
+    html = ("<table><tr><td>2025</td><td><table><tr><td>Detail</td></tr></table></td></tr>"
+            "<tr><td>2024</td><td>9</td></tr></table>")
+    assert _table_geometry(html)[0]["rows"][1]["cells"][0]["text"] == "2024"
+    out = apply_sheet_patch({1: html}, {"cells": [{"row": 1, "operations": [{
+        "target": {"table": 0, "cell": {"r": 2, "c": 1}},
+        "style": {"border_top": {"style": "solid", "color": "#000000"}},
+    }]}]})
+    soup = BeautifulSoup(out.rows[1], "html.parser")
+    assert "border-top" in soup.find("td", string="2024").get("style", "")
+    assert "border-top" not in soup.find("td", string="Detail").get("style", "")
+
+
+def test_formatter_refuses_to_certify_malformed_row_nesting():
+    html = "<table><tr><td>2025</td><td>10</td></tr><tr><tr><td>2024</td><td>9</td></tr></tr></table>"
+    with pytest.raises(FormatPatchError, match="malformed table row nesting"):
+        apply_sheet_patch({1: html}, {"cells": [{"row": 1, "operations": [{
+            "target": {"table": 0, "cell": {"r": 1, "c": 2}},
+            "style": {"text_align": "right"},
+        }]}]})

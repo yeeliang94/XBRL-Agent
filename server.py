@@ -7780,6 +7780,9 @@ async def run_multi_agent_stream(
                         ),
                         output_dir=output_dir,
                         timeout_s=NOTES_FORMATTER_WALLCLOCK_TIMEOUT,
+                        on_phase=lambda sheet, message: _emit_stage(
+                            "formatting_notes", message=message, item=sheet,
+                        ),
                         on_progress=lambda completed, total, sheet: _emit_stage(
                             "formatting_notes",
                             message=(

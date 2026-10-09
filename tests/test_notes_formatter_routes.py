@@ -159,6 +159,15 @@ def test_notes_formatter_reports_already_running(formatter_client):
     assert body["already_running"] is True
 
 
+def test_running_status_exposes_visual_phase(formatter_client):
+    client, run_id, server_module = formatter_client
+    with repo.db_session(server_module.AUDIT_DB_PATH) as conn:
+        repo.upsert_notes_format_task(conn, run_id, "Notes-Listofnotes", status="running",
+                                     model="m", summary="Rechecking corrected notes against the source PDF…")
+    response = client.get(f"/api/runs/{run_id}/notes-format/status", params={"sheet": "Notes-Listofnotes"})
+    assert response.json()["summary"] == "Rechecking corrected notes against the source PDF…"
+
+
 def test_notes_formatter_reports_already_formatted_sheet(formatter_client):
     """A retry with no unfinished rows must not claim the sheet is empty."""
     client, run_id, server_module = formatter_client
