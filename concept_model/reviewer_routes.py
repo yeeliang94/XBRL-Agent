@@ -67,12 +67,14 @@ def register_reviewer_routes(app, audit_db_getter) -> None:
             flags = [
                 dict(r)
                 for r in conn.execute(
-                    "SELECT id, concept_uuid, target_sheet, target_row, "
-                    "category, reasoning, pdf_page, applied_fix, status, "
-                    "human_answer, created_at, updated_at "
-                    "FROM reviewer_flags WHERE run_id = ? "
-                    "AND status IN ('open', 'answered') "
-                    "ORDER BY created_at, id",
+                    "SELECT f.id, f.concept_uuid, f.target_sheet, f.target_row, "
+                    "f.category, f.reasoning, f.pdf_page, f.applied_fix, f.status, "
+                    "f.human_answer, f.created_at, f.updated_at, "
+                    "COALESCE(NULLIF(n.display_label, ''), n.canonical_label) AS label "
+                    "FROM reviewer_flags f LEFT JOIN concept_nodes n "
+                    "ON n.concept_uuid = f.concept_uuid WHERE f.run_id = ? "
+                    "AND f.status IN ('open', 'answered') "
+                    "ORDER BY f.created_at, f.id",
                     (run_id,),
                 ).fetchall()
             ]

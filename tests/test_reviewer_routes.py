@@ -116,6 +116,7 @@ def test_get_review_returns_diff_flag_and_crosschecks(client):
     assert body["diff"][0]["original"] == 100.0
     assert body["diff"][0]["current"] == 120.0
     assert len(body["flags"]) == 1 and body["flags"][0]["category"] == "stuck"
+    assert body["flags"][0]["label"] is None
     assert len(body["cross_checks"]) == 1
     assert body["cross_checks"][0]["status"] == "failed"
 
@@ -131,6 +132,34 @@ def test_get_review_no_reviewer_version_when_no_snapshot(client):
     body = tc.get(f"/api/runs/{run_id}/review").json()
     assert body["has_reviewer_version"] is False
     assert body["diff"] == []
+
+
+@pytest.mark.parametrize("is_current,display_label,expected", [
+    (1, None, "Cash"),
+    (1, "Bank balances", "Bank balances"),
+    (0, None, "Cash"),
+])
+def test_get_review_labels_unchanged_flagged_figures(client, is_current, display_label, expected):
+    tc, db, run_id, _srv = client
+    _wf(db, run_id, LEAF1, 100.0)
+    from concept_model.versioning import snapshot_facts
+    snapshot_facts(db, run_id)
+    with sqlite3.connect(str(db)) as conn:
+        conn.execute(
+            "UPDATE concept_nodes SET is_current = ?, display_label = ? WHERE concept_uuid = ?",
+            (is_current, display_label, LEAF1),
+        )
+        conn.execute(
+            "INSERT INTO reviewer_flags(run_id, concept_uuid, target_sheet, target_row, "
+            "category, reasoning, status, created_at) "
+            "VALUES (?, ?, 'SOFP', 5, 'stuck', 'cannot confirm', 'open', '2026Z')",
+            (run_id, LEAF1),
+        )
+    response = tc.get(f"/api/runs/{run_id}/review")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["diff"] == []
+    assert body["flags"][0]["label"] == expected
 
 
 # ---------------------------------------------------------------------------
