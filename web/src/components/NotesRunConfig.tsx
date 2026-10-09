@@ -1,6 +1,7 @@
 import { ui } from "../lib/uiStyles";
 import type { NotesTemplateType, ModelEntry, FilingStandard } from "../lib/types";
 import { NOTES_TEMPLATE_TYPES, NOTES_TEMPLATE_LABELS } from "../lib/types";
+import { notesTabLabel } from "../lib/appReducer";
 import { pwc } from "../lib/theme";
 
 interface Props {
@@ -88,7 +89,7 @@ export function NotesRunConfig({
                     onChange={(e) => onToggleNote(nt, e.target.checked)}
                     aria-label={NOTES_TEMPLATE_LABELS[nt]}
                   />
-                  <span>{NOTES_TEMPLATE_LABELS[nt]}</span>
+                  <span>{notesTabLabel(nt)}</span>
                 </label>
               </td>
               {showModels && (

@@ -221,11 +221,11 @@ function DisclosureSection({
         aria-controls={id}
         style={styles.disclosureButton}
       >
-        <span style={{ display: "flex", flexDirection: "column", gap: pwc.space.sm }}>
+        <DisclosureChevron open={open} />
+        <span style={{ display: "flex", flexDirection: "column", gap: pwc.space.xs, flex: 1, textAlign: "left" }}>
           <span style={styles.disclosureTitle}>{title}</span>
           <span style={styles.disclosureSummary}>{summary}</span>
         </span>
-        <DisclosureChevron open={open} />
       </button>
       <div
         id={id}
@@ -599,8 +599,13 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
   // two selection lists once they have checked them, while model overrides
   // remain behind the advanced disclosure.
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [showStatements, setShowStatements] = useState(true);
-  const [showNotes, setShowNotes] = useState(true);
+  // Statement and note lists start folded once preparation has finished:
+  // everything is selected by default and the summary line says so.
+  const [showStatementsChoice, setShowStatements] = useState<boolean | null>(null);
+  // null = follow the default: open until formats are detected, and kept
+  // open while any detected format needs checking.
+  const [showFormatsChoice, setShowFormatsChoice] = useState<boolean | null>(null);
+  const [showNotesChoice, setShowNotes] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [scoutError, setScoutError] = useState<string | null>(null);
@@ -687,6 +692,18 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
   const variantOverridesRef = useRef(new Set<StatementType>(
     STATEMENT_TYPES.filter((stmt) => Boolean(variantSelections[stmt].variant)),
   ));
+  const preparedForConfirmation = preparation?.status === "succeeded";
+  const showStatements = showStatementsChoice ?? !preparedForConfirmation;
+  // Notes stay open when the inventory needs attention (none found, or gaps).
+  const inventoryEntries = infopack && Array.isArray(infopack.notes_inventory)
+    ? applyNotesInventoryOverrides(infopack.notes_inventory as NotesInventoryEntry[], notesInventoryOverrides)
+    : null;
+  const inventoryNeedsAttention = inventoryEntries != null
+    && (inventoryEntries.length === 0 || findInventoryGaps(inventoryEntries).length > 0);
+  const showNotes = showNotesChoice ?? (!preparedForConfirmation || inventoryNeedsAttention);
+  const formatsDetected = STATEMENT_TYPES.filter((stmt) => Boolean(variantSelections[stmt].variant)).length;
+  const formatsToCheck = STATEMENT_TYPES.filter((stmt) => variantSelections[stmt].variant && variantSelections[stmt].confidence === "low").length;
+  const showFormats = showFormatsChoice ?? (!preparedForConfirmation || formatsToCheck > 0);
   const [statementsEnabled, setStatementsEnabled] = useState(
     () => _seedStatementsEnabled(initialConfig),
   );
@@ -1396,23 +1413,16 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
         </div>
       </div>
 
-      <div style={styles.section}>
-        <label style={styles.sectionLabel} htmlFor="filing-reporting-periods">
-          Reporting periods
-        </label>
-        <select id="filing-reporting-periods" value={firstFinancialStatements ? "first" : "comparative"}
-          onChange={(event) => setFirstFinancialStatements(event.target.value === "first")}
-          style={{ ...ui.select, maxWidth: "100%" }}>
-          <option value="comparative">Current and prior periods</option>
-          <option value="first">First statements after incorporation — current period only</option>
-        </select>
-      </div>
-
       {/* Presentation denomination the filer declares for the source figures.
           The agent treats this as authoritative (no guessing) and transcribes
           values verbatim; the scout cross-checks it. Mirrors the toggles above. */}
       <div style={styles.section}>
-        <span style={styles.sectionLabel}>Denomination</span>
+        <span style={{ ...styles.sectionLabel, display: "inline-flex", alignItems: "center", gap: pwc.space.sm }}>
+          Denomination
+          {detectedDenomination && infopack?.scale_unit !== "unknown" && (
+            <span data-testid="detected-denomination" style={styles.detectedBadge}>Detected {DENOMINATION_LABELS[detectedDenomination]}</span>
+          )}
+        </span>
         <div className="segmented-control-group" style={ui.segmentGroup}>
           {(["units", "thousands", "millions"] as const).map((d) => {
             const active = denomination === d;
@@ -1430,20 +1440,38 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
             );
           })}
         </div>
-        {infopack?.scale_unit === "unknown" ? (
+        {/* Only an exception earns a sentence: the unit could not be found. */}
+        {infopack?.scale_unit === "unknown" && (
           <span style={{ ...ui.bodyText, color: pwc.orange700 }}>
-            Document scan could not determine the denomination. Select the value shown in the financial statements before starting extraction.
-          </span>
-        ) : detectedDenomination ? (
-          <span data-testid="detected-denomination" style={ui.bodyText}>
-            Document scan detected {DENOMINATION_LABELS[detectedDenomination]}. Confirm or correct it before starting extraction.
-          </span>
-        ) : (
-          <span style={ui.bodyText}>
-            Document preparation will suggest a denomination for you to confirm.
+            Not found in the document. Select the unit shown in the statements.
           </span>
         )}
       </div>
+
+      {/* Reporting periods: the same segmented choice as the other three, so
+          the filing row is four controls of one kind. */}
+      <div style={styles.section}>
+        <span id="filing-reporting-periods-label" style={styles.sectionLabel}>Reporting periods</span>
+        <div className="segmented-control-group" role="group" aria-labelledby="filing-reporting-periods-label" style={ui.segmentGroup}>
+          {([["comparative", "Current and prior"], ["first", "Current only"]] as const).map(([value, label]) => {
+            const active = (firstFinancialStatements ? "first" : "comparative") === value;
+            return (
+              <button
+                key={value}
+                type="button"
+                className="segmented-control-button"
+                aria-pressed={active}
+                title={value === "first" ? "First statements after incorporation" : undefined}
+                onClick={() => setFirstFinancialStatements(value === "first")}
+                style={{ ...ui.segmentButton, ...(active ? ui.segmentButtonActive : {}) }}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
         </div>
       </section>
 
@@ -1455,10 +1483,6 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
           verify — never enforced (gotcha #13). */}
       <div style={styles.section}>
         <span style={styles.sectionLabel}>Preview document scan</span>
-        <span style={{ ...ui.bodyText, color: pwc.grey700 }}>
-          Preparation builds the inventory automatically. Preview refreshes the
-          document scan using the current model.
-        </span>
         <div style={{ display: "flex", alignItems: "center", gap: pwc.space.sm }}>
           <button
             type="button"
@@ -1484,10 +1508,6 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
             </select>
           )}
         </div>
-        <p style={{ ...ui.bodyText, margin: 0 }}>
-          Text and scanned pages are read automatically. Notes are checked and
-          formatted before you review them.
-        </p>
         {scoutModelSaveError && (
           <p
             role="status"
@@ -1584,15 +1604,22 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
 
       {/* Statement formats are optional overrides. The automatic scout picks
           a supported format when a row is left blank. */}
-      <div style={styles.section}>
-        <span style={styles.sectionLabel}>Statement format overrides</span>
+      <DisclosureSection
+        id="statement-formats"
+        title="Statement formats"
+        summary={formatsToCheck > 0
+          ? `${formatsToCheck} to check`
+          : formatsDetected > 0 ? `${formatsDetected} set` : "Automatic"}
+        open={showFormats}
+        onToggle={() => setShowFormatsChoice(!showFormats)}
+      >
         <VariantSelector
           selections={variantSelections}
           enabledStatements={enabledStmts}
           onChange={handleVariantChange}
           filingStandard={filingStandard}
         />
-      </div>
+      </DisclosureSection>
 
       {/* Which statements to extract. The per-statement AI-model picker only
           shows inside Advanced (Phase 3). */}
@@ -1601,7 +1628,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
         title="Statements to extract"
         summary={`${enabledStmts.length} of ${STATEMENT_TYPES.length} selected`}
         open={showStatements}
-        onToggle={() => setShowStatements((value) => !value)}
+        onToggle={() => setShowStatements(!showStatements)}
       >
         <div style={styles.section}>
           <StatementRunConfig
@@ -1627,7 +1654,7 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
             ? "All document notes included"
             : `${enabledNotes.length} of ${NOTES_TEMPLATE_TYPES.length} selected`}
         open={showNotes}
-        onToggle={() => setShowNotes((value) => !value)}
+        onToggle={() => setShowNotes(!showNotes)}
       >
         <div style={styles.section}>
         {/* A saved preview may already contain a note inventory. Keep its
@@ -1679,13 +1706,6 @@ export function PreRunPanel({ sessionId, getSettings, onRun, initialConfig, onCo
             </div>
           );
         })()}
-        {preparation?.status === "succeeded" && enabledNotes.length > 0 && (
-          <div style={styles.notesNudge} role="status">
-            A notes run includes Corporate information, Accounting policies, and
-            List of notes to cover the full document. Issued capital and Related
-            party numeric templates run when selected.
-          </div>
-        )}
         <NotesRunConfig
           enabled={notesEnabled}
           filingStandard={filingStandard}

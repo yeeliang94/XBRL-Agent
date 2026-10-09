@@ -12,6 +12,8 @@ const activeStatuses = new Set(["queued", "working", "retrying"]);
 const labels = { not_started: "Waiting", queued: "Queued", working: "Working", retrying: "Retrying", succeeded: "Complete", failed: "Failed", cancelled: "Stopped" };
 
 // One term per state, matching the rest of the app.
+const visuallyHidden: React.CSSProperties = { position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)", whiteSpace: "nowrap" };
+
 function detailStatus({ complete, active, stopped, failed = false }: { complete: boolean; active: boolean; stopped: boolean; failed?: boolean }) {
   if (complete) return "Complete";
   if (stopped) return failed ? "Failed" : "Stopped";
@@ -129,12 +131,12 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
         isComplete={false}
       />
     </div>}
-    <p role="status" aria-live="polite" style={{ margin: `${pwc.space.md}px 0` }}>{connectionError ?? snapshot?.message ?? "Connecting to document preparation…"}</p>
+    <p role="status" aria-live="polite" style={snapshot?.status === "succeeded" && !connectionError ? visuallyHidden : { margin: `${pwc.space.md}px 0` }}>{connectionError ?? snapshot?.message ?? "Connecting to document preparation…"}</p>
     {snapshot?.prepared && snapshot.status !== "succeeded" && (
       <p style={{ margin: `${pwc.space.md}px 0` }}>Document prepared. {active && mapActive ? "Document map and notes inventory are being built." : "Notes inventory is not ready."}</p>
     )}
     {actionRequired !== "none" || snapshot?.status === "not_started" ? (
-      <p style={{ margin: `0 0 ${pwc.space.md}px`, color: actionRequired === "confirm_setup" ? pwc.orange700 : pwc.grey700 }}>
+      <p style={{ margin: `${pwc.space.md}px 0`, color: pwc.grey700 }}>
         {actionRequired === "confirm_setup"
           ? "Review the detected filing details, then confirm setup."
           : actionRequired === "retry"
