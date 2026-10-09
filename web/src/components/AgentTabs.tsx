@@ -273,10 +273,7 @@ function AgentTabsImpl({
 
   return (
     <div className="workstream-nav" style={styles.tabBar}>
-      <div style={styles.navigatorHeader}>
-        <div style={styles.navigatorTitle}>Run activity</div>
-      </div>
-
+      {/* No list heading: the Activity tab already names this view. */}
       <div role="tablist" aria-label="Run workstreams" aria-orientation="vertical" style={styles.tabList}>
         {visiblePreparation.length > 0 && (
           <div role="presentation" data-bucket="preparation" style={styles.tabGroup}>
@@ -415,21 +412,6 @@ const styles = {
     flexDirection: "column" as const,
     alignItems: "stretch" as const,
   } as React.CSSProperties,
-  navigatorHeader: {
-    display: "flex",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-    gap: pwc.space.md,
-    minHeight: 42,
-    padding: `0 9px`,
-  },
-  navigatorTitle: {
-    fontFamily: pwc.fontHeading,
-    fontSize: 16,
-    lineHeight: 1.3,
-    fontWeight: pwc.weight.semibold,
-    color: pwc.grey900,
-  },
   navigatorCount: {
     flexShrink: 0,
     fontFamily: pwc.fontBody,

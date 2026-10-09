@@ -2574,7 +2574,8 @@ const styles = {
     // heading text starts exactly where the sub-note numbers start.
     gridTemplateColumns: "20px minmax(0, 1fr) 16px",
     gap: 8,
-    alignItems: "center",
+    // Numbers sit on the first line of a wrapped title, not its middle.
+    alignItems: "start",
     width: "100%",
     minHeight: 40,
     padding: "6px 8px",
@@ -2593,6 +2594,7 @@ const styles = {
     fontFamily: pwc.fontBody,
     fontVariantNumeric: "tabular-nums",
     fontSize: 12,
+    lineHeight: "21px",
     color: pwc.grey500,
     textAlign: "left" as const,
   } as React.CSSProperties,

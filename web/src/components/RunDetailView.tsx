@@ -1042,6 +1042,7 @@ export function RunDetailView({
           >
             {isFailed || isAborted ? "Prepare investigation draft" : "Prepare mTool draft"}
           </button>}
+          {activeTab === "agents" && <DiagnosticsExport key={detail.id} runId={detail.id} />}
           {canCompareHuman && !humanFile && (
             <button
               type="button"
@@ -1379,7 +1380,6 @@ export function RunDetailView({
 
       {activeTab === "agents" && (
         <section style={styles.section} role="tabpanel" data-testid="run-detail-agents">
-          <DiagnosticsExport key={detail.id} runId={detail.id} />
           {detail.agents.length === 0 && observedStageAgents(detail).length === 0 ? (
             <p style={styles.dim}>Nothing was recorded for this run yet.</p>
           ) : (
@@ -1896,11 +1896,16 @@ const styles = {
     fontWeight: pwc.weight.medium,
     color: pwc.grey900,
   } as React.CSSProperties,
+  // One Grey 100 divider between the workstream list and its detail, as in
+  // the live run and the Notes workspace.
   agentDetail: {
     display: "flex",
     flexDirection: "column" as const,
     gap: pwc.space.lg,
     background: pwc.white,
+    borderLeft: `1px solid ${pwc.grey100}`,
+    paddingLeft: pwc.space.xl,
+    alignSelf: "stretch",
   } as React.CSSProperties,
   agentHeaderButton: {
     display: "flex",
