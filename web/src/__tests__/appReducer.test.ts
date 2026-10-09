@@ -1003,10 +1003,10 @@ describe("appReducer", () => {
 
   test("notesTabLabel normalizes every notes identifier shape to the same label", () => {
     // Single source of truth for live tabs, skeletons, and history.
-    expect(notesTabLabel("CORP_INFO")).toBe("Notes 10: Corp Info");
-    expect(notesTabLabel("notes:CORP_INFO")).toBe("Notes 10: Corp Info");
-    expect(notesTabLabel("NOTES_CORP_INFO")).toBe("Notes 10: Corp Info");
-    expect(notesTabLabel("LIST_OF_NOTES")).toBe("Notes 12: List of Notes");
+    expect(notesTabLabel("CORP_INFO")).toBe("Corporate information");
+    expect(notesTabLabel("notes:CORP_INFO")).toBe("Corporate information");
+    expect(notesTabLabel("NOTES_CORP_INFO")).toBe("Corporate information");
+    expect(notesTabLabel("LIST_OF_NOTES")).toBe("List of notes");
     // Unknown key falls back without throwing — forward-compatible with
     // templates that exist before the UI map is updated.
     expect(notesTabLabel("FUTURE_TEMPLATE")).toBe("Notes: FUTURE_TEMPLATE");
@@ -1104,7 +1104,7 @@ describe("appReducer", () => {
   test("notes agent slot gets the friendly tab label derived from role", () => {
     // When a notes SSE event arrives, ensureAgent creates the slot using
     // deriveAgentLabel(agentId, role). Verify the label is the short
-    // "Notes 10: Corp Info" form rather than the raw role string.
+    // "Corporate information" form rather than the raw role string.
     const running = appReducer(
       appReducer(initialState, {
         type: "UPLOADED",
@@ -1130,7 +1130,7 @@ describe("appReducer", () => {
     });
     const agent = after.agents["notes:CORP_INFO"];
     expect(agent).toBeDefined();
-    expect(agent.label).toBe("Notes 10: Corp Info");
+    expect(agent.label).toBe("Corporate information");
     expect(agent.role).toBe("CORP_INFO");
   });
 

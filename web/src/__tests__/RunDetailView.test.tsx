@@ -1038,8 +1038,8 @@ describe("RunDetailView", () => {
     render(<RunDetailView detail={detail} onDelete={() => {}} onDownload={() => {}} />);
     clickRunTab(/^activity$/i);
     const agentList = screen.getByRole("tablist", { name: "Run workstreams" });
-    expect(within(agentList).getByText("Notes 10: Corp Info")).toBeTruthy();
-    expect(within(agentList).getByText("Notes 12: List of Notes")).toBeTruthy();
+    expect(within(agentList).getByText("Corporate information")).toBeTruthy();
+    expect(within(agentList).getByText("List of notes")).toBeTruthy();
     // Ensure the raw enum isn't leaking through anywhere.
     expect(screen.queryByText("NOTES_CORP_INFO")).toBeNull();
   });
@@ -1063,7 +1063,7 @@ describe("RunDetailView", () => {
     expect(within(panel).getByText("Notes")).toBeTruthy();
     // values rendered as the friendly labels, joined
     expect(
-      within(panel).getByText(/Notes 10: Corp Info.*Notes 12: List of Notes/),
+      within(panel).getByText(/Corporate information.*List of notes/),
     ).toBeTruthy();
   });
 

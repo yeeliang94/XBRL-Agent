@@ -351,6 +351,10 @@ function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, re
     };
   }, [agent.events, notes12SubId, showSubTabs, technicalOpen]);
 
+  const showErrorDetail = Boolean(agent.error_message)
+    && (agent.statement_type !== "CORRECTION" || agent.error_message !== updates[0]);
+  const agentEnded = ["failed", "cancelled", "aborted"].includes(agent.status);
+
   return (
     <article role="tabpanel" id={panelId} aria-labelledby={tabId} data-testid="run-detail-agent" className="pwc-view-enter" style={styles.agentDetail}>
       <div style={styles.agentHeaderButton}>
@@ -393,9 +397,11 @@ function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, re
         {(updates[0] || agent.status === "cancelled" || agent.status === "aborted") && <span>{agent.status === "cancelled" || agent.status === "aborted" ? "Workstream stopped" : updates[0]}</span>}
         {sourceReference && <span>{sourceReference}</span>}
       </div>}
-      {agent.error_message && (agent.statement_type !== "CORRECTION" || agent.error_message !== updates[0]) && (
+      {/* A failure's reason stays visible; for a workstream that finished,
+          the recorded detail is technical and sits behind Technical detail. */}
+      {showErrorDetail && agentEnded && (
         <div data-testid="agent-error-message" style={styles.agentErrorMessage}>
-          <strong>Terminal detail</strong>
+          <strong>What went wrong</strong>
           <span>{agent.error_message}</span>
         </div>
       )}
@@ -416,6 +422,12 @@ function AgentCard({ panelId, tabId, agent, summary, filingStandard, onRetry, re
         recorded={agent.status !== "running"} streamKey={`${agent.id}:${notes12SubId ?? "all"}`}
         onTechnicalChange={setTechnicalOpen}
         technical={technicalOpen ? <div style={styles.agentBody}>
+          {showErrorDetail && !agentEnded && (
+            <div data-testid="agent-error-message" style={styles.agentErrorMessage}>
+              <strong>Recorded detail</strong>
+              <span>{agent.error_message}</span>
+            </div>
+          )}
           <div style={styles.agentMetaRow}>
             <span>{displayModelId(agent.model)}</span>
             {agent.token_breakdown && (
