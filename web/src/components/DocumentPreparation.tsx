@@ -7,6 +7,7 @@ import { ui } from "../lib/uiStyles";
 import { formatElapsedMs } from "../lib/time";
 import { ElapsedTimer } from "./ElapsedTimer";
 import { PipelineStages } from "./PipelineStages";
+import { DisclosureChevron } from "./icons";
 
 const activeStatuses = new Set(["queued", "working", "retrying"]);
 const labels = { not_started: "Waiting", queued: "Queued", working: "Working", retrying: "Retrying", succeeded: "Complete", failed: "Failed", cancelled: "Stopped" };
@@ -31,6 +32,7 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
   const [busy, setBusy] = useState(false);
   const [retriedFailure, setRetriedFailure] = useState<{ message: string; attemptId: string | null } | null>(null);
   const [refresh, setRefresh] = useState(0);
+  const [detailsChoice, setDetailsChoice] = useState<boolean | null>(null);
   const callback = useRef(onSnapshot);
   callback.current = onSnapshot;
   const operation = useRef(0);
@@ -109,8 +111,11 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
   // Page counts exclude the cross-page continuation checks that can finish later.
   const checkComplete = pagesComplete;
   const missingDocument = snapshot == null && connectionError?.startsWith("Document not found.");
-  return <section aria-label="Document preparation" style={{ padding: `${pwc.space.lg}px 0` }}>
-    <div style={{ display: "flex", alignItems: "center", gap: pwc.space.md, flexWrap: "wrap" }}>
+  const detailsOpen = detailsChoice ?? snapshot?.status !== "succeeded";
+  // Same rhythm as Filing setup: a 40px header row, 8 to its content, 16
+  // between blocks; the page puts 32 before the next section.
+  return <section aria-label="Document preparation" style={{ display: "flex", flexDirection: "column", gap: pwc.space.sm }}>
+    <div style={{ display: "flex", alignItems: "center", gap: pwc.space.md, flexWrap: "wrap", minHeight: 40 }}>
       <h2 style={{ ...ui.sectionTitle, margin: 0 }}>Document preparation</h2>
       <span data-testid="preparation-status">{snapshot ? labels[snapshot.status] : missingDocument ? "Unavailable" : "Connecting"}</span>
       {snapshot?.started_at != null && (active
@@ -120,7 +125,8 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
       {snapshot?.status === "not_started" && <button style={ui.buttonSecondary} disabled={busy} onClick={() => void act("retry")}>Start preparation</button>}
       {(snapshot?.status === "failed" || snapshot?.status === "cancelled") && <button style={ui.buttonSecondary} disabled={busy} onClick={() => void act("retry")}>Retry preparation</button>}
     </div>
-    {!missingDocument && <div style={{ marginTop: pwc.space.lg }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: pwc.space.lg }}>
+    {!missingDocument && <div>
       <PipelineStages
         currentPhase={null}
         preparationPhase={phase}
@@ -131,12 +137,12 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
         isComplete={false}
       />
     </div>}
-    <p role="status" aria-live="polite" style={snapshot?.status === "succeeded" && !connectionError ? visuallyHidden : { margin: `${pwc.space.md}px 0` }}>{connectionError ?? snapshot?.message ?? "Connecting to document preparation…"}</p>
+    <p role="status" aria-live="polite" style={snapshot?.status === "succeeded" && !connectionError ? visuallyHidden : { margin: 0 }}>{connectionError ?? snapshot?.message ?? "Connecting to document preparation…"}</p>
     {snapshot?.prepared && snapshot.status !== "succeeded" && (
-      <p style={{ margin: `${pwc.space.md}px 0` }}>Document prepared. {active && mapActive ? "Document map and notes inventory are being built." : "Notes inventory is not ready."}</p>
+      <p style={{ margin: 0 }}>Document prepared. {active && mapActive ? "Document map and notes inventory are being built." : "Notes inventory is not ready."}</p>
     )}
     {actionRequired !== "none" || snapshot?.status === "not_started" ? (
-      <p style={{ margin: `${pwc.space.md}px 0`, color: pwc.grey700 }}>
+      <p style={{ margin: 0, color: pwc.grey700 }}>
         {actionRequired === "confirm_setup"
           ? "Review the detected filing details, then confirm setup."
           : actionRequired === "retry"
@@ -146,11 +152,21 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
             : "Start document preparation."}
       </p>
     ) : null}
-    {!missingDocument && <details open={snapshot?.status !== "succeeded"} style={{ marginTop: pwc.space.sm }}>
-    <summary style={{ fontWeight: pwc.weight.medium, minHeight: 40 }}>
-      {snapshot?.status === "succeeded" ? `Preparation details${total > 0 ? ` · ${total} pages` : ""}` : "Preparation steps"}
-    </summary>
-    <ol aria-label="Document preparation steps" style={{ listStyle: "none", margin: 0, padding: 0, borderTop: `1px solid ${pwc.grey200}` }}>
+    {!missingDocument && <div style={{ display: "flex", flexDirection: "column", gap: pwc.space.sm }}>
+    {/* Title first, chevron after, count only while folded: the same
+        disclosure pattern as the setup sections below. */}
+    <button
+      type="button"
+      aria-expanded={detailsOpen}
+      aria-controls="preparation-steps"
+      onClick={() => setDetailsChoice(!detailsOpen)}
+      style={{ display: "flex", alignItems: "center", gap: pwc.space.sm, minHeight: 40, padding: 0, background: "transparent", border: "none", cursor: "pointer", alignSelf: "flex-start", ...ui.bodyText, fontWeight: pwc.weight.medium }}
+    >
+      {snapshot?.status === "succeeded" ? "Preparation details" : "Preparation steps"}
+      <DisclosureChevron open={detailsOpen} />
+      {!detailsOpen && total > 0 && <span style={ui.metadata}>{total} pages</span>}
+    </button>
+    <ol id="preparation-steps" hidden={!detailsOpen} aria-label="Document preparation steps" style={{ listStyle: "none", margin: 0, padding: 0 }}>
       {[
         {
           label: "Read source pages",
@@ -173,7 +189,7 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
           state: actionRequired === "confirm_setup" ? "Action required" : "Waiting",
         },
       ].map((step) => (
-        <li key={step.label} className="preparation-step-row" style={{ display: "grid", gridTemplateColumns: "minmax(180px, 1fr) minmax(220px, 2fr) 120px", gap: pwc.space.md, alignItems: "center", padding: `${pwc.space.sm}px 0`, borderBottom: `1px solid ${pwc.grey200}`, fontSize: 14 }}>
+        <li key={step.label} className="preparation-step-row" style={{ display: "grid", gridTemplateColumns: "minmax(180px, 1fr) minmax(220px, 2fr) 120px", gap: pwc.space.md, alignItems: "center", minHeight: 40, padding: `${pwc.space.sm}px 0`, borderTop: `1px solid ${pwc.grey100}`, fontSize: 14 }}>
           <span style={{ fontFamily: pwc.fontHeading }}>{step.label}</span>
           <span style={{ color: pwc.grey700 }}>{step.detail}</span>
           <span style={{ textAlign: "right", color: step.state === "Action required" || step.state === "Failed" ? pwc.orange700 : pwc.grey700, fontWeight: step.state === "Working" || step.state === "Action required" ? pwc.weight.medium : pwc.weight.regular }}>
@@ -182,6 +198,7 @@ export function DocumentPreparation({ sessionId, onSnapshot }: {
         </li>
       ))}
     </ol>
-    </details>}
+    </div>}
+    </div>
   </section>;
 }

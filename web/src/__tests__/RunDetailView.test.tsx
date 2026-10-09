@@ -1827,7 +1827,9 @@ describe("RunDetailView", () => {
     render(<RunDetailView detail={makeDetail({ status: "completed_with_errors", cross_checks: [], agents: [makeAgent({ status: "completed_with_errors" })] })}
       onDelete={() => {}} onDownload={() => {}} />);
     const items = screen.getByTestId("items-to-check");
-    expect(items).toHaveTextContent("Extraction or review finished with issues.");
+    // The issue names the workstream rather than a generic line.
+    expect(items).toHaveTextContent(/finished with issues\./);
+    expect(items).not.toHaveTextContent("Extraction or review");
     expect(screen.queryByText(/consistency check didn.t pass/i)).toBeNull();
     expect(screen.queryByRole("button", { name: "View cross-checks" })).toBeNull();
     fireEvent.click(within(items).getByRole("button", { name: "View activity" }));

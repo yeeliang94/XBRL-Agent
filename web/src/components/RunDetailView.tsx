@@ -859,10 +859,18 @@ export function RunDetailView({
     : sidecarNotice && !sidecarNotice.built ? sidecarNotice.title : null;
   const runDuration = formatRunDuration(detail.started_at, detail.ended_at);
   const liveElapsed = useLiveElapsed(isRunning ? detail.started_at : null);
+  const troubledAgents = (detail.agents ?? []).filter(
+    (a) => a.status === "completed_with_errors" || a.status === "failed",
+  );
+  const outcomeIssue = troubledAgents.length === 1
+    ? `${workstreamTitle(troubledAgents[0].statement_type, detail.filing_standard ?? detail.config?.filing_standard) ?? "One workstream"} finished with issues.`
+    : troubledAgents.length > 1
+      ? `${troubledAgents.length} workstreams finished with issues.`
+      : "Extraction or review finished with issues.";
   const nonBlockingItems = [
     ...advisoryCheckSummaries,
     ...(isErrorOutcome && failingCheckSummaries.length === 0
-      ? ["Extraction or review finished with issues."]
+      ? [outcomeIssue]
       : []),
     ...(detail.incidents ?? [])
       .filter((incident) => incident.severity !== "fatal")
@@ -1255,7 +1263,7 @@ export function RunDetailView({
           hard-swapping. The child <section> keeps role="tabpanel". */}
       <TabPanelFade tabKey={activeTab}>
       {activeTab === "overview" && (
-        <section style={styles.section} role="tabpanel">
+        <section style={styles.overview} role="tabpanel">
           {/* Lead with the operator's two immediate questions: can the filing
               workbook be prepared, and how long did extraction take? */}
           <div style={styles.metricStrip}>
@@ -1283,48 +1291,70 @@ export function RunDetailView({
           {isRunning && (
             <LiveRunSummary agents={[...detail.agents, ...observedStageAgents(detail)]} onViewActivity={() => selectTab("agents")} />
           )}
-          {(detail.status === "completed" || detail.status === "completed_with_errors" || detail.status === "correction_exhausted") && canonicalEnabled &&
-            hasFigureStatements && (
-            <div style={styles.verificationPrompt}>
-              <span>Verify extracted figures against the source PDF before filing.</span>
-              <button type="button" onClick={() => selectTab("values")} className={uiClass.btnQuiet} style={{ ...ui.buttonQuiet, marginRight: -15 }}>
-                Review figures<ArrowForward size={16} />
-              </button>
-            </div>
-          )}
-          {reviewItemCount > 0 && (
-            <div style={styles.itemsToCheck} data-testid="items-to-check">
-              <span style={styles.itemToCheck}>
-                <StatusIcon symbol={STATUS_SYMBOLS.attention} />
-                {reviewItemMessage}
-              </span>
-              <button
-                type="button"
-                onClick={() => selectTab(issueTab)}
-                className={uiClass.btnQuiet}
-                style={{ ...ui.buttonQuiet, marginRight: -15 }}
-              >
-                {issueTab === "checks" ? "View cross-checks" : "View activity"}<ArrowForward size={16} />
-              </button>
-            </div>
-          )}
+          {(() => {
+            const showVerify = (detail.status === "completed" || detail.status === "completed_with_errors" || detail.status === "correction_exhausted") && canonicalEnabled &&
+              hasFigureStatements;
+            if (!showVerify && reviewItemCount === 0) return null;
+            // One list of next steps. Every row has the same shape: an icon
+            // slot, one sentence, and its action at the right edge. The
+            // exception comes first.
+            return (
+              <div style={styles.overviewGroup}>
+                <h3 style={styles.overviewHeading}>Before filing</h3>
+                <ul style={styles.nextList}>
+                  {reviewItemCount > 0 && (
+                    <li style={styles.nextRow} data-testid="items-to-check">
+                      <span style={styles.nextText}>
+                        <span style={styles.nextIcon}><StatusIcon symbol={STATUS_SYMBOLS.attention} /></span>
+                        {reviewItemMessage}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => selectTab(issueTab)}
+                        className={uiClass.btnQuiet}
+                        style={styles.nextAction}
+                      >
+                        {issueTab === "checks" ? "View cross-checks" : "View activity"}<ArrowForward size={16} />
+                      </button>
+                    </li>
+                  )}
+                  {showVerify && (
+                    <li style={styles.nextRow}>
+                      <span style={styles.nextText}>
+                        <span style={styles.nextIcon} />
+                        Verify extracted figures against the source PDF before filing.
+                      </span>
+                      <button type="button" onClick={() => selectTab("values")} className={uiClass.btnQuiet} style={styles.nextAction}>
+                        Review figures<ArrowForward size={16} />
+                      </button>
+                    </li>
+                  )}
+                </ul>
+              </div>
+            );
+          })()}
+          <div style={styles.overviewRecord}>
           {!isDraft && <details>
-            <summary style={styles.perfSummary}>Team guidance used</summary>
-            {detail.agent_instructions && <p style={styles.dim}>Recorded at run start. Each agent receives guidance for its scope.</p>}
-            {!detail.agent_instructions ? <p style={styles.dim}>Guidance was not recorded for this run.</p>
+            <summary style={styles.overviewSummary}>Team guidance used</summary>
+            <div style={styles.overviewDisclosureBody}>
+            {!detail.agent_instructions ? <p style={{ ...styles.dim, margin: 0 }}>Guidance was not recorded for this run.</p>
               : Object.values(detail.agent_instructions.texts).every(text => !text.trim())
-                ? <p style={styles.dim}>No team guidance was applied.</p>
+                ? <p style={{ ...styles.dim, margin: 0 }}>No team guidance was applied.</p>
                 : Object.entries(detail.agent_instructions.texts).filter(([, text]) => text.trim()).map(([scope, text]) => (
                   <div key={scope} style={{ marginTop: pwc.space.md }}>
                     <strong>{({ all: "All extraction and review agents", figures: "Figures extraction and review", notes: "Notes extraction and review", figures_extraction: "Figures extraction only", figures_review: "Figures review only", notes_extraction: "Notes extraction only", notes_review: "Notes review only" } as Record<string, string>)[scope] ?? scope}</strong>
                     <p style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxHeight: 320, overflow: "auto" }}>{text}</p>
                   </div>
                 ))}
+            </div>
           </details>}
           <details>
-            <summary style={styles.perfSummary}>Run configuration</summary>
-            <ConfigBlock config={detail.config} />
+            <summary style={styles.overviewSummary}>Run configuration</summary>
+            <div style={styles.overviewDisclosureBody}>
+              <ConfigBlock config={detail.config} />
+            </div>
           </details>
+          </div>
           {!isDraft && (
             <section aria-label="Run actions" style={styles.runActions}>
               <div style={styles.runActionButtons}>
@@ -1712,9 +1742,67 @@ const styles = {
     alignItems: "center",
     flexWrap: "wrap" as const,
     gap: pwc.space.md,
-    marginTop: pwc.space.xl,
-    paddingTop: pwc.space.xl,
+  } as React.CSSProperties,
+  // Overview rhythm (same as Setup): 32 between groups, 40px headers,
+  // 8 from a header to its content.
+  overview: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: pwc.space.xxl,
+  } as React.CSSProperties,
+  overviewGroup: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: pwc.space.sm,
+  } as React.CSSProperties,
+  overviewHeading: {
+    ...ui.sectionTitle,
+    display: "flex",
+    alignItems: "center",
+    minHeight: 40,
+  } as React.CSSProperties,
+  overviewRecord: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: pwc.space.lg,
+  } as React.CSSProperties,
+  overviewSummary: {
+    ...ui.sectionTitle,
+    minHeight: 40,
+  } as React.CSSProperties,
+  overviewDisclosureBody: {
+    paddingTop: pwc.space.sm,
+  } as React.CSSProperties,
+  nextList: {
+    listStyle: "none",
+    margin: 0,
+    padding: 0,
+    borderBottom: `1px solid ${pwc.grey100}`,
+  } as React.CSSProperties,
+  nextRow: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: pwc.space.md,
+    minHeight: 48,
     borderTop: `1px solid ${pwc.grey100}`,
+  } as React.CSSProperties,
+  nextText: {
+    ...ui.bodyText,
+    display: "inline-flex",
+    alignItems: "center",
+    gap: pwc.space.sm,
+    minWidth: 0,
+  } as React.CSSProperties,
+  nextIcon: {
+    display: "inline-flex",
+    width: 16,
+    flexShrink: 0,
+  } as React.CSSProperties,
+  nextAction: {
+    ...ui.buttonQuiet,
+    paddingInline: 0,
+    flexShrink: 0,
   } as React.CSSProperties,
   runActionButtons: {
     display: "flex",
@@ -1763,7 +1851,6 @@ const styles = {
     display: "flex",
     gap: pwc.space.xxxl,
     flexWrap: "wrap" as const,
-    marginBottom: pwc.space.lg,
   } as React.CSSProperties,
   // Label above value, matching the work-queue counts.
   metricTile: {
@@ -1779,7 +1866,9 @@ const styles = {
     color: pwc.grey900,
     fontVariantNumeric: "tabular-nums" as const,
   } as React.CSSProperties,
-  metricValueSecondary: {} as React.CSSProperties,
+  metricValueSecondary: {
+    color: pwc.grey700,
+  } as React.CSSProperties,
   metricLabel: {
     fontFamily: pwc.fontBody,
     fontSize: 13,
@@ -1823,15 +1912,16 @@ const styles = {
     margin: 0,
   } as React.CSSProperties,
   dlRow: {
-    display: "flex",
-    gap: pwc.space.sm,
+    display: "grid",
+    gridTemplateColumns: "160px minmax(0, 1fr)",
+    gap: pwc.space.md,
     fontFamily: pwc.fontBody,
     fontSize: 14,
+    lineHeight: 1.5,
   } as React.CSSProperties,
   dt: {
     fontWeight: 400,
     color: pwc.grey700,
-    minWidth: 140,
   } as React.CSSProperties,
   dd: {
     margin: 0,
@@ -1841,28 +1931,6 @@ const styles = {
     marginTop: pwc.space.lg,
     borderTop: `1px solid ${pwc.grey200}`,
     paddingTop: pwc.space.md,
-  } as React.CSSProperties,
-  itemsToCheck: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: pwc.space.md,
-    minHeight: 48,
-    borderBottom: `1px solid ${pwc.grey100}`,
-  } as React.CSSProperties,
-  itemsToCheckBody: {
-    display: "grid",
-    gap: pwc.space.sm,
-    marginTop: pwc.space.md,
-  } as React.CSSProperties,
-  itemToCheck: {
-    margin: 0,
-    color: pwc.grey900,
-    fontFamily: pwc.fontBody,
-    fontSize: 14,
-    display: "inline-flex",
-    alignItems: "center",
-    gap: pwc.space.sm,
   } as React.CSSProperties,
   perfSummary: {
     cursor: "pointer",
@@ -2001,19 +2069,6 @@ const styles = {
     ...ui.metadata,
     paddingLeft: 24,
     fontVariantNumeric: "tabular-nums",
-  } as React.CSSProperties,
-  verificationPrompt: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: pwc.space.md,
-    flexWrap: "wrap" as const,
-    minHeight: 48,
-    borderTop: `1px solid ${pwc.grey100}`,
-    borderBottom: `1px solid ${pwc.grey100}`,
-    fontFamily: pwc.fontBody,
-    fontSize: 14,
-    color: pwc.grey900,
   } as React.CSSProperties,
   legacyBadge: {
     ...ui.metadata,
