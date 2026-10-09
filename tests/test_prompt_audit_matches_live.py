@@ -134,6 +134,7 @@ def test_the_role_map_covers_every_live_role():
     "scout/notes_discoverer_vision.py",
     "scout/calibrator.py",
     "ingest/pdf_sidecar.py",
+    "notes_visual_review.md",
 ])
 def test_helper_model_prompts_are_in_the_audit_inventory(source):
     assert source in _AUDIT, f"helper prompt source missing from audit: {source}"

@@ -3045,7 +3045,7 @@ describe("NotesReviewTab — AI formatter", () => {
     routedFetch({
       status: (url) =>
         url.includes("Notes-CI")
-          ? { status: "running", sheet: "Notes-CI", model: "m" }
+          ? { status: "running", sheet: "Notes-CI", model: "m", summary: "Checking formatted notes against the source PDF…" }
           : { status: "idle", sheet: "other" },
     });
 
@@ -3061,7 +3061,7 @@ describe("NotesReviewTab — AI formatter", () => {
     selectFirstField();
     expect(
       screen.getByTestId("notes-format-running-banner"),
-    ).toHaveTextContent("Formatting notes");
+    ).toHaveTextContent("Checking formatted notes against the source PDF");
   });
 
   test("hydration on mount keeps a finished pass quiet", async () => {

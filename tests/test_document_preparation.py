@@ -775,6 +775,7 @@ def test_changed_repair_gets_third_round_with_previous_findings(tmp_path):
 
 
 @pytest.mark.parametrize("html,flagged", [
+    ("<table><tr><td>2025</td><td>10</td></tr><tr><tr><td>2024</td><td>9</td></tr></tr></table>", True),
     ("<table><tr><th></th><th>2024</th><th>2023</th></tr><tr><td>Tax</td><td>13,949</td></tr></table>", True),
     ("<table><tr><th>2024</th><th>2023</th></tr><tr><td>Profit</td><td>5</td><td>2,195</td></tr></table>", True),
     ("<table><tr><th></th><th>2024</th><th>2023</th></tr><tr><td>Tax</td><td>1</td><td>2</td></tr><tr><td>13,949</td></tr></table>", True),

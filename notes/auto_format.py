@@ -121,6 +121,9 @@ def merge_part_results(parts: list[dict[str, Any]]) -> dict[str, Any]:
     }
     for field_name in _TOKEN_FIELDS:
         merged[field_name] = sum(int(p.get(field_name) or 0) for p in parts)
+    visual_reviews = [p["visual_review"] for p in active if "visual_review" in p]
+    if visual_reviews:
+        merged["visual_reviews"] = visual_reviews
     if failures:
         merged["error_type"] = failures[0].get("error_type")
         merged["error"] = "; ".join(
@@ -170,6 +173,7 @@ async def run_pdf_auto_format(
     timeout_s: float,
     formatter=run_notes_formatter,
     on_progress: Callable[[int, int, str | None], None] | None = None,
+    on_phase: Callable[[str, str], None] | None = None,
 ) -> dict[str, Any]:
     """Format eligible PDF-note sheets and return an advisory summary.
 
@@ -191,6 +195,8 @@ async def run_pdf_auto_format(
 
     async def _bounded(**kwargs):
         async with model_slots:
+            if on_phase is not None:
+                kwargs["on_phase"] = lambda message: on_phase(kwargs["sheet"], message)
             coro = formatter(model=model_factory(), **kwargs)
             if timeout_s and timeout_s != float("inf"):
                 return await asyncio.wait_for(coro, timeout=timeout_s)
