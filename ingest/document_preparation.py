@@ -34,7 +34,7 @@ from ingest.pdf_sidecar import (
 from notes._rate_limit import RATE_LIMIT_MAX_RETRIES, compute_backoff_delay, is_rate_limit_error
 from utils.atomic_io import replace_with_retry
 
-CONTRACT_VERSION = 14
+CONTRACT_VERSION = 15
 # Capture, verify and repair rounds per page. The third round runs only while
 # specific table findings remain and the previous repair changed the page.
 _MAX_PREPARATION_ROUNDS = 3
@@ -814,7 +814,21 @@ def _table_shape_issues(html: str, *, allow_blank_label_rows: bool = False) -> l
         for tr in table.find_all("tr"):
             if tr.find_parent("table") is not table:
                 continue
+            parent = tr.parent
+            if not (parent is table or (
+                parent.name in {"thead", "tbody", "tfoot"} and parent.parent is table
+            )):
+                issues.append(
+                    f"Table {table_number}: malformed row nesting; rows must be direct children "
+                    "of the table or its thead/tbody/tfoot. Restore separate source rows."
+                )
+                continue
             cells = tr.find_all(["td", "th"], recursive=False)
+            if not cells and tr.find("tr") is not None:
+                issues.append(
+                    f"Table {table_number}: an empty row wraps other rows; remove the wrapper "
+                    "and restore separate source rows."
+                )
             occupied = set(carried)
             carried = {column: remaining - 1 for column, remaining in carried.items() if remaining > 1}
             column = 0

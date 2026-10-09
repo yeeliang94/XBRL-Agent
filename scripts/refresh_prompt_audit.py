@@ -185,6 +185,32 @@ def refresh(text: str) -> tuple[str, list[str]]:
         text = pattern.sub(lambda _: section, text)
         changed.append("prepared document map")
 
+    visual_prompt = (PROMPTS / "notes_visual_review.md").read_text(encoding="utf-8").strip()
+    visual_matrix_row = ('<tr><td><span class="tag t-rev">REVIEWER</span>Notes visual review</td>'
+                         '<td>after each formatting proposal; one correction/recheck</td><td>—</td>'
+                         '<td><code>notes_visual_review.md</code> + prepared output HTML and source PDF</td>'
+                         '<td><code>xbrl-notes-visual-review</code></td>'
+                         '<td>table assessments; incomplete or failed rows remain unresolved</td></tr>')
+    if 'REVIEWER</span>Notes visual review</td>' not in text:
+        formatter_row = re.compile(r'<tr><td><span class="tag t-rev">REVIEWER</span>Notes formatter</td>.*?</tr>', re.S)
+        text = formatter_row.sub(lambda match: match.group() + '\n' + visual_matrix_row, text)
+        changed.append("notes visual review matrix")
+    visual_section = ('<section id="notes-visual-review"><h2>Notes visual review</h2>'
+                      '<p>Fresh formatter-model context checks prepared output against the source PDF before saving. '
+                      'One style correction and recheck; incomplete evidence stays unresolved.</p>'
+                      '<details open><summary><span><code>prompts/notes_visual_review.md</code> (verbatim)</span>'
+                      '<span class="meta">' + str(len(visual_prompt.splitlines()))
+                      + ' lines</span></summary><pre>' + html.escape(visual_prompt, quote=False)
+                      + '</pre></details></section>')
+    visual_pattern = re.compile(r'<section id="notes-visual-review">.*?</section>', re.S)
+    existing_visual = visual_pattern.search(text)
+    if existing_visual is None:
+        text = text.replace('</body>', visual_section + '\n</body>')
+        changed.append("notes visual review")
+    elif existing_visual.group() != visual_section:
+        text = visual_pattern.sub(lambda _: visual_section, text)
+        changed.append("notes visual review")
+
     for old, new in COPY_REPLACEMENTS:
         if old in text:
             text = text.replace(old, new)

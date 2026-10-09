@@ -61,6 +61,7 @@ export function PdfSourcePane({
   // Bumping this forces the <img> to remount so a failed load can be retried.
   const [retryKey, setRetryKey] = useState(0);
   const [zoom, setZoom] = useState(1);
+  const viewportRef = useRef<HTMLDivElement | null>(null);
   const sourcesMenuRef = useRef<HTMLDetailsElement | null>(null);
   // M3.11 — on narrow viewports the three-region layout has no room for a
   // third column, so the pane defaults collapsed to a toggle. matchMedia is
@@ -278,7 +279,10 @@ export function PdfSourcePane({
           <button
             type="button"
             data-testid="pdf-zoom-fit"
-            onClick={() => setZoom(1)}
+            onClick={() => {
+              setZoom(1);
+              if (viewportRef.current) viewportRef.current.scrollLeft = 0;
+            }}
             style={styles.compactButton}
             title="Fit to width"
             aria-label="Fit to width"
@@ -300,7 +304,7 @@ export function PdfSourcePane({
         </div>
       </div>
 
-      <div style={styles.viewport}>
+      <div ref={viewportRef} style={styles.viewport}>
         {current == null ? (
           <p style={styles.muted}>Select a value to view its source page.</p>
         ) : imgState === "error" ? (
@@ -325,6 +329,9 @@ export function PdfSourcePane({
             onError={() => setImgState("error")}
             style={{
               width: `${zoom * 100}%`,
+              flexShrink: 0,
+              boxSizing: "border-box",
+              marginInline: zoom < 1 ? "auto" : 0,
               maxWidth: zoom === 1 ? "100%" : "none",
               display: "block",
               borderRadius: pwc.radius.sm,
@@ -469,7 +476,7 @@ const styles = {
     padding: pwc.space.sm,
     minHeight: 120,
     display: "flex",
-    justifyContent: "center",
+    justifyContent: "flex-start",
     alignItems: "flex-start",
   } as React.CSSProperties,
   errorBox: {

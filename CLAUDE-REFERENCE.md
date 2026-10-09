@@ -1306,8 +1306,8 @@ Key invariants:
     This distinguishes `no_change_needed` on the initial valid
     patch from `invalid_patch_fallback` after a rejected target;
     `notes_formatter` ∈ `_AGENT_ROLES`. The output has no model-authored
-    confidence score and there is no routine second AI self-check. Deterministic
-    validation owns safety. Mixed numeric sheets permit formatting only for
+    confidence score. Deterministic validation owns content safety; the separate
+    appearance check below compares formatting against the source. Mixed numeric sheets permit formatting only for
     filled, valid canonical HTML disclosure slots resolved within the run's
     exact filing family. Structured numeric rows and mismatched identities are
     excluded from selection, patch targets and snapshots; eligibility is checked
@@ -1335,8 +1335,35 @@ Key invariants:
     Formatter patches cannot introduce text underline; table rules use cell
     borders, and existing source/human markup remains intact. Existing row
     errors retain their root cause.
+    Before saving, a fresh formatter-model context compares every prepared
+    output table (the same HTML used by review and Copy, plus its geometry)
+    with source PDF images, including comparative years and continuation
+    pages. No browser is required. Oversize output, missing/duplicate table
+    decisions or incomplete source evidence remains unresolved. One targeted style-only correction is
+    supplied with all failed-table findings for the note, not only its last
+    finding. Each table cites its actual inspected source pages; tables within
+    one note may have different citations. All known note source pages are
+    loaded independently before checking. A note with any missing source image
+    stays unresolved without blocking notes whose images are complete. Empty,
+    unseen-page or other-note citations stay unresolved. A table's citations
+    must belong to its own note's recorded source pages; source-viewing tools
+    remain unrestricted and may inspect any valid PDF page.
+    The correction is
+    checked once. Only passed rows reach existing CAS writes
+    and snapshots; grouped task results retain each part's visual assessment
+    and evidence hashes. No-op proposals also require the check. Formatting and
+    correction share the formatter request cap. Initial checking and one recheck share a separate
+    eight-request allowance, aggregated into the same token telemetry only after
+    correction finishes. Budget exhaustion leaves affected rows unresolved and
+    preserves unrelated rows that already passed. Duplicate/omitted assessments
+    and rejected corrections retain their original findings; rejected corrections
+    are logged. Manual summaries and automatic stage
+    events surface checking, correction and rechecking. The check does not
+    certify native Word or mTool rendering. Pinned by
+    `tests/test_notes_visual_review.py` and the visual-save cases in
+    `tests/test_notes_format_patch.py`.
     Partial saves retain
-    `ok=false`, `validation_failed`, `failed_rows`, and per-row errors, alongside
+    `ok=false`, `validation_failed` or `visual_review_failed`, `failed_rows`, and per-row errors, alongside
     the actual `changed_rows`. Snapshots include only saved rows. The review
     panel reloads partial saves and names unresolved rows from the summary;
     the status API also exposes `failed_rows`. Automatic formatting counts
@@ -2331,6 +2358,11 @@ Load-bearing invariants:
   Selecting a sub-note opens its own cited PDF page; use the parent note page
   only when the child page is unavailable. A child with multiple placements
   retains every destination link, and switching fields keeps its cited pages.
+  Missing destination coordinates on saved parent or child rows are recovered
+  at read time from live structured provenance and active source placements.
+  Deleted cells are excluded. Navigation recovery never changes the saved
+  coverage status or clears review work. Pinned by
+  `tests/test_notes_coverage_api.py`.
   For older runs, recover child pages
   from the saved Scout Infopack when coverage rows lack them. Pinned by
   `NotesReviewTab` and `RunDetailView` web tests.
@@ -3060,6 +3092,12 @@ complete independent assessment and table relationships confirm source
 agreement without uncertainties. Missing evidence or a demonstrated mismatch
 keeps that row subject to repair. A lone amount or dash is never exempt),
 overrides a positive Boolean verdict and triggers focused repair.
+Malformed row nesting, including an empty row wrapping further rows, also
+triggers repair even when all amounts and column counts survive. Unrepaired
+nesting remains best-effort uncertainty. Formatter coordinates, patch targets
+and geometry checks share the direct table-row model; nested tables have their
+own coordinates. A style-only patch cannot certify malformed row nesting.
+Pinned by `tests/test_document_preparation.py` and `tests/test_notes_format_patch.py`.
 Table shape checks bound cell spans and cumulative row width to
 `_MAX_TABLE_SPAN` before allocating occupied columns. Oversized geometry becomes
 a repair finding and remains unresolved if it survives repair; source HTML is

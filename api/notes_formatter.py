@@ -144,12 +144,20 @@ async def launch_notes_formatter(run_id: int, body: _NotesFormatLaunch):
 
     async def _runner_async() -> dict:
         from notes.formatting_agent import run_notes_formatter
+        def on_phase(message: str) -> None:
+            with repo.db_session(server.AUDIT_DB_PATH) as conn:
+                conn.execute(
+                    "UPDATE notes_format_tasks SET summary = ? "
+                    "WHERE run_id = ? AND sheet = ? AND status = 'running'",
+                    (message, run_id, body.sheet),
+                )
         model = server._create_proxy_model(model_name, proxy_url, api_key)
         coro = run_notes_formatter(
             run_id=run_id, db_path=str(server.AUDIT_DB_PATH),
             pdf_path=pdf_path, sheet=body.sheet, model=model,
             output_dir=run.output_dir or "",
             style_sources=PDF_FORMAT_CANDIDATE_SOURCES | {None},
+            on_phase=on_phase,
         )
         # Bound the whole pass the way the reviewer / notes-validator passes are
         # bounded — without this a hung LLM call leaves the task 'running'
@@ -244,7 +252,8 @@ async def notes_formatter_status(run_id: int, sheet: str):
     if state is None:
         return {"status": "idle", "sheet": sheet, "can_revert": False}
     if state.get("status") == "running":
-        return {"status": "running", "sheet": sheet, "model": state.get("model")}
+        return {"status": "running", "sheet": sheet, "model": state.get("model"),
+                "summary": state.get("summary")}
     # Lift skipped_rows out of result_json so the panel can render the
     # "edited during formatting" note without unpacking the whole result.
     skipped = (state.get("result") or {}).get("skipped_rows") or []
