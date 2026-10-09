@@ -259,7 +259,9 @@ describe("Direction A shell and responsive composition", () => {
     expect(designSystem).toContain("even when no agents started or no output folder exists");
     expect(designSystem).toContain("one flat chronological <em>Live activity</em> stream (or <em>Recorded activity</em> for settled workstreams)");
     expect(designSystem).toContain("no event cards, navigation buttons or nested activity panels");
-    expect(designSystem).toContain("Follow new updates only while the operator remains at the bottom");
+    expect(designSystem).toContain("Opening Activity never scrolls the page");
+    expect(designSystem).toContain("Follow new updates when it opens at the bottom and only while the operator remains there");
+    expect(designSystem).toContain("Decision cards name the affected figure even when its value is unchanged");
     expect(designSystem).toContain("Keep tool operations, provider reasoning, tokens and request metadata in closed technical diagnostics");
     expect(designSystem).toContain("the activity roster shows item states without a second completion total");
     expect(prototype).toContain("Live activity");

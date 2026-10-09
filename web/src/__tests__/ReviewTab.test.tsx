@@ -35,6 +35,7 @@ const reviewPayload = {
   flags: [
     {
       id: 9,
+      label: "Receivables",
       concept_uuid: "leaf-2",
       target_sheet: "SOFP",
       target_row: 6,
@@ -107,6 +108,17 @@ describe("ReviewTab", () => {
     // Flag. The kind renders in plain English (vocabulary map), not the raw enum.
     expect(screen.getByText(/cannot reconcile receivables/i)).toBeTruthy();
     expect(screen.getByText(/couldn't resolve/i)).toBeTruthy();
+    expect(within(screen.getByTestId("flag-9")).getByText(/couldn't confirm Receivables/)).toBeVisible();
+  });
+
+  test("identifies the worksheet row when a historical flag has no figure label", async () => {
+    const payload = { ...reviewPayload, flags: [{ ...reviewPayload.flags[0], label: null, target_sheet: "SOFP-CuNonCu" }] };
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation(async (url: string) => ({
+      ok: true, status: 200, json: async () => url.includes("/api/settings") ? settingsPayload : payload,
+    }));
+    render(<ReviewTab runId={7} />);
+    const flag = await screen.findByTestId("flag-9");
+    expect(within(flag).getByText(/couldn't confirm Balance sheet row 6/)).toBeVisible();
   });
 
   test("leads with reviewer impact and separates automatic cascades", async () => {

@@ -76,15 +76,17 @@ export function ActivityStream({
   // so opening Activity never jumps the page.
   const pageFollowRef = useRef(false);
   const followLatestRef = useRef(true);
-  const previousStreamKeyRef = useRef(streamKey);
   const latest = items[items.length - 1] ?? null;
   const followKey = `${latest?.id ?? "empty"}:${latest?.text.length ?? 0}`;
+  const previousUpdateRef = useRef({ streamKey, followKey });
 
   const announcement = latest?.text ?? "";
 
   useEffect(() => {
-    if (previousStreamKeyRef.current !== streamKey) {
-      previousStreamKeyRef.current = streamKey;
+    const streamChanged = previousUpdateRef.current.streamKey !== streamKey;
+    const hasNewUpdate = !streamChanged && previousUpdateRef.current.followKey !== followKey;
+    previousUpdateRef.current = { streamKey, followKey };
+    if (streamChanged) {
       followLatestRef.current = true;
     }
     const node = scrollRef.current;
@@ -96,7 +98,7 @@ export function ActivityStream({
     }
     // The list grows with the page. Follow new updates only while the
     // operator is already at the bottom of the page.
-    if (isRunning && pageFollowRef.current) {
+    if (isRunning && pageFollowRef.current && hasNewUpdate) {
       window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "auto" });
     }
   }, [followKey, streamKey, isRunning]);
@@ -106,6 +108,7 @@ export function ActivityStream({
       const root = document.documentElement;
       pageFollowRef.current = root.scrollHeight - window.scrollY - window.innerHeight <= 48;
     };
+    onScroll();
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);

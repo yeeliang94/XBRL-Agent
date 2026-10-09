@@ -6,6 +6,7 @@ import { StatusIcon } from "./StatusIcon";
 import type { ModelEntry } from "../lib/types";
 import { ApiError, userMessage } from "../lib/errors";
 import { flagKindLabel, humanize } from "../lib/vocabulary";
+import { figureSheetDisplayName } from "../lib/sheetLabels";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { SkeletonText } from "./Skeleton";
 
@@ -36,6 +37,7 @@ interface DiffRow {
 
 interface FlagRow {
   id: number;
+  label: string | null;
   concept_uuid: string | null;
   target_sheet: string | null;
   target_row: number | null;
@@ -88,10 +90,11 @@ function fmt(v: number | null): string {
   return v.toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 
-// Plain words only: the figure's name when known, never a sheet/row ID
-// (those stay in the Open in Figures hover text).
-function flagDecisionSummary(flag: FlagRow, label?: string | null): string {
-  const target = label ? label : "this figure";
+// Unlabelled historical flags still identify the affected worksheet row.
+function flagDecisionSummary(flag: FlagRow): string {
+  const target = flag.label || (flag.target_sheet && flag.target_row != null
+    ? `${figureSheetDisplayName(flag.target_sheet)} row ${flag.target_row}`
+    : "this figure");
   const evidence = flag.pdf_page != null ? `page ${flag.pdf_page} of the PDF` : "the source PDF";
   return `The AI couldn't confirm ${target}. Check it against ${evidence} and record your decision.`;
 }
@@ -537,7 +540,7 @@ export function ReviewTab({ runId, onSelectTarget }: Props) {
                   </button>
                 )}
               </div>
-              <p style={styles.flagReason}>{flagDecisionSummary(f, data.diff.find((d) => d.concept_uuid === f.concept_uuid)?.label)}</p>
+              <p style={styles.flagReason}>{flagDecisionSummary(f)}</p>
               {f.reasoning && (
                 <details style={styles.technicalDetails}>
                   <summary>Show technical details</summary>

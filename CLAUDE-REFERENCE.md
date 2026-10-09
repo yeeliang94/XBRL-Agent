@@ -1977,7 +1977,11 @@ current-consumer filtering, and historical readability),
     (`reviewer` ∈ `_AGENT_ROLES`).
 - **Frontend:** the **Review** tab (`web/src/components/ReviewTab.tsx`) + Values
   tab + `/concepts/{id}` alias show whenever `/api/config` reports
-  `canonical_mode: true`. Reviewer API: `GET /review`, `POST /flags/{id}/answer`,
+  `canonical_mode: true`. Reviewer flags carry their figure label from the exact
+  saved concept UUID, including unchanged and retired historical concepts;
+  missing labels retain a visible worksheet/row fallback. Pinned by
+  `tests/test_reviewer_routes.py` and `web/src/__tests__/ReviewTab.test.tsx`.
+  Reviewer API: `GET /review`, `POST /flags/{id}/answer`,
   `POST /re-review`, `GET /re-review/status`, `POST /revert-to-original`.
   - **Manual re-review is async** (a pass runs minutes): `POST /re-review` only
     LAUNCHES it on a dedicated thread with its own event loop, tracked in the
